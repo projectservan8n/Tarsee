@@ -42,13 +42,19 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
     ...(system ? { system } : {}),
   };
 
-  console.log(`[anthropic] POST ${url} model=${resolvedModel} messages=${anthropicMessages.length}`);
+  // Detect auth type: API keys start with "sk-ant-", everything else is an OAuth/Bearer token
+  const isApiKey = apiKey.startsWith("sk-ant-");
+  const authHeaders = isApiKey
+    ? { "x-api-key": apiKey }
+    : { "Authorization": `Bearer ${apiKey}` };
+
+  console.log(`[anthropic] POST ${url} model=${resolvedModel} messages=${anthropicMessages.length} auth=${isApiKey ? "api-key" : "bearer"}`);
 
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": apiKey,
+      ...authHeaders,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(body),
