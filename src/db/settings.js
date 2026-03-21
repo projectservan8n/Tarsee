@@ -156,9 +156,17 @@ export class SettingsStore {
     if (!providerId) return null;
 
     const providerDef = AI_PROVIDERS[providerId];
-    const apiKey = this.get(`ai.${providerId}.apiKey`)
+    const rawKey = this.get(`ai.${providerId}.apiKey`)
       || process.env[providerDef?.envKey || `${providerId.toUpperCase()}_API_KEY`]
       || null;
+
+    // Trim whitespace/quotes that Railway env vars sometimes include
+    const apiKey = rawKey ? rawKey.trim().replace(/^["']|["']$/g, "") : null;
+
+    // Debug: log key prefix so we can verify it's correct without exposing the full key
+    if (apiKey) {
+      console.log(`[settings] provider=${providerId} key=${apiKey.slice(0, 10)}... (${apiKey.length} chars)`);
+    }
 
     // Audit credential read
     if (apiKey && this.auditLog) {
