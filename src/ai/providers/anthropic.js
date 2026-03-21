@@ -32,7 +32,7 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
 
   const system = systemPrompt || messages.find((m) => m.role === "system")?.content || undefined;
 
-  const resolvedModel = model || "claude-sonnet-4-5-20250929";
+  const resolvedModel = model || "claude-sonnet-4-6";
 
   const body = {
     model: resolvedModel,
