@@ -48,7 +48,10 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
     ? { "x-api-key": apiKey }
     : { "Authorization": `Bearer ${apiKey}` };
 
-  console.log(`[anthropic] POST ${url} model=${resolvedModel} messages=${anthropicMessages.length} auth=${isApiKey ? "api-key" : "bearer"}`);
+  const bodyJson = JSON.stringify(body);
+  console.log(`[anthropic] POST ${url}`);
+  console.log(`[anthropic] auth=${isApiKey ? "api-key" : "bearer"} model=${resolvedModel} messages=${anthropicMessages.length}`);
+  console.log(`[anthropic] body: ${bodyJson}`);
 
   const response = await fetch(url, {
     method: "POST",
@@ -57,13 +60,29 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
       ...authHeaders,
       "anthropic-version": "2023-06-01",
     },
-    body: JSON.stringify(body),
+    body: bodyJson,
     signal,
   });
 
   if (!response.ok) {
     const errText = await response.text();
     console.error(`[anthropic] API error ${response.status}: ${errText}`);
+    // Try non-streaming as fallback to get better error details
+    if (response.status === 400) {
+      const retryBody = { ...body, stream: false };
+      console.log(`[anthropic] retrying without stream for better error...`);
+      const retry = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify(retryBody),
+      });
+      const retryText = await retry.text();
+      console.error(`[anthropic] non-stream response ${retry.status}: ${retryText}`);
+    }
     throw new Error(`Anthropic API error ${response.status}: ${errText}`);
   }
 
