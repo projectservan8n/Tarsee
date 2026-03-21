@@ -42,8 +42,11 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
     ...(system ? { system } : {}),
   };
 
-  // Detect auth type: API keys start with "sk-ant-", everything else is an OAuth/Bearer token
-  const isApiKey = apiKey.startsWith("sk-ant-");
+  // Detect auth type:
+  //   sk-ant-api* → API key → x-api-key header
+  //   sk-ant-oat* → OAuth Access Token → Authorization: Bearer header
+  //   anything else → Bearer header
+  const isApiKey = apiKey.startsWith("sk-ant-api");
   const authHeaders = isApiKey
     ? { "x-api-key": apiKey }
     : { "Authorization": `Bearer ${apiKey}` };
