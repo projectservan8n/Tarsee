@@ -1,17 +1,31 @@
 import crypto from "node:crypto";
 
-// --- CSRF Token Store ---
-// Maps CSRF token → expiry timestamp. Tokens are single-use or expire after 2 hours.
-const csrfTokens = new Map();
+// --- CSRF: HMAC-signed tokens (stateless, survives restarts) ---
 const CSRF_TOKEN_MAX_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours
 
-// Cleanup expired tokens every 30 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [token, expiry] of csrfTokens) {
-    if (now >= expiry) csrfTokens.delete(token);
-  }
-}, 30 * 60_000).unref();
+// Derive a stable CSRF secret from ENCRYPTION_KEY or generate a persistent one.
+// Using ENCRYPTION_KEY means tokens survive restarts as long as env is stable.
+const CSRF_SECRET = process.env.ENCRYPTION_KEY
+  ? crypto.createHash("sha256").update("csrf:" + process.env.ENCRYPTION_KEY).digest()
+  : crypto.randomBytes(32);
+
+function signCsrfToken(timestamp) {
+  const hmac = crypto.createHmac("sha256", CSRF_SECRET);
+  hmac.update(String(timestamp));
+  return `${timestamp}.${hmac.digest("hex")}`;
+}
+
+function verifyCsrfToken(token) {
+  const dot = token.indexOf(".");
+  if (dot === -1) return false;
+  const timestamp = Number(token.slice(0, dot));
+  if (isNaN(timestamp)) return false;
+  // Check expiry
+  if (Date.now() - timestamp > CSRF_TOKEN_MAX_AGE_MS) return false;
+  // Verify HMAC
+  const expected = signCsrfToken(timestamp);
+  return crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected));
+}
 
 /**
  * Middleware: Sets security headers on all responses.
@@ -42,8 +56,7 @@ export function securityHeaders(_req, res, next) {
  * Call this on GET routes that serve HTML pages.
  */
 export function generateCsrfCookie(_req, res, next) {
-  const token = crypto.randomBytes(32).toString("hex");
-  csrfTokens.set(token, Date.now() + CSRF_TOKEN_MAX_AGE_MS);
+  const token = signCsrfToken(Date.now());
 
   res.cookie("opusclaw_csrf", token, {
     httpOnly: false,        // JS needs to read it for the double-submit pattern
@@ -72,13 +85,10 @@ export function csrfProtect(req, res, next) {
     return res.status(403).json({ error: "CSRF token missing" });
   }
 
-  // Validate token exists and hasn't expired
-  const expiry = csrfTokens.get(headerToken);
-  if (!expiry || Date.now() >= expiry) {
-    csrfTokens.delete(headerToken);
+  // Validate HMAC signature and expiry (stateless — no server-side storage needed)
+  if (!verifyCsrfToken(headerToken)) {
     return res.status(403).json({ error: "CSRF token invalid or expired" });
   }
 
-  // Token is valid — don't delete it (allow reuse within the window for SPA)
   next();
 }
