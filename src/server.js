@@ -78,7 +78,8 @@ app.use("/api/debug", requireAuth, csrfProtect, debugRouter);
 app.use("/api/backup", requireAuth, csrfProtect, backupRouter);
 
 // SPA fallback — serve index.html for client-side routes
-app.get("*", (_req, res) => {
+// Express 5 requires named wildcard params (bare * is invalid)
+app.get("/{*splat}", (_req, res) => {
   res.sendFile("index.html", { root: publicDir });
 });
 
