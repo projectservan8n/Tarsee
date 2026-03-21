@@ -4,7 +4,7 @@ export const AI_PROVIDERS = Object.freeze({
     id: "anthropic",
     name: "Anthropic (Claude)",
     envKey: "ANTHROPIC_API_KEY",
-    defaultModel: "claude-sonnet-4-6-20250514",
+    defaultModel: "claude-sonnet-4-5-20250929",
     baseUrl: "https://api.anthropic.com",
   },
   openai: {
