@@ -1,0 +1,32 @@
+# OpusClaw — Self-hosted Docker Compose
+version: "3.8"
+
+services:
+  opusclaw:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - opusclaw-data:/data
+    environment:
+      - PORT=3000
+      - SETUP_PASSWORD=${SETUP_PASSWORD}
+      - OPUSCLAW_STATE_DIR=/data/.opusclaw
+      - OPUSCLAW_WORKSPACE_DIR=/data/workspace
+      - OPUSCLAW_DATA_DIR=/data/.opusclaw/data
+      # AI Provider keys (set in .env file or env)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      # Optional encryption key for stored secrets
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  opusclaw-data:

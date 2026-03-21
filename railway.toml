@@ -1,0 +1,13 @@
+[build]
+builder = "dockerfile"
+
+[deploy]
+healthcheckPath = "/healthz"
+healthcheckTimeout = 120
+restartPolicyType = "on_failure"
+requiredMountPath = "/data"
+
+[variables]
+OPUSCLAW_STATE_DIR = "/data/.opusclaw"
+OPUSCLAW_WORKSPACE_DIR = "/data/workspace"
+OPUSCLAW_DATA_DIR = "/data/.opusclaw/data"

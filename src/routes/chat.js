@@ -1,0 +1,186 @@
+import { Router } from "express";
+import { chatStream, getAvailableProviders } from "../ai/router.js";
+import { ConversationStore } from "../db/conversations.js";
+import { SettingsStore } from "../db/settings.js";
+import { initSSE, sendSSE } from "../lib/stream-utils.js";
+import { LIMITS } from "../config/constants.js";
+
+export const chatRouter = Router();
+
+// Lazy-init stores (set by server.js via setDb)
+let convStore = null;
+let settingsStore = null;
+
+chatRouter.use((req, _res, next) => {
+  if (!convStore) {
+    convStore = new ConversationStore(req.app.get("db"));
+    settingsStore = new SettingsStore(req.app.get("db"));
+  }
+  next();
+});
+
+/**
+ * GET /api/chat/providers
+ * List available AI providers.
+ */
+chatRouter.get("/providers", (_req, res) => {
+  res.json({ providers: getAvailableProviders(settingsStore) });
+});
+
+/**
+ * GET /api/chat/conversations
+ * List conversations.
+ */
+chatRouter.get("/conversations", (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const offset = Number(req.query.offset) || 0;
+  res.json({ conversations: convStore.list(limit, offset) });
+});
+
+/**
+ * POST /api/chat/conversations
+ * Create a new conversation.
+ */
+chatRouter.post("/conversations", (req, res) => {
+  const { title, provider, model, systemPrompt } = req.body || {};
+  const conv = convStore.create({ title, provider, model, systemPrompt });
+  res.status(201).json(conv);
+});
+
+/**
+ * GET /api/chat/conversations/:id
+ * Get conversation with messages.
+ */
+chatRouter.get("/conversations/:id", (req, res) => {
+  const conv = convStore.get(req.params.id);
+  if (!conv) return res.status(404).json({ error: "Conversation not found" });
+
+  const messages = convStore.getMessages(req.params.id);
+  res.json({ ...conv, messages });
+});
+
+/**
+ * DELETE /api/chat/conversations/:id
+ */
+chatRouter.delete("/conversations/:id", (req, res) => {
+  const deleted = convStore.delete(req.params.id);
+  if (!deleted) return res.status(404).json({ error: "Conversation not found" });
+  res.json({ ok: true });
+});
+
+/**
+ * PATCH /api/chat/conversations/:id
+ * Update conversation title or settings.
+ */
+chatRouter.patch("/conversations/:id", (req, res) => {
+  const conv = convStore.get(req.params.id);
+  if (!conv) return res.status(404).json({ error: "Conversation not found" });
+
+  const { title, provider, model, systemPrompt } = req.body || {};
+  if (title) convStore.updateTitle(req.params.id, title.slice(0, LIMITS.MAX_CONVERSATION_TITLE));
+  if (provider || model || systemPrompt !== undefined) {
+    convStore.update(req.params.id, { provider, model, systemPrompt });
+  }
+
+  res.json(convStore.get(req.params.id));
+});
+
+/**
+ * POST /api/chat/send
+ * Send a message and stream AI response via SSE.
+ *
+ * Body: { conversationId, message, provider?, model? }
+ */
+chatRouter.post("/send", async (req, res) => {
+  const { conversationId, message, provider: reqProvider, model: reqModel } = req.body || {};
+
+  if (!message || typeof message !== "string") {
+    return res.status(400).json({ error: "Message is required" });
+  }
+  if (message.length > LIMITS.MAX_MESSAGE_LENGTH) {
+    return res.status(400).json({ error: "Message too long" });
+  }
+
+  // Get or create conversation
+  let convId = conversationId;
+  if (!convId) {
+    const conv = convStore.create({ title: message.slice(0, 100) });
+    convId = conv.id;
+  } else {
+    const conv = convStore.get(convId);
+    if (!conv) return res.status(404).json({ error: "Conversation not found" });
+  }
+
+  // Resolve provider
+  const activeProvider = settingsStore.getActiveProvider();
+  const providerId = reqProvider || activeProvider?.provider;
+  const model = reqModel || activeProvider?.model;
+  const apiKey = activeProvider?.apiKey;
+
+  if (!providerId || !apiKey) {
+    return res.status(400).json({ error: "No AI provider configured. Go to Settings to configure one." });
+  }
+
+  // Save user message
+  convStore.addMessage(convId, { role: "user", content: message });
+
+  // Get conversation history for context
+  const history = convStore.getRecentMessages(convId, 50);
+  const conv = convStore.get(convId);
+
+  // Start SSE stream
+  initSSE(res);
+
+  // Send conversation ID (useful when auto-created)
+  sendSSE(res, "conversation", { id: convId });
+
+  let fullResponse = "";
+  let usage = {};
+
+  try {
+    const stream = chatStream({
+      provider: providerId,
+      model,
+      apiKey,
+      baseUrl: activeProvider?.baseUrl,
+      messages: history.map((m) => ({ role: m.role, content: m.content })),
+      systemPrompt: conv?.system_prompt,
+      signal: req.signal,
+    });
+
+    for await (const event of stream) {
+      if (event.type === "text") {
+        fullResponse += event.content;
+        sendSSE(res, "text", { content: event.content });
+      } else if (event.type === "usage") {
+        usage = event.usage;
+      } else if (event.type === "done") {
+        break;
+      }
+    }
+
+    // Save assistant message
+    if (fullResponse) {
+      convStore.addMessage(convId, {
+        role: "assistant",
+        content: fullResponse,
+        provider: providerId,
+        model,
+        tokensIn: usage.input_tokens,
+        tokensOut: usage.output_tokens,
+      });
+    }
+
+    // Auto-title if this is the first exchange
+    if (convStore.messageCount(convId) <= 2) {
+      const title = message.slice(0, LIMITS.MAX_CONVERSATION_TITLE);
+      convStore.updateTitle(convId, title);
+    }
+
+    sendSSE(res, "done", { conversationId: convId, usage });
+  } catch (err) {
+    sendSSE(res, "error", { message: err.message });
+  }
+
+  res.end();
+});

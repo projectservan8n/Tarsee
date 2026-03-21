@@ -1,0 +1,181 @@
+/* ===== Voice Mode Styles ===== */
+
+.voice-panel {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 80;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+}
+
+.voice-panel.active {
+  display: flex;
+}
+
+.voice-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+
+.voice-visualizer {
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  background: var(--primary-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 300ms ease;
+}
+
+.voice-visualizer.listening {
+  background: var(--primary);
+  box-shadow: 0 0 0 20px rgba(108, 92, 231, 0.15), 0 0 0 40px rgba(108, 92, 231, 0.05);
+  animation: voicePulse 2s infinite ease-in-out;
+}
+
+.voice-visualizer.speaking {
+  background: var(--success);
+  box-shadow: 0 0 0 20px rgba(16, 185, 129, 0.15);
+}
+
+@keyframes voicePulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+.voice-visualizer svg {
+  width: 64px;
+  height: 64px;
+  color: white;
+}
+
+.voice-status {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.voice-transcript {
+  max-width: 500px;
+  text-align: center;
+  font-size: 16px;
+  color: var(--text-secondary);
+  min-height: 48px;
+}
+
+.voice-controls {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.voice-btn {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition);
+  font-size: 20px;
+}
+
+.voice-btn.mic {
+  background: var(--primary);
+  color: white;
+  width: 72px;
+  height: 72px;
+}
+
+.voice-btn.mic:hover {
+  background: var(--primary-hover);
+}
+
+.voice-btn.mic.active {
+  background: var(--danger);
+}
+
+.voice-btn.secondary {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.voice-btn.secondary:hover {
+  background: var(--surface-hover);
+}
+
+/* Audio player for TTS */
+.voice-audio-player {
+  display: none;
+}
+
+/* Voice settings in settings panel */
+.voice-settings .voice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.voice-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color var(--transition);
+}
+
+.voice-item:hover,
+.voice-item.selected {
+  border-color: var(--primary);
+}
+
+.voice-item .voice-name {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.voice-item .voice-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--primary-light);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.voice-item .voice-badge.clone {
+  background: #ECFDF5;
+  color: var(--success);
+}
+
+/* Clone voice upload */
+.clone-upload {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color var(--transition);
+}
+
+.clone-upload:hover {
+  border-color: var(--primary);
+}
+
+.clone-upload.dragover {
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
