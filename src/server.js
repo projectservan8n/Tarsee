@@ -63,8 +63,14 @@ app.use(sessionAuth);
 const publicDir = path.join(__dirname, "public");
 app.use(express.static(publicDir, { maxAge: config.NODE_ENV === "production" ? "1h" : 0 }));
 
-// CSRF cookie on page loads
-app.get("/", generateCsrfCookie);
+// CSRF cookie on all page loads (root and SPA fallback)
+app.use((req, res, next) => {
+  // Only generate CSRF for HTML page requests (not API, not static assets)
+  if (req.method === "GET" && !req.path.startsWith("/api/") && !req.path.match(/\.\w+$/)) {
+    return generateCsrfCookie(req, res, next);
+  }
+  next();
+});
 
 // --- Routes ---
 app.use(healthRouter);

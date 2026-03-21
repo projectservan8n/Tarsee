@@ -25,11 +25,11 @@ export function securityHeaders(_req, res, next) {
   res.set("Content-Security-Policy", [
     "default-src 'self'",
     "script-src 'self'",
-    "style-src 'self' 'unsafe-inline'",  // Needed for inline styles
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: blob:",
     "media-src 'self' blob:",            // For voice audio playback
     "connect-src 'self' ws: wss:",       // WebSocket connections
-    "font-src 'self'",
+    "font-src 'self' https://fonts.gstatic.com",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
