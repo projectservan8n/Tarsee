@@ -23,7 +23,9 @@ export function setTTSEngine(engine) {
  * Called on server startup.
  */
 export async function initTTSEngine(settingsStore) {
-  const engineType = settingsStore?.get("voice.engine") || "auto";
+  // Default to stub (no TTS) to avoid loading ~8GB Coqui model into RAM.
+  // Set voice.engine = "coqui" in settings to enable TTS when needed.
+  const engineType = settingsStore?.get("voice.engine") || "stub";
 
   if (engineType === "stub" || engineType === "none") {
     currentEngine = new StubTTSEngine();
