@@ -2,6 +2,7 @@ import { Telegraf } from "telegraf";
 import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
+import { processCommand } from "../lib/commands.js";
 
 /**
  * Creates and starts a Telegram bot.
@@ -27,6 +28,25 @@ export async function createTelegramBot(config, db) {
     }
 
     if (!message?.trim()) return;
+
+    // Check for commands
+    if (message.startsWith("/")) {
+      const channelKey = `telegram:${chatId}`;
+      const existingConvId = settingsStore.get(`channel_conv.${channelKey}`);
+      const cmdResult = await processCommand(message, {
+        settingsStore,
+        convStore,
+        conversationId: existingConvId,
+      });
+
+      if (cmdResult.handled) {
+        const chunks = splitMessage(cmdResult.response, 4096);
+        for (const chunk of chunks) {
+          await ctx.reply(chunk, { parse_mode: "Markdown" }).catch(() => ctx.reply(chunk));
+        }
+        return;
+      }
+    }
 
     // Get or create conversation keyed by Telegram chat
     const channelKey = `telegram:${chatId}`;

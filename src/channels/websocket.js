@@ -5,6 +5,7 @@ import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { WS_CODES } from "../config/constants.js";
+import { processCommand } from "../lib/commands.js";
 
 /**
  * Sets up WebSocket server on the existing HTTP server.
@@ -114,6 +115,20 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   if (!message || typeof message !== "string") {
     ws.send(JSON.stringify({ type: "error", message: "Message is required" }));
     return;
+  }
+
+  // Check for commands
+  if (message.startsWith("/")) {
+    const cmdResult = await processCommand(message, {
+      settingsStore,
+      convStore,
+      conversationId,
+    });
+
+    if (cmdResult.handled) {
+      ws.send(JSON.stringify({ type: "command", response: cmdResult.response }));
+      return;
+    }
   }
 
   // Get or create conversation

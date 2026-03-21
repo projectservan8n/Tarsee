@@ -3,6 +3,7 @@ const { App } = pkg;
 import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
+import { processCommand } from "../lib/commands.js";
 
 /**
  * Creates and starts a Slack bot.
@@ -28,6 +29,22 @@ export async function createSlackBot(config, db) {
 
     const text = message.text?.trim();
     if (!text) return;
+
+    // Check for commands
+    if (text.startsWith("/")) {
+      const channelKey = `slack:${message.channel}`;
+      const existingConvId = settingsStore.get(`channel_conv.${channelKey}`);
+      const cmdResult = await processCommand(text, {
+        settingsStore,
+        convStore,
+        conversationId: existingConvId,
+      });
+
+      if (cmdResult.handled) {
+        await say(cmdResult.response);
+        return;
+      }
+    }
 
     const channelKey = `slack:${message.channel}`;
     let convId = settingsStore.get(`channel_conv.${channelKey}`);

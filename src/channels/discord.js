@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, Events } from "discord.js";
 import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
+import { processCommand } from "../lib/commands.js";
 
 /**
  * Creates and starts a Discord bot.
@@ -46,6 +47,25 @@ export async function createDiscordBot(config, db) {
       .trim();
 
     if (!content) return;
+
+    // Check for commands
+    if (content.startsWith("/")) {
+      const channelKey = `discord:${message.channel.id}`;
+      const existingConvId = settingsStore.get(`channel_conv.${channelKey}`);
+      const cmdResult = await processCommand(content, {
+        settingsStore,
+        convStore,
+        conversationId: existingConvId,
+      });
+
+      if (cmdResult.handled) {
+        const chunks = splitMessage(cmdResult.response, 2000);
+        for (const chunk of chunks) {
+          await message.reply(chunk);
+        }
+        return;
+      }
+    }
 
     // Get or create a conversation keyed by Discord channel
     const channelKey = `discord:${message.channel.id}`;

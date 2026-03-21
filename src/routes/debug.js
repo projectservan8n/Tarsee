@@ -1,0 +1,191 @@
+import { Router } from "express";
+import fs from "node:fs";
+import config from "../config/env.js";
+import { getTTSEngine } from "../voice/engine-registry.js";
+
+export const debugRouter = Router();
+
+/**
+ * Allowlisted debug commands.
+ * Only these commands can be executed via the console.
+ */
+const ALLOWED_COMMANDS = {
+  "system.info": {
+    description: "System information",
+    run: async () => {
+      const mem = process.memoryUsage();
+      return [
+        `Node:     ${process.version}`,
+        `Platform: ${process.platform} ${process.arch}`,
+        `PID:      ${process.pid}`,
+        `Uptime:   ${Math.floor(process.uptime())}s`,
+        `RSS:      ${Math.round(mem.rss / 1024 / 1024)}MB`,
+        `Heap:     ${Math.round(mem.heapUsed / 1024 / 1024)}/${Math.round(mem.heapTotal / 1024 / 1024)}MB`,
+        `Data dir: ${config.DATA_DIR}`,
+        `State:    ${config.STATE_DIR}`,
+        `DB:       ${config.DB_PATH}`,
+      ].join("\n");
+    },
+  },
+
+  "system.env": {
+    description: "Show (safe) environment variables",
+    run: async () => {
+      const safe = ["NODE_ENV", "PORT", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID"];
+      return safe
+        .map((k) => `${k}=${process.env[k] || "(not set)"}`)
+        .join("\n");
+    },
+  },
+
+  "db.stats": {
+    description: "Database statistics",
+    run: async (_args, ctx) => {
+      const db = ctx.db;
+      if (!db) return "Database not available";
+
+      const convCount = db.prepare("SELECT COUNT(*) as count FROM conversations").get();
+      const msgCount = db.prepare("SELECT COUNT(*) as count FROM messages").get();
+      const settingsCount = db.prepare("SELECT COUNT(*) as count FROM settings").get();
+      const dbSize = db.prepare("PRAGMA page_count").get();
+      const pageSize = db.prepare("PRAGMA page_size").get();
+      const sizeBytes = dbSize.page_count * pageSize.page_size;
+
+      return [
+        `Conversations: ${convCount.count}`,
+        `Messages:      ${msgCount.count}`,
+        `Settings:      ${settingsCount.count}`,
+        `DB Size:       ${Math.round(sizeBytes / 1024)}KB`,
+        `WAL mode:      enabled`,
+      ].join("\n");
+    },
+  },
+
+  "db.vacuum": {
+    description: "Vacuum database to reclaim space",
+    run: async (_args, ctx) => {
+      const db = ctx.db;
+      if (!db) return "Database not available";
+      db.exec("VACUUM");
+      return "Database vacuumed successfully.";
+    },
+  },
+
+  "voice.status": {
+    description: "TTS engine status",
+    run: async () => {
+      const engine = getTTSEngine();
+      const lines = [`Engine: ${engine.name || "unknown"}`];
+      if (engine.name !== "stub") {
+        try {
+          const voices = await engine.listVoices();
+          lines.push(`Voices: ${voices.length}`);
+          if (engine.ready !== undefined) lines.push(`Ready: ${engine.ready}`);
+        } catch (err) {
+          lines.push(`Error: ${err.message}`);
+        }
+      }
+      return lines.join("\n");
+    },
+  },
+
+  "channels.status": {
+    description: "Channel integration status",
+    run: async (_args, ctx) => {
+      const cm = ctx.channelManager;
+      if (!cm) return "Channel manager not available";
+      const status = cm.getStatus();
+      return Object.entries(status)
+        .map(([type, s]) => `${type}: ${s.status}${s.error ? ` (${s.error})` : ""}`)
+        .join("\n");
+    },
+  },
+
+  "logs.recent": {
+    description: "Show recent console output (last 50 lines)",
+    run: async () => {
+      // We don't buffer logs in-process, so indicate how to access them
+      return "Logs are streamed to stdout/stderr.\nOn Railway: View logs in Railway dashboard.\nOn Docker: Use `docker logs <container>`";
+    },
+  },
+
+  "disk.usage": {
+    description: "Disk usage of data directories",
+    run: async () => {
+      const dirs = [config.DATA_DIR, config.STATE_DIR, config.WORKSPACE_DIR];
+      const results = [];
+      for (const dir of dirs) {
+        try {
+          const size = getDirSize(dir);
+          results.push(`${dir}: ${formatSize(size)}`);
+        } catch {
+          results.push(`${dir}: (not accessible)`);
+        }
+      }
+      return results.join("\n");
+    },
+  },
+};
+
+/**
+ * GET /api/debug/commands
+ * List available debug commands.
+ */
+debugRouter.get("/commands", (_req, res) => {
+  const commands = Object.entries(ALLOWED_COMMANDS).map(([name, cmd]) => ({
+    name,
+    description: cmd.description,
+  }));
+  res.json({ commands });
+});
+
+/**
+ * POST /api/debug/run
+ * Execute an allowlisted debug command.
+ */
+debugRouter.post("/run", async (req, res) => {
+  const { command, args } = req.body || {};
+  if (!command) return res.status(400).json({ error: "Command required" });
+
+  const cmd = ALLOWED_COMMANDS[command];
+  if (!cmd) {
+    return res.status(400).json({
+      error: `Unknown command: ${command}`,
+      available: Object.keys(ALLOWED_COMMANDS),
+    });
+  }
+
+  try {
+    const ctx = {
+      db: req.app.get("db"),
+      channelManager: req.app.get("channelManager"),
+    };
+    const output = await cmd.run(args, ctx);
+    res.json({ ok: true, command, output });
+  } catch (err) {
+    res.status(500).json({ error: `Command failed: ${err.message}` });
+  }
+});
+
+// Helpers
+function getDirSize(dirPath) {
+  let size = 0;
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = `${dirPath}/${entry.name}`;
+      if (entry.isFile()) {
+        size += fs.statSync(full).size;
+      } else if (entry.isDirectory()) {
+        size += getDirSize(full);
+      }
+    }
+  } catch { /* ignore */ }
+  return size;
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}

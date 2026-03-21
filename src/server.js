@@ -1,7 +1,11 @@
 import { createServer } from "node:http";
 import express from "express";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import config from "./config/env.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { LIMITS } from "./config/constants.js";
 import { securityHeaders, csrfProtect, generateCsrfCookie } from "./middleware/security.js";
 import { sessionAuth, requireAuth, rateLimitAuth } from "./middleware/auth.js";
@@ -13,6 +17,9 @@ import { chatRouter } from "./routes/chat.js";
 import { voiceRouter } from "./routes/voice.js";
 import { settingsRouter } from "./routes/settings.js";
 import { adminRouter } from "./routes/admin.js";
+import { filesRouter } from "./routes/files.js";
+import { debugRouter } from "./routes/debug.js";
+import { backupRouter } from "./routes/backup.js";
 import { setupWebSocket } from "./channels/websocket.js";
 import { ChannelManager } from "./channels/manager.js";
 import { initTTSEngine, stopTTSEngine } from "./voice/engine-registry.js";
@@ -34,7 +41,8 @@ app.use(express.json({ limit: LIMITS.JSON_BODY_MAX }));
 app.use(sessionAuth);
 
 // Static files (WebUI) — no auth required for the shell, API calls are protected
-app.use(express.static("src/public", { maxAge: config.NODE_ENV === "production" ? "1h" : 0 }));
+const publicDir = path.join(__dirname, "public");
+app.use(express.static(publicDir, { maxAge: config.NODE_ENV === "production" ? "1h" : 0 }));
 
 // CSRF cookie on page loads
 app.get("/", generateCsrfCookie);
@@ -46,10 +54,13 @@ app.use("/api/chat", requireAuth, csrfProtect, chatRouter);
 app.use("/api/voice", requireAuth, csrfProtect, voiceRouter);
 app.use("/api/settings", requireAuth, csrfProtect, settingsRouter);
 app.use("/api/admin", requireAuth, csrfProtect, adminRouter);
+app.use("/api/files", requireAuth, csrfProtect, filesRouter);
+app.use("/api/debug", requireAuth, csrfProtect, debugRouter);
+app.use("/api/backup", requireAuth, csrfProtect, backupRouter);
 
 // SPA fallback — serve index.html for client-side routes
 app.get("*", (_req, res) => {
-  res.sendFile("index.html", { root: "src/public" });
+  res.sendFile("index.html", { root: publicDir });
 });
 
 // Error handler (must be last)

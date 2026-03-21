@@ -154,6 +154,19 @@ const Chat = {
       this.elements.inputArea.style.display = "block";
     }
 
+    // Handle /clear locally
+    if (text === "/clear") {
+      this.newChat();
+      this.elements.welcomeScreen.style.display = "none";
+      this.elements.chatArea.style.display = "flex";
+      this.elements.inputArea.style.display = "block";
+      this.elements.chatArea.innerHTML = "";
+      this.appendMessage("assistant", "Conversation cleared. Starting fresh.");
+      this.elements.sendBtn.disabled = false;
+      this.elements.messageInput.focus();
+      return;
+    }
+
     // Append user message
     this.appendMessage("user", text);
 

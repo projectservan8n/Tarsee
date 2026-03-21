@@ -4,6 +4,7 @@ import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { initSSE, sendSSE } from "../lib/stream-utils.js";
 import { LIMITS } from "../config/constants.js";
+import { processCommand, getCommandList } from "../lib/commands.js";
 
 export const chatRouter = Router();
 
@@ -25,6 +26,14 @@ chatRouter.use((req, _res, next) => {
  */
 chatRouter.get("/providers", (_req, res) => {
   res.json({ providers: getAvailableProviders(settingsStore) });
+});
+
+/**
+ * GET /api/chat/commands
+ * List available chat commands.
+ */
+chatRouter.get("/commands", (_req, res) => {
+  res.json({ commands: getCommandList() });
 });
 
 /**
@@ -99,6 +108,24 @@ chatRouter.post("/send", async (req, res) => {
   }
   if (message.length > LIMITS.MAX_MESSAGE_LENGTH) {
     return res.status(400).json({ error: "Message too long" });
+  }
+
+  // Check for commands
+  if (message.startsWith("/")) {
+    const cmdResult = await processCommand(message, {
+      settingsStore,
+      convStore,
+      conversationId,
+      channelManager: req.app.get("channelManager"),
+    });
+
+    if (cmdResult.handled) {
+      return res.json({
+        command: true,
+        response: cmdResult.response,
+        conversationId: conversationId || null,
+      });
+    }
   }
 
   // Get or create conversation

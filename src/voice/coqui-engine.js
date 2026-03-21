@@ -3,7 +3,10 @@ import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 import config from "../config/env.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const TTS_SERVER_PORT = 5002;
 const TTS_SERVER_HOST = "127.0.0.1";
@@ -75,7 +78,7 @@ export class CoquiTTSEngine extends TTSEngine {
     // Kill existing process if any
     this.stop();
 
-    const scriptPath = path.join(process.cwd(), "src", "voice", "coqui-server.py");
+    const scriptPath = path.join(__dirname, "coqui-server.py");
 
     this.serverProc = childProcess.spawn("python3", [
       scriptPath,

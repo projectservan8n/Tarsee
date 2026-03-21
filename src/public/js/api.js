@@ -126,6 +126,17 @@ const API = {
       return;
     }
 
+    // Check if response is a command result (JSON, not SSE stream)
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const data = await res.json();
+      if (data.command) {
+        onText?.(data.response);
+        onDone?.({ conversationId: data.conversationId, type: "command" });
+        return;
+      }
+    }
+
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
