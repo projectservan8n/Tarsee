@@ -1,5 +1,7 @@
 import { Router } from "express";
 import config from "../config/env.js";
+import { isEncryptionEnabled } from "../lib/vault.js";
+import { AuditLog } from "../db/audit.js";
 
 export const adminRouter = Router();
 
@@ -26,6 +28,26 @@ adminRouter.get("/status", (req, res) => {
     channels: channelManager?.getStatus() || {},
     stateDir: config.STATE_DIR,
     isRailway: config.IS_RAILWAY,
+    encryption: isEncryptionEnabled() ? "enabled" : "disabled",
+  });
+});
+
+/**
+ * GET /api/admin/audit
+ * View credential access audit log.
+ */
+adminRouter.get("/audit", (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 100, 1000);
+  const offset = Number(req.query.offset) || 0;
+
+  const auditLog = req.app.get("auditLog");
+  if (!auditLog) {
+    return res.status(500).json({ error: "Audit log not initialized" });
+  }
+
+  res.json({
+    entries: auditLog.query(limit, offset),
+    total: auditLog.count(),
   });
 });
 

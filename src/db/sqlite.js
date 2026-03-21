@@ -95,4 +95,22 @@ const MIGRATIONS = [
       );
     `,
   },
+  {
+    name: "002_audit_log",
+    sql: `
+      CREATE TABLE audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        action TEXT NOT NULL,
+        target TEXT,
+        actor TEXT NOT NULL DEFAULT 'system',
+        ip TEXT,
+        detail TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX idx_audit_log_created ON audit_log(created_at DESC);
+      CREATE INDEX idx_audit_log_action ON audit_log(action);
+      CREATE INDEX idx_audit_log_target ON audit_log(target);
+    `,
+  },
 ];

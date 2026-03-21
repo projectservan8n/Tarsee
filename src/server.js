@@ -24,6 +24,21 @@ import { setupWebSocket } from "./channels/websocket.js";
 import { ChannelManager } from "./channels/manager.js";
 import { initTTSEngine, stopTTSEngine } from "./voice/engine-registry.js";
 import { SettingsStore } from "./db/settings.js";
+import { AuditLog } from "./db/audit.js";
+import { isEncryptionEnabled } from "./lib/vault.js";
+
+// --- Enforce encryption in production ---
+if (config.NODE_ENV === "production" && !isEncryptionEnabled()) {
+  console.error("[opusclaw] FATAL: ENCRYPTION_KEY environment variable is required in production.");
+  console.error("[opusclaw] Set a strong random key (e.g., openssl rand -hex 32) to encrypt credentials at rest.");
+  process.exit(1);
+}
+
+if (isEncryptionEnabled()) {
+  console.log("[opusclaw] credential encryption: ENABLED");
+} else {
+  console.warn("[opusclaw] credential encryption: DISABLED (set ENCRYPTION_KEY for production)");
+}
 
 // --- Initialize database ---
 const db = initDb(config.DB_PATH);
@@ -80,8 +95,12 @@ server.listen(config.PORT, "0.0.0.0", () => {
   console.log(`[opusclaw] database:  ${config.DB_PATH}`);
 });
 
+// --- Audit log + Settings ---
+const auditLog = new AuditLog(db);
+app.set("auditLog", auditLog);
+
 // --- TTS Engine (lazy init) ---
-const settingsStore = new SettingsStore(db);
+const settingsStore = new SettingsStore(db, auditLog);
 initTTSEngine(settingsStore).catch((err) => {
   console.warn("[opusclaw] TTS engine init error:", err.message);
 });
