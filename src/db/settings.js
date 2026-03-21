@@ -1,4 +1,5 @@
 import { encryptIfSecret, decryptIfEncrypted, isSecretKey, maskSecret, isEncrypted } from "../lib/vault.js";
+import { AI_PROVIDERS } from "../config/constants.js";
 
 /**
  * Key-value settings store backed by SQLite.
@@ -140,11 +141,23 @@ export class SettingsStore {
    * API key is decrypted for use.
    */
   getActiveProvider() {
-    const providerId = this.get("ai.activeProvider");
+    let providerId = this.get("ai.activeProvider");
+
+    // Auto-detect from env vars if no provider configured in DB
+    if (!providerId) {
+      for (const [id, def] of Object.entries(AI_PROVIDERS)) {
+        if (process.env[def.envKey]) {
+          providerId = id;
+          break;
+        }
+      }
+    }
+
     if (!providerId) return null;
 
+    const providerDef = AI_PROVIDERS[providerId];
     const apiKey = this.get(`ai.${providerId}.apiKey`)
-      || process.env[`${providerId.toUpperCase()}_API_KEY`]
+      || process.env[providerDef?.envKey || `${providerId.toUpperCase()}_API_KEY`]
       || null;
 
     // Audit credential read
@@ -159,9 +172,9 @@ export class SettingsStore {
 
     return {
       provider: providerId,
-      model: this.get(`ai.${providerId}.model`) || null,
+      model: this.get(`ai.${providerId}.model`) || providerDef?.defaultModel || null,
       apiKey,
-      baseUrl: this.get(`ai.${providerId}.baseUrl`) || null,
+      baseUrl: this.get(`ai.${providerId}.baseUrl`) || providerDef?.baseUrl || null,
     };
   }
 
