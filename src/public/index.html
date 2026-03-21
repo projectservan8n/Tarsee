@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/css/style.css">
   <link rel="stylesheet" href="/css/chat.css">
   <link rel="stylesheet" href="/css/voice.css">
+  <link rel="stylesheet" href="/css/console.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -67,6 +68,11 @@
           <span class="topbar-title" id="topbarTitle">OpusClaw</span>
         </div>
         <div class="topbar-right">
+          <button class="btn btn-sm console-toggle-btn" id="consoleToggleBtn" title="Server Console">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12v10H2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M4 7l2 2-2 2M8 11h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Console
+            <span class="badge" id="consoleBadge"></span>
+          </button>
           <button class="btn btn-sm" id="voiceModeBtn" title="Voice Mode">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1v0a3 3 0 013 3v3a3 3 0 01-6 0V4a3 3 0 013-3z" stroke="currentColor" stroke-width="1.2"/><path d="M3 7v0a5 5 0 0010 0M8 14v-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
             Voice
@@ -101,6 +107,27 @@
         </div>
       </div>
     </main>
+  </div>
+
+  <!-- Server Console Panel -->
+  <div id="consolePanel" class="console-panel">
+    <div class="console-toolbar">
+      <div class="console-toolbar-left">
+        <span class="console-title">CONSOLE</span>
+        <span class="console-status" id="consoleStatus">disconnected</span>
+      </div>
+      <div class="console-toolbar-right">
+        <button class="console-btn active" id="consoleAutoScrollBtn" title="Auto-scroll">Auto</button>
+        <button class="console-btn" id="consoleClearBtn" title="Clear">Clear</button>
+        <button class="console-btn" id="consoleMaxBtn" title="Maximize">Max</button>
+        <button class="console-btn" id="consoleCloseBtn" title="Close">X</button>
+      </div>
+    </div>
+    <div class="console-output" id="consoleOutput"></div>
+    <div class="console-input-area">
+      <span class="console-prompt">opusclaw&gt;</span>
+      <input type="text" class="console-input" id="consoleInput" placeholder="Type a command or 'help'..." autocomplete="off" spellcheck="false">
+    </div>
   </div>
 
   <!-- Voice Mode Panel -->
@@ -240,6 +267,7 @@
   <script src="/js/api.js"></script>
   <script src="/js/chat.js"></script>
   <script src="/js/voice.js"></script>
+  <script src="/js/console.js"></script>
   <script src="/js/settings.js"></script>
   <script src="/js/app.js"></script>
 </body>

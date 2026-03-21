@@ -2,6 +2,7 @@ import { Router } from "express";
 import fs from "node:fs";
 import config from "../config/env.js";
 import { getTTSEngine } from "../voice/engine-registry.js";
+import { logCapture } from "../lib/log-capture.js";
 
 export const debugRouter = Router();
 
@@ -9,7 +10,7 @@ export const debugRouter = Router();
  * Allowlisted debug commands.
  * Only these commands can be executed via the console.
  */
-const ALLOWED_COMMANDS = {
+export const ALLOWED_COMMANDS = {
   "system.info": {
     description: "System information",
     run: async () => {
@@ -104,8 +105,14 @@ const ALLOWED_COMMANDS = {
   "logs.recent": {
     description: "Show recent console output (last 50 lines)",
     run: async () => {
-      // We don't buffer logs in-process, so indicate how to access them
-      return "Logs are streamed to stdout/stderr.\nOn Railway: View logs in Railway dashboard.\nOn Docker: Use `docker logs <container>`";
+      const entries = logCapture.recent(50);
+      if (entries.length === 0) return "(no log entries captured yet)";
+      return entries
+        .map((e) => {
+          const t = new Date(e.ts).toISOString().slice(11, 23);
+          return `[${t}] ${e.level.toUpperCase().padEnd(5)} ${e.text}`;
+        })
+        .join("\n");
     },
   },
 

@@ -6,6 +6,7 @@ import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { WS_CODES } from "../config/constants.js";
 import { processCommand } from "../lib/commands.js";
+import { logCapture } from "../lib/log-capture.js";
 
 /**
  * Sets up WebSocket server on the existing HTTP server.
@@ -25,7 +26,7 @@ import { processCommand } from "../lib/commands.js";
  *     { type: "error", message: "..." }
  *     { type: "pong" }
  */
-export function setupWebSocket(server, db) {
+export function setupWebSocket(server, db, app) {
   const wss = new WebSocketServer({ noServer: true });
   const convStore = new ConversationStore(db);
   const settingsStore = new SettingsStore(db);
@@ -58,6 +59,10 @@ export function setupWebSocket(server, db) {
   });
 
   wss.on("connection", (ws) => {
+    // Attach context for console commands
+    ws._opusclaw_db = db;
+    ws._opusclaw_channelManager = app?.get?.("channelManager") || null;
+
     ws.on("message", async (raw) => {
       let msg;
       try {
@@ -89,6 +94,27 @@ export function setupWebSocket(server, db) {
       // Handle ping
       if (msg.type === "ping") {
         ws.send(JSON.stringify({ type: "pong" }));
+        return;
+      }
+
+      // Handle console subscribe
+      if (msg.type === "console.subscribe") {
+        logCapture.subscribe(ws);
+        // Send recent history
+        const recent = logCapture.recent(100);
+        ws.send(JSON.stringify({ type: "console.history", entries: recent }));
+        return;
+      }
+
+      // Handle console unsubscribe
+      if (msg.type === "console.unsubscribe") {
+        logCapture.unsubscribe(ws);
+        return;
+      }
+
+      // Handle console command execution
+      if (msg.type === "console.exec") {
+        await handleConsoleExec(ws, msg);
         return;
       }
 
@@ -204,5 +230,41 @@ async function handleChat(ws, msg, convStore, settingsStore) {
     if (ws.readyState === ws.OPEN) {
       ws.send(JSON.stringify({ type: "error", message: err.message }));
     }
+  }
+}
+
+/**
+ * Execute a debug command from the console UI.
+ */
+async function handleConsoleExec(ws, msg) {
+  const { command, args } = msg;
+  if (!command) {
+    ws.send(JSON.stringify({ type: "console.error", message: "Command required" }));
+    return;
+  }
+
+  try {
+    const { ALLOWED_COMMANDS } = await import("../routes/debug.js");
+    const cmd = ALLOWED_COMMANDS[command];
+
+    if (!cmd) {
+      ws.send(JSON.stringify({
+        type: "console.error",
+        command,
+        message: `Unknown command: ${command}. Available: ${Object.keys(ALLOWED_COMMANDS).join(", ")}`,
+      }));
+      return;
+    }
+
+    // Build context — channelManager comes from the app if available
+    const ctx = {
+      db: ws._opusclaw_db,
+      channelManager: ws._opusclaw_channelManager,
+    };
+
+    const output = await cmd.run(args, ctx);
+    ws.send(JSON.stringify({ type: "console.result", command, output }));
+  } catch (err) {
+    ws.send(JSON.stringify({ type: "console.error", command, message: err.message }));
   }
 }

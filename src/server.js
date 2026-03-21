@@ -26,6 +26,10 @@ import { initTTSEngine, stopTTSEngine } from "./voice/engine-registry.js";
 import { SettingsStore } from "./db/settings.js";
 import { AuditLog } from "./db/audit.js";
 import { isEncryptionEnabled } from "./lib/vault.js";
+import { logCapture } from "./lib/log-capture.js";
+
+// --- Install log capture early (before any console.log calls) ---
+logCapture.install();
 
 // --- Enforce encryption in production ---
 if (config.NODE_ENV === "production" && !isEncryptionEnabled()) {
@@ -85,7 +89,7 @@ app.use(errorHandler);
 const server = createServer(app);
 
 // --- WebSocket ---
-setupWebSocket(server, db);
+setupWebSocket(server, db, app);
 
 // --- Start ---
 server.listen(config.PORT, "0.0.0.0", () => {

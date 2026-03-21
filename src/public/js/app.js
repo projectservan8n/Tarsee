@@ -53,6 +53,7 @@ const App = {
     Chat.init();
     Voice.init();
     Settings.init();
+    Console.init();
 
     // Mobile menu toggle
     const menuBtn = document.getElementById("menuBtn");
