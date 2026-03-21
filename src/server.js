@@ -15,6 +15,8 @@ import { settingsRouter } from "./routes/settings.js";
 import { adminRouter } from "./routes/admin.js";
 import { setupWebSocket } from "./channels/websocket.js";
 import { ChannelManager } from "./channels/manager.js";
+import { initTTSEngine, stopTTSEngine } from "./voice/engine-registry.js";
+import { SettingsStore } from "./db/settings.js";
 
 // --- Initialize database ---
 const db = initDb(config.DB_PATH);
@@ -67,6 +69,12 @@ server.listen(config.PORT, "0.0.0.0", () => {
   console.log(`[opusclaw] database:  ${config.DB_PATH}`);
 });
 
+// --- TTS Engine (lazy init) ---
+const settingsStore = new SettingsStore(db);
+initTTSEngine(settingsStore).catch((err) => {
+  console.warn("[opusclaw] TTS engine init error:", err.message);
+});
+
 // --- Channel Manager (lazy start) ---
 const channelManager = new ChannelManager(db);
 app.set("channelManager", channelManager);
@@ -77,6 +85,7 @@ channelManager.startAll().catch((err) => {
 // --- Graceful shutdown ---
 function shutdown(signal) {
   console.log(`[opusclaw] ${signal} received, shutting down...`);
+  stopTTSEngine();
   channelManager.stopAll();
   server.close(() => {
     db.close();

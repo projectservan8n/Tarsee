@@ -21,6 +21,16 @@ const Settings = {
       slackAppToken: document.getElementById("settingsSlackAppToken"),
       saveChannelsBtn: document.getElementById("saveChannelsBtn"),
       apiToken: document.getElementById("settingsApiToken"),
+      // Voice settings
+      voiceEngine: document.getElementById("settingsVoiceEngine"),
+      voiceEngineStatus: document.getElementById("voiceEngineStatus"),
+      voiceCloneFile: document.getElementById("voiceCloneFile"),
+      voiceCloneUpload: document.getElementById("voiceCloneUpload"),
+      voiceCloneName: document.getElementById("voiceCloneName"),
+      voiceCloneBtn: document.getElementById("voiceCloneBtn"),
+      voiceCloneResult: document.getElementById("voiceCloneResult"),
+      voicesList: document.getElementById("voicesList"),
+      saveVoiceBtn: document.getElementById("saveVoiceBtn"),
     };
 
     this.elements.openBtn.addEventListener("click", () => this.open());
@@ -46,6 +56,28 @@ const Settings = {
 
     this.elements.saveProviderBtn.addEventListener("click", () => this.saveProvider());
     this.elements.saveChannelsBtn.addEventListener("click", () => this.saveChannels());
+
+    // Voice settings handlers
+    if (this.elements.voiceCloneUpload) {
+      this.elements.voiceCloneUpload.addEventListener("click", () => {
+        this.elements.voiceCloneFile.click();
+      });
+
+      this.elements.voiceCloneFile.addEventListener("change", () => {
+        const file = this.elements.voiceCloneFile.files[0];
+        if (file) {
+          this.elements.voiceCloneUpload.querySelector("span").textContent = file.name;
+        }
+      });
+    }
+
+    if (this.elements.voiceCloneBtn) {
+      this.elements.voiceCloneBtn.addEventListener("click", () => this.cloneVoice());
+    }
+
+    if (this.elements.saveVoiceBtn) {
+      this.elements.saveVoiceBtn.addEventListener("click", () => this.saveVoiceSettings());
+    }
   },
 
   async open() {
@@ -94,6 +126,16 @@ const Settings = {
       if (API.token) {
         this.elements.apiToken.value = API.token;
       }
+
+      // Load voice settings
+      const voiceEngine = settings.find((s) => s.key === "voice.engine")?.value;
+      if (voiceEngine && this.elements.voiceEngine) {
+        this.elements.voiceEngine.value = voiceEngine;
+      }
+
+      // Load voice engine status and voices list
+      this.loadVoiceStatus();
+      this.loadVoices();
     } catch (err) {
       App.showToast("Failed to load settings: " + err.message, "error");
     }
@@ -137,6 +179,118 @@ const Settings = {
       }
 
       App.showToast("Channels saved. Restart channels in Admin to apply.", "success");
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+  },
+
+  async loadVoiceStatus() {
+    if (!this.elements.voiceEngineStatus) return;
+    try {
+      const res = await API.request("/api/voice/status");
+      const data = await res.json();
+      const engine = data.engine || "stub";
+      const status = engine === "stub" ? "No TTS engine active" : `Engine: ${engine}`;
+      this.elements.voiceEngineStatus.textContent = status;
+      this.elements.voiceEngineStatus.style.color =
+        engine === "stub" ? "var(--text-muted)" : "var(--primary)";
+    } catch {
+      this.elements.voiceEngineStatus.textContent = "Could not load voice status";
+    }
+  },
+
+  async loadVoices() {
+    if (!this.elements.voicesList) return;
+    try {
+      const res = await API.request("/api/voice/voices");
+      const data = await res.json();
+      const voices = data.voices || [];
+
+      if (voices.length === 0) {
+        this.elements.voicesList.innerHTML =
+          '<div style="color: var(--text-muted); font-size: 13px">No cloned voices yet</div>';
+        return;
+      }
+
+      this.elements.voicesList.innerHTML = voices
+        .map(
+          (v) =>
+            `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px">
+              <span style="flex:1">${v.name || v.id}</span>
+              ${v.isClone ? '<span style="color:var(--primary);font-size:11px">cloned</span>' : ""}
+            </div>`
+        )
+        .join("");
+    } catch {
+      this.elements.voicesList.innerHTML = "";
+    }
+  },
+
+  async cloneVoice() {
+    const file = this.elements.voiceCloneFile?.files[0];
+    const name = this.elements.voiceCloneName?.value.trim();
+
+    if (!file) {
+      App.showToast("Select an audio file first (6-30 seconds recommended)", "error");
+      return;
+    }
+    if (!name) {
+      App.showToast("Enter a name for the voice", "error");
+      return;
+    }
+
+    this.elements.voiceCloneBtn.disabled = true;
+    this.elements.voiceCloneBtn.textContent = "Cloning...";
+    this.elements.voiceCloneResult.textContent = "";
+
+    try {
+      const formData = new FormData();
+      formData.append("audio", file);
+      formData.append("name", name);
+
+      const res = await API.request("/api/voice/clone", {
+        method: "POST",
+        body: formData,
+        // Don't set Content-Type — browser sets it with boundary for FormData
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Clone failed" }));
+        throw new Error(err.error || "Clone failed");
+      }
+
+      const data = await res.json();
+      this.elements.voiceCloneResult.innerHTML =
+        `<span style="color: var(--primary)">Voice "${data.name}" cloned (${data.voiceId})</span>`;
+      this.elements.voiceCloneName.value = "";
+      this.elements.voiceCloneFile.value = "";
+      this.elements.voiceCloneUpload.querySelector("span").textContent =
+        "Drop audio file or click to upload";
+
+      // Refresh voices list
+      this.loadVoices();
+      App.showToast("Voice cloned successfully", "success");
+    } catch (err) {
+      this.elements.voiceCloneResult.innerHTML =
+        `<span style="color: #e74c3c">${err.message}</span>`;
+      App.showToast(err.message, "error");
+    } finally {
+      this.elements.voiceCloneBtn.disabled = false;
+      this.elements.voiceCloneBtn.textContent = "Clone Voice";
+    }
+  },
+
+  async saveVoiceSettings() {
+    const engine = this.elements.voiceEngine?.value;
+    if (!engine) return;
+
+    try {
+      await API.request("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: "voice.engine", value: engine }),
+      });
+      App.showToast("Voice engine saved. Restart server to apply.", "success");
     } catch (err) {
       App.showToast(err.message, "error");
     }
