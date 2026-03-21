@@ -17,19 +17,32 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
   const url = `${baseUrl || "https://api.anthropic.com"}/v1/messages`;
 
   // Convert messages to Anthropic format (system is separate)
-  const anthropicMessages = messages
+  let anthropicMessages = messages
     .filter((m) => m.role !== "system")
     .map((m) => ({ role: m.role, content: m.content }));
 
+  // Anthropic requires messages to alternate user/assistant.
+  // Merge consecutive same-role messages and ensure first message is from user.
+  anthropicMessages = mergeConsecutiveRoles(anthropicMessages);
+
+  // Anthropic requires at least one message
+  if (anthropicMessages.length === 0) {
+    throw new Error("No messages to send");
+  }
+
   const system = systemPrompt || messages.find((m) => m.role === "system")?.content || undefined;
 
+  const resolvedModel = model || "claude-sonnet-4-6-20250514";
+
   const body = {
-    model: model || "claude-sonnet-4-5-20250929",
+    model: resolvedModel,
     max_tokens: 8192,
     stream: true,
     messages: anthropicMessages,
     ...(system ? { system } : {}),
   };
+
+  console.log(`[anthropic] POST ${url} model=${resolvedModel} messages=${anthropicMessages.length}`);
 
   const response = await fetch(url, {
     method: "POST",
@@ -44,6 +57,7 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
 
   if (!response.ok) {
     const errText = await response.text();
+    console.error(`[anthropic] API error ${response.status}: ${errText}`);
     throw new Error(`Anthropic API error ${response.status}: ${errText}`);
   }
 
@@ -90,4 +104,30 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
     yield { type: "usage", usage };
   }
   yield { type: "done" };
+}
+
+/**
+ * Anthropic requires strictly alternating user/assistant roles,
+ * starting with user. Merge consecutive same-role messages.
+ */
+function mergeConsecutiveRoles(messages) {
+  if (messages.length === 0) return messages;
+
+  // Ensure first message is from user
+  if (messages[0].role !== "user") {
+    messages = [{ role: "user", content: "(continued)" }, ...messages];
+  }
+
+  const merged = [messages[0]];
+  for (let i = 1; i < messages.length; i++) {
+    const prev = merged[merged.length - 1];
+    if (messages[i].role === prev.role) {
+      // Merge consecutive same-role messages
+      prev.content += "\n\n" + messages[i].content;
+    } else {
+      merged.push({ ...messages[i] });
+    }
+  }
+
+  return merged;
 }

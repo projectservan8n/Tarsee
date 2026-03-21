@@ -15,7 +15,7 @@ let settingsStore = null;
 chatRouter.use((req, _res, next) => {
   if (!convStore) {
     convStore = new ConversationStore(req.app.get("db"));
-    settingsStore = new SettingsStore(req.app.get("db"));
+    settingsStore = new SettingsStore(req.app.get("db"), req.app.get("auditLog"));
   }
   next();
 });
