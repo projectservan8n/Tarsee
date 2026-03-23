@@ -314,6 +314,7 @@ html, body {
 
 /* --- Input Area --- */
 .input-area {
+  position: relative;
   padding: 16px 24px 24px;
   background: var(--bg);
 }

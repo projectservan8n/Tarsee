@@ -9,6 +9,12 @@ const Chat = {
 
   elements: {},
 
+  // Command palette state
+  commands: [],
+  paletteVisible: false,
+  paletteIndex: -1,
+  paletteCommands: [],
+
   init() {
     this.elements = {
       chatArea: document.getElementById("chatArea"),
@@ -21,16 +27,53 @@ const Chat = {
       topbarTitle: document.getElementById("topbarTitle"),
     };
 
-    // Auto-resize textarea
+    // Create command palette
+    const palette = document.createElement("div");
+    palette.id = "commandPalette";
+    palette.className = "command-palette";
+    palette.style.display = "none";
+    palette.innerHTML = '<div class="command-palette-list"></div>';
+    this.elements.inputArea.appendChild(palette);
+    this.elements.commandPalette = palette;
+    this.elements.commandPaletteList = palette.querySelector(".command-palette-list");
+
+    // Auto-resize textarea + command palette trigger
     this.elements.messageInput.addEventListener("input", () => {
       const el = this.elements.messageInput;
       el.style.height = "auto";
       el.style.height = Math.min(el.scrollHeight, 200) + "px";
       this.elements.sendBtn.disabled = !el.value.trim();
+      this.handleCommandPalette();
     });
 
-    // Send on Enter (Shift+Enter for newline)
+    // Keyboard: palette navigation + Enter to send
     this.elements.messageInput.addEventListener("keydown", (e) => {
+      if (this.paletteVisible) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          this.paletteIndex = Math.min(this.paletteIndex + 1, this.paletteCommands.length - 1);
+          this.updatePaletteHighlight();
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          this.paletteIndex = Math.max(this.paletteIndex - 1, 0);
+          this.updatePaletteHighlight();
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          if (this.paletteIndex >= 0) this.selectPaletteItem(this.paletteIndex);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          this.hidePalette();
+          return;
+        }
+      }
+
+      // Normal Enter to send
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         if (!this.isStreaming && this.elements.messageInput.value.trim()) {
@@ -39,10 +82,90 @@ const Chat = {
       }
     });
 
+    // Dismiss palette on outside click
+    document.addEventListener("click", (e) => {
+      if (this.paletteVisible && !this.elements.commandPalette.contains(e.target) && e.target !== this.elements.messageInput) {
+        this.hidePalette();
+      }
+    });
+
     this.elements.sendBtn.addEventListener("click", () => this.send());
     this.elements.newChatBtn.addEventListener("click", () => this.newChat());
 
     this.loadConversations();
+    this.loadCommands();
+  },
+
+  async loadCommands() {
+    try {
+      const data = await API.json("/api/chat/commands");
+      this.commands = data.commands || [];
+    } catch {
+      this.commands = [];
+    }
+  },
+
+  handleCommandPalette() {
+    const text = this.elements.messageInput.value;
+    if (text.startsWith("/") && !text.includes(" ") && text.length < 30) {
+      const filter = text.slice(1).toLowerCase();
+      const filtered = this.commands.filter(
+        (c) => c.name.toLowerCase().includes(filter) || c.description.toLowerCase().includes(filter)
+      );
+      this.showPalette(filtered);
+    } else {
+      this.hidePalette();
+    }
+  },
+
+  showPalette(commands) {
+    if (commands.length === 0) { this.hidePalette(); return; }
+    this.paletteVisible = true;
+    this.paletteIndex = 0;
+    this.paletteCommands = commands;
+
+    this.elements.commandPaletteList.innerHTML = commands
+      .map((cmd, i) =>
+        `<div class="command-palette-item${i === 0 ? " active" : ""}" data-index="${i}">
+          <span class="command-palette-name">/${escapeHtml(cmd.name)}</span>
+          <span class="command-palette-desc">${escapeHtml(cmd.description)}</span>
+        </div>`
+      ).join("");
+
+    this.elements.commandPaletteList.querySelectorAll(".command-palette-item").forEach((el) => {
+      el.addEventListener("click", () => this.selectPaletteItem(parseInt(el.dataset.index, 10)));
+      el.addEventListener("mouseenter", () => {
+        this.paletteIndex = parseInt(el.dataset.index, 10);
+        this.updatePaletteHighlight();
+      });
+    });
+
+    this.elements.commandPalette.style.display = "block";
+  },
+
+  hidePalette() {
+    this.paletteVisible = false;
+    this.paletteIndex = -1;
+    this.elements.commandPalette.style.display = "none";
+  },
+
+  selectPaletteItem(index) {
+    const cmd = this.paletteCommands[index];
+    if (!cmd) return;
+    // If usage has args placeholder like "/model [model-name]", place cursor after command name
+    const hasArgs = cmd.usage.includes("[");
+    this.elements.messageInput.value = hasArgs ? `/${cmd.name} ` : cmd.usage;
+    this.elements.messageInput.focus();
+    const len = this.elements.messageInput.value.length;
+    this.elements.messageInput.setSelectionRange(len, len);
+    this.hidePalette();
+    this.elements.sendBtn.disabled = !this.elements.messageInput.value.trim();
+  },
+
+  updatePaletteHighlight() {
+    const items = this.elements.commandPaletteList.querySelectorAll(".command-palette-item");
+    items.forEach((el, i) => el.classList.toggle("active", i === this.paletteIndex));
+    items[this.paletteIndex]?.scrollIntoView({ block: "nearest" });
   },
 
   async loadConversations() {

@@ -106,6 +106,58 @@
   51%, 100% { opacity: 0; }
 }
 
+/* --- Command Palette --- */
+.command-palette {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.12));
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: 50;
+}
+
+.command-palette-list {
+  padding: 6px;
+}
+
+.command-palette-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius, 8px);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.command-palette-item:hover,
+.command-palette-item.active {
+  background: var(--primary-light, rgba(108, 92, 231, 0.08));
+}
+
+.command-palette-name {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--primary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.command-palette-desc {
+  font-size: 13px;
+  color: var(--text-secondary, #6B7280);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Empty state */
 .empty-state {
   text-align: center;
