@@ -708,3 +708,19 @@ html, body {
     padding: 12px 16px 16px;
   }
 }
+
+/* --- Voice Clone Upload --- */
+.clone-upload {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.clone-upload:hover,
+.clone-upload.dragover {
+  border-color: var(--primary);
+  background: rgba(108, 92, 231, 0.04);
+}

@@ -59,14 +59,35 @@ const Settings = {
 
     // Voice settings handlers
     if (this.elements.voiceCloneUpload) {
-      this.elements.voiceCloneUpload.addEventListener("click", () => {
-        this.elements.voiceCloneFile.click();
-      });
+      const dropZone = this.elements.voiceCloneUpload;
+
+      // Click to select file
+      dropZone.addEventListener("click", () => this.elements.voiceCloneFile.click());
 
       this.elements.voiceCloneFile.addEventListener("change", () => {
         const file = this.elements.voiceCloneFile.files[0];
         if (file) {
-          this.elements.voiceCloneUpload.querySelector("span").textContent = file.name;
+          dropZone.querySelector("p").textContent = file.name;
+        }
+      });
+
+      // Drag-and-drop
+      dropZone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        dropZone.classList.add("dragover");
+      });
+      dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
+      dropZone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dropZone.classList.remove("dragover");
+        const file = e.dataTransfer.files[0];
+        if (file && file.type.startsWith("audio/")) {
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          this.elements.voiceCloneFile.files = dt.files;
+          dropZone.querySelector("p").textContent = file.name;
+        } else {
+          App.showToast("Please drop an audio file (WAV or MP3)", "error");
         }
       });
     }
@@ -264,8 +285,8 @@ const Settings = {
         `<span style="color: var(--primary)">Voice "${data.name}" cloned (${data.voiceId})</span>`;
       this.elements.voiceCloneName.value = "";
       this.elements.voiceCloneFile.value = "";
-      this.elements.voiceCloneUpload.querySelector("span").textContent =
-        "Drop audio file or click to upload";
+      this.elements.voiceCloneUpload.querySelector("p").textContent =
+        "Drop an audio file here or click to upload";
 
       // Refresh voices list
       this.loadVoices();

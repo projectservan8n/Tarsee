@@ -1,4 +1,5 @@
 import { Router } from "express";
+import Busboy from "busboy";
 import { getTTSEngine } from "../voice/engine-registry.js";
 import { cloneVoice, listVoiceProfiles } from "../voice/clone-handler.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
@@ -102,10 +103,25 @@ voiceRouter.post("/stt", async (req, res) => {
 /**
  * POST /api/voice/clone
  * Clone a voice from an audio sample.
- * Expects multipart form with 'audio' file and 'name' field.
+ * Accepts multipart form (web UI) or raw binary (API clients).
  */
 voiceRouter.post("/clone", async (req, res) => {
-  // Simple body buffer read for audio (Content-Type: application/octet-stream or multipart)
+  const contentType = req.headers["content-type"] || "";
+  const db = req.app.get("db");
+
+  // Multipart form data (from web UI: FormData with 'audio' file + 'name' field)
+  if (contentType.includes("multipart/form-data")) {
+    try {
+      const { audioBuffer, name } = await parseMultipart(req);
+      const result = await cloneVoice(audioBuffer, name, db);
+      return res.status(201).json(result);
+    } catch (err) {
+      const status = err.status || 500;
+      return res.status(status).json({ error: err.message });
+    }
+  }
+
+  // Raw binary fallback (API clients: Content-Type: application/octet-stream)
   const name = req.headers["x-voice-name"] || req.query.name || "Custom Voice";
   const chunks = [];
   let totalSize = 0;
@@ -119,7 +135,6 @@ voiceRouter.post("/clone", async (req, res) => {
   }
 
   const audioBuffer = Buffer.concat(chunks);
-  const db = req.app.get("db");
 
   try {
     const result = await cloneVoice(audioBuffer, name, db);
@@ -129,3 +144,37 @@ voiceRouter.post("/clone", async (req, res) => {
     res.status(status).json({ error: err.message });
   }
 });
+
+/**
+ * Parse multipart form data with busboy.
+ * Returns { audioBuffer, name }.
+ */
+function parseMultipart(req) {
+  return new Promise((resolve, reject) => {
+    const busboy = Busboy({ headers: req.headers, limits: { fileSize: LIMITS.VOICE_SAMPLE_MAX_BYTES } });
+    let audioBuffer = null;
+    let name = "Custom Voice";
+
+    busboy.on("file", (fieldname, stream) => {
+      if (fieldname !== "audio") { stream.resume(); return; }
+      const chunks = [];
+      stream.on("data", (chunk) => chunks.push(chunk));
+      stream.on("end", () => { audioBuffer = Buffer.concat(chunks); });
+      stream.on("limit", () => {
+        reject(Object.assign(new Error("Audio sample too large (max 25MB)"), { status: 413 }));
+      });
+    });
+
+    busboy.on("field", (fieldname, value) => {
+      if (fieldname === "name") name = value.trim() || "Custom Voice";
+    });
+
+    busboy.on("finish", () => {
+      if (!audioBuffer) return reject(Object.assign(new Error("No audio file provided"), { status: 400 }));
+      resolve({ audioBuffer, name });
+    });
+
+    busboy.on("error", reject);
+    req.pipe(busboy);
+  });
+}
