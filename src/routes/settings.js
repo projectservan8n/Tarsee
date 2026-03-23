@@ -2,7 +2,7 @@ import { Router } from "express";
 import { SettingsStore } from "../db/settings.js";
 import { AI_PROVIDERS } from "../config/constants.js";
 import { getAvailableProviders } from "../ai/router.js";
-import { readWorkspaceFile, writeWorkspaceFile } from "../lib/workspace-files.js";
+import { readWorkspaceFile, writeWorkspaceFile, hasBootstrapFile, deleteBootstrapFile } from "../lib/workspace-files.js";
 
 export const settingsRouter = Router();
 
@@ -118,7 +118,7 @@ settingsRouter.get("/setup-status", (_req, res) => {
 const ALLOWED_WORKSPACE_FILES = [
   "SOUL.md", "USER.md", "MEMORY.md",
   "AGENTS.md", "IDENTITY.md", "TOOLS.md",
-  "HEARTBEAT.md", "BOOT.md",
+  "HEARTBEAT.md", "BOOT.md", "BOOTSTRAP.md",
 ];
 
 settingsRouter.get("/workspace-file", (req, res) => {
@@ -166,5 +166,22 @@ settingsRouter.post("/general", (req, res) => {
   }
 
   settingsStore.set(key, value);
+  res.json({ ok: true });
+});
+
+/**
+ * GET /api/settings/bootstrap-status
+ * Check if BOOTSTRAP.md exists (first-run detection).
+ */
+settingsRouter.get("/bootstrap-status", (_req, res) => {
+  res.json({ hasBootstrap: hasBootstrapFile() });
+});
+
+/**
+ * DELETE /api/settings/bootstrap
+ * Delete BOOTSTRAP.md after first-run setup is complete.
+ */
+settingsRouter.delete("/bootstrap", (_req, res) => {
+  deleteBootstrapFile();
   res.json({ ok: true });
 });

@@ -128,6 +128,12 @@ try {
   console.warn("[opusclaw] memory sync error:", err.message);
 }
 
+// --- Boot runner (BOOT.md on every restart) ---
+import { runBootChecklist } from "./lib/boot-runner.js";
+runBootChecklist({ db, settingsStore }).catch((err) => {
+  console.warn("[opusclaw] boot runner error:", err.message);
+});
+
 // --- Heartbeat system ---
 import { startHeartbeat, stopHeartbeat } from "./lib/heartbeat.js";
 startHeartbeat({ db, settingsStore });

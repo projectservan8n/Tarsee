@@ -108,22 +108,37 @@ const Setup = {
 
   /**
    * Start the personality interview as the first conversation.
+   * If BOOTSTRAP.md exists, uses it to enhance the interview.
    */
   async startPersonalityInterview() {
     this.isSetupConversation = true;
     this.personalityBuffer = "";
 
+    // Check for BOOTSTRAP.md (first-run ritual)
+    let bootstrapContent = "";
+    try {
+      const bsData = await API.json("/api/settings/workspace-file?name=BOOTSTRAP.md");
+      if (bsData.content && bsData.content.trim().length > 10) {
+        bootstrapContent = bsData.content;
+      }
+    } catch {
+      // No bootstrap file, that's fine
+    }
+
+    const systemPrompt = bootstrapContent
+      ? `${INTERVIEW_SYSTEM_PROMPT}\n\n--- BOOTSTRAP CONTEXT ---\nThe following is the BOOTSTRAP.md ritual file. Use it to guide the setup:\n\n${bootstrapContent}`
+      : INTERVIEW_SYSTEM_PROMPT;
+
     // Create a conversation with the interview system prompt
     try {
       const conv = await API.createConversation({
         title: "Getting to know you",
-        systemPrompt: INTERVIEW_SYSTEM_PROMPT,
+        systemPrompt,
       });
       this.setupConversationId = conv.id;
       Chat.openChannel("web:default", conv.id);
 
       // Send a hidden first message to kick off the interview
-      // The bot will introduce itself and ask the first question
       setTimeout(() => {
         Chat.elements.messageInput.value = "Hey! I just set you up. Let's get to know each other.";
         Chat.send();
@@ -212,6 +227,27 @@ const Setup = {
             body: { content: pref, category: "preference", conversationId: this.setupConversationId },
           });
         }
+      }
+
+      // Populate IDENTITY.md with extracted metadata
+      const identityLines = [
+        "# Identity",
+        "",
+        `- **Name:** ${botName}`,
+        `- **Emoji:** ${identity.emoji || "\u{1F99E}"}`,
+        `- **Creature:** ${identity.creature || "Lobster"}`,
+        `- **Vibe:** ${identity.vibe || "Helpful and sharp"}`,
+      ];
+      await API.json("/api/settings/workspace-file", {
+        method: "PUT",
+        body: { name: "IDENTITY.md", content: identityLines.join("\n") + "\n" },
+      });
+
+      // Delete BOOTSTRAP.md (first-run ritual complete)
+      try {
+        await API.json("/api/settings/bootstrap", { method: "DELETE" });
+      } catch {
+        // May not exist, that's fine
       }
 
       App.showToast(`Setup complete! I'm ${botName} now.`, "success");
