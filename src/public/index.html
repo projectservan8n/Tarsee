@@ -32,6 +32,11 @@
     </div>
   </div>
 
+  <!-- Setup Wizard (first-time only) -->
+  <div id="setupWizard" class="setup-wizard" style="display:none">
+    <div class="setup-card" id="setupContent"></div>
+  </div>
+
   <!-- Main App -->
   <div id="appScreen" class="app" style="display:none">
 
@@ -166,6 +171,20 @@
       </h2>
 
       <div class="settings-section">
+        <h3>Bot Identity</h3>
+        <div class="form-group">
+          <label>Bot Name</label>
+          <input type="text" id="settingsBotName" placeholder="OpusClaw">
+        </div>
+        <div class="form-group">
+          <label>Global System Prompt</label>
+          <textarea id="settingsGlobalPrompt" rows="4" placeholder="You are a helpful AI assistant..."></textarea>
+          <div class="hint">This personality prompt applies to ALL conversations. Auto-generated during setup, editable anytime.</div>
+        </div>
+        <button class="btn btn-primary" id="saveIdentityBtn">Save Identity</button>
+      </div>
+
+      <div class="settings-section">
         <h3>AI Provider</h3>
         <div class="form-group">
           <label>Provider</label>
@@ -250,6 +269,16 @@
       </div>
 
       <div class="settings-section">
+        <h3>Memories</h3>
+        <div class="hint" style="margin-bottom: 12px">The bot learns preferences and facts over time. Memories are injected into every conversation.</div>
+        <div id="memoriesList" style="max-height: 200px; overflow-y: auto; margin-bottom: 12px"></div>
+        <div style="display: flex; gap: 8px">
+          <input type="text" id="memoryInput" placeholder="Add a memory manually..." style="flex:1">
+          <button class="btn btn-sm btn-primary" id="addMemoryBtn">Add</button>
+        </div>
+      </div>
+
+      <div class="settings-section">
         <h3>API Token</h3>
         <div class="form-group">
           <label>Your API Token</label>
@@ -269,6 +298,7 @@
   <script src="/js/voice.js"></script>
   <script src="/js/console.js"></script>
   <script src="/js/settings.js"></script>
+  <script src="/js/setup.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>

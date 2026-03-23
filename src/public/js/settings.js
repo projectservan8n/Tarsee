@@ -21,6 +21,14 @@ const Settings = {
       slackAppToken: document.getElementById("settingsSlackAppToken"),
       saveChannelsBtn: document.getElementById("saveChannelsBtn"),
       apiToken: document.getElementById("settingsApiToken"),
+      // Identity
+      botName: document.getElementById("settingsBotName"),
+      globalPrompt: document.getElementById("settingsGlobalPrompt"),
+      saveIdentityBtn: document.getElementById("saveIdentityBtn"),
+      // Memory
+      memoriesList: document.getElementById("memoriesList"),
+      memoryInput: document.getElementById("memoryInput"),
+      addMemoryBtn: document.getElementById("addMemoryBtn"),
       // Voice settings
       voiceEngine: document.getElementById("settingsVoiceEngine"),
       voiceEngineStatus: document.getElementById("voiceEngineStatus"),
@@ -56,6 +64,19 @@ const Settings = {
 
     this.elements.saveProviderBtn.addEventListener("click", () => this.saveProvider());
     this.elements.saveChannelsBtn.addEventListener("click", () => this.saveChannels());
+
+    // Identity handlers
+    if (this.elements.saveIdentityBtn) {
+      this.elements.saveIdentityBtn.addEventListener("click", () => this.saveIdentity());
+    }
+
+    // Memory handlers
+    if (this.elements.addMemoryBtn) {
+      this.elements.addMemoryBtn.addEventListener("click", () => this.addMemory());
+      this.elements.memoryInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") this.addMemory();
+      });
+    }
 
     // Voice settings handlers
     if (this.elements.voiceCloneUpload) {
@@ -148,6 +169,12 @@ const Settings = {
         this.elements.apiToken.value = API.token;
       }
 
+      // Load identity
+      const botName = settings.find((s) => s.key === "identity.name")?.value;
+      const globalPrompt = settings.find((s) => s.key === "identity.systemPrompt")?.value;
+      if (botName && this.elements.botName) this.elements.botName.value = botName;
+      if (globalPrompt && this.elements.globalPrompt) this.elements.globalPrompt.value = globalPrompt;
+
       // Load voice settings
       const voiceEngine = settings.find((s) => s.key === "voice.engine")?.value;
       if (voiceEngine && this.elements.voiceEngine) {
@@ -157,6 +184,9 @@ const Settings = {
       // Load voice engine status and voices list
       this.loadVoiceStatus();
       this.loadVoices();
+
+      // Load memories
+      this.loadMemories();
     } catch (err) {
       App.showToast("Failed to load settings: " + err.message, "error");
     }
@@ -312,6 +342,84 @@ const Settings = {
         body: JSON.stringify({ key: "voice.engine", value: engine }),
       });
       App.showToast("Voice engine saved. Restart server to apply.", "success");
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+  },
+
+  // --- Identity ---
+  async saveIdentity() {
+    const name = this.elements.botName?.value.trim() || "OpusClaw";
+    const prompt = this.elements.globalPrompt?.value.trim() || "";
+
+    try {
+      await API.json("/api/settings/general", {
+        method: "POST",
+        body: { key: "identity.name", value: name },
+      });
+      if (prompt) {
+        await API.json("/api/settings/general", {
+          method: "POST",
+          body: { key: "identity.systemPrompt", value: prompt },
+        });
+      }
+      App.showToast("Identity saved", "success");
+      // Update chat UI bot name
+      if (typeof Chat !== "undefined" && Chat.setBotName) Chat.setBotName(name);
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+  },
+
+  // --- Memories ---
+  async loadMemories() {
+    if (!this.elements.memoriesList) return;
+    try {
+      const data = await API.json("/api/memory?limit=50");
+      const memories = data.memories || [];
+
+      if (memories.length === 0) {
+        this.elements.memoriesList.innerHTML =
+          '<div style="color: var(--text-muted); font-size: 13px">No memories yet. The bot will learn over time.</div>';
+        return;
+      }
+
+      this.elements.memoriesList.innerHTML = memories.map((m) =>
+        `<div class="memory-item" style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid var(--border)">
+          <span style="color:var(--primary);font-size:11px;flex-shrink:0">${m.category}</span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.content}</span>
+          <button class="btn btn-sm" data-memory-id="${m.id}" style="flex-shrink:0;padding:2px 6px;font-size:11px">x</button>
+        </div>`
+      ).join("");
+
+      // Delete buttons
+      this.elements.memoriesList.querySelectorAll("[data-memory-id]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          try {
+            await API.json(`/api/memory/${btn.dataset.memoryId}`, { method: "DELETE" });
+            this.loadMemories();
+          } catch (err) {
+            App.showToast(err.message, "error");
+          }
+        });
+      });
+    } catch {
+      this.elements.memoriesList.innerHTML = "";
+    }
+  },
+
+  async addMemory() {
+    const text = this.elements.memoryInput?.value.trim();
+    if (!text) return;
+
+    try {
+      await API.json("/api/memory", {
+        method: "POST",
+        body: { content: text, category: "manual" },
+      });
+      this.elements.memoryInput.value = "";
+      this.loadMemories();
+      App.showToast("Memory added", "success");
     } catch (err) {
       App.showToast(err.message, "error");
     }

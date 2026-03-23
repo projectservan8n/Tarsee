@@ -84,6 +84,32 @@ settingsRouter.post("/channel", (req, res) => {
 });
 
 /**
+ * GET /api/settings/setup-status
+ * Check if first-time setup is needed.
+ */
+settingsRouter.get("/setup-status", (_req, res) => {
+  const provider = settingsStore.get("ai.activeProvider");
+  const botName = settingsStore.get("identity.name");
+  const hasKey = provider
+    ? !!settingsStore.get(`ai.${provider}.apiKey`)
+    : false;
+  // Also check env vars — if ANTHROPIC_API_KEY etc is set, provider may work without UI config
+  const envConfigured = !!(
+    process.env.ANTHROPIC_API_KEY ||
+    process.env.OPENAI_API_KEY ||
+    process.env.GEMINI_API_KEY ||
+    process.env.OPENROUTER_API_KEY
+  );
+  res.json({
+    needsSetup: !provider && !envConfigured,
+    needsPersonality: !botName,
+    botName: botName || "OpusClaw",
+    provider: provider || null,
+    hasKey: hasKey || envConfigured,
+  });
+});
+
+/**
  * POST /api/settings/general
  * Update general settings.
  * Body: { key, value }
