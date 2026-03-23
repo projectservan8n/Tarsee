@@ -128,6 +128,10 @@ try {
   console.warn("[opusclaw] memory sync error:", err.message);
 }
 
+// --- Heartbeat system ---
+import { startHeartbeat, stopHeartbeat } from "./lib/heartbeat.js";
+startHeartbeat({ db, settingsStore });
+
 // --- Channel Manager (lazy start) ---
 const channelManager = new ChannelManager(db);
 app.set("channelManager", channelManager);
@@ -139,6 +143,7 @@ channelManager.startAll().catch((err) => {
 function shutdown(signal) {
   console.log(`[opusclaw] ${signal} received, shutting down...`);
   stopTTSEngine();
+  stopHeartbeat();
   channelManager.stopAll();
   server.close(() => {
     db.close();

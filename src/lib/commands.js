@@ -365,18 +365,30 @@ const COMMANDS = {
   },
 
   heartbeat: {
-    description: "Show heartbeat status or trigger a manual heartbeat",
-    usage: "/heartbeat",
-    handler: async () => {
+    description: "Show heartbeat status or trigger a manual run",
+    usage: "/heartbeat [run]",
+    handler: async (args) => {
       try {
-        const { readWorkspaceFile } = await import("./workspace-files.js");
-        const content = readWorkspaceFile("HEARTBEAT.md");
-        if (!content || content.trim().length < 10) {
-          return "No heartbeat tasks defined. Edit **HEARTBEAT.md** in Settings to add periodic tasks.";
+        const { getHeartbeatStatus, runHeartbeat } = await import("./heartbeat.js");
+
+        if (args === "run") {
+          const result = await runHeartbeat("manual");
+          if (result.skipped) return `Heartbeat skipped: ${result.reason}`;
+          if (result.error) return `Heartbeat error: ${result.error}`;
+          if (result.suppressed) return "Heartbeat ran — **HEARTBEAT_OK** (nothing to report)";
+          return `**Heartbeat result:**\n\n${result.response?.slice(0, 2000) || "(empty)"}`;
         }
-        return `**Heartbeat Tasks:**\n\n${content.slice(0, 2000)}\n\n*Heartbeat system runs these tasks periodically.*`;
+
+        const status = getHeartbeatStatus();
+        const lines = ["**Heartbeat Status**", ""];
+        lines.push(`**Running:** ${status.running ? "Yes" : "No"}`);
+        lines.push(`**Last run:** ${status.lastRun || "Never"}`);
+        lines.push(`**Run count:** ${status.runCount || 0}`);
+        if (status.lastResult) lines.push(`**Last result:** ${status.lastResult.slice(0, 200)}`);
+        lines.push("", "Use `/heartbeat run` to trigger manually.");
+        return lines.join("\n");
       } catch (err) {
-        return `Failed to read HEARTBEAT.md: ${err.message}`;
+        return `Heartbeat error: ${err.message}`;
       }
     },
   },
