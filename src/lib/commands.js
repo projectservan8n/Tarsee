@@ -276,6 +276,38 @@ const COMMANDS = {
     },
   },
 
+  reset: {
+    description: "Create a fresh session for the current channel (keeps history in DB)",
+    usage: "/reset",
+    handler: async (_args, ctx) => {
+      if (!ctx.conversationId || !ctx.convStore || !ctx.settingsStore) {
+        return "No active conversation to reset.";
+      }
+
+      // Find which channel_conv key points to this conversation
+      const channelSettings = ctx.settingsStore.getByPrefix("channel_conv.");
+      let channelKey = null;
+      for (const { key, value } of channelSettings) {
+        if (value === ctx.conversationId) {
+          channelKey = key.replace("channel_conv.", "");
+          break;
+        }
+      }
+
+      if (!channelKey) {
+        return "Could not determine which channel this conversation belongs to.";
+      }
+
+      // Create a new conversation for this channel
+      const conv = ctx.convStore.create({
+        title: channelKey === "web:default" ? "Web Chat" : channelKey,
+      });
+      ctx.settingsStore.set(`channel_conv.${channelKey}`, conv.id);
+
+      return `Session reset. Fresh conversation started for **${channelKey}**. Previous history is still in the database.`;
+    },
+  },
+
   forget: {
     description: "List and manage bot memories",
     usage: "/forget",

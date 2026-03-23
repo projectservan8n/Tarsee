@@ -4,11 +4,12 @@ import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
+import { parseReactions } from "../lib/reaction-parser.js";
 
 /**
  * Creates and starts a Telegram bot.
  *
- * @param {object} config - { token, enabled, allowedChats? }
+ * @param {object} config - { token, enabled, allowedChats?, ackReaction?, streaming? }
  * @param {import('better-sqlite3').Database} db
  * @returns {Promise<{stop: Function}>}
  */
@@ -18,9 +19,21 @@ export async function createTelegramBot(config, db) {
 
   const bot = new Telegraf(config.token);
 
-  bot.on("text", async (ctx) => {
+  /**
+   * Resolve channel key — supports topics (forum threads).
+   */
+  function getChannelKey(ctx) {
     const chatId = ctx.chat.id;
-    const message = ctx.message.text;
+    const threadId = ctx.message?.message_thread_id;
+    if (threadId) return `telegram:${chatId}:topic:${threadId}`;
+    return `telegram:${chatId}`;
+  }
+
+  /**
+   * Handle a text message (shared by text handler and callback handler).
+   */
+  async function handleMessage(ctx, text, replyToMessageId = null) {
+    const chatId = ctx.chat.id;
     const username = ctx.from.username || ctx.from.first_name || "User";
 
     // Check allowed chats
@@ -28,13 +41,14 @@ export async function createTelegramBot(config, db) {
       if (!config.allowedChats.includes(String(chatId))) return;
     }
 
-    if (!message?.trim()) return;
+    if (!text?.trim()) return;
+
+    const channelKey = getChannelKey(ctx);
 
     // Check for commands
-    if (message.startsWith("/")) {
-      const channelKey = `telegram:${chatId}`;
+    if (text.startsWith("/")) {
       const existingConvId = settingsStore.get(`channel_conv.${channelKey}`);
-      const cmdResult = await processCommand(message, {
+      const cmdResult = await processCommand(text, {
         settingsStore,
         convStore,
         conversationId: existingConvId,
@@ -43,20 +57,23 @@ export async function createTelegramBot(config, db) {
       if (cmdResult.handled) {
         const chunks = splitMessage(cmdResult.response, 4096);
         for (const chunk of chunks) {
-          await ctx.reply(chunk, { parse_mode: "Markdown" }).catch(() => ctx.reply(chunk));
+          await ctx.reply(chunk, {
+            parse_mode: "Markdown",
+            ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
+          }).catch(() => ctx.reply(chunk));
         }
         return;
       }
     }
 
-    // Get or create conversation keyed by Telegram chat
-    const channelKey = `telegram:${chatId}`;
+    // Get or create conversation keyed by Telegram chat/topic
     let convId = settingsStore.get(`channel_conv.${channelKey}`);
 
     if (!convId || !convStore.get(convId)) {
-      const conv = convStore.create({
-        title: ctx.chat.title || `Chat with ${username}`,
-      });
+      const title = ctx.message?.message_thread_id
+        ? `${ctx.chat.title || "Chat"} > Topic ${ctx.message.message_thread_id}`
+        : ctx.chat.title || `Chat with ${username}`;
+      const conv = convStore.create({ title });
       convId = conv.id;
       settingsStore.set(`channel_conv.${channelKey}`, convId);
     }
@@ -64,7 +81,7 @@ export async function createTelegramBot(config, db) {
     // Save user message
     convStore.addMessage(convId, {
       role: "user",
-      content: `[${username}]: ${message}`,
+      content: `[${username}]: ${text}`,
     });
 
     // Get provider
@@ -92,11 +109,14 @@ export async function createTelegramBot(config, db) {
       conversationId: convId,
       messageCount: history.length,
       conversationPrompt: conv?.system_prompt,
-      channelHint: "Keep responses concise for chat. You are in a Telegram conversation.",
+      channelHint: `Keep responses concise for chat. You are in a Telegram conversation.
+You can use these special markers in your response:
+- [react: emoji] — adds a reaction to the user's message (e.g. [react: ✅])
+- [buttons: ["Option A", "Option B"]] — sends inline buttons the user can tap`,
     });
 
     let fullResponse = "";
-    const streaming = config.streaming ?? "partial"; // partial | off
+    const streaming = config.streaming ?? "partial";
 
     try {
       const stream = chatStream({
@@ -111,8 +131,7 @@ export async function createTelegramBot(config, db) {
       // Live streaming: edit a preview message as tokens arrive
       let previewMsgId = null;
       let lastEditTime = 0;
-      const EDIT_INTERVAL_MS = 1500; // Telegram rate limits are stricter
-      // Keep typing indicator running
+      const EDIT_INTERVAL_MS = 1500;
       const typingInterval = setInterval(() => {
         ctx.sendChatAction("typing").catch(() => {});
       }, 4000);
@@ -121,7 +140,6 @@ export async function createTelegramBot(config, db) {
         if (event.type === "text") {
           fullResponse += event.content;
 
-          // Live edit preview
           if (streaming === "partial" && fullResponse.length > 20) {
             const now = Date.now();
             if (now - lastEditTime > EDIT_INTERVAL_MS) {
@@ -129,7 +147,9 @@ export async function createTelegramBot(config, db) {
               const preview = fullResponse.slice(0, 4000) + (fullResponse.length > 4000 ? "..." : " ▎");
               try {
                 if (!previewMsgId) {
-                  const sent = await ctx.reply(preview);
+                  const sent = await ctx.reply(preview, {
+                    ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
+                  });
                   previewMsgId = sent.message_id;
                 } else {
                   await ctx.telegram.editMessageText(
@@ -147,17 +167,27 @@ export async function createTelegramBot(config, db) {
       clearInterval(typingInterval);
 
       if (fullResponse) {
+        // Parse agent reactions and buttons
+        const { cleanText, reactions, buttons } = parseReactions(fullResponse);
+
         convStore.addMessage(convId, {
           role: "assistant",
-          content: fullResponse,
+          content: cleanText,
           provider: activeProvider.provider,
           model: activeProvider.model,
         });
 
-        // Telegram has 4096 char limit
-        const chunks = splitMessage(fullResponse, 4096);
+        // Apply agent reactions to the original message
+        for (const emoji of reactions) {
+          if (ctx.message?.message_id) {
+            ctx.telegram.setMessageReaction?.(chatId, ctx.message.message_id, [{ type: "emoji", emoji }]).catch(() => {});
+          }
+        }
 
-        if (previewMsgId && chunks.length === 1) {
+        // Send final text
+        const chunks = splitMessage(cleanText, 4096);
+
+        if (previewMsgId && chunks.length === 1 && !buttons) {
           // Edit preview to final content
           await ctx.telegram.editMessageText(
             chatId, previewMsgId, undefined, chunks[0],
@@ -170,10 +200,28 @@ export async function createTelegramBot(config, db) {
           if (previewMsgId) {
             await ctx.telegram.deleteMessage(chatId, previewMsgId).catch(() => {});
           }
-          for (const chunk of chunks) {
-            await ctx.reply(chunk, { parse_mode: "Markdown" }).catch(() =>
-              ctx.reply(chunk)
-            );
+
+          // Send text chunks
+          for (let i = 0; i < chunks.length; i++) {
+            const isLast = i === chunks.length - 1;
+            const opts = { parse_mode: "Markdown" };
+            if (replyToMessageId && i === 0) opts.reply_to_message_id = replyToMessageId;
+
+            // Attach inline buttons to the last chunk
+            if (isLast && buttons?.length > 0) {
+              opts.reply_markup = {
+                inline_keyboard: buttonsToKeyboard(buttons),
+              };
+            }
+
+            await ctx.reply(chunks[i], opts).catch(() => ctx.reply(chunks[i]));
+          }
+
+          // If no text chunks but we have buttons, send buttons alone
+          if (chunks.length === 0 && buttons?.length > 0) {
+            await ctx.reply("Choose:", {
+              reply_markup: { inline_keyboard: buttonsToKeyboard(buttons) },
+            });
           }
         }
       }
@@ -181,6 +229,24 @@ export async function createTelegramBot(config, db) {
       console.error("[telegram] chat error:", err.message);
       await ctx.reply("Sorry, I encountered an error processing your message.").catch(() => {});
     }
+  }
+
+  // --- Main text handler ---
+  bot.on("text", async (ctx) => {
+    await handleMessage(ctx, ctx.message.text);
+  });
+
+  // --- Inline button callback handler ---
+  bot.on("callback_query", async (ctx) => {
+    const data = ctx.callbackQuery?.data;
+    if (!data) return;
+
+    // Acknowledge the button press immediately
+    await ctx.answerCbQuery().catch(() => {});
+
+    // Feed button click back into the conversation as a user message
+    const buttonText = `[Button clicked: ${data}]`;
+    await handleMessage(ctx, buttonText, ctx.callbackQuery?.message?.message_id);
   });
 
   bot.catch((err) => {
@@ -196,6 +262,23 @@ export async function createTelegramBot(config, db) {
       bot.stop("OpusClaw shutdown");
     },
   };
+}
+
+/**
+ * Convert buttons array to Telegram inline keyboard format.
+ * Arranges up to 3 buttons per row.
+ */
+function buttonsToKeyboard(buttons) {
+  const rows = [];
+  for (let i = 0; i < buttons.length; i += 3) {
+    rows.push(
+      buttons.slice(i, i + 3).map((b) => ({
+        text: b.text,
+        callback_data: String(b.data).slice(0, 64), // Telegram 64-byte limit
+      }))
+    );
+  }
+  return rows;
 }
 
 function splitMessage(text, maxLen) {

@@ -1,14 +1,15 @@
-import { Client, GatewayIntentBits, Events } from "discord.js";
+import { Client, GatewayIntentBits, Events, ActivityType, ChannelType } from "discord.js";
 import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
+import { parseReactions } from "../lib/reaction-parser.js";
 
 /**
  * Creates and starts a Discord bot.
  *
- * @param {object} config - { token, enabled, allowedChannels?, allowDMs? }
+ * @param {object} config - { token, enabled, allowedChannels?, allowDMs?, ackReaction?, streaming?, status?, activity?, activityType? }
  * @param {import('better-sqlite3').Database} db
  * @returns {Promise<{stop: Function}>}
  */
@@ -25,6 +26,29 @@ export async function createDiscordBot(config, db) {
     ],
   });
 
+  /**
+   * Resolve channel key — supports threads.
+   */
+  function getChannelKey(message) {
+    const channel = message.channel;
+    // Thread channels get their own session
+    if (channel.isThread?.()) {
+      return `discord:${channel.parentId}:thread:${channel.id}`;
+    }
+    return `discord:${channel.id}`;
+  }
+
+  /**
+   * Get a human-readable title for the channel.
+   */
+  function getChannelTitle(message) {
+    const isDM = !message.guild;
+    const channel = message.channel;
+    if (isDM) return `DM with ${message.author.username}`;
+    if (channel.isThread?.()) return `${channel.parent?.name || "channel"} > ${channel.name}`;
+    return `#${channel.name || "channel"}`;
+  }
+
   client.on(Events.MessageCreate, async (message) => {
     // Ignore bots and self
     if (message.author.bot) return;
@@ -34,14 +58,21 @@ export async function createDiscordBot(config, db) {
     const isDM = !message.guild;
     if (isDM && config.allowDMs === false) return;
 
+    // For threads: always respond if parent channel is allowed
+    const isThread = message.channel.isThread?.();
+    const effectiveChannelId = isThread ? message.channel.parentId : message.channel.id;
+
     if (!isDM && config.allowedChannels?.length > 0) {
-      if (!config.allowedChannels.includes(message.channel.id)) return;
+      if (!config.allowedChannels.includes(effectiveChannelId)) return;
     }
 
-    // Need to be mentioned in guilds (unless allowedChannels explicitly listed)
-    if (!isDM && !config.allowedChannels?.length) {
+    // In guild (non-thread): need to be mentioned unless allowedChannels explicitly listed
+    if (!isDM && !isThread && !config.allowedChannels?.length) {
       if (!message.mentions.has(client.user)) return;
     }
+
+    // In threads: always respond (no mention needed)
+    // In DMs: always respond
 
     const content = message.content
       .replace(new RegExp(`<@!?${client.user.id}>`), "")
@@ -49,9 +80,10 @@ export async function createDiscordBot(config, db) {
 
     if (!content) return;
 
+    const channelKey = getChannelKey(message);
+
     // Check for commands
     if (content.startsWith("/")) {
-      const channelKey = `discord:${message.channel.id}`;
       const existingConvId = settingsStore.get(`channel_conv.${channelKey}`);
       const cmdResult = await processCommand(content, {
         settingsStore,
@@ -68,14 +100,12 @@ export async function createDiscordBot(config, db) {
       }
     }
 
-    // Get or create a conversation keyed by Discord channel
-    const channelKey = `discord:${message.channel.id}`;
+    // Get or create conversation keyed by Discord channel/thread
     let convId = settingsStore.get(`channel_conv.${channelKey}`);
 
     if (!convId || !convStore.get(convId)) {
       const conv = convStore.create({
-        title: isDM ? `DM with ${message.author.username}` : `#${message.channel.name || "channel"}`,
-        provider: null,
+        title: getChannelTitle(message),
       });
       convId = conv.id;
       settingsStore.set(`channel_conv.${channelKey}`, convId);
@@ -112,11 +142,13 @@ export async function createDiscordBot(config, db) {
       conversationId: convId,
       messageCount: history.length,
       conversationPrompt: conv?.system_prompt,
-      channelHint: "Keep responses concise for chat. You are in a Discord conversation.",
+      channelHint: `Keep responses concise for chat. You are in a Discord conversation.
+You can use these special markers in your response:
+- [react: emoji] — adds a reaction to the user's message (e.g. [react: ✅] or [react: 👍])`,
     });
 
     let fullResponse = "";
-    const streaming = config.streaming ?? "partial"; // partial | off
+    const streaming = config.streaming ?? "partial";
 
     try {
       const stream = chatStream({
@@ -131,13 +163,12 @@ export async function createDiscordBot(config, db) {
       // Live streaming: edit a preview message as tokens arrive
       let previewMsg = null;
       let lastEditTime = 0;
-      const EDIT_INTERVAL_MS = 1200; // Rate limit: edit at most every 1.2s
+      const EDIT_INTERVAL_MS = 1200;
 
       for await (const event of stream) {
         if (event.type === "text") {
           fullResponse += event.content;
 
-          // Live edit preview if streaming is enabled
           if (streaming === "partial" && fullResponse.length > 10) {
             const now = Date.now();
             if (now - lastEditTime > EDIT_INTERVAL_MS) {
@@ -152,7 +183,6 @@ export async function createDiscordBot(config, db) {
               } catch {
                 // Editing can fail if message was deleted
               }
-              // Keep typing indicator going
               message.channel.sendTyping().catch(() => {});
             }
           }
@@ -161,9 +191,12 @@ export async function createDiscordBot(config, db) {
 
       // Save and send final response
       if (fullResponse) {
+        // Parse agent reactions
+        const { cleanText, reactions } = parseReactions(fullResponse);
+
         convStore.addMessage(convId, {
           role: "assistant",
-          content: fullResponse,
+          content: cleanText,
           provider: activeProvider.provider,
           model: activeProvider.model,
         });
@@ -173,14 +206,17 @@ export async function createDiscordBot(config, db) {
           message.reactions.cache.get(ackEmoji)?.users.remove(client.user.id).catch(() => {});
         }
 
+        // Apply agent reactions to the user's message
+        for (const emoji of reactions) {
+          message.react(emoji).catch(() => {});
+        }
+
         // Discord has 2000 char limit — split if needed
-        const chunks = splitMessage(fullResponse, 2000);
+        const chunks = splitMessage(cleanText, 2000);
 
         if (previewMsg && chunks.length === 1) {
-          // Just edit the preview to final content
           await previewMsg.edit(chunks[0]).catch(() => {});
         } else {
-          // Delete preview and send fresh
           if (previewMsg) {
             await previewMsg.delete().catch(() => {});
           }
@@ -191,7 +227,6 @@ export async function createDiscordBot(config, db) {
       }
     } catch (err) {
       console.error("[discord] chat error:", err.message);
-      // Remove ack reaction on error
       if (ackEmoji) {
         message.reactions.cache.get(ackEmoji)?.users.remove(client.user.id).catch(() => {});
       }
@@ -201,6 +236,29 @@ export async function createDiscordBot(config, db) {
 
   client.on(Events.ClientReady, () => {
     console.log(`[discord] logged in as ${client.user.tag}`);
+
+    // Set bot presence/status
+    const activityTypeMap = {
+      playing: ActivityType.Playing,        // 0
+      streaming: ActivityType.Streaming,    // 1
+      listening: ActivityType.Listening,    // 2
+      watching: ActivityType.Watching,      // 3
+      competing: ActivityType.Competing,    // 5
+    };
+
+    const activityType = activityTypeMap[config.activityType || "listening"] ?? ActivityType.Listening;
+    const activityName = config.activity || "your messages";
+    const status = config.status || "online"; // online | idle | dnd | invisible
+
+    client.user.setPresence({
+      status,
+      activities: [{
+        name: activityName,
+        type: activityType,
+      }],
+    });
+
+    console.log(`[discord] presence: ${status}, ${config.activityType || "listening"} to "${activityName}"`);
   });
 
   client.on(Events.Error, (err) => {
@@ -225,7 +283,6 @@ function splitMessage(text, maxLen) {
       chunks.push(remaining);
       break;
     }
-    // Try to split at a newline
     let splitIdx = remaining.lastIndexOf("\n", maxLen);
     if (splitIdx < maxLen * 0.5) splitIdx = maxLen;
     chunks.push(remaining.slice(0, splitIdx));
