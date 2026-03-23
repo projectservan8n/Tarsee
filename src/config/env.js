@@ -20,6 +20,29 @@ for (const dir of [STATE_DIR, WORKSPACE_DIR, DATA_DIR]) {
   }
 }
 
+// Log volume mount status (Railway uses /data)
+const isVolumeMounted = (() => {
+  try {
+    // Check if /data exists and is writable (Railway volume mount point)
+    if (STATE_DIR.startsWith("/data")) {
+      fs.accessSync("/data", fs.constants.W_OK);
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+})();
+
+if (process.env.RAILWAY_PROJECT_ID) {
+  if (isVolumeMounted) {
+    console.log("[config] Railway volume mounted at /data — data will persist across deploys");
+  } else {
+    console.warn("[config] WARNING: Railway volume NOT mounted! Data will be LOST on redeploy.");
+    console.warn("[config] Go to Railway dashboard → your service → Settings → Add Volume → mount path: /data");
+  }
+}
+
 // --- Auth ---
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim() || null;
 

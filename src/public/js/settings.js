@@ -241,10 +241,23 @@ const Settings = {
       const res = await API.request("/api/voice/status");
       const data = await res.json();
       const engine = data.engine || "stub";
-      const status = engine === "stub" ? "No TTS engine active" : `Engine: ${engine}`;
+      const isActive = engine !== "stub" && engine !== "none";
+      const status = isActive ? `Engine: ${engine}` : "No TTS engine active — voice cloning requires Coqui TTS";
       this.elements.voiceEngineStatus.textContent = status;
       this.elements.voiceEngineStatus.style.color =
-        engine === "stub" ? "var(--text-muted)" : "var(--primary)";
+        isActive ? "var(--primary)" : "var(--text-muted)";
+
+      // Disable clone UI when no engine
+      if (this.elements.voiceCloneBtn) {
+        this.elements.voiceCloneBtn.disabled = !isActive;
+        if (!isActive) {
+          this.elements.voiceCloneBtn.title = "Enable a TTS engine first";
+        }
+      }
+      if (this.elements.voiceCloneUpload) {
+        this.elements.voiceCloneUpload.style.opacity = isActive ? "1" : "0.5";
+        this.elements.voiceCloneUpload.style.pointerEvents = isActive ? "auto" : "none";
+      }
     } catch {
       this.elements.voiceEngineStatus.textContent = "Could not load voice status";
     }
