@@ -16,6 +16,9 @@
 export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, signal }) {
   const url = `${baseUrl || "https://api.anthropic.com"}/v1/messages`;
 
+  const isOAuth = apiKey.includes("sk-ant-oat");
+  const isApiKey = apiKey.startsWith("sk-ant-api");
+
   // Convert messages to Anthropic format (system is separate)
   let anthropicMessages = messages
     .filter((m) => m.role !== "system")
@@ -30,7 +33,19 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
     throw new Error("No messages to send");
   }
 
-  const system = systemPrompt || messages.find((m) => m.role === "system")?.content || undefined;
+  // Build system prompt — OAuth tokens are scoped to Claude Code and require
+  // the identity prefix or Anthropic rejects the request.
+  let systemBlocks;
+  const userSystem = systemPrompt || messages.find((m) => m.role === "system")?.content || undefined;
+
+  if (isOAuth) {
+    systemBlocks = [
+      { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
+      ...(userSystem ? [{ type: "text", text: userSystem }] : []),
+    ];
+  } else {
+    systemBlocks = userSystem || undefined;
+  }
 
   const resolvedModel = model || "claude-sonnet-4-6";
 
@@ -39,29 +54,41 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
     max_tokens: 8192,
     stream: true,
     messages: anthropicMessages,
-    ...(system ? { system } : {}),
+    ...(systemBlocks ? { system: systemBlocks } : {}),
   };
 
-  // Detect auth type:
-  //   sk-ant-api* → API key → x-api-key header
-  //   sk-ant-oat* → OAuth Access Token → Authorization: Bearer header
-  //   anything else → Bearer header
-  const isApiKey = apiKey.startsWith("sk-ant-api");
+  // Auth headers
   const authHeaders = isApiKey
     ? { "x-api-key": apiKey }
     : { "Authorization": `Bearer ${apiKey}` };
 
+  // Beta headers differ for OAuth vs API key
+  const betaHeaders = isOAuth
+    ? "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14"
+    : "fine-grained-tool-streaming-2025-05-14";
+
+  // OAuth requires mimicking Claude Code CLI exactly
+  const oauthHeaders = isOAuth
+    ? {
+        "user-agent": "claude-cli/2.1.62",
+        "x-app": "cli",
+        "anthropic-dangerous-direct-browser-access": "true",
+      }
+    : {};
+
   const bodyJson = JSON.stringify(body);
   console.log(`[anthropic] POST ${url}`);
-  console.log(`[anthropic] auth=${isApiKey ? "api-key" : "bearer"} model=${resolvedModel} messages=${anthropicMessages.length}`);
-  console.log(`[anthropic] body: ${bodyJson}`);
+  console.log(`[anthropic] auth=${isOAuth ? "oauth" : isApiKey ? "api-key" : "bearer"} model=${resolvedModel} messages=${anthropicMessages.length}`);
 
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "accept": "application/json",
       ...authHeaders,
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": betaHeaders,
+      ...oauthHeaders,
     },
     body: bodyJson,
     signal,
@@ -70,22 +97,6 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
   if (!response.ok) {
     const errText = await response.text();
     console.error(`[anthropic] API error ${response.status}: ${errText}`);
-    // Try non-streaming as fallback to get better error details
-    if (response.status === 400) {
-      const retryBody = { ...body, stream: false };
-      console.log(`[anthropic] retrying without stream for better error...`);
-      const retry = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...authHeaders,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify(retryBody),
-      });
-      const retryText = await retry.text();
-      console.error(`[anthropic] non-stream response ${retry.status}: ${retryText}`);
-    }
     throw new Error(`Anthropic API error ${response.status}: ${errText}`);
   }
 
