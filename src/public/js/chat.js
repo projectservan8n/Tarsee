@@ -16,6 +16,8 @@ const Chat = {
   isStreaming: false,
   channels: [],
   botName: "OpusClaw",
+  lastMessageRole: null,
+  lastMessageTime: 0,
 
   elements: {},
 
@@ -300,6 +302,8 @@ const Chat = {
   // --- Messages ---
   renderMessages(messages) {
     this.elements.chatArea.innerHTML = "";
+    this.lastMessageRole = null;
+    this.lastMessageTime = 0;
     for (const msg of messages) {
       this.appendMessage(msg.role, msg.content);
     }
@@ -308,10 +312,19 @@ const Chat = {
 
   appendMessage(role, content, isStreaming = false) {
     const msg = document.createElement("div");
-    msg.className = `message ${role}`;
+
+    // Slack-style grouping: same sender within 5 minutes
+    const now = Date.now();
+    const isGrouped = (role === this.lastMessageRole) && (now - this.lastMessageTime < 5 * 60 * 1000);
+    msg.className = `message ${role}${isGrouped ? " grouped" : ""}`;
 
     const initials = this.botName ? this.botName.slice(0, 2).toUpperCase() : "OC";
     const avatar = role === "assistant" ? initials : "U";
+
+    // Copy button for assistant messages
+    const copyBtn = role === "assistant" && !isStreaming
+      ? `<button class="msg-copy-btn" onclick="navigator.clipboard.writeText(this.closest('.message').querySelector('.message-text').textContent)">Copy</button>`
+      : "";
 
     msg.innerHTML = `
       <div class="message-avatar">${avatar}</div>
@@ -319,7 +332,11 @@ const Chat = {
         <div class="message-role">${role === "assistant" ? escapeHtml(this.botName) : "You"}</div>
         <div class="message-text ${isStreaming ? "streaming-cursor" : ""}">${this.renderMarkdown(content)}</div>
       </div>
+      ${copyBtn}
     `;
+
+    this.lastMessageRole = role;
+    this.lastMessageTime = now;
 
     this.elements.chatArea.appendChild(msg);
     this.scrollToBottom();
@@ -337,6 +354,14 @@ const Chat = {
     const textEl = msgEl.querySelector(".message-text");
     if (textEl) {
       textEl.classList.remove("streaming-cursor");
+    }
+    // Add copy button after streaming completes
+    if (!msgEl.querySelector(".msg-copy-btn")) {
+      const btn = document.createElement("button");
+      btn.className = "msg-copy-btn";
+      btn.textContent = "Copy";
+      btn.onclick = () => navigator.clipboard.writeText(textEl.textContent);
+      msgEl.appendChild(btn);
     }
   },
 
@@ -372,6 +397,8 @@ const Chat = {
     // Handle /reset — create fresh conversation for this channel
     if (text === "/reset") {
       this.currentConversationId = null;
+      this.lastMessageRole = null;
+      this.lastMessageTime = 0;
       this.elements.chatArea.innerHTML = "";
       this.appendMessage("assistant", "Session reset. Starting fresh conversation for this channel.");
       this.elements.sendBtn.disabled = false;
