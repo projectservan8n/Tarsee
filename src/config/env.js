@@ -13,11 +13,45 @@ const DATA_DIR = process.env.OPUSCLAW_DATA_DIR?.trim() || path.join(STATE_DIR, "
 
 // Ensure directories exist
 const SKILLS_DIR = path.join(WORKSPACE_DIR, "skills");
-for (const dir of [STATE_DIR, WORKSPACE_DIR, DATA_DIR, SKILLS_DIR]) {
+const MEMORY_DIR = path.join(WORKSPACE_DIR, "memory");
+for (const dir of [STATE_DIR, WORKSPACE_DIR, DATA_DIR, SKILLS_DIR, MEMORY_DIR]) {
   try {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   } catch {
     // best-effort — may fail in read-only containers before volume mount
+  }
+}
+
+// Create default workspace identity files on first boot
+const DEFAULT_FILES = {
+  "SOUL.md": `# Soul & Personality
+
+You are OpusClaw, a helpful AI assistant.
+Be concise, direct, and helpful. Adapt your communication style to match the user.
+
+<!-- Edit this file to change your bot's personality and behavior -->
+`,
+  "USER.md": `# About the User
+
+<!-- Preferences and info about your human go here -->
+<!-- This gets injected into every conversation so the bot knows you -->
+`,
+  "MEMORY.md": `# Long-Term Memory
+
+<!-- Curated memories are stored here -->
+<!-- Use /remember in chat or edit this file directly -->
+`,
+};
+
+for (const [filename, defaultContent] of Object.entries(DEFAULT_FILES)) {
+  const filePath = path.join(WORKSPACE_DIR, filename);
+  try {
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, defaultContent, { encoding: "utf8", mode: 0o600 });
+      console.log(`[config] Created default ${filename}`);
+    }
+  } catch {
+    // best-effort
   }
 }
 

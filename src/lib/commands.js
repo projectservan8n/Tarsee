@@ -198,7 +198,7 @@ const COMMANDS = {
     },
   },
   remember: {
-    description: "Save a fact or preference to bot memory",
+    description: "Save a fact or preference to bot memory (DB + MEMORY.md)",
     usage: "/remember [something to remember]",
     handler: async (args, ctx) => {
       if (!args) return "Usage: `/remember The user prefers dark mode`";
@@ -209,10 +209,44 @@ const COMMANDS = {
         if (!db) return "Database not available.";
 
         const store = new MemoryStore(db);
-        const memory = store.add(args, "preference", ctx.conversationId || null);
-        return `Remembered: "${args}"`;
+        store.addAndSync(args, "preference", ctx.conversationId || null);
+        return `Remembered: "${args}" (saved to DB + MEMORY.md)`;
       } catch (err) {
         return `Failed to save memory: ${err.message}`;
+      }
+    },
+  },
+
+  soul: {
+    description: "Show current SOUL.md personality summary",
+    usage: "/soul",
+    handler: async () => {
+      try {
+        const { readWorkspaceFile } = await import("./workspace-files.js");
+        const soul = readWorkspaceFile("SOUL.md");
+        if (!soul || soul.trim().length < 10) {
+          return "No soul defined yet. Edit **SOUL.md** in Settings to give your bot personality.";
+        }
+        return `**Current Soul:**\n\n${soul.slice(0, 2000)}`;
+      } catch (err) {
+        return `Failed to read SOUL.md: ${err.message}`;
+      }
+    },
+  },
+
+  daily: {
+    description: "Add a note to today's daily memory log",
+    usage: "/daily [note]",
+    handler: async (args) => {
+      if (!args) return "Usage: `/daily Met with client about project scope`";
+
+      try {
+        const { appendDailyLog } = await import("./workspace-files.js");
+        appendDailyLog(args);
+        const today = new Date().toISOString().slice(0, 10);
+        return `Logged to **memory/${today}.md**: "${args}"`;
+      } catch (err) {
+        return `Failed to write daily log: ${err.message}`;
       }
     },
   },

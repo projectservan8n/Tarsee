@@ -23,8 +23,14 @@ const Settings = {
       apiToken: document.getElementById("settingsApiToken"),
       // Identity
       botName: document.getElementById("settingsBotName"),
-      globalPrompt: document.getElementById("settingsGlobalPrompt"),
       saveIdentityBtn: document.getElementById("saveIdentityBtn"),
+      // Workspace files
+      soulMd: document.getElementById("settingsSoulMd"),
+      saveSoulBtn: document.getElementById("saveSoulBtn"),
+      userMd: document.getElementById("settingsUserMd"),
+      saveUserBtn: document.getElementById("saveUserBtn"),
+      memoryMd: document.getElementById("settingsMemoryMd"),
+      saveMemoryFileBtn: document.getElementById("saveMemoryFileBtn"),
       // Memory
       memoriesList: document.getElementById("memoriesList"),
       memoryInput: document.getElementById("memoryInput"),
@@ -77,6 +83,16 @@ const Settings = {
     // Identity handlers
     if (this.elements.saveIdentityBtn) {
       this.elements.saveIdentityBtn.addEventListener("click", () => this.saveIdentity());
+    }
+    // Workspace file handlers
+    if (this.elements.saveSoulBtn) {
+      this.elements.saveSoulBtn.addEventListener("click", () => this.saveWorkspaceFile("SOUL.md", this.elements.soulMd.value));
+    }
+    if (this.elements.saveUserBtn) {
+      this.elements.saveUserBtn.addEventListener("click", () => this.saveWorkspaceFile("USER.md", this.elements.userMd.value));
+    }
+    if (this.elements.saveMemoryFileBtn) {
+      this.elements.saveMemoryFileBtn.addEventListener("click", () => this.saveWorkspaceFile("MEMORY.md", this.elements.memoryMd.value));
     }
 
     // Memory handlers
@@ -191,9 +207,10 @@ const Settings = {
 
       // Load identity
       const botName = settings.find((s) => s.key === "identity.name")?.value;
-      const globalPrompt = settings.find((s) => s.key === "identity.systemPrompt")?.value;
       if (botName && this.elements.botName) this.elements.botName.value = botName;
-      if (globalPrompt && this.elements.globalPrompt) this.elements.globalPrompt.value = globalPrompt;
+
+      // Load workspace files (SOUL.md, USER.md, MEMORY.md)
+      this.loadWorkspaceFiles();
 
       // Load voice settings
       const voiceEngine = settings.find((s) => s.key === "voice.engine")?.value;
@@ -386,22 +403,43 @@ const Settings = {
   // --- Identity ---
   async saveIdentity() {
     const name = this.elements.botName?.value.trim() || "OpusClaw";
-    const prompt = this.elements.globalPrompt?.value.trim() || "";
 
     try {
       await API.json("/api/settings/general", {
         method: "POST",
         body: { key: "identity.name", value: name },
       });
-      if (prompt) {
-        await API.json("/api/settings/general", {
-          method: "POST",
-          body: { key: "identity.systemPrompt", value: prompt },
-        });
-      }
-      App.showToast("Identity saved", "success");
-      // Update chat UI bot name
+      App.showToast("Bot name saved", "success");
       if (typeof Chat !== "undefined" && Chat.setBotName) Chat.setBotName(name);
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+  },
+
+  // --- Workspace Files (SOUL.md, USER.md, MEMORY.md) ---
+  async loadWorkspaceFiles() {
+    for (const [name, el] of [
+      ["SOUL.md", this.elements.soulMd],
+      ["USER.md", this.elements.userMd],
+      ["MEMORY.md", this.elements.memoryMd],
+    ]) {
+      if (!el) continue;
+      try {
+        const data = await API.json(`/api/settings/workspace-file?name=${name}`);
+        el.value = data.content || "";
+      } catch {
+        // ignore
+      }
+    }
+  },
+
+  async saveWorkspaceFile(name, content) {
+    try {
+      await API.json("/api/settings/workspace-file", {
+        method: "PUT",
+        body: { name, content },
+      });
+      App.showToast(`${name} saved`, "success");
     } catch (err) {
       App.showToast(err.message, "error");
     }

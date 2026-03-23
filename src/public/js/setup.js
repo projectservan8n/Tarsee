@@ -174,19 +174,38 @@ const Setup = {
     const systemPrompt = identity.systemPrompt || identity.personality || "";
 
     try {
+      // Save bot name to DB (for display in topbar/UI)
       await API.json("/api/settings/general", {
         method: "POST",
         body: { key: "identity.name", value: botName },
       });
+
+      // Write personality to SOUL.md file (source of truth for identity)
       if (systemPrompt) {
+        await API.json("/api/settings/workspace-file", {
+          method: "PUT",
+          body: {
+            name: "SOUL.md",
+            content: `# Soul & Personality\n\n${systemPrompt}\n`,
+          },
+        });
+        // Also keep in DB as fallback
         await API.json("/api/settings/general", {
           method: "POST",
           body: { key: "identity.systemPrompt", value: systemPrompt },
         });
       }
 
-      // Save any preferences as memories
+      // Save preferences to USER.md + bot_memory DB
       if (identity.preferences && Array.isArray(identity.preferences)) {
+        const prefLines = identity.preferences.map((p) => `- ${p}`).join("\n");
+        await API.json("/api/settings/workspace-file", {
+          method: "PUT",
+          body: {
+            name: "USER.md",
+            content: `# About the User\n\n${prefLines}\n`,
+          },
+        });
         for (const pref of identity.preferences) {
           await API.json("/api/memory", {
             method: "POST",

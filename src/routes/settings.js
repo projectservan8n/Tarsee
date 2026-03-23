@@ -2,6 +2,7 @@ import { Router } from "express";
 import { SettingsStore } from "../db/settings.js";
 import { AI_PROVIDERS } from "../config/constants.js";
 import { getAvailableProviders } from "../ai/router.js";
+import { readWorkspaceFile, writeWorkspaceFile } from "../lib/workspace-files.js";
 
 export const settingsRouter = Router();
 
@@ -107,6 +108,39 @@ settingsRouter.get("/setup-status", (_req, res) => {
     provider: provider || null,
     hasKey: hasKey || envConfigured,
   });
+});
+
+/**
+ * GET /api/settings/workspace-file
+ * Read a workspace identity file (SOUL.md, USER.md, MEMORY.md).
+ * Query: ?name=SOUL.md
+ */
+const ALLOWED_WORKSPACE_FILES = ["SOUL.md", "USER.md", "MEMORY.md"];
+
+settingsRouter.get("/workspace-file", (req, res) => {
+  const name = req.query.name;
+  if (!name || !ALLOWED_WORKSPACE_FILES.includes(name)) {
+    return res.status(400).json({ error: `Invalid file. Allowed: ${ALLOWED_WORKSPACE_FILES.join(", ")}` });
+  }
+  const content = readWorkspaceFile(name);
+  res.json({ name, content });
+});
+
+/**
+ * PUT /api/settings/workspace-file
+ * Write a workspace identity file.
+ * Body: { name, content }
+ */
+settingsRouter.put("/workspace-file", (req, res) => {
+  const { name, content } = req.body || {};
+  if (!name || !ALLOWED_WORKSPACE_FILES.includes(name)) {
+    return res.status(400).json({ error: `Invalid file. Allowed: ${ALLOWED_WORKSPACE_FILES.join(", ")}` });
+  }
+  if (typeof content !== "string") {
+    return res.status(400).json({ error: "Content must be a string" });
+  }
+  writeWorkspaceFile(name, content);
+  res.json({ ok: true, name });
 });
 
 /**

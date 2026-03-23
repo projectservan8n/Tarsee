@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
+import { appendWorkspaceFile, readWorkspaceFile, writeWorkspaceFile } from "../lib/workspace-files.js";
 
 /**
  * Persistent memory store for bot identity and learned preferences.
  * Memories survive across conversations and restarts.
+ * Syncs to MEMORY.md file on the workspace volume.
  */
 export class MemoryStore {
   constructor(db) {
@@ -61,12 +63,48 @@ export class MemoryStore {
   /**
    * Build a context string for injection into system prompts.
    * Returns formatted memories or empty string if none.
+   * These are supplementary to MEMORY.md (which is the primary source).
    */
   getContextString(limit = 20) {
     const memories = this.list(limit);
     if (memories.length === 0) return "";
 
     const lines = memories.map((m) => `- [${m.category}] ${m.content}`);
-    return `\n\nYou have the following memories from previous interactions:\n${lines.join("\n")}`;
+    return `\n\nAdditional quick memories:\n${lines.join("\n")}`;
+  }
+
+  /**
+   * Add a memory and also append it to MEMORY.md file.
+   */
+  addAndSync(content, category = "preference", conversationId = null) {
+    const result = this.add(content, category, conversationId);
+    try {
+      appendWorkspaceFile("MEMORY.md", `\n- [${category}] ${content}`);
+    } catch {
+      // best-effort file sync
+    }
+    return result;
+  }
+
+  /**
+   * One-time migration: export all DB memories to MEMORY.md if the file
+   * is still the default template but DB has entries.
+   */
+  syncToMemoryFile() {
+    try {
+      const existing = readWorkspaceFile("MEMORY.md");
+      const memories = this.list(100);
+      if (memories.length === 0) return;
+
+      // Only migrate if MEMORY.md is still the default template
+      if (existing.includes("<!-- Curated memories are stored here -->") && !existing.includes("- [")) {
+        const lines = memories.map((m) => `- [${m.category}] ${m.content}`);
+        const content = `# Long-Term Memory\n\n${lines.join("\n")}\n`;
+        writeWorkspaceFile("MEMORY.md", content);
+        console.log(`[memory] Migrated ${memories.length} DB memories to MEMORY.md`);
+      }
+    } catch (err) {
+      console.warn("[memory] syncToMemoryFile error:", err.message);
+    }
   }
 }

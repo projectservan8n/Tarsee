@@ -183,12 +183,34 @@
           <label>Bot Name</label>
           <input type="text" id="settingsBotName" placeholder="OpusClaw">
         </div>
+        <button class="btn btn-primary btn-sm" id="saveIdentityBtn" style="margin-bottom: 16px">Save Name</button>
+      </div>
+
+      <div class="settings-section">
+        <h3>SOUL.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Personality & Vibe</span></h3>
         <div class="form-group">
-          <label>Global System Prompt</label>
-          <textarea id="settingsGlobalPrompt" rows="4" placeholder="You are a helpful AI assistant..."></textarea>
-          <div class="hint">This personality prompt applies to ALL conversations. Auto-generated during setup, editable anytime.</div>
+          <textarea id="settingsSoulMd" rows="8" placeholder="# Soul & Personality&#10;&#10;You are OpusClaw, a helpful AI assistant..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
+          <div class="hint">The bot's soul. Injected into every conversation. Edit to change personality, tone, and behavior.</div>
         </div>
-        <button class="btn btn-primary" id="saveIdentityBtn">Save Identity</button>
+        <button class="btn btn-primary btn-sm" id="saveSoulBtn">Save SOUL.md</button>
+      </div>
+
+      <div class="settings-section">
+        <h3>USER.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— About Your Human</span></h3>
+        <div class="form-group">
+          <textarea id="settingsUserMd" rows="6" placeholder="# About the User&#10;&#10;- Prefers concise responses&#10;- Works in software development" style="font-family: var(--font-mono); font-size: 12px"></textarea>
+          <div class="hint">Info about you. The bot reads this to personalize responses.</div>
+        </div>
+        <button class="btn btn-primary btn-sm" id="saveUserBtn">Save USER.md</button>
+      </div>
+
+      <div class="settings-section">
+        <h3>MEMORY.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Long-Term Memory</span></h3>
+        <div class="form-group">
+          <textarea id="settingsMemoryMd" rows="8" placeholder="# Long-Term Memory&#10;&#10;- [preference] User likes dark mode" style="font-family: var(--font-mono); font-size: 12px"></textarea>
+          <div class="hint">Curated memories. Use /remember in chat or edit directly. Persists across redeploys.</div>
+        </div>
+        <button class="btn btn-primary btn-sm" id="saveMemoryFileBtn">Save MEMORY.md</button>
       </div>
 
       <div class="settings-section">

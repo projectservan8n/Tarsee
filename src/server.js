@@ -119,6 +119,15 @@ initTTSEngine(settingsStore).catch((err) => {
   console.warn("[opusclaw] TTS engine init error:", err.message);
 });
 
+// --- Migrate DB memories to MEMORY.md (one-time) ---
+import { MemoryStore } from "./db/memory.js";
+try {
+  const memoryStore = new MemoryStore(db);
+  memoryStore.syncToMemoryFile();
+} catch (err) {
+  console.warn("[opusclaw] memory sync error:", err.message);
+}
+
 // --- Channel Manager (lazy start) ---
 const channelManager = new ChannelManager(db);
 app.set("channelManager", channelManager);
