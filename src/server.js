@@ -71,7 +71,15 @@ app.use((req, res, next) => {
 });
 
 // Static files (WebUI) — no auth required for the shell, API calls are protected
-app.use(express.static(publicDir, { maxAge: config.NODE_ENV === "production" ? "1h" : 0 }));
+// Short cache for CSS/JS (5min) so deploys take effect quickly; longer for images/fonts
+app.use(express.static(publicDir, {
+  maxAge: config.NODE_ENV === "production" ? "5m" : 0,
+  setHeaders(res, filePath) {
+    if (/\.(css|js|html)$/i.test(filePath)) {
+      res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
+    }
+  }
+}));
 
 // --- Routes ---
 app.use(healthRouter);
