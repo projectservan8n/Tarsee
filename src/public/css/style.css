@@ -786,7 +786,7 @@ html, body {
 
 .settings-tab-panel {
   display: none;
-  max-width: 680px;
+  width: 100%;
 }
 
 .settings-tab-panel.active {
