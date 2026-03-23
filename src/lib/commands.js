@@ -308,6 +308,96 @@ const COMMANDS = {
     },
   },
 
+  identity: {
+    description: "Show parsed IDENTITY.md metadata",
+    usage: "/identity",
+    handler: async () => {
+      try {
+        const { parseIdentityFile } = await import("./workspace-files.js");
+        const parsed = parseIdentityFile();
+        const keys = Object.keys(parsed);
+        if (keys.length === 0) {
+          return "No identity defined yet. Edit **IDENTITY.md** in Settings to set name, emoji, creature, vibe.";
+        }
+        const lines = ["**Identity**", ""];
+        for (const [k, v] of Object.entries(parsed)) {
+          lines.push(`- **${k}:** ${v}`);
+        }
+        return lines.join("\n");
+      } catch (err) {
+        return `Failed to read IDENTITY.md: ${err.message}`;
+      }
+    },
+  },
+
+  agents: {
+    description: "Show current AGENTS.md rules summary",
+    usage: "/agents",
+    handler: async () => {
+      try {
+        const { readWorkspaceFile } = await import("./workspace-files.js");
+        const content = readWorkspaceFile("AGENTS.md");
+        if (!content || content.trim().length < 10) {
+          return "No agent rules defined yet. Edit **AGENTS.md** in Settings.";
+        }
+        return `**Agent Rules:**\n\n${content.slice(0, 2000)}`;
+      } catch (err) {
+        return `Failed to read AGENTS.md: ${err.message}`;
+      }
+    },
+  },
+
+  tools: {
+    description: "Show current TOOLS.md capabilities",
+    usage: "/tools",
+    handler: async () => {
+      try {
+        const { readWorkspaceFile } = await import("./workspace-files.js");
+        const content = readWorkspaceFile("TOOLS.md");
+        if (!content || content.trim().length < 10) {
+          return "No tools defined yet. Edit **TOOLS.md** in Settings.";
+        }
+        return `**Tools & Capabilities:**\n\n${content.slice(0, 2000)}`;
+      } catch (err) {
+        return `Failed to read TOOLS.md: ${err.message}`;
+      }
+    },
+  },
+
+  heartbeat: {
+    description: "Show heartbeat status or trigger a manual heartbeat",
+    usage: "/heartbeat",
+    handler: async () => {
+      try {
+        const { readWorkspaceFile } = await import("./workspace-files.js");
+        const content = readWorkspaceFile("HEARTBEAT.md");
+        if (!content || content.trim().length < 10) {
+          return "No heartbeat tasks defined. Edit **HEARTBEAT.md** in Settings to add periodic tasks.";
+        }
+        return `**Heartbeat Tasks:**\n\n${content.slice(0, 2000)}\n\n*Heartbeat system runs these tasks periodically.*`;
+      } catch (err) {
+        return `Failed to read HEARTBEAT.md: ${err.message}`;
+      }
+    },
+  },
+
+  boot: {
+    description: "Show BOOT.md startup checklist",
+    usage: "/boot",
+    handler: async () => {
+      try {
+        const { readWorkspaceFile } = await import("./workspace-files.js");
+        const content = readWorkspaceFile("BOOT.md");
+        if (!content || content.trim().length < 10) {
+          return "No boot checklist defined. Edit **BOOT.md** in Settings to add startup tasks.";
+        }
+        return `**Boot Checklist:**\n\n${content.slice(0, 2000)}`;
+      } catch (err) {
+        return `Failed to read BOOT.md: ${err.message}`;
+      }
+    },
+  },
+
   forget: {
     description: "List and manage bot memories",
     usage: "/forget",

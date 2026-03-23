@@ -41,6 +41,36 @@ Be concise, direct, and helpful. Adapt your communication style to match the use
 <!-- Curated memories are stored here -->
 <!-- Use /remember in chat or edit this file directly -->
 `,
+  "AGENTS.md": `# Agent Rules & Conventions
+
+<!-- Define rules, workspace conventions, and how the agent should behave -->
+<!-- This is always injected into the system prompt -->
+`,
+  "IDENTITY.md": `# Identity
+
+- **Name:** OpusClaw
+- **Emoji:** 🦞
+- **Creature:** Lobster
+- **Vibe:** Helpful and sharp
+
+<!-- Metadata about the agent — parsed as key-value pairs -->
+`,
+  "TOOLS.md": `# Tools & Capabilities
+
+<!-- Available tools, local setup notes, capabilities -->
+<!-- This is injected into the system prompt so the bot knows what it can do -->
+`,
+  "HEARTBEAT.md": `# Heartbeat Tasks
+
+<!-- Periodic tasks the bot checks every ~30 minutes -->
+<!-- Leave empty to skip heartbeat runs (saves tokens) -->
+<!-- Use HEARTBEAT_OK as response to suppress output -->
+`,
+  "BOOT.md": `# Boot Checklist
+
+<!-- Runs once on every server restart -->
+<!-- Leave empty to skip boot runs -->
+`,
 };
 
 for (const [filename, defaultContent] of Object.entries(DEFAULT_FILES)) {

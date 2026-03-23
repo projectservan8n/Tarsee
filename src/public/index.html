@@ -210,6 +210,51 @@
       </div>
 
       <div class="settings-section">
+        <h3>AGENTS.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Rules & Conventions</span></h3>
+        <div class="form-group">
+          <textarea id="settingsAgentsMd" rows="6" placeholder="# Agent Rules & Conventions&#10;&#10;Define how the agent should behave..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
+          <div class="hint">Rules and workspace conventions. Always injected into system prompt.</div>
+        </div>
+        <button class="btn btn-primary btn-sm" id="saveAgentsBtn">Save AGENTS.md</button>
+      </div>
+
+      <div class="settings-section">
+        <h3>IDENTITY.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Name, Emoji, Creature, Vibe</span></h3>
+        <div class="form-group">
+          <textarea id="settingsIdentityMd" rows="6" placeholder="# Identity&#10;&#10;- **Name:** OpusClaw&#10;- **Emoji:** &#x1F99E;&#10;- **Creature:** Lobster&#10;- **Vibe:** Helpful and sharp" style="font-family: var(--font-mono); font-size: 12px"></textarea>
+          <div class="hint">Agent metadata in key-value format. Parsed as <code>- **Label:** value</code>.</div>
+        </div>
+        <button class="btn btn-primary btn-sm" id="saveIdentityMdBtn">Save IDENTITY.md</button>
+      </div>
+
+      <div class="settings-section">
+        <h3>TOOLS.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Capabilities & Setup Notes</span></h3>
+        <div class="form-group">
+          <textarea id="settingsToolsMd" rows="6" placeholder="# Tools & Capabilities&#10;&#10;Available tools, local setup notes..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
+          <div class="hint">Tools the bot knows about. Injected into system prompt.</div>
+        </div>
+        <button class="btn btn-primary btn-sm" id="saveToolsBtn">Save TOOLS.md</button>
+      </div>
+
+      <div class="settings-section">
+        <h3>HEARTBEAT.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Periodic Tasks</span></h3>
+        <div class="form-group">
+          <textarea id="settingsHeartbeatMd" rows="6" placeholder="# Heartbeat Tasks&#10;&#10;Tasks the bot checks periodically..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
+          <div class="hint">Checked every ~30 minutes. Leave empty to skip heartbeat runs (saves tokens).</div>
+        </div>
+        <button class="btn btn-primary btn-sm" id="saveHeartbeatBtn">Save HEARTBEAT.md</button>
+      </div>
+
+      <div class="settings-section">
+        <h3>BOOT.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Startup Checklist</span></h3>
+        <div class="form-group">
+          <textarea id="settingsBootMd" rows="6" placeholder="# Boot Checklist&#10;&#10;Runs once on every server restart..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
+          <div class="hint">Runs once on every server restart. Leave empty to skip.</div>
+        </div>
+        <button class="btn btn-primary btn-sm" id="saveBootBtn">Save BOOT.md</button>
+      </div>
+
+      <div class="settings-section">
         <h3>AI Provider</h3>
         <form autocomplete="off" onsubmit="return false">
         <div class="form-group">

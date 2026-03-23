@@ -31,6 +31,16 @@ const Settings = {
       saveUserBtn: document.getElementById("saveUserBtn"),
       memoryMd: document.getElementById("settingsMemoryMd"),
       saveMemoryFileBtn: document.getElementById("saveMemoryFileBtn"),
+      agentsMd: document.getElementById("settingsAgentsMd"),
+      saveAgentsBtn: document.getElementById("saveAgentsBtn"),
+      identityMd: document.getElementById("settingsIdentityMd"),
+      saveIdentityMdBtn: document.getElementById("saveIdentityMdBtn"),
+      toolsMd: document.getElementById("settingsToolsMd"),
+      saveToolsBtn: document.getElementById("saveToolsBtn"),
+      heartbeatMd: document.getElementById("settingsHeartbeatMd"),
+      saveHeartbeatBtn: document.getElementById("saveHeartbeatBtn"),
+      bootMd: document.getElementById("settingsBootMd"),
+      saveBootBtn: document.getElementById("saveBootBtn"),
       // Memory
       memoriesList: document.getElementById("memoriesList"),
       memoryInput: document.getElementById("memoryInput"),
@@ -93,6 +103,21 @@ const Settings = {
     }
     if (this.elements.saveMemoryFileBtn) {
       this.elements.saveMemoryFileBtn.addEventListener("click", () => this.saveWorkspaceFile("MEMORY.md", this.elements.memoryMd.value));
+    }
+    if (this.elements.saveAgentsBtn) {
+      this.elements.saveAgentsBtn.addEventListener("click", () => this.saveWorkspaceFile("AGENTS.md", this.elements.agentsMd.value));
+    }
+    if (this.elements.saveIdentityMdBtn) {
+      this.elements.saveIdentityMdBtn.addEventListener("click", () => this.saveWorkspaceFile("IDENTITY.md", this.elements.identityMd.value));
+    }
+    if (this.elements.saveToolsBtn) {
+      this.elements.saveToolsBtn.addEventListener("click", () => this.saveWorkspaceFile("TOOLS.md", this.elements.toolsMd.value));
+    }
+    if (this.elements.saveHeartbeatBtn) {
+      this.elements.saveHeartbeatBtn.addEventListener("click", () => this.saveWorkspaceFile("HEARTBEAT.md", this.elements.heartbeatMd.value));
+    }
+    if (this.elements.saveBootBtn) {
+      this.elements.saveBootBtn.addEventListener("click", () => this.saveWorkspaceFile("BOOT.md", this.elements.bootMd.value));
     }
 
     // Memory handlers
@@ -416,12 +441,17 @@ const Settings = {
     }
   },
 
-  // --- Workspace Files (SOUL.md, USER.md, MEMORY.md) ---
+  // --- Workspace Files ---
   async loadWorkspaceFiles() {
     for (const [name, el] of [
       ["SOUL.md", this.elements.soulMd],
       ["USER.md", this.elements.userMd],
       ["MEMORY.md", this.elements.memoryMd],
+      ["AGENTS.md", this.elements.agentsMd],
+      ["IDENTITY.md", this.elements.identityMd],
+      ["TOOLS.md", this.elements.toolsMd],
+      ["HEARTBEAT.md", this.elements.heartbeatMd],
+      ["BOOT.md", this.elements.bootMd],
     ]) {
       if (!el) continue;
       try {

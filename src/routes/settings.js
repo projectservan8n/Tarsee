@@ -115,7 +115,11 @@ settingsRouter.get("/setup-status", (_req, res) => {
  * Read a workspace identity file (SOUL.md, USER.md, MEMORY.md).
  * Query: ?name=SOUL.md
  */
-const ALLOWED_WORKSPACE_FILES = ["SOUL.md", "USER.md", "MEMORY.md"];
+const ALLOWED_WORKSPACE_FILES = [
+  "SOUL.md", "USER.md", "MEMORY.md",
+  "AGENTS.md", "IDENTITY.md", "TOOLS.md",
+  "HEARTBEAT.md", "BOOT.md",
+];
 
 settingsRouter.get("/workspace-file", (req, res) => {
   const name = req.query.name;

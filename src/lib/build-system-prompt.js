@@ -3,18 +3,22 @@ import { getSkillsPromptContext } from "./skills-engine.js";
 import { getLearningHint } from "./personality-learner.js";
 import { getBootstrapContext } from "./workspace-files.js";
 
+const MAX_TOTAL_BYTES = 150 * 1024; // 150KB total prompt budget
+
 /**
  * Build the effective system prompt from all sources.
  * Used by HTTP, WebSocket, Discord, Telegram, and Slack handlers.
  *
  * Composition order:
- *   1. SOUL.md + USER.md + MEMORY.md (workspace files — source of truth)
+ *   1. AGENTS.md + SOUL.md + IDENTITY.md + USER.md + TOOLS.md + MEMORY.md (workspace files)
  *   2. DB memories (bot_memory table — supplementary)
  *   3. Skills context (SKILL.md files)
  *   4. Per-conversation prompt (if set)
  *   5. Channel hint (e.g. "You are in a Discord conversation")
  *   6. Learning hint (periodic nudge)
  *   7. Fallback if everything empty
+ *
+ * Individual files are truncated at 20KB. Total prompt capped at 150KB.
  *
  * @param {object} opts
  * @param {import('../db/settings.js').SettingsStore} opts.settingsStore
@@ -33,7 +37,7 @@ export function buildSystemPrompt({
   conversationPrompt = null,
   channelHint = "",
 }) {
-  // 1. Workspace files: SOUL.md + USER.md + MEMORY.md
+  // 1. Workspace files: AGENTS → SOUL → IDENTITY → USER → TOOLS → MEMORY
   const bootstrapContext = getBootstrapContext();
 
   // 2. DB memories (supplementary to MEMORY.md)
@@ -74,6 +78,11 @@ export function buildSystemPrompt({
   if (conversationId && messageCount > 0) {
     const learningHint = getLearningHint(conversationId, messageCount);
     if (learningHint) prompt += learningHint;
+  }
+
+  // Enforce total budget
+  if (Buffer.byteLength(prompt, "utf8") > MAX_TOTAL_BYTES) {
+    prompt = prompt.slice(0, MAX_TOTAL_BYTES);
   }
 
   return prompt;
