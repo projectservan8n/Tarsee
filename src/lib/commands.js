@@ -410,6 +410,60 @@ const COMMANDS = {
     },
   },
 
+  cron: {
+    description: "Manage scheduled cron jobs",
+    usage: "/cron [list|add|remove|run|status]",
+    handler: async (args) => {
+      try {
+        const { getCronStatus, addCronJob, removeCronJob, runCronJob, loadCronJobs } = await import("./cron.js");
+
+        if (!args || args === "list" || args === "status") {
+          const status = getCronStatus();
+          if (status.jobs.length === 0) {
+            return "No cron jobs configured. Use `/cron add \"0 9 * * *\" Your prompt here` to add one.";
+          }
+          const lines = ["**Cron Jobs**", ""];
+          for (const j of status.jobs) {
+            const badge = j.running ? "running" : j.enabled ? "enabled" : "disabled";
+            lines.push(`- **${j.id}** [${badge}] \`${j.schedule}\` — ${j.prompt.slice(0, 60)}`);
+          }
+          lines.push("", `Active: ${status.activeJobs}/${status.totalJobs}`);
+          return lines.join("\n");
+        }
+
+        if (args.startsWith("add ")) {
+          // Parse: /cron add "schedule" prompt text
+          const match = args.slice(4).match(/^"([^"]+)"\s+(.+)$/s);
+          if (!match) {
+            return 'Usage: `/cron add "0 9 * * *" Good morning summary`';
+          }
+          const job = addCronJob({ schedule: match[1], prompt: match[2] });
+          return `Cron job created: **${job.id}** — \`${job.schedule}\``;
+        }
+
+        if (args.startsWith("remove ")) {
+          const id = args.slice(7).trim();
+          const removed = removeCronJob(id);
+          return removed ? `Removed cron job **${id}**` : `Job not found: ${id}`;
+        }
+
+        if (args.startsWith("run ")) {
+          const id = args.slice(4).trim();
+          const jobs = loadCronJobs();
+          const job = jobs.find((j) => j.id === id);
+          if (!job) return `Job not found: ${id}`;
+          const result = await runCronJob(job);
+          if (result.error) return `Cron error: ${result.error}`;
+          return `**Cron result:**\n\n${result.response?.slice(0, 2000) || "(empty)"}`;
+        }
+
+        return 'Usage: `/cron list|add|remove|run|status`';
+      } catch (err) {
+        return `Cron error: ${err.message}`;
+      }
+    },
+  },
+
   forget: {
     description: "List and manage bot memories",
     usage: "/forget",

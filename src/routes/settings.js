@@ -216,3 +216,50 @@ settingsRouter.post("/session-reset", (req, res) => {
 
   res.json({ ok: true });
 });
+
+/**
+ * GET /api/settings/cron
+ * List all cron jobs.
+ */
+settingsRouter.get("/cron", async (_req, res) => {
+  try {
+    const { getCronStatus } = await import("../lib/cron.js");
+    res.json(getCronStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/settings/cron
+ * Add a new cron job.
+ * Body: { schedule, prompt, channel?, enabled? }
+ */
+settingsRouter.post("/cron", async (req, res) => {
+  const { schedule, prompt, channel, enabled } = req.body || {};
+  if (!schedule || !prompt) {
+    return res.status(400).json({ error: "schedule and prompt are required" });
+  }
+  try {
+    const { addCronJob } = await import("../lib/cron.js");
+    const job = addCronJob({ schedule, prompt, channel, enabled });
+    res.status(201).json(job);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/settings/cron/:id
+ * Remove a cron job.
+ */
+settingsRouter.delete("/cron/:id", async (req, res) => {
+  try {
+    const { removeCronJob } = await import("../lib/cron.js");
+    const removed = removeCronJob(req.params.id);
+    if (!removed) return res.status(404).json({ error: "Job not found" });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});

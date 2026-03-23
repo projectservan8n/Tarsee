@@ -144,6 +144,11 @@ import { ConversationStore } from "./db/conversations.js";
 const convStore = new ConversationStore(db);
 startSessionReset({ db, settingsStore, convStore });
 
+// --- Cron scheduler ---
+import { initCron, startCronScheduler, stopCronScheduler } from "./lib/cron.js";
+initCron({ db, settingsStore, convStore });
+startCronScheduler();
+
 // --- Channel Manager (lazy start) ---
 const channelManager = new ChannelManager(db);
 app.set("channelManager", channelManager);
@@ -157,6 +162,7 @@ function shutdown(signal) {
   stopTTSEngine();
   stopHeartbeat();
   stopSessionReset();
+  stopCronScheduler();
   channelManager.stopAll();
   server.close(() => {
     db.close();

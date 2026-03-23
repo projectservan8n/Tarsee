@@ -55,6 +55,11 @@ const Settings = {
       voiceCloneResult: document.getElementById("voiceCloneResult"),
       voicesList: document.getElementById("voicesList"),
       saveVoiceBtn: document.getElementById("saveVoiceBtn"),
+      // Cron jobs
+      cronJobsList: document.getElementById("cronJobsList"),
+      cronScheduleInput: document.getElementById("cronScheduleInput"),
+      cronPromptInput: document.getElementById("cronPromptInput"),
+      addCronBtn: document.getElementById("addCronBtn"),
       // Session reset
       resetMode: document.getElementById("settingsResetMode"),
       resetHour: document.getElementById("settingsResetHour"),
@@ -137,6 +142,11 @@ const Settings = {
     }
     if (this.elements.saveResetBtn) {
       this.elements.saveResetBtn.addEventListener("click", () => this.saveSessionReset());
+    }
+
+    // Cron handlers
+    if (this.elements.addCronBtn) {
+      this.elements.addCronBtn.addEventListener("click", () => this.addCronJob());
     }
 
     // Memory handlers
@@ -258,6 +268,9 @@ const Settings = {
 
       // Load session reset config
       this.loadSessionReset();
+
+      // Load cron jobs
+      this.loadCronJobs();
 
       // Load voice settings
       const voiceEngine = settings.find((s) => s.key === "voice.engine")?.value;
@@ -523,6 +536,66 @@ const Settings = {
         },
       });
       App.showToast("Session reset config saved", "success");
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+  },
+
+  // --- Cron Jobs ---
+  async loadCronJobs() {
+    if (!this.elements.cronJobsList) return;
+    try {
+      const data = await API.json("/api/settings/cron");
+      const jobs = data.jobs || [];
+
+      if (jobs.length === 0) {
+        this.elements.cronJobsList.innerHTML =
+          '<div style="color: var(--text-muted); font-size: 13px">No cron jobs. Add one below or use <code>/cron add</code> in chat.</div>';
+        return;
+      }
+
+      this.elements.cronJobsList.innerHTML = jobs.map((j) =>
+        `<div class="memory-item">
+          <span class="memory-badge">${j.running ? "running" : j.enabled ? "enabled" : "off"}</span>
+          <span class="memory-content"><code>${j.schedule}</code> — ${escapeHtml(j.prompt.slice(0, 60))}</span>
+          <button class="memory-delete" data-cron-id="${j.id}" title="Delete">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+        </div>`
+      ).join("");
+
+      this.elements.cronJobsList.querySelectorAll("[data-cron-id]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          try {
+            await API.json(`/api/settings/cron/${btn.dataset.cronId}`, { method: "DELETE" });
+            this.loadCronJobs();
+            App.showToast("Cron job removed", "success");
+          } catch (err) {
+            App.showToast(err.message, "error");
+          }
+        });
+      });
+    } catch {
+      this.elements.cronJobsList.innerHTML = "";
+    }
+  },
+
+  async addCronJob() {
+    const schedule = this.elements.cronScheduleInput?.value.trim();
+    const prompt = this.elements.cronPromptInput?.value.trim();
+    if (!schedule || !prompt) {
+      App.showToast("Schedule and prompt are required", "error");
+      return;
+    }
+    try {
+      await API.json("/api/settings/cron", {
+        method: "POST",
+        body: { schedule, prompt },
+      });
+      this.elements.cronScheduleInput.value = "";
+      this.elements.cronPromptInput.value = "";
+      this.loadCronJobs();
+      App.showToast("Cron job added", "success");
     } catch (err) {
       App.showToast(err.message, "error");
     }

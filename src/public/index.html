@@ -279,6 +279,21 @@
       </div>
 
       <div class="settings-section">
+        <h3>Cron Jobs</h3>
+        <div id="cronJobsList" style="margin-bottom:12px"></div>
+        <div class="form-group">
+          <label>Schedule (cron expression)</label>
+          <input type="text" id="cronScheduleInput" placeholder="0 9 * * * (= 9 AM daily)">
+          <div class="hint">Standard cron: minute hour day month weekday. Use <a href="https://crontab.guru" target="_blank" style="color:var(--primary)">crontab.guru</a> for help.</div>
+        </div>
+        <div class="form-group">
+          <label>Prompt</label>
+          <input type="text" id="cronPromptInput" placeholder="Give me a morning summary">
+        </div>
+        <button class="btn btn-primary btn-sm" id="addCronBtn">Add Cron Job</button>
+      </div>
+
+      <div class="settings-section">
         <h3>AI Provider</h3>
         <form autocomplete="off" onsubmit="return false">
         <div class="form-group">
