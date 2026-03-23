@@ -69,7 +69,7 @@ const App = {
   bootApp() {
     document.getElementById("loginScreen").style.display = "none";
     document.getElementById("setupWizard").style.display = "none";
-    document.getElementById("appScreen").style.display = "flex";
+    document.getElementById("appScreen").style.display = "grid";
 
     // Initialize modules
     Chat.init();
