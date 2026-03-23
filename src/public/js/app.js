@@ -45,8 +45,30 @@ const App = {
     document.getElementById("loginPassword").focus();
   },
 
-  showApp() {
+  async showApp() {
+    // Check if first-time setup is needed
+    try {
+      const status = await API.json("/api/settings/setup-status");
+      if (status.needsSetup) {
+        Setup.show(status);
+        return;
+      }
+      // If provider configured but no personality, start interview
+      if (status.needsPersonality && status.hasKey) {
+        this.bootApp();
+        Setup.startPersonalityInterview();
+        return;
+      }
+    } catch {
+      // If setup check fails, continue normally
+    }
+
+    this.bootApp();
+  },
+
+  bootApp() {
     document.getElementById("loginScreen").style.display = "none";
+    document.getElementById("setupWizard").style.display = "none";
     document.getElementById("appScreen").style.display = "flex";
 
     // Initialize modules

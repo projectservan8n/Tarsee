@@ -6,6 +6,7 @@ const Chat = {
   currentConversationId: null,
   isStreaming: false,
   conversations: [],
+  botName: "OpusClaw",
 
   elements: {},
 
@@ -94,6 +95,7 @@ const Chat = {
 
     this.loadConversations();
     this.loadCommands();
+    this.loadBotName();
   },
 
   async loadCommands() {
@@ -102,6 +104,23 @@ const Chat = {
       this.commands = data.commands || [];
     } catch {
       this.commands = [];
+    }
+  },
+
+  async loadBotName() {
+    try {
+      const data = await API.json("/api/settings/setup-status");
+      this.botName = data.botName || "OpusClaw";
+    } catch {
+      this.botName = "OpusClaw";
+    }
+  },
+
+  setBotName(name) {
+    this.botName = name || "OpusClaw";
+    // Update topbar if showing default
+    if (this.elements.topbarTitle.textContent === "OpusClaw") {
+      this.elements.topbarTitle.textContent = this.botName;
     }
   },
 
@@ -232,12 +251,13 @@ const Chat = {
     const msg = document.createElement("div");
     msg.className = `message ${role}`;
 
-    const avatar = role === "assistant" ? "OC" : "U";
+    const initials = this.botName ? this.botName.slice(0, 2).toUpperCase() : "OC";
+    const avatar = role === "assistant" ? initials : "U";
 
     msg.innerHTML = `
       <div class="message-avatar">${avatar}</div>
       <div class="message-content">
-        <div class="message-role">${role === "assistant" ? "OpusClaw" : "You"}</div>
+        <div class="message-role">${role === "assistant" ? escapeHtml(this.botName) : "You"}</div>
         <div class="message-text ${isStreaming ? "streaming-cursor" : ""}">${this.renderMarkdown(content)}</div>
       </div>
     `;
@@ -306,8 +326,12 @@ const Chat = {
         // onText
         (content) => {
           fullResponse += content;
-          this.updateStreamingMessage(assistantMsg, fullResponse);
+          // Strip setup marker from display
+          const displayText = fullResponse.split("|||PERSONALITY_COMPLETE|||")[0];
+          this.updateStreamingMessage(assistantMsg, displayText);
           this.scrollToBottom();
+          // Notify setup module
+          if (typeof Setup !== "undefined") Setup.handleStreamingText(fullResponse);
         },
         // onDone
         (data) => {
@@ -316,6 +340,8 @@ const Chat = {
           }
           this.finishStreaming(assistantMsg);
           this.loadConversations();
+          // Check for personality completion
+          if (typeof Setup !== "undefined") Setup.handleStreamComplete(fullResponse);
         },
         // onError
         (error) => {
@@ -342,7 +368,7 @@ const Chat = {
     this.elements.chatArea.style.display = "none";
     this.elements.inputArea.style.display = "block";
     this.elements.welcomeScreen.style.display = "flex";
-    this.elements.topbarTitle.textContent = "OpusClaw";
+    this.elements.topbarTitle.textContent = this.botName || "OpusClaw";
     this.renderConversationList();
     this.elements.messageInput.focus();
   },
