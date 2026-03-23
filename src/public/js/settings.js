@@ -55,6 +55,13 @@ const Settings = {
       voiceCloneResult: document.getElementById("voiceCloneResult"),
       voicesList: document.getElementById("voicesList"),
       saveVoiceBtn: document.getElementById("saveVoiceBtn"),
+      // Session reset
+      resetMode: document.getElementById("settingsResetMode"),
+      resetHour: document.getElementById("settingsResetHour"),
+      resetIdle: document.getElementById("settingsResetIdle"),
+      resetDailyGroup: document.getElementById("resetDailyGroup"),
+      resetIdleGroup: document.getElementById("resetIdleGroup"),
+      saveResetBtn: document.getElementById("saveResetBtn"),
       // Skills
       skillsList: document.getElementById("skillsList"),
       createSkillBtn: document.getElementById("createSkillBtn"),
@@ -118,6 +125,18 @@ const Settings = {
     }
     if (this.elements.saveBootBtn) {
       this.elements.saveBootBtn.addEventListener("click", () => this.saveWorkspaceFile("BOOT.md", this.elements.bootMd.value));
+    }
+
+    // Session reset handlers
+    if (this.elements.resetMode) {
+      this.elements.resetMode.addEventListener("change", () => {
+        const mode = this.elements.resetMode.value;
+        this.elements.resetDailyGroup.style.display = mode === "daily" ? "block" : "none";
+        this.elements.resetIdleGroup.style.display = mode === "idle" ? "block" : "none";
+      });
+    }
+    if (this.elements.saveResetBtn) {
+      this.elements.saveResetBtn.addEventListener("click", () => this.saveSessionReset());
     }
 
     // Memory handlers
@@ -234,8 +253,11 @@ const Settings = {
       const botName = settings.find((s) => s.key === "identity.name")?.value;
       if (botName && this.elements.botName) this.elements.botName.value = botName;
 
-      // Load workspace files (SOUL.md, USER.md, MEMORY.md)
+      // Load workspace files
       this.loadWorkspaceFiles();
+
+      // Load session reset config
+      this.loadSessionReset();
 
       // Load voice settings
       const voiceEngine = settings.find((s) => s.key === "voice.engine")?.value;
@@ -470,6 +492,37 @@ const Settings = {
         body: { name, content },
       });
       App.showToast(`${name} saved`, "success");
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+  },
+
+  // --- Session Reset ---
+  async loadSessionReset() {
+    try {
+      const data = await API.json("/api/settings/session-reset");
+      if (this.elements.resetMode) {
+        this.elements.resetMode.value = data.mode || "manual";
+        this.elements.resetMode.dispatchEvent(new Event("change"));
+      }
+      if (this.elements.resetHour) this.elements.resetHour.value = data.atHour || 0;
+      if (this.elements.resetIdle) this.elements.resetIdle.value = data.idleMinutes || 60;
+    } catch {
+      // ignore
+    }
+  },
+
+  async saveSessionReset() {
+    try {
+      await API.json("/api/settings/session-reset", {
+        method: "POST",
+        body: {
+          mode: this.elements.resetMode?.value || "manual",
+          atHour: Number(this.elements.resetHour?.value) || 0,
+          idleMinutes: Number(this.elements.resetIdle?.value) || 60,
+        },
+      });
+      App.showToast("Session reset config saved", "success");
     } catch (err) {
       App.showToast(err.message, "error");
     }

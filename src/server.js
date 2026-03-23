@@ -138,6 +138,12 @@ runBootChecklist({ db, settingsStore }).catch((err) => {
 import { startHeartbeat, stopHeartbeat } from "./lib/heartbeat.js";
 startHeartbeat({ db, settingsStore });
 
+// --- Session reset system ---
+import { startSessionReset, stopSessionReset } from "./lib/session-reset.js";
+import { ConversationStore } from "./db/conversations.js";
+const convStore = new ConversationStore(db);
+startSessionReset({ db, settingsStore, convStore });
+
 // --- Channel Manager (lazy start) ---
 const channelManager = new ChannelManager(db);
 app.set("channelManager", channelManager);
@@ -150,6 +156,7 @@ function shutdown(signal) {
   console.log(`[opusclaw] ${signal} received, shutting down...`);
   stopTTSEngine();
   stopHeartbeat();
+  stopSessionReset();
   channelManager.stopAll();
   server.close(() => {
     db.close();

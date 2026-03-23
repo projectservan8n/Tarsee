@@ -6,6 +6,7 @@ import { initSSE, sendSSE } from "../lib/stream-utils.js";
 import { LIMITS } from "../config/constants.js";
 import { processCommand, getCommandList } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
+import { trackActivity } from "../lib/session-reset.js";
 
 export const chatRouter = Router();
 
@@ -131,6 +132,9 @@ chatRouter.patch("/conversations/:id", (req, res) => {
  */
 chatRouter.post("/send", async (req, res) => {
   const { conversationId, channelKey, message, provider: reqProvider, model: reqModel } = req.body || {};
+
+  // Track activity for idle session reset
+  trackActivity();
 
   if (!message || typeof message !== "string") {
     return res.status(400).json({ error: "Message is required" });

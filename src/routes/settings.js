@@ -185,3 +185,34 @@ settingsRouter.delete("/bootstrap", (_req, res) => {
   deleteBootstrapFile();
   res.json({ ok: true });
 });
+
+/**
+ * GET /api/settings/session-reset
+ * Get session reset configuration.
+ */
+settingsRouter.get("/session-reset", (_req, res) => {
+  res.json({
+    mode: settingsStore.get("session.reset.mode") || "manual",
+    atHour: Number(settingsStore.get("session.reset.atHour")) || 0,
+    idleMinutes: Number(settingsStore.get("session.reset.idleMinutes")) || 60,
+  });
+});
+
+/**
+ * POST /api/settings/session-reset
+ * Update session reset configuration.
+ * Body: { mode, atHour?, idleMinutes? }
+ */
+settingsRouter.post("/session-reset", (req, res) => {
+  const { mode, atHour, idleMinutes } = req.body || {};
+
+  if (mode && !["manual", "daily", "idle"].includes(mode)) {
+    return res.status(400).json({ error: "Invalid mode. Valid: manual, daily, idle" });
+  }
+
+  if (mode) settingsStore.set("session.reset.mode", mode);
+  if (atHour !== undefined) settingsStore.set("session.reset.atHour", String(Math.max(0, Math.min(23, Number(atHour) || 0))));
+  if (idleMinutes !== undefined) settingsStore.set("session.reset.idleMinutes", String(Math.max(5, Number(idleMinutes) || 60)));
+
+  res.json({ ok: true });
+});

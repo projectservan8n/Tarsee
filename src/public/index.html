@@ -255,6 +255,30 @@
       </div>
 
       <div class="settings-section">
+        <h3>Session Reset</h3>
+        <div class="form-group">
+          <label>Reset Mode</label>
+          <select id="settingsResetMode">
+            <option value="manual">Manual (/reset command only)</option>
+            <option value="daily">Daily (at a specific hour)</option>
+            <option value="idle">Idle (after inactivity timeout)</option>
+          </select>
+          <div class="hint">Controls when conversations automatically rotate to a fresh session.</div>
+        </div>
+        <div class="form-group" id="resetDailyGroup" style="display:none">
+          <label>Reset at hour (0-23)</label>
+          <input type="number" id="settingsResetHour" min="0" max="23" value="0" placeholder="0">
+          <div class="hint">Hour in server timezone (24h format). E.g. 0 = midnight, 9 = 9 AM.</div>
+        </div>
+        <div class="form-group" id="resetIdleGroup" style="display:none">
+          <label>Idle timeout (minutes)</label>
+          <input type="number" id="settingsResetIdle" min="5" max="1440" value="60" placeholder="60">
+          <div class="hint">Reset after this many minutes of no messages.</div>
+        </div>
+        <button class="btn btn-primary btn-sm" id="saveResetBtn">Save Session Reset</button>
+      </div>
+
+      <div class="settings-section">
         <h3>AI Provider</h3>
         <form autocomplete="off" onsubmit="return false">
         <div class="form-group">
