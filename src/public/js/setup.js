@@ -95,6 +95,12 @@ const Setup = {
         baseUrl: baseUrl || undefined,
       });
 
+      // Mark setup as started so it doesn't re-trigger if interview is interrupted
+      await API.json("/api/settings/general", {
+        method: "POST",
+        body: { key: "setup.completed", value: "true" },
+      }).catch(() => {});
+
       // Boot the app and start personality interview
       App.bootApp();
       this.startPersonalityInterview();
@@ -249,6 +255,12 @@ const Setup = {
       } catch {
         // May not exist, that's fine
       }
+
+      // Mark setup as permanently completed so it never re-triggers on redeploy
+      await API.json("/api/settings/general", {
+        method: "POST",
+        body: { key: "setup.completed", value: "true" },
+      });
 
       App.showToast(`Setup complete! I'm ${botName} now.`, "success");
 

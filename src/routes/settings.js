@@ -101,9 +101,13 @@ settingsRouter.get("/setup-status", (_req, res) => {
     process.env.GEMINI_API_KEY ||
     process.env.OPENROUTER_API_KEY
   );
+  // Personality is "done" if bot name was set, OR if SOUL.md/systemPrompt exist,
+  // OR if setup was explicitly completed (prevents re-triggering on redeploy)
+  const setupCompleted = !!settingsStore.get("setup.completed");
+  const hasPersonality = !!botName || !!settingsStore.get("identity.systemPrompt") || setupCompleted;
   res.json({
     needsSetup: !provider && !envConfigured,
-    needsPersonality: !botName,
+    needsPersonality: !hasPersonality,
     botName: botName || "OpusClaw",
     provider: provider || null,
     hasKey: hasKey || envConfigured,
