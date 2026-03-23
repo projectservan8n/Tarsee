@@ -217,6 +217,31 @@ const COMMANDS = {
     },
   },
 
+  skills: {
+    description: "List available skills",
+    usage: "/skills",
+    handler: async () => {
+      try {
+        const { getSkillsList } = await import("./skills-engine.js");
+        const skills = getSkillsList();
+
+        if (skills.length === 0) {
+          return "No skills available yet. Create skills in **Settings > Skills**.";
+        }
+
+        const lines = ["**Available Skills**", ""];
+        for (const s of skills) {
+          const badge = s.source === "built-in" ? "(built-in)" : "(custom)";
+          lines.push(`- **${s.name}** ${badge} — ${s.description}`);
+        }
+        lines.push("", "Manage skills in **Settings > Skills**.");
+        return lines.join("\n");
+      } catch (err) {
+        return `Failed to load skills: ${err.message}`;
+      }
+    },
+  },
+
   forget: {
     description: "List and manage bot memories",
     usage: "/forget",

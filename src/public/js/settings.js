@@ -39,6 +39,15 @@ const Settings = {
       voiceCloneResult: document.getElementById("voiceCloneResult"),
       voicesList: document.getElementById("voicesList"),
       saveVoiceBtn: document.getElementById("saveVoiceBtn"),
+      // Skills
+      skillsList: document.getElementById("skillsList"),
+      createSkillBtn: document.getElementById("createSkillBtn"),
+      skillDialog: document.getElementById("skillDialog"),
+      skillNameInput: document.getElementById("skillNameInput"),
+      skillDescInput: document.getElementById("skillDescInput"),
+      skillContentInput: document.getElementById("skillContentInput"),
+      skillSaveBtn: document.getElementById("skillSaveBtn"),
+      skillCancelBtn: document.getElementById("skillCancelBtn"),
     };
 
     this.elements.openBtn.addEventListener("click", () => this.open());
@@ -120,6 +129,17 @@ const Settings = {
     if (this.elements.saveVoiceBtn) {
       this.elements.saveVoiceBtn.addEventListener("click", () => this.saveVoiceSettings());
     }
+
+    // Skills handlers
+    if (this.elements.createSkillBtn) {
+      this.elements.createSkillBtn.addEventListener("click", () => this.showSkillDialog());
+    }
+    if (this.elements.skillCancelBtn) {
+      this.elements.skillCancelBtn.addEventListener("click", () => this.hideSkillDialog());
+    }
+    if (this.elements.skillSaveBtn) {
+      this.elements.skillSaveBtn.addEventListener("click", () => this.saveSkill());
+    }
   },
 
   async open() {
@@ -184,6 +204,9 @@ const Settings = {
       // Load voice engine status and voices list
       this.loadVoiceStatus();
       this.loadVoices();
+
+      // Load skills
+      this.loadSkills();
 
       // Load memories
       this.loadMemories();
@@ -435,6 +458,148 @@ const Settings = {
       this.elements.memoryInput.value = "";
       this.loadMemories();
       App.showToast("Memory added", "success");
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+  },
+
+  // --- Skills ---
+  _editingSkill: null, // null = creating, string = editing skill name
+
+  async loadSkills() {
+    if (!this.elements.skillsList) return;
+    try {
+      const res = await API.request("/api/skills");
+      const data = await res.json();
+      const skills = data.skills || [];
+
+      if (skills.length === 0) {
+        this.elements.skillsList.innerHTML =
+          '<div style="color: var(--text-muted); font-size: 13px">No skills yet. Create one to give the AI specialized instructions.</div>';
+        return;
+      }
+
+      this.elements.skillsList.innerHTML = skills.map((s) =>
+        `<div class="skill-card">
+          <div style="display: flex; justify-content: space-between; align-items: center">
+            <div>
+              <strong>${escapeHtml(s.name)}</strong>
+              <span class="memory-badge">${s.source}</span>
+            </div>
+            <div style="display: flex; gap: 4px">
+              ${s.source === "custom" ? `
+                <button class="btn btn-sm" data-skill-edit="${s.name}">Edit</button>
+                <button class="btn btn-sm" style="color: var(--danger)" data-skill-delete="${s.name}">Delete</button>
+              ` : `
+                <button class="btn btn-sm" data-skill-view="${s.name}">View</button>
+              `}
+            </div>
+          </div>
+          <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px">${escapeHtml(s.description)}</div>
+        </div>`
+      ).join("");
+
+      // Wire up buttons
+      this.elements.skillsList.querySelectorAll("[data-skill-edit]").forEach((btn) => {
+        btn.addEventListener("click", () => this.editSkill(btn.dataset.skillEdit));
+      });
+      this.elements.skillsList.querySelectorAll("[data-skill-delete]").forEach((btn) => {
+        btn.addEventListener("click", () => this.deleteSkill(btn.dataset.skillDelete));
+      });
+      this.elements.skillsList.querySelectorAll("[data-skill-view]").forEach((btn) => {
+        btn.addEventListener("click", () => this.viewSkill(btn.dataset.skillView));
+      });
+    } catch {
+      this.elements.skillsList.innerHTML = "";
+    }
+  },
+
+  showSkillDialog(name, desc, content) {
+    this._editingSkill = name || null;
+    this.elements.skillNameInput.value = name || "";
+    this.elements.skillDescInput.value = desc || "";
+    this.elements.skillContentInput.value = content || "";
+    this.elements.skillNameInput.disabled = !!name;
+    this.elements.skillDescInput.disabled = false;
+    this.elements.skillContentInput.disabled = false;
+    this.elements.skillSaveBtn.style.display = "";
+    this.elements.skillDialog.style.display = "block";
+    (name ? this.elements.skillContentInput : this.elements.skillNameInput).focus();
+  },
+
+  hideSkillDialog() {
+    this._editingSkill = null;
+    this.elements.skillDialog.style.display = "none";
+  },
+
+  async editSkill(name) {
+    try {
+      const res = await API.request(`/api/skills/${encodeURIComponent(name)}`);
+      const data = await res.json();
+      this.showSkillDialog(name, data.description, data.content);
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+  },
+
+  async viewSkill(name) {
+    try {
+      const res = await API.request(`/api/skills/${encodeURIComponent(name)}`);
+      const data = await res.json();
+      // Show in the dialog as read-only
+      this.showSkillDialog(name, data.description, data.content);
+      this.elements.skillContentInput.disabled = true;
+      this.elements.skillDescInput.disabled = true;
+      this.elements.skillSaveBtn.style.display = "none";
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+  },
+
+  async saveSkill() {
+    const name = this.elements.skillNameInput.value.trim();
+    const description = this.elements.skillDescInput.value.trim();
+    const content = this.elements.skillContentInput.value.trim();
+
+    if (!name || !content) {
+      App.showToast("Name and content are required", "error");
+      return;
+    }
+
+    try {
+      if (this._editingSkill) {
+        await API.request(`/api/skills/${encodeURIComponent(name)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ description, content }),
+        });
+        App.showToast("Skill updated", "success");
+      } else {
+        const res = await API.request("/api/skills", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, description, content }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: "Failed" }));
+          throw new Error(err.error);
+        }
+        App.showToast("Skill created", "success");
+      }
+
+      this.hideSkillDialog();
+      this.loadSkills();
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+  },
+
+  async deleteSkill(name) {
+    if (!confirm(`Delete skill "${name}"?`)) return;
+    try {
+      await API.request(`/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" });
+      this.loadSkills();
+      App.showToast("Skill deleted", "success");
     } catch (err) {
       App.showToast(err.message, "error");
     }

@@ -12,7 +12,8 @@ const WORKSPACE_DIR = process.env.OPUSCLAW_WORKSPACE_DIR?.trim() || path.join(ST
 const DATA_DIR = process.env.OPUSCLAW_DATA_DIR?.trim() || path.join(STATE_DIR, "data");
 
 // Ensure directories exist
-for (const dir of [STATE_DIR, WORKSPACE_DIR, DATA_DIR]) {
+const SKILLS_DIR = path.join(WORKSPACE_DIR, "skills");
+for (const dir of [STATE_DIR, WORKSPACE_DIR, DATA_DIR, SKILLS_DIR]) {
   try {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   } catch {

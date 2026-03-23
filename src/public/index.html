@@ -280,6 +280,34 @@
       </div>
 
       <div class="settings-section">
+        <h3>Skills</h3>
+        <div class="hint" style="margin-bottom: 14px">On-demand knowledge packs that give the AI specialized instructions for specific tasks.</div>
+        <div id="skillsList" style="margin-bottom: 12px"></div>
+        <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px">
+          <button class="btn btn-sm btn-primary" id="createSkillBtn">Create Skill</button>
+        </div>
+        <!-- Create/Edit skill dialog (hidden by default) -->
+        <div id="skillDialog" style="display:none; border: 1px solid var(--border-light); border-radius: 8px; padding: 16px; margin-top: 12px; background: var(--bg)">
+          <div class="form-group">
+            <label>Skill Name</label>
+            <input type="text" id="skillNameInput" placeholder="my-skill (lowercase, hyphens)">
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <input type="text" id="skillDescInput" placeholder="Brief one-line description">
+          </div>
+          <div class="form-group">
+            <label>Instructions (Markdown)</label>
+            <textarea id="skillContentInput" rows="8" placeholder="Full instructions the AI follows when this skill is activated..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
+          </div>
+          <div style="display: flex; gap: 8px">
+            <button class="btn btn-sm btn-primary" id="skillSaveBtn">Save Skill</button>
+            <button class="btn btn-sm" id="skillCancelBtn">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
         <h3>Memories</h3>
         <div class="hint" style="margin-bottom: 14px">Learned preferences and facts injected into every conversation.</div>
         <div id="memoriesList" style="max-height: 220px; overflow-y: auto; margin-bottom: 12px"></div>

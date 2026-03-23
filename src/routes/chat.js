@@ -7,6 +7,7 @@ import { LIMITS } from "../config/constants.js";
 import { processCommand, getCommandList } from "../lib/commands.js";
 import { MemoryStore } from "../db/memory.js";
 import { getLearningHint } from "../lib/personality-learner.js";
+import { getSkillsPromptContext } from "../lib/skills-engine.js";
 
 export const chatRouter = Router();
 
@@ -176,6 +177,10 @@ chatRouter.post("/send", async (req, res) => {
   }
   if (memoryContext) {
     effectiveSystemPrompt += memoryContext;
+  }
+  const skillsContext = getSkillsPromptContext();
+  if (skillsContext) {
+    effectiveSystemPrompt += skillsContext;
   }
   if (conv?.system_prompt) {
     effectiveSystemPrompt += (effectiveSystemPrompt ? "\n\n" : "") + conv.system_prompt;
