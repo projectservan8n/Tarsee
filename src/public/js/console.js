@@ -100,12 +100,14 @@ const Console = {
     this.ws = new WebSocket(url);
 
     this.ws.onopen = () => {
-      // Authenticate with session cookie approach — send auth message
-      // For console, we reuse the existing session
+      // Session cookie is sent automatically with the upgrade request,
+      // so the server may already authenticate us. If not, try token auth.
       const token = this.getApiToken();
       if (token) {
         this.ws.send(JSON.stringify({ type: "auth", token }));
       }
+      // If no token and no session, server will send auth_ok if session-authed,
+      // or timeout after 10s if truly unauthenticated
     };
 
     this.ws.onmessage = (event) => {
@@ -140,7 +142,8 @@ const Console = {
   },
 
   getApiToken() {
-    // Try to read from settings if available
+    // Try API.token first (set during login), then settings input as fallback
+    if (typeof API !== "undefined" && API.token) return API.token;
     const tokenEl = document.getElementById("settingsApiToken");
     return tokenEl?.value || null;
   },

@@ -119,21 +119,36 @@ const Chat = {
   async loadBotName() {
     try {
       const data = await API.json("/api/settings/setup-status");
-      this.botName = data.botName || "OpusClaw";
+      this.setBotName(data.botName || "OpusClaw");
     } catch {
-      this.botName = "OpusClaw";
+      this.setBotName("OpusClaw");
     }
-    // Update welcome title
-    const welcomeTitle = document.getElementById("welcomeTitle");
-    if (welcomeTitle) welcomeTitle.textContent = `Welcome to ${this.botName}`;
   },
 
   setBotName(name) {
     this.botName = name || "OpusClaw";
-    // Update topbar if showing default
-    if (this.elements.topbarTitle.textContent === "OpusClaw") {
+    const initials = this.botName.slice(0, 2).toUpperCase();
+
+    // Update topbar title (only if showing old name or default)
+    if (!this.currentConversationId) {
       this.elements.topbarTitle.textContent = this.botName;
     }
+
+    // Update welcome screen
+    const welcomeTitle = document.getElementById("welcomeTitle");
+    if (welcomeTitle) welcomeTitle.textContent = `Welcome to ${this.botName}`;
+
+    // Update sidebar header
+    const sidebarH1 = document.querySelector(".sidebar-header h1");
+    if (sidebarH1) sidebarH1.textContent = this.botName;
+
+    // Update sidebar logo initials
+    const sidebarLogo = document.querySelector(".sidebar-header .logo");
+    if (sidebarLogo) sidebarLogo.textContent = initials;
+
+    // Update welcome logo initials
+    const welcomeLogo = document.querySelector(".welcome .logo-large");
+    if (welcomeLogo) welcomeLogo.textContent = initials;
   },
 
   handleCommandPalette() {

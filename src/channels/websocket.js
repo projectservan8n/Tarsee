@@ -1,6 +1,6 @@
 import { WebSocketServer } from "ws";
 import crypto from "node:crypto";
-import { validateApiToken } from "../middleware/auth.js";
+import { validateApiToken, validateSessionFromRequest } from "../middleware/auth.js";
 import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
@@ -37,7 +37,10 @@ export function setupWebSocket(server, db, app) {
     const url = new URL(req.url, "http://localhost");
     const token = url.searchParams.get("token");
 
-    if (token && validateApiToken(token)) {
+    // Auth via query token or session cookie
+    const isAuthed = (token && validateApiToken(token)) || validateSessionFromRequest(req);
+
+    if (isAuthed) {
       wss.handleUpgrade(req, socket, head, (ws) => {
         ws.isAuthenticated = true;
         wss.emit("connection", ws, req);
@@ -63,6 +66,11 @@ export function setupWebSocket(server, db, app) {
     ws._opusclaw_db = db;
     ws._opusclaw_channelManager = app?.get?.("channelManager") || null;
 
+    // If already authenticated via session/token at upgrade, send auth_ok immediately
+    if (ws.isAuthenticated) {
+      ws.send(JSON.stringify({ type: "auth_ok" }));
+    }
+
     ws.on("message", async (raw) => {
       let msg;
       try {
@@ -74,7 +82,10 @@ export function setupWebSocket(server, db, app) {
 
       // Handle auth
       if (msg.type === "auth") {
-        if (validateApiToken(msg.token)) {
+        if (ws.isAuthenticated) {
+          // Already authenticated via session cookie
+          ws.send(JSON.stringify({ type: "auth_ok" }));
+        } else if (validateApiToken(msg.token)) {
           ws.isAuthenticated = true;
           clearTimeout(ws.authTimeout);
           ws.send(JSON.stringify({ type: "auth_ok" }));

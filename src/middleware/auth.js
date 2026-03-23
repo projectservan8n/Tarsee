@@ -92,6 +92,25 @@ export function validateApiToken(token) {
 }
 
 /**
+ * Validates a session from an HTTP request (for WebSocket upgrades).
+ * Returns true if the request has a valid session cookie.
+ */
+export function validateSessionFromRequest(req) {
+  // If no password is required, all connections are allowed
+  if (!config.SETUP_PASSWORD) return true;
+
+  const sessionToken = extractSessionToken(req);
+  if (!sessionToken || !sessions.has(sessionToken)) return false;
+
+  const session = sessions.get(sessionToken);
+  if (Date.now() - session.createdAt > SESSION_MAX_AGE_MS) {
+    sessions.delete(sessionToken);
+    return false;
+  }
+  return true;
+}
+
+/**
  * Middleware: Extracts auth info and attaches to req.auth.
  * Does NOT enforce auth — use requireAuth for that.
  */
