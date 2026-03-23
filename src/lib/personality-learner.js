@@ -46,4 +46,10 @@ export function clearCounter(conversationId) {
 
 const LEARNING_HINT = `
 
-[Internal note: If you've noticed any user preferences, communication style patterns, or important facts during this conversation that would be useful to remember for future conversations, mention them naturally or suggest saving them. The user can add memories in Settings.]`;
+[Internal note: This is your periodic memory check. Review this conversation so far and save anything important you've learned about the user. Use [REMEMBER: fact] markers to auto-save. Examples of things worth remembering:
+- Their name, role, company, or projects
+- Communication preferences (concise? detailed? technical?)
+- Tools, languages, or frameworks they use
+- Decisions made or preferences expressed
+- Recurring topics or goals
+Do NOT re-save things already in your memory context above. Only save genuinely new information.]`;

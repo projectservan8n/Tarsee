@@ -5,6 +5,7 @@ import { SettingsStore } from "../db/settings.js";
 import { processCommand } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
+import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 
 /**
  * Creates and starts a Discord bot.
@@ -191,6 +192,9 @@ You can use these special markers in your response:
 
       // Save and send final response
       if (fullResponse) {
+        // Extract memories before parsing reactions
+        fullResponse = extractAndSaveMemories(fullResponse, db, convId);
+
         // Parse agent reactions
         const { cleanText, reactions } = parseReactions(fullResponse);
 

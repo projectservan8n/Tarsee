@@ -6,17 +6,66 @@ import { getBootstrapContext } from "./workspace-files.js";
 const MAX_TOTAL_BYTES = 150 * 1024; // 150KB total prompt budget
 
 /**
+ * Memory & capabilities instruction block.
+ * Tells the AI about its memory system and how to use it.
+ */
+const MEMORY_INSTRUCTIONS = `
+
+## Memory & Learning
+
+You have persistent long-term memory that survives across conversations and restarts.
+
+**Your memory sources:**
+- **MEMORY.md** — your main memory file (injected above as "Long-Term Memory")
+- **USER.md** — facts about your user (injected above as "About the User")
+- **DB memories** — quick indexed memories (shown as "Additional quick memories" below)
+
+**How to remember things:**
+When you learn something important about the user — preferences, facts, names, projects, decisions, communication style, recurring topics — you MUST save it by including a memory marker in your response:
+
+\`[REMEMBER: brief fact to save]\`
+
+Examples:
+- \`[REMEMBER: User's name is Karl, works in construction tech]\`
+- \`[REMEMBER: Prefers concise responses, no fluff]\`
+- \`[REMEMBER: Main project is Worksite360 — construction management platform]\`
+- \`[REMEMBER: Uses Railway for deployments, GitHub for code]\`
+
+These markers are automatically extracted and saved to your memory. The user won't see them.
+You can include multiple [REMEMBER: ...] markers in a single response.
+
+**When to remember:**
+- User tells you their name, role, company, or preferences
+- User corrects you or clarifies something important
+- Important decisions or conclusions from conversations
+- Recurring topics or projects the user works on
+- Communication style preferences (formal/casual/technical)
+
+**When NOT to remember:**
+- Trivial or temporary information (today's weather, a one-off question)
+- Things already in your memory (avoid duplicates)
+- Sensitive data like passwords, API keys, or secrets
+
+**The user can also:**
+- Type \`/remember [fact]\` to manually save a memory
+- Type \`/forget\` to list stored memories
+- Edit MEMORY.md directly in Settings > Workspace
+
+**Always reference your memories** when relevant. If the user asks about something you've discussed before, check your memory context above first.`;
+
+/**
  * Build the effective system prompt from all sources.
  * Used by HTTP, WebSocket, Discord, Telegram, and Slack handlers.
  *
  * Composition order:
  *   1. AGENTS.md + SOUL.md + IDENTITY.md + USER.md + TOOLS.md + MEMORY.md (workspace files)
- *   2. DB memories (bot_memory table — supplementary)
- *   3. Skills context (SKILL.md files)
- *   4. Per-conversation prompt (if set)
- *   5. Channel hint (e.g. "You are in a Discord conversation")
- *   6. Learning hint (periodic nudge)
- *   7. Fallback if everything empty
+ *   2. Memory instructions (how to use memory system)
+ *   3. DB memories (bot_memory table — supplementary)
+ *   4. Skills context (SKILL.md files)
+ *   5. Per-conversation prompt (if set)
+ *   6. Channel hint (e.g. "You are in a Discord conversation")
+ *   7. Learning hint (periodic nudge)
+ *   8. Fallback if everything empty
  *
  * Individual files are truncated at 20KB. Total prompt capped at 150KB.
  *
@@ -52,6 +101,9 @@ export function buildSystemPrompt({
   if (bootstrapContext) {
     prompt = bootstrapContext;
   }
+
+  // Memory instructions — always included so the bot knows how to remember
+  prompt += MEMORY_INSTRUCTIONS;
 
   if (dbMemoryContext) {
     prompt += dbMemoryContext;

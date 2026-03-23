@@ -487,8 +487,9 @@ const Chat = {
         // onText
         (content) => {
           fullResponse += content;
-          // Strip setup marker from display
-          const displayText = fullResponse.split("|||PERSONALITY_COMPLETE|||")[0];
+          // Strip setup marker and [REMEMBER: ...] markers from display
+          let displayText = fullResponse.split("|||PERSONALITY_COMPLETE|||")[0];
+          displayText = displayText.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n");
           this.updateStreamingMessage(assistantMsg, displayText);
           this.scrollToBottom();
           // Notify setup module
@@ -549,6 +550,8 @@ const Chat = {
    */
   renderMarkdown(text) {
     if (!text) return "";
+    // Strip any [REMEMBER: ...] markers that leaked through
+    text = text.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n").trim();
     let html = escapeHtml(text);
 
     // Code blocks (```lang\ncode\n```)

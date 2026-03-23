@@ -7,6 +7,7 @@ import { LIMITS } from "../config/constants.js";
 import { processCommand, getCommandList } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { trackActivity } from "../lib/session-reset.js";
+import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 
 export const chatRouter = Router();
 
@@ -244,7 +245,12 @@ chatRouter.post("/send", async (req, res) => {
       }
     }
 
-    // Save assistant message
+    // Extract [REMEMBER: ...] markers and auto-save memories
+    if (fullResponse) {
+      fullResponse = extractAndSaveMemories(fullResponse, req.app.get("db"), convId);
+    }
+
+    // Save assistant message (with markers stripped)
     if (fullResponse) {
       convStore.addMessage(convId, {
         role: "assistant",

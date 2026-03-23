@@ -8,6 +8,7 @@ import { WS_CODES } from "../config/constants.js";
 import { processCommand } from "../lib/commands.js";
 import { logCapture } from "../lib/log-capture.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
+import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 
 /**
  * Sets up WebSocket server on the existing HTTP server.
@@ -232,7 +233,12 @@ async function handleChat(ws, msg, convStore, settingsStore) {
 
     ws.removeListener("close", onClose);
 
-    // Save assistant message
+    // Extract [REMEMBER: ...] markers and auto-save memories
+    if (fullResponse) {
+      fullResponse = extractAndSaveMemories(fullResponse, ws._opusclaw_db, convId);
+    }
+
+    // Save assistant message (with markers stripped)
     if (fullResponse) {
       convStore.addMessage(convId, {
         role: "assistant",

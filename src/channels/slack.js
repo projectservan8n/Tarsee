@@ -6,6 +6,7 @@ import { SettingsStore } from "../db/settings.js";
 import { processCommand } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
+import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 
 /**
  * Creates and starts a Slack bot.
@@ -150,6 +151,9 @@ You can use [react: emoji_name] to add a reaction to the user's message (e.g. [r
       }
 
       if (fullResponse) {
+        // Extract memories before parsing reactions
+        fullResponse = extractAndSaveMemories(fullResponse, db, convId);
+
         // Parse agent reactions
         const { cleanText, reactions } = parseReactions(fullResponse);
 
