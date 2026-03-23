@@ -110,10 +110,8 @@ html, body {
 .app {
   display: grid;
   grid-template-columns: 258px 1fr;
-  grid-template-rows: 52px 1fr;
-  grid-template-areas:
-    "sidebar topbar"
-    "sidebar content";
+  grid-template-rows: 1fr;
+  grid-template-areas: "sidebar content";
   height: 100vh;
   overflow: hidden;
 }
@@ -254,7 +252,6 @@ html, body {
 
 /* --- Topbar (frosted glass) --- */
 .topbar {
-  grid-area: topbar;
   height: 52px;
   padding: 0 20px;
   border-bottom: 1px solid var(--border);

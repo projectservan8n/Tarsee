@@ -120,7 +120,7 @@ const Setup = {
         systemPrompt: INTERVIEW_SYSTEM_PROMPT,
       });
       this.setupConversationId = conv.id;
-      Chat.openConversation(conv.id);
+      Chat.openChannel("web:default", conv.id);
 
       // Send a hidden first message to kick off the interview
       // The bot will introduce itself and ask the first question
@@ -222,7 +222,7 @@ const Setup = {
       // Rename conversation
       if (this.setupConversationId) {
         await API.updateConversation(this.setupConversationId, { title: `Hello from ${botName}` });
-        Chat.loadConversations();
+        Chat.loadChannels();
       }
     } catch (err) {
       console.error("[setup] Failed to save identity:", err);
