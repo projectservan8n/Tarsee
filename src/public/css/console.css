@@ -7,16 +7,17 @@
   right: 0;
   height: 0;
   background: #0a0c10;
-  border-top: 2px solid var(--primary);
+  border-top: 2px solid transparent;
   display: flex;
   flex-direction: column;
   z-index: 40;
-  transition: height 200ms ease;
+  transition: height 200ms ease, border-color 200ms ease;
   overflow: hidden;
 }
 
 .console-panel.open {
   height: 340px;
+  border-top-color: var(--primary);
 }
 
 .console-panel.maximized {
