@@ -196,6 +196,20 @@ html, body {
   padding: 8px 8px;
 }
 
+.channel-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding: 12px 12px 4px;
+  margin-top: 4px;
+}
+
+.channel-section-label:first-child {
+  margin-top: 0;
+}
+
 .channel-item {
   padding: 10px 12px;
   border-radius: var(--radius);

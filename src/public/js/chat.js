@@ -252,22 +252,50 @@ const Chat = {
     if (!el) return;
     el.innerHTML = "";
 
-    for (const ch of this.channels) {
-      const item = document.createElement("div");
-      const isActive = ch.key === this.currentChannelKey;
-      item.className = "channel-item" + (isActive ? " active" : "");
+    // Always ensure web:default is visible
+    const hasWeb = this.channels.some((c) => c.key === "web:default");
+    const allChannels = hasWeb
+      ? this.channels
+      : [{ key: "web:default", platform: "web", title: "Web Chat", conversationId: null, updatedAt: null }, ...this.channels];
 
-      const icon = PLATFORM_ICONS[ch.platform] || PLATFORM_ICONS.web;
-      const timeAgo = ch.updatedAt ? this.timeAgo(ch.updatedAt) : "";
+    // Group by platform
+    const groups = {};
+    for (const ch of allChannels) {
+      if (!groups[ch.platform]) groups[ch.platform] = [];
+      groups[ch.platform].push(ch);
+    }
 
-      item.innerHTML = `
-        <span class="channel-icon">${icon}</span>
-        <span class="channel-name">${escapeHtml(ch.title)}</span>
-        <span class="channel-time">${timeAgo}</span>
-      `;
+    // Platform labels
+    const platformLabels = { web: "Web", discord: "Discord", telegram: "Telegram", slack: "Slack" };
+    const platformOrder = ["web", "discord", "telegram", "slack"];
 
-      item.addEventListener("click", () => this.openChannel(ch.key, ch.conversationId));
-      el.appendChild(item);
+    for (const platform of platformOrder) {
+      const items = groups[platform];
+      if (!items || items.length === 0) continue;
+
+      // Section label
+      const label = document.createElement("div");
+      label.className = "channel-section-label";
+      label.textContent = platformLabels[platform] || platform;
+      el.appendChild(label);
+
+      for (const ch of items) {
+        const item = document.createElement("div");
+        const isActive = ch.key === this.currentChannelKey;
+        item.className = "channel-item" + (isActive ? " active" : "");
+
+        const icon = PLATFORM_ICONS[ch.platform] || PLATFORM_ICONS.web;
+        const timeAgo = ch.updatedAt ? this.timeAgo(ch.updatedAt) : "";
+
+        item.innerHTML = `
+          <span class="channel-icon">${icon}</span>
+          <span class="channel-name">${escapeHtml(ch.title)}</span>
+          <span class="channel-time">${timeAgo}</span>
+        `;
+
+        item.addEventListener("click", () => this.openChannel(ch.key, ch.conversationId));
+        el.appendChild(item);
+      }
     }
   },
 
