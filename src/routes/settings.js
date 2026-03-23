@@ -263,3 +263,65 @@ settingsRouter.delete("/cron/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+/**
+ * GET /api/settings/profiles
+ * List all auth profiles with stats (redacted keys).
+ */
+settingsRouter.get("/profiles", async (_req, res) => {
+  try {
+    const { getProfilesWithStats } = await import("../lib/auth-profiles.js");
+    res.json({ profiles: getProfilesWithStats() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/settings/profiles
+ * Add a new auth profile.
+ * Body: { name, provider, apiKey, model?, baseUrl?, enabled? }
+ */
+settingsRouter.post("/profiles", async (req, res) => {
+  const { name, provider, apiKey, model, baseUrl, enabled } = req.body || {};
+  if (!name || !provider || !apiKey) {
+    return res.status(400).json({ error: "name, provider, and apiKey are required" });
+  }
+  try {
+    const { addProfile } = await import("../lib/auth-profiles.js");
+    const profile = addProfile({ name, provider, apiKey, model, baseUrl, enabled });
+    res.status(201).json(profile);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/settings/profiles/:id
+ * Update an auth profile.
+ */
+settingsRouter.patch("/profiles/:id", async (req, res) => {
+  try {
+    const { updateProfile } = await import("../lib/auth-profiles.js");
+    const updated = updateProfile(req.params.id, req.body || {});
+    if (!updated) return res.status(404).json({ error: "Profile not found" });
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/settings/profiles/:id
+ * Remove an auth profile.
+ */
+settingsRouter.delete("/profiles/:id", async (req, res) => {
+  try {
+    const { removeProfile } = await import("../lib/auth-profiles.js");
+    const removed = removeProfile(req.params.id);
+    if (!removed) return res.status(404).json({ error: "Profile not found" });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});

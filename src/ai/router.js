@@ -1,4 +1,5 @@
 import { AI_PROVIDERS } from "../config/constants.js";
+import { resolveProfile, setCooldown, trackUsage } from "../lib/auth-profiles.js";
 
 // Lazy-loaded provider modules
 const providerModules = {};
@@ -31,6 +32,8 @@ async function loadProvider(providerId) {
  * Routes a chat request to the appropriate AI provider.
  * Returns an async generator that yields text chunks.
  *
+ * Supports auth profile resolution with auto-rotation on failure.
+ *
  * @param {object} opts
  * @param {Array<{role: string, content: string}>} opts.messages - Conversation messages
  * @param {string} opts.provider - Provider ID (anthropic, openai, gemini, openrouter, custom)
@@ -39,12 +42,22 @@ async function loadProvider(providerId) {
  * @param {string} [opts.baseUrl] - Custom base URL (for custom provider)
  * @param {string} [opts.systemPrompt] - System prompt
  * @param {AbortSignal} [opts.signal] - Abort signal
+ * @param {string} [opts.profileName] - Auth profile name (from @syntax)
  * @returns {AsyncGenerator<{type: string, content?: string, usage?: object}>}
  */
 export async function* chatStream(opts) {
-  const { provider: providerId, model, apiKey, baseUrl, messages, systemPrompt, signal } = opts;
+  let { provider: providerId, model, apiKey, baseUrl, messages, systemPrompt, signal, profileName } = opts;
 
   if (!providerId) throw new Error("No AI provider configured");
+
+  // Try to resolve from auth profiles first
+  const profile = resolveProfile(providerId, profileName);
+  if (profile) {
+    apiKey = profile.apiKey;
+    if (profile.model && !model) model = profile.model;
+    if (profile.baseUrl && !baseUrl) baseUrl = profile.baseUrl;
+  }
+
   if (!apiKey) throw new Error(`No API key configured for ${providerId}`);
 
   const providerDef = AI_PROVIDERS[providerId];
@@ -54,14 +67,25 @@ export async function* chatStream(opts) {
 
   const providerModule = await loadProvider(providerId);
 
-  yield* providerModule.chat({
-    messages,
-    model: model || providerDef?.defaultModel || "",
-    apiKey,
-    baseUrl: baseUrl || providerDef?.baseUrl || "",
-    systemPrompt,
-    signal,
-  });
+  try {
+    yield* providerModule.chat({
+      messages,
+      model: model || providerDef?.defaultModel || "",
+      apiKey,
+      baseUrl: baseUrl || providerDef?.baseUrl || "",
+      systemPrompt,
+      signal,
+    });
+
+    // Track successful usage
+    if (profile) trackUsage(profile.profileId);
+  } catch (err) {
+    // Put profile into cooldown on failure
+    if (profile) {
+      setCooldown(profile.profileId, err.message?.slice(0, 100));
+    }
+    throw err;
+  }
 }
 
 /**

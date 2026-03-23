@@ -45,6 +45,13 @@ const Settings = {
       memoriesList: document.getElementById("memoriesList"),
       memoryInput: document.getElementById("memoryInput"),
       addMemoryBtn: document.getElementById("addMemoryBtn"),
+      // Auth profiles
+      profilesList: document.getElementById("profilesList"),
+      profileNameInput: document.getElementById("profileNameInput"),
+      profileProviderInput: document.getElementById("profileProviderInput"),
+      profileApiKeyInput: document.getElementById("profileApiKeyInput"),
+      profileModelInput: document.getElementById("profileModelInput"),
+      addProfileBtn: document.getElementById("addProfileBtn"),
       // Voice settings
       voiceEngine: document.getElementById("settingsVoiceEngine"),
       voiceEngineStatus: document.getElementById("voiceEngineStatus"),
@@ -142,6 +149,11 @@ const Settings = {
     }
     if (this.elements.saveResetBtn) {
       this.elements.saveResetBtn.addEventListener("click", () => this.saveSessionReset());
+    }
+
+    // Auth profile handlers
+    if (this.elements.addProfileBtn) {
+      this.elements.addProfileBtn.addEventListener("click", () => this.addProfile());
     }
 
     // Cron handlers
@@ -271,6 +283,9 @@ const Settings = {
 
       // Load cron jobs
       this.loadCronJobs();
+
+      // Load auth profiles
+      this.loadProfiles();
 
       // Load voice settings
       const voiceEngine = settings.find((s) => s.key === "voice.engine")?.value;
@@ -536,6 +551,75 @@ const Settings = {
         },
       });
       App.showToast("Session reset config saved", "success");
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+  },
+
+  // --- Auth Profiles ---
+  async loadProfiles() {
+    if (!this.elements.profilesList) return;
+    try {
+      const data = await API.json("/api/settings/profiles");
+      const profiles = data.profiles || [];
+
+      if (profiles.length === 0) {
+        this.elements.profilesList.innerHTML =
+          '<div style="color: var(--text-muted); font-size: 13px">No auth profiles. Add one below for multi-key rotation.</div>';
+        return;
+      }
+
+      this.elements.profilesList.innerHTML = profiles.map((p) => {
+        const status = p.inCooldown ? `cooldown (${p.cooldownReason || "error"})` : p.enabled ? "active" : "disabled";
+        const statusColor = p.inCooldown ? "color:#fbbf24" : p.enabled ? "" : "color:var(--text-muted)";
+        return `<div class="memory-item">
+          <span class="memory-badge" style="${statusColor}">${status}</span>
+          <span class="memory-content">
+            <strong>${escapeHtml(p.name)}</strong> (${p.provider}) ${p.apiKeyHint || ""}
+            ${p.stats.requests > 0 ? `<span style="color:var(--text-muted);font-size:11px"> — ${p.stats.requests} reqs, ${p.stats.errors} errs</span>` : ""}
+          </span>
+          <button class="memory-delete" data-profile-id="${p.id}" title="Delete">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+        </div>`;
+      }).join("");
+
+      this.elements.profilesList.querySelectorAll("[data-profile-id]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          try {
+            await API.json(`/api/settings/profiles/${btn.dataset.profileId}`, { method: "DELETE" });
+            this.loadProfiles();
+            App.showToast("Profile removed", "success");
+          } catch (err) {
+            App.showToast(err.message, "error");
+          }
+        });
+      });
+    } catch {
+      this.elements.profilesList.innerHTML = "";
+    }
+  },
+
+  async addProfile() {
+    const name = this.elements.profileNameInput?.value.trim();
+    const provider = this.elements.profileProviderInput?.value;
+    const apiKey = this.elements.profileApiKeyInput?.value.trim();
+    const model = this.elements.profileModelInput?.value.trim();
+
+    if (!name || !provider || !apiKey) {
+      App.showToast("Name, provider, and API key are required", "error");
+      return;
+    }
+    try {
+      await API.json("/api/settings/profiles", {
+        method: "POST",
+        body: { name, provider, apiKey, model: model || undefined },
+      });
+      this.elements.profileNameInput.value = "";
+      this.elements.profileApiKeyInput.value = "";
+      this.elements.profileModelInput.value = "";
+      this.loadProfiles();
+      App.showToast("Auth profile added", "success");
     } catch (err) {
       App.showToast(err.message, "error");
     }

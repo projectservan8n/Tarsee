@@ -119,6 +119,10 @@ initTTSEngine(settingsStore).catch((err) => {
   console.warn("[opusclaw] TTS engine init error:", err.message);
 });
 
+// --- Auth profiles ---
+import { initAuthProfiles } from "./lib/auth-profiles.js";
+initAuthProfiles(settingsStore);
+
 // --- Migrate DB memories to MEMORY.md (one-time) ---
 import { MemoryStore } from "./db/memory.js";
 try {

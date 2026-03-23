@@ -348,6 +348,35 @@
       </div>
 
       <div class="settings-section">
+        <h3>Auth Profiles <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Multi-Key with Rotation</span></h3>
+        <div id="profilesList" style="margin-bottom:12px"></div>
+        <div class="form-group">
+          <label>Profile Name</label>
+          <input type="text" id="profileNameInput" placeholder="e.g. work, personal, backup">
+        </div>
+        <div class="form-group">
+          <label>Provider</label>
+          <select id="profileProviderInput">
+            <option value="anthropic">Anthropic</option>
+            <option value="openai">OpenAI</option>
+            <option value="gemini">Gemini</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>API Key</label>
+          <input type="password" id="profileApiKeyInput" placeholder="sk-..." autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label>Model (optional)</label>
+          <input type="text" id="profileModelInput" placeholder="Override model for this profile">
+        </div>
+        <button class="btn btn-primary btn-sm" id="addProfileBtn">Add Profile</button>
+        <div class="hint" style="margin-top:8px">Profiles auto-rotate on failure with 5-min cooldown. Use <code>/model name@provider:profile</code> to select.</div>
+      </div>
+
+      <div class="settings-section">
         <h3>Voice (Coqui TTS / XTTS v2)</h3>
         <div id="voiceEngineStatus" style="font-size: 13px; margin-bottom: 12px; color: var(--text-muted)">
           Checking voice engine status...
