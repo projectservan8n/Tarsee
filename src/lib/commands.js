@@ -197,13 +197,58 @@ const COMMANDS = {
       return lines.join("\n");
     },
   },
+  remember: {
+    description: "Save a fact or preference to bot memory",
+    usage: "/remember [something to remember]",
+    handler: async (args, ctx) => {
+      if (!args) return "Usage: `/remember The user prefers dark mode`";
+
+      try {
+        const { MemoryStore } = await import("../db/memory.js");
+        const db = ctx.db;
+        if (!db) return "Database not available.";
+
+        const store = new MemoryStore(db);
+        const memory = store.add(args, "preference", ctx.conversationId || null);
+        return `Remembered: "${args}"`;
+      } catch (err) {
+        return `Failed to save memory: ${err.message}`;
+      }
+    },
+  },
+
+  forget: {
+    description: "List and manage bot memories",
+    usage: "/forget",
+    handler: async (_args, ctx) => {
+      try {
+        const { MemoryStore } = await import("../db/memory.js");
+        const db = ctx.db;
+        if (!db) return "Database not available.";
+
+        const store = new MemoryStore(db);
+        const memories = store.list(20);
+
+        if (memories.length === 0) return "No memories stored yet.";
+
+        const lines = ["**Bot Memories** (manage in Settings > Memories)", ""];
+        for (const m of memories) {
+          lines.push(`- [${m.category}] ${m.content}`);
+        }
+        lines.push("", `Total: ${store.count()} memories`);
+        return lines.join("\n");
+      } catch (err) {
+        return `Failed to load memories: ${err.message}`;
+      }
+    },
+  },
 };
 
 /**
  * Process a potential command message.
  *
  * @param {string} message - The raw user message
- * @param {object} ctx - Context object with settingsStore, convStore, conversationId, channelManager, clearConversation
+ * @param {object} ctx - Context object with settingsStore, convStore, conversationId, channelManager, clearConversation, db
  * @returns {Promise<{handled: boolean, response?: string}>}
  */
 export async function processCommand(message, ctx = {}) {

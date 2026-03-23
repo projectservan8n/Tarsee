@@ -6,6 +6,7 @@ import { initSSE, sendSSE } from "../lib/stream-utils.js";
 import { LIMITS } from "../config/constants.js";
 import { processCommand, getCommandList } from "../lib/commands.js";
 import { MemoryStore } from "../db/memory.js";
+import { getLearningHint } from "../lib/personality-learner.js";
 
 export const chatRouter = Router();
 
@@ -118,6 +119,7 @@ chatRouter.post("/send", async (req, res) => {
       convStore,
       conversationId,
       channelManager: req.app.get("channelManager"),
+      db: req.app.get("db"),
     });
 
     if (cmdResult.handled) {
@@ -180,6 +182,12 @@ chatRouter.post("/send", async (req, res) => {
   }
   if (!effectiveSystemPrompt) {
     effectiveSystemPrompt = `You are ${identityName}, a helpful AI assistant.`;
+  }
+
+  // Add learning hint every N messages (zero API cost)
+  const learningHint = getLearningHint(convId, history.length);
+  if (learningHint) {
+    effectiveSystemPrompt += learningHint;
   }
 
   let fullResponse = "";
