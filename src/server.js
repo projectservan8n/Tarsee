@@ -20,6 +20,7 @@ import { adminRouter } from "./routes/admin.js";
 import { filesRouter } from "./routes/files.js";
 import { debugRouter } from "./routes/debug.js";
 import { backupRouter } from "./routes/backup.js";
+import { memoryRouter } from "./routes/memory.js";
 import { setupWebSocket } from "./channels/websocket.js";
 import { ChannelManager } from "./channels/manager.js";
 import { initTTSEngine, stopTTSEngine } from "./voice/engine-registry.js";
@@ -81,6 +82,7 @@ app.use("/api/admin", requireAuth, csrfProtect, adminRouter);
 app.use("/api/files", requireAuth, csrfProtect, filesRouter);
 app.use("/api/debug", requireAuth, csrfProtect, debugRouter);
 app.use("/api/backup", requireAuth, csrfProtect, backupRouter);
+app.use("/api/memory", requireAuth, csrfProtect, memoryRouter);
 
 // SPA fallback — serve index.html for client-side routes
 // Express 5 requires named wildcard params (bare * is invalid)

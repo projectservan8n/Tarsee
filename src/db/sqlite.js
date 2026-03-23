@@ -113,4 +113,20 @@ const MIGRATIONS = [
       CREATE INDEX idx_audit_log_target ON audit_log(target);
     `,
   },
+  {
+    name: "003_bot_memory",
+    sql: `
+      CREATE TABLE bot_memory (
+        id TEXT PRIMARY KEY,
+        category TEXT NOT NULL DEFAULT 'preference',
+        content TEXT NOT NULL,
+        source_conversation_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX idx_bot_memory_category ON bot_memory(category);
+      CREATE INDEX idx_bot_memory_created ON bot_memory(created_at DESC);
+    `,
+  },
 ];
