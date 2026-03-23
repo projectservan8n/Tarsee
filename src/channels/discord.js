@@ -3,6 +3,7 @@ import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand } from "../lib/commands.js";
+import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 
 /**
  * Creates and starts a Discord bot.
@@ -93,12 +94,29 @@ export async function createDiscordBot(config, db) {
       return;
     }
 
-    // Show typing indicator
-    const typing = message.channel.sendTyping().catch(() => {});
+    // Ack reaction — let user know we're processing
+    const ackEmoji = config.ackReaction ?? "👀";
+    if (ackEmoji) {
+      message.react(ackEmoji).catch(() => {});
+    }
 
-    // Stream response
+    // Show typing indicator
+    message.channel.sendTyping().catch(() => {});
+
+    // Build full system prompt (identity + memory + skills)
     const history = convStore.getRecentMessages(convId, 30);
+    const conv = convStore.get(convId);
+    const systemPrompt = buildSystemPrompt({
+      settingsStore,
+      db,
+      conversationId: convId,
+      messageCount: history.length,
+      conversationPrompt: conv?.system_prompt,
+      channelHint: "Keep responses concise for chat. You are in a Discord conversation.",
+    });
+
     let fullResponse = "";
+    const streaming = config.streaming ?? "partial"; // partial | off
 
     try {
       const stream = chatStream({
@@ -107,16 +125,41 @@ export async function createDiscordBot(config, db) {
         apiKey: activeProvider.apiKey,
         baseUrl: activeProvider.baseUrl,
         messages: history.map((m) => ({ role: m.role, content: m.content })),
-        systemPrompt: "You are OpusClaw, a helpful AI assistant. Keep responses concise for chat. You are in a Discord conversation.",
+        systemPrompt,
       });
+
+      // Live streaming: edit a preview message as tokens arrive
+      let previewMsg = null;
+      let lastEditTime = 0;
+      const EDIT_INTERVAL_MS = 1200; // Rate limit: edit at most every 1.2s
 
       for await (const event of stream) {
         if (event.type === "text") {
           fullResponse += event.content;
+
+          // Live edit preview if streaming is enabled
+          if (streaming === "partial" && fullResponse.length > 10) {
+            const now = Date.now();
+            if (now - lastEditTime > EDIT_INTERVAL_MS) {
+              lastEditTime = now;
+              const preview = fullResponse.slice(0, 1950) + (fullResponse.length > 1950 ? "..." : " ▎");
+              try {
+                if (!previewMsg) {
+                  previewMsg = await message.reply(preview);
+                } else {
+                  await previewMsg.edit(preview);
+                }
+              } catch {
+                // Editing can fail if message was deleted
+              }
+              // Keep typing indicator going
+              message.channel.sendTyping().catch(() => {});
+            }
+          }
         }
       }
 
-      // Save and send response
+      // Save and send final response
       if (fullResponse) {
         convStore.addMessage(convId, {
           role: "assistant",
@@ -125,14 +168,33 @@ export async function createDiscordBot(config, db) {
           model: activeProvider.model,
         });
 
+        // Remove ack reaction
+        if (ackEmoji) {
+          message.reactions.cache.get(ackEmoji)?.users.remove(client.user.id).catch(() => {});
+        }
+
         // Discord has 2000 char limit — split if needed
         const chunks = splitMessage(fullResponse, 2000);
-        for (const chunk of chunks) {
-          await message.reply(chunk);
+
+        if (previewMsg && chunks.length === 1) {
+          // Just edit the preview to final content
+          await previewMsg.edit(chunks[0]).catch(() => {});
+        } else {
+          // Delete preview and send fresh
+          if (previewMsg) {
+            await previewMsg.delete().catch(() => {});
+          }
+          for (const chunk of chunks) {
+            await message.reply(chunk);
+          }
         }
       }
     } catch (err) {
       console.error("[discord] chat error:", err.message);
+      // Remove ack reaction on error
+      if (ackEmoji) {
+        message.reactions.cache.get(ackEmoji)?.users.remove(client.user.id).catch(() => {});
+      }
       await message.reply("Sorry, I encountered an error processing your message.").catch(() => {});
     }
   });

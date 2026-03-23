@@ -5,9 +5,7 @@ import { SettingsStore } from "../db/settings.js";
 import { initSSE, sendSSE } from "../lib/stream-utils.js";
 import { LIMITS } from "../config/constants.js";
 import { processCommand, getCommandList } from "../lib/commands.js";
-import { MemoryStore } from "../db/memory.js";
-import { getLearningHint } from "../lib/personality-learner.js";
-import { getSkillsPromptContext } from "../lib/skills-engine.js";
+import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 
 export const chatRouter = Router();
 
@@ -165,35 +163,14 @@ chatRouter.post("/send", async (req, res) => {
   // Send conversation ID (useful when auto-created)
   sendSSE(res, "conversation", { id: convId });
 
-  // Build effective system prompt: identity + memory + conversation-specific
-  const identityName = settingsStore.get("identity.name") || "OpusClaw";
-  const globalPrompt = settingsStore.get("identity.systemPrompt") || "";
-  const memoryStore = new MemoryStore(req.app.get("db"));
-  const memoryContext = memoryStore.getContextString(20);
-
-  let effectiveSystemPrompt = "";
-  if (globalPrompt) {
-    effectiveSystemPrompt = globalPrompt;
-  }
-  if (memoryContext) {
-    effectiveSystemPrompt += memoryContext;
-  }
-  const skillsContext = getSkillsPromptContext();
-  if (skillsContext) {
-    effectiveSystemPrompt += skillsContext;
-  }
-  if (conv?.system_prompt) {
-    effectiveSystemPrompt += (effectiveSystemPrompt ? "\n\n" : "") + conv.system_prompt;
-  }
-  if (!effectiveSystemPrompt) {
-    effectiveSystemPrompt = `You are ${identityName}, a helpful AI assistant.`;
-  }
-
-  // Add learning hint every N messages (zero API cost)
-  const learningHint = getLearningHint(convId, history.length);
-  if (learningHint) {
-    effectiveSystemPrompt += learningHint;
-  }
+  // Build effective system prompt: identity + memory + skills + conversation-specific
+  const effectiveSystemPrompt = buildSystemPrompt({
+    settingsStore,
+    db: req.app.get("db"),
+    conversationId: convId,
+    messageCount: history.length,
+    conversationPrompt: conv?.system_prompt,
+  });
 
   let fullResponse = "";
   let usage = {};

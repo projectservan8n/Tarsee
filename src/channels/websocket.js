@@ -7,9 +7,7 @@ import { SettingsStore } from "../db/settings.js";
 import { WS_CODES } from "../config/constants.js";
 import { processCommand } from "../lib/commands.js";
 import { logCapture } from "../lib/log-capture.js";
-import { MemoryStore } from "../db/memory.js";
-import { getLearningHint } from "../lib/personality-learner.js";
-import { getSkillsPromptContext } from "../lib/skills-engine.js";
+import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 
 /**
  * Sets up WebSocket server on the existing HTTP server.
@@ -193,24 +191,13 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   const conv = convStore.get(convId);
 
   // Build effective system prompt (parity with HTTP handler)
-  const identityName = settingsStore.get("identity.name") || "OpusClaw";
-  const globalPrompt = settingsStore.get("identity.systemPrompt") || "";
-  const memoryStore = new MemoryStore(ws._opusclaw_db);
-  const memoryContext = memoryStore.getContextString(20);
-  const skillsContext = getSkillsPromptContext();
-
-  let effectiveSystemPrompt = "";
-  if (globalPrompt) effectiveSystemPrompt = globalPrompt;
-  if (memoryContext) effectiveSystemPrompt += memoryContext;
-  if (skillsContext) effectiveSystemPrompt += skillsContext;
-  if (conv?.system_prompt) {
-    effectiveSystemPrompt += (effectiveSystemPrompt ? "\n\n" : "") + conv.system_prompt;
-  }
-  if (!effectiveSystemPrompt) {
-    effectiveSystemPrompt = `You are ${identityName}, a helpful AI assistant.`;
-  }
-  const learningHint = getLearningHint(convId, history.length);
-  if (learningHint) effectiveSystemPrompt += learningHint;
+  const effectiveSystemPrompt = buildSystemPrompt({
+    settingsStore,
+    db: ws._opusclaw_db,
+    conversationId: convId,
+    messageCount: history.length,
+    conversationPrompt: conv?.system_prompt,
+  });
 
   let fullResponse = "";
   let usage = {};

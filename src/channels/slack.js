@@ -4,6 +4,7 @@ import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand } from "../lib/commands.js";
+import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 
 /**
  * Creates and starts a Slack bot.
@@ -71,6 +72,16 @@ export async function createSlackBot(config, db) {
     }
 
     const history = convStore.getRecentMessages(convId, 30);
+    const conv = convStore.get(convId);
+    const systemPrompt = buildSystemPrompt({
+      settingsStore,
+      db,
+      conversationId: convId,
+      messageCount: history.length,
+      conversationPrompt: conv?.system_prompt,
+      channelHint: "Keep responses concise for chat. You are in a Slack conversation.",
+    });
+
     let fullResponse = "";
 
     try {
@@ -80,7 +91,7 @@ export async function createSlackBot(config, db) {
         apiKey: activeProvider.apiKey,
         baseUrl: activeProvider.baseUrl,
         messages: history.map((m) => ({ role: m.role, content: m.content })),
-        systemPrompt: "You are OpusClaw, a helpful AI assistant. Keep responses concise for chat. You are in a Slack conversation.",
+        systemPrompt,
       });
 
       for await (const event of stream) {
@@ -110,7 +121,6 @@ export async function createSlackBot(config, db) {
     const text = event.text?.replace(/<@[^>]+>/g, "").trim();
     if (!text) return;
 
-    // Same logic as message handler
     const channelKey = `slack:${event.channel}`;
     let convId = settingsStore.get(`channel_conv.${channelKey}`);
 
@@ -129,6 +139,16 @@ export async function createSlackBot(config, db) {
     }
 
     const history = convStore.getRecentMessages(convId, 30);
+    const conv = convStore.get(convId);
+    const systemPrompt = buildSystemPrompt({
+      settingsStore,
+      db,
+      conversationId: convId,
+      messageCount: history.length,
+      conversationPrompt: conv?.system_prompt,
+      channelHint: "Keep responses concise. You are responding to a mention in Slack.",
+    });
+
     let fullResponse = "";
 
     try {
@@ -138,7 +158,7 @@ export async function createSlackBot(config, db) {
         apiKey: activeProvider.apiKey,
         baseUrl: activeProvider.baseUrl,
         messages: history.map((m) => ({ role: m.role, content: m.content })),
-        systemPrompt: "You are OpusClaw, a helpful AI assistant in Slack. Keep responses concise.",
+        systemPrompt,
       });
 
       for await (const event of stream) {

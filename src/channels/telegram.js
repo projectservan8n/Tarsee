@@ -3,6 +3,7 @@ import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand } from "../lib/commands.js";
+import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 
 /**
  * Creates and starts a Telegram bot.
@@ -73,11 +74,29 @@ export async function createTelegramBot(config, db) {
       return;
     }
 
+    // Ack reaction — let user know we're processing
+    const ackEmoji = config.ackReaction ?? "👀";
+    if (ackEmoji) {
+      ctx.react?.(ackEmoji).catch?.(() => {});
+    }
+
     // Send typing action
     await ctx.sendChatAction("typing").catch(() => {});
 
+    // Build full system prompt (identity + memory + skills)
     const history = convStore.getRecentMessages(convId, 30);
+    const conv = convStore.get(convId);
+    const systemPrompt = buildSystemPrompt({
+      settingsStore,
+      db,
+      conversationId: convId,
+      messageCount: history.length,
+      conversationPrompt: conv?.system_prompt,
+      channelHint: "Keep responses concise for chat. You are in a Telegram conversation.",
+    });
+
     let fullResponse = "";
+    const streaming = config.streaming ?? "partial"; // partial | off
 
     try {
       const stream = chatStream({
@@ -86,14 +105,46 @@ export async function createTelegramBot(config, db) {
         apiKey: activeProvider.apiKey,
         baseUrl: activeProvider.baseUrl,
         messages: history.map((m) => ({ role: m.role, content: m.content })),
-        systemPrompt: "You are OpusClaw, a helpful AI assistant. Keep responses concise for chat. You are in a Telegram conversation.",
+        systemPrompt,
       });
+
+      // Live streaming: edit a preview message as tokens arrive
+      let previewMsgId = null;
+      let lastEditTime = 0;
+      const EDIT_INTERVAL_MS = 1500; // Telegram rate limits are stricter
+      // Keep typing indicator running
+      const typingInterval = setInterval(() => {
+        ctx.sendChatAction("typing").catch(() => {});
+      }, 4000);
 
       for await (const event of stream) {
         if (event.type === "text") {
           fullResponse += event.content;
+
+          // Live edit preview
+          if (streaming === "partial" && fullResponse.length > 20) {
+            const now = Date.now();
+            if (now - lastEditTime > EDIT_INTERVAL_MS) {
+              lastEditTime = now;
+              const preview = fullResponse.slice(0, 4000) + (fullResponse.length > 4000 ? "..." : " ▎");
+              try {
+                if (!previewMsgId) {
+                  const sent = await ctx.reply(preview);
+                  previewMsgId = sent.message_id;
+                } else {
+                  await ctx.telegram.editMessageText(
+                    chatId, previewMsgId, undefined, preview
+                  ).catch(() => {});
+                }
+              } catch {
+                // Edit can fail
+              }
+            }
+          }
         }
       }
+
+      clearInterval(typingInterval);
 
       if (fullResponse) {
         convStore.addMessage(convId, {
@@ -105,10 +156,25 @@ export async function createTelegramBot(config, db) {
 
         // Telegram has 4096 char limit
         const chunks = splitMessage(fullResponse, 4096);
-        for (const chunk of chunks) {
-          await ctx.reply(chunk, { parse_mode: "Markdown" }).catch(() =>
-            ctx.reply(chunk) // Fallback without markdown if parsing fails
+
+        if (previewMsgId && chunks.length === 1) {
+          // Edit preview to final content
+          await ctx.telegram.editMessageText(
+            chatId, previewMsgId, undefined, chunks[0],
+            { parse_mode: "Markdown" }
+          ).catch(() =>
+            ctx.telegram.editMessageText(chatId, previewMsgId, undefined, chunks[0]).catch(() => {})
           );
+        } else {
+          // Delete preview and send fresh
+          if (previewMsgId) {
+            await ctx.telegram.deleteMessage(chatId, previewMsgId).catch(() => {});
+          }
+          for (const chunk of chunks) {
+            await ctx.reply(chunk, { parse_mode: "Markdown" }).catch(() =>
+              ctx.reply(chunk)
+            );
+          }
         }
       }
     } catch (err) {
