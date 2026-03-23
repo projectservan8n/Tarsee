@@ -18,41 +18,42 @@ const Setup = {
     wizard.style.display = "flex";
 
     document.getElementById("setupContent").innerHTML = `
-      <div style="text-align:center;margin-bottom:24px">
-        <div style="font-size:48px;font-weight:800;color:var(--primary);margin-bottom:8px">OC</div>
-        <h2 style="margin:0 0 4px">Welcome to OpusClaw</h2>
-        <p style="color:var(--text-secondary);margin:0">Your personal AI gateway. Let's connect in under a minute.</p>
+      <div class="setup-card-header">
+        <div class="logo-large">OC</div>
+        <h2>Welcome to OpusClaw</h2>
+        <p>Your personal AI gateway. Connect in under a minute.</p>
       </div>
-
-      <div class="form-group">
-        <label>AI Provider</label>
-        <select id="setupProvider">
-          <option value="">Select a provider...</option>
-          <option value="anthropic">Anthropic (Claude)</option>
-          <option value="openai">OpenAI</option>
-          <option value="gemini">Google Gemini</option>
-          <option value="openrouter">OpenRouter</option>
-          <option value="custom">Custom (OpenAI-compatible)</option>
-        </select>
+      <div class="setup-card-body">
+        <div class="form-group">
+          <label>AI Provider</label>
+          <select id="setupProvider">
+            <option value="">Select a provider...</option>
+            <option value="anthropic">Anthropic (Claude)</option>
+            <option value="openai">OpenAI</option>
+            <option value="gemini">Google Gemini</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="custom">Custom (OpenAI-compatible)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>API Key</label>
+          <input type="password" id="setupApiKey" placeholder="sk-...">
+          <div class="hint">Stored securely, never committed to files.</div>
+        </div>
+        <div class="form-group" id="setupModelGroup">
+          <label>Model (optional)</label>
+          <input type="text" id="setupModel" placeholder="Leave blank for default">
+        </div>
+        <div class="form-group" id="setupBaseUrlGroup" style="display:none">
+          <label>Base URL</label>
+          <input type="text" id="setupBaseUrl" placeholder="http://localhost:11434/v1">
+        </div>
+        <div id="setupError" style="color:var(--danger);font-size:13px;margin-bottom:12px;display:none"></div>
+        <button class="btn btn-primary" id="setupConnectBtn" style="width:100%;padding:12px;font-size:14px">Connect & Start Chatting</button>
+        <p style="text-align:center;margin-top:14px;font-size:11px;color:var(--text-muted)">
+          You can also set API keys via environment variables
+        </p>
       </div>
-      <div class="form-group">
-        <label>API Key</label>
-        <input type="password" id="setupApiKey" placeholder="sk-...">
-        <div class="hint">Stored securely, never committed to files.</div>
-      </div>
-      <div class="form-group" id="setupModelGroup">
-        <label>Model (optional)</label>
-        <input type="text" id="setupModel" placeholder="Leave blank for default">
-      </div>
-      <div class="form-group" id="setupBaseUrlGroup" style="display:none">
-        <label>Base URL</label>
-        <input type="text" id="setupBaseUrl" placeholder="http://localhost:11434/v1">
-      </div>
-      <div id="setupError" style="color:var(--danger);font-size:13px;margin-bottom:12px;display:none"></div>
-      <button class="btn btn-primary" id="setupConnectBtn" style="width:100%;padding:12px">Connect & Start Chatting</button>
-      <p style="text-align:center;margin-top:16px;font-size:12px;color:var(--text-muted)">
-        You can also set API keys via environment variables (ANTHROPIC_API_KEY, etc.)
-      </p>
     `;
 
     // Show base URL for custom provider

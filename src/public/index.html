@@ -55,8 +55,8 @@
       <div class="conversation-list" id="conversationList">
         <!-- Dynamically populated -->
       </div>
-      <div style="padding: 12px 16px; border-top: 1px solid var(--border)">
-        <button class="btn btn-sm" id="settingsBtn" style="width:100%">
+      <div style="padding: 10px 12px; border-top: 1px solid var(--border-light)">
+        <button class="btn btn-ghost btn-sm" id="settingsBtn" style="width:100%; justify-content: center; color: var(--text-muted)">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6.5 1.5h3l.5 2 1.5.9 2-.5 1.5 2.6-1.5 1.5v1.5l1.5 1.5-1.5 2.6-2-.5-1.5.9-.5 2h-3l-.5-2-1.5-.9-2 .5L1 11.5l1.5-1.5V8.5L1 7l1.5-2.6 2 .5L6 4z" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8.5" r="2" stroke="currentColor" stroke-width="1.2"/></svg>
           Settings
         </button>
@@ -88,10 +88,16 @@
       <!-- Welcome (shown when no conversation active) -->
       <div id="welcomeScreen" class="welcome">
         <div class="logo-large">OC</div>
-        <h2>Welcome to OpusClaw</h2>
-        <p>Start a new conversation or select one from the sidebar. Configure your AI provider in Settings.</p>
-        <div style="margin-top: 16px; font-size: 13px; color: var(--text-muted)">
-          Type <code>/help</code> for available commands
+        <h2 id="welcomeTitle">Welcome to OpusClaw</h2>
+        <p>How can I help you today?</p>
+        <div class="welcome-suggestions" id="welcomeSuggestions">
+          <div class="welcome-suggestion" data-msg="Help me write code">Help me write code</div>
+          <div class="welcome-suggestion" data-msg="Explain a concept">Explain a concept</div>
+          <div class="welcome-suggestion" data-msg="Brainstorm ideas">Brainstorm ideas</div>
+          <div class="welcome-suggestion" data-msg="Analyze some data">Analyze data</div>
+        </div>
+        <div style="margin-top: 20px; font-size: 12px; color: var(--text-muted)">
+          Type <code>/</code> for commands
         </div>
       </div>
 
@@ -270,10 +276,10 @@
 
       <div class="settings-section">
         <h3>Memories</h3>
-        <div class="hint" style="margin-bottom: 12px">The bot learns preferences and facts over time. Memories are injected into every conversation.</div>
-        <div id="memoriesList" style="max-height: 200px; overflow-y: auto; margin-bottom: 12px"></div>
-        <div style="display: flex; gap: 8px">
-          <input type="text" id="memoryInput" placeholder="Add a memory manually..." style="flex:1">
+        <div class="hint" style="margin-bottom: 14px">Learned preferences and facts injected into every conversation.</div>
+        <div id="memoriesList" style="max-height: 220px; overflow-y: auto; margin-bottom: 12px"></div>
+        <div style="display: flex; gap: 8px; align-items: center">
+          <input type="text" id="memoryInput" placeholder="Add a memory..." style="flex:1">
           <button class="btn btn-sm btn-primary" id="addMemoryBtn">Add</button>
         </div>
       </div>

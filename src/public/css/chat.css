@@ -5,34 +5,37 @@
 .message-text h2,
 .message-text h3 {
   margin-top: 16px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   font-weight: 600;
+  letter-spacing: -0.2px;
 }
 
-.message-text h1 { font-size: 1.4em; }
+.message-text h1 { font-size: 1.35em; }
 .message-text h2 { font-size: 1.2em; }
-.message-text h3 { font-size: 1.1em; }
+.message-text h3 { font-size: 1.05em; }
 
 .message-text ul,
 .message-text ol {
-  padding-left: 24px;
-  margin: 8px 0;
+  padding-left: 22px;
+  margin: 6px 0;
 }
 
 .message-text li {
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 
 .message-text blockquote {
-  border-left: 3px solid var(--border);
-  padding-left: 12px;
+  border-left: 3px solid var(--primary-light);
+  padding-left: 14px;
   color: var(--text-secondary);
-  margin: 8px 0;
+  margin: 10px 0;
+  font-style: italic;
 }
 
 .message-text a {
   color: var(--primary);
   text-decoration: none;
+  font-weight: 500;
 }
 
 .message-text a:hover {
@@ -41,20 +44,25 @@
 
 .message-text table {
   border-collapse: collapse;
-  margin: 8px 0;
-  font-size: 14px;
+  margin: 10px 0;
+  font-size: 13px;
+  width: 100%;
 }
 
 .message-text th,
 .message-text td {
   border: 1px solid var(--border);
-  padding: 6px 10px;
+  padding: 8px 12px;
   text-align: left;
 }
 
 .message-text th {
-  background: var(--surface-hover);
+  background: var(--bg);
   font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-secondary);
 }
 
 /* Code block header */
@@ -62,11 +70,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 16px;
-  background: #181825;
+  padding: 8px 16px;
+  background: #16161E;
   border-radius: var(--radius) var(--radius) 0 0;
-  font-size: 12px;
-  color: #7F849C;
+  font-size: 11px;
+  color: #565F89;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .code-header + pre {
@@ -77,16 +88,20 @@
 .copy-btn {
   background: none;
   border: none;
-  color: #7F849C;
+  color: #565F89;
   cursor: pointer;
-  padding: 2px 8px;
+  padding: 3px 8px;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 11px;
+  font-family: var(--font-body);
+  text-transform: none;
+  letter-spacing: 0;
+  transition: all 150ms ease;
 }
 
 .copy-btn:hover {
-  background: rgba(255,255,255,0.1);
-  color: #CDD6F4;
+  background: rgba(255,255,255,0.08);
+  color: #C0CAF5;
 }
 
 /* Streaming cursor */
@@ -99,6 +114,7 @@
   margin-left: 2px;
   animation: blink 0.8s infinite;
   vertical-align: text-bottom;
+  border-radius: 1px;
 }
 
 @keyframes blink {
@@ -110,20 +126,28 @@
 .command-palette {
   position: absolute;
   bottom: 100%;
-  left: 0;
-  right: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 740px;
   margin-bottom: 8px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg, 12px);
-  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.12));
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
   max-height: 280px;
   overflow-y: auto;
   z-index: 50;
+  animation: paletteIn 150ms ease;
+}
+
+@keyframes paletteIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
 .command-palette-list {
-  padding: 6px;
+  padding: 4px;
 }
 
 .command-palette-item {
@@ -131,19 +155,19 @@
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
-  border-radius: var(--radius, 8px);
+  border-radius: var(--radius);
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 120ms ease;
 }
 
 .command-palette-item:hover,
 .command-palette-item.active {
-  background: var(--primary-light, rgba(108, 92, 231, 0.08));
+  background: var(--primary-light);
 }
 
 .command-palette-name {
-  font-family: var(--font-mono, 'JetBrains Mono', monospace);
-  font-size: 14px;
+  font-family: var(--font-mono);
+  font-size: 13px;
   font-weight: 600;
   color: var(--primary);
   white-space: nowrap;
@@ -151,8 +175,8 @@
 }
 
 .command-palette-desc {
-  font-size: 13px;
-  color: var(--text-secondary, #6B7280);
+  font-size: 12.5px;
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -169,5 +193,5 @@
   width: 48px;
   height: 48px;
   margin-bottom: 16px;
-  opacity: 0.5;
+  opacity: 0.4;
 }

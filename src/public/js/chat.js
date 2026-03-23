@@ -93,6 +93,15 @@ const Chat = {
     this.elements.sendBtn.addEventListener("click", () => this.send());
     this.elements.newChatBtn.addEventListener("click", () => this.newChat());
 
+    // Welcome suggestion cards
+    document.querySelectorAll(".welcome-suggestion").forEach((el) => {
+      el.addEventListener("click", () => {
+        this.elements.messageInput.value = el.dataset.msg;
+        this.elements.sendBtn.disabled = false;
+        this.elements.messageInput.focus();
+      });
+    });
+
     this.loadConversations();
     this.loadCommands();
     this.loadBotName();
@@ -114,6 +123,9 @@ const Chat = {
     } catch {
       this.botName = "OpusClaw";
     }
+    // Update welcome title
+    const welcomeTitle = document.getElementById("welcomeTitle");
+    if (welcomeTitle) welcomeTitle.textContent = `Welcome to ${this.botName}`;
   },
 
   setBotName(name) {

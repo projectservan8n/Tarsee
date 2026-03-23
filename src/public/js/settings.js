@@ -385,10 +385,12 @@ const Settings = {
       }
 
       this.elements.memoriesList.innerHTML = memories.map((m) =>
-        `<div class="memory-item" style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid var(--border)">
-          <span style="color:var(--primary);font-size:11px;flex-shrink:0">${m.category}</span>
-          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.content}</span>
-          <button class="btn btn-sm" data-memory-id="${m.id}" style="flex-shrink:0;padding:2px 6px;font-size:11px">x</button>
+        `<div class="memory-item">
+          <span class="memory-badge">${m.category}</span>
+          <span class="memory-content">${m.content}</span>
+          <button class="memory-delete" data-memory-id="${m.id}" title="Delete">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
         </div>`
       ).join("");
 
