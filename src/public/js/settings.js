@@ -1,14 +1,21 @@
 /**
- * Settings panel module.
+ * Settings page module — full-page tabbed layout with auto-save.
  */
+
+function debounce(fn, ms) {
+  let t;
+  return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
 const Settings = {
   elements: {},
+  isOpen: false,
+  _previousView: null, // track what was showing before settings opened
 
   init() {
     this.elements = {
-      overlay: document.getElementById("settingsOverlay"),
+      settingsPage: document.getElementById("settingsPage"),
       openBtn: document.getElementById("settingsBtn"),
-      closeBtn: document.getElementById("settingsClose"),
       provider: document.getElementById("settingsProvider"),
       apiKey: document.getElementById("settingsApiKey"),
       model: document.getElementById("settingsModel"),
@@ -23,24 +30,15 @@ const Settings = {
       apiToken: document.getElementById("settingsApiToken"),
       // Identity
       botName: document.getElementById("settingsBotName"),
-      saveIdentityBtn: document.getElementById("saveIdentityBtn"),
       // Workspace files
       soulMd: document.getElementById("settingsSoulMd"),
-      saveSoulBtn: document.getElementById("saveSoulBtn"),
       userMd: document.getElementById("settingsUserMd"),
-      saveUserBtn: document.getElementById("saveUserBtn"),
       memoryMd: document.getElementById("settingsMemoryMd"),
-      saveMemoryFileBtn: document.getElementById("saveMemoryFileBtn"),
       agentsMd: document.getElementById("settingsAgentsMd"),
-      saveAgentsBtn: document.getElementById("saveAgentsBtn"),
       identityMd: document.getElementById("settingsIdentityMd"),
-      saveIdentityMdBtn: document.getElementById("saveIdentityMdBtn"),
       toolsMd: document.getElementById("settingsToolsMd"),
-      saveToolsBtn: document.getElementById("saveToolsBtn"),
       heartbeatMd: document.getElementById("settingsHeartbeatMd"),
-      saveHeartbeatBtn: document.getElementById("saveHeartbeatBtn"),
       bootMd: document.getElementById("settingsBootMd"),
-      saveBootBtn: document.getElementById("saveBootBtn"),
       // Memory
       memoriesList: document.getElementById("memoriesList"),
       memoryInput: document.getElementById("memoryInput"),
@@ -60,6 +58,7 @@ const Settings = {
       voiceCloneName: document.getElementById("voiceCloneName"),
       voiceCloneBtn: document.getElementById("voiceCloneBtn"),
       voiceCloneResult: document.getElementById("voiceCloneResult"),
+      voiceCloneInfo: document.getElementById("voiceCloneInfo"),
       voicesList: document.getElementById("voicesList"),
       saveVoiceBtn: document.getElementById("saveVoiceBtn"),
       // Cron jobs
@@ -85,17 +84,25 @@ const Settings = {
       skillCancelBtn: document.getElementById("skillCancelBtn"),
     };
 
-    this.elements.openBtn.addEventListener("click", () => this.open());
-    this.elements.closeBtn.addEventListener("click", () => this.close());
-    this.elements.overlay.addEventListener("click", (e) => {
-      if (e.target === this.elements.overlay) this.close();
+    // Toggle settings page open/close
+    this.elements.openBtn.addEventListener("click", () => {
+      if (this.isOpen) {
+        this.close();
+      } else {
+        this.open();
+      }
     });
 
+    // Tab switching
+    document.querySelectorAll(".settings-tab").forEach((tab) => {
+      tab.addEventListener("click", () => this.switchTab(tab.dataset.tab));
+    });
+
+    // Provider change handler
     this.elements.provider.addEventListener("change", () => {
       const isCustom = this.elements.provider.value === "custom";
       this.elements.baseUrlGroup.style.display = isCustom ? "block" : "none";
 
-      // Set default model hints
       const defaults = {
         anthropic: "claude-sonnet-4-5-20250929",
         openai: "gpt-4o",
@@ -109,34 +116,34 @@ const Settings = {
     this.elements.saveProviderBtn.addEventListener("click", () => this.saveProvider());
     this.elements.saveChannelsBtn.addEventListener("click", () => this.saveChannels());
 
-    // Identity handlers
-    if (this.elements.saveIdentityBtn) {
-      this.elements.saveIdentityBtn.addEventListener("click", () => this.saveIdentity());
+    // --- Auto-save: Bot Name (debounced) ---
+    if (this.elements.botName) {
+      const autoSaveName = debounce(() => this.saveIdentity(), 1200);
+      this.elements.botName.addEventListener("input", autoSaveName);
     }
-    // Workspace file handlers
-    if (this.elements.saveSoulBtn) {
-      this.elements.saveSoulBtn.addEventListener("click", () => this.saveWorkspaceFile("SOUL.md", this.elements.soulMd.value));
-    }
-    if (this.elements.saveUserBtn) {
-      this.elements.saveUserBtn.addEventListener("click", () => this.saveWorkspaceFile("USER.md", this.elements.userMd.value));
-    }
-    if (this.elements.saveMemoryFileBtn) {
-      this.elements.saveMemoryFileBtn.addEventListener("click", () => this.saveWorkspaceFile("MEMORY.md", this.elements.memoryMd.value));
-    }
-    if (this.elements.saveAgentsBtn) {
-      this.elements.saveAgentsBtn.addEventListener("click", () => this.saveWorkspaceFile("AGENTS.md", this.elements.agentsMd.value));
-    }
-    if (this.elements.saveIdentityMdBtn) {
-      this.elements.saveIdentityMdBtn.addEventListener("click", () => this.saveWorkspaceFile("IDENTITY.md", this.elements.identityMd.value));
-    }
-    if (this.elements.saveToolsBtn) {
-      this.elements.saveToolsBtn.addEventListener("click", () => this.saveWorkspaceFile("TOOLS.md", this.elements.toolsMd.value));
-    }
-    if (this.elements.saveHeartbeatBtn) {
-      this.elements.saveHeartbeatBtn.addEventListener("click", () => this.saveWorkspaceFile("HEARTBEAT.md", this.elements.heartbeatMd.value));
-    }
-    if (this.elements.saveBootBtn) {
-      this.elements.saveBootBtn.addEventListener("click", () => this.saveWorkspaceFile("BOOT.md", this.elements.bootMd.value));
+
+    // --- Auto-save: Workspace Files (debounced 1.5s) ---
+    const workspaceFiles = [
+      ["SOUL.md", this.elements.soulMd, "statusSoulMd"],
+      ["USER.md", this.elements.userMd, "statusUserMd"],
+      ["MEMORY.md", this.elements.memoryMd, "statusMemoryMd"],
+      ["AGENTS.md", this.elements.agentsMd, "statusAgentsMd"],
+      ["IDENTITY.md", this.elements.identityMd, "statusIdentityMd"],
+      ["TOOLS.md", this.elements.toolsMd, "statusToolsMd"],
+      ["HEARTBEAT.md", this.elements.heartbeatMd, "statusHeartbeatMd"],
+      ["BOOT.md", this.elements.bootMd, "statusBootMd"],
+    ];
+
+    for (const [name, el, statusId] of workspaceFiles) {
+      if (!el) continue;
+      const statusEl = document.getElementById(statusId);
+      const autoSave = debounce(async () => {
+        if (statusEl) { statusEl.textContent = "Saving..."; statusEl.className = "save-status saving"; }
+        await this.saveWorkspaceFile(name, el.value, true);
+        if (statusEl) { statusEl.textContent = "Saved"; statusEl.className = "save-status saved"; }
+        setTimeout(() => { if (statusEl) { statusEl.textContent = ""; statusEl.className = "save-status"; } }, 2000);
+      }, 1500);
+      el.addEventListener("input", autoSave);
     }
 
     // Session reset handlers
@@ -169,11 +176,10 @@ const Settings = {
       });
     }
 
-    // Voice settings handlers
+    // Voice settings handlers — upload always clickable
     if (this.elements.voiceCloneUpload) {
       const dropZone = this.elements.voiceCloneUpload;
 
-      // Click to select file
       dropZone.addEventListener("click", () => this.elements.voiceCloneFile.click());
 
       this.elements.voiceCloneFile.addEventListener("change", () => {
@@ -183,7 +189,6 @@ const Settings = {
         }
       });
 
-      // Drag-and-drop
       dropZone.addEventListener("dragover", (e) => {
         e.preventDefault();
         dropZone.classList.add("dragover");
@@ -224,36 +229,96 @@ const Settings = {
     }
   },
 
+  // --- Tab Switching ---
+  switchTab(tabName) {
+    document.querySelectorAll(".settings-tab").forEach((t) => {
+      t.classList.toggle("active", t.dataset.tab === tabName);
+    });
+    document.querySelectorAll(".settings-tab-panel").forEach((p) => {
+      p.classList.toggle("active", p.dataset.tab === tabName);
+    });
+  },
+
+  // --- Open / Close ---
   async open() {
-    this.elements.overlay.classList.add("open");
+    this.isOpen = true;
+    // Remember what was showing
+    const welcome = document.getElementById("welcomeScreen");
+    const chatArea = document.getElementById("chatArea");
+    const inputArea = document.getElementById("inputArea");
+    this._previousView = {
+      welcome: welcome.style.display,
+      chat: chatArea.style.display,
+      input: inputArea.style.display,
+    };
+
+    // Hide chat/welcome, show settings
+    welcome.style.display = "none";
+    chatArea.style.display = "none";
+    inputArea.style.display = "none";
+    this.elements.settingsPage.style.display = "flex";
+
+    // Update topbar
+    document.getElementById("topbarTitle").textContent = "Settings";
+
+    // Highlight settings button
+    this.elements.openBtn.style.color = "var(--primary)";
+
     await this.load();
   },
 
   close() {
-    this.elements.overlay.classList.remove("open");
+    this.isOpen = false;
+    this.elements.settingsPage.style.display = "none";
+
+    // Restore previous view
+    const welcome = document.getElementById("welcomeScreen");
+    const chatArea = document.getElementById("chatArea");
+    const inputArea = document.getElementById("inputArea");
+
+    if (this._previousView) {
+      welcome.style.display = this._previousView.welcome;
+      chatArea.style.display = this._previousView.chat;
+      inputArea.style.display = this._previousView.input;
+    } else {
+      // Default: show welcome
+      welcome.style.display = "";
+      inputArea.style.display = "block";
+    }
+
+    // Restore topbar title
+    if (typeof Chat !== "undefined" && Chat.currentChannelKey) {
+      const ch = Chat.channels.find((c) => c.key === Chat.currentChannelKey);
+      if (ch) {
+        const icon = { web: "\u{1F310}", discord: "\u{1F4AC}", telegram: "\u{2708}\uFE0F", slack: "\u{1F4BC}" };
+        document.getElementById("topbarTitle").textContent = `${icon[ch.platform] || icon.web} ${ch.title}`;
+      }
+    } else {
+      document.getElementById("topbarTitle").textContent = Chat?.botName || "OpusClaw";
+    }
+
+    // Un-highlight settings button
+    this.elements.openBtn.style.color = "var(--text-muted)";
   },
 
   async load() {
     try {
-      // Load current settings
       const { settings } = await API.getSettings();
 
-      // Find active provider
+      // Provider
       const activeProvider = settings.find((s) => s.key === "ai.activeProvider")?.value;
       if (activeProvider) {
         this.elements.provider.value = activeProvider;
         this.elements.provider.dispatchEvent(new Event("change"));
-
         const model = settings.find((s) => s.key === `ai.${activeProvider}.model`)?.value;
         const apiKey = settings.find((s) => s.key === `ai.${activeProvider}.apiKey`)?.value;
         const baseUrl = settings.find((s) => s.key === `ai.${activeProvider}.baseUrl`)?.value;
-
         if (model) this.elements.model.value = model;
         if (apiKey) this.elements.apiKey.value = apiKey;
         if (baseUrl) this.elements.baseUrl.value = baseUrl;
       }
 
-      // Load channel configs
+      // Channels
       for (const type of ["discord", "telegram"]) {
         const config = settings.find((s) => s.key === `channel.${type}`)?.value;
         if (config?.token) {
@@ -261,46 +326,31 @@ const Settings = {
           el.value = config.token;
         }
       }
-
       const slackConfig = settings.find((s) => s.key === "channel.slack")?.value;
       if (slackConfig?.token) this.elements.slackToken.value = slackConfig.token;
       if (slackConfig?.appToken) this.elements.slackAppToken.value = slackConfig.appToken;
 
       // API token
-      if (API.token) {
-        this.elements.apiToken.value = API.token;
-      }
+      if (API.token) this.elements.apiToken.value = API.token;
 
-      // Load identity
+      // Identity
       const botName = settings.find((s) => s.key === "identity.name")?.value;
       if (botName && this.elements.botName) this.elements.botName.value = botName;
 
-      // Load workspace files
-      this.loadWorkspaceFiles();
-
-      // Load session reset config
-      this.loadSessionReset();
-
-      // Load cron jobs
-      this.loadCronJobs();
-
-      // Load auth profiles
-      this.loadProfiles();
-
-      // Load voice settings
+      // Voice engine
       const voiceEngine = settings.find((s) => s.key === "voice.engine")?.value;
       if (voiceEngine && this.elements.voiceEngine) {
         this.elements.voiceEngine.value = voiceEngine;
       }
 
-      // Load voice engine status and voices list
+      // Load all sub-sections
+      this.loadWorkspaceFiles();
+      this.loadSessionReset();
+      this.loadCronJobs();
+      this.loadProfiles();
       this.loadVoiceStatus();
       this.loadVoices();
-
-      // Load skills
       this.loadSkills();
-
-      // Load memories
       this.loadMemories();
     } catch (err) {
       App.showToast("Failed to load settings: " + err.message, "error");
@@ -313,7 +363,6 @@ const Settings = {
       App.showToast("Select a provider", "error");
       return;
     }
-
     try {
       await API.saveProvider({
         provider,
@@ -334,15 +383,9 @@ const Settings = {
       const slackBot = this.elements.slackToken.value.trim();
       const slackApp = this.elements.slackAppToken.value.trim();
 
-      if (discord) {
-        await API.saveChannel({ type: "discord", token: discord, enabled: true });
-      }
-      if (telegram) {
-        await API.saveChannel({ type: "telegram", token: telegram, enabled: true });
-      }
-      if (slackBot && slackApp) {
-        await API.saveChannel({ type: "slack", token: slackBot, appToken: slackApp, enabled: true });
-      }
+      if (discord) await API.saveChannel({ type: "discord", token: discord, enabled: true });
+      if (telegram) await API.saveChannel({ type: "telegram", token: telegram, enabled: true });
+      if (slackBot && slackApp) await API.saveChannel({ type: "slack", token: slackBot, appToken: slackApp, enabled: true });
 
       App.showToast("Channels saved. Restart channels in Admin to apply.", "success");
     } catch (err) {
@@ -357,21 +400,23 @@ const Settings = {
       const data = await res.json();
       const engine = data.engine || "stub";
       const isActive = engine !== "stub" && engine !== "none";
-      const status = isActive ? `Engine: ${engine}` : "No TTS engine active — voice cloning requires Coqui TTS";
+      const status = isActive ? `Engine: ${engine}` : "No TTS engine active";
       this.elements.voiceEngineStatus.textContent = status;
-      this.elements.voiceEngineStatus.style.color =
-        isActive ? "var(--primary)" : "var(--text-muted)";
+      this.elements.voiceEngineStatus.style.color = isActive ? "var(--primary)" : "var(--text-muted)";
 
-      // Disable clone UI when no engine
+      // Show info message when no engine (but keep upload clickable!)
+      if (this.elements.voiceCloneInfo) {
+        this.elements.voiceCloneInfo.style.display = isActive ? "none" : "block";
+      }
       if (this.elements.voiceCloneBtn) {
         this.elements.voiceCloneBtn.disabled = !isActive;
         if (!isActive) {
           this.elements.voiceCloneBtn.title = "Enable a TTS engine first";
         }
       }
+      // Keep upload area always clickable (no pointerEvents: "none")
       if (this.elements.voiceCloneUpload) {
-        this.elements.voiceCloneUpload.style.opacity = isActive ? "1" : "0.5";
-        this.elements.voiceCloneUpload.style.pointerEvents = isActive ? "auto" : "none";
+        this.elements.voiceCloneUpload.style.opacity = isActive ? "1" : "0.6";
       }
     } catch {
       this.elements.voiceEngineStatus.textContent = "Could not load voice status";
@@ -392,12 +437,11 @@ const Settings = {
       }
 
       this.elements.voicesList.innerHTML = voices
-        .map(
-          (v) =>
-            `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px">
-              <span style="flex:1">${v.name || v.id}</span>
-              ${v.isClone ? '<span style="color:var(--primary);font-size:11px">cloned</span>' : ""}
-            </div>`
+        .map((v) =>
+          `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px">
+            <span style="flex:1">${v.name || v.id}</span>
+            ${v.isClone ? '<span style="color:var(--primary);font-size:11px">cloned</span>' : ""}
+          </div>`
         )
         .join("");
     } catch {
@@ -430,7 +474,6 @@ const Settings = {
       const res = await API.request("/api/voice/clone", {
         method: "POST",
         body: formData,
-        // Don't set Content-Type — browser sets it with boundary for FormData
       });
 
       if (!res.ok) {
@@ -446,7 +489,6 @@ const Settings = {
       this.elements.voiceCloneUpload.querySelector("p").textContent =
         "Drop an audio file here or click to upload";
 
-      // Refresh voices list
       this.loadVoices();
       App.showToast("Voice cloned successfully", "success");
     } catch (err) {
@@ -462,7 +504,6 @@ const Settings = {
   async saveVoiceSettings() {
     const engine = this.elements.voiceEngine?.value;
     if (!engine) return;
-
     try {
       await API.request("/api/settings", {
         method: "POST",
@@ -475,19 +516,17 @@ const Settings = {
     }
   },
 
-  // --- Identity ---
+  // --- Identity (auto-saved) ---
   async saveIdentity() {
     const name = this.elements.botName?.value.trim() || "OpusClaw";
-
     try {
       await API.json("/api/settings/general", {
         method: "POST",
         body: { key: "identity.name", value: name },
       });
-      App.showToast("Bot name saved", "success");
       if (typeof Chat !== "undefined" && Chat.setBotName) Chat.setBotName(name);
-    } catch (err) {
-      App.showToast(err.message, "error");
+    } catch {
+      // silent — auto-save
     }
   },
 
@@ -513,15 +552,15 @@ const Settings = {
     }
   },
 
-  async saveWorkspaceFile(name, content) {
+  async saveWorkspaceFile(name, content, silent = false) {
     try {
       await API.json("/api/settings/workspace-file", {
         method: "PUT",
         body: { name, content },
       });
-      App.showToast(`${name} saved`, "success");
+      if (!silent) App.showToast(`${name} saved`, "success");
     } catch (err) {
-      App.showToast(err.message, "error");
+      if (!silent) App.showToast(err.message, "error");
     }
   },
 
@@ -708,7 +747,6 @@ const Settings = {
         </div>`
       ).join("");
 
-      // Delete buttons
       this.elements.memoriesList.querySelectorAll("[data-memory-id]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           try {
@@ -742,7 +780,7 @@ const Settings = {
   },
 
   // --- Skills ---
-  _editingSkill: null, // null = creating, string = editing skill name
+  _editingSkill: null,
 
   async loadSkills() {
     if (!this.elements.skillsList) return;
@@ -777,7 +815,6 @@ const Settings = {
         </div>`
       ).join("");
 
-      // Wire up buttons
       this.elements.skillsList.querySelectorAll("[data-skill-edit]").forEach((btn) => {
         btn.addEventListener("click", () => this.editSkill(btn.dataset.skillEdit));
       });
@@ -824,7 +861,6 @@ const Settings = {
     try {
       const res = await API.request(`/api/skills/${encodeURIComponent(name)}`);
       const data = await res.json();
-      // Show in the dialog as read-only
       this.showSkillDialog(name, data.description, data.content);
       this.elements.skillContentInput.disabled = true;
       this.elements.skillDescInput.disabled = true;

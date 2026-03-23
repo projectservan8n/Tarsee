@@ -84,7 +84,7 @@
 
       <!-- Welcome (shown when no conversation active) -->
       <div id="welcomeScreen" class="welcome">
-        <div class="logo-large">OC</div>
+        <div class="logo-large" id="welcomeLogo">OC</div>
         <h2 id="welcomeTitle">Welcome to OpusClaw</h2>
         <p>How can I help you today?</p>
         <div class="welcome-suggestions" id="welcomeSuggestions">
@@ -105,13 +105,378 @@
 
       <div id="inputArea" class="input-area" style="display:none">
         <div class="input-container">
-          <textarea id="messageInput" placeholder="Type a message or /help for commands..." rows="1"></textarea>
+          <textarea id="messageInput" placeholder="Type a message or /help for commands..." rows="1" spellcheck="false"></textarea>
           <button class="input-btn" id="voiceInputBtn" title="Voice input">
             <svg width="18" height="18" viewBox="0 0 16 16" fill="none"><path d="M8 1a3 3 0 013 3v3a3 3 0 01-6 0V4a3 3 0 013-3z" stroke="currentColor" stroke-width="1.2"/><path d="M3 7a5 5 0 0010 0M8 14v-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
           </button>
           <button class="input-btn send" id="sendBtn" title="Send" disabled>
             <svg width="18" height="18" viewBox="0 0 16 16" fill="none"><path d="M14 2L7 9M14 2l-4 12-3-5-5-3z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
           </button>
+        </div>
+      </div>
+
+      <!-- Settings Page (full-page, replaces chat when open) -->
+      <div id="settingsPage" class="settings-page" style="display:none">
+        <div class="settings-tabs">
+          <button class="settings-tab active" data-tab="identity">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="5" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" stroke-width="1.2"/></svg>
+            Identity
+          </button>
+          <button class="settings-tab" data-tab="workspace">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 3h12v10H2z" stroke="currentColor" stroke-width="1.2"/><path d="M5 1v4M11 1v4" stroke="currentColor" stroke-width="1.2"/></svg>
+            Workspace
+          </button>
+          <button class="settings-tab" data-tab="provider">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 8h8M8 4v8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/></svg>
+            AI Provider
+          </button>
+          <button class="settings-tab" data-tab="channels">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4l6 4 6-4M2 4h12v8H2z" stroke="currentColor" stroke-width="1.2"/></svg>
+            Channels
+          </button>
+          <button class="settings-tab" data-tab="profiles">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 4h8M4 8h8M4 12h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            Auth Profiles
+          </button>
+          <button class="settings-tab" data-tab="automation">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 4v4l3 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            Automation
+          </button>
+          <button class="settings-tab" data-tab="voice">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 1a3 3 0 013 3v3a3 3 0 01-6 0V4a3 3 0 013-3z" stroke="currentColor" stroke-width="1.2"/><path d="M3 7a5 5 0 0010 0M8 14v-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            Voice
+          </button>
+          <button class="settings-tab" data-tab="skills">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 1l2 4h4l-3 3 1 4-4-2-4 2 1-4-3-3h4z" stroke="currentColor" stroke-width="1.2"/></svg>
+            Skills
+          </button>
+          <button class="settings-tab" data-tab="memories">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2h10v12H3z" stroke="currentColor" stroke-width="1.2"/><path d="M6 5h4M6 8h4M6 11h2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            Memories
+          </button>
+        </div>
+
+        <div class="settings-content">
+          <!-- Identity Tab -->
+          <div class="settings-tab-panel active" data-tab="identity">
+            <h2>Identity</h2>
+            <div class="settings-section">
+              <h3>Bot Name</h3>
+              <div class="form-group">
+                <label>Display Name</label>
+                <input type="text" id="settingsBotName" placeholder="OpusClaw">
+                <span class="save-status" id="statusBotName"></span>
+                <div class="hint">Shown in sidebar, topbar, and chat messages.</div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>SOUL.md <span class="settings-label">Personality & Vibe</span></h3>
+              <div class="form-group">
+                <textarea id="settingsSoulMd" rows="12" spellcheck="false" placeholder="# Soul & Personality&#10;&#10;You are OpusClaw, a helpful AI assistant..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
+                <span class="save-status" id="statusSoulMd"></span>
+                <div class="hint">The bot's soul. Injected into every conversation. Edit to change personality, tone, and behavior.</div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>IDENTITY.md <span class="settings-label">Name, Emoji, Creature, Vibe</span></h3>
+              <div class="form-group">
+                <textarea id="settingsIdentityMd" rows="8" spellcheck="false" placeholder="# Identity&#10;&#10;- **Name:** OpusClaw&#10;- **Emoji:** &#x1F99E;&#10;- **Creature:** Lobster&#10;- **Vibe:** Helpful and sharp" style="font-family: var(--font-mono); font-size: 12px"></textarea>
+                <span class="save-status" id="statusIdentityMd"></span>
+                <div class="hint">Agent metadata in key-value format. Parsed as <code>- **Label:** value</code>.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Workspace Tab -->
+          <div class="settings-tab-panel" data-tab="workspace">
+            <h2>Workspace Files</h2>
+
+            <div class="settings-section">
+              <h3>AGENTS.md <span class="settings-label">Rules & Conventions</span></h3>
+              <div class="form-group">
+                <textarea id="settingsAgentsMd" rows="10" spellcheck="false" placeholder="# Agent Rules & Conventions&#10;&#10;Define how the agent should behave..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
+                <span class="save-status" id="statusAgentsMd"></span>
+                <div class="hint">Rules and workspace conventions. Always injected into system prompt.</div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>USER.md <span class="settings-label">About Your Human</span></h3>
+              <div class="form-group">
+                <textarea id="settingsUserMd" rows="10" spellcheck="false" placeholder="# About the User&#10;&#10;- Prefers concise responses&#10;- Works in software development" style="font-family: var(--font-mono); font-size: 12px"></textarea>
+                <span class="save-status" id="statusUserMd"></span>
+                <div class="hint">Info about you. The bot reads this to personalize responses.</div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>TOOLS.md <span class="settings-label">Capabilities & Setup Notes</span></h3>
+              <div class="form-group">
+                <textarea id="settingsToolsMd" rows="10" spellcheck="false" placeholder="# Tools & Capabilities&#10;&#10;Available tools, local setup notes..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
+                <span class="save-status" id="statusToolsMd"></span>
+                <div class="hint">Tools the bot knows about. Injected into system prompt.</div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>MEMORY.md <span class="settings-label">Long-Term Memory File</span></h3>
+              <div class="form-group">
+                <textarea id="settingsMemoryMd" rows="10" spellcheck="false" placeholder="# Long-Term Memory&#10;&#10;- [preference] User likes dark mode" style="font-family: var(--font-mono); font-size: 12px"></textarea>
+                <span class="save-status" id="statusMemoryMd"></span>
+                <div class="hint">Curated memories file. Use /remember in chat or edit directly. Persists across redeploys.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- AI Provider Tab -->
+          <div class="settings-tab-panel" data-tab="provider">
+            <h2>AI Provider</h2>
+            <div class="settings-section">
+              <form autocomplete="off" onsubmit="return false">
+              <div class="form-group">
+                <label>Provider</label>
+                <select id="settingsProvider">
+                  <option value="">Select a provider...</option>
+                  <option value="anthropic">Anthropic (Claude)</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="gemini">Google Gemini</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="custom">Custom (OpenAI-compatible)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>API Key</label>
+                <input type="password" id="settingsApiKey" placeholder="sk-..." autocomplete="off">
+                <div class="hint">Stored securely. Never committed to files.</div>
+              </div>
+              <div class="form-group">
+                <label>Model</label>
+                <input type="text" id="settingsModel" placeholder="e.g. claude-sonnet-4-5-20250929">
+              </div>
+              <div class="form-group" id="customBaseUrlGroup" style="display:none">
+                <label>Base URL</label>
+                <input type="text" id="settingsBaseUrl" placeholder="http://localhost:11434/v1">
+              </div>
+              </form>
+              <button class="btn btn-primary" id="saveProviderBtn">Save Provider</button>
+            </div>
+          </div>
+
+          <!-- Channels Tab -->
+          <div class="settings-tab-panel" data-tab="channels">
+            <h2>Channels</h2>
+            <div class="settings-section">
+              <form autocomplete="off" onsubmit="return false">
+              <div class="form-group">
+                <label>Discord Bot Token</label>
+                <input type="password" id="settingsDiscordToken" placeholder="Bot token" autocomplete="off">
+              </div>
+              <div class="form-group">
+                <label>Telegram Bot Token</label>
+                <input type="password" id="settingsTelegramToken" placeholder="123456:ABC..." autocomplete="off">
+              </div>
+              <div class="form-group">
+                <label>Slack Bot Token</label>
+                <input type="password" id="settingsSlackToken" placeholder="xoxb-..." autocomplete="off">
+              </div>
+              <div class="form-group">
+                <label>Slack App Token</label>
+                <input type="password" id="settingsSlackAppToken" placeholder="xapp-..." autocomplete="off">
+              </div>
+              </form>
+              <button class="btn btn-primary" id="saveChannelsBtn">Save Channels</button>
+            </div>
+          </div>
+
+          <!-- Auth Profiles Tab -->
+          <div class="settings-tab-panel" data-tab="profiles">
+            <h2>Auth Profiles <span class="settings-label">Multi-Key with Rotation</span></h2>
+            <div class="settings-section">
+              <div id="profilesList" style="margin-bottom:12px"></div>
+              <div class="form-group">
+                <label>Profile Name</label>
+                <input type="text" id="profileNameInput" placeholder="e.g. work, personal, backup">
+              </div>
+              <div class="form-group">
+                <label>Provider</label>
+                <select id="profileProviderInput">
+                  <option value="anthropic">Anthropic</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>API Key</label>
+                <input type="password" id="profileApiKeyInput" placeholder="sk-..." autocomplete="off">
+              </div>
+              <div class="form-group">
+                <label>Model (optional)</label>
+                <input type="text" id="profileModelInput" placeholder="Override model for this profile">
+              </div>
+              <button class="btn btn-primary btn-sm" id="addProfileBtn">Add Profile</button>
+              <div class="hint" style="margin-top:8px">Profiles auto-rotate on failure with 5-min cooldown. Use <code>/model name@provider:profile</code> to select.</div>
+            </div>
+          </div>
+
+          <!-- Automation Tab -->
+          <div class="settings-tab-panel" data-tab="automation">
+            <h2>Automation</h2>
+
+            <div class="settings-section">
+              <h3>Session Reset</h3>
+              <div class="form-group">
+                <label>Reset Mode</label>
+                <select id="settingsResetMode">
+                  <option value="manual">Manual (/reset command only)</option>
+                  <option value="daily">Daily (at a specific hour)</option>
+                  <option value="idle">Idle (after inactivity timeout)</option>
+                </select>
+                <div class="hint">Controls when conversations automatically rotate to a fresh session.</div>
+              </div>
+              <div class="form-group" id="resetDailyGroup" style="display:none">
+                <label>Reset at hour (0-23)</label>
+                <input type="number" id="settingsResetHour" min="0" max="23" value="0" placeholder="0">
+                <div class="hint">Hour in server timezone (24h format). E.g. 0 = midnight, 9 = 9 AM.</div>
+              </div>
+              <div class="form-group" id="resetIdleGroup" style="display:none">
+                <label>Idle timeout (minutes)</label>
+                <input type="number" id="settingsResetIdle" min="5" max="1440" value="60" placeholder="60">
+                <div class="hint">Reset after this many minutes of no messages.</div>
+              </div>
+              <button class="btn btn-primary btn-sm" id="saveResetBtn">Save Session Reset</button>
+            </div>
+
+            <div class="settings-section">
+              <h3>Cron Jobs</h3>
+              <div id="cronJobsList" style="margin-bottom:12px"></div>
+              <div class="form-group">
+                <label>Schedule (cron expression)</label>
+                <input type="text" id="cronScheduleInput" placeholder="0 9 * * * (= 9 AM daily)" spellcheck="false">
+                <div class="hint">Standard cron: minute hour day month weekday. Use <a href="https://crontab.guru" target="_blank" style="color:var(--primary)">crontab.guru</a> for help.</div>
+              </div>
+              <div class="form-group">
+                <label>Prompt</label>
+                <input type="text" id="cronPromptInput" placeholder="Give me a morning summary">
+              </div>
+              <button class="btn btn-primary btn-sm" id="addCronBtn">Add Cron Job</button>
+            </div>
+
+            <div class="settings-section">
+              <h3>HEARTBEAT.md <span class="settings-label">Periodic Tasks</span></h3>
+              <div class="form-group">
+                <textarea id="settingsHeartbeatMd" rows="10" spellcheck="false" placeholder="# Heartbeat Tasks&#10;&#10;Tasks the bot checks periodically..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
+                <span class="save-status" id="statusHeartbeatMd"></span>
+                <div class="hint">Checked every ~30 minutes. Leave empty to skip heartbeat runs (saves tokens).</div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>BOOT.md <span class="settings-label">Startup Checklist</span></h3>
+              <div class="form-group">
+                <textarea id="settingsBootMd" rows="10" spellcheck="false" placeholder="# Boot Checklist&#10;&#10;Runs once on every server restart..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
+                <span class="save-status" id="statusBootMd"></span>
+                <div class="hint">Runs once on every server restart. Leave empty to skip.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Voice Tab -->
+          <div class="settings-tab-panel" data-tab="voice">
+            <h2>Voice (Coqui TTS / XTTS v2)</h2>
+            <div class="settings-section">
+              <div id="voiceEngineStatus" style="font-size: 13px; margin-bottom: 12px; color: var(--text-muted)">
+                Checking voice engine status...
+              </div>
+              <div class="form-group">
+                <label>TTS Engine</label>
+                <select id="settingsVoiceEngine">
+                  <option value="auto">Auto-detect (Recommended)</option>
+                  <option value="coqui">Coqui TTS (XTTS v2)</option>
+                  <option value="stub">Disabled</option>
+                </select>
+                <div class="hint">Coqui TTS uses ~500MB-1GB RAM. XTTS v2 supports zero-shot voice cloning from ~6s of audio.</div>
+              </div>
+              <button class="btn btn-sm" id="saveVoiceBtn" style="margin-bottom: 16px">Save Voice Settings</button>
+
+              <div class="form-group">
+                <label>Clone a Voice</label>
+                <div class="clone-upload" id="voiceCloneUpload">
+                  <p style="margin-bottom: 8px">Drop an audio file here or click to upload</p>
+                  <p style="font-size: 12px; color: var(--text-muted)">WAV or MP3, 6-30 seconds recommended</p>
+                  <input type="file" id="voiceCloneFile" accept="audio/*" style="display:none">
+                </div>
+                <div id="voiceCloneInfo" style="display:none; margin-top: 8px; padding: 8px 12px; background: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.15); border-radius: var(--radius); font-size: 12px; color: var(--warning)">
+                  Voice cloning requires an active TTS engine. Configure one above and restart the server.
+                </div>
+                <div class="form-group" style="margin-top: 8px">
+                  <input type="text" id="voiceCloneName" placeholder="Voice name (e.g. 'My Voice')">
+                </div>
+                <button class="btn btn-primary btn-sm" id="voiceCloneBtn">Clone Voice</button>
+                <div id="voiceCloneResult" style="margin-top: 8px; font-size: 13px"></div>
+              </div>
+              <div style="margin-top: 12px">
+                <strong style="font-size: 13px">Cloned Voices</strong>
+                <div id="voicesList" class="voice-settings" style="margin-top: 8px"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Skills Tab -->
+          <div class="settings-tab-panel" data-tab="skills">
+            <h2>Skills</h2>
+            <div class="settings-section">
+              <div class="hint" style="margin-bottom: 14px">On-demand knowledge packs that give the AI specialized instructions for specific tasks.</div>
+              <div id="skillsList" style="margin-bottom: 12px"></div>
+              <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px">
+                <button class="btn btn-sm btn-primary" id="createSkillBtn">Create Skill</button>
+              </div>
+              <!-- Create/Edit skill dialog (hidden by default) -->
+              <div id="skillDialog" style="display:none; border: 1px solid var(--border-light); border-radius: 8px; padding: 16px; margin-top: 12px; background: var(--bg)">
+                <div class="form-group">
+                  <label>Skill Name</label>
+                  <input type="text" id="skillNameInput" placeholder="my-skill (lowercase, hyphens)" spellcheck="false">
+                </div>
+                <div class="form-group">
+                  <label>Description</label>
+                  <input type="text" id="skillDescInput" placeholder="Brief one-line description">
+                </div>
+                <div class="form-group">
+                  <label>Instructions (Markdown)</label>
+                  <textarea id="skillContentInput" rows="12" spellcheck="false" placeholder="Full instructions the AI follows when this skill is activated..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
+                </div>
+                <div style="display: flex; gap: 8px">
+                  <button class="btn btn-sm btn-primary" id="skillSaveBtn">Save Skill</button>
+                  <button class="btn btn-sm" id="skillCancelBtn">Cancel</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Memories Tab -->
+          <div class="settings-tab-panel" data-tab="memories">
+            <h2>Memories</h2>
+            <div class="settings-section">
+              <div class="hint" style="margin-bottom: 14px">Learned preferences and facts injected into every conversation.</div>
+              <div id="memoriesList" style="max-height: 400px; overflow-y: auto; margin-bottom: 12px"></div>
+              <div style="display: flex; gap: 8px; align-items: center">
+                <input type="text" id="memoryInput" placeholder="Add a memory..." style="flex:1">
+                <button class="btn btn-sm btn-primary" id="addMemoryBtn">Add</button>
+              </div>
+            </div>
+
+            <div class="settings-section" style="margin-top: 24px">
+              <h3>API Token</h3>
+              <div class="form-group">
+                <label>Your API Token</label>
+                <input type="text" id="settingsApiToken" readonly spellcheck="false" style="font-family: var(--font-mono); font-size: 12px">
+                <div class="hint">Use this token for WebSocket and REST API authentication.</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </main>
@@ -161,302 +526,6 @@
       </button>
     </div>
     <audio id="voiceAudio" class="voice-audio-player"></audio>
-  </div>
-
-  <!-- Settings Overlay -->
-  <div id="settingsOverlay" class="settings-overlay">
-    <div class="settings-panel">
-      <h2>
-        Settings
-        <button class="btn btn-sm" id="settingsClose">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        </button>
-      </h2>
-
-      <div class="settings-section">
-        <h3>Bot Identity</h3>
-        <div class="form-group">
-          <label>Bot Name</label>
-          <input type="text" id="settingsBotName" placeholder="OpusClaw">
-        </div>
-        <button class="btn btn-primary btn-sm" id="saveIdentityBtn" style="margin-bottom: 16px">Save Name</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>SOUL.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Personality & Vibe</span></h3>
-        <div class="form-group">
-          <textarea id="settingsSoulMd" rows="8" placeholder="# Soul & Personality&#10;&#10;You are OpusClaw, a helpful AI assistant..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
-          <div class="hint">The bot's soul. Injected into every conversation. Edit to change personality, tone, and behavior.</div>
-        </div>
-        <button class="btn btn-primary btn-sm" id="saveSoulBtn">Save SOUL.md</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>USER.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— About Your Human</span></h3>
-        <div class="form-group">
-          <textarea id="settingsUserMd" rows="6" placeholder="# About the User&#10;&#10;- Prefers concise responses&#10;- Works in software development" style="font-family: var(--font-mono); font-size: 12px"></textarea>
-          <div class="hint">Info about you. The bot reads this to personalize responses.</div>
-        </div>
-        <button class="btn btn-primary btn-sm" id="saveUserBtn">Save USER.md</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>MEMORY.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Long-Term Memory</span></h3>
-        <div class="form-group">
-          <textarea id="settingsMemoryMd" rows="8" placeholder="# Long-Term Memory&#10;&#10;- [preference] User likes dark mode" style="font-family: var(--font-mono); font-size: 12px"></textarea>
-          <div class="hint">Curated memories. Use /remember in chat or edit directly. Persists across redeploys.</div>
-        </div>
-        <button class="btn btn-primary btn-sm" id="saveMemoryFileBtn">Save MEMORY.md</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>AGENTS.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Rules & Conventions</span></h3>
-        <div class="form-group">
-          <textarea id="settingsAgentsMd" rows="6" placeholder="# Agent Rules & Conventions&#10;&#10;Define how the agent should behave..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
-          <div class="hint">Rules and workspace conventions. Always injected into system prompt.</div>
-        </div>
-        <button class="btn btn-primary btn-sm" id="saveAgentsBtn">Save AGENTS.md</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>IDENTITY.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Name, Emoji, Creature, Vibe</span></h3>
-        <div class="form-group">
-          <textarea id="settingsIdentityMd" rows="6" placeholder="# Identity&#10;&#10;- **Name:** OpusClaw&#10;- **Emoji:** &#x1F99E;&#10;- **Creature:** Lobster&#10;- **Vibe:** Helpful and sharp" style="font-family: var(--font-mono); font-size: 12px"></textarea>
-          <div class="hint">Agent metadata in key-value format. Parsed as <code>- **Label:** value</code>.</div>
-        </div>
-        <button class="btn btn-primary btn-sm" id="saveIdentityMdBtn">Save IDENTITY.md</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>TOOLS.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Capabilities & Setup Notes</span></h3>
-        <div class="form-group">
-          <textarea id="settingsToolsMd" rows="6" placeholder="# Tools & Capabilities&#10;&#10;Available tools, local setup notes..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
-          <div class="hint">Tools the bot knows about. Injected into system prompt.</div>
-        </div>
-        <button class="btn btn-primary btn-sm" id="saveToolsBtn">Save TOOLS.md</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>HEARTBEAT.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Periodic Tasks</span></h3>
-        <div class="form-group">
-          <textarea id="settingsHeartbeatMd" rows="6" placeholder="# Heartbeat Tasks&#10;&#10;Tasks the bot checks periodically..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
-          <div class="hint">Checked every ~30 minutes. Leave empty to skip heartbeat runs (saves tokens).</div>
-        </div>
-        <button class="btn btn-primary btn-sm" id="saveHeartbeatBtn">Save HEARTBEAT.md</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>BOOT.md <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Startup Checklist</span></h3>
-        <div class="form-group">
-          <textarea id="settingsBootMd" rows="6" placeholder="# Boot Checklist&#10;&#10;Runs once on every server restart..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
-          <div class="hint">Runs once on every server restart. Leave empty to skip.</div>
-        </div>
-        <button class="btn btn-primary btn-sm" id="saveBootBtn">Save BOOT.md</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>Session Reset</h3>
-        <div class="form-group">
-          <label>Reset Mode</label>
-          <select id="settingsResetMode">
-            <option value="manual">Manual (/reset command only)</option>
-            <option value="daily">Daily (at a specific hour)</option>
-            <option value="idle">Idle (after inactivity timeout)</option>
-          </select>
-          <div class="hint">Controls when conversations automatically rotate to a fresh session.</div>
-        </div>
-        <div class="form-group" id="resetDailyGroup" style="display:none">
-          <label>Reset at hour (0-23)</label>
-          <input type="number" id="settingsResetHour" min="0" max="23" value="0" placeholder="0">
-          <div class="hint">Hour in server timezone (24h format). E.g. 0 = midnight, 9 = 9 AM.</div>
-        </div>
-        <div class="form-group" id="resetIdleGroup" style="display:none">
-          <label>Idle timeout (minutes)</label>
-          <input type="number" id="settingsResetIdle" min="5" max="1440" value="60" placeholder="60">
-          <div class="hint">Reset after this many minutes of no messages.</div>
-        </div>
-        <button class="btn btn-primary btn-sm" id="saveResetBtn">Save Session Reset</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>Cron Jobs</h3>
-        <div id="cronJobsList" style="margin-bottom:12px"></div>
-        <div class="form-group">
-          <label>Schedule (cron expression)</label>
-          <input type="text" id="cronScheduleInput" placeholder="0 9 * * * (= 9 AM daily)">
-          <div class="hint">Standard cron: minute hour day month weekday. Use <a href="https://crontab.guru" target="_blank" style="color:var(--primary)">crontab.guru</a> for help.</div>
-        </div>
-        <div class="form-group">
-          <label>Prompt</label>
-          <input type="text" id="cronPromptInput" placeholder="Give me a morning summary">
-        </div>
-        <button class="btn btn-primary btn-sm" id="addCronBtn">Add Cron Job</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>AI Provider</h3>
-        <form autocomplete="off" onsubmit="return false">
-        <div class="form-group">
-          <label>Provider</label>
-          <select id="settingsProvider">
-            <option value="">Select a provider...</option>
-            <option value="anthropic">Anthropic (Claude)</option>
-            <option value="openai">OpenAI</option>
-            <option value="gemini">Google Gemini</option>
-            <option value="openrouter">OpenRouter</option>
-            <option value="custom">Custom (OpenAI-compatible)</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>API Key</label>
-          <input type="password" id="settingsApiKey" placeholder="sk-..." autocomplete="off">
-          <div class="hint">Stored securely. Never committed to files.</div>
-        </div>
-        <div class="form-group">
-          <label>Model</label>
-          <input type="text" id="settingsModel" placeholder="e.g. claude-sonnet-4-5-20250929">
-        </div>
-        <div class="form-group" id="customBaseUrlGroup" style="display:none">
-          <label>Base URL</label>
-          <input type="text" id="settingsBaseUrl" placeholder="http://localhost:11434/v1">
-        </div>
-        </form>
-        <button class="btn btn-primary" id="saveProviderBtn">Save Provider</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>Channels</h3>
-        <form autocomplete="off" onsubmit="return false">
-        <div class="form-group">
-          <label>Discord Bot Token</label>
-          <input type="password" id="settingsDiscordToken" placeholder="Bot token" autocomplete="off">
-        </div>
-        <div class="form-group">
-          <label>Telegram Bot Token</label>
-          <input type="password" id="settingsTelegramToken" placeholder="123456:ABC..." autocomplete="off">
-        </div>
-        <div class="form-group">
-          <label>Slack Bot Token</label>
-          <input type="password" id="settingsSlackToken" placeholder="xoxb-..." autocomplete="off">
-        </div>
-        <div class="form-group">
-          <label>Slack App Token</label>
-          <input type="password" id="settingsSlackAppToken" placeholder="xapp-..." autocomplete="off">
-        </div>
-        </form>
-        <button class="btn btn-primary" id="saveChannelsBtn">Save Channels</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>Auth Profiles <span style="font-size:11px;color:var(--text-muted);font-weight:400">— Multi-Key with Rotation</span></h3>
-        <div id="profilesList" style="margin-bottom:12px"></div>
-        <div class="form-group">
-          <label>Profile Name</label>
-          <input type="text" id="profileNameInput" placeholder="e.g. work, personal, backup">
-        </div>
-        <div class="form-group">
-          <label>Provider</label>
-          <select id="profileProviderInput">
-            <option value="anthropic">Anthropic</option>
-            <option value="openai">OpenAI</option>
-            <option value="gemini">Gemini</option>
-            <option value="openrouter">OpenRouter</option>
-            <option value="custom">Custom</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>API Key</label>
-          <input type="password" id="profileApiKeyInput" placeholder="sk-..." autocomplete="off">
-        </div>
-        <div class="form-group">
-          <label>Model (optional)</label>
-          <input type="text" id="profileModelInput" placeholder="Override model for this profile">
-        </div>
-        <button class="btn btn-primary btn-sm" id="addProfileBtn">Add Profile</button>
-        <div class="hint" style="margin-top:8px">Profiles auto-rotate on failure with 5-min cooldown. Use <code>/model name@provider:profile</code> to select.</div>
-      </div>
-
-      <div class="settings-section">
-        <h3>Voice (Coqui TTS / XTTS v2)</h3>
-        <div id="voiceEngineStatus" style="font-size: 13px; margin-bottom: 12px; color: var(--text-muted)">
-          Checking voice engine status...
-        </div>
-        <div class="form-group">
-          <label>TTS Engine</label>
-          <select id="settingsVoiceEngine">
-            <option value="auto">Auto-detect (Recommended)</option>
-            <option value="coqui">Coqui TTS (XTTS v2)</option>
-            <option value="stub">Disabled</option>
-          </select>
-          <div class="hint">Coqui TTS uses ~500MB-1GB RAM. XTTS v2 supports zero-shot voice cloning from ~6s of audio.</div>
-        </div>
-        <div class="form-group">
-          <label>Clone a Voice</label>
-          <div class="clone-upload" id="voiceCloneUpload">
-            <p style="margin-bottom: 8px">Drop an audio file here or click to upload</p>
-            <p style="font-size: 12px; color: var(--text-muted)">WAV or MP3, 6-30 seconds recommended</p>
-            <input type="file" id="voiceCloneFile" accept="audio/*" style="display:none">
-          </div>
-          <div class="form-group" style="margin-top: 8px">
-            <input type="text" id="voiceCloneName" placeholder="Voice name (e.g. 'My Voice')">
-          </div>
-          <button class="btn btn-primary btn-sm" id="voiceCloneBtn">Clone Voice</button>
-          <div id="voiceCloneResult" style="margin-top: 8px; font-size: 13px"></div>
-        </div>
-        <div style="margin-top: 12px">
-          <strong style="font-size: 13px">Cloned Voices</strong>
-          <div id="voicesList" class="voice-settings" style="margin-top: 8px"></div>
-        </div>
-        <button class="btn btn-sm" id="saveVoiceBtn" style="margin-top: 12px">Save Voice Settings</button>
-      </div>
-
-      <div class="settings-section">
-        <h3>Skills</h3>
-        <div class="hint" style="margin-bottom: 14px">On-demand knowledge packs that give the AI specialized instructions for specific tasks.</div>
-        <div id="skillsList" style="margin-bottom: 12px"></div>
-        <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px">
-          <button class="btn btn-sm btn-primary" id="createSkillBtn">Create Skill</button>
-        </div>
-        <!-- Create/Edit skill dialog (hidden by default) -->
-        <div id="skillDialog" style="display:none; border: 1px solid var(--border-light); border-radius: 8px; padding: 16px; margin-top: 12px; background: var(--bg)">
-          <div class="form-group">
-            <label>Skill Name</label>
-            <input type="text" id="skillNameInput" placeholder="my-skill (lowercase, hyphens)">
-          </div>
-          <div class="form-group">
-            <label>Description</label>
-            <input type="text" id="skillDescInput" placeholder="Brief one-line description">
-          </div>
-          <div class="form-group">
-            <label>Instructions (Markdown)</label>
-            <textarea id="skillContentInput" rows="8" placeholder="Full instructions the AI follows when this skill is activated..." style="font-family: var(--font-mono); font-size: 12px"></textarea>
-          </div>
-          <div style="display: flex; gap: 8px">
-            <button class="btn btn-sm btn-primary" id="skillSaveBtn">Save Skill</button>
-            <button class="btn btn-sm" id="skillCancelBtn">Cancel</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-section">
-        <h3>Memories</h3>
-        <div class="hint" style="margin-bottom: 14px">Learned preferences and facts injected into every conversation.</div>
-        <div id="memoriesList" style="max-height: 220px; overflow-y: auto; margin-bottom: 12px"></div>
-        <div style="display: flex; gap: 8px; align-items: center">
-          <input type="text" id="memoryInput" placeholder="Add a memory..." style="flex:1">
-          <button class="btn btn-sm btn-primary" id="addMemoryBtn">Add</button>
-        </div>
-      </div>
-
-      <div class="settings-section">
-        <h3>API Token</h3>
-        <div class="form-group">
-          <label>Your API Token</label>
-          <input type="text" id="settingsApiToken" readonly style="font-family: var(--font-mono); font-size: 12px">
-          <div class="hint">Use this token for WebSocket and REST API authentication.</div>
-        </div>
-      </div>
-    </div>
   </div>
 
   <!-- Toast Container -->

@@ -132,14 +132,49 @@ const Chat = {
     } catch {
       this.setBotName("OpusClaw");
     }
+
+    // Also load IDENTITY.md to get emoji for welcome screen
+    try {
+      const identity = await API.json("/api/settings/workspace-file?name=IDENTITY.md");
+      if (identity.content) this.applyIdentity(identity.content);
+    } catch {
+      // ignore — use initials
+    }
+  },
+
+  applyIdentity(content) {
+    // Parse IDENTITY.md for emoji and name
+    // Format: - **Label:** value
+    let emoji = null;
+    let name = null;
+    for (const line of content.split("\n")) {
+      const match = line.match(/^-\s*\*\*(.+?)\*\*:?\s*(.+)/);
+      if (!match) continue;
+      const label = match[1].toLowerCase().trim();
+      const value = match[2].trim();
+      if (label === "emoji" && value) emoji = value;
+      if (label === "name" && value) name = value;
+    }
+
+    // Update welcome logo with emoji if available
+    const welcomeLogo = document.getElementById("welcomeLogo");
+    if (welcomeLogo && emoji) {
+      welcomeLogo.textContent = emoji;
+      welcomeLogo.style.fontSize = "32px";
+    }
+
+    // If identity has a name, update bot name
+    if (name && name !== this.botName) {
+      this.setBotName(name);
+    }
   },
 
   setBotName(name) {
     this.botName = name || "OpusClaw";
     const initials = this.botName.slice(0, 2).toUpperCase();
 
-    // Update topbar title (only if showing default)
-    if (!this.currentChannelKey) {
+    // Update topbar title (only if showing default, not in settings)
+    if (!this.currentChannelKey && !(typeof Settings !== "undefined" && Settings.isOpen)) {
       this.elements.topbarTitle.textContent = this.botName;
     }
 
@@ -155,9 +190,11 @@ const Chat = {
     const sidebarLogo = document.querySelector(".sidebar-header .logo");
     if (sidebarLogo) sidebarLogo.textContent = initials;
 
-    // Update welcome logo initials
-    const welcomeLogo = document.querySelector(".welcome .logo-large");
-    if (welcomeLogo) welcomeLogo.textContent = initials;
+    // Update welcome logo (only if no emoji was set)
+    const welcomeLogo = document.getElementById("welcomeLogo");
+    if (welcomeLogo && welcomeLogo.style.fontSize !== "32px") {
+      welcomeLogo.textContent = initials;
+    }
   },
 
   // --- Command Palette ---
