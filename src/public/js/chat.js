@@ -1,11 +1,20 @@
 /**
  * Chat UI module.
- * Handles message rendering, streaming, and conversation management.
+ * Channel-based: each channel (web, discord, telegram, slack) has one persistent session.
+ * No multi-conversation sidebar — the sidebar shows channels.
  */
+const PLATFORM_ICONS = {
+  web: "\u{1F310}",       // 🌐
+  discord: "\u{1F4AC}",   // 💬
+  telegram: "\u{2708}\uFE0F", // ✈️
+  slack: "\u{1F4BC}",     // 💼
+};
+
 const Chat = {
+  currentChannelKey: null,
   currentConversationId: null,
   isStreaming: false,
-  conversations: [],
+  channels: [],
   botName: "OpusClaw",
 
   elements: {},
@@ -22,8 +31,7 @@ const Chat = {
       inputArea: document.getElementById("inputArea"),
       messageInput: document.getElementById("messageInput"),
       sendBtn: document.getElementById("sendBtn"),
-      newChatBtn: document.getElementById("newChatBtn"),
-      conversationList: document.getElementById("conversationList"),
+      channelList: document.getElementById("channelList"),
       welcomeScreen: document.getElementById("welcomeScreen"),
       topbarTitle: document.getElementById("topbarTitle"),
     };
@@ -91,7 +99,6 @@ const Chat = {
     });
 
     this.elements.sendBtn.addEventListener("click", () => this.send());
-    this.elements.newChatBtn.addEventListener("click", () => this.newChat());
 
     // Welcome suggestion cards
     document.querySelectorAll(".welcome-suggestion").forEach((el) => {
@@ -102,7 +109,7 @@ const Chat = {
       });
     });
 
-    this.loadConversations();
+    this.loadChannels();
     this.loadCommands();
     this.loadBotName();
   },
@@ -129,8 +136,8 @@ const Chat = {
     this.botName = name || "OpusClaw";
     const initials = this.botName.slice(0, 2).toUpperCase();
 
-    // Update topbar title (only if showing old name or default)
-    if (!this.currentConversationId) {
+    // Update topbar title (only if showing default)
+    if (!this.currentChannelKey) {
       this.elements.topbarTitle.textContent = this.botName;
     }
 
@@ -151,6 +158,7 @@ const Chat = {
     if (welcomeLogo) welcomeLogo.textContent = initials;
   },
 
+  // --- Command Palette ---
   handleCommandPalette() {
     const text = this.elements.messageInput.value;
     if (text.startsWith("/") && !text.includes(" ") && text.length < 30) {
@@ -198,7 +206,6 @@ const Chat = {
   selectPaletteItem(index) {
     const cmd = this.paletteCommands[index];
     if (!cmd) return;
-    // If usage has args placeholder like "/model [model-name]", place cursor after command name
     const hasArgs = cmd.usage.includes("[");
     this.elements.messageInput.value = hasArgs ? `/${cmd.name} ` : cmd.usage;
     this.elements.messageInput.focus();
@@ -214,58 +221,83 @@ const Chat = {
     items[this.paletteIndex]?.scrollIntoView({ block: "nearest" });
   },
 
-  async loadConversations() {
+  // --- Channel Management ---
+  async loadChannels() {
     try {
-      const data = await API.listConversations();
-      this.conversations = data.conversations || [];
-      this.renderConversationList();
+      const data = await API.listChannels();
+      this.channels = data.channels || [];
+      this.renderChannelList();
+
+      // Auto-open web:default channel on first load
+      if (!this.currentChannelKey) {
+        const webChannel = this.channels.find((c) => c.key === "web:default");
+        if (webChannel) {
+          this.openChannel(webChannel.key, webChannel.conversationId);
+        } else {
+          // Show welcome + input — first message will create web:default
+          this.elements.inputArea.style.display = "block";
+        }
+      }
     } catch (err) {
-      console.error("Failed to load conversations:", err);
+      console.error("Failed to load channels:", err);
+      // Still show input so user can chat
+      this.elements.inputArea.style.display = "block";
     }
   },
 
-  renderConversationList() {
-    const el = this.elements.conversationList;
+  renderChannelList() {
+    const el = this.elements.channelList;
+    if (!el) return;
     el.innerHTML = "";
 
-    for (const conv of this.conversations) {
+    for (const ch of this.channels) {
       const item = document.createElement("div");
-      item.className = "conversation-item" + (conv.id === this.currentConversationId ? " active" : "");
+      const isActive = ch.key === this.currentChannelKey;
+      item.className = "channel-item" + (isActive ? " active" : "");
+
+      const icon = PLATFORM_ICONS[ch.platform] || PLATFORM_ICONS.web;
+      const timeAgo = ch.updatedAt ? this.timeAgo(ch.updatedAt) : "";
+
       item.innerHTML = `
-        <span class="title">${escapeHtml(conv.title)}</span>
-        <button class="delete-btn" title="Delete">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        </button>
+        <span class="channel-icon">${icon}</span>
+        <span class="channel-name">${escapeHtml(ch.title)}</span>
+        <span class="channel-time">${timeAgo}</span>
       `;
 
-      item.querySelector(".title").addEventListener("click", () => this.openConversation(conv.id));
-      item.querySelector(".delete-btn").addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.deleteConversation(conv.id);
-      });
-
+      item.addEventListener("click", () => this.openChannel(ch.key, ch.conversationId));
       el.appendChild(item);
     }
   },
 
-  async openConversation(id) {
-    this.currentConversationId = id;
+  async openChannel(channelKey, conversationId) {
+    this.currentChannelKey = channelKey;
+    this.currentConversationId = conversationId || null;
     this.elements.welcomeScreen.style.display = "none";
     this.elements.chatArea.style.display = "flex";
     this.elements.inputArea.style.display = "block";
 
-    try {
-      const data = await API.getConversation(id);
-      this.elements.topbarTitle.textContent = data.title || "Chat";
-      this.renderMessages(data.messages || []);
-      this.renderConversationList();
-    } catch (err) {
-      App.showToast("Failed to load conversation", "error");
+    // Update topbar
+    const ch = this.channels.find((c) => c.key === channelKey);
+    const icon = PLATFORM_ICONS[ch?.platform] || PLATFORM_ICONS.web;
+    this.elements.topbarTitle.textContent = ch ? `${icon} ${ch.title}` : channelKey;
+
+    // Load messages
+    if (conversationId) {
+      try {
+        const data = await API.getConversation(conversationId);
+        this.renderMessages(data.messages || []);
+      } catch {
+        this.elements.chatArea.innerHTML = "";
+      }
+    } else {
+      this.elements.chatArea.innerHTML = "";
     }
 
+    this.renderChannelList();
     this.elements.messageInput.focus();
   },
 
+  // --- Messages ---
   renderMessages(messages) {
     this.elements.chatArea.innerHTML = "";
     for (const msg of messages) {
@@ -308,6 +340,7 @@ const Chat = {
     }
   },
 
+  // --- Send ---
   async send() {
     const text = this.elements.messageInput.value.trim();
     if (!text || this.isStreaming) return;
@@ -317,21 +350,30 @@ const Chat = {
     this.elements.messageInput.style.height = "auto";
     this.elements.sendBtn.disabled = true;
 
-    // Show chat area if hidden
-    if (!this.currentConversationId) {
-      this.elements.welcomeScreen.style.display = "none";
-      this.elements.chatArea.style.display = "flex";
-      this.elements.inputArea.style.display = "block";
+    // Show chat area if on welcome screen
+    this.elements.welcomeScreen.style.display = "none";
+    this.elements.chatArea.style.display = "flex";
+    this.elements.inputArea.style.display = "block";
+
+    // Default to web:default channel
+    if (!this.currentChannelKey) {
+      this.currentChannelKey = "web:default";
     }
 
-    // Handle /clear locally
+    // Handle /clear locally — clear display, keep history
     if (text === "/clear") {
-      this.newChat();
-      this.elements.welcomeScreen.style.display = "none";
-      this.elements.chatArea.style.display = "flex";
-      this.elements.inputArea.style.display = "block";
       this.elements.chatArea.innerHTML = "";
-      this.appendMessage("assistant", "Conversation cleared. Starting fresh.");
+      this.appendMessage("assistant", "Chat cleared. History preserved in database.");
+      this.elements.sendBtn.disabled = false;
+      this.elements.messageInput.focus();
+      return;
+    }
+
+    // Handle /reset — create fresh conversation for this channel
+    if (text === "/reset") {
+      this.currentConversationId = null;
+      this.elements.chatArea.innerHTML = "";
+      this.appendMessage("assistant", "Session reset. Starting fresh conversation for this channel.");
       this.elements.sendBtn.disabled = false;
       this.elements.messageInput.focus();
       return;
@@ -366,7 +408,7 @@ const Chat = {
             this.currentConversationId = data.conversationId;
           }
           this.finishStreaming(assistantMsg);
-          this.loadConversations();
+          this.loadChannels();
           // Check for personality completion
           if (typeof Setup !== "undefined") Setup.handleStreamComplete(fullResponse);
         },
@@ -378,7 +420,9 @@ const Chat = {
               `<span style="color:var(--danger)">${escapeHtml(error)}</span>`;
           }
           App.showToast(error, "error");
-        }
+        },
+        // channelKey
+        this.currentChannelKey
       );
     } catch (err) {
       this.finishStreaming(assistantMsg);
@@ -390,32 +434,22 @@ const Chat = {
     this.elements.messageInput.focus();
   },
 
-  newChat() {
-    this.currentConversationId = null;
-    this.elements.chatArea.style.display = "none";
-    this.elements.inputArea.style.display = "block";
-    this.elements.welcomeScreen.style.display = "flex";
-    this.elements.topbarTitle.textContent = this.botName || "OpusClaw";
-    this.renderConversationList();
-    this.elements.messageInput.focus();
-  },
-
-  async deleteConversation(id) {
-    try {
-      await API.deleteConversation(id);
-      if (this.currentConversationId === id) {
-        this.newChat();
-      }
-      await this.loadConversations();
-      App.showToast("Conversation deleted", "success");
-    } catch (err) {
-      App.showToast(err.message, "error");
-    }
-  },
-
+  // --- Utilities ---
   scrollToBottom() {
     const el = this.elements.chatArea;
     el.scrollTop = el.scrollHeight;
+  },
+
+  timeAgo(dateStr) {
+    if (!dateStr) return "";
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "now";
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h`;
+    const days = Math.floor(hours / 24);
+    return `${days}d`;
   },
 
   /**

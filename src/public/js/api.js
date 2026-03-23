@@ -84,6 +84,11 @@ const API = {
     return res.json();
   },
 
+  // --- Channels ---
+  async listChannels() {
+    return this.json("/api/chat/channels");
+  },
+
   // --- Conversations ---
   async listConversations(limit = 50, offset = 0) {
     return this.json(`/api/chat/conversations?limit=${limit}&offset=${offset}`);
@@ -106,17 +111,21 @@ const API = {
   },
 
   // --- Chat (SSE streaming) ---
-  async sendMessage(conversationId, message, onText, onDone, onError) {
+  async sendMessage(conversationId, message, onText, onDone, onError, channelKey) {
     const csrf = this.getCsrfToken();
     const headers = {
       "Content-Type": "application/json",
     };
     if (csrf) headers["X-CSRF-Token"] = csrf;
 
+    const body = { message };
+    if (channelKey) body.channelKey = channelKey;
+    if (conversationId) body.conversationId = conversationId;
+
     const res = await fetch("/api/chat/send", {
       method: "POST",
       headers,
-      body: JSON.stringify({ conversationId, message }),
+      body: JSON.stringify(body),
       credentials: "same-origin",
     });
 

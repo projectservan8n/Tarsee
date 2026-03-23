@@ -38,8 +38,36 @@ chatRouter.get("/commands", (_req, res) => {
 });
 
 /**
+ * GET /api/chat/channels
+ * List all channels (web, discord, telegram, slack) with their conversations.
+ */
+chatRouter.get("/channels", (req, res) => {
+  const channelSettings = settingsStore.getByPrefix("channel_conv.");
+  const channels = [];
+
+  for (const { key, value: convId } of channelSettings) {
+    const channelKey = key.replace("channel_conv.", "");
+    const [platform] = channelKey.split(":");
+    const conv = convStore.get(convId);
+    if (!conv) continue;
+
+    channels.push({
+      key: channelKey,
+      platform,
+      title: conv.title || channelKey,
+      conversationId: convId,
+      updatedAt: conv.updated_at,
+    });
+  }
+
+  // Sort by most recently active
+  channels.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+  res.json({ channels });
+});
+
+/**
  * GET /api/chat/conversations
- * List conversations.
+ * List conversations (kept for backward compat).
  */
 chatRouter.get("/conversations", (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
@@ -102,7 +130,7 @@ chatRouter.patch("/conversations/:id", (req, res) => {
  * Body: { conversationId, message, provider?, model? }
  */
 chatRouter.post("/send", async (req, res) => {
-  const { conversationId, message, provider: reqProvider, model: reqModel } = req.body || {};
+  const { conversationId, channelKey, message, provider: reqProvider, model: reqModel } = req.body || {};
 
   if (!message || typeof message !== "string") {
     return res.status(400).json({ error: "Message is required" });
@@ -111,12 +139,28 @@ chatRouter.post("/send", async (req, res) => {
     return res.status(400).json({ error: "Message too long" });
   }
 
+  // Resolve conversation from channelKey or conversationId
+  let convId = conversationId;
+
+  if (channelKey && !convId) {
+    // Channel-based: resolve conversation from channel key (same pattern as Discord/Telegram/Slack bots)
+    convId = settingsStore.get(`channel_conv.${channelKey}`);
+    if (convId && !convStore.get(convId)) convId = null; // stale reference
+
+    if (!convId) {
+      // Auto-create conversation for this channel
+      const conv = convStore.create({ title: channelKey === "web:default" ? "Web Chat" : channelKey });
+      convId = conv.id;
+      settingsStore.set(`channel_conv.${channelKey}`, convId);
+    }
+  }
+
   // Check for commands
   if (message.startsWith("/")) {
     const cmdResult = await processCommand(message, {
       settingsStore,
       convStore,
-      conversationId,
+      conversationId: convId,
       channelManager: req.app.get("channelManager"),
       db: req.app.get("db"),
     });
@@ -125,13 +169,12 @@ chatRouter.post("/send", async (req, res) => {
       return res.json({
         command: true,
         response: cmdResult.response,
-        conversationId: conversationId || null,
+        conversationId: convId || null,
       });
     }
   }
 
-  // Get or create conversation
-  let convId = conversationId;
+  // Get or create conversation (fallback for non-channel requests)
   if (!convId) {
     const conv = convStore.create({ title: message.slice(0, 100) });
     convId = conv.id;
