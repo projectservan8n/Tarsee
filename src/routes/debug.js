@@ -132,6 +132,179 @@ export const ALLOWED_COMMANDS = {
       return results.join("\n");
     },
   },
+
+  // ── New commands (OpenClaw parity) ──────────────────────────────────
+
+  "restart": {
+    description: "Restart the server (Railway auto-restarts)",
+    run: async () => {
+      setTimeout(() => process.exit(0), 500);
+      return "Restarting OpusClaw... back in a few seconds.";
+    },
+  },
+
+  "config.list": {
+    description: "List all non-secret config values",
+    run: async (_args, ctx) => {
+      const db = ctx.db;
+      if (!db) return "Database not available";
+      const rows = db.prepare("SELECT key, value FROM settings ORDER BY key").all();
+      if (rows.length === 0) return "(no settings)";
+      return rows.map((r) => {
+        const val = (r.key.includes("apiKey") || r.key.includes("token") || r.key.includes("secret"))
+          ? "••••••"
+          : r.value?.slice(0, 80);
+        return `${r.key} = ${val}`;
+      }).join("\n");
+    },
+  },
+
+  "config.get": {
+    description: "Get a specific config value (usage: config.get <key>)",
+    run: async (args, ctx) => {
+      const db = ctx.db;
+      if (!db) return "Database not available";
+      if (!args) return "Usage: config.get <key>";
+      const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(args);
+      if (!row) return `${args}: (not set)`;
+      if (args.includes("apiKey") || args.includes("token")) return `${args}: ••••••`;
+      return `${args}: ${row.value}`;
+    },
+  },
+
+  "provider.status": {
+    description: "Current AI provider, model, and key status",
+    run: async (_args, ctx) => {
+      const db = ctx.db;
+      if (!db) return "Database not available";
+      const provider = db.prepare("SELECT value FROM settings WHERE key = 'ai.activeProvider'").get();
+      const p = provider?.value || "none";
+      const model = db.prepare("SELECT value FROM settings WHERE key = ?").get(`ai.${p}.model`);
+      const key = db.prepare("SELECT value FROM settings WHERE key = ?").get(`ai.${p}.apiKey`);
+      const base = db.prepare("SELECT value FROM settings WHERE key = ?").get(`ai.${p}.baseUrl`);
+      return [
+        `Provider: ${p}`,
+        `Model:    ${model?.value || "(default)"}`,
+        `API Key:  ${key?.value ? "••••" + key.value.slice(-4) : "(not set / env fallback)"}`,
+        `Base URL: ${base?.value || "(default)"}`,
+      ].join("\n");
+    },
+  },
+
+  "memory.stats": {
+    description: "Bot memory statistics",
+    run: async (_args, ctx) => {
+      const db = ctx.db;
+      if (!db) return "Database not available";
+      try {
+        const total = db.prepare("SELECT COUNT(*) as count FROM bot_memory").get();
+        const byCategory = db.prepare("SELECT category, COUNT(*) as count FROM bot_memory GROUP BY category ORDER BY count DESC").all();
+        const lines = [`Total memories: ${total.count}`];
+        for (const row of byCategory) {
+          lines.push(`  ${row.category}: ${row.count}`);
+        }
+        return lines.join("\n");
+      } catch {
+        return "bot_memory table not found";
+      }
+    },
+  },
+
+  "skills.list": {
+    description: "List all available skills",
+    run: async () => {
+      try {
+        const { getSkillsList } = await import("../lib/skills-engine.js");
+        const skills = getSkillsList();
+        if (skills.length === 0) return "(no skills)";
+        return skills.map((s) => `${s.name} [${s.source}] — ${s.description}`).join("\n");
+      } catch (err) {
+        return `Error: ${err.message}`;
+      }
+    },
+  },
+
+  "workspace.files": {
+    description: "List workspace files and their sizes",
+    run: async () => {
+      const files = ["SOUL.md", "USER.md", "MEMORY.md", "AGENTS.md", "IDENTITY.md", "TOOLS.md", "HEARTBEAT.md", "BOOT.md", "BOOTSTRAP.md"];
+      const results = [];
+      for (const f of files) {
+        const path = `${config.WORKSPACE_DIR}/${f}`;
+        try {
+          const stat = fs.statSync(path);
+          results.push(`${f}: ${formatSize(stat.size)}`);
+        } catch {
+          results.push(`${f}: (not created)`);
+        }
+      }
+      return results.join("\n");
+    },
+  },
+
+  "sessions.list": {
+    description: "List recent conversations/sessions",
+    run: async (_args, ctx) => {
+      const db = ctx.db;
+      if (!db) return "Database not available";
+      const rows = db.prepare("SELECT id, title, channel, created_at FROM conversations ORDER BY created_at DESC LIMIT 10").all();
+      if (rows.length === 0) return "(no conversations)";
+      return rows.map((r) =>
+        `${r.id.slice(0, 8)}… [${r.channel || "web"}] ${r.title || "(untitled)"} — ${r.created_at}`
+      ).join("\n");
+    },
+  },
+
+  "cron.status": {
+    description: "Show cron job status",
+    run: async () => {
+      try {
+        const { getCronStatus } = await import("../lib/cron.js");
+        const status = getCronStatus();
+        if (status.jobs.length === 0) return "No cron jobs configured";
+        const lines = [`Active: ${status.activeJobs}/${status.totalJobs}`];
+        for (const j of status.jobs) {
+          lines.push(`  ${j.id} [${j.enabled ? "ON" : "OFF"}] ${j.schedule} — ${j.prompt.slice(0, 50)}`);
+        }
+        return lines.join("\n");
+      } catch (err) {
+        return `Error: ${err.message}`;
+      }
+    },
+  },
+
+  "heartbeat.status": {
+    description: "Show heartbeat system status",
+    run: async () => {
+      try {
+        const { getHeartbeatStatus } = await import("../lib/heartbeat.js");
+        const s = getHeartbeatStatus();
+        return [
+          `Running:   ${s.running ? "Yes" : "No"}`,
+          `Last run:  ${s.lastRun || "Never"}`,
+          `Run count: ${s.runCount || 0}`,
+          `Last result: ${s.lastResult?.slice(0, 100) || "(none)"}`,
+        ].join("\n");
+      } catch (err) {
+        return `Error: ${err.message}`;
+      }
+    },
+  },
+
+  "reload": {
+    description: "Force-reload workspace files and skills cache",
+    run: async () => {
+      try {
+        const { invalidateCache } = await import("../lib/workspace-files.js");
+        invalidateCache();
+        const skills = await import("../lib/skills-engine.js");
+        skills.invalidateCache();
+        return "Workspace files and skills cache cleared.";
+      } catch (err) {
+        return `Reload error: ${err.message}`;
+      }
+    },
+  },
 };
 
 /**

@@ -489,6 +489,288 @@ const COMMANDS = {
       }
     },
   },
+
+  // ── New commands (OpenClaw parity) ──────────────────────────────────
+
+  restart: {
+    description: "Restart the server (Railway auto-restarts the process)",
+    usage: "/restart",
+    handler: (_args, _ctx) => {
+      setTimeout(() => process.exit(0), 500);
+      return "**Restarting OpusClaw…** The server will be back in a few seconds.";
+    },
+  },
+
+  stop: {
+    description: "Stop the current AI generation",
+    usage: "/stop",
+    handler: (_args, ctx) => {
+      if (ctx.abortController) {
+        ctx.abortController.abort();
+        return "Generation stopped.";
+      }
+      return "Nothing is currently generating.";
+    },
+  },
+
+  new: {
+    description: "Start a new session (alias for /clear)",
+    usage: "/new",
+    handler: (_args, ctx) => {
+      if (ctx.clearConversation) ctx.clearConversation();
+      return "New session started.";
+    },
+  },
+
+  config: {
+    description: "Show or set a config value",
+    usage: "/config [key] [value]",
+    handler: (args, ctx) => {
+      const settingsStore = ctx.settingsStore;
+      if (!settingsStore) return "Settings not available.";
+
+      if (!args) {
+        // Show all non-secret settings
+        const all = settingsStore.getByPrefix("");
+        const lines = ["**Configuration**", ""];
+        for (const { key, value } of all) {
+          if (key.includes("apiKey") || key.includes("token") || key.includes("secret")) {
+            lines.push(`\`${key}\` = ••••••`);
+          } else {
+            lines.push(`\`${key}\` = ${value}`);
+          }
+        }
+        if (lines.length === 2) lines.push("(no settings stored)");
+        return lines.join("\n");
+      }
+
+      const parts = args.split(/\s+/);
+      const key = parts[0];
+      const value = parts.slice(1).join(" ");
+
+      if (!value) {
+        // Get single key
+        const v = settingsStore.get(key);
+        if (v === undefined || v === null) return `\`${key}\` is not set.`;
+        if (key.includes("apiKey") || key.includes("token")) return `\`${key}\` = ••••••`;
+        return `\`${key}\` = ${v}`;
+      }
+
+      // Set key
+      settingsStore.set(key, value);
+      return `Set \`${key}\` = ${value}`;
+    },
+  },
+
+  usage: {
+    description: "Show token usage and cost estimate",
+    usage: "/usage",
+    handler: async (_args, ctx) => {
+      const db = ctx.db;
+      if (!db) return "Database not available.";
+
+      try {
+        const total = db.prepare("SELECT COUNT(*) as count FROM messages").get();
+        const userMsgs = db.prepare("SELECT COUNT(*) as count FROM messages WHERE role='user'").get();
+        const aiMsgs = db.prepare("SELECT COUNT(*) as count FROM messages WHERE role='assistant'").get();
+        const convs = db.prepare("SELECT COUNT(*) as count FROM conversations").get();
+
+        // Estimate token count from message content
+        const contentRows = db.prepare("SELECT SUM(LENGTH(content)) as chars FROM messages").get();
+        const estTokens = Math.round((contentRows.chars || 0) / 4);
+
+        const lines = [
+          "**Usage Statistics**",
+          "",
+          `**Conversations:** ${convs.count}`,
+          `**Total messages:** ${total.count}`,
+          `  User: ${userMsgs.count}`,
+          `  Assistant: ${aiMsgs.count}`,
+          `**Est. tokens:** ~${estTokens.toLocaleString()} (based on message length)`,
+        ];
+        return lines.join("\n");
+      } catch (err) {
+        return `Usage error: ${err.message}`;
+      }
+    },
+  },
+
+  whoami: {
+    description: "Show your identity and session info",
+    usage: "/whoami",
+    handler: async (_args, ctx) => {
+      try {
+        const { parseIdentityFile } = await import("./workspace-files.js");
+        const identity = parseIdentityFile();
+        const name = identity.Name || "OpusClaw";
+        const emoji = identity.Emoji || "";
+        const creature = identity.Creature || "";
+        const vibe = identity.Vibe || "";
+
+        const lines = [
+          `**${emoji} ${name}**`,
+          creature ? `Creature: ${creature}` : null,
+          vibe ? `Vibe: ${vibe}` : null,
+          "",
+          `**Channel:** ${ctx.channel || "web"}`,
+          `**Conversation:** ${ctx.conversationId || "(none)"}`,
+        ].filter(Boolean);
+
+        if (ctx.settingsStore) {
+          const active = ctx.settingsStore.getActiveProvider();
+          lines.push(`**Provider:** ${active?.provider || "none"}`);
+          lines.push(`**Model:** ${active?.model || "default"}`);
+        }
+
+        return lines.join("\n");
+      } catch (err) {
+        return `Identity error: ${err.message}`;
+      }
+    },
+  },
+
+  compact: {
+    description: "Compact conversation by summarizing older messages",
+    usage: "/compact",
+    handler: async (_args, ctx) => {
+      if (!ctx.conversationId || !ctx.convStore) return "No active conversation.";
+
+      const messages = ctx.convStore.getMessages(ctx.conversationId);
+      if (messages.length < 10) return "Conversation too short to compact (need 10+ messages).";
+
+      // Keep the last 6 messages, summarize the rest
+      const toSummarize = messages.slice(0, -6);
+      const summary = toSummarize
+        .map((m) => `${m.role}: ${m.content.slice(0, 100)}`)
+        .join("\n");
+
+      const lines = [
+        "**Conversation Compacted**",
+        "",
+        `Summarized ${toSummarize.length} older messages.`,
+        `Keeping ${Math.min(6, messages.length)} recent messages in context.`,
+        "",
+        "The AI will see a summary of earlier messages on the next turn.",
+      ];
+
+      // Store the summary as a system note
+      ctx.convStore.addMessage(ctx.conversationId, {
+        role: "system",
+        content: `[Compacted ${toSummarize.length} messages] Summary of earlier conversation:\n${summary.slice(0, 2000)}`,
+      });
+
+      return lines.join("\n");
+    },
+  },
+
+  context: {
+    description: "Show what's included in the system prompt",
+    usage: "/context",
+    handler: async (_args, ctx) => {
+      try {
+        const { readWorkspaceFile } = await import("./workspace-files.js");
+
+        const files = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "TOOLS.md", "MEMORY.md"];
+        const lines = ["**System Prompt Context**", ""];
+
+        for (const f of files) {
+          const content = readWorkspaceFile(f);
+          const size = content ? content.length : 0;
+          const status = size > 10 ? `${size} chars` : "(empty)";
+          lines.push(`- **${f}**: ${status}`);
+        }
+
+        // DB memories
+        if (ctx.db) {
+          try {
+            const { MemoryStore } = await import("../db/memory.js");
+            const store = new MemoryStore(ctx.db);
+            lines.push(`- **DB Memories**: ${store.count()} entries`);
+          } catch { /* ignore */ }
+        }
+
+        // Skills
+        try {
+          const { getSkillsList } = await import("./skills-engine.js");
+          const skills = getSkillsList();
+          lines.push(`- **Skills**: ${skills.length} available`);
+        } catch { /* ignore */ }
+
+        // Conversation system prompt
+        if (ctx.conversationId && ctx.convStore) {
+          const conv = ctx.convStore.get(ctx.conversationId);
+          const cp = conv?.system_prompt;
+          lines.push(`- **Conv. prompt**: ${cp ? `${cp.length} chars` : "(none)"}`);
+        }
+
+        lines.push("", "All of the above is injected into every AI request (150KB max).");
+        lines.push("Workspace files auto-reload within 5 seconds of editing.");
+        return lines.join("\n");
+      } catch (err) {
+        return `Context error: ${err.message}`;
+      }
+    },
+  },
+
+  models: {
+    description: "List available AI providers and their default models",
+    usage: "/models",
+    handler: () => {
+      const lines = ["**Available Providers**", ""];
+      for (const [id, provider] of Object.entries(AI_PROVIDERS)) {
+        lines.push(`**${provider.name}** (\`${id}\`) — default: \`${provider.defaultModel || "none"}\``);
+      }
+      lines.push("", "Switch with `/model <model-name>` or `/provider <provider-id>`");
+      lines.push("Any model ID supported by the provider will work.");
+      return lines.join("\n");
+    },
+  },
+
+  debug: {
+    description: "Show debug info for troubleshooting",
+    usage: "/debug",
+    handler: (_args, ctx) => {
+      const mem = process.memoryUsage();
+      const lines = [
+        "**Debug Info**",
+        "",
+        `**Node:** ${process.version}`,
+        `**Platform:** ${process.platform} ${process.arch}`,
+        `**PID:** ${process.pid}`,
+        `**Uptime:** ${Math.floor(process.uptime())}s`,
+        `**RSS:** ${Math.round(mem.rss / 1024 / 1024)}MB`,
+        `**Heap:** ${Math.round(mem.heapUsed / 1024 / 1024)}/${Math.round(mem.heapTotal / 1024 / 1024)}MB`,
+        `**ENV:** ${process.env.NODE_ENV || "development"}`,
+      ];
+
+      if (ctx.settingsStore) {
+        const active = ctx.settingsStore.getActiveProvider();
+        lines.push(`**Provider:** ${active?.provider || "none"}`);
+        lines.push(`**Model:** ${active?.model || "default"}`);
+        lines.push(`**API Key:** ${active?.apiKey ? "••••" + active.apiKey.slice(-4) : "not set"}`);
+      }
+
+      return lines.join("\n");
+    },
+  },
+
+  reload: {
+    description: "Force-reload workspace files and skills cache",
+    usage: "/reload",
+    handler: async () => {
+      try {
+        const { invalidateCache } = await import("./workspace-files.js");
+        invalidateCache();
+
+        const skills = await import("./skills-engine.js");
+        skills.invalidateCache();
+
+        return "**Reloaded.** Workspace files and skills cache cleared. Changes take effect on next message.";
+      } catch (err) {
+        return `Reload error: ${err.message}`;
+      }
+    },
+  },
 };
 
 /**
