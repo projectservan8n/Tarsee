@@ -102,9 +102,11 @@ settingsRouter.get("/setup-status", (_req, res) => {
     process.env.OPENROUTER_API_KEY
   );
   // Personality is "done" if bot name was set, OR if SOUL.md/systemPrompt exist,
-  // OR if setup was explicitly completed (prevents re-triggering on redeploy)
+  // OR if setup was explicitly completed, OR if conversations already exist (not first-time)
   const setupCompleted = !!settingsStore.get("setup.completed");
-  const hasPersonality = !!botName || !!settingsStore.get("identity.systemPrompt") || setupCompleted;
+  const db = req.app.get("db");
+  const hasConversations = db ? (db.prepare("SELECT COUNT(*) as c FROM conversations").get()?.c || 0) > 0 : false;
+  const hasPersonality = !!botName || !!settingsStore.get("identity.systemPrompt") || setupCompleted || hasConversations;
   res.json({
     needsSetup: !provider && !envConfigured,
     needsPersonality: !hasPersonality,
