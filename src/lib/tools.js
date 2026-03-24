@@ -23,6 +23,14 @@ export const TOOLS = [
           type: "string",
           description: "The filename to read, e.g. 'MEMORY.md' or 'memory/2026-03-24.md'",
         },
+        offset: {
+          type: "number",
+          description: "Line number to start reading from (1-indexed). Optional.",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of lines to return. Optional, defaults to all lines.",
+        },
       },
       required: ["filename"],
     },
@@ -152,6 +160,67 @@ export const TOOLS = [
       required: ["query"],
     },
   },
+
+  {
+    name: "edit_file",
+    description: "Edit a workspace file by replacing specific text (targeted find-and-replace). Only replaces the first occurrence.",
+    input_schema: {
+      type: "object",
+      properties: {
+        filename: {
+          type: "string",
+          description: "The workspace filename to edit, e.g. 'MEMORY.md'",
+        },
+        old_text: {
+          type: "string",
+          description: "The exact text to find in the file",
+        },
+        new_text: {
+          type: "string",
+          description: "The replacement text",
+        },
+      },
+      required: ["filename", "old_text", "new_text"],
+    },
+  },
+
+  {
+    name: "grep",
+    description: "Search for a text pattern across workspace files. Returns matching lines with filename:lineNumber format. Case-insensitive. Results capped at 50 matches.",
+    input_schema: {
+      type: "object",
+      properties: {
+        pattern: {
+          type: "string",
+          description: "The text pattern to search for (case-insensitive substring match)",
+        },
+        filename: {
+          type: "string",
+          description: "Optional: search only this specific workspace file. If omitted, searches all workspace files and memory logs.",
+        },
+      },
+      required: ["pattern"],
+    },
+  },
+
+  {
+    name: "append_file",
+    description: "Append content to a workspace file without overwriting existing content. Useful for adding entries to MEMORY.md, TOOLS.md, etc.",
+    input_schema: {
+      type: "object",
+      properties: {
+        filename: {
+          type: "string",
+          description: "The workspace filename to append to, e.g. 'MEMORY.md'",
+        },
+        content: {
+          type: "string",
+          description: "The content to append to the end of the file",
+        },
+      },
+      required: ["filename", "content"],
+    },
+  },
 ];
 
 /**
@@ -179,13 +248,21 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
   try {
     switch (toolName) {
       case "read_file": {
-        const { filename } = toolInput;
+        const { filename, offset, limit } = toolInput;
         // Allow workspace files and memory/ subdirectory
         if (!isAllowedFile(filename)) {
           return `Error: Cannot read '${filename}'. Allowed files: ${WORKSPACE_FILES.join(", ")} and memory/*.md`;
         }
-        const content = readWorkspaceFile(filename);
+        let content = readWorkspaceFile(filename);
         if (!content) return `File '${filename}' is empty or does not exist.`;
+        // Apply offset and limit if provided
+        if (offset || limit) {
+          const lines = content.split("\n");
+          const start = Math.max(0, (offset || 1) - 1); // 1-indexed to 0-indexed
+          const end = limit ? start + limit : lines.length;
+          content = lines.slice(start, end).join("\n");
+          if (!content) return `No content in '${filename}' at offset ${offset || 1} with limit ${limit || "all"}.`;
+        }
         return truncate(content, MAX_RESULT);
       }
 
@@ -274,6 +351,79 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
         } catch (err) {
           return `Memory search error: ${err.message}`;
         }
+      }
+
+      case "edit_file": {
+        const { filename, old_text, new_text } = toolInput;
+        if (!isAllowedWriteFile(filename)) {
+          return `Error: Cannot edit '${filename}'. Allowed: ${WORKSPACE_FILES.join(", ")}`;
+        }
+        const existing = readWorkspaceFile(filename);
+        if (!existing) return `Error: File '${filename}' is empty or does not exist.`;
+        if (!existing.includes(old_text)) {
+          return `Error: Could not find the specified old_text in '${filename}'. Make sure the text matches exactly (including whitespace and newlines).`;
+        }
+        const updated = existing.replace(old_text, new_text);
+        writeWorkspaceFile(filename, updated);
+        return `Successfully edited '${filename}'. Replaced ${old_text.length} chars with ${new_text.length} chars.`;
+      }
+
+      case "grep": {
+        const { pattern, filename } = toolInput;
+        const MAX_MATCHES = 50;
+        const matches = [];
+        const regex = new RegExp(pattern, "i");
+
+        const searchFile = (fname) => {
+          try {
+            const content = readWorkspaceFile(fname);
+            if (!content) return;
+            const lines = content.split("\n");
+            for (let i = 0; i < lines.length && matches.length < MAX_MATCHES; i++) {
+              if (regex.test(lines[i])) {
+                matches.push(`${fname}:${i + 1}: ${lines[i]}`);
+              }
+            }
+          } catch { /* skip unreadable files */ }
+        };
+
+        if (filename) {
+          if (!isAllowedFile(filename)) {
+            return `Error: Cannot search '${filename}'. Allowed files: ${WORKSPACE_FILES.join(", ")} and memory/*.md`;
+          }
+          searchFile(filename);
+        } else {
+          // Search all workspace files
+          for (const f of WORKSPACE_FILES) {
+            if (matches.length >= MAX_MATCHES) break;
+            searchFile(f);
+          }
+          // Search memory logs
+          const memDir = path.join(config.WORKSPACE_DIR, "memory");
+          try {
+            const memFiles = fs.readdirSync(memDir).filter((f) => f.endsWith(".md")).sort();
+            for (const f of memFiles) {
+              if (matches.length >= MAX_MATCHES) break;
+              searchFile(`memory/${f}`);
+            }
+          } catch { /* no memory dir yet */ }
+        }
+
+        if (matches.length === 0) return `No matches found for pattern "${pattern}".`;
+        let result = matches.join("\n");
+        if (matches.length >= MAX_MATCHES) result += `\n...(capped at ${MAX_MATCHES} matches)`;
+        return result;
+      }
+
+      case "append_file": {
+        const { filename, content } = toolInput;
+        if (!isAllowedWriteFile(filename)) {
+          return `Error: Cannot append to '${filename}'. Allowed: ${WORKSPACE_FILES.join(", ")}`;
+        }
+        const existing = readWorkspaceFile(filename) || "";
+        const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+        writeWorkspaceFile(filename, existing + separator + content);
+        return `Successfully appended ${content.length} chars to '${filename}'.`;
       }
 
       default:
