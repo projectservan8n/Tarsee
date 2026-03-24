@@ -438,7 +438,7 @@ function getDirSizeRecursive(dirPath) {
 function getDefaultFileContent(filename) {
   const defaults = {
     "SOUL.md": "# Soul & Personality\n\nYou are Tarsee, a helpful AI assistant.\nBe concise, direct, and helpful. Adapt your communication style to match the user.\n\n<!-- Edit this file to change your bot's personality and behavior -->\n",
-    "IDENTITY.md": "# Identity\n\n- **Name:** Tarsee\n- **Emoji:** 👁️\n- **Creature:** Tarsier\n- **Vibe:** Sees everything, forgets nothing\n\n<!-- Metadata about the agent — parsed as key-value pairs -->\n",
+    "IDENTITY.md": "# Identity\n\n- **Name:** Tarsee\n- **Emoji:** 🐒\n- **Creature:** Tarsier\n- **Vibe:** Sees everything, forgets nothing\n\n<!-- Metadata about the agent — parsed as key-value pairs -->\n",
     "AGENTS.md": "# Agent Rules & Conventions\n\n<!-- Define rules, workspace conventions, and how the agent should behave -->\n<!-- This is always injected into the system prompt -->\n",
     "USER.md": "# About the User\n\n<!-- Preferences and info about your human go here -->\n<!-- This gets injected into every conversation so the bot knows you -->\n",
     "TOOLS.md": "# Tools & Capabilities\n\n<!-- Available tools, local setup notes, capabilities -->\n<!-- This is injected into the system prompt so the tool knows what it can do -->\n",

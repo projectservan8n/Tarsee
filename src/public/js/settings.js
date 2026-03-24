@@ -279,18 +279,20 @@ const Settings = {
     this.isOpen = false;
     this.elements.settingsPage.classList.remove("open");
 
-    // Restore previous view
+    // Restore chat or welcome view based on active conversation
     const welcome = document.getElementById("welcomeScreen");
     const chatArea = document.getElementById("chatArea");
     const inputArea = document.getElementById("inputArea");
 
-    if (this._previousView) {
-      welcome.style.display = this._previousView.welcome;
-      chatArea.style.display = this._previousView.chat;
-      inputArea.style.display = this._previousView.input;
+    if (typeof Chat !== "undefined" && Chat.currentConversationId) {
+      // Has active conversation — show chat
+      welcome.style.display = "none";
+      chatArea.style.display = "flex";
+      inputArea.style.display = "block";
     } else {
-      // Default: show welcome
+      // No conversation — show welcome
       welcome.style.display = "";
+      chatArea.style.display = "none";
       inputArea.style.display = "block";
     }
 
