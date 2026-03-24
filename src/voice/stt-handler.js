@@ -2,7 +2,7 @@
  * Speech-to-text handler with multiple backend options.
  *
  * Priority:
- *   1. OpenAI Whisper API (cloud, requires OPENAI_API_KEY)
+ *   1. OpenAI gpt-4o-mini-transcribe (cloud, requires OPENAI_API_KEY)
  *   2. Local whisper.cpp (requires binary + ffmpeg)
  *   3. Anthropic/Gemini audio (if available)
  *   4. Stub error
@@ -20,13 +20,13 @@ import { isAvailable as whisperLocalAvailable, transcribe as whisperLocalTranscr
  * @returns {Promise<{transcript: string, language: string, provider: string}>}
  */
 export async function transcribeAudio(audioBuffer, language, opts = {}) {
-  // 1. Try OpenAI Whisper API
+  // 1. Try OpenAI gpt-4o-mini-transcribe
   const openaiKey = process.env.OPENAI_API_KEY || opts.settingsStore?.get?.("ai.openai.apiKey");
   if (openaiKey) {
     try {
       return await openaiWhisperAPI(audioBuffer, openaiKey, language);
     } catch (err) {
-      console.warn("[stt] OpenAI Whisper API failed:", err.message);
+      console.warn("[stt] OpenAI gpt-4o-mini-transcribe failed:", err.message);
       // Fall through to next option
     }
   }
@@ -54,7 +54,7 @@ export async function transcribeAudio(audioBuffer, language, opts = {}) {
   // 4. No STT engine available
   throw Object.assign(
     new Error(
-      "No STT engine available. Options: 1) Set OPENAI_API_KEY for cloud Whisper API, " +
+      "No STT engine available. Options: 1) Set OPENAI_API_KEY for cloud STT (gpt-4o-mini-transcribe), " +
       "2) Install whisper.cpp + ffmpeg for local STT, " +
       "3) Set GEMINI_API_KEY for Gemini audio."
     ),
@@ -63,7 +63,7 @@ export async function transcribeAudio(audioBuffer, language, opts = {}) {
 }
 
 /**
- * OpenAI Whisper API transcription.
+ * OpenAI gpt-4o-mini-transcribe transcription.
  * Uses the /v1/audio/transcriptions endpoint.
  */
 async function openaiWhisperAPI(audioBuffer, apiKey, language) {
@@ -84,7 +84,7 @@ async function openaiWhisperAPI(audioBuffer, apiKey, language) {
   parts.push(
     `--${boundary}\r\n` +
     `Content-Disposition: form-data; name="model"\r\n\r\n` +
-    `whisper-1\r\n`
+    `gpt-4o-mini-transcribe\r\n`
   );
 
   // Language part (optional)
@@ -122,15 +122,15 @@ async function openaiWhisperAPI(audioBuffer, apiKey, language) {
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`OpenAI Whisper API error (${res.status}): ${errText}`);
+    throw new Error(`OpenAI gpt-4o-mini-transcribe error (${res.status}): ${errText}`);
   }
 
   const data = await res.json();
-  console.log(`[stt] OpenAI Whisper: "${data.text?.slice(0, 80)}..."`);
+  console.log(`[stt] OpenAI STT: "${data.text?.slice(0, 80)}..."`);
   return {
     transcript: data.text || "",
     language: language?.split("-")[0] || "en",
-    provider: "openai-whisper",
+    provider: "gpt-4o-mini-transcribe",
   };
 }
 
