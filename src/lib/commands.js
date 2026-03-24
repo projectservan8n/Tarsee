@@ -490,6 +490,34 @@ const COMMANDS = {
     },
   },
 
+  consolidate: {
+    description: "Deduplicate and clean up stored memories",
+    usage: "/consolidate",
+    handler: async (_args, ctx) => {
+      try {
+        const { MemoryStore } = await import("../db/memory.js");
+        if (!ctx.db) return "Database not available.";
+        const store = new MemoryStore(ctx.db);
+        const removed = store.consolidate();
+        const stats = store.getStats();
+        const lines = [
+          "**Memory Consolidation**",
+          "",
+          `Removed ${removed} duplicate(s).`,
+          `**Total memories:** ${stats.total}`,
+        ];
+        for (const [cat, count] of Object.entries(stats.byCategory)) {
+          lines.push(`  ${cat}: ${count}`);
+        }
+        if (stats.oldestDate) lines.push(`**Oldest:** ${stats.oldestDate}`);
+        if (stats.newestDate) lines.push(`**Newest:** ${stats.newestDate}`);
+        return lines.join("\n");
+      } catch (err) {
+        return `Consolidation error: ${err.message}`;
+      }
+    },
+  },
+
   // ── New commands (OpenClaw parity) ──────────────────────────────────
 
   restart: {

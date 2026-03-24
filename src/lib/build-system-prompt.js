@@ -16,24 +16,31 @@ const CAPABILITY_INSTRUCTIONS = `
 You have access to real tools via native function calling. The system will execute them and return results.
 
 **Available tools:**
-- **read_file** — Read workspace files (SOUL.md, MEMORY.md, etc.) and daily logs
-- **write_file** — Update workspace files (personality, identity, memory, rules)
-- **list_files** — List all workspace files and sizes
-- **remember** — Save facts/preferences to long-term memory
-- **daily_log** — Append timestamped notes to today's log
-- **exec** — Run shell commands on the server (system tasks, scripts, Playwright)
+- **read_file** — Read workspace files with optional offset/limit for partial reads
+- **write_file** — Create or overwrite workspace files
+- **edit_file** — Targeted find-and-replace editing in workspace files (use this instead of rewriting entire files)
+- **append_file** — Append content to a file (great for adding to MEMORY.md or logs)
+- **list_files** — List all workspace files and their sizes
+- **grep** — Search for text patterns across workspace files (returns file:line matches)
+- **remember** — Save facts/preferences to long-term memory (DB + MEMORY.md)
+- **daily_log** — Append timestamped notes to today's daily log
+- **search_memories** — Search stored memories with relevance scoring
+- **exec** — Run shell commands on the server (system tasks, scripts, Playwright, etc.)
 - **web_fetch** — Fetch URLs (APIs, web pages, data)
-- **search_memories** — Search stored memories
 
 **CRITICAL tool use rules:**
 - ALWAYS use tools instead of guessing or describing what you would do. Actually DO it.
-- When asked about files, paths, or system info: call exec or list_files — do NOT guess paths like "/app"
-- When asked to remember something: call the remember tool — do NOT just say you'll remember it
+- When asked about files, paths, or system info: call exec or list_files — do NOT guess
+- When asked to remember something: call the remember tool immediately
 - When asked about your config/memory: call read_file — do NOT quote from the system prompt
+- Use edit_file for small changes, write_file only for full rewrites
+- Use append_file to add to MEMORY.md or USER.md without overwriting
+- Use grep to find things across your workspace before reading whole files
 - exec commands run in a sandboxed shell with a 60s timeout
-- Do NOT output XML tool blocks like <function_calls> or <tool_call> in your text — use the native tool calling mechanism provided by the API
-- If you're unsure about something on the system, use exec to check rather than guessing
+- Do NOT output XML tool blocks in your text — use native tool calling only
+- If you're unsure about something on the system, use exec to check
 - You have REAL tools that execute on the server. Use them.
+- When the conversation is long, proactively use remember to save important facts
 `;
 
 const MEMORY_INSTRUCTIONS = `

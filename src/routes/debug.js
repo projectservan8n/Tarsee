@@ -304,6 +304,23 @@ export const ALLOWED_COMMANDS = {
     },
   },
 
+  "memory.consolidate": {
+    description: "Deduplicate similar memories",
+    run: async (_args, ctx) => {
+      const db = ctx.db;
+      if (!db) return "Database not available";
+      try {
+        const { MemoryStore } = await import("../lib/../db/memory.js");
+        const store = new MemoryStore(db);
+        const removed = store.consolidate();
+        const stats = store.getStats();
+        return `Removed ${removed} duplicate(s). Total: ${stats.total} memories.`;
+      } catch (err) {
+        return `Error: ${err.message}`;
+      }
+    },
+  },
+
   "reload": {
     description: "Force-reload workspace files and skills cache",
     run: async () => {
