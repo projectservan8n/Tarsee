@@ -7,7 +7,19 @@ import path from "node:path";
 const PORT = Number.parseInt(process.env.PORT ?? process.env.OPUSCLAW_PORT ?? "3000", 10);
 
 // --- Directories ---
-const STATE_DIR = process.env.OPUSCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".opusclaw");
+// Auto-detect Railway volume at /data — use it if available, else fall back to ~/.opusclaw
+function resolveStateDir() {
+  if (process.env.OPUSCLAW_STATE_DIR?.trim()) return process.env.OPUSCLAW_STATE_DIR.trim();
+  // Railway: if /data exists and is writable, use it
+  if (process.env.RAILWAY_PROJECT_ID) {
+    try {
+      fs.accessSync("/data", fs.constants.W_OK);
+      return "/data/opusclaw";
+    } catch { /* volume not mounted yet */ }
+  }
+  return path.join(os.homedir(), ".opusclaw");
+}
+const STATE_DIR = resolveStateDir();
 const WORKSPACE_DIR = process.env.OPUSCLAW_WORKSPACE_DIR?.trim() || path.join(STATE_DIR, "workspace");
 const DATA_DIR = process.env.OPUSCLAW_DATA_DIR?.trim() || path.join(STATE_DIR, "data");
 
@@ -86,18 +98,7 @@ for (const [filename, defaultContent] of Object.entries(DEFAULT_FILES)) {
 }
 
 // Log volume mount status (Railway uses /data)
-const isVolumeMounted = (() => {
-  try {
-    // Check if /data exists and is writable (Railway volume mount point)
-    if (STATE_DIR.startsWith("/data")) {
-      fs.accessSync("/data", fs.constants.W_OK);
-      return true;
-    }
-    return false;
-  } catch {
-    return false;
-  }
-})();
+const isVolumeMounted = STATE_DIR.startsWith("/data");
 
 if (process.env.RAILWAY_PROJECT_ID) {
   if (isVolumeMounted) {
