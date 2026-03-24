@@ -1,0 +1,11 @@
+{
+  "app.name": "Tarsee",
+  "app.tagline": "AI助手",
+  "status.running": "运行中",
+  "status.stopped": "已停止",
+  "status.error": "错误",
+  "error.no_provider": "未配置AI提供商。请前往设置。",
+  "boot.starting": "正在启动Tarsee...",
+  "boot.ready": "Tarsee已就绪",
+  "boot.shutdown": "正在关闭..."
+}

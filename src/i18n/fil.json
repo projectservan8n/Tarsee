@@ -1,0 +1,15 @@
+{
+  "app.name": "Tarsee",
+  "app.tagline": "Ang Iyong AI Assistant",
+  "status.running": "Tumatakbo",
+  "status.stopped": "Huminto",
+  "status.error": "May Error",
+  "status.not_configured": "Hindi pa nakaset up",
+  "error.no_provider": "Walang AI provider na naka-configure. Pumunta sa Settings.",
+  "error.auth_failed": "Hindi makapasok",
+  "error.rate_limited": "Sobrang daming request. Maghintay muna.",
+  "error.message_required": "Kailangan ng mensahe",
+  "boot.starting": "Nagsisimula ang Tarsee...",
+  "boot.ready": "Handa na ang Tarsee",
+  "boot.shutdown": "Pinapatay..."
+}

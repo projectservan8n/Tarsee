@@ -417,6 +417,34 @@ export const TOOLS = [
       required: ["task_id"],
     },
   },
+
+  {
+    name: "analyze_image",
+    description: "Analyze an image using AI vision. Accepts a base64-encoded image or URL. Returns a detailed description.",
+    input_schema: {
+      type: "object",
+      properties: {
+        image: { type: "string", description: "Base64-encoded image data or URL" },
+        prompt: { type: "string", description: "Optional analysis prompt (default: describe the image)" },
+      },
+      required: ["image"],
+    },
+  },
+
+  {
+    name: "create_canvas",
+    description: "Create an interactive HTML/CSS/JS canvas that can be viewed in the browser. Use for dashboards, visualizations, mini-apps, or any UI the user needs.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Canvas title/ID (used in URL)" },
+        html: { type: "string", description: "HTML content" },
+        css: { type: "string", description: "Optional CSS styles" },
+        js: { type: "string", description: "Optional JavaScript" },
+      },
+      required: ["title", "html"],
+    },
+  },
 ];
 
 /**
@@ -888,6 +916,39 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           return stopped ? `Agent ${task_id} stopped.` : `Agent not found: ${task_id}`;
         } catch (err) {
           return `stop_agent error: ${err.message}`;
+        }
+      }
+
+      case "analyze_image": {
+        const { image, prompt: imgPrompt } = toolInput;
+        try {
+          const { analyzeImage, getMediaProviderInfo } = await import("./media-understanding.js");
+          const providerInfo = getMediaProviderInfo(ctx.settingsStore);
+          if (!providerInfo) return "No vision-capable API key configured (needs Anthropic, OpenAI, or Gemini).";
+          let imageBuffer;
+          if (image.startsWith("http")) {
+            const res = await fetch(image, { signal: AbortSignal.timeout(30000) });
+            imageBuffer = Buffer.from(await res.arrayBuffer());
+          } else {
+            imageBuffer = Buffer.from(image, "base64");
+          }
+          const analysis = await analyzeImage(imageBuffer, "image/png", { ...providerInfo, prompt: imgPrompt });
+          return truncate(analysis, MAX_RESULT);
+        } catch (err) {
+          return `analyze_image error: ${err.message}`;
+        }
+      }
+
+      case "create_canvas": {
+        const { title, html, css, js } = toolInput;
+        try {
+          const { CanvasServer } = await import("./canvas.js");
+          const canvas = CanvasServer.create();
+          const canvasId = title.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 50);
+          const result = canvas.serve(canvasId, html, css, js);
+          return `Canvas created! View at: /canvas/${canvasId}/  (${result.size} bytes)`;
+        } catch (err) {
+          return `create_canvas error: ${err.message}`;
         }
       }
 

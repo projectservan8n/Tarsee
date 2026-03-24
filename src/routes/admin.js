@@ -75,6 +75,35 @@ adminRouter.post("/channels/:type/restart", async (req, res) => {
  * POST /api/admin/channels/:type/stop
  * Stop a specific channel.
  */
+// Security audit
+adminRouter.get("/security-audit", async (req, res) => {
+  try {
+    const { runAudit } = await import("../lib/security-audit.js");
+    const settingsStore = req.app.get("settingsStore");
+    res.json(runAudit(settingsStore));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Tool permissions
+adminRouter.get("/tool-permissions", async (req, res) => {
+  try {
+    const { getSecurityManager } = await import("../lib/security-manager.js");
+    const sm = getSecurityManager(req.app.get("settingsStore"));
+    res.json({ permissions: sm.listPermissions() });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+adminRouter.post("/tool-permissions", async (req, res) => {
+  const { toolName, mode } = req.body || {};
+  if (!toolName || !mode) return res.status(400).json({ error: "toolName and mode required" });
+  try {
+    const { getSecurityManager } = await import("../lib/security-manager.js");
+    const sm = getSecurityManager(req.app.get("settingsStore"));
+    sm.setToolPermission(toolName, mode);
+    res.json({ ok: true, toolName, mode });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 adminRouter.post("/channels/:type/stop", async (req, res) => {
   const { type } = req.params;
   const channelManager = req.app.get("channelManager");

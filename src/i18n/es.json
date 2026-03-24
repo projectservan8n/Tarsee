@@ -1,0 +1,15 @@
+{
+  "app.name": "Tarsee",
+  "app.tagline": "Tu Asistente de IA",
+  "status.running": "Ejecutando",
+  "status.stopped": "Detenido",
+  "status.error": "Error",
+  "status.not_configured": "No configurado",
+  "error.no_provider": "No hay proveedor de IA configurado. Ve a Configuracion.",
+  "error.auth_failed": "Autenticacion fallida",
+  "error.rate_limited": "Demasiadas solicitudes. Espera un momento.",
+  "error.message_required": "El mensaje es requerido",
+  "boot.starting": "Iniciando Tarsee...",
+  "boot.ready": "Tarsee esta listo",
+  "boot.shutdown": "Apagando..."
+}

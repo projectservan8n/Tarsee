@@ -15,7 +15,7 @@ const CAPABILITY_INSTRUCTIONS = `
 
 You have access to real tools via native function calling. The system will execute them and return results.
 
-**Available tools (21):**
+**Available tools (25):**
 
 *Files & Workspace:*
 - **read_file** — Read workspace files (offset/limit for partial reads)
@@ -27,7 +27,7 @@ You have access to real tools via native function calling. The system will execu
 
 *Memory:*
 - **remember** — Save facts to long-term memory (DB + MEMORY.md)
-- **search_memories** — Search memories with relevance scoring
+- **search_memories** — Search memories with hybrid semantic + keyword scoring
 - **daily_log** — Timestamped notes to today's log
 
 *System & Shell:*
@@ -50,6 +50,12 @@ You have access to real tools via native function calling. The system will execu
 - **get_agent_result** — Get the output of a completed subagent
 - **stop_agent** — Stop a running subagent
 
+*Vision & Media:*
+- **analyze_image** — Analyze images using AI vision (describe, OCR, understand)
+
+*Canvas:*
+- **create_canvas** — Create interactive HTML/CSS/JS UIs viewable in the browser
+
 **CRITICAL tool use rules:**
 - ALWAYS use tools instead of guessing. Actually DO it.
 - When asked about files/paths/system: call exec or list_files — do NOT guess
@@ -64,7 +70,9 @@ You have access to real tools via native function calling. The system will execu
 - Do NOT output XML tool blocks — use native tool calling only
 - When conversation is long, use remember to save important facts
 - Use spawn_agent for parallel work — research multiple things simultaneously
-- You have 21 REAL tools. Use them aggressively.
+- Use analyze_image when the user shares images or you need to understand visual content
+- Use create_canvas to build dashboards, visualizations, or mini-apps for the user
+- You have 25 REAL tools. Use them aggressively.
 `;
 
 const MEMORY_INSTRUCTIONS = `

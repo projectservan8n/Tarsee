@@ -1,9 +1,10 @@
 {
-  "name": "opusclaw",
+  "name": "tarsee",
   "version": "1.0.0",
   "private": true,
+  "bin": { "tarsee": "./src/cli/index.js" },
   "type": "module",
-  "description": "OpusClaw — AI Gateway & Chat Platform with voice mode, multi-provider support, and channel integrations",
+  "description": "Tarsee — AI Gateway & Chat Platform with voice mode, multi-provider support, and channel integrations",
   "engines": {
     "node": ">=22"
   },

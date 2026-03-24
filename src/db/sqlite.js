@@ -135,4 +135,39 @@ const MIGRATIONS = [
       CREATE INDEX idx_bot_memory_created ON bot_memory(created_at DESC);
     `,
   },
+  {
+    name: "004_vector_memory",
+    sql: `
+      CREATE TABLE IF NOT EXISTS memory_vectors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        memory_id TEXT NOT NULL,
+        embedding BLOB NOT NULL,
+        provider TEXT NOT NULL DEFAULT 'unknown',
+        model TEXT NOT NULL DEFAULT 'unknown',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (memory_id) REFERENCES bot_memory(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_memory_vectors_memory ON memory_vectors(memory_id);
+      CREATE TABLE IF NOT EXISTS embedding_cache (
+        hash TEXT PRIMARY KEY,
+        embedding BLOB NOT NULL,
+        provider TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `,
+  },
+  {
+    name: "005_compaction_cache",
+    sql: `
+      CREATE TABLE IF NOT EXISTS compaction_cache (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT NOT NULL,
+        start_msg_idx INTEGER NOT NULL,
+        end_msg_idx INTEGER NOT NULL,
+        summary TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_compaction_conv ON compaction_cache(conversation_id);
+    `,
+  },
 ];

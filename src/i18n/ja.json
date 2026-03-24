@@ -1,0 +1,11 @@
+{
+  "app.name": "Tarsee",
+  "app.tagline": "AIアシスタント",
+  "status.running": "実行中",
+  "status.stopped": "停止",
+  "status.error": "エラー",
+  "error.no_provider": "AIプロバイダーが設定されていません。設定に移動してください。",
+  "boot.starting": "Tarseeを起動中...",
+  "boot.ready": "Tarsee準備完了",
+  "boot.shutdown": "シャットダウン中..."
+}

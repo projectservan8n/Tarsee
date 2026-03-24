@@ -29,9 +29,18 @@ import { SettingsStore } from "./db/settings.js";
 import { AuditLog } from "./db/audit.js";
 import { isEncryptionEnabled } from "./lib/vault.js";
 import { logCapture } from "./lib/log-capture.js";
+import { hookRegistry } from "./lib/hooks.js";
+import { loadHooks } from "./lib/hook-loader.js";
+import { loadPlugins } from "./lib/plugin-loader.js";
+import { getSecurityManager } from "./lib/security-manager.js";
+import { getGatewayManager } from "./lib/gateway.js";
+import { canvasMiddleware } from "./lib/canvas.js";
+import { acpRouter } from "./routes/acp.js";
+import { writePid, removePid } from "./daemon/pid.js";
 
 // --- Install log capture early (before any console.log calls) ---
 logCapture.install();
+writePid();
 
 // --- Enforce encryption in production ---
 if (config.NODE_ENV === "production" && !isEncryptionEnabled()) {
@@ -70,6 +79,9 @@ app.use((req, res, next) => {
   next();
 });
 
+// Canvas middleware (AI-generated UIs)
+app.use(canvasMiddleware);
+
 // Static files (WebUI) — no auth required for the shell, API calls are protected
 // Short cache for CSS/JS (5min) so deploys take effect quickly; longer for images/fonts
 app.use(express.static(publicDir, {
@@ -93,6 +105,7 @@ app.use("/api/debug", requireAuth, csrfProtect, debugRouter);
 app.use("/api/backup", requireAuth, csrfProtect, backupRouter);
 app.use("/api/memory", requireAuth, csrfProtect, memoryRouter);
 app.use("/api/skills", requireAuth, csrfProtect, skillsRouter);
+app.use("/api/acp", requireAuth, csrfProtect, acpRouter);
 
 // SPA fallback — serve index.html for client-side routes
 // Express 5 requires named wildcard params (bare * is invalid)
@@ -169,6 +182,31 @@ channelManager.startAll().catch((err) => {
   console.warn("[tarsee] channel startup error:", err.message);
 });
 
+// --- Security manager ---
+const securityManager = getSecurityManager(settingsStore);
+app.set("securityManager", securityManager);
+
+// --- Gateway manager ---
+const gatewayManager = getGatewayManager();
+app.set("gatewayManager", gatewayManager);
+
+// --- Hooks system ---
+loadHooks().then(() => {
+  console.log("[tarsee] hooks loaded:", hookRegistry.list().length);
+}).catch((err) => {
+  console.warn("[tarsee] hook loading error:", err.message);
+});
+
+// --- Plugin system ---
+loadPlugins({ db, settingsStore, hookRegistry }).then(() => {
+  console.log("[tarsee] plugins loaded");
+}).catch((err) => {
+  console.warn("[tarsee] plugin loading error:", err.message);
+});
+
+// --- Emit boot:ready hook ---
+setTimeout(() => hookRegistry.emit("boot:ready"), 2000);
+
 // --- Graceful shutdown ---
 function shutdown(signal) {
   console.log(`[tarsee] ${signal} received, shutting down...`);
@@ -178,6 +216,7 @@ function shutdown(signal) {
   stopCronScheduler();
   channelManager.stopAll();
   server.close(() => {
+    removePid();
     db.close();
     process.exit(0);
   });
