@@ -16,17 +16,13 @@ RUN npm install --omit=dev
 # Install Playwright + Chromium
 RUN npx playwright install chromium --with-deps
 
-# Download Piper TTS binary
+# Download Piper TTS + whisper.cpp binaries
 RUN apt-get update && apt-get install -y --no-install-recommends wget \
   && wget -q https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz \
-  && tar -xzf piper_linux_x86_64.tar.gz \
-  && rm piper_linux_x86_64.tar.gz \
+  && tar -xzf piper_linux_x86_64.tar.gz && rm piper_linux_x86_64.tar.gz \
+  && wget -q https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.4/whisper-v1.8.4-linux-x64.tar.gz \
+  && tar -xzf whisper-v1.8.4-linux-x64.tar.gz && rm whisper-v1.8.4-linux-x64.tar.gz \
   && rm -rf /var/lib/apt/lists/*
-
-# Download whisper.cpp binary
-RUN wget -q https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.4/whisper-v1.8.4-linux-x64.tar.gz \
-  && tar -xzf whisper-v1.8.4-linux-x64.tar.gz \
-  && rm whisper-v1.8.4-linux-x64.tar.gz
 
 # Stage 2: Runtime with Piper TTS + Playwright (Chromium)
 FROM node:22-bookworm-slim
