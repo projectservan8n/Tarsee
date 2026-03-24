@@ -217,6 +217,14 @@ const Settings = {
       this.elements.saveVoiceBtn.addEventListener("click", () => this.saveVoiceSettings());
     }
 
+    // Show/hide ElevenLabs key field based on engine selection
+    if (this.elements.voiceEngine) {
+      this.elements.voiceEngine.addEventListener("change", () => {
+        const elGroup = document.getElementById("elevenlabsKeyGroup");
+        if (elGroup) elGroup.style.display = this.elements.voiceEngine.value === "elevenlabs" ? "block" : "none";
+      });
+    }
+
     // Skills handlers
     if (this.elements.createSkillBtn) {
       this.elements.createSkillBtn.addEventListener("click", () => this.showSkillDialog());
@@ -342,6 +350,9 @@ const Settings = {
       if (voiceEngine && this.elements.voiceEngine) {
         this.elements.voiceEngine.value = voiceEngine;
       }
+      // Show ElevenLabs key field if engine is elevenlabs
+      const elGroup = document.getElementById("elevenlabsKeyGroup");
+      if (elGroup) elGroup.style.display = voiceEngine === "elevenlabs" ? "block" : "none";
 
       // Load all sub-sections
       this.loadWorkspaceFiles();
@@ -505,11 +516,20 @@ const Settings = {
     const engine = this.elements.voiceEngine?.value;
     if (!engine) return;
     try {
-      await API.request("/api/settings", {
+      await API.json("/api/settings/general", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: "voice.engine", value: engine }),
+        body: { key: "voice.engine", value: engine },
       });
+
+      // Save ElevenLabs key if provided
+      const elKey = document.getElementById("settingsElevenlabsKey")?.value.trim();
+      if (elKey && engine === "elevenlabs") {
+        await API.json("/api/settings/general", {
+          method: "POST",
+          body: { key: "voice.elevenlabs.apiKey", value: elKey },
+        });
+      }
+
       App.showToast("Voice engine saved. Restart server to apply.", "success");
     } catch (err) {
       App.showToast(err.message, "error");

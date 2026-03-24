@@ -386,7 +386,7 @@
 
           <!-- Voice Tab -->
           <div class="settings-tab-panel" data-tab="voice">
-            <h2>Voice (Coqui TTS / XTTS v2)</h2>
+            <h2>Voice</h2>
             <div class="settings-section">
               <div id="voiceEngineStatus" style="font-size: 13px; margin-bottom: 12px; color: var(--text-muted)">
                 Checking voice engine status...
@@ -395,10 +395,16 @@
                 <label>TTS Engine</label>
                 <select id="settingsVoiceEngine">
                   <option value="auto">Auto-detect (Recommended)</option>
-                  <option value="coqui">Coqui TTS (XTTS v2)</option>
+                  <option value="elevenlabs">ElevenLabs (Cloud)</option>
+                  <option value="coqui">Coqui TTS (XTTS v2 / Local)</option>
                   <option value="stub">Disabled</option>
                 </select>
-                <div class="hint">Coqui TTS uses ~500MB-1GB RAM. XTTS v2 supports zero-shot voice cloning from ~6s of audio.</div>
+                <div class="hint">ElevenLabs: cloud-based, works on Railway. Coqui: local, needs Python + ~1GB RAM.</div>
+              </div>
+              <div class="form-group" id="elevenlabsKeyGroup" style="display:none">
+                <label>ElevenLabs API Key</label>
+                <input type="password" id="settingsElevenlabsKey" placeholder="xi-...">
+                <div class="hint">Get your key from elevenlabs.io/api. Or set ELEVENLABS_API_KEY env var.</div>
               </div>
               <button class="btn btn-sm" id="saveVoiceBtn" style="margin-bottom: 16px">Save Voice Settings</button>
 

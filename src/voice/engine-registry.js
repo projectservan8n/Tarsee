@@ -32,6 +32,32 @@ export async function initTTSEngine(settingsStore) {
     return;
   }
 
+  // Try ElevenLabs (cloud — works on Railway)
+  if (engineType === "elevenlabs" || engineType === "auto") {
+    try {
+      const apiKey =
+        settingsStore?.get("voice.elevenlabs.apiKey") ||
+        process.env.ELEVENLABS_API_KEY;
+      if (apiKey) {
+        const { ElevenLabsTTSEngine } = await import("./elevenlabs-engine.js");
+        const modelId = settingsStore?.get("voice.elevenlabs.model") || undefined;
+        const el = new ElevenLabsTTSEngine(apiKey, modelId);
+        const available = await el.isAvailable();
+        if (available) {
+          currentEngine = el;
+          console.log("[voice] using ElevenLabs TTS");
+          return;
+        } else if (engineType === "elevenlabs") {
+          console.warn("[voice] ElevenLabs API key invalid or unreachable");
+        }
+      } else if (engineType === "elevenlabs") {
+        console.warn("[voice] ElevenLabs requested but no API key (set ELEVENLABS_API_KEY or voice.elevenlabs.apiKey)");
+      }
+    } catch (err) {
+      console.warn("[voice] ElevenLabs init failed:", err.message);
+    }
+  }
+
   // Try Coqui TTS (auto-detect or explicit)
   if (engineType === "coqui" || engineType === "auto") {
     try {
