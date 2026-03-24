@@ -1,7 +1,7 @@
 import { MemoryStore } from "../db/memory.js";
 import { getSkillsPromptContext } from "./skills-engine.js";
 import { getLearningHint } from "./personality-learner.js";
-import { getBootstrapContext } from "./workspace-files.js";
+import { getBootstrapContext, readWorkspaceFile } from "./workspace-files.js";
 
 const MAX_TOTAL_BYTES = 150 * 1024; // 150KB total prompt budget
 
@@ -123,10 +123,37 @@ export function buildSystemPrompt({
   // 3. Skills
   const skillsContext = getSkillsPromptContext();
 
+  // 4. Daily memory logs (today + yesterday)
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const fmt = (d) => d.toISOString().slice(0, 10); // YYYY-MM-DD
+  const todayStr = fmt(today);
+  const yesterdayStr = fmt(yesterday);
+
+  const todayLog = readWorkspaceFile(`memory/${todayStr}.md`);
+  const yesterdayLog = readWorkspaceFile(`memory/${yesterdayStr}.md`);
+
+  let dailyLogsContext = "";
+  if (todayLog || yesterdayLog) {
+    dailyLogsContext = "\n\n## Recent Daily Logs";
+    if (yesterdayLog) {
+      dailyLogsContext += `\n### ${yesterdayStr}\n${yesterdayLog.trim()}`;
+    }
+    if (todayLog) {
+      dailyLogsContext += `\n### ${todayStr}\n${todayLog.trim()}`;
+    }
+  }
+
   let prompt = "";
 
   if (bootstrapContext) {
     prompt = bootstrapContext;
+  }
+
+  // Inject daily memory logs right after workspace files
+  if (dailyLogsContext) {
+    prompt += dailyLogsContext;
   }
 
   // Capability instructions — prevent hallucinated tool use
@@ -134,6 +161,12 @@ export function buildSystemPrompt({
 
   // Memory instructions — always included so the bot knows how to remember
   prompt += MEMORY_INSTRUCTIONS;
+
+  // Current session context
+  prompt += `\n\n## Current Session\nMessages in this conversation: ${messageCount}`;
+  if (messageCount > 20) {
+    prompt += `\nNote: This conversation is getting long. Consider using the \`remember\` tool to save important facts before they leave context.`;
+  }
 
   if (dbMemoryContext) {
     prompt += dbMemoryContext;
