@@ -413,12 +413,16 @@ const Chat = {
     return msg;
   },
 
-  updateStreamingMessage(msgEl, content) {
+  updateStreamingMessage(msgEl, content, rawHtml = false) {
     const textEl = msgEl.querySelector(".message-text");
     if (textEl) {
-      // Hide incomplete XML blocks during streaming (they render as raw text until closed)
-      const cleaned = hideIncompleteBlocks(content);
-      textEl.innerHTML = this.renderMarkdown(cleaned);
+      if (rawHtml) {
+        textEl.innerHTML = content;
+      } else {
+        // Hide incomplete XML blocks during streaming (they render as raw text until closed)
+        const cleaned = hideIncompleteBlocks(content);
+        textEl.innerHTML = this.renderMarkdown(cleaned);
+      }
     }
   },
 
@@ -484,6 +488,7 @@ const Chat = {
     // Create streaming assistant message
     const assistantMsg = this.appendMessage("assistant", "", true);
     let fullResponse = "";
+    let toolBlocks = ""; // Accumulated tool call/result HTML
 
     this.isStreaming = true;
 
@@ -491,13 +496,44 @@ const Chat = {
       await API.sendMessage(
         this.currentConversationId,
         text,
-        // onText
-        (content) => {
+        // onText (content for text, null + event for tool events)
+        (content, event) => {
+          if (event?.type === "tool_call") {
+            // Render tool call block
+            const detail = event.input?.command || event.input?.filename || event.input?.url || event.input?.query || event.input?.fact || "";
+            const argsStr = event.input ? JSON.stringify(event.input, null, 2) : "";
+            toolBlocks += `<div class="block-tool-call">
+              <div class="block-tool-header">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M9.5 1.5L14 6l-4.5 4.5M6.5 14.5L2 10l4.5-4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="block-tool-name">${escapeHtml(event.name)}</span>
+                <span class="block-detail">${escapeHtml(String(detail).slice(0, 80))}</span>
+              </div>
+              ${argsStr ? `<pre class="block-code">${escapeHtml(argsStr)}</pre>` : ""}
+            </div>`;
+            this.updateStreamingMessage(assistantMsg, toolBlocks + `<div class="block-streaming-indicator"><span class="streaming-dots"><span></span><span></span><span></span></span> Running ${escapeHtml(event.name)}…</div>`, true);
+            this.scrollToBottom();
+            return;
+          }
+          if (event?.type === "tool_result") {
+            // Render tool result block
+            const resultText = event.result || "(no output)";
+            const isLong = resultText.length > 200;
+            if (isLong) {
+              const preview = escapeHtml(resultText.slice(0, 150)) + "…";
+              toolBlocks += `<details class="block-tool-response"><summary><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Result<span class="block-preview">${preview}</span></summary><div class="block-body">${escapeHtml(resultText)}</div></details>`;
+            } else {
+              toolBlocks += `<div class="block-tool-response block-tool-response--inline"><div class="block-tool-response-header"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Result</div><div class="block-body">${escapeHtml(resultText)}</div></div>`;
+            }
+            this.updateStreamingMessage(assistantMsg, toolBlocks, true);
+            this.scrollToBottom();
+            return;
+          }
+          // Normal text
           fullResponse += content;
           // Strip setup marker and [REMEMBER: ...] markers from display
           let displayText = fullResponse.split("|||PERSONALITY_COMPLETE|||")[0];
           displayText = displayText.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n");
-          this.updateStreamingMessage(assistantMsg, displayText);
+          this.updateStreamingMessage(assistantMsg, toolBlocks + this.renderMarkdown(displayText), true);
           this.scrollToBottom();
           // Notify setup module
           if (typeof Setup !== "undefined") Setup.handleStreamingText(fullResponse);
