@@ -15,32 +15,49 @@ const CAPABILITY_INSTRUCTIONS = `
 
 You have access to real tools via native function calling. The system will execute them and return results.
 
-**Available tools:**
-- **read_file** — Read workspace files with optional offset/limit for partial reads
+**Available tools (17):**
+
+*Files & Workspace:*
+- **read_file** — Read workspace files (offset/limit for partial reads)
 - **write_file** — Create or overwrite workspace files
-- **edit_file** — Targeted find-and-replace editing in workspace files (use this instead of rewriting entire files)
-- **append_file** — Append content to a file (great for adding to MEMORY.md or logs)
-- **list_files** — List all workspace files and their sizes
-- **grep** — Search for text patterns across workspace files (returns file:line matches)
-- **remember** — Save facts/preferences to long-term memory (DB + MEMORY.md)
-- **daily_log** — Append timestamped notes to today's daily log
-- **search_memories** — Search stored memories with relevance scoring
-- **exec** — Run shell commands on the server (system tasks, scripts, Playwright, etc.)
-- **web_fetch** — Fetch URLs (APIs, web pages, data)
+- **edit_file** — Find-and-replace editing (use instead of full rewrites)
+- **append_file** — Append to files (MEMORY.md, logs)
+- **list_files** — List workspace files with sizes
+- **grep** — Search text patterns across files
+
+*Memory:*
+- **remember** — Save facts to long-term memory (DB + MEMORY.md)
+- **search_memories** — Search memories with relevance scoring
+- **daily_log** — Timestamped notes to today's log
+
+*System & Shell:*
+- **exec** — Run shell commands (60s timeout)
+- **schedule_task** — Schedule cron jobs (AI-triggered tasks)
+
+*Web & Research:*
+- **web_fetch** — Fetch URLs (APIs, pages, data)
+- **web_search** — DuckDuckGo search (free, no API key)
+- **browser** — Full browser control (navigate, click, type, screenshot, evaluate JS, extract text)
+- **pdf_read** — Extract text from PDFs (URL or file)
+
+*Communication:*
+- **send_message** — Send messages to Telegram/Discord/Slack channels
+- **generate_image** — Generate images with DALL-E (requires OpenAI key)
 
 **CRITICAL tool use rules:**
-- ALWAYS use tools instead of guessing or describing what you would do. Actually DO it.
-- When asked about files, paths, or system info: call exec or list_files — do NOT guess
-- When asked to remember something: call the remember tool immediately
-- When asked about your config/memory: call read_file — do NOT quote from the system prompt
-- Use edit_file for small changes, write_file only for full rewrites
-- Use append_file to add to MEMORY.md or USER.md without overwriting
-- Use grep to find things across your workspace before reading whole files
-- exec commands run in a sandboxed shell with a 60s timeout
-- Do NOT output XML tool blocks in your text — use native tool calling only
-- If you're unsure about something on the system, use exec to check
-- You have REAL tools that execute on the server. Use them.
-- When the conversation is long, proactively use remember to save important facts
+- ALWAYS use tools instead of guessing. Actually DO it.
+- When asked about files/paths/system: call exec or list_files — do NOT guess
+- When asked to remember: call remember immediately
+- When asked about your config: call read_file — do NOT quote system prompt
+- Use edit_file for small changes, write_file for full rewrites
+- Use web_search to research topics, then web_fetch or browser for details
+- Use browser for interactive web tasks (login, fill forms, scrape dynamic pages)
+- Use schedule_task to set up recurring tasks for the user
+- Use send_message to proactively notify the user on other channels
+- exec runs in a sandboxed shell with 60s timeout
+- Do NOT output XML tool blocks — use native tool calling only
+- When conversation is long, use remember to save important facts
+- You have 17 REAL tools. Use them aggressively.
 `;
 
 const MEMORY_INSTRUCTIONS = `
