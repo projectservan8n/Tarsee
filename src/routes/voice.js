@@ -113,9 +113,11 @@ voiceRouter.post("/clone", async (req, res) => {
   if (contentType.includes("multipart/form-data")) {
     try {
       const { audioBuffer, name } = await parseMultipart(req);
+      console.log(`[voice] clone request: name="${name}" audioSize=${audioBuffer?.length || 0} bytes`);
       const result = await cloneVoice(audioBuffer, name, db);
       return res.status(201).json(result);
     } catch (err) {
+      console.error(`[voice] clone error: ${err.message}`);
       const status = err.status || 500;
       return res.status(status).json({ error: err.message });
     }
