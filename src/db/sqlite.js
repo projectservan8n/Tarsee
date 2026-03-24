@@ -1,4 +1,6 @@
 import Database from "better-sqlite3";
+import fs from "node:fs";
+import path from "node:path";
 
 /**
  * Initializes the SQLite database with schema migrations.
@@ -6,6 +8,10 @@ import Database from "better-sqlite3";
  * @returns {Database.Database}
  */
 export function initDb(dbPath) {
+  // Ensure parent directory exists before opening DB
+  const dir = path.dirname(dbPath);
+  fs.mkdirSync(dir, { recursive: true });
+
   const db = new Database(dbPath);
 
   // Performance tuning for production use
