@@ -15,7 +15,7 @@ const CAPABILITY_INSTRUCTIONS = `
 
 You have access to real tools via native function calling. The system will execute them and return results.
 
-**Available tools (17):**
+**Available tools (21):**
 
 *Files & Workspace:*
 - **read_file** — Read workspace files (offset/limit for partial reads)
@@ -44,6 +44,12 @@ You have access to real tools via native function calling. The system will execu
 - **send_message** — Send messages to Telegram/Discord/Slack channels
 - **generate_image** — Generate images with DALL-E (requires OpenAI key)
 
+*Subagents:*
+- **spawn_agent** — Spawn a background AI agent to work on a task independently (parallel work)
+- **list_agents** — List all spawned subagents and their status
+- **get_agent_result** — Get the output of a completed subagent
+- **stop_agent** — Stop a running subagent
+
 **CRITICAL tool use rules:**
 - ALWAYS use tools instead of guessing. Actually DO it.
 - When asked about files/paths/system: call exec or list_files — do NOT guess
@@ -57,7 +63,8 @@ You have access to real tools via native function calling. The system will execu
 - exec runs in a sandboxed shell with 60s timeout
 - Do NOT output XML tool blocks — use native tool calling only
 - When conversation is long, use remember to save important facts
-- You have 17 REAL tools. Use them aggressively.
+- Use spawn_agent for parallel work — research multiple things simultaneously
+- You have 21 REAL tools. Use them aggressively.
 `;
 
 const MEMORY_INSTRUCTIONS = `
