@@ -234,7 +234,7 @@
           <div class="settings-tab-panel" data-tab="provider">
             <h2>AI Provider</h2>
             <div class="settings-section">
-              <form autocomplete="off" onsubmit="return false">
+              <div>
               <div class="form-group">
                 <label>Provider</label>
                 <select id="settingsProvider">
@@ -259,7 +259,7 @@
                 <label>Base URL</label>
                 <input type="text" id="settingsBaseUrl" placeholder="http://localhost:11434/v1">
               </div>
-              </form>
+              </div>
               <button class="btn btn-primary" id="saveProviderBtn">Save Provider</button>
             </div>
           </div>
@@ -268,7 +268,7 @@
           <div class="settings-tab-panel" data-tab="channels">
             <h2>Channels</h2>
             <div class="settings-section">
-              <form autocomplete="off" onsubmit="return false">
+              <div>
               <div class="form-group">
                 <label>Discord Bot Token</label>
                 <input type="password" id="settingsDiscordToken" placeholder="Bot token" autocomplete="off">
@@ -285,7 +285,7 @@
                 <label>Slack App Token</label>
                 <input type="password" id="settingsSlackAppToken" placeholder="xapp-..." autocomplete="off">
               </div>
-              </form>
+              </div>
               <button class="btn btn-primary" id="saveChannelsBtn">Save Channels</button>
             </div>
           </div>
@@ -311,7 +311,7 @@
               </div>
               <div class="form-group">
                 <label>API Key</label>
-                <input type="password" id="profileApiKeyInput" placeholder="sk-..." autocomplete="off">
+                <input type="text" id="profileApiKeyInput" placeholder="sk-..." autocomplete="off" class="secret-input">
               </div>
               <div class="form-group">
                 <label>Model (optional)</label>
@@ -403,7 +403,7 @@
               </div>
               <div class="form-group" id="elevenlabsKeyGroup" style="display:none">
                 <label>ElevenLabs API Key</label>
-                <input type="password" id="settingsElevenlabsKey" placeholder="xi-...">
+                <input type="text" id="settingsElevenlabsKey" placeholder="xi-..." autocomplete="off" class="secret-input">
                 <div class="hint">Get your key from elevenlabs.io/api. Or set ELEVENLABS_API_KEY env var.</div>
               </div>
               <button class="btn btn-sm" id="saveVoiceBtn" style="margin-bottom: 16px">Save Voice Settings</button>

@@ -52,7 +52,9 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Coqui TTS in a venv (avoids PEP 668 issues)
+# Pin transformers<4.40 to avoid BeamSearchScorer removal breaking TTS
 RUN python3 -m venv /opt/tts-venv \
+  && /opt/tts-venv/bin/pip install --no-cache-dir "transformers>=4.33,<4.40" \
   && /opt/tts-venv/bin/pip install --no-cache-dir TTS \
   && ln -s /opt/tts-venv/bin/python3 /usr/local/bin/python3-tts
 

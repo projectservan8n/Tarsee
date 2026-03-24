@@ -896,6 +896,10 @@ html, body {
   color: var(--text-muted);
 }
 
+.form-group .secret-input {
+  -webkit-text-security: disc;
+}
+
 .form-group .hint {
   font-size: 12px;
   color: var(--text-muted);
