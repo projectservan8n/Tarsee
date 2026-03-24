@@ -263,15 +263,29 @@ voiceRouter.post("/upload-model", async (req, res) => {
 
   try {
     const { onnxBuffer, jsonBuffer, name } = await parseModelUpload(req);
+    console.log(`[voice] upload-model: name="${name}" onnx=${onnxBuffer?.length || 0} bytes, json=${jsonBuffer?.length || 0} bytes`);
+
     const engine = getTTSEngine();
 
-    if (typeof engine.addVoiceFromFiles !== "function") {
-      return res.status(400).json({ error: "Current TTS engine doesn't support model uploads. Switch to Piper." });
+    // Try engine's addVoiceFromFiles if available, otherwise save directly
+    if (typeof engine.addVoiceFromFiles === "function") {
+      const result = engine.addVoiceFromFiles(name, onnxBuffer, jsonBuffer);
+      res.status(201).json(result);
+    } else {
+      // Fallback: save to piper-voices directory directly
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const config = (await import("../config/env.js")).default;
+      const voicesDir = path.default.join(config.DATA_DIR, "piper-voices");
+      fs.default.mkdirSync(voicesDir, { recursive: true });
+      const safeName = name.replace(/[^a-zA-Z0-9_-]/g, "_");
+      fs.default.writeFileSync(path.default.join(voicesDir, `${safeName}.onnx`), onnxBuffer);
+      if (jsonBuffer) fs.default.writeFileSync(path.default.join(voicesDir, `${safeName}.onnx.json`), jsonBuffer);
+      console.log(`[voice] saved voice model: ${safeName}`);
+      res.status(201).json({ voiceId: safeName, name });
     }
-
-    const result = engine.addVoiceFromFiles(name, onnxBuffer, jsonBuffer);
-    res.status(201).json(result);
   } catch (err) {
+    console.error(`[voice] upload-model error: ${err.message}`);
     res.status(err.status || 500).json({ error: err.message });
   }
 });
