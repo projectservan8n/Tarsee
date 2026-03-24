@@ -4,7 +4,6 @@ let currentEngine = new StubTTSEngine();
 
 /**
  * Gets the current TTS engine instance.
- * @returns {import('./tts-interface.js').TTSEngine}
  */
 export function getTTSEngine() {
   return currentEngine;
@@ -12,7 +11,6 @@ export function getTTSEngine() {
 
 /**
  * Sets the TTS engine.
- * @param {import('./tts-interface.js').TTSEngine} engine
  */
 export function setTTSEngine(engine) {
   currentEngine = engine;
@@ -20,11 +18,9 @@ export function setTTSEngine(engine) {
 
 /**
  * Initializes the TTS engine based on settings.
- * Called on server startup.
+ * Priority: Piper (local, fast) → ElevenLabs (cloud) → stub
  */
 export async function initTTSEngine(settingsStore) {
-  // Default to auto — try Coqui (local/free) first, then ElevenLabs (cloud).
-  // Falls back to stub if nothing is available.
   const engineType = settingsStore?.get("voice.engine") || "auto";
 
   if (engineType === "stub" || engineType === "none") {
@@ -32,24 +28,21 @@ export async function initTTSEngine(settingsStore) {
     return;
   }
 
-  // Try Coqui TTS first (local, free, voice cloning)
-  if (engineType === "coqui" || engineType === "auto") {
+  // Try Piper TTS (local, fast, ONNX-based)
+  if (engineType === "piper" || engineType === "auto") {
     try {
-      const { CoquiTTSEngine } = await import("./coqui-engine.js");
-      const coqui = new CoquiTTSEngine();
-      const available = await coqui.isAvailable();
-
+      const { PiperTTSEngine } = await import("./piper-engine.js");
+      const piper = new PiperTTSEngine();
+      const available = await piper.isAvailable();
       if (available) {
-        currentEngine = coqui;
-        console.log("[voice] using Coqui TTS (XTTS v2)");
+        currentEngine = piper;
+        console.log("[voice] using Piper TTS (ONNX)");
         return;
-      } else if (engineType === "coqui") {
-        console.warn("[voice] Coqui TTS requested but not available (python3 or TTS package not found)");
+      } else if (engineType === "piper") {
+        console.warn("[voice] Piper TTS binary not found in PATH");
       }
     } catch (err) {
-      if (engineType === "coqui") {
-        console.warn("[voice] Coqui TTS init failed:", err.message);
-      }
+      console.warn("[voice] Piper TTS init failed:", err.message);
     }
   }
 
@@ -68,18 +61,12 @@ export async function initTTSEngine(settingsStore) {
           currentEngine = el;
           console.log("[voice] using ElevenLabs TTS");
           return;
-        } else if (engineType === "elevenlabs") {
-          console.warn("[voice] ElevenLabs API key invalid or unreachable");
         }
-      } else if (engineType === "elevenlabs") {
-        console.warn("[voice] ElevenLabs requested but no API key (set ELEVENLABS_API_KEY or voice.elevenlabs.apiKey)");
       }
     } catch (err) {
       console.warn("[voice] ElevenLabs init failed:", err.message);
     }
   }
-
-  // (Coqui already tried above)
 
   // Fallback to stub
   if (engineType === "auto") {

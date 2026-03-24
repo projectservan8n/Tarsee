@@ -398,11 +398,11 @@
                 <label>TTS Engine</label>
                 <select id="settingsVoiceEngine">
                   <option value="auto">Auto-detect (Recommended)</option>
+                  <option value="piper">Piper TTS (Local / ONNX)</option>
                   <option value="elevenlabs">ElevenLabs (Cloud)</option>
-                  <option value="coqui">Coqui TTS (XTTS v2 / Local)</option>
                   <option value="stub">Disabled</option>
                 </select>
-                <div class="hint">ElevenLabs: cloud-based, works on Railway. Coqui: local, needs Python + ~1GB RAM.</div>
+                <div class="hint">Piper: fast local TTS (~50MB per voice, ONNX). ElevenLabs: cloud-based, needs API key.</div>
               </div>
               <div class="form-group" id="elevenlabsKeyGroup" style="display:none">
                 <label>ElevenLabs API Key</label>
@@ -411,24 +411,34 @@
               </div>
               <button class="btn btn-sm" id="saveVoiceBtn" style="margin-bottom: 16px">Save Voice Settings</button>
 
+              <h3>Add a Voice Model</h3>
               <div class="form-group">
-                <label>Clone a Voice</label>
+                <label>Upload ONNX Voice</label>
                 <div class="clone-upload" id="voiceCloneUpload">
-                  <p style="margin-bottom: 8px">Drop an audio file here or click to upload</p>
-                  <p style="font-size: 12px; color: var(--text-muted)">WAV or MP3, 6-30 seconds recommended</p>
-                  <input type="file" id="voiceCloneFile" accept="audio/*" style="display:none">
-                </div>
-                <div id="voiceCloneInfo" style="display:none; margin-top: 8px; padding: 8px 12px; background: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.15); border-radius: var(--radius); font-size: 12px; color: var(--warning)">
-                  Voice cloning requires an active TTS engine. Configure one above and restart the server.
+                  <p style="margin-bottom: 8px">Drop .onnx voice model file here or click to upload</p>
+                  <p style="font-size: 12px; color: var(--text-muted)">Piper ONNX model + optional .onnx.json config</p>
+                  <input type="file" id="voiceOnnxFile" accept=".onnx" style="display:none">
                 </div>
                 <div class="form-group" style="margin-top: 8px">
-                  <input type="text" id="voiceCloneName" placeholder="Voice name (e.g. 'My Voice')">
+                  <label>Config file (optional)</label>
+                  <input type="file" id="voiceOnnxJson" accept=".json">
                 </div>
-                <button class="btn btn-primary btn-sm" id="voiceCloneBtn">Clone Voice</button>
+                <div class="form-group" style="margin-top: 8px">
+                  <input type="text" id="voiceCloneName" placeholder="Voice name (e.g. 'jarvis')">
+                </div>
+                <button class="btn btn-primary btn-sm" id="voiceCloneBtn">Upload Voice</button>
                 <div id="voiceCloneResult" style="margin-top: 8px; font-size: 13px"></div>
               </div>
+              <div class="form-group" style="margin-top: 12px">
+                <label>Or download from Hugging Face</label>
+                <div style="display: flex; gap: 8px">
+                  <input type="text" id="voiceDownloadName" placeholder="e.g. en_US-lessac-medium">
+                  <button class="btn btn-sm" id="voiceDownloadBtn">Download</button>
+                </div>
+                <div class="hint">Browse voices at <a href="https://huggingface.co/rhasspy/piper-voices" target="_blank">rhasspy/piper-voices</a>. Format: xx_XX-name-quality</div>
+              </div>
               <div style="margin-top: 12px">
-                <strong style="font-size: 13px">Cloned Voices</strong>
+                <strong style="font-size: 13px">Installed Voices</strong>
                 <div id="voicesList" class="voice-settings" style="margin-top: 8px"></div>
               </div>
             </div>

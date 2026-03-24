@@ -53,7 +53,7 @@ const Settings = {
       // Voice settings
       voiceEngine: document.getElementById("settingsVoiceEngine"),
       voiceEngineStatus: document.getElementById("voiceEngineStatus"),
-      voiceCloneFile: document.getElementById("voiceCloneFile"),
+      voiceCloneFile: document.getElementById("voiceOnnxFile"),
       voiceCloneUpload: document.getElementById("voiceCloneUpload"),
       voiceCloneName: document.getElementById("voiceCloneName"),
       voiceCloneBtn: document.getElementById("voiceCloneBtn"),
@@ -198,19 +198,42 @@ const Settings = {
         e.preventDefault();
         dropZone.classList.remove("dragover");
         const file = e.dataTransfer.files[0];
-        if (file && file.type.startsWith("audio/")) {
+        if (file && file.name.endsWith(".onnx")) {
           const dt = new DataTransfer();
           dt.items.add(file);
           this.elements.voiceCloneFile.files = dt.files;
           dropZone.querySelector("p").textContent = file.name;
         } else {
-          App.showToast("Please drop an audio file (WAV or MP3)", "error");
+          App.showToast("Please drop an .onnx voice model file", "error");
         }
       });
     }
 
     if (this.elements.voiceCloneBtn) {
       this.elements.voiceCloneBtn.addEventListener("click", () => this.cloneVoice());
+    }
+
+    // Piper voice download from HF
+    const dlBtn = document.getElementById("voiceDownloadBtn");
+    if (dlBtn) {
+      dlBtn.addEventListener("click", async () => {
+        const nameInput = document.getElementById("voiceDownloadName");
+        const voiceName = nameInput?.value.trim();
+        if (!voiceName) { App.showToast("Enter a voice name (e.g. en_US-lessac-medium)", "error"); return; }
+        dlBtn.disabled = true;
+        dlBtn.textContent = "Downloading...";
+        try {
+          await API.json("/api/voice/download-model", { method: "POST", body: { name: voiceName } });
+          App.showToast(`Voice "${voiceName}" downloaded`, "success");
+          nameInput.value = "";
+          this.loadVoices();
+        } catch (err) {
+          App.showToast(err.message, "error");
+        } finally {
+          dlBtn.disabled = false;
+          dlBtn.textContent = "Download";
+        }
+      });
     }
 
     if (this.elements.saveVoiceBtn) {
@@ -463,11 +486,13 @@ const Settings = {
   },
 
   async cloneVoice() {
-    const file = this.elements.voiceCloneFile?.files[0];
+    // Upload ONNX voice model
+    const onnxFile = document.getElementById("voiceOnnxFile")?.files[0];
+    const jsonFile = document.getElementById("voiceOnnxJson")?.files[0];
     const name = this.elements.voiceCloneName?.value.trim();
 
-    if (!file) {
-      App.showToast("Select an audio file first (6-30 seconds recommended)", "error");
+    if (!onnxFile) {
+      App.showToast("Select an .onnx voice model file", "error");
       return;
     }
     if (!name) {
@@ -476,31 +501,33 @@ const Settings = {
     }
 
     this.elements.voiceCloneBtn.disabled = true;
-    this.elements.voiceCloneBtn.textContent = "Cloning...";
+    this.elements.voiceCloneBtn.textContent = "Uploading...";
     this.elements.voiceCloneResult.textContent = "";
 
     try {
       const formData = new FormData();
-      formData.append("audio", file);
+      formData.append("onnx", onnxFile);
+      if (jsonFile) formData.append("config", jsonFile);
       formData.append("name", name);
 
-      const res = await API.request("/api/voice/clone", {
+      const res = await API.request("/api/voice/upload-model", {
         method: "POST",
         body: formData,
       });
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "Clone failed" }));
-        throw new Error(err.error || "Clone failed");
+        const err = await res.json().catch(() => ({ error: "Upload failed" }));
+        throw new Error(err.error || "Upload failed");
       }
 
       const data = await res.json();
       this.elements.voiceCloneResult.innerHTML =
-        `<span style="color: var(--primary)">Voice "${data.name}" cloned (${data.voiceId})</span>`;
+        `<span style="color: var(--primary)">Voice "${data.name}" installed (${data.voiceId})</span>`;
       this.elements.voiceCloneName.value = "";
-      this.elements.voiceCloneFile.value = "";
+      document.getElementById("voiceOnnxFile").value = "";
+      if (document.getElementById("voiceOnnxJson")) document.getElementById("voiceOnnxJson").value = "";
       this.elements.voiceCloneUpload.querySelector("p").textContent =
-        "Drop an audio file here or click to upload";
+        "Drop .onnx voice model file here or click to upload";
 
       this.loadVoices();
       App.showToast("Voice cloned successfully", "success");

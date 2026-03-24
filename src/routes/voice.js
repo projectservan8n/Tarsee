@@ -180,3 +180,82 @@ function parseMultipart(req) {
     req.pipe(busboy);
   });
 }
+
+/**
+ * POST /api/voice/upload-model
+ * Upload a Piper ONNX voice model (.onnx + optional .onnx.json).
+ * Multipart form: 'onnx' file (required), 'config' file (optional .onnx.json), 'name' field.
+ */
+voiceRouter.post("/upload-model", async (req, res) => {
+  const contentType = req.headers["content-type"] || "";
+  if (!contentType.includes("multipart/form-data")) {
+    return res.status(400).json({ error: "Multipart form data required" });
+  }
+
+  try {
+    const { onnxBuffer, jsonBuffer, name } = await parseModelUpload(req);
+    const engine = getTTSEngine();
+
+    if (typeof engine.addVoiceFromFiles !== "function") {
+      return res.status(400).json({ error: "Current TTS engine doesn't support model uploads. Switch to Piper." });
+    }
+
+    const result = engine.addVoiceFromFiles(name, onnxBuffer, jsonBuffer);
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/voice/download-model
+ * Download a Piper voice from Hugging Face by name.
+ * Body: { name: "en_US-lessac-medium" }
+ */
+voiceRouter.post("/download-model", async (req, res) => {
+  const { name } = req.body || {};
+  if (!name) return res.status(400).json({ error: "Voice name required" });
+
+  const engine = getTTSEngine();
+  if (typeof engine.downloadVoice !== "function") {
+    return res.status(400).json({ error: "Current TTS engine doesn't support voice downloads." });
+  }
+
+  try {
+    await engine.downloadVoice(name);
+    res.json({ ok: true, voiceId: name });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function parseModelUpload(req) {
+  return new Promise((resolve, reject) => {
+    const busboy = Busboy({ headers: req.headers, limits: { fileSize: 100 * 1024 * 1024 } }); // 100MB max
+    let onnxBuffer = null;
+    let jsonBuffer = null;
+    let name = "custom-voice";
+
+    busboy.on("file", (fieldname, stream) => {
+      const chunks = [];
+      stream.on("data", (chunk) => chunks.push(chunk));
+      stream.on("end", () => {
+        const buf = Buffer.concat(chunks);
+        if (fieldname === "onnx") onnxBuffer = buf;
+        else if (fieldname === "config") jsonBuffer = buf;
+      });
+    });
+
+    busboy.on("field", (fieldname, value) => {
+      if (fieldname === "name") name = value.trim() || "custom-voice";
+    });
+
+    busboy.on("finish", () => {
+      if (!onnxBuffer) return reject(Object.assign(new Error("No .onnx file provided"), { status: 400 }));
+      resolve({ onnxBuffer, jsonBuffer, name });
+    });
+
+    busboy.on("error", reject);
+    req.pipe(busboy);
+  });
+}

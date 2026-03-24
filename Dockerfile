@@ -16,20 +16,22 @@ RUN npm install --omit=dev
 # Install Playwright + Chromium
 RUN npx playwright install chromium --with-deps
 
-# Stage 2: Runtime with Python (Coqui TTS) + Playwright (Chromium)
+# Download Piper TTS binary
+RUN apt-get update && apt-get install -y --no-install-recommends wget \
+  && wget -q https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz \
+  && tar -xzf piper_linux_x86_64.tar.gz \
+  && rm piper_linux_x86_64.tar.gz \
+  && rm -rf /var/lib/apt/lists/*
+
+# Stage 2: Runtime with Piper TTS + Playwright (Chromium)
 FROM node:22-bookworm-slim
 
-# System deps: TTS audio libs + Playwright browser deps + su-exec for entrypoint
+# System deps: Playwright browser deps + gosu for entrypoint
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     tini \
     ca-certificates \
     gosu \
-    python3 \
-    python3-pip \
-    python3-venv \
-    libsndfile1 \
-    ffmpeg \
     # Playwright/Chromium dependencies
     libnss3 \
     libnspr4 \
@@ -51,19 +53,12 @@ RUN apt-get update \
     libwayland-client0 \
   && rm -rf /var/lib/apt/lists/*
 
-# Install Coqui TTS in a venv (avoids PEP 668 issues)
-# Pin transformers<4.40 to avoid BeamSearchScorer removal breaking TTS
-RUN python3 -m venv /opt/tts-venv \
-  && /opt/tts-venv/bin/pip install --no-cache-dir "transformers>=4.33,<4.40" \
-  && /opt/tts-venv/bin/pip install --no-cache-dir TTS \
-  && ln -s /opt/tts-venv/bin/python3 /usr/local/bin/python3-tts
-
-# Make the venv python3 the default for the TTS server
-ENV PATH="/opt/tts-venv/bin:${PATH}"
-ENV COQUI_TOS_AGREED=1
-
 ENV NODE_ENV=production
 WORKDIR /app
+
+# Copy Piper binary + libs from builder
+COPY --from=builder /app/piper /opt/piper
+ENV PATH="/opt/piper:${PATH}"
 
 # Copy dependencies from builder (includes node_modules + Playwright browsers)
 COPY --from=builder /app/node_modules ./node_modules
@@ -72,7 +67,7 @@ COPY package.json ./
 COPY src ./src
 COPY entrypoint.sh ./entrypoint.sh
 
-# Fix Playwright browser permissions for node user
+# Fix permissions
 RUN chown -R node:node /home/node/.cache \
   && chmod +x /app/entrypoint.sh
 
