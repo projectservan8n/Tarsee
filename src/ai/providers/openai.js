@@ -11,7 +11,31 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
   if (systemPrompt) {
     allMessages.push({ role: "system", content: systemPrompt });
   }
-  allMessages.push(...messages);
+
+  // Convert Anthropic-style content blocks to OpenAI format
+  const convertedMessages = messages.map((m) => {
+    if (!Array.isArray(m.content)) return m;
+
+    const openaiContent = m.content.map((block) => {
+      if (block.type === "image" && block.source?.type === "base64") {
+        return {
+          type: "image_url",
+          image_url: {
+            url: `data:${block.source.media_type};base64,${block.source.data}`,
+          },
+        };
+      }
+      if (block.type === "text") {
+        return { type: "text", text: block.text };
+      }
+      // Pass through other block types as-is (tool_result, tool_use, etc.)
+      return block;
+    });
+
+    return { ...m, content: openaiContent };
+  });
+
+  allMessages.push(...convertedMessages);
 
   // Convert Anthropic-style tools to OpenAI function format
   const openaiTools = tools?.length > 0

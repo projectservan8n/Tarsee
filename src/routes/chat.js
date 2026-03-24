@@ -133,7 +133,7 @@ chatRouter.patch("/conversations/:id", (req, res) => {
  * Body: { conversationId, message, provider?, model? }
  */
 chatRouter.post("/send", async (req, res) => {
-  const { conversationId, channelKey, message, provider: reqProvider, model: reqModel } = req.body || {};
+  const { conversationId, channelKey, message, attachments, provider: reqProvider, model: reqModel } = req.body || {};
 
   // Track activity for idle session reset
   trackActivity();
@@ -199,8 +199,36 @@ chatRouter.post("/send", async (req, res) => {
     return res.status(400).json({ error: "No AI provider configured. Go to Settings to configure one." });
   }
 
-  // Save user message
+  // Save user message (text only — no base64 blobs in DB)
   convStore.addMessage(convId, { role: "user", content: message });
+
+  // Build user content blocks for the AI when attachments are present
+  let userContentForAI = message;
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    const contentBlocks = [];
+    for (const att of attachments) {
+      if (att.type === "image") {
+        contentBlocks.push({
+          type: "image",
+          source: { type: "base64", media_type: att.mediaType || "image/png", data: att.data },
+        });
+      } else if (att.type === "audio") {
+        // Pass audio as a document-style block (provider will adapt)
+        contentBlocks.push({
+          type: "audio",
+          source: { type: "base64", media_type: att.mediaType || "audio/wav", data: att.data },
+        });
+      } else {
+        // Generic file — include as text description for now
+        contentBlocks.push({
+          type: "text",
+          text: `[Attached file: ${att.name || "file"} (${att.mediaType || "application/octet-stream"})]`,
+        });
+      }
+    }
+    contentBlocks.push({ type: "text", text: message });
+    userContentForAI = contentBlocks;
+  }
 
   // Get conversation history for context
   const history = convStore.getRecentMessages(convId, 50);
@@ -229,7 +257,11 @@ chatRouter.post("/send", async (req, res) => {
 
   try {
     // Build the working message array (may grow with tool results)
+    // Replace the last user message content with the attachment-enriched version
     let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
+    if (workingMessages.length > 0 && workingMessages[workingMessages.length - 1].role === "user") {
+      workingMessages[workingMessages.length - 1].content = userContentForAI;
+    }
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const toolCalls = [];

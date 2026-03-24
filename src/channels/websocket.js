@@ -150,7 +150,7 @@ export function setupWebSocket(server, db, app) {
 }
 
 async function handleChat(ws, msg, convStore, settingsStore) {
-  const { conversationId, message } = msg;
+  const { conversationId, message, attachments } = msg;
 
   if (!message || typeof message !== "string") {
     ws.send(JSON.stringify({ type: "error", message: "Message is required" }));
@@ -185,8 +185,34 @@ async function handleChat(ws, msg, convStore, settingsStore) {
     return;
   }
 
-  // Save user message
+  // Save user message (text only — no base64 blobs in DB)
   convStore.addMessage(convId, { role: "user", content: message });
+
+  // Build user content blocks for the AI when attachments are present
+  let userContentForAI = message;
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    const contentBlocks = [];
+    for (const att of attachments) {
+      if (att.type === "image") {
+        contentBlocks.push({
+          type: "image",
+          source: { type: "base64", media_type: att.mediaType || "image/png", data: att.data },
+        });
+      } else if (att.type === "audio") {
+        contentBlocks.push({
+          type: "audio",
+          source: { type: "base64", media_type: att.mediaType || "audio/wav", data: att.data },
+        });
+      } else {
+        contentBlocks.push({
+          type: "text",
+          text: `[Attached file: ${att.name || "file"} (${att.mediaType || "application/octet-stream"})]`,
+        });
+      }
+    }
+    contentBlocks.push({ type: "text", text: message });
+    userContentForAI = contentBlocks;
+  }
 
   // Get history
   const history = convStore.getRecentMessages(convId, 50);
@@ -212,7 +238,11 @@ async function handleChat(ws, msg, convStore, settingsStore) {
     const onClose = () => controller.abort();
     ws.on("close", onClose);
 
+    // Replace the last user message content with the attachment-enriched version
     let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
+    if (workingMessages.length > 0 && workingMessages[workingMessages.length - 1].role === "user") {
+      workingMessages[workingMessages.length - 1].content = userContentForAI;
+    }
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const toolCalls = [];
