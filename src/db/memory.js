@@ -21,9 +21,6 @@ export class MemoryStore {
     this._listByCategory = db.prepare(
       "SELECT * FROM bot_memory WHERE category = ? ORDER BY updated_at DESC LIMIT ?"
     );
-    this._search = db.prepare(
-      "SELECT * FROM bot_memory WHERE content LIKE ? ORDER BY updated_at DESC LIMIT ?"
-    );
     this._get = db.prepare("SELECT * FROM bot_memory WHERE id = ?");
     this._delete = db.prepare("DELETE FROM bot_memory WHERE id = ?");
     this._count = db.prepare("SELECT COUNT(*) as count FROM bot_memory");
@@ -49,7 +46,36 @@ export class MemoryStore {
   }
 
   search(query, limit = 20) {
-    return this._search.all(`%${query}%`, limit);
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) return [];
+
+    // Build a query that fetches any row matching at least one word
+    const conditions = words.map(() => "LOWER(content) LIKE ?").join(" OR ");
+    const params = words.map((w) => `%${w}%`);
+
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM bot_memory WHERE ${conditions} ORDER BY updated_at DESC`
+      )
+      .all(...params);
+
+    // Score each row by how many query words it matches
+    const scored = rows.map((row) => {
+      const lower = row.content.toLowerCase();
+      const score = words.reduce(
+        (acc, w) => acc + (lower.includes(w) ? 1 : 0),
+        0
+      );
+      return { ...row, score };
+    });
+
+    // Sort by score descending, then by recency (updated_at descending)
+    scored.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return (b.updated_at || "").localeCompare(a.updated_at || "");
+    });
+
+    return scored.slice(0, limit);
   }
 
   delete(id) {
@@ -58,6 +84,78 @@ export class MemoryStore {
 
   count() {
     return this._count.get().count;
+  }
+
+  /**
+   * Get memories filtered by category, ordered by most recent.
+   */
+  getRecentByCategory(category, limit = 10) {
+    return this._listByCategory.all(category, limit);
+  }
+
+  /**
+   * Merge duplicate/similar memories (first 50 chars match).
+   * Keeps the most recent duplicate, deletes older ones.
+   * Returns the count of removed duplicates.
+   */
+  consolidate() {
+    const all = this.db
+      .prepare("SELECT * FROM bot_memory ORDER BY updated_at DESC")
+      .all();
+
+    const seen = new Map(); // prefix -> most-recent row id
+    const toDelete = [];
+
+    for (const row of all) {
+      const prefix = row.content.substring(0, 50).toLowerCase().trim();
+      if (seen.has(prefix)) {
+        // This row is older (list is sorted DESC), so mark it for deletion
+        toDelete.push(row.id);
+      } else {
+        seen.set(prefix, row.id);
+      }
+    }
+
+    if (toDelete.length > 0) {
+      const deleteStmt = this.db.prepare("DELETE FROM bot_memory WHERE id = ?");
+      const batch = this.db.transaction((ids) => {
+        for (const id of ids) deleteStmt.run(id);
+      });
+      batch(toDelete);
+    }
+
+    return toDelete.length;
+  }
+
+  /**
+   * Return memory statistics: total count, count by category,
+   * oldest and newest memory dates.
+   */
+  getStats() {
+    const total = this._count.get().count;
+
+    const categoryRows = this.db
+      .prepare(
+        "SELECT category, COUNT(*) as count FROM bot_memory GROUP BY category ORDER BY count DESC"
+      )
+      .all();
+    const byCategory = Object.fromEntries(
+      categoryRows.map((r) => [r.category, r.count])
+    );
+
+    const oldest = this.db
+      .prepare("SELECT created_at FROM bot_memory ORDER BY created_at ASC LIMIT 1")
+      .get();
+    const newest = this.db
+      .prepare("SELECT created_at FROM bot_memory ORDER BY created_at DESC LIMIT 1")
+      .get();
+
+    return {
+      total,
+      byCategory,
+      oldestDate: oldest?.created_at || null,
+      newestDate: newest?.created_at || null,
+    };
   }
 
   /**
