@@ -569,6 +569,20 @@ const Chat = {
       return PH(i);
     });
 
+    // Function calls block: <function_calls>...<invoke name="X">...<parameter>...</parameter></invoke>...</function_calls>
+    text = text.replace(/<function_calls>\s*([\s\S]*?)\s*<\/function_calls>/g, (_m, content) => {
+      const i = blocks.length;
+      blocks.push(renderFunctionCallsBlock(content.trim()));
+      return PH(i);
+    });
+
+    // Function responses: <function_response>...</function_response>
+    text = text.replace(/<function_response>\s*([\s\S]*?)\s*<\/function_response>/g, (_m, content) => {
+      const i = blocks.length;
+      blocks.push(renderToolResponseBlock(content.trim()));
+      return PH(i);
+    });
+
     // Tool calls: <tool_call> or <tool_use>
     text = text.replace(/<(tool_call|tool_use)>\s*(\{[\s\S]*?\})\s*<\/\1>/g, (_m, _tag, json) => {
       const i = blocks.length;
@@ -666,7 +680,7 @@ function escapeHtml(text) {
  * with a nice "working" indicator so the user doesn't see raw XML.
  */
 function hideIncompleteBlocks(text) {
-  const blockTags = ["thinking", "antThinking", "antml:thinking", "reasoning", "tool_call", "tool_use", "tool_response", "tool_result", "search_results", "artifact", "result"];
+  const blockTags = ["thinking", "antThinking", "antml:thinking", "reasoning", "tool_call", "tool_use", "tool_response", "tool_result", "function_calls", "function_response", "invoke", "search_results", "artifact", "result"];
   let result = text;
 
   for (const tag of blockTags) {
@@ -750,6 +764,46 @@ function renderToolResponseBlock(content) {
     <div class="block-tool-response-header"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Tool output</div>
     <div class="block-body">${displayContent}</div>
   </div>`;
+}
+
+function renderFunctionCallsBlock(content) {
+  // Parse <invoke name="X"><parameter name="Y">value</parameter></invoke> blocks
+  const invocations = [];
+  const invokePattern = /<invoke\s+name="([^"]+)">([\s\S]*?)<\/invoke>/g;
+  let match;
+  while ((match = invokePattern.exec(content)) !== null) {
+    const name = match[1];
+    const params = {};
+    const paramPattern = /<parameter\s+name="([^"]+)">([\s\S]*?)<\/parameter>/g;
+    let pm;
+    while ((pm = paramPattern.exec(match[2])) !== null) {
+      params[pm[1]] = pm[2].trim();
+    }
+    invocations.push({ name, params });
+  }
+
+  if (invocations.length === 0) {
+    // Fallback: show as generic tool call
+    return renderToolCallBlock(content);
+  }
+
+  return invocations.map((inv) => {
+    const detail = inv.params.cmd || inv.params.path || inv.params.command || inv.params.query || "";
+    const argsStr = Object.entries(inv.params).length > 0
+      ? JSON.stringify(inv.params, null, 2)
+      : "";
+    const argsHtml = argsStr ? `<pre class="block-code">${escapeHtml(argsStr)}</pre>` : "";
+    const detailHtml = detail ? `<span class="block-detail">${escapeHtml(detail.slice(0, 80))}</span>` : "";
+
+    return `<div class="block-tool-call">
+      <div class="block-tool-header">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M9.5 1.5L14 6l-4.5 4.5M6.5 14.5L2 10l4.5-4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="block-tool-name">${escapeHtml(inv.name)}</span>
+        ${detailHtml}
+      </div>
+      ${argsHtml}
+    </div>`;
+  }).join("");
 }
 
 function renderGenericBlock(tag, content) {

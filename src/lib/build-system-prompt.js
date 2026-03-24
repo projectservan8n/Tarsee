@@ -9,6 +9,23 @@ const MAX_TOTAL_BYTES = 150 * 1024; // 150KB total prompt budget
  * Memory & capabilities instruction block.
  * Tells the AI about its memory system and how to use it.
  */
+const CAPABILITY_INSTRUCTIONS = `
+
+## Important: Your Capabilities
+
+You are a conversational AI assistant. You do NOT have access to tools, shell commands, file system, or code execution.
+Do NOT generate <function_calls>, <tool_call>, <tool_use>, <invoke>, or similar XML blocks — you cannot execute them and they will confuse the user.
+Do NOT pretend to run commands like bash, ls, cat, pwd, etc. You cannot execute anything on the server or user's machine.
+
+If the user asks you to do something that requires tools or code execution, explain what steps they could take, or suggest they use the available slash commands (/help to see them).
+
+You CAN:
+- Have conversations and answer questions
+- Remember things about the user (see memory section below)
+- Use your personality and knowledge from your workspace files
+- Trigger slash commands when the user types them (e.g. /status, /skills)
+`;
+
 const MEMORY_INSTRUCTIONS = `
 
 ## Memory & Learning
@@ -101,6 +118,9 @@ export function buildSystemPrompt({
   if (bootstrapContext) {
     prompt = bootstrapContext;
   }
+
+  // Capability instructions — prevent hallucinated tool use
+  prompt += CAPABILITY_INSTRUCTIONS;
 
   // Memory instructions — always included so the bot knows how to remember
   prompt += MEMORY_INSTRUCTIONS;
