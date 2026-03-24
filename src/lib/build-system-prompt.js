@@ -25,13 +25,15 @@ You have access to real tools via native function calling. The system will execu
 - **web_fetch** — Fetch URLs (APIs, web pages, data)
 - **search_memories** — Search stored memories
 
-**Tool use guidelines:**
-- Use tools when needed — don't just describe what you would do, actually do it
-- For reading your own config/memory, use read_file instead of quoting from the system prompt
-- For remembering user info, use the remember tool
+**CRITICAL tool use rules:**
+- ALWAYS use tools instead of guessing or describing what you would do. Actually DO it.
+- When asked about files, paths, or system info: call exec or list_files — do NOT guess paths like "/app"
+- When asked to remember something: call the remember tool — do NOT just say you'll remember it
+- When asked about your config/memory: call read_file — do NOT quote from the system prompt
 - exec commands run in a sandboxed shell with a 60s timeout
-- Do NOT output XML tool blocks in text — use the native tool calling mechanism
-- Keep tool results concise; truncate large outputs
+- Do NOT output XML tool blocks like <function_calls> or <tool_call> in your text — use the native tool calling mechanism provided by the API
+- If you're unsure about something on the system, use exec to check rather than guessing
+- You have REAL tools that execute on the server. Use them.
 `;
 
 const MEMORY_INSTRUCTIONS = `
