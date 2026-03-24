@@ -8,4 +8,4 @@ if [ -d /data ]; then
 fi
 
 # Drop to node user and start the app
-exec su-exec node node src/server.js
+exec gosu node node src/server.js
