@@ -93,8 +93,10 @@ voiceRouter.post("/stt", async (req, res) => {
   const language = req.headers["x-language"] || "en-US";
 
   try {
-    const result = await transcribeAudio(audioBuffer, language);
-    res.json(result);
+    const { SettingsStore } = await import("../db/settings.js");
+    const sStore = new SettingsStore(req.app.get("db"), req.app.get("auditLog"));
+    const result = await transcribeAudio(audioBuffer, language, { settingsStore: sStore });
+    res.json({ text: result.transcript, language: result.language, provider: result.provider });
   } catch (err) {
     const status = err.status || 500;
     res.status(status).json({ error: err.message });
@@ -154,15 +156,11 @@ voiceRouter.post("/transcribe", async (req, res) => {
       return res.status(400).json({ error: "Empty audio" });
     }
 
-    // Prefer whisper.cpp if available, fall back to legacy STT handler
-    if (await whisperAvailable()) {
-      const result = await whisperTranscribe(audioBuffer);
-      return res.json({ text: result.text, language: result.language });
-    }
-
-    // Fallback to configured STT handler
-    const result = await transcribeAudio(audioBuffer, req.headers["x-language"] || "en-US");
-    res.json({ text: result.transcript, language: "en" });
+    // Use multi-provider STT (OpenAI Whisper API > whisper.cpp > Gemini > error)
+    const { SettingsStore } = await import("../db/settings.js");
+    const sStore = new SettingsStore(req.app.get("db"), req.app.get("auditLog"));
+    const result = await transcribeAudio(audioBuffer, req.headers["x-language"] || "en", { settingsStore: sStore });
+    res.json({ text: result.transcript, language: result.language, provider: result.provider });
   } catch (err) {
     const status = err.status || 500;
     res.status(status).json({ error: err.message });
