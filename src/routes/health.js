@@ -8,7 +8,7 @@ export const healthRouter = Router();
 healthRouter.get("/healthz", (_req, res) => {
   res.json({
     ok: true,
-    service: "opusclaw",
+    service: "tarsee",
     version: "1.0.0",
     uptime: Math.floor(process.uptime()),
     memory: {
@@ -36,7 +36,7 @@ healthRouter.get("/healthz/deep", async (req, res) => {
 
     res.status(hasErrors ? 503 : 200).json({
       ok: !hasErrors,
-      service: "opusclaw",
+      service: "tarsee",
       uptime: Math.floor(process.uptime()),
       checks: diagnostics,
       errors: errorSummary,

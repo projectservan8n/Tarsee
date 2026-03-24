@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Coqui TTS HTTP server for OpusClaw.
+Coqui TTS HTTP server for Tarsee.
 
 Wraps Coqui TTS into a simple HTTP API that the Node.js backend calls.
 Runs as a subprocess managed by coqui-engine.js.
@@ -151,7 +151,7 @@ class TTSHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Coqui TTS HTTP server for OpusClaw")
+    parser = argparse.ArgumentParser(description="Coqui TTS HTTP server for Tarsee")
     parser.add_argument("--port", type=int, default=5002)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--model", default="tts_models/multilingual/multi-dataset/xtts_v2")

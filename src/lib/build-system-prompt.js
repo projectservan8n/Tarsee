@@ -152,7 +152,7 @@ export function buildSystemPrompt({
   }
 
   if (!prompt) {
-    const identityName = settingsStore.get("identity.name") || "OpusClaw";
+    const identityName = settingsStore.get("identity.name") || "Tarsee";
     prompt = `You are ${identityName}, a helpful AI assistant.`;
   }
 

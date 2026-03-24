@@ -23,8 +23,8 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${apiKey}`,
-      "HTTP-Referer": "https://opusclaw.ai",
-      "X-Title": "OpusClaw",
+      "HTTP-Referer": "https://tarsee.ai",
+      "X-Title": "Tarsee",
     },
     body: JSON.stringify(body),
     signal,

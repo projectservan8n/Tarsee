@@ -45,7 +45,7 @@ export function parseFrontmatter(content) {
 }
 
 /**
- * Get the built-in skills directory (ships with OpusClaw).
+ * Get the built-in skills directory (ships with Tarsee).
  */
 export function getBuiltInSkillsDir() {
   return path.join(__dirname, "..", "skills");

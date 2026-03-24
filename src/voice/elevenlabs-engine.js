@@ -91,7 +91,7 @@ export class ElevenLabsTTSEngine extends TTSEngine {
     // ElevenLabs expects multipart form data
     const formData = new FormData();
     formData.append("name", voiceName);
-    formData.append("description", `Cloned voice: ${voiceName} (via OpusClaw)`);
+    formData.append("description", `Cloned voice: ${voiceName} (via Tarsee)`);
     formData.append("files", new Blob([audioSample], { type: "audio/wav" }), "sample.wav");
 
     const res = await fetch(`${BASE_URL}/voices/add`, {

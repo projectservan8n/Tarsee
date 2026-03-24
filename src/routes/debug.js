@@ -139,7 +139,7 @@ export const ALLOWED_COMMANDS = {
     description: "Restart the server (Railway auto-restarts)",
     run: async () => {
       setTimeout(() => process.exit(0), 500);
-      return "Restarting OpusClaw... back in a few seconds.";
+      return "Restarting Tarsee... back in a few seconds.";
     },
   },
 

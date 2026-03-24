@@ -69,7 +69,7 @@ export async function createSlackBot(config, db) {
     // Get provider
     const activeProvider = settingsStore.getActiveProvider();
     if (!activeProvider?.provider || !activeProvider?.apiKey) {
-      await say("No AI provider configured. Set one up in the OpusClaw web panel.");
+      await say("No AI provider configured. Set one up in the Tarsee web panel.");
       return;
     }
 

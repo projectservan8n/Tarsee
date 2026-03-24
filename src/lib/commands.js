@@ -13,7 +13,7 @@ const COMMANDS = {
     description: "Show available commands",
     usage: "/help",
     handler: () => {
-      const lines = ["**OpusClaw Commands**", ""];
+      const lines = ["**Tarsee Commands**", ""];
       for (const [name, cmd] of Object.entries(COMMANDS)) {
         lines.push(`\`${cmd.usage}\` — ${cmd.description}`);
       }
@@ -124,7 +124,7 @@ const COMMANDS = {
       const secs = uptime % 60;
 
       const lines = [
-        "**OpusClaw Status**",
+        "**Tarsee Status**",
         "",
         `**Uptime:** ${hours}h ${mins}m ${secs}s`,
         `**Memory:** ${Math.round(mem.rss / 1024 / 1024)}MB RSS, ${Math.round(mem.heapUsed / 1024 / 1024)}MB heap`,
@@ -188,7 +188,7 @@ const COMMANDS = {
 
       const lines = [`# ${conv.title || "Untitled"}`, `Exported: ${new Date().toISOString()}`, ""];
       for (const msg of messages) {
-        const role = msg.role === "user" ? "You" : "OpusClaw";
+        const role = msg.role === "user" ? "You" : "Tarsee";
         lines.push(`**${role}:**`);
         lines.push(msg.content);
         lines.push("");
@@ -497,7 +497,7 @@ const COMMANDS = {
     usage: "/restart",
     handler: (_args, _ctx) => {
       setTimeout(() => process.exit(0), 500);
-      return "**Restarting OpusClaw…** The server will be back in a few seconds.";
+      return "**Restarting Tarsee…** The server will be back in a few seconds.";
     },
   },
 
@@ -602,7 +602,7 @@ const COMMANDS = {
       try {
         const { parseIdentityFile } = await import("./workspace-files.js");
         const identity = parseIdentityFile();
-        const name = identity.Name || "OpusClaw";
+        const name = identity.Name || "Tarsee";
         const emoji = identity.Emoji || "";
         const creature = identity.Creature || "";
         const vibe = identity.Vibe || "";

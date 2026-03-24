@@ -108,7 +108,7 @@ settingsRouter.get("/setup-status", (_req, res) => {
   res.json({
     needsSetup: !provider && !envConfigured,
     needsPersonality: !hasPersonality,
-    botName: botName || "OpusClaw",
+    botName: botName || "Tarsee",
     provider: provider || null,
     hasKey: hasKey || envConfigured,
   });

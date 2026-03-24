@@ -121,7 +121,7 @@ export async function createDiscordBot(config, db) {
     // Get provider config
     const activeProvider = settingsStore.getActiveProvider();
     if (!activeProvider?.provider || !activeProvider?.apiKey) {
-      await message.reply("No AI provider configured. Set one up in the OpusClaw web panel.");
+      await message.reply("No AI provider configured. Set one up in the Tarsee web panel.");
       return;
     }
 

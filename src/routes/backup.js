@@ -18,7 +18,7 @@ backupRouter.get("/export", (req, res) => {
   }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const filename = `opusclaw-backup-${timestamp}.tar.gz`;
+  const filename = `tarsee-backup-${timestamp}.tar.gz`;
 
   res.setHeader("Content-Type", "application/gzip");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);

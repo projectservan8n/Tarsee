@@ -14,7 +14,7 @@ adminRouter.get("/status", (req, res) => {
   const memUsage = process.memoryUsage();
 
   res.json({
-    service: "opusclaw",
+    service: "tarsee",
     version: "1.0.0",
     uptime: Math.floor(process.uptime()),
     nodeVersion: process.version,

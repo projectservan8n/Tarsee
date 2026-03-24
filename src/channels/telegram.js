@@ -88,7 +88,7 @@ export async function createTelegramBot(config, db) {
     // Get provider
     const activeProvider = settingsStore.getActiveProvider();
     if (!activeProvider?.provider || !activeProvider?.apiKey) {
-      await ctx.reply("No AI provider configured. Set one up in the OpusClaw web panel.");
+      await ctx.reply("No AI provider configured. Set one up in the Tarsee web panel.");
       return;
     }
 
@@ -263,7 +263,7 @@ You can use these special markers in your response:
 
   return {
     stop: async () => {
-      bot.stop("OpusClaw shutdown");
+      bot.stop("Tarsee shutdown");
     },
   };
 }

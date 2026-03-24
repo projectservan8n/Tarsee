@@ -35,15 +35,15 @@ logCapture.install();
 
 // --- Enforce encryption in production ---
 if (config.NODE_ENV === "production" && !isEncryptionEnabled()) {
-  console.error("[opusclaw] FATAL: ENCRYPTION_KEY environment variable is required in production.");
-  console.error("[opusclaw] Set a strong random key (e.g., openssl rand -hex 32) to encrypt credentials at rest.");
+  console.error("[tarsee] FATAL: ENCRYPTION_KEY environment variable is required in production.");
+  console.error("[tarsee] Set a strong random key (e.g., openssl rand -hex 32) to encrypt credentials at rest.");
   process.exit(1);
 }
 
 if (isEncryptionEnabled()) {
-  console.log("[opusclaw] credential encryption: ENABLED");
+  console.log("[tarsee] credential encryption: ENABLED");
 } else {
-  console.warn("[opusclaw] credential encryption: DISABLED (set ENCRYPTION_KEY for production)");
+  console.warn("[tarsee] credential encryption: DISABLED (set ENCRYPTION_KEY for production)");
 }
 
 // --- Initialize database ---
@@ -111,10 +111,10 @@ setupWebSocket(server, db, app);
 
 // --- Start ---
 server.listen(config.PORT, "0.0.0.0", () => {
-  console.log(`[opusclaw] listening on http://0.0.0.0:${config.PORT}`);
-  console.log(`[opusclaw] state:     ${config.STATE_DIR}`);
-  console.log(`[opusclaw] workspace: ${config.WORKSPACE_DIR}`);
-  console.log(`[opusclaw] database:  ${config.DB_PATH}`);
+  console.log(`[tarsee] listening on http://0.0.0.0:${config.PORT}`);
+  console.log(`[tarsee] state:     ${config.STATE_DIR}`);
+  console.log(`[tarsee] workspace: ${config.WORKSPACE_DIR}`);
+  console.log(`[tarsee] database:  ${config.DB_PATH}`);
 });
 
 // --- Audit log + Settings ---
@@ -125,7 +125,7 @@ app.set("auditLog", auditLog);
 const settingsStore = new SettingsStore(db, auditLog);
 app.set("settingsStore", settingsStore);
 initTTSEngine(settingsStore).catch((err) => {
-  console.warn("[opusclaw] TTS engine init error:", err.message);
+  console.warn("[tarsee] TTS engine init error:", err.message);
 });
 
 // --- Auth profiles ---
@@ -138,13 +138,13 @@ try {
   const memoryStore = new MemoryStore(db);
   memoryStore.syncToMemoryFile();
 } catch (err) {
-  console.warn("[opusclaw] memory sync error:", err.message);
+  console.warn("[tarsee] memory sync error:", err.message);
 }
 
 // --- Boot runner (BOOT.md on every restart) ---
 import { runBootChecklist } from "./lib/boot-runner.js";
 runBootChecklist({ db, settingsStore }).catch((err) => {
-  console.warn("[opusclaw] boot runner error:", err.message);
+  console.warn("[tarsee] boot runner error:", err.message);
 });
 
 // --- Heartbeat system ---
@@ -166,12 +166,12 @@ startCronScheduler();
 const channelManager = new ChannelManager(db);
 app.set("channelManager", channelManager);
 channelManager.startAll().catch((err) => {
-  console.warn("[opusclaw] channel startup error:", err.message);
+  console.warn("[tarsee] channel startup error:", err.message);
 });
 
 // --- Graceful shutdown ---
 function shutdown(signal) {
-  console.log(`[opusclaw] ${signal} received, shutting down...`);
+  console.log(`[tarsee] ${signal} received, shutting down...`);
   stopTTSEngine();
   stopHeartbeat();
   stopSessionReset();

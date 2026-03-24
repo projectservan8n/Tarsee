@@ -5,7 +5,7 @@ import { readWorkspaceFile, writeWorkspaceFile, appendDailyLog } from "./workspa
 import { runCmd } from "./run-cmd.js";
 
 /**
- * Tool registry for OpusClaw.
+ * Tool registry for Tarsee.
  * Defines tools that the AI can call via native tool_use (Anthropic) or function calling (OpenAI).
  * Each tool has a name, description, input_schema (JSON Schema), and execute function.
  */
