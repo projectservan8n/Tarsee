@@ -1,4 +1,4 @@
-# OpusClaw — Multi-stage Docker build
+# Tarsee — Multi-stage Docker build
 # Stage 1: Build native modules (better-sqlite3)
 FROM node:22-bookworm AS builder
 
@@ -19,11 +19,12 @@ RUN npx playwright install chromium --with-deps
 # Stage 2: Runtime with Python (Coqui TTS) + Playwright (Chromium)
 FROM node:22-bookworm-slim
 
-# System deps: TTS audio libs + Playwright browser deps + misc
+# System deps: TTS audio libs + Playwright browser deps + su-exec for entrypoint
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     tini \
     ca-certificates \
+    su-exec \
     python3 \
     python3-pip \
     python3-venv \
@@ -67,20 +68,16 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /root/.cache/ms-playwright /home/node/.cache/ms-playwright
 COPY package.json ./
 COPY src ./src
+COPY entrypoint.sh ./entrypoint.sh
 
 # Fix Playwright browser permissions for node user
-RUN chown -R node:node /home/node/.cache
-
-# Create data directories with correct ownership for node user
-RUN mkdir -p /data/tarsee/data /data/tarsee/workspace/skills /data/tarsee/workspace/memory \
-  && chown -R node:node /data
-
-USER node
+RUN chown -R node:node /home/node/.cache \
+  && chmod +x /app/entrypoint.sh
 
 # Tell Playwright where browsers are
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 
 EXPOSE 3000
 
-ENTRYPOINT ["tini", "--"]
-CMD ["node", "src/server.js"]
+# Entrypoint runs as root to fix /data permissions, then drops to node user
+ENTRYPOINT ["tini", "--", "/app/entrypoint.sh"]
