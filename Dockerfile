@@ -25,8 +25,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends wget \
 # Build whisper.cpp from source (no pre-built Linux binaries available)
 RUN apt-get update && apt-get install -y --no-install-recommends git cmake \
   && git clone --depth 1 --branch v1.8.4 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper \
-  && cd /tmp/whisper && cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc) --target whisper-cli \
-  && mkdir -p /app/whisper-bin && cp build/bin/whisper-cli /app/whisper-bin/ && cp build/src/libwhisper.so* /app/whisper-bin/ 2>/dev/null || true \
+  && cd /tmp/whisper \
+  && cmake -B build -DCMAKE_BUILD_TYPE=Release \
+  && cmake --build build -j$(nproc) --target whisper-cli \
+  && mkdir -p /app/whisper-bin \
+  && cp build/bin/whisper-cli /app/whisper-bin/ \
+  && (cp build/src/libwhisper.so* /app/whisper-bin/ 2>/dev/null; true) \
+  && ls -la /app/whisper-bin/ \
   && rm -rf /tmp/whisper /var/lib/apt/lists/*
 
 # Stage 2: Runtime with Piper TTS + Playwright (Chromium)

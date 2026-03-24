@@ -21,10 +21,16 @@ const HF_BASE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
  */
 export async function isAvailable() {
   try {
-    execFileSync("whisper-cli", ["--help"], { stdio: "ignore", timeout: 5000 });
+    // Try whisper-cli first, then main (older builds)
+    execFileSync("whisper-cli", ["--version"], { stdio: "ignore", timeout: 5000 });
     return true;
   } catch {
-    return false;
+    try {
+      execFileSync("main", ["--help"], { stdio: "ignore", timeout: 5000 });
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -61,12 +67,15 @@ export async function transcribe(audioBuffer, opts = {}) {
     try { fs.unlinkSync(tmpIn); } catch { /* ignore */ }
   }
 
-  // Run whisper-cli
+  // Run whisper-cli (or 'main' for older builds)
+  const binaryName = await findWhisperBinary();
+  console.log(`[whisper] transcribing with ${binaryName}, model=${model}`);
+
   return new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
 
-    const proc = spawn("whisper-cli", [
+    const proc = spawn(binaryName, [
       "-m", modelPath,
       "-f", tmpWav,
       "--no-timestamps",
@@ -94,6 +103,23 @@ export async function transcribe(audioBuffer, opts = {}) {
       try { proc.kill(); } catch { /* ignore */ }
     }, 60_000);
   });
+}
+
+/**
+ * Find the whisper binary (whisper-cli or main).
+ */
+async function findWhisperBinary() {
+  for (const name of ["whisper-cli", "main"]) {
+    try {
+      execFileSync(name, ["--version"], { stdio: "ignore", timeout: 3000 });
+      return name;
+    } catch { /* try next */ }
+  }
+  // Last resort: check /opt/whisper directly
+  for (const name of ["/opt/whisper/whisper-cli", "/opt/whisper/main"]) {
+    if (fs.existsSync(name)) return name;
+  }
+  throw new Error("whisper-cli binary not found. Check Docker build.");
 }
 
 /**
