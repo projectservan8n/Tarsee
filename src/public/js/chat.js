@@ -337,6 +337,11 @@ const Chat = {
   },
 
   async openChannel(channelKey, conversationId) {
+    // Close settings if open
+    if (typeof Settings !== "undefined" && Settings.isOpen) {
+      Settings.close();
+    }
+
     this.currentChannelKey = channelKey;
     this.currentConversationId = conversationId || null;
     this.elements.welcomeScreen.style.display = "none";
