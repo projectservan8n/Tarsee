@@ -10,12 +10,20 @@ const PORT = Number.parseInt(process.env.PORT ?? process.env.OPUSCLAW_PORT ?? "3
 // Auto-detect Railway volume at /data — use it if available, else fall back to ~/.opusclaw
 function resolveStateDir() {
   if (process.env.OPUSCLAW_STATE_DIR?.trim()) return process.env.OPUSCLAW_STATE_DIR.trim();
-  // Railway: if /data exists and is writable, use it
+  // Railway: check if /data exists (volume mount point)
   if (process.env.RAILWAY_PROJECT_ID) {
     try {
-      fs.accessSync("/data", fs.constants.W_OK);
-      return "/data/opusclaw";
-    } catch { /* volume not mounted yet */ }
+      // Check if /data directory exists at all (stat, not access — permissions may differ)
+      const stat = fs.statSync("/data");
+      if (stat.isDirectory()) {
+        // Try to create our subdirectory to confirm writability
+        fs.mkdirSync("/data/opusclaw", { recursive: true });
+        return "/data/opusclaw";
+      }
+    } catch {
+      // /data doesn't exist or isn't accessible — volume not mounted
+      console.warn("[tarsee] /data not accessible — using ephemeral storage");
+    }
   }
   return path.join(os.homedir(), ".opusclaw");
 }
