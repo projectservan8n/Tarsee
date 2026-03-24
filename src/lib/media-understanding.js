@@ -29,13 +29,19 @@ export async function analyzeImage(imageBuffer, mimeType, opts = {}) {
 }
 
 async function analyzeWithClaude(b64, mimeType, apiKey, prompt) {
+  const isOAuth = apiKey.includes("sk-ant-oat");
+  const headers = {
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01",
+  };
+  if (isOAuth) {
+    headers["Authorization"] = "Bearer " + apiKey;
+  } else {
+    headers["x-api-key"] = apiKey;
+  }
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
+    headers,
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1024,
@@ -50,7 +56,7 @@ async function analyzeWithClaude(b64, mimeType, apiKey, prompt) {
     signal: AbortSignal.timeout(60000),
   });
   const data = await res.json();
-  if (data.error) return `Analysis error: ${data.error.message}`;
+  if (data.error) return `Analysis error: ${data.error.message || data.error.type || JSON.stringify(data.error)}`;
   return data.content?.[0]?.text || "No analysis generated.";
 }
 
@@ -72,7 +78,7 @@ async function analyzeWithGPT4(b64, mimeType, apiKey, prompt) {
     signal: AbortSignal.timeout(60000),
   });
   const data = await res.json();
-  if (data.error) return `Analysis error: ${data.error.message}`;
+  if (data.error) return `Analysis error: ${data.error.message || data.error.type || JSON.stringify(data.error)}`;
   return data.choices?.[0]?.message?.content || "No analysis generated.";
 }
 
@@ -92,7 +98,7 @@ async function analyzeWithGemini(b64, mimeType, apiKey, prompt) {
     signal: AbortSignal.timeout(60000),
   });
   const data = await res.json();
-  if (data.error) return `Analysis error: ${data.error.message}`;
+  if (data.error) return `Analysis error: ${data.error.message || data.error.type || JSON.stringify(data.error)}`;
   return data.candidates?.[0]?.content?.parts?.[0]?.text || "No analysis generated.";
 }
 

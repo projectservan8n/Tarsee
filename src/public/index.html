@@ -162,6 +162,14 @@
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 2h10v12H3z" stroke="currentColor" stroke-width="1.2"/><path d="M6 5h4M6 8h4M6 11h2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
             Memories
           </button>
+          <button class="settings-tab" data-tab="security">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 1L3 3v4c0 4 2.5 6.5 5 8 2.5-1.5 5-4 5-8V3z" stroke="currentColor" stroke-width="1.2"/></svg>
+            Security
+          </button>
+          <button class="settings-tab" data-tab="canvas">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.2"/><path d="M5 8h6M8 5v6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            Canvas
+          </button>
         </div>
 
         <div class="settings-content">
@@ -292,6 +300,34 @@
               <div class="form-group">
                 <label>Slack App Token</label>
                 <input type="password" id="settingsSlackAppToken" placeholder="xapp-..." autocomplete="off">
+              </div>
+              <div class="form-group" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border-light)">
+                <label>WhatsApp (Baileys)</label>
+                <input type="password" id="settingsWhatsappToken" placeholder="Auth directory path or leave blank for QR" autocomplete="off">
+                <div class="hint">Uses QR code auth. Set auth directory path or configure via CLI.</div>
+              </div>
+              <div class="form-group">
+                <label>Signal Phone Number</label>
+                <input type="text" id="settingsSignalPhone" placeholder="+1234567890" autocomplete="off">
+                <div class="hint">Requires signal-cli REST API running.</div>
+              </div>
+              <div class="form-group">
+                <label>Signal API URL</label>
+                <input type="text" id="settingsSignalApiUrl" placeholder="http://localhost:8080" autocomplete="off">
+              </div>
+              <div class="form-group">
+                <label>iMessage (BlueBubbles Server URL)</label>
+                <input type="text" id="settingsImessageUrl" placeholder="http://localhost:1234" autocomplete="off">
+                <div class="hint">macOS only. Requires BlueBubbles server.</div>
+              </div>
+              <div class="form-group">
+                <label>iMessage Password</label>
+                <input type="password" id="settingsImessagePassword" placeholder="BlueBubbles password" autocomplete="off">
+              </div>
+              <div class="form-group">
+                <label>LINE Channel Access Token</label>
+                <input type="password" id="settingsLineToken" placeholder="LINE Bot token" autocomplete="off">
+                <div class="hint">Get from LINE Developers Console.</div>
               </div>
               </div>
               <button class="btn btn-primary" id="saveChannelsBtn">Save Channels</button>
@@ -499,6 +535,31 @@
                 <input type="text" id="settingsApiToken" readonly spellcheck="false" style="font-family: var(--font-mono); font-size: 12px">
                 <div class="hint">Use this token for WebSocket and REST API authentication.</div>
               </div>
+            </div>
+          </div>
+
+          <!-- Security Tab -->
+          <div class="settings-tab-panel" data-tab="security">
+            <h2>Security</h2>
+            <div class="settings-section">
+              <h3>Security Audit</h3>
+              <button class="btn btn-sm" id="runAuditBtn">Run Security Audit</button>
+              <div id="auditResults" style="margin-top:12px"></div>
+            </div>
+            <div class="settings-section">
+              <h3>Tool Permissions</h3>
+              <div class="hint" style="margin-bottom:12px">Control which tools the AI can use.</div>
+              <div id="toolPermissionsList"></div>
+            </div>
+          </div>
+
+          <!-- Canvas Tab -->
+          <div class="settings-tab-panel" data-tab="canvas">
+            <h2>Canvas</h2>
+            <div class="settings-section">
+              <div class="hint" style="margin-bottom:14px">AI-generated interactive UIs. Ask the AI to create a canvas for dashboards, visualizations, or mini-apps.</div>
+              <div id="canvasGallery"></div>
+              <div id="canvasEmpty" style="color:var(--text-muted);font-size:13px">No canvas projects yet. Ask the AI to create one!</div>
             </div>
           </div>
         </div>
