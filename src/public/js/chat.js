@@ -18,6 +18,7 @@ const Chat = {
   botName: "Tarsee",
   lastMessageRole: null,
   lastMessageTime: 0,
+  pendingFiles: [],
 
   elements: {},
 
@@ -36,6 +37,9 @@ const Chat = {
       channelList: document.getElementById("channelList"),
       welcomeScreen: document.getElementById("welcomeScreen"),
       topbarTitle: document.getElementById("topbarTitle"),
+      chatFileInput: document.getElementById("chatFileInput"),
+      attachBtn: document.getElementById("attachBtn"),
+      attachmentsPreview: document.getElementById("attachmentsPreview"),
     };
 
     // Create command palette
@@ -53,7 +57,7 @@ const Chat = {
       const el = this.elements.messageInput;
       el.style.height = "auto";
       el.style.height = Math.min(el.scrollHeight, 200) + "px";
-      this.elements.sendBtn.disabled = !el.value.trim();
+      this.elements.sendBtn.disabled = !(el.value.trim() || this.pendingFiles.length);
       this.handleCommandPalette();
     });
 
@@ -87,7 +91,7 @@ const Chat = {
       // Normal Enter to send
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        if (!this.isStreaming && this.elements.messageInput.value.trim()) {
+        if (!this.isStreaming && (this.elements.messageInput.value.trim() || this.pendingFiles.length)) {
           this.send();
         }
       }
@@ -101,6 +105,27 @@ const Chat = {
     });
 
     this.elements.sendBtn.addEventListener("click", () => this.send());
+
+    // File upload: attach button triggers hidden input
+    this.elements.attachBtn.addEventListener("click", () => this.elements.chatFileInput.click());
+    this.elements.chatFileInput.addEventListener("change", (e) => {
+      if (e.target.files.length) {
+        this.addPendingFiles(Array.from(e.target.files));
+        e.target.value = ""; // reset so same file can be re-selected
+      }
+    });
+
+    // Drag-and-drop on chat area
+    const chatArea = this.elements.chatArea;
+    chatArea.addEventListener("dragover", (e) => { e.preventDefault(); chatArea.classList.add("drag-over"); });
+    chatArea.addEventListener("dragleave", (e) => { e.preventDefault(); chatArea.classList.remove("drag-over"); });
+    chatArea.addEventListener("drop", (e) => {
+      e.preventDefault();
+      chatArea.classList.remove("drag-over");
+      if (e.dataTransfer.files.length) {
+        this.addPendingFiles(Array.from(e.dataTransfer.files));
+      }
+    });
 
     // Welcome suggestion cards
     document.querySelectorAll(".welcome-suggestion").forEach((el) => {
@@ -434,10 +459,111 @@ const Chat = {
     }
   },
 
+  // --- File Attachments ---
+  addPendingFiles(files) {
+    for (const file of files) {
+      // Limit individual file to 10 MB
+      if (file.size > 10 * 1024 * 1024) {
+        App.showToast(`File "${file.name}" exceeds 10 MB limit`, "error");
+        continue;
+      }
+      this.pendingFiles.push(file);
+    }
+    this.renderAttachmentsPreview();
+    this.elements.sendBtn.disabled = !(this.elements.messageInput.value.trim() || this.pendingFiles.length);
+  },
+
+  removePendingFile(index) {
+    this.pendingFiles.splice(index, 1);
+    this.renderAttachmentsPreview();
+    this.elements.sendBtn.disabled = !(this.elements.messageInput.value.trim() || this.pendingFiles.length);
+  },
+
+  renderAttachmentsPreview() {
+    const container = this.elements.attachmentsPreview;
+    if (!this.pendingFiles.length) {
+      container.style.display = "none";
+      container.innerHTML = "";
+      return;
+    }
+    container.style.display = "flex";
+    container.innerHTML = this.pendingFiles.map((file, i) => {
+      const isImage = file.type.startsWith("image/");
+      const thumb = isImage
+        ? `<img src="${URL.createObjectURL(file)}" alt="">`
+        : `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/></svg>`;
+      return `<div class="chat-attachment-thumb">
+        ${thumb}
+        <span class="att-name">${escapeHtml(file.name)}</span>
+        <button class="chat-attachment-remove" data-index="${i}" title="Remove">&times;</button>
+      </div>`;
+    }).join("");
+
+    container.querySelectorAll(".chat-attachment-remove").forEach((btn) => {
+      btn.addEventListener("click", () => this.removePendingFile(parseInt(btn.dataset.index, 10)));
+    });
+  },
+
+  fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(",")[1]); // strip data:...;base64, prefix
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  },
+
+  getAttachmentType(mimeType) {
+    if (mimeType.startsWith("image/")) return "image";
+    if (mimeType.startsWith("audio/")) return "audio";
+    return "file";
+  },
+
+  async buildAttachments() {
+    const attachments = [];
+    for (const file of this.pendingFiles) {
+      const data = await this.fileToBase64(file);
+      attachments.push({
+        type: this.getAttachmentType(file.type),
+        name: file.name,
+        data,
+        mediaType: file.type || "application/octet-stream",
+      });
+    }
+    return attachments;
+  },
+
+  renderMessageAttachments(attachments) {
+    if (!attachments || !attachments.length) return "";
+    const images = attachments.filter(a => a.type === "image");
+    const others = attachments.filter(a => a.type !== "image");
+    let html = "";
+    if (images.length) {
+      html += '<div class="message-images">';
+      for (const img of images) {
+        html += `<img src="data:${escapeHtml(img.mediaType)};base64,${img.data}" alt="${escapeHtml(img.name)}">`;
+      }
+      html += "</div>";
+    }
+    for (const f of others) {
+      html += `<div class="message-file-chip"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/></svg> ${escapeHtml(f.name)}</div>`;
+    }
+    return html;
+  },
+
   // --- Send ---
   async send() {
     const text = this.elements.messageInput.value.trim();
-    if (!text || this.isStreaming) return;
+    const hasFiles = this.pendingFiles.length > 0;
+    if ((!text && !hasFiles) || this.isStreaming) return;
+
+    // Build attachments from pending files before clearing
+    let attachments = [];
+    if (hasFiles) {
+      attachments = await this.buildAttachments();
+      this.pendingFiles = [];
+      this.renderAttachmentsPreview();
+    }
 
     // Clear input
     this.elements.messageInput.value = "";
@@ -475,8 +601,12 @@ const Chat = {
       return;
     }
 
-    // Append user message
-    this.appendMessage("user", text);
+    // Append user message (with attachment previews if any)
+    const userMsg = this.appendMessage("user", text);
+    if (attachments.length) {
+      const textEl = userMsg.querySelector(".message-text");
+      textEl.insertAdjacentHTML("afterend", this.renderMessageAttachments(attachments));
+    }
 
     // Create streaming assistant message
     const assistantMsg = this.appendMessage("assistant", "", true);
@@ -551,7 +681,9 @@ const Chat = {
           App.showToast(error, "error");
         },
         // channelKey
-        this.currentChannelKey
+        this.currentChannelKey,
+        // attachments
+        attachments.length ? attachments : undefined
       );
     } catch (err) {
       this.finishStreaming(assistantMsg);
