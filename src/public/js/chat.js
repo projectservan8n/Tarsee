@@ -546,19 +546,69 @@ const Chat = {
   },
 
   /**
-   * Simple markdown renderer (no external deps).
+   * Markdown renderer with tool call, tool response, and thinking block support.
    */
   renderMarkdown(text) {
     if (!text) return "";
     // Strip any [REMEMBER: ...] markers that leaked through
     text = text.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n").trim();
+
+    // ── Extract special blocks BEFORE escaping HTML ──
+
+    // Placeholders for blocks we'll inject after escaping
+    const blocks = [];
+    const PH = (i) => `\x00BLOCK${i}\x00`;
+
+    // Thinking / reasoning blocks: <thinking>, <antThinking>, <reasoning>
+    text = text.replace(/<(thinking|antThinking|antml:thinking|reasoning)>([\s\S]*?)<\/\1>/g, (_m, tag, content) => {
+      const i = blocks.length;
+      const label = tag.includes("thinking") ? "Thinking" : "Reasoning";
+      blocks.push(renderThinkingBlock(label, content.trim()));
+      return PH(i);
+    });
+
+    // Tool calls: <tool_call> or <tool_use>
+    text = text.replace(/<(tool_call|tool_use)>\s*(\{[\s\S]*?\})\s*<\/\1>/g, (_m, _tag, json) => {
+      const i = blocks.length;
+      blocks.push(renderToolCallBlock(json));
+      return PH(i);
+    });
+    // Also handle the named format: <tool_call>\n{"name": "...", "arguments": {...}}\n</tool_call>
+    text = text.replace(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g, (_m, content) => {
+      const i = blocks.length;
+      blocks.push(renderToolCallBlock(content));
+      return PH(i);
+    });
+
+    // Tool responses: <tool_response> or <tool_result>
+    text = text.replace(/<(tool_response|tool_result)>\s*([\s\S]*?)\s*<\/\1>/g, (_m, _tag, content) => {
+      const i = blocks.length;
+      blocks.push(renderToolResponseBlock(content.trim()));
+      return PH(i);
+    });
+
+    // Search/artifact blocks: <search_results>, <artifact>
+    text = text.replace(/<(search_results|artifact|result)>([\s\S]*?)<\/\1>/g, (_m, tag, content) => {
+      const i = blocks.length;
+      blocks.push(renderGenericBlock(tag, content.trim()));
+      return PH(i);
+    });
+
+    // ── Now escape HTML on the remaining text ──
     let html = escapeHtml(text);
+
+    // ── Markdown formatting ──
 
     // Code blocks (```lang\ncode\n```)
     html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
       const langLabel = lang || "code";
       return `<div class="code-header"><span>${escapeHtml(langLabel)}</span><button class="copy-btn" onclick="navigator.clipboard.writeText(this.closest('.code-header').nextElementSibling.textContent)">Copy</button></div><pre><code>${code}</code></pre>`;
     });
+
+    // Headings (### h3, ## h2, # h1) — must be at start of line
+    html = html.replace(/(^|<br>)### (.+?)(<br>|$)/g, "$1<h3>$2</h3>$3");
+    html = html.replace(/(^|<br>)## (.+?)(<br>|$)/g, "$1<h2>$2</h2>$3");
+    html = html.replace(/(^|<br>)# (.+?)(<br>|$)/g, "$1<h1>$2</h1>$3");
 
     // Inline code
     html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
@@ -569,11 +619,25 @@ const Chat = {
     // Italic
     html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
 
+    // Strikethrough
+    html = html.replace(/~~(.+?)~~/g, "<del>$1</del>");
+
     // Links
     html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 
+    // Horizontal rule
+    html = html.replace(/(^|<br>)---(<br>|$)/g, "$1<hr>$2");
+
+    // Unordered lists (- item)
+    html = html.replace(/(^|<br>)- (.+?)(?=<br>|$)/g, "$1<li>$2</li>");
+
     // Newlines to <br> (but not inside pre blocks)
     html = html.replace(/\n/g, "<br>");
+
+    // ── Re-inject extracted blocks ──
+    for (let i = 0; i < blocks.length; i++) {
+      html = html.replace(escapeHtml(PH(i)), blocks[i]);
+    }
 
     return html;
   },
@@ -583,4 +647,73 @@ function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+// ── Tool & Thinking Block Renderers ──────────────────────────────────
+
+function renderThinkingBlock(label, content) {
+  const preview = escapeHtml(content.slice(0, 120).replace(/\n/g, " ")) + (content.length > 120 ? "…" : "");
+  const full = escapeHtml(content).replace(/\n/g, "<br>");
+  return `<details class="block-thinking">
+    <summary><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M6 6a2 2 0 012-2 2 2 0 012 2c0 1-1 1.5-1 2.5M8 11.5v.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> ${label}<span class="block-preview">${preview}</span></summary>
+    <div class="block-body">${full}</div>
+  </details>`;
+}
+
+function renderToolCallBlock(content) {
+  let name = "tool_call";
+  let detail = "";
+  let args = "";
+  try {
+    const parsed = JSON.parse(content);
+    name = parsed.name || "tool_call";
+    args = parsed.arguments ? JSON.stringify(parsed.arguments, null, 2) : "";
+    // Extract a useful detail from arguments
+    if (parsed.arguments) {
+      detail = parsed.arguments.path || parsed.arguments.command || parsed.arguments.query || parsed.arguments.url || "";
+      if (typeof detail === "string" && detail.length > 80) detail = detail.slice(0, 77) + "…";
+    }
+  } catch {
+    // Not valid JSON — just show raw content
+    args = content;
+  }
+
+  const argsHtml = args ? `<pre class="block-code">${escapeHtml(args)}</pre>` : "";
+  const detailHtml = detail ? `<span class="block-detail">${escapeHtml(detail)}</span>` : "";
+
+  return `<div class="block-tool-call">
+    <div class="block-tool-header">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M9.5 1.5L14 6l-4.5 4.5M6.5 14.5L2 10l4.5-4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="block-tool-name">${escapeHtml(name)}</span>
+      ${detailHtml}
+    </div>
+    ${argsHtml}
+  </div>`;
+}
+
+function renderToolResponseBlock(content) {
+  const isLong = content.length > 200;
+  const displayContent = escapeHtml(content).replace(/\n/g, "<br>");
+
+  if (isLong) {
+    const preview = escapeHtml(content.slice(0, 150).replace(/\n/g, " ")) + "…";
+    return `<details class="block-tool-response">
+      <summary><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Tool output<span class="block-preview">${preview}</span></summary>
+      <div class="block-body">${displayContent}</div>
+    </details>`;
+  }
+
+  return `<div class="block-tool-response block-tool-response--inline">
+    <div class="block-tool-response-header"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Tool output</div>
+    <div class="block-body">${displayContent}</div>
+  </div>`;
+}
+
+function renderGenericBlock(tag, content) {
+  const displayContent = escapeHtml(content).replace(/\n/g, "<br>");
+  const label = tag.replace(/_/g, " ");
+  return `<details class="block-generic">
+    <summary><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.2"/><path d="M5 6h6M5 8h6M5 10h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> ${escapeHtml(label)}</summary>
+    <div class="block-body">${displayContent}</div>
+  </details>`;
 }
