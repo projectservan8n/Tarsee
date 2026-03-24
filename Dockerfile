@@ -71,8 +71,9 @@ COPY src ./src
 # Fix Playwright browser permissions for node user
 RUN chown -R node:node /home/node/.cache
 
-# Create data directory
-RUN mkdir -p /data && chown -R node:node /data
+# Create data directories with correct ownership for node user
+RUN mkdir -p /data/tarsee/data /data/tarsee/workspace/skills /data/tarsee/workspace/memory \
+  && chown -R node:node /data
 
 USER node
 
