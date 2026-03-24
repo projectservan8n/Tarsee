@@ -186,15 +186,7 @@ const Chat = {
     const sidebarH1 = document.querySelector(".sidebar-header h1");
     if (sidebarH1) sidebarH1.textContent = this.botName;
 
-    // Update sidebar logo initials
-    const sidebarLogo = document.querySelector(".sidebar-header .logo");
-    if (sidebarLogo) sidebarLogo.textContent = initials;
-
-    // Update welcome logo (only if no emoji was set)
-    const welcomeLogo = document.getElementById("welcomeLogo");
-    if (welcomeLogo && welcomeLogo.style.fontSize !== "32px") {
-      welcomeLogo.textContent = initials;
-    }
+    // Sidebar logo and welcome logo use the tarsier image — don't overwrite with initials
   },
 
   // --- Command Palette ---
@@ -388,8 +380,9 @@ const Chat = {
     const isGrouped = (role === this.lastMessageRole) && (now - this.lastMessageTime < 5 * 60 * 1000);
     msg.className = `message ${role}${isGrouped ? " grouped" : ""}`;
 
-    const initials = this.botName ? this.botName.slice(0, 2).toUpperCase() : "T";
-    const avatar = role === "assistant" ? initials : "U";
+    const avatar = role === "assistant"
+      ? `<img src="/icon-32.png" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`
+      : "U";
 
     // Copy button for assistant messages
     const copyBtn = role === "assistant" && !isStreaming

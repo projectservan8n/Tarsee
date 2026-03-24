@@ -19,7 +19,7 @@ const Setup = {
 
     document.getElementById("setupContent").innerHTML = `
       <div class="setup-card-header">
-        <div class="logo-large">T</div>
+        <div class="logo-large"><img src="/icon-192.png" alt="Tarsee" style="width:100%;height:100%;object-fit:cover;border-radius:inherit"></div>
         <h2>Welcome to Tarsee</h2>
         <p>Your personal AI gateway. Connect in under a minute.</p>
       </div>
