@@ -645,6 +645,142 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
         }
       }
 
+      case "browser": {
+        const { action, url, selector, text, script } = toolInput;
+        try {
+          if (action === "close") {
+            if (browserInstance) {
+              await browserInstance.close();
+              browserInstance = null;
+              browserPage = null;
+            }
+            return "Browser closed.";
+          }
+
+          const page = await ensureBrowser();
+
+          switch (action) {
+            case "navigate": {
+              if (!url) return "Error: 'url' is required for navigate action.";
+              await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+              const title = await page.title();
+              return `Navigated to: ${page.url()}\nTitle: ${title}`;
+            }
+            case "screenshot": {
+              const buf = await page.screenshot({ type: "png", fullPage: false });
+              const b64 = buf.toString("base64");
+              return `Screenshot captured (${buf.length} bytes, base64). Data URL: data:image/png;base64,${b64.slice(0, 200)}... (truncated for display, full image available)`;
+            }
+            case "click": {
+              if (!selector) return "Error: 'selector' is required for click action.";
+              await page.click(selector, { timeout: 10_000 });
+              return `Clicked element: ${selector}`;
+            }
+            case "type": {
+              if (!selector) return "Error: 'selector' is required for type action.";
+              if (!text) return "Error: 'text' is required for type action.";
+              await page.fill(selector, text);
+              return `Typed "${text}" into ${selector}`;
+            }
+            case "evaluate": {
+              if (!script) return "Error: 'script' is required for evaluate action.";
+              const result = await page.evaluate(script);
+              return truncate(JSON.stringify(result, null, 2) || "undefined", MAX_RESULT);
+            }
+            case "get_text": {
+              const bodyText = await page.textContent("body");
+              return truncate(bodyText || "(empty page)", MAX_RESULT);
+            }
+            default:
+              return `Unknown browser action: ${action}. Valid actions: navigate, screenshot, click, type, evaluate, get_text, close`;
+          }
+        } catch (err) {
+          return `Browser error (${action}): ${err.message}`;
+        }
+      }
+
+      case "web_search": {
+        const { query, max_results } = toolInput;
+        const limit = Math.min(Math.max(max_results || 5, 1), 10);
+        const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+        const res = await fetch(searchUrl, {
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
+          signal: AbortSignal.timeout(15_000),
+        });
+        const html = await res.text();
+
+        // Parse results from DuckDuckGo HTML
+        const results = [];
+        const resultRegex = /<a[^>]+class="result__a"[^>]+href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
+        const snippetRegex = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+
+        let match;
+        while ((match = resultRegex.exec(html)) !== null && results.length < limit) {
+          const rawUrl = match[1];
+          const title = match[2].replace(/<[^>]+>/g, "").trim();
+          // DuckDuckGo wraps URLs in a redirect; extract the actual URL
+          let actualUrl = rawUrl;
+          const uddgMatch = rawUrl.match(/[?&]uddg=([^&]+)/);
+          if (uddgMatch) actualUrl = decodeURIComponent(uddgMatch[1]);
+          results.push({ title, url: actualUrl, snippet: "" });
+        }
+
+        // Extract snippets
+        let snippetIdx = 0;
+        while ((match = snippetRegex.exec(html)) !== null && snippetIdx < results.length) {
+          results[snippetIdx].snippet = match[1].replace(/<[^>]+>/g, "").trim();
+          snippetIdx++;
+        }
+
+        if (results.length === 0) return `No results found for "${query}".`;
+
+        return results.map((r, i) =>
+          `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`
+        ).join("\n\n");
+      }
+
+      case "pdf_read": {
+        const { source } = toolInput;
+        let pdfBuffer;
+
+        if (source.startsWith("http://") || source.startsWith("https://")) {
+          // Fetch PDF from URL
+          const res = await fetch(source, {
+            signal: AbortSignal.timeout(30_000),
+          });
+          if (!res.ok) return `Error fetching PDF: HTTP ${res.status}`;
+          pdfBuffer = Buffer.from(await res.arrayBuffer());
+        } else {
+          // Read from workspace
+          const filePath = path.join(config.WORKSPACE_DIR, source);
+          try {
+            pdfBuffer = fs.readFileSync(filePath);
+          } catch (err) {
+            return `Error reading PDF file '${source}': ${err.message}`;
+          }
+        }
+
+        // Try pdftotext first (poppler-utils), fall back to raw text extraction
+        try {
+          const { execSync } = await import("node:child_process");
+          const tmpPath = path.join(config.WORKSPACE_DIR, ".tmp_pdf_read.pdf");
+          fs.writeFileSync(tmpPath, pdfBuffer);
+          try {
+            const text = execSync(`pdftotext "${tmpPath}" -`, { timeout: 30_000, maxBuffer: 10 * 1024 * 1024 }).toString();
+            fs.unlinkSync(tmpPath);
+            if (text.trim()) return truncate(text, MAX_RESULT);
+          } catch {
+            // pdftotext not available, fall through
+            try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+          }
+        } catch { /* ignore */ }
+
+        // Fallback: extract readable ASCII text from PDF binary
+        const rawText = pdfBuffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s{3,}/g, " ").trim();
+        if (rawText.length < 50) return "Could not extract meaningful text from this PDF. Install poppler-utils (pdftotext) for better PDF support.";
+        return truncate(`(Raw text extraction — install pdftotext for better results)\n\n${rawText}`, MAX_RESULT);
+      }
+
       default:
         return `Unknown tool: ${toolName}`;
     }
