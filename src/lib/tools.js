@@ -221,6 +221,144 @@ export const TOOLS = [
       required: ["filename", "content"],
     },
   },
+
+  {
+    name: "browser",
+    description: "Control a web browser. Actions: navigate (go to URL), screenshot (capture page), click (click element by selector), type (type text into element), evaluate (run JS in page), get_text (extract page text content). The browser persists across calls within a conversation.",
+    input_schema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["navigate", "screenshot", "click", "type", "evaluate", "get_text", "close"],
+          description: "The browser action to perform",
+        },
+        url: {
+          type: "string",
+          description: "URL to navigate to (for 'navigate' action)",
+        },
+        selector: {
+          type: "string",
+          description: "CSS selector for the target element (for 'click' and 'type' actions)",
+        },
+        text: {
+          type: "string",
+          description: "Text to type into the element (for 'type' action)",
+        },
+        script: {
+          type: "string",
+          description: "JavaScript code to evaluate in the page (for 'evaluate' action)",
+        },
+      },
+      required: ["action"],
+    },
+  },
+
+  {
+    name: "web_search",
+    description: "Search the web using DuckDuckGo. Returns titles, URLs, and snippets for the top results. Free, no API key needed.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "The search query",
+        },
+        max_results: {
+          type: "number",
+          description: "Maximum number of results to return (default: 5, max: 10)",
+        },
+      },
+      required: ["query"],
+    },
+  },
+
+  {
+    name: "pdf_read",
+    description: "Read and extract text from a PDF file. Can read from a URL or from a workspace file path.",
+    input_schema: {
+      type: "object",
+      properties: {
+        source: {
+          type: "string",
+          description: "URL of the PDF or workspace filename to read",
+        },
+      },
+      required: ["source"],
+    },
+  },
+
+  {
+    name: "send_message",
+    description: "Send a message to a specific channel. Use this to proactively message the user on Telegram, Discord, or Slack, or to send data/files to the chat.",
+    input_schema: {
+      type: "object",
+      properties: {
+        channel: {
+          type: "string",
+          description: "The channel to send to",
+          enum: ["web", "discord", "telegram", "slack"],
+        },
+        message: {
+          type: "string",
+          description: "The message content to send",
+        },
+        channel_id: {
+          type: "string",
+          description: "Optional specific chat/channel ID to target",
+        },
+      },
+      required: ["channel", "message"],
+    },
+  },
+
+  {
+    name: "schedule_task",
+    description: "Schedule a task to run at a specific time or interval using cron syntax. The task will be executed as an AI prompt at the scheduled time.",
+    input_schema: {
+      type: "object",
+      properties: {
+        schedule: {
+          type: "string",
+          description: "Cron expression, e.g. '0 9 * * *' for daily at 9am",
+        },
+        prompt: {
+          type: "string",
+          description: "What to do when the task triggers — this will be sent as an AI prompt",
+        },
+        name: {
+          type: "string",
+          description: "Optional descriptive name for this scheduled task",
+        },
+      },
+      required: ["schedule", "prompt"],
+    },
+  },
+
+  {
+    name: "generate_image",
+    description: "Generate an image from a text prompt. Uses DALL-E or compatible image generation API. Requires OPENAI_API_KEY.",
+    input_schema: {
+      type: "object",
+      properties: {
+        prompt: {
+          type: "string",
+          description: "Text description of the image to generate",
+        },
+        size: {
+          type: "string",
+          description: "Image dimensions",
+          enum: ["1024x1024", "1024x1792", "1792x1024"],
+        },
+        quality: {
+          type: "string",
+          description: "Image quality level",
+          enum: ["standard", "hd"],
+        },
+      },
+      required: ["prompt"],
+    },
+  },
 ];
 
 /**
@@ -233,6 +371,23 @@ export function getToolDefinitions() {
     description: t.description,
     input_schema: t.input_schema,
   }));
+}
+
+// ── Browser state (persists across tool calls within a session) ──
+let browserInstance = null;
+let browserPage = null;
+
+async function ensureBrowser() {
+  if (browserPage && !browserPage.isClosed()) return browserPage;
+  try {
+    const { chromium } = await import("playwright");
+    browserInstance = await chromium.launch({ headless: true });
+    const context = await browserInstance.newContext();
+    browserPage = await context.newPage();
+    return browserPage;
+  } catch (err) {
+    throw new Error(`Failed to launch browser: ${err.message}. Make sure playwright is installed (npm i playwright).`);
+  }
 }
 
 /**
@@ -436,6 +591,58 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
         const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
         writeWorkspaceFile(filename, existing + separator + content);
         return `Successfully appended ${content.length} chars to '${filename}'.`;
+      }
+
+      case "send_message": {
+        const { channel, message, channel_id } = toolInput;
+        if (!ctx.db) return "Database not available.";
+        try {
+          const { ConversationStore } = await import("../db/conversations.js");
+          const store = new ConversationStore(ctx.db);
+          // Find or create a conversation for this channel
+          let conv = store.findByChannel(channel, channel_id);
+          if (!conv) {
+            conv = store.create({ channel, channelId: channel_id || null, title: `${channel} outbound` });
+          }
+          store.addMessage(conv.id, { role: "assistant", content: message });
+          const preview = message.length > 80 ? message.slice(0, 80) + "..." : message;
+          return `Message sent to ${channel}: ${preview}`;
+        } catch (err) {
+          return `send_message error: ${err.message}`;
+        }
+      }
+
+      case "schedule_task": {
+        const { schedule, prompt, name } = toolInput;
+        try {
+          const { addCronJob } = await import("./cron.js");
+          const job = addCronJob({ schedule, prompt, name });
+          return `Scheduled task: ${name || job.id} at ${schedule}`;
+        } catch (err) {
+          return `schedule_task error: ${err.message}`;
+        }
+      }
+
+      case "generate_image": {
+        const { prompt, size, quality } = toolInput;
+        const apiKey = process.env.OPENAI_API_KEY || ctx.settingsStore?.get("ai.openai.apiKey");
+        if (!apiKey) {
+          return "Image generation requires an OpenAI API key. Set OPENAI_API_KEY or configure OpenAI in settings.";
+        }
+        try {
+          const res = await fetch("https://api.openai.com/v1/images/generations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+            body: JSON.stringify({ model: "dall-e-3", prompt, n: 1, size: size || "1024x1024", quality: quality || "standard" }),
+            signal: AbortSignal.timeout(60000),
+          });
+          const data = await res.json();
+          if (data.error) return `Image generation error: ${data.error.message}`;
+          const imageUrl = data.data?.[0]?.url;
+          return `Image generated: ${imageUrl}\n\nRevised prompt: ${data.data?.[0]?.revised_prompt || prompt}`;
+        } catch (err) {
+          return `generate_image error: ${err.message}`;
+        }
       }
 
       default:
