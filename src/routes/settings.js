@@ -88,7 +88,7 @@ settingsRouter.post("/channel", (req, res) => {
  * GET /api/settings/setup-status
  * Check if first-time setup is needed.
  */
-settingsRouter.get("/setup-status", (_req, res) => {
+settingsRouter.get("/setup-status", (req, res) => {
   const provider = settingsStore.get("ai.activeProvider");
   const botName = settingsStore.get("identity.name");
   const hasKey = provider
