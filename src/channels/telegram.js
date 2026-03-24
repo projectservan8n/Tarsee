@@ -3,6 +3,7 @@ import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand } from "../lib/commands.js";
+import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
@@ -118,16 +119,12 @@ You can use these special markers in your response:
 
     let fullResponse = "";
     const streaming = config.streaming ?? "partial";
+    const tools = getToolDefinitions();
+    const toolCtx = { db, settingsStore, conversationId: convId };
+    const MAX_TOOL_ROUNDS = 15;
 
     try {
-      const stream = chatStream({
-        provider: activeProvider.provider,
-        model: activeProvider.model,
-        apiKey: activeProvider.apiKey,
-        baseUrl: activeProvider.baseUrl,
-        messages: history.map((m) => ({ role: m.role, content: m.content })),
-        systemPrompt,
-      });
+      let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
       // Live streaming: edit a preview message as tokens arrive
       let previewMsgId = null;
@@ -137,32 +134,72 @@ You can use these special markers in your response:
         ctx.sendChatAction("typing").catch(() => {});
       }, 4000);
 
-      for await (const event of stream) {
-        if (event.type === "text") {
-          fullResponse += event.content;
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const toolCalls = [];
+        let roundText = "";
+        let stopReason = "end_turn";
 
-          if (streaming === "partial" && fullResponse.length > 20) {
-            const now = Date.now();
-            if (now - lastEditTime > EDIT_INTERVAL_MS) {
-              lastEditTime = now;
-              const preview = fullResponse.slice(0, 4000) + (fullResponse.length > 4000 ? "..." : " ▎");
-              try {
-                if (!previewMsgId) {
-                  const sent = await ctx.reply(preview, {
-                    ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
-                  });
-                  previewMsgId = sent.message_id;
-                } else {
-                  await ctx.telegram.editMessageText(
-                    chatId, previewMsgId, undefined, preview
-                  ).catch(() => {});
-                }
-              } catch {
-                // Edit can fail
+        const stream = chatStream({
+          provider: activeProvider.provider,
+          model: activeProvider.model,
+          apiKey: activeProvider.apiKey,
+          baseUrl: activeProvider.baseUrl,
+          messages: workingMessages,
+          systemPrompt,
+          tools,
+        });
+
+        for await (const event of stream) {
+          if (event.type === "text") {
+            roundText += event.content;
+            fullResponse += event.content;
+
+            if (streaming === "partial" && fullResponse.length > 20) {
+              const now = Date.now();
+              if (now - lastEditTime > EDIT_INTERVAL_MS) {
+                lastEditTime = now;
+                const preview = fullResponse.slice(0, 4000) + (fullResponse.length > 4000 ? "..." : " ▎");
+                try {
+                  if (!previewMsgId) {
+                    const sent = await ctx.reply(preview, {
+                      ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
+                    });
+                    previewMsgId = sent.message_id;
+                  } else {
+                    await ctx.telegram.editMessageText(
+                      chatId, previewMsgId, undefined, preview
+                    ).catch(() => {});
+                  }
+                } catch { /* Edit can fail */ }
               }
             }
+          } else if (event.type === "tool_use") {
+            toolCalls.push({ id: event.id, name: event.name, input: event.input });
+          } else if (event.type === "done") {
+            stopReason = event.stopReason || "end_turn";
+            break;
           }
         }
+
+        // No tool calls — done
+        if (toolCalls.length === 0 || stopReason !== "tool_use") break;
+
+        // Build assistant message with tool_use blocks
+        const assistantContent = [];
+        if (roundText) assistantContent.push({ type: "text", text: roundText });
+        for (const tc of toolCalls) {
+          assistantContent.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
+        }
+        workingMessages.push({ role: "assistant", content: assistantContent });
+
+        // Execute tools
+        const toolResults = [];
+        for (const tc of toolCalls) {
+          console.log(`[telegram] tool: ${tc.name}(${JSON.stringify(tc.input).slice(0, 80)})`);
+          const result = await executeTool(tc.name, tc.input, toolCtx);
+          toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
+        }
+        workingMessages.push({ role: "user", content: toolResults });
       }
 
       clearInterval(typingInterval);

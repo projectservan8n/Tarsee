@@ -6,6 +6,7 @@ import { processCommand } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
+import { getToolDefinitions, executeTool } from "../lib/tools.js";
 
 /**
  * Creates and starts a Discord bot.
@@ -152,42 +153,82 @@ You can use these special markers in your response:
     const streaming = config.streaming ?? "partial";
 
     try {
-      const stream = chatStream({
-        provider: activeProvider.provider,
-        model: activeProvider.model,
-        apiKey: activeProvider.apiKey,
-        baseUrl: activeProvider.baseUrl,
-        messages: history.map((m) => ({ role: m.role, content: m.content })),
-        systemPrompt,
-      });
+      const tools = getToolDefinitions();
+      const toolCtx = { db, settingsStore, conversationId: convId };
+      const MAX_TOOL_ROUNDS = 15;
+      let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
       // Live streaming: edit a preview message as tokens arrive
       let previewMsg = null;
       let lastEditTime = 0;
       const EDIT_INTERVAL_MS = 1200;
 
-      for await (const event of stream) {
-        if (event.type === "text") {
-          fullResponse += event.content;
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const toolCalls = [];
+        let roundText = "";
+        let stopReason = "end_turn";
 
-          if (streaming === "partial" && fullResponse.length > 10) {
-            const now = Date.now();
-            if (now - lastEditTime > EDIT_INTERVAL_MS) {
-              lastEditTime = now;
-              const preview = fullResponse.slice(0, 1950) + (fullResponse.length > 1950 ? "..." : " ▎");
-              try {
-                if (!previewMsg) {
-                  previewMsg = await message.reply(preview);
-                } else {
-                  await previewMsg.edit(preview);
+        const stream = chatStream({
+          provider: activeProvider.provider,
+          model: activeProvider.model,
+          apiKey: activeProvider.apiKey,
+          baseUrl: activeProvider.baseUrl,
+          messages: workingMessages,
+          systemPrompt,
+          tools,
+        });
+
+        for await (const event of stream) {
+          if (event.type === "text") {
+            roundText += event.content;
+            fullResponse += event.content;
+
+            if (streaming === "partial" && fullResponse.length > 10) {
+              const now = Date.now();
+              if (now - lastEditTime > EDIT_INTERVAL_MS) {
+                lastEditTime = now;
+                const preview = fullResponse.slice(0, 1950) + (fullResponse.length > 1950 ? "..." : " ▎");
+                try {
+                  if (!previewMsg) {
+                    previewMsg = await message.reply(preview);
+                  } else {
+                    await previewMsg.edit(preview);
+                  }
+                } catch {
+                  // Editing can fail if message was deleted
                 }
-              } catch {
-                // Editing can fail if message was deleted
+                message.channel.sendTyping().catch(() => {});
               }
-              message.channel.sendTyping().catch(() => {});
             }
+          } else if (event.type === "tool_use") {
+            toolCalls.push({ id: event.id, name: event.name, input: event.input });
+          } else if (event.type === "done") {
+            stopReason = event.stopReason || "end_turn";
+            break;
           }
         }
+
+        if (toolCalls.length === 0 || stopReason !== "tool_use") break;
+
+        // Build assistant content blocks
+        const assistantContent = [];
+        if (roundText) assistantContent.push({ type: "text", text: roundText });
+        for (const tc of toolCalls) {
+          assistantContent.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
+        }
+        workingMessages.push({ role: "assistant", content: assistantContent });
+
+        // Execute tools
+        const toolResults = [];
+        for (const tc of toolCalls) {
+          console.log(`[discord] tool: ${tc.name}`);
+          const result = await executeTool(tc.name, tc.input, toolCtx);
+          toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
+        }
+        workingMessages.push({ role: "user", content: toolResults });
+
+        // Keep typing indicator alive during tool rounds
+        message.channel.sendTyping().catch(() => {});
       }
 
       // Save and send final response
