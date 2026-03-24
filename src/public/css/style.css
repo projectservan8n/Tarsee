@@ -1,4 +1,4 @@
-/* ===== OpusClaw Design System — Dark Theme (OpenClaw Parity) ===== */
+/* ===== Tarsee Design System — Dark Theme ===== */
 
 /* --- CSS Variables --- */
 :root {
@@ -12,11 +12,11 @@
   --surface-hover: #22252e;
   --surface-elevated: #1e2128;
 
-  /* Accent - Red */
-  --primary: #ff5c5c;
-  --primary-hover: #ff4040;
-  --primary-light: rgba(255, 92, 92, 0.1);
-  --primary-glow: rgba(255, 92, 92, 0.2);
+  /* Accent - Amber/Gold (Tarsee) */
+  --primary: #f5a623;
+  --primary-hover: #e6951a;
+  --primary-light: rgba(245, 166, 35, 0.1);
+  --primary-glow: rgba(245, 166, 35, 0.2);
 
   /* Text */
   --text: #e4e4e7;
@@ -139,7 +139,7 @@ html, body {
 .sidebar-header .logo {
   width: 34px;
   height: 34px;
-  background: linear-gradient(135deg, var(--primary), #ff8a80);
+  background: linear-gradient(135deg, var(--primary), #ffd700);
   border-radius: var(--radius);
   display: flex;
   align-items: center;
@@ -148,7 +148,7 @@ html, body {
   font-weight: 700;
   font-size: 14px;
   letter-spacing: -0.5px;
-  box-shadow: 0 2px 8px rgba(255, 92, 92, 0.25);
+  box-shadow: 0 2px 8px rgba(245, 166, 35, 0.25);
   flex-shrink: 0;
 }
 
@@ -182,7 +182,7 @@ html, body {
 
 .btn-new-chat:hover {
   background: var(--primary-hover);
-  box-shadow: 0 4px 12px rgba(255, 92, 92, 0.3);
+  box-shadow: 0 4px 12px rgba(245, 166, 35, 0.3);
   transform: translateY(-1px);
 }
 
@@ -355,9 +355,9 @@ html, body {
 }
 
 .message.assistant .message-avatar {
-  background: linear-gradient(135deg, var(--primary), #ff8a80);
+  background: linear-gradient(135deg, var(--primary), #ffd700);
   color: white;
-  box-shadow: 0 2px 6px rgba(255, 92, 92, 0.2);
+  box-shadow: 0 2px 6px rgba(245, 166, 35, 0.2);
 }
 
 .message-content {
@@ -590,7 +590,7 @@ html, body {
 .welcome .logo-large {
   width: 56px;
   height: 56px;
-  background: linear-gradient(135deg, var(--primary), #ff8a80);
+  background: linear-gradient(135deg, var(--primary), #ffd700);
   border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
@@ -599,7 +599,7 @@ html, body {
   font-size: 22px;
   font-weight: 700;
   margin-bottom: 4px;
-  box-shadow: 0 4px 16px rgba(255, 92, 92, 0.25);
+  box-shadow: 0 4px 16px rgba(245, 166, 35, 0.25);
   letter-spacing: -0.5px;
 }
 
@@ -682,7 +682,7 @@ html, body {
 .btn-primary:hover {
   background: var(--primary-hover);
   border-color: var(--primary-hover);
-  box-shadow: 0 2px 8px rgba(255, 92, 92, 0.3);
+  box-shadow: 0 2px 8px rgba(245, 166, 35, 0.3);
 }
 
 .btn-danger {
@@ -933,7 +933,7 @@ html, body {
 .login-card .logo-large {
   width: 52px;
   height: 52px;
-  background: linear-gradient(135deg, var(--primary), #ff8a80);
+  background: linear-gradient(135deg, var(--primary), #ffd700);
   border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
@@ -942,7 +942,7 @@ html, body {
   font-size: 20px;
   font-weight: 700;
   margin: 0 auto 16px;
-  box-shadow: 0 4px 16px rgba(255, 92, 92, 0.25);
+  box-shadow: 0 4px 16px rgba(245, 166, 35, 0.25);
   letter-spacing: -0.5px;
 }
 
@@ -1177,7 +1177,7 @@ html, body {
 }
 
 .setup-card-header {
-  background: linear-gradient(135deg, var(--primary), #ff8a80);
+  background: linear-gradient(135deg, var(--primary), #ffd700);
   padding: 28px 32px 24px;
   text-align: center;
   color: white;

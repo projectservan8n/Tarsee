@@ -1,5 +1,5 @@
 /**
- * OpusClaw Console — Real-time server console in the WebUI.
+ * Tarsee Console — Real-time server console in the WebUI.
  * Connects via WebSocket to stream live server logs and execute debug commands.
  */
 const Console = {
@@ -154,7 +154,7 @@ const Console = {
         this.setStatus("connected");
         // Subscribe to console logs
         this.ws.send(JSON.stringify({ type: "console.subscribe" }));
-        this.appendSystem("Connected to OpusClaw server console.");
+        this.appendSystem("Connected to Tarsee server console.");
         break;
 
       case "auth_error":

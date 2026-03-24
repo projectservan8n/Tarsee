@@ -1,5 +1,5 @@
 /**
- * OpusClaw API Client.
+ * Tarsee API Client.
  * Handles all communication with the server, including CSRF tokens and auth.
  */
 const API = {

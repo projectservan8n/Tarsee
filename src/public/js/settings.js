@@ -302,7 +302,7 @@ const Settings = {
         document.getElementById("topbarTitle").textContent = `${icon[ch.platform] || icon.web} ${ch.title}`;
       }
     } else {
-      document.getElementById("topbarTitle").textContent = Chat?.botName || "OpusClaw";
+      document.getElementById("topbarTitle").textContent = Chat?.botName || "Tarsee";
     }
 
     // Un-highlight settings button
@@ -538,7 +538,7 @@ const Settings = {
 
   // --- Identity (auto-saved) ---
   async saveIdentity() {
-    const name = this.elements.botName?.value.trim() || "OpusClaw";
+    const name = this.elements.botName?.value.trim() || "Tarsee";
     try {
       await API.json("/api/settings/general", {
         method: "POST",

@@ -15,7 +15,7 @@ const Chat = {
   currentConversationId: null,
   isStreaming: false,
   channels: [],
-  botName: "OpusClaw",
+  botName: "Tarsee",
   lastMessageRole: null,
   lastMessageTime: 0,
 
@@ -128,9 +128,9 @@ const Chat = {
   async loadBotName() {
     try {
       const data = await API.json("/api/settings/setup-status");
-      this.setBotName(data.botName || "OpusClaw");
+      this.setBotName(data.botName || "Tarsee");
     } catch {
-      this.setBotName("OpusClaw");
+      this.setBotName("Tarsee");
     }
 
     // Also load IDENTITY.md to get emoji for welcome screen
@@ -170,7 +170,7 @@ const Chat = {
   },
 
   setBotName(name) {
-    this.botName = name || "OpusClaw";
+    this.botName = name || "Tarsee";
     const initials = this.botName.slice(0, 2).toUpperCase();
 
     // Update topbar title (only if showing default, not in settings)
@@ -383,7 +383,7 @@ const Chat = {
     const isGrouped = (role === this.lastMessageRole) && (now - this.lastMessageTime < 5 * 60 * 1000);
     msg.className = `message ${role}${isGrouped ? " grouped" : ""}`;
 
-    const initials = this.botName ? this.botName.slice(0, 2).toUpperCase() : "OC";
+    const initials = this.botName ? this.botName.slice(0, 2).toUpperCase() : "T";
     const avatar = role === "assistant" ? initials : "U";
 
     // Copy button for assistant messages

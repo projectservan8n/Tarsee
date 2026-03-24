@@ -1,5 +1,5 @@
 /**
- * OpusClaw App — Main initialization.
+ * Tarsee App — Main initialization.
  */
 const App = {
   async init() {

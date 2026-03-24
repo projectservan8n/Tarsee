@@ -19,8 +19,8 @@ const Setup = {
 
     document.getElementById("setupContent").innerHTML = `
       <div class="setup-card-header">
-        <div class="logo-large">OC</div>
-        <h2>Welcome to OpusClaw</h2>
+        <div class="logo-large">T</div>
+        <h2>Welcome to Tarsee</h2>
         <p>Your personal AI gateway. Connect in under a minute.</p>
       </div>
       <div class="setup-card-body">
@@ -191,7 +191,7 @@ const Setup = {
     }
 
     // Save identity
-    const botName = identity.name || "OpusClaw";
+    const botName = identity.name || "Tarsee";
     const systemPrompt = identity.systemPrompt || identity.personality || "";
 
     try {
@@ -285,7 +285,7 @@ const Setup = {
 const INTERVIEW_SYSTEM_PROMPT = `You are being set up for the first time by your new owner. Your job is to have a warm, brief conversation (3-5 exchanges) to learn who they want you to be.
 
 Discover:
-1. What they want to call you (suggest "OpusClaw" as default, but let them pick anything)
+1. What they want to call you (suggest "Tarsee" as default, but let them pick anything)
 2. Their preferred communication style (formal/casual/technical/friendly/witty)
 3. What they'll mainly use you for (coding, business, creative writing, general assistant, etc.)
 4. Any personality traits they want (humor level, emoji usage, verbosity, directness)

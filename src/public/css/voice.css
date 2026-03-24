@@ -35,7 +35,7 @@
 
 .voice-visualizer.listening {
   background: var(--primary);
-  box-shadow: 0 0 0 20px rgba(255, 92, 92, 0.15), 0 0 0 40px rgba(255, 92, 92, 0.05);
+  box-shadow: 0 0 0 20px rgba(245, 166, 35, 0.15), 0 0 0 40px rgba(245, 166, 35, 0.05);
   animation: voicePulse 2s infinite ease-in-out;
 }
 
@@ -97,7 +97,7 @@
 
 .voice-btn.mic:hover {
   background: var(--primary-hover);
-  box-shadow: 0 0 20px rgba(255, 92, 92, 0.3);
+  box-shadow: 0 0 20px rgba(245, 166, 35, 0.3);
 }
 
 .voice-btn.mic.active {
