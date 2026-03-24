@@ -529,25 +529,18 @@
 
   <!-- Voice Mode Panel -->
   <div id="voicePanel" class="voice-panel">
-    <button class="btn voice-close" id="voiceClose">
-      <svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-      Close
-    </button>
-    <div class="voice-visualizer" id="voiceVisualizer">
-      <svg width="64" height="64" viewBox="0 0 24 24" fill="none"><path d="M12 1a4 4 0 014 4v5a4 4 0 01-8 0V5a4 4 0 014-4z" stroke="currentColor" stroke-width="1.5"/><path d="M4 10a8 8 0 0016 0M12 22v-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-    </div>
-    <div class="voice-status" id="voiceStatus">Press the mic to start</div>
-    <div class="voice-transcript" id="voiceTranscript"></div>
-    <div class="voice-controls">
-      <button class="voice-btn secondary" id="voiceSettingsBtn" title="Voice settings">
-        <svg width="20" height="20" viewBox="0 0 16 16" fill="none"><path d="M6.5 1.5h3l.5 2 1.5.9 2-.5 1.5 2.6-1.5 1.5v1.5l1.5 1.5-1.5 2.6-2-.5-1.5.9-.5 2h-3l-.5-2-1.5-.9-2 .5L1 11.5l1.5-1.5V8.5L1 7l1.5-2.6 2 .5L6 4z" stroke="currentColor" stroke-width="1"/></svg>
-      </button>
-      <button class="voice-btn mic" id="voiceMicBtn" title="Start/stop recording">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M12 1a4 4 0 014 4v5a4 4 0 01-8 0V5a4 4 0 014-4z" stroke="currentColor" stroke-width="1.5"/><path d="M4 10a8 8 0 0016 0M12 22v-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-      </button>
-      <button class="voice-btn secondary" id="voiceStopAudioBtn" title="Stop audio" style="display:none">
-        <svg width="20" height="20" viewBox="0 0 16 16" fill="none"><rect x="3" y="3" width="10" height="10" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>
-      </button>
+    <button class="voice-close" id="voiceClose">&#10005;</button>
+    <div class="voice-conversation" id="voiceConversation"></div>
+    <div class="voice-orb-container">
+      <div class="voice-orb idle" id="voiceOrb">
+        <svg width="48" height="48" viewBox="0 0 16 16" fill="none"><path d="M8 1a3 3 0 013 3v3a3 3 0 01-6 0V4a3 3 0 013-3z" stroke="currentColor" stroke-width="1.2"/><path d="M3 7a5 5 0 0010 0M8 14v-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </div>
+      <div class="voice-status-text" id="voiceStatus">Tap to start</div>
+      <div class="voice-controls">
+        <button class="voice-btn mic" id="voiceMicBtn" title="Toggle mic">
+          <svg width="24" height="24" viewBox="0 0 16 16" fill="none"><path d="M8 1a3 3 0 013 3v3a3 3 0 01-6 0V4a3 3 0 013-3z" stroke="currentColor" stroke-width="1.5"/><path d="M3 7a5 5 0 0010 0M8 14v-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
     </div>
     <audio id="voiceAudio" class="voice-audio-player"></audio>
   </div>
