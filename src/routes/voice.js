@@ -3,6 +3,7 @@ import Busboy from "busboy";
 import { getTTSEngine } from "../voice/engine-registry.js";
 import { cloneVoice, listVoiceProfiles } from "../voice/clone-handler.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
+import { transcribe as whisperTranscribe, isAvailable as whisperAvailable } from "../voice/whisper-engine.js";
 import { LIMITS } from "../config/constants.js";
 
 export const voiceRouter = Router();
@@ -94,6 +95,74 @@ voiceRouter.post("/stt", async (req, res) => {
   try {
     const result = await transcribeAudio(audioBuffer, language);
     res.json(result);
+  } catch (err) {
+    const status = err.status || 500;
+    res.status(status).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/voice/transcribe
+ * Transcribe audio using whisper.cpp (multipart form with 'audio' file).
+ * Returns { text, language }.
+ */
+voiceRouter.post("/transcribe", async (req, res) => {
+  const contentType = req.headers["content-type"] || "";
+
+  try {
+    let audioBuffer;
+
+    if (contentType.includes("multipart/form-data")) {
+      // Parse multipart — reuse busboy inline
+      audioBuffer = await new Promise((resolve, reject) => {
+        const busboy = Busboy({ headers: req.headers, limits: { fileSize: LIMITS.VOICE_SAMPLE_MAX_BYTES } });
+        let buf = null;
+
+        busboy.on("file", (fieldname, stream) => {
+          if (fieldname !== "audio") { stream.resume(); return; }
+          const chunks = [];
+          stream.on("data", (chunk) => chunks.push(chunk));
+          stream.on("end", () => { buf = Buffer.concat(chunks); });
+          stream.on("limit", () => {
+            reject(Object.assign(new Error("Audio too large"), { status: 413 }));
+          });
+        });
+
+        busboy.on("finish", () => {
+          if (!buf) return reject(Object.assign(new Error("No audio file provided"), { status: 400 }));
+          resolve(buf);
+        });
+
+        busboy.on("error", reject);
+        req.pipe(busboy);
+      });
+    } else {
+      // Raw body fallback
+      const chunks = [];
+      let totalSize = 0;
+      for await (const chunk of req) {
+        totalSize += chunk.length;
+        if (totalSize > LIMITS.VOICE_SAMPLE_MAX_BYTES) {
+          return res.status(413).json({ error: "Audio too large" });
+        }
+        chunks.push(chunk);
+      }
+      audioBuffer = Buffer.concat(chunks);
+    }
+
+    if (!audioBuffer || audioBuffer.length === 0) {
+      return res.status(400).json({ error: "Empty audio" });
+    }
+
+    // Prefer whisper.cpp if available, fall back to legacy STT handler
+    if (await whisperAvailable()) {
+      const result = await whisperTranscribe(audioBuffer);
+      return res.json({ text: result.text, language: result.language });
+    }
+
+    // Fallback to configured STT handler
+    const result = await transcribeAudio(audioBuffer, req.headers["x-language"] || "en-US");
+    res.json({ text: result.transcript, language: "en" });
   } catch (err) {
     const status = err.status || 500;
     res.status(status).json({ error: err.message });

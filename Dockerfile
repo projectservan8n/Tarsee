@@ -23,6 +23,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends wget \
   && rm piper_linux_x86_64.tar.gz \
   && rm -rf /var/lib/apt/lists/*
 
+# Download whisper.cpp binary
+RUN wget -q https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.4/whisper-v1.8.4-linux-x64.tar.gz \
+  && tar -xzf whisper-v1.8.4-linux-x64.tar.gz \
+  && rm whisper-v1.8.4-linux-x64.tar.gz
+
 # Stage 2: Runtime with Piper TTS + Playwright (Chromium)
 FROM node:22-bookworm-slim
 
@@ -51,6 +56,8 @@ RUN apt-get update \
     libcairo2 \
     libasound2 \
     libwayland-client0 \
+    # Audio conversion for whisper.cpp STT
+    ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production
@@ -58,7 +65,11 @@ WORKDIR /app
 
 # Copy Piper binary + libs from builder
 COPY --from=builder /app/piper /opt/piper
-ENV PATH="/opt/piper:${PATH}"
+
+# Copy whisper.cpp binary from builder
+COPY --from=builder /app/whisper-v1.8.4-linux-x64 /opt/whisper
+
+ENV PATH="/opt/piper:/opt/whisper:${PATH}"
 
 # Copy dependencies from builder (includes node_modules + Playwright browsers)
 COPY --from=builder /app/node_modules ./node_modules
