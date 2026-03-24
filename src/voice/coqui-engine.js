@@ -239,8 +239,9 @@ export class CoquiTTSEngine extends TTSEngine {
         language: "en",
       });
 
+      // First request triggers model download + load — allow 5 minutes
       const res = await fetch(`${TTS_SERVER_URL}/api/tts?${params}`, {
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(300_000),
       });
 
       if (!res.ok) {

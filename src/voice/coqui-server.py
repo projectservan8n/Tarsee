@@ -70,19 +70,14 @@ class TTSHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Not found")
 
     def _handle_ready(self):
-        """Health check — returns 200 if model is loaded."""
-        try:
-            tts = get_tts(self.server.model_name, self.server.models_dir)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"ok":true,"engine":"coqui","model":"' +
-                             self.server.model_name.encode() + b'"}')
-        except Exception as e:
-            self.send_response(503)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(f'{{"ok":false,"error":"{str(e)}"}}'.encode())
+        """Health check — returns 200 if server is up (model loads lazily on first request)."""
+        loaded = tts_instance is not None
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"ok":true,"engine":"coqui","model":"' +
+                         self.server.model_name.encode() +
+                         b'","modelLoaded":' + (b'true' if loaded else b'false') + b'}')
 
     def _handle_tts(self, params):
         """Synthesize text to speech."""
@@ -159,13 +154,9 @@ def main():
     parser.add_argument("--voices-dir", default="")
     args = parser.parse_args()
 
-    # Pre-load the model
+    # Lazy-load: skip pre-loading to save RAM — model loads on first TTS request
     print(f"[coqui-server] starting on {args.host}:{args.port}", file=sys.stderr)
-    try:
-        get_tts(args.model, args.models_dir)
-    except Exception as e:
-        print(f"[coqui-server] WARNING: model pre-load failed: {e}", file=sys.stderr)
-        print("[coqui-server] will retry on first request", file=sys.stderr)
+    print(f"[coqui-server] model will load on first request: {args.model}", file=sys.stderr)
 
     server = HTTPServer((args.host, args.port), TTSHandler)
     server.model_name = args.model
