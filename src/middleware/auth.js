@@ -44,7 +44,7 @@ function extractBearerToken(req) {
  */
 function extractSessionToken(req) {
   const cookies = req.headers.cookie || "";
-  const match = cookies.match(/(?:^|;\s*)opusclaw_session=([^;]+)/);
+  const match = cookies.match(/(?:^|;\s*)tarsee_session=([^;]+)/);
   return match ? match[1].trim() : null;
 }
 

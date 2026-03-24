@@ -26,7 +26,7 @@ authRouter.post("/login", (req, res) => {
 
   const sessionId = createSession(req.ip || req.socket?.remoteAddress);
 
-  res.cookie("opusclaw_session", sessionId, {
+  res.cookie("tarsee_session", sessionId, {
     httpOnly: true,
     sameSite: "Strict",
     secure: config.NODE_ENV === "production",
@@ -47,7 +47,7 @@ authRouter.post("/logout", (req, res) => {
   if (req.auth?.sessionId) {
     destroySession(req.auth.sessionId);
   }
-  res.clearCookie("opusclaw_session", { path: "/" });
+  res.clearCookie("tarsee_session", { path: "/" });
   res.json({ ok: true });
 });
 

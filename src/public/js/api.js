@@ -9,7 +9,7 @@ const API = {
    * Get CSRF token from cookie.
    */
   getCsrfToken() {
-    const match = document.cookie.match(/(?:^|;\s*)opusclaw_csrf=([^;]+)/);
+    const match = document.cookie.match(/(?:^|;\s*)tarsee_csrf=([^;]+)/);
     return match ? match[1] : null;
   },
 

@@ -8,6 +8,6 @@ restartPolicyType = "on_failure"
 requiredMountPath = "/data"
 
 [variables]
-OPUSCLAW_STATE_DIR = "/data/.opusclaw"
-OPUSCLAW_WORKSPACE_DIR = "/data/workspace"
-OPUSCLAW_DATA_DIR = "/data/.opusclaw/data"
+TARSEE_STATE_DIR = "/data/tarsee"
+TARSEE_WORKSPACE_DIR = "/data/tarsee/workspace"
+TARSEE_DATA_DIR = "/data/tarsee/data"

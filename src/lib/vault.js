@@ -24,7 +24,7 @@ function getKey() {
   // PBKDF2 with high iteration count for key stretching
   derivedKey = crypto.pbkdf2Sync(
     config.ENCRYPTION_KEY,
-    "opusclaw-vault-v1", // fixed application salt
+    "tarsee-vault-v1", // fixed application salt
     100_000,             // iterations
     KEY_LENGTH,
     "sha512"

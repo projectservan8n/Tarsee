@@ -1,19 +1,19 @@
-# OpusClaw — Self-hosted Docker Compose
+# Tarsee — Self-hosted Docker Compose
 version: "3.8"
 
 services:
-  opusclaw:
+  tarsee:
     build: .
     ports:
       - "${PORT:-3000}:3000"
     volumes:
-      - opusclaw-data:/data
+      - tarsee-data:/data
     environment:
       - PORT=3000
       - SETUP_PASSWORD=${SETUP_PASSWORD}
-      - OPUSCLAW_STATE_DIR=/data/.opusclaw
-      - OPUSCLAW_WORKSPACE_DIR=/data/workspace
-      - OPUSCLAW_DATA_DIR=/data/.opusclaw/data
+      - TARSEE_STATE_DIR=/data/tarsee
+      - TARSEE_WORKSPACE_DIR=/data/tarsee/workspace
+      - TARSEE_DATA_DIR=/data/tarsee/data
       # AI Provider keys (set in .env file or env)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -29,4 +29,4 @@ services:
       retries: 3
 
 volumes:
-  opusclaw-data:
+  tarsee-data:

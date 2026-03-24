@@ -4,12 +4,12 @@ import os from "node:os";
 import path from "node:path";
 
 // --- Port ---
-const PORT = Number.parseInt(process.env.PORT ?? process.env.OPUSCLAW_PORT ?? "3000", 10);
+const PORT = Number.parseInt(process.env.PORT ?? process.env.TARSEE_PORT ?? "3000", 10);
 
 // --- Directories ---
-// Auto-detect Railway volume at /data — use it if available, else fall back to ~/.opusclaw
+// Auto-detect Railway volume at /data — use it if available, else fall back to ~/.tarsee
 function resolveStateDir() {
-  if (process.env.OPUSCLAW_STATE_DIR?.trim()) return process.env.OPUSCLAW_STATE_DIR.trim();
+  if (process.env.TARSEE_STATE_DIR?.trim()) return process.env.TARSEE_STATE_DIR.trim();
   // Railway: check if /data exists (volume mount point)
   if (process.env.RAILWAY_PROJECT_ID) {
     try {
@@ -17,19 +17,19 @@ function resolveStateDir() {
       const stat = fs.statSync("/data");
       if (stat.isDirectory()) {
         // Try to create our subdirectory to confirm writability
-        fs.mkdirSync("/data/opusclaw", { recursive: true });
-        return "/data/opusclaw";
+        fs.mkdirSync("/data/tarsee", { recursive: true });
+        return "/data/tarsee";
       }
     } catch {
       // /data doesn't exist or isn't accessible — volume not mounted
       console.warn("[tarsee] /data not accessible — using ephemeral storage");
     }
   }
-  return path.join(os.homedir(), ".opusclaw");
+  return path.join(os.homedir(), ".tarsee");
 }
 const STATE_DIR = resolveStateDir();
-const WORKSPACE_DIR = process.env.OPUSCLAW_WORKSPACE_DIR?.trim() || path.join(STATE_DIR, "workspace");
-const DATA_DIR = process.env.OPUSCLAW_DATA_DIR?.trim() || path.join(STATE_DIR, "data");
+const WORKSPACE_DIR = process.env.TARSEE_WORKSPACE_DIR?.trim() || path.join(STATE_DIR, "workspace");
+const DATA_DIR = process.env.TARSEE_DATA_DIR?.trim() || path.join(STATE_DIR, "data");
 
 // Ensure directories exist
 const SKILLS_DIR = path.join(WORKSPACE_DIR, "skills");
@@ -123,7 +123,7 @@ const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim() || null;
 // --- API Token ---
 // Stable token for REST/WS API authentication. Persisted to disk if not in env.
 function resolveApiToken() {
-  const envTok = process.env.OPUSCLAW_API_TOKEN?.trim();
+  const envTok = process.env.TARSEE_API_TOKEN?.trim();
   if (envTok) return envTok;
 
   const tokenPath = path.join(STATE_DIR, "api.token");
@@ -150,7 +150,7 @@ const API_TOKEN = resolveApiToken();
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY?.trim() || null;
 
 // --- Database path ---
-const DB_PATH = path.join(DATA_DIR, "opusclaw.db");
+const DB_PATH = path.join(DATA_DIR, "tarsee.db");
 
 // --- Frozen config export ---
 const config = Object.freeze({

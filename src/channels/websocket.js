@@ -66,8 +66,8 @@ export function setupWebSocket(server, db, app) {
 
   wss.on("connection", (ws) => {
     // Attach context for console commands
-    ws._opusclaw_db = db;
-    ws._opusclaw_channelManager = app?.get?.("channelManager") || null;
+    ws._tarsee_db = db;
+    ws._tarsee_channelManager = app?.get?.("channelManager") || null;
 
     // If already authenticated via session/token at upgrade, send auth_ok immediately
     if (ws.isAuthenticated) {
@@ -195,7 +195,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   // Build effective system prompt (parity with HTTP handler)
   const effectiveSystemPrompt = buildSystemPrompt({
     settingsStore,
-    db: ws._opusclaw_db,
+    db: ws._tarsee_db,
     conversationId: convId,
     messageCount: history.length,
     conversationPrompt: conv?.system_prompt,
@@ -204,7 +204,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   let fullResponse = "";
   let usage = {};
   const tools = getToolDefinitions();
-  const toolCtx = { db: ws._opusclaw_db, settingsStore, conversationId: convId };
+  const toolCtx = { db: ws._tarsee_db, settingsStore, conversationId: convId };
   const MAX_TOOL_ROUNDS = 15;
 
   try {
@@ -275,7 +275,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
 
     // Extract [REMEMBER: ...] markers and auto-save memories
     if (fullResponse) {
-      fullResponse = extractAndSaveMemories(fullResponse, ws._opusclaw_db, convId);
+      fullResponse = extractAndSaveMemories(fullResponse, ws._tarsee_db, convId);
     }
 
     // Save assistant message (with markers stripped)
@@ -325,8 +325,8 @@ async function handleConsoleExec(ws, msg) {
 
     // Build context — channelManager comes from the app if available
     const ctx = {
-      db: ws._opusclaw_db,
-      channelManager: ws._opusclaw_channelManager,
+      db: ws._tarsee_db,
+      channelManager: ws._tarsee_channelManager,
     };
 
     const output = await cmd.run(args, ctx);

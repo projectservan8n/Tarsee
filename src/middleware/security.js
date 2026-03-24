@@ -58,7 +58,7 @@ export function securityHeaders(_req, res, next) {
 export function generateCsrfCookie(_req, res, next) {
   const token = signCsrfToken(Date.now());
 
-  res.cookie("opusclaw_csrf", token, {
+  res.cookie("tarsee_csrf", token, {
     httpOnly: false,        // JS needs to read it for the double-submit pattern
     sameSite: "Strict",
     secure: process.env.NODE_ENV === "production",
@@ -70,7 +70,7 @@ export function generateCsrfCookie(_req, res, next) {
 
 /**
  * Middleware: Validates CSRF token on state-changing requests.
- * Expects X-CSRF-Token header to match the opusclaw_csrf cookie.
+ * Expects X-CSRF-Token header to match the tarsee_csrf cookie.
  * Skips validation for Bearer token auth (API clients don't need CSRF).
  */
 export function csrfProtect(req, res, next) {
