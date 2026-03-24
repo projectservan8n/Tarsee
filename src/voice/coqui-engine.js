@@ -114,8 +114,9 @@ export class CoquiTTSEngine extends TTSEngine {
       }
     });
 
-    this.serverProc.on("exit", (code) => {
-      console.warn(`[coqui] server exited with code ${code}`);
+    this.serverProc.on("exit", (code, signal) => {
+      console.warn(`[coqui] server exited with code ${code} signal ${signal}`);
+      if (serverOutput) console.warn(`[coqui] last output: ${serverOutput.slice(-500)}`);
       this.ready = false;
       this.serverProc = null;
     });

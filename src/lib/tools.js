@@ -272,6 +272,13 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           return `Error: Cannot write to '${filename}'. Allowed: ${WORKSPACE_FILES.join(", ")}`;
         }
         writeWorkspaceFile(filename, content);
+        // Auto-sync identity.name when IDENTITY.md is written
+        if (filename === "IDENTITY.md" && ctx.settingsStore) {
+          const nameMatch = content.match(/\*\*Name:\*\*\s*(.+)/i);
+          if (nameMatch) {
+            ctx.settingsStore.set("identity.name", nameMatch[1].trim());
+          }
+        }
         return `Successfully wrote ${content.length} chars to ${filename}.`;
       }
 
@@ -365,6 +372,11 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
         }
         const updated = existing.replace(old_text, new_text);
         writeWorkspaceFile(filename, updated);
+        // Auto-sync identity.name when IDENTITY.md is edited
+        if (filename === "IDENTITY.md" && ctx.settingsStore) {
+          const nameMatch = updated.match(/\*\*Name:\*\*\s*(.+)/i);
+          if (nameMatch) ctx.settingsStore.set("identity.name", nameMatch[1].trim());
+        }
         return `Successfully edited '${filename}'. Replaced ${old_text.length} chars with ${new_text.length} chars.`;
       }
 
