@@ -714,9 +714,13 @@ html, body {
 /* --- Settings Page (full-page tabbed layout) --- */
 .settings-page {
   flex: 1;
-  display: flex;
+  display: none;
   overflow: hidden;
   animation: fadeIn 200ms ease;
+}
+
+.settings-page.open {
+  display: flex;
 }
 
 .settings-tabs {

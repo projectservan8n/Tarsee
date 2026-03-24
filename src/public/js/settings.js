@@ -256,7 +256,7 @@ const Settings = {
     welcome.style.display = "none";
     chatArea.style.display = "none";
     inputArea.style.display = "none";
-    this.elements.settingsPage.style.display = "flex";
+    this.elements.settingsPage.classList.add("open");
 
     // Update topbar
     document.getElementById("topbarTitle").textContent = "Settings";
@@ -269,7 +269,7 @@ const Settings = {
 
   close() {
     this.isOpen = false;
-    this.elements.settingsPage.style.display = "none";
+    this.elements.settingsPage.classList.remove("open");
 
     // Restore previous view
     const welcome = document.getElementById("welcomeScreen");
