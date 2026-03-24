@@ -8,6 +8,7 @@ import { WS_CODES } from "../config/constants.js";
 import { processCommand } from "../lib/commands.js";
 import { logCapture } from "../lib/log-capture.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
+import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 
 /**
@@ -202,33 +203,72 @@ async function handleChat(ws, msg, convStore, settingsStore) {
 
   let fullResponse = "";
   let usage = {};
+  const tools = getToolDefinitions();
+  const toolCtx = { db: ws._opusclaw_db, settingsStore, conversationId: convId };
+  const MAX_TOOL_ROUNDS = 15;
 
   try {
     const controller = new AbortController();
-
-    // Abort on disconnect
     const onClose = () => controller.abort();
     ws.on("close", onClose);
 
-    const stream = chatStream({
-      provider: activeProvider.provider,
-      model: activeProvider.model,
-      apiKey: activeProvider.apiKey,
-      baseUrl: activeProvider.baseUrl,
-      messages: history.map((m) => ({ role: m.role, content: m.content })),
-      systemPrompt: effectiveSystemPrompt,
-      signal: controller.signal,
-    });
+    let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
-    for await (const event of stream) {
-      if (ws.readyState !== ws.OPEN) break;
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const toolCalls = [];
+      let roundText = "";
+      let stopReason = "end_turn";
 
-      if (event.type === "text") {
-        fullResponse += event.content;
-        ws.send(JSON.stringify({ type: "text", content: event.content }));
-      } else if (event.type === "usage") {
-        usage = event.usage;
+      const stream = chatStream({
+        provider: activeProvider.provider,
+        model: activeProvider.model,
+        apiKey: activeProvider.apiKey,
+        baseUrl: activeProvider.baseUrl,
+        messages: workingMessages,
+        systemPrompt: effectiveSystemPrompt,
+        signal: controller.signal,
+        tools,
+      });
+
+      for await (const event of stream) {
+        if (ws.readyState !== ws.OPEN) break;
+
+        if (event.type === "text") {
+          roundText += event.content;
+          fullResponse += event.content;
+          ws.send(JSON.stringify({ type: "text", content: event.content }));
+        } else if (event.type === "tool_use") {
+          toolCalls.push({ id: event.id, name: event.name, input: event.input });
+          ws.send(JSON.stringify({ type: "tool_call", id: event.id, name: event.name, input: event.input }));
+        } else if (event.type === "usage") {
+          usage = { ...usage, ...event.usage };
+        } else if (event.type === "done") {
+          stopReason = event.stopReason || "end_turn";
+          break;
+        }
       }
+
+      if (toolCalls.length === 0 || stopReason !== "tool_use") break;
+
+      // Build assistant message with tool_use blocks
+      const assistantContent = [];
+      if (roundText) assistantContent.push({ type: "text", text: roundText });
+      for (const tc of toolCalls) {
+        assistantContent.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
+      }
+      workingMessages.push({ role: "assistant", content: assistantContent });
+
+      // Execute tools and build results
+      const toolResults = [];
+      for (const tc of toolCalls) {
+        console.log(`[tools] executing: ${tc.name}(${JSON.stringify(tc.input).slice(0, 100)})`);
+        const result = await executeTool(tc.name, tc.input, toolCtx);
+        toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
+        if (ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ type: "tool_result", id: tc.id, name: tc.name, result: result.slice(0, 500) }));
+        }
+      }
+      workingMessages.push({ role: "user", content: toolResults });
     }
 
     ws.removeListener("close", onClose);

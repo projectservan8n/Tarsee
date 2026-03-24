@@ -1,9 +1,10 @@
 /**
  * OpenAI provider.
  * Uses the Chat Completions API with streaming.
+ * Supports function calling / tool_use.
  */
 
-export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, signal }) {
+export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, signal, tools }) {
   const url = `${baseUrl || "https://api.openai.com"}/v1/chat/completions`;
 
   const allMessages = [];
@@ -12,11 +13,24 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
   }
   allMessages.push(...messages);
 
+  // Convert Anthropic-style tools to OpenAI function format
+  const openaiTools = tools?.length > 0
+    ? tools.map((t) => ({
+        type: "function",
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: t.input_schema,
+        },
+      }))
+    : undefined;
+
   const body = {
     model: model || "gpt-4o",
     stream: true,
     stream_options: { include_usage: true },
     messages: allMessages,
+    ...(openaiTools ? { tools: openaiTools } : {}),
   };
 
   const response = await fetch(url, {
@@ -38,6 +52,10 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
   const decoder = new TextDecoder();
   let buffer = "";
   let usage = {};
+  let stopReason = "end_turn";
+
+  // Track tool calls being assembled
+  const toolCalls = {};
 
   try {
     while (true) {
@@ -55,10 +73,34 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
 
           try {
             const event = JSON.parse(data);
-            const delta = event.choices?.[0]?.delta;
+            const choice = event.choices?.[0];
+            const delta = choice?.delta;
 
+            // Text content
             if (delta?.content) {
               yield { type: "text", content: delta.content };
+            }
+
+            // Tool call chunks
+            if (delta?.tool_calls) {
+              for (const tc of delta.tool_calls) {
+                const idx = tc.index;
+                if (!toolCalls[idx]) {
+                  toolCalls[idx] = { id: tc.id || "", name: "", args: "" };
+                }
+                if (tc.id) toolCalls[idx].id = tc.id;
+                if (tc.function?.name) toolCalls[idx].name += tc.function.name;
+                if (tc.function?.arguments) toolCalls[idx].args += tc.function.arguments;
+              }
+            }
+
+            // Finish reason
+            if (choice?.finish_reason) {
+              if (choice.finish_reason === "tool_calls") {
+                stopReason = "tool_use";
+              } else {
+                stopReason = choice.finish_reason === "stop" ? "end_turn" : choice.finish_reason;
+              }
             }
 
             if (event.usage) {
@@ -74,8 +116,20 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
     reader.releaseLock();
   }
 
+  // Emit completed tool calls
+  for (const tc of Object.values(toolCalls)) {
+    let input = {};
+    try { input = JSON.parse(tc.args); } catch { /* empty */ }
+    yield {
+      type: "tool_use",
+      id: tc.id,
+      name: tc.name,
+      input,
+    };
+  }
+
   if (Object.keys(usage).length > 0) {
     yield { type: "usage", usage };
   }
-  yield { type: "done" };
+  yield { type: "done", stopReason };
 }

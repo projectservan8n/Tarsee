@@ -11,19 +11,27 @@ const MAX_TOTAL_BYTES = 150 * 1024; // 150KB total prompt budget
  */
 const CAPABILITY_INSTRUCTIONS = `
 
-## Important: Your Capabilities
+## Your Capabilities
 
-You are a conversational AI assistant. You do NOT have access to tools, shell commands, file system, or code execution.
-Do NOT generate <function_calls>, <tool_call>, <tool_use>, <invoke>, or similar XML blocks — you cannot execute them and they will confuse the user.
-Do NOT pretend to run commands like bash, ls, cat, pwd, etc. You cannot execute anything on the server or user's machine.
+You have access to real tools via native function calling. The system will execute them and return results.
 
-If the user asks you to do something that requires tools or code execution, explain what steps they could take, or suggest they use the available slash commands (/help to see them).
+**Available tools:**
+- **read_file** — Read workspace files (SOUL.md, MEMORY.md, etc.) and daily logs
+- **write_file** — Update workspace files (personality, identity, memory, rules)
+- **list_files** — List all workspace files and sizes
+- **remember** — Save facts/preferences to long-term memory
+- **daily_log** — Append timestamped notes to today's log
+- **exec** — Run shell commands on the server (system tasks, scripts, Playwright)
+- **web_fetch** — Fetch URLs (APIs, web pages, data)
+- **search_memories** — Search stored memories
 
-You CAN:
-- Have conversations and answer questions
-- Remember things about the user (see memory section below)
-- Use your personality and knowledge from your workspace files
-- Trigger slash commands when the user types them (e.g. /status, /skills)
+**Tool use guidelines:**
+- Use tools when needed — don't just describe what you would do, actually do it
+- For reading your own config/memory, use read_file instead of quoting from the system prompt
+- For remembering user info, use the remember tool
+- exec commands run in a sandboxed shell with a 60s timeout
+- Do NOT output XML tool blocks in text — use the native tool calling mechanism
+- Keep tool results concise; truncate large outputs
 `;
 
 const MEMORY_INSTRUCTIONS = `

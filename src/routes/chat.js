@@ -8,6 +8,7 @@ import { processCommand, getCommandList } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { trackActivity } from "../lib/session-reset.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
+import { getToolDefinitions, executeTool } from "../lib/tools.js";
 
 export const chatRouter = Router();
 
@@ -222,27 +223,68 @@ chatRouter.post("/send", async (req, res) => {
 
   let fullResponse = "";
   let usage = {};
+  const tools = getToolDefinitions();
+  const toolCtx = { db: req.app.get("db"), settingsStore, conversationId: convId };
+  const MAX_TOOL_ROUNDS = 15;
 
   try {
-    const stream = chatStream({
-      provider: providerId,
-      model,
-      apiKey,
-      baseUrl: activeProvider?.baseUrl,
-      messages: history.map((m) => ({ role: m.role, content: m.content })),
-      systemPrompt: effectiveSystemPrompt,
-      signal: req.signal,
-    });
+    // Build the working message array (may grow with tool results)
+    let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
-    for await (const event of stream) {
-      if (event.type === "text") {
-        fullResponse += event.content;
-        sendSSE(res, "text", { content: event.content });
-      } else if (event.type === "usage") {
-        usage = event.usage;
-      } else if (event.type === "done") {
-        break;
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const toolCalls = [];
+      let roundText = "";
+      let stopReason = "end_turn";
+
+      const stream = chatStream({
+        provider: providerId,
+        model,
+        apiKey,
+        baseUrl: activeProvider?.baseUrl,
+        messages: workingMessages,
+        systemPrompt: effectiveSystemPrompt,
+        signal: req.signal,
+        tools,
+      });
+
+      for await (const event of stream) {
+        if (event.type === "text") {
+          roundText += event.content;
+          fullResponse += event.content;
+          sendSSE(res, "text", { content: event.content });
+        } else if (event.type === "tool_use") {
+          toolCalls.push({ id: event.id, name: event.name, input: event.input });
+          // Notify client about tool call
+          sendSSE(res, "tool_call", { id: event.id, name: event.name, input: event.input });
+        } else if (event.type === "usage") {
+          usage = { ...usage, ...event.usage };
+        } else if (event.type === "done") {
+          stopReason = event.stopReason || "end_turn";
+          break;
+        }
       }
+
+      // If no tool calls, we're done
+      if (toolCalls.length === 0 || stopReason !== "tool_use") break;
+
+      // Build the assistant message with text + tool_use blocks
+      const assistantContent = [];
+      if (roundText) assistantContent.push({ type: "text", text: roundText });
+      for (const tc of toolCalls) {
+        assistantContent.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
+      }
+      workingMessages.push({ role: "assistant", content: assistantContent });
+
+      // Execute each tool and build tool_result blocks
+      const toolResults = [];
+      for (const tc of toolCalls) {
+        console.log(`[tools] executing: ${tc.name}(${JSON.stringify(tc.input).slice(0, 100)})`);
+        const result = await executeTool(tc.name, tc.input, toolCtx);
+        toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
+        // Notify client about tool result
+        sendSSE(res, "tool_result", { id: tc.id, name: tc.name, result: result.slice(0, 500) });
+      }
+      workingMessages.push({ role: "user", content: toolResults });
     }
 
     // Extract [REMEMBER: ...] markers and auto-save memories

@@ -1,19 +1,21 @@
 /**
  * Anthropic (Claude) provider.
  * Uses the Messages API with streaming.
+ * Supports tool_use for function calling.
  */
 
 /**
  * @param {object} opts
- * @param {Array<{role: string, content: string}>} opts.messages
+ * @param {Array} opts.messages - Conversation messages (may include tool_result blocks)
  * @param {string} opts.model
  * @param {string} opts.apiKey
  * @param {string} opts.baseUrl
  * @param {string} [opts.systemPrompt]
  * @param {AbortSignal} [opts.signal]
- * @yields {{ type: 'text', content: string } | { type: 'usage', usage: object } | { type: 'done' }}
+ * @param {Array} [opts.tools] - Tool definitions for function calling
+ * @yields {{ type: 'text', content: string } | { type: 'tool_use', id: string, name: string, input: object } | { type: 'usage', usage: object } | { type: 'done', stopReason: string }}
  */
-export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, signal }) {
+export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, signal, tools }) {
   const url = `${baseUrl || "https://api.anthropic.com"}/v1/messages`;
 
   const isOAuth = apiKey.includes("sk-ant-oat");
@@ -22,9 +24,15 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
   // Convert messages to Anthropic format (system is separate)
   let anthropicMessages = messages
     .filter((m) => m.role !== "system")
-    .map((m) => ({ role: m.role, content: m.content }));
+    .map((m) => {
+      // Pass through structured content blocks (for tool_result messages)
+      if (Array.isArray(m.content)) {
+        return { role: m.role, content: m.content };
+      }
+      return { role: m.role, content: m.content };
+    });
 
-  // Anthropic requires messages to alternate user/assistant.
+  // Anthropic requires messages to alternate user/assistant roles.
   // Merge consecutive same-role messages and ensure first message is from user.
   anthropicMessages = mergeConsecutiveRoles(anthropicMessages);
 
@@ -55,6 +63,7 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
     stream: true,
     messages: anthropicMessages,
     ...(systemBlocks ? { system: systemBlocks } : {}),
+    ...(tools && tools.length > 0 ? { tools } : {}),
   };
 
   // Auth headers
@@ -78,7 +87,7 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
 
   const bodyJson = JSON.stringify(body);
   console.log(`[anthropic] POST ${url}`);
-  console.log(`[anthropic] auth=${isOAuth ? "oauth" : isApiKey ? "api-key" : "bearer"} model=${resolvedModel} messages=${anthropicMessages.length}`);
+  console.log(`[anthropic] auth=${isOAuth ? "oauth" : isApiKey ? "api-key" : "bearer"} model=${resolvedModel} messages=${anthropicMessages.length} tools=${tools?.length || 0}`);
 
   const response = await fetch(url, {
     method: "POST",
@@ -104,6 +113,11 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
   const decoder = new TextDecoder();
   let buffer = "";
   let usage = {};
+  let stopReason = "end_turn";
+
+  // Track tool_use content blocks being built
+  let currentToolUse = null;
+  let toolUseJsonBuf = "";
 
   try {
     while (true) {
@@ -122,11 +136,45 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
           try {
             const event = JSON.parse(data);
 
-            if (event.type === "content_block_delta" && event.delta?.text) {
+            // Text content
+            if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
               yield { type: "text", content: event.delta.text };
-            } else if (event.type === "message_delta" && event.usage) {
-              usage = { ...usage, ...event.usage };
-            } else if (event.type === "message_start" && event.message?.usage) {
+            }
+
+            // Tool use content block start
+            if (event.type === "content_block_start" && event.content_block?.type === "tool_use") {
+              currentToolUse = {
+                id: event.content_block.id,
+                name: event.content_block.name,
+              };
+              toolUseJsonBuf = "";
+            }
+
+            // Tool use input JSON delta
+            if (event.type === "content_block_delta" && event.delta?.type === "input_json_delta") {
+              toolUseJsonBuf += event.delta.partial_json || "";
+            }
+
+            // Content block stop — emit completed tool_use
+            if (event.type === "content_block_stop" && currentToolUse) {
+              let input = {};
+              try { input = JSON.parse(toolUseJsonBuf); } catch { /* empty input */ }
+              yield {
+                type: "tool_use",
+                id: currentToolUse.id,
+                name: currentToolUse.name,
+                input,
+              };
+              currentToolUse = null;
+              toolUseJsonBuf = "";
+            }
+
+            // Message-level events
+            if (event.type === "message_delta") {
+              if (event.usage) usage = { ...usage, ...event.usage };
+              if (event.delta?.stop_reason) stopReason = event.delta.stop_reason;
+            }
+            if (event.type === "message_start" && event.message?.usage) {
               usage = { ...usage, input_tokens: event.message.usage.input_tokens };
             }
           } catch {
@@ -142,7 +190,7 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
   if (Object.keys(usage).length > 0) {
     yield { type: "usage", usage };
   }
-  yield { type: "done" };
+  yield { type: "done", stopReason };
 }
 
 /**
@@ -161,8 +209,13 @@ function mergeConsecutiveRoles(messages) {
   for (let i = 1; i < messages.length; i++) {
     const prev = merged[merged.length - 1];
     if (messages[i].role === prev.role) {
-      // Merge consecutive same-role messages
-      prev.content += "\n\n" + messages[i].content;
+      // Only merge if both are simple strings
+      if (typeof prev.content === "string" && typeof messages[i].content === "string") {
+        prev.content += "\n\n" + messages[i].content;
+      } else {
+        // Can't merge structured content — just push
+        merged.push({ ...messages[i] });
+      }
     } else {
       merged.push({ ...messages[i] });
     }

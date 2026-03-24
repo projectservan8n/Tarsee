@@ -43,10 +43,11 @@ async function loadProvider(providerId) {
  * @param {string} [opts.systemPrompt] - System prompt
  * @param {AbortSignal} [opts.signal] - Abort signal
  * @param {string} [opts.profileName] - Auth profile name (from @syntax)
+ * @param {Array} [opts.tools] - Tool definitions for function calling
  * @returns {AsyncGenerator<{type: string, content?: string, usage?: object}>}
  */
 export async function* chatStream(opts) {
-  let { provider: providerId, model, apiKey, baseUrl, messages, systemPrompt, signal, profileName } = opts;
+  let { provider: providerId, model, apiKey, baseUrl, messages, systemPrompt, signal, profileName, tools } = opts;
 
   if (!providerId) throw new Error("No AI provider configured");
 
@@ -75,6 +76,7 @@ export async function* chatStream(opts) {
       baseUrl: baseUrl || providerDef?.baseUrl || "",
       systemPrompt,
       signal,
+      tools,
     });
 
     // Track successful usage
