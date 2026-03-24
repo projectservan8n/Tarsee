@@ -123,6 +123,7 @@ app.set("auditLog", auditLog);
 
 // --- TTS Engine (lazy init) ---
 const settingsStore = new SettingsStore(db, auditLog);
+app.set("settingsStore", settingsStore);
 initTTSEngine(settingsStore).catch((err) => {
   console.warn("[opusclaw] TTS engine init error:", err.message);
 });

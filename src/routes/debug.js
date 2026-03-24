@@ -291,6 +291,19 @@ export const ALLOWED_COMMANDS = {
     },
   },
 
+  "doctor": {
+    description: "Run diagnostics and auto-repair (usage: doctor [fix])",
+    run: async (args, ctx) => {
+      const { runDiagnostics, autoRepair, formatDiagnosticsPlain } = await import("../lib/self-heal.js");
+      const diagnostics = await runDiagnostics(ctx);
+      let repairs = [];
+      if (args === "fix" || args === "repair") {
+        repairs = await autoRepair(diagnostics, ctx);
+      }
+      return formatDiagnosticsPlain(diagnostics, repairs);
+    },
+  },
+
   "reload": {
     description: "Force-reload workspace files and skills cache",
     run: async () => {

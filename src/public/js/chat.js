@@ -411,7 +411,9 @@ const Chat = {
   updateStreamingMessage(msgEl, content) {
     const textEl = msgEl.querySelector(".message-text");
     if (textEl) {
-      textEl.innerHTML = this.renderMarkdown(content);
+      // Hide incomplete XML blocks during streaming (they render as raw text until closed)
+      const cleaned = hideIncompleteBlocks(content);
+      textEl.innerHTML = this.renderMarkdown(cleaned);
     }
   },
 
@@ -594,6 +596,13 @@ const Chat = {
       return PH(i);
     });
 
+    // Streaming indicator divs (injected by hideIncompleteBlocks during streaming)
+    text = text.replace(/<div class="block-streaming-indicator">[\s\S]*?<\/div>/g, (match) => {
+      const i = blocks.length;
+      blocks.push(match);
+      return PH(i);
+    });
+
     // ── Now escape HTML on the remaining text ──
     let html = escapeHtml(text);
 
@@ -647,6 +656,40 @@ function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+// ── Streaming block helper ───────────────────────────────────────────
+
+/**
+ * During streaming, XML blocks like <tool_call>...</tool_call> appear as raw
+ * text until the closing tag arrives. This replaces any unclosed block tags
+ * with a nice "working" indicator so the user doesn't see raw XML.
+ */
+function hideIncompleteBlocks(text) {
+  const blockTags = ["thinking", "antThinking", "antml:thinking", "reasoning", "tool_call", "tool_use", "tool_response", "tool_result", "search_results", "artifact", "result"];
+  let result = text;
+
+  for (const tag of blockTags) {
+    // Check for opening tag without matching closing tag
+    const openPattern = new RegExp(`<${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}>`, "g");
+    const closePattern = new RegExp(`</${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}>`, "g");
+    const opens = (result.match(openPattern) || []).length;
+    const closes = (result.match(closePattern) || []).length;
+
+    if (opens > closes) {
+      // There's an unclosed block — replace the incomplete one with a placeholder
+      const lastOpen = result.lastIndexOf(`<${tag}>`);
+      if (lastOpen !== -1) {
+        const label = tag.includes("think") || tag.includes("reason") ? "Thinking" :
+                      tag.includes("tool_call") || tag.includes("tool_use") ? "Running tool" :
+                      tag.includes("tool_r") ? "Processing result" : "Working";
+        result = result.slice(0, lastOpen) +
+          `\n<div class="block-streaming-indicator"><span class="streaming-dots"><span></span><span></span><span></span></span> ${label}…</div>`;
+      }
+    }
+  }
+
+  return result;
 }
 
 // ── Tool & Thinking Block Renderers ──────────────────────────────────

@@ -754,6 +754,24 @@ const COMMANDS = {
     },
   },
 
+  doctor: {
+    description: "Run diagnostics and self-heal (use /doctor fix to auto-repair)",
+    usage: "/doctor [fix]",
+    handler: async (args, ctx) => {
+      try {
+        const { runDiagnostics, autoRepair, formatDiagnostics } = await import("./self-heal.js");
+        const diagnostics = await runDiagnostics(ctx);
+        let repairs = [];
+        if (args === "fix" || args === "repair") {
+          repairs = await autoRepair(diagnostics, ctx);
+        }
+        return formatDiagnostics(diagnostics, repairs);
+      } catch (err) {
+        return `Doctor error: ${err.message}`;
+      }
+    },
+  },
+
   reload: {
     description: "Force-reload workspace files and skills cache",
     usage: "/reload",

@@ -363,6 +363,25 @@ details[open] .block-preview { display: none; }
   color: var(--text-muted);
 }
 
+/* Block streaming indicator (shown while block is being generated) */
+.block-streaming-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  margin: 8px 0;
+  border: 1px solid rgba(168, 130, 255, 0.2);
+  border-radius: var(--radius);
+  background: rgba(168, 130, 255, 0.03);
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(168, 130, 255, 0.7);
+}
+
+.block-streaming-indicator .streaming-dots span {
+  background: rgba(168, 130, 255, 0.6);
+}
+
 /* --- Command Palette --- */
 .command-palette {
   position: absolute;
