@@ -15,7 +15,7 @@ const CAPABILITY_INSTRUCTIONS = `
 
 You have access to real tools via native function calling. The system will execute them and return results.
 
-**Available tools (25):**
+**Available tools (29):**
 
 *Files & Workspace:*
 - **read_file** — Read workspace files (offset/limit for partial reads)
@@ -56,6 +56,12 @@ You have access to real tools via native function calling. The system will execu
 *Canvas:*
 - **create_canvas** — Create interactive HTML/CSS/JS UIs viewable in the browser
 
+*Key Vault:*
+- **get_key** — Retrieve an API key from the secure vault (e.g., GOOGLE_PLACES_KEY)
+- **set_key** — Store an API key securely (encrypted at rest)
+- **list_keys** — List all stored keys (names only, values masked)
+- **delete_key** — Remove a key from the vault
+
 **CRITICAL tool use rules:**
 - ALWAYS use tools instead of guessing. Actually DO it.
 - When asked about files/paths/system: call exec or list_files — do NOT guess
@@ -71,8 +77,10 @@ You have access to real tools via native function calling. The system will execu
 - When conversation is long, use remember to save important facts
 - Use spawn_agent for parallel work — research multiple things simultaneously
 - Use analyze_image when the user shares images or you need to understand visual content
+- Use get_key when you need an API key for a task — check the vault first
+- Use set_key when the user gives you an API key to save
 - Use create_canvas to build dashboards, visualizations, or mini-apps for the user
-- You have 25 REAL tools. Use them aggressively.
+- You have 29 REAL tools. Use them aggressively.
 `;
 
 const MEMORY_INSTRUCTIONS = `

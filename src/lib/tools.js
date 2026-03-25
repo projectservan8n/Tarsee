@@ -432,6 +432,53 @@ export const TOOLS = [
   },
 
   {
+    name: "get_key",
+    description: "Retrieve an API key or secret from the secure vault. Use this when you need a key for a task (e.g., Google Places API key, Stripe key, etc). Keys are stored encrypted and only decrypted when needed.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Key name (e.g., GOOGLE_PLACES_KEY, STRIPE_SECRET)" },
+      },
+      required: ["name"],
+    },
+  },
+
+  {
+    name: "set_key",
+    description: "Store an API key or secret in the secure vault. The user gives you a key and you save it encrypted. Use a descriptive name like GOOGLE_PLACES_KEY, OPENWEATHER_KEY, etc.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Key name (uppercase with underscores, e.g., GOOGLE_PLACES_KEY)" },
+        value: { type: "string", description: "The secret value to store" },
+        description: { type: "string", description: "What this key is for (e.g., Google Places API for location lookups)" },
+      },
+      required: ["name", "value"],
+    },
+  },
+
+  {
+    name: "list_keys",
+    description: "List all API keys and secrets stored in the vault. Shows names and descriptions only — values are masked for security.",
+    input_schema: {
+      type: "object",
+      properties: {},
+    },
+  },
+
+  {
+    name: "delete_key",
+    description: "Delete an API key or secret from the vault.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Key name to delete" },
+      },
+      required: ["name"],
+    },
+  },
+
+  {
     name: "create_canvas",
     description: "Create an interactive HTML/CSS/JS canvas that can be viewed in the browser. Use for dashboards, visualizations, mini-apps, or any UI the user needs.",
     input_schema: {
@@ -936,6 +983,51 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           return truncate(analysis, MAX_RESULT);
         } catch (err) {
           return `analyze_image error: ${err.message}`;
+        }
+      }
+
+      case "get_key": {
+        const { name: keyName } = toolInput;
+        try {
+          const { getKey } = await import("./key-vault.js");
+          const value = getKey(keyName);
+          if (!value) return `Key "${keyName}" not found in vault. Use list_keys to see available keys.`;
+          return value;
+        } catch (err) {
+          return `get_key error: ${err.message}`;
+        }
+      }
+
+      case "set_key": {
+        const { name: skName, value: skValue, description: skDesc } = toolInput;
+        try {
+          const { setKey } = await import("./key-vault.js");
+          const result = setKey(skName, skValue, skDesc);
+          return `Key "${result.name}" saved securely (masked: ${result.masked}). Description: ${result.description || "none"}`;
+        } catch (err) {
+          return `set_key error: ${err.message}`;
+        }
+      }
+
+      case "list_keys": {
+        try {
+          const { listKeys } = await import("./key-vault.js");
+          const keys = listKeys();
+          if (keys.length === 0) return "No keys stored in vault. Use set_key to add API keys.";
+          return keys.map(k => k.name + ": " + (k.description || "(no description)") + " [masked: " + k.masked + "]").join("\n");
+        } catch (err) {
+          return `list_keys error: ${err.message}`;
+        }
+      }
+
+      case "delete_key": {
+        const { name: dkName } = toolInput;
+        try {
+          const { deleteKey } = await import("./key-vault.js");
+          const deleted = deleteKey(dkName);
+          return deleted ? `Key "${dkName}" deleted from vault.` : `Key "${dkName}" not found.`;
+        } catch (err) {
+          return `delete_key error: ${err.message}`;
         }
       }
 
