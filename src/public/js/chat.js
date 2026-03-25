@@ -904,10 +904,14 @@ function renderToolCallBlock(content) {
   const argsHtml = args ? `<pre class="block-code">${escapeHtml(args)}</pre>` : "";
   const detailHtml = detail ? `<span class="block-detail">${escapeHtml(detail)}</span>` : "";
 
+  const toolColors = {exec:"#f59e0b",read_file:"#3b82f6",write_file:"#8b5cf6",edit_file:"#8b5cf6",web_search:"#10b981",web_fetch:"#10b981",browser:"#10b981",remember:"#ec4899",search_memories:"#ec4899",spawn_agent:"#f97316",generate_image:"#06b6d4",analyze_image:"#06b6d4",create_canvas:"#a855f7",send_message:"#6366f1",schedule_task:"#eab308",pdf_read:"#ef4444"};
+  const tc = toolColors[name] || "#6b7280";
   return `<div class="block-tool-call">
     <div class="block-tool-header">
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M9.5 1.5L14 6l-4.5 4.5M6.5 14.5L2 10l4.5-4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      <span class="block-tool-name">${escapeHtml(name)}</span>
+      <span style="display:inline-flex;align-items:center;gap:5px;background:${tc}22;color:${tc};padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M9.5 1.5L14 6l-4.5 4.5M6.5 14.5L2 10l4.5-4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        ${escapeHtml(name)}
+      </span>
       ${detailHtml}
     </div>
     ${argsHtml}

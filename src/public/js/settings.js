@@ -26,6 +26,12 @@ const Settings = {
       telegramToken: document.getElementById("settingsTelegramToken"),
       slackToken: document.getElementById("settingsSlackToken"),
       slackAppToken: document.getElementById("settingsSlackAppToken"),
+      whatsappToken: document.getElementById("settingsWhatsappToken"),
+      signalPhone: document.getElementById("settingsSignalPhone"),
+      signalApiUrl: document.getElementById("settingsSignalApiUrl"),
+      imessageUrl: document.getElementById("settingsImessageUrl"),
+      imessagePassword: document.getElementById("settingsImessagePassword"),
+      lineToken: document.getElementById("settingsLineToken"),
       saveChannelsBtn: document.getElementById("saveChannelsBtn"),
       apiToken: document.getElementById("settingsApiToken"),
       // Identity
@@ -82,6 +88,7 @@ const Settings = {
       skillContentInput: document.getElementById("skillContentInput"),
       skillSaveBtn: document.getElementById("skillSaveBtn"),
       skillCancelBtn: document.getElementById("skillCancelBtn"),
+      runAuditBtn: document.getElementById("runAuditBtn"),
     };
 
     // Toggle settings page open/close
@@ -115,6 +122,11 @@ const Settings = {
 
     this.elements.saveProviderBtn.addEventListener("click", () => this.saveProvider());
     this.elements.saveChannelsBtn.addEventListener("click", () => this.saveChannels());
+
+    // Security handlers
+    if (this.elements.runAuditBtn) {
+      this.elements.runAuditBtn.addEventListener("click", () => this.loadSecurityAudit());
+    }
 
     // --- Auto-save: Bot Name (debounced) ---
     if (this.elements.botName) {
@@ -268,6 +280,9 @@ const Settings = {
     document.querySelectorAll(".settings-tab-panel").forEach((p) => {
       p.classList.toggle("active", p.dataset.tab === tabName);
     });
+    // Load data for new tabs
+    if (tabName === "security") { this.loadToolPermissions(); }
+    if (tabName === "canvas") { this.loadCanvasGallery(); }
   },
 
   // --- Open / Close ---
@@ -422,6 +437,18 @@ const Settings = {
       if (discord) await API.saveChannel({ type: "discord", token: discord, enabled: true });
       if (telegram) await API.saveChannel({ type: "telegram", token: telegram, enabled: true });
       if (slackBot && slackApp) await API.saveChannel({ type: "slack", token: slackBot, appToken: slackApp, enabled: true });
+
+      // New channels
+      const wa = this.elements.whatsappToken?.value?.trim();
+      if (wa) await API.saveChannel({ type: "whatsapp", token: wa, enabled: true });
+      const sigPhone = this.elements.signalPhone?.value?.trim();
+      const sigUrl = this.elements.signalApiUrl?.value?.trim();
+      if (sigPhone) await API.saveChannel({ type: "signal", token: sigPhone, phoneNumber: sigPhone, apiUrl: sigUrl || "http://localhost:8080", enabled: true });
+      const imUrl = this.elements.imessageUrl?.value?.trim();
+      const imPass = this.elements.imessagePassword?.value?.trim();
+      if (imUrl) await API.saveChannel({ type: "imessage", token: imUrl, serverUrl: imUrl, password: imPass, enabled: true });
+      const lineT = this.elements.lineToken?.value?.trim();
+      if (lineT) await API.saveChannel({ type: "line", token: lineT, enabled: true });
 
       App.showToast("Channels saved. Restart channels in Admin to apply.", "success");
     } catch (err) {
@@ -966,5 +993,57 @@ const Settings = {
     } catch (err) {
       App.showToast(err.message, "error");
     }
+  },
+
+  async loadSecurityAudit() {
+    try {
+      const data = await API.json("/api/admin/security-audit");
+      const el = document.getElementById("auditResults");
+      if (!el) return;
+      if (data.issues && data.issues.length > 0) {
+        el.innerHTML = data.issues.map(i => {
+          const bg = i.severity === "critical" ? "rgba(255,50,50,0.15)" : i.severity === "warning" ? "rgba(255,165,0,0.15)" : "rgba(100,200,100,0.1)";
+          return '<div style="padding:8px;margin-bottom:6px;border-radius:6px;font-size:13px;background:' + bg + '">' +
+            '<strong>' + i.severity.toUpperCase() + '</strong>: ' + i.message +
+            '<br><span style="color:var(--text-muted);font-size:12px">Fix: ' + i.fix + '</span></div>';
+        }).join("");
+      } else {
+        el.innerHTML = '<div style="color:#22c55e;font-size:13px">All checks passed!</div>';
+      }
+    } catch(err) { App.showToast("Audit failed: " + err.message, "error"); }
+  },
+
+  async loadToolPermissions() {
+    try {
+      const data = await API.json("/api/admin/tool-permissions");
+      const el = document.getElementById("toolPermissionsList");
+      if (!el) return;
+      const tools = ["read_file","write_file","edit_file","exec","web_fetch","web_search","browser","spawn_agent","send_message","generate_image","analyze_image","create_canvas","schedule_task","pdf_read","remember","search_memories"];
+      const perms = data.permissions || {};
+      el.innerHTML = tools.map(function(t) {
+        var mode = perms[t] || "always_allow";
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:13px">' +
+          '<code>' + t + '</code>' +
+          '<select data-tool="' + t + '" class="tool-perm-select" style="font-size:12px;padding:2px 6px;background:var(--bg-raised);color:var(--text);border:1px solid var(--border-light);border-radius:4px">' +
+          '<option value="always_allow"' + (mode==="always_allow"?" selected":"") + '>Allow</option>' +
+          '<option value="warn"' + (mode==="warn"?" selected":"") + '>Warn</option>' +
+          '<option value="always_deny"' + (mode==="always_deny"?" selected":"") + '>Deny</option>' +
+          '</select></div>';
+      }).join("");
+      el.querySelectorAll(".tool-perm-select").forEach(function(sel) {
+        sel.addEventListener("change", async function() {
+          await API.json("/api/admin/tool-permissions", { method: "POST", body: { toolName: sel.dataset.tool, mode: sel.value }});
+          App.showToast("Permission updated", "success");
+        });
+      });
+    } catch(err) { console.warn("Tool permissions error:", err); }
+  },
+
+  async loadCanvasGallery() {
+    var gallery = document.getElementById("canvasGallery");
+    var empty = document.getElementById("canvasEmpty");
+    if (!gallery) return;
+    gallery.innerHTML = '<a href="/canvas/" target="_blank" class="btn btn-sm" style="margin-bottom:8px">Open Canvas Gallery</a>';
+    if (empty) empty.style.display = "none";
   },
 };

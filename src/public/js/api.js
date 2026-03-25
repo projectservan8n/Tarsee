@@ -223,4 +223,30 @@ const API = {
   async getVoices() {
     return this.json("/api/voice/voices");
   },
+
+  // --- Security ---
+  async getSecurityAudit() {
+    return this.json("/api/admin/security-audit");
+  },
+
+  async getToolPermissions() {
+    return this.json("/api/admin/tool-permissions");
+  },
+
+  async setToolPermission(toolName, mode) {
+    return this.json("/api/admin/tool-permissions", { method: "POST", body: { toolName, mode } });
+  },
+
+  // --- ACP ---
+  async listAcpSessions() {
+    return this.json("/api/acp/sessions");
+  },
+
+  async createAcpSession(identity) {
+    return this.json("/api/acp/session", { method: "POST", body: { identity } });
+  },
+
+  async stopChannel(type) {
+    return this.json("/api/admin/channels/" + type + "/stop", { method: "POST" });
+  },
 };
