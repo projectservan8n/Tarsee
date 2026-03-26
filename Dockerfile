@@ -16,17 +16,6 @@ RUN npm install --omit=dev
 # Install Playwright + Chromium
 RUN npx playwright install chromium --with-deps
 
-# Download Piper TTS binary + default voice model
-RUN apt-get update && apt-get install -y --no-install-recommends wget \
-  && wget -q https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz \
-  && tar -xzf piper_linux_x86_64.tar.gz && rm piper_linux_x86_64.tar.gz \
-  && mkdir -p /app/piper-voices \
-  && wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx" \
-       -O /app/piper-voices/en_US-lessac-medium.onnx \
-  && wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json" \
-       -O /app/piper-voices/en_US-lessac-medium.onnx.json \
-  && rm -rf /var/lib/apt/lists/*
-
 # Build whisper.cpp from source (no pre-built Linux binaries available)
 RUN apt-get update && apt-get install -y --no-install-recommends git cmake \
   && git clone --depth 1 --branch v1.8.4 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper \
@@ -39,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git cmake \
   && ls -la /app/whisper-bin/ \
   && rm -rf /tmp/whisper /var/lib/apt/lists/*
 
-# Stage 2: Runtime with Piper TTS + Playwright (Chromium)
+# Stage 2: Runtime with Playwright (Chromium)
 FROM node:22-bookworm-slim
 
 # System deps: Playwright browser deps + gosu for entrypoint
@@ -74,16 +63,10 @@ RUN apt-get update \
 ENV NODE_ENV=production
 WORKDIR /app
 
-# Copy Piper binary + libs from builder
-COPY --from=builder /app/piper /opt/piper
-
-# Copy bundled Piper voice model (en_US-lessac-medium)
-COPY --from=builder /app/piper-voices /opt/piper-voices
-
 # Copy whisper.cpp binary from builder
 COPY --from=builder /app/whisper-bin /opt/whisper
 
-ENV PATH="/opt/piper:/opt/whisper:${PATH}"
+ENV PATH="/opt/whisper:${PATH}"
 
 # Copy dependencies from builder (includes node_modules + Playwright browsers)
 COPY --from=builder /app/node_modules ./node_modules

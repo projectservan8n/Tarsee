@@ -226,29 +226,6 @@ const Settings = {
       this.elements.voiceCloneBtn.addEventListener("click", () => this.cloneVoice());
     }
 
-    // Piper voice download from HF
-    const dlBtn = document.getElementById("voiceDownloadBtn");
-    if (dlBtn) {
-      dlBtn.addEventListener("click", async () => {
-        const nameInput = document.getElementById("voiceDownloadName");
-        const voiceName = nameInput?.value.trim();
-        if (!voiceName) { App.showToast("Enter a voice name (e.g. en_US-lessac-medium)", "error"); return; }
-        dlBtn.disabled = true;
-        dlBtn.textContent = "Downloading...";
-        try {
-          await API.json("/api/voice/download-model", { method: "POST", body: { name: voiceName } });
-          App.showToast(`Voice "${voiceName}" downloaded`, "success");
-          nameInput.value = "";
-          this.loadVoices();
-        } catch (err) {
-          App.showToast(err.message, "error");
-        } finally {
-          dlBtn.disabled = false;
-          dlBtn.textContent = "Download";
-        }
-      });
-    }
-
     if (this.elements.saveVoiceBtn) {
       this.elements.saveVoiceBtn.addEventListener("click", () => this.saveVoiceSettings());
     }
