@@ -59,6 +59,7 @@ const Settings = {
       // Voice settings
       voiceEngine: document.getElementById("settingsVoiceEngine"),
       voiceEngineStatus: document.getElementById("voiceEngineStatus"),
+      defaultVoice: document.getElementById("settingsDefaultVoice"),
       voiceCloneFile: document.getElementById("voiceOnnxFile"),
       voiceCloneUpload: document.getElementById("voiceCloneUpload"),
       voiceCloneName: document.getElementById("voiceCloneName"),
@@ -394,6 +395,12 @@ const Settings = {
       const elGroup = document.getElementById("elevenlabsKeyGroup");
       if (elGroup) elGroup.style.display = voiceEngine === "elevenlabs" ? "block" : "none";
 
+      // Default voice
+      const defaultVoiceId = settings.find((s) => s.key === "voice.defaultVoiceId")?.value;
+      if (defaultVoiceId) {
+        localStorage.setItem("voice.defaultVoiceId", defaultVoiceId);
+      }
+
       // Load all sub-sections
       this.loadWorkspaceFiles();
       this.loadSessionReset();
@@ -496,17 +503,33 @@ const Settings = {
       if (voices.length === 0) {
         this.elements.voicesList.innerHTML =
           '<div style="color: var(--text-muted); font-size: 13px">No cloned voices yet</div>';
-        return;
+      } else {
+        this.elements.voicesList.innerHTML = voices
+          .map((v) =>
+            `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px">
+              <span style="flex:1">${v.name || v.id}</span>
+              ${v.isClone ? '<span style="color:var(--primary);font-size:11px">cloned</span>' : ""}
+            </div>`
+          )
+          .join("");
       }
 
-      this.elements.voicesList.innerHTML = voices
-        .map((v) =>
-          `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px">
-            <span style="flex:1">${v.name || v.id}</span>
-            ${v.isClone ? '<span style="color:var(--primary);font-size:11px">cloned</span>' : ""}
-          </div>`
-        )
-        .join("");
+      // Populate default voice dropdown
+      if (this.elements.defaultVoice) {
+        const current = this.elements.defaultVoice.value;
+        this.elements.defaultVoice.innerHTML = '<option value="">Engine default</option>';
+        for (const v of voices) {
+          const opt = document.createElement("option");
+          opt.value = v.id;
+          opt.textContent = v.name || v.id;
+          if (v.isClone) opt.textContent += " (cloned)";
+          this.elements.defaultVoice.appendChild(opt);
+        }
+        // Restore saved selection
+        const saved = localStorage.getItem("voice.defaultVoiceId");
+        if (saved) this.elements.defaultVoice.value = saved;
+        else if (current) this.elements.defaultVoice.value = current;
+      }
     } catch {
       this.elements.voicesList.innerHTML = "";
     }
@@ -586,7 +609,15 @@ const Settings = {
         });
       }
 
-      App.showToast("Voice engine saved. Restart server to apply.", "success");
+      // Save default voice selection
+      const defaultVoiceId = this.elements.defaultVoice?.value || "";
+      localStorage.setItem("voice.defaultVoiceId", defaultVoiceId);
+      await API.json("/api/settings/general", {
+        method: "POST",
+        body: { key: "voice.defaultVoiceId", value: defaultVoiceId },
+      });
+
+      App.showToast("Voice settings saved. Restart server to apply engine changes.", "success");
     } catch (err) {
       App.showToast(err.message, "error");
     }

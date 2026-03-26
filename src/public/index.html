@@ -450,6 +450,13 @@
                 <input type="text" id="settingsElevenlabsKey" placeholder="xi-..." autocomplete="off" class="secret-input">
                 <div class="hint">Get your key from elevenlabs.io/api. Or set ELEVENLABS_API_KEY env var.</div>
               </div>
+              <div class="form-group">
+                <label>Default Voice</label>
+                <select id="settingsDefaultVoice">
+                  <option value="">Engine default</option>
+                </select>
+                <div class="hint">Select which voice the AI uses in voice mode. Upload or download voices below to add more options.</div>
+              </div>
               <button class="btn btn-sm" id="saveVoiceBtn" style="margin-bottom: 16px">Save Voice Settings</button>
 
               <h3>Add a Voice Model</h3>
@@ -591,6 +598,7 @@
   <!-- Voice Mode Panel -->
   <div id="voicePanel" class="voice-panel">
     <button class="voice-close" id="voiceClose">&#10005;</button>
+    <div id="voiceActiveLabel" style="position:absolute;top:12px;left:16px;font-size:12px;color:var(--text-muted);opacity:0.8"></div>
     <div class="voice-conversation" id="voiceConversation"></div>
     <div class="voice-orb-container">
       <div class="voice-orb idle" id="voiceOrb">

@@ -57,6 +57,23 @@ const Voice = {
     this.elements.panel.classList.add("active");
     this.autoListen = true;
     this.elements.status.textContent = "Starting...";
+
+    // Show active voice label
+    const label = document.getElementById("voiceActiveLabel");
+    if (label) {
+      const voiceId = localStorage.getItem("voice.defaultVoiceId");
+      if (voiceId) {
+        label.textContent = `Voice: ${voiceId}`;
+        // Try to resolve name from API
+        API.getVoices?.().then((data) => {
+          const match = data?.voices?.find((v) => v.id === voiceId);
+          if (match) label.textContent = `Voice: ${match.name || voiceId}`;
+        }).catch(() => {});
+      } else {
+        label.textContent = "";
+      }
+    }
+
     setTimeout(() => this.startRecording(), 300);
   },
 
@@ -317,7 +334,8 @@ const Voice = {
     this.elements.status.textContent = "Speaking...";
 
     try {
-      const audioBlob = await API.tts(text);
+      const voiceId = localStorage.getItem("voice.defaultVoiceId") || undefined;
+      const audioBlob = await API.tts(text, voiceId);
       const audioUrl = URL.createObjectURL(audioBlob);
       this.elements.audio.src = audioUrl;
       await this.elements.audio.play();

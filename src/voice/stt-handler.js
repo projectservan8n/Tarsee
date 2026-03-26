@@ -2,7 +2,7 @@
  * Speech-to-text handler with multiple backend options.
  *
  * Priority:
- *   1. OpenAI gpt-4o-mini-transcribe (cloud, requires OPENAI_API_KEY)
+ *   1. OpenAI whisper-1 (cloud, requires OPENAI_API_KEY)
  *   2. Local whisper.cpp (requires binary + ffmpeg)
  *   3. Anthropic/Gemini audio (if available)
  *   4. Stub error
@@ -20,13 +20,13 @@ import { isAvailable as whisperLocalAvailable, transcribe as whisperLocalTranscr
  * @returns {Promise<{transcript: string, language: string, provider: string}>}
  */
 export async function transcribeAudio(audioBuffer, language, opts = {}) {
-  // 1. Try OpenAI gpt-4o-mini-transcribe
+  // 1. Try OpenAI Whisper API (whisper-1)
   const openaiKey = process.env.OPENAI_API_KEY || opts.settingsStore?.get?.("ai.openai.apiKey");
   if (openaiKey) {
     try {
       return await openaiWhisperAPI(audioBuffer, openaiKey, language);
     } catch (err) {
-      console.warn("[stt] OpenAI gpt-4o-mini-transcribe failed:", err.message);
+      console.warn("[stt] OpenAI whisper-1 failed:", err.message);
       // Fall through to next option
     }
   }
@@ -54,7 +54,7 @@ export async function transcribeAudio(audioBuffer, language, opts = {}) {
   // 4. No STT engine available
   throw Object.assign(
     new Error(
-      "No STT engine available. Options: 1) Set OPENAI_API_KEY for cloud STT (gpt-4o-mini-transcribe), " +
+      "No STT engine available. Options: 1) Set OPENAI_API_KEY for cloud STT (whisper-1), " +
       "2) Install whisper.cpp + ffmpeg for local STT, " +
       "3) Set GEMINI_API_KEY for Gemini audio."
     ),
@@ -63,75 +63,94 @@ export async function transcribeAudio(audioBuffer, language, opts = {}) {
 }
 
 /**
- * OpenAI gpt-4o-mini-transcribe transcription.
+ * OpenAI whisper-1 transcription.
  * Uses the /v1/audio/transcriptions endpoint.
  */
 async function openaiWhisperAPI(audioBuffer, apiKey, language) {
-  // Build multipart form data manually
-  const boundary = "----TarseeSTTBoundary" + Date.now();
-  const parts = [];
+  // Build multipart form data
+  function buildBody() {
+    const boundary = "----TarseeSTTBoundary" + Date.now();
+    const parts = [];
 
-  // File part
-  parts.push(
-    `--${boundary}\r\n` +
-    `Content-Disposition: form-data; name="file"; filename="audio.webm"\r\n` +
-    `Content-Type: audio/webm\r\n\r\n`
-  );
-  parts.push(audioBuffer);
-  parts.push("\r\n");
-
-  // Model part
-  parts.push(
-    `--${boundary}\r\n` +
-    `Content-Disposition: form-data; name="model"\r\n\r\n` +
-    `gpt-4o-mini-transcribe\r\n`
-  );
-
-  // Language part (optional)
-  if (language) {
-    const lang = language.split("-")[0]; // "en-US" -> "en"
     parts.push(
       `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="language"\r\n\r\n` +
-      `${lang}\r\n`
+      `Content-Disposition: form-data; name="file"; filename="audio.webm"\r\n` +
+      `Content-Type: audio/webm\r\n\r\n`
     );
+    parts.push(audioBuffer);
+    parts.push("\r\n");
+
+    parts.push(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="model"\r\n\r\n` +
+      `whisper-1\r\n`
+    );
+
+    if (language) {
+      const lang = language.split("-")[0];
+      parts.push(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="language"\r\n\r\n` +
+        `${lang}\r\n`
+      );
+    }
+
+    parts.push(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="response_format"\r\n\r\n` +
+      `json\r\n`
+    );
+
+    parts.push(`--${boundary}--\r\n`);
+
+    const bodyParts = parts.map((p) => (typeof p === "string" ? Buffer.from(p) : p));
+    return { body: Buffer.concat(bodyParts), boundary };
   }
 
-  // Response format
-  parts.push(
-    `--${boundary}\r\n` +
-    `Content-Disposition: form-data; name="response_format"\r\n\r\n` +
-    `json\r\n`
-  );
+  // Retry up to 3 times on 503/429 (OpenAI overloaded)
+  const MAX_RETRIES = 3;
+  let lastError;
 
-  parts.push(`--${boundary}--\r\n`);
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = Math.min(1000 * Math.pow(2, attempt), 4000);
+      console.log(`[stt] OpenAI retry ${attempt}/${MAX_RETRIES} after ${delay}ms...`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
 
-  // Combine into single buffer
-  const bodyParts = parts.map((p) => (typeof p === "string" ? Buffer.from(p) : p));
-  const body = Buffer.concat(bodyParts);
+    const { body, boundary } = buildBody();
 
-  const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": `multipart/form-data; boundary=${boundary}`,
-    },
-    body,
-    signal: AbortSignal.timeout(30_000),
-  });
+    const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      },
+      body,
+      signal: AbortSignal.timeout(30_000),
+    });
 
-  if (!res.ok) {
+    if (res.ok) {
+      const data = await res.json();
+      console.log(`[stt] OpenAI STT: "${data.text?.slice(0, 80)}..."`);
+      return {
+        transcript: data.text || "",
+        language: language?.split("-")[0] || "en",
+        provider: "whisper-1",
+      };
+    }
+
     const errText = await res.text();
-    throw new Error(`OpenAI gpt-4o-mini-transcribe error (${res.status}): ${errText}`);
+    lastError = new Error(`OpenAI whisper-1 error (${res.status}): ${errText}`);
+
+    // Only retry on 503 (overloaded) or 429 (rate limit)
+    if (res.status !== 503 && res.status !== 429) {
+      throw lastError;
+    }
+    console.warn(`[stt] OpenAI returned ${res.status}, retrying...`);
   }
 
-  const data = await res.json();
-  console.log(`[stt] OpenAI STT: "${data.text?.slice(0, 80)}..."`);
-  return {
-    transcript: data.text || "",
-    language: language?.split("-")[0] || "en",
-    provider: "gpt-4o-mini-transcribe",
-  };
+  throw lastError;
 }
 
 /**
