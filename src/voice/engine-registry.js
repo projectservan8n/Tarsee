@@ -32,7 +32,9 @@ export async function initTTSEngine(settingsStore) {
   if (engineType === "elevenlabs" || engineType === "auto") {
     try {
       const apiKey = settingsStore?.getApiKey?.("elevenlabs")
-        || settingsStore?.get("voice.elevenlabs.apiKey");
+        || settingsStore?.get("voice.elevenlabs.apiKey")
+        || process.env.ELEVEN_LABS_API_KEY
+        || process.env.XI_API_KEY;
       if (apiKey) {
         const { ElevenLabsTTSEngine } = await import("./elevenlabs-engine.js");
         const modelId = settingsStore?.get("voice.elevenlabs.model") || undefined;
