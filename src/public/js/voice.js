@@ -347,8 +347,7 @@ const Voice = {
     this.elements.status.textContent = "Speaking...";
 
     try {
-      const voiceId = localStorage.getItem("voice.defaultVoiceId") || undefined;
-      const audioBlob = await API.tts(text, voiceId);
+      const audioBlob = await API.tts(text);
       const audioUrl = URL.createObjectURL(audioBlob);
       this.elements.audio.src = audioUrl;
       await this.elements.audio.play();
