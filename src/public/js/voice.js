@@ -200,12 +200,22 @@ const Voice = {
       const headers = {};
       if (csrf) headers["X-CSRF-Token"] = csrf;
 
-      const res = await fetch("/api/voice/transcribe", {
-        method: "POST",
-        headers,
-        credentials: "same-origin",
-        body: formData,
-      });
+      // Retry up to 2 times on 503 (server temporarily unavailable)
+      let res;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) {
+          this.elements.status.textContent = `Retrying transcription (${attempt}/2)...`;
+          await new Promise((r) => setTimeout(r, 1500 * attempt));
+        }
+        res = await fetch("/api/voice/transcribe", {
+          method: "POST",
+          headers,
+          credentials: "same-origin",
+          body: formData,
+        });
+        if (res.ok || (res.status !== 503 && res.status !== 429)) break;
+        console.warn(`[voice] transcribe returned ${res.status}, retrying...`);
+      }
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
