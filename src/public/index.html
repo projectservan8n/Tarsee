@@ -440,10 +440,11 @@
                 <select id="settingsVoiceEngine">
                   <option value="auto">Auto-detect (Recommended)</option>
                   <option value="piper">Piper TTS (Local / ONNX)</option>
+                  <option value="openai-tts">OpenAI TTS (Cloud)</option>
                   <option value="elevenlabs">ElevenLabs (Cloud)</option>
                   <option value="stub">Disabled</option>
                 </select>
-                <div class="hint">Piper: fast local TTS (~50MB per voice, ONNX). ElevenLabs: cloud-based, needs API key.</div>
+                <div class="hint">Auto: uses first available (Piper → ElevenLabs → OpenAI). OpenAI TTS uses your existing API key.</div>
               </div>
               <div class="form-group" id="elevenlabsKeyGroup" style="display:none">
                 <label>ElevenLabs API Key</label>

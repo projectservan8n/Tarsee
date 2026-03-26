@@ -18,7 +18,7 @@ export function setTTSEngine(engine) {
 
 /**
  * Initializes the TTS engine based on settings.
- * Priority: Piper (local, fast) → ElevenLabs (cloud) → stub
+ * Priority: Piper (local) → ElevenLabs (cloud) → OpenAI TTS (cloud) → stub
  */
 export async function initTTSEngine(settingsStore) {
   const engineType = settingsStore?.get("voice.engine") || "auto";
@@ -46,7 +46,7 @@ export async function initTTSEngine(settingsStore) {
     }
   }
 
-  // Try ElevenLabs (cloud fallback)
+  // Try ElevenLabs (cloud, supports cloning)
   if (engineType === "elevenlabs" || engineType === "auto") {
     try {
       const apiKey = settingsStore?.getApiKey?.("elevenlabs")
@@ -64,6 +64,23 @@ export async function initTTSEngine(settingsStore) {
       }
     } catch (err) {
       console.warn("[voice] ElevenLabs init failed:", err.message);
+    }
+  }
+
+  // Try OpenAI TTS (cloud, works if OPENAI_API_KEY is set)
+  if (engineType === "openai-tts" || engineType === "auto") {
+    try {
+      const apiKey = settingsStore?.getApiKey?.("openai");
+      if (apiKey) {
+        const { OpenAITTSEngine } = await import("./openai-tts-engine.js");
+        const voice = settingsStore?.get("voice.openai.voice") || "onyx";
+        const engine = new OpenAITTSEngine(apiKey, { voice });
+        currentEngine = engine;
+        console.log(`[voice] using OpenAI TTS (voice: ${voice})`);
+        return;
+      }
+    } catch (err) {
+      console.warn("[voice] OpenAI TTS init failed:", err.message);
     }
   }
 
