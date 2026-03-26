@@ -13,10 +13,11 @@ const BASE_URL = "https://api.elevenlabs.io/v1";
  * Requires: ELEVENLABS_API_KEY in env or voice.elevenlabs.apiKey in settings
  */
 export class ElevenLabsTTSEngine extends TTSEngine {
-  constructor(apiKey, modelId) {
+  constructor(apiKey, modelId, defaultVoice) {
     super();
     this.apiKey = apiKey;
     this.modelId = modelId || "eleven_multilingual_v2";
+    this.defaultVoice = defaultVoice || null;
   }
 
   get name() {
@@ -43,7 +44,7 @@ export class ElevenLabsTTSEngine extends TTSEngine {
     if (!text) throw new Error("Text is required");
 
     // Default to Rachel voice if no ID specified
-    const vid = voiceId || "21m00Tcm4TlvDq8ikWAM";
+    const vid = voiceId || this.defaultVoice || "21m00Tcm4TlvDq8ikWAM";
 
     const res = await fetch(`${BASE_URL}/text-to-speech/${vid}`, {
       method: "POST",

@@ -18,7 +18,7 @@ export function setTTSEngine(engine) {
 
 /**
  * Initializes the TTS engine based on settings.
- * Priority: Piper (local) → ElevenLabs (cloud) → OpenAI TTS (cloud) → stub
+ * Priority: ElevenLabs (cloud) → OpenAI TTS (cloud) → stub
  */
 export async function initTTSEngine(settingsStore) {
   const engineType = settingsStore?.get("voice.engine") || "auto";
@@ -26,24 +26,6 @@ export async function initTTSEngine(settingsStore) {
   if (engineType === "stub" || engineType === "none") {
     currentEngine = new StubTTSEngine();
     return;
-  }
-
-  // Try Piper TTS (local, fast, ONNX-based)
-  if (engineType === "piper" || engineType === "auto") {
-    try {
-      const { PiperTTSEngine } = await import("./piper-engine.js");
-      const piper = new PiperTTSEngine();
-      const available = await piper.isAvailable();
-      if (available) {
-        currentEngine = piper;
-        console.log("[voice] using Piper TTS (ONNX)");
-        return;
-      } else if (engineType === "piper") {
-        console.warn("[voice] Piper TTS binary not found in PATH");
-      }
-    } catch (err) {
-      console.warn("[voice] Piper TTS init failed:", err.message);
-    }
   }
 
   // Try ElevenLabs (cloud, supports cloning)
@@ -54,11 +36,12 @@ export async function initTTSEngine(settingsStore) {
       if (apiKey) {
         const { ElevenLabsTTSEngine } = await import("./elevenlabs-engine.js");
         const modelId = settingsStore?.get("voice.elevenlabs.model") || undefined;
-        const el = new ElevenLabsTTSEngine(apiKey, modelId);
+        const defaultVoice = settingsStore?.get("voice.defaultVoiceId") || "iWyfYyRejPZ24HwI8ySp";
+        const el = new ElevenLabsTTSEngine(apiKey, modelId, defaultVoice);
         const available = await el.isAvailable();
         if (available) {
           currentEngine = el;
-          console.log("[voice] using ElevenLabs TTS");
+          console.log(`[voice] using ElevenLabs TTS (default voice: ${defaultVoice})`);
           return;
         }
       }
@@ -67,7 +50,7 @@ export async function initTTSEngine(settingsStore) {
     }
   }
 
-  // Try OpenAI TTS (cloud, works if OPENAI_API_KEY is set)
+  // Try OpenAI TTS (cloud fallback)
   if (engineType === "openai-tts" || engineType === "auto") {
     try {
       const apiKey = settingsStore?.getApiKey?.("openai");
