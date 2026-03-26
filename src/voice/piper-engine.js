@@ -26,16 +26,29 @@ export class PiperTTSEngine extends TTSEngine {
   }
 
   async isAvailable() {
-    try {
-      const code = await new Promise((resolve) => {
-        const proc = spawn("piper", ["--version"], { stdio: "ignore", timeout: 5000 });
-        proc.on("close", resolve);
-        proc.on("error", () => resolve(1));
-      });
-      return code === 0;
-    } catch {
-      return false;
+    // Try piper on PATH first, then check /opt/piper directly
+    for (const bin of ["piper", "/opt/piper/piper"]) {
+      try {
+        const code = await new Promise((resolve) => {
+          // piper --help exits 0, --version may not exist
+          const proc = spawn(bin, ["--help"], { stdio: "ignore", timeout: 5000 });
+          proc.on("close", resolve);
+          proc.on("error", () => resolve(1));
+        });
+        if (code === 0) {
+          this._binary = bin;
+          return true;
+        }
+      } catch { /* try next */ }
     }
+    // Last resort: check if binary file exists
+    if (fs.existsSync("/opt/piper/piper")) {
+      this._binary = "/opt/piper/piper";
+      console.log("[piper] found binary at /opt/piper/piper (file check)");
+      return true;
+    }
+    console.warn("[piper] binary not found on PATH or /opt/piper/");
+    return false;
   }
 
   /**
@@ -65,7 +78,8 @@ export class PiperTTSEngine extends TTSEngine {
     const outFile = path.join(os.tmpdir(), `piper-${Date.now()}.wav`);
 
     return new Promise((resolve, reject) => {
-      const proc = spawn("piper", [
+      const bin = this._binary || "piper";
+      const proc = spawn(bin, [
         "--model", modelPath,
         "--output_file", outFile,
       ], { stdio: ["pipe", "pipe", "pipe"] });
