@@ -124,6 +124,7 @@ export function getBootstrapContext() {
     { name: "USER.md", label: "About the User" },
     { name: "TOOLS.md", label: "Tools & Capabilities" },
     { name: "MEMORY.md", label: "Long-Term Memory" },
+    { name: "HEARTBEAT.md", label: "Heartbeat Tasks" },
   ];
 
   const sections = [];

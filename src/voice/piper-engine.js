@@ -6,8 +6,9 @@ import os from "node:os";
 import config from "../config/env.js";
 
 const VOICES_DIR = path.join(config.DATA_DIR, "piper-voices");
+const BUNDLED_VOICES_DIR = "/opt/piper-voices"; // pre-downloaded in Docker image
 const DEFAULT_VOICE = "en_US-lessac-medium";
-const HF_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main";
+const HF_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0";
 
 /**
  * Piper TTS engine — fast, lightweight, ONNX-based.
@@ -44,11 +45,16 @@ export class PiperTTSEngine extends TTSEngine {
     if (!text) throw new Error("Text is required");
 
     const voiceName = voiceId || DEFAULT_VOICE;
-    const modelPath = path.join(VOICES_DIR, `${voiceName}.onnx`);
+    let modelPath = path.join(VOICES_DIR, `${voiceName}.onnx`);
 
-    // Auto-download default voice if not present
+    // Check bundled voices dir (Docker image) as fallback
     if (!fs.existsSync(modelPath)) {
-      if (voiceName === DEFAULT_VOICE) {
+      const bundledPath = path.join(BUNDLED_VOICES_DIR, `${voiceName}.onnx`);
+      if (fs.existsSync(bundledPath)) {
+        modelPath = bundledPath;
+        console.log(`[piper] using bundled voice model: ${bundledPath}`);
+      } else if (voiceName === DEFAULT_VOICE) {
+        // Auto-download default voice as last resort
         console.log(`[piper] downloading default voice: ${voiceName}`);
         await this.downloadVoice(voiceName);
       } else {

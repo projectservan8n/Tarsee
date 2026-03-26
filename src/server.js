@@ -36,6 +36,7 @@ import { getSecurityManager } from "./lib/security-manager.js";
 import { getGatewayManager } from "./lib/gateway.js";
 import { canvasMiddleware } from "./lib/canvas.js";
 import { acpRouter } from "./routes/acp.js";
+import { cronRouter } from "./routes/cron.js";
 import { writePid, removePid } from "./daemon/pid.js";
 
 // --- Install log capture early (before any console.log calls) ---
@@ -106,6 +107,7 @@ app.use("/api/backup", requireAuth, csrfProtect, backupRouter);
 app.use("/api/memory", requireAuth, csrfProtect, memoryRouter);
 app.use("/api/skills", requireAuth, csrfProtect, skillsRouter);
 app.use("/api/acp", requireAuth, csrfProtect, acpRouter);
+app.use("/api/cron", requireAuth, csrfProtect, cronRouter);
 
 // SPA fallback — serve index.html for client-side routes
 // Express 5 requires named wildcard params (bare * is invalid)

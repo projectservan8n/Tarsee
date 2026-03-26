@@ -636,16 +636,50 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
 
       case "search_memories": {
         const { query } = toolInput;
-        if (!ctx.db) return "Database not available.";
-        try {
-          const { MemoryStore } = await import("../db/memory.js");
-          const store = new MemoryStore(ctx.db);
-          const results = store.search(query, 10);
-          if (results.length === 0) return `No memories found matching "${query}".`;
-          return results.map((m) => `[${m.category}] ${m.content}`).join("\n");
-        } catch (err) {
-          return `Memory search error: ${err.message}`;
+        const allResults = [];
+        const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+        const regex = new RegExp(words.join("|"), "i");
+
+        // 1. Search DB memories
+        if (ctx.db) {
+          try {
+            const { MemoryStore } = await import("../db/memory.js");
+            const store = new MemoryStore(ctx.db);
+            const dbResults = store.search(query, 10);
+            for (const m of dbResults) {
+              allResults.push(`[db:${m.category}] ${m.content}`);
+            }
+          } catch { /* ignore db errors */ }
         }
+
+        // 2. Search MEMORY.md and daily log files
+        const searchFileForMatches = (filename) => {
+          const content = readWorkspaceFile(filename);
+          if (!content) return;
+          const lines = content.split("\n");
+          for (let i = 0; i < lines.length; i++) {
+            if (regex.test(lines[i])) {
+              allResults.push(`[${filename}:${i + 1}] ${lines[i].trim()}`);
+            }
+          }
+        };
+
+        searchFileForMatches("MEMORY.md");
+
+        // Search last 7 daily logs
+        const memDir = path.join(config.WORKSPACE_DIR, "memory");
+        try {
+          const memFiles = fs.readdirSync(memDir)
+            .filter((f) => f.match(/^\d{4}-\d{2}-\d{2}\.md$/))
+            .sort()
+            .slice(-7);
+          for (const f of memFiles) {
+            searchFileForMatches(`memory/${f}`);
+          }
+        } catch { /* no memory dir */ }
+
+        if (allResults.length === 0) return `No memories found matching "${query}".`;
+        return allResults.slice(0, 30).join("\n");
       }
 
       case "edit_file": {
