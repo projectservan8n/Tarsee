@@ -3,6 +3,7 @@ import { SettingsStore } from "../db/settings.js";
 import { AI_PROVIDERS } from "../config/constants.js";
 import { getAvailableProviders } from "../ai/router.js";
 import { readWorkspaceFile, writeWorkspaceFile, hasBootstrapFile, deleteBootstrapFile } from "../lib/workspace-files.js";
+import { initTTSEngine } from "../voice/engine-registry.js";
 
 export const settingsRouter = Router();
 
@@ -172,6 +173,14 @@ settingsRouter.post("/general", (req, res) => {
   }
 
   settingsStore.set(key, value);
+
+  // Hot-reload: re-init TTS engine when voice settings change (no restart needed)
+  if (key.startsWith("voice.")) {
+    initTTSEngine(settingsStore).catch((err) => {
+      console.warn("[settings] TTS hot-reload failed:", err.message);
+    });
+  }
+
   res.json({ ok: true });
 });
 

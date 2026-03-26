@@ -617,7 +617,9 @@ const Settings = {
         body: { key: "voice.defaultVoiceId", value: defaultVoiceId },
       });
 
-      App.showToast("Voice settings saved. Restart server to apply engine changes.", "success");
+      App.showToast("Voice settings saved and applied.", "success");
+      // Refresh status to show the new engine
+      this.loadVoiceStatus();
     } catch (err) {
       App.showToast(err.message, "error");
     }
