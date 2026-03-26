@@ -307,28 +307,31 @@ const Voice = {
     } else {
       // Conversational response — show and speak it
       this.addBubble("assistant", text);
-      this.speak(text);
+      // Strip markdown formatting for cleaner TTS
+      const speakText = text
+        .replace(/\*\*(.*?)\*\*/g, "$1")
+        .replace(/\*(.*?)\*/g, "$1")
+        .replace(/#{1,6}\s+/g, "")
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+        .replace(/^[-*]\s+/gm, "")
+        .trim();
+      this.speak(speakText);
     }
   },
 
   /**
-   * Detect if a response is "complex" (code, tables, long lists, lengthy text).
-   * Returns true if the text has code blocks, tables, long lists, or is over 500 chars.
+   * Detect if a response is truly "complex" (code blocks or massive text).
+   * Only redirect to chat for actual code/tables — speak everything else.
    */
   isComplexResponse(text) {
-    // Code blocks
+    // Code blocks — these genuinely can't be spoken
     if (/```[\s\S]*?```/.test(text)) return true;
 
     // Tables (markdown pipe tables)
     if (/\|.*\|.*\|/.test(text) && /[-]{3,}/.test(text)) return true;
 
-    // Long lists (more than 3 items with - or * or numbered)
-    const listItems = text.match(/^[\s]*[-*]\s+.+/gm) || [];
-    const numberedItems = text.match(/^[\s]*\d+[.)]\s+.+/gm) || [];
-    if (listItems.length > 3 || numberedItems.length > 3) return true;
-
-    // Long text
-    if (text.length > 500) return true;
+    // Very long text (over 2000 chars is genuinely too long to listen to)
+    if (text.length > 2000) return true;
 
     return false;
   },
