@@ -20,15 +20,18 @@ import { isAvailable as whisperLocalAvailable, transcribe as whisperLocalTranscr
  * @returns {Promise<{transcript: string, language: string, provider: string}>}
  */
 export async function transcribeAudio(audioBuffer, language, opts = {}) {
-  // 1. Try OpenAI Whisper API (whisper-1)
-  const openaiKey = process.env.OPENAI_API_KEY || opts.settingsStore?.get?.("ai.openai.apiKey");
+  const store = opts.settingsStore;
+
+  // 1. Try OpenAI Whisper API (whisper-1) — vault key first, env second
+  const openaiKey = store?.getApiKey?.("openai") || process.env.OPENAI_API_KEY;
   if (openaiKey) {
     try {
       return await openaiWhisperAPI(audioBuffer, openaiKey, language);
     } catch (err) {
       console.warn("[stt] OpenAI whisper-1 failed:", err.message);
-      // Fall through to next option
     }
+  } else {
+    console.warn("[stt] No OpenAI key found (vault or env)");
   }
 
   // 2. Try local whisper.cpp
@@ -41,8 +44,8 @@ export async function transcribeAudio(audioBuffer, language, opts = {}) {
     }
   }
 
-  // 3. Try Gemini (supports audio in content)
-  const geminiKey = process.env.GEMINI_API_KEY || opts.settingsStore?.get?.("ai.gemini.apiKey");
+  // 3. Try Gemini — vault key first, env second
+  const geminiKey = store?.getApiKey?.("gemini") || process.env.GEMINI_API_KEY;
   if (geminiKey) {
     try {
       return await geminiTranscribe(audioBuffer, geminiKey, language);
@@ -54,9 +57,7 @@ export async function transcribeAudio(audioBuffer, language, opts = {}) {
   // 4. No STT engine available
   throw Object.assign(
     new Error(
-      "No STT engine available. Options: 1) Set OPENAI_API_KEY for cloud STT (whisper-1), " +
-      "2) Install whisper.cpp + ffmpeg for local STT, " +
-      "3) Set GEMINI_API_KEY for Gemini audio."
+      "No STT engine available. Set an OpenAI or Gemini API key in Settings > Providers, or via environment variables."
     ),
     { status: 501 }
   );

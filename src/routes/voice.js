@@ -103,8 +103,7 @@ voiceRouter.post("/stt", async (req, res) => {
   const language = req.headers["x-language"] || "en-US";
 
   try {
-    const { SettingsStore } = await import("../db/settings.js");
-    const sStore = new SettingsStore(req.app.get("db"), req.app.get("auditLog"));
+    const sStore = req.app.get("settingsStore");
     const result = await transcribeAudio(audioBuffer, language, { settingsStore: sStore });
     res.json({ text: result.transcript, language: result.language, provider: result.provider });
   } catch (err) {
@@ -167,8 +166,7 @@ voiceRouter.post("/transcribe", async (req, res) => {
     }
 
     // Use multi-provider STT (OpenAI Whisper API > whisper.cpp > Gemini > error)
-    const { SettingsStore } = await import("../db/settings.js");
-    const sStore = new SettingsStore(req.app.get("db"), req.app.get("auditLog"));
+    const sStore = req.app.get("settingsStore");
 
     // Debug: log which keys are available
     const hasEnvKey = !!process.env.OPENAI_API_KEY;

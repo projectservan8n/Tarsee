@@ -187,6 +187,26 @@ export class SettingsStore {
   }
 
   /**
+   * Get an API key for a provider — vault first, env second.
+   * Works for any provider: openai, gemini, anthropic, elevenlabs, etc.
+   * @param {string} providerId - e.g. "openai", "gemini", "elevenlabs"
+   * @returns {string|null}
+   */
+  getApiKey(providerId) {
+    // 1. Check vault/DB
+    const dbKey = this.get(`ai.${providerId}.apiKey`);
+    if (dbKey) return dbKey.trim();
+
+    // 2. Check known env var names
+    const providerDef = AI_PROVIDERS[providerId];
+    const envName = providerDef?.envKey || `${providerId.toUpperCase()}_API_KEY`;
+    const envKey = process.env[envName];
+    if (envKey) return envKey.trim().replace(/^["']|["']$/g, "");
+
+    return null;
+  }
+
+  /**
    * Set the active AI provider.
    */
   setActiveProvider(providerId, { model, apiKey, baseUrl } = {}) {
