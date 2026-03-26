@@ -107,15 +107,15 @@ async function openaiWhisperAPI(audioBuffer, apiKey, language) {
     return { body: Buffer.concat(bodyParts), boundary };
   }
 
-  // Retry up to 3 times on 503/429 (OpenAI overloaded)
-  const MAX_RETRIES = 3;
+  // Retry up to 2 times on 503/429 (OpenAI overloaded)
+  // Keep total time under 20s to avoid Railway proxy timeout
+  const MAX_RETRIES = 2;
   let lastError;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     if (attempt > 0) {
-      const delay = Math.min(1000 * Math.pow(2, attempt), 4000);
-      console.log(`[stt] OpenAI retry ${attempt}/${MAX_RETRIES} after ${delay}ms...`);
-      await new Promise((r) => setTimeout(r, delay));
+      console.log(`[stt] OpenAI retry ${attempt}/${MAX_RETRIES} after 1s...`);
+      await new Promise((r) => setTimeout(r, 1000));
     }
 
     const { body, boundary } = buildBody();
@@ -127,7 +127,7 @@ async function openaiWhisperAPI(audioBuffer, apiKey, language) {
         "Content-Type": `multipart/form-data; boundary=${boundary}`,
       },
       body,
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(15_000),
     });
 
     if (res.ok) {

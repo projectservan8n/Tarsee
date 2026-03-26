@@ -17,10 +17,20 @@ voiceRouter.get("/status", async (_req, res) => {
   const available = await engine.isAvailable();
   const voices = await engine.listVoices();
 
+  // STT diagnostics
+  const hasOpenAI = !!(process.env.OPENAI_API_KEY);
+  const hasGemini = !!(process.env.GEMINI_API_KEY);
+  const whisperLocal = await whisperAvailable().catch(() => false);
+
   res.json({
     engine: engine.name,
     available,
     voices,
+    stt: {
+      openai: hasOpenAI ? "key set" : "no key",
+      whisperLocal: whisperLocal ? "available" : "not installed",
+      gemini: hasGemini ? "key set" : "no key",
+    },
   });
 });
 
@@ -159,6 +169,13 @@ voiceRouter.post("/transcribe", async (req, res) => {
     // Use multi-provider STT (OpenAI Whisper API > whisper.cpp > Gemini > error)
     const { SettingsStore } = await import("../db/settings.js");
     const sStore = new SettingsStore(req.app.get("db"), req.app.get("auditLog"));
+
+    // Debug: log which keys are available
+    const hasEnvKey = !!process.env.OPENAI_API_KEY;
+    const hasDbKey = !!sStore.get("ai.openai.apiKey");
+    const hasGeminiKey = !!(process.env.GEMINI_API_KEY || sStore.get("ai.gemini.apiKey"));
+    console.log(`[stt] keys: env=${hasEnvKey}, db=${hasDbKey}, gemini=${hasGeminiKey}, audioSize=${audioBuffer.length}`);
+
     const result = await transcribeAudio(audioBuffer, req.headers["x-language"] || "en", { settingsStore: sStore });
     res.json({ text: result.transcript, language: result.language, provider: result.provider });
   } catch (err) {
