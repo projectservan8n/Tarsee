@@ -207,6 +207,35 @@ export class SettingsStore {
   }
 
   /**
+   * Log which API keys are configured (masked) at startup.
+   * Call once during server init.
+   */
+  logKeyStatus() {
+    const providers = ["anthropic", "openai", "gemini", "openrouter", "elevenlabs"];
+    const lines = providers.map((id) => {
+      const dbKey = this.get(`ai.${id}.apiKey`);
+      const providerDef = AI_PROVIDERS[id];
+      const envName = providerDef?.envKey || `${id.toUpperCase()}_API_KEY`;
+      const envKey = process.env[envName];
+
+      if (dbKey) {
+        const masked = typeof dbKey === "string" && dbKey.length > 8
+          ? `${dbKey.slice(0, 4)}...${dbKey.slice(-4)}`
+          : "****";
+        return `  ${id}: ${masked} (vault)`;
+      }
+      if (envKey) {
+        const masked = envKey.length > 8
+          ? `${envKey.slice(0, 4)}...${envKey.slice(-4)}`
+          : "****";
+        return `  ${id}: ${masked} (env)`;
+      }
+      return `  ${id}: not set`;
+    });
+    console.log(`[keys] API key status:\n${lines.join("\n")}`);
+  }
+
+  /**
    * Set the active AI provider.
    */
   setActiveProvider(providerId, { model, apiKey, baseUrl } = {}) {

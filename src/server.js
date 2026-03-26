@@ -139,6 +139,7 @@ app.set("auditLog", auditLog);
 // --- TTS Engine (lazy init) ---
 const settingsStore = new SettingsStore(db, auditLog);
 app.set("settingsStore", settingsStore);
+settingsStore.logKeyStatus();
 initTTSEngine(settingsStore).catch((err) => {
   console.warn("[tarsee] TTS engine init error:", err.message);
 });
