@@ -1,6 +1,6 @@
 import { Router } from "express";
 import Busboy from "busboy";
-import { getTTSEngine } from "../voice/engine-registry.js";
+import { getTTSEngine, initTTSEngine } from "../voice/engine-registry.js";
 import { cloneVoice, listVoiceProfiles } from "../voice/clone-handler.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
 import { transcribe as whisperTranscribe, isAvailable as whisperAvailable } from "../voice/whisper-engine.js";
@@ -75,10 +75,18 @@ voiceRouter.post("/tts", async (req, res) => {
 
     // If engine is still stub, try to re-init (key may have been added after startup)
     if (engine.name === "stub") {
-      const { initTTSEngine } = await import("../voice/engine-registry.js");
+      console.log("[tts] engine is stub, attempting re-init...");
       const sStore = req.app.get("settingsStore");
       await initTTSEngine(sStore);
       engine = getTTSEngine();
+      console.log(`[tts] after re-init: engine=${engine.name}`);
+    }
+
+    if (engine.name === "stub") {
+      return res.status(501).json({
+        error: "No TTS engine available. Check ELEVENLABS_API_KEY is set in Railway env vars.",
+        hint: `env check: ELEVENLABS_API_KEY=${process.env.ELEVENLABS_API_KEY ? "set" : "missing"}, ELEVEN_LABS_API_KEY=${process.env.ELEVEN_LABS_API_KEY ? "set" : "missing"}`
+      });
     }
 
     console.log(`[tts] engine=${engine.name}, voiceId=${voiceId || "default"}, textLen=${text.length}`);
