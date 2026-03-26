@@ -71,13 +71,24 @@ voiceRouter.post("/tts", async (req, res) => {
   }
 
   try {
-    const engine = getTTSEngine();
+    let engine = getTTSEngine();
+
+    // If engine is still stub, try to re-init (key may have been added after startup)
+    if (engine.name === "stub") {
+      const { initTTSEngine } = await import("../voice/engine-registry.js");
+      const sStore = req.app.get("settingsStore");
+      await initTTSEngine(sStore);
+      engine = getTTSEngine();
+    }
+
+    console.log(`[tts] engine=${engine.name}, voiceId=${voiceId || "default"}, textLen=${text.length}`);
     const { audio, contentType } = await engine.synthesize(text, voiceId);
 
     res.set("Content-Type", contentType || "audio/wav");
     res.set("Content-Length", String(audio.length));
     res.send(audio);
   } catch (err) {
+    console.error(`[tts] error: ${err.message}`);
     const status = err.status || 500;
     res.status(status).json({ error: err.message });
   }
