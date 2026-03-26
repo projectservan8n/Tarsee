@@ -29,8 +29,9 @@ export class ElevenLabsTTSEngine extends TTSEngine {
     try {
       const res = await fetch(`${BASE_URL}/user`, {
         headers: { "xi-api-key": this.apiKey },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(8000),
       });
+      console.log(`[elevenlabs] isAvailable check: ${res.ok ? "OK" : res.status}`);
       return res.ok;
     } catch {
       return false;
@@ -63,12 +64,12 @@ export class ElevenLabsTTSEngine extends TTSEngine {
           use_speaker_boost: true,
         },
       }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(15_000),
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail?.message || `ElevenLabs TTS error: ${res.status}`);
+      const errBody = await res.text().catch(() => "");
+      throw new Error(`ElevenLabs TTS error (${res.status}): ${errBody.slice(0, 200)}`);
     }
 
     const arrayBuffer = await res.arrayBuffer();
