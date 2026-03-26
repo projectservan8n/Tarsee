@@ -3,7 +3,6 @@ import Busboy from "busboy";
 import { getTTSEngine, initTTSEngine } from "../voice/engine-registry.js";
 import { cloneVoice, listVoiceProfiles } from "../voice/clone-handler.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
-import { transcribe as whisperTranscribe, isAvailable as whisperAvailable } from "../voice/whisper-engine.js";
 import { LIMITS } from "../config/constants.js";
 
 export const voiceRouter = Router();
@@ -12,26 +11,16 @@ export const voiceRouter = Router();
  * GET /api/voice/status
  * Check voice engine status.
  */
-voiceRouter.get("/status", async (_req, res) => {
+voiceRouter.get("/status", async (req, res) => {
   const engine = getTTSEngine();
   const available = await engine.isAvailable();
   const voices = await engine.listVoices();
-
-  // STT diagnostics — check vault + env
   const sStore = req.app.get("settingsStore");
-  const hasOpenAI = !!sStore?.getApiKey?.("openai");
-  const hasGemini = !!sStore?.getApiKey?.("gemini");
-  const whisperLocal = await whisperAvailable().catch(() => false);
 
   res.json({
-    engine: engine.name,
-    available,
+    tts: { engine: engine.name, available },
+    stt: { whisper: !!sStore?.getApiKey?.("openai") ? "key set" : "no key" },
     voices,
-    stt: {
-      openai: hasOpenAI ? "key set" : "no key",
-      whisperLocal: whisperLocal ? "available" : "not installed",
-      gemini: hasGemini ? "key set" : "no key",
-    },
   });
 });
 
