@@ -95,12 +95,12 @@ settingsRouter.get("/setup-status", (req, res) => {
   const hasKey = provider
     ? !!settingsStore.get(`ai.${provider}.apiKey`)
     : false;
-  // Also check env vars — if ANTHROPIC_API_KEY etc is set, provider may work without UI config
+  // Check if any provider has a key (vault or env)
   const envConfigured = !!(
-    process.env.ANTHROPIC_API_KEY ||
-    process.env.OPENAI_API_KEY ||
-    process.env.GEMINI_API_KEY ||
-    process.env.OPENROUTER_API_KEY
+    settingsStore.getApiKey("anthropic") ||
+    settingsStore.getApiKey("openai") ||
+    settingsStore.getApiKey("gemini") ||
+    settingsStore.getApiKey("openrouter")
   );
   // Personality is "done" if bot name was set, OR if SOUL.md/systemPrompt exist,
   // OR if setup was explicitly completed, OR if conversations already exist (not first-time)

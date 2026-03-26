@@ -115,11 +115,11 @@ export async function analyzeAudio(audioBuffer, opts = {}) {
 }
 
 export function getMediaProviderInfo(settingsStore) {
-  const anthropicKey = process.env.ANTHROPIC_API_KEY || settingsStore?.get?.("ai.anthropic.apiKey");
-  const openaiKey = process.env.OPENAI_API_KEY || settingsStore?.get?.("ai.openai.apiKey");
-  const geminiKey = process.env.GEMINI_API_KEY || settingsStore?.get?.("ai.gemini.apiKey");
+  const anthropicKey = settingsStore?.getApiKey?.("anthropic");
+  const openaiKey = settingsStore?.getApiKey?.("openai");
+  const geminiKey = settingsStore?.getApiKey?.("gemini");
   if (anthropicKey) return { provider: "anthropic", apiKey: anthropicKey };
   if (openaiKey) return { provider: "openai", apiKey: openaiKey };
-  if (geminiKey) return { provider: "gemini", apiKey: geminiKey, geminiKey };
+  if (geminiKey) return { provider: "gemini", apiKey: geminiKey };
   return null;
 }

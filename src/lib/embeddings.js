@@ -49,9 +49,9 @@ export async function batchEmbed(texts, opts = {}) {
 }
 
 function detectEmbeddingProvider(settingsStore) {
-  const openaiKey = process.env.OPENAI_API_KEY || settingsStore?.get?.("ai.openai.apiKey");
+  const openaiKey = settingsStore?.getApiKey?.("openai");
   if (openaiKey) return { type: "openai", apiKey: openaiKey };
-  const geminiKey = process.env.GEMINI_API_KEY || settingsStore?.get?.("ai.gemini.apiKey");
+  const geminiKey = settingsStore?.getApiKey?.("gemini");
   if (geminiKey) return { type: "gemini", apiKey: geminiKey };
   const ollamaUrl = process.env.OLLAMA_BASE_URL || settingsStore?.get?.("ai.custom.baseUrl") || "http://localhost:11434";
   return { type: "ollama", baseUrl: ollamaUrl };

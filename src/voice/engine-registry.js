@@ -49,9 +49,8 @@ export async function initTTSEngine(settingsStore) {
   // Try ElevenLabs (cloud fallback)
   if (engineType === "elevenlabs" || engineType === "auto") {
     try {
-      const apiKey =
-        settingsStore?.get("voice.elevenlabs.apiKey") ||
-        process.env.ELEVENLABS_API_KEY;
+      const apiKey = settingsStore?.getApiKey?.("elevenlabs")
+        || settingsStore?.get("voice.elevenlabs.apiKey");
       if (apiKey) {
         const { ElevenLabsTTSEngine } = await import("./elevenlabs-engine.js");
         const modelId = settingsStore?.get("voice.elevenlabs.model") || undefined;

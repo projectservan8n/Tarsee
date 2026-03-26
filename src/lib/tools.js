@@ -792,9 +792,9 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
 
       case "generate_image": {
         const { prompt, size, quality } = toolInput;
-        const apiKey = process.env.OPENAI_API_KEY || ctx.settingsStore?.get("ai.openai.apiKey");
+        const apiKey = ctx.settingsStore?.getApiKey?.("openai");
         if (!apiKey) {
-          return "Image generation requires an OpenAI API key. Set OPENAI_API_KEY or configure OpenAI in settings.";
+          return "Image generation requires an OpenAI API key. Configure it in Settings > Providers.";
         }
         try {
           const res = await fetch("https://api.openai.com/v1/images/generations", {

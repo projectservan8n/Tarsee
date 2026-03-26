@@ -23,7 +23,7 @@ export async function transcribeAudio(audioBuffer, language, opts = {}) {
   const store = opts.settingsStore;
 
   // 1. Try OpenAI Whisper API (whisper-1) — vault key first, env second
-  const openaiKey = store?.getApiKey?.("openai") || process.env.OPENAI_API_KEY;
+  const openaiKey = store?.getApiKey?.("openai");
   if (openaiKey) {
     try {
       return await openaiWhisperAPI(audioBuffer, openaiKey, language);
@@ -45,7 +45,7 @@ export async function transcribeAudio(audioBuffer, language, opts = {}) {
   }
 
   // 3. Try Gemini — vault key first, env second
-  const geminiKey = store?.getApiKey?.("gemini") || process.env.GEMINI_API_KEY;
+  const geminiKey = store?.getApiKey?.("gemini");
   if (geminiKey) {
     try {
       return await geminiTranscribe(audioBuffer, geminiKey, language);
