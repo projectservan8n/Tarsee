@@ -103,49 +103,9 @@ router.post("/resume", sessionAuth, requireAuth, async (req, res) => {
 });
 
 /**
- * GET /api/claude-code/sessions
- * List all sessions in the workspace
+ * Note: Session listing/details are not available via the Agent SDK.
+ * Sessions are managed internally and can only be resumed via the resume endpoint.
  */
-router.get("/sessions", sessionAuth, requireAuth, async (req, res) => {
-  const { projectDir } = req.query;
-
-  const wrapper = new ClaudeCodeWrapper();
-
-  try {
-    const sessions = await wrapper.listSessions(projectDir || config.CLAUDE_WORKSPACE_DIR);
-    res.json({
-      sessions,
-      projectDir: projectDir || config.CLAUDE_WORKSPACE_DIR,
-    });
-  } catch (error) {
-    console.error("[claude-code-routes] List sessions error:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
- * GET /api/claude-code/sessions/:id
- * Get details of a specific session
- */
-router.get("/sessions/:id", sessionAuth, requireAuth, async (req, res) => {
-  const { id } = req.params;
-
-  const wrapper = new ClaudeCodeWrapper();
-
-  try {
-    const session = await wrapper.getSessionInfo(id);
-    if (!session) {
-      return res.status(404).json({ error: "Session not found" });
-    }
-    res.json({
-      session,
-      projectDir: config.CLAUDE_WORKSPACE_DIR,
-    });
-  } catch (error) {
-    console.error("[claude-code-routes] Get session error:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
 
 /**
  * GET /api/claude-code/status

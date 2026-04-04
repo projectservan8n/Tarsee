@@ -4,7 +4,7 @@
  * Provides a clean interface for Tarsee to interact with Claude.
  */
 
-import { query, listSessions } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import config from "../config/env.js";
 
 export class ClaudeCodeWrapper {
@@ -80,42 +80,9 @@ export class ClaudeCodeWrapper {
   }
 
   /**
-   * List all sessions in a project directory
-   * @param {string} projectDir - Project directory path
-   * @returns {Promise<Array>} - Array of session objects
+   * Note: Session listing is not available via the Agent SDK.
+   * Sessions are managed internally by the SDK during resumption.
    */
-  async listSessions(projectDir) {
-    try {
-      const sessions = await listSessions({ dir: projectDir || this.defaultCwd });
-      console.log(`[claude-wrapper] Found ${sessions.length} sessions`);
-      return sessions;
-    } catch (error) {
-      console.error(`[claude-wrapper] Failed to list sessions:`, error);
-      return [];
-    }
-  }
-
-  /**
-   * Get messages from a specific session
-   * Note: Session message retrieval is handled internally by the SDK during resumption
-   * @param {string} sessionId - Session ID
-   * @returns {Promise<object>} - Session info
-   */
-  async getSessionInfo(sessionId) {
-    try {
-      const sessions = await this.listSessions(this.defaultCwd);
-      const session = sessions.find(s => s.id === sessionId);
-      if (session) {
-        console.log(`[claude-wrapper] Found session ${sessionId}`);
-        return session;
-      }
-      console.log(`[claude-wrapper] Session ${sessionId} not found`);
-      return null;
-    } catch (error) {
-      console.error(`[claude-wrapper] Failed to get session info:`, error);
-      return null;
-    }
-  }
 
   /**
    * Resume a previous session with a new prompt
