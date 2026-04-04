@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Terminal - Tarsee</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+  <link rel="stylesheet" href="/css/global.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.5.0/css/xterm.min.css">
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg-primary, #1a1a1a);
+      color: var(--text-primary, #fff);
+      font-family: var(--font-mono, 'Courier New', monospace);
+      overflow: hidden;
+    }
+
+    #terminal-container {
+      position: fixed;
+      top: 60px;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 16px;
+      background: #000;
+    }
+
+    #terminal {
+      width: 100%;
+      height: 100%;
+    }
+
+    .terminal-header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 60px;
+      background: var(--bg-secondary, #2a2a2a);
+      border-bottom: 1px solid var(--border-color, #444);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      z-index: 100;
+    }
+
+    .terminal-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--accent-color, #f5a623);
+    }
+
+    .terminal-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      color: var(--text-secondary, #999);
+    }
+
+    .status-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #666;
+    }
+
+    .status-indicator.connected {
+      background: #4caf50;
+    }
+
+    .status-indicator.disconnected {
+      background: #f44336;
+    }
+
+    .terminal-info {
+      font-size: 12px;
+      color: var(--text-tertiary, #666);
+    }
+
+    /* Make xterm.js look good */
+    .xterm {
+      padding: 8px;
+    }
+
+    .xterm-viewport {
+      background-color: #000 !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="terminal-header">
+    <div class="terminal-title">Tarsee Terminal</div>
+    <div class="terminal-status">
+      <div class="status-indicator" id="status-indicator"></div>
+      <span id="status-text">Connecting...</span>
+    </div>
+  </div>
+
+  <div id="terminal-container">
+    <div id="terminal"></div>
+  </div>
+
+  <div id="terminal-info" class="terminal-info"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js"></script>
+  <script src="/js/terminal.js"></script>
+</body>
+</html>

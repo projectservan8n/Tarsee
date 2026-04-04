@@ -4,12 +4,14 @@ import { validateApiToken, validateSessionFromRequest } from "../middleware/auth
 import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
+import { AuditLog } from "../db/audit.js";
 import { WS_CODES } from "../config/constants.js";
 import { processCommand } from "../lib/commands.js";
 import { logCapture } from "../lib/log-capture.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
+import { handleTerminalConnection } from "./terminal-handler.js";
 
 /**
  * Sets up WebSocket server on the existing HTTP server.
@@ -31,13 +33,34 @@ import { extractAndSaveMemories } from "../lib/memory-extractor.js";
  */
 export function setupWebSocket(server, db, app) {
   const wss = new WebSocketServer({ noServer: true });
+  const terminalWss = new WebSocketServer({ noServer: true });
   const convStore = new ConversationStore(db);
   const settingsStore = new SettingsStore(db);
+  const auditLog = new AuditLog(db);
 
   // Handle HTTP upgrade
   server.on("upgrade", (req, socket, head) => {
-    // Extract token from query param or subprotocol
     const url = new URL(req.url, "http://localhost");
+    const pathname = url.pathname;
+
+    // Route to terminal WebSocket if path is /terminal
+    if (pathname === "/terminal") {
+      // Terminal requires session auth only (no API token)
+      const isAuthed = validateSessionFromRequest(req);
+      if (!isAuthed) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+
+      terminalWss.handleUpgrade(req, socket, head, (ws) => {
+        terminalWss.emit("connection", ws, req);
+      });
+      return;
+    }
+
+    // Default chat WebSocket
+    // Extract token from query param or subprotocol
     const token = url.searchParams.get("token");
 
     // Auth via query token or session cookie
@@ -143,6 +166,14 @@ export function setupWebSocket(server, db, app) {
 
     ws.on("close", () => {
       clearTimeout(ws.authTimeout);
+    });
+  });
+
+  // Terminal WebSocket connections
+  terminalWss.on("connection", (ws, req) => {
+    handleTerminalConnection(ws, req, {
+      sessionAuth: validateSessionFromRequest,
+      auditLog,
     });
   });
 
