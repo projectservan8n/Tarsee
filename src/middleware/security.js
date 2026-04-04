@@ -42,7 +42,7 @@ export function securityHeaders(_req, res, next) {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
     "img-src 'self' data: blob:",
     "media-src 'self' blob:",            // For voice audio playback
-    "connect-src 'self' ws: wss:",       // WebSocket connections
+    "connect-src 'self' ws: wss: https://cdn.jsdelivr.net",  // WebSocket + CDN source maps
     "font-src 'self' https://fonts.gstatic.com",
     "object-src 'none'",
     "base-uri 'self'",
