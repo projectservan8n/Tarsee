@@ -38,8 +38,8 @@ export function securityHeaders(_req, res, next) {
   res.set("Permissions-Policy", "camera=(), microphone=(self), geolocation=()");
   res.set("Content-Security-Policy", [
     "default-src 'self'",
-    "script-src 'self'",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "script-src 'self' https://cdn.jsdelivr.net",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
     "img-src 'self' data: blob:",
     "media-src 'self' blob:",            // For voice audio playback
     "connect-src 'self' ws: wss:",       // WebSocket connections
