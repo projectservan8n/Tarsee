@@ -4,14 +4,26 @@
  * Useful for Claude CLI authentication and other admin tasks.
  */
 
-import * as pty from "node-pty";
 import os from "node:os";
-import path from "node:path";
 import config from "../config/env.js";
+
+// Lazy-load node-pty — it's a native module that may fail to compile on some platforms
+let pty = null;
+try {
+  pty = await import("node-pty");
+} catch (err) {
+  console.warn("[terminal] node-pty unavailable — terminal feature disabled:", err.message);
+}
 
 const terminals = new Map();
 
 export function handleTerminalConnection(ws, req, { auditLog }) {
+  if (!pty) {
+    ws.send(JSON.stringify({ type: "error", message: "Terminal unavailable: node-pty failed to load on this platform" }));
+    ws.close(1011, "node-pty unavailable");
+    return;
+  }
+
   // Auth is already handled at upgrade level
   const terminalId = generateTerminalId();
 
@@ -30,17 +42,25 @@ export function handleTerminalConnection(ws, req, { auditLog }) {
   const shell = os.platform() === "win32" ? "powershell.exe" : "bash";
   const cwd = config.CLAUDE_WORKSPACE_DIR || process.cwd();
 
-  const ptyProcess = pty.spawn(shell, [], {
-    name: "xterm-256color",
-    cols: 80,
-    rows: 30,
-    cwd,
-    env: {
-      ...process.env,
-      TERM: "xterm-256color",
-      COLORTERM: "truecolor",
-    },
-  });
+  let ptyProcess;
+  try {
+    ptyProcess = pty.spawn(shell, [], {
+      name: "xterm-256color",
+      cols: 80,
+      rows: 30,
+      cwd,
+      env: {
+        ...process.env,
+        TERM: "xterm-256color",
+        COLORTERM: "truecolor",
+      },
+    });
+  } catch (err) {
+    console.error("[terminal] Failed to spawn PTY:", err);
+    ws.send(JSON.stringify({ type: "error", message: `Failed to spawn shell: ${err.message}` }));
+    ws.close(1011, "PTY spawn failed");
+    return;
+  }
 
   terminals.set(terminalId, ptyProcess);
 

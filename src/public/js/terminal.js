@@ -61,8 +61,11 @@
   }
 
   // WebSocket connection
+  // Session cookie (httpOnly) is sent automatically by browser on WS upgrade.
+  // API token via query param serves as fallback auth.
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = `${protocol}//${window.location.host}/terminal`;
+  const apiToken = localStorage.getItem("tarsee_api_token");
+  const wsUrl = `${protocol}//${window.location.host}/terminal${apiToken ? "?token=" + encodeURIComponent(apiToken) : ""}`;
   let ws = null;
   let reconnectInterval = null;
 
@@ -71,7 +74,9 @@
 
     ws = new WebSocket(wsUrl);
 
+    ws._wasOpen = false;
     ws.addEventListener("open", () => {
+      ws._wasOpen = true;
       setStatus("connected", "Connected");
       clearInterval(reconnectInterval);
       reconnectInterval = null;
@@ -89,8 +94,16 @@
       }
     });
 
-    ws.addEventListener("close", () => {
+    ws.addEventListener("close", (event) => {
       setStatus("disconnected", "Disconnected");
+
+      // Detect auth failure (server sends 401 before upgrade completes → code 1006)
+      if (event.code === 1006 && !ws._wasOpen) {
+        term.writeln("\r\n\x1b[31m[Connection rejected — not authenticated]\x1b[0m");
+        term.writeln("\x1b[33mPlease log in to Tarsee first, then reload this page.\x1b[0m");
+        return; // Don't reconnect — auth won't magically fix itself
+      }
+
       term.writeln("\r\n\x1b[31m[Disconnected from server]\x1b[0m");
 
       // Attempt to reconnect every 5 seconds

@@ -45,8 +45,9 @@ export function setupWebSocket(server, db, app) {
 
     // Route to terminal WebSocket if path is /terminal
     if (pathname === "/terminal") {
-      // Terminal requires session auth only (no API token)
-      const isAuthed = validateSessionFromRequest(req);
+      // Terminal auth: session cookie OR API token via query param
+      const token = url.searchParams.get("token");
+      const isAuthed = validateSessionFromRequest(req) || (token && validateApiToken(token));
       if (!isAuthed) {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
