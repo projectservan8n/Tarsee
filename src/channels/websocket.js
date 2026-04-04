@@ -11,7 +11,7 @@ import { logCapture } from "../lib/log-capture.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
-import { handleTerminalConnection } from "./terminal-handler.js";
+import { handleTerminalConnection } from "../websocket/terminal-handler.js";
 
 /**
  * Sets up WebSocket server on the existing HTTP server.
