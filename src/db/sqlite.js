@@ -170,4 +170,13 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_compaction_conv ON compaction_cache(conversation_id);
     `,
   },
+  {
+    name: "006_claude_session_id",
+    sql: `
+      -- Add claude_session_id column to conversations table
+      -- This stores the Claude Code CLI session ID for resuming sessions
+      ALTER TABLE conversations ADD COLUMN claude_session_id TEXT;
+      CREATE INDEX IF NOT EXISTS idx_conversations_claude_session ON conversations(claude_session_id);
+    `,
+  },
 ];

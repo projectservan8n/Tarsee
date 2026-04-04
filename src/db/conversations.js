@@ -47,6 +47,9 @@ export class ConversationStore {
     this._countMessages = this.db.prepare(
       "SELECT COUNT(*) as count FROM messages WHERE conversation_id = ?"
     );
+    this._updateClaudeSessionId = this.db.prepare(
+      "UPDATE conversations SET claude_session_id = ?, updated_at = datetime('now') WHERE id = ?"
+    );
   }
 
   /**
@@ -136,5 +139,21 @@ export class ConversationStore {
    */
   messageCount(conversationId) {
     return this._countMessages.get(conversationId)?.count || 0;
+  }
+
+  /**
+   * Update the Claude Code CLI session ID for a conversation.
+   * This allows resuming the session later.
+   */
+  setClaudeSessionId(conversationId, claudeSessionId) {
+    this._updateClaudeSessionId.run(claudeSessionId, conversationId);
+  }
+
+  /**
+   * Get the Claude Code CLI session ID for a conversation.
+   */
+  getClaudeSessionId(conversationId) {
+    const conv = this.get(conversationId);
+    return conv?.claude_session_id || null;
   }
 }

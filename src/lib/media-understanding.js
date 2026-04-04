@@ -29,19 +29,13 @@ export async function analyzeImage(imageBuffer, mimeType, opts = {}) {
 }
 
 async function analyzeWithClaude(b64, mimeType, apiKey, prompt) {
-  const isOAuth = apiKey.includes("sk-ant-oat");
-  const headers = {
-    "Content-Type": "application/json",
-    "anthropic-version": "2023-06-01",
-  };
-  if (isOAuth) {
-    headers["Authorization"] = "Bearer " + apiKey;
-  } else {
-    headers["x-api-key"] = apiKey;
-  }
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers,
+    headers: {
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "x-api-key": apiKey,
+    },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1024,

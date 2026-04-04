@@ -18,9 +18,6 @@
 export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, signal, tools }) {
   const url = `${baseUrl || "https://api.anthropic.com"}/v1/messages`;
 
-  const isOAuth = apiKey.includes("sk-ant-oat");
-  const isApiKey = apiKey.startsWith("sk-ant-api");
-
   // Convert messages to Anthropic format (system is separate)
   let anthropicMessages = messages
     .filter((m) => m.role !== "system")
@@ -41,19 +38,8 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
     throw new Error("No messages to send");
   }
 
-  // Build system prompt — OAuth tokens are scoped to Claude Code and require
-  // the identity prefix or Anthropic rejects the request.
-  let systemBlocks;
-  const userSystem = systemPrompt || messages.find((m) => m.role === "system")?.content || undefined;
-
-  if (isOAuth) {
-    systemBlocks = [
-      { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
-      ...(userSystem ? [{ type: "text", text: userSystem }] : []),
-    ];
-  } else {
-    systemBlocks = userSystem || undefined;
-  }
+  // Build system prompt
+  const systemBlocks = systemPrompt || messages.find((m) => m.role === "system")?.content || undefined;
 
   const resolvedModel = model || "claude-sonnet-4-6";
 
@@ -66,38 +52,18 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
     ...(tools && tools.length > 0 ? { tools } : {}),
   };
 
-  // Auth headers
-  const authHeaders = isApiKey
-    ? { "x-api-key": apiKey }
-    : { "Authorization": `Bearer ${apiKey}` };
-
-  // Beta headers differ for OAuth vs API key
-  const betaHeaders = isOAuth
-    ? "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14"
-    : "fine-grained-tool-streaming-2025-05-14";
-
-  // OAuth requires mimicking Claude Code CLI exactly
-  const oauthHeaders = isOAuth
-    ? {
-        "user-agent": "claude-cli/2.1.62",
-        "x-app": "cli",
-        "anthropic-dangerous-direct-browser-access": "true",
-      }
-    : {};
-
   const bodyJson = JSON.stringify(body);
   console.log(`[anthropic] POST ${url}`);
-  console.log(`[anthropic] auth=${isOAuth ? "oauth" : isApiKey ? "api-key" : "bearer"} model=${resolvedModel} messages=${anthropicMessages.length} tools=${tools?.length || 0}`);
+  console.log(`[anthropic] auth=api-key model=${resolvedModel} messages=${anthropicMessages.length} tools=${tools?.length || 0}`);
 
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "accept": "application/json",
-      ...authHeaders,
+      "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
-      "anthropic-beta": betaHeaders,
-      ...oauthHeaders,
+      "anthropic-beta": "fine-grained-tool-streaming-2025-05-14",
     },
     body: bodyJson,
     signal,
