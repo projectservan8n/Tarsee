@@ -129,16 +129,17 @@ router.get("/sessions", sessionAuth, requireAuth, async (req, res) => {
  */
 router.get("/sessions/:id", sessionAuth, requireAuth, async (req, res) => {
   const { id } = req.params;
-  const { projectDir } = req.query;
 
   const wrapper = new ClaudeCodeWrapper();
 
   try {
-    const messages = await wrapper.getSessionMessages(id, projectDir || config.CLAUDE_WORKSPACE_DIR);
+    const session = await wrapper.getSessionInfo(id);
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
     res.json({
-      sessionId: id,
-      messages,
-      projectDir: projectDir || config.CLAUDE_WORKSPACE_DIR,
+      session,
+      projectDir: config.CLAUDE_WORKSPACE_DIR,
     });
   } catch (error) {
     console.error("[claude-code-routes] Get session error:", error);

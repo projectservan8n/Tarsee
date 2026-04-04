@@ -4,7 +4,7 @@
  * Provides a clean interface for Tarsee to interact with Claude.
  */
 
-import { query, listSessions, getSessionMessages } from "@anthropic-ai/claude-agent-sdk";
+import { query, listSessions } from "@anthropic-ai/claude-agent-sdk";
 import config from "../config/env.js";
 
 export class ClaudeCodeWrapper {
@@ -97,21 +97,23 @@ export class ClaudeCodeWrapper {
 
   /**
    * Get messages from a specific session
+   * Note: Session message retrieval is handled internally by the SDK during resumption
    * @param {string} sessionId - Session ID
-   * @param {string} projectDir - Project directory path
-   * @returns {Promise<Array>} - Array of message objects
+   * @returns {Promise<object>} - Session info
    */
-  async getSessionMessages(sessionId, projectDir) {
+  async getSessionInfo(sessionId) {
     try {
-      const messages = await getSessionMessages({
-        sessionId,
-        dir: projectDir || this.defaultCwd,
-      });
-      console.log(`[claude-wrapper] Loaded ${messages.length} messages from session ${sessionId}`);
-      return messages;
+      const sessions = await this.listSessions(this.defaultCwd);
+      const session = sessions.find(s => s.id === sessionId);
+      if (session) {
+        console.log(`[claude-wrapper] Found session ${sessionId}`);
+        return session;
+      }
+      console.log(`[claude-wrapper] Session ${sessionId} not found`);
+      return null;
     } catch (error) {
-      console.error(`[claude-wrapper] Failed to get session messages:`, error);
-      return [];
+      console.error(`[claude-wrapper] Failed to get session info:`, error);
+      return null;
     }
   }
 
