@@ -152,18 +152,9 @@ const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY?.trim() || null;
 // --- Database path ---
 const DB_PATH = path.join(DATA_DIR, "tarsee.db");
 
-// --- Claude Code CLI Configuration ---
-const CLAUDE_CLI_MODE = process.env.CLAUDE_CLI_MODE?.trim() || "sdk"; // "sdk" or "direct-api"
+// --- Claude Code Configuration ---
 const CLAUDE_WORKSPACE_DIR = process.env.CLAUDE_WORKSPACE_DIR?.trim() || WORKSPACE_DIR;
 const CLAUDE_DEFAULT_MODEL = process.env.CLAUDE_DEFAULT_MODEL?.trim() || "claude-sonnet-4-6";
-const CLAUDE_SESSION_DIR = process.env.CLAUDE_SESSION_DIR?.trim() || path.join(DATA_DIR, ".claude-code", "sessions");
-
-// Ensure Claude session directory exists
-try {
-  fs.mkdirSync(CLAUDE_SESSION_DIR, { recursive: true, mode: 0o700 });
-} catch {
-  // best-effort
-}
 
 // --- Frozen config export ---
 const config = Object.freeze({
@@ -178,11 +169,9 @@ const config = Object.freeze({
   NODE_ENV: process.env.NODE_ENV || "development",
   IS_RAILWAY: !!process.env.RAILWAY_PROJECT_ID,
 
-  // Claude Code CLI
-  CLAUDE_CLI_MODE,
+  // Claude Code
   CLAUDE_WORKSPACE_DIR,
   CLAUDE_DEFAULT_MODEL,
-  CLAUDE_SESSION_DIR,
 });
 
 export default config;

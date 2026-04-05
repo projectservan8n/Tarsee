@@ -52,6 +52,7 @@ export async function* chat({
     tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
     allowedTools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
     permissionMode: "bypassPermissions",
+    allowDangerouslySkipPermissions: true,
     maxTurns: 50,
   };
 

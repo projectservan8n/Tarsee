@@ -2,7 +2,9 @@
   "name": "tarsee",
   "version": "1.0.0",
   "private": true,
-  "bin": { "tarsee": "./src/cli/index.js" },
+  "bin": {
+    "tarsee": "./src/cli/index.js"
+  },
   "type": "module",
   "description": "Tarsee — AI Gateway & Chat Platform with voice mode, multi-provider support, and channel integrations",
   "engines": {
@@ -15,7 +17,7 @@
     "lint": "node -c src/server.js"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.92",
     "@slack/bolt": "^4.0.0",
     "better-sqlite3": "^11.0.0",
     "busboy": "^1.6.0",
@@ -23,8 +25,8 @@
     "express": "^5.1.0",
     "node-cron": "^4.2.1",
     "node-pty": "^1.1.0",
-    "telegraf": "^4.0.0",
     "playwright": "^1.52.0",
+    "telegraf": "^4.0.0",
     "ws": "^8.19.0"
   }
 }
