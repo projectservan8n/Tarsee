@@ -67,9 +67,14 @@ export async function* chat({
   }
 
   console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}`);
+  console.log(`[claude-code] Options:`, JSON.stringify(queryOptions, null, 2));
 
   try {
+    let messageCount = 0;
     for await (const message of query({ prompt, options: queryOptions, signal })) {
+      messageCount++;
+      // Log every message for debugging
+      console.log(`[claude-code] Message #${messageCount}: type=${message.type}`, JSON.stringify(message).slice(0, 500));
       if (signal?.aborted) break;
 
       switch (message.type) {
@@ -161,6 +166,11 @@ export async function* chat({
           }
           break;
       }
+    }
+    console.log(`[claude-code] Stream ended. Total messages received: ${messageCount}`);
+    if (messageCount === 0) {
+      yield { type: "text", content: "**Claude Code returned no response.** Check the server logs for details. The CLI may not be authenticated — run `claude login` in the Terminal." };
+      yield { type: "done", stopReason: "error" };
     }
   } catch (error) {
     console.error("[claude-code] Exception:", error);
