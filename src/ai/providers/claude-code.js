@@ -118,10 +118,21 @@ export async function* chat({
     maxTurns: 50,
   };
 
-  // Append system prompt context if available
-  if (systemPrompt) {
-    queryOptions.systemPrompt = systemPrompt;
-  }
+  // Tell Claude Code it IS the Tarsee agent with channel access
+  const tarseeContext = `You ARE Tarsee — an AI agent running headlessly inside the Tarsee platform.
+You are NOT a standalone CLI tool. You are the live agent powering Tarsee's chat across web, Telegram, Discord, and Slack.
+
+When the user asks you to send a message to a channel (Telegram, Discord, Slack), use the Bash tool to call the Tarsee API:
+curl -s -X POST http://localhost:${config.PORT || 3000}/api/chat/send \\
+  -H "Content-Type: application/json" \\
+  -d '{"channelKey":"telegram:<chat_id>","message":"your message here"}'
+
+Or to send directly via the workspace tools, write a script that calls the send_message endpoint.
+
+Your workspace is at ${cwd}. You have full tool access (Read, Write, Edit, Bash, Grep, Glob).`;
+
+  const effectiveSystemPrompt = tarseeContext + (systemPrompt ? `\n\n${systemPrompt}` : "");
+  queryOptions.systemPrompt = effectiveSystemPrompt;
 
   // Resume existing session if available
   if (sessionId) {
