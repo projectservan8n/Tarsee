@@ -129,6 +129,20 @@ export class ChannelManager {
   }
 
   /**
+   * Send an outbound message to a channel.
+   * @param {string} type - Channel type (telegram, discord, slack)
+   * @param {string} chatId - Platform-specific chat/channel ID
+   * @param {string} message - Message text
+   */
+  async sendMessage(type, chatId, message) {
+    const channel = this.channels.get(type);
+    if (!channel?.bot?.sendMessage) {
+      throw new Error(`Channel ${type} is not running or does not support outbound messages`);
+    }
+    await channel.bot.sendMessage(chatId, message);
+  }
+
+  /**
    * Gets status of all channels.
    */
   getStatus() {

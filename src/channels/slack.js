@@ -344,6 +344,14 @@ You can use [react: emoji_name] to add a reaction to the user's message (e.g. [r
     stop: async () => {
       await app.stop();
     },
+    /** Send a message to a Slack channel (outbound push). */
+    sendMessage: async (channelId, text) => {
+      await app.client.chat.postMessage({
+        token: config.token,
+        channel: channelId,
+        text,
+      });
+    },
   };
 }
 

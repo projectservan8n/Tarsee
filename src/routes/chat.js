@@ -263,7 +263,7 @@ chatRouter.post("/send", async (req, res) => {
   let fullResponse = "";
   let usage = {};
   const tools = getToolDefinitions();
-  const toolCtx = { db: req.app.get("db"), settingsStore, conversationId: convId };
+  const toolCtx = { db: req.app.get("db"), settingsStore, conversationId: convId, channelManager: req.app.get("channelManager") };
   const MAX_TOOL_ROUNDS = 15;
 
   // --- Claude Code provider: runs its own agentic loop ---

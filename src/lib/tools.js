@@ -762,18 +762,46 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
 
       case "send_message": {
         const { channel, message, channel_id } = toolInput;
+        const preview = message.length > 80 ? message.slice(0, 80) + "..." : message;
+
+        // For external channels (Telegram, Discord, Slack), push via ChannelManager
+        if (channel !== "web" && ctx.channelManager) {
+          try {
+            // Resolve chat ID: explicit channel_id, or find from stored conversation mapping
+            let chatId = channel_id;
+            if (!chatId && ctx.db) {
+              const { SettingsStore } = await import("../db/settings.js");
+              const settings = new SettingsStore(ctx.db);
+              // Look for any stored conversation for this channel type
+              const allSettings = settings.getAll();
+              for (const s of allSettings) {
+                if (s.key.startsWith(`channel_conv.${channel}:`)) {
+                  // Extract chat ID from channel key (e.g., "telegram:123456")
+                  chatId = s.key.split(`${channel}:`)[1]?.split(":")[0];
+                  if (chatId) break;
+                }
+              }
+            }
+            if (!chatId) return `send_message error: No chat ID found for ${channel}. The bot needs to have received at least one message from a chat first.`;
+            await ctx.channelManager.sendMessage(channel, chatId, message);
+            return `Message sent to ${channel} (chat ${chatId}): ${preview}`;
+          } catch (err) {
+            return `send_message error: ${err.message}`;
+          }
+        }
+
+        // Fallback: save to DB (for web channel or when channelManager unavailable)
         if (!ctx.db) return "Database not available.";
         try {
           const { ConversationStore } = await import("../db/conversations.js");
           const store = new ConversationStore(ctx.db);
-          // Find or create a conversation for this channel
-          let conv = store.findByChannel(channel, channel_id);
-          if (!conv) {
-            conv = store.create({ channel, channelId: channel_id || null, title: `${channel} outbound` });
+          const { SettingsStore } = await import("../db/settings.js");
+          const settings = new SettingsStore(ctx.db);
+          const convId = settings.get("channel_conv.web:default");
+          if (convId) {
+            store.addMessage(convId, { role: "assistant", content: message });
           }
-          store.addMessage(conv.id, { role: "assistant", content: message });
-          const preview = message.length > 80 ? message.slice(0, 80) + "..." : message;
-          return `Message sent to ${channel}: ${preview}`;
+          return `Message saved to web chat: ${preview}`;
         } catch (err) {
           return `send_message error: ${err.message}`;
         }

@@ -262,7 +262,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   let fullResponse = "";
   let usage = {};
   const tools = getToolDefinitions();
-  const toolCtx = { db: ws._tarsee_db, settingsStore, conversationId: convId };
+  const toolCtx = { db: ws._tarsee_db, settingsStore, conversationId: convId, channelManager: ws._tarsee_channelManager };
   const MAX_TOOL_ROUNDS = 15;
   const providerId = activeProvider.provider;
 

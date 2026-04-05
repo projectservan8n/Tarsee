@@ -367,6 +367,10 @@ You can use these special markers in your response:
     stop: async () => {
       bot.stop("Tarsee shutdown");
     },
+    /** Send a message to a Telegram chat (outbound push). */
+    sendMessage: async (chatId, text) => {
+      await bot.telegram.sendMessage(chatId, mdToTelegramHtml(text), { parse_mode: "HTML" });
+    },
   };
 }
 

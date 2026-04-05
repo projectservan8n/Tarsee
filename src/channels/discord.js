@@ -347,6 +347,13 @@ You can use these special markers in your response:
     stop: async () => {
       await client.destroy();
     },
+    /** Send a message to a Discord channel (outbound push). */
+    sendMessage: async (channelId, text) => {
+      const channel = await client.channels.fetch(channelId);
+      if (channel?.isTextBased()) {
+        await channel.send(text.slice(0, 2000));
+      }
+    },
   };
 }
 
