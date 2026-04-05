@@ -112,6 +112,11 @@ const Settings = {
       const showBaseUrl = val === "custom" || val === "ollama";
       this.elements.baseUrlGroup.style.display = showBaseUrl ? "block" : "none";
 
+      // Hide API key + model fields for Claude Code (uses subscription auth)
+      const isClaudeCode = val === "claude-code";
+      this.elements.apiKey.parentElement.style.display = isClaudeCode ? "none" : "block";
+      this.elements.model.parentElement.style.display = isClaudeCode ? "none" : "block";
+
       // Show model presets for OpenRouter
       const presetsGroup = document.getElementById("modelPresetsGroup");
       if (presetsGroup) presetsGroup.style.display = val === "openrouter" ? "block" : "none";
@@ -122,12 +127,15 @@ const Settings = {
         gemini: "gemini-2.5-flash",
         openrouter: "anthropic/claude-sonnet-4-5",
         ollama: "gemma3:4b",
+        "claude-code": "claude-sonnet-4-6",
         custom: "",
       };
       this.elements.model.placeholder = defaults[val] || "";
 
       // Update hints per provider
-      if (val === "ollama") {
+      if (val === "claude-code") {
+        this.elements.apiKey.placeholder = "(uses subscription auth — no key needed)";
+      } else if (val === "ollama") {
         this.elements.apiKey.placeholder = "(optional — Ollama usually needs no key)";
         this.elements.baseUrl.placeholder = "https://your-tunnel.trycloudflare.com";
       } else if (val === "openrouter") {
