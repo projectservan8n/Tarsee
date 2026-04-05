@@ -22,12 +22,22 @@ fi
 # Set CLAUDE_OAUTH_CREDENTIALS in Railway with the JSON from:
 #   security find-generic-password -s "Claude Code-credentials" -w
 if [ -n "$CLAUDE_OAUTH_CREDENTIALS" ]; then
-  CRED_DIR="/data/tarsee/.claude-code-home"
+  # Write to CLAUDE_CONFIG_DIR if set (Railway), otherwise ~/.claude
+  CRED_DIR="${CLAUDE_CONFIG_DIR:-/home/node/.claude}"
   mkdir -p "$CRED_DIR"
   echo "$CLAUDE_OAUTH_CREDENTIALS" > "$CRED_DIR/.credentials.json"
   chmod 600 "$CRED_DIR/.credentials.json"
   chown -R node:node "$CRED_DIR"
-  echo "[entrypoint] Claude Code credentials written from env var"
+
+  # Also write to ~/.claude as fallback (some SDK paths check HOME)
+  if [ "$CRED_DIR" != "/home/node/.claude" ]; then
+    mkdir -p /home/node/.claude
+    cp "$CRED_DIR/.credentials.json" /home/node/.claude/.credentials.json
+    chmod 600 /home/node/.claude/.credentials.json
+    chown -R node:node /home/node/.claude
+  fi
+
+  echo "[entrypoint] Claude Code credentials written to $CRED_DIR"
 fi
 
 # Ensure claude CLI is in PATH for web terminal sessions
