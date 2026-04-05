@@ -769,14 +769,13 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           try {
             // Resolve chat ID: explicit channel_id, or find from stored conversation mapping
             let chatId = channel_id;
-            if (!chatId && ctx.db) {
-              const { SettingsStore } = await import("../db/settings.js");
-              const settings = new SettingsStore(ctx.db);
-              // Look for any stored conversation for this channel type
-              const allSettings = settings.getAll();
-              for (const s of allSettings) {
-                if (s.key.startsWith(`channel_conv.${channel}:`)) {
-                  // Extract chat ID from channel key (e.g., "telegram:123456")
+            if (!chatId) {
+              // Resolve chat ID from stored conversation mappings
+              const store = ctx.settingsStore || (ctx.db ? new (await import("../db/settings.js")).SettingsStore(ctx.db) : null);
+              if (store) {
+                const convMappings = store.getByPrefix(`channel_conv.${channel}:`);
+                for (const s of convMappings) {
+                  // Extract chat ID from key (e.g., "channel_conv.telegram:123456" → "123456")
                   chatId = s.key.split(`${channel}:`)[1]?.split(":")[0];
                   if (chatId) break;
                 }

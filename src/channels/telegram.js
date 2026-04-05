@@ -77,7 +77,7 @@ export async function createTelegramBot(config, db) {
           await ctx.reply(chunk, {
             parse_mode: "HTML",
             ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
-          }).catch(() => ctx.reply(chunk));
+          }).catch(() => ctx.reply(chunk.replace(/<[^>]+>/g, "")));
         }
         return;
       }
@@ -285,7 +285,9 @@ You can use these special markers in your response:
               };
             }
 
-            await ctx.reply(chunks[i], opts).catch(() => ctx.reply(chunks[i]));
+            await ctx.reply(chunks[i], opts).catch(() =>
+              ctx.reply(chunks[i].replace(/<[^>]+>/g, ""))
+            );
           }
 
           // If no text chunks but we have buttons, send buttons alone
@@ -370,7 +372,9 @@ You can use these special markers in your response:
     },
     /** Send a message to a Telegram chat (outbound push). */
     sendMessage: async (chatId, text) => {
-      await bot.telegram.sendMessage(chatId, mdToTelegramHtml(text), { parse_mode: "HTML" });
+      const html = mdToTelegramHtml(text);
+      await bot.telegram.sendMessage(chatId, html, { parse_mode: "HTML" })
+        .catch(() => bot.telegram.sendMessage(chatId, html.replace(/<[^>]+>/g, "")));
     },
   };
 }

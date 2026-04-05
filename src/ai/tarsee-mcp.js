@@ -35,7 +35,7 @@ export function createTarseeMcp(ctx) {
       tool(
         "tarsee_schedule_task",
         "Schedule a recurring or one-time task using cron syntax. The task runs as an AI prompt at the scheduled time. Example: '0 20 * * *' for daily at 8 PM.",
-        { schedule: z.string().describe("Cron expression (e.g. '0 20 * * *' for 8 PM daily)"), prompt: z.string().describe("The AI prompt to execute at the scheduled time"), name: z.string().optional().describe("Human-friendly name for this task") },
+        { schedule: z.string().describe("Cron expression. Format: 'min hour day month weekday'. Examples: '30 14 * * *' (2:30 PM daily), '*/5 * * * *' (every 5 min), '0 9 * * 1' (Mon 9 AM). Server is UTC — convert user's timezone first."), prompt: z.string().describe("The AI prompt to execute at the scheduled time. IMPORTANT: If the task should send a message, the prompt must explicitly say 'Use tarsee_send_message to send to telegram/discord/slack'."), name: z.string().optional().describe("Human-friendly name for this task") },
         async (args) => {
           const result = await executeTool("schedule_task", args, ctx);
           return { content: [{ type: "text", text: result }] };
