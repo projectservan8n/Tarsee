@@ -207,6 +207,7 @@ You can use these special markers in your response:
           messages: workingMessages,
           systemPrompt,
           tools,
+          toolCtx,
         });
 
         for await (const event of stream) {

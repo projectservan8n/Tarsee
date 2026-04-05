@@ -18,6 +18,7 @@ import { appendDailyLog } from "./workspace-files.js";
 let _db = null;
 let _settingsStore = null;
 let _convStore = null;
+let _channelManager = null;
 const activeJobs = new Map(); // id → cron.ScheduledTask
 
 /**
@@ -26,11 +27,20 @@ const activeJobs = new Map(); // id → cron.ScheduledTask
  * @param {import('better-sqlite3').Database} opts.db
  * @param {import('../db/settings.js').SettingsStore} opts.settingsStore
  * @param {import('../db/conversations.js').ConversationStore} opts.convStore
+ * @param {import('../channels/manager.js').ChannelManager} [opts.channelManager]
  */
-export function initCron({ db, settingsStore, convStore }) {
+export function initCron({ db, settingsStore, convStore, channelManager }) {
   _db = db;
   _settingsStore = settingsStore;
   _convStore = convStore;
+  if (channelManager) _channelManager = channelManager;
+}
+
+/**
+ * Set channel manager (can be called after init if manager starts later).
+ */
+export function setCronChannelManager(channelManager) {
+  _channelManager = channelManager;
 }
 
 /**
@@ -112,6 +122,7 @@ export async function runCronJob(job) {
 
   try {
     let fullResponse = "";
+    const toolCtx = { db: _db, settingsStore: _settingsStore, conversationId: null, channelManager: _channelManager };
     const stream = chatStream({
       provider: activeProvider.provider,
       model: activeProvider.model,
@@ -119,6 +130,7 @@ export async function runCronJob(job) {
       baseUrl: activeProvider.baseUrl,
       messages,
       systemPrompt,
+      toolCtx,
     });
 
     for await (const event of stream) {

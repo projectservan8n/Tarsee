@@ -171,6 +171,7 @@ You can use [react: emoji_name] to add a reaction to the user's message (e.g. [r
           messages: workingMessages,
           systemPrompt,
           tools,
+          toolCtx,
         });
 
         for await (const event of stream) {

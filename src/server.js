@@ -183,6 +183,9 @@ startCronScheduler();
 // --- Channel Manager (lazy start) ---
 const channelManager = new ChannelManager(db);
 app.set("channelManager", channelManager);
+// Wire into cron so scheduled tasks can send to channels
+import { setCronChannelManager } from "./lib/cron.js";
+setCronChannelManager(channelManager);
 channelManager.startAll().catch((err) => {
   console.warn("[tarsee] channel startup error:", err.message);
 });
