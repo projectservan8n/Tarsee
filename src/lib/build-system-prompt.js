@@ -13,7 +13,7 @@ const CAPABILITY_INSTRUCTIONS = `
 
 ## Your Capabilities
 
-You have access to real tools via native function calling. The system will execute them and return results.
+You have access to real tools. The system will execute them and return results.
 
 **Available tools (29):**
 
@@ -73,7 +73,7 @@ You have access to real tools via native function calling. The system will execu
 - Use schedule_task to set up recurring tasks for the user
 - Use send_message to proactively notify the user on other channels
 - exec runs in a sandboxed shell with 60s timeout
-- Do NOT output XML tool blocks — use native tool calling only
+- Use the tool calling method provided by your system (native function calling or <tool_call> format)
 - When conversation is long, use remember to save important facts
 - Use spawn_agent for parallel work — research multiple things simultaneously
 - Use analyze_image when the user shares images or you need to understand visual content

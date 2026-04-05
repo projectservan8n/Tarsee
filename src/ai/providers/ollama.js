@@ -1,17 +1,195 @@
 /**
  * Ollama provider — uses native /api/chat endpoint.
  * Supports local and remote Ollama instances (including Cloudflare tunnels).
- * Full tool calling support via OpenAI-compatible function calling format.
- * No API key required.
+ *
+ * Uses PROMPT-BASED tool calling instead of native function calling.
+ * This works with ALL Ollama models (Gemma, Llama, Mistral, Phi, etc.)
+ * regardless of whether they support native tool use.
+ *
+ * The model is instructed to output <tool_call> XML blocks which are
+ * parsed from the streaming response and converted to tool_use events.
  */
+
+/**
+ * Build compact tool-calling instructions to append to the system prompt.
+ * Keeps it small (~1-2KB) since the main CAPABILITY_INSTRUCTIONS already
+ * lists all tools with descriptions.
+ */
+function buildToolCallingPrompt(tools) {
+  if (!tools || tools.length === 0) return "";
+
+  const paramRef = tools.map((t) => {
+    const schema = t.input_schema;
+    const required = schema?.required || [];
+    const props = schema?.properties || {};
+    const params = Object.entries(props)
+      .map(([name, def]) => {
+        const opt = required.includes(name) ? "" : "?";
+        return `${name}${opt}`;
+      })
+      .join(", ");
+    return `- ${t.name}(${params})`;
+  }).join("\n");
+
+  return `
+
+## How to Call Tools
+
+To use any of the tools listed above, output a tool call block in this EXACT format:
+
+<tool_call>
+{"name": "TOOL_NAME", "input": {"param1": "value1", "param2": "value2"}}
+</tool_call>
+
+### Examples:
+
+To read a file:
+<tool_call>
+{"name": "read_file", "input": {"filename": "SOUL.md"}}
+</tool_call>
+
+To search memories:
+<tool_call>
+{"name": "search_memories", "input": {"query": "user preferences"}}
+</tool_call>
+
+To run a shell command:
+<tool_call>
+{"name": "exec", "input": {"command": "ls -la"}}
+</tool_call>
+
+### Tool Parameter Reference:
+${paramRef}
+
+CRITICAL RULES:
+- You MUST use the exact <tool_call> XML tags shown above
+- The JSON inside must be valid JSON
+- ACTUALLY call tools — do NOT just describe what you would do
+- When asked about files, configs, or system state: CALL read_file or exec — do NOT guess
+- You can output text before or after tool calls
+- After a tool executes, you will receive the result and can continue
+`;
+}
+
+/**
+ * Streaming text parser that detects <tool_call> blocks in the model output.
+ * Returns parsed events: { type: "text", content } or { type: "tool_use", ... }
+ */
+class ToolCallParser {
+  constructor() {
+    this.buffer = "";
+    this.inToolCall = false;
+    this.toolCallContent = "";
+    this.toolCallCounter = 0;
+  }
+
+  /** Feed a text chunk and get back an array of events */
+  feed(text) {
+    const events = [];
+    this.buffer += text;
+
+    // Keep processing while we can make progress
+    let progress = true;
+    while (progress) {
+      progress = false;
+
+      if (this.inToolCall) {
+        const endTag = "</tool_call>";
+        const endIdx = this.buffer.indexOf(endTag);
+        if (endIdx !== -1) {
+          this.toolCallContent += this.buffer.slice(0, endIdx);
+          this.buffer = this.buffer.slice(endIdx + endTag.length);
+          this.inToolCall = false;
+
+          // Parse the tool call JSON
+          try {
+            const tc = JSON.parse(this.toolCallContent.trim());
+            this.toolCallCounter++;
+            events.push({
+              type: "tool_use",
+              id: `ollama-tc-${Date.now()}-${this.toolCallCounter}`,
+              name: tc.name,
+              input: tc.input || tc.arguments || tc.params || {},
+            });
+          } catch {
+            // Failed to parse — emit as regular text so user sees what model said
+            events.push({ type: "text", content: `<tool_call>${this.toolCallContent}</tool_call>` });
+          }
+          this.toolCallContent = "";
+          progress = true;
+          continue;
+        } else {
+          // Still buffering tool call content
+          this.toolCallContent += this.buffer;
+          this.buffer = "";
+          break;
+        }
+      }
+
+      // Not in a tool call — look for <tool_call> start
+      const startTag = "<tool_call>";
+      const startIdx = this.buffer.indexOf(startTag);
+
+      if (startIdx !== -1) {
+        // Emit text before the tag
+        if (startIdx > 0) {
+          events.push({ type: "text", content: this.buffer.slice(0, startIdx) });
+        }
+        this.buffer = this.buffer.slice(startIdx + startTag.length);
+        this.inToolCall = true;
+        this.toolCallContent = "";
+        progress = true;
+        continue;
+      }
+
+      // No complete start tag found — but might have a partial one at the end
+      // Hold back enough chars to detect a partial "<tool_call>" (10 chars)
+      const holdLen = startTag.length - 1; // 10
+      if (this.buffer.length > holdLen) {
+        const safeText = this.buffer.slice(0, -holdLen);
+        this.buffer = this.buffer.slice(-holdLen);
+        if (safeText) {
+          events.push({ type: "text", content: safeText });
+          progress = true;
+        }
+      }
+      break;
+    }
+
+    return events;
+  }
+
+  /** Flush remaining buffer at end of stream */
+  flush() {
+    const events = [];
+    if (this.inToolCall) {
+      // Unclosed tool call — emit as text
+      events.push({ type: "text", content: `<tool_call>${this.toolCallContent}` });
+    }
+    if (this.buffer) {
+      events.push({ type: "text", content: this.buffer });
+    }
+    this.buffer = "";
+    this.toolCallContent = "";
+    this.inToolCall = false;
+    return events;
+  }
+}
+
 
 export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, signal, tools }) {
   const base = (baseUrl || "http://localhost:11434").replace(/\/+$/, "");
   const url = `${base}/api/chat`;
 
+  // Enhance system prompt with tool calling instructions
+  let enhancedSystemPrompt = systemPrompt || "";
+  if (tools?.length > 0) {
+    enhancedSystemPrompt += buildToolCallingPrompt(tools);
+  }
+
   const allMessages = [];
-  if (systemPrompt) {
-    allMessages.push({ role: "system", content: systemPrompt });
+  if (enhancedSystemPrompt) {
+    allMessages.push({ role: "system", content: enhancedSystemPrompt });
   }
 
   // Convert messages from Anthropic format to Ollama format
@@ -37,50 +215,31 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
       }
 
       if (toolUseParts.length > 0 && msg.role === "assistant") {
-        // Assistant message with tool calls
-        allMessages.push({
-          role: "assistant",
-          content: textParts.join("\n") || "",
-          tool_calls: toolUseParts.map((tc) => ({
-            id: tc.id,
-            type: "function",
-            function: {
-              name: tc.name,
-              arguments: JSON.stringify(tc.input || {}),
-            },
-          })),
-        });
-      } else if (toolResultParts.length > 0) {
-        // Tool result messages — one per result
-        for (const tr of toolResultParts) {
-          allMessages.push({
-            role: "tool",
-            content: typeof tr.content === "string" ? tr.content : JSON.stringify(tr.content),
-          });
+        // Convert assistant tool_use blocks back to text format
+        // (Since we use prompt-based calling, tool calls are just text with <tool_call> tags)
+        let content = textParts.join("\n");
+        for (const tc of toolUseParts) {
+          content += `\n<tool_call>\n${JSON.stringify({ name: tc.name, input: tc.input || {} })}\n</tool_call>`;
         }
+        allMessages.push({ role: "assistant", content: content.trim() });
+      } else if (toolResultParts.length > 0) {
+        // Tool results — combine into a single user message
+        const resultTexts = toolResultParts.map((tr) => {
+          const content = typeof tr.content === "string" ? tr.content : JSON.stringify(tr.content);
+          return `Tool result:\n${content}`;
+        });
+        allMessages.push({ role: "user", content: resultTexts.join("\n\n") });
       } else if (textParts.length > 0) {
         allMessages.push({ role: msg.role, content: textParts.join("\n") });
       }
     }
   }
 
-  // Convert Anthropic-style tools to Ollama/OpenAI function format
-  const ollamaTools = tools?.length > 0
-    ? tools.map((t) => ({
-        type: "function",
-        function: {
-          name: t.name,
-          description: t.description,
-          parameters: t.input_schema,
-        },
-      }))
-    : undefined;
-
+  // NO tools parameter — we use prompt-based tool calling instead
   const body = {
     model: model || "gemma3:4b",
     messages: allMessages,
     stream: true,
-    ...(ollamaTools ? { tools: ollamaTools } : {}),
   };
 
   const headers = { "Content-Type": "application/json" };
@@ -103,7 +262,8 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let stopReason = "end_turn";
+  const parser = new ToolCallParser();
+  let hasToolCalls = false;
 
   try {
     while (true) {
@@ -120,30 +280,23 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
         try {
           const event = JSON.parse(line);
 
-          // Text content
+          // Text content — feed through tool call parser
           if (event.message?.content) {
-            yield { type: "text", content: event.message.content };
-          }
-
-          // Tool calls from Ollama
-          if (event.message?.tool_calls) {
-            stopReason = "tool_use";
-            for (const tc of event.message.tool_calls) {
-              const fn = tc.function;
-              let input = {};
-              try {
-                input = typeof fn.arguments === "string" ? JSON.parse(fn.arguments) : fn.arguments || {};
-              } catch { /* empty */ }
-              yield {
-                type: "tool_use",
-                id: tc.id || `ollama-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                name: fn.name,
-                input,
-              };
+            const parsed = parser.feed(event.message.content);
+            for (const evt of parsed) {
+              if (evt.type === "tool_use") hasToolCalls = true;
+              yield evt;
             }
           }
 
           if (event.done) {
+            // Flush any remaining buffered text
+            const flushed = parser.flush();
+            for (const evt of flushed) {
+              if (evt.type === "tool_use") hasToolCalls = true;
+              yield evt;
+            }
+
             if (event.eval_count || event.prompt_eval_count) {
               yield {
                 type: "usage",
@@ -153,11 +306,11 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
                 },
               };
             }
-            yield { type: "done", stopReason };
+            yield { type: "done", stopReason: hasToolCalls ? "tool_use" : "end_turn" };
             return;
           }
         } catch {
-          // Skip malformed JSON
+          // Skip malformed JSON lines from Ollama
         }
       }
     }
@@ -165,5 +318,12 @@ export async function* chat({ messages, model, apiKey, baseUrl, systemPrompt, si
     reader.releaseLock();
   }
 
-  yield { type: "done", stopReason };
+  // Flush parser in case stream ended without a done event
+  const flushed = parser.flush();
+  for (const evt of flushed) {
+    if (evt.type === "tool_use") hasToolCalls = true;
+    yield evt;
+  }
+
+  yield { type: "done", stopReason: hasToolCalls ? "tool_use" : "end_turn" };
 }
