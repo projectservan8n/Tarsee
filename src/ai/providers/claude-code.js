@@ -110,7 +110,7 @@ export async function* chat({
   const cwd = config.CLAUDE_WORKSPACE_DIR || process.cwd();
 
   // Create MCP server with Tarsee tools (requires ctx passed from caller)
-  const { createTarseeMcp } = await import("../ai/tarsee-mcp.js");
+  const { createTarseeMcp } = await import("../tarsee-mcp.js");
   const tarseeMcp = createTarseeMcp(toolCtx || {});
 
   const queryOptions = {
