@@ -67,14 +67,11 @@ export async function* chat({
   }
 
   console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}`);
-  console.log(`[claude-code] Options:`, JSON.stringify(queryOptions, null, 2));
 
   try {
     let messageCount = 0;
     for await (const message of query({ prompt, options: queryOptions, signal })) {
       messageCount++;
-      // Log every message for debugging
-      console.log(`[claude-code] Message #${messageCount}: type=${message.type}`, JSON.stringify(message).slice(0, 500));
       if (signal?.aborted) break;
 
       switch (message.type) {
@@ -130,17 +127,8 @@ export async function* chat({
           if (message.usage) {
             yield { type: "usage", usage: message.usage };
           }
-
-          // If the result contains text content, yield it
-          if (message.result) {
-            const resultText = typeof message.result === "string"
-              ? message.result
-              : "";
-            if (resultText) {
-              yield { type: "text", content: resultText };
-            }
-          }
-
+          // Don't yield message.result text — it duplicates what was
+          // already streamed via "assistant" messages above.
           yield { type: "done", stopReason: "end_turn" };
           break;
         }
