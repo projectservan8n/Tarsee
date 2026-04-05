@@ -11,7 +11,58 @@
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
 import config from "../../config/env.js";
+
+// Directory for temporary image uploads that Claude Code can read via its Read tool
+const UPLOAD_DIR = path.join(config.CLAUDE_WORKSPACE_DIR || process.cwd(), ".uploads");
+
+/**
+ * Save image content blocks to disk so Claude Code can access them via Read tool.
+ * Returns an array of { path, mediaType } for each saved image.
+ * Files auto-delete after 3 days via cleanup sweep.
+ */
+function saveImagesToDisk(contentBlocks) {
+  if (!Array.isArray(contentBlocks)) return [];
+
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+  const saved = [];
+  for (const block of contentBlocks) {
+    if (block.type === "image" && block.source?.data) {
+      const ext = (block.source.media_type || "image/png").split("/")[1] || "png";
+      const filename = `img-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.${ext}`;
+      const filePath = path.join(UPLOAD_DIR, filename);
+      fs.writeFileSync(filePath, Buffer.from(block.source.data, "base64"));
+      saved.push({ path: filePath, mediaType: block.source.media_type });
+    }
+  }
+  return saved;
+}
+
+/**
+ * Clean up uploaded images older than 3 days.
+ */
+function cleanupOldUploads() {
+  if (!fs.existsSync(UPLOAD_DIR)) return;
+  const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  for (const file of fs.readdirSync(UPLOAD_DIR)) {
+    const filePath = path.join(UPLOAD_DIR, file);
+    try {
+      const stat = fs.statSync(filePath);
+      if (now - stat.mtimeMs > THREE_DAYS_MS) {
+        fs.unlinkSync(filePath);
+      }
+    } catch { /* ignore */ }
+  }
+}
+
+// Run cleanup on load and every 6 hours
+cleanupOldUploads();
+setInterval(cleanupOldUploads, 6 * 60 * 60 * 1000).unref();
 
 /**
  * Async generator that matches Tarsee's provider interface.
@@ -38,11 +89,22 @@ export async function* chat({
 }) {
   // Extract the latest user message as the prompt
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
-  const prompt = typeof lastUserMsg?.content === "string"
+  let prompt = typeof lastUserMsg?.content === "string"
     ? lastUserMsg.content
     : Array.isArray(lastUserMsg?.content)
       ? lastUserMsg.content.filter((b) => b.type === "text").map((b) => b.text).join("\n")
       : "hello";
+
+  // Save any attached images to disk so Claude Code can read them
+  if (Array.isArray(lastUserMsg?.content)) {
+    const savedImages = saveImagesToDisk(lastUserMsg.content);
+    if (savedImages.length > 0) {
+      const imageRefs = savedImages.map((img, i) =>
+        `[Attached image ${i + 1}: ${img.path}]`
+      ).join("\n");
+      prompt = `${prompt}\n\nThe user attached ${savedImages.length} image(s). Use the Read tool to view them:\n${imageRefs}`;
+    }
+  }
 
   const cwd = config.CLAUDE_WORKSPACE_DIR || process.cwd();
 

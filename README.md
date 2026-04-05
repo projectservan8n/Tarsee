@@ -100,6 +100,39 @@ docker compose up -d
 
 ---
 
+## Claude Code Agent (Subscription Auth)
+
+Tarsee can run **Claude Code** as a headless AI provider, using your Claude Max/Pro subscription instead of API keys.
+
+### Setup
+
+1. **On your local machine** (where you have Claude Code installed), run:
+
+   ```bash
+   security find-generic-password -s "Claude Code-credentials" -w   # macOS
+   cat ~/.claude/.credentials.json                                    # Linux
+   ```
+
+2. **Copy the JSON output** and add it as a Railway environment variable:
+
+   ```
+   CLAUDE_OAUTH_CREDENTIALS={"claudeAiOauth":{"accessToken":"sk-ant-oat01-...","refreshToken":"...","expiresAt":...},...}
+   ```
+
+3. **Deploy** — the entrypoint writes credentials to the right location automatically.
+
+4. **Select "Claude Code (Agent)"** as the provider in Tarsee Settings.
+
+Claude Code runs with full tool access (Read, Write, Edit, Bash, Grep, Glob) and manages its own agentic loop. Image attachments are saved to disk and referenced by path so Claude Code can read them.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `CLAUDE_OAUTH_CREDENTIALS` | For Claude Code | Full JSON from your local Claude Code credentials |
+| `CLAUDE_WORKSPACE_DIR` | No | Working directory for Claude Code (default: workspace dir) |
+| `CLAUDE_DEFAULT_MODEL` | No | Default model (default: `claude-sonnet-4-6`) |
+
+---
+
 ## AI Tools
 
 The AI has access to real, server-executed tools:

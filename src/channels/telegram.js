@@ -32,9 +32,24 @@ export async function createTelegramBot(config, db) {
   }
 
   /**
-   * Handle a text message (shared by text handler and callback handler).
+   * Download a Telegram file and return as base64 + media type.
    */
-  async function handleMessage(ctx, text, replyToMessageId = null) {
+  async function downloadTelegramFile(fileId) {
+    const fileLink = await bot.telegram.getFileLink(fileId);
+    const res = await fetch(fileLink.href);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const contentType = res.headers.get("content-type") || "image/jpeg";
+    return { data: buffer.toString("base64"), mediaType: contentType };
+  }
+
+  /**
+   * Handle a message (shared by text, photo, and callback handlers).
+   * @param {object} ctx - Telegraf context
+   * @param {string} text - Message text
+   * @param {number|null} replyToMessageId - Message to reply to
+   * @param {Array} [attachments] - Image attachments [{type, source: {type, media_type, data}}]
+   */
+  async function handleMessage(ctx, text, replyToMessageId = null, attachments = []) {
     const chatId = ctx.chat.id;
     const username = ctx.from.username || ctx.from.first_name || "User";
 
@@ -57,10 +72,10 @@ export async function createTelegramBot(config, db) {
       });
 
       if (cmdResult.handled) {
-        const chunks = splitMessage(cmdResult.response, 4096);
+        const chunks = splitMessage(mdToTelegramHtml(cmdResult.response), 4096);
         for (const chunk of chunks) {
           await ctx.reply(chunk, {
-            parse_mode: "Markdown",
+            parse_mode: "HTML",
             ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
           }).catch(() => ctx.reply(chunk));
         }
@@ -80,10 +95,10 @@ export async function createTelegramBot(config, db) {
       settingsStore.set(`channel_conv.${channelKey}`, convId);
     }
 
-    // Save user message
+    // Save user message (text only — no base64 in DB)
     convStore.addMessage(convId, {
       role: "user",
-      content: `[${username}]: ${text}`,
+      content: `[${username}]: ${text}${attachments.length ? ` [+${attachments.length} image(s)]` : ""}`,
     });
 
     // Get provider
@@ -125,6 +140,19 @@ You can use these special markers in your response:
 
     try {
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
+
+      // Enrich last user message with image blocks if attachments present
+      if (attachments.length > 0 && workingMessages.length > 0) {
+        const last = workingMessages[workingMessages.length - 1];
+        if (last.role === "user") {
+          const contentBlocks = [];
+          for (const att of attachments) {
+            contentBlocks.push(att);
+          }
+          contentBlocks.push({ type: "text", text: typeof last.content === "string" ? last.content : text });
+          last.content = contentBlocks;
+        }
+      }
 
       // Live streaming: edit a preview message as tokens arrive
       let previewMsgId = null;
@@ -225,14 +253,15 @@ You can use these special markers in your response:
           }
         }
 
-        // Send final text
-        const chunks = splitMessage(cleanText, 4096);
+        // Send final text (convert markdown to Telegram HTML)
+        const htmlText = mdToTelegramHtml(cleanText);
+        const chunks = splitMessage(htmlText, 4096);
 
         if (previewMsgId && chunks.length === 1 && !buttons) {
           // Edit preview to final content
           await ctx.telegram.editMessageText(
             chatId, previewMsgId, undefined, chunks[0],
-            { parse_mode: "Markdown" }
+            { parse_mode: "HTML" }
           ).catch(() =>
             ctx.telegram.editMessageText(chatId, previewMsgId, undefined, chunks[0]).catch(() => {})
           );
@@ -245,7 +274,7 @@ You can use these special markers in your response:
           // Send text chunks
           for (let i = 0; i < chunks.length; i++) {
             const isLast = i === chunks.length - 1;
-            const opts = { parse_mode: "Markdown" };
+            const opts = { parse_mode: "HTML" };
             if (replyToMessageId && i === 0) opts.reply_to_message_id = replyToMessageId;
 
             // Attach inline buttons to the last chunk
@@ -275,6 +304,42 @@ You can use these special markers in your response:
   // --- Main text handler ---
   bot.on("text", async (ctx) => {
     await handleMessage(ctx, ctx.message.text);
+  });
+
+  // --- Photo handler (images sent in Telegram) ---
+  bot.on("photo", async (ctx) => {
+    try {
+      // Telegram sends multiple sizes — grab the largest
+      const photos = ctx.message.photo;
+      const largest = photos[photos.length - 1];
+      const { data, mediaType } = await downloadTelegramFile(largest.file_id);
+      const caption = ctx.message.caption || "Please analyze this image.";
+      const attachment = { type: "image", source: { type: "base64", media_type: mediaType, data } };
+      await handleMessage(ctx, caption, null, [attachment]);
+    } catch (err) {
+      console.error("[telegram] photo handler error:", err.message);
+      await ctx.reply("Failed to process image.").catch(() => {});
+    }
+  });
+
+  // --- Document handler (files sent in Telegram, including images as files) ---
+  bot.on("document", async (ctx) => {
+    try {
+      const doc = ctx.message.document;
+      const mime = doc.mime_type || "";
+      if (!mime.startsWith("image/")) {
+        // Non-image files — just mention them in the message
+        await handleMessage(ctx, ctx.message.caption || `[Sent file: ${doc.file_name} (${mime})]`);
+        return;
+      }
+      const { data, mediaType } = await downloadTelegramFile(doc.file_id);
+      const caption = ctx.message.caption || "Please analyze this image.";
+      const attachment = { type: "image", source: { type: "base64", media_type: mediaType, data } };
+      await handleMessage(ctx, caption, null, [attachment]);
+    } catch (err) {
+      console.error("[telegram] document handler error:", err.message);
+      await ctx.reply("Failed to process file.").catch(() => {});
+    }
   });
 
   // --- Inline button callback handler ---
@@ -320,6 +385,28 @@ function buttonsToKeyboard(buttons) {
     );
   }
   return rows;
+}
+
+/**
+ * Convert common Markdown to Telegram HTML.
+ * Handles: **bold**, *italic*, `code`, ```code blocks```, [links](url)
+ */
+function mdToTelegramHtml(text) {
+  return text
+    // Code blocks first (before other transforms)
+    .replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, _lang, code) => `<pre>${escapeHtml(code.trim())}</pre>`)
+    // Inline code
+    .replace(/`([^`]+)`/g, (_m, code) => `<code>${escapeHtml(code)}</code>`)
+    // Bold (**text**)
+    .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+    // Italic (*text*)
+    .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<i>$1</i>")
+    // Links [text](url)
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+}
+
+function escapeHtml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function splitMessage(text, maxLen) {

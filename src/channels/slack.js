@@ -30,10 +30,41 @@ export async function createSlackBot(config, db) {
   const streaming = config.streaming ?? "partial";
 
   /**
+   * Download a Slack file and return as base64 + media type.
+   */
+  async function downloadSlackFile(url) {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${config.token}` },
+    });
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const contentType = res.headers.get("content-type") || "image/png";
+    return { data: buffer.toString("base64"), mediaType: contentType };
+  }
+
+  /**
    * Shared handler for messages and mentions.
    */
-  async function handleSlackMessage({ text, channel, user, ts, say, isThread, threadTs }) {
-    if (!text?.trim()) return;
+  async function handleSlackMessage({ text, channel, user, ts, say, isThread, threadTs, files }) {
+    const imageAttachments = [];
+
+    // Download image files from Slack
+    if (Array.isArray(files)) {
+      for (const file of files) {
+        if (file.mimetype?.startsWith("image/") && file.url_private) {
+          try {
+            const { data, mediaType } = await downloadSlackFile(file.url_private);
+            imageAttachments.push({
+              type: "image",
+              source: { type: "base64", media_type: mediaType, data },
+            });
+          } catch (err) {
+            console.error("[slack] Failed to download file:", err.message);
+          }
+        }
+      }
+    }
+
+    if (!text?.trim() && imageAttachments.length === 0) return;
 
     const channelKey = `slack:${channel}`;
 
@@ -64,8 +95,12 @@ export async function createSlackBot(config, db) {
       settingsStore.set(`channel_conv.${channelKey}`, convId);
     }
 
-    // Save user message
-    convStore.addMessage(convId, { role: "user", content: text });
+    // Save user message (text only — no base64 in DB)
+    const displayText = text || "Please analyze this image.";
+    convStore.addMessage(convId, {
+      role: "user",
+      content: `${displayText}${imageAttachments.length ? ` [+${imageAttachments.length} image(s)]` : ""}`,
+    });
 
     // Get provider
     const activeProvider = settingsStore.getActiveProvider();
@@ -107,6 +142,16 @@ You can use [react: emoji_name] to add a reaction to the user's message (e.g. [r
       const toolCtx = { db, settingsStore, conversationId: convId };
       const MAX_TOOL_ROUNDS = 15;
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
+
+      // Enrich last user message with image blocks if attachments present
+      if (imageAttachments.length > 0 && workingMessages.length > 0) {
+        const last = workingMessages[workingMessages.length - 1];
+        if (last.role === "user") {
+          const contentBlocks = [...imageAttachments];
+          contentBlocks.push({ type: "text", text: typeof last.content === "string" ? last.content : displayText });
+          last.content = contentBlocks;
+        }
+      }
 
       // Live streaming: post a message and edit it as tokens arrive
       let previewTs = null;
@@ -273,6 +318,7 @@ You can use [react: emoji_name] to add a reaction to the user's message (e.g. [r
       say,
       isThread: !!message.thread_ts,
       threadTs: message.thread_ts,
+      files: message.files,
     });
   });
 
@@ -287,6 +333,7 @@ You can use [react: emoji_name] to add a reaction to the user's message (e.g. [r
       say,
       isThread: !!event.thread_ts,
       threadTs: event.thread_ts,
+      files: event.files,
     });
   });
 

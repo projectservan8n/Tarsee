@@ -80,7 +80,27 @@ export async function createDiscordBot(config, db) {
       .replace(new RegExp(`<@!?${client.user.id}>`), "")
       .trim();
 
-    if (!content) return;
+    // Download image attachments from Discord CDN
+    const imageAttachments = [];
+    if (message.attachments?.size > 0) {
+      for (const [, att] of message.attachments) {
+        if (att.contentType?.startsWith("image/")) {
+          try {
+            const res = await fetch(att.url);
+            const buffer = Buffer.from(await res.arrayBuffer());
+            imageAttachments.push({
+              type: "image",
+              source: { type: "base64", media_type: att.contentType, data: buffer.toString("base64") },
+            });
+          } catch (err) {
+            console.error("[discord] Failed to download attachment:", err.message);
+          }
+        }
+      }
+    }
+
+    // Need either text or images to proceed
+    if (!content && imageAttachments.length === 0) return;
 
     const channelKey = getChannelKey(message);
 
@@ -113,10 +133,11 @@ export async function createDiscordBot(config, db) {
       settingsStore.set(`channel_conv.${channelKey}`, convId);
     }
 
-    // Save user message
+    // Save user message (text only — no base64 in DB)
+    const displayText = content || "Please analyze this image.";
     convStore.addMessage(convId, {
       role: "user",
-      content: `[${message.author.username}]: ${content}`,
+      content: `[${message.author.username}]: ${displayText}${imageAttachments.length ? ` [+${imageAttachments.length} image(s)]` : ""}`,
     });
 
     // Get provider config
@@ -157,6 +178,16 @@ You can use these special markers in your response:
       const toolCtx = { db, settingsStore, conversationId: convId };
       const MAX_TOOL_ROUNDS = 15;
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
+
+      // Enrich last user message with image blocks if attachments present
+      if (imageAttachments.length > 0 && workingMessages.length > 0) {
+        const last = workingMessages[workingMessages.length - 1];
+        if (last.role === "user") {
+          const contentBlocks = [...imageAttachments];
+          contentBlocks.push({ type: "text", text: typeof last.content === "string" ? last.content : displayText });
+          last.content = contentBlocks;
+        }
+      }
 
       // Live streaming: edit a preview message as tokens arrive
       let previewMsg = null;
