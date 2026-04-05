@@ -36,6 +36,14 @@ export const AI_PROVIDERS = Object.freeze({
     baseUrl: "http://localhost:11434",
     noKeyRequired: true,
   },
+  "claude-code": {
+    id: "claude-code",
+    name: "Claude Code (Agent)",
+    envKey: null,
+    defaultModel: "claude-sonnet-4-6",
+    baseUrl: null,
+    noKeyRequired: true,
+  },
   custom: {
     id: "custom",
     name: "Custom (OpenAI-compatible)",

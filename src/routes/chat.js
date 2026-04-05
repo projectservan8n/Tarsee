@@ -127,6 +127,17 @@ chatRouter.patch("/conversations/:id", (req, res) => {
 });
 
 /**
+ * POST /api/chat/conversations/:id/reset-session
+ * Clear the Claude Code session ID so the next message starts a fresh session.
+ */
+chatRouter.post("/conversations/:id/reset-session", (req, res) => {
+  const conv = convStore.get(req.params.id);
+  if (!conv) return res.status(404).json({ error: "Conversation not found" });
+  convStore.setClaudeSessionId(req.params.id, null);
+  res.json({ ok: true });
+});
+
+/**
  * POST /api/chat/send
  * Send a message and stream AI response via SSE.
  *
@@ -254,6 +265,59 @@ chatRouter.post("/send", async (req, res) => {
   const tools = getToolDefinitions();
   const toolCtx = { db: req.app.get("db"), settingsStore, conversationId: convId };
   const MAX_TOOL_ROUNDS = 15;
+
+  // --- Claude Code provider: runs its own agentic loop ---
+  if (providerId === "claude-code") {
+    try {
+      const existingSessionId = convStore.getClaudeSessionId(convId);
+      const mod = await import("../ai/providers/claude-code.js");
+      const stream = mod.chat({
+        messages: history.map((m) => ({ role: m.role, content: m.content })),
+        model,
+        systemPrompt: effectiveSystemPrompt,
+        signal: req.signal,
+        sessionId: existingSessionId,
+        onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
+      });
+
+      for await (const event of stream) {
+        if (event.type === "text") {
+          fullResponse += event.content;
+          sendSSE(res, "text", { content: event.content });
+        } else if (event.type === "tool_use") {
+          sendSSE(res, "tool_call", { id: event.id, name: event.name, input: event.input });
+        } else if (event.type === "tool_result") {
+          sendSSE(res, "tool_result", { id: event.id, name: event.name, result: event.result });
+        } else if (event.type === "usage") {
+          usage = { ...usage, ...event.usage };
+        } else if (event.type === "error") {
+          sendSSE(res, "error", { message: event.message });
+        } else if (event.type === "done") {
+          break;
+        }
+      }
+
+      if (fullResponse) {
+        fullResponse = extractAndSaveMemories(fullResponse, req.app.get("db"), convId);
+        convStore.addMessage(convId, {
+          role: "assistant",
+          content: fullResponse,
+          provider: providerId,
+          model,
+          tokensIn: usage.input_tokens,
+          tokensOut: usage.output_tokens,
+        });
+      }
+      if (convStore.messageCount(convId) <= 2) {
+        convStore.updateTitle(convId, message.slice(0, LIMITS.MAX_CONVERSATION_TITLE));
+      }
+      sendSSE(res, "done", { conversationId: convId, usage });
+    } catch (err) {
+      sendSSE(res, "error", { message: err.message });
+    }
+    res.end();
+    return;
+  }
 
   try {
     // Build the working message array (may grow with tool results)

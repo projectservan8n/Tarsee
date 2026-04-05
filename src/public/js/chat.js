@@ -136,9 +136,32 @@ const Chat = {
       });
     });
 
+    // Claude Code session badge
+    this.elements.claudeCodeBadge = document.getElementById("claudeCodeBadge");
+    document.getElementById("newSessionBtn")?.addEventListener("click", async () => {
+      if (this.currentConversationId) {
+        try {
+          await API.json(`/api/chat/conversations/${this.currentConversationId}/reset-session`, { method: "POST" });
+        } catch { /* ignore */ }
+      }
+      this.elements.claudeCodeBadge.style.display = "none";
+    });
+
     this.loadChannels();
     this.loadCommands();
     this.loadBotName();
+  },
+
+  async updateClaudeCodeBadge() {
+    const badge = this.elements.claudeCodeBadge;
+    if (!badge) return;
+    try {
+      const data = await API.json("/api/settings");
+      const active = (data.settings || []).find((s) => s.key === "ai.activeProvider");
+      badge.style.display = (active?.value === "claude-code") ? "flex" : "none";
+    } catch {
+      badge.style.display = "none";
+    }
   },
 
   async loadCommands() {
@@ -382,6 +405,7 @@ const Chat = {
       this.elements.chatArea.innerHTML = "";
     }
 
+    this.updateClaudeCodeBadge();
     this.renderChannelList();
     this.elements.messageInput.focus();
   },

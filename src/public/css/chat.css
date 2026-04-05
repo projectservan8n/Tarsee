@@ -1,3 +1,31 @@
+/* ===== Claude Code session badge ===== */
+.claude-code-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: rgba(245, 166, 35, 0.1);
+  border-bottom: 1px solid rgba(245, 166, 35, 0.2);
+  font-size: 12px;
+  color: var(--primary, #f5a623);
+}
+.claude-code-badge .badge-icon { font-size: 14px; }
+.claude-code-badge .badge-text { font-weight: 600; }
+.claude-code-badge .badge-btn {
+  margin-left: auto;
+  padding: 2px 10px;
+  background: transparent;
+  border: 1px solid rgba(245, 166, 35, 0.3);
+  border-radius: 4px;
+  color: var(--primary, #f5a623);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.claude-code-badge .badge-btn:hover {
+  background: rgba(245, 166, 35, 0.15);
+}
+
 /* ===== Chat-specific styles — Dark Theme ===== */
 
 /* Markdown rendering in messages */

@@ -68,6 +68,11 @@ COPY --from=builder /app/whisper-bin /opt/whisper
 
 ENV PATH="/opt/whisper:${PATH}"
 
+# Install Claude Code CLI globally (Agent SDK spawns this binary)
+# Installed in runtime stage so the binary is available at /usr/local/bin/claude
+RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force \
+  && claude --version
+
 # Copy dependencies from builder (includes node_modules + Playwright browsers)
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /root/.cache/ms-playwright /home/node/.cache/ms-playwright

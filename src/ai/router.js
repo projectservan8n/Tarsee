@@ -18,6 +18,7 @@ async function loadProvider(providerId) {
     gemini: "./providers/gemini.js",
     openrouter: "./providers/openrouter.js",
     ollama: "./providers/ollama.js",
+    "claude-code": "./providers/claude-code.js",
     custom: "./providers/custom.js",
   };
 

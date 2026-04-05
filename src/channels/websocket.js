@@ -264,6 +264,68 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   const tools = getToolDefinitions();
   const toolCtx = { db: ws._tarsee_db, settingsStore, conversationId: convId };
   const MAX_TOOL_ROUNDS = 15;
+  const providerId = activeProvider.provider;
+
+  // --- Claude Code provider: runs its own agentic loop ---
+  if (providerId === "claude-code") {
+    try {
+      const controller = new AbortController();
+      const onClose = () => controller.abort();
+      ws.on("close", onClose);
+
+      const existingSessionId = convStore.getClaudeSessionId(convId);
+      const mod = await import("../ai/providers/claude-code.js");
+      const stream = mod.chat({
+        messages: history.map((m) => ({ role: m.role, content: m.content })),
+        model: activeProvider.model,
+        systemPrompt: effectiveSystemPrompt,
+        signal: controller.signal,
+        sessionId: existingSessionId,
+        onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
+      });
+
+      for await (const event of stream) {
+        if (ws.readyState !== ws.OPEN) break;
+        if (event.type === "text") {
+          fullResponse += event.content;
+          ws.send(JSON.stringify({ type: "text", content: event.content }));
+        } else if (event.type === "tool_use") {
+          ws.send(JSON.stringify({ type: "tool_call", id: event.id, name: event.name, input: event.input }));
+        } else if (event.type === "tool_result") {
+          ws.send(JSON.stringify({ type: "tool_result", id: event.id, name: event.name, result: event.result }));
+        } else if (event.type === "usage") {
+          usage = { ...usage, ...event.usage };
+        } else if (event.type === "error") {
+          ws.send(JSON.stringify({ type: "error", message: event.message }));
+        } else if (event.type === "done") {
+          break;
+        }
+      }
+
+      ws.removeListener("close", onClose);
+
+      if (fullResponse) {
+        fullResponse = extractAndSaveMemories(fullResponse, ws._tarsee_db, convId);
+        convStore.addMessage(convId, {
+          role: "assistant",
+          content: fullResponse,
+          provider: providerId,
+          model: activeProvider.model,
+          tokensIn: usage.input_tokens,
+          tokensOut: usage.output_tokens,
+        });
+      }
+
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({ type: "done", conversationId: convId, usage }));
+      }
+    } catch (err) {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({ type: "error", message: err.message }));
+      }
+    }
+    return;
+  }
 
   try {
     const controller = new AbortController();
