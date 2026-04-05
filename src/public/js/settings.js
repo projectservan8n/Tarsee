@@ -112,6 +112,10 @@ const Settings = {
       const showBaseUrl = val === "custom" || val === "ollama";
       this.elements.baseUrlGroup.style.display = showBaseUrl ? "block" : "none";
 
+      // Show model presets for OpenRouter
+      const presetsGroup = document.getElementById("modelPresetsGroup");
+      if (presetsGroup) presetsGroup.style.display = val === "openrouter" ? "block" : "none";
+
       const defaults = {
         anthropic: "claude-sonnet-4-5-20250929",
         openai: "gpt-4o",
@@ -122,15 +126,28 @@ const Settings = {
       };
       this.elements.model.placeholder = defaults[val] || "";
 
-      // Update hints for Ollama
+      // Update hints per provider
       if (val === "ollama") {
         this.elements.apiKey.placeholder = "(optional — Ollama usually needs no key)";
         this.elements.baseUrl.placeholder = "https://your-tunnel.trycloudflare.com";
+      } else if (val === "openrouter") {
+        this.elements.apiKey.placeholder = "sk-or-...";
       } else {
         this.elements.apiKey.placeholder = "sk-...";
         this.elements.baseUrl.placeholder = "http://localhost:11434/v1";
       }
     });
+
+    // Model preset selector (OpenRouter)
+    const modelPresets = document.getElementById("modelPresets");
+    if (modelPresets) {
+      modelPresets.addEventListener("change", () => {
+        if (modelPresets.value) {
+          this.elements.model.value = modelPresets.value;
+          modelPresets.selectedIndex = 0; // Reset to placeholder
+        }
+      });
+    }
 
     this.elements.saveProviderBtn.addEventListener("click", () => this.saveProvider());
     this.elements.saveChannelsBtn.addEventListener("click", () => this.saveChannels());

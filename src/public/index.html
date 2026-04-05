@@ -275,6 +275,29 @@
               <div class="form-group">
                 <label>Model</label>
                 <input type="text" id="settingsModel" placeholder="e.g. claude-sonnet-4-5-20250929">
+                <div id="modelPresetsGroup" style="display:none; margin-top:6px">
+                  <select id="modelPresets" style="width:100%; font-size:13px">
+                    <option value="">-- Quick presets (click to fill) --</option>
+                    <optgroup label="Free Models (no credit cost)">
+                      <option value="google/gemma-3-27b-it:free">Gemma 3 27B (Google, free)</option>
+                      <option value="google/gemma-3-12b-it:free">Gemma 3 12B (Google, free)</option>
+                      <option value="google/gemma-3-4b-it:free">Gemma 3 4B (Google, free)</option>
+                      <option value="meta-llama/llama-4-scout:free">Llama 4 Scout (Meta, free)</option>
+                      <option value="meta-llama/llama-4-maverick:free">Llama 4 Maverick (Meta, free)</option>
+                      <option value="meta-llama/llama-3.3-70b-instruct:free">Llama 3.3 70B (Meta, free)</option>
+                      <option value="qwen/qwen-2.5-72b-instruct:free">Qwen 2.5 72B (Alibaba, free)</option>
+                      <option value="deepseek/deepseek-r1:free">DeepSeek R1 (reasoning, free)</option>
+                      <option value="deepseek/deepseek-chat-v3-0324:free">DeepSeek V3 (chat, free)</option>
+                      <option value="mistralai/mistral-small-3.1-24b-instruct:free">Mistral Small 3.1 24B (free)</option>
+                    </optgroup>
+                    <optgroup label="Paid Models (uses credits)">
+                      <option value="anthropic/claude-sonnet-4-5">Claude Sonnet 4.5</option>
+                      <option value="openai/gpt-4o">GPT-4o</option>
+                      <option value="google/gemini-2.5-flash-preview">Gemini 2.5 Flash</option>
+                      <option value="anthropic/claude-haiku-3.5">Claude Haiku 3.5</option>
+                    </optgroup>
+                  </select>
+                </div>
               </div>
               <div class="form-group" id="customBaseUrlGroup" style="display:none">
                 <label>Base URL</label>
