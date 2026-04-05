@@ -68,7 +68,7 @@ export async function createWhatsAppBot(channelConfig, db) {
       const history = convStore.getRecentMessages(convId, 40);
       const systemPrompt = buildSystemPrompt({ settingsStore, db, conversationId: convId, messageCount: history.length, channelHint: "You are chatting on WhatsApp." });
       const activeProvider = settingsStore.getActiveProvider();
-      if (!activeProvider?.apiKey) continue;
+      if (!activeProvider?.ready) continue;
 
       let fullResponse = "";
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));

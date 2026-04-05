@@ -87,7 +87,7 @@ export async function runCronJob(job) {
   }
 
   const activeProvider = _settingsStore.getActiveProvider();
-  if (!activeProvider?.apiKey || !activeProvider?.provider) {
+  if (!activeProvider?.ready || !activeProvider?.provider) {
     return { error: "No AI provider configured" };
   }
 

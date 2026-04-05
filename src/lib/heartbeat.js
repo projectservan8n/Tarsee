@@ -56,7 +56,7 @@ export async function runHeartbeat(reason = "scheduled") {
   }
 
   const activeProvider = _settingsStore.getActiveProvider();
-  if (!activeProvider?.apiKey || !activeProvider?.provider) {
+  if (!activeProvider?.ready || !activeProvider?.provider) {
     return { skipped: true, reason: "No AI provider configured" };
   }
 

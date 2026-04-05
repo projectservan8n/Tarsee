@@ -42,7 +42,7 @@ export async function createLineBot(channelConfig, db) {
       const history = convStore.getRecentMessages(convId, 40);
       const systemPrompt = buildSystemPrompt({ settingsStore, db, conversationId: convId, messageCount: history.length, channelHint: "You are chatting on LINE." });
       const activeProvider = settingsStore.getActiveProvider();
-      if (!activeProvider?.apiKey) continue;
+      if (!activeProvider?.ready) continue;
 
       let fullResponse = "";
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));

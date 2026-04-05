@@ -212,7 +212,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
 
   // Resolve provider
   const activeProvider = settingsStore.getActiveProvider();
-  if (!activeProvider?.provider || !activeProvider?.apiKey) {
+  if (!activeProvider?.provider || !activeProvider?.ready) {
     ws.send(JSON.stringify({ type: "error", message: "No AI provider configured" }));
     return;
   }

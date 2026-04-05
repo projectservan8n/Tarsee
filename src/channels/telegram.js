@@ -88,7 +88,7 @@ export async function createTelegramBot(config, db) {
 
     // Get provider
     const activeProvider = settingsStore.getActiveProvider();
-    if (!activeProvider?.provider || !activeProvider?.apiKey) {
+    if (!activeProvider?.provider || !activeProvider?.ready) {
       await ctx.reply("No AI provider configured. Set one up in the Tarsee web panel.");
       return;
     }

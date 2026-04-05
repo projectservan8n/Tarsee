@@ -59,7 +59,7 @@ export function spawnAgent({ task, name, settingsStore, db }) {
  */
 async function runAgent(agent, { settingsStore, db, signal }) {
   const activeProvider = settingsStore.getActiveProvider();
-  if (!activeProvider?.provider || !activeProvider?.apiKey) {
+  if (!activeProvider?.provider || !activeProvider?.ready) {
     throw new Error("No AI provider configured");
   }
 

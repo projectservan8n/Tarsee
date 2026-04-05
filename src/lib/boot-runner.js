@@ -20,7 +20,7 @@ export async function runBootChecklist({ db, settingsStore }) {
   }
 
   const activeProvider = settingsStore.getActiveProvider();
-  if (!activeProvider?.apiKey || !activeProvider?.provider) {
+  if (!activeProvider?.ready || !activeProvider?.provider) {
     console.log("[boot] No AI provider configured, skipping boot checklist");
     return { skipped: true, reason: "No AI provider configured" };
   }

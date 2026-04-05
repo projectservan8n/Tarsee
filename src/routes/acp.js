@@ -63,7 +63,7 @@ acpRouter.post("/session/:id/turn", async (req, res) => {
   session.addMessage("user", message);
 
   const activeProvider = settingsStore.getActiveProvider();
-  if (!activeProvider?.apiKey) {
+  if (!activeProvider?.ready) {
     return res.status(400).json({ error: "No AI provider configured" });
   }
 

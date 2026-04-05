@@ -183,6 +183,7 @@ export class SettingsStore {
       model: this.get(`ai.${providerId}.model`) || providerDef?.defaultModel || null,
       apiKey,
       baseUrl: this.get(`ai.${providerId}.baseUrl`) || providerDef?.baseUrl || null,
+      ready: !!apiKey || !!providerDef?.noKeyRequired,
     };
   }
 

@@ -195,7 +195,7 @@ chatRouter.post("/send", async (req, res) => {
   const model = reqModel || activeProvider?.model;
   const apiKey = activeProvider?.apiKey;
 
-  if (!providerId || !apiKey) {
+  if (!providerId || !activeProvider?.ready) {
     return res.status(400).json({ error: "No AI provider configured. Go to Settings to configure one." });
   }
 
