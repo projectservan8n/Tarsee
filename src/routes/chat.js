@@ -29,7 +29,7 @@ chatRouter.use((req, _res, next) => {
  * List available AI providers.
  */
 chatRouter.get("/providers", (_req, res) => {
-  res.json({ providers: getAvailableProviders(settingsStore) });
+  res.json({ providers: getAvailableProviders() });
 });
 
 /**

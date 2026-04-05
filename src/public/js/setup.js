@@ -24,29 +24,17 @@ const Setup = {
         <p>Your personal AI gateway. Connect in under a minute.</p>
       </div>
       <div class="setup-card-body">
-        <div class="form-group">
-          <label>AI Provider</label>
+        <div class="form-group" style="display:none">
           <select id="setupProvider">
-            <option value="">Select a provider...</option>
-            <option value="anthropic">Anthropic (Claude)</option>
-            <option value="openai">OpenAI</option>
-            <option value="gemini">Google Gemini</option>
-            <option value="openrouter">OpenRouter</option>
-            <option value="custom">Custom (OpenAI-compatible)</option>
+            <option value="claude-code" selected>Claude Code (Agent)</option>
           </select>
+          <input type="password" id="setupApiKey">
+          <input type="text" id="setupModel" value="claude-sonnet-4-6">
+          <input type="text" id="setupBaseUrl">
         </div>
-        <div class="form-group">
-          <label>API Key</label>
-          <input type="password" id="setupApiKey" placeholder="sk-...">
-          <div class="hint">Stored securely, never committed to files.</div>
-        </div>
-        <div class="form-group" id="setupModelGroup">
-          <label>Model (optional)</label>
-          <input type="text" id="setupModel" placeholder="Leave blank for default">
-        </div>
-        <div class="form-group" id="setupBaseUrlGroup" style="display:none">
-          <label>Base URL</label>
-          <input type="text" id="setupBaseUrl" placeholder="http://localhost:11434/v1">
+        <div class="hint" style="margin-bottom:12px">
+          Tarsee uses Claude Code with your Claude Max/Pro subscription.<br>
+          Set <code>CLAUDE_OAUTH_CREDENTIALS</code> in your Railway environment variables.
         </div>
         <div id="setupError" style="color:var(--danger);font-size:13px;margin-bottom:12px;display:none"></div>
         <button class="btn btn-primary" id="setupConnectBtn" style="width:100%;padding:12px;font-size:14px">Connect & Start Chatting</button>

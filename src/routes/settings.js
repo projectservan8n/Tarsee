@@ -37,7 +37,7 @@ settingsRouter.get("/", (_req, res) => {
  * Get AI provider list with configuration status.
  */
 settingsRouter.get("/providers", (_req, res) => {
-  res.json({ providers: getAvailableProviders(settingsStore) });
+  res.json({ providers: getAvailableProviders() });
 });
 
 /**
@@ -92,16 +92,9 @@ settingsRouter.post("/channel", (req, res) => {
 settingsRouter.get("/setup-status", (req, res) => {
   const provider = settingsStore.get("ai.activeProvider");
   const botName = settingsStore.get("identity.name");
-  const hasKey = provider
-    ? !!settingsStore.get(`ai.${provider}.apiKey`)
-    : false;
-  // Check if any provider has a key (vault or env)
-  const envConfigured = !!(
-    settingsStore.getApiKey("anthropic") ||
-    settingsStore.getApiKey("openai") ||
-    settingsStore.getApiKey("gemini") ||
-    settingsStore.getApiKey("openrouter")
-  );
+  const hasKey = provider === "claude-code"; // Claude Code uses subscription auth, no API key
+  // Claude Code is configured if CLAUDE_OAUTH_CREDENTIALS env var is set
+  const envConfigured = !!process.env.CLAUDE_OAUTH_CREDENTIALS;
   // Personality is "done" if bot name was set, OR if SOUL.md/systemPrompt exist,
   // OR if setup was explicitly completed, OR if conversations already exist (not first-time)
   const setupCompleted = !!settingsStore.get("setup.completed");

@@ -1,41 +1,5 @@
 // --- AI Provider Definitions ---
 export const AI_PROVIDERS = Object.freeze({
-  anthropic: {
-    id: "anthropic",
-    name: "Anthropic (Claude)",
-    envKey: "ANTHROPIC_API_KEY",
-    defaultModel: "claude-sonnet-4-6",
-    baseUrl: "https://api.anthropic.com",
-  },
-  openai: {
-    id: "openai",
-    name: "OpenAI",
-    envKey: "OPENAI_API_KEY",
-    defaultModel: "gpt-4o",
-    baseUrl: "https://api.openai.com",
-  },
-  gemini: {
-    id: "gemini",
-    name: "Google Gemini",
-    envKey: "GEMINI_API_KEY",
-    defaultModel: "gemini-2.5-flash",
-    baseUrl: "https://generativelanguage.googleapis.com",
-  },
-  openrouter: {
-    id: "openrouter",
-    name: "OpenRouter",
-    envKey: "OPENROUTER_API_KEY",
-    defaultModel: "anthropic/claude-sonnet-4-5",
-    baseUrl: "https://openrouter.ai/api",
-  },
-  ollama: {
-    id: "ollama",
-    name: "Ollama (Local/Remote)",
-    envKey: "OLLAMA_API_KEY",
-    defaultModel: "gemma3:4b",
-    baseUrl: "http://localhost:11434",
-    noKeyRequired: true,
-  },
   "claude-code": {
     id: "claude-code",
     name: "Claude Code (Agent)",
@@ -43,13 +7,6 @@ export const AI_PROVIDERS = Object.freeze({
     defaultModel: "claude-sonnet-4-6",
     baseUrl: null,
     noKeyRequired: true,
-  },
-  custom: {
-    id: "custom",
-    name: "Custom (OpenAI-compatible)",
-    envKey: "CUSTOM_API_KEY",
-    defaultModel: "",
-    baseUrl: "",
   },
 });
 

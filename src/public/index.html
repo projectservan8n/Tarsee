@@ -153,10 +153,6 @@
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4l6 4 6-4M2 4h12v8H2z" stroke="currentColor" stroke-width="1.2"/></svg>
             Channels
           </button>
-          <button class="settings-tab" data-tab="profiles">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 4h8M4 8h8M4 12h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-            Auth Profiles
-          </button>
           <button class="settings-tab" data-tab="automation">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 4v4l3 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
             Automation
@@ -259,60 +255,31 @@
 
           <!-- AI Provider Tab -->
           <div class="settings-tab-panel" data-tab="provider">
-            <h2>AI Provider</h2>
+            <h2>Claude Code Agent</h2>
             <div class="settings-section">
               <div>
-              <div class="form-group">
-                <label>Provider</label>
+              <div class="form-group" style="display:none">
                 <select id="settingsProvider">
-                  <option value="">Select a provider...</option>
-                  <option value="anthropic">Anthropic (Claude)</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="gemini">Google Gemini</option>
-                  <option value="openrouter">OpenRouter</option>
-                  <option value="ollama">Ollama (Local/Remote)</option>
-                  <option value="claude-code">Claude Code (Agent)</option>
-                  <option value="custom">Custom (OpenAI-compatible)</option>
+                  <option value="claude-code" selected>Claude Code (Agent)</option>
                 </select>
               </div>
-              <div class="form-group">
-                <label>API Key</label>
-                <input type="password" id="settingsApiKey" placeholder="sk-..." autocomplete="off">
-                <div class="hint">Stored securely. Never committed to files.</div>
+              <div class="form-group" style="display:none">
+                <input type="password" id="settingsApiKey" autocomplete="off">
               </div>
               <div class="form-group">
                 <label>Model</label>
-                <input type="text" id="settingsModel" placeholder="e.g. claude-sonnet-4-5-20250929">
-                <div id="modelPresetsGroup" style="display:none; margin-top:6px">
-                  <select id="modelPresets" style="width:100%; font-size:13px">
-                    <option value="">-- Quick presets (click to fill) --</option>
-                    <optgroup label="Free Models (no credit cost)">
-                      <option value="google/gemma-3-27b-it:free">Gemma 3 27B (Google, free)</option>
-                      <option value="google/gemma-3-12b-it:free">Gemma 3 12B (Google, free)</option>
-                      <option value="google/gemma-3-4b-it:free">Gemma 3 4B (Google, free)</option>
-                      <option value="meta-llama/llama-4-scout:free">Llama 4 Scout (Meta, free)</option>
-                      <option value="meta-llama/llama-4-maverick:free">Llama 4 Maverick (Meta, free)</option>
-                      <option value="meta-llama/llama-3.3-70b-instruct:free">Llama 3.3 70B (Meta, free)</option>
-                      <option value="qwen/qwen-2.5-72b-instruct:free">Qwen 2.5 72B (Alibaba, free)</option>
-                      <option value="deepseek/deepseek-r1:free">DeepSeek R1 (reasoning, free)</option>
-                      <option value="deepseek/deepseek-chat-v3-0324:free">DeepSeek V3 (chat, free)</option>
-                      <option value="mistralai/mistral-small-3.1-24b-instruct:free">Mistral Small 3.1 24B (free)</option>
-                    </optgroup>
-                    <optgroup label="Paid Models (uses credits)">
-                      <option value="anthropic/claude-sonnet-4-5">Claude Sonnet 4.5</option>
-                      <option value="openai/gpt-4o">GPT-4o</option>
-                      <option value="google/gemini-2.5-flash-preview">Gemini 2.5 Flash</option>
-                      <option value="anthropic/claude-haiku-3.5">Claude Haiku 3.5</option>
-                    </optgroup>
-                  </select>
-                </div>
+                <select id="settingsModel" style="width:100%">
+                  <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (recommended)</option>
+                  <option value="claude-opus-4-6">Claude Opus 4.6</option>
+                  <option value="claude-haiku-4-5">Claude Haiku 4.5 (fast)</option>
+                </select>
               </div>
               <div class="form-group" id="customBaseUrlGroup" style="display:none">
-                <label>Base URL</label>
-                <input type="text" id="settingsBaseUrl" placeholder="http://localhost:11434/v1">
+                <input type="text" id="settingsBaseUrl">
               </div>
               </div>
-              <button class="btn btn-primary" id="saveProviderBtn">Save Provider</button>
+              <div class="hint" style="margin-bottom:12px">Uses your Claude Max/Pro subscription. Set <code>CLAUDE_OAUTH_CREDENTIALS</code> in Railway env vars. No API key needed.</div>
+              <button class="btn btn-primary" id="saveProviderBtn">Save</button>
             </div>
           </div>
 
@@ -367,39 +334,6 @@
               </div>
               </div>
               <button class="btn btn-primary" id="saveChannelsBtn">Save Channels</button>
-            </div>
-          </div>
-
-          <!-- Auth Profiles Tab -->
-          <div class="settings-tab-panel" data-tab="profiles">
-            <h2>Auth Profiles <span class="settings-label">Multi-Key with Rotation</span></h2>
-            <div class="settings-section">
-              <div id="profilesList" style="margin-bottom:12px"></div>
-              <div class="form-group">
-                <label>Profile Name</label>
-                <input type="text" id="profileNameInput" placeholder="e.g. work, personal, backup">
-              </div>
-              <div class="form-group">
-                <label>Provider</label>
-                <select id="profileProviderInput">
-                  <option value="anthropic">Anthropic</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="gemini">Gemini</option>
-                  <option value="openrouter">OpenRouter</option>
-                  <option value="ollama">Ollama</option>
-                  <option value="custom">Custom</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>API Key</label>
-                <input type="text" id="profileApiKeyInput" placeholder="sk-..." autocomplete="off" class="secret-input">
-              </div>
-              <div class="form-group">
-                <label>Model (optional)</label>
-                <input type="text" id="profileModelInput" placeholder="Override model for this profile">
-              </div>
-              <button class="btn btn-primary btn-sm" id="addProfileBtn">Add Profile</button>
-              <div class="hint" style="margin-top:8px">Profiles auto-rotate on failure with 5-min cooldown. Use <code>/model name@provider:profile</code> to select.</div>
             </div>
           </div>
 

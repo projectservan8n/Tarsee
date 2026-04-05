@@ -106,56 +106,8 @@ const Settings = {
       tab.addEventListener("click", () => this.switchTab(tab.dataset.tab));
     });
 
-    // Provider change handler
-    this.elements.provider.addEventListener("change", () => {
-      const val = this.elements.provider.value;
-      const showBaseUrl = val === "custom" || val === "ollama";
-      this.elements.baseUrlGroup.style.display = showBaseUrl ? "block" : "none";
-
-      // Hide API key + model fields for Claude Code (uses subscription auth)
-      const isClaudeCode = val === "claude-code";
-      this.elements.apiKey.parentElement.style.display = isClaudeCode ? "none" : "block";
-      this.elements.model.parentElement.style.display = isClaudeCode ? "none" : "block";
-
-      // Show model presets for OpenRouter
-      const presetsGroup = document.getElementById("modelPresetsGroup");
-      if (presetsGroup) presetsGroup.style.display = val === "openrouter" ? "block" : "none";
-
-      const defaults = {
-        anthropic: "claude-sonnet-4-5-20250929",
-        openai: "gpt-4o",
-        gemini: "gemini-2.5-flash",
-        openrouter: "anthropic/claude-sonnet-4-5",
-        ollama: "gemma3:4b",
-        "claude-code": "claude-sonnet-4-6",
-        custom: "",
-      };
-      this.elements.model.placeholder = defaults[val] || "";
-
-      // Update hints per provider
-      if (val === "claude-code") {
-        this.elements.apiKey.placeholder = "(uses subscription auth — no key needed)";
-      } else if (val === "ollama") {
-        this.elements.apiKey.placeholder = "(optional — Ollama usually needs no key)";
-        this.elements.baseUrl.placeholder = "https://your-tunnel.trycloudflare.com";
-      } else if (val === "openrouter") {
-        this.elements.apiKey.placeholder = "sk-or-...";
-      } else {
-        this.elements.apiKey.placeholder = "sk-...";
-        this.elements.baseUrl.placeholder = "http://localhost:11434/v1";
-      }
-    });
-
-    // Model preset selector (OpenRouter)
-    const modelPresets = document.getElementById("modelPresets");
-    if (modelPresets) {
-      modelPresets.addEventListener("change", () => {
-        if (modelPresets.value) {
-          this.elements.model.value = modelPresets.value;
-          modelPresets.selectedIndex = 0; // Reset to placeholder
-        }
-      });
-    }
+    // Provider is always claude-code — no change handler needed
+    this.elements.provider.value = "claude-code";
 
     this.elements.saveProviderBtn.addEventListener("click", () => this.saveProvider());
     this.elements.saveChannelsBtn.addEventListener("click", () => this.saveChannels());
@@ -367,18 +319,10 @@ const Settings = {
     try {
       const { settings } = await API.getSettings();
 
-      // Provider
-      const activeProvider = settings.find((s) => s.key === "ai.activeProvider")?.value;
-      if (activeProvider) {
-        this.elements.provider.value = activeProvider;
-        this.elements.provider.dispatchEvent(new Event("change"));
-        const model = settings.find((s) => s.key === `ai.${activeProvider}.model`)?.value;
-        const apiKey = settings.find((s) => s.key === `ai.${activeProvider}.apiKey`)?.value;
-        const baseUrl = settings.find((s) => s.key === `ai.${activeProvider}.baseUrl`)?.value;
-        if (model) this.elements.model.value = model;
-        if (apiKey) this.elements.apiKey.value = apiKey;
-        if (baseUrl) this.elements.baseUrl.value = baseUrl;
-      }
+      // Provider (always claude-code)
+      this.elements.provider.value = "claude-code";
+      const model = settings.find((s) => s.key === "ai.claude-code.model")?.value;
+      if (model) this.elements.model.value = model;
 
       // Channels
       for (const type of ["discord", "telegram"]) {
@@ -418,7 +362,6 @@ const Settings = {
       this.loadWorkspaceFiles();
       this.loadSessionReset();
       this.loadCronJobs();
-      this.loadProfiles();
       this.loadVoiceStatus();
       this.loadVoices();
       this.loadSkills();
@@ -429,19 +372,12 @@ const Settings = {
   },
 
   async saveProvider() {
-    const provider = this.elements.provider.value;
-    if (!provider) {
-      App.showToast("Select a provider", "error");
-      return;
-    }
     try {
       await API.saveProvider({
-        provider,
-        apiKey: this.elements.apiKey.value.trim() || undefined,
-        model: this.elements.model.value.trim() || undefined,
-        baseUrl: this.elements.baseUrl.value.trim() || undefined,
+        provider: "claude-code",
+        model: this.elements.model.value || "claude-sonnet-4-6",
       });
-      App.showToast("Provider saved", "success");
+      App.showToast("Model saved", "success");
     } catch (err) {
       App.showToast(err.message, "error");
     }

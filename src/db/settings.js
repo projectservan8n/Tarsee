@@ -212,7 +212,7 @@ export class SettingsStore {
    * Call once during server init.
    */
   logKeyStatus() {
-    const providers = ["anthropic", "openai", "gemini", "openrouter", "elevenlabs"];
+    const providers = ["elevenlabs"];
     const lines = providers.map((id) => {
       const dbKey = this.get(`ai.${id}.apiKey`);
       const providerDef = AI_PROVIDERS[id];
