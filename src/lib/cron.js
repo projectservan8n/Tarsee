@@ -20,14 +20,15 @@ let _settingsStore = null;
 let _convStore = null;
 let _channelManager = null;
 const activeJobs = new Map(); // id → cron.ScheduledTask
+const jobState = new Map();   // id → { lastRun, lastStatus, lastError, consecutiveErrors }
+
+const JOB_TIMEOUT_MS = 120_000; // 2 minutes max per job
+const MAX_CONSECUTIVE_ERRORS = 5; // Auto-disable after this many failures
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 5_000;
 
 /**
  * Initialize the cron system.
- * @param {object} opts
- * @param {import('better-sqlite3').Database} opts.db
- * @param {import('../db/settings.js').SettingsStore} opts.settingsStore
- * @param {import('../db/conversations.js').ConversationStore} opts.convStore
- * @param {import('../channels/manager.js').ChannelManager} [opts.channelManager]
  */
 export function initCron({ db, settingsStore, convStore, channelManager }) {
   _db = db;
@@ -47,7 +48,7 @@ export function setCronChannelManager(channelManager) {
  * Load and start all enabled cron jobs.
  */
 export function startCronScheduler() {
-  stopCronScheduler(); // Clear any existing
+  stopCronScheduler();
   const jobs = loadCronJobs();
 
   for (const job of jobs) {
@@ -62,7 +63,7 @@ export function startCronScheduler() {
  * Stop all running cron jobs.
  */
 export function stopCronScheduler() {
-  for (const [id, task] of activeJobs) {
+  for (const [, task] of activeJobs) {
     task.stop();
   }
   activeJobs.clear();
@@ -78,8 +79,8 @@ function scheduleJob(job) {
   }
 
   const task = cron.schedule(job.schedule, () => {
-    runCronJob(job).catch((err) => {
-      console.error(`[cron] Job ${job.id} error:`, err.message);
+    runCronJobWithRetry(job).catch((err) => {
+      console.error(`[cron] Job ${job.id} fatal error:`, err.message);
     });
   });
 
@@ -87,9 +88,44 @@ function scheduleJob(job) {
 }
 
 /**
+ * Run a cron job with retry and timeout.
+ */
+async function runCronJobWithRetry(job) {
+  // Check if auto-disabled from too many errors
+  const state = jobState.get(job.id) || { consecutiveErrors: 0 };
+  if (state.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+    console.warn(`[cron] Job "${job.id}" auto-disabled after ${MAX_CONSECUTIVE_ERRORS} consecutive errors. Last: ${state.lastError}`);
+    return { error: "Auto-disabled" };
+  }
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const result = await runCronJob(job);
+
+    if (!result.error) {
+      // Success — reset error counter
+      jobState.set(job.id, { lastRun: Date.now(), lastStatus: "ok", lastError: null, consecutiveErrors: 0 });
+      return result;
+    }
+
+    // Failure
+    state.consecutiveErrors = (state.consecutiveErrors || 0) + 1;
+    state.lastRun = Date.now();
+    state.lastStatus = "error";
+    state.lastError = result.error;
+    jobState.set(job.id, state);
+
+    if (attempt < MAX_RETRIES) {
+      const delay = RETRY_DELAY_MS * (attempt + 1);
+      console.warn(`[cron] Job "${job.id}" failed (attempt ${attempt + 1}/${MAX_RETRIES + 1}), retrying in ${delay}ms: ${result.error}`);
+      await new Promise((r) => setTimeout(r, delay));
+    } else {
+      console.error(`[cron] Job "${job.id}" failed after ${MAX_RETRIES + 1} attempts: ${result.error}`);
+    }
+  }
+}
+
+/**
  * Run a cron job — send prompt to AI and deliver response.
- * @param {object} job
- * @returns {Promise<{response?: string, error?: string}>}
  */
 export async function runCronJob(job) {
   if (!_settingsStore || !_db) {
@@ -110,7 +146,7 @@ export async function runCronJob(job) {
     conversationId: null,
     messageCount: 0,
     conversationPrompt: null,
-    channelHint: `This is a scheduled cron job (${job.id}). Execute the task and report results.`,
+    channelHint: `This is a scheduled cron job (${job.id}). Execute the task immediately. If the task asks you to send a message to a channel, use tarsee_send_message. Do NOT just describe what you would do — actually do it.`,
   });
 
   const messages = [
@@ -119,6 +155,10 @@ export async function runCronJob(job) {
       content: `[Cron Job: ${job.id} — ${now}]\n\n${job.prompt}`,
     },
   ];
+
+  // Timeout protection
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), JOB_TIMEOUT_MS);
 
   try {
     let fullResponse = "";
@@ -131,19 +171,24 @@ export async function runCronJob(job) {
       messages,
       systemPrompt,
       toolCtx,
+      signal: controller.signal,
     });
 
     for await (const event of stream) {
       if (event.type === "text") {
         fullResponse += event.content;
+      } else if (event.type === "error") {
+        console.error(`[cron] Job "${job.id}" stream error:`, event.message);
       } else if (event.type === "done") {
         break;
       }
     }
 
+    clearTimeout(timeout);
+
     // Deliver to channel conversation
     const channelKey = job.channel || "web:default";
-    let convId = _settingsStore.get(`channel_conv.${channelKey}`);
+    const convId = _settingsStore.get(`channel_conv.${channelKey}`);
 
     if (convId && _convStore) {
       _convStore.addMessage(convId, {
@@ -158,14 +203,15 @@ export async function runCronJob(job) {
     console.log(`[cron] Job "${job.id}" completed: ${fullResponse.slice(0, 100)}`);
     return { response: fullResponse };
   } catch (err) {
-    console.error(`[cron] Job "${job.id}" failed:`, err.message);
-    return { error: err.message };
+    clearTimeout(timeout);
+    const errMsg = err.name === "AbortError" ? `Timed out after ${JOB_TIMEOUT_MS / 1000}s` : err.message;
+    console.error(`[cron] Job "${job.id}" failed:`, errMsg);
+    return { error: errMsg };
   }
 }
 
 /**
  * Load cron jobs from settings DB.
- * @returns {Array<{id: string, schedule: string, prompt: string, channel: string, enabled: boolean}>}
  */
 export function loadCronJobs() {
   if (!_settingsStore) return [];
@@ -181,7 +227,6 @@ export function loadCronJobs() {
 
 /**
  * Save cron jobs to settings DB.
- * @param {Array} jobs
  */
 function saveCronJobs(jobs) {
   if (!_settingsStore) return;
@@ -190,8 +235,6 @@ function saveCronJobs(jobs) {
 
 /**
  * Add a new cron job.
- * @param {object} job - { schedule, prompt, channel?, enabled? }
- * @returns {object} The created job
  */
 export function addCronJob({ schedule, prompt, channel = "web:default", enabled = true }) {
   if (!cron.validate(schedule)) {
@@ -204,7 +247,8 @@ export function addCronJob({ schedule, prompt, channel = "web:default", enabled 
   jobs.push(newJob);
   saveCronJobs(jobs);
 
-  // Start immediately if enabled
+  // Reset error state and start immediately if enabled
+  jobState.delete(id);
   if (enabled) scheduleJob(newJob);
 
   return newJob;
@@ -212,8 +256,6 @@ export function addCronJob({ schedule, prompt, channel = "web:default", enabled 
 
 /**
  * Remove a cron job by ID.
- * @param {string} id
- * @returns {boolean}
  */
 export function removeCronJob(id) {
   const jobs = loadCronJobs();
@@ -223,27 +265,35 @@ export function removeCronJob(id) {
   jobs.splice(idx, 1);
   saveCronJobs(jobs);
 
-  // Stop if running
   const task = activeJobs.get(id);
   if (task) {
     task.stop();
     activeJobs.delete(id);
   }
+  jobState.delete(id);
 
   return true;
 }
 
 /**
- * Get cron status.
+ * Get cron status with runtime state.
  */
 export function getCronStatus() {
   const jobs = loadCronJobs();
   return {
     totalJobs: jobs.length,
     activeJobs: activeJobs.size,
-    jobs: jobs.map((j) => ({
-      ...j,
-      running: activeJobs.has(j.id),
-    })),
+    jobs: jobs.map((j) => {
+      const state = jobState.get(j.id);
+      return {
+        ...j,
+        running: activeJobs.has(j.id),
+        lastRun: state?.lastRun ? new Date(state.lastRun).toISOString() : null,
+        lastStatus: state?.lastStatus || null,
+        lastError: state?.lastError || null,
+        consecutiveErrors: state?.consecutiveErrors || 0,
+        autoDisabled: (state?.consecutiveErrors || 0) >= MAX_CONSECUTIVE_ERRORS,
+      };
+    }),
   };
 }
