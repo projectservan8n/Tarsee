@@ -282,6 +282,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
         signal: controller.signal,
         sessionId: existingSessionId,
         onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
+        toolCtx,
       });
 
       for await (const event of stream) {

@@ -278,6 +278,7 @@ chatRouter.post("/send", async (req, res) => {
         signal: req.signal,
         sessionId: existingSessionId,
         onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
+        toolCtx,
       });
 
       for await (const event of stream) {

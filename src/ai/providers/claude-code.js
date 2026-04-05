@@ -86,6 +86,7 @@ export async function* chat({
   signal,
   sessionId,
   onSessionId,
+  toolCtx,
 }) {
   // Extract the latest user message as the prompt
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
@@ -108,6 +109,10 @@ export async function* chat({
 
   const cwd = config.CLAUDE_WORKSPACE_DIR || process.cwd();
 
+  // Create MCP server with Tarsee tools (requires ctx passed from caller)
+  const { createTarseeMcp } = await import("../ai/tarsee-mcp.js");
+  const tarseeMcp = createTarseeMcp(toolCtx || {});
+
   const queryOptions = {
     cwd,
     model: model || config.CLAUDE_DEFAULT_MODEL || "claude-sonnet-4-6",
@@ -116,20 +121,24 @@ export async function* chat({
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     maxTurns: 50,
+    mcpServers: { tarsee: tarseeMcp },
   };
 
-  // Tell Claude Code it IS the Tarsee agent with channel access
-  const tarseeContext = `You ARE Tarsee — an AI agent running headlessly inside the Tarsee platform.
-You are NOT a standalone CLI tool. You are the live agent powering Tarsee's chat across web, Telegram, Discord, and Slack.
+  // System prompt: tell Claude it IS Tarsee with native platform tools
+  const tarseeContext = `You ARE Tarsee — an AI agent platform. You have native access to platform tools via the "tarsee" MCP server.
 
-When the user asks you to send a message to a channel (Telegram, Discord, Slack), use the Bash tool to call the Tarsee API:
-curl -s -X POST http://localhost:${config.PORT || 3000}/api/chat/send \\
-  -H "Content-Type: application/json" \\
-  -d '{"channelKey":"telegram:<chat_id>","message":"your message here"}'
+Your tarsee_* tools give you direct control over the platform:
+- tarsee_send_message: Push messages to Telegram, Discord, Slack, or web chat
+- tarsee_schedule_task: Create cron jobs that run AI prompts on a schedule
+- tarsee_remember: Save facts to persistent long-term memory
+- tarsee_daily_log: Write to today's memory log
+- tarsee_read_file / tarsee_write_file: Read/write workspace files (SOUL.md, MEMORY.md, etc.)
+- tarsee_search_memories: Search across all memory files
+- tarsee_web_fetch / tarsee_web_search: Fetch URLs or search the web
+- tarsee_get_key / tarsee_set_key: Encrypted key vault
 
-Or to send directly via the workspace tools, write a script that calls the send_message endpoint.
-
-Your workspace is at ${cwd}. You have full tool access (Read, Write, Edit, Bash, Grep, Glob).`;
+ALWAYS use tarsee_* tools for platform operations. Do NOT use Bash+curl for things these tools handle directly.
+Your workspace is at ${cwd}.`;
 
   const effectiveSystemPrompt = tarseeContext + (systemPrompt ? `\n\n${systemPrompt}` : "");
   queryOptions.systemPrompt = effectiveSystemPrompt;
