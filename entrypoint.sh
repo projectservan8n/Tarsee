@@ -18,6 +18,17 @@ if [ -d /data ]; then
   ln -sf /data/tarsee/.claude-code-home /home/node/.claude
 fi
 
+# Write Claude Code credentials from env var (subscription auth, no API key).
+# Set CLAUDE_OAUTH_CREDENTIALS in Railway with the JSON from:
+#   security find-generic-password -s "Claude Code-credentials" -w
+if [ -n "$CLAUDE_OAUTH_CREDENTIALS" ]; then
+  mkdir -p /home/node/.claude
+  echo "$CLAUDE_OAUTH_CREDENTIALS" > /home/node/.claude/.credentials.json
+  chmod 600 /home/node/.claude/.credentials.json
+  chown -R node:node /home/node/.claude
+  echo "[entrypoint] Claude Code credentials written from env var"
+fi
+
 # Ensure claude CLI is in PATH for web terminal sessions
 if [ -f /usr/local/bin/claude ]; then
   grep -q 'claude' /home/node/.bashrc 2>/dev/null || \
