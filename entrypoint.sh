@@ -22,10 +22,11 @@ fi
 # Set CLAUDE_OAUTH_CREDENTIALS in Railway with the JSON from:
 #   security find-generic-password -s "Claude Code-credentials" -w
 if [ -n "$CLAUDE_OAUTH_CREDENTIALS" ]; then
-  mkdir -p /home/node/.claude
-  echo "$CLAUDE_OAUTH_CREDENTIALS" > /home/node/.claude/.credentials.json
-  chmod 600 /home/node/.claude/.credentials.json
-  chown -R node:node /home/node/.claude
+  CRED_DIR="/data/tarsee/.claude-code-home"
+  mkdir -p "$CRED_DIR"
+  echo "$CLAUDE_OAUTH_CREDENTIALS" > "$CRED_DIR/.credentials.json"
+  chmod 600 "$CRED_DIR/.credentials.json"
+  chown -R node:node "$CRED_DIR"
   echo "[entrypoint] Claude Code credentials written from env var"
 fi
 
