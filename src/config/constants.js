@@ -28,6 +28,14 @@ export const AI_PROVIDERS = Object.freeze({
     defaultModel: "anthropic/claude-sonnet-4-5",
     baseUrl: "https://openrouter.ai/api",
   },
+  ollama: {
+    id: "ollama",
+    name: "Ollama (Local/Remote)",
+    envKey: "OLLAMA_API_KEY",
+    defaultModel: "gemma3:4b",
+    baseUrl: "http://localhost:11434",
+    noKeyRequired: true,
+  },
   custom: {
     id: "custom",
     name: "Custom (OpenAI-compatible)",

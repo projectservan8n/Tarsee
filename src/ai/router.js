@@ -17,6 +17,7 @@ async function loadProvider(providerId) {
     openai: "./providers/openai.js",
     gemini: "./providers/gemini.js",
     openrouter: "./providers/openrouter.js",
+    ollama: "./providers/ollama.js",
     custom: "./providers/custom.js",
   };
 
@@ -59,9 +60,13 @@ export async function* chatStream(opts) {
     if (profile.baseUrl && !baseUrl) baseUrl = profile.baseUrl;
   }
 
-  if (!apiKey) throw new Error(`No API key configured for ${providerId}`);
-
   const providerDef = AI_PROVIDERS[providerId];
+
+  // Skip API key check for providers that don't need one (e.g., Ollama)
+  if (!apiKey && !providerDef?.noKeyRequired) {
+    throw new Error(`No API key configured for ${providerId}`);
+  }
+
   if (!providerDef && providerId !== "custom") {
     throw new Error(`Unknown provider: ${providerId}`);
   }
@@ -101,7 +106,7 @@ export function getAvailableProviders(settingsStore) {
     return {
       id: p.id,
       name: p.name,
-      configured: !!apiKey,
+      configured: !!apiKey || !!p.noKeyRequired,
       defaultModel: p.defaultModel,
     };
   });

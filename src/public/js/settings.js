@@ -108,17 +108,28 @@ const Settings = {
 
     // Provider change handler
     this.elements.provider.addEventListener("change", () => {
-      const isCustom = this.elements.provider.value === "custom";
-      this.elements.baseUrlGroup.style.display = isCustom ? "block" : "none";
+      const val = this.elements.provider.value;
+      const showBaseUrl = val === "custom" || val === "ollama";
+      this.elements.baseUrlGroup.style.display = showBaseUrl ? "block" : "none";
 
       const defaults = {
         anthropic: "claude-sonnet-4-5-20250929",
         openai: "gpt-4o",
         gemini: "gemini-2.5-flash",
         openrouter: "anthropic/claude-sonnet-4-5",
+        ollama: "gemma3:4b",
         custom: "",
       };
-      this.elements.model.placeholder = defaults[this.elements.provider.value] || "";
+      this.elements.model.placeholder = defaults[val] || "";
+
+      // Update hints for Ollama
+      if (val === "ollama") {
+        this.elements.apiKey.placeholder = "(optional — Ollama usually needs no key)";
+        this.elements.baseUrl.placeholder = "https://your-tunnel.trycloudflare.com";
+      } else {
+        this.elements.apiKey.placeholder = "sk-...";
+        this.elements.baseUrl.placeholder = "http://localhost:11434/v1";
+      }
     });
 
     this.elements.saveProviderBtn.addEventListener("click", () => this.saveProvider());
