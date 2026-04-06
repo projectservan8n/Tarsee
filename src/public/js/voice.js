@@ -293,10 +293,13 @@ const Voice = {
     this.setOrbState("processing");
     this.elements.status.textContent = "Thinking...";
 
+    // Prefix with voice mode tag so backend adds conversational style
+    const voiceText = `[voice] ${text}`;
+
     let fullResponse = "";
     try {
       await API.sendMessage(
-        Chat.currentConversationId, text,
+        Chat.currentConversationId, voiceText,
         (content) => { fullResponse += content; },
         async (data) => {
           if (data?.conversationId) Chat.currentConversationId = data.conversationId;
@@ -330,12 +333,15 @@ const Voice = {
       this.speak("Check the chat for details.");
       if (Chat.currentConversationId) Chat.loadMessages?.(Chat.currentConversationId);
     } else {
-      this.addBubble("assistant", text);
+      // Strip emotion markers from display bubble but keep for TTS
+      const displayText = text.replace(/\[(laughs|sighs|chuckles|whispers|gasps|clears throat)\]/gi, "").replace(/\s{2,}/g, " ").trim();
+      this.addBubble("assistant", displayText);
+      // Keep emotion markers in speak text — ElevenLabs v3 vocalizes them
       const speakText = text
         .replace(/\*\*(.*?)\*\*/g, "$1")
         .replace(/\*(.*?)\*/g, "$1")
         .replace(/#{1,6}\s+/g, "")
-        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
         .replace(/^[-*]\s+/gm, "")
         .trim();
       this.speak(speakText);

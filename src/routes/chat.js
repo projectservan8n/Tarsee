@@ -210,11 +210,14 @@ chatRouter.post("/send", async (req, res) => {
     return res.status(400).json({ error: "No AI provider configured. Go to Settings to configure one." });
   }
 
+  // Strip voice mode prefix before saving
+  const cleanMessage = message.startsWith("[voice] ") ? message.slice(8) : message;
+
   // Save user message (text only — no base64 blobs in DB)
-  convStore.addMessage(convId, { role: "user", content: message });
+  convStore.addMessage(convId, { role: "user", content: cleanMessage });
 
   // Build user content blocks for the AI when attachments are present
-  let userContentForAI = message;
+  let userContentForAI = cleanMessage;
   if (Array.isArray(attachments) && attachments.length > 0) {
     const contentBlocks = [];
     for (const att of attachments) {
@@ -251,6 +254,12 @@ chatRouter.post("/send", async (req, res) => {
   // Send conversation ID (useful when auto-created)
   sendSSE(res, "conversation", { id: convId });
 
+  // Detect voice mode messages and add conversational style
+  const isVoiceMode = message.startsWith("[voice]");
+  const voiceHint = isVoiceMode
+    ? "\n\n[VOICE MODE] The user is speaking to you. Respond conversationally — short, natural, spoken language. Include emotion markers that ElevenLabs v3 TTS can vocalize: [laughs], [sighs], [chuckles], [whispers], [gasps], [clears throat]. Use them naturally, not in every sentence. Be expressive and human-like. Keep responses under 3 sentences unless the topic needs more."
+    : "";
+
   // Build effective system prompt: identity + memory + skills + conversation-specific
   const effectiveSystemPrompt = buildSystemPrompt({
     settingsStore,
@@ -258,7 +267,7 @@ chatRouter.post("/send", async (req, res) => {
     conversationId: convId,
     messageCount: history.length,
     conversationPrompt: conv?.system_prompt,
-  });
+  }) + voiceHint;
 
   let fullResponse = "";
   let usage = {};
