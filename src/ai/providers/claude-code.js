@@ -113,6 +113,9 @@ export async function* chat({
   const { createTarseeMcp } = await import("../tarsee-mcp.js");
   const tarseeMcp = createTarseeMcp(toolCtx || {});
 
+  // Skills directory — Claude Code discovers SKILL.md files here
+  const skillsDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "skills");
+
   const queryOptions = {
     cwd,
     model: model || config.CLAUDE_DEFAULT_MODEL || "claude-opus-4-6",
@@ -122,6 +125,7 @@ export async function* chat({
     allowDangerouslySkipPermissions: true,
     maxTurns: 50,
     mcpServers: { tarsee: tarseeMcp },
+    additionalDirectories: [skillsDir],
   };
 
   // System prompt: tell Claude it IS Tarsee with native platform tools
@@ -146,6 +150,17 @@ Then respond to the user's message with full context.
 - tarsee_web_fetch / tarsee_web_search: Fetch URLs or search the web
 - tarsee_get_key / tarsee_set_key: Encrypted key vault (for API keys, secrets)
 - tarsee_list_files: See all workspace files
+
+## Skills
+You have 50+ built-in skills available via /skill-name commands. Key ones:
+- /gog — Google Workspace (Gmail, Calendar, Drive, Sheets, Docs)
+- /github — GitHub operations
+- /discord, /slack — Channel management
+- /weather — Weather lookups
+- /summarize — Summarize content
+- /healthcheck — System health
+- /canvas — Create visual canvases
+Use the Read tool on the skills directory to discover more: ${skillsDir}
 
 ## Rules
 - ALWAYS use tarsee_* tools for platform operations. Never use Bash+curl for things these tools handle.
