@@ -175,6 +175,10 @@ import { ConversationStore } from "./db/conversations.js";
 const convStore = new ConversationStore(db);
 startSessionReset({ db, settingsStore, convStore });
 
+// --- OAuth token auto-refresh (keeps subscription auth alive 24/7) ---
+import { startOAuthRefresh } from "./lib/oauth-refresh.js";
+startOAuthRefresh();
+
 // --- Cron scheduler ---
 import { initCron, startCronScheduler, stopCronScheduler } from "./lib/cron.js";
 initCron({ db, settingsStore, convStore });

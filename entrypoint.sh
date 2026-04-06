@@ -23,9 +23,15 @@ fi
 #   security find-generic-password -s "Claude Code-credentials" -w
 if [ -n "$CLAUDE_OAUTH_CREDENTIALS" ]; then
   # Write to CLAUDE_CONFIG_DIR if set (Railway), otherwise ~/.claude
+  # Only write if no credentials file exists yet (auto-refresh may have updated it)
   CRED_DIR="${CLAUDE_CONFIG_DIR:-/home/node/.claude}"
   mkdir -p "$CRED_DIR"
-  echo "$CLAUDE_OAUTH_CREDENTIALS" > "$CRED_DIR/.credentials.json"
+  if [ ! -f "$CRED_DIR/.credentials.json" ]; then
+    echo "$CLAUDE_OAUTH_CREDENTIALS" > "$CRED_DIR/.credentials.json"
+    echo "[entrypoint] Initial credentials written from env var"
+  else
+    echo "[entrypoint] Credentials file exists, skipping env var write (auto-refresh manages it)"
+  fi
   chmod 600 "$CRED_DIR/.credentials.json"
   chown -R node:node "$CRED_DIR"
 
