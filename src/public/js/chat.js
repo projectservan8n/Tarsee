@@ -700,31 +700,32 @@ const Chat = {
         // onText (content for text, null + event for tool events)
         (content, event) => {
           if (event?.type === "tool_call") {
-            // Render tool call block
-            const detail = event.input?.command || event.input?.filename || event.input?.url || event.input?.query || event.input?.fact || "";
-            const argsStr = event.input ? JSON.stringify(event.input, null, 2) : "";
-            toolBlocks += `<div class="block-tool-call">
-              <div class="block-tool-header">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M9.5 1.5L14 6l-4.5 4.5M6.5 14.5L2 10l4.5-4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                <span class="block-tool-name">${escapeHtml(event.name)}</span>
-                <span class="block-detail">${escapeHtml(String(detail).slice(0, 80))}</span>
+            // VS Code-style tool call block with green indicator
+            const detail = event.input?.command || event.input?.filename || event.input?.url || event.input?.query || event.input?.message || "";
+            const argsJson = event.input ? JSON.stringify(event.input, null, 2) : "";
+            toolBlocks += `<details class="tool-block" open>
+              <summary class="tool-block-header">
+                <span class="tool-indicator running"></span>
+                <span class="tool-name">${escapeHtml(event.name)}</span>
+                <span class="tool-detail">${escapeHtml(String(detail).slice(0, 100))}</span>
+              </summary>
+              <div class="tool-block-body">
+                ${argsJson ? `<pre class="tool-block-code">${escapeHtml(argsJson)}</pre>` : ""}
               </div>
-              ${argsStr ? `<pre class="block-code">${escapeHtml(argsStr)}</pre>` : ""}
-            </div>`;
-            this.updateStreamingMessage(assistantMsg, toolBlocks + `<div class="block-streaming-indicator"><span class="streaming-dots"><span></span><span></span><span></span></span> Running ${escapeHtml(event.name)}…</div>`, true);
+            </details>`;
+            this.updateStreamingMessage(assistantMsg, toolBlocks, true);
             this.scrollToBottom();
             return;
           }
           if (event?.type === "tool_result") {
-            // Render tool result block
+            // Close the running indicator and add result
             const resultText = event.result || "(no output)";
-            const isLong = resultText.length > 200;
-            if (isLong) {
-              const preview = escapeHtml(resultText.slice(0, 150)) + "…";
-              toolBlocks += `<details class="block-tool-response"><summary><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Result<span class="block-preview">${preview}</span></summary><div class="block-body">${escapeHtml(resultText)}</div></details>`;
-            } else {
-              toolBlocks += `<div class="block-tool-response block-tool-response--inline"><div class="block-tool-response-header"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Result</div><div class="block-body">${escapeHtml(resultText)}</div></div>`;
-            }
+            // Update the last tool block's indicator to done
+            toolBlocks = toolBlocks.replace(/running"><\/span>(?![\s\S]*running"><\/span>)/, 'done"></span>');
+            // Add output to the last tool block
+            const outputHtml = `<div class="tool-block-output"><div class="tool-output-label">OUT</div><pre class="tool-block-code">${escapeHtml(resultText.slice(0, 3000))}</pre></div>`;
+            // Insert before last </div></details>
+            toolBlocks = toolBlocks.replace(/<\/div>\s*<\/details>$/, outputHtml + "</div></details>");
             this.updateStreamingMessage(assistantMsg, toolBlocks, true);
             this.scrollToBottom();
             return;

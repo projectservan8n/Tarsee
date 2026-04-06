@@ -56,6 +56,75 @@
 
 /* ===== Chat-specific styles — Dark Theme ===== */
 
+/* VS Code-style tool blocks */
+.tool-block {
+  background: rgba(30, 30, 30, 0.8);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  margin: 8px 0;
+  overflow: hidden;
+}
+.tool-block-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
+}
+.tool-block-header::-webkit-details-marker { display: none; }
+.tool-block-header::before { content: none; }
+.tool-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.tool-indicator.running {
+  background: #fbbf24;
+  animation: pulse 1s infinite;
+}
+.tool-indicator.done { background: #4caf50; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.tool-name {
+  font-weight: 600;
+  color: var(--primary, #f5a623);
+}
+.tool-detail {
+  color: var(--text-muted, #888);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.tool-block-body {
+  border-top: 1px solid var(--border-color, #333);
+}
+.tool-block-code {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+  color: var(--text-secondary, #ccc);
+}
+.tool-block-output {
+  border-top: 1px solid var(--border-color, #333);
+}
+.tool-output-label {
+  padding: 4px 12px 0;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted, #666);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 /* Markdown blockquotes */
 .message-text blockquote {
   border-left: 3px solid var(--primary, #f5a623);
