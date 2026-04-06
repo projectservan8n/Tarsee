@@ -28,6 +28,16 @@
 
 /* ===== Chat-specific styles — Dark Theme ===== */
 
+/* Markdown blockquotes */
+.message-text blockquote {
+  border-left: 3px solid var(--primary, #f5a623);
+  margin: 8px 0;
+  padding: 6px 14px;
+  background: rgba(245, 166, 35, 0.05);
+  color: var(--text-secondary, #aaa);
+  font-style: italic;
+}
+
 /* Markdown tables */
 .md-table {
   width: 100%;

@@ -174,18 +174,21 @@ USE THESE DIRECTLY — do NOT use Bash as a workaround.
 - mcp__tarsee__tarsee_get_key / tarsee_set_key: Encrypted key vault
 - mcp__tarsee__tarsee_list_files: See all workspace files
 
-## Skills (${skillStatus.filter(s => s.status === "ready").length} ready, ${skillStatus.filter(s => s.status === "needs_install").length} need install)
-${skillStatus.filter(s => s.status === "ready").map(s => `- /${s.name} ✅`).join("\n")}
-${skillStatus.filter(s => s.status === "needs_install").length > 0 ? "\nNot installed (use Bash to install if needed):\n" + skillStatus.filter(s => s.status === "needs_install").map(s => `- /${s.name} — needs: ${s.missing.join(", ")}`).join("\n") : ""}
-Skills directory: ${skillsDir}
+## Skills (${skillStatus.filter(s => s.status === "ready").length} ready / ${skillStatus.length} total)
+Ready: ${skillStatus.filter(s => s.status === "ready").map(s => s.name).join(", ") || "none"}
+Need install: ${skillStatus.filter(s => s.status === "needs_install").map(s => `${s.name}(${s.missing.join(",")})`).join(", ") || "none"}
+Run /skills to see full list. Skills dir: ${skillsDir}
 
 ## CRITICAL Rules
-- NEVER use Bash to schedule tasks, send messages, or manage memories. ALWAYS use the mcp__tarsee__* tools directly.
-- When the user says "remind me" or "schedule" → call mcp__tarsee__tarsee_schedule_task with action field for simple notifications.
-- When the user says "message me on telegram/discord/slack" → call mcp__tarsee__tarsee_send_message.
-- When the user teaches you something → call mcp__tarsee__tarsee_remember.
+- NEVER use Bash to schedule tasks, send messages, or manage memories. ALWAYS use the mcp__tarsee__* tools.
+- "remind me" / "schedule" → mcp__tarsee__tarsee_schedule_task (use action field for simple notifications)
+- "message me on telegram/discord/slack" → mcp__tarsee__tarsee_send_message
+- "remember this" → mcp__tarsee__tarsee_remember
+- MEMORY.md is your source of truth. If you learned an API key, a skill, or a user preference, it's there. READ IT FIRST before saying you can't do something.
+- When the user asks about places/locations → check MEMORY.md for Google Places API key, use goplaces or curl the API directly.
+- When the user gives you a new API key or teaches you a workflow → save it to MEMORY.md immediately.
 - Bash is for running scripts, installing packages, file operations — NOT for platform actions.
-- Your workspace is at ${cwd}. You have full file access (Read, Write, Edit, Bash, Grep, Glob).`;
+- Workspace: ${cwd}. Full access: Read, Write, Edit, Bash, Grep, Glob.`;
 
   const effectiveSystemPrompt = tarseeContext + (systemPrompt ? `\n\n${systemPrompt}` : "");
   queryOptions.systemPrompt = effectiveSystemPrompt;

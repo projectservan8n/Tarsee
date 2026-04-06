@@ -884,6 +884,15 @@ const Chat = {
     // Horizontal rule
     html = html.replace(/(^|<br>)---(<br>|$)/g, "$1<hr>$2");
 
+    // Blockquotes (> text) — collect consecutive lines into one blockquote
+    html = html.replace(/((?:(?:^|<br>)&gt; .+?(?=<br>|$))+)/g, (block) => {
+      const lines = block.split("<br>").map(l => l.replace(/^&gt;\s?/, "").trim()).filter(Boolean);
+      return `<blockquote>${lines.join("<br>")}</blockquote>`;
+    });
+
+    // Ordered lists (1. item)
+    html = html.replace(/(^|<br>)\d+\.\s(.+?)(?=<br>|$)/g, "$1<li>$2</li>");
+
     // Unordered lists (- item)
     html = html.replace(/(^|<br>)- (.+?)(?=<br>|$)/g, "$1<li>$2</li>");
 
