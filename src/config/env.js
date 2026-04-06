@@ -154,7 +154,7 @@ const DB_PATH = path.join(DATA_DIR, "tarsee.db");
 
 // --- Claude Code Configuration ---
 const CLAUDE_WORKSPACE_DIR = process.env.CLAUDE_WORKSPACE_DIR?.trim() || WORKSPACE_DIR;
-const CLAUDE_DEFAULT_MODEL = process.env.CLAUDE_DEFAULT_MODEL?.trim() || "claude-sonnet-4-6";
+const CLAUDE_DEFAULT_MODEL = process.env.CLAUDE_DEFAULT_MODEL?.trim() || "claude-opus-4-6";
 
 // --- Frozen config export ---
 const config = Object.freeze({

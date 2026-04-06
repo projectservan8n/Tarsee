@@ -4,6 +4,12 @@
 # If /data exists (Railway volume), ensure node user can write to it
 if [ -d /data ]; then
   mkdir -p /data/tarsee/data /data/tarsee/workspace/skills /data/tarsee/workspace/memory
+  # Seed default workspace files if they don't exist
+  for f in CLAUDE.md; do
+    if [ ! -f "/data/tarsee/workspace/$f" ] && [ -f "/app/src/workspace-defaults/$f" ]; then
+      cp "/app/src/workspace-defaults/$f" "/data/tarsee/workspace/$f"
+    fi
+  done
   chown -R node:node /data/tarsee
 fi
 
