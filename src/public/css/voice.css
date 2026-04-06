@@ -50,7 +50,7 @@
   width: 100%;
   max-width: 600px;
   margin: 0 auto;
-  padding: 72px 20px 24px;
+  padding: calc(env(safe-area-inset-top, 20px) + 64px) 20px 24px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
