@@ -187,12 +187,12 @@ const Chat = {
     if (!bar) return;
     bar.style.display = "flex";
 
-    // Model name
-    try {
-      const stored = localStorage.getItem("tarsee_model");
-      const alias = { "claude-opus-4-6": "opus", "claude-sonnet-4-6": "sonnet", "claude-haiku-4-5": "haiku" };
-      this.elements.sessionModel.textContent = alias[stored] || "opus";
-    } catch { /* ignore */ }
+    // Model name — read from server settings
+    const alias = { "claude-opus-4-6": "opus", "claude-sonnet-4-6": "sonnet", "claude-haiku-4-5": "haiku" };
+    API.json("/api/settings").then(data => {
+      const model = (data.settings || []).find(s => s.key === "ai.claude-code.model")?.value;
+      this.elements.sessionModel.textContent = alias[model] || alias[Object.keys(alias).find(k => k.includes("opus"))] || "opus";
+    }).catch(() => {});
 
     // Context usage (approximate from message count)
     if (this.currentConversationId) {
