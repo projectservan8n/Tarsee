@@ -4,7 +4,7 @@ export const AI_PROVIDERS = Object.freeze({
     id: "claude-code",
     name: "Claude Code (Agent)",
     envKey: null,
-    defaultModel: "claude-sonnet-4-6",
+    defaultModel: "claude-opus-4-6",
     baseUrl: null,
     noKeyRequired: true,
   },
