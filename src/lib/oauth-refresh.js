@@ -13,6 +13,7 @@ const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const REFRESH_BUFFER_MS = 10 * 60 * 1000; // Refresh 10 minutes before expiry
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;  // Check every 5 minutes
+const DEFAULT_EXPIRES_IN = 28800;          // 8 hours default if not in response
 
 let refreshTimer = null;
 
@@ -37,21 +38,32 @@ function readCredentials() {
 }
 
 /**
- * Write credentials back to disk.
+ * Write credentials to ALL locations the CLI might read from.
  */
 function writeCredentials(creds) {
-  const credPath = getCredentialsPath();
-  fs.mkdirSync(path.dirname(credPath), { recursive: true });
-  fs.writeFileSync(credPath, JSON.stringify(creds), { mode: 0o600 });
+  const credJson = JSON.stringify(creds);
 
-  // Also write to ~/.claude if CLAUDE_CONFIG_DIR is different
+  // Primary: CLAUDE_CONFIG_DIR
+  const credPath = getCredentialsPath();
+  try {
+    fs.mkdirSync(path.dirname(credPath), { recursive: true });
+    fs.writeFileSync(credPath, credJson, { mode: 0o600 });
+  } catch (err) {
+    console.error("[oauth] Failed to write to", credPath, err.message);
+  }
+
+  // Fallback: ~/.claude
   const homeCredPath = path.join(process.env.HOME || "/home/node", ".claude", ".credentials.json");
   if (credPath !== homeCredPath) {
     try {
       fs.mkdirSync(path.dirname(homeCredPath), { recursive: true });
-      fs.writeFileSync(homeCredPath, JSON.stringify(creds), { mode: 0o600 });
+      fs.writeFileSync(homeCredPath, credJson, { mode: 0o600 });
     } catch { /* best effort */ }
   }
+
+  // Update the env var in-memory so restarts during this process lifetime
+  // don't overwrite refreshed tokens with stale env var values
+  process.env.CLAUDE_OAUTH_CREDENTIALS = credJson;
 }
 
 /**
@@ -76,10 +88,15 @@ async function refreshAccessToken(refreshToken) {
   }
 
   const data = await response.json();
+
+  if (!data.access_token) {
+    throw new Error(`No access_token in refresh response: ${JSON.stringify(data)}`);
+  }
+
   return {
     accessToken: data.access_token,
-    refreshToken: data.refresh_token || refreshToken, // New refresh token if provided
-    expiresIn: data.expires_in, // seconds
+    refreshToken: data.refresh_token || refreshToken,
+    expiresIn: data.expires_in || DEFAULT_EXPIRES_IN,
   };
 }
 
@@ -113,17 +130,19 @@ async function checkAndRefresh() {
   try {
     const result = await refreshAccessToken(oauth.refreshToken);
 
-    // Update credentials
+    // Update credentials with new tokens
     creds.claudeAiOauth.accessToken = result.accessToken;
-    if (result.refreshToken) {
-      creds.claudeAiOauth.refreshToken = result.refreshToken;
-    }
+    creds.claudeAiOauth.refreshToken = result.refreshToken;
     creds.claudeAiOauth.expiresAt = now + (result.expiresIn * 1000);
 
     writeCredentials(creds);
-    console.log(`[oauth] Token refreshed successfully. New expiry: ${new Date(creds.claudeAiOauth.expiresAt).toISOString()}`);
+    console.log(`[oauth] Token refreshed! New expiry: ${new Date(creds.claudeAiOauth.expiresAt).toISOString()}`);
   } catch (err) {
     console.error("[oauth] Token refresh failed:", err.message);
+    // If refresh token is invalid, log instructions
+    if (err.message.includes("invalid_grant") || err.message.includes("not found")) {
+      console.error("[oauth] Refresh token is invalid. Update CLAUDE_OAUTH_CREDENTIALS env var with fresh credentials from: security find-generic-password -s 'Claude Code-credentials' -w");
+    }
   }
 }
 
