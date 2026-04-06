@@ -1,58 +1,116 @@
-# Tarsee 🐒
+# Tarsee
 
-**AI Gateway & Agent Platform** — with real tool calling, persistent memory, voice cloning, self-healing, and multi-channel integrations.
+**Headless Claude Code Agent** — runs Claude 24/7 on a server with persistent memory, channel integrations, scheduled tasks, and 42 built-in skills.
 
-Named after the Philippine Tarsier. *Sees everything, forgets nothing.*
+Uses your Claude Max/Pro subscription. No API keys needed.
 
-Built with Node.js 22+, Express 5, SQLite, and a zero-build vanilla WebUI.
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/tarsee)
+
+---
+
+## What is Tarsee?
+
+Tarsee wraps Claude Code as a headless AI agent that you can talk to from anywhere — web, Telegram, Discord, or Slack. It remembers everything, runs scripts, schedules tasks, and manages its own identity through workspace files.
+
+Think of it as your personal AI that lives on a server and is always available.
+
+---
+
+## Deploy on Railway (Recommended)
+
+1. Click the **Deploy on Railway** button above
+2. Add a **Volume** mounted at `/data`
+3. Set these environment variables:
+
+   | Variable | Required | Description |
+   |----------|----------|-------------|
+   | `SETUP_PASSWORD` | Yes | Password for the web UI |
+   | `ENCRYPTION_KEY` | Yes | Run `openssl rand -hex 32` to generate |
+   | `CLAUDE_OAUTH_CREDENTIALS` | Yes | Your Claude subscription credentials (see below) |
+   | `NODE_ENV` | Yes | Set to `production` |
+
+4. Deploy and open the URL
+
+### Getting Claude Credentials
+
+On your local machine where Claude Code is installed:
+
+```bash
+# macOS
+security find-generic-password -s "Claude Code-credentials" -w
+
+# Linux
+cat ~/.claude/.credentials.json
+```
+
+Copy the JSON output into `CLAUDE_OAUTH_CREDENTIALS`. Tarsee auto-refreshes the token — you only do this once.
 
 ---
 
 ## Features
 
-- **Real Tool Calling** — Native Anthropic `tool_use` / OpenAI function calling. The AI can read/write files, run shell commands, fetch URLs, and manage its own memory. Up to 15 tool rounds per message.
-- **Multi-Provider AI Router** — Anthropic (Claude), OpenAI, Google Gemini, OpenRouter, and any OpenAI-compatible endpoint. Streaming responses via SSE and WebSocket.
-- **Persistent Memory** — Workspace files (SOUL.md, MEMORY.md, USER.md, etc.) injected into every conversation. AI remembers across restarts.
-- **Self-Healing** — `/doctor` command runs 8 diagnostic checks (DB integrity, disk, memory, provider, volume, error trends). Auto-repair with `/doctor fix`.
-- **Voice Mode** — Browser STT (Web Speech API) + TTS via Coqui XTTS v2 (offline voice cloning) or ElevenLabs (cloud).
-- **Channel Integrations** — Discord, Telegram, Slack bots sharing the same AI router and memory.
-- **Browser Automation** — Playwright (Chromium) installed for complex web tasks.
-- **WebUI** — Dark theme, amber/gold accent. Chat, settings, real-time console, command palette.
-- **40+ Commands** — Chat (`/help`, `/doctor`, `/restart`, `/config`, `/usage`, etc.) + console (`system.info`, `db.stats`, `doctor`, `restart`, etc.)
-- **Credential Security** — AES-256-GCM encryption at rest. Full audit log. CSRF + timing-safe auth.
-- **Skills System** — 49 built-in skills + custom skill creation.
+- **Claude Code Agent** — Full Claude Opus 4.6 with 1M context, running headlessly via the Agent SDK. Subscription auth, no API key costs.
+- **Persistent Memory** — SOUL.md (personality), MEMORY.md (knowledge), USER.md (user info). Claude reads these every session.
+- **Channel Integrations** — Telegram, Discord, Slack, WhatsApp, Signal, LINE. Same AI, same memory, everywhere.
+- **Scheduled Tasks** — Cron jobs with direct actions (instant notifications) or AI prompts (complex tasks). One-time reminders auto-delete.
+- **42 Built-in Skills** — Google Workspace, GitHub, weather, web search, and more via `/skill-name` commands.
+- **Image Analysis** — Send images on any channel. Claude reads them via the workspace.
+- **Voice Mode** — ElevenLabs TTS in the web UI.
+- **Web Terminal** — Browser-based terminal for server access.
+- **Self-Healing** — `/doctor` runs diagnostics and auto-repairs.
+- **Encrypted Vault** — AES-256-GCM for API keys and secrets.
 
 ---
 
-## Quick Start (Local)
+## How It Works
 
-```bash
-# Prerequisites: Node.js 22+
-npm install
-npm run dev
+```
+You (web/telegram/discord/slack)
+  |
+  v
+Tarsee Server (Railway)
+  |
+  ├── Claude Code Agent SDK (subscription auth)
+  │     ├── Built-in tools: Read, Write, Edit, Bash, Grep, Glob
+  │     └── Tarsee MCP tools: send_message, schedule_task, remember, etc.
+  |
+  ├── Workspace: SOUL.md, MEMORY.md, USER.md, scripts/
+  ├── SQLite: conversations, settings, encrypted vault
+  └── Channels: Telegram, Discord, Slack, WhatsApp, Signal, LINE
 ```
 
-Open `http://localhost:3000`. No password required in dev mode.
+Every message goes through Claude Code with full tool access. Claude can read/write files, run commands, send messages to your channels, schedule reminders, and learn new skills.
 
 ---
 
-## Deploy on Railway
+## Commands
 
-1. **Create a project** on [Railway](https://railway.app) and connect this repo.
-2. **Add a Volume** — mount at `/data`.
-3. **Set environment variables:**
+| Command | Description |
+|---------|-------------|
+| `/help` | Show all commands |
+| `/model opus\|sonnet\|haiku` | Switch AI model |
+| `/clear` | New conversation |
+| `/status` | System status |
+| `/soul` | Show personality |
+| `/skills` | List skills |
+| `/cron` | Manage scheduled tasks |
+| `/remember [fact]` | Save to memory |
+| `/doctor [fix]` | Diagnostics + auto-repair |
+| `/export` | Export conversation |
 
-   ```
-   SETUP_PASSWORD=<your-password>
-   ENCRYPTION_KEY=<openssl rand -hex 32>
-   NODE_ENV=production
-   TARSEE_STATE_DIR=/data/tarsee
-   TARSEE_WORKSPACE_DIR=/data/tarsee/workspace
-   TARSEE_DATA_DIR=/data/tarsee/data
-   ```
+---
 
-4. **Deploy** — Railway auto-detects the Dockerfile.
-5. **Open the URL**, log in, configure an AI provider in Settings.
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SETUP_PASSWORD` | Yes | Web UI login password |
+| `ENCRYPTION_KEY` | Yes | AES-256 key for secrets. `openssl rand -hex 32` |
+| `CLAUDE_OAUTH_CREDENTIALS` | Yes | Claude subscription credentials JSON |
+| `NODE_ENV` | Yes | Set to `production` |
+| `CLAUDE_DEFAULT_MODEL` | No | Default: `claude-opus-4-6` |
+| `ELEVENLABS_API_KEY` | No | ElevenLabs TTS (optional) |
+| `TARSEE_STATE_DIR` | No | Auto-detected on Railway (`/data/tarsee`) |
 
 ---
 
@@ -68,166 +126,23 @@ docker run -d \
   -e NODE_ENV=production \
   -e SETUP_PASSWORD=your-password \
   -e ENCRYPTION_KEY=$(openssl rand -hex 32) \
+  -e CLAUDE_OAUTH_CREDENTIALS='{"claudeAiOauth":{"accessToken":"...","refreshToken":"...","expiresAt":...}}' \
   tarsee
 ```
 
-Or with Docker Compose:
-
-```bash
-export ENCRYPTION_KEY=$(openssl rand -hex 32)
-export SETUP_PASSWORD=your-password
-docker compose up -d
-```
-
 ---
 
-## Environment Variables
+## Channel Setup
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `PORT` | No | Server port (default: `3000`) |
-| `SETUP_PASSWORD` | Recommended | Password for WebUI login |
-| `ENCRYPTION_KEY` | **Production** | AES-256 key for stored credentials. `openssl rand -hex 32` |
-| `ANTHROPIC_API_KEY` | No | Anthropic API key (or set via WebUI) |
-| `OPENAI_API_KEY` | No | OpenAI API key |
-| `GEMINI_API_KEY` | No | Google Gemini API key |
-| `OPENROUTER_API_KEY` | No | OpenRouter API key |
-| `ELEVENLABS_API_KEY` | No | ElevenLabs TTS API key |
-| `TARSEE_STATE_DIR` | No | State directory (default: `~/.tarsee`, auto-detects `/data/tarsee` on Railway) |
-| `TARSEE_DATA_DIR` | No | Data directory (default: `<state>/data`) |
-| `TARSEE_WORKSPACE_DIR` | No | Workspace directory (default: `<state>/workspace`) |
-| `TARSEE_API_TOKEN` | No | Fixed API token for WS/REST auth (auto-generated if not set) |
+Configure channels in **Settings > Channels** after deploying:
 
----
-
-## Claude Code Agent (Subscription Auth)
-
-Tarsee can run **Claude Code** as a headless AI provider, using your Claude Max/Pro subscription instead of API keys.
-
-### Setup
-
-1. **On your local machine** (where you have Claude Code installed), run:
-
-   ```bash
-   security find-generic-password -s "Claude Code-credentials" -w   # macOS
-   cat ~/.claude/.credentials.json                                    # Linux
-   ```
-
-2. **Copy the JSON output** and add it as a Railway environment variable:
-
-   ```
-   CLAUDE_OAUTH_CREDENTIALS={"claudeAiOauth":{"accessToken":"sk-ant-oat01-...","refreshToken":"...","expiresAt":...},...}
-   ```
-
-3. **Deploy** — the entrypoint writes credentials to the right location automatically.
-
-4. **Select "Claude Code (Agent)"** as the provider in Tarsee Settings.
-
-Claude Code runs with full tool access (Read, Write, Edit, Bash, Grep, Glob) and manages its own agentic loop. Image attachments are saved to disk and referenced by path so Claude Code can read them.
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `CLAUDE_OAUTH_CREDENTIALS` | For Claude Code | Full JSON from your local Claude Code credentials |
-| `CLAUDE_WORKSPACE_DIR` | No | Working directory for Claude Code (default: workspace dir) |
-| `CLAUDE_DEFAULT_MODEL` | No | Default model (default: `claude-sonnet-4-6`) |
-
----
-
-## AI Tools
-
-The AI has access to real, server-executed tools:
-
-| Tool | Description |
-|------|-------------|
-| `read_file` | Read workspace files (SOUL.md, MEMORY.md, etc.) |
-| `write_file` | Update workspace files |
-| `list_files` | List all workspace files with sizes |
-| `remember` | Save facts to long-term memory (DB + MEMORY.md) |
-| `daily_log` | Append timestamped notes to daily log |
-| `exec` | Run shell commands (60s timeout, 50KB output cap) |
-| `web_fetch` | Fetch URLs (GET/POST/PUT/DELETE) |
-| `search_memories` | Search stored memories |
-
----
-
-## Chat Commands
-
-| Command | Description |
+| Channel | Token needed |
 |---------|-------------|
-| `/help` | Show all commands |
-| `/doctor [fix]` | Run diagnostics, optionally auto-repair |
-| `/restart` | Restart server |
-| `/reload` | Force-reload workspace files and skills cache |
-| `/config [key] [value]` | Show/get/set config |
-| `/model [name]` | Show or switch AI model |
-| `/provider [name]` | Show or switch provider |
-| `/models` | List all providers |
-| `/status` | System status |
-| `/usage` | Token usage stats |
-| `/whoami` | Identity and session info |
-| `/context` | Show system prompt composition |
-| `/debug` | Debug info |
-| `/skills` | List available skills |
-| `/remember [fact]` | Save to memory |
-| `/forget` | List stored memories |
-| `/compact` | Summarize older messages |
-| `/export` | Export conversation |
-| `/clear` / `/new` | New session |
-| `/reset` | Fresh channel session |
-| `/soul` | Show SOUL.md |
-| `/identity` | Show IDENTITY.md |
-| `/voices` | List TTS voices |
-| `/heartbeat [run]` | Heartbeat status or manual trigger |
-| `/boot` | Show boot checklist |
-| `/cron [list\|add\|remove]` | Manage cron jobs |
-| `/stop` | Stop current generation |
+| Telegram | Bot token from [@BotFather](https://t.me/BotFather) |
+| Discord | Bot token from [Discord Developer Portal](https://discord.com/developers) |
+| Slack | Bot token + App token (Socket Mode) |
 
----
-
-## Console Commands
-
-Type in the server console (`tarsee>`):
-
-`system.info`, `system.env`, `db.stats`, `db.vacuum`, `voice.status`, `channels.status`, `logs.recent`, `disk.usage`, `restart`, `config.list`, `config.get`, `provider.status`, `memory.stats`, `skills.list`, `workspace.files`, `sessions.list`, `cron.status`, `heartbeat.status`, `reload`, `doctor [fix]`
-
----
-
-## Voice
-
-- **Coqui XTTS v2** — Offline voice cloning from ~6s of audio. Included in Docker image (Python + TTS). Free, no API key.
-- **ElevenLabs** — Cloud TTS with instant voice cloning. Set `ELEVENLABS_API_KEY` or configure in Settings > Voice.
-- Auto-detected on startup (set engine to `auto` or pick explicitly).
-
----
-
-## API Reference
-
-All endpoints require auth (session cookie or Bearer token).
-
-### Chat
-- `POST /api/chat/send` — Send message, get SSE stream (includes tool_call/tool_result events)
-- `GET /api/chat/conversations` — List conversations
-- `GET /api/chat/conversations/:id/messages` — Get messages
-- `DELETE /api/chat/conversations/:id` — Delete conversation
-
-### WebSocket
-Connect to `/ws?token=<api-token>` for real-time chat, tool events, and console streaming.
-
-### Voice
-- `POST /api/voice/tts` — Text-to-speech
-- `POST /api/voice/clone` — Clone voice from audio sample
-- `GET /api/voice/voices` — List voices
-
-### Health
-- `GET /healthz` — Basic health check
-- `GET /healthz/deep` — Full diagnostics (returns 503 if errors)
-
-### Settings / Admin / Debug
-- `GET /api/settings` — All settings (secrets masked)
-- `POST /api/settings` — Update settings
-- `GET /api/admin/status` — System status
-- `GET /api/admin/audit` — Credential audit log
-- `POST /api/debug/run` — Execute console command
+All channels share the same AI, memory, and tools.
 
 ---
 
@@ -236,53 +151,36 @@ Connect to `/ws?token=<api-token>` for real-time chat, tool events, and console 
 ```
 src/
   server.js              # Express + HTTP server
-  config/
-    env.js               # Environment config
-    constants.js         # Providers, limits
   ai/
-    router.js            # Multi-provider AI router + tool passing
-    providers/           # Anthropic, OpenAI, Gemini, OpenRouter, Custom
+    router.js            # Claude Code router
+    providers/claude-code.js  # Agent SDK wrapper + MCP tools
+    tarsee-mcp.js        # Tarsee MCP server (send_message, schedule_task, etc.)
   lib/
-    tools.js             # Tool registry + executor (read, write, exec, etc.)
-    commands.js          # 30+ chat commands
-    self-heal.js         # Diagnostics + auto-repair engine
-    build-system-prompt.js # System prompt composer
-    workspace-files.js   # Workspace file I/O with caching
-    skills-engine.js     # Built-in + custom skills
-    heartbeat.js         # Periodic health checks
-    boot-runner.js       # Startup task runner
-    cron.js              # Cron scheduler
-    vault.js             # AES-256-GCM encryption
-  voice/
-    elevenlabs-engine.js # ElevenLabs cloud TTS
-    coqui-engine.js      # Coqui XTTS v2 local TTS
-    engine-registry.js   # Engine lifecycle
+    tools.js             # Tool registry (read, write, exec, web_fetch, etc.)
+    commands.js          # Chat commands (/help, /model, /cron, etc.)
+    cron.js              # Cron scheduler with direct actions
+    oauth-refresh.js     # Auto-refresh subscription token
   channels/
-    websocket.js         # WebSocket chat + console + tools
-    discord.js           # Discord bot
-    telegram.js          # Telegram bot
-    slack.js             # Slack bot
-  routes/                # REST API endpoints
-  db/                    # SQLite, conversations, settings, memory
-  middleware/            # Auth, CSRF, security headers, error handler
-  public/               # Static WebUI (vanilla HTML/CSS/JS)
+    telegram.js, discord.js, slack.js, websocket.js
+  skills/                # 42 built-in skills
+  public/                # Web UI
+  db/                    # SQLite (conversations, settings, vault)
 ```
 
 ---
 
 ## Security
 
-- **AES-256-GCM** credential encryption with unique IVs, PBKDF2 key derivation
-- **Audit logging** for all credential operations
-- **Timing-safe** auth with `crypto.timingSafeEqual`
-- **Rate limiting**: 10 auth attempts/min/IP
-- **CSRF**: Double-submit cookie pattern
-- **Security headers**: CSP, X-Content-Type-Options, X-Frame-Options
-- **Path traversal protection** on all file operations
-- **Production enforcement**: Won't start without `ENCRYPTION_KEY`
+- AES-256-GCM credential encryption
+- Timing-safe authentication
+- CSRF protection
+- Content Security Policy headers
+- Rate limiting (10 auth attempts/min/IP)
+- Path traversal protection
+- OAuth token auto-refresh
 
 ---
 
 ## License
 
-Proprietary. All rights reserved.
+MIT
