@@ -82,13 +82,13 @@ export async function runHeartbeat(reason = "scheduled") {
 
   try {
     let fullResponse = "";
+    const toolCtx = { db: _db, settingsStore: _settingsStore, conversationId: null };
     const stream = chatStream({
       provider: activeProvider.provider,
       model: activeProvider.model,
-      apiKey: activeProvider.apiKey,
-      baseUrl: activeProvider.baseUrl,
       messages,
       systemPrompt,
+      toolCtx,
     });
 
     for await (const event of stream) {

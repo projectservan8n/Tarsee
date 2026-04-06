@@ -78,7 +78,8 @@ acpRouter.post("/session/:id/turn", async (req, res) => {
     for (let round = 0; round < 10; round++) {
       const toolCalls = [];
       let roundText = "", stopReason = "end_turn";
-      const stream = chatStream({ provider: activeProvider.provider, model: activeProvider.model, apiKey: activeProvider.apiKey, messages: workingMessages, systemPrompt, tools });
+      const toolCtx = { db: req.app.get("db"), settingsStore, conversationId: null, channelManager: req.app.get("channelManager") };
+      const stream = chatStream({ provider: activeProvider.provider, model: activeProvider.model, messages: workingMessages, systemPrompt, tools, toolCtx });
       for await (const event of stream) {
         if (event.type === "text") { roundText += event.content; fullResponse += event.content; }
         else if (event.type === "tool_use") toolCalls.push({ id: event.id, name: event.name, input: event.input });

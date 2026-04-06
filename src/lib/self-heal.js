@@ -259,13 +259,14 @@ function checkProvider(settingsStore) {
     if (!active?.provider) {
       return { check: "ai_provider", status: "error", detail: "No provider configured" };
     }
-    if (!active?.apiKey) {
-      return { check: "ai_provider", status: "error", detail: `Provider ${active.provider} has no API key` };
+    if (!active?.ready) {
+      return { check: "ai_provider", status: "error", detail: `Provider ${active.provider} is not ready` };
     }
+    const keyDisplay = active.apiKey ? `key: ••••${active.apiKey.slice(-4)}` : "subscription auth";
     return {
       check: "ai_provider",
       status: "ok",
-      detail: `${active.provider} / ${active.model || "default"} — key: ••••${active.apiKey.slice(-4)}`,
+      detail: `${active.provider} / ${active.model || "default"} — ${keyDisplay}`,
     };
   } catch (err) {
     return { check: "ai_provider", status: "error", detail: err.message };

@@ -49,9 +49,7 @@ settingsRouter.post("/provider", (req, res) => {
   const { provider, model, apiKey, baseUrl } = req.body || {};
 
   if (!provider || !AI_PROVIDERS[provider]) {
-    if (provider !== "custom") {
-      return res.status(400).json({ error: "Invalid provider. Valid: " + Object.keys(AI_PROVIDERS).join(", ") });
-    }
+    return res.status(400).json({ error: "Invalid provider. Valid: " + Object.keys(AI_PROVIDERS).join(", ") });
   }
 
   settingsStore.setActiveProvider(provider, { model, apiKey, baseUrl });
