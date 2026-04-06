@@ -47,13 +47,13 @@ function saveImagesToDisk(contentBlocks) {
  */
 function cleanupOldUploads() {
   if (!fs.existsSync(UPLOAD_DIR)) return;
-  const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+  const MAX_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours
   const now = Date.now();
   for (const file of fs.readdirSync(UPLOAD_DIR)) {
     const filePath = path.join(UPLOAD_DIR, file);
     try {
       const stat = fs.statSync(filePath);
-      if (now - stat.mtimeMs > THREE_DAYS_MS) {
+      if (now - stat.mtimeMs > MAX_AGE_MS) {
         fs.unlinkSync(filePath);
       }
     } catch { /* ignore */ }
@@ -62,7 +62,7 @@ function cleanupOldUploads() {
 
 // Run cleanup on load and every 6 hours
 cleanupOldUploads();
-setInterval(cleanupOldUploads, 6 * 60 * 60 * 1000).unref();
+setInterval(cleanupOldUploads, 30 * 60 * 1000).unref();
 
 /**
  * Async generator that matches Tarsee's provider interface.
