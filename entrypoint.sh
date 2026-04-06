@@ -28,20 +28,16 @@ fi
 # Set CLAUDE_OAUTH_CREDENTIALS in Railway with the JSON from:
 #   security find-generic-password -s "Claude Code-credentials" -w
 if [ -n "$CLAUDE_OAUTH_CREDENTIALS" ]; then
-  # Write to CLAUDE_CONFIG_DIR if set (Railway), otherwise ~/.claude
-  # Only write if no credentials file exists yet (auto-refresh may have updated it)
+  # Always write env var credentials to BOTH locations on boot.
+  # The auto-refresh service will update them in-place after that.
+  # This ensures fresh env var tokens always take effect on deploy/restart.
   CRED_DIR="${CLAUDE_CONFIG_DIR:-/home/node/.claude}"
   mkdir -p "$CRED_DIR"
-  if [ ! -f "$CRED_DIR/.credentials.json" ]; then
-    echo "$CLAUDE_OAUTH_CREDENTIALS" > "$CRED_DIR/.credentials.json"
-    echo "[entrypoint] Initial credentials written from env var"
-  else
-    echo "[entrypoint] Credentials file exists, skipping env var write (auto-refresh manages it)"
-  fi
+  echo "$CLAUDE_OAUTH_CREDENTIALS" > "$CRED_DIR/.credentials.json"
   chmod 600 "$CRED_DIR/.credentials.json"
   chown -R node:node "$CRED_DIR"
 
-  # Also write to ~/.claude as fallback (some SDK paths check HOME)
+  # Also write to ~/.claude (some SDK paths check HOME)
   if [ "$CRED_DIR" != "/home/node/.claude" ]; then
     mkdir -p /home/node/.claude
     cp "$CRED_DIR/.credentials.json" /home/node/.claude/.credentials.json
@@ -49,7 +45,7 @@ if [ -n "$CLAUDE_OAUTH_CREDENTIALS" ]; then
     chown -R node:node /home/node/.claude
   fi
 
-  echo "[entrypoint] Claude Code credentials written to $CRED_DIR"
+  echo "[entrypoint] Credentials written to $CRED_DIR and ~/.claude"
 fi
 
 # Ensure claude CLI is in PATH for web terminal sessions
