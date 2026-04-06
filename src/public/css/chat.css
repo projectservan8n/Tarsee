@@ -28,6 +28,30 @@
 
 /* ===== Chat-specific styles — Dark Theme ===== */
 
+/* Markdown tables */
+.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 13px;
+}
+.md-table th, .md-table td {
+  border: 1px solid var(--border-color, #333);
+  padding: 8px 12px;
+  text-align: left;
+}
+.md-table th {
+  background: rgba(245, 166, 35, 0.08);
+  font-weight: 600;
+  color: var(--primary, #f5a623);
+}
+.md-table tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.02);
+}
+.md-table tr:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
 /* Markdown rendering in messages */
 .message-text h1,
 .message-text h2,

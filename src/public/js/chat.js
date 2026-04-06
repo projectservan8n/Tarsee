@@ -844,6 +844,31 @@ const Chat = {
     // Horizontal rule
     html = html.replace(/(^|<br>)---(<br>|$)/g, "$1<hr>$2");
 
+    // Markdown tables: | col | col | with |---|---| separator
+    html = html.replace(/((?:(?:^|<br>)\|[^\n]+\|(?:<br>|\n|$))+)/g, (tableBlock) => {
+      const rows = tableBlock.split(/<br>|\n/).filter(r => r.trim().startsWith("|") && r.trim().endsWith("|"));
+      if (rows.length < 2) return tableBlock;
+      // Check for separator row (|---|---|)
+      const sepIdx = rows.findIndex(r => /^\|[\s\-:|]+\|$/.test(r.trim()));
+      if (sepIdx === -1) return tableBlock;
+      const headerRows = rows.slice(0, sepIdx);
+      const bodyRows = rows.slice(sepIdx + 1);
+      const parseRow = (r) => r.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+      let table = '<table class="md-table">';
+      if (headerRows.length > 0) {
+        table += "<thead>";
+        for (const r of headerRows) table += "<tr>" + parseRow(r).map(c => `<th>${c}</th>`).join("") + "</tr>";
+        table += "</thead>";
+      }
+      if (bodyRows.length > 0) {
+        table += "<tbody>";
+        for (const r of bodyRows) table += "<tr>" + parseRow(r).map(c => `<td>${c}</td>`).join("") + "</tr>";
+        table += "</tbody>";
+      }
+      table += "</table>";
+      return table;
+    });
+
     // Unordered lists (- item)
     html = html.replace(/(^|<br>)- (.+?)(?=<br>|$)/g, "$1<li>$2</li>");
 
