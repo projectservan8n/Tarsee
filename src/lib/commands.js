@@ -62,29 +62,6 @@ const COMMANDS = {
     },
   },
 
-  provider: {
-    description: "Show or switch the AI provider",
-    usage: "/provider [name]",
-    handler: (args, ctx) => {
-      const settingsStore = ctx.settingsStore;
-      if (!settingsStore) return "Settings not available.";
-
-      if (!args) {
-        const active = settingsStore.getActiveProvider();
-        const current = active?.provider || "none";
-        const available = Object.keys(AI_PROVIDERS).join(", ");
-        return `**Current provider:** ${current}\n**Available:** ${available}`;
-      }
-
-      if (!AI_PROVIDERS[args]) {
-        return `Unknown provider: ${args}\n**Available:** ${Object.keys(AI_PROVIDERS).join(", ")}`;
-      }
-
-      settingsStore.setActiveProvider(args);
-      return `Provider switched to **${AI_PROVIDERS[args].name}**`;
-    },
-  },
-
   system: {
     description: "Set or show the system prompt for this conversation",
     usage: "/system [prompt]",
@@ -335,23 +312,6 @@ const COMMANDS = {
     },
   },
 
-  agents: {
-    description: "Show current AGENTS.md rules summary",
-    usage: "/agents",
-    handler: async () => {
-      try {
-        const { readWorkspaceFile } = await import("./workspace-files.js");
-        const content = readWorkspaceFile("AGENTS.md");
-        if (!content || content.trim().length < 10) {
-          return "No agent rules defined yet. Edit **AGENTS.md** in Settings.";
-        }
-        return `**Agent Rules:**\n\n${content.slice(0, 2000)}`;
-      } catch (err) {
-        return `Failed to read AGENTS.md: ${err.message}`;
-      }
-    },
-  },
-
   tools: {
     description: "Show current TOOLS.md capabilities",
     usage: "/tools",
@@ -365,52 +325,6 @@ const COMMANDS = {
         return `**Tools & Capabilities:**\n\n${content.slice(0, 2000)}`;
       } catch (err) {
         return `Failed to read TOOLS.md: ${err.message}`;
-      }
-    },
-  },
-
-  heartbeat: {
-    description: "Show heartbeat status or trigger a manual run",
-    usage: "/heartbeat [run]",
-    handler: async (args) => {
-      try {
-        const { getHeartbeatStatus, runHeartbeat } = await import("./heartbeat.js");
-
-        if (args === "run") {
-          const result = await runHeartbeat("manual");
-          if (result.skipped) return `Heartbeat skipped: ${result.reason}`;
-          if (result.error) return `Heartbeat error: ${result.error}`;
-          if (result.suppressed) return "Heartbeat ran — **HEARTBEAT_OK** (nothing to report)";
-          return `**Heartbeat result:**\n\n${result.response?.slice(0, 2000) || "(empty)"}`;
-        }
-
-        const status = getHeartbeatStatus();
-        const lines = ["**Heartbeat Status**", ""];
-        lines.push(`**Running:** ${status.running ? "Yes" : "No"}`);
-        lines.push(`**Last run:** ${status.lastRun || "Never"}`);
-        lines.push(`**Run count:** ${status.runCount || 0}`);
-        if (status.lastResult) lines.push(`**Last result:** ${status.lastResult.slice(0, 200)}`);
-        lines.push("", "Use `/heartbeat run` to trigger manually.");
-        return lines.join("\n");
-      } catch (err) {
-        return `Heartbeat error: ${err.message}`;
-      }
-    },
-  },
-
-  boot: {
-    description: "Show BOOT.md startup checklist",
-    usage: "/boot",
-    handler: async () => {
-      try {
-        const { readWorkspaceFile } = await import("./workspace-files.js");
-        const content = readWorkspaceFile("BOOT.md");
-        if (!content || content.trim().length < 10) {
-          return "No boot checklist defined. Edit **BOOT.md** in Settings to add startup tasks.";
-        }
-        return `**Boot Checklist:**\n\n${content.slice(0, 2000)}`;
-      } catch (err) {
-        return `Failed to read BOOT.md: ${err.message}`;
       }
     },
   },
@@ -495,35 +409,7 @@ const COMMANDS = {
     },
   },
 
-  consolidate: {
-    description: "Deduplicate and clean up stored memories",
-    usage: "/consolidate",
-    handler: async (_args, ctx) => {
-      try {
-        const { MemoryStore } = await import("../db/memory.js");
-        if (!ctx.db) return "Database not available.";
-        const store = new MemoryStore(ctx.db);
-        const removed = store.consolidate();
-        const stats = store.getStats();
-        const lines = [
-          "**Memory Consolidation**",
-          "",
-          `Removed ${removed} duplicate(s).`,
-          `**Total memories:** ${stats.total}`,
-        ];
-        for (const [cat, count] of Object.entries(stats.byCategory)) {
-          lines.push(`  ${cat}: ${count}`);
-        }
-        if (stats.oldestDate) lines.push(`**Oldest:** ${stats.oldestDate}`);
-        if (stats.newestDate) lines.push(`**Newest:** ${stats.newestDate}`);
-        return lines.join("\n");
-      } catch (err) {
-        return `Consolidation error: ${err.message}`;
-      }
-    },
-  },
-
-  // ── New commands (OpenClaw parity) ──────────────────────────────────
+  // ── Session & system commands ──────────────────────────────────
 
   restart: {
     description: "Restart the server (Railway auto-restarts the process)",
@@ -625,165 +511,6 @@ const COMMANDS = {
       } catch (err) {
         return `Usage error: ${err.message}`;
       }
-    },
-  },
-
-  whoami: {
-    description: "Show your identity and session info",
-    usage: "/whoami",
-    handler: async (_args, ctx) => {
-      try {
-        const { parseIdentityFile } = await import("./workspace-files.js");
-        const identity = parseIdentityFile();
-        const name = identity.Name || "Tarsee";
-        const emoji = identity.Emoji || "";
-        const creature = identity.Creature || "";
-        const vibe = identity.Vibe || "";
-
-        const lines = [
-          `**${emoji} ${name}**`,
-          creature ? `Creature: ${creature}` : null,
-          vibe ? `Vibe: ${vibe}` : null,
-          "",
-          `**Channel:** ${ctx.channel || "web"}`,
-          `**Conversation:** ${ctx.conversationId || "(none)"}`,
-        ].filter(Boolean);
-
-        if (ctx.settingsStore) {
-          const active = ctx.settingsStore.getActiveProvider();
-          lines.push(`**Provider:** ${active?.provider || "none"}`);
-          lines.push(`**Model:** ${active?.model || "default"}`);
-        }
-
-        return lines.join("\n");
-      } catch (err) {
-        return `Identity error: ${err.message}`;
-      }
-    },
-  },
-
-  compact: {
-    description: "Compact conversation by summarizing older messages",
-    usage: "/compact",
-    handler: async (_args, ctx) => {
-      if (!ctx.conversationId || !ctx.convStore) return "No active conversation.";
-
-      const messages = ctx.convStore.getMessages(ctx.conversationId);
-      if (messages.length < 10) return "Conversation too short to compact (need 10+ messages).";
-
-      // Keep the last 6 messages, summarize the rest
-      const toSummarize = messages.slice(0, -6);
-      const summary = toSummarize
-        .map((m) => `${m.role}: ${m.content.slice(0, 100)}`)
-        .join("\n");
-
-      const lines = [
-        "**Conversation Compacted**",
-        "",
-        `Summarized ${toSummarize.length} older messages.`,
-        `Keeping ${Math.min(6, messages.length)} recent messages in context.`,
-        "",
-        "The AI will see a summary of earlier messages on the next turn.",
-      ];
-
-      // Store the summary as a system note
-      ctx.convStore.addMessage(ctx.conversationId, {
-        role: "system",
-        content: `[Compacted ${toSummarize.length} messages] Summary of earlier conversation:\n${summary.slice(0, 2000)}`,
-      });
-
-      return lines.join("\n");
-    },
-  },
-
-  context: {
-    description: "Show what's included in the system prompt",
-    usage: "/context",
-    handler: async (_args, ctx) => {
-      try {
-        const { readWorkspaceFile } = await import("./workspace-files.js");
-
-        const files = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "TOOLS.md", "MEMORY.md"];
-        const lines = ["**System Prompt Context**", ""];
-
-        for (const f of files) {
-          const content = readWorkspaceFile(f);
-          const size = content ? content.length : 0;
-          const status = size > 10 ? `${size} chars` : "(empty)";
-          lines.push(`- **${f}**: ${status}`);
-        }
-
-        // DB memories
-        if (ctx.db) {
-          try {
-            const { MemoryStore } = await import("../db/memory.js");
-            const store = new MemoryStore(ctx.db);
-            lines.push(`- **DB Memories**: ${store.count()} entries`);
-          } catch { /* ignore */ }
-        }
-
-        // Skills
-        try {
-          const { getSkillsList } = await import("./skills-engine.js");
-          const skills = getSkillsList();
-          lines.push(`- **Skills**: ${skills.length} available`);
-        } catch { /* ignore */ }
-
-        // Conversation system prompt
-        if (ctx.conversationId && ctx.convStore) {
-          const conv = ctx.convStore.get(ctx.conversationId);
-          const cp = conv?.system_prompt;
-          lines.push(`- **Conv. prompt**: ${cp ? `${cp.length} chars` : "(none)"}`);
-        }
-
-        lines.push("", "All of the above is injected into every AI request (150KB max).");
-        lines.push("Workspace files auto-reload within 5 seconds of editing.");
-        return lines.join("\n");
-      } catch (err) {
-        return `Context error: ${err.message}`;
-      }
-    },
-  },
-
-  models: {
-    description: "List available AI providers and their default models",
-    usage: "/models",
-    handler: () => {
-      const lines = ["**Available Providers**", ""];
-      for (const [id, provider] of Object.entries(AI_PROVIDERS)) {
-        lines.push(`**${provider.name}** (\`${id}\`) — default: \`${provider.defaultModel || "none"}\``);
-      }
-      lines.push("", "Switch with `/model <model-name>` or `/provider <provider-id>`");
-      lines.push("Any model ID supported by the provider will work.");
-      return lines.join("\n");
-    },
-  },
-
-  debug: {
-    description: "Show debug info for troubleshooting",
-    usage: "/debug",
-    handler: (_args, ctx) => {
-      const mem = process.memoryUsage();
-      const lines = [
-        "**Debug Info**",
-        "",
-        `**Node:** ${process.version}`,
-        `**Platform:** ${process.platform} ${process.arch}`,
-        `**PID:** ${process.pid}`,
-        `**Uptime:** ${Math.floor(process.uptime())}s`,
-        `**RSS:** ${Math.round(mem.rss / 1024 / 1024)}MB`,
-        `**Heap:** ${Math.round(mem.heapUsed / 1024 / 1024)}/${Math.round(mem.heapTotal / 1024 / 1024)}MB`,
-        `**ENV:** ${process.env.NODE_ENV || "development"}`,
-      ];
-
-      if (ctx.settingsStore) {
-        const active = ctx.settingsStore.getActiveProvider();
-        lines.push(`**Provider:** ${active?.provider || "none"}`);
-        lines.push(`**Model:** ${active?.model || "default"}`);
-        lines.push(`**API Key:** ${active?.apiKey ? "••••" + active.apiKey.slice(-4) : "not set"}`);
-      }
-
-      return lines.join("\n");
     },
   },
 
