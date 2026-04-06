@@ -49,15 +49,7 @@ const Voice = {
       orb.addEventListener("touchend", () => { this.onPressEnd(Date.now() - pressStart); });
     }
 
-    // Auto-restart listening after TTS ends
-    this.elements.audio.addEventListener("ended", () => {
-      this.isSpeaking = false;
-      this.setOrbState("idle");
-      this.elements.status.textContent = "Hold to talk";
-      if (this.autoListen && this.elements.panel.classList.contains("active")) {
-        setTimeout(() => this.startRecording(), 400);
-      }
-    });
+    // Audio ended handling is now per-playback in speak()
 
     // Voice input button in chat input (quick dictation)
     this.elements.voiceInputBtn?.addEventListener("click", () => this.quickListen());
@@ -89,8 +81,8 @@ const Voice = {
 
   open() {
     this.elements.panel.classList.add("active");
-    this.autoListen = true;
-    this.elements.status.textContent = "Hold to talk · Click to toggle";
+    this.autoListen = false; // Don't auto-record — user controls when to talk
+    this.elements.status.textContent = "Hold to talk · Tap to toggle";
 
     const label = document.getElementById("voiceActiveLabel");
     if (label) {
@@ -106,7 +98,8 @@ const Voice = {
       }
     }
 
-    setTimeout(() => this.startRecording(), 300);
+    // Prime audio element with user gesture (iOS requires this)
+    this.elements.audio.load();
   },
 
   close() {
@@ -364,17 +357,31 @@ const Voice = {
     try {
       const audioBlob = await API.tts(text);
       const audioUrl = URL.createObjectURL(audioBlob);
-      this.elements.audio.src = audioUrl;
-      await this.elements.audio.play();
-      this.elements.audio.addEventListener("ended", () => URL.revokeObjectURL(audioUrl), { once: true });
+
+      // iOS workaround: create a fresh Audio object for each playback
+      const audio = new Audio(audioUrl);
+      audio.addEventListener("ended", () => {
+        URL.revokeObjectURL(audioUrl);
+        this.isSpeaking = false;
+        this.setOrbState("idle");
+        this.elements.status.textContent = "Hold to talk";
+      });
+      audio.addEventListener("error", () => {
+        URL.revokeObjectURL(audioUrl);
+        this.isSpeaking = false;
+        this.setOrbState("idle");
+        this.elements.status.textContent = "Audio error";
+      });
+      await audio.play().catch(() => {
+        // iOS may block — fallback to element
+        this.elements.audio.src = audioUrl;
+        return this.elements.audio.play();
+      });
     } catch (err) {
       console.warn("[voice] TTS error:", err.message);
       this.isSpeaking = false;
       this.setOrbState("idle");
       this.elements.status.textContent = "TTS unavailable";
-      if (this.autoListen && this.elements.panel.classList.contains("active")) {
-        setTimeout(() => this.startRecording(), 1000);
-      }
     }
   },
 

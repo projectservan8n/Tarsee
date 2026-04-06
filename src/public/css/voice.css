@@ -21,8 +21,8 @@
 /* ---------- Close button ---------- */
 .voice-close {
   position: absolute;
-  top: 20px;
-  right: 20px;
+  top: calc(env(safe-area-inset-top, 12px) + 12px);
+  right: 16px;
   width: 40px;
   height: 40px;
   border-radius: 50%;
