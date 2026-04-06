@@ -176,7 +176,10 @@ const Chat = {
   async loadBotName() {
     try {
       const data = await API.json("/api/settings/setup-status");
-      this.setBotName(data.botName || "Tarsee");
+      // Ignore default/autofill names — only use names set via IDENTITY.md
+      const name = data.botName;
+      const ignored = ["admin", "user", "root", "tarsee", ""];
+      this.setBotName(name && !ignored.includes(name.toLowerCase()) ? name : "Tarsee");
     } catch {
       this.setBotName("Tarsee");
     }

@@ -178,8 +178,8 @@ const Setup = {
       console.warn("[setup] Could not parse personality JSON, using defaults");
     }
 
-    // Save identity
-    const botName = identity.name || "Tarsee";
+    // Save identity — name is always "Tarsee" by default, Claude Code sets it via IDENTITY.md
+    const botName = "Tarsee";
     const systemPrompt = identity.systemPrompt || identity.personality || "";
 
     try {
