@@ -807,11 +807,12 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       }
 
       case "schedule_task": {
-        const { schedule, prompt, name } = toolInput;
+        const { schedule, prompt, name, action } = toolInput;
         try {
           const { addCronJob } = await import("./cron.js");
-          const job = addCronJob({ schedule, prompt, name });
-          return `Scheduled task: ${name || job.id} at ${schedule}`;
+          const job = addCronJob({ schedule, prompt: prompt || "", name, action });
+          const desc = action ? `direct ${action.tool}` : "AI prompt";
+          return `Scheduled task (${desc}): ${name || job.id} at ${schedule}`;
         } catch (err) {
           return `schedule_task error: ${err.message}`;
         }

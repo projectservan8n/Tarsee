@@ -34,9 +34,20 @@ export function createTarseeMcp(ctx) {
 
       tool(
         "tarsee_schedule_task",
-        "Schedule a recurring or one-time task using cron syntax. The task runs as an AI prompt at the scheduled time. Example: '0 20 * * *' for daily at 8 PM.",
-        { schedule: z.string().describe("Cron expression. Format: 'min hour day month weekday'. Examples: '30 14 * * *' (2:30 PM daily), '*/5 * * * *' (every 5 min), '0 9 * * 1' (Mon 9 AM). Server is UTC — convert user's timezone first."), prompt: z.string().describe("The AI prompt to execute at the scheduled time. IMPORTANT: If the task should send a message, the prompt must explicitly say 'Use tarsee_send_message to send to telegram/discord/slack'."), name: z.string().optional().describe("Human-friendly name for this task") },
+        "Schedule a task using cron syntax. For simple notifications, use the action field to send directly without AI. For complex tasks, use prompt to trigger an AI session.\n\nEXAMPLES:\n- Reminder: schedule='0 20 * * *', action={tool:'send_message', args:{channel:'telegram', message:'Meeting in 1 hour!'}}\n- Complex: schedule='0 9 * * 1', prompt='Check my calendar and summarize this week'\n\nALWAYS prefer action over prompt for simple send_message tasks — it's instant and reliable.",
+        {
+          schedule: z.string().describe("Cron expression. Format: 'min hour day month weekday'. Server is UTC — convert user's timezone."),
+          name: z.string().optional().describe("Human-friendly name"),
+          prompt: z.string().optional().describe("AI prompt for complex tasks (spawns full Claude session)"),
+          action: z.object({
+            tool: z.string().describe("Tool to execute directly (e.g. 'send_message')"),
+            args: z.record(z.any()).describe("Tool arguments (e.g. {channel:'telegram', message:'Hello!'})"),
+          }).optional().describe("Direct tool action — instant, no AI needed. Use for simple notifications."),
+        },
         async (args) => {
+          if (!args.prompt && !args.action) {
+            return { content: [{ type: "text", text: "Error: Either 'prompt' or 'action' is required." }] };
+          }
           const result = await executeTool("schedule_task", args, ctx);
           return { content: [{ type: "text", text: result }] };
         }

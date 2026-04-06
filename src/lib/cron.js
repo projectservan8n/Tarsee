@@ -125,20 +125,45 @@ async function runCronJobWithRetry(job) {
 }
 
 /**
- * Run a cron job — send prompt to AI and deliver response.
+ * Run a cron job — either execute a direct action or send prompt to AI.
  */
 export async function runCronJob(job) {
   if (!_settingsStore || !_db) {
     return { error: "Not initialized" };
   }
 
+  const now = new Date().toISOString();
+
+  // --- Direct action: execute tool immediately without AI ---
+  if (job.action?.tool) {
+    console.log(`[cron] Running direct action "${job.id}": ${job.action.tool}(${JSON.stringify(job.action.args).slice(0, 100)})`);
+    try {
+      const { executeTool } = await import("./tools.js");
+      const toolCtx = { db: _db, settingsStore: _settingsStore, conversationId: null, channelManager: _channelManager };
+      const result = await executeTool(job.action.tool, job.action.args || {}, toolCtx);
+      console.log(`[cron] Direct action "${job.id}" completed: ${result.slice(0, 100)}`);
+      appendDailyLog(`[cron:${job.id}] ${result.slice(0, 200)}`);
+
+      // Also save to channel conversation
+      const channelKey = job.channel || "web:default";
+      const convId = _settingsStore.get(`channel_conv.${channelKey}`);
+      if (convId && _convStore) {
+        _convStore.addMessage(convId, { role: "assistant", content: `**[Cron: ${job.id}]** ${result}` });
+      }
+      return { response: result };
+    } catch (err) {
+      console.error(`[cron] Direct action "${job.id}" failed:`, err.message);
+      return { error: err.message };
+    }
+  }
+
+  // --- AI prompt: send to Claude Code ---
   const activeProvider = _settingsStore.getActiveProvider();
   if (!activeProvider?.ready || !activeProvider?.provider) {
     return { error: "No AI provider configured" };
   }
 
-  const now = new Date().toISOString();
-  console.log(`[cron] Running job "${job.id}": ${job.prompt.slice(0, 80)}...`);
+  console.log(`[cron] Running AI job "${job.id}": ${(job.prompt || "").slice(0, 80)}...`);
 
   const systemPrompt = buildSystemPrompt({
     settingsStore: _settingsStore,
@@ -236,14 +261,16 @@ function saveCronJobs(jobs) {
 /**
  * Add a new cron job.
  */
-export function addCronJob({ schedule, prompt, channel = "web:default", enabled = true }) {
+export function addCronJob({ schedule, prompt, channel = "web:default", enabled = true, name, action }) {
   if (!cron.validate(schedule)) {
     throw new Error(`Invalid cron schedule: ${schedule}`);
   }
 
   const jobs = loadCronJobs();
-  const id = `cron_${Date.now().toString(36)}`;
-  const newJob = { id, schedule, prompt, channel, enabled };
+  const id = name ? `cron_${name.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12)}` : `cron_${Date.now().toString(36)}`;
+  const newJob = { id, schedule, prompt: prompt || "", channel, enabled };
+  if (action) newJob.action = action;
+  if (name) newJob.name = name;
   jobs.push(newJob);
   saveCronJobs(jobs);
 
