@@ -1135,6 +1135,35 @@ html, body {
   .login-card {
     padding: 28px 24px;
   }
+
+  /* Session bar mobile */
+  .session-bar {
+    padding: 3px 10px;
+    font-size: 10px;
+    gap: 6px;
+  }
+  .session-model { font-size: 9px; padding: 1px 6px; }
+  .context-bar { width: 50px; }
+
+  /* Tool blocks mobile */
+  .tool-block-code { font-size: 11px; max-height: 150px; }
+  .tool-name { font-size: 12px; }
+  .tool-detail { font-size: 11px; }
+
+  /* Tables mobile */
+  .md-table { font-size: 11px; }
+  .md-table th, .md-table td { padding: 5px 8px; }
+
+  /* Code blocks mobile */
+  pre code { font-size: 11px; }
+  .code-header { font-size: 11px; }
+
+  /* Messages */
+  .message-text { font-size: 14px; }
+
+  /* Topbar */
+  .topbar { padding: 0 10px; }
+  .topbar h1 { font-size: 14px; }
 }
 
 /* --- Voice Clone Upload --- */
