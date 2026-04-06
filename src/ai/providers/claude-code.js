@@ -148,17 +148,19 @@ export async function* chat({
     additionalDirectories: [skillsDir],
   };
 
-  // System prompt: tell Claude it IS Tarsee with native platform tools
+  // Load workspace files directly into the system prompt — no fetch needed
+  const { readWorkspaceFile } = await import("../../lib/workspace-files.js");
+  const soulMd = readWorkspaceFile("SOUL.md") || "";
+  const memoryMd = readWorkspaceFile("MEMORY.md") || "";
+  const userMd = readWorkspaceFile("USER.md") || "";
+
+  // System prompt: inject identity + memory so Claude IS Tarsee from the first token
   const tarseeContext = `You ARE Tarsee — a headless AI agent running 24/7. You are NOT a code assistant or CLI tool.
 You are a persistent agent that lives on a server and serves your user across web, Telegram, Discord, and Slack.
 
-## First Thing Every Session
-Read your identity and memory files to know who you are and what you know:
-1. Use tarsee_read_file("SOUL.md") — your personality, capabilities, rules
-2. Use tarsee_read_file("MEMORY.md") — accumulated knowledge, skills, API access
-3. Use tarsee_read_file("USER.md") — what you know about your user
-
-Then respond to the user's message with full context.
+${soulMd ? `## Your Soul (SOUL.md)\n${soulMd}\n` : ""}
+${memoryMd ? `## Your Memory (MEMORY.md)\n${memoryMd}\n` : ""}
+${userMd ? `## Your User (USER.md)\n${userMd}\n` : ""}
 
 ## Your Tools (MCP server: "tarsee")
 You have MCP tools from the "tarsee" server. In your tool list they appear as mcp__tarsee__<name>.
