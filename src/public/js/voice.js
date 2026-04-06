@@ -236,6 +236,49 @@ const Voice = {
     if (canvas) canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
   },
 
+  /** Show waveform from audio playback (agent speaking). */
+  startSpeakingWaveform(audioEl) {
+    const canvas = this.elements.waveform;
+    if (!canvas) return;
+
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaElementSource(audioEl);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 128;
+      source.connect(analyser);
+      analyser.connect(audioCtx.destination);
+
+      const ctx = canvas.getContext("2d");
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      const draw = () => {
+        if (!this.isSpeaking) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          audioCtx.close().catch(() => {});
+          return;
+        }
+        this._speakAnim = requestAnimationFrame(draw);
+        analyser.getByteFrequencyData(dataArray);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const barWidth = (canvas.width / bufferLength) * 1.5;
+        let x = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          const barHeight = (dataArray[i] / 255) * canvas.height * 0.9;
+          // Blue/cyan for agent speaking (vs amber for user)
+          const lightness = 40 + (dataArray[i] / 255) * 30;
+          ctx.fillStyle = `hsl(200, 80%, ${lightness}%)`;
+          ctx.fillRect(x, (canvas.height - barHeight) / 2, barWidth - 1, barHeight || 1);
+          x += barWidth;
+        }
+      };
+      draw();
+    } catch {
+      // AudioContext not available — skip waveform
+    }
+  },
+
   async sendToWhisper(audioBlob) {
     this.isProcessing = true;
     this.setOrbState("processing");
@@ -354,34 +397,41 @@ const Voice = {
     this.setOrbState("speaking");
     this.elements.status.textContent = "Speaking...";
 
+    const done = () => {
+      if (!this.isSpeaking) return;
+      this.isSpeaking = false;
+      this.setOrbState("idle");
+      this.elements.status.textContent = "Hold to talk";
+    };
+
     try {
       const audioBlob = await API.tts(text);
       const audioUrl = URL.createObjectURL(audioBlob);
 
-      // iOS workaround: create a fresh Audio object for each playback
-      const audio = new Audio(audioUrl);
-      audio.addEventListener("ended", () => {
+      // Use the page's audio element (more reliable on iOS than new Audio())
+      const audio = this.elements.audio;
+      audio.src = audioUrl;
+      audio.onended = () => { URL.revokeObjectURL(audioUrl); done(); };
+      audio.onerror = () => { URL.revokeObjectURL(audioUrl); done(); };
+
+      try {
+        await audio.play();
+        // Show speaking waveform from audio output
+        this.startSpeakingWaveform(audio);
+      } catch {
+        // Autoplay blocked — clean up
         URL.revokeObjectURL(audioUrl);
-        this.isSpeaking = false;
-        this.setOrbState("idle");
-        this.elements.status.textContent = "Hold to talk";
-      });
-      audio.addEventListener("error", () => {
-        URL.revokeObjectURL(audioUrl);
-        this.isSpeaking = false;
-        this.setOrbState("idle");
-        this.elements.status.textContent = "Audio error";
-      });
-      await audio.play().catch(() => {
-        // iOS may block — fallback to element
-        this.elements.audio.src = audioUrl;
-        return this.elements.audio.play();
-      });
+        done();
+        return;
+      }
+
+      // Safety timeout — if ended event never fires, reset after estimated duration
+      // Rough: 150 words/min speaking rate, ~5 chars/word
+      const estimatedMs = Math.max(3000, (text.length / 5 / 150) * 60000 + 2000);
+      setTimeout(() => { if (this.isSpeaking) done(); }, estimatedMs);
     } catch (err) {
       console.warn("[voice] TTS error:", err.message);
-      this.isSpeaking = false;
-      this.setOrbState("idle");
-      this.elements.status.textContent = "TTS unavailable";
+      done();
     }
   },
 
