@@ -55,5 +55,21 @@ if [ -f /usr/local/bin/claude ]; then
   chown node:node /home/node/.bashrc
 fi
 
+# Auto-install Claude Code plugins on boot (runs as node user, persists on volume)
+if [ -f /usr/local/bin/claude ]; then
+  PLUGINS="superpowers claude-md-management feature-dev frontend-design semgrep skill-creator ralph-loop"
+  # Only install if plugins dir is empty (first boot or volume wipe)
+  PLUGIN_DIR="${CLAUDE_CONFIG_DIR:-/home/node/.claude}/plugins"
+  if [ ! -f "$PLUGIN_DIR/installed_plugins.json" ]; then
+    echo "[entrypoint] Installing Claude Code plugins..."
+    for p in $PLUGINS; do
+      gosu node claude plugins install "$p" </dev/null 2>&1 || echo "[entrypoint] Plugin $p install skipped"
+    done
+    echo "[entrypoint] Plugin install complete"
+  else
+    echo "[entrypoint] Plugins already installed, skipping"
+  fi
+fi
+
 # Drop to node user and start the app
 exec gosu node node src/server.js
