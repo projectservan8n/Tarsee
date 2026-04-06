@@ -17,7 +17,7 @@ let claudeCodeModule = null;
  * @returns {AsyncGenerator<{type: string, content?: string, usage?: object}>}
  */
 export async function* chatStream(opts) {
-  const { messages, model, systemPrompt, signal, toolCtx } = opts;
+  const { messages, model, systemPrompt, signal, toolCtx, sessionId, onSessionId } = opts;
 
   if (!claudeCodeModule) {
     claudeCodeModule = await import("./providers/claude-code.js");
@@ -31,6 +31,8 @@ export async function* chatStream(opts) {
     systemPrompt,
     signal,
     toolCtx,
+    sessionId,
+    onSessionId,
   });
 }
 

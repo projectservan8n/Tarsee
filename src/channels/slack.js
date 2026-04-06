@@ -163,15 +163,16 @@ You can use [react: emoji_name] to add a reaction to the user's message (e.g. [r
         let roundText = "";
         let stopReason = "end_turn";
 
+        const existingSessionId = convStore.getClaudeSessionId(convId);
         const stream = chatStream({
           provider: activeProvider.provider,
           model: activeProvider.model,
-          apiKey: activeProvider.apiKey,
-          baseUrl: activeProvider.baseUrl,
           messages: workingMessages,
           systemPrompt,
           tools,
           toolCtx,
+          sessionId: existingSessionId,
+          onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
         });
 
         for await (const event of stream) {

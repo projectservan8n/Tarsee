@@ -167,15 +167,16 @@ You can use these special markers in your response:
         let roundText = "";
         let stopReason = "end_turn";
 
+        const existingSessionId = convStore.getClaudeSessionId(convId);
         const stream = chatStream({
           provider: activeProvider.provider,
           model: activeProvider.model,
-          apiKey: activeProvider.apiKey,
-          baseUrl: activeProvider.baseUrl,
           messages: workingMessages,
           systemPrompt,
           tools,
           toolCtx,
+          sessionId: existingSessionId,
+          onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
         });
 
         for await (const event of stream) {
