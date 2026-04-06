@@ -271,8 +271,14 @@ chatRouter.post("/send", async (req, res) => {
     try {
       const existingSessionId = convStore.getClaudeSessionId(convId);
       const mod = await import("../ai/providers/claude-code.js");
+      // Build messages with image blocks for the last user message
+      const ccMessages = history.map((m) => ({ role: m.role, content: m.content }));
+      if (userContentForAI !== message && ccMessages.length > 0) {
+        const last = ccMessages[ccMessages.length - 1];
+        if (last.role === "user") last.content = userContentForAI;
+      }
       const stream = mod.chat({
-        messages: history.map((m) => ({ role: m.role, content: m.content })),
+        messages: ccMessages,
         model,
         systemPrompt: effectiveSystemPrompt,
         signal: req.signal,
