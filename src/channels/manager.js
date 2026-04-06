@@ -17,7 +17,7 @@ export class ChannelManager {
    * Starts all configured channels.
    */
   async startAll() {
-    const channels = ["discord", "telegram", "slack", "whatsapp", "signal", "imessage", "line"];
+    const channels = ["discord", "telegram", "slack", "whatsapp", "signal", "line"];
 
     for (const type of channels) {
       try {
@@ -68,11 +68,6 @@ export class ChannelManager {
         case "signal": {
           const { createSignalBot } = await import("./signal.js");
           bot = await createSignalBot(channelConfig, this.db);
-          break;
-        }
-        case "imessage": {
-          const { createIMessageBot } = await import("./imessage.js");
-          bot = await createIMessageBot(channelConfig, this.db);
           break;
         }
         case "line": {
@@ -154,7 +149,7 @@ export class ChannelManager {
       };
     }
     // Add unconfigured channels
-    for (const type of ["discord", "telegram", "slack", "whatsapp", "signal", "imessage", "line"]) {
+    for (const type of ["discord", "telegram", "slack", "whatsapp", "signal", "line"]) {
       if (!result[type]) {
         const config = this.settings.get(`channel.${type}`);
         result[type] = {
