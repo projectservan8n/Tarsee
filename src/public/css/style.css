@@ -1040,14 +1040,16 @@ html, body {
 * { touch-action: manipulation; }
 
 @media (max-width: 768px) {
-  /* Fix iOS keyboard pushing content — use fixed height */
+  /* Fix iOS keyboard + PWA safe areas */
   html, body { height: 100%; overflow: hidden; }
   .app {
     grid-template-columns: 1fr;
-    grid-template-rows: 48px 1fr;
+    grid-template-rows: auto 1fr;
     grid-template-areas: "topbar" "content";
     height: 100vh;
-    height: 100dvh; /* Dynamic viewport height — excludes iOS keyboard */
+    height: 100dvh;
+    /* Push content below the notch/status bar in PWA mode */
+    padding-top: env(safe-area-inset-top, 0px);
   }
 
   /* Sidebar — slide in with smooth transition */
@@ -1057,6 +1059,7 @@ html, body {
     top: 0;
     bottom: 0;
     width: 280px;
+    padding-top: env(safe-area-inset-top, 0px);
     z-index: 50;
     transform: translateX(-100%);
     transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);

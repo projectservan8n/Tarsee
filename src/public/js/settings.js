@@ -87,6 +87,12 @@ const Settings = {
 
     // Toggle settings page open/close
     this.elements.openBtn.addEventListener("click", () => {
+      // Close sidebar on mobile
+      const sidebar = document.getElementById("sidebar");
+      const overlay = document.getElementById("sidebarOverlay");
+      if (sidebar) sidebar.classList.remove("open");
+      if (overlay) overlay.classList.remove("active");
+
       if (this.isOpen) {
         this.close();
       } else {
