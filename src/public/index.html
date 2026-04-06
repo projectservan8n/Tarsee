@@ -547,10 +547,11 @@
     <div id="voiceActiveLabel" style="position:absolute;top:12px;left:16px;font-size:12px;color:var(--text-muted);opacity:0.8"></div>
     <div class="voice-conversation" id="voiceConversation"></div>
     <div class="voice-orb-container">
+      <canvas id="voiceWaveform" class="voice-waveform" width="300" height="60"></canvas>
       <div class="voice-orb idle" id="voiceOrb">
         <svg width="48" height="48" viewBox="0 0 16 16" fill="none"><path d="M8 1a3 3 0 013 3v3a3 3 0 01-6 0V4a3 3 0 013-3z" stroke="currentColor" stroke-width="1.2"/><path d="M3 7a5 5 0 0010 0M8 14v-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
       </div>
-      <div class="voice-status-text" id="voiceStatus">Tap to start</div>
+      <div class="voice-status-text" id="voiceStatus">Hold to talk · Click to toggle</div>
     </div>
     <audio id="voiceAudio" class="voice-audio-player"></audio>
   </div>

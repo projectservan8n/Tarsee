@@ -160,6 +160,12 @@
   flex-shrink: 0;
 }
 
+.voice-waveform {
+  width: 300px;
+  height: 60px;
+  opacity: 0.8;
+}
+
 /* ---------- Orb ---------- */
 .voice-orb {
   width: 120px;

@@ -27,7 +27,7 @@ export async function initTTSEngine(settingsStore) {
     }
 
     const { ElevenLabsTTSEngine } = await import("./elevenlabs-engine.js");
-    const defaultVoice = settingsStore?.get("voice.defaultVoiceId") || "iWyfYyRejPZ24HwI8ySp";
+    const defaultVoice = settingsStore?.get("voice.defaultVoiceId") || "wNl2YBRc8v5uIcq6gOxd";
     const el = new ElevenLabsTTSEngine(apiKey, undefined, defaultVoice);
     const available = await el.isAvailable();
 
