@@ -881,14 +881,18 @@ const Chat = {
     html = html.replace(/\n/g, "<br>");
 
     // Markdown tables: | col | col | with |---|---| separator
-    html = html.replace(/((?:(?:^|<br>)\s*\|[^<]+\|(?:<br>|$))+)/g, (tableBlock) => {
-      const rows = tableBlock.split("<br>").map(r => r.trim()).filter(r => r.startsWith("|") && r.endsWith("|"));
+    html = html.replace(/((?:(?:^|<br>)\s*\|.+\|(?:\s*<br>|\s*$))+)/g, (tableBlock) => {
+      const rows = tableBlock.split("<br>").map(r => r.trim()).filter(r => r.includes("|") && r.startsWith("|"));
       if (rows.length < 2) return tableBlock;
-      const sepIdx = rows.findIndex(r => /^\|[\s\-:|]+\|$/.test(r));
+      // Find separator row — just needs pipes and dashes/colons
+      const sepIdx = rows.findIndex(r => {
+        const cells = r.replace(/^\||\|$/g, "").split("|");
+        return cells.length >= 1 && cells.every(c => /^[\s\-:]+$/.test(c));
+      });
       if (sepIdx === -1) return tableBlock;
       const headerRows = rows.slice(0, sepIdx);
       const bodyRows = rows.slice(sepIdx + 1);
-      const parseRow = (r) => r.replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+      const parseRow = (r) => r.replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
       let table = '<table class="md-table">';
       if (headerRows.length > 0) {
         table += "<thead>";
