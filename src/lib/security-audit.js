@@ -18,13 +18,9 @@ export function runAudit(settingsStore) {
     issues.push({ severity: "warning", message: "No SETUP_PASSWORD set. Anyone can access the UI.", fix: "Set SETUP_PASSWORD env var" });
   }
 
-  // Check for API keys in settings
-  const providers = ["anthropic", "openai", "gemini", "openrouter"];
-  for (const p of providers) {
-    const key = settingsStore?.get?.(`ai.${p}.apiKey`);
-    if (key && !key.startsWith("enc:")) {
-      issues.push({ severity: "warning", message: `${p} API key stored unencrypted.`, fix: "Set ENCRYPTION_KEY to auto-encrypt credentials" });
-    }
+  // Check OAuth credentials
+  if (!process.env.CLAUDE_OAUTH_CREDENTIALS) {
+    issues.push({ severity: "info", message: "No CLAUDE_OAUTH_CREDENTIALS env var set. Claude Code auth relies on cached credentials.", fix: "Set CLAUDE_OAUTH_CREDENTIALS for reliable auth" });
   }
 
   // Check channel tokens

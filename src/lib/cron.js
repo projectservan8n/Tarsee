@@ -79,7 +79,13 @@ function scheduleJob(job) {
   }
 
   const task = cron.schedule(job.schedule, () => {
-    runCronJobWithRetry(job).catch((err) => {
+    runCronJobWithRetry(job).then(() => {
+      // Auto-delete one-time jobs after they fire
+      if (job.once) {
+        console.log(`[cron] One-time job "${job.id}" completed, removing`);
+        removeCronJob(job.id);
+      }
+    }).catch((err) => {
       console.error(`[cron] Job ${job.id} fatal error:`, err.message);
     });
   });
@@ -261,7 +267,7 @@ function saveCronJobs(jobs) {
 /**
  * Add a new cron job.
  */
-export function addCronJob({ schedule, prompt, channel = "web:default", enabled = true, name, action }) {
+export function addCronJob({ schedule, prompt, channel = "web:default", enabled = true, name, action, once = false }) {
   if (!cron.validate(schedule)) {
     throw new Error(`Invalid cron schedule: ${schedule}`);
   }
@@ -271,6 +277,7 @@ export function addCronJob({ schedule, prompt, channel = "web:default", enabled 
   const newJob = { id, schedule, prompt: prompt || "", channel, enabled };
   if (action) newJob.action = action;
   if (name) newJob.name = name;
+  if (once) newJob.once = true;
   jobs.push(newJob);
   saveCronJobs(jobs);
 

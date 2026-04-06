@@ -34,10 +34,11 @@ export function createTarseeMcp(ctx) {
 
       tool(
         "tarsee_schedule_task",
-        "Schedule a task using cron syntax. For simple notifications, use the action field to send directly without AI. For complex tasks, use prompt to trigger an AI session.\n\nEXAMPLES:\n- Reminder: schedule='0 20 * * *', action={tool:'send_message', args:{channel:'telegram', message:'Meeting in 1 hour!'}}\n- Complex: schedule='0 9 * * 1', prompt='Check my calendar and summarize this week'\n\nALWAYS prefer action over prompt for simple send_message tasks — it's instant and reliable.",
+        "Schedule a task using cron syntax. Supports one-time and recurring. For simple notifications, use action (direct, instant). For complex tasks, use prompt (AI session).\n\nEXAMPLES:\n- One-time reminder: schedule='30 12 7 4 *', once=true, action={tool:'send_message', args:{channel:'telegram', message:'Meeting now!'}}\n- Daily recurring: schedule='0 1 * * *', action={tool:'send_message', args:{channel:'telegram', message:'Good morning!'}}\n- Complex: schedule='0 1 * * 1', prompt='Check calendar and summarize the week'\n\nALWAYS prefer action over prompt for send_message tasks. Set once=true for one-time reminders (auto-deletes after firing). Server is UTC — user is PHT (UTC+8), so subtract 8 hours.",
         {
-          schedule: z.string().describe("Cron expression. Format: 'min hour day month weekday'. Server is UTC — convert user's timezone."),
+          schedule: z.string().describe("Cron expression. Format: 'min hour day month weekday'. Server is UTC — subtract 8 for PHT."),
           name: z.string().optional().describe("Human-friendly name"),
+          once: z.boolean().optional().describe("If true, job auto-deletes after firing once. Use for one-time reminders."),
           prompt: z.string().optional().describe("AI prompt for complex tasks (spawns full Claude session)"),
           action: z.object({
             tool: z.string().describe("Tool to execute directly (e.g. 'send_message')"),

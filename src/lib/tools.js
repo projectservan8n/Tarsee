@@ -336,31 +336,6 @@ export const TOOLS = [
   },
 
   {
-    name: "generate_image",
-    description: "Generate an image from a text prompt. Uses DALL-E or compatible image generation API. Requires OPENAI_API_KEY.",
-    input_schema: {
-      type: "object",
-      properties: {
-        prompt: {
-          type: "string",
-          description: "Text description of the image to generate",
-        },
-        size: {
-          type: "string",
-          description: "Image dimensions",
-          enum: ["1024x1024", "1024x1792", "1792x1024"],
-        },
-        quality: {
-          type: "string",
-          description: "Image quality level",
-          enum: ["standard", "hd"],
-        },
-      },
-      required: ["prompt"],
-    },
-  },
-
-  {
     name: "spawn_agent",
     description: "Spawn a background subagent to work on a task independently. The subagent runs as a separate AI conversation with its own tool access. Use this for: long-running tasks, parallel research, monitoring jobs, or delegating work. Returns a task ID you can check later.",
     input_schema: {
@@ -415,19 +390,6 @@ export const TOOLS = [
         },
       },
       required: ["task_id"],
-    },
-  },
-
-  {
-    name: "analyze_image",
-    description: "Analyze an image using AI vision. Accepts a base64-encoded image or URL. Returns a detailed description.",
-    input_schema: {
-      type: "object",
-      properties: {
-        image: { type: "string", description: "Base64-encoded image data or URL" },
-        prompt: { type: "string", description: "Optional analysis prompt (default: describe the image)" },
-      },
-      required: ["image"],
     },
   },
 
@@ -807,36 +769,15 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       }
 
       case "schedule_task": {
-        const { schedule, prompt, name, action } = toolInput;
+        const { schedule, prompt, name, action, once } = toolInput;
         try {
           const { addCronJob } = await import("./cron.js");
-          const job = addCronJob({ schedule, prompt: prompt || "", name, action });
+          const job = addCronJob({ schedule, prompt: prompt || "", name, action, once: !!once });
           const desc = action ? `direct ${action.tool}` : "AI prompt";
-          return `Scheduled task (${desc}): ${name || job.id} at ${schedule}`;
+          const freq = once ? "one-time" : "recurring";
+          return `Scheduled ${freq} task (${desc}): ${name || job.id} at ${schedule}`;
         } catch (err) {
           return `schedule_task error: ${err.message}`;
-        }
-      }
-
-      case "generate_image": {
-        const { prompt, size, quality } = toolInput;
-        const apiKey = ctx.settingsStore?.getApiKey?.("openai");
-        if (!apiKey) {
-          return "Image generation requires an OpenAI API key. Configure it in Settings > Providers.";
-        }
-        try {
-          const res = await fetch("https://api.openai.com/v1/images/generations", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-            body: JSON.stringify({ model: "dall-e-3", prompt, n: 1, size: size || "1024x1024", quality: quality || "standard" }),
-            signal: AbortSignal.timeout(60000),
-          });
-          const data = await res.json();
-          if (data.error) return `Image generation error: ${data.error.message}`;
-          const imageUrl = data.data?.[0]?.url;
-          return `Image generated: ${imageUrl}\n\nRevised prompt: ${data.data?.[0]?.revised_prompt || prompt}`;
-        } catch (err) {
-          return `generate_image error: ${err.message}`;
         }
       }
 
@@ -1025,26 +966,6 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           return stopped ? `Agent ${task_id} stopped.` : `Agent not found: ${task_id}`;
         } catch (err) {
           return `stop_agent error: ${err.message}`;
-        }
-      }
-
-      case "analyze_image": {
-        const { image, prompt: imgPrompt } = toolInput;
-        try {
-          const { analyzeImage, getMediaProviderInfo } = await import("./media-understanding.js");
-          const providerInfo = getMediaProviderInfo(ctx.settingsStore);
-          if (!providerInfo) return "No vision-capable API key configured (needs Anthropic, OpenAI, or Gemini).";
-          let imageBuffer;
-          if (image.startsWith("http")) {
-            const res = await fetch(image, { signal: AbortSignal.timeout(30000) });
-            imageBuffer = Buffer.from(await res.arrayBuffer());
-          } else {
-            imageBuffer = Buffer.from(image, "base64");
-          }
-          const analysis = await analyzeImage(imageBuffer, "image/png", { ...providerInfo, prompt: imgPrompt });
-          return truncate(analysis, MAX_RESULT);
-        } catch (err) {
-          return `analyze_image error: ${err.message}`;
         }
       }
 
