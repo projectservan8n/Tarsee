@@ -205,7 +205,8 @@ Run /skills to see full list. Skills dir: ${skillsDir}
 
   try {
     let messageCount = 0;
-    let streamed = false; // Track if we streamed text via stream_event (avoid duplicate from assistant message)
+    let streamed = false;
+    let inThinking = false;
     for await (const message of query({ prompt, options: queryOptions, signal })) {
       messageCount++;
       if (signal?.aborted) break;
@@ -219,15 +220,18 @@ Run /skills to see full list. Skills dir: ${skillsDir}
               yield { type: "text", content: evt.delta.text };
               streamed = true;
             } else if (evt.delta?.type === "thinking_delta" && evt.delta.thinking) {
-              yield { type: "text", content: evt.delta.thinking };
+              // Don't emit thinking as text — skip it silently
+              // (thinking bloats the response and confuses users)
               streamed = true;
             }
           } else if (evt?.type === "content_block_start") {
             if (evt.content_block?.type === "thinking") {
-              yield { type: "text", content: "<thinking>\n" };
+              inThinking = true;
             }
           } else if (evt?.type === "content_block_stop") {
-            // Check if we were in a thinking block
+            if (inThinking) {
+              inThinking = false;
+            }
           }
           break;
         }
