@@ -1,30 +1,58 @@
-/* ===== Claude Code session badge ===== */
-.claude-code-badge {
+/* ===== Session bar ===== */
+.session-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 14px;
+  background: var(--bg-secondary, #1e1e1e);
+  border-bottom: 1px solid var(--border-color, #333);
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  gap: 10px;
+}
+.session-bar-left, .session-bar-right {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 14px;
-  background: rgba(245, 166, 35, 0.1);
-  border-bottom: 1px solid rgba(245, 166, 35, 0.2);
-  font-size: 12px;
-  color: var(--primary, #f5a623);
 }
-.claude-code-badge .badge-icon { font-size: 14px; }
-.claude-code-badge .badge-text { font-weight: 600; }
-.claude-code-badge .badge-btn {
-  margin-left: auto;
-  padding: 2px 10px;
+.session-model {
+  background: rgba(245, 166, 35, 0.15);
+  color: var(--primary, #f5a623);
+  padding: 1px 8px;
+  border-radius: 3px;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.session-status {
+  font-size: 11px;
+}
+.context-bar {
+  width: 80px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.context-bar-fill {
+  height: 100%;
+  background: var(--primary, #f5a623);
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+.context-bar-fill.warning { background: #fbbf24; }
+.context-bar-fill.danger { background: #f44336; }
+.context-label { font-size: 10px; min-width: 28px; }
+.badge-btn {
+  padding: 1px 8px;
   background: transparent;
   border: 1px solid rgba(245, 166, 35, 0.3);
-  border-radius: 4px;
+  border-radius: 3px;
   color: var(--primary, #f5a623);
-  font-size: 11px;
+  font-size: 10px;
   cursor: pointer;
-  transition: background 0.15s;
 }
-.claude-code-badge .badge-btn:hover {
-  background: rgba(245, 166, 35, 0.15);
-}
+.badge-btn:hover { background: rgba(245, 166, 35, 0.15); }
 
 /* ===== Chat-specific styles — Dark Theme ===== */
 

@@ -105,11 +105,19 @@
         </div>
       </div>
 
-      <!-- Claude Code session indicator -->
-      <div id="claudeCodeBadge" class="claude-code-badge" style="display:none">
-        <span class="badge-icon">⚡</span>
-        <span class="badge-text">Claude Code Agent</span>
-        <button id="newSessionBtn" class="badge-btn" title="Start new session">New Session</button>
+      <!-- Session bar: model, session status, context usage -->
+      <div id="sessionBar" class="session-bar" style="display:none">
+        <div class="session-bar-left">
+          <span class="session-model" id="sessionModel">opus</span>
+          <span class="session-status" id="sessionStatus">New Session</span>
+        </div>
+        <div class="session-bar-right">
+          <div class="context-bar" title="Context window usage">
+            <div class="context-bar-fill" id="contextBarFill" style="width:0%"></div>
+          </div>
+          <span class="context-label" id="contextLabel">0%</span>
+          <button id="newSessionBtn" class="badge-btn" title="Start new session">New</button>
+        </div>
       </div>
 
       <!-- Chat -->

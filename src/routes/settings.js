@@ -271,63 +271,31 @@ settingsRouter.delete("/cron/:id", async (req, res) => {
 });
 
 /**
- * GET /api/settings/profiles
- * List all auth profiles with stats (redacted keys).
+ * GET /api/settings/skills-status
+ * Scan skills and report installed vs needs-install status.
  */
-settingsRouter.get("/profiles", async (_req, res) => {
+settingsRouter.get("/skills-status", async (_req, res) => {
+  const fs = await import("node:fs");
+  const nodePath = await import("node:path");
+  const { execSync } = await import("node:child_process");
+  const skillsDir = nodePath.default.join(nodePath.default.dirname(new URL(import.meta.url).pathname), "..", "skills");
   try {
-    const { getProfilesWithStats } = await import("../lib/auth-profiles.js");
-    res.json({ profiles: getProfilesWithStats() });
+    const results = [];
+    const dirs = fs.default.readdirSync(skillsDir, { withFileTypes: true }).filter(d => d.isDirectory());
+    for (const dir of dirs) {
+      const skillMd = nodePath.default.join(skillsDir, dir.name, "SKILL.md");
+      if (!fs.default.existsSync(skillMd)) continue;
+      const content = fs.default.readFileSync(skillMd, "utf8").slice(0, 600);
+      const descMatch = content.match(/^description:\s*(.+)/m);
+      const binsMatch = content.match(/"bins":\s*\[([^\]]+)\]/);
+      const bins = binsMatch ? (binsMatch[1].match(/"([^"]+)"/g) || []).map(b => b.replace(/"/g, "")) : [];
+      const missing = bins.filter(b => { try { execSync(`which ${b}`, { stdio: "ignore" }); return false; } catch { return true; } });
+      results.push({ name: dir.name, description: descMatch?.[1]?.trim() || "", status: bins.length === 0 || missing.length === 0 ? "ready" : "needs_install", bins, missing });
+    }
+    results.sort((a, b) => (a.status === "ready" ? 0 : 1) - (b.status === "ready" ? 0 : 1) || a.name.localeCompare(b.name));
+    res.json({ skills: results, ready: results.filter(s => s.status === "ready").length, total: results.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-/**
- * POST /api/settings/profiles
- * Add a new auth profile.
- * Body: { name, provider, apiKey, model?, baseUrl?, enabled? }
- */
-settingsRouter.post("/profiles", async (req, res) => {
-  const { name, provider, apiKey, model, baseUrl, enabled } = req.body || {};
-  if (!name || !provider || !apiKey) {
-    return res.status(400).json({ error: "name, provider, and apiKey are required" });
-  }
-  try {
-    const { addProfile } = await import("../lib/auth-profiles.js");
-    const profile = addProfile({ name, provider, apiKey, model, baseUrl, enabled });
-    res.status(201).json(profile);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-/**
- * PATCH /api/settings/profiles/:id
- * Update an auth profile.
- */
-settingsRouter.patch("/profiles/:id", async (req, res) => {
-  try {
-    const { updateProfile } = await import("../lib/auth-profiles.js");
-    const updated = updateProfile(req.params.id, req.body || {});
-    if (!updated) return res.status(404).json({ error: "Profile not found" });
-    res.json(updated);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-/**
- * DELETE /api/settings/profiles/:id
- * Remove an auth profile.
- */
-settingsRouter.delete("/profiles/:id", async (req, res) => {
-  try {
-    const { removeProfile } = await import("../lib/auth-profiles.js");
-    const removed = removeProfile(req.params.id);
-    if (!removed) return res.status(404).json({ error: "Profile not found" });
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});

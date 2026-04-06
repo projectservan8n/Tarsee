@@ -49,13 +49,6 @@ const Settings = {
       memoriesList: document.getElementById("memoriesList"),
       memoryInput: document.getElementById("memoryInput"),
       addMemoryBtn: document.getElementById("addMemoryBtn"),
-      // Auth profiles
-      profilesList: document.getElementById("profilesList"),
-      profileNameInput: document.getElementById("profileNameInput"),
-      profileProviderInput: document.getElementById("profileProviderInput"),
-      profileApiKeyInput: document.getElementById("profileApiKeyInput"),
-      profileModelInput: document.getElementById("profileModelInput"),
-      addProfileBtn: document.getElementById("addProfileBtn"),
       // Voice settings
       voiceEngine: document.getElementById("settingsVoiceEngine"),
       voiceEngineStatus: document.getElementById("voiceEngineStatus"),
@@ -159,10 +152,6 @@ const Settings = {
       this.elements.saveResetBtn.addEventListener("click", () => this.saveSessionReset());
     }
 
-    // Auth profile handlers
-    if (this.elements.addProfileBtn) {
-      this.elements.addProfileBtn.addEventListener("click", () => this.addProfile());
-    }
 
     // Cron handlers
     if (this.elements.addCronBtn) {
@@ -653,75 +642,6 @@ const Settings = {
     }
   },
 
-  // --- Auth Profiles ---
-  async loadProfiles() {
-    if (!this.elements.profilesList) return;
-    try {
-      const data = await API.json("/api/settings/profiles");
-      const profiles = data.profiles || [];
-
-      if (profiles.length === 0) {
-        this.elements.profilesList.innerHTML =
-          '<div style="color: var(--text-muted); font-size: 13px">No auth profiles. Add one below for multi-key rotation.</div>';
-        return;
-      }
-
-      this.elements.profilesList.innerHTML = profiles.map((p) => {
-        const status = p.inCooldown ? `cooldown (${p.cooldownReason || "error"})` : p.enabled ? "active" : "disabled";
-        const statusColor = p.inCooldown ? "color:#fbbf24" : p.enabled ? "" : "color:var(--text-muted)";
-        return `<div class="memory-item">
-          <span class="memory-badge" style="${statusColor}">${status}</span>
-          <span class="memory-content">
-            <strong>${escapeHtml(p.name)}</strong> (${p.provider}) ${p.apiKeyHint || ""}
-            ${p.stats.requests > 0 ? `<span style="color:var(--text-muted);font-size:11px"> — ${p.stats.requests} reqs, ${p.stats.errors} errs</span>` : ""}
-          </span>
-          <button class="memory-delete" data-profile-id="${p.id}" title="Delete">
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          </button>
-        </div>`;
-      }).join("");
-
-      this.elements.profilesList.querySelectorAll("[data-profile-id]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          try {
-            await API.json(`/api/settings/profiles/${btn.dataset.profileId}`, { method: "DELETE" });
-            this.loadProfiles();
-            App.showToast("Profile removed", "success");
-          } catch (err) {
-            App.showToast(err.message, "error");
-          }
-        });
-      });
-    } catch {
-      this.elements.profilesList.innerHTML = "";
-    }
-  },
-
-  async addProfile() {
-    const name = this.elements.profileNameInput?.value.trim();
-    const provider = this.elements.profileProviderInput?.value;
-    const apiKey = this.elements.profileApiKeyInput?.value.trim();
-    const model = this.elements.profileModelInput?.value.trim();
-
-    if (!name || !provider || !apiKey) {
-      App.showToast("Name, provider, and API key are required", "error");
-      return;
-    }
-    try {
-      await API.json("/api/settings/profiles", {
-        method: "POST",
-        body: { name, provider, apiKey, model: model || undefined },
-      });
-      this.elements.profileNameInput.value = "";
-      this.elements.profileApiKeyInput.value = "";
-      this.elements.profileModelInput.value = "";
-      this.loadProfiles();
-      App.showToast("Auth profile added", "success");
-    } catch (err) {
-      App.showToast(err.message, "error");
-    }
-  },
-
   // --- Cron Jobs ---
   async loadCronJobs() {
     if (!this.elements.cronJobsList) return;
@@ -843,9 +763,14 @@ const Settings = {
   async loadSkills() {
     if (!this.elements.skillsList) return;
     try {
-      const res = await API.request("/api/skills");
-      const data = await res.json();
-      const skills = data.skills || [];
+      // Fetch both skills list and install status
+      const [skillsRes, statusRes] = await Promise.all([
+        API.request("/api/skills").then(r => r.json()),
+        API.json("/api/settings/skills-status").catch(() => ({ skills: [] })),
+      ]);
+      const skills = skillsRes.skills || [];
+      const statusMap = {};
+      for (const s of (statusRes.skills || [])) statusMap[s.name] = s;
 
       if (skills.length === 0) {
         this.elements.skillsList.innerHTML =
@@ -853,12 +778,16 @@ const Settings = {
         return;
       }
 
-      this.elements.skillsList.innerHTML = skills.map((s) =>
-        `<div class="skill-card">
+      this.elements.skillsList.innerHTML = skills.map((s) => {
+        const st = statusMap[s.name];
+        const badge = st?.status === "ready" ? '<span class="memory-badge" style="background:rgba(76,175,80,0.15);color:#4caf50">ready</span>'
+          : st?.status === "needs_install" ? `<span class="memory-badge" style="background:rgba(244,67,54,0.15);color:#f44336">needs: ${(st.missing || []).join(", ")}</span>`
+          : `<span class="memory-badge">${s.source}</span>`;
+        return `<div class="skill-card">
           <div style="display: flex; justify-content: space-between; align-items: center">
             <div>
               <strong>${escapeHtml(s.name)}</strong>
-              <span class="memory-badge">${s.source}</span>
+              ${badge}
             </div>
             <div style="display: flex; gap: 4px">
               ${s.source === "custom" ? `
@@ -870,8 +799,8 @@ const Settings = {
             </div>
           </div>
           <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px">${escapeHtml(s.description)}</div>
-        </div>`
-      ).join("");
+        </div>`;
+      }).join("");
 
       this.elements.skillsList.querySelectorAll("[data-skill-edit]").forEach((btn) => {
         btn.addEventListener("click", () => this.editSkill(btn.dataset.skillEdit));

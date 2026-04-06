@@ -161,15 +161,20 @@ const Chat = {
       });
     });
 
-    // Claude Code session badge
-    this.elements.claudeCodeBadge = document.getElementById("claudeCodeBadge");
+    // Session bar
+    this.elements.sessionBar = document.getElementById("sessionBar");
+    this.elements.sessionModel = document.getElementById("sessionModel");
+    this.elements.sessionStatus = document.getElementById("sessionStatus");
+    this.elements.contextBarFill = document.getElementById("contextBarFill");
+    this.elements.contextLabel = document.getElementById("contextLabel");
     document.getElementById("newSessionBtn")?.addEventListener("click", async () => {
       if (this.currentConversationId) {
         try {
           await API.json(`/api/chat/conversations/${this.currentConversationId}/reset-session`, { method: "POST" });
+          this.elements.sessionStatus.textContent = "New Session";
+          App.showToast("Session reset", "success");
         } catch { /* ignore */ }
       }
-      this.elements.claudeCodeBadge.style.display = "none";
     });
 
     this.loadChannels();
@@ -177,15 +182,36 @@ const Chat = {
     this.loadBotName();
   },
 
-  async updateClaudeCodeBadge() {
-    const badge = this.elements.claudeCodeBadge;
-    if (!badge) return;
+  updateSessionBar() {
+    const bar = this.elements.sessionBar;
+    if (!bar) return;
+    bar.style.display = "flex";
+
+    // Model name
     try {
-      const data = await API.json("/api/settings");
-      const active = (data.settings || []).find((s) => s.key === "ai.activeProvider");
-      badge.style.display = (active?.value === "claude-code") ? "flex" : "none";
-    } catch {
-      badge.style.display = "none";
+      const stored = localStorage.getItem("tarsee_model");
+      const alias = { "claude-opus-4-6": "opus", "claude-sonnet-4-6": "sonnet", "claude-haiku-4-5": "haiku" };
+      this.elements.sessionModel.textContent = alias[stored] || "opus";
+    } catch { /* ignore */ }
+
+    // Context usage (approximate from message count)
+    if (this.currentConversationId) {
+      API.json(`/api/chat/conversations/${this.currentConversationId}`).then(data => {
+        const msgs = data.messages || [];
+        const totalChars = msgs.reduce((sum, m) => sum + (m.content?.length || 0), 0);
+        // Rough estimate: 4 chars per token, 1M token window
+        const approxTokens = Math.round(totalChars / 4);
+        const maxTokens = 1_000_000;
+        const pct = Math.min(100, Math.round((approxTokens / maxTokens) * 100));
+        this.elements.contextBarFill.style.width = `${pct}%`;
+        this.elements.contextBarFill.className = `context-bar-fill${pct > 80 ? " danger" : pct > 50 ? " warning" : ""}`;
+        this.elements.contextLabel.textContent = `${pct}%`;
+        this.elements.sessionStatus.textContent = msgs.length > 0 ? `${msgs.length} messages` : "New Session";
+      }).catch(() => {});
+    } else {
+      this.elements.sessionStatus.textContent = "New Session";
+      this.elements.contextBarFill.style.width = "0%";
+      this.elements.contextLabel.textContent = "0%";
     }
   },
 
@@ -433,7 +459,7 @@ const Chat = {
       this.elements.chatArea.innerHTML = "";
     }
 
-    this.updateClaudeCodeBadge();
+    this.updateSessionBar();
     this.renderChannelList();
     this.elements.messageInput.focus();
   },
@@ -719,6 +745,7 @@ const Chat = {
             this.currentConversationId = data.conversationId;
           }
           this.finishStreaming(assistantMsg);
+          this.updateSessionBar();
           this.loadChannels();
           // Check for personality completion
           if (typeof Setup !== "undefined") Setup.handleStreamComplete(fullResponse);
