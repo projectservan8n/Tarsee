@@ -1034,136 +1034,138 @@ html, body {
 }
 
 /* --- Responsive --- */
+/* ===== Mobile — Native App Feel ===== */
+
+/* Prevent double-tap zoom on iOS */
+* { touch-action: manipulation; }
+
 @media (max-width: 768px) {
+  /* Fix iOS keyboard pushing content — use fixed height */
+  html, body { height: 100%; overflow: hidden; }
   .app {
     grid-template-columns: 1fr;
-    grid-template-rows: 52px 1fr;
-    grid-template-areas:
-      "topbar"
-      "content";
+    grid-template-rows: 48px 1fr;
+    grid-template-areas: "topbar" "content";
+    height: 100vh;
+    height: 100dvh; /* Dynamic viewport height — excludes iOS keyboard */
   }
 
+  /* Sidebar — slide in with smooth transition */
   .sidebar {
     position: fixed;
     left: 0;
     top: 0;
     bottom: 0;
-    width: 272px;
+    width: 280px;
     z-index: 50;
     transform: translateX(-100%);
-    box-shadow: var(--shadow-xl);
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: none;
   }
-
   .sidebar.open {
     transform: translateX(0);
+    box-shadow: 4px 0 24px rgba(0,0,0,0.4);
   }
 
+  /* Overlay to close sidebar */
   .sidebar-overlay {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.5);
     z-index: 49;
-    display: none;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s;
   }
-
   .sidebar-overlay.active {
-    display: block;
+    opacity: 1;
+    pointer-events: auto;
   }
 
+  /* Topbar — compact */
+  .topbar { padding: 0 10px; height: 48px; }
+  .topbar h1 { font-size: 14px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar-right .btn svg + span,
+  .topbar-right .btn-sm span { display: none; }
+  .topbar-right .btn, .topbar-right .btn-sm { padding: 6px 8px; }
+
+  /* Content area — fill remaining space */
+  .content-area {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Chat area — scrollable, takes remaining space */
   .chat-area {
-    padding: 16px 12px;
+    padding: 12px 10px;
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
+  /* Input — pinned to bottom, safe area padding for iPhone notch */
   .input-area {
-    padding: 8px 12px 14px;
+    padding: 6px 10px calc(env(safe-area-inset-bottom, 8px) + 6px);
+    flex-shrink: 0;
+  }
+  .input-container { border-radius: 20px; }
+  #messageInput {
+    font-size: 16px; /* Prevents iOS zoom on focus */
+    padding: 10px 12px;
   }
 
-  .message {
-    gap: 10px;
-    padding: 8px 10px;
-  }
+  /* Messages */
+  .message { gap: 8px; padding: 6px 8px; }
+  .message-avatar { width: 28px; height: 28px; font-size: 11px; }
+  .message-text { font-size: 15px; line-height: 1.5; word-break: break-word; }
+  .msg-copy-btn { font-size: 10px; padding: 2px 6px; }
 
-  .message-avatar {
-    width: 28px;
-    height: 28px;
-    font-size: 11px;
-  }
+  /* Session bar */
+  .session-bar { padding: 3px 10px; font-size: 10px; }
+  .session-model { font-size: 9px; padding: 1px 6px; }
+  .context-bar { width: 50px; }
+  .badge-btn { font-size: 9px; padding: 1px 6px; }
 
-  .welcome h2 {
-    font-size: 19px;
-  }
+  /* Tables — horizontal scroll instead of overflow */
+  .message-text { overflow-x: auto; }
+  .md-table { font-size: 12px; min-width: 400px; }
+  .md-table th, .md-table td { padding: 6px 8px; white-space: nowrap; }
 
-  .welcome-suggestions {
-    flex-direction: column;
-    align-items: center;
-  }
+  /* Tool blocks */
+  .tool-block-code { font-size: 11px; max-height: 150px; }
+  .tool-name { font-size: 12px; }
+  .tool-detail { font-size: 11px; max-width: 150px; }
 
-  .settings-page {
-    flex-direction: column;
-  }
+  /* Code blocks */
+  pre { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  pre code { font-size: 12px; }
+  .code-header { font-size: 11px; padding: 6px 10px; }
 
+  /* Welcome screen */
+  .welcome h2 { font-size: 18px; }
+  .welcome-suggestions { flex-direction: column; align-items: center; }
+
+  /* Settings */
+  .settings-page { flex-direction: column; }
   .settings-tabs {
     width: 100%;
     flex-direction: row;
     overflow-x: auto;
-    padding: 8px;
-    gap: 4px;
+    -webkit-overflow-scrolling: touch;
+    padding: 6px;
+    gap: 2px;
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
-
-  .settings-tab {
-    padding: 6px 10px;
-    font-size: 12px;
-  }
-
-  .settings-content {
-    padding: 20px 16px;
-  }
-
-  .topbar-right .btn svg + span,
-  .topbar-right .btn-sm span {
-    display: none;
-  }
+  .settings-tab { padding: 6px 10px; font-size: 11px; white-space: nowrap; }
+  .settings-content { padding: 16px 12px; }
 }
 
 @media (max-width: 480px) {
-  .input-container {
-    border-radius: var(--radius-lg);
-  }
-
-  .login-card {
-    padding: 28px 24px;
-  }
-
-  /* Session bar mobile */
-  .session-bar {
-    padding: 3px 10px;
-    font-size: 10px;
-    gap: 6px;
-  }
-  .session-model { font-size: 9px; padding: 1px 6px; }
-  .context-bar { width: 50px; }
-
-  /* Tool blocks mobile */
-  .tool-block-code { font-size: 11px; max-height: 150px; }
-  .tool-name { font-size: 12px; }
-  .tool-detail { font-size: 11px; }
-
-  /* Tables mobile */
-  .md-table { font-size: 11px; }
-  .md-table th, .md-table td { padding: 5px 8px; }
-
-  /* Code blocks mobile */
-  pre code { font-size: 11px; }
-  .code-header { font-size: 11px; }
-
-  /* Messages */
-  .message-text { font-size: 14px; }
-
-  /* Topbar */
-  .topbar { padding: 0 10px; }
-  .topbar h1 { font-size: 14px; }
+  .login-card { padding: 24px 20px; }
+  .topbar h1 { max-width: 80px; }
 }
 
 /* --- Voice Clone Upload --- */

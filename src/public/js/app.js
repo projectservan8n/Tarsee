@@ -77,16 +77,39 @@ const App = {
     Settings.init();
     Console.init();
 
-    // Mobile menu toggle
+    // Mobile menu toggle with overlay
     const menuBtn = document.getElementById("menuBtn");
     const sidebar = document.getElementById("sidebar");
+
+    // Create overlay for sidebar
+    const overlay = document.createElement("div");
+    overlay.className = "sidebar-overlay";
+    overlay.id = "sidebarOverlay";
+    document.body.appendChild(overlay);
+
+    const closeSidebar = () => {
+      sidebar.classList.remove("open");
+      overlay.classList.remove("active");
+    };
 
     if (window.innerWidth <= 768) {
       menuBtn.style.display = "inline-flex";
       menuBtn.addEventListener("click", () => {
-        sidebar.classList.toggle("open");
+        const isOpen = sidebar.classList.toggle("open");
+        overlay.classList.toggle("active", isOpen);
+      });
+      overlay.addEventListener("click", closeSidebar);
+      // Close sidebar when a channel is clicked
+      sidebar.addEventListener("click", (e) => {
+        if (e.target.closest(".channel-item")) closeSidebar();
       });
     }
+
+    // Handle window resize
+    window.addEventListener("resize", () => {
+      if (window.innerWidth > 768) closeSidebar();
+      menuBtn.style.display = window.innerWidth <= 768 ? "inline-flex" : "none";
+    });
 
     // Refresh CSRF token periodically (every hour)
     setInterval(() => {
