@@ -144,6 +144,7 @@ export async function* chat({
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     maxTurns: 50,
+    includePartialMessages: true,
     mcpServers: { tarsee: tarseeMcp },
     additionalDirectories: [skillsDir],
   };
@@ -204,24 +205,50 @@ Run /skills to see full list. Skills dir: ${skillsDir}
 
   try {
     let messageCount = 0;
+    let streamed = false; // Track if we streamed text via stream_event (avoid duplicate from assistant message)
     for await (const message of query({ prompt, options: queryOptions, signal })) {
       messageCount++;
       if (signal?.aborted) break;
 
       switch (message.type) {
-        case "assistant": {
-          // Assistant text content — stream it
-          const text = typeof message.message?.content === "string"
-            ? message.message.content
-            : Array.isArray(message.message?.content)
-              ? message.message.content
-                  .filter((b) => b.type === "text")
-                  .map((b) => b.text)
-                  .join("")
-              : "";
-          if (text) {
-            yield { type: "text", content: text };
+        case "stream_event": {
+          // Token-by-token streaming — text deltas and thinking
+          const evt = message.event;
+          if (evt?.type === "content_block_delta") {
+            if (evt.delta?.type === "text_delta" && evt.delta.text) {
+              yield { type: "text", content: evt.delta.text };
+              streamed = true;
+            } else if (evt.delta?.type === "thinking_delta" && evt.delta.thinking) {
+              yield { type: "text", content: evt.delta.thinking };
+              streamed = true;
+            }
+          } else if (evt?.type === "content_block_start") {
+            if (evt.content_block?.type === "thinking") {
+              yield { type: "text", content: "<thinking>\n" };
+            }
+          } else if (evt?.type === "content_block_stop") {
+            // Check if we were in a thinking block
           }
+          break;
+        }
+
+        case "assistant": {
+          // Full assistant message (after streaming completes)
+          // Only yield text if we didn't already stream it
+          if (!streamed) {
+            const text = typeof message.message?.content === "string"
+              ? message.message.content
+              : Array.isArray(message.message?.content)
+                ? message.message.content
+                    .filter((b) => b.type === "text")
+                    .map((b) => b.text)
+                    .join("")
+                : "";
+            if (text) {
+              yield { type: "text", content: text };
+            }
+          }
+          streamed = false;
 
           // Check for tool_use blocks in the content
           if (Array.isArray(message.message?.content)) {
