@@ -364,6 +364,22 @@ You can use these special markers in your response:
 
   // Use polling (no webhook needed)
   await bot.launch({ dropPendingUpdates: true });
+
+  // Register /commands dropdown in Telegram
+  bot.telegram.setMyCommands([
+    { command: "help", description: "Show available commands" },
+    { command: "model", description: "Switch model (opus, sonnet, haiku)" },
+    { command: "clear", description: "Start a new conversation" },
+    { command: "status", description: "System status" },
+    { command: "soul", description: "Show personality" },
+    { command: "skills", description: "List available skills" },
+    { command: "cron", description: "Manage scheduled tasks" },
+    { command: "remember", description: "Save to memory" },
+    { command: "daily", description: "Today's log" },
+    { command: "export", description: "Export conversation" },
+    { command: "doctor", description: "Run diagnostics" },
+  ]).catch(() => {});
+
   console.log(`[telegram] bot started`);
 
   return {
