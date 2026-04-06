@@ -49,12 +49,13 @@
   --radius-pill: 100px;
 
   /* Typography */
-  --font-body: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-body: 'DM Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
 
-  /* Motion */
-  --transition: 150ms ease;
-  --transition-slow: 250ms ease;
+  /* Motion — spring-like curves */
+  --transition: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  --spring: 500ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 /* --- Reset & Base --- */
@@ -272,9 +273,9 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: rgba(14, 16, 21, 0.8);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(14, 16, 21, 0.75);
+  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
   flex-shrink: 0;
   z-index: 10;
 }
@@ -330,8 +331,8 @@ html, body {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 .message-avatar {
@@ -499,8 +500,8 @@ html, body {
 }
 
 .input-container:focus-within {
-  border-color: rgba(255, 255, 255, 0.18);
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.06), var(--shadow);
+  border-color: rgba(245, 166, 35, 0.3);
+  box-shadow: 0 0 0 3px rgba(245, 166, 35, 0.08), var(--shadow);
 }
 
 .input-container textarea {
@@ -920,6 +921,7 @@ html, body {
   min-height: 100vh;
   padding: 20px;
   background: var(--bg);
+  background-image: radial-gradient(circle at 50% 0%, rgba(245, 166, 35, 0.06) 0%, transparent 50%);
 }
 
 .login-card {
@@ -1052,103 +1054,122 @@ html, body {
     padding-top: env(safe-area-inset-top, 0px);
   }
 
-  /* Sidebar — slide in with smooth transition */
+  /* Sidebar — iOS sheet-style slide */
   .sidebar {
     position: fixed;
     left: 0;
     top: 0;
     bottom: 0;
-    width: 280px;
+    width: 300px;
+    max-width: 85vw;
     padding-top: env(safe-area-inset-top, 0px);
     z-index: 50;
     transform: translateX(-100%);
-    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1); /* iOS spring */
     box-shadow: none;
+    background: rgba(19, 21, 26, 0.98);
+    backdrop-filter: blur(40px) saturate(1.8);
+    -webkit-backdrop-filter: blur(40px) saturate(1.8);
   }
   .sidebar.open {
     transform: translateX(0);
-    box-shadow: 4px 0 24px rgba(0,0,0,0.4);
+    box-shadow: 8px 0 40px rgba(0,0,0,0.5);
   }
 
-  /* Overlay to close sidebar */
+  /* Overlay — smooth fade */
   .sidebar-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(0, 0, 0, 0.45);
     z-index: 49;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.25s;
+    transition: opacity 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+    -webkit-tap-highlight-color: transparent;
   }
   .sidebar-overlay.active {
     opacity: 1;
     pointer-events: auto;
   }
 
-  /* Topbar — compact */
-  .topbar { padding: 0 10px; height: 48px; }
-  .topbar h1 { font-size: 14px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Topbar — compact, glass */
+  .topbar {
+    padding: 0 12px;
+    height: 48px;
+    background: rgba(14, 16, 21, 0.7);
+    backdrop-filter: blur(24px) saturate(1.5);
+    -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  }
+  .topbar h1, .topbar-title { font-size: 15px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .topbar-right .btn svg + span,
   .topbar-right .btn-sm span { display: none; }
-  .topbar-right .btn, .topbar-right .btn-sm { padding: 6px 8px; }
+  .topbar-right .btn, .topbar-right .btn-sm { padding: 6px 8px; min-width: 36px; min-height: 36px; }
 
-  /* Content area — fill remaining space */
-  .content-area {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  /* Chat area — scrollable, takes remaining space */
+  /* Chat area */
   .chat-area {
-    padding: 12px 10px;
+    padding: 10px 8px;
     flex: 1;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
 
-  /* Input — pinned to bottom, safe area padding for iPhone notch */
+  /* Input — iOS-native feel */
   .input-area {
-    padding: 6px 10px calc(env(safe-area-inset-bottom, 8px) + 6px);
+    padding: 6px 8px calc(env(safe-area-inset-bottom, 8px) + 4px);
     flex-shrink: 0;
+    background: rgba(14, 16, 21, 0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-top: 1px solid var(--border);
   }
-  .input-container { border-radius: 20px; }
+  .input-container {
+    border-radius: 22px;
+    background: rgba(26, 29, 36, 0.9);
+  }
   #messageInput {
     font-size: 16px; /* Prevents iOS zoom on focus */
-    padding: 10px 12px;
+    padding: 10px 14px;
   }
+  .input-btn { width: 34px; height: 34px; }
+  .input-btn.send { border-radius: 50%; width: 34px; height: 34px; }
 
-  /* Messages */
-  .message { gap: 8px; padding: 6px 8px; }
-  .message-avatar { width: 28px; height: 28px; font-size: 11px; }
-  .message-text { font-size: 15px; line-height: 1.5; word-break: break-word; }
-  .msg-copy-btn { font-size: 10px; padding: 2px 6px; }
+  /* Messages — tighter, cleaner */
+  .message { gap: 10px; padding: 8px 10px; border-radius: var(--radius); }
+  .message-avatar { width: 30px; height: 30px; font-size: 11px; border-radius: 50%; }
+  .message.assistant .message-avatar { border-radius: 50%; }
+  .message.user .message-avatar { border-radius: 50%; }
+  .message-text { font-size: 15px; line-height: 1.55; word-break: break-word; }
+  .message-role { font-size: 12px; }
+  .msg-copy-btn { font-size: 10px; padding: 2px 6px; opacity: 0.6; }
 
-  /* Session bar */
-  .session-bar { padding: 3px 10px; font-size: 10px; }
-  .session-model { font-size: 9px; padding: 1px 6px; }
-  .context-bar { width: 50px; }
-  .badge-btn { font-size: 9px; padding: 1px 6px; }
+  /* Session bar — minimal */
+  .session-bar { padding: 4px 10px; font-size: 10px; background: rgba(14,16,21,0.6); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  .session-model { font-size: 9px; padding: 2px 7px; border-radius: 4px; }
+  .context-bar { width: 50px; height: 4px; border-radius: 2px; }
+  .context-bar-fill { border-radius: 2px; }
+  .badge-btn { font-size: 9px; padding: 2px 7px; border-radius: 4px; }
 
-  /* Tables — horizontal scroll instead of overflow */
-  .message-text { overflow-x: auto; }
-  .md-table { font-size: 12px; min-width: 400px; }
-  .md-table th, .md-table td { padding: 6px 8px; white-space: nowrap; }
+  /* Tables — horizontal scroll */
+  .message-text { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .md-table { font-size: 12px; min-width: 360px; }
+  .md-table th, .md-table td { padding: 6px 10px; white-space: nowrap; }
 
   /* Tool blocks */
+  .tool-block { border-radius: var(--radius); }
   .tool-block-code { font-size: 11px; max-height: 150px; }
   .tool-name { font-size: 12px; }
-  .tool-detail { font-size: 11px; max-width: 150px; }
+  .tool-detail { font-size: 11px; max-width: 140px; }
 
   /* Code blocks */
   pre { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   pre code { font-size: 12px; }
   .code-header { font-size: 11px; padding: 6px 10px; }
 
-  /* Welcome screen */
-  .welcome h2 { font-size: 18px; }
-  .welcome-suggestions { flex-direction: column; align-items: center; }
+  /* Welcome */
+  .welcome h2 { font-size: 20px; }
+  .welcome p { font-size: 14px; }
+  .welcome-suggestions { flex-direction: column; align-items: center; gap: 6px; }
+  .welcome-suggestion { font-size: 13px; padding: 10px 18px; }
 
   /* Settings */
   .settings-page { flex-direction: column; }
@@ -1157,18 +1178,21 @@ html, body {
     flex-direction: row;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
-    padding: 6px;
-    gap: 2px;
+    padding: 8px;
+    gap: 4px;
     border-right: none;
     border-bottom: 1px solid var(--border);
+    background: var(--bg-sidebar);
   }
-  .settings-tab { padding: 6px 10px; font-size: 11px; white-space: nowrap; }
-  .settings-content { padding: 16px 12px; }
+  .settings-tab { padding: 8px 14px; font-size: 12px; white-space: nowrap; border-radius: var(--radius-pill); }
+  .settings-tab.active { background: var(--primary-light); color: var(--primary); }
+  .settings-content { padding: 20px 14px; }
 }
 
 @media (max-width: 480px) {
-  .login-card { padding: 24px 20px; }
-  .topbar h1 { max-width: 80px; }
+  .login-card { padding: 24px 20px; border-radius: var(--radius-xl); }
+  .topbar h1, .topbar-title { max-width: 100px; }
+  .message { padding: 6px 6px; }
 }
 
 /* --- Voice Clone Upload --- */

@@ -4,9 +4,9 @@
 .voice-panel {
   position: fixed;
   inset: 0;
-  background: rgba(10, 12, 18, 0.97);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
+  background: rgba(8, 10, 14, 0.95);
+  backdrop-filter: blur(40px) saturate(1.5);
+  -webkit-backdrop-filter: blur(40px) saturate(1.5);
   z-index: 80;
   display: none;
   flex-direction: column;
