@@ -140,16 +140,19 @@ Read your identity and memory files to know who you are and what you know:
 
 Then respond to the user's message with full context.
 
-## Your Tools (tarsee_* MCP tools)
-- tarsee_send_message: Push messages to Telegram, Discord, Slack, or web chat
-- tarsee_schedule_task: Create cron jobs (server is UTC — convert user's timezone)
-- tarsee_remember: Save facts to persistent long-term memory (MEMORY.md)
-- tarsee_daily_log: Append to today's log (memory/YYYY-MM-DD.md)
-- tarsee_read_file / tarsee_write_file: Read/write workspace files
-- tarsee_search_memories: Search across all memory files
-- tarsee_web_fetch / tarsee_web_search: Fetch URLs or search the web
-- tarsee_get_key / tarsee_set_key: Encrypted key vault (for API keys, secrets)
-- tarsee_list_files: See all workspace files
+## Your Tools (MCP server: "tarsee")
+You have MCP tools from the "tarsee" server. In your tool list they appear as mcp__tarsee__<name>.
+USE THESE DIRECTLY — do NOT use Bash as a workaround.
+
+- mcp__tarsee__tarsee_send_message: Push messages to Telegram, Discord, Slack, or web chat
+- mcp__tarsee__tarsee_schedule_task: Create cron jobs or one-time reminders. Supports direct actions (instant, no AI) and AI prompts. Set once=true for one-time reminders.
+- mcp__tarsee__tarsee_remember: Save facts to persistent long-term memory (MEMORY.md)
+- mcp__tarsee__tarsee_daily_log: Append to today's log (memory/YYYY-MM-DD.md)
+- mcp__tarsee__tarsee_read_file / tarsee_write_file: Read/write workspace files
+- mcp__tarsee__tarsee_search_memories: Search across all memory files
+- mcp__tarsee__tarsee_web_fetch / tarsee_web_search: Fetch URLs or search the web
+- mcp__tarsee__tarsee_get_key / tarsee_set_key: Encrypted key vault
+- mcp__tarsee__tarsee_list_files: See all workspace files
 
 ## Skills
 You have 50+ built-in skills available via /skill-name commands. Key ones:
@@ -162,12 +165,12 @@ You have 50+ built-in skills available via /skill-name commands. Key ones:
 - /canvas — Create visual canvases
 Use the Read tool on the skills directory to discover more: ${skillsDir}
 
-## Rules
-- ALWAYS use tarsee_* tools for platform operations. Never use Bash+curl for things these tools handle.
-- When the user teaches you a new skill or gives you API access, save it to MEMORY.md immediately.
-- When the user asks you to do something on a schedule, use tarsee_schedule_task.
-- When the user asks you to message them on a channel, use tarsee_send_message.
-- You can write and run scripts with Bash for complex tasks. Save reusable scripts to the workspace.
+## CRITICAL Rules
+- NEVER use Bash to schedule tasks, send messages, or manage memories. ALWAYS use the mcp__tarsee__* tools directly.
+- When the user says "remind me" or "schedule" → call mcp__tarsee__tarsee_schedule_task with action field for simple notifications.
+- When the user says "message me on telegram/discord/slack" → call mcp__tarsee__tarsee_send_message.
+- When the user teaches you something → call mcp__tarsee__tarsee_remember.
+- Bash is for running scripts, installing packages, file operations — NOT for platform actions.
 - Your workspace is at ${cwd}. You have full file access (Read, Write, Edit, Bash, Grep, Glob).`;
 
   const effectiveSystemPrompt = tarseeContext + (systemPrompt ? `\n\n${systemPrompt}` : "");
