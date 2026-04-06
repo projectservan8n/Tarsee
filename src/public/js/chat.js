@@ -127,6 +127,31 @@ const Chat = {
       }
     });
 
+    // Copy button delegation (works for both message copy and code block copy)
+    document.addEventListener("click", (e) => {
+      const copyBtn = e.target.closest(".msg-copy-btn, .copy-btn");
+      if (!copyBtn) return;
+      const msg = copyBtn.closest(".message");
+      const codeBlock = copyBtn.closest(".code-header")?.nextElementSibling;
+      const text = codeBlock ? codeBlock.textContent : msg?.querySelector(".message-text")?.textContent;
+      if (text) {
+        navigator.clipboard.writeText(text).then(() => {
+          copyBtn.textContent = "Copied!";
+          setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
+        }).catch(() => {
+          // Fallback for non-HTTPS
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+          copyBtn.textContent = "Copied!";
+          setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
+        });
+      }
+    });
+
     // Welcome suggestion cards
     document.querySelectorAll(".welcome-suggestion").forEach((el) => {
       el.addEventListener("click", () => {
@@ -438,7 +463,7 @@ const Chat = {
 
     // Copy button for assistant messages
     const copyBtn = role === "assistant" && !isStreaming
-      ? `<button class="msg-copy-btn" onclick="navigator.clipboard.writeText(this.closest('.message').querySelector('.message-text').textContent)">Copy</button>`
+      ? `<button class="msg-copy-btn">Copy</button>`
       : "";
 
     msg.innerHTML = `
@@ -815,45 +840,27 @@ const Chat = {
 
     // ── Markdown formatting ──
 
-    // Code blocks (```lang\ncode\n```)
+    // Code blocks FIRST (preserve newlines inside)
+    const codeBlocks = [];
     html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
       const langLabel = lang || "code";
-      return `<div class="code-header"><span>${escapeHtml(langLabel)}</span><button class="copy-btn" onclick="navigator.clipboard.writeText(this.closest('.code-header').nextElementSibling.textContent)">Copy</button></div><pre><code>${code}</code></pre>`;
+      const idx = codeBlocks.length;
+      codeBlocks.push(`<div class="code-header"><span>${escapeHtml(langLabel)}</span><button class="copy-btn">Copy</button></div><pre><code>${code}</code></pre>`);
+      return `\x01CODE${idx}\x01`;
     });
 
-    // Headings (### h3, ## h2, # h1) — must be at start of line
-    html = html.replace(/(^|<br>)### (.+?)(<br>|$)/g, "$1<h3>$2</h3>$3");
-    html = html.replace(/(^|<br>)## (.+?)(<br>|$)/g, "$1<h2>$2</h2>$3");
-    html = html.replace(/(^|<br>)# (.+?)(<br>|$)/g, "$1<h1>$2</h1>$3");
-
-    // Inline code
-    html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-
-    // Bold
-    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-
-    // Italic
-    html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-
-    // Strikethrough
-    html = html.replace(/~~(.+?)~~/g, "<del>$1</del>");
-
-    // Links
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-
-    // Horizontal rule
-    html = html.replace(/(^|<br>)---(<br>|$)/g, "$1<hr>$2");
+    // Convert newlines to <br> BEFORE parsing block elements
+    html = html.replace(/\n/g, "<br>");
 
     // Markdown tables: | col | col | with |---|---| separator
-    html = html.replace(/((?:(?:^|<br>)\|[^\n]+\|(?:<br>|\n|$))+)/g, (tableBlock) => {
-      const rows = tableBlock.split(/<br>|\n/).filter(r => r.trim().startsWith("|") && r.trim().endsWith("|"));
+    html = html.replace(/((?:(?:^|<br>)\s*\|[^<]+\|(?:<br>|$))+)/g, (tableBlock) => {
+      const rows = tableBlock.split("<br>").map(r => r.trim()).filter(r => r.startsWith("|") && r.endsWith("|"));
       if (rows.length < 2) return tableBlock;
-      // Check for separator row (|---|---|)
-      const sepIdx = rows.findIndex(r => /^\|[\s\-:|]+\|$/.test(r.trim()));
+      const sepIdx = rows.findIndex(r => /^\|[\s\-:|]+\|$/.test(r));
       if (sepIdx === -1) return tableBlock;
       const headerRows = rows.slice(0, sepIdx);
       const bodyRows = rows.slice(sepIdx + 1);
-      const parseRow = (r) => r.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+      const parseRow = (r) => r.replace(/^\||\|$/g, "").split("|").map(c => c.trim());
       let table = '<table class="md-table">';
       if (headerRows.length > 0) {
         table += "<thead>";
@@ -869,11 +876,36 @@ const Chat = {
       return table;
     });
 
+    // Headings (### h3, ## h2, # h1) — at start of line
+    html = html.replace(/(^|<br>)### (.+?)(<br>|$)/g, "$1<h3>$2</h3>$3");
+    html = html.replace(/(^|<br>)## (.+?)(<br>|$)/g, "$1<h2>$2</h2>$3");
+    html = html.replace(/(^|<br>)# (.+?)(<br>|$)/g, "$1<h1>$2</h1>$3");
+
+    // Horizontal rule
+    html = html.replace(/(^|<br>)---(<br>|$)/g, "$1<hr>$2");
+
     // Unordered lists (- item)
     html = html.replace(/(^|<br>)- (.+?)(?=<br>|$)/g, "$1<li>$2</li>");
 
-    // Newlines to <br> (but not inside pre blocks)
-    html = html.replace(/\n/g, "<br>");
+    // Inline code
+    html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+
+    // Bold
+    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+    // Italic
+    html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
+
+    // Strikethrough
+    html = html.replace(/~~(.+?)~~/g, "<del>$1</del>");
+
+    // Links
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+
+    // Re-inject code blocks
+    for (let i = 0; i < codeBlocks.length; i++) {
+      html = html.replace(`\x01CODE${i}\x01`, codeBlocks[i]);
+    }
 
     // ── Re-inject extracted blocks ──
     for (let i = 0; i < blocks.length; i++) {
