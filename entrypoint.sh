@@ -55,9 +55,5 @@ if [ -f /usr/local/bin/claude ]; then
   chown node:node /home/node/.bashrc
 fi
 
-# Auto-install Claude Code plugins on boot (runs as node user, persists on volume)
-if [ -f /usr/local/bin/claude ]; then
-fi
-
 # Drop to node user and start the app
 exec gosu node node src/server.js
