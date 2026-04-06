@@ -116,6 +116,26 @@ export async function* chat({
   // Skills directory — Claude Code discovers SKILL.md files here
   const skillsDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "skills");
 
+  // Scan skill availability (check which required binaries are installed)
+  const { execSync } = await import("node:child_process");
+  const skillStatus = [];
+  try {
+    const skillDirs = fs.readdirSync(skillsDir, { withFileTypes: true }).filter(d => d.isDirectory());
+    for (const dir of skillDirs) {
+      const skillMd = path.join(skillsDir, dir.name, "SKILL.md");
+      if (!fs.existsSync(skillMd)) continue;
+      const content = fs.readFileSync(skillMd, "utf8").slice(0, 500);
+      const binsMatch = content.match(/"bins":\s*\[([^\]]+)\]/);
+      if (!binsMatch) {
+        skillStatus.push({ name: dir.name, status: "ready", bins: [] });
+        continue;
+      }
+      const bins = binsMatch[1].match(/"([^"]+)"/g)?.map(b => b.replace(/"/g, "")) || [];
+      const missing = bins.filter(b => { try { execSync(`which ${b}`, { stdio: "ignore" }); return false; } catch { return true; } });
+      skillStatus.push({ name: dir.name, status: missing.length === 0 ? "ready" : "needs_install", bins, missing });
+    }
+  } catch { /* ignore scan errors */ }
+
   const queryOptions = {
     cwd,
     model: model || config.CLAUDE_DEFAULT_MODEL || "claude-opus-4-6",
@@ -154,16 +174,10 @@ USE THESE DIRECTLY — do NOT use Bash as a workaround.
 - mcp__tarsee__tarsee_get_key / tarsee_set_key: Encrypted key vault
 - mcp__tarsee__tarsee_list_files: See all workspace files
 
-## Skills
-You have 50+ built-in skills available via /skill-name commands. Key ones:
-- /gog — Google Workspace (Gmail, Calendar, Drive, Sheets, Docs)
-- /github — GitHub operations
-- /discord, /slack — Channel management
-- /weather — Weather lookups
-- /summarize — Summarize content
-- /healthcheck — System health
-- /canvas — Create visual canvases
-Use the Read tool on the skills directory to discover more: ${skillsDir}
+## Skills (${skillStatus.filter(s => s.status === "ready").length} ready, ${skillStatus.filter(s => s.status === "needs_install").length} need install)
+${skillStatus.filter(s => s.status === "ready").map(s => `- /${s.name} ✅`).join("\n")}
+${skillStatus.filter(s => s.status === "needs_install").length > 0 ? "\nNot installed (use Bash to install if needed):\n" + skillStatus.filter(s => s.status === "needs_install").map(s => `- /${s.name} — needs: ${s.missing.join(", ")}`).join("\n") : ""}
+Skills directory: ${skillsDir}
 
 ## CRITICAL Rules
 - NEVER use Bash to schedule tasks, send messages, or manage memories. ALWAYS use the mcp__tarsee__* tools directly.
