@@ -34,26 +34,31 @@ const COMMANDS = {
   },
 
   model: {
-    description: "Show or switch the AI model",
-    usage: "/model [model-name]",
+    description: "Show or switch the AI model (opus, sonnet, haiku)",
+    usage: "/model [opus|sonnet|haiku]",
     handler: (args, ctx) => {
       const settingsStore = ctx.settingsStore;
       if (!settingsStore) return "Settings not available.";
 
+      const MODELS = {
+        opus: "claude-opus-4-6",
+        sonnet: "claude-sonnet-4-6",
+        haiku: "claude-haiku-4-5",
+      };
+
       const active = settingsStore.getActiveProvider();
 
       if (!args) {
-        const provider = active?.provider || "none";
-        const model = active?.model || "default";
-        return `**Current model:** ${model}\n**Provider:** ${provider}`;
+        const model = active?.model || "claude-opus-4-6";
+        const alias = Object.entries(MODELS).find(([, v]) => v === model)?.[0] || model;
+        return `**Current model:** ${alias} (\`${model}\`)\n\n**Available:**\n- \`/model opus\` — Opus 4.6 (smartest, 1M context)\n- \`/model sonnet\` — Sonnet 4.6 (fast, 1M context)\n- \`/model haiku\` — Haiku 4.5 (fastest)`;
       }
 
-      // Set the model
-      const provider = active?.provider;
-      if (!provider) return "No provider configured. Set one in Settings first.";
-
-      settingsStore.set(`ai.${provider}.model`, args);
-      return `Model switched to **${args}** (provider: ${provider})`;
+      const provider = active?.provider || "claude-code";
+      const modelId = MODELS[args.toLowerCase()] || args;
+      settingsStore.set(`ai.${provider}.model`, modelId);
+      const alias = Object.entries(MODELS).find(([, v]) => v === modelId)?.[0] || modelId;
+      return `Model switched to **${alias}** (\`${modelId}\`)`;
     },
   },
 
