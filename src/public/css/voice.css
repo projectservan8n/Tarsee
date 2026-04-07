@@ -266,6 +266,20 @@
   }
 }
 
+/* Drag-to-cancel state */
+.voice-orb.drag-cancel {
+  background: rgba(248, 113, 113, 0.15);
+  border-color: var(--danger, #f87171);
+  box-shadow: 0 0 20px rgba(248, 113, 113, 0.2);
+  animation: none;
+  transform: scale(0.9);
+  opacity: 0.6;
+}
+
+.voice-orb.drag-cancel svg {
+  color: var(--danger, #f87171);
+}
+
 /* ---------- Status text ---------- */
 .voice-status-text {
   font-size: 14px;

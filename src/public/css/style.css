@@ -595,9 +595,88 @@ html, body {
   animation: pulse 1.5s infinite;
 }
 
+.input-btn.voice-transcribing {
+  background: var(--primary);
+  color: #1a1a1a;
+  animation: pulse-amber 1.2s infinite;
+}
+
+.input-btn.drag-cancel {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  animation: none;
+  opacity: 0.5;
+}
+
 @keyframes pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.4); }
   50% { box-shadow: 0 0 0 8px rgba(248, 113, 113, 0); }
+}
+
+@keyframes pulse-amber {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 166, 35, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(245, 166, 35, 0); }
+}
+
+/* Voice cancel hint (slide to cancel) */
+.voice-cancel-hint {
+  position: absolute;
+  right: 100px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+  opacity: 0.7;
+  transition: opacity 0.2s, color 0.2s;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.voice-cancel-hint.active {
+  color: var(--danger);
+  opacity: 1;
+}
+
+.voice-cancel-arrow {
+  animation: slideArrow 1s ease-in-out infinite;
+  font-size: 16px;
+}
+
+@keyframes slideArrow {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(-6px); }
+}
+
+/* Voice recording timer */
+.voice-rec-timer {
+  position: absolute;
+  left: 56px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--danger);
+  pointer-events: none;
+}
+
+.voice-rec-timer::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: recDot 1s ease-in-out infinite;
+}
+
+@keyframes recDot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
 /* --- Welcome Screen --- */

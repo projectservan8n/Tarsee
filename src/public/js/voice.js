@@ -1,7 +1,8 @@
 /**
  * Voice mode module.
  * Hold-to-talk or click-to-toggle with waveform visualization.
- * Uses Whisper STT + ElevenLabs v3 TTS with conversational emotions.
+ * Drag away to cancel recording (both voice mode orb + chat mic button).
+ * Uses Whisper STT + Edge TTS / ElevenLabs TTS.
  */
 const Voice = {
   isListening: false,
@@ -16,6 +17,7 @@ const Voice = {
   waveformAnim: null,
   holdTimer: null,
   isHolding: false,
+  _dragCancelled: false,
 
   elements: {},
 
@@ -37,22 +39,270 @@ const Voice = {
     this.elements.modeBtn?.addEventListener("click", () => this.open());
     this.elements.closeBtn?.addEventListener("click", () => this.close());
 
-    // Orb: hold-to-talk (mousedown + mouseup) or click-to-toggle (quick click)
+    // Orb: hold-to-talk + click-to-toggle + drag-to-cancel
+    this._initOrbDrag();
+
+    // Chat mic button: hold-to-record + click-to-toggle + drag-to-cancel
+    this._initChatMicDrag();
+  },
+
+  /** Set up orb drag-to-cancel (voice mode). */
+  _initOrbDrag() {
     const orb = this.elements.orb;
-    if (orb) {
-      let pressStart = 0;
-      orb.addEventListener("mousedown", (e) => { e.preventDefault(); pressStart = Date.now(); this.onPressStart(); });
-      orb.addEventListener("mouseup", () => { this.onPressEnd(Date.now() - pressStart); });
-      orb.addEventListener("mouseleave", () => { if (this.isHolding) this.onPressEnd(500); });
-      // Touch support
-      orb.addEventListener("touchstart", (e) => { e.preventDefault(); pressStart = Date.now(); this.onPressStart(); });
-      orb.addEventListener("touchend", () => { this.onPressEnd(Date.now() - pressStart); });
-    }
+    if (!orb) return;
 
-    // Audio ended handling is now per-playback in speak()
+    let pressStart = 0;
+    let startX = 0, startY = 0;
+    this._dragCancelled = false;
 
-    // Voice input button in chat input (quick dictation)
-    this.elements.voiceInputBtn?.addEventListener("click", () => this.quickListen());
+    const CANCEL_DISTANCE = 80;
+
+    const onMove = (x, y) => {
+      if (!this.isHolding && !this.isRecording) return;
+      const dx = x - startX;
+      const dy = y - startY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist > CANCEL_DISTANCE) {
+        if (!this._dragCancelled) {
+          this._dragCancelled = true;
+          this.elements.status.textContent = "Release to cancel";
+          orb.classList.add("drag-cancel");
+        }
+      } else {
+        if (this._dragCancelled) {
+          this._dragCancelled = false;
+          this.elements.status.textContent = "Listening...";
+          orb.classList.remove("drag-cancel");
+        }
+      }
+    };
+
+    // Mouse
+    orb.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      pressStart = Date.now();
+      startX = e.clientX; startY = e.clientY;
+      this._dragCancelled = false;
+      this.onPressStart();
+      const mousemove = (e2) => onMove(e2.clientX, e2.clientY);
+      const mouseup = () => {
+        document.removeEventListener("mousemove", mousemove);
+        document.removeEventListener("mouseup", mouseup);
+        this.onPressEnd(Date.now() - pressStart);
+      };
+      document.addEventListener("mousemove", mousemove);
+      document.addEventListener("mouseup", mouseup);
+    });
+
+    // Touch
+    orb.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      pressStart = Date.now();
+      const touch = e.touches[0];
+      startX = touch.clientX; startY = touch.clientY;
+      this._dragCancelled = false;
+      this.onPressStart();
+    });
+    orb.addEventListener("touchmove", (e) => {
+      const touch = e.touches[0];
+      onMove(touch.clientX, touch.clientY);
+    });
+    orb.addEventListener("touchend", () => {
+      this.onPressEnd(Date.now() - pressStart);
+    });
+  },
+
+  /** Set up chat mic button: hold-to-record + tap-to-toggle + drag-to-cancel. */
+  _initChatMicDrag() {
+    const btn = this.elements.voiceInputBtn;
+    if (!btn) return;
+
+    let pressStart = 0;
+    let startX = 0, startY = 0;
+    let cancelled = false;
+    const CANCEL_DISTANCE = 60;
+
+    // Create cancel hint element
+    const cancelHint = document.createElement("div");
+    cancelHint.className = "voice-cancel-hint";
+    cancelHint.innerHTML = '<span class="voice-cancel-arrow">‹</span> Slide to cancel';
+    cancelHint.style.display = "none";
+    btn.parentElement.appendChild(cancelHint);
+
+    // Create recording timer element
+    const recTimer = document.createElement("div");
+    recTimer.className = "voice-rec-timer";
+    recTimer.style.display = "none";
+    btn.parentElement.appendChild(recTimer);
+
+    let timerInterval = null;
+    const startTimer = () => {
+      const start = Date.now();
+      recTimer.style.display = "flex";
+      timerInterval = setInterval(() => {
+        const s = Math.floor((Date.now() - start) / 1000);
+        recTimer.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+      }, 200);
+    };
+    const stopTimer = () => {
+      clearInterval(timerInterval);
+      recTimer.style.display = "none";
+      recTimer.textContent = "";
+    };
+
+    const onMove = (x, y) => {
+      const dx = x - startX;
+      const dist = Math.abs(dx);
+
+      // Only cancel when dragging left (away from button)
+      if (dx < -CANCEL_DISTANCE) {
+        if (!cancelled) {
+          cancelled = true;
+          cancelHint.classList.add("active");
+          btn.classList.add("drag-cancel");
+        }
+      } else {
+        if (cancelled) {
+          cancelled = false;
+          cancelHint.classList.remove("active");
+          btn.classList.remove("drag-cancel");
+        }
+      }
+    };
+
+    const startRecording = async () => {
+      if (this.isRecording || this._chatRecording) return;
+
+      let stream;
+      try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+      catch { App.showToast("Microphone access denied", "error"); return; }
+
+      this._chatRecording = true;
+      this._chatCancelled = false;
+      btn.classList.add("voice-active");
+      cancelHint.style.display = "flex";
+      startTimer();
+
+      const chunks = [];
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+      this._quickRecorder = recorder;
+      this._quickStream = stream;
+
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        this._chatRecording = false;
+        this._quickRecorder = null;
+        this._quickStream = null;
+        btn.classList.remove("voice-active", "drag-cancel");
+        cancelHint.style.display = "none";
+        cancelHint.classList.remove("active");
+        stopTimer();
+
+        if (this._chatCancelled || chunks.length === 0) return;
+
+        // Transcribe and send as chat message
+        const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+        btn.classList.add("voice-transcribing");
+        try {
+          const formData = new FormData();
+          formData.append("audio", blob, "recording.webm");
+          const csrf = API.getCsrfToken();
+          const headers = {};
+          if (csrf) headers["X-CSRF-Token"] = csrf;
+          const res = await fetch("/api/voice/transcribe", { method: "POST", headers, credentials: "same-origin", body: formData });
+          if (!res.ok) throw new Error("Transcription failed");
+          const data = await res.json();
+          const text = data.text?.trim();
+          if (text) {
+            // Auto-send as a message (like Telegram voice)
+            const input = document.getElementById("messageInput");
+            input.value = text;
+            input.dispatchEvent(new Event("input"));
+            Chat.send();
+          }
+        } catch (err) {
+          console.error("[voice] Chat mic error:", err);
+          App.showToast("Could not transcribe audio", "error");
+        } finally {
+          btn.classList.remove("voice-transcribing");
+        }
+      };
+      recorder.start();
+    };
+
+    const stopRecording = (cancel = false) => {
+      if (!this._chatRecording || !this._quickRecorder) return;
+      this._chatCancelled = cancel;
+      this._quickRecorder.stop();
+    };
+
+    // Mouse events
+    btn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      pressStart = Date.now();
+      startX = e.clientX; startY = e.clientY;
+      cancelled = false;
+
+      // Start recording after hold threshold
+      this._chatHoldTimer = setTimeout(() => {
+        if (!this._chatRecording) startRecording();
+      }, 200);
+
+      const mousemove = (e2) => onMove(e2.clientX, e2.clientY);
+      const mouseup = () => {
+        document.removeEventListener("mousemove", mousemove);
+        document.removeEventListener("mouseup", mouseup);
+        clearTimeout(this._chatHoldTimer);
+
+        const duration = Date.now() - pressStart;
+        if (duration < 200) {
+          // Quick tap — toggle recording
+          if (this._chatRecording) {
+            stopRecording(cancelled);
+          } else {
+            startRecording();
+          }
+        } else {
+          // Hold release — stop recording (send or cancel)
+          stopRecording(cancelled);
+        }
+      };
+      document.addEventListener("mousemove", mousemove);
+      document.addEventListener("mouseup", mouseup);
+    });
+
+    // Touch events
+    btn.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      pressStart = Date.now();
+      const touch = e.touches[0];
+      startX = touch.clientX; startY = touch.clientY;
+      cancelled = false;
+
+      this._chatHoldTimer = setTimeout(() => {
+        if (!this._chatRecording) startRecording();
+      }, 200);
+    });
+    btn.addEventListener("touchmove", (e) => {
+      const touch = e.touches[0];
+      onMove(touch.clientX, touch.clientY);
+    });
+    btn.addEventListener("touchend", () => {
+      clearTimeout(this._chatHoldTimer);
+      const duration = Date.now() - pressStart;
+      if (duration < 200) {
+        if (this._chatRecording) {
+          stopRecording(cancelled);
+        } else {
+          startRecording();
+        }
+      } else {
+        stopRecording(cancelled);
+      }
+    });
   },
 
   /** Handle press start — start recording after short delay (hold detection). */
@@ -62,13 +312,27 @@ const Voice = {
       if (this.isHolding && !this.isRecording && !this.isSpeaking && !this.isProcessing) {
         this.startRecording();
       }
-    }, 150); // 150ms = hold threshold
+    }, 150);
   },
 
   /** Handle press end — if quick click, toggle. If held, stop recording. */
   onPressEnd(duration) {
     this.isHolding = false;
     clearTimeout(this.holdTimer);
+
+    if (this._dragCancelled) {
+      // Drag cancel — discard recording
+      this._dragCancelled = false;
+      this.elements.orb?.classList.remove("drag-cancel");
+      this.stopRecording(true);
+      this.elements.status.textContent = "Cancelled";
+      setTimeout(() => {
+        if (!this.isRecording && !this.isProcessing && !this.isSpeaking) {
+          this.elements.status.textContent = "Hold to talk · Tap to toggle";
+        }
+      }, 1000);
+      return;
+    }
 
     if (duration < 150) {
       // Quick click — toggle recording
@@ -81,7 +345,7 @@ const Voice = {
 
   open() {
     this.elements.panel.classList.add("active");
-    this.autoListen = false; // Don't auto-record — user controls when to talk
+    this.autoListen = false;
     this.elements.status.textContent = "Hold to talk · Tap to toggle";
 
     const label = document.getElementById("voiceActiveLabel");
@@ -150,7 +414,7 @@ const Voice = {
     this.mediaRecorder.start();
     this.isRecording = true;
     this.setOrbState("listening");
-    this.elements.status.textContent = "Listening...";
+    this.elements.status.textContent = "Listening... drag away to cancel";
     this.elements.micBtn?.classList.add("active");
 
     // Start waveform visualization
@@ -266,7 +530,6 @@ const Voice = {
         let x = 0;
         for (let i = 0; i < bufferLength; i++) {
           const barHeight = (dataArray[i] / 255) * canvas.height * 0.9;
-          // Blue/cyan for agent speaking (vs amber for user)
           const lightness = 40 + (dataArray[i] / 255) * 30;
           ctx.fillStyle = `hsl(200, 80%, ${lightness}%)`;
           ctx.fillRect(x, (canvas.height - barHeight) / 2, barWidth - 1, barHeight || 1);
@@ -388,7 +651,6 @@ const Voice = {
     this.elements.status.textContent = "Speaking...";
 
     try {
-      // Use streaming TTS endpoint for lower latency
       const csrf = API.getCsrfToken();
       const headers = { "Content-Type": "application/json" };
       if (csrf) headers["X-CSRF-Token"] = csrf;
@@ -421,7 +683,6 @@ const Voice = {
     }
   },
 
-
   stopSpeaking() {
     this.elements.audio.pause();
     this.elements.audio.currentTime = 0;
@@ -451,58 +712,5 @@ const Voice = {
     if (!orb) return;
     orb.classList.remove("idle", "listening", "processing", "speaking");
     orb.classList.add(state);
-  },
-
-  /** Quick listen from chat input mic button. */
-  async quickListen() {
-    if (this.isRecording) {
-      this.isRecording = false;
-      this.elements.voiceInputBtn?.classList.remove("voice-active");
-      if (this._quickRecorder) this._quickRecorder.stop();
-      return;
-    }
-
-    let stream;
-    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-    catch { App.showToast("Microphone access denied", "error"); return; }
-
-    this.isRecording = true;
-    this.elements.voiceInputBtn?.classList.add("voice-active");
-
-    const chunks = [];
-    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
-    this._quickRecorder = recorder;
-
-    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-    recorder.onstop = async () => {
-      stream.getTracks().forEach((t) => t.stop());
-      this.isRecording = false;
-      this.elements.voiceInputBtn?.classList.remove("voice-active");
-      this._quickRecorder = null;
-      if (chunks.length === 0) return;
-
-      const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
-      try {
-        const formData = new FormData();
-        formData.append("audio", blob, "recording.webm");
-        const csrf = API.getCsrfToken();
-        const headers = {};
-        if (csrf) headers["X-CSRF-Token"] = csrf;
-        const res = await fetch("/api/voice/transcribe", { method: "POST", headers, credentials: "same-origin", body: formData });
-        if (!res.ok) throw new Error("Transcription failed");
-        const data = await res.json();
-        const text = data.text?.trim();
-        if (text) {
-          const input = document.getElementById("messageInput");
-          input.value += (input.value ? " " : "") + text;
-          input.dispatchEvent(new Event("input"));
-        }
-      } catch (err) {
-        console.error("[voice] Quick listen error:", err);
-        App.showToast("Could not transcribe audio", "error");
-      }
-    };
-    recorder.start();
   },
 };
