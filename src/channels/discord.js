@@ -202,7 +202,6 @@ You can use these special markers in your response:
     });
 
     let fullResponse = "";
-    const streaming = config.streaming ?? "partial";
 
     try {
       const tools = getToolDefinitions();
@@ -220,11 +219,12 @@ You can use these special markers in your response:
         }
       }
 
-      // Live streaming: edit a preview message as tokens arrive
-      let previewMsg = null;
-      let lastEditTime = 0;
-      const EDIT_INTERVAL_MS = 1200;
+      // Keep typing indicator alive every 8s while processing
+      const typingInterval = setInterval(() => {
+        message.channel.sendTyping().catch(() => {});
+      }, 8_000);
 
+      try {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const toolCalls = [];
         let roundText = "";
@@ -246,24 +246,6 @@ You can use these special markers in your response:
           if (event.type === "text") {
             roundText += event.content;
             fullResponse += event.content;
-
-            if (streaming === "partial" && fullResponse.length > 10) {
-              const now = Date.now();
-              if (now - lastEditTime > EDIT_INTERVAL_MS) {
-                lastEditTime = now;
-                const preview = fullResponse.slice(0, 1950) + (fullResponse.length > 1950 ? "..." : " ▎");
-                try {
-                  if (!previewMsg) {
-                    previewMsg = await message.reply(preview);
-                  } else {
-                    await previewMsg.edit(preview);
-                  }
-                } catch {
-                  // Editing can fail if message was deleted
-                }
-                message.channel.sendTyping().catch(() => {});
-              }
-            }
           } else if (event.type === "tool_use") {
             toolCalls.push({ id: event.id, name: event.name, input: event.input });
           } else if (event.type === "done") {
@@ -322,17 +304,12 @@ You can use these special markers in your response:
 
         // Discord has 2000 char limit — split if needed
         const chunks = splitMessage(cleanText, 2000);
-
-        if (previewMsg && chunks.length === 1) {
-          await previewMsg.edit(chunks[0]).catch(() => {});
-        } else {
-          if (previewMsg) {
-            await previewMsg.delete().catch(() => {});
-          }
-          for (const chunk of chunks) {
-            await retryOnRateLimit(() => message.reply(chunk));
-          }
+        for (const chunk of chunks) {
+          await retryOnRateLimit(() => message.reply(chunk));
         }
+      }
+      } finally {
+        clearInterval(typingInterval);
       }
     } catch (err) {
       console.error("[discord] chat error:", err.message);

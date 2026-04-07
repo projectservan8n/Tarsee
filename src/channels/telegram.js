@@ -136,10 +136,14 @@ You can use these special markers in your response:
     });
 
     let fullResponse = "";
-    const streaming = config.streaming ?? "partial";
     const tools = getToolDefinitions();
     const toolCtx = { db, settingsStore, conversationId: convId };
     const MAX_TOOL_ROUNDS = 15;
+
+    // Keep typing indicator alive while processing
+    const typingInterval = setInterval(() => {
+      ctx.sendChatAction("typing").catch(() => {});
+    }, 4000);
 
     try {
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
@@ -156,14 +160,6 @@ You can use these special markers in your response:
           last.content = contentBlocks;
         }
       }
-
-      // Live streaming: edit a preview message as tokens arrive
-      let previewMsgId = null;
-      let lastEditTime = 0;
-      const EDIT_INTERVAL_MS = 1500;
-      const typingInterval = setInterval(() => {
-        ctx.sendChatAction("typing").catch(() => {});
-      }, 4000);
 
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const toolCalls = [];
@@ -186,26 +182,6 @@ You can use these special markers in your response:
           if (event.type === "text") {
             roundText += event.content;
             fullResponse += event.content;
-
-            if (streaming === "partial" && fullResponse.length > 20) {
-              const now = Date.now();
-              if (now - lastEditTime > EDIT_INTERVAL_MS) {
-                lastEditTime = now;
-                const preview = fullResponse.slice(0, 4000) + (fullResponse.length > 4000 ? "..." : " ▎");
-                try {
-                  if (!previewMsgId) {
-                    const sent = await ctx.reply(preview, {
-                      ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
-                    });
-                    previewMsgId = sent.message_id;
-                  } else {
-                    await ctx.telegram.editMessageText(
-                      chatId, previewMsgId, undefined, preview
-                    ).catch(() => {});
-                  }
-                } catch { /* Edit can fail */ }
-              }
-            }
           } else if (event.type === "tool_use") {
             toolCalls.push({ id: event.id, name: event.name, input: event.input });
           } else if (event.type === "done") {
@@ -235,8 +211,6 @@ You can use these special markers in your response:
         workingMessages.push({ role: "user", content: toolResults });
       }
 
-      clearInterval(typingInterval);
-
       if (fullResponse) {
         // Extract memories before parsing reactions
         fullResponse = extractAndSaveMemories(fullResponse, db, convId);
@@ -262,49 +236,35 @@ You can use these special markers in your response:
         const htmlText = mdToTelegramHtml(cleanText);
         const chunks = splitMessage(htmlText, 4096);
 
-        if (previewMsgId && chunks.length === 1 && !buttons) {
-          // Edit preview to final content
-          await ctx.telegram.editMessageText(
-            chatId, previewMsgId, undefined, chunks[0],
-            { parse_mode: "HTML" }
-          ).catch(() =>
-            ctx.telegram.editMessageText(chatId, previewMsgId, undefined, chunks[0]).catch(() => {})
+        for (let i = 0; i < chunks.length; i++) {
+          const isLast = i === chunks.length - 1;
+          const opts = { parse_mode: "HTML" };
+          if (replyToMessageId && i === 0) opts.reply_to_message_id = replyToMessageId;
+
+          // Attach inline buttons to the last chunk
+          if (isLast && buttons?.length > 0) {
+            opts.reply_markup = {
+              inline_keyboard: buttonsToKeyboard(buttons),
+            };
+          }
+
+          await ctx.reply(chunks[i], opts).catch(() =>
+            ctx.reply(chunks[i].replace(/<[^>]+>/g, ""))
           );
-        } else {
-          // Delete preview and send fresh
-          if (previewMsgId) {
-            await ctx.telegram.deleteMessage(chatId, previewMsgId).catch(() => {});
-          }
+        }
 
-          // Send text chunks
-          for (let i = 0; i < chunks.length; i++) {
-            const isLast = i === chunks.length - 1;
-            const opts = { parse_mode: "HTML" };
-            if (replyToMessageId && i === 0) opts.reply_to_message_id = replyToMessageId;
-
-            // Attach inline buttons to the last chunk
-            if (isLast && buttons?.length > 0) {
-              opts.reply_markup = {
-                inline_keyboard: buttonsToKeyboard(buttons),
-              };
-            }
-
-            await ctx.reply(chunks[i], opts).catch(() =>
-              ctx.reply(chunks[i].replace(/<[^>]+>/g, ""))
-            );
-          }
-
-          // If no text chunks but we have buttons, send buttons alone
-          if (chunks.length === 0 && buttons?.length > 0) {
-            await ctx.reply("Choose:", {
-              reply_markup: { inline_keyboard: buttonsToKeyboard(buttons) },
-            });
-          }
+        // If no text chunks but we have buttons, send buttons alone
+        if (chunks.length === 0 && buttons?.length > 0) {
+          await ctx.reply("Choose:", {
+            reply_markup: { inline_keyboard: buttonsToKeyboard(buttons) },
+          });
         }
       }
     } catch (err) {
       console.error("[telegram] chat error:", err.message);
       await ctx.reply("Sorry, I encountered an error processing your message.").catch(() => {});
+    } finally {
+      clearInterval(typingInterval);
     }
   }
 
