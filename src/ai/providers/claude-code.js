@@ -304,8 +304,10 @@ ${skillStatus.filter(s => s.status === "needs_install").length} need CLI install
           if (message.usage) {
             yield { type: "usage", usage: message.usage };
           }
-          // Don't yield message.result text — it duplicates what was
-          // already streamed via "assistant" messages above.
+          // Yield result text as fallback if streaming didn't capture it
+          if (!streamed && message.result) {
+            yield { type: "text", content: message.result };
+          }
           yield { type: "done", stopReason: "end_turn" };
           break;
         }
@@ -340,7 +342,7 @@ ${skillStatus.filter(s => s.status === "needs_install").length} need CLI install
           break;
       }
     }
-    console.log(`[claude-code] Stream ended. Total messages received: ${messageCount}`);
+    console.log(`[claude-code] Stream ended. Messages: ${messageCount}, streamed: ${streamed}`);
     if (messageCount === 0) {
       yield { type: "text", content: "**Claude Code returned no response.** Check the server logs for details. The CLI may not be authenticated — run `claude login` in the Terminal." };
       yield { type: "done", stopReason: "error" };
