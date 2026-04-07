@@ -232,8 +232,14 @@ chatRouter.post("/send", async (req, res) => {
           type: "audio",
           source: { type: "base64", media_type: att.mediaType || "audio/wav", data: att.data },
         });
+      } else if (att.type === "pdf" || att.mediaType === "application/pdf") {
+        // PDF — pass as document block (Anthropic API supports this natively)
+        contentBlocks.push({
+          type: "document",
+          source: { type: "base64", media_type: "application/pdf", data: att.data },
+        });
       } else {
-        // Generic file — include as text description for now
+        // Generic file — include as text description
         contentBlocks.push({
           type: "text",
           text: `[Attached file: ${att.name || "file"} (${att.mediaType || "application/octet-stream"})]`,

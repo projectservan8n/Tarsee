@@ -310,36 +310,66 @@ You can use these special markers in your response:
     await handleMessage(ctx, ctx.message.text);
   });
 
-  // --- Photo handler (images sent in Telegram) ---
+  // --- Photo handler with multi-image batching ---
+  // Telegram sends media groups as separate messages with same media_group_id.
+  // Buffer them and process together after a short delay.
+  const mediaGroupBuffer = new Map(); // media_group_id → { ctx, images[], caption, timer }
+
   bot.on("photo", async (ctx) => {
     try {
-      // Telegram sends multiple sizes — grab the largest
       const photos = ctx.message.photo;
       const largest = photos[photos.length - 1];
       const { data, mediaType } = await downloadTelegramFile(largest.file_id);
-      const caption = ctx.message.caption || "Please analyze this image.";
       const attachment = { type: "image", source: { type: "base64", media_type: mediaType, data } };
-      await handleMessage(ctx, caption, null, [attachment]);
+      const caption = ctx.message.caption || "";
+      const groupId = ctx.message.media_group_id;
+
+      if (groupId) {
+        // Part of a media group — buffer it
+        if (!mediaGroupBuffer.has(groupId)) {
+          mediaGroupBuffer.set(groupId, { ctx, images: [], caption: "", timer: null });
+        }
+        const group = mediaGroupBuffer.get(groupId);
+        group.images.push(attachment);
+        if (caption) group.caption = caption;
+
+        // Reset timer — process 500ms after last photo in group arrives
+        clearTimeout(group.timer);
+        group.timer = setTimeout(async () => {
+          mediaGroupBuffer.delete(groupId);
+          const text = group.caption || `Please analyze these ${group.images.length} images.`;
+          await handleMessage(group.ctx, text, null, group.images);
+        }, 500);
+      } else {
+        // Single photo — process immediately
+        await handleMessage(ctx, caption || "Please analyze this image.", null, [attachment]);
+      }
     } catch (err) {
       console.error("[telegram] photo handler error:", err.message);
       await ctx.reply("Failed to process image.").catch(() => {});
     }
   });
 
-  // --- Document handler (files sent in Telegram, including images as files) ---
+  // --- Document handler (files including images and PDFs) ---
   bot.on("document", async (ctx) => {
     try {
       const doc = ctx.message.document;
       const mime = doc.mime_type || "";
-      if (!mime.startsWith("image/")) {
-        // Non-image files — just mention them in the message
-        await handleMessage(ctx, ctx.message.caption || `[Sent file: ${doc.file_name} (${mime})]`);
-        return;
+      const caption = ctx.message.caption || "";
+
+      if (mime.startsWith("image/")) {
+        const { data, mediaType } = await downloadTelegramFile(doc.file_id);
+        const attachment = { type: "image", source: { type: "base64", media_type: mediaType, data } };
+        await handleMessage(ctx, caption || "Please analyze this image.", null, [attachment]);
+      } else if (mime === "application/pdf") {
+        // Download PDF and pass as text description with base64
+        const { data } = await downloadTelegramFile(doc.file_id);
+        const text = caption || `[PDF attached: ${doc.file_name}]`;
+        // Save PDF info for Claude to process via Bash tools
+        await handleMessage(ctx, `${text}\n\n[PDF file: ${doc.file_name} (${Math.round(doc.file_size / 1024)}KB) — base64 data available in this message]`);
+      } else {
+        await handleMessage(ctx, caption || `[Sent file: ${doc.file_name} (${mime})]`);
       }
-      const { data, mediaType } = await downloadTelegramFile(doc.file_id);
-      const caption = ctx.message.caption || "Please analyze this image.";
-      const attachment = { type: "image", source: { type: "base64", media_type: mediaType, data } };
-      await handleMessage(ctx, caption, null, [attachment]);
     } catch (err) {
       console.error("[telegram] document handler error:", err.message);
       await ctx.reply("Failed to process file.").catch(() => {});

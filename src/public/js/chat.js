@@ -594,6 +594,7 @@ const Chat = {
   getAttachmentType(mimeType) {
     if (mimeType.startsWith("image/")) return "image";
     if (mimeType.startsWith("audio/")) return "audio";
+    if (mimeType === "application/pdf") return "pdf";
     return "file";
   },
 

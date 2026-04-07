@@ -19,25 +19,30 @@ import config from "../../config/env.js";
  * Extract image blocks from content array.
  * Returns { images: ImageBlockParam[], text: string }
  */
-function extractImages(content) {
-  if (!Array.isArray(content)) return { images: [], text: typeof content === "string" ? content : "hello" };
-  const images = [];
+/**
+ * Extract media blocks (images, PDFs) from content array.
+ * Returns { mediaBlocks: ContentBlockParam[], text: string }
+ */
+function extractMedia(content) {
+  if (!Array.isArray(content)) return { mediaBlocks: [], text: typeof content === "string" ? content : "hello" };
+  const mediaBlocks = [];
   const textParts = [];
   for (const block of content) {
     if (block.type === "image" && block.source?.data) {
-      images.push({
+      mediaBlocks.push({
         type: "image",
-        source: {
-          type: "base64",
-          media_type: block.source.media_type || "image/png",
-          data: block.source.data,
-        },
+        source: { type: "base64", media_type: block.source.media_type || "image/png", data: block.source.data },
+      });
+    } else if (block.type === "document" && block.source?.data) {
+      mediaBlocks.push({
+        type: "document",
+        source: { type: "base64", media_type: block.source.media_type || "application/pdf", data: block.source.data },
       });
     } else if (block.type === "text") {
       textParts.push(block.text);
     }
   }
-  return { images, text: textParts.join("\n") || "hello" };
+  return { mediaBlocks, text: textParts.join("\n") || "hello" };
 }
 
 /**
@@ -71,9 +76,9 @@ export async function* chat({
 
   // Extract the latest user message — separate text and images
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
-  const { images, text: extractedText } = extractImages(lastUserMsg?.content);
+  const { mediaBlocks, text: extractedText } = extractMedia(lastUserMsg?.content);
   let prompt = extractedText;
-  const hasImages = images.length > 0;
+  const hasMedia = mediaBlocks.length > 0;
 
   // Inject memory flush instruction when conversation is long
   if (needsFlush) {
@@ -190,13 +195,13 @@ ${skillStatus.filter(s => s.status === "needs_install").length} need CLI install
     queryOptions.resume = sessionId;
   }
 
-  console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}, images: ${images.length}`);
+  console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}, media: ${mediaBlocks.length}`);
 
   // Build prompt: use AsyncIterable with image content blocks if images present
   let queryPrompt;
-  if (hasImages) {
+  if (hasMedia) {
     // Native image support via AsyncIterable<SDKUserMessage>
-    const contentBlocks = [...images, { type: "text", text: prompt }];
+    const contentBlocks = [...mediaBlocks, { type: "text", text: prompt }];
     async function* imagePrompt() {
       yield {
         type: "user",
