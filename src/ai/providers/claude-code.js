@@ -216,7 +216,7 @@ ${skillStatus.filter(s => s.status === "needs_install").length} need CLI install
 
   try {
     let messageCount = 0;
-    let streamed = false;
+    let everStreamed = false; // True if ANY text was streamed via stream_event
     let inThinking = false;
     for await (const message of query({ prompt: queryPrompt, options: queryOptions, signal })) {
       messageCount++;
@@ -229,11 +229,11 @@ ${skillStatus.filter(s => s.status === "needs_install").length} need CLI install
           if (evt?.type === "content_block_delta") {
             if (evt.delta?.type === "text_delta" && evt.delta.text) {
               yield { type: "text", content: evt.delta.text };
-              streamed = true;
+              everStreamed = true;
             } else if (evt.delta?.type === "thinking_delta" && evt.delta.thinking) {
               // Don't emit thinking as text — skip it silently
               // (thinking bloats the response and confuses users)
-              streamed = true;
+              everStreamed = true;
             }
           } else if (evt?.type === "content_block_start") {
             if (evt.content_block?.type === "thinking") {
@@ -248,9 +248,8 @@ ${skillStatus.filter(s => s.status === "needs_install").length} need CLI install
         }
 
         case "assistant": {
-          // Full assistant message (after streaming completes)
-          // Only yield text if we didn't already stream it
-          if (!streamed) {
+          // Full assistant message — skip text if already streamed token-by-token
+          if (!everStreamed) {
             const text = typeof message.message?.content === "string"
               ? message.message.content
               : Array.isArray(message.message?.content)
@@ -261,9 +260,9 @@ ${skillStatus.filter(s => s.status === "needs_install").length} need CLI install
                 : "";
             if (text) {
               yield { type: "text", content: text };
+              everStreamed = true;
             }
           }
-          streamed = false;
 
           // Check for tool_use blocks in the content
           if (Array.isArray(message.message?.content)) {
@@ -304,8 +303,8 @@ ${skillStatus.filter(s => s.status === "needs_install").length} need CLI install
           if (message.usage) {
             yield { type: "usage", usage: message.usage };
           }
-          // Yield result text as fallback if streaming didn't capture it
-          if (!streamed && message.result) {
+          // Yield result text as fallback if nothing was streamed at all
+          if (!everStreamed && message.result) {
             yield { type: "text", content: message.result };
           }
           yield { type: "done", stopReason: "end_turn" };
@@ -342,7 +341,7 @@ ${skillStatus.filter(s => s.status === "needs_install").length} need CLI install
           break;
       }
     }
-    console.log(`[claude-code] Stream ended. Messages: ${messageCount}, streamed: ${streamed}`);
+    console.log(`[claude-code] Stream ended. Messages: ${messageCount}, streamed: ${everStreamed}`);
     if (messageCount === 0) {
       yield { type: "text", content: "**Claude Code returned no response.** Check the server logs for details. The CLI may not be authenticated — run `claude login` in the Terminal." };
       yield { type: "done", stopReason: "error" };
