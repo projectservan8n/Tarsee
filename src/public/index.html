@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="/css/voice.css">
   <link rel="stylesheet" href="/css/console.css">
   <link rel="stylesheet" href="/css/agents.css">
+  <link rel="stylesheet" href="/css/files.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -84,6 +85,9 @@
           <a class="topbar-icon-btn" href="/terminal.html" title="Terminal" target="_blank">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 6l2 2-2 2M8 10h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </a>
+          <button class="topbar-icon-btn" id="fileManagerBtn" title="Files">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h4l2 2h6v8H2V3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+          </button>
           <button class="topbar-icon-btn" id="agentsDashBtn" title="Agents">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="6" cy="5" r="2" stroke="currentColor" stroke-width="1.3"/><circle cx="11" cy="6" r="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2 13c0-2 1.5-3.5 4-3.5s4 1.5 4 3.5" stroke="currentColor" stroke-width="1.3"/></svg>
           </button>
@@ -575,6 +579,37 @@
     </div>
   </div>
 
+  <!-- File Manager Panel -->
+  <div id="fileManagerPanel" class="file-manager-panel" style="display:none">
+    <div class="fm-header">
+      <div class="fm-breadcrumb" id="fmBreadcrumb">workspace</div>
+      <div style="display:flex;gap:4px">
+        <button class="topbar-icon-btn" id="fmNewFile" title="New File">+</button>
+        <button class="topbar-icon-btn" id="fmClose">&#10005;</button>
+      </div>
+    </div>
+    <div class="fm-body">
+      <div class="fm-sidebar" id="fmFileList"></div>
+      <div class="fm-editor" id="fmEditor" style="display:none">
+        <div class="fm-editor-header">
+          <span id="fmEditorFilename"></span>
+          <div style="display:flex;gap:4px">
+            <button class="btn btn-sm btn-primary" id="fmSaveBtn">Save</button>
+            <button class="btn btn-sm" id="fmCloseEditor">Close</button>
+          </div>
+        </div>
+        <textarea id="fmEditorContent" class="fm-textarea" spellcheck="false"></textarea>
+      </div>
+      <div class="fm-preview" id="fmPreview" style="display:none">
+        <div class="fm-editor-header">
+          <span id="fmPreviewFilename"></span>
+          <button class="btn btn-sm" id="fmClosePreview">Close</button>
+        </div>
+        <div id="fmPreviewContent" class="fm-preview-content"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Agents Dashboard Panel -->
   <div id="agentsPanel" class="agents-panel" style="display:none">
     <div class="agents-panel-header">
@@ -615,6 +650,7 @@
   <script src="/js/settings.js"></script>
   <script src="/js/setup.js"></script>
   <script src="/js/agents.js"></script>
+  <script src="/js/files.js"></script>
   <script src="/js/app.js"></script>
   <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});</script>
 </body>

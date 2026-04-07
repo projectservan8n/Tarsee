@@ -76,6 +76,7 @@ const App = {
     Voice.init();
     Settings.init();
     Agents.init();
+    FileManager.init();
     Console.init();
 
     // Mobile menu toggle with overlay
