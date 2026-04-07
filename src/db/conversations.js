@@ -50,6 +50,20 @@ export class ConversationStore {
     this._updateClaudeSessionId = this.db.prepare(
       "UPDATE conversations SET claude_session_id = ?, updated_at = datetime('now') WHERE id = ?"
     );
+    this._clearAllSessions = this.db.prepare(
+      "UPDATE conversations SET claude_session_id = NULL WHERE claude_session_id IS NOT NULL"
+    );
+  }
+
+  /**
+   * Clear all session IDs — forces fresh sessions on next message.
+   * Called on server boot to prevent stale MCP tool registrations.
+   */
+  clearAllSessions() {
+    const result = this._clearAllSessions.run();
+    if (result.changes > 0) {
+      console.log(`[sessions] Cleared ${result.changes} stale session(s) on boot`);
+    }
   }
 
   /**

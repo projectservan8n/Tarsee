@@ -178,6 +178,7 @@ startHeartbeat({ db, settingsStore });
 import { startSessionReset, stopSessionReset } from "./lib/session-reset.js";
 import { ConversationStore } from "./db/conversations.js";
 const convStore = new ConversationStore(db);
+convStore.clearAllSessions(); // Force fresh MCP tool registration on boot
 startSessionReset({ db, settingsStore, convStore });
 
 // --- OAuth token auto-refresh (keeps subscription auth alive 24/7) ---
