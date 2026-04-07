@@ -103,7 +103,7 @@ export async function* chat({
       const imageRefs = savedImages.map((img, i) =>
         `[Attached image ${i + 1}: ${img.path}]`
       ).join("\n");
-      prompt = `${prompt}\n\nThe user attached ${savedImages.length} image(s). Use the Read tool to view them:\n${imageRefs}`;
+      prompt = `${prompt}\n\nThe user attached ${savedImages.length} image(s). These are JPEG/PNG files on disk. To view them, use the Read tool (it supports images natively). If Read says the file is too large, use Bash: base64 FILE | head -c 50000 to get a partial preview, or just describe based on the filename context.\n${imageRefs}`;
     }
   }
 
@@ -286,8 +286,9 @@ Run /skills to see full list. Skills dir: ${skillsDir}
 
         case "result": {
           // Final result — capture session ID and usage
-          if (message.sessionId && onSessionId) {
-            onSessionId(message.sessionId);
+          const sid = message.session_id || message.sessionId;
+          if (sid && onSessionId) {
+            onSessionId(sid);
           }
           if (message.usage) {
             yield { type: "usage", usage: message.usage };
@@ -312,9 +313,17 @@ Run /skills to see full list. Skills dir: ${skillsDir}
           break;
         }
 
+        case "system": {
+          // Capture session ID from init event
+          if (message.session_id && onSessionId) {
+            onSessionId(message.session_id);
+          }
+          break;
+        }
+
         default:
-          // Forward any other message types as debug info
-          if (message.type) {
+          // Forward any other message types
+          if (message.type && !["rate_limit_event", "user"].includes(message.type)) {
             console.log(`[claude-code] Event: ${message.type}`, JSON.stringify(message).slice(0, 200));
           }
           break;
