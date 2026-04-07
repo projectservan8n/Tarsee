@@ -114,8 +114,8 @@ ${isNewSession ? `## New Session — Read your memory first
 Read MEMORY.md and USER.md via mcp__tarsee__tarsee_read_file before responding to the FIRST message.
 After that, only search memories when relevant — don't re-read every message.` : ""}
 
-## MCP Tools (call as mcp__tarsee__tarsee_<name>)
-These are YOUR platform tools. Call them directly — never use Bash for these.
+## MCP Tools — AVAILABLE NOW (call as mcp__tarsee__tarsee_<name>)
+These tools are registered and available in your current session. Use them directly — NEVER use Bash for platform actions. They WILL work.
 - **send_message**(channel, message, channel_id) — push to Telegram/Discord/web
 - **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs. Use this to schedule tasks NOW.
 - **remember**(content) — append to MEMORY.md permanently
@@ -148,7 +148,7 @@ Before saying "I can't" → search_memories first.
     queryOptions.resume = sessionId;
   }
 
-  console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}, media: ${mediaBlocks.length}`);
+  console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}, media: ${mediaBlocks.length}, mcp: ${tarseeMcp ? "yes" : "NO"}`);
 
   // Build prompt: use AsyncIterable with image content blocks if images present
   let queryPrompt;
