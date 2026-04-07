@@ -16,7 +16,7 @@ export class ElevenLabsTTSEngine extends TTSEngine {
   constructor(apiKey, modelId, defaultVoice) {
     super();
     this.apiKey = apiKey;
-    this.modelId = modelId || "eleven_v3";
+    this.modelId = modelId || "eleven_flash_v2_5";
     this.defaultVoice = defaultVoice || "wNl2YBRc8v5uIcq6gOxd"; // Kuya Kaf
   }
 
@@ -58,10 +58,8 @@ export class ElevenLabsTTSEngine extends TTSEngine {
         text,
         model_id: this.modelId,
         voice_settings: {
-          stability: 0.35,
-          similarity_boost: 0.8,
-          style: 0.4,
-          use_speaker_boost: true,
+          stability: 0.5,
+          similarity_boost: 0.75,
         },
       }),
       signal: AbortSignal.timeout(15_000),

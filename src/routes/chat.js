@@ -257,7 +257,7 @@ chatRouter.post("/send", async (req, res) => {
   // Detect voice mode messages and add conversational style
   const isVoiceMode = message.startsWith("[voice]");
   const voiceHint = isVoiceMode
-    ? "\n\n[VOICE MODE] The user is speaking to you. Respond conversationally — short, natural, spoken language. Include emotion markers that ElevenLabs v3 TTS can vocalize: [laughs], [sighs], [chuckles], [whispers], [gasps], [clears throat]. Use them naturally, not in every sentence. Be expressive and human-like. Keep responses under 3 sentences unless the topic needs more."
+    ? "\n\n[VOICE MODE] The user is speaking to you. Respond conversationally — short, natural, spoken language. Keep responses under 3 sentences unless the topic needs more."
     : "";
 
   // Build effective system prompt: identity + memory + skills + conversation-specific

@@ -369,10 +369,7 @@ const Voice = {
       this.speak("Check the chat for details.");
       if (Chat.currentConversationId) Chat.loadMessages?.(Chat.currentConversationId);
     } else {
-      // Strip emotion markers from display bubble but keep for TTS
-      const displayText = text.replace(/\[(laughs|sighs|chuckles|whispers|gasps|clears throat)\]/gi, "").replace(/\s{2,}/g, " ").trim();
-      this.addBubble("assistant", displayText);
-      // Keep emotion markers in speak text — ElevenLabs v3 vocalizes them
+      this.addBubble("assistant", text);
       const speakText = text
         .replace(/\*\*(.*?)\*\*/g, "$1")
         .replace(/\*(.*?)\*/g, "$1")
