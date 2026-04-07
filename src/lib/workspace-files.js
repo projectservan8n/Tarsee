@@ -100,7 +100,7 @@ export function appendDailyLog(content) {
  * @param {number} maxBytes - Default 20KB
  * @returns {string}
  */
-function truncateContent(content, maxBytes = 20 * 1024) {
+function truncateContent(content, maxBytes = 8 * 1024) {
   if (!content || Buffer.byteLength(content, "utf8") <= maxBytes) return content;
 
   const headSize = Math.floor(maxBytes * 0.7);

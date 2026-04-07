@@ -251,7 +251,7 @@ chatRouter.post("/send", async (req, res) => {
   }
 
   // Get conversation history for context
-  const history = convStore.getRecentMessages(convId, 50);
+  const history = convStore.getRecentMessages(convId, 20);
   const conv = convStore.get(convId);
 
   // Start SSE stream

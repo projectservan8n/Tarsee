@@ -247,7 +247,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   }
 
   // Get history
-  const history = convStore.getRecentMessages(convId, 50);
+  const history = convStore.getRecentMessages(convId, 20);
   const conv = convStore.get(convId);
 
   // Build effective system prompt (parity with HTTP handler)

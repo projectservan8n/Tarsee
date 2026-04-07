@@ -69,22 +69,11 @@ export async function* chat({
   onSessionId,
   toolCtx,
 }) {
-  // Auto-memory flush: if conversation is long, prepend extraction instruction
-  const messageCount = messages.length;
-  const FLUSH_THRESHOLD = 30; // After 30 messages, trigger memory flush
-  const needsFlush = messageCount > 0 && messageCount % FLUSH_THRESHOLD === 0;
-
   // Extract the latest user message — separate text and images
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
   const { mediaBlocks, text: extractedText } = extractMedia(lastUserMsg?.content);
   let prompt = extractedText;
   const hasMedia = mediaBlocks.length > 0;
-
-  // Inject memory flush instruction when conversation is long
-  if (needsFlush) {
-    prompt = `[MEMORY FLUSH] Before responding, extract and save any important information from this conversation to memory/YYYY-MM-DD.md using tarsee_daily_log. Save: facts learned, decisions made, tasks discussed, API keys mentioned, user preferences. Then respond normally.\n\n${prompt}`;
-    console.log(`[claude-code] Memory flush triggered at ${messageCount} messages`);
-  }
 
   const cwd = config.CLAUDE_WORKSPACE_DIR || process.cwd();
 
@@ -94,26 +83,6 @@ export async function* chat({
 
   // Skills directory — Claude Code discovers SKILL.md files here
   const skillsDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "skills");
-
-  // Scan skill availability (check which required binaries are installed)
-  const { execSync } = await import("node:child_process");
-  const skillStatus = [];
-  try {
-    const skillDirs = fs.readdirSync(skillsDir, { withFileTypes: true }).filter(d => d.isDirectory());
-    for (const dir of skillDirs) {
-      const skillMd = path.join(skillsDir, dir.name, "SKILL.md");
-      if (!fs.existsSync(skillMd)) continue;
-      const content = fs.readFileSync(skillMd, "utf8").slice(0, 500);
-      const binsMatch = content.match(/"bins":\s*\[([^\]]+)\]/);
-      if (!binsMatch) {
-        skillStatus.push({ name: dir.name, status: "ready", bins: [] });
-        continue;
-      }
-      const bins = binsMatch[1].match(/"([^"]+)"/g)?.map(b => b.replace(/"/g, "")) || [];
-      const missing = bins.filter(b => { try { execSync(`which ${b}`, { stdio: "ignore" }); return false; } catch { return true; } });
-      skillStatus.push({ name: dir.name, status: missing.length === 0 ? "ready" : "needs_install", bins, missing });
-    }
-  } catch { /* ignore scan errors */ }
 
   const queryOptions = {
     cwd,
@@ -136,66 +105,25 @@ export async function* chat({
   const soulMd = readWorkspaceFile("SOUL.md") || "";
   const soulSummary = soulMd.split("\n").slice(0, 8).join("\n").slice(0, 500); // First 8 lines max
 
+  // Only read memory on first message of a session (no sessionId = new session)
+  const isNewSession = !sessionId;
+
   const tarseeContext = `You ARE Tarsee — a headless AI agent running 24/7 on a server.
+${soulSummary ? `\n${soulSummary}\n` : ""}
+${isNewSession ? `## New Session — Read your memory first
+Read MEMORY.md and USER.md via mcp__tarsee__tarsee_read_file before responding to the FIRST message.
+After that, only search memories when relevant — don't re-read every message.` : ""}
 
-## Session Startup
-BEFORE responding to ANY message, run your startup sequence:
-1. mcp__tarsee__tarsee_read_file("MEMORY.md") — your accumulated knowledge, API keys, skills, preferences
-2. mcp__tarsee__tarsee_search_memories with the user's topic — find relevant past context
-3. If this is a NEW conversation or you're unsure of context, also read SOUL.md and USER.md
+## MCP Tools (prefix: mcp__tarsee__)
+tarsee_send_message, tarsee_schedule_task, tarsee_remember, tarsee_daily_log, tarsee_read_file, tarsee_write_file, tarsee_search_memories, tarsee_get_key, tarsee_set_key, tarsee_web_fetch, tarsee_web_search, tarsee_spawn_agent, tarsee_list_agents, tarsee_check_agents, tarsee_get_agent_result
 
-This is NON-NEGOTIABLE. Always check memory before responding. Never say "I don't have that info" without searching first.
+## Agent Team
+Coder (Opus), Researcher (Sonnet), Writer (Sonnet), Quick (Haiku). Use tarsee_spawn_agent with agent_id.
+Route: research→researcher, code→coder, write→writer, trivial→quick or answer directly. Nicknames work too.
 
-## Identity (from SOUL.md)
-${soulSummary}
-
-## Platform Tools (MCP server: "tarsee")
-Your tools appear as mcp__tarsee__<name>. Use them directly — NEVER use Bash for platform actions.
-
-Key tools:
-- tarsee_send_message: Push to Telegram/Discord/Slack/web
-- tarsee_schedule_task: Cron jobs + one-time reminders (action field for direct, once=true for one-time)
-- tarsee_remember: Save to MEMORY.md (append, never overwrite)
-- tarsee_daily_log: Append to today's memory/YYYY-MM-DD.md
-- tarsee_read_file / tarsee_write_file: Workspace files
-- tarsee_search_memories: Keyword search across all memory files
-- tarsee_get_key / tarsee_set_key: Encrypted vault
-- tarsee_web_fetch / tarsee_web_search: Web access
-
-## Agents — You Are The Orchestrator (COO)
-You manage a team of specialized AI agents. They have their own workspaces and persistent memory.
-Use your MCP tools (mcp__tarsee__*) to manage them — NEVER use Bash for this.
-
-Agent tools:
-- mcp__tarsee__tarsee_list_agents: See your team (Coder, Researcher, Writer, Quick) with their models
-- mcp__tarsee__tarsee_spawn_agent: Assign a task. Use agent_id: "coder", "researcher", "writer", "quick"
-- mcp__tarsee__tarsee_check_agents: Check who's working, who's done
-- mcp__tarsee__tarsee_get_agent_result: Get full output from a completed agent
-
-Your team: Coder (Opus), Researcher (Sonnet), Writer (Sonnet), Quick (Haiku).
-Each agent has persistent memory — they remember past tasks.
-
-Semantic routing — understand intent and delegate:
-- "check the team / agents / who's available" → mcp__tarsee__tarsee_list_agents
-- "research / look into / find out / investigate" → spawn researcher
-- "write / draft / compose / create content" → spawn writer
-- "code / build / fix / debug / implement / script" → spawn coder
-- "what's / calculate / format / quick question" → spawn quick (or answer directly if trivial)
-- "{nickname} do X" → find agent by nickname, spawn it
-- "do X and Y in parallel" → spawn multiple agents simultaneously
-- "check on the agents / any updates" → mcp__tarsee__tarsee_check_agents
-ALWAYS report back when agents complete — proactively tell the user.
-
-## Memory Rules
-- ALWAYS save important info to memory/YYYY-MM-DD.md (append-only daily log)
-- Use tarsee_remember for durable facts (API keys, user preferences, workflows)
-- NEVER overwrite MEMORY.md wholesale — only append
-- When the user teaches you something → save immediately
-- Before saying "I can't" → search memories first
-
-## Skills (${skillStatus.filter(s => s.status === "ready").length} ready / ${skillStatus.length} total)
-${skillStatus.filter(s => s.status === "ready").map(s => s.name).join(", ") || "none"} ready.
-${skillStatus.filter(s => s.status === "needs_install").length} need CLI install. Run /skills for full list.
+## Memory
+Use tarsee_remember for durable facts. Use tarsee_daily_log for session notes. Only append, never overwrite.
+Before saying "I can't" → tarsee_search_memories first.
 
 ## Workspace: ${cwd}`;
 

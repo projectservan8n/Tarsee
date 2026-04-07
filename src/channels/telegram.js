@@ -121,7 +121,7 @@ export async function createTelegramBot(config, db) {
     await ctx.sendChatAction("typing").catch(() => {});
 
     // Build full system prompt (identity + memory + skills)
-    const history = convStore.getRecentMessages(convId, 30);
+    const history = convStore.getRecentMessages(convId, 15);
     const conv = convStore.get(convId);
     const systemPrompt = buildSystemPrompt({
       settingsStore,
