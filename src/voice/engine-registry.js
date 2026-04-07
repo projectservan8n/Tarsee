@@ -51,9 +51,7 @@ async function tryEngine(name, settingsStore, defaultVoice) {
     switch (name) {
       case "elevenlabs": {
         const apiKey = settingsStore?.getApiKey?.("elevenlabs")
-          || settingsStore?.get("voice.elevenlabs.apiKey")
-          || process.env.ELEVEN_LABS_API_KEY
-          || process.env.XI_API_KEY;
+          || settingsStore?.get("voice.elevenlabs.apiKey");
         if (!apiKey) return null;
 
         const { ElevenLabsTTSEngine } = await import("./elevenlabs-engine.js");

@@ -7,7 +7,7 @@ import { TTSEngine } from "./tts-interface.js";
 export class StubTTSEngine extends TTSEngine {
   async synthesize(_text, _voiceId) {
     throw Object.assign(
-      new Error("TTS engine not configured. Set ELEVENLABS_API_KEY or OPENAI_API_KEY for cloud TTS."),
+      new Error("TTS engine not configured. Add ElevenLabs key in Settings > Voice, or select Edge TTS (free)."),
       { status: 501 }
     );
   }

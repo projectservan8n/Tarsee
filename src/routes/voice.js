@@ -73,8 +73,7 @@ voiceRouter.post("/tts", async (req, res) => {
 
     if (engine.name === "stub") {
       return res.status(501).json({
-        error: "No TTS engine available. Check ELEVENLABS_API_KEY is set in Railway env vars.",
-        hint: `env check: ELEVENLABS_API_KEY=${process.env.ELEVENLABS_API_KEY ? "set" : "missing"}, ELEVEN_LABS_API_KEY=${process.env.ELEVEN_LABS_API_KEY ? "set" : "missing"}`
+        error: "No TTS engine available. Add your ElevenLabs API key in Settings > Voice, or select Edge TTS (free).",
       });
     }
 
