@@ -407,8 +407,8 @@ const Chat = {
     }
 
     // Platform labels
-    const platformLabels = { web: "Web", discord: "Discord", telegram: "Telegram", slack: "Slack" };
-    const platformOrder = ["web", "discord", "telegram", "slack"];
+    const platformLabels = { web: "Web", telegram: "Telegram", discord: "Discord" };
+    const platformOrder = ["web", "telegram", "discord"];
 
     for (const platform of platformOrder) {
       const items = groups[platform];

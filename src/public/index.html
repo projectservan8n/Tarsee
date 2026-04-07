@@ -305,20 +305,12 @@
             <div class="settings-section">
               <div>
               <div class="form-group">
-                <label>Discord Bot Token</label>
-                <input type="password" id="settingsDiscordToken" placeholder="Bot token" autocomplete="off">
-              </div>
-              <div class="form-group">
                 <label>Telegram Bot Token</label>
-                <input type="password" id="settingsTelegramToken" placeholder="123456:ABC..." autocomplete="off">
+                <input type="password" id="settingsTelegramToken" placeholder="123456:ABC... (from @BotFather)" autocomplete="off">
               </div>
               <div class="form-group">
-                <label>Slack Bot Token</label>
-                <input type="password" id="settingsSlackToken" placeholder="xoxb-..." autocomplete="off">
-              </div>
-              <div class="form-group">
-                <label>Slack App Token</label>
-                <input type="password" id="settingsSlackAppToken" placeholder="xapp-..." autocomplete="off">
+                <label>Discord Bot Token</label>
+                <input type="password" id="settingsDiscordToken" placeholder="Bot token (from Discord Developer Portal)" autocomplete="off">
               </div>
               </div>
               <button class="btn btn-primary" id="saveChannelsBtn">Save Channels</button>
@@ -330,17 +322,12 @@
 
               <div class="form-group">
                 <label>Telegram — Allowed Chat IDs</label>
-                <textarea id="settingsTelegramAllowlist" rows="3" placeholder="One per line. Use chat ID (number).&#10;Get yours: message the bot, check logs for chat ID.&#10;Groups use negative numbers, e.g. -1001234567890" spellcheck="false" style="font-family:var(--font-mono);font-size:12px"></textarea>
+                <textarea id="settingsTelegramAllowlist" rows="3" placeholder="One per line. Chat ID (number).&#10;Message the bot, check Console logs for the chat ID.&#10;Groups: negative number e.g. -1001234567890" spellcheck="false" style="font-family:var(--font-mono);font-size:12px"></textarea>
               </div>
 
               <div class="form-group">
                 <label>Discord — Allowed Channels / Users</label>
-                <textarea id="settingsDiscordAllowlist" rows="3" placeholder="One per line. Channel IDs or User IDs.&#10;Right-click channel/user → Copy ID (Developer Mode).&#10;Bot responds in these channels + DMs from these users." spellcheck="false" style="font-family:var(--font-mono);font-size:12px"></textarea>
-              </div>
-
-              <div class="form-group">
-                <label>Slack — Allowed Channels</label>
-                <textarea id="settingsSlackAllowlist" rows="2" placeholder="One per line. Channel IDs.&#10;Bot only responds in these channels." spellcheck="false" style="font-family:var(--font-mono);font-size:12px"></textarea>
+                <textarea id="settingsDiscordAllowlist" rows="3" placeholder="One per line. Channel or User ID.&#10;Enable Developer Mode → right-click → Copy ID.&#10;Bot responds in listed channels + DMs from listed users." spellcheck="false" style="font-family:var(--font-mono);font-size:12px"></textarea>
               </div>
 
               <button class="btn btn-sm btn-primary" id="saveAllowlistBtn">Save Allowlist</button>

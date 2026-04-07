@@ -24,14 +24,6 @@ const Settings = {
       saveProviderBtn: document.getElementById("saveProviderBtn"),
       discordToken: document.getElementById("settingsDiscordToken"),
       telegramToken: document.getElementById("settingsTelegramToken"),
-      slackToken: document.getElementById("settingsSlackToken"),
-      slackAppToken: document.getElementById("settingsSlackAppToken"),
-      whatsappToken: document.getElementById("settingsWhatsappToken"),
-      signalPhone: document.getElementById("settingsSignalPhone"),
-      signalApiUrl: document.getElementById("settingsSignalApiUrl"),
-      imessageUrl: document.getElementById("settingsImessageUrl"),
-      imessagePassword: document.getElementById("settingsImessagePassword"),
-      lineToken: document.getElementById("settingsLineToken"),
       saveChannelsBtn: document.getElementById("saveChannelsBtn"),
       apiToken: document.getElementById("settingsApiToken"),
       // Identity
@@ -331,9 +323,6 @@ const Settings = {
           el.value = config.token;
         }
       }
-      const slackConfig = settings.find((s) => s.key === "channel.slack")?.value;
-      if (slackConfig?.token) this.elements.slackToken.value = slackConfig.token;
-      if (slackConfig?.appToken) this.elements.slackAppToken.value = slackConfig.appToken;
 
       // Allowlists
       const telegramAllow = settings.find((s) => s.key === "allowlist.telegram")?.value;
@@ -395,12 +384,8 @@ const Settings = {
     try {
       const discord = this.elements.discordToken.value.trim();
       const telegram = this.elements.telegramToken.value.trim();
-      const slackBot = this.elements.slackToken.value.trim();
-      const slackApp = this.elements.slackAppToken.value.trim();
-
-      if (discord) await API.saveChannel({ type: "discord", token: discord, enabled: true });
       if (telegram) await API.saveChannel({ type: "telegram", token: telegram, enabled: true });
-      if (slackBot && slackApp) await API.saveChannel({ type: "slack", token: slackBot, appToken: slackApp, enabled: true });
+      if (discord) await API.saveChannel({ type: "discord", token: discord, enabled: true });
 
       App.showToast("Channels saved. Restart to apply.", "success");
     } catch (err) {
@@ -413,7 +398,6 @@ const Settings = {
       const parse = (id) => (document.getElementById(id)?.value || "").split("\n").map(s => s.trim()).filter(Boolean);
       await API.json("/api/settings/general", { method: "POST", body: { key: "allowlist.telegram", value: JSON.stringify(parse("settingsTelegramAllowlist")) } });
       await API.json("/api/settings/general", { method: "POST", body: { key: "allowlist.discord", value: JSON.stringify(parse("settingsDiscordAllowlist")) } });
-      await API.json("/api/settings/general", { method: "POST", body: { key: "allowlist.slack", value: JSON.stringify(parse("settingsSlackAllowlist")) } });
       App.showToast("Allowlist saved", "success");
     } catch (err) {
       App.showToast(err.message, "error");
