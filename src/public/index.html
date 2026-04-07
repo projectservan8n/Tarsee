@@ -315,34 +315,6 @@
                 <label>Slack App Token</label>
                 <input type="password" id="settingsSlackAppToken" placeholder="xapp-..." autocomplete="off">
               </div>
-              <div class="form-group" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border-light)">
-                <label>WhatsApp (Baileys)</label>
-                <input type="password" id="settingsWhatsappToken" placeholder="Auth directory path or leave blank for QR" autocomplete="off">
-                <div class="hint">Uses QR code auth. Set auth directory path or configure via CLI.</div>
-              </div>
-              <div class="form-group">
-                <label>Signal Phone Number</label>
-                <input type="text" id="settingsSignalPhone" placeholder="+1234567890" autocomplete="off">
-                <div class="hint">Requires signal-cli REST API running.</div>
-              </div>
-              <div class="form-group">
-                <label>Signal API URL</label>
-                <input type="text" id="settingsSignalApiUrl" placeholder="http://localhost:8080" autocomplete="off">
-              </div>
-              <div class="form-group">
-                <label>iMessage (BlueBubbles Server URL)</label>
-                <input type="text" id="settingsImessageUrl" placeholder="http://localhost:1234" autocomplete="off">
-                <div class="hint">macOS only. Requires BlueBubbles server.</div>
-              </div>
-              <div class="form-group">
-                <label>iMessage Password</label>
-                <input type="password" id="settingsImessagePassword" placeholder="BlueBubbles password" autocomplete="off">
-              </div>
-              <div class="form-group">
-                <label>LINE Channel Access Token</label>
-                <input type="password" id="settingsLineToken" placeholder="LINE Bot token" autocomplete="off">
-                <div class="hint">Get from LINE Developers Console.</div>
-              </div>
               </div>
               <button class="btn btn-primary" id="saveChannelsBtn">Save Channels</button>
             </div>
@@ -366,6 +338,10 @@
                 <div class="form-group">
                   <label>Name</label>
                   <input type="text" id="agentNameInput" placeholder="e.g. Coder, Researcher">
+                </div>
+                <div class="form-group">
+                  <label>Nickname (optional)</label>
+                  <input type="text" id="agentNicknameInput" placeholder="e.g. Luis, Aria — use in chat to refer to this agent">
                 </div>
                 <div class="form-group">
                   <label>Model</label>
@@ -606,6 +582,8 @@
       <button class="topbar-icon-btn" id="agentsPanelClose">&#10005;</button>
     </div>
     <div class="agents-panel-body">
+      <div id="agentsTeam" style="margin-bottom:16px"></div>
+      <h3 style="font-size:12px;color:var(--text-muted);text-transform:uppercase;margin:12px 0 8px">Active Tasks</h3>
       <div id="agentsRunning"></div>
       <div id="agentsHistory"></div>
     </div>

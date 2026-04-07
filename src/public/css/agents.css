@@ -85,6 +85,18 @@
   overflow: hidden;
 }
 
+/* Team roster members (always online) */
+.agent-team-member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-elevated, #1a1b1f);
+  border-radius: 10px;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
 /* Settings: Agent Cards */
 .agent-card {
   padding: 12px 14px;

@@ -59,6 +59,7 @@ const Agents = {
       document.getElementById("agentIdInput").value = agent.id;
       document.getElementById("agentIdInput").disabled = true;
       document.getElementById("agentNameInput").value = agent.name;
+      document.getElementById("agentNicknameInput").value = agent.nickname || "";
       document.getElementById("agentModelInput").value = agent.model;
       document.getElementById("agentPromptInput").value = agent.prompt;
       document.getElementById("agentIconInput").value = agent.icon || "";
@@ -67,6 +68,7 @@ const Agents = {
       document.getElementById("agentIdInput").value = "";
       document.getElementById("agentIdInput").disabled = false;
       document.getElementById("agentNameInput").value = "";
+      document.getElementById("agentNicknameInput").value = "";
       document.getElementById("agentModelInput").value = "claude-sonnet-4-6";
       document.getElementById("agentPromptInput").value = "";
       document.getElementById("agentIconInput").value = "🤖";
@@ -98,6 +100,7 @@ const Agents = {
     const agent = {
       id: document.getElementById("agentIdInput").value.trim(),
       name: document.getElementById("agentNameInput").value.trim(),
+      nickname: document.getElementById("agentNicknameInput").value.trim() || "",
       model: document.getElementById("agentModelInput").value,
       prompt: document.getElementById("agentPromptInput").value.trim(),
       icon: document.getElementById("agentIconInput").value.trim() || "🤖",
@@ -138,15 +141,37 @@ const Agents = {
 
   async loadDashboard() {
     try {
+      // Load team roster (always online)
+      const regData = await API.json("/api/agents/registry");
+      const teamEl = document.getElementById("agentsTeam");
+      const agents = regData.agents || [];
+
       const data = await API.json("/api/agents/tasks");
       const running = data.running || [];
       const history = data.history || [];
+
+      // Find which agents are currently busy
+      const busyAgentIds = new Set(running.filter(t => t.status === "running").map(t => t.agentId));
+
+      teamEl.innerHTML = agents.map(a => {
+        const busy = busyAgentIds.has(a.id);
+        const statusDot = busy ? "🟡" : "🟢";
+        const statusText = busy ? "Busy" : "Online";
+        const nick = a.nickname ? ` "${a.nickname}"` : "";
+        return `<div class="agent-team-member" style="border-left:3px solid ${a.color || '#666'}">
+          <span>${a.icon || "🤖"}</span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px"><strong>${a.name}</strong>${nick} <span style="font-size:11px;color:var(--text-muted)">${a.model?.split("-").slice(-2).join(" ") || ""}</span></div>
+            <div style="font-size:11px;color:var(--text-muted)">${statusDot} ${statusText}</div>
+          </div>
+        </div>`;
+      }).join("") || '<div style="color:var(--text-muted);font-size:13px">No agents configured.</div>';
 
       const runningEl = document.getElementById("agentsRunning");
       const historyEl = document.getElementById("agentsHistory");
 
       if (running.length === 0 && history.length === 0) {
-        runningEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:20px;text-align:center">No agents running. Ask Tarsee to spawn one, or use the chat to delegate tasks.</div>';
+        runningEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px;text-align:center">No active tasks. Agents are standing by.</div>';
         historyEl.innerHTML = "";
         return;
       }
