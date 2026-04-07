@@ -216,8 +216,11 @@ const Settings = {
     // Show/hide ElevenLabs key field based on engine selection
     if (this.elements.voiceEngine) {
       this.elements.voiceEngine.addEventListener("change", () => {
+        const val = this.elements.voiceEngine.value;
         const elGroup = document.getElementById("elevenlabsKeyGroup");
-        if (elGroup) elGroup.style.display = this.elements.voiceEngine.value === "elevenlabs" ? "block" : "none";
+        if (elGroup) elGroup.style.display = val === "elevenlabs" ? "block" : "none";
+        // Reload voices for the selected engine
+        this.loadVoicesForEngine(val);
       });
     }
 
@@ -476,6 +479,45 @@ const Settings = {
       }
     } catch {
       this.elements.voicesList.innerHTML = "";
+    }
+  },
+
+  /** Load voices for a specific engine and populate the dropdown with hardcoded defaults. */
+  loadVoicesForEngine(engine) {
+    if (!this.elements.defaultVoice) return;
+    const voiceMap = {
+      "elevenlabs": [
+        { id: "wNl2YBRc8v5uIcq6gOxd", name: "Kuya Kaf" },
+        { id: "21m00Tcm4TlvDq8ikWAM", name: "Rachel" },
+        { id: "EXAVITQu4vr4xnSDxMaL", name: "Bella" },
+        { id: "ErXwobaYiN019PkySvjV", name: "Antoni" },
+        { id: "MF3mGyEYCl7XYWbV9V6O", name: "Elli" },
+      ],
+      "kokoro": [
+        { id: "af_heart", name: "Heart (Female)" },
+        { id: "af_alloy", name: "Alloy (Female)" },
+        { id: "am_adam", name: "Adam (Male)" },
+        { id: "am_michael", name: "Michael (Male)" },
+        { id: "bf_emma", name: "Emma (British F)" },
+        { id: "bm_george", name: "George (British M)" },
+      ],
+      "edge-tts": [
+        { id: "en-US-AndrewMultilingualNeural", name: "Andrew (US)" },
+        { id: "en-US-AvaMultilingualNeural", name: "Ava (US)" },
+        { id: "en-US-BrianMultilingualNeural", name: "Brian (US)" },
+        { id: "en-GB-SoniaNeural", name: "Sonia (UK)" },
+        { id: "en-AU-NatashaNeural", name: "Natasha (AU)" },
+        { id: "en-PH-JamesNeural", name: "James (PH)" },
+      ],
+    };
+
+    const voices = voiceMap[engine] || [];
+    this.elements.defaultVoice.innerHTML = '<option value="">Engine default</option>';
+    for (const v of voices) {
+      const opt = document.createElement("option");
+      opt.value = v.id;
+      opt.textContent = v.name;
+      this.elements.defaultVoice.appendChild(opt);
     }
   },
 
