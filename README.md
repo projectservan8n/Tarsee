@@ -1,6 +1,6 @@
 # Tarsee
 
-**Headless Claude Code Agent** — runs Claude 24/7 on a server with persistent memory, channel integrations, scheduled tasks, and 42 built-in skills.
+**Headless Claude Code Agent** — runs Claude 24/7 on a server with persistent memory, multi-agent teams, voice mode, and channel integrations.
 
 Uses your Claude Max/Pro subscription. No API keys needed.
 
@@ -10,7 +10,7 @@ Uses your Claude Max/Pro subscription. No API keys needed.
 
 ## What is Tarsee?
 
-Tarsee wraps Claude Code as a headless AI agent that you can talk to from anywhere — web, Telegram, Discord, or Slack. It remembers everything, runs scripts, schedules tasks, and manages its own identity through workspace files.
+Tarsee wraps Claude Code as a headless AI agent that you can talk to from anywhere — web, Telegram, Discord, or voice. It remembers everything, runs scripts, schedules tasks, and manages its own identity through workspace files.
 
 Think of it as your personal AI that lives on a server and is always available.
 
@@ -49,37 +49,65 @@ Copy the JSON output into `CLAUDE_OAUTH_CREDENTIALS`. Tarsee auto-refreshes the 
 
 ## Features
 
-- **Claude Code Agent** — Full Claude Opus 4.6 with 1M context, running headlessly via the Agent SDK. Subscription auth, no API key costs.
-- **Persistent Memory** — SOUL.md (personality), MEMORY.md (knowledge), USER.md (user info). Claude reads these every session.
-- **Channel Integrations** — Telegram, Discord, Slack, WhatsApp, Signal, LINE. Same AI, same memory, everywhere.
-- **Scheduled Tasks** — Cron jobs with direct actions (instant notifications) or AI prompts (complex tasks). One-time reminders auto-delete.
-- **42 Built-in Skills** — Google Workspace, GitHub, weather, web search, and more via `/skill-name` commands.
-- **Image Analysis** — Send images on any channel. Claude reads them via the workspace.
-- **Voice Mode** — ElevenLabs TTS in the web UI.
-- **Web Terminal** — Browser-based terminal for server access.
-- **Self-Healing** — `/doctor` runs diagnostics and auto-repairs.
+### Core
+- **Claude Code Agent** — Full Claude Opus 4.6 with 1M context, running headlessly via the Agent SDK. Subscription auth, no API costs.
+- **Persistent Memory** — SOUL.md (personality), MEMORY.md (knowledge), USER.md (user info), IDENTITY.md, AGENTS.md. Claude reads these every session.
+- **Session Persistence** — Conversations resume where you left off. 2-hour idle timeout with auto-reset.
 - **Encrypted Vault** — AES-256-GCM for API keys and secrets.
+
+### Multi-Agent Team
+- **Agent Registry** — Orchestrator (Opus), Coder (Opus), Researcher (Sonnet), Writer (Sonnet), Quick (Haiku).
+- **Agent Workspaces** — Each agent has its own persistent memory and workspace at `/data/tarsee/agents/{id}/`.
+- **Nicknames** — Refer to agents by name in chat (e.g. "Hey Luis, write a script...").
+- **Agent Dashboard** — View team status, running tasks, and manage agent definitions.
+
+### Channels
+- **Web UI** — Chat, voice mode, terminal, console, file manager, settings. PWA with iOS/Android save-to-homescreen.
+- **Telegram** — Text, photos, PDFs, voice messages, video notes. Group @mention support, inline buttons, forwarded message detection.
+- **Discord** — Text, images, PDFs, voice messages. Thread support, rate limit handling, presence/activity status.
+- **All channels share** the same AI, memory, tools, and conversation history.
+
+### Voice
+- **Voice Mode** — Full-screen conversational UI with hold-to-talk, tap-to-toggle, and drag-to-cancel.
+- **Chat Mic Button** — Hold to record, release to send. Drag left to cancel (Telegram-style). Shows timer + "slide to cancel" hint.
+- **Local STT** — whisper.cpp with tiny.en model (~75MB). No API key needed. Runs on CPU.
+- **Free TTS** — Microsoft Edge TTS. No API key, no rate limits, good quality.
+- **ElevenLabs TTS** — Optional upgrade for premium voices with conversational emotions.
+
+### Tools & Automation
+- **Scheduled Tasks** — Cron jobs with direct actions or AI prompts. One-time reminders auto-delete.
+- **Built-in Skills** — Activated via `/skill-name` commands in chat.
+- **Native Image/PDF Support** — Send images or PDFs on any channel. Passed natively to Claude via the API.
+- **File Manager** — Browse, view, edit, and create workspace files from the web UI.
+- **Web Terminal** — Browser-based terminal with xterm.js for server access.
 
 ---
 
 ## How It Works
 
 ```
-You (web/telegram/discord/slack)
-  |
-  v
+You (web / telegram / discord / voice)
+  │
+  ▼
 Tarsee Server (Railway)
-  |
+  │
   ├── Claude Code Agent SDK (subscription auth)
   │     ├── Built-in tools: Read, Write, Edit, Bash, Grep, Glob
-  │     └── Tarsee MCP tools: send_message, schedule_task, remember, etc.
-  |
-  ├── Workspace: SOUL.md, MEMORY.md, USER.md, scripts/
-  ├── SQLite: conversations, settings, encrypted vault
-  └── Channels: Telegram, Discord, Slack, WhatsApp, Signal, LINE
+  │     └── Tarsee MCP tools: send_message, schedule_task, remember,
+  │         spawn_agent, web_fetch, web_search, etc.
+  │
+  ├── Agent Team
+  │     ├── Orchestrator (Opus) — routes tasks
+  │     ├── Coder (Opus) — code, debugging, architecture
+  │     ├── Researcher (Sonnet) — web research, docs
+  │     ├── Writer (Sonnet) — content, emails, docs
+  │     └── Quick (Haiku) — simple lookups, formatting
+  │
+  ├── Workspace: SOUL.md, MEMORY.md, USER.md, IDENTITY.md
+  ├── Voice: whisper.cpp STT + Edge TTS (free, no API key)
+  ├── SQLite: conversations, settings, agent tasks, encrypted vault
+  └── Channels: Telegram, Discord (always online)
 ```
-
-Every message goes through Claude Code with full tool access. Claude can read/write files, run commands, send messages to your channels, schedule reminders, and learn new skills.
 
 ---
 
@@ -108,8 +136,8 @@ Every message goes through Claude Code with full tool access. Claude can read/wr
 | `ENCRYPTION_KEY` | Yes | AES-256 key for secrets. `openssl rand -hex 32` |
 | `CLAUDE_OAUTH_CREDENTIALS` | Yes | Claude subscription credentials JSON |
 | `NODE_ENV` | Yes | Set to `production` |
-| `CLAUDE_DEFAULT_MODEL` | No | Default: `claude-opus-4-6` |
-| `ELEVENLABS_API_KEY` | No | ElevenLabs TTS (optional) |
+| `CLAUDE_DEFAULT_MODEL` | No | Default: `claude-sonnet-4-6` |
+| `ELEVENLABS_API_KEY` | No | ElevenLabs TTS (optional, Edge TTS is free) |
 | `TARSEE_STATE_DIR` | No | Auto-detected on Railway (`/data/tarsee`) |
 
 ---
@@ -121,7 +149,7 @@ docker build -t tarsee .
 
 docker run -d \
   --name tarsee \
-  -p 3000:3000 \
+  -p 8080:8080 \
   -v tarsee-data:/data \
   -e NODE_ENV=production \
   -e SETUP_PASSWORD=your-password \
@@ -134,15 +162,16 @@ docker run -d \
 
 ## Channel Setup
 
-Configure channels in **Settings > Channels** after deploying:
+Configure channels in **Settings > Channels** after deploying. Channels auto-start when you save the token.
 
-| Channel | Token needed |
-|---------|-------------|
-| Telegram | Bot token from [@BotFather](https://t.me/BotFather) |
-| Discord | Bot token from [Discord Developer Portal](https://discord.com/developers) |
-| Slack | Bot token + App token (Socket Mode) |
+| Channel | Token needed | Voice messages |
+|---------|-------------|----------------|
+| Telegram | Bot token from [@BotFather](https://t.me/BotFather) | Yes (voice + video notes) |
+| Discord | Bot token from [Discord Developer Portal](https://discord.com/developers) | Yes (audio attachments) |
 
-All channels share the same AI, memory, and tools.
+Both channels support: text, images, PDFs, voice messages (transcribed via whisper.cpp), inline buttons (Telegram), reactions, and tool use.
+
+**Discord setup:** Enable "Message Content Intent" in Bot settings. Invite with Send Messages, Read Messages, Add Reactions permissions.
 
 ---
 
@@ -150,21 +179,29 @@ All channels share the same AI, memory, and tools.
 
 ```
 src/
-  server.js              # Express + HTTP server
+  server.js                    # Express + HTTP server
   ai/
-    router.js            # Claude Code router
-    providers/claude-code.js  # Agent SDK wrapper + MCP tools
-    tarsee-mcp.js        # Tarsee MCP server (send_message, schedule_task, etc.)
+    router.js                  # Claude Code router
+    providers/claude-code.js   # Agent SDK wrapper + native image support
+    tarsee-mcp.js              # MCP server (30+ tools)
   lib/
-    tools.js             # Tool registry (read, write, exec, web_fetch, etc.)
-    commands.js          # Chat commands (/help, /model, /cron, etc.)
-    cron.js              # Cron scheduler with direct actions
-    oauth-refresh.js     # Auto-refresh subscription token
+    tools.js                   # Tool registry
+    commands.js                # Chat commands (/help, /model, /cron, etc.)
+    cron.js                    # Cron scheduler with direct actions
+    oauth-refresh.js           # Auto-refresh subscription token
+    agent-registry.js          # Multi-agent definitions + workspaces
+    subagents.js               # Background agent spawning + persistence
   channels/
-    telegram.js, discord.js, slack.js, websocket.js
-  skills/                # 42 built-in skills
-  public/                # Web UI
-  db/                    # SQLite (conversations, settings, vault)
+    telegram.js                # Telegram bot (text, images, voice, PDFs)
+    discord.js                 # Discord bot (text, images, voice, PDFs)
+    websocket.js               # Web UI real-time communication
+    manager.js                 # Channel lifecycle management
+  voice/
+    stt-handler.js             # whisper.cpp local STT
+    edge-tts-engine.js         # Microsoft Edge TTS (free)
+    tts-interface.js           # TTS engine interface
+  public/                      # Web UI (vanilla HTML/CSS/JS, PWA)
+  db/                          # SQLite (conversations, settings, vault)
 ```
 
 ---
