@@ -62,12 +62,18 @@ async function transcribeLocal(audioBuffer) {
     });
 
     // Run whisper-cli
+    // Perf tuning: 8 threads (Railway has 32 cores), greedy decode (beam=1)
+    // cuts ~8s encode down to ~2-3s for typical voice clips
+    const cpuCount = (await import("node:os")).default.cpus().length;
+    const threads = Math.min(Math.max(Math.floor(cpuCount / 2), 4), 16);
     const output = execFileSync("whisper-cli", [
       "-m", modelPath,
       "-f", tmpWav,
       "--no-timestamps",
       "--language", "en",
-      "--threads", "2",
+      "--threads", String(threads),
+      "--beam-size", "1",
+      "--best-of", "1",
     ], { encoding: "utf8", timeout: 30_000 });
 
     // Parse output — whisper-cli prints text lines
