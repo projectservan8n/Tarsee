@@ -309,7 +309,25 @@ You can use these special markers in your response:
 
   // --- Main text handler ---
   bot.on("text", async (ctx) => {
-    await handleMessage(ctx, ctx.message.text);
+    let text = ctx.message.text;
+
+    // Detect forwarded messages — add context
+    if (ctx.message.forward_from || ctx.message.forward_sender_name) {
+      const from = ctx.message.forward_from?.first_name || ctx.message.forward_sender_name || "someone";
+      text = `[Forwarded from ${from}]: ${text}`;
+    }
+
+    // In groups: only respond if mentioned by @username or replied to
+    if (ctx.chat.type === "group" || ctx.chat.type === "supergroup") {
+      const botUsername = ctx.botInfo?.username;
+      const isMentioned = botUsername && text.includes(`@${botUsername}`);
+      const isReply = ctx.message.reply_to_message?.from?.id === ctx.botInfo?.id;
+      if (!isMentioned && !isReply) return; // Ignore messages not directed at the bot
+      // Strip the @mention from text
+      if (botUsername) text = text.replace(new RegExp(`@${botUsername}\\b`, "gi"), "").trim();
+    }
+
+    await handleMessage(ctx, text);
   });
 
   // --- Photo handler with multi-image batching ---
@@ -411,7 +429,7 @@ You can use these special markers in your response:
     { command: "daily", description: "Today's log" },
     { command: "export", description: "Export conversation" },
     { command: "doctor", description: "Run diagnostics" },
-  ]).catch(() => {});
+  ]).then(() => console.log("[telegram] Commands registered")).catch(e => console.warn("[telegram] Failed to register commands:", e.message));
 
   console.log(`[telegram] bot started`);
 

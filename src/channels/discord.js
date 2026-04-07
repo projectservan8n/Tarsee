@@ -87,24 +87,30 @@ export async function createDiscordBot(config, db) {
       .replace(new RegExp(`<@!?${client.user.id}>`), "")
       .trim();
 
-    // Download image attachments from Discord CDN
-    const imageAttachments = [];
+    // Download attachments from Discord CDN (images + PDFs)
+    const mediaAttachments = [];
     if (message.attachments?.size > 0) {
       for (const [, att] of message.attachments) {
-        if (att.contentType?.startsWith("image/")) {
-          try {
-            const res = await fetch(att.url);
-            const buffer = Buffer.from(await res.arrayBuffer());
-            imageAttachments.push({
+        try {
+          const res = await fetch(att.url);
+          const buffer = Buffer.from(await res.arrayBuffer());
+          if (att.contentType?.startsWith("image/")) {
+            mediaAttachments.push({
               type: "image",
               source: { type: "base64", media_type: att.contentType, data: buffer.toString("base64") },
             });
-          } catch (err) {
-            console.error("[discord] Failed to download attachment:", err.message);
+          } else if (att.contentType === "application/pdf") {
+            mediaAttachments.push({
+              type: "document",
+              source: { type: "base64", media_type: "application/pdf", data: buffer.toString("base64") },
+            });
           }
+        } catch (err) {
+          console.error("[discord] Failed to download attachment:", err.message);
         }
       }
     }
+    const imageAttachments = mediaAttachments; // Backward compat for enrichment below
 
     // Need either text or images to proceed
     if (!content && imageAttachments.length === 0) return;
@@ -306,7 +312,7 @@ You can use these special markers in your response:
             await previewMsg.delete().catch(() => {});
           }
           for (const chunk of chunks) {
-            await message.reply(chunk);
+            await retryOnRateLimit(() => message.reply(chunk));
           }
         }
       }
@@ -360,10 +366,26 @@ You can use these special markers in your response:
     sendMessage: async (channelId, text) => {
       const channel = await client.channels.fetch(channelId);
       if (channel?.isTextBased()) {
-        await channel.send(text.slice(0, 2000));
+        const chunks = splitMessage(text, 2000);
+        for (const chunk of chunks) {
+          await channel.send(chunk);
+        }
       }
     },
   };
+}
+
+async function retryOnRateLimit(fn, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try { return await fn(); }
+    catch (err) {
+      if (err.status === 429 && i < maxRetries - 1) {
+        const delay = err.retryAfter ? err.retryAfter * 1000 : (i + 1) * 2000;
+        console.warn(`[discord] Rate limited, retrying in ${delay}ms`);
+        await new Promise(r => setTimeout(r, delay));
+      } else throw err;
+    }
+  }
 }
 
 function splitMessage(text, maxLen) {
