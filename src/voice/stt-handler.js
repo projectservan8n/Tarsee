@@ -9,8 +9,8 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 const MODELS_DIR = path.join(process.env.TARSEE_DATA_DIR || process.env.TARSEE_STATE_DIR || "/data/tarsee", "whisper-models");
-const TINY_MODEL = "ggml-tiny.bin";
-const TINY_MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin";
+const TINY_MODEL = "ggml-base.bin";
+const TINY_MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin";
 
 /**
  * Check if whisper-cli is available.
