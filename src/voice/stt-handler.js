@@ -1,6 +1,7 @@
 /**
  * Speech-to-text — whisper.cpp (local) or OpenAI Whisper API (fallback).
- * whisper.cpp runs on CPU, no API key needed. Uses tiny model (~75MB).
+ * whisper.cpp runs on CPU, no API key needed. Uses tiny.en model (~75MB).
+ * English-only model — all parameters dedicated to English = better accuracy per MB.
  */
 
 import { execSync, execFileSync } from "node:child_process";
@@ -9,8 +10,8 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 const MODELS_DIR = path.join(process.env.TARSEE_DATA_DIR || process.env.TARSEE_STATE_DIR || "/data/tarsee", "whisper-models");
-const TINY_MODEL = "ggml-base.bin";
-const TINY_MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin";
+const MODEL_FILE = "ggml-tiny.en.bin";
+const MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
 
 /**
  * Check if whisper-cli is available.
@@ -25,15 +26,15 @@ function isWhisperAvailable() {
 }
 
 /**
- * Download the tiny model if not present.
+ * Download the model if not present.
  */
 async function ensureModel() {
   fs.mkdirSync(MODELS_DIR, { recursive: true });
-  const modelPath = path.join(MODELS_DIR, TINY_MODEL);
+  const modelPath = path.join(MODELS_DIR, MODEL_FILE);
   if (fs.existsSync(modelPath)) return modelPath;
 
-  console.log("[stt] Downloading whisper base model (~142MB)...");
-  const res = await fetch(TINY_MODEL_URL);
+  console.log("[stt] Downloading whisper tiny.en model (~75MB)...");
+  const res = await fetch(MODEL_URL);
   if (!res.ok) throw new Error(`Model download failed: ${res.status}`);
   const buffer = Buffer.from(await res.arrayBuffer());
   fs.writeFileSync(modelPath, buffer);
@@ -62,16 +63,14 @@ async function transcribeLocal(audioBuffer) {
     });
 
     // Run whisper-cli
-    // Perf tuning: 8 threads (Railway has 32 cores), greedy decode (beam=1)
-    // cuts ~8s encode down to ~2-3s for typical voice clips
-    const cpuCount = (await import("node:os")).default.cpus().length;
-    const threads = Math.min(Math.max(Math.floor(cpuCount / 2), 4), 16);
+    // 2 threads — Railway plan is 0.5 vCPU, no point spawning more
+    // Greedy decode (beam=1) — faster, good enough for voice commands
     const output = execFileSync("whisper-cli", [
       "-m", modelPath,
       "-f", tmpWav,
       "--no-timestamps",
       "--language", "en",
-      "--threads", String(threads),
+      "--threads", "2",
       "--beam-size", "1",
       "--best-of", "1",
     ], { encoding: "utf8", timeout: 30_000 });
