@@ -294,6 +294,26 @@ html, body {
   gap: 6px;
 }
 
+/* Topbar icon buttons — minimal, no text */
+.topbar-icon-btn {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition);
+  text-decoration: none;
+}
+.topbar-icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 .topbar-title {
   font-size: 15px;
   font-weight: 600;
