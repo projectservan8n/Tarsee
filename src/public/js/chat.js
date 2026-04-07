@@ -127,6 +127,23 @@ const Chat = {
       }
     });
 
+    // Paste images from clipboard (Ctrl+V / Cmd+V screenshots)
+    this.elements.messageInput.addEventListener("paste", (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files = [];
+      for (const item of items) {
+        if (item.kind === "file") {
+          const file = item.getAsFile();
+          if (file) files.push(file);
+        }
+      }
+      if (files.length) {
+        e.preventDefault();
+        this.addPendingFiles(files);
+      }
+    });
+
     // Copy button delegation (works for both message copy and code block copy)
     document.addEventListener("click", (e) => {
       const copyBtn = e.target.closest(".msg-copy-btn, .copy-btn");
