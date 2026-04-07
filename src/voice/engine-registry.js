@@ -11,36 +11,84 @@ export function setTTSEngine(engine) {
 }
 
 /**
- * Initializes TTS — ElevenLabs only.
+ * Initialize TTS engine based on settings.
+ * Priority: user setting > ElevenLabs > Kokoro > Edge TTS > Stub
  */
 export async function initTTSEngine(settingsStore) {
-  try {
-    const apiKey = settingsStore?.getApiKey?.("elevenlabs")
-      || settingsStore?.get("voice.elevenlabs.apiKey")
-      || process.env.ELEVEN_LABS_API_KEY
-      || process.env.XI_API_KEY;
+  const enginePref = settingsStore?.get("voice.engine") || "auto";
+  const defaultVoice = settingsStore?.get("voice.defaultVoiceId");
 
-    if (!apiKey) {
-      console.warn("[voice] No ElevenLabs API key found — TTS disabled");
-      currentEngine = new StubTTSEngine();
+  // If user explicitly selected an engine, try that first
+  if (enginePref !== "auto") {
+    const engine = await tryEngine(enginePref, settingsStore, defaultVoice);
+    if (engine) {
+      currentEngine = engine;
       return;
     }
+    console.warn(`[voice] Preferred engine "${enginePref}" unavailable, falling back`);
+  }
 
-    const { ElevenLabsTTSEngine } = await import("./elevenlabs-engine.js");
-    const defaultVoice = settingsStore?.get("voice.defaultVoiceId") || "wNl2YBRc8v5uIcq6gOxd";
-    const el = new ElevenLabsTTSEngine(apiKey, undefined, defaultVoice);
-    const available = await el.isAvailable();
+  // Auto: try ElevenLabs → Kokoro → Edge TTS → Stub
+  for (const name of ["elevenlabs", "kokoro", "edge-tts"]) {
+    const engine = await tryEngine(name, settingsStore, defaultVoice);
+    if (engine) {
+      currentEngine = engine;
+      return;
+    }
+  }
 
-    if (available) {
-      currentEngine = el;
-      console.log(`[voice] ElevenLabs TTS active (voice: ${defaultVoice})`);
-    } else {
-      console.warn("[voice] ElevenLabs API key invalid or unreachable");
-      currentEngine = new StubTTSEngine();
+  console.warn("[voice] No TTS engine available — voice disabled");
+  currentEngine = new StubTTSEngine();
+}
+
+/**
+ * Try to initialize a specific engine. Returns the engine if available, null otherwise.
+ */
+async function tryEngine(name, settingsStore, defaultVoice) {
+  try {
+    switch (name) {
+      case "elevenlabs": {
+        const apiKey = settingsStore?.getApiKey?.("elevenlabs")
+          || settingsStore?.get("voice.elevenlabs.apiKey")
+          || process.env.ELEVEN_LABS_API_KEY
+          || process.env.XI_API_KEY;
+        if (!apiKey) return null;
+
+        const { ElevenLabsTTSEngine } = await import("./elevenlabs-engine.js");
+        const el = new ElevenLabsTTSEngine(apiKey, undefined, defaultVoice || "wNl2YBRc8v5uIcq6gOxd");
+        if (await el.isAvailable()) {
+          console.log(`[voice] ElevenLabs TTS active (voice: ${defaultVoice || "default"})`);
+          return el;
+        }
+        return null;
+      }
+
+      case "kokoro": {
+        const { KokoroTTSEngine } = await import("./kokoro-engine.js");
+        const kokoro = new KokoroTTSEngine(defaultVoice);
+        if (await kokoro.isAvailable()) {
+          console.log("[voice] Kokoro TTS active (local, free)");
+          return kokoro;
+        }
+        return null;
+      }
+
+      case "edge-tts": {
+        const { EdgeTTSEngine } = await import("./edge-tts-engine.js");
+        const edge = new EdgeTTSEngine(defaultVoice);
+        if (await edge.isAvailable()) {
+          console.log("[voice] Edge TTS active (Microsoft, free)");
+          return edge;
+        }
+        return null;
+      }
+
+      default:
+        return null;
     }
   } catch (err) {
-    console.error("[voice] ElevenLabs init failed:", err.message);
-    currentEngine = new StubTTSEngine();
+    console.warn(`[voice] Engine "${name}" failed:`, err.message);
+    return null;
   }
 }
 
