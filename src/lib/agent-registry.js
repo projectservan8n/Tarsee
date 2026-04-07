@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+
 /**
  * Agent Registry — manages agent definitions (Coder, Researcher, Writer, etc.)
  *
@@ -74,6 +77,46 @@ export function initAgentRegistry(settingsStore) {
   if (existing.length === 0) {
     _settingsStore.set("agents.registry", JSON.stringify(DEFAULT_AGENTS));
   }
+
+  // Create workspace dirs for each agent
+  ensureAgentWorkspaces();
+}
+
+/**
+ * Create workspace directories for all agents.
+ * Each agent gets: /data/tarsee/agents/{id}/ with MEMORY.md, SOUL.md
+ */
+export function ensureAgentWorkspaces() {
+  const baseDir = getAgentsBaseDir();
+  for (const agent of getAgents()) {
+    if (agent.isOrchestrator) continue;
+    const agentDir = path.join(baseDir, agent.id);
+    try {
+      fs.mkdirSync(agentDir, { recursive: true });
+      const memPath = path.join(agentDir, "MEMORY.md");
+      if (!fs.existsSync(memPath)) {
+        fs.writeFileSync(memPath, `# ${agent.name} Memory\n\nTask history and learned knowledge.\n`);
+      }
+      const soulPath = path.join(agentDir, "SOUL.md");
+      if (!fs.existsSync(soulPath)) {
+        fs.writeFileSync(soulPath, `# ${agent.name}\n\n${agent.prompt}\n`);
+      }
+    } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Get the base directory for agent workspaces.
+ */
+export function getAgentsBaseDir() {
+  return path.join(process.env.TARSEE_STATE_DIR || process.env.HOME || "/data/tarsee", "agents");
+}
+
+/**
+ * Get workspace directory for a specific agent.
+ */
+export function getAgentWorkspace(agentId) {
+  return path.join(getAgentsBaseDir(), agentId);
 }
 
 /**

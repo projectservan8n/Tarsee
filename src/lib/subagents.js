@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import { chatStream } from "../ai/router.js";
 import { buildSystemPrompt } from "./build-system-prompt.js";
 import { getToolDefinitions, executeTool } from "./tools.js";
-import { getAgent } from "./agent-registry.js";
+import { getAgent, getAgentWorkspace } from "./agent-registry.js";
+import fs from "node:fs";
 
 /**
  * Subagent manager — spawns background AI agents that run independently.
@@ -93,14 +94,26 @@ function persistTask(db, agent) {
 async function runAgent(agent, { settingsStore, db, channelManager, signal }) {
   const agentDef = agent.agentId ? getAgent(agent.agentId) : null;
 
+  // Agent-specific workspace with its own memory
+  const agentWorkspace = agent.agentId ? getAgentWorkspace(agent.agentId) : null;
+  let agentMemory = "";
+  if (agentWorkspace) {
+    try {
+      const memPath = `${agentWorkspace}/MEMORY.md`;
+      if (fs.existsSync(memPath)) agentMemory = fs.readFileSync(memPath, "utf8");
+    } catch { /* ignore */ }
+  }
+
+  const agentContext = agentDef
+    ? `${agentDef.prompt}\n\n${agentMemory ? `## Your Memory\n${agentMemory}\n` : ""}Your task:\n${agent.task}\n\nWork independently. Save important findings to your MEMORY.md. When done, provide a clear summary.`
+    : `You are "${agent.name}". Your task:\n\n${agent.task}\n\nWork independently. Be thorough.`;
+
   const systemPrompt = buildSystemPrompt({
     settingsStore,
     db,
     conversationId: null,
     messageCount: 0,
-    conversationPrompt: agentDef
-      ? `${agentDef.prompt}\n\nYour task:\n${agent.task}\n\nWork independently. When done, provide a clear summary.`
-      : `You are a background subagent named "${agent.name}". Your task:\n\n${agent.task}\n\nWork independently. Be thorough and report results clearly.`,
+    conversationPrompt: agentContext,
   });
 
   const tools = getToolDefinitions();
@@ -109,7 +122,7 @@ async function runAgent(agent, { settingsStore, db, channelManager, signal }) {
   let messages = [{ role: "user", content: agent.task }];
   let fullResponse = "";
 
-  // Use agent-specific model if defined
+  // Use agent-specific model
   const model = agentDef?.model || settingsStore.getActiveProvider()?.model;
 
   console.log(`[agent:${agent.name}] started (${model || "default"}): ${agent.task.slice(0, 80)}`);
@@ -175,6 +188,17 @@ async function runAgent(agent, { settingsStore, db, channelManager, signal }) {
   agent.completedAt = new Date().toISOString();
   persistTask(db, agent);
   emit("completed", { id: agent.id, name: agent.name, status: "completed", resultPreview: fullResponse.slice(0, 200) });
+
+  // Save task summary to agent's persistent memory
+  if (agentWorkspace && fullResponse) {
+    try {
+      const memPath = `${agentWorkspace}/MEMORY.md`;
+      const date = new Date().toISOString().split("T")[0];
+      const summary = `\n## ${date} — ${agent.task.slice(0, 80)}\n${fullResponse.slice(0, 500)}\n`;
+      fs.appendFileSync(memPath, summary);
+    } catch { /* ignore */ }
+  }
+
   console.log(`[agent:${agent.name}] completed (${fullResponse.length} chars, ${agent.toolsUsed} tools)`);
 }
 
