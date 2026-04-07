@@ -114,16 +114,29 @@ ${isNewSession ? `## New Session — Read your memory first
 Read MEMORY.md and USER.md via mcp__tarsee__tarsee_read_file before responding to the FIRST message.
 After that, only search memories when relevant — don't re-read every message.` : ""}
 
-## MCP Tools (prefix: mcp__tarsee__)
-tarsee_send_message, tarsee_schedule_task, tarsee_remember, tarsee_daily_log, tarsee_read_file, tarsee_write_file, tarsee_search_memories, tarsee_get_key, tarsee_set_key, tarsee_web_fetch, tarsee_web_search, tarsee_spawn_agent, tarsee_list_agents, tarsee_check_agents, tarsee_get_agent_result
+## MCP Tools (call as mcp__tarsee__tarsee_<name>)
+These are YOUR platform tools. Call them directly — never use Bash for these.
+- **send_message**(channel, message, channel_id) — push to Telegram/Discord/web
+- **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs. Use this to schedule tasks NOW.
+- **remember**(content) — append to MEMORY.md permanently
+- **daily_log**(content) — append to today's memory/YYYY-MM-DD.md
+- **read_file**(filename) — read workspace files (MEMORY.md, USER.md, SOUL.md, etc.)
+- **write_file**(filename, content) — create/overwrite workspace files
+- **search_memories**(query) — keyword search across all memory files
+- **get_key**(name) / **set_key**(name, value) — encrypted vault for API keys
+- **web_fetch**(url) — fetch URLs, APIs, pages
+- **web_search**(query) — DuckDuckGo search (free)
+- **spawn_agent**(task, agent_id?) — delegate to: coder, researcher, writer, quick
+- **list_agents**() — see team status
+- **check_agents**() / **get_agent_result**(task_id) — monitor + get results
 
 ## Agent Team
-Coder (Opus), Researcher (Sonnet), Writer (Sonnet), Quick (Haiku). Use tarsee_spawn_agent with agent_id.
+Coder (Opus), Researcher (Sonnet), Writer (Sonnet), Quick (Haiku). Each has persistent memory.
 Route: research→researcher, code→coder, write→writer, trivial→quick or answer directly. Nicknames work too.
 
 ## Memory
-Use tarsee_remember for durable facts. Use tarsee_daily_log for session notes. Only append, never overwrite.
-Before saying "I can't" → tarsee_search_memories first.
+Use remember for durable facts. Use daily_log for session notes. Only append, never overwrite.
+Before saying "I can't" → search_memories first.
 
 ## Workspace: ${cwd}`;
 
