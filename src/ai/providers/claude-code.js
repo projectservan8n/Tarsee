@@ -13,56 +13,32 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import config from "../../config/env.js";
 
-// Directory for temporary image uploads that Claude Code can read via its Read tool
-const UPLOAD_DIR = path.join(config.CLAUDE_WORKSPACE_DIR || process.cwd(), ".uploads");
-
 /**
- * Save image content blocks to disk so Claude Code can access them via Read tool.
- * Returns an array of { path, mediaType } for each saved image.
- * Files auto-delete after 3 days via cleanup sweep.
+ * Extract image blocks from content array.
+ * Returns { images: ImageBlockParam[], text: string }
  */
-function saveImagesToDisk(contentBlocks) {
-  if (!Array.isArray(contentBlocks)) return [];
-
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-  const saved = [];
-  for (const block of contentBlocks) {
+function extractImages(content) {
+  if (!Array.isArray(content)) return { images: [], text: typeof content === "string" ? content : "hello" };
+  const images = [];
+  const textParts = [];
+  for (const block of content) {
     if (block.type === "image" && block.source?.data) {
-      const ext = (block.source.media_type || "image/png").split("/")[1] || "png";
-      const filename = `img-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.${ext}`;
-      const filePath = path.join(UPLOAD_DIR, filename);
-      fs.writeFileSync(filePath, Buffer.from(block.source.data, "base64"));
-      saved.push({ path: filePath, mediaType: block.source.media_type });
+      images.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: block.source.media_type || "image/png",
+          data: block.source.data,
+        },
+      });
+    } else if (block.type === "text") {
+      textParts.push(block.text);
     }
   }
-  return saved;
+  return { images, text: textParts.join("\n") || "hello" };
 }
-
-/**
- * Clean up uploaded images older than 3 days.
- */
-function cleanupOldUploads() {
-  if (!fs.existsSync(UPLOAD_DIR)) return;
-  const MAX_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours
-  const now = Date.now();
-  for (const file of fs.readdirSync(UPLOAD_DIR)) {
-    const filePath = path.join(UPLOAD_DIR, file);
-    try {
-      const stat = fs.statSync(filePath);
-      if (now - stat.mtimeMs > MAX_AGE_MS) {
-        fs.unlinkSync(filePath);
-      }
-    } catch { /* ignore */ }
-  }
-}
-
-// Run cleanup on load and every 6 hours
-cleanupOldUploads();
-setInterval(cleanupOldUploads, 30 * 60 * 1000).unref();
 
 /**
  * Async generator that matches Tarsee's provider interface.
@@ -93,24 +69,11 @@ export async function* chat({
   const FLUSH_THRESHOLD = 30; // After 30 messages, trigger memory flush
   const needsFlush = messageCount > 0 && messageCount % FLUSH_THRESHOLD === 0;
 
-  // Extract the latest user message as the prompt
+  // Extract the latest user message — separate text and images
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
-  let prompt = typeof lastUserMsg?.content === "string"
-    ? lastUserMsg.content
-    : Array.isArray(lastUserMsg?.content)
-      ? lastUserMsg.content.filter((b) => b.type === "text").map((b) => b.text).join("\n")
-      : "hello";
-
-  // Save any attached images to disk so Claude Code can read them
-  if (Array.isArray(lastUserMsg?.content)) {
-    const savedImages = saveImagesToDisk(lastUserMsg.content);
-    if (savedImages.length > 0) {
-      const imageRefs = savedImages.map((img, i) =>
-        `[Attached image ${i + 1}: ${img.path}]`
-      ).join("\n");
-      prompt = `${prompt}\n\nThe user attached ${savedImages.length} image(s). These are JPEG/PNG files on disk. To view them, use the Read tool (it supports images natively). If Read says the file is too large, use Bash: base64 FILE | head -c 50000 to get a partial preview, or just describe based on the filename context.\n${imageRefs}`;
-    }
-  }
+  const { images, text: extractedText } = extractImages(lastUserMsg?.content);
+  let prompt = extractedText;
+  const hasImages = images.length > 0;
 
   // Inject memory flush instruction when conversation is long
   if (needsFlush) {
@@ -215,13 +178,30 @@ ${skillStatus.filter(s => s.status === "needs_install").length} need CLI install
     queryOptions.resume = sessionId;
   }
 
-  console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}`);
+  console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}, images: ${images.length}`);
+
+  // Build prompt: use AsyncIterable with image content blocks if images present
+  let queryPrompt;
+  if (hasImages) {
+    // Native image support via AsyncIterable<SDKUserMessage>
+    const contentBlocks = [...images, { type: "text", text: prompt }];
+    async function* imagePrompt() {
+      yield {
+        type: "user",
+        message: { role: "user", content: contentBlocks },
+        parent_tool_use_id: null,
+      };
+    }
+    queryPrompt = imagePrompt();
+  } else {
+    queryPrompt = prompt;
+  }
 
   try {
     let messageCount = 0;
     let streamed = false;
     let inThinking = false;
-    for await (const message of query({ prompt, options: queryOptions, signal })) {
+    for await (const message of query({ prompt: queryPrompt, options: queryOptions, signal })) {
       messageCount++;
       if (signal?.aborted) break;
 
