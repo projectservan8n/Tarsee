@@ -78,6 +78,37 @@ export class ElevenLabsTTSEngine extends TTSEngine {
   }
 
   /**
+   * Stream TTS audio — returns a readable stream of audio chunks.
+   * First audio bytes arrive in ~300ms instead of waiting for full synthesis.
+   */
+  async synthesizeStream(text, voiceId) {
+    if (!text) throw new Error("Text is required");
+    const vid = voiceId || this.defaultVoice || "21m00Tcm4TlvDq8ikWAM";
+
+    const res = await fetch(`${BASE_URL}/text-to-speech/${vid}/stream`, {
+      method: "POST",
+      headers: {
+        "xi-api-key": this.apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        text,
+        model_id: this.modelId,
+        voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+        output_format: "mp3_44100_64",
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      throw new Error(`ElevenLabs stream error (${res.status}): ${errBody.slice(0, 200)}`);
+    }
+
+    return { stream: res.body, contentType: "audio/mpeg" };
+  }
+
+  /**
    * Clone a voice using ElevenLabs instant voice cloning.
    */
   async cloneVoice(audioSample, voiceName) {

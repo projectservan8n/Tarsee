@@ -329,108 +329,72 @@ const Voice = {
     this.setOrbState("processing");
     this.elements.status.textContent = "Thinking...";
 
-    // Prefix with voice mode tag so backend adds conversational style
-    const voiceText = `[voice] ${text}`;
-
-    let fullResponse = "";
     try {
-      await API.sendMessage(
-        Chat.currentConversationId, voiceText,
-        (content) => { fullResponse += content; },
-        async (data) => {
-          if (data?.conversationId) Chat.currentConversationId = data.conversationId;
-          Chat.loadConversations?.();
-          this.isProcessing = false;
-          this.handleAIResponse(fullResponse);
-        },
-        (error) => {
-          this.isProcessing = false;
-          this.setOrbState("idle");
-          this.elements.status.textContent = "Error: " + error;
-          this.addBubble("assistant", "Something went wrong.");
-        }
-      );
+      // Fast path: direct API call + streaming TTS in one request
+      const csrf = API.getCsrfToken();
+      const headers = { "Content-Type": "application/json" };
+      if (csrf) headers["X-CSRF-Token"] = csrf;
+
+      const res = await fetch("/api/voice/fast-chat", {
+        method: "POST",
+        headers,
+        credentials: "same-origin",
+        body: JSON.stringify({
+          message: text,
+          conversationId: Chat.currentConversationId,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Voice chat failed (${res.status})`);
+      }
+
+      // Get text from header, audio from body
+      const textB64 = res.headers.get("X-Voice-Text");
+      const responseText = textB64 ? atob(textB64) : "";
+
+      this.isProcessing = false;
+
+      if (responseText) {
+        this.addBubble("assistant", responseText);
+      }
+
+      // Play audio directly from response
+      const audioBlob = await res.blob();
+      if (audioBlob.size > 0) {
+        this.speakBlob(audioBlob);
+      } else {
+        this.setOrbState("idle");
+        this.elements.status.textContent = "Hold to talk";
+      }
     } catch (err) {
+      console.error("[voice] fast-chat error:", err);
       this.isProcessing = false;
       this.setOrbState("idle");
       this.elements.status.textContent = "Error: " + err.message;
+      this.addBubble("assistant", "Something went wrong.");
     }
   },
 
-  handleAIResponse(text) {
-    if (!text?.trim()) {
-      this.setOrbState("idle");
-      this.elements.status.textContent = "Hold to talk";
-      return;
-    }
-
-    if (this.isComplexResponse(text)) {
-      this.addBubble("assistant", "Details sent to chat.");
-      this.speak("Check the chat for details.");
-      if (Chat.currentConversationId) Chat.loadMessages?.(Chat.currentConversationId);
-    } else {
-      this.addBubble("assistant", text);
-      const speakText = text
-        .replace(/\*\*(.*?)\*\*/g, "$1")
-        .replace(/\*(.*?)\*/g, "$1")
-        .replace(/#{1,6}\s+/g, "")
-        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
-        .replace(/^[-*]\s+/gm, "")
-        .trim();
-      this.speak(speakText);
-    }
-  },
-
-  isComplexResponse(text) {
-    if (/```[\s\S]*?```/.test(text)) return true;
-    if (/\|.*\|.*\|/.test(text) && /[-]{3,}/.test(text)) return true;
-    if (text.length > 2000) return true;
-    return false;
-  },
-
-  async speak(text) {
-    if (!text?.trim()) return;
+  /** Play audio from a blob — used by fast-chat path. */
+  speakBlob(audioBlob) {
     this.isSpeaking = true;
     this.setOrbState("speaking");
     this.elements.status.textContent = "Speaking...";
 
-    const done = () => {
-      if (!this.isSpeaking) return;
-      this.isSpeaking = false;
-      this.setOrbState("idle");
-      this.elements.status.textContent = "Hold to talk";
-    };
+    const audioUrl = URL.createObjectURL(audioBlob);
+    const audio = this.elements.audio;
+    audio.src = audioUrl;
+    audio.onended = () => { URL.revokeObjectURL(audioUrl); this.isSpeaking = false; this.setOrbState("idle"); this.elements.status.textContent = "Hold to talk"; };
+    audio.onerror = () => { URL.revokeObjectURL(audioUrl); this.isSpeaking = false; this.setOrbState("idle"); };
+    audio.play().catch(() => { this.isSpeaking = false; this.setOrbState("idle"); });
 
-    try {
-      const audioBlob = await API.tts(text);
-      const audioUrl = URL.createObjectURL(audioBlob);
-
-      // Use the page's audio element (more reliable on iOS than new Audio())
-      const audio = this.elements.audio;
-      audio.src = audioUrl;
-      audio.onended = () => { URL.revokeObjectURL(audioUrl); done(); };
-      audio.onerror = () => { URL.revokeObjectURL(audioUrl); done(); };
-
-      try {
-        await audio.play();
-        // Show speaking waveform from audio output
-        this.startSpeakingWaveform(audio);
-      } catch {
-        // Autoplay blocked — clean up
-        URL.revokeObjectURL(audioUrl);
-        done();
-        return;
-      }
-
-      // Safety timeout — if ended event never fires, reset after estimated duration
-      // Rough: 150 words/min speaking rate, ~5 chars/word
-      const estimatedMs = Math.max(3000, (text.length / 5 / 150) * 60000 + 2000);
-      setTimeout(() => { if (this.isSpeaking) done(); }, estimatedMs);
-    } catch (err) {
-      console.warn("[voice] TTS error:", err.message);
-      done();
-    }
+    // Safety timeout
+    const estimatedMs = Math.max(3000, audioBlob.size / 8);
+    setTimeout(() => { if (this.isSpeaking) { this.isSpeaking = false; this.setOrbState("idle"); this.elements.status.textContent = "Hold to talk"; } }, estimatedMs);
   },
+
 
   stopSpeaking() {
     this.elements.audio.pause();
