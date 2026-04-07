@@ -387,7 +387,7 @@ const Chat = {
     const hasWeb = this.channels.some((c) => c.key === "web:default");
     const allChannels = hasWeb
       ? this.channels
-      : [{ key: "web:default", platform: "web", title: "Web Chat", conversationId: null, updatedAt: null }, ...this.channels];
+      : [{ key: "web:default", platform: "web", title: "Main Session", conversationId: null, updatedAt: null }, ...this.channels];
 
     // Group by platform
     const groups = {};
@@ -418,9 +418,15 @@ const Chat = {
         const icon = PLATFORM_ICONS[ch.platform] || PLATFORM_ICONS.web;
         const timeAgo = ch.updatedAt ? this.timeAgo(ch.updatedAt) : "";
 
+        // Clean display name — use platform name for non-web channels
+        let displayName = ch.title;
+        if (ch.key === "web:default") displayName = "Main Session";
+        else if (ch.platform === "telegram" && ch.title.startsWith("Chat with")) displayName = ch.title.replace("Chat with ", "");
+        else if (ch.platform !== "web" && ch.title.length > 25) displayName = ch.title.slice(0, 25) + "...";
+
         item.innerHTML = `
           <span class="channel-icon">${icon}</span>
-          <span class="channel-name">${escapeHtml(ch.title)}</span>
+          <span class="channel-name">${escapeHtml(displayName)}</span>
           <span class="channel-time">${timeAgo}</span>
         `;
 
