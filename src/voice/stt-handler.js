@@ -32,7 +32,7 @@ async function ensureModel() {
   const modelPath = path.join(MODELS_DIR, TINY_MODEL);
   if (fs.existsSync(modelPath)) return modelPath;
 
-  console.log("[stt] Downloading whisper tiny model (~75MB)...");
+  console.log("[stt] Downloading whisper base model (~142MB)...");
   const res = await fetch(TINY_MODEL_URL);
   if (!res.ok) throw new Error(`Model download failed: ${res.status}`);
   const buffer = Buffer.from(await res.arrayBuffer());

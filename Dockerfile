@@ -66,7 +66,8 @@ WORKDIR /app
 # Copy whisper.cpp binary from builder
 COPY --from=builder /app/whisper-bin /opt/whisper
 
-ENV PATH="/opt/whisper:${PATH}"
+ENV PATH="/opt/whisper:${PATH}" \
+    LD_LIBRARY_PATH="/opt/whisper:${LD_LIBRARY_PATH}"
 
 # Install Claude Code CLI globally (Agent SDK spawns this binary)
 # Installed in runtime stage so the binary is available at /usr/local/bin/claude
