@@ -37,6 +37,7 @@ import { getGatewayManager } from "./lib/gateway.js";
 import { canvasMiddleware } from "./lib/canvas.js";
 import { acpRouter } from "./routes/acp.js";
 import { cronRouter } from "./routes/cron.js";
+import { agentsRouter } from "./routes/agents.js";
 
 import { writePid, removePid } from "./daemon/pid.js";
 
@@ -109,7 +110,11 @@ app.use("/api/memory", requireAuth, csrfProtect, memoryRouter);
 app.use("/api/skills", requireAuth, csrfProtect, skillsRouter);
 app.use("/api/acp", requireAuth, csrfProtect, acpRouter);
 app.use("/api/cron", requireAuth, csrfProtect, cronRouter);
+app.use("/api/agents", requireAuth, csrfProtect, agentsRouter);
 
+// Init agent registry
+import { initAgentRegistry } from "./lib/agent-registry.js";
+initAgentRegistry(settingsStore);
 
 // SPA fallback — serve index.html for client-side routes
 // Express 5 requires named wildcard params (bare * is invalid)

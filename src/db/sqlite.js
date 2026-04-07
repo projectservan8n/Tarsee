@@ -179,4 +179,23 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_conversations_claude_session ON conversations(claude_session_id);
     `,
   },
+  {
+    name: "007_agent_tasks",
+    sql: `
+      CREATE TABLE IF NOT EXISTS agent_tasks (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT,
+        name TEXT NOT NULL,
+        task TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        model TEXT,
+        result TEXT,
+        error TEXT,
+        tools_used INTEGER DEFAULT 0,
+        started_at TEXT DEFAULT (datetime('now')),
+        completed_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status);
+    `,
+  },
 ];

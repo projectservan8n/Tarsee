@@ -153,6 +153,73 @@ export function createTarseeMcp(ctx) {
           return { content: [{ type: "text", text: result }] };
         }
       ),
+
+      tool(
+        "tarsee_spawn_agent",
+        "Spawn a background agent to work on a task independently. Each agent runs its own Claude session with its own model. Use for parallel work — research while coding, draft while analyzing. The orchestrator (you) will be notified when agents complete.\n\nAvailable agents: Use tarsee_list_agents to see them, or specify by id: 'coder' (Opus), 'researcher' (Sonnet), 'writer' (Sonnet), 'quick' (Haiku).",
+        {
+          task: z.string().describe("The task for the agent to work on"),
+          name: z.string().optional().describe("Human-friendly task name"),
+          agent_id: z.string().optional().describe("Agent type: 'coder', 'researcher', 'writer', 'quick'. Auto-selects if omitted."),
+        },
+        async (args) => {
+          const { spawnAgent } = await import("../lib/subagents.js");
+          try {
+            const result = spawnAgent({
+              task: args.task,
+              name: args.name,
+              agentId: args.agent_id,
+              settingsStore: ctx.settingsStore,
+              db: ctx.db,
+              channelManager: ctx.channelManager,
+            });
+            return { content: [{ type: "text", text: `Agent spawned: ${result.name} (${result.taskId}). It's working in the background. Use tarsee_check_agents to see status.` }] };
+          } catch (err) {
+            return { content: [{ type: "text", text: `Failed to spawn agent: ${err.message}` }] };
+          }
+        }
+      ),
+
+      tool(
+        "tarsee_check_agents",
+        "Check the status of all background agents. Shows running, completed, and failed tasks.",
+        {},
+        async () => {
+          const { listAgents } = await import("../lib/subagents.js");
+          const agents = listAgents();
+          if (agents.length === 0) return { content: [{ type: "text", text: "No agents running or recently completed." }] };
+          const lines = agents.map(a => {
+            const status = a.status === "running" ? `🟡 Running (${a.toolsUsed} tools${a.lastTool ? `, last: ${a.lastTool}` : ""})` :
+              a.status === "completed" ? "✅ Done" : a.status === "failed" ? "❌ Failed" : "⏹️ Stopped";
+            return `${a.icon || "🤖"} **${a.name}** [${a.id}] — ${status}\n  Task: ${a.task}\n  ${a.resultPreview ? `Result: ${a.resultPreview}` : ""}`;
+          });
+          return { content: [{ type: "text", text: lines.join("\n\n") }] };
+        }
+      ),
+
+      tool(
+        "tarsee_get_agent_result",
+        "Get the full result of a completed background agent.",
+        { task_id: z.string().describe("The task ID returned by tarsee_spawn_agent") },
+        async (args) => {
+          const { getAgentResult } = await import("../lib/subagents.js");
+          const result = getAgentResult(args.task_id);
+          if (!result) return { content: [{ type: "text", text: "Agent not found." }] };
+          return { content: [{ type: "text", text: `**${result.name}** (${result.status})\nModel: ${result.model || "default"}\nTools: ${result.toolsUsed}\n\n${result.result || result.error || "No output"}` }] };
+        }
+      ),
+
+      tool(
+        "tarsee_list_agents",
+        "List available agent types (Coder, Researcher, Writer, Quick) with their models and capabilities.",
+        {},
+        async () => {
+          const { getAgents } = await import("../lib/agent-registry.js");
+          const agents = getAgents();
+          const lines = agents.map(a => `${a.icon || "🤖"} **${a.name}** (\`${a.id}\`) — ${a.model}\n  ${a.prompt.slice(0, 100)}`);
+          return { content: [{ type: "text", text: `Available agents:\n\n${lines.join("\n\n")}` }] };
+        }
+      ),
     ],
   });
 }
