@@ -1,0 +1,99 @@
+/* Agents Dashboard Panel */
+.agents-panel {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 380px;
+  max-width: 90vw;
+  background: var(--bg-sidebar, #111215);
+  border-left: 1px solid var(--border, rgba(255,255,255,0.07));
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  animation: slideInRight 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes slideInRight {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+.agents-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.agents-panel-header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+}
+.agents-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Agent Task Cards */
+.agent-task-card {
+  background: var(--bg-elevated, #1a1b1f);
+  border: 1px solid var(--border, rgba(255,255,255,0.06));
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+.agent-task-card.running {
+  border-left: 3px solid #fbbf24;
+}
+.agent-task-card.completed {
+  border-left: 3px solid #4caf50;
+}
+.agent-task-card.failed {
+  border-left: 3px solid #f44336;
+}
+.agent-task-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+}
+.agent-task-status {
+  font-size: 11px;
+  font-weight: 600;
+}
+.agent-task-detail {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.agent-task-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+.agent-task-result {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: var(--bg);
+  border-radius: 6px;
+  max-height: 80px;
+  overflow: hidden;
+}
+
+/* Settings: Agent Cards */
+.agent-card {
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  background: var(--bg);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+@media (max-width: 768px) {
+  .agents-panel { width: 100%; max-width: 100%; }
+}

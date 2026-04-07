@@ -75,6 +75,7 @@ const App = {
     Chat.init();
     Voice.init();
     Settings.init();
+    Agents.init();
     Console.init();
 
     // Mobile menu toggle with overlay
