@@ -151,9 +151,21 @@ export class ConversationStore {
 
   /**
    * Get the Claude Code CLI session ID for a conversation.
+   * Returns null if session is stale (idle > 2 hours) to force fresh start.
    */
   getClaudeSessionId(conversationId) {
     const conv = this.get(conversationId);
-    return conv?.claude_session_id || null;
+    if (!conv?.claude_session_id) return null;
+
+    // Session idle timeout: if no messages in 2 hours, start fresh
+    const IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+    const updatedAt = conv.updated_at ? new Date(conv.updated_at).getTime() : 0;
+    if (Date.now() - updatedAt > IDLE_TIMEOUT_MS) {
+      console.log(`[session] Session for conv ${conversationId} expired (idle > 2h), starting fresh`);
+      this._updateClaudeSessionId.run(null, conversationId);
+      return null;
+    }
+
+    return conv.claude_session_id;
   }
 }

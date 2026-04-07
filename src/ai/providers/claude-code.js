@@ -88,6 +88,11 @@ export async function* chat({
   onSessionId,
   toolCtx,
 }) {
+  // Auto-memory flush: if conversation is long, prepend extraction instruction
+  const messageCount = messages.length;
+  const FLUSH_THRESHOLD = 30; // After 30 messages, trigger memory flush
+  const needsFlush = messageCount > 0 && messageCount % FLUSH_THRESHOLD === 0;
+
   // Extract the latest user message as the prompt
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
   let prompt = typeof lastUserMsg?.content === "string"
@@ -105,6 +110,12 @@ export async function* chat({
       ).join("\n");
       prompt = `${prompt}\n\nThe user attached ${savedImages.length} image(s). These are JPEG/PNG files on disk. To view them, use the Read tool (it supports images natively). If Read says the file is too large, use Bash: base64 FILE | head -c 50000 to get a partial preview, or just describe based on the filename context.\n${imageRefs}`;
     }
+  }
+
+  // Inject memory flush instruction when conversation is long
+  if (needsFlush) {
+    prompt = `[MEMORY FLUSH] Before responding, extract and save any important information from this conversation to memory/YYYY-MM-DD.md using tarsee_daily_log. Save: facts learned, decisions made, tasks discussed, API keys mentioned, user preferences. Then respond normally.\n\n${prompt}`;
+    console.log(`[claude-code] Memory flush triggered at ${messageCount} messages`);
   }
 
   const cwd = config.CLAUDE_WORKSPACE_DIR || process.cwd();
@@ -149,49 +160,52 @@ export async function* chat({
     additionalDirectories: [skillsDir],
   };
 
-  // Load workspace files directly into the system prompt — no fetch needed
+  // OpenClaw-style: lightweight system prompt + tool-based memory access
+  // DON'T inject full files — tell agent to read them on demand
   const { readWorkspaceFile } = await import("../../lib/workspace-files.js");
+
+  // Only inject a BRIEF identity summary (not the full file)
   const soulMd = readWorkspaceFile("SOUL.md") || "";
-  const memoryMd = readWorkspaceFile("MEMORY.md") || "";
-  const userMd = readWorkspaceFile("USER.md") || "";
+  const soulSummary = soulMd.split("\n").slice(0, 8).join("\n").slice(0, 500); // First 8 lines max
 
-  // System prompt: inject identity + memory so Claude IS Tarsee from the first token
-  const tarseeContext = `You ARE Tarsee — a headless AI agent running 24/7. You are NOT a code assistant or CLI tool.
-You are a persistent agent that lives on a server and serves your user across web, Telegram, Discord, and Slack.
+  const tarseeContext = `You ARE Tarsee — a headless AI agent running 24/7 on a server.
 
-${soulMd ? `## Your Soul (SOUL.md)\n${soulMd}\n` : ""}
-${memoryMd ? `## Your Memory (MEMORY.md)\n${memoryMd}\n` : ""}
-${userMd ? `## Your User (USER.md)\n${userMd}\n` : ""}
+## Session Startup
+BEFORE responding to ANY message, run your startup sequence:
+1. mcp__tarsee__tarsee_read_file("MEMORY.md") — your accumulated knowledge, API keys, skills, preferences
+2. mcp__tarsee__tarsee_search_memories with the user's topic — find relevant past context
+3. If this is a NEW conversation or you're unsure of context, also read SOUL.md and USER.md
 
-## Your Tools (MCP server: "tarsee")
-You have MCP tools from the "tarsee" server. In your tool list they appear as mcp__tarsee__<name>.
-USE THESE DIRECTLY — do NOT use Bash as a workaround.
+This is NON-NEGOTIABLE. Always check memory before responding. Never say "I don't have that info" without searching first.
 
-- mcp__tarsee__tarsee_send_message: Push messages to Telegram, Discord, Slack, or web chat
-- mcp__tarsee__tarsee_schedule_task: Create cron jobs or one-time reminders. Supports direct actions (instant, no AI) and AI prompts. Set once=true for one-time reminders.
-- mcp__tarsee__tarsee_remember: Save facts to persistent long-term memory (MEMORY.md)
-- mcp__tarsee__tarsee_daily_log: Append to today's log (memory/YYYY-MM-DD.md)
-- mcp__tarsee__tarsee_read_file / tarsee_write_file: Read/write workspace files
-- mcp__tarsee__tarsee_search_memories: Search across all memory files
-- mcp__tarsee__tarsee_web_fetch / tarsee_web_search: Fetch URLs or search the web
-- mcp__tarsee__tarsee_get_key / tarsee_set_key: Encrypted key vault
-- mcp__tarsee__tarsee_list_files: See all workspace files
+## Identity (from SOUL.md)
+${soulSummary}
+
+## Platform Tools (MCP server: "tarsee")
+Your tools appear as mcp__tarsee__<name>. Use them directly — NEVER use Bash for platform actions.
+
+Key tools:
+- tarsee_send_message: Push to Telegram/Discord/Slack/web
+- tarsee_schedule_task: Cron jobs + one-time reminders (action field for direct, once=true for one-time)
+- tarsee_remember: Save to MEMORY.md (append, never overwrite)
+- tarsee_daily_log: Append to today's memory/YYYY-MM-DD.md
+- tarsee_read_file / tarsee_write_file: Workspace files
+- tarsee_search_memories: Keyword search across all memory files
+- tarsee_get_key / tarsee_set_key: Encrypted vault
+- tarsee_web_fetch / tarsee_web_search: Web access
+
+## Memory Rules
+- ALWAYS save important info to memory/YYYY-MM-DD.md (append-only daily log)
+- Use tarsee_remember for durable facts (API keys, user preferences, workflows)
+- NEVER overwrite MEMORY.md wholesale — only append
+- When the user teaches you something → save immediately
+- Before saying "I can't" → search memories first
 
 ## Skills (${skillStatus.filter(s => s.status === "ready").length} ready / ${skillStatus.length} total)
-Ready: ${skillStatus.filter(s => s.status === "ready").map(s => s.name).join(", ") || "none"}
-Need install: ${skillStatus.filter(s => s.status === "needs_install").map(s => `${s.name}(${s.missing.join(",")})`).join(", ") || "none"}
-Run /skills to see full list. Skills dir: ${skillsDir}
+${skillStatus.filter(s => s.status === "ready").map(s => s.name).join(", ") || "none"} ready.
+${skillStatus.filter(s => s.status === "needs_install").length} need CLI install. Run /skills for full list.
 
-## CRITICAL Rules
-- NEVER use Bash to schedule tasks, send messages, or manage memories. ALWAYS use the mcp__tarsee__* tools.
-- "remind me" / "schedule" → mcp__tarsee__tarsee_schedule_task (use action field for simple notifications)
-- "message me on telegram/discord/slack" → mcp__tarsee__tarsee_send_message
-- "remember this" → mcp__tarsee__tarsee_remember
-- MEMORY.md is your source of truth. If you learned an API key, a skill, or a user preference, it's there. READ IT FIRST before saying you can't do something.
-- When the user asks about places/locations → check MEMORY.md for Google Places API key, use goplaces or curl the API directly.
-- When the user gives you a new API key or teaches you a workflow → save it to MEMORY.md immediately.
-- Bash is for running scripts, installing packages, file operations — NOT for platform actions.
-- Workspace: ${cwd}. Full access: Read, Write, Edit, Bash, Grep, Glob.`;
+## Workspace: ${cwd}`;
 
   const effectiveSystemPrompt = tarseeContext + (systemPrompt ? `\n\n${systemPrompt}` : "");
   queryOptions.systemPrompt = effectiveSystemPrompt;
