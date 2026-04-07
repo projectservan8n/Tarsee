@@ -25,22 +25,28 @@ const Agents = {
         list.innerHTML = '<div style="color:var(--text-muted);font-size:13px">No agents defined. Add one to get started.</div>';
         return;
       }
-      list.innerHTML = agents.map(a => `
+      const modelLabels = { "claude-opus-4-6": "Opus", "claude-sonnet-4-6": "Sonnet", "claude-haiku-4-5": "Haiku" };
+      list.innerHTML = agents.map(a => {
+        const iconHtml = a.icon?.startsWith("ph ") ? `<i class="${a.icon}" style="font-size:16px;color:${a.color || 'var(--text)'}"></i>` : `<span style="font-size:16px">${a.icon || "🤖"}</span>`;
+        const nick = a.nickname ? ` "${a.nickname}"` : "";
+        return `
         <div class="agent-card" style="border-left:3px solid ${a.color || '#666'}">
           <div style="display:flex;justify-content:space-between;align-items:center">
-            <div>
-              <span style="font-size:16px">${a.icon || "🤖"}</span>
-              <strong>${a.name}</strong>
-              <code style="font-size:11px;margin-left:4px">${a.id}</code>
+            <div style="display:flex;align-items:center;gap:8px">
+              ${iconHtml}
+              <div>
+                <strong>${a.name}</strong>${nick}
+                <span style="font-size:11px;color:var(--text-muted);margin-left:4px">${modelLabels[a.model] || a.model}</span>
+              </div>
             </div>
             <div style="display:flex;gap:4px">
               <button class="btn btn-sm" data-agent-edit="${a.id}">Edit</button>
               <button class="btn btn-sm" style="color:var(--danger)" data-agent-delete="${a.id}">Delete</button>
             </div>
           </div>
-          <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${a.model} — ${(a.prompt || "").slice(0, 80)}...</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${(a.prompt || "").slice(0, 80)}...</div>
         </div>
-      `).join("");
+      `}).join("");
 
       list.querySelectorAll("[data-agent-edit]").forEach(btn => {
         btn.addEventListener("click", () => this.editAgent(btn.dataset.agentEdit));
@@ -153,16 +159,20 @@ const Agents = {
       // Find which agents are currently busy
       const busyAgentIds = new Set(running.filter(t => t.status === "running").map(t => t.agentId));
 
+      const modelLabels = { "claude-opus-4-6": "Opus", "claude-sonnet-4-6": "Sonnet", "claude-haiku-4-5": "Haiku" };
       teamEl.innerHTML = agents.map(a => {
         const busy = busyAgentIds.has(a.id);
-        const statusDot = busy ? "🟡" : "🟢";
-        const statusText = busy ? "Busy" : "Online";
+        const isOrch = a.isOrchestrator;
+        const statusDot = isOrch ? '<span class="agent-dot online"></span>' : busy ? '<span class="agent-dot busy"></span>' : '<span class="agent-dot online"></span>';
+        const statusText = isOrch ? "Active" : busy ? "Busy" : "Online";
         const nick = a.nickname ? ` "${a.nickname}"` : "";
+        const iconHtml = a.icon?.startsWith("ph ") ? `<i class="${a.icon}" style="font-size:18px;color:${a.color || 'var(--text)'}"></i>` : `<span style="font-size:16px">${a.icon || "🤖"}</span>`;
+        const modelLabel = modelLabels[a.model] || a.model || "";
         return `<div class="agent-team-member" style="border-left:3px solid ${a.color || '#666'}">
-          <span>${a.icon || "🤖"}</span>
+          ${iconHtml}
           <div style="flex:1;min-width:0">
-            <div style="font-size:13px"><strong>${a.name}</strong>${nick} <span style="font-size:11px;color:var(--text-muted)">${a.model?.split("-").slice(-2).join(" ") || ""}</span></div>
-            <div style="font-size:11px;color:var(--text-muted)">${statusDot} ${statusText}</div>
+            <div style="font-size:13px"><strong>${a.name}</strong>${nick}</div>
+            <div style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:6px">${statusDot} ${statusText} · ${modelLabel}</div>
           </div>
         </div>`;
       }).join("") || '<div style="color:var(--text-muted);font-size:13px">No agents configured.</div>';

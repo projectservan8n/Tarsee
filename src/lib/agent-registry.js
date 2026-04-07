@@ -8,6 +8,18 @@
 
 const DEFAULT_AGENTS = [
   {
+    id: "orchestrator",
+    name: "Orchestrator",
+    nickname: "",
+    model: "claude-opus-4-6",
+    prompt: "You are the main Tarsee agent. You talk directly to the user, manage memory, schedule tasks, and delegate work to specialized agents when needed.",
+    tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+    color: "#f5a623",
+    icon: "ph ph-crown",
+    status: "online",
+    isOrchestrator: true,
+  },
+  {
     id: "coder",
     name: "Coder",
     nickname: "",
@@ -15,7 +27,7 @@ const DEFAULT_AGENTS = [
     prompt: "You are a senior software engineer. Write clean, production-grade code. Debug thoroughly. Always test your work. Use Read, Write, Edit, Bash, Grep, Glob tools. Be concise — code speaks louder than explanations.",
     tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
     color: "#4caf50",
-    icon: "💻",
+    icon: "ph ph-code",
     status: "online",
   },
   {
@@ -26,7 +38,7 @@ const DEFAULT_AGENTS = [
     prompt: "You are a thorough researcher. Search the web, read documents, analyze data, and summarize findings. Be comprehensive but concise. Cite sources. Use web_fetch, web_search, Read tools.",
     tools: ["Read", "Bash", "Glob", "Grep"],
     color: "#2196f3",
-    icon: "🔍",
+    icon: "ph ph-magnifying-glass",
     status: "online",
   },
   {
@@ -37,7 +49,7 @@ const DEFAULT_AGENTS = [
     prompt: "You are a professional writer. Draft emails, documents, reports, and content. Match the user's tone and style. Be clear, concise, and compelling. Use Read and Write tools for file output.",
     tools: ["Read", "Write", "Edit", "Bash"],
     color: "#ff9800",
-    icon: "✍️",
+    icon: "ph ph-pencil-line",
     status: "online",
   },
   {
@@ -48,7 +60,7 @@ const DEFAULT_AGENTS = [
     prompt: "You are a fast assistant for simple tasks. Answer quickly, format data, do calculations, lookups. Be extremely concise — one sentence when possible.",
     tools: ["Read", "Bash", "Grep"],
     color: "#9c27b0",
-    icon: "⚡",
+    icon: "ph ph-lightning",
     status: "online",
   },
 ];
