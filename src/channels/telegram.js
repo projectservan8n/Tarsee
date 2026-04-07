@@ -7,6 +7,7 @@ import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
+import { transcribeAudio } from "../voice/stt-handler.js";
 
 /**
  * Creates and starts a Telegram bot.
@@ -393,6 +394,64 @@ You can use these special markers in your response:
     } catch (err) {
       console.error("[telegram] document handler error:", err.message);
       await ctx.reply("Failed to process file.").catch(() => {});
+    }
+  });
+
+  // --- Voice message handler (transcribe with whisper.cpp) ---
+  bot.on("voice", async (ctx) => {
+    try {
+      const voice = ctx.message.voice;
+      console.log(`[telegram] voice message: ${voice.duration}s, ${voice.file_size} bytes`);
+
+      // Download the .ogg file from Telegram
+      const fileLink = await bot.telegram.getFileLink(voice.file_id);
+      const res = await fetch(fileLink.href);
+      const audioBuffer = Buffer.from(await res.arrayBuffer());
+
+      // Transcribe
+      await ctx.sendChatAction("typing").catch(() => {});
+      const result = await transcribeAudio(audioBuffer, "en", { settingsStore });
+
+      if (!result.transcript?.trim()) {
+        await ctx.reply("Couldn't understand the voice message.", {
+          reply_to_message_id: ctx.message.message_id,
+        });
+        return;
+      }
+
+      console.log(`[telegram] transcribed: "${result.transcript.slice(0, 80)}..."`);
+      await handleMessage(ctx, result.transcript, ctx.message.message_id);
+    } catch (err) {
+      console.error("[telegram] voice handler error:", err.message);
+      await ctx.reply("Failed to process voice message.").catch(() => {});
+    }
+  });
+
+  // --- Voice note (video message / round video) handler ---
+  bot.on("video_note", async (ctx) => {
+    try {
+      const vn = ctx.message.video_note;
+      console.log(`[telegram] video note: ${vn.duration}s`);
+
+      const fileLink = await bot.telegram.getFileLink(vn.file_id);
+      const res = await fetch(fileLink.href);
+      const audioBuffer = Buffer.from(await res.arrayBuffer());
+
+      await ctx.sendChatAction("typing").catch(() => {});
+      const result = await transcribeAudio(audioBuffer, "en", { settingsStore });
+
+      if (!result.transcript?.trim()) {
+        await ctx.reply("Couldn't understand the video note.", {
+          reply_to_message_id: ctx.message.message_id,
+        });
+        return;
+      }
+
+      console.log(`[telegram] transcribed video note: "${result.transcript.slice(0, 80)}..."`);
+      await handleMessage(ctx, result.transcript, ctx.message.message_id);
+    } catch (err) {
+      console.error("[telegram] video_note handler error:", err.message);
+      await ctx.reply("Failed to process video note.").catch(() => {});
     }
   });
 

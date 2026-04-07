@@ -7,6 +7,7 @@ import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
+import { transcribeAudio } from "../voice/stt-handler.js";
 
 /**
  * Creates and starts a Discord bot.
@@ -83,12 +84,13 @@ export async function createDiscordBot(config, db) {
     // In threads: always respond (no mention needed)
     // In DMs: always respond
 
-    const content = message.content
+    let content = message.content
       .replace(new RegExp(`<@!?${client.user.id}>`), "")
       .trim();
 
-    // Download attachments from Discord CDN (images + PDFs)
+    // Download attachments from Discord CDN (images, PDFs, voice)
     const mediaAttachments = [];
+    let voiceTranscript = "";
     if (message.attachments?.size > 0) {
       for (const [, att] of message.attachments) {
         try {
@@ -104,13 +106,29 @@ export async function createDiscordBot(config, db) {
               type: "document",
               source: { type: "base64", media_type: "application/pdf", data: buffer.toString("base64") },
             });
+          } else if (att.contentType?.startsWith("audio/") || att.name?.endsWith(".ogg") || att.name?.endsWith(".webm")) {
+            // Voice message — transcribe with whisper
+            console.log(`[discord] voice attachment: ${att.name} (${att.contentType})`);
+            message.channel.sendTyping().catch(() => {});
+            const result = await transcribeAudio(buffer, "en", { settingsStore });
+            if (result.transcript?.trim()) {
+              voiceTranscript = result.transcript;
+              console.log(`[discord] transcribed: "${voiceTranscript.slice(0, 80)}..."`);
+            }
           }
         } catch (err) {
-          console.error("[discord] Failed to download attachment:", err.message);
+          console.error("[discord] Failed to process attachment:", err.message);
         }
       }
     }
     const imageAttachments = mediaAttachments; // Backward compat for enrichment below
+
+    // Use voice transcript as content if no text was provided
+    if (voiceTranscript && !content) {
+      content = voiceTranscript;
+    } else if (voiceTranscript) {
+      content = `${content}\n\n[Voice message]: ${voiceTranscript}`;
+    }
 
     // Need either text or images to proceed
     if (!content && imageAttachments.length === 0) return;
