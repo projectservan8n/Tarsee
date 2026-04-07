@@ -29,8 +29,10 @@ export async function initTTSEngine(settingsStore) {
   }
 
   // Auto: try ElevenLabs → Kokoro → Edge TTS → Stub
+  // When falling back, DON'T pass the user's voice ID (it's for a different engine)
   for (const name of ["elevenlabs", "kokoro", "edge-tts"]) {
-    const engine = await tryEngine(name, settingsStore, defaultVoice);
+    const voiceForEngine = (name === enginePref) ? defaultVoice : null;
+    const engine = await tryEngine(name, settingsStore, voiceForEngine);
     if (engine) {
       currentEngine = engine;
       return;
