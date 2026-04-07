@@ -84,9 +84,10 @@ voiceRouter.post("/tts", async (req, res) => {
     res.set("Content-Length", String(audio.length));
     res.send(audio);
   } catch (err) {
-    console.error(`[tts] error: ${err.message}`);
+    const msg = err?.message || String(err);
+    console.error(`[tts] error: ${msg}`);
     const status = err.status || 500;
-    res.status(status).json({ error: err.message });
+    if (!res.headersSent) res.status(status).json({ error: msg });
   }
 });
 
@@ -99,7 +100,15 @@ voiceRouter.post("/tts-stream", async (req, res) => {
   if (!text) return res.status(400).json({ error: "Text is required" });
 
   try {
-    const engine = getTTSEngine();
+    let engine = getTTSEngine();
+
+    // Re-init if engine is stub (key may have been added after startup)
+    if (engine.name === "stub") {
+      const sStore = req.app.get("settingsStore");
+      await initTTSEngine(sStore);
+      engine = getTTSEngine();
+    }
+
     if (!engine.synthesizeStream) {
       // Fallback to non-streaming
       const { audio, contentType } = await engine.synthesize(text, voiceId);
@@ -115,8 +124,9 @@ voiceRouter.post("/tts-stream", async (req, res) => {
     }
     res.end();
   } catch (err) {
-    console.error("[tts-stream] error:", err.message);
-    res.status(500).json({ error: err.message });
+    const msg = err?.message || String(err);
+    console.error("[tts-stream] error:", msg);
+    if (!res.headersSent) res.status(500).json({ error: msg });
   }
 });
 
