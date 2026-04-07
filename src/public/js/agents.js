@@ -163,8 +163,8 @@ const Agents = {
       teamEl.innerHTML = agents.map(a => {
         const busy = busyAgentIds.has(a.id);
         const isOrch = a.isOrchestrator;
-        const statusDot = isOrch ? '<span class="agent-dot online"></span>' : busy ? '<span class="agent-dot busy"></span>' : '<span class="agent-dot online"></span>';
-        const statusText = isOrch ? "Active" : busy ? "Busy" : "Online";
+        const statusDot = isOrch ? '<span class="agent-dot online"></span>' : busy ? '<span class="agent-dot busy"></span>' : '<span class="agent-dot available"></span>';
+        const statusText = isOrch ? "Active" : busy ? "Working" : "Available";
         const nick = a.nickname ? ` "${a.nickname}"` : "";
         const iconHtml = a.icon?.startsWith("ph ") ? `<i class="${a.icon}" style="font-size:18px;color:${a.color || 'var(--text)'}"></i>` : `<span style="font-size:16px">${a.icon || "🤖"}</span>`;
         const modelLabel = modelLabels[a.model] || a.model || "";

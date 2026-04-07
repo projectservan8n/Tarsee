@@ -448,10 +448,13 @@ const Chat = {
     this.elements.chatArea.style.display = "flex";
     this.elements.inputArea.style.display = "block";
 
-    // Update topbar
+    // Update topbar with clean display name
     const ch = this.channels.find((c) => c.key === channelKey);
     const icon = PLATFORM_ICONS[ch?.platform] || PLATFORM_ICONS.web;
-    this.elements.topbarTitle.textContent = ch ? `${icon} ${ch.title}` : channelKey;
+    let topbarName = ch?.title || channelKey;
+    if (channelKey === "web:default") topbarName = "Main Session";
+    else if (ch?.platform === "telegram" && topbarName.startsWith("Chat with")) topbarName = topbarName.replace("Chat with ", "");
+    this.elements.topbarTitle.textContent = `${icon} ${topbarName}`;
 
     // Load messages
     if (conversationId) {

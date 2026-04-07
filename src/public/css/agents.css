@@ -106,6 +106,7 @@
   flex-shrink: 0;
 }
 .agent-dot.online { background: #4caf50; }
+.agent-dot.available { background: #4caf50; opacity: 0.6; }
 .agent-dot.busy { background: #fbbf24; animation: pulse 1.5s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
