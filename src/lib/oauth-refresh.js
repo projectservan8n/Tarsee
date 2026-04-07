@@ -11,7 +11,7 @@ import path from "node:path";
 
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const REFRESH_BUFFER_MS = 10 * 60 * 1000; // Refresh 10 minutes before expiry
+const REFRESH_BUFFER_MS = 60 * 60 * 1000;  // Refresh 1 hour before expiry (aggressive — prevents Mac from refreshing first)
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;  // Check every 5 minutes
 const DEFAULT_EXPIRES_IN = 28800;          // 8 hours default if not in response
 
@@ -61,9 +61,15 @@ function writeCredentials(creds) {
     } catch { /* best effort */ }
   }
 
-  // Update the env var in-memory so restarts during this process lifetime
-  // don't overwrite refreshed tokens with stale env var values
+  // Update env vars in-memory
   process.env.CLAUDE_OAUTH_CREDENTIALS = credJson;
+
+  // Set CLAUDE_CODE_OAUTH_TOKEN so the Agent SDK reads it from env
+  // instead of the credentials file (avoids conflict with Mac's VS Code)
+  const parsed = JSON.parse(credJson);
+  if (parsed.claudeAiOauth?.accessToken) {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = parsed.claudeAiOauth.accessToken;
+  }
 }
 
 /**
@@ -112,6 +118,11 @@ async function checkAndRefresh() {
   const oauth = creds.claudeAiOauth;
   const now = Date.now();
   const expiresAt = oauth.expiresAt || 0;
+
+  // Always set CLAUDE_CODE_OAUTH_TOKEN from current access token
+  if (oauth.accessToken) {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = oauth.accessToken;
+  }
 
   // Check if token is expired or expiring soon
   if (now < expiresAt - REFRESH_BUFFER_MS) {
