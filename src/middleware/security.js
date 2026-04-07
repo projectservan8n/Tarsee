@@ -43,7 +43,7 @@ export function securityHeaders(_req, res, next) {
     "img-src 'self' data: blob:",
     "media-src 'self' blob:",            // For voice audio playback
     "connect-src 'self' ws: wss: https://cdn.jsdelivr.net",  // WebSocket + CDN source maps
-    "font-src 'self' https://fonts.gstatic.com",
+    "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
