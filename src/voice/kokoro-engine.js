@@ -27,6 +27,11 @@ export class KokoroTTSEngine extends TTSEngine {
 
   async _getInstance() {
     if (kokoroInstance) return kokoroInstance;
+    // Set cache dir to writable location (Railway runs as node user, /app is read-only)
+    const cacheDir = process.env.TARSEE_DATA_DIR || process.env.HOME || "/tmp";
+    process.env.TRANSFORMERS_CACHE = `${cacheDir}/.cache/huggingface`;
+    process.env.HF_HOME = `${cacheDir}/.cache/huggingface`;
+
     const { KokoroTTS } = await import("kokoro-js");
     console.log("[kokoro] Loading model (first time takes ~30s)...");
     kokoroInstance = await KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
