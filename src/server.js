@@ -112,10 +112,6 @@ app.use("/api/acp", requireAuth, csrfProtect, acpRouter);
 app.use("/api/cron", requireAuth, csrfProtect, cronRouter);
 app.use("/api/agents", requireAuth, csrfProtect, agentsRouter);
 
-// Init agent registry
-import { initAgentRegistry } from "./lib/agent-registry.js";
-initAgentRegistry(settingsStore);
-
 // SPA fallback — serve index.html for client-side routes
 // Express 5 requires named wildcard params (bare * is invalid)
 app.get("/{*splat}", (_req, res) => {
@@ -154,6 +150,10 @@ initTTSEngine(settingsStore).catch((err) => {
 // --- Auth profiles ---
 import { initAuthProfiles } from "./lib/auth-profiles.js";
 initAuthProfiles(settingsStore);
+
+// --- Agent registry ---
+import { initAgentRegistry } from "./lib/agent-registry.js";
+initAgentRegistry(settingsStore);
 
 // --- Migrate DB memories to MEMORY.md (one-time) ---
 import { MemoryStore } from "./db/memory.js";
