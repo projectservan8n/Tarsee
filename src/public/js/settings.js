@@ -110,6 +110,7 @@ const Settings = {
 
     this.elements.saveProviderBtn.addEventListener("click", () => this.saveProvider());
     this.elements.saveChannelsBtn.addEventListener("click", () => this.saveChannels());
+    document.getElementById("saveAllowlistBtn")?.addEventListener("click", () => this.saveAllowlist());
 
     // Security handlers
     if (this.elements.runAuditBtn) {
@@ -334,6 +335,14 @@ const Settings = {
       if (slackConfig?.token) this.elements.slackToken.value = slackConfig.token;
       if (slackConfig?.appToken) this.elements.slackAppToken.value = slackConfig.appToken;
 
+      // Allowlists
+      const telegramAllow = settings.find((s) => s.key === "allowlist.telegram")?.value;
+      const discordAllow = settings.find((s) => s.key === "allowlist.discord")?.value;
+      const slackAllow = settings.find((s) => s.key === "allowlist.slack")?.value;
+      if (telegramAllow) document.getElementById("settingsTelegramAllowlist").value = Array.isArray(telegramAllow) ? telegramAllow.join("\n") : telegramAllow;
+      if (discordAllow) document.getElementById("settingsDiscordAllowlist").value = Array.isArray(discordAllow) ? discordAllow.join("\n") : discordAllow;
+      if (slackAllow) document.getElementById("settingsSlackAllowlist").value = Array.isArray(slackAllow) ? slackAllow.join("\n") : slackAllow;
+
       // API token
       if (API.token) this.elements.apiToken.value = API.token;
 
@@ -393,19 +402,19 @@ const Settings = {
       if (telegram) await API.saveChannel({ type: "telegram", token: telegram, enabled: true });
       if (slackBot && slackApp) await API.saveChannel({ type: "slack", token: slackBot, appToken: slackApp, enabled: true });
 
-      // New channels
-      const wa = this.elements.whatsappToken?.value?.trim();
-      if (wa) await API.saveChannel({ type: "whatsapp", token: wa, enabled: true });
-      const sigPhone = this.elements.signalPhone?.value?.trim();
-      const sigUrl = this.elements.signalApiUrl?.value?.trim();
-      if (sigPhone) await API.saveChannel({ type: "signal", token: sigPhone, phoneNumber: sigPhone, apiUrl: sigUrl || "http://localhost:8080", enabled: true });
-      const imUrl = this.elements.imessageUrl?.value?.trim();
-      const imPass = this.elements.imessagePassword?.value?.trim();
-      if (imUrl) await API.saveChannel({ type: "imessage", token: imUrl, serverUrl: imUrl, password: imPass, enabled: true });
-      const lineT = this.elements.lineToken?.value?.trim();
-      if (lineT) await API.saveChannel({ type: "line", token: lineT, enabled: true });
+      App.showToast("Channels saved. Restart to apply.", "success");
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+  },
 
-      App.showToast("Channels saved. Restart channels in Admin to apply.", "success");
+  async saveAllowlist() {
+    try {
+      const parse = (id) => (document.getElementById(id)?.value || "").split("\n").map(s => s.trim()).filter(Boolean);
+      await API.json("/api/settings/general", { method: "POST", body: { key: "allowlist.telegram", value: JSON.stringify(parse("settingsTelegramAllowlist")) } });
+      await API.json("/api/settings/general", { method: "POST", body: { key: "allowlist.discord", value: JSON.stringify(parse("settingsDiscordAllowlist")) } });
+      await API.json("/api/settings/general", { method: "POST", body: { key: "allowlist.slack", value: JSON.stringify(parse("settingsSlackAllowlist")) } });
+      App.showToast("Allowlist saved", "success");
     } catch (err) {
       App.showToast(err.message, "error");
     }

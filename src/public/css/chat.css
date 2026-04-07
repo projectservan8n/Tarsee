@@ -76,6 +76,7 @@
   cursor: pointer;
   font-size: 13px;
   user-select: none;
+  position: relative;
 }
 .tool-block-header::-webkit-details-marker { display: none; }
 .tool-block-header::before { content: none; }
@@ -84,12 +85,29 @@
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+  position: relative;
+  z-index: 1;
 }
 .tool-indicator.running {
   background: #fbbf24;
-  animation: pulse 1s infinite;
+  animation: breathe 2s ease-in-out infinite;
 }
 .tool-indicator.done { background: #4caf50; }
+@keyframes breathe { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(76,175,80,0.3); } 50% { opacity: 0.6; box-shadow: 0 0 6px 2px rgba(251,191,36,0.3); } }
+
+/* Vertical line connecting tool blocks */
+.tool-block + .tool-block {
+  margin-top: 0;
+}
+.tool-block + .tool-block .tool-block-header::before {
+  content: "";
+  position: absolute;
+  left: 15px;
+  top: -8px;
+  width: 1px;
+  height: 8px;
+  background: rgba(255,255,255,0.1);
+}
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .tool-name {
   font-weight: 600;

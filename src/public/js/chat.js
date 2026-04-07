@@ -133,7 +133,17 @@ const Chat = {
       if (!copyBtn) return;
       const msg = copyBtn.closest(".message");
       const codeBlock = copyBtn.closest(".code-header")?.nextElementSibling;
-      const text = codeBlock ? codeBlock.textContent : msg?.querySelector(".message-text")?.textContent;
+      let text;
+      if (codeBlock) {
+        text = codeBlock.textContent;
+      } else if (msg) {
+        // Clone message text, remove tool blocks, get clean text only
+        const clone = msg.querySelector(".message-text")?.cloneNode(true);
+        if (clone) {
+          clone.querySelectorAll(".tool-block, .block-streaming-indicator").forEach(el => el.remove());
+          text = clone.textContent?.trim();
+        }
+      }
       if (text) {
         navigator.clipboard.writeText(text).then(() => {
           copyBtn.textContent = "Copied!";
@@ -711,16 +721,26 @@ const Chat = {
         (content, event) => {
           if (event?.type === "tool_call") {
             // Clean tool block — name + detail, collapsible input
-            const detail = event.input?.command || event.input?.filename || event.input?.url || event.input?.query || event.input?.message || event.input?.task || event.input?.schedule || "";
-            const shortDetail = String(detail).slice(0, 120);
+            // Build human-readable detail based on tool type
+            const inp = event.input || {};
+            let detail = "";
+            let label = event.name;
+            if (event.name === "Bash") { detail = inp.command || ""; }
+            else if (event.name === "Read") { detail = inp.file_path || inp.filename || ""; label = "Read"; }
+            else if (event.name === "Write") { detail = inp.file_path || inp.filename || ""; label = "Write"; }
+            else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
+            else if (event.name === "Grep") { detail = `"${inp.pattern || ""}" ${inp.path || ""}`; label = "Search"; }
+            else if (event.name === "Glob") { detail = inp.pattern || ""; label = "Find"; }
+            else { detail = inp.command || inp.filename || inp.url || inp.query || inp.message || inp.task || inp.schedule || inp.key || JSON.stringify(inp).slice(0, 80); }
+
             toolBlocks += `<details class="tool-block">
               <summary class="tool-block-header">
                 <span class="tool-indicator running"></span>
-                <span class="tool-name">${escapeHtml(event.name)}</span>
-                <span class="tool-detail">${escapeHtml(shortDetail)}</span>
+                <span class="tool-name">${escapeHtml(label)}</span>
+                <span class="tool-detail">${escapeHtml(String(detail).slice(0, 120))}</span>
               </summary>
               <div class="tool-block-body">
-                <pre class="tool-block-code">${escapeHtml(shortDetail || "(no args)")}</pre>
+                <pre class="tool-block-code">${escapeHtml(String(detail).slice(0, 500) || "(no args)")}</pre>
               </div>
             </details>`;
             this.updateStreamingMessage(assistantMsg, toolBlocks, true);

@@ -64,13 +64,20 @@ export async function createDiscordBot(config, db) {
     const isThread = message.channel.isThread?.();
     const effectiveChannelId = isThread ? message.channel.parentId : message.channel.id;
 
-    if (!isDM && config.allowedChannels?.length > 0) {
-      if (!config.allowedChannels.includes(effectiveChannelId)) return;
-    }
+    // Check allowlist (from config or settings DB)
+    const dbAllowlist = settingsStore.get("allowlist.discord");
+    const allowedIds = config.allowedChannels?.length > 0 ? config.allowedChannels : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
 
-    // In guild (non-thread): need to be mentioned unless allowedChannels explicitly listed
-    if (!isDM && !isThread && !config.allowedChannels?.length) {
-      if (!message.mentions.has(client.user)) return;
+    if (allowedIds.length > 0) {
+      // Check if channel, user, or DM is allowed
+      const allowed = allowedIds.includes(effectiveChannelId) || allowedIds.includes(message.author.id) || allowedIds.includes(message.channel.id);
+      if (!allowed && !isDM) return;
+      if (isDM && !allowedIds.includes(message.author.id)) return;
+    } else {
+      // No allowlist: require mention in guilds (default behavior)
+      if (!isDM && !isThread) {
+        if (!message.mentions.has(client.user)) return;
+      }
     }
 
     // In threads: always respond (no mention needed)

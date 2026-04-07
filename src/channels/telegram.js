@@ -53,9 +53,11 @@ export async function createTelegramBot(config, db) {
     const chatId = ctx.chat.id;
     const username = ctx.from.username || ctx.from.first_name || "User";
 
-    // Check allowed chats
-    if (config.allowedChats?.length > 0) {
-      if (!config.allowedChats.includes(String(chatId))) return;
+    // Check allowed chats (from config or settings DB allowlist)
+    const dbAllowlist = settingsStore.get("allowlist.telegram");
+    const allowedChats = config.allowedChats?.length > 0 ? config.allowedChats : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
+    if (allowedChats.length > 0) {
+      if (!allowedChats.includes(String(chatId))) return;
     }
 
     if (!text?.trim()) return;
