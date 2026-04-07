@@ -542,6 +542,9 @@ html, body {
 
 .input-container textarea::placeholder {
   color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .input-btn {
