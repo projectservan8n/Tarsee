@@ -710,17 +710,17 @@ const Chat = {
         // onText (content for text, null + event for tool events)
         (content, event) => {
           if (event?.type === "tool_call") {
-            // VS Code-style tool call block with green indicator
-            const detail = event.input?.command || event.input?.filename || event.input?.url || event.input?.query || event.input?.message || "";
-            const argsJson = event.input ? JSON.stringify(event.input, null, 2) : "";
-            toolBlocks += `<details class="tool-block" open>
+            // Clean tool block — name + detail, collapsible input
+            const detail = event.input?.command || event.input?.filename || event.input?.url || event.input?.query || event.input?.message || event.input?.task || event.input?.schedule || "";
+            const shortDetail = String(detail).slice(0, 120);
+            toolBlocks += `<details class="tool-block">
               <summary class="tool-block-header">
                 <span class="tool-indicator running"></span>
                 <span class="tool-name">${escapeHtml(event.name)}</span>
-                <span class="tool-detail">${escapeHtml(String(detail).slice(0, 100))}</span>
+                <span class="tool-detail">${escapeHtml(shortDetail)}</span>
               </summary>
               <div class="tool-block-body">
-                ${argsJson ? `<pre class="tool-block-code">${escapeHtml(argsJson)}</pre>` : ""}
+                <pre class="tool-block-code">${escapeHtml(shortDetail || "(no args)")}</pre>
               </div>
             </details>`;
             this.updateStreamingMessage(assistantMsg, toolBlocks, true);
@@ -728,14 +728,14 @@ const Chat = {
             return;
           }
           if (event?.type === "tool_result") {
-            // Close the running indicator and add result
-            const resultText = event.result || "(no output)";
-            // Update the last tool block's indicator to done
+            const resultText = event.result || "";
+            // Update indicator to done
             toolBlocks = toolBlocks.replace(/running"><\/span>(?![\s\S]*running"><\/span>)/, 'done"></span>');
-            // Add output to the last tool block
-            const outputHtml = `<div class="tool-block-output"><div class="tool-output-label">OUT</div><pre class="tool-block-code">${escapeHtml(resultText.slice(0, 3000))}</pre></div>`;
-            // Insert before last </div></details>
-            toolBlocks = toolBlocks.replace(/<\/div>\s*<\/details>$/, outputHtml + "</div></details>");
+            // Add output (only if there's content)
+            if (resultText && resultText !== "(no output)") {
+              const outputHtml = `<div class="tool-block-output"><pre class="tool-block-code">${escapeHtml(resultText.slice(0, 2000))}</pre></div>`;
+              toolBlocks = toolBlocks.replace(/<\/div>\s*<\/details>$/, outputHtml + "</div></details>");
+            }
             this.updateStreamingMessage(assistantMsg, toolBlocks, true);
             this.scrollToBottom();
             return;
