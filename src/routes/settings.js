@@ -80,6 +80,16 @@ settingsRouter.post("/channel", (req, res) => {
     ...opts,
   });
 
+  // Auto-start/restart the channel immediately
+  const channelManager = req.app.get("channelManager");
+  if (channelManager && enabled && token) {
+    channelManager.restart(type).catch((err) => {
+      console.warn(`[channels] auto-start ${type} failed:`, err.message);
+    });
+  } else if (channelManager && !enabled) {
+    channelManager.stop(type).catch(() => {});
+  }
+
   res.json({ ok: true, type, enabled: !!enabled });
 });
 
