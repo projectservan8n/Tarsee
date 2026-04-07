@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git cmake \
   && cmake --build build -j$(nproc) --target whisper-cli \
   && mkdir -p /app/whisper-bin \
   && cp build/bin/whisper-cli /app/whisper-bin/ \
-  && (cp build/src/libwhisper.so* /app/whisper-bin/ 2>/dev/null; true) \
+  && find build -name '*.so*' -exec cp {} /app/whisper-bin/ \; \
   && ls -la /app/whisper-bin/ \
   && rm -rf /tmp/whisper /var/lib/apt/lists/*
 
