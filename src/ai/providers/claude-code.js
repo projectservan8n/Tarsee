@@ -86,11 +86,17 @@ export async function* chat({
   // Skills directory — Claude Code discovers SKILL.md files here
   const skillsDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "skills");
 
+  // Orchestrator: read-only tools (delegates code/bash to agents)
+  // Subagents: full tool access
+  const orchTools = ["Read", "Glob", "Grep"];
+  const fullTools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"];
+  const activeTools = isOrchestrator ? orchTools : fullTools;
+
   const queryOptions = {
     cwd,
     model: model || config.CLAUDE_DEFAULT_MODEL || "claude-opus-4-6",
-    tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
-    allowedTools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+    tools: activeTools,
+    allowedTools: activeTools,
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     maxTurns: 50,
@@ -116,42 +122,28 @@ ${isNewSession ? `## New Session — Read your memory first
 Read MEMORY.md and USER.md via mcp__tarsee__tarsee_read_file before responding to the FIRST message.
 After that, only search memories when relevant — don't re-read every message.` : ""}
 
-## MCP Tools — AVAILABLE NOW (call as mcp__tarsee__tarsee_<name>)
-These tools are registered and available in your current session. Use them directly — NEVER use Bash for platform actions. They WILL work.
+## MCP Tools (call as mcp__tarsee__tarsee_<name>)
 - **send_message**(channel, message, channel_id) — push to Telegram/Discord/web
-- **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs. Use this to schedule tasks NOW.
-- **remember**(content) — append to MEMORY.md permanently
-- **daily_log**(content) — append to today's memory/YYYY-MM-DD.md
-- **read_file**(filename) — read workspace files (MEMORY.md, USER.md, SOUL.md, etc.)
-- **write_file**(filename, content) — create/overwrite workspace files
-- **search_memories**(query) — keyword search across all memory files
-- **get_key**(name) / **set_key**(name, value) — encrypted vault for API keys
-- **spawn_agent**(task, agent_id?) — delegate work to an agent
-- **await_agent**(task_id, timeout?) — wait for agent to finish and get result
-- **list_agents**() / **check_agents**() / **get_agent_result**(task_id) — monitor team
+- **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs
+- **remember**(content) — append to MEMORY.md
+- **daily_log**(content) — append to today's log
+- **read_file**(filename) / **write_file**(filename, content) — workspace files
+- **search_memories**(query) — search memory files
+- **web_fetch**(url) / **web_search**(query) — web access
+- **get_key**(name) / **set_key**(name, value) — encrypted vault
+- **spawn_agent**(task, agent_id?) — delegate to an agent
+- **await_agent**(task_id, timeout?) — wait for agent result
+- **list_agents**() / **check_agents**() / **get_agent_result**(task_id)
 
-## Agent Team — DELEGATE, DON'T DO IT YOURSELF
-You manage 4 specialized agents. For non-trivial tasks, you MUST delegate:
+## Agent Team
+You manage 4 agents. Delegate work that needs code execution, file writing, or deep research:
 - Code/scripts/debugging → spawn_agent(task, "coder")
-- Research/web search/analysis → spawn_agent(task, "researcher")
-- Writing/emails/content/drafts → spawn_agent(task, "writer")
-- Simple lookups/formatting → spawn_agent(task, "quick") or answer directly
+- Deep research/analysis → spawn_agent(task, "researcher")
+- Writing/emails/drafts → spawn_agent(task, "writer")
+- Quick tasks → spawn_agent(task, "quick") or handle directly
 
-DELEGATION FLOW:
-1. spawn_agent(task, agent_id) → returns task_id
-2. await_agent(task_id) → blocks until agent finishes, returns result
-3. Relay the result to the user with your own summary/commentary
-
-RULES:
-- If a task takes more than a quick answer, SPAWN an agent. Do NOT do the work yourself.
-- ALWAYS use await_agent after spawning — never just say "I spawned it" and move on.
-- You are the MANAGER. Delegate, monitor, relay. Not a worker.
-- Only handle directly: greetings, simple questions, memory lookups, scheduling, sending messages.
-- Nicknames work: if user says "Hey Luis, do X" → find agent by nickname → spawn it.
-- NEVER use Bash/curl/wget/python to do research, fetch URLs, scrape websites, or write code yourself. That's what your agents are for.
-- NEVER write scripts, code, or files directly. Spawn the Coder agent.
-- NEVER search the web or fetch URLs directly. Spawn the Researcher agent.
-- If you catch yourself about to use Bash for anything beyond reading files or checking status — STOP and spawn an agent instead.
+FLOW: spawn_agent(task, id) → await_agent(task_id) → relay result to user.
+Always await_agent after spawning. Nicknames work too.
 
 ## Memory
 Use remember for durable facts. Use daily_log for session notes. Only append, never overwrite.
@@ -167,7 +159,7 @@ Before saying "I can't" → search_memories first.
     queryOptions.resume = sessionId;
   }
 
-  console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}, media: ${mediaBlocks.length}, mcp: ${tarseeMcp ? "yes" : "NO"}`);
+  console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}, media: ${mediaBlocks.length}, tools: ${activeTools.join(",")}, mcp: ${tarseeMcp ? "yes" : "NO"}`);
 
   // Build prompt: use AsyncIterable with image content blocks if images present
   let queryPrompt;

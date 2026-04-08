@@ -255,12 +255,6 @@ export function createTarseeMcp(ctx, opts = {}) {
       ),
   ];
 
-  // Orchestrator mode: remove web tools to force delegation to agents
-  const ORCHESTRATOR_EXCLUDED = ["tarsee_web_fetch", "tarsee_web_search"];
-  const tools = opts.isOrchestrator
-    ? allTools.filter(t => !ORCHESTRATOR_EXCLUDED.includes(t.name))
-    : allTools;
-
-  console.log(`[mcp] Creating Tarsee MCP server: ${tools.length} tools (orchestrator: ${!!opts.isOrchestrator}), names: ${tools.map(t => t.name).join(", ")}`);
-  return createSdkMcpServer({ name: "tarsee", version: "1.0.0", tools });
+  console.log(`[mcp] Creating Tarsee MCP server: ${allTools.length} tools, names: ${allTools.map(t => t.name).join(", ")}`);
+  return createSdkMcpServer({ name: "tarsee", version: "1.0.0", tools: allTools });
 }
