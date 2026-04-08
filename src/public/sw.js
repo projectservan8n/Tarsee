@@ -1,43 +1,106 @@
-// Tarsee Service Worker — enables PWA install and offline shell
-const CACHE_NAME = "tarsee-v1";
+// Tarsee Service Worker v2 — PWA install, offline shell, stale-while-revalidate
+const CACHE_NAME = "tarsee-v2";
 
-// Cache the app shell on install
+const APP_SHELL = [
+  "/",
+  "/offline.html",
+  "/css/style.css",
+  "/css/chat.css",
+  "/css/voice.css",
+  "/css/tokens.css",
+  "/css/utilities.css",
+  "/css/agents.css",
+  "/css/console.css",
+  "/css/files.css",
+  "/js/app.js",
+  "/js/api.js",
+  "/js/chat.js",
+  "/js/voice.js",
+  "/js/settings.js",
+  "/js/setup.js",
+  "/js/sw-register.js",
+  "/js/agents.js",
+  "/js/console.js",
+  "/js/files.js",
+  "/js/terminal.js",
+  "/manifest.json",
+  "/icon-32.png",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/apple-touch-icon.png",
+  "/favicon.ico",
+];
+
+// Precache app shell on install
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) =>
-      cache.addAll(["/", "/css/style.css", "/css/chat.css", "/css/voice.css"])
-    )
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
   );
   self.skipWaiting();
 });
 
-// Clean up old caches
+// Clean up old caches on activate
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+      Promise.all(
+        keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
+      )
     )
   );
   self.clients.claim();
 });
 
-// Network-first strategy — try network, fall back to cache
+// Fetch strategies
 self.addEventListener("fetch", (event) => {
-  // Skip non-GET and API/WS requests
+  // Skip non-GET, API, and WebSocket requests
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/ws")) return;
 
-  event.respondWith(
-    fetch(event.request)
-      .then((res) => {
-        // Cache successful responses for offline
-        if (res.ok && url.origin === self.location.origin) {
-          const clone = res.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        }
-        return res;
+  const isNavigation = event.request.mode === "navigate";
+  const ext = url.pathname.split(".").pop();
+  const isStatic = ["css", "js", "png", "ico", "json", "woff2"].includes(ext);
+
+  if (isNavigation) {
+    // HTML navigation: network-first, fallback to offline page
+    event.respondWith(
+      fetch(event.request)
+        .then((res) => {
+          if (res.ok && url.origin === self.location.origin) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return res;
+        })
+        .catch(() => caches.match("/offline.html"))
+    );
+  } else if (isStatic) {
+    // Static assets: stale-while-revalidate
+    event.respondWith(
+      caches.match(event.request).then((cached) => {
+        const networkFetch = fetch(event.request).then((res) => {
+          if (res.ok && url.origin === self.location.origin) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return res;
+        });
+        return cached || networkFetch;
       })
-      .catch(() => caches.match(event.request))
-  );
+    );
+  } else {
+    // Everything else: network-first, fallback to cache
+    event.respondWith(
+      fetch(event.request)
+        .then((res) => {
+          if (res.ok && url.origin === self.location.origin) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return res;
+        })
+        .catch(() => caches.match(event.request))
+    );
+  }
 });

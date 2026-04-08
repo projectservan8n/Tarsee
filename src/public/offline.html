@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tarsee — Offline</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+      background: #1a1a1a;
+      color: #ececec;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100dvh;
+      padding: 1.5rem;
+    }
+    .card {
+      text-align: center;
+      max-width: 380px;
+      padding: 2.5rem 2rem;
+      border-radius: 16px;
+      background: #242424;
+      border: 1px solid #333;
+    }
+    .icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      display: block;
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+    p {
+      font-size: 0.925rem;
+      color: #999;
+      line-height: 1.5;
+      margin-bottom: 1.5rem;
+    }
+    button {
+      font-family: inherit;
+      font-size: 0.925rem;
+      font-weight: 500;
+      padding: 0.65rem 1.75rem;
+      border: none;
+      border-radius: 8px;
+      background: #c45a35;
+      color: #fff;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.85; }
+    button:active { opacity: 0.7; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <span class="icon" aria-hidden="true">🔌</span>
+    <h1>You're offline</h1>
+    <p>Tarsee needs a connection to your server. Check your network and try again.</p>
+    <button onclick="location.reload()">Retry</button>
+  </div>
+</body>
+</html>
