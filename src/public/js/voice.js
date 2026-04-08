@@ -687,44 +687,61 @@ const Voice = {
     }
   },
 
-  /** Speak text via streaming TTS. */
+  /** Speak text via streaming TTS. Retries once on failure. */
   async speak(text) {
     if (!text?.trim()) return;
     this.isSpeaking = true;
     this.setOrbState("speaking");
     this.elements.status.textContent = "Speaking...";
 
-    try {
-      const csrf = API.getCsrfToken();
-      const headers = { "Content-Type": "application/json" };
-      if (csrf) headers["X-CSRF-Token"] = csrf;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const csrf = API.getCsrfToken();
+        const headers = { "Content-Type": "application/json" };
+        if (csrf) headers["X-CSRF-Token"] = csrf;
 
-      const res = await fetch("/api/voice/tts-stream", {
-        method: "POST",
-        headers,
-        credentials: "same-origin",
-        body: JSON.stringify({ text }),
-      });
+        // Abort if TTS fetch takes too long (25s)
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 25_000);
 
-      if (!res.ok) throw new Error("TTS failed");
+        const res = await fetch("/api/voice/tts-stream", {
+          method: "POST",
+          headers,
+          credentials: "same-origin",
+          body: JSON.stringify({ text }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
 
-      const audioBlob = await res.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = this.elements.audio;
-      audio.src = audioUrl;
-      audio.onended = () => { URL.revokeObjectURL(audioUrl); this.isSpeaking = false; this.setOrbState("idle"); this.elements.status.textContent = "Hold to talk"; };
-      audio.onerror = () => { URL.revokeObjectURL(audioUrl); this.isSpeaking = false; this.setOrbState("idle"); };
-      await audio.play().catch(() => { this.isSpeaking = false; this.setOrbState("idle"); });
+        if (!res.ok) throw new Error("TTS failed");
 
-      // Safety timeout
-      const estimatedMs = Math.max(3000, (text.length / 5 / 150) * 60000 + 2000);
-      setTimeout(() => { if (this.isSpeaking) { this.isSpeaking = false; this.setOrbState("idle"); this.elements.status.textContent = "Hold to talk"; } }, estimatedMs);
-    } catch (err) {
-      console.warn("[voice] TTS error:", err.message);
-      this.isSpeaking = false;
-      this.setOrbState("idle");
-      this.elements.status.textContent = "TTS unavailable";
+        const audioBlob = await res.blob();
+        if (audioBlob.size < 100) throw new Error("Empty audio");
+
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = this.elements.audio;
+        audio.src = audioUrl;
+        audio.onended = () => { URL.revokeObjectURL(audioUrl); this.isSpeaking = false; this.setOrbState("idle"); this.elements.status.textContent = "Hold to talk"; };
+        audio.onerror = () => { URL.revokeObjectURL(audioUrl); this.isSpeaking = false; this.setOrbState("idle"); };
+        await audio.play().catch(() => { this.isSpeaking = false; this.setOrbState("idle"); });
+
+        // Safety timeout
+        const estimatedMs = Math.max(3000, (text.length / 5 / 150) * 60000 + 2000);
+        setTimeout(() => { if (this.isSpeaking) { this.isSpeaking = false; this.setOrbState("idle"); this.elements.status.textContent = "Hold to talk"; } }, estimatedMs);
+        return; // Success — exit retry loop
+      } catch (err) {
+        console.warn(`[voice] TTS attempt ${attempt + 1} failed:`, err.message);
+        if (attempt === 0 && text.length > 400) {
+          // Retry with shorter text
+          text = text.slice(0, 350) + "... see chat for details.";
+          continue;
+        }
+      }
     }
+    // Both attempts failed — show response in chat, don't block
+    this.isSpeaking = false;
+    this.setOrbState("idle");
+    this.elements.status.textContent = "Response in chat · Hold to talk";
   },
 
   stopSpeaking() {
@@ -847,9 +864,9 @@ const Voice = {
       .replace(/\n{3,}/g, "\n\n")            // collapse whitespace
       .trim();
 
-    // Cap at 2000 chars for TTS (longer = too slow)
-    if (text.length > 2000) {
-      text = text.slice(0, 1950) + "... see the rest in chat.";
+    // Cap at 800 chars for TTS — Edge TTS times out on long text
+    if (text.length > 800) {
+      text = text.slice(0, 750) + "... check the chat for full details.";
     }
 
     return text;
