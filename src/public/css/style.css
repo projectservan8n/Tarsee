@@ -1116,7 +1116,7 @@ html, body {
 /* --- Toast notifications --- */
 .toast-container {
   position: fixed;
-  top: 16px;
+  top: 60px;
   right: 16px;
   z-index: 200;
   display: flex;
