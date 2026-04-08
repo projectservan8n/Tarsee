@@ -11,18 +11,6 @@ import path from "node:path";
 
 const DEFAULT_AGENTS = [
   {
-    id: "orchestrator",
-    name: "Orchestrator",
-    nickname: "",
-    model: "claude-opus-4-6",
-    prompt: "You are the main Tarsee agent. You talk directly to the user, manage memory, schedule tasks, and delegate work to specialized agents when needed.",
-    tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
-    color: "#f5a623",
-    icon: "ph ph-crown",
-    status: "online",
-    isOrchestrator: true,
-  },
-  {
     id: "coder",
     name: "Coder",
     nickname: "",
@@ -128,7 +116,8 @@ export function getAgents() {
     const raw = _settingsStore.get("agents.registry");
     if (!raw) return DEFAULT_AGENTS;
     const agents = typeof raw === "string" ? JSON.parse(raw) : raw;
-    return Array.isArray(agents) ? agents : DEFAULT_AGENTS;
+    // Filter out legacy orchestrator entry — main chat agent IS the orchestrator
+    return Array.isArray(agents) ? agents.filter(a => !a.isOrchestrator) : DEFAULT_AGENTS;
   } catch {
     return DEFAULT_AGENTS;
   }
