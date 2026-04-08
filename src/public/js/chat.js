@@ -578,6 +578,9 @@ const Chat = {
   },
 
   finishStreaming(msgEl) {
+    // Remove thinking indicator if still present
+    const thinkEl = msgEl.querySelector(".chat-thinking");
+    if (thinkEl) thinkEl.remove();
     const textEl = msgEl.querySelector(".message-text");
     if (textEl) {
       textEl.classList.remove("streaming-cursor");
