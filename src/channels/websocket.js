@@ -250,10 +250,10 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   const history = convStore.getRecentMessages(convId, 20);
   const conv = convStore.get(convId);
 
-  // Voice mode hint — respond conversationally, no tables/markdown
+  // Voice mode — respond normally, TTS strips non-speakable content
   const isVoiceMode = message.startsWith("[voice]");
   const voiceHint = isVoiceMode
-    ? `[VOICE MODE] Your response will be read aloud. Talk naturally — no tables, no markdown, no bullet points, no code blocks, no pipe characters. Say information conversationally like you're briefing someone verbally.`
+    ? "[VOICE MODE] User is speaking via voice. Respond concisely. Use formatting as needed — TTS handles cleanup."
     : "";
 
   // Build effective system prompt (parity with HTTP handler)

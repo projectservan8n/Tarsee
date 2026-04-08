@@ -609,20 +609,13 @@ const Voice = {
             return;
           }
 
-          // Show text bubble
+          // Show full response visually (tables, code, formatting all visible)
           this.addBubble("assistant", fullResponse);
 
-          // Speak it via streaming TTS
-          const speakText = fullResponse
-            .replace(/\*\*(.*?)\*\*/g, "$1")
-            .replace(/\*(.*?)\*/g, "$1")
-            .replace(/#{1,6}\s+/g, "")
-            .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
-            .replace(/^[-*]\s+/gm, "")
-            .trim();
+          // Clean response for TTS — strip non-speakable content
+          const speakText = this.makeSpokenText(fullResponse);
 
-          if (speakText.length > 2000 || /```/.test(fullResponse)) {
-            this.addBubble("assistant", "Details in chat.");
+          if (!speakText || speakText.length < 3) {
             this.setOrbState("idle");
             this.elements.status.textContent = "Hold to talk";
             return;
@@ -705,6 +698,85 @@ const Voice = {
     turn.appendChild(bubble);
     container.appendChild(turn);
     container.scrollTop = container.scrollHeight;
+  },
+
+  /**
+   * Convert a full markdown response into clean speakable text.
+   * Tables become brief summaries, code blocks are skipped, formatting is stripped.
+   */
+  makeSpokenText(text) {
+    if (!text) return "";
+
+    // Remove code blocks entirely (not speakable)
+    text = text.replace(/```[\s\S]*?```/g, " (see code in chat) ");
+
+    // Convert markdown tables to spoken summary
+    // Detect table blocks: consecutive lines starting/ending with |
+    const lines = text.split("\n");
+    const output = [];
+    let tableRows = [];
+
+    const flushTable = () => {
+      if (tableRows.length < 2) {
+        output.push(...tableRows);
+        tableRows = [];
+        return;
+      }
+      // Parse header and data rows
+      const dataRows = tableRows.filter(r => !/^[\s|:-]+$/.test(r.replace(/\|/g, "").trim() || "-"));
+      const cells = dataRows.map(r =>
+        r.replace(/^\||\|$/g, "").split("|").map(c => c.trim()).filter(Boolean)
+      );
+      if (cells.length > 0 && cells[0].length > 0) {
+        // Speak as: "Table with N rows. Headers: X, Y, Z."
+        const headers = cells[0];
+        const rowCount = cells.length - 1;
+        output.push(`Table with ${rowCount} ${rowCount === 1 ? "row" : "rows"}: ${headers.join(", ")}.`);
+        // Read first 3 data rows naturally
+        for (let i = 1; i < Math.min(cells.length, 4); i++) {
+          output.push(cells[i].join(", ") + ".");
+        }
+        if (cells.length > 4) {
+          output.push(`And ${cells.length - 4} more rows — see the full table in chat.`);
+        }
+      }
+      tableRows = [];
+    };
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+        tableRows.push(trimmed);
+      } else {
+        if (tableRows.length > 0) flushTable();
+        output.push(line);
+      }
+    }
+    if (tableRows.length > 0) flushTable();
+
+    text = output.join("\n");
+
+    // Strip remaining markdown formatting
+    text = text
+      .replace(/\*\*(.*?)\*\*/g, "$1")       // bold
+      .replace(/\*(.*?)\*/g, "$1")            // italic
+      .replace(/~~(.*?)~~/g, "$1")            // strikethrough
+      .replace(/#{1,6}\s+/g, "")              // headings
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1") // links → just text
+      .replace(/^[-*+]\s+/gm, "")            // bullet points
+      .replace(/^\d+\.\s+/gm, "")            // numbered lists
+      .replace(/^>\s?/gm, "")                // blockquotes
+      .replace(/`([^`]+)`/g, "$1")           // inline code
+      .replace(/---+/g, "")                  // horizontal rules
+      .replace(/\n{3,}/g, "\n\n")            // collapse whitespace
+      .trim();
+
+    // Cap at 2000 chars for TTS (longer = too slow)
+    if (text.length > 2000) {
+      text = text.slice(0, 1950) + "... see the rest in chat.";
+    }
+
+    return text;
   },
 
   setOrbState(state) {
