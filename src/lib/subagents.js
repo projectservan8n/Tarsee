@@ -11,6 +11,7 @@ import fs from "node:fs";
  */
 
 const agents = new Map();
+const taskQueue = new Map(); // agentId → [{ task, name, agentId, ctx, resolve }]
 const MAX_AGENTS = 10;
 const MAX_TOOL_ROUNDS = 15;
 
@@ -21,57 +22,138 @@ export function onAgentEvent(fn) { listeners.add(fn); return () => listeners.del
 function emit(event, data) { for (const fn of listeners) fn(event, data); }
 
 /**
- * Spawn a new background subagent.
+ * Check if an agent type is currently busy.
+ */
+function isAgentBusy(agentId) {
+  if (!agentId) return false;
+  for (const a of agents.values()) {
+    if (a.agentId === agentId && a.status === "running") return true;
+  }
+  return false;
+}
+
+/**
+ * Process the next queued task for an agent type.
+ */
+function processQueue(agentId) {
+  if (!agentId) return;
+  const queue = taskQueue.get(agentId);
+  if (!queue || queue.length === 0) return;
+  if (isAgentBusy(agentId)) return; // still busy
+
+  const next = queue.shift();
+  if (queue.length === 0) taskQueue.delete(agentId);
+
+  console.log(`[queue] Dequeuing task for ${agentId}: "${next.task.slice(0, 60)}..." (${queue.length} remaining)`);
+  const result = startAgent(next);
+  next.resolve?.(result);
+}
+
+/**
+ * Spawn a new background subagent. Queues if agent type is busy.
  * @param {string} task - The task description
  * @param {string} [name] - Human-friendly name
  * @param {string} [agentId] - Agent definition ID (coder, researcher, etc.)
  * @param {object} ctx - { settingsStore, db, channelManager }
  */
 export function spawnAgent({ task, name, agentId, settingsStore, db, channelManager }) {
-  // Clean up completed agents
-  for (const [id, a] of agents) {
-    if (a.status !== "running") agents.delete(id);
+  // Clean up old completed agents (keep last 5 for result retrieval)
+  const completed = [...agents.entries()].filter(([, a]) => a.status !== "running");
+  if (completed.length > 5) {
+    for (const [id] of completed.slice(0, completed.length - 5)) agents.delete(id);
   }
+
+  // If this agent type is already busy, queue the task
+  if (agentId && isAgentBusy(agentId)) {
+    const queue = taskQueue.get(agentId) || [];
+    const taskId = crypto.randomUUID().slice(0, 8);
+    const agentDef = getAgent(agentId);
+
+    const queuedAgent = {
+      id: taskId,
+      agentId,
+      name: name || agentDef?.name || `agent-${taskId}`,
+      icon: agentDef?.icon || "🤖",
+      task,
+      model: agentDef?.model || null,
+      status: "queued",
+      result: null,
+      error: null,
+      toolsUsed: 0,
+      lastTool: null,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+    };
+    agents.set(taskId, queuedAgent);
+    persistTask(db, queuedAgent);
+
+    queue.push({ task, name, agentId, settingsStore, db, channelManager, taskId });
+    taskQueue.set(agentId, queue);
+
+    const pos = queue.length;
+    console.log(`[queue] ${agentDef?.name || agentId} is busy — queued task "${task.slice(0, 60)}..." (position ${pos})`);
+    emit("queued", { id: taskId, name: queuedAgent.name, task, position: pos });
+
+    return { taskId, name: queuedAgent.name, agentId, queued: true, position: pos };
+  }
+
+  return startAgent({ task, name, agentId, settingsStore, db, channelManager });
+}
+
+/**
+ * Internal: actually start an agent (no queue check).
+ */
+function startAgent({ task, name, agentId, settingsStore, db, channelManager, taskId: existingTaskId }) {
   if (agents.size >= MAX_AGENTS) {
     throw new Error(`Too many agents (max ${MAX_AGENTS}). Stop or wait for existing ones.`);
   }
 
   const agentDef = agentId ? getAgent(agentId) : null;
-  const taskId = crypto.randomUUID().slice(0, 8);
+  const taskId = existingTaskId || crypto.randomUUID().slice(0, 8);
   const controller = new AbortController();
 
-  const agent = {
-    id: taskId,
-    agentId: agentId || null,
-    name: name || agentDef?.name || `agent-${taskId}`,
-    icon: agentDef?.icon || "🤖",
-    task,
-    model: agentDef?.model || null,
-    status: "running",
-    result: null,
-    error: null,
-    toolsUsed: 0,
-    lastTool: null,
-    startedAt: new Date().toISOString(),
-    completedAt: null,
-    abortController: controller,
-  };
+  // Update existing queued agent or create new
+  let agent = agents.get(taskId);
+  if (agent) {
+    agent.status = "running";
+    agent.abortController = controller;
+  } else {
+    agent = {
+      id: taskId,
+      agentId: agentId || null,
+      name: name || agentDef?.name || `agent-${taskId}`,
+      icon: agentDef?.icon || "🤖",
+      task,
+      model: agentDef?.model || null,
+      status: "running",
+      result: null,
+      error: null,
+      toolsUsed: 0,
+      lastTool: null,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      abortController: controller,
+    };
+    agents.set(taskId, agent);
+  }
 
-  agents.set(taskId, agent);
   emit("started", { id: taskId, name: agent.name, task });
-
-  // Persist to DB
   persistTask(db, agent);
 
-  // Run in background
-  runAgent(agent, { settingsStore, db, channelManager, signal: controller.signal }).catch((err) => {
-    agent.status = "failed";
-    agent.error = err.message;
-    agent.completedAt = new Date().toISOString();
-    persistTask(db, agent);
-    emit("completed", { id: taskId, name: agent.name, status: "failed", error: err.message });
-    console.error(`[agent:${agent.name}] failed: ${err.message}`);
-  });
+  // Run in background — process queue when done
+  runAgent(agent, { settingsStore, db, channelManager, signal: controller.signal })
+    .catch((err) => {
+      agent.status = "failed";
+      agent.error = err.message;
+      agent.completedAt = new Date().toISOString();
+      persistTask(db, agent);
+      emit("completed", { id: taskId, name: agent.name, status: "failed", error: err.message });
+      console.error(`[agent:${agent.name}] failed: ${err.message}`);
+    })
+    .finally(() => {
+      // Process next queued task for this agent type
+      if (agentId) processQueue(agentId);
+    });
 
   return { taskId, name: agent.name, agentId: agent.agentId };
 }

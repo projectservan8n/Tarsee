@@ -173,7 +173,10 @@ export function createTarseeMcp(ctx) {
               db: ctx.db,
               channelManager: ctx.channelManager,
             });
-            return { content: [{ type: "text", text: `Agent spawned: ${result.name} (task_id: "${result.taskId}"). NOW call tarsee_await_agent with task_id "${result.taskId}" to wait for the result.` }] };
+            const queueMsg = result.queued
+              ? `Agent ${result.name} is busy — task queued at position ${result.position}. `
+              : `Agent ${result.name} started. `;
+            return { content: [{ type: "text", text: `${queueMsg}task_id: "${result.taskId}". NOW call tarsee_await_agent("${result.taskId}") to wait for the result.` }] };
           } catch (err) {
             return { content: [{ type: "text", text: `Failed to spawn agent: ${err.message}` }] };
           }
@@ -190,6 +193,7 @@ export function createTarseeMcp(ctx) {
           if (agents.length === 0) return { content: [{ type: "text", text: "No agents running or recently completed." }] };
           const lines = agents.map(a => {
             const status = a.status === "running" ? `🟡 Running (${a.toolsUsed} tools${a.lastTool ? `, last: ${a.lastTool}` : ""})` :
+              a.status === "queued" ? "⏳ Queued" :
               a.status === "completed" ? "✅ Done" : a.status === "failed" ? "❌ Failed" : "⏹️ Stopped";
             return `${a.icon || "🤖"} **${a.name}** [${a.id}] — ${status}\n  Task: ${a.task}\n  ${a.resultPreview ? `Result: ${a.resultPreview}` : ""}`;
           });
