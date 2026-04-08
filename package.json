@@ -1,6 +1,6 @@
 {
   "name": "tarsee",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "private": true,
   "bin": {
     "tarsee": "./src/cli/index.js"

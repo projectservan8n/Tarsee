@@ -81,6 +81,10 @@ COPY package.json ./
 COPY src ./src
 COPY entrypoint.sh ./entrypoint.sh
 
+# Bake commit hash into image for version tracking
+ARG RAILWAY_GIT_COMMIT_SHA=""
+ENV TARSEE_COMMIT_SHA=${RAILWAY_GIT_COMMIT_SHA}
+
 # Fix permissions + create writable cache for Kokoro/HuggingFace
 RUN mkdir -p /app/node_modules/@huggingface/transformers/.cache \
   && chown -R node:node /home/node/.cache /app/node_modules/@huggingface \

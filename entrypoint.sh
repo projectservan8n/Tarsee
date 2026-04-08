@@ -5,7 +5,7 @@
 if [ -d /data ]; then
   mkdir -p /data/tarsee/data /data/tarsee/workspace/skills /data/tarsee/workspace/memory
   # Seed default workspace files if they don't exist
-  for f in CLAUDE.md SOUL.md MEMORY.md IDENTITY.md; do
+  for f in CLAUDE.md SOUL.md MEMORY.md IDENTITY.md USER.md TOOLS.md AGENTS.md; do
     if [ ! -f "/data/tarsee/workspace/$f" ] && [ -f "/app/src/workspace-defaults/$f" ]; then
       cp "/app/src/workspace-defaults/$f" "/data/tarsee/workspace/$f"
     fi

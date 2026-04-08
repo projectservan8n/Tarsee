@@ -549,6 +549,103 @@ const COMMANDS = {
       }
     },
   },
+
+  update: {
+    description: "Check for updates and hot-swap code from GitHub",
+    usage: "/update",
+    handler: async () => {
+      const { execSync } = await import("node:child_process");
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+
+      const REPO = "https://github.com/projectservan8n/Tarsee.git";
+      const CACHE_DIR = path.join(process.env.TARSEE_STATE_DIR || "/data/tarsee", "repo-cache");
+      const APP_DIR = "/app";
+
+      try {
+        // Get current version
+        const pkg = JSON.parse(fs.readFileSync(path.join(APP_DIR, "package.json"), "utf8"));
+        const currentCommit = process.env.TARSEE_COMMIT_SHA?.slice(0, 7) || "unknown";
+
+        // Fetch latest from GitHub
+        if (fs.existsSync(path.join(CACHE_DIR, ".git"))) {
+          execSync("git fetch origin main --depth=1", { cwd: CACHE_DIR, stdio: "ignore", timeout: 30_000 });
+          execSync("git reset --hard origin/main", { cwd: CACHE_DIR, stdio: "ignore" });
+        } else {
+          fs.mkdirSync(CACHE_DIR, { recursive: true });
+          execSync(`git clone --depth=1 ${REPO} ${CACHE_DIR}`, { stdio: "ignore", timeout: 60_000 });
+        }
+
+        const latestCommit = execSync("git rev-parse --short HEAD", { cwd: CACHE_DIR, encoding: "utf8" }).trim();
+        const latestPkg = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, "package.json"), "utf8"));
+
+        // Check if deps changed (would need a full redeploy)
+        const currentDeps = JSON.stringify(pkg.dependencies || {});
+        const latestDeps = JSON.stringify(latestPkg.dependencies || {});
+        const depsChanged = currentDeps !== latestDeps;
+
+        if (currentCommit === latestCommit) {
+          return `**Already up to date.** v${pkg.version} (${currentCommit})`;
+        }
+
+        // Get commit log between versions
+        let changelog = "";
+        try {
+          changelog = execSync(`git log --oneline -10`, { cwd: CACHE_DIR, encoding: "utf8" }).trim();
+        } catch { /* ignore */ }
+
+        if (depsChanged) {
+          return `**Update available:** ${currentCommit} -> ${latestCommit} (v${latestPkg.version})\n\n` +
+            `**Dependencies changed** — this update requires a full redeploy from your Railway dashboard.\n\n` +
+            `**Recent changes:**\n\`\`\`\n${changelog}\n\`\`\``;
+        }
+
+        // Hot-swap src/ files
+        const srcFrom = path.join(CACHE_DIR, "src");
+        const srcTo = path.join(APP_DIR, "src");
+        execSync(`cp -rf ${srcFrom}/* ${srcTo}/`, { stdio: "ignore" });
+
+        // Also update entrypoint.sh and package.json version
+        try { fs.copyFileSync(path.join(CACHE_DIR, "entrypoint.sh"), path.join(APP_DIR, "entrypoint.sh")); } catch {}
+        try { fs.copyFileSync(path.join(CACHE_DIR, "package.json"), path.join(APP_DIR, "package.json")); } catch {}
+
+        // Update commit SHA env
+        process.env.TARSEE_COMMIT_SHA = latestCommit;
+
+        // Invalidate caches
+        try {
+          const { invalidateCache } = await import("./workspace-files.js");
+          invalidateCache();
+          const skills = await import("./skills-engine.js");
+          skills.invalidateCache();
+        } catch { /* ignore */ }
+
+        return `**Updated!** ${currentCommit} -> ${latestCommit} (v${latestPkg.version})\n\n` +
+          `**Recent changes:**\n\`\`\`\n${changelog}\n\`\`\`\n\n` +
+          `Hot-swapped \`src/\` files. Run \`/restart\` to apply, or it takes effect on next server restart.`;
+      } catch (err) {
+        return `**Update failed:** ${err.message}`;
+      }
+    },
+  },
+
+  version: {
+    description: "Show current Tarsee version",
+    usage: "/version",
+    handler: async () => {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      try {
+        const pkg = JSON.parse(fs.readFileSync(path.join("/app", "package.json"), "utf8"));
+        const commit = process.env.TARSEE_COMMIT_SHA?.slice(0, 7) || "unknown";
+        const { execSync } = await import("node:child_process");
+        const claudeVersion = execSync("claude --version 2>/dev/null || echo unknown", { encoding: "utf8" }).trim();
+        return `**Tarsee** v${pkg.version} (${commit})\n**Claude Code:** ${claudeVersion}\n**Node:** ${process.version}`;
+      } catch (err) {
+        return `Version check failed: ${err.message}`;
+      }
+    },
+  },
 };
 
 /**
