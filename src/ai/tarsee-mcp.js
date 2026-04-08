@@ -173,7 +173,7 @@ export function createTarseeMcp(ctx) {
               db: ctx.db,
               channelManager: ctx.channelManager,
             });
-            return { content: [{ type: "text", text: `Agent spawned: ${result.name} (${result.taskId}). It's working in the background. Use tarsee_check_agents to see status.` }] };
+            return { content: [{ type: "text", text: `Agent spawned: ${result.name} (task_id: "${result.taskId}"). NOW call tarsee_await_agent with task_id "${result.taskId}" to wait for the result.` }] };
           } catch (err) {
             return { content: [{ type: "text", text: `Failed to spawn agent: ${err.message}` }] };
           }
@@ -206,6 +206,36 @@ export function createTarseeMcp(ctx) {
           const result = getAgentResult(args.task_id);
           if (!result) return { content: [{ type: "text", text: "Agent not found." }] };
           return { content: [{ type: "text", text: `**${result.name}** (${result.status})\nModel: ${result.model || "default"}\nTools: ${result.toolsUsed}\n\n${result.result || result.error || "No output"}` }] };
+        }
+      ),
+
+      tool(
+        "tarsee_await_agent",
+        "Wait for a spawned agent to complete and return its full result. Call this IMMEDIATELY after spawn_agent. Blocks until the agent finishes (up to timeout).",
+        {
+          task_id: z.string().describe("The task_id returned by tarsee_spawn_agent"),
+          timeout: z.number().optional().describe("Max seconds to wait (default 120)"),
+        },
+        async (args) => {
+          const { getAgentResult } = await import("../lib/subagents.js");
+          const start = Date.now();
+          const timeoutMs = (args.timeout || 120) * 1000;
+          while (Date.now() - start < timeoutMs) {
+            const result = getAgentResult(args.task_id);
+            if (!result) return { content: [{ type: "text", text: `Agent "${args.task_id}" not found.` }] };
+            if (result.status === "completed") {
+              return { content: [{ type: "text", text: `**${result.name}** completed.\nModel: ${result.model || "default"} | Tools used: ${result.toolsUsed}\n\n${result.result || "(no output)"}` }] };
+            }
+            if (result.status === "failed") {
+              return { content: [{ type: "text", text: `**${result.name}** failed: ${result.error || "unknown error"}` }] };
+            }
+            if (result.status === "stopped") {
+              return { content: [{ type: "text", text: `**${result.name}** was stopped.` }] };
+            }
+            // Still running — wait 3s and check again
+            await new Promise(r => setTimeout(r, 3000));
+          }
+          return { content: [{ type: "text", text: `**${args.task_id}** is still running after ${args.timeout || 120}s. Use tarsee_check_agents to monitor.` }] };
         }
       ),
 
