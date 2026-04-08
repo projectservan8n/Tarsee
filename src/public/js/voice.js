@@ -636,7 +636,7 @@ const Voice = {
   async handleTranscript(text) {
     this.addBubble("user", text);
     this.setOrbState("processing");
-    this.elements.status.textContent = "Thinking...";
+    this._startThinkingAnimation();
 
     const voiceText = `[voice] ${text}`;
     let fullResponse = "";
@@ -644,10 +644,15 @@ const Voice = {
     try {
       await API.sendMessage(
         Chat.currentConversationId, voiceText,
-        (content) => { fullResponse += content; },
+        (content) => { if (content) fullResponse += content; },
         async (data) => {
+          if (data?.type === "conversation") {
+            Chat.currentConversationId = data.conversationId;
+            return; // Don't process conversation events as "done"
+          }
           if (data?.conversationId) Chat.currentConversationId = data.conversationId;
           this.isProcessing = false;
+          this._stopThinkingAnimation();
 
           if (!fullResponse?.trim()) {
             this.setOrbState("idle");
@@ -739,11 +744,36 @@ const Voice = {
     label.textContent = role === "user" ? "You" : "Tarsee";
     const bubble = document.createElement("div");
     bubble.className = "voice-turn-text";
-    bubble.textContent = text;
+    // Render markdown for assistant, plain text for user
+    if (role === "assistant" && typeof Chat !== "undefined" && Chat.renderMarkdown) {
+      bubble.innerHTML = Chat.renderMarkdown(text);
+    } else {
+      bubble.textContent = text;
+    }
     turn.appendChild(label);
     turn.appendChild(bubble);
     container.appendChild(turn);
     container.scrollTop = container.scrollHeight;
+  },
+
+  /** Animated "Thinking..." ellipsis in status text. */
+  _startThinkingAnimation() {
+    this._stopThinkingAnimation();
+    let dots = 0;
+    this.elements.status.textContent = "Thinking";
+    this.elements.status.classList.add("thinking-anim");
+    this._thinkingInterval = setInterval(() => {
+      dots = (dots + 1) % 4;
+      this.elements.status.textContent = "Thinking" + ".".repeat(dots);
+    }, 400);
+  },
+
+  _stopThinkingAnimation() {
+    if (this._thinkingInterval) {
+      clearInterval(this._thinkingInterval);
+      this._thinkingInterval = null;
+    }
+    this.elements.status.classList.remove("thinking-anim");
   },
 
   /**

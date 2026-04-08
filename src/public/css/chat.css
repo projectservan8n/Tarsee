@@ -157,6 +157,34 @@
   font-style: italic;
 }
 
+/* Thinking animation — "Thinking..." with animated dots */
+.chat-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--primary, #f5a623);
+  font-weight: 600;
+  font-size: 14px;
+  padding: 4px 0;
+}
+
+.chat-thinking .thinking-text {
+  color: var(--primary, #f5a623);
+}
+
+.chat-thinking .thinking-dots::after {
+  content: "";
+  animation: thinkingDots 1.2s steps(4, end) infinite;
+}
+
+@keyframes thinkingDots {
+  0% { content: ""; }
+  25% { content: "."; }
+  50% { content: ".."; }
+  75% { content: "..."; }
+  100% { content: ""; }
+}
+
 /* Markdown tables */
 .md-table {
   width: 100%;

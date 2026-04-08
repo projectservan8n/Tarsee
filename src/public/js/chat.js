@@ -723,8 +723,13 @@ const Chat = {
       textEl.insertAdjacentHTML("afterend", this.renderMessageAttachments(attachments));
     }
 
-    // Create streaming assistant message
+    // Create streaming assistant message with thinking indicator
     const assistantMsg = this.appendMessage("assistant", "", true);
+    const thinkingEl = document.createElement("div");
+    thinkingEl.className = "chat-thinking";
+    thinkingEl.innerHTML = '<span class="thinking-text">Thinking</span><span class="thinking-dots"></span>';
+    assistantMsg.querySelector(".message-text")?.appendChild(thinkingEl);
+    let hasReceivedText = false;
     let fullResponse = "";
     let toolBlocks = ""; // Accumulated tool call/result HTML
 
@@ -737,6 +742,12 @@ const Chat = {
         // onText (content for text, null + event for tool events)
         (content, event) => {
           if (event?.type === "tool_call") {
+            // Remove thinking indicator when tools start
+            if (!hasReceivedText) {
+              hasReceivedText = true;
+              const thinkEl = assistantMsg.querySelector(".chat-thinking");
+              if (thinkEl) thinkEl.remove();
+            }
             // Clean tool block — name + detail, collapsible input
             // Build human-readable detail based on tool type
             const inp = event.input || {};
@@ -777,7 +788,12 @@ const Chat = {
             this.scrollToBottom();
             return;
           }
-          // Normal text
+          // Normal text — remove thinking indicator on first text
+          if (!hasReceivedText) {
+            hasReceivedText = true;
+            const thinkEl = assistantMsg.querySelector(".chat-thinking");
+            if (thinkEl) thinkEl.remove();
+          }
           fullResponse += content;
           // Strip setup marker and [REMEMBER: ...] markers from display
           let displayText = fullResponse.split("|||PERSONALITY_COMPLETE|||")[0];

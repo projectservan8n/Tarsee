@@ -280,6 +280,12 @@
   color: var(--danger, #f87171);
 }
 
+/* ---------- Thinking animation ---------- */
+.voice-status-text.thinking-anim {
+  color: var(--primary, #f5a623);
+  font-weight: 600;
+}
+
 /* ---------- Status text ---------- */
 .voice-status-text {
   font-size: 14px;

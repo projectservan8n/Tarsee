@@ -42,7 +42,11 @@ export class EdgeTTSEngine extends TTSEngine {
 
     try {
       const t = new EdgeTTS({ voice });
-      await t.ttsPromise(text, tmpFile);
+      // 30s timeout for TTS generation
+      await Promise.race([
+        t.ttsPromise(text, tmpFile),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("TTS generation timed out (30s)")), 30_000)),
+      ]);
       const audio = fs.readFileSync(tmpFile);
       return { audio, contentType: "audio/mpeg" };
     } finally {
