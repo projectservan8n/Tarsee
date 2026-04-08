@@ -484,11 +484,14 @@ const Chat = {
 
     // Agent conversations are read-only (orchestrator sends tasks, not the user)
     const isAgentChannel = channelKey.startsWith("agent:");
-    this.elements.messageInput.disabled = isAgentChannel;
-    this.elements.sendBtn.disabled = isAgentChannel;
-    this.elements.messageInput.placeholder = isAgentChannel
-      ? "Tasks are delegated by the orchestrator"
-      : "Message Tarsee...";
+    if (isAgentChannel) {
+      this.elements.inputArea.style.display = "none";
+    } else {
+      this.elements.inputArea.style.display = "block";
+      this.elements.messageInput.disabled = false;
+      this.elements.sendBtn.disabled = !this.elements.messageInput.value.trim();
+      this.elements.messageInput.placeholder = "Message Tarsee...";
+    }
 
     // Update topbar with clean display name
     const ch = this.channels.find((c) => c.key === channelKey);
