@@ -6,16 +6,12 @@
   bottom: 0;
   width: 380px;
   max-width: 90vw;
-  background: var(--bg-sidebar, #111215);
-  border-left: 1px solid var(--border, rgba(255,255,255,0.07));
-  z-index: 60;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+  z-index: var(--z-panels);
   display: flex;
   flex-direction: column;
   animation: slideInRight 0.25s cubic-bezier(0.32, 0.72, 0, 1);
-}
-@keyframes slideInRight {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
 }
 .agents-panel-header {
   display: flex;
@@ -38,20 +34,20 @@
 
 /* Agent Task Cards */
 .agent-task-card {
-  background: var(--bg-elevated, #1a1b1f);
-  border: 1px solid var(--border, rgba(255,255,255,0.06));
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px 14px;
   margin-bottom: 8px;
 }
 .agent-task-card.running {
-  border-left: 3px solid #fbbf24;
+  border-left: 3px solid var(--warning);
 }
 .agent-task-card.completed {
-  border-left: 3px solid #4caf50;
+  border-left: 3px solid var(--success);
 }
 .agent-task-card.failed {
-  border-left: 3px solid #f44336;
+  border-left: 3px solid var(--danger);
 }
 .agent-task-header {
   display: flex;
@@ -149,10 +145,9 @@
   border-radius: 50%;
   flex-shrink: 0;
 }
-.agent-dot.online { background: #4caf50; }
-.agent-dot.offline { background: #666; opacity: 0.5; }
-.agent-dot.busy { background: #fbbf24; animation: agentPulse 1.5s infinite; }
-@keyframes agentPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.agent-dot.online { background: var(--success); }
+.agent-dot.offline { background: var(--text-muted); opacity: 0.5; }
+.agent-dot.busy { background: var(--warning); animation: agentPulse 1.5s infinite; }
 
 /* Settings: Agent Cards */
 .agent-card {

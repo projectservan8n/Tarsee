@@ -186,6 +186,6 @@
     inset: 0;
     top: var(--space-12);
     background: var(--bg);
-    z-index: 5;
+    z-index: var(--z-base);
   }
 }

@@ -127,8 +127,7 @@ const App = {
     container.appendChild(toast);
 
     setTimeout(() => {
-      toast.style.opacity = "0";
-      toast.style.transform = "translateX(20px)";
+      toast.classList.add("removing");
       setTimeout(() => toast.remove(), 200);
     }, 4000);
   },

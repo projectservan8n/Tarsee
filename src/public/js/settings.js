@@ -412,7 +412,7 @@ const Settings = {
       const isActive = engine !== "stub" && engine !== "none";
       const status = isActive ? `Engine: ${engine}` : "No TTS engine active";
       this.elements.voiceEngineStatus.textContent = status;
-      this.elements.voiceEngineStatus.style.color = isActive ? "var(--primary)" : "var(--text-muted)";
+      this.elements.voiceEngineStatus.classList.toggle("active", isActive);
 
       // Show info message when no engine (but keep upload clickable!)
       if (this.elements.voiceCloneInfo) {
@@ -426,7 +426,7 @@ const Settings = {
       }
       // Keep upload area always clickable (no pointerEvents: "none")
       if (this.elements.voiceCloneUpload) {
-        this.elements.voiceCloneUpload.style.opacity = isActive ? "1" : "0.6";
+        this.elements.voiceCloneUpload.classList.toggle("inactive", !isActive);
       }
     } catch {
       this.elements.voiceEngineStatus.textContent = "Could not load voice status";

@@ -721,6 +721,7 @@ html, body {
   letter-spacing: var(--tracking-tight);
   overflow: hidden;
 }
+.welcome .logo-large.emoji { font-size: 32px; }
 
 .welcome h2 {
   font-size: var(--text-2xl);
@@ -1189,6 +1190,11 @@ html, body {
   background: var(--bg);
 }
 
+/* Voice settings state classes */
+#voiceEngineStatus { color: var(--text-muted); }
+#voiceEngineStatus.active { color: var(--primary); }
+.inactive { opacity: 0.6; }
+
 .settings-content h2 {
   font-size: var(--text-3xl);
   font-weight: 700;
@@ -1378,6 +1384,11 @@ html, body {
 .toast.error  { border-left: var(--space-0-5) solid var(--danger);  background: var(--danger-subtle); }
 .toast.success { border-left: var(--space-0-5) solid var(--success); background: var(--success-subtle); }
 .toast.info    { border-left: var(--space-0-5) solid var(--info);    background: var(--info-subtle); }
+.toast.removing {
+  opacity: 0;
+  transform: translateX(20px);
+  transition: all var(--duration-fast) var(--ease-default);
+}
 
 
 /* ==========================================================================

@@ -301,7 +301,7 @@ const Chat = {
     const welcomeLogo = document.getElementById("welcomeLogo");
     if (welcomeLogo && emoji) {
       welcomeLogo.textContent = emoji;
-      welcomeLogo.style.fontSize = "32px";
+      welcomeLogo.classList.add("emoji");
     }
 
     // If identity has a name, update bot name
