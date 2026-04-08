@@ -162,17 +162,16 @@ const Agents = {
       const modelLabels = { "claude-opus-4-6": "Opus", "claude-sonnet-4-6": "Sonnet", "claude-haiku-4-5": "Haiku" };
       teamEl.innerHTML = agents.map(a => {
         const busy = busyAgentIds.has(a.id);
-        const isOrch = a.isOrchestrator;
-        const statusDot = isOrch ? '<span class="agent-dot online"></span>' : busy ? '<span class="agent-dot busy"></span>' : '<span class="agent-dot available"></span>';
-        const statusText = isOrch ? "Active" : busy ? "Working" : "Available";
+        const statusDot = busy ? '<span class="agent-dot busy"></span>' : '<span class="agent-dot available"></span>';
+        const statusText = busy ? "Working" : "Available";
         const nick = a.nickname ? ` "${a.nickname}"` : "";
-        const iconHtml = a.icon?.startsWith("ph ") ? `<i class="${a.icon}" style="font-size:18px;color:${a.color || 'var(--text)'}"></i>` : `<span style="font-size:16px">${a.icon || "🤖"}</span>`;
+        const iconHtml = a.icon?.startsWith("ph ") ? `<i class="${a.icon}"></i>` : `<span>${a.icon || "AI"}</span>`;
         const modelLabel = modelLabels[a.model] || a.model || "";
-        return `<div class="agent-team-member" style="border-left:3px solid ${a.color || '#666'}">
-          ${iconHtml}
-          <div style="flex:1;min-width:0">
-            <div style="font-size:13px"><strong>${a.name}</strong>${nick}</div>
-            <div style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:6px">${statusDot} ${statusText} · ${modelLabel}</div>
+        return `<div class="agent-team-member">
+          <div class="agent-avatar" style="color:${a.color || 'var(--text)'}">${iconHtml}</div>
+          <div class="agent-info">
+            <span class="agent-name">${a.name}</span>${nick ? `<span class="agent-nick">${nick}</span>` : ""}
+            <span class="agent-meta">${statusDot} ${statusText} · ${modelLabel}</span>
           </div>
         </div>`;
       }).join("") || '<div style="color:var(--text-muted);font-size:13px">No agents configured.</div>';
