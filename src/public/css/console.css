@@ -1,36 +1,40 @@
-/* ===== Console Panel — Dark Theme ===== */
+/* ==========================================================================
+   Console Panel
+   Slide-up panel with log entries, toolbar, and command input.
+   All values sourced from tokens.css — zero hardcoded colors or keyframes.
+   ========================================================================== */
+
+/* --- 1. Console Panel --- */
 
 .console-panel {
   position: fixed;
   bottom: 0;
-  left: 258px;
+  left: var(--sidebar-width);
   right: 0;
   height: 0;
-  background: #0a0c10;
+  background: var(--bg);
   border-top: 2px solid transparent;
   display: flex;
   flex-direction: column;
-  z-index: 40;
-  transition: height 200ms ease, border-color 200ms ease;
+  z-index: var(--z-console);
+  transition: height var(--duration-normal) var(--ease-default),
+              border-color var(--duration-normal) var(--ease-default);
   overflow: hidden;
 }
 
 .console-panel.open {
-  height: 340px;
-  border-top-color: var(--primary);
+  height: var(--console-height);
+  border-top-color: var(--accent);
 }
 
-.console-panel.maximized {
-  height: calc(100vh - 52px);
-}
+/* --- 2. Console Toolbar --- */
 
-/* Console toolbar */
 .console-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
-  background: #0e1015;
+  padding: var(--space-1-5) var(--space-3);
+  background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   min-height: 36px;
@@ -39,34 +43,35 @@
 .console-toolbar-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .console-toolbar-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .console-title {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text);
-  letter-spacing: 0.5px;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
 }
 
 .console-status {
   font-family: var(--font-mono);
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: var(--bg-hover);
+  font-size: var(--text-xs);
+  padding: var(--space-0-5) var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--bg-surface-hover);
   color: var(--text-muted);
 }
 
 .console-status.connected {
-  background: rgba(52, 211, 153, 0.15);
+  background: var(--success-subtle);
   color: var(--success);
 }
 
@@ -75,38 +80,39 @@
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 4px 6px;
-  border-radius: 4px;
-  font-size: 12px;
+  padding: var(--space-1) var(--space-1-5);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
   font-family: var(--font-mono);
   display: flex;
   align-items: center;
-  gap: 4px;
-  transition: background 100ms, color 100ms;
+  gap: var(--space-1);
+  transition: background var(--duration-fast), color var(--duration-fast);
 }
 
 .console-btn:hover {
-  background: var(--bg-hover);
+  background: var(--bg-surface-hover);
   color: var(--text);
 }
 
 .console-btn.active {
-  background: var(--primary);
-  color: white;
+  background: var(--accent);
+  color: var(--text-inverse);
 }
 
-/* Console output area */
+/* --- 3. Console Output --- */
+
 .console-output {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.6;
-  color: #CDD6F4;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--text);
   scroll-behavior: smooth;
-  background: #0a0c10;
+  background: var(--bg);
 }
 
 .console-output::-webkit-scrollbar {
@@ -118,20 +124,23 @@
 }
 
 .console-output::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 3px;
+  background: var(--border);
+  border-radius: var(--radius-full);
 }
 
-/* Log entry */
+/* --- 4. Console Entries --- */
+
 .console-entry {
   display: flex;
-  gap: 8px;
-  padding: 1px 0;
+  gap: var(--space-2);
+  padding: var(--space-px) 0;
   word-break: break-all;
 }
 
 .console-entry .ts {
   color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
   flex-shrink: 0;
   user-select: none;
 }
@@ -143,16 +152,21 @@
   user-select: none;
 }
 
+.console-entry .level.info,
 .console-entry .level.log {
-  color: #89B4FA;
+  color: var(--info);
 }
 
 .console-entry .level.warn {
-  color: #fbbf24;
+  color: var(--warning);
 }
 
 .console-entry .level.error {
-  color: #f87171;
+  color: var(--danger);
+}
+
+.console-entry .level.debug {
+  color: var(--text-muted);
 }
 
 .console-entry .text {
@@ -161,37 +175,37 @@
 }
 
 .console-entry.warn .text {
-  color: #fbbf24;
+  color: var(--warning);
 }
 
 .console-entry.error .text {
-  color: #f87171;
+  color: var(--danger);
 }
 
-/* Command result */
 .console-entry.cmd-result .text {
   color: var(--success);
 }
 
 .console-entry.cmd-input .text {
-  color: var(--primary);
+  color: var(--accent);
 }
 
-/* Console input area */
+/* --- 5. Console Input --- */
+
 .console-input-area {
   display: flex;
   align-items: center;
-  padding: 6px 12px;
-  background: #0e1015;
+  padding: var(--space-1-5) var(--space-3);
+  background: var(--bg-surface);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
 
 .console-prompt {
   font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--primary);
-  margin-right: 8px;
+  font-size: var(--text-sm);
+  color: var(--accent);
+  margin-right: var(--space-2);
   user-select: none;
   font-weight: 600;
 }
@@ -201,37 +215,54 @@
   background: transparent;
   border: none;
   outline: none;
-  color: #CDD6F4;
+  color: var(--text);
   font-family: var(--font-mono);
-  font-size: 12px;
-  caret-color: var(--primary);
+  font-size: var(--text-sm);
+  caret-color: var(--accent);
 }
 
 .console-input::placeholder {
   color: var(--text-muted);
 }
 
-/* Toggle button in topbar */
+/* --- 6. Maximized State --- */
+
+.console-panel.maximized {
+  height: calc(100vh - var(--topbar-height));
+}
+
+/* --- 7. Console Badge --- */
+
 .console-toggle-btn {
   position: relative;
 }
 
+.console-badge,
 .console-toggle-btn .badge {
   position: absolute;
   top: -2px;
   right: -2px;
-  width: 8px;
-  height: 8px;
+  width: var(--space-2);
+  height: var(--space-2);
   background: var(--success);
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   display: none;
 }
 
+.console-badge.active,
 .console-toggle-btn .badge.active {
   display: block;
 }
 
-/* Responsive */
+/* --- 8. Console System Messages --- */
+
+.console-system-msg {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* --- 9. Responsive --- */
+
 @media (max-width: 768px) {
   .console-panel {
     left: 0;
