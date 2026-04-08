@@ -723,6 +723,23 @@ html, body {
   transform: none;
 }
 
+.input-btn.send.stop-mode {
+  background: var(--danger, #f87171);
+}
+
+.input-btn.send.stop-mode:hover {
+  background: #ef4444;
+}
+
+.input-btn.send.stop-mode svg {
+  display: none;
+}
+
+.input-btn.send.stop-mode::after {
+  content: "■";
+  font-size: 14px;
+}
+
 .input-btn.voice-active {
   background: var(--danger);
   color: white;

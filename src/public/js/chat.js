@@ -95,6 +95,12 @@ const Chat = {
           this.send();
         }
       }
+
+      // Escape to stop generation
+      if (e.key === "Escape" && this.isStreaming) {
+        e.preventDefault();
+        this.stopGeneration();
+      }
     });
 
     // Dismiss palette on outside click
@@ -104,7 +110,13 @@ const Chat = {
       }
     });
 
-    this.elements.sendBtn.addEventListener("click", () => this.send());
+    this.elements.sendBtn.addEventListener("click", () => {
+      if (this.isStreaming) {
+        this.stopGeneration();
+      } else {
+        this.send();
+      }
+    });
 
     // File upload: attach button triggers hidden input
     this.elements.attachBtn.addEventListener("click", () => this.elements.chatFileInput.click());
@@ -741,6 +753,9 @@ const Chat = {
     let toolBlocks = ""; // Accumulated tool call/result HTML
 
     this.isStreaming = true;
+    this.elements.sendBtn.disabled = false;
+    this.elements.sendBtn.classList.add("stop-mode");
+    this.elements.sendBtn.title = "Stop generation (Esc)";
 
     try {
       await API.sendMessage(
@@ -842,7 +857,22 @@ const Chat = {
 
     this.isStreaming = false;
     this.elements.sendBtn.disabled = false;
+    this.elements.sendBtn.classList.remove("stop-mode");
+    this.elements.sendBtn.title = "Send";
     this.elements.messageInput.focus();
+  },
+
+  stopGeneration() {
+    if (!this.isStreaming) return;
+    // Abort via HTTP endpoint
+    const csrf = API.getCsrfToken();
+    const headers = { "Content-Type": "application/json" };
+    if (csrf) headers["X-CSRF-Token"] = csrf;
+    fetch("/api/chat/stop", {
+      method: "POST", headers, credentials: "same-origin",
+      body: JSON.stringify({ conversationId: this.currentConversationId }),
+    }).catch(() => {});
+    App.showToast("Stopping...", "info");
   },
 
   // --- Session Deletion ---

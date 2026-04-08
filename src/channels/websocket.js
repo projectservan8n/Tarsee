@@ -156,9 +156,40 @@ export function setupWebSocket(server, db, app) {
         return;
       }
 
-      // Handle chat
+      // Handle stop (abort current task)
+      if (msg.type === "stop") {
+        if (ws._currentAbort) {
+          ws._currentAbort.abort();
+          ws._currentAbort = null;
+          ws.send(JSON.stringify({ type: "stopped" }));
+        }
+        return;
+      }
+
+      // Handle chat (with queueing)
       if (msg.type === "chat") {
-        await handleChat(ws, msg, convStore, settingsStore);
+        if (ws._chatBusy) {
+          if (!ws._chatQueue) ws._chatQueue = [];
+          ws._chatQueue.push(msg);
+          ws.send(JSON.stringify({ type: "queued", position: ws._chatQueue.length }));
+          return;
+        }
+        ws._chatBusy = true;
+        const drainQueue = async () => {
+          try {
+            await handleChat(ws, msg, convStore, settingsStore);
+          } finally {
+            ws._chatBusy = false;
+            // Process next queued message
+            if (ws._chatQueue?.length > 0) {
+              const next = ws._chatQueue.shift();
+              ws._chatBusy = true;
+              msg = next; // reuse variable for next iteration
+              await drainQueue();
+            }
+          }
+        };
+        await drainQueue();
         return;
       }
 
@@ -277,6 +308,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   if (providerId === "claude-code") {
     try {
       const controller = new AbortController();
+      ws._currentAbort = controller; // expose for /stop
       const onClose = () => controller.abort();
       ws.on("close", onClose);
 
@@ -311,6 +343,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
       }
 
       ws.removeListener("close", onClose);
+      ws._currentAbort = null;
 
       if (fullResponse) {
         fullResponse = extractAndSaveMemories(fullResponse, ws._tarsee_db, convId);

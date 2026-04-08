@@ -75,7 +75,6 @@ const App = {
     Chat.init();
     Voice.init();
     Settings.init();
-    Agents.init();
     FileManager.init();
     Console.init();
 

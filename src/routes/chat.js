@@ -149,6 +149,24 @@ chatRouter.post("/conversations/:id/reset-session", (req, res) => {
   res.json({ ok: true });
 });
 
+// Store active AbortControllers per conversation for /stop
+const activeRequests = new Map(); // convId → AbortController
+
+/**
+ * POST /api/chat/stop
+ * Stop the current generation for a conversation.
+ */
+chatRouter.post("/stop", (req, res) => {
+  const { conversationId } = req.body || {};
+  const controller = activeRequests.get(conversationId);
+  if (controller) {
+    controller.abort();
+    activeRequests.delete(conversationId);
+    return res.json({ ok: true, stopped: true });
+  }
+  res.json({ ok: true, stopped: false });
+});
+
 /**
  * POST /api/chat/send
  * Send a message and stream AI response via SSE.
@@ -296,6 +314,10 @@ chatRouter.post("/send", async (req, res) => {
 
   // --- Claude Code provider: runs its own agentic loop ---
   if (providerId === "claude-code") {
+    const controller = new AbortController();
+    activeRequests.set(convId, controller);
+    req.on("close", () => { controller.abort(); activeRequests.delete(convId); });
+
     try {
       const existingSessionId = convStore.getClaudeSessionId(convId);
       const mod = await import("../ai/providers/claude-code.js");
@@ -309,7 +331,7 @@ chatRouter.post("/send", async (req, res) => {
         messages: ccMessages,
         model,
         systemPrompt: effectiveSystemPrompt,
-        signal: req.signal,
+        signal: controller.signal,
         sessionId: existingSessionId,
         onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
         toolCtx,
@@ -348,8 +370,11 @@ chatRouter.post("/send", async (req, res) => {
       }
       sendSSE(res, "done", { conversationId: convId, usage });
     } catch (err) {
-      sendSSE(res, "error", { message: err.message });
+      if (!controller.signal.aborted) {
+        sendSSE(res, "error", { message: err.message });
+      }
     }
+    activeRequests.delete(convId);
     res.end();
     return;
   }
