@@ -362,7 +362,6 @@ const Settings = {
       this.loadVoices();
       this.loadSkills();
       this.loadMemories();
-      if (typeof Agents !== "undefined") Agents.loadRegistry();
     } catch (err) {
       App.showToast("Failed to load settings: " + err.message, "error");
     }

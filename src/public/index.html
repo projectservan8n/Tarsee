@@ -18,7 +18,6 @@
   <link rel="stylesheet" href="/css/chat.css">
   <link rel="stylesheet" href="/css/voice.css">
   <link rel="stylesheet" href="/css/console.css">
-  <link rel="stylesheet" href="/css/agents.css">
   <link rel="stylesheet" href="/css/files.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -89,9 +88,6 @@
           </a>
           <button class="topbar-icon-btn" id="fileManagerBtn" title="Files">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h4l2 2h6v8H2V3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
-          </button>
-          <button class="topbar-icon-btn" id="agentsDashBtn" title="Agents">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="6" cy="5" r="2" stroke="currentColor" stroke-width="1.3"/><circle cx="11" cy="6" r="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2 13c0-2 1.5-3.5 4-3.5s4 1.5 4 3.5" stroke="currentColor" stroke-width="1.3"/></svg>
           </button>
           <button class="topbar-icon-btn" id="voiceModeBtn" title="Voice">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2a2.5 2.5 0 012.5 2.5v3a2.5 2.5 0 01-5 0v-3A2.5 2.5 0 018 2z" stroke="currentColor" stroke-width="1.3"/><path d="M4 7.5a4 4 0 008 0M8 13v-1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
@@ -170,10 +166,6 @@
           <button class="settings-tab" data-tab="channels">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4l6 4 6-4M2 4h12v8H2z" stroke="currentColor" stroke-width="1.2"/></svg>
             Channels
-          </button>
-          <button class="settings-tab" data-tab="agents">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="6" cy="5" r="2.5" stroke="currentColor" stroke-width="1.2"/><circle cx="11" cy="6" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M1 13c0-2.5 2-4 5-4s5 1.5 5 4" stroke="currentColor" stroke-width="1.2"/></svg>
-            Agents
           </button>
           <button class="settings-tab" data-tab="automation">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 4v4l3 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
@@ -335,56 +327,6 @@
             </div>
           </div>
 
-          <!-- Agents Tab -->
-          <div class="settings-tab-panel" data-tab="agents">
-            <h2>Agent Team</h2>
-            <div class="settings-section">
-              <div class="hint" style="margin-bottom:12px">Specialized AI agents that the orchestrator can delegate tasks to. Each agent has its own model and expertise.</div>
-              <div id="agentRegistryList"></div>
-              <button class="btn btn-sm btn-primary" id="addAgentBtn" style="margin-top:12px">+ Add Agent</button>
-            </div>
-            <div id="agentForm" style="display:none">
-              <div class="settings-section">
-                <h3>Agent Definition</h3>
-                <div class="form-group">
-                  <label>ID</label>
-                  <input type="text" id="agentIdInput" placeholder="e.g. coder, researcher" spellcheck="false">
-                </div>
-                <div class="form-group">
-                  <label>Name</label>
-                  <input type="text" id="agentNameInput" placeholder="e.g. Coder, Researcher">
-                </div>
-                <div class="form-group">
-                  <label>Nickname (optional)</label>
-                  <input type="text" id="agentNicknameInput" placeholder="e.g. Luis, Aria — use in chat to refer to this agent">
-                </div>
-                <div class="form-group">
-                  <label>Model</label>
-                  <select id="agentModelInput">
-                    <option value="claude-opus-4-6">Claude Opus 4.6 (smartest)</option>
-                    <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (balanced)</option>
-                    <option value="claude-haiku-4-5">Claude Haiku 4.5 (fastest)</option>
-                  </select>
-                </div>
-                <div class="form-group">
-                  <label>System Prompt</label>
-                  <textarea id="agentPromptInput" rows="4" placeholder="You are a senior software engineer..."></textarea>
-                </div>
-                <div class="form-group">
-                  <label>Icon</label>
-                  <input type="text" id="agentIconInput" placeholder="💻" style="width:60px">
-                </div>
-                <div class="form-group">
-                  <label>Color</label>
-                  <input type="color" id="agentColorInput" value="#4caf50" style="width:60px;height:32px">
-                </div>
-                <div style="display:flex;gap:8px;margin-top:8px">
-                  <button class="btn btn-sm btn-primary" id="saveAgentBtn">Save Agent</button>
-                  <button class="btn btn-sm" id="cancelAgentBtn">Cancel</button>
-                </div>
-              </div>
-            </div>
-          </div>
 
           <!-- Automation Tab -->
           <div class="settings-tab-panel" data-tab="automation">
@@ -621,19 +563,6 @@
     </div>
   </div>
 
-  <!-- Agents Dashboard Panel -->
-  <div id="agentsPanel" class="agents-panel" style="display:none">
-    <div class="agents-panel-header">
-      <h2>Agent Team</h2>
-      <button class="topbar-icon-btn" id="agentsPanelClose">&#10005;</button>
-    </div>
-    <div class="agents-panel-body">
-      <div id="agentsTeam" style="margin-bottom:16px"></div>
-      <h3 style="font-size:12px;color:var(--text-muted);text-transform:uppercase;margin:12px 0 8px">Active Tasks</h3>
-      <div id="agentsRunning"></div>
-      <div id="agentsHistory"></div>
-    </div>
-  </div>
 
   <!-- Voice Mode Panel -->
   <div id="voicePanel" class="voice-panel">
@@ -660,7 +589,6 @@
   <script src="/js/console.js"></script>
   <script src="/js/settings.js"></script>
   <script src="/js/setup.js"></script>
-  <script src="/js/agents.js"></script>
   <script src="/js/files.js"></script>
   <script src="/js/app.js"></script>
   <script src="/js/sw-register.js"></script>
