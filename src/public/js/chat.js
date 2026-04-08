@@ -8,6 +8,7 @@ const PLATFORM_ICONS = {
   discord: "\u{1F4AC}",   // 💬
   telegram: "\u{2708}\uFE0F", // ✈️
   slack: "\u{1F4BC}",     // 💼
+  agent: "\u{1F916}",     // 🤖
 };
 
 const Chat = {
@@ -424,8 +425,8 @@ const Chat = {
     }
 
     // Platform labels
-    const platformLabels = { web: "Web", telegram: "Telegram", discord: "Discord" };
-    const platformOrder = ["web", "telegram", "discord"];
+    const platformLabels = { web: "Web", telegram: "Telegram", discord: "Discord", agent: "Agents" };
+    const platformOrder = ["web", "telegram", "discord", "agent"];
 
     for (const platform of platformOrder) {
       const items = groups[platform];
@@ -480,6 +481,14 @@ const Chat = {
     this.elements.welcomeScreen.style.display = "none";
     this.elements.chatArea.style.display = "flex";
     this.elements.inputArea.style.display = "block";
+
+    // Agent conversations are read-only (orchestrator sends tasks, not the user)
+    const isAgentChannel = channelKey.startsWith("agent:");
+    this.elements.messageInput.disabled = isAgentChannel;
+    this.elements.sendBtn.disabled = isAgentChannel;
+    this.elements.messageInput.placeholder = isAgentChannel
+      ? "Tasks are delegated by the orchestrator"
+      : "Message Tarsee...";
 
     // Update topbar with clean display name
     const ch = this.channels.find((c) => c.key === channelKey);

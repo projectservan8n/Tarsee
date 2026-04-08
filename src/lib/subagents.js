@@ -3,17 +3,20 @@ import { chatStream } from "../ai/router.js";
 import { buildSystemPrompt } from "./build-system-prompt.js";
 import { getToolDefinitions, executeTool } from "./tools.js";
 import { getAgent, getAgentWorkspace } from "./agent-registry.js";
+import { ConversationStore } from "../db/conversations.js";
 import fs from "node:fs";
 
 /**
  * Subagent manager — spawns background AI agents that run independently.
- * Each agent can use a different model and system prompt based on its definition.
+ * Each agent has a persistent session, visible conversation, and task queue.
  */
 
 const agents = new Map();
 const taskQueue = new Map(); // agentId → [{ task, name, agentId, ctx, resolve }]
+const agentSessions = new Map(); // agentId → { sessionId, lastActive }
 const MAX_AGENTS = 10;
 const MAX_TOOL_ROUNDS = 15;
+const SESSION_IDLE_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hours
 
 // Event listeners for agent state changes (UI updates)
 const listeners = new Set();
@@ -21,9 +24,73 @@ const listeners = new Set();
 export function onAgentEvent(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 function emit(event, data) { for (const fn of listeners) fn(event, data); }
 
-/**
- * Check if an agent type is currently busy.
- */
+// --- Persistent Sessions ---
+
+function loadAgentSessions(settingsStore) {
+  if (!settingsStore) return;
+  try {
+    const raw = settingsStore.get("agent.sessions");
+    if (!raw) return;
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    for (const [k, v] of Object.entries(parsed)) {
+      agentSessions.set(k, v);
+    }
+  } catch { /* ignore */ }
+}
+
+function saveAgentSessions(settingsStore) {
+  if (!settingsStore) return;
+  try {
+    const obj = Object.fromEntries(agentSessions);
+    settingsStore.set("agent.sessions", JSON.stringify(obj));
+  } catch { /* ignore */ }
+}
+
+function getAgentSessionId(agentId, settingsStore) {
+  if (!agentId) return null;
+  if (agentSessions.size === 0) loadAgentSessions(settingsStore);
+
+  const session = agentSessions.get(agentId);
+  if (!session?.sessionId) return null;
+
+  // Check idle timeout
+  if (Date.now() - (session.lastActive || 0) > SESSION_IDLE_TIMEOUT) {
+    agentSessions.delete(agentId);
+    saveAgentSessions(settingsStore);
+    console.log(`[agent:${agentId}] session expired (idle >2hr)`);
+    return null;
+  }
+  return session.sessionId;
+}
+
+function setAgentSessionId(agentId, sessionId, settingsStore) {
+  if (!agentId || !sessionId) return;
+  agentSessions.set(agentId, { sessionId, lastActive: Date.now() });
+  saveAgentSessions(settingsStore);
+}
+
+// --- Agent Conversations (visible in sidebar) ---
+
+function getOrCreateAgentConversation(agentId, db, settingsStore) {
+  if (!agentId || !db || !settingsStore) return null;
+  const channelKey = `channel_conv.agent:${agentId}`;
+  let convId = settingsStore.get(channelKey);
+
+  const convStore = new ConversationStore(db);
+  if (convId && convStore.get(convId)) return { convStore, convId };
+
+  // Create new conversation for this agent
+  const agentDef = getAgent(agentId);
+  const nick = agentDef?.nickname ? ` (${agentDef.nickname})` : "";
+  const conv = convStore.create({ title: `${agentDef?.name || agentId}${nick}` });
+  convId = conv.id;
+  settingsStore.set(channelKey, convId);
+  console.log(`[agent:${agentId}] created conversation: ${convId}`);
+  return { convStore, convId };
+}
+
+// --- Queue ---
+
 function isAgentBusy(agentId) {
   if (!agentId) return false;
   for (const a of agents.values()) {
@@ -32,14 +99,11 @@ function isAgentBusy(agentId) {
   return false;
 }
 
-/**
- * Process the next queued task for an agent type.
- */
 function processQueue(agentId) {
   if (!agentId) return;
   const queue = taskQueue.get(agentId);
   if (!queue || queue.length === 0) return;
-  if (isAgentBusy(agentId)) return; // still busy
+  if (isAgentBusy(agentId)) return;
 
   const next = queue.shift();
   if (queue.length === 0) taskQueue.delete(agentId);
@@ -49,16 +113,11 @@ function processQueue(agentId) {
   next.resolve?.(result);
 }
 
-/**
- * Spawn a new background subagent. Queues if agent type is busy.
- * @param {string} task - The task description
- * @param {string} [name] - Human-friendly name
- * @param {string} [agentId] - Agent definition ID (coder, researcher, etc.)
- * @param {object} ctx - { settingsStore, db, channelManager }
- */
+// --- Spawn / Start ---
+
 export function spawnAgent({ task, name, agentId, settingsStore, db, channelManager }) {
-  // Clean up old completed agents (keep last 5 for result retrieval)
-  const completed = [...agents.entries()].filter(([, a]) => a.status !== "running");
+  // Clean up old completed agents (keep last 5)
+  const completed = [...agents.entries()].filter(([, a]) => a.status !== "running" && a.status !== "queued");
   if (completed.length > 5) {
     for (const [id] of completed.slice(0, completed.length - 5)) agents.delete(id);
   }
@@ -70,28 +129,26 @@ export function spawnAgent({ task, name, agentId, settingsStore, db, channelMana
     const agentDef = getAgent(agentId);
 
     const queuedAgent = {
-      id: taskId,
-      agentId,
+      id: taskId, agentId,
       name: name || agentDef?.name || `agent-${taskId}`,
       icon: agentDef?.icon || "🤖",
-      task,
-      model: agentDef?.model || null,
-      status: "queued",
-      result: null,
-      error: null,
-      toolsUsed: 0,
-      lastTool: null,
-      startedAt: new Date().toISOString(),
-      completedAt: null,
+      task, model: agentDef?.model || null,
+      status: "queued", result: null, error: null,
+      toolsUsed: 0, lastTool: null,
+      startedAt: new Date().toISOString(), completedAt: null,
     };
     agents.set(taskId, queuedAgent);
     persistTask(db, queuedAgent);
+
+    // Log to agent conversation
+    const ac = getOrCreateAgentConversation(agentId, db, settingsStore);
+    if (ac) ac.convStore.addMessage(ac.convId, { role: "user", content: `[Queued] ${task}` });
 
     queue.push({ task, name, agentId, settingsStore, db, channelManager, taskId });
     taskQueue.set(agentId, queue);
 
     const pos = queue.length;
-    console.log(`[queue] ${agentDef?.name || agentId} is busy — queued task "${task.slice(0, 60)}..." (position ${pos})`);
+    console.log(`[queue] ${agentDef?.name || agentId} busy — queued "${task.slice(0, 60)}..." (pos ${pos})`);
     emit("queued", { id: taskId, name: queuedAgent.name, task, position: pos });
 
     return { taskId, name: queuedAgent.name, agentId, queued: true, position: pos };
@@ -100,9 +157,6 @@ export function spawnAgent({ task, name, agentId, settingsStore, db, channelMana
   return startAgent({ task, name, agentId, settingsStore, db, channelManager });
 }
 
-/**
- * Internal: actually start an agent (no queue check).
- */
 function startAgent({ task, name, agentId, settingsStore, db, channelManager, taskId: existingTaskId }) {
   if (agents.size >= MAX_AGENTS) {
     throw new Error(`Too many agents (max ${MAX_AGENTS}). Stop or wait for existing ones.`);
@@ -112,26 +166,19 @@ function startAgent({ task, name, agentId, settingsStore, db, channelManager, ta
   const taskId = existingTaskId || crypto.randomUUID().slice(0, 8);
   const controller = new AbortController();
 
-  // Update existing queued agent or create new
   let agent = agents.get(taskId);
   if (agent) {
     agent.status = "running";
     agent.abortController = controller;
   } else {
     agent = {
-      id: taskId,
-      agentId: agentId || null,
+      id: taskId, agentId: agentId || null,
       name: name || agentDef?.name || `agent-${taskId}`,
       icon: agentDef?.icon || "🤖",
-      task,
-      model: agentDef?.model || null,
-      status: "running",
-      result: null,
-      error: null,
-      toolsUsed: 0,
-      lastTool: null,
-      startedAt: new Date().toISOString(),
-      completedAt: null,
+      task, model: agentDef?.model || null,
+      status: "running", result: null, error: null,
+      toolsUsed: 0, lastTool: null,
+      startedAt: new Date().toISOString(), completedAt: null,
       abortController: controller,
     };
     agents.set(taskId, agent);
@@ -140,7 +187,11 @@ function startAgent({ task, name, agentId, settingsStore, db, channelManager, ta
   emit("started", { id: taskId, name: agent.name, task });
   persistTask(db, agent);
 
-  // Run in background — process queue when done
+  // Log task to agent conversation
+  const ac = getOrCreateAgentConversation(agentId, db, settingsStore);
+  if (ac) ac.convStore.addMessage(ac.convId, { role: "user", content: `[Task] ${task}` });
+
+  // Run in background
   runAgent(agent, { settingsStore, db, channelManager, signal: controller.signal })
     .catch((err) => {
       agent.status = "failed";
@@ -149,30 +200,29 @@ function startAgent({ task, name, agentId, settingsStore, db, channelManager, ta
       persistTask(db, agent);
       emit("completed", { id: taskId, name: agent.name, status: "failed", error: err.message });
       console.error(`[agent:${agent.name}] failed: ${err.message}`);
+      // Log failure to conversation
+      if (ac) ac.convStore.addMessage(ac.convId, { role: "assistant", content: `[Failed] ${err.message}`, provider: "claude-code", model: agent.model });
     })
     .finally(() => {
-      // Process next queued task for this agent type
       if (agentId) processQueue(agentId);
     });
 
   return { taskId, name: agent.name, agentId: agent.agentId };
 }
 
-/**
- * Persist agent task to SQLite.
- */
+// --- Persistence ---
+
 function persistTask(db, agent) {
   try {
     db?.prepare(`
       INSERT OR REPLACE INTO agent_tasks (id, agent_id, name, task, status, model, result, error, tools_used, started_at, completed_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(agent.id, agent.agentId, agent.name, agent.task, agent.status, agent.model, agent.result, agent.error, agent.toolsUsed, agent.startedAt, agent.completedAt);
-  } catch { /* ignore if table doesn't exist yet */ }
+  } catch { /* ignore */ }
 }
 
-/**
- * Run the subagent's AI loop with its own model and prompt.
- */
+// --- Agent Runner ---
+
 async function runAgent(agent, { settingsStore, db, channelManager, signal }) {
   const agentDef = agent.agentId ? getAgent(agent.agentId) : null;
 
@@ -191,8 +241,7 @@ async function runAgent(agent, { settingsStore, db, channelManager, signal }) {
     : `You are "${agent.name}". Your task:\n\n${agent.task}\n\nWork independently. Be thorough.`;
 
   const systemPrompt = buildSystemPrompt({
-    settingsStore,
-    db,
+    settingsStore, db,
     conversationId: null,
     messageCount: 0,
     conversationPrompt: agentContext,
@@ -204,10 +253,12 @@ async function runAgent(agent, { settingsStore, db, channelManager, signal }) {
   let messages = [{ role: "user", content: agent.task }];
   let fullResponse = "";
 
-  // Use agent-specific model
   const model = agentDef?.model || settingsStore.getActiveProvider()?.model;
 
-  console.log(`[agent:${agent.name}] started (${model || "default"}): ${agent.task.slice(0, 80)}`);
+  // Persistent session — resume if available
+  const existingSessionId = getAgentSessionId(agent.agentId, settingsStore);
+
+  console.log(`[agent:${agent.name}] started (${model || "default"}, session: ${existingSessionId || "new"}): ${agent.task.slice(0, 80)}`);
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (signal.aborted) {
@@ -230,6 +281,10 @@ async function runAgent(agent, { settingsStore, db, channelManager, signal }) {
       signal,
       tools,
       toolCtx,
+      sessionId: existingSessionId || undefined,
+      onSessionId: (sid) => {
+        setAgentSessionId(agent.agentId, sid, settingsStore);
+      },
     });
 
     for await (const event of stream) {
@@ -271,6 +326,17 @@ async function runAgent(agent, { settingsStore, db, channelManager, signal }) {
   persistTask(db, agent);
   emit("completed", { id: agent.id, name: agent.name, status: "completed", resultPreview: fullResponse.slice(0, 200) });
 
+  // Log result to agent conversation
+  const ac = getOrCreateAgentConversation(agent.agentId, db, settingsStore);
+  if (ac) {
+    ac.convStore.addMessage(ac.convId, {
+      role: "assistant",
+      content: fullResponse || "(no output)",
+      provider: "claude-code",
+      model: agent.model,
+    });
+  }
+
   // Save task summary to agent's persistent memory
   if (agentWorkspace && fullResponse) {
     try {
@@ -284,19 +350,14 @@ async function runAgent(agent, { settingsStore, db, channelManager, signal }) {
   console.log(`[agent:${agent.name}] completed (${fullResponse.length} chars, ${agent.toolsUsed} tools)`);
 }
 
+// --- Public API ---
+
 export function listAgents() {
   return [...agents.values()].map((a) => ({
-    id: a.id,
-    agentId: a.agentId,
-    name: a.name,
-    icon: a.icon,
-    model: a.model,
-    status: a.status,
-    task: a.task.slice(0, 100),
-    toolsUsed: a.toolsUsed,
-    lastTool: a.lastTool,
-    startedAt: a.startedAt,
-    completedAt: a.completedAt,
+    id: a.id, agentId: a.agentId, name: a.name, icon: a.icon,
+    model: a.model, status: a.status, task: a.task.slice(0, 100),
+    toolsUsed: a.toolsUsed, lastTool: a.lastTool,
+    startedAt: a.startedAt, completedAt: a.completedAt,
     resultPreview: a.result?.slice(0, 200) || a.error || null,
   }));
 }
@@ -305,18 +366,10 @@ export function getAgentResult(taskId) {
   const agent = agents.get(taskId);
   if (!agent) return null;
   return {
-    id: agent.id,
-    agentId: agent.agentId,
-    name: agent.name,
-    icon: agent.icon,
-    model: agent.model,
-    status: agent.status,
-    task: agent.task,
-    result: agent.result,
-    error: agent.error,
-    toolsUsed: agent.toolsUsed,
-    startedAt: agent.startedAt,
-    completedAt: agent.completedAt,
+    id: agent.id, agentId: agent.agentId, name: agent.name, icon: agent.icon,
+    model: agent.model, status: agent.status, task: agent.task,
+    result: agent.result, error: agent.error, toolsUsed: agent.toolsUsed,
+    startedAt: agent.startedAt, completedAt: agent.completedAt,
   };
 }
 
@@ -332,13 +385,8 @@ export function stopAgent(taskId) {
   return true;
 }
 
-/**
- * Get recent tasks from DB (for history).
- */
 export function getRecentTasks(db, limit = 20) {
   try {
     return db?.prepare("SELECT * FROM agent_tasks ORDER BY started_at DESC LIMIT ?").all(limit) || [];
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }

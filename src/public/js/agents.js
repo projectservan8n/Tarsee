@@ -162,8 +162,8 @@ const Agents = {
       const modelLabels = { "claude-opus-4-6": "Opus", "claude-sonnet-4-6": "Sonnet", "claude-haiku-4-5": "Haiku" };
       teamEl.innerHTML = agents.map(a => {
         const busy = busyAgentIds.has(a.id);
-        const statusDot = busy ? '<span class="agent-dot busy"></span>' : '<span class="agent-dot available"></span>';
-        const statusText = busy ? "Working" : "Available";
+        const statusDot = busy ? '<span class="agent-dot busy"></span>' : '<span class="agent-dot online"></span>';
+        const statusText = busy ? "Working" : "Online";
         const nick = a.nickname ? ` "${a.nickname}"` : "";
         const iconHtml = a.icon?.startsWith("ph ") ? `<i class="${a.icon}"></i>` : `<span>${a.icon || "AI"}</span>`;
         const modelLabel = modelLabels[a.model] || a.model || "";
