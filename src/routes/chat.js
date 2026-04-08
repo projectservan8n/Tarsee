@@ -316,9 +316,8 @@ chatRouter.post("/send", async (req, res) => {
   if (providerId === "claude-code") {
     const controller = new AbortController();
     activeRequests.set(convId, controller);
-    // Only abort if client disconnects before we're done (not on normal close)
-    let responseFinished = false;
-    req.on("close", () => { if (!responseFinished) { controller.abort(); } activeRequests.delete(convId); });
+    // Abort if client disconnects the SSE stream
+    res.on("close", () => { if (!res.writableEnded) { controller.abort(); } activeRequests.delete(convId); });
 
     try {
       const existingSessionId = convStore.getClaudeSessionId(convId);
@@ -376,7 +375,6 @@ chatRouter.post("/send", async (req, res) => {
         sendSSE(res, "error", { message: err.message });
       }
     }
-    responseFinished = true;
     activeRequests.delete(convId);
     res.end();
     return;

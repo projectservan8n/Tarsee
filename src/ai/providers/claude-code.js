@@ -125,9 +125,6 @@ After that, only search memories when relevant — don't re-read every message.`
 - **search_memories**(query) — search memory files
 - **web_fetch**(url) / **web_search**(query) — web access
 - **get_key**(name) / **set_key**(name, value) — encrypted vault
-- **spawn_agent**(task, agent_id?) — run a task in the background (parallel work)
-- **await_agent**(task_id) — wait for background task result
-- **check_agents**() — see running background tasks
 
 ## Memory
 Use remember for durable facts. Use daily_log for session notes. Only append, never overwrite.

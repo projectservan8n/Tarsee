@@ -15,11 +15,9 @@ import { executeTool } from "../lib/tools.js";
 /**
  * Create a Tarsee MCP server with platform tools.
  * @param {object} ctx - Tool execution context { db, settingsStore, channelManager, conversationId }
- * @param {object} [opts] - Options
- * @param {boolean} [opts.isOrchestrator] - If true, exclude web_fetch/web_search (force delegation to agents)
  * @returns {McpSdkServerConfigWithInstance}
  */
-export function createTarseeMcp(ctx, opts = {}) {
+export function createTarseeMcp(ctx) {
   const allTools = [
       tool(
         "tarsee_send_message",
@@ -153,109 +151,6 @@ export function createTarseeMcp(ctx, opts = {}) {
         }
       ),
 
-      tool(
-        "tarsee_spawn_agent",
-        "Spawn a background agent to work on a task independently. Each agent runs its own Claude session with its own model. Use for parallel work — research while coding, draft while analyzing. The orchestrator (you) will be notified when agents complete.\n\nAvailable agents: Use tarsee_list_agents to see them, or specify by id: 'coder' (Opus), 'researcher' (Sonnet), 'writer' (Sonnet), 'quick' (Haiku).",
-        {
-          task: z.string().describe("The task for the agent to work on"),
-          name: z.string().optional().describe("Human-friendly task name"),
-          agent_id: z.string().optional().describe("Agent type: 'coder', 'researcher', 'writer', 'quick'. Auto-selects if omitted."),
-        },
-        async (args) => {
-          const { spawnAgent } = await import("../lib/subagents.js");
-          try {
-            const result = spawnAgent({
-              task: args.task,
-              name: args.name,
-              agentId: args.agent_id,
-              settingsStore: ctx.settingsStore,
-              db: ctx.db,
-              channelManager: ctx.channelManager,
-            });
-            const queueMsg = result.queued
-              ? `Agent ${result.name} is busy — task queued at position ${result.position}. `
-              : `Agent ${result.name} started. `;
-            return { content: [{ type: "text", text: `${queueMsg}task_id: "${result.taskId}". NOW call tarsee_await_agent("${result.taskId}") to wait for the result.` }] };
-          } catch (err) {
-            return { content: [{ type: "text", text: `Failed to spawn agent: ${err.message}` }] };
-          }
-        }
-      ),
-
-      tool(
-        "tarsee_check_agents",
-        "Check the status of all background agents. Shows running, completed, and failed tasks.",
-        {},
-        async () => {
-          const { listAgents } = await import("../lib/subagents.js");
-          const agents = listAgents();
-          if (agents.length === 0) return { content: [{ type: "text", text: "No agents running or recently completed." }] };
-          const lines = agents.map(a => {
-            const status = a.status === "running" ? `🟡 Running (${a.toolsUsed} tools${a.lastTool ? `, last: ${a.lastTool}` : ""})` :
-              a.status === "queued" ? "⏳ Queued" :
-              a.status === "completed" ? "✅ Done" : a.status === "failed" ? "❌ Failed" : "⏹️ Stopped";
-            return `${a.icon || "🤖"} **${a.name}** [${a.id}] — ${status}\n  Task: ${a.task}\n  ${a.resultPreview ? `Result: ${a.resultPreview}` : ""}`;
-          });
-          return { content: [{ type: "text", text: lines.join("\n\n") }] };
-        }
-      ),
-
-      tool(
-        "tarsee_get_agent_result",
-        "Get the full result of a completed background agent.",
-        { task_id: z.string().describe("The task ID returned by tarsee_spawn_agent") },
-        async (args) => {
-          const { getAgentResult } = await import("../lib/subagents.js");
-          const result = getAgentResult(args.task_id);
-          if (!result) return { content: [{ type: "text", text: "Agent not found." }] };
-          return { content: [{ type: "text", text: `**${result.name}** (${result.status})\nModel: ${result.model || "default"}\nTools: ${result.toolsUsed}\n\n${result.result || result.error || "No output"}` }] };
-        }
-      ),
-
-      tool(
-        "tarsee_await_agent",
-        "Wait for a spawned agent to complete and return its full result. Call this IMMEDIATELY after spawn_agent. Blocks until the agent finishes (up to timeout).",
-        {
-          task_id: z.string().describe("The task_id returned by tarsee_spawn_agent"),
-          timeout: z.number().optional().describe("Max seconds to wait (default 120)"),
-        },
-        async (args) => {
-          const { getAgentResult } = await import("../lib/subagents.js");
-          const start = Date.now();
-          const timeoutMs = (args.timeout || 120) * 1000;
-          while (Date.now() - start < timeoutMs) {
-            const result = getAgentResult(args.task_id);
-            if (!result) return { content: [{ type: "text", text: `Agent "${args.task_id}" not found.` }] };
-            if (result.status === "completed") {
-              return { content: [{ type: "text", text: `**${result.name}** completed.\nModel: ${result.model || "default"} | Tools used: ${result.toolsUsed}\n\n${result.result || "(no output)"}` }] };
-            }
-            if (result.status === "failed") {
-              return { content: [{ type: "text", text: `**${result.name}** failed: ${result.error || "unknown error"}` }] };
-            }
-            if (result.status === "stopped") {
-              return { content: [{ type: "text", text: `**${result.name}** was stopped.` }] };
-            }
-            // Still running — wait 3s and check again
-            await new Promise(r => setTimeout(r, 3000));
-          }
-          return { content: [{ type: "text", text: `**${args.task_id}** is still running after ${args.timeout || 120}s. Use tarsee_check_agents to monitor.` }] };
-        }
-      ),
-
-      tool(
-        "tarsee_list_agents",
-        "List available agent types (Coder, Researcher, Writer, Quick) with their models and capabilities.",
-        {},
-        async () => {
-          const { getAgents } = await import("../lib/agent-registry.js");
-          const agents = getAgents();
-          const lines = agents.map(a => {
-            const nick = a.nickname ? ` aka "${a.nickname}"` : "";
-            return `${a.icon || "🤖"} **${a.name}**${nick} (\`${a.id}\`) — ${a.model}\n  ${a.prompt.slice(0, 100)}`;
-          });
-          return { content: [{ type: "text", text: `Available agents:\n\n${lines.join("\n\n")}` }] };
-        }
-      ),
   ];
 
   console.log(`[mcp] Creating Tarsee MCP server: ${allTools.length} tools, names: ${allTools.map(t => t.name).join(", ")}`);

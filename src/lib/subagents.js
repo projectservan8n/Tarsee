@@ -249,7 +249,7 @@ async function runAgent(agent, { settingsStore, db, channelManager, signal }) {
   });
 
   const tools = getToolDefinitions();
-  const toolCtx = { db, settingsStore, conversationId: null, channelManager, _isSubagent: true };
+  const toolCtx = { db, settingsStore, conversationId: null, channelManager };
 
   let messages = [{ role: "user", content: agent.task }];
   let fullResponse = "";
