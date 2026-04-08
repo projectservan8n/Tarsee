@@ -820,11 +820,14 @@ const Settings = {
         return;
       }
 
-      this.elements.skillsList.innerHTML = skills.map((s) => {
+      const customSkills = skills.filter(s => s.source === "custom");
+      const builtinSkills = skills.filter(s => s.source !== "custom");
+
+      const renderSkill = (s) => {
         const st = statusMap[s.name];
         const badge = st?.status === "ready" ? '<span class="memory-badge" style="background:rgba(76,175,80,0.15);color:#4caf50">ready</span>'
           : st?.status === "needs_install" ? `<span class="memory-badge" style="background:rgba(244,67,54,0.15);color:#f44336">needs: ${(st.missing || []).join(", ")}</span>`
-          : `<span class="memory-badge">${s.source}</span>`;
+          : '';
         return `<div class="skill-card">
           <div style="display: flex; justify-content: space-between; align-items: center">
             <div>
@@ -842,7 +845,18 @@ const Settings = {
           </div>
           <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px">${escapeHtml(s.description)}</div>
         </div>`;
-      }).join("");
+      };
+
+      let html = "";
+      if (customSkills.length > 0) {
+        html += `<div class="skills-section-label">Custom Skills</div>`;
+        html += customSkills.map(renderSkill).join("");
+      }
+      if (builtinSkills.length > 0) {
+        html += `<div class="skills-section-label">Built-in Skills <span style="color:var(--text-muted);font-weight:400">(${builtinSkills.length})</span></div>`;
+        html += builtinSkills.map(renderSkill).join("");
+      }
+      this.elements.skillsList.innerHTML = html;
 
       this.elements.skillsList.querySelectorAll("[data-skill-edit]").forEach((btn) => {
         btn.addEventListener("click", () => this.editSkill(btn.dataset.skillEdit));

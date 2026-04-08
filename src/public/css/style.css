@@ -1601,7 +1601,21 @@ html, body {
   background: rgba(248, 113, 113, 0.1);
 }
 
-/* ===== Skills — iOS list ===== */
+/* ===== Skills ===== */
+.skills-section-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  padding: 14px 4px 6px;
+}
+
+.skills-section-label:first-child {
+  padding-top: 0;
+}
+
+/* --- Skill cards (iOS list) --- */
 .skill-card {
   border: none;
   border-bottom: 1px solid var(--border-light);
@@ -1612,16 +1626,20 @@ html, body {
   background: var(--bg-elevated);
 }
 
-.skill-card:first-child {
+.skills-section-label + .skill-card {
   border-radius: 12px 12px 0 0;
 }
 
-.skill-card:last-child {
+.skill-card:last-child,
+.skill-card + .skills-section-label {
   border-bottom: none;
+}
+
+.skill-card:last-child {
   border-radius: 0 0 12px 12px;
 }
 
-.skill-card:only-child {
+.skills-section-label + .skill-card:last-child {
   border-radius: 12px;
 }
 
