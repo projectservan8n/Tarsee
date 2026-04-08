@@ -1,0 +1,263 @@
+/* ==========================================================================
+   Design Tokens — Tarsee UI
+   Claude Desktop warm charcoal palette
+
+   This file is the single source of truth for ALL visual constants.
+   No other CSS file should hardcode colors, spacing, font sizes,
+   shadows, z-index, or animation values.
+   ========================================================================== */
+
+:root {
+
+  /* ---------- Colors ---------- */
+
+  --bg:                 #1a1a1a;
+  --bg-surface:         #2b2a27;
+  --bg-surface-hover:   #353430;
+  --bg-elevated:        #2b2a27;
+  --bg-input:           #1f1e1b;
+  --bg-sidebar:         #1e1e1c;
+
+  --border:             #3a3935;
+  --border-light:       #2f2e2b;
+  --border-hover:       #4a4945;
+
+  --text:               #ececec;
+  --text-secondary:     #a8a8a0;
+  --text-muted:         #6b6b63;
+  --text-inverse:       #1a1a1a;
+
+  --accent:             #c45a35;
+  --accent-hover:       #d4663d;
+  --accent-subtle:      rgba(196, 90, 53, 0.12);
+  --accent-glow:        rgba(196, 90, 53, 0.25);
+
+  --success:            #34d399;
+  --success-subtle:     rgba(52, 211, 153, 0.12);
+  --warning:            #fbbf24;
+  --warning-subtle:     rgba(251, 191, 36, 0.12);
+  --danger:             #f87171;
+  --danger-hover:       #ef4444;
+  --danger-subtle:      rgba(248, 113, 113, 0.12);
+  --info:               #60a5fa;
+  --info-subtle:        rgba(96, 165, 250, 0.12);
+
+  --thinking:           #a78bfa;
+  --thinking-subtle:    rgba(167, 139, 250, 0.12);
+  --thinking-border:    rgba(167, 139, 250, 0.25);
+  --tool-call:          #60a5fa;
+  --tool-call-subtle:   rgba(96, 165, 250, 0.12);
+  --tool-call-border:   rgba(96, 165, 250, 0.25);
+  --tool-response:      #4ade80;
+  --tool-response-subtle: rgba(74, 222, 128, 0.12);
+  --tool-response-border: rgba(74, 222, 128, 0.25);
+
+
+  /* ---------- Typography ---------- */
+
+  --font-body: 'DM Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+
+  --text-xs:   11px;
+  --text-sm:   12px;
+  --text-base: 14px;
+  --text-md:   15px;
+  --text-lg:   16px;
+  --text-xl:   18px;
+  --text-2xl:  22px;
+  --text-3xl:  26px;
+
+  --leading-tight:   1.4;
+  --leading-normal:  1.5;
+  --leading-relaxed: 1.6;
+
+  --tracking-tight:  -0.3px;
+  --tracking-normal: 0;
+  --tracking-wide:   0.5px;
+
+
+  /* ---------- Spacing (4px base grid) ---------- */
+
+  --space-0:   0;
+  --space-px:  1px;
+  --space-0-5: 2px;
+  --space-1:   4px;
+  --space-1-5: 6px;
+  --space-2:   8px;
+  --space-3:   12px;
+  --space-4:   16px;
+  --space-5:   20px;
+  --space-6:   24px;
+  --space-8:   32px;
+  --space-10:  40px;
+  --space-12:  48px;
+
+
+  /* ---------- Radius ---------- */
+
+  --radius-sm:   6px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-2xl:  20px;
+  --radius-full: 9999px;
+
+
+  /* ---------- Shadows (warm, not cold) ---------- */
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.5);
+
+
+  /* ---------- Z-Index ---------- */
+
+  --z-base:            0;
+  --z-sticky:          10;
+  --z-overlay:         20;
+  --z-console:         40;
+  --z-sidebar-overlay: 49;
+  --z-sidebar:         50;
+  --z-panels:          60;
+  --z-files:           70;
+  --z-voice:           80;
+  --z-toast:           100;
+  --z-modal:           200;
+
+
+  /* ---------- Motion ---------- */
+
+  --duration-fast:   100ms;
+  --duration-normal: 150ms;
+  --duration-slow:   300ms;
+  --duration-spring: 500ms;
+
+  --ease-default: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring:  cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-ios:     cubic-bezier(0.32, 0.72, 0, 1);
+
+
+  /* ---------- Layout ---------- */
+
+  --sidebar-width:          260px;
+  --topbar-height:          52px;
+  --topbar-height-mobile:   48px;
+  --input-max-width:        740px;
+  --message-max-width:      740px;
+  --settings-sidebar-width: 180px;
+  --console-height:         340px;
+}
+
+
+/* ==========================================================================
+   Global Keyframes
+   Defined ONCE here — no other CSS file should define keyframes.
+   ========================================================================== */
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeOut {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(8px); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.5; }
+}
+
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+  50%      { box-shadow: 0 0 16px 4px var(--accent-glow); }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes thinkingDots {
+  0%   { content: ""; }
+  25%  { content: "."; }
+  50%  { content: ".."; }
+  75%  { content: "..."; }
+  100% { content: ""; }
+}
+
+@keyframes streamPulse {
+  0%, 100% { transform: scale(0.6); opacity: 0.4; }
+  50%      { transform: scale(1);   opacity: 1; }
+}
+
+@keyframes orbListenPulse {
+  0%, 100% { transform: scale(1);    box-shadow: 0 0 0 0 var(--accent-glow); }
+  50%      { transform: scale(1.08); box-shadow: 0 0 20px 6px var(--accent-glow); }
+}
+
+@keyframes orbSpeakPulse {
+  0%, 100% { transform: scale(1);    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.25); }
+  50%      { transform: scale(1.06); box-shadow: 0 0 18px 5px rgba(52, 211, 153, 0.25); }
+}
+
+@keyframes orbThinkPulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.03); }
+}
+
+@keyframes orbSpin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes recDot {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+@keyframes slideArrow {
+  0%, 100% { transform: translateX(0); }
+  50%      { transform: translateX(4px); }
+}
+
+@keyframes paletteIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+
+/* ==========================================================================
+   Reduced Motion
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
