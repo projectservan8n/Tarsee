@@ -264,7 +264,7 @@ chatRouter.post("/send", async (req, res) => {
   // The TTS pipeline strips non-speakable content before reading aloud.
   const isVoiceMode = message.startsWith("[voice]");
   const voiceHint = isVoiceMode
-    ? "\n\n[VOICE MODE] User is speaking via voice. Respond concisely. Use formatting/tables as needed — they'll be shown visually. Your text will also be read aloud (TTS handles cleanup)."
+    ? "\n\n[VOICE MODE] User is speaking via voice. Your response will be shown visually AND read aloud by TTS.\nKeep your spoken text under 600 characters total. Tables and code are shown visually but NOT read aloud — the TTS only reads your natural language text.\nSo: write a brief conversational summary (2-4 sentences max), then optionally add a table or details below. The summary is what gets spoken."
     : "";
 
   // Build effective system prompt: identity + memory + skills + conversation-specific
