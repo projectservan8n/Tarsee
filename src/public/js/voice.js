@@ -731,9 +731,9 @@ const Voice = {
         return; // Success — exit retry loop
       } catch (err) {
         console.warn(`[voice] TTS attempt ${attempt + 1} failed:`, err.message);
-        if (attempt === 0 && text.length > 400) {
-          // Retry with shorter text
-          text = text.slice(0, 350) + "... see chat for details.";
+        if (attempt === 0 && text.length > 150) {
+          // Retry with much shorter text
+          text = text.slice(0, 150) + ". See chat for details.";
           continue;
         }
       }
@@ -820,18 +820,10 @@ const Voice = {
       const cells = dataRows.map(r =>
         r.replace(/^\||\|$/g, "").split("|").map(c => c.trim()).filter(Boolean)
       );
-      if (cells.length > 0 && cells[0].length > 0) {
-        // Speak as: "Table with N rows. Headers: X, Y, Z."
-        const headers = cells[0];
+      if (cells.length > 1) {
+        // Brief: just say how many results, skip reading rows
         const rowCount = cells.length - 1;
-        output.push(`Table with ${rowCount} ${rowCount === 1 ? "row" : "rows"}: ${headers.join(", ")}.`);
-        // Read first 3 data rows naturally
-        for (let i = 1; i < Math.min(cells.length, 4); i++) {
-          output.push(cells[i].join(", ") + ".");
-        }
-        if (cells.length > 4) {
-          output.push(`And ${cells.length - 4} more rows — see the full table in chat.`);
-        }
+        output.push(`I found ${rowCount} results — check the table in chat for details.`);
       }
       tableRows = [];
     };
@@ -864,9 +856,11 @@ const Voice = {
       .replace(/\n{3,}/g, "\n\n")            // collapse whitespace
       .trim();
 
-    // Cap at 800 chars for TTS — Edge TTS times out on long text
-    if (text.length > 800) {
-      text = text.slice(0, 750) + "... check the chat for full details.";
+    // Cap at 400 chars — Edge TTS times out on anything longer
+    if (text.length > 400) {
+      // Try to cut at a sentence boundary
+      const cutoff = text.lastIndexOf(".", 380);
+      text = text.slice(0, cutoff > 200 ? cutoff + 1 : 380) + " Check the chat for full details.";
     }
 
     return text;

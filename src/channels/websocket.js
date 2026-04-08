@@ -253,7 +253,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   // Voice mode — respond normally, TTS strips non-speakable content
   const isVoiceMode = message.startsWith("[voice]");
   const voiceHint = isVoiceMode
-    ? "[VOICE MODE] User is speaking via voice. Keep spoken text under 600 chars. Tables/code shown visually but NOT read aloud. Write a brief summary (2-4 sentences) then optionally add details below."
+    ? "[VOICE MODE] Response shown visually AND read aloud. TTS limit: 2 short sentences max before any table/code. Tables shown but NOT spoken. Structure: brief intro (under 200 chars) → then details."
     : "";
 
   // Build effective system prompt (parity with HTTP handler)
