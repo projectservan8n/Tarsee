@@ -77,26 +77,20 @@ export async function* chat({
 
   const cwd = config.CLAUDE_WORKSPACE_DIR || process.cwd();
 
-  // Create MCP server with Tarsee tools (requires ctx passed from caller)
+  // Create MCP server with all Tarsee tools
   const { createTarseeMcp } = await import("../tarsee-mcp.js");
-  // Orchestrator mode: exclude web_fetch/web_search to force delegation to agents
-  const isOrchestrator = !toolCtx?._isSubagent;
-  const tarseeMcp = createTarseeMcp(toolCtx || {}, { isOrchestrator });
+  const tarseeMcp = createTarseeMcp(toolCtx || {});
 
   // Skills directory — Claude Code discovers SKILL.md files here
   const skillsDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "skills");
 
-  // Orchestrator: read-only tools (delegates code/bash to agents)
-  // Subagents: full tool access
-  const orchTools = ["Read", "Glob", "Grep"];
-  const fullTools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"];
-  const activeTools = isOrchestrator ? orchTools : fullTools;
+  const allTools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"];
 
   const queryOptions = {
     cwd,
     model: model || config.CLAUDE_DEFAULT_MODEL || "claude-opus-4-6",
-    tools: activeTools,
-    allowedTools: activeTools,
+    tools: allTools,
+    allowedTools: allTools,
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     maxTurns: 50,
@@ -116,14 +110,6 @@ export async function* chat({
   // Only read memory on first message of a session (no sessionId = new session)
   const isNewSession = !sessionId;
 
-  // Build agent roster with nicknames for system prompt
-  const { getAgents: getAgentDefs } = await import("../../lib/agent-registry.js");
-  const agentRoster = getAgentDefs().map(a => {
-    const nick = a.nickname ? ` aka "${a.nickname}"` : "";
-    const modelLabel = a.model?.includes("opus") ? "Opus" : a.model?.includes("haiku") ? "Haiku" : "Sonnet";
-    return `- **${a.name}**${nick} (id: "${a.id}") — ${modelLabel}`;
-  }).join("\n") || "- coder, researcher, writer, quick";
-
   const tarseeContext = `You ARE Tarsee — a headless AI agent running 24/7 on a server.
 ${soulSummary ? `\n${soulSummary}\n` : ""}
 ${isNewSession ? `## New Session — Read your memory first
@@ -139,16 +125,9 @@ After that, only search memories when relevant — don't re-read every message.`
 - **search_memories**(query) — search memory files
 - **web_fetch**(url) / **web_search**(query) — web access
 - **get_key**(name) / **set_key**(name, value) — encrypted vault
-- **spawn_agent**(task, agent_id?) — delegate to an agent
-- **await_agent**(task_id, timeout?) — wait for agent result
-- **list_agents**() / **check_agents**() / **get_agent_result**(task_id)
-
-## Agent Team — Your Crew
-${agentRoster}
-
-Route: code→coder, research→researcher, writing→writer, quick tasks→quick or handle directly.
-FLOW: spawn_agent(task, id) → await_agent(task_id) → relay result to user.
-When someone says a name (e.g. "John", "Paul"), match it to an agent nickname above and spawn that agent.
+- **spawn_agent**(task, agent_id?) — run a task in the background (parallel work)
+- **await_agent**(task_id) — wait for background task result
+- **check_agents**() — see running background tasks
 
 ## Memory
 Use remember for durable facts. Use daily_log for session notes. Only append, never overwrite.
