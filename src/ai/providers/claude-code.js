@@ -143,7 +143,7 @@ Before saying "I can't" → search_memories first.
     queryOptions.resume = sessionId;
   }
 
-  console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}, media: ${mediaBlocks.length}, tools: ${activeTools.join(",")}, mcp: ${tarseeMcp ? "yes" : "NO"}`);
+  console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}, media: ${mediaBlocks.length}, mcp: ${tarseeMcp ? "yes" : "NO"}`);
 
   // Build prompt: use AsyncIterable with image content blocks if images present
   let queryPrompt;
