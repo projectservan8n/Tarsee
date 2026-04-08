@@ -250,6 +250,12 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   const history = convStore.getRecentMessages(convId, 20);
   const conv = convStore.get(convId);
 
+  // Voice mode hint — respond conversationally, no tables/markdown
+  const isVoiceMode = message.startsWith("[voice]");
+  const voiceHint = isVoiceMode
+    ? `[VOICE MODE] Your response will be read aloud. Talk naturally — no tables, no markdown, no bullet points, no code blocks, no pipe characters. Say information conversationally like you're briefing someone verbally.`
+    : "";
+
   // Build effective system prompt (parity with HTTP handler)
   const effectiveSystemPrompt = buildSystemPrompt({
     settingsStore,
@@ -257,6 +263,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
     conversationId: convId,
     messageCount: history.length,
     conversationPrompt: conv?.system_prompt,
+    channelHint: voiceHint,
   });
 
   let fullResponse = "";

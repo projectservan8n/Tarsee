@@ -263,7 +263,16 @@ chatRouter.post("/send", async (req, res) => {
   // Detect voice mode messages and add conversational style
   const isVoiceMode = message.startsWith("[voice]");
   const voiceHint = isVoiceMode
-    ? "\n\n[VOICE MODE] The user is speaking to you. Respond conversationally — short, natural, spoken language. Keep responses under 3 sentences unless the topic needs more."
+    ? `\n\n[VOICE MODE] The user is speaking to you via voice. Your response will be read aloud by TTS.
+
+CRITICAL voice rules:
+- Respond like you're TALKING to a person, not writing a document
+- NEVER use tables, markdown, bullet points, code blocks, or any formatting
+- NEVER output pipe characters (|), dashes (---), or ASCII art
+- Instead of a table, SAY the information naturally: "You have 3 unread emails. The first one is from Richard about the MCP project, the second is from Emily about..."
+- Instead of bullet points, use natural speech: "There are a few things — first..., also..., and finally..."
+- Keep it concise but complete. Talk like a smart assistant briefing someone verbally.
+- If data is complex, summarize the key points conversationally. The full details are in the chat text.`
     : "";
 
   // Build effective system prompt: identity + memory + skills + conversation-specific
