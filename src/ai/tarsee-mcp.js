@@ -249,7 +249,10 @@ export function createTarseeMcp(ctx, opts = {}) {
         async () => {
           const { getAgents } = await import("../lib/agent-registry.js");
           const agents = getAgents();
-          const lines = agents.map(a => `${a.icon || "🤖"} **${a.name}** (\`${a.id}\`) — ${a.model}\n  ${a.prompt.slice(0, 100)}`);
+          const lines = agents.map(a => {
+            const nick = a.nickname ? ` aka "${a.nickname}"` : "";
+            return `${a.icon || "🤖"} **${a.name}**${nick} (\`${a.id}\`) — ${a.model}\n  ${a.prompt.slice(0, 100)}`;
+          });
           return { content: [{ type: "text", text: `Available agents:\n\n${lines.join("\n\n")}` }] };
         }
       ),

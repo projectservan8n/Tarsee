@@ -116,6 +116,14 @@ export async function* chat({
   // Only read memory on first message of a session (no sessionId = new session)
   const isNewSession = !sessionId;
 
+  // Build agent roster with nicknames for system prompt
+  const { getAgents: getAgentDefs } = await import("../../lib/agent-registry.js");
+  const agentRoster = getAgentDefs().map(a => {
+    const nick = a.nickname ? ` aka "${a.nickname}"` : "";
+    const modelLabel = a.model?.includes("opus") ? "Opus" : a.model?.includes("haiku") ? "Haiku" : "Sonnet";
+    return `- **${a.name}**${nick} (id: "${a.id}") — ${modelLabel}`;
+  }).join("\n") || "- coder, researcher, writer, quick";
+
   const tarseeContext = `You ARE Tarsee — a headless AI agent running 24/7 on a server.
 ${soulSummary ? `\n${soulSummary}\n` : ""}
 ${isNewSession ? `## New Session — Read your memory first
@@ -136,14 +144,11 @@ After that, only search memories when relevant — don't re-read every message.`
 - **list_agents**() / **check_agents**() / **get_agent_result**(task_id)
 
 ## Agent Team — Your Crew
-You manage a team of AI agents. Call list_agents() to see who's online + their nicknames.
-- Code/scripts/debugging → spawn_agent(task, "coder")
-- Deep research/analysis → spawn_agent(task, "researcher")
-- Writing/emails/drafts → spawn_agent(task, "writer")
-- Quick tasks → spawn_agent(task, "quick") or handle directly
+${agentRoster}
 
+Route: code→coder, research→researcher, writing→writer, quick tasks→quick or handle directly.
 FLOW: spawn_agent(task, id) → await_agent(task_id) → relay result to user.
-If someone mentions a name you don't recognize, check list_agents() — it might be an agent nickname.
+When someone says a name (e.g. "John", "Paul"), match it to an agent nickname above and spawn that agent.
 
 ## Memory
 Use remember for durable facts. Use daily_log for session notes. Only append, never overwrite.
