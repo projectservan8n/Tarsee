@@ -256,6 +256,140 @@ html, body {
   white-space: nowrap;
 }
 
+.channel-item .channel-delete {
+  display: none;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+  line-height: 1;
+  padding: 0;
+  transition: all 0.15s;
+}
+
+.channel-item:hover .channel-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.channel-item:hover .channel-time {
+  display: none;
+}
+
+.channel-item .channel-delete:hover {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--danger);
+}
+
+/* --- Delete Confirmation Modal --- */
+.delete-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.delete-modal {
+  background: var(--bg-elevated, #1a1d24);
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: 16px;
+  padding: 24px;
+  width: 100%;
+  max-width: 380px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.delete-modal-header {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.delete-modal-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 8px 0;
+  line-height: 1.5;
+}
+
+.delete-modal-text strong {
+  color: var(--text);
+}
+
+.delete-modal-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: 10px;
+  background: var(--bg, #0e1015);
+  color: var(--text);
+  font-size: 14px;
+  margin: 12px 0 16px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.delete-modal-input:focus {
+  border-color: var(--danger, #f87171);
+}
+
+.delete-modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.delete-modal-cancel {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 8px 18px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s;
+}
+
+.delete-modal-cancel:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+
+.delete-modal-confirm {
+  background: var(--danger, #f87171);
+  border: none;
+  color: white;
+  padding: 8px 18px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+
+.delete-modal-confirm:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.delete-modal-confirm:not(:disabled):hover {
+  background: #ef4444;
+  box-shadow: 0 0 15px rgba(248, 113, 113, 0.3);
+}
+
 /* --- Main Content --- */
 .main {
   grid-area: content;

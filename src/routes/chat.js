@@ -104,8 +104,20 @@ chatRouter.get("/conversations/:id", (req, res) => {
  * DELETE /api/chat/conversations/:id
  */
 chatRouter.delete("/conversations/:id", (req, res) => {
-  const deleted = convStore.delete(req.params.id);
+  const convId = req.params.id;
+  const deleted = convStore.delete(convId);
   if (!deleted) return res.status(404).json({ error: "Conversation not found" });
+
+  // Clean up channel_conv mappings that pointed to this conversation
+  try {
+    const allSettings = settingsStore.getByPrefix("channel_conv.");
+    for (const s of allSettings) {
+      if (s.value === convId) {
+        settingsStore.set(s.key, null);
+      }
+    }
+  } catch { /* ignore cleanup errors */ }
+
   res.json({ ok: true });
 });
 

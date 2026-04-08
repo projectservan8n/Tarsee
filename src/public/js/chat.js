@@ -455,9 +455,15 @@ const Chat = {
           <span class="channel-icon">${icon}</span>
           <span class="channel-name">${escapeHtml(displayName)}</span>
           <span class="channel-time">${timeAgo}</span>
+          <button class="channel-delete" title="Delete session">&times;</button>
         `;
 
-        item.addEventListener("click", () => this.openChannel(ch.key, ch.conversationId));
+        item.querySelector(".channel-name").addEventListener("click", () => this.openChannel(ch.key, ch.conversationId));
+        item.querySelector(".channel-icon").addEventListener("click", () => this.openChannel(ch.key, ch.conversationId));
+        item.querySelector(".channel-delete").addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.showDeleteModal(displayName, ch.conversationId, ch.key);
+        });
         el.appendChild(item);
       }
     }
@@ -836,6 +842,78 @@ const Chat = {
     this.isStreaming = false;
     this.elements.sendBtn.disabled = false;
     this.elements.messageInput.focus();
+  },
+
+  // --- Session Deletion ---
+  showDeleteModal(sessionName, conversationId, channelKey) {
+    // Remove existing modal if any
+    document.getElementById("deleteModal")?.remove();
+
+    const modal = document.createElement("div");
+    modal.id = "deleteModal";
+    modal.className = "delete-modal-overlay";
+    modal.innerHTML = `
+      <div class="delete-modal">
+        <div class="delete-modal-header">Delete Session</div>
+        <p class="delete-modal-text">This will permanently delete <strong>${escapeHtml(sessionName)}</strong> and all its messages.</p>
+        <p class="delete-modal-text">Type <strong>${escapeHtml(sessionName)}</strong> to confirm:</p>
+        <input type="text" class="delete-modal-input" id="deleteConfirmInput" placeholder="Type session name..." autocomplete="off" spellcheck="false">
+        <div class="delete-modal-actions">
+          <button class="btn btn-sm delete-modal-cancel" id="deleteModalCancel">Cancel</button>
+          <button class="btn btn-sm delete-modal-confirm" id="deleteModalConfirm" disabled>Delete</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const input = document.getElementById("deleteConfirmInput");
+    const confirmBtn = document.getElementById("deleteModalConfirm");
+    const cancelBtn = document.getElementById("deleteModalCancel");
+
+    input.addEventListener("input", () => {
+      confirmBtn.disabled = input.value !== sessionName;
+    });
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && input.value === sessionName) {
+        this.deleteSession(conversationId, channelKey);
+        modal.remove();
+      } else if (e.key === "Escape") {
+        modal.remove();
+      }
+    });
+
+    confirmBtn.addEventListener("click", () => {
+      this.deleteSession(conversationId, channelKey);
+      modal.remove();
+    });
+
+    cancelBtn.addEventListener("click", () => modal.remove());
+    modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
+
+    setTimeout(() => input.focus(), 50);
+  },
+
+  async deleteSession(conversationId, channelKey) {
+    try {
+      if (conversationId) {
+        await API.deleteConversation(conversationId);
+      }
+
+      // If deleted the current session, reset view
+      if (channelKey === this.currentChannelKey) {
+        this.currentChannelKey = null;
+        this.currentConversationId = null;
+        this.elements.chatArea.style.display = "none";
+        this.elements.inputArea.style.display = "none";
+        this.elements.welcomeScreen.style.display = "flex";
+      }
+
+      App.showToast("Session deleted", "success");
+      this.loadChannels();
+    } catch (err) {
+      App.showToast("Failed to delete: " + err.message, "error");
+    }
   },
 
   // --- Utilities ---
