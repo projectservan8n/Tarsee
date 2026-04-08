@@ -1,0 +1,178 @@
+/* ==========================================================================
+   Utility Classes — Tarsee UI
+   Tailwind-inspired helpers using design tokens from tokens.css.
+   ========================================================================== */
+
+
+/* ---------- Display ---------- */
+
+.hidden       { display: none !important; }
+.flex         { display: flex; }
+.inline-flex  { display: inline-flex; }
+.grid         { display: grid; }
+.block        { display: block; }
+
+
+/* ---------- Visibility ---------- */
+
+.invisible { visibility: hidden; }
+.visible   { visibility: visible; }
+
+
+/* ---------- Flex shortcuts ---------- */
+
+.items-center    { align-items: center; }
+.justify-center  { justify-content: center; }
+.justify-between { justify-content: space-between; }
+.flex-col        { flex-direction: column; }
+.flex-1          { flex: 1 1 0%; }
+.flex-shrink-0   { flex-shrink: 0; }
+.flex-wrap       { flex-wrap: wrap; }
+
+.gap-1 { gap: var(--space-1); }
+.gap-2 { gap: var(--space-2); }
+.gap-3 { gap: var(--space-3); }
+.gap-4 { gap: var(--space-4); }
+.gap-5 { gap: var(--space-5); }
+.gap-6 { gap: var(--space-6); }
+
+
+/* ---------- Margins ---------- */
+
+.mt-1 { margin-top: var(--space-1); }
+.mt-2 { margin-top: var(--space-2); }
+.mt-3 { margin-top: var(--space-3); }
+.mt-4 { margin-top: var(--space-4); }
+.mt-5 { margin-top: var(--space-5); }
+.mt-6 { margin-top: var(--space-6); }
+
+.mb-1 { margin-bottom: var(--space-1); }
+.mb-2 { margin-bottom: var(--space-2); }
+.mb-3 { margin-bottom: var(--space-3); }
+.mb-4 { margin-bottom: var(--space-4); }
+.mb-5 { margin-bottom: var(--space-5); }
+.mb-6 { margin-bottom: var(--space-6); }
+
+
+/* ---------- Padding ---------- */
+
+.p-2  { padding: var(--space-2); }
+.p-3  { padding: var(--space-3); }
+.p-4  { padding: var(--space-4); }
+.p-5  { padding: var(--space-5); }
+.p-6  { padding: var(--space-6); }
+
+.px-3 { padding-left: var(--space-3); padding-right: var(--space-3); }
+.px-4 { padding-left: var(--space-4); padding-right: var(--space-4); }
+
+.py-2 { padding-top: var(--space-2); padding-bottom: var(--space-2); }
+.py-3 { padding-top: var(--space-3); padding-bottom: var(--space-3); }
+
+
+/* ---------- Text: sizes ---------- */
+
+.text-xs   { font-size: var(--text-xs); }
+.text-sm   { font-size: var(--text-sm); }
+.text-base { font-size: var(--text-base); }
+.text-md   { font-size: var(--text-md); }
+.text-lg   { font-size: var(--text-lg); }
+.text-xl   { font-size: var(--text-xl); }
+.text-2xl  { font-size: var(--text-2xl); }
+
+/* ---------- Text: weights ---------- */
+
+.font-medium   { font-weight: 500; }
+.font-semibold { font-weight: 600; }
+.font-bold     { font-weight: 700; }
+
+/* ---------- Text: colors ---------- */
+
+.text-primary   { color: var(--text); }
+.text-secondary { color: var(--text-secondary); }
+.text-muted     { color: var(--text-muted); }
+.text-accent    { color: var(--accent); }
+.text-danger    { color: var(--danger); }
+.text-success   { color: var(--success); }
+
+/* ---------- Text: misc ---------- */
+
+.font-mono       { font-family: var(--font-mono); }
+.uppercase       { text-transform: uppercase; }
+.tracking-wide   { letter-spacing: var(--tracking-wide); }
+.truncate        { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.whitespace-nowrap { white-space: nowrap; }
+
+
+/* ---------- Width / Height ---------- */
+
+.w-full  { width: 100%; }
+.h-full  { height: 100%; }
+.min-w-0 { min-width: 0; }
+
+
+/* ---------- Overflow ---------- */
+
+.overflow-hidden { overflow: hidden; }
+.overflow-y-auto { overflow-y: auto; }
+.overflow-x-auto { overflow-x: auto; }
+
+
+/* ---------- Borders ---------- */
+
+.border         { border: 1px solid var(--border); }
+.border-light   { border: 1px solid var(--border-light); }
+.border-b       { border-bottom: 1px solid var(--border); }
+.border-b-light { border-bottom: 1px solid var(--border-light); }
+
+.rounded-sm   { border-radius: var(--radius-sm); }
+.rounded-md   { border-radius: var(--radius-md); }
+.rounded-lg   { border-radius: var(--radius-lg); }
+.rounded-xl   { border-radius: var(--radius-xl); }
+.rounded-2xl  { border-radius: var(--radius-2xl); }
+.rounded-full { border-radius: var(--radius-full); }
+
+
+/* ---------- Backgrounds ---------- */
+
+.bg-base         { background-color: var(--bg); }
+.bg-surface      { background-color: var(--bg-surface); }
+.bg-elevated     { background-color: var(--bg-elevated); }
+.bg-accent-subtle { background-color: var(--accent-subtle); }
+
+
+/* ---------- Cursor ---------- */
+
+.cursor-pointer { cursor: pointer; }
+
+
+/* ---------- Transitions ---------- */
+
+.transition      { transition: all var(--duration-normal) var(--ease-default); }
+.transition-fast { transition: all var(--duration-fast) var(--ease-default); }
+.transition-slow { transition: all var(--duration-slow) var(--ease-default); }
+
+
+/* ---------- Object fit ---------- */
+
+.object-cover { object-fit: cover; }
+
+
+/* ---------- Accessibility ---------- */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+
+/* ---------- Safe area (iOS PWA) ---------- */
+
+.safe-top    { padding-top: env(safe-area-inset-top); }
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
