@@ -181,9 +181,12 @@ const convStore = new ConversationStore(db);
 convStore.clearAllSessions(); // Force fresh MCP tool registration on boot
 startSessionReset({ db, settingsStore, convStore });
 
-// --- OAuth token auto-refresh (keeps subscription auth alive 24/7) ---
-import { startOAuthRefresh } from "./lib/oauth-refresh.js";
-startOAuthRefresh();
+// --- OAuth: Let the Claude Code SDK handle its own token refresh ---
+// Our custom oauth-refresh.js was fighting with the Mac's Claude Code
+// over the same refresh token, causing mutual logouts. The SDK handles
+// credential refresh internally when it makes API calls.
+// import { startOAuthRefresh } from "./lib/oauth-refresh.js";
+// startOAuthRefresh();
 
 // --- Cron scheduler ---
 import { initCron, startCronScheduler, stopCronScheduler } from "./lib/cron.js";
