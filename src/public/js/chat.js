@@ -928,18 +928,31 @@ const Chat = {
     html = html.replace(/\n/g, "<br>");
 
     // Markdown tables: | col | col | with |---|---| separator
-    html = html.replace(/((?:(?:^|<br>)\s*\|.+\|(?:\s*<br>|\s*$))+)/g, (tableBlock) => {
-      const rows = tableBlock.split("<br>").map(r => r.trim()).filter(r => r.includes("|") && r.startsWith("|"));
-      if (rows.length < 2) return tableBlock;
-      // Find separator row — just needs pipes and dashes/colons
+    // Split into lines, find contiguous table blocks, convert to HTML
+    const lines = html.split("<br>");
+    let inTable = false;
+    let tableLines = [];
+    const outputLines = [];
+
+    const flushTable = () => {
+      if (tableLines.length < 2) {
+        outputLines.push(...tableLines);
+        tableLines = [];
+        return;
+      }
+      const rows = tableLines.map(r => r.trim()).filter(r => r.startsWith("|") && r.endsWith("|"));
       const sepIdx = rows.findIndex(r => {
         const cells = r.replace(/^\||\|$/g, "").split("|");
         return cells.length >= 1 && cells.every(c => /^[\s\-:]+$/.test(c));
       });
-      if (sepIdx === -1) return tableBlock;
+      if (sepIdx === -1 || rows.length < 3) {
+        outputLines.push(...tableLines);
+        tableLines = [];
+        return;
+      }
+      const parseRow = (r) => r.replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
       const headerRows = rows.slice(0, sepIdx);
       const bodyRows = rows.slice(sepIdx + 1);
-      const parseRow = (r) => r.replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
       let table = '<table class="md-table">';
       if (headerRows.length > 0) {
         table += "<thead>";
@@ -952,8 +965,21 @@ const Chat = {
         table += "</tbody>";
       }
       table += "</table>";
-      return table;
-    });
+      outputLines.push(table);
+      tableLines = [];
+    };
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+        tableLines.push(line);
+      } else {
+        if (tableLines.length > 0) flushTable();
+        outputLines.push(line);
+      }
+    }
+    if (tableLines.length > 0) flushTable();
+    html = outputLines.join("<br>");
 
     // Headings (### h3, ## h2, # h1) — at start of line
     html = html.replace(/(^|<br>)### (.+?)(<br>|$)/g, "$1<h3>$2</h3>$3");
