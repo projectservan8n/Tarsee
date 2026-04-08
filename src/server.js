@@ -225,6 +225,28 @@ loadPlugins({ db, settingsStore, hookRegistry }).then(() => {
 // --- Emit boot:ready hook ---
 setTimeout(() => hookRegistry.emit("boot:ready"), 2000);
 
+// --- Wake up all agents (spawn lightweight init sessions) ---
+import { spawnAgent } from "./lib/subagents.js";
+import { getAgents } from "./lib/agent-registry.js";
+setTimeout(() => {
+  const agents = getAgents();
+  console.log(`[agents] Waking up ${agents.length} agents...`);
+  for (const agentDef of agents) {
+    try {
+      spawnAgent({
+        task: `You are now online. Read your MEMORY.md to load your context. Then respond with a single short sentence confirming you're ready (e.g. "Coder online, ready for tasks."). Do NOT do any other work.`,
+        name: `${agentDef.name} boot`,
+        agentId: agentDef.id,
+        settingsStore,
+        db,
+        channelManager,
+      });
+    } catch (err) {
+      console.warn(`[agents] Failed to wake ${agentDef.name}: ${err.message}`);
+    }
+  }
+}, 5000); // 5s after boot to let everything settle
+
 // --- Graceful shutdown ---
 function shutdown(signal) {
   console.log(`[tarsee] ${signal} received, shutting down...`);

@@ -1,13 +1,15 @@
 import { Router } from "express";
 import { getAgents, getAgent, upsertAgent, removeAgent } from "../lib/agent-registry.js";
-import { listAgents, getAgentResult, stopAgent, getRecentTasks, spawnAgent } from "../lib/subagents.js";
+import { listAgents, getAgentResult, stopAgent, getRecentTasks, spawnAgent, getAgentStatuses } from "../lib/subagents.js";
 
 export const agentsRouter = Router();
 
 // --- Registry (agent definitions) ---
 
 agentsRouter.get("/registry", (_req, res) => {
-  res.json({ agents: getAgents() });
+  const agents = getAgents();
+  const statuses = getAgentStatuses(agents.map(a => a.id));
+  res.json({ agents, statuses });
 });
 
 agentsRouter.post("/registry", (req, res) => {

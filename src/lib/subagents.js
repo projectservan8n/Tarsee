@@ -390,3 +390,25 @@ export function getRecentTasks(db, limit = 20) {
     return db?.prepare("SELECT * FROM agent_tasks ORDER BY started_at DESC LIMIT ?").all(limit) || [];
   } catch { return []; }
 }
+
+/**
+ * Check if an agent has an active (non-expired) session.
+ */
+export function isAgentOnline(agentId) {
+  const session = agentSessions.get(agentId);
+  if (!session?.sessionId) return false;
+  if (Date.now() - (session.lastActive || 0) > SESSION_IDLE_TIMEOUT) return false;
+  return true;
+}
+
+/**
+ * Get online status for all agent IDs.
+ */
+export function getAgentStatuses(agentIds) {
+  const statuses = {};
+  for (const id of agentIds) {
+    const busy = isAgentBusy(id);
+    statuses[id] = busy ? "working" : isAgentOnline(id) ? "online" : "offline";
+  }
+  return statuses;
+}

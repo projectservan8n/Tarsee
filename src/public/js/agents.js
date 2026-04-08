@@ -151,19 +151,17 @@ const Agents = {
       const regData = await API.json("/api/agents/registry");
       const teamEl = document.getElementById("agentsTeam");
       const agents = regData.agents || [];
+      const statuses = regData.statuses || {};
 
       const data = await API.json("/api/agents/tasks");
       const running = data.running || [];
       const history = data.history || [];
 
-      // Find which agents are currently busy
-      const busyAgentIds = new Set(running.filter(t => t.status === "running").map(t => t.agentId));
-
       const modelLabels = { "claude-opus-4-6": "Opus", "claude-sonnet-4-6": "Sonnet", "claude-haiku-4-5": "Haiku" };
       teamEl.innerHTML = agents.map(a => {
-        const busy = busyAgentIds.has(a.id);
-        const statusDot = busy ? '<span class="agent-dot busy"></span>' : '<span class="agent-dot offline"></span>';
-        const statusText = busy ? "Working" : "Offline";
+        const status = statuses[a.id] || "offline";
+        const statusDot = `<span class="agent-dot ${status}"></span>`;
+        const statusLabel = status === "working" ? "Working" : status === "online" ? "Online" : "Offline";
         const nick = a.nickname ? ` "${a.nickname}"` : "";
         const iconHtml = a.icon?.startsWith("ph ") ? `<i class="${a.icon}"></i>` : `<span>${a.icon || "AI"}</span>`;
         const modelLabel = modelLabels[a.model] || a.model || "";
@@ -171,7 +169,7 @@ const Agents = {
           <div class="agent-avatar" style="color:${a.color || 'var(--text)'}">${iconHtml}</div>
           <div class="agent-info">
             <span class="agent-name">${a.name}</span>${nick ? `<span class="agent-nick">${nick}</span>` : ""}
-            <span class="agent-meta">${statusDot} ${statusText} · ${modelLabel}</span>
+            <span class="agent-meta">${statusDot} ${statusLabel} · ${modelLabel}</span>
           </div>
         </div>`;
       }).join("") || '<div style="color:var(--text-muted);font-size:13px">No agents configured.</div>';
