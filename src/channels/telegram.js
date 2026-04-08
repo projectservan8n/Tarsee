@@ -497,19 +497,39 @@ function mdToTelegramHtml(text) {
     return `\x00CODEBLOCK_${idx}\x00`;
   });
 
-  // 2. Detect markdown tables (lines with |) and wrap in <pre>
+  // 2. Detect markdown tables (lines with |) and wrap in <pre> with aligned columns
   text = text.replace(/((?:^|\n)\|.+\|(?:\n\|.+\|)+)/g, (table) => {
-    // Clean up the separator row (|---|---|) but keep it for alignment
     const lines = table.trim().split("\n");
-    const cleaned = lines
+    // Parse all rows into cells
+    const rows = lines
       .filter(line => !/^\|[\s\-:|]+\|$/.test(line)) // remove separator rows
-      .map(line => {
-        // Parse cells and align with fixed-width
-        const cells = line.split("|").filter(Boolean).map(c => c.trim());
-        return cells.join("  |  ");
-      })
-      .join("\n");
-    return `\n<pre>${escapeHtml(cleaned)}</pre>\n`;
+      .map(line => line.replace(/^\||\|$/g, "").split("|").map(c => c.trim()));
+
+    if (rows.length === 0) return table;
+
+    // Calculate max width for each column
+    const colCount = Math.max(...rows.map(r => r.length));
+    const colWidths = Array(colCount).fill(0);
+    for (const row of rows) {
+      for (let i = 0; i < row.length; i++) {
+        colWidths[i] = Math.max(colWidths[i], (row[i] || "").length);
+      }
+    }
+
+    // Format rows with padding
+    const formatted = rows.map((row, rowIdx) => {
+      const cells = row.map((cell, i) => (cell || "").padEnd(colWidths[i]));
+      const line = cells.join(" | ");
+      return line;
+    });
+
+    // Insert separator after header
+    if (formatted.length > 1) {
+      const sep = colWidths.map(w => "-".repeat(w)).join("-+-");
+      formatted.splice(1, 0, sep);
+    }
+
+    return `\n<pre>${escapeHtml(formatted.join("\n"))}</pre>\n`;
   });
 
   text = text
