@@ -93,17 +93,16 @@ const App = {
       overlay.classList.remove("active");
     };
 
-    if (window.innerWidth <= 768) {
-      menuBtn.addEventListener("click", () => {
-        const isOpen = sidebar.classList.toggle("open");
-        overlay.classList.toggle("active", isOpen);
-      });
-      overlay.addEventListener("click", closeSidebar);
-      // Close sidebar when a channel is clicked
-      sidebar.addEventListener("click", (e) => {
-        if (e.target.closest(".channel-item")) closeSidebar();
-      });
-    }
+    // Always bind — CSS .mobile-only hides the button on desktop
+    menuBtn.addEventListener("click", () => {
+      const isOpen = sidebar.classList.toggle("open");
+      overlay.classList.toggle("active", isOpen);
+    });
+    overlay.addEventListener("click", closeSidebar);
+    // Close sidebar when a channel is clicked
+    sidebar.addEventListener("click", (e) => {
+      if (e.target.closest(".channel-item")) closeSidebar();
+    });
 
     // Handle window resize
     window.addEventListener("resize", () => {

@@ -1727,6 +1727,11 @@ html, body {
     display: none;
   }
 
+  /* Hide mobile-only elements on desktop */
+  .mobile-only {
+    display: none !important;
+  }
+
   /* Main content → grid area */
   .main {
     grid-area: content;
