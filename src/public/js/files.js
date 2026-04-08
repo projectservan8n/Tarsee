@@ -86,7 +86,7 @@ const FileManager = {
         el.addEventListener("click", () => this.openFileView(el.dataset.path));
       });
     } catch (err) {
-      list.innerHTML = `<div style="color:var(--danger);padding:12px">${err.message}</div>`;
+      list.innerHTML = `<div class="fm-error">${err.message}</div>`;
     }
   },
 
@@ -101,7 +101,7 @@ const FileManager = {
       document.getElementById("fmEditor").style.display = "none";
       document.getElementById("fmPreview").style.display = "flex";
       document.getElementById("fmPreviewFilename").textContent = filePath.split("/").pop();
-      document.getElementById("fmPreviewContent").innerHTML = `<img src="/api/files/download?path=${encodeURIComponent(filePath)}" style="max-width:100%;border-radius:8px">`;
+      document.getElementById("fmPreviewContent").innerHTML = `<img src="/api/files/download?path=${encodeURIComponent(filePath)}" class="fm-preview-img">`;
       return;
     }
 
@@ -117,7 +117,7 @@ const FileManager = {
         document.getElementById("fmEditor").style.display = "none";
         document.getElementById("fmPreview").style.display = "flex";
         document.getElementById("fmPreviewFilename").textContent = filePath.split("/").pop();
-        document.getElementById("fmPreviewContent").innerHTML = `<pre style="white-space:pre-wrap;font-size:12px">${this.escapeHtml(data.content)}</pre>`;
+        document.getElementById("fmPreviewContent").innerHTML = `<pre class="fm-preview-code">${this.escapeHtml(data.content)}</pre>`;
       }
     } catch (err) {
       App.showToast("Can't open: " + err.message, "error");

@@ -539,7 +539,7 @@ const Chat = {
     msg.className = `message ${role}${isGrouped ? " grouped" : ""}`;
 
     const avatar = role === "assistant"
-      ? `<img src="/icon-32.png" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`
+      ? `<img src="/icon-32.png" alt="" class="avatar-img">`
       : "U";
 
     // Copy button for assistant messages
@@ -844,7 +844,7 @@ const Chat = {
           this.finishStreaming(assistantMsg);
           if (!fullResponse) {
             assistantMsg.querySelector(".message-text").innerHTML =
-              `<span style="color:var(--danger)">${escapeHtml(error)}</span>`;
+              `<span class="text-danger">${escapeHtml(error)}</span>`;
           }
           App.showToast(error, "error");
         },

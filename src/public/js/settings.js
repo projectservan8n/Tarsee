@@ -265,7 +265,7 @@ const Settings = {
     document.getElementById("topbarTitle").textContent = "Settings";
 
     // Highlight settings button
-    this.elements.openBtn.style.color = "var(--primary)";
+    this.elements.openBtn.classList.add("settings-active");
 
     await this.load();
   },
@@ -303,7 +303,7 @@ const Settings = {
     }
 
     // Un-highlight settings button
-    this.elements.openBtn.style.color = "var(--text-muted)";
+    this.elements.openBtn.classList.remove("settings-active");
   },
 
   async load() {

@@ -337,7 +337,7 @@ const Console = {
   appendSystem(text) {
     const div = document.createElement("div");
     div.className = "console-entry";
-    div.innerHTML = `<span class="text" style="color:#585B70;font-style:italic">${this.escapeHtml(text)}</span>`;
+    div.innerHTML = `<span class="text console-system-msg">${this.escapeHtml(text)}</span>`;
     this.output.appendChild(div);
     this.scrollToBottom();
   },

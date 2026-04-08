@@ -94,7 +94,6 @@ const App = {
     };
 
     if (window.innerWidth <= 768) {
-      menuBtn.style.display = "inline-flex";
       menuBtn.addEventListener("click", () => {
         const isOpen = sidebar.classList.toggle("open");
         overlay.classList.toggle("active", isOpen);
@@ -109,7 +108,6 @@ const App = {
     // Handle window resize
     window.addEventListener("resize", () => {
       if (window.innerWidth > 768) closeSidebar();
-      menuBtn.style.display = window.innerWidth <= 768 ? "inline-flex" : "none";
     });
 
     // Refresh CSRF token periodically (every hour)
