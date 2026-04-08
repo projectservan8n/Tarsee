@@ -44,6 +44,52 @@ const Voice = {
 
     // Chat mic button: hold-to-record + click-to-toggle + drag-to-cancel
     this._initChatMicDrag();
+
+    // Keyboard: spacebar hold/toggle + space+c to cancel (voice mode only)
+    this._initKeyboard();
+  },
+
+  /** Spacebar hold-to-talk / toggle + Space+C to cancel in voice mode. */
+  _initKeyboard() {
+    let spaceDown = false;
+    let spaceStart = 0;
+
+    document.addEventListener("keydown", (e) => {
+      // Only when voice panel is open and not typing in an input
+      if (!this.elements.panel?.classList.contains("active")) return;
+      const tag = document.activeElement?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      if (e.code === "Space" && !spaceDown) {
+        e.preventDefault();
+        spaceDown = true;
+        spaceStart = Date.now();
+        this.onPressStart();
+      }
+
+      // Space + C = cancel
+      if (e.code === "KeyC" && spaceDown && this.isRecording) {
+        e.preventDefault();
+        spaceDown = false;
+        clearTimeout(this.holdTimer);
+        this.isHolding = false;
+        this.stopRecording(true);
+        this.elements.status.textContent = "Cancelled";
+        setTimeout(() => {
+          if (!this.isRecording && !this.isProcessing && !this.isSpeaking) {
+            this.elements.status.textContent = "Hold to talk · Tap to toggle";
+          }
+        }, 1000);
+      }
+    });
+
+    document.addEventListener("keyup", (e) => {
+      if (e.code === "Space" && spaceDown) {
+        e.preventDefault();
+        spaceDown = false;
+        this.onPressEnd(Date.now() - spaceStart);
+      }
+    });
   },
 
   /** Set up orb drag-to-cancel (voice mode). */
