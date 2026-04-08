@@ -225,12 +225,12 @@ loadPlugins({ db, settingsStore, hookRegistry }).then(() => {
 // --- Emit boot:ready hook ---
 setTimeout(() => hookRegistry.emit("boot:ready"), 2000);
 
-// --- Wake up all agents (spawn lightweight init sessions) ---
+// --- Wake up all agents (staggered to avoid rate limits) ---
 import { spawnAgent } from "./lib/subagents.js";
 import { getAgents } from "./lib/agent-registry.js";
-setTimeout(() => {
+setTimeout(async () => {
   const agents = getAgents();
-  console.log(`[agents] Waking up ${agents.length} agents...`);
+  console.log(`[agents] Waking up ${agents.length} agents (staggered 10s apart)...`);
   for (const agentDef of agents) {
     try {
       const nick = agentDef.nickname ? ` (${agentDef.nickname})` : "";
@@ -242,6 +242,8 @@ setTimeout(() => {
         db,
         channelManager,
       });
+      // Stagger: wait 10s between each agent to avoid rate limits
+      await new Promise(r => setTimeout(r, 10_000));
     } catch (err) {
       console.warn(`[agents] Failed to wake ${agentDef.name}: ${err.message}`);
     }
