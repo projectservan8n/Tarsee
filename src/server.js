@@ -225,37 +225,9 @@ loadPlugins({ db, settingsStore, hookRegistry }).then(() => {
 // --- Emit boot:ready hook ---
 setTimeout(() => hookRegistry.emit("boot:ready"), 2000);
 
-// --- Wake up all agents (one at a time, wait for completion) ---
-import { spawnAgent, getAgentResult } from "./lib/subagents.js";
-import { getAgents } from "./lib/agent-registry.js";
-setTimeout(async () => {
-  const agents = getAgents();
-  console.log(`[agents] Waking up ${agents.length} agents (sequential)...`);
-  for (const agentDef of agents) {
-    try {
-      const nick = agentDef.nickname ? ` (${agentDef.nickname})` : "";
-      const result = spawnAgent({
-        task: `You are ${agentDef.name}${nick}. Respond ONLY with: "${agentDef.nickname || agentDef.name} online." Nothing else.`,
-        name: `${agentDef.name} boot`,
-        agentId: agentDef.id,
-        settingsStore,
-        db,
-        channelManager,
-      });
-      // Wait for this agent to finish before spawning the next (max 60s)
-      const start = Date.now();
-      while (Date.now() - start < 60_000) {
-        const status = getAgentResult(result.taskId);
-        if (status && status.status !== "running" && status.status !== "queued") break;
-        await new Promise(r => setTimeout(r, 2000));
-      }
-      console.log(`[agents] ${agentDef.nickname || agentDef.name} is online`);
-    } catch (err) {
-      console.warn(`[agents] Failed to wake ${agentDef.name}: ${err.message}`);
-    }
-  }
-  console.log(`[agents] All ${agents.length} agents online`);
-}, 8000); // 8s after boot (after boot checklist finishes)
+// --- Agents use lazy wake-up: first real task creates their session ---
+// No boot wake-up needed. Agents show "Offline" until their first task,
+// then "Online" once they have a session. Sessions persist across tasks.
 
 // --- Graceful shutdown ---
 function shutdown(signal) {
