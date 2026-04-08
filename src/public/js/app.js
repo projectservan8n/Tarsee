@@ -25,6 +25,7 @@ const App = {
     document.getElementById("loginScreen").style.display = "flex";
     document.getElementById("appScreen").style.display = "none";
 
+    // Desktop: classic form login
     const form = document.getElementById("loginForm");
     const errorEl = document.getElementById("loginError");
 
@@ -43,6 +44,61 @@ const App = {
     });
 
     document.getElementById("loginPassword").focus();
+
+    // Mobile: PIN pad
+    this.initPinPad();
+  },
+
+  initPinPad() {
+    const dots = document.querySelectorAll("#pinDots .pin-dot");
+    const pinError = document.getElementById("pinError");
+    let pin = "";
+
+    const updateDots = () => {
+      dots.forEach((dot, i) => {
+        dot.classList.toggle("filled", i < pin.length);
+        dot.classList.remove("error");
+      });
+    };
+
+    const shakeAndClear = (msg) => {
+      pinError.textContent = msg || "Wrong PIN";
+      dots.forEach((d) => d.classList.add("error"));
+      setTimeout(() => {
+        pin = "";
+        updateDots();
+        pinError.textContent = "";
+      }, 600);
+    };
+
+    const tryLogin = async () => {
+      try {
+        await API.login(pin);
+        this.showApp();
+      } catch {
+        shakeAndClear("Wrong PIN");
+      }
+    };
+
+    // Key buttons
+    document.querySelectorAll(".pin-key[data-digit]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (pin.length >= 4) return;
+        pin += btn.dataset.digit;
+        updateDots();
+        if (pin.length === 4) {
+          setTimeout(tryLogin, 150);
+        }
+      });
+    });
+
+    // Delete button
+    document.getElementById("pinDelete").addEventListener("click", () => {
+      if (pin.length > 0) {
+        pin = pin.slice(0, -1);
+        updateDots();
+      }
+    });
   },
 
   async showApp() {

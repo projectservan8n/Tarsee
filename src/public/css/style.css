@@ -1693,7 +1693,149 @@ html, body {
 
 
 /* ==========================================================================
-   24. Responsive — desktop overrides
+   24. PIN Pad — iOS Lock Screen Style (mobile only)
+   ========================================================================== */
+
+.pin-pad {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 340px;
+  padding: var(--space-6) var(--space-4);
+  gap: var(--space-4);
+}
+
+.pin-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+}
+
+.pin-title {
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: var(--tracking-tight);
+}
+
+.pin-error {
+  font-size: var(--text-sm);
+  color: var(--danger);
+  min-height: 20px;
+  text-align: center;
+}
+
+.pin-dots {
+  display: flex;
+  gap: var(--space-4);
+  margin: var(--space-2) 0 var(--space-6);
+}
+
+.pin-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  border: 2px solid var(--text-secondary);
+  background: transparent;
+  transition: all var(--duration-normal) var(--ease-spring);
+}
+
+.pin-dot.filled {
+  background: var(--text);
+  border-color: var(--text);
+  transform: scale(1.15);
+}
+
+.pin-dot.error {
+  border-color: var(--danger);
+  background: var(--danger);
+  animation: pinShake 0.5s var(--ease-default);
+}
+
+@keyframes pinShake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-5px); }
+  80% { transform: translateX(5px); }
+}
+
+.pin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 80px);
+  gap: var(--space-4);
+  justify-content: center;
+}
+
+.pin-key {
+  width: 80px;
+  height: 80px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-hover);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  transition: all var(--duration-fast) var(--ease-default);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.pin-key:active {
+  background: rgba(255, 255, 255, 0.15);
+  transform: scale(0.95);
+}
+
+.pin-key-empty {
+  border: none;
+  background: none;
+  cursor: default;
+}
+
+.pin-key-empty:active {
+  background: none;
+  transform: none;
+}
+
+.pin-key-delete {
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+}
+
+.pin-key-delete:active {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+
+.pin-digit {
+  font-size: 32px;
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: -0.5px;
+}
+
+.pin-letters {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+/* Mobile-first: hide desktop elements, show mobile elements */
+.desktop-only { display: none; }
+.mobile-only { display: flex; }
+
+/* ==========================================================================
+   25. Responsive — desktop overrides
    ========================================================================== */
 
 @media (min-width: 769px) {
@@ -1730,6 +1872,11 @@ html, body {
   /* Hide mobile-only elements on desktop */
   .mobile-only {
     display: none !important;
+  }
+
+  /* Show desktop-only elements on desktop */
+  .desktop-only {
+    display: block !important;
   }
 
   /* Main content → grid area */
