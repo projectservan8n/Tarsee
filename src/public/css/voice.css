@@ -22,7 +22,7 @@
 .voice-close {
   position: absolute;
   top: calc(env(safe-area-inset-top, 12px) + 12px);
-  left: 16px;
+  right: 16px;
   width: 40px;
   height: 40px;
   border-radius: 50%;
@@ -460,6 +460,11 @@
 /* ===== Responsive ===== */
 
 @media (max-width: 640px) {
+  .voice-close {
+    right: auto;
+    left: 16px;
+  }
+
   .voice-conversation {
     padding: 60px 16px 16px;
     max-width: 100%;
