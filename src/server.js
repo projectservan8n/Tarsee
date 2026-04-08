@@ -233,8 +233,9 @@ setTimeout(() => {
   console.log(`[agents] Waking up ${agents.length} agents...`);
   for (const agentDef of agents) {
     try {
+      const nick = agentDef.nickname ? ` (${agentDef.nickname})` : "";
       spawnAgent({
-        task: `You are now online. Read your MEMORY.md to load your context. Then respond with a single short sentence confirming you're ready (e.g. "Coder online, ready for tasks."). Do NOT do any other work.`,
+        task: `You are ${agentDef.name}${nick}, a specialized AI agent. Your role: ${agentDef.prompt.slice(0, 100)}. Read your MEMORY.md to load context. Respond with ONE short sentence: "${agentDef.nickname || agentDef.name} online, ready for tasks." Do NOT do any other work.`,
         name: `${agentDef.name} boot`,
         agentId: agentDef.id,
         settingsStore,
