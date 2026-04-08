@@ -13,15 +13,14 @@ import { z } from "zod";
 import { executeTool } from "../lib/tools.js";
 
 /**
- * Create a Tarsee MCP server with all platform tools.
+ * Create a Tarsee MCP server with platform tools.
  * @param {object} ctx - Tool execution context { db, settingsStore, channelManager, conversationId }
+ * @param {object} [opts] - Options
+ * @param {boolean} [opts.isOrchestrator] - If true, exclude web_fetch/web_search (force delegation to agents)
  * @returns {McpSdkServerConfigWithInstance}
  */
-export function createTarseeMcp(ctx) {
-  return createSdkMcpServer({
-    name: "tarsee",
-    version: "1.0.0",
-    tools: [
+export function createTarseeMcp(ctx, opts = {}) {
+  const allTools = [
       tool(
         "tarsee_send_message",
         "Send a message to a channel (Telegram, Discord, Slack, or web chat). Use this to proactively notify the user.",
@@ -254,6 +253,13 @@ export function createTarseeMcp(ctx) {
           return { content: [{ type: "text", text: `Available agents:\n\n${lines.join("\n\n")}` }] };
         }
       ),
-    ],
-  });
+  ];
+
+  // Orchestrator mode: remove web tools to force delegation to agents
+  const ORCHESTRATOR_EXCLUDED = ["tarsee_web_fetch", "tarsee_web_search"];
+  const tools = opts.isOrchestrator
+    ? allTools.filter(t => !ORCHESTRATOR_EXCLUDED.includes(t.name))
+    : allTools;
+
+  return createSdkMcpServer({ name: "tarsee", version: "1.0.0", tools });
 }

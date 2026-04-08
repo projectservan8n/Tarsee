@@ -79,7 +79,9 @@ export async function* chat({
 
   // Create MCP server with Tarsee tools (requires ctx passed from caller)
   const { createTarseeMcp } = await import("../tarsee-mcp.js");
-  const tarseeMcp = createTarseeMcp(toolCtx || {});
+  // Orchestrator mode: exclude web_fetch/web_search to force delegation to agents
+  const isOrchestrator = !toolCtx?._isSubagent;
+  const tarseeMcp = createTarseeMcp(toolCtx || {}, { isOrchestrator });
 
   // Skills directory — Claude Code discovers SKILL.md files here
   const skillsDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "skills");
@@ -124,8 +126,6 @@ These tools are registered and available in your current session. Use them direc
 - **write_file**(filename, content) — create/overwrite workspace files
 - **search_memories**(query) — keyword search across all memory files
 - **get_key**(name) / **set_key**(name, value) — encrypted vault for API keys
-- **web_fetch**(url) — fetch URLs, APIs, pages
-- **web_search**(query) — DuckDuckGo search (free)
 - **spawn_agent**(task, agent_id?) — delegate work to an agent
 - **await_agent**(task_id, timeout?) — wait for agent to finish and get result
 - **list_agents**() / **check_agents**() / **get_agent_result**(task_id) — monitor team
