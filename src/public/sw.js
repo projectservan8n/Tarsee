@@ -9,7 +9,7 @@ const APP_SHELL = [
   "/css/voice.css",
   "/css/tokens.css",
   "/css/utilities.css",
-  "/css/agents.css",
+
   "/css/console.css",
   "/css/files.css",
   "/js/app.js",
@@ -19,7 +19,7 @@ const APP_SHELL = [
   "/js/settings.js",
   "/js/setup.js",
   "/js/sw-register.js",
-  "/js/agents.js",
+
   "/js/console.js",
   "/js/files.js",
   "/js/terminal.js",
