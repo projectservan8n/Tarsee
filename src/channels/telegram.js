@@ -487,17 +487,51 @@ function buttonsToKeyboard(buttons) {
  * Handles: **bold**, *italic*, `code`, ```code blocks```, [links](url)
  */
 function mdToTelegramHtml(text) {
-  return text
-    // Code blocks first (before other transforms)
-    .replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, _lang, code) => `<pre>${escapeHtml(code.trim())}</pre>`)
+  // 1. Extract code blocks first (protect from other transforms)
+  const codeBlocks = [];
+  text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, lang, code) => {
+    const idx = codeBlocks.length;
+    const langTag = lang ? `<code class="language-${escapeHtml(lang)}">` : "";
+    const langClose = lang ? "</code>" : "";
+    codeBlocks.push(`<pre>${langTag}${escapeHtml(code.trim())}${langClose}</pre>`);
+    return `\x00CODEBLOCK_${idx}\x00`;
+  });
+
+  // 2. Detect markdown tables (lines with |) and wrap in <pre>
+  text = text.replace(/((?:^|\n)\|.+\|(?:\n\|.+\|)+)/g, (table) => {
+    // Clean up the separator row (|---|---|) but keep it for alignment
+    const lines = table.trim().split("\n");
+    const cleaned = lines
+      .filter(line => !/^\|[\s\-:|]+\|$/.test(line)) // remove separator rows
+      .map(line => {
+        // Parse cells and align with fixed-width
+        const cells = line.split("|").filter(Boolean).map(c => c.trim());
+        return cells.join("  |  ");
+      })
+      .join("\n");
+    return `\n<pre>${escapeHtml(cleaned)}</pre>\n`;
+  });
+
+  text = text
     // Inline code
     .replace(/`([^`]+)`/g, (_m, code) => `<code>${escapeHtml(code)}</code>`)
     // Bold (**text**)
     .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
     // Italic (*text*)
     .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<i>$1</i>")
+    // Strikethrough (~~text~~)
+    .replace(/~~(.+?)~~/g, "<s>$1</s>")
     // Links [text](url)
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    // Headings (## text) → bold
+    .replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>")
+    // Blockquotes (> text)
+    .replace(/^>\s?(.+)$/gm, "<blockquote>$1</blockquote>");
+
+  // 3. Restore code blocks
+  text = text.replace(/\x00CODEBLOCK_(\d+)\x00/g, (_m, idx) => codeBlocks[parseInt(idx)]);
+
+  return text;
 }
 
 function escapeHtml(text) {
