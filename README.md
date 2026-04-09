@@ -112,6 +112,7 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 |---------|-------------|
 | `/help` | Show all commands |
 | `/model opus\|sonnet\|haiku` | Switch AI model |
+| `/auto [on\|off]` | Toggle auto model routing (haiku/sonnet/opus by complexity) |
 | `/clear` | New conversation |
 | `/status` | System status |
 | `/cron` | Manage scheduled tasks |

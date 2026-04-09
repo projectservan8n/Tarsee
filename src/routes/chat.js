@@ -10,6 +10,30 @@ import { trackActivity } from "../lib/session-reset.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 
+/**
+ * Classify message complexity for auto model routing.
+ * Heuristic only — no AI calls.
+ */
+function classifyMessageModel(message) {
+  const words = message.split(/\s+/).length;
+  const lower = message.toLowerCase();
+
+  // Opus signals: code, analysis, complex tasks
+  const opusKeywords = ["debug", "fix", "implement", "refactor", "architect", "design pattern",
+    "analyze", "complex", "explain how", "write a", "build", "create a", "deploy",
+    "optimize", "migrate", "security", "performance", "!think", "!!"];
+  const hasCode = message.includes("```") || /\b(function|const|import|class|def|async|await)\s/.test(message);
+  if (hasCode || opusKeywords.some((k) => lower.includes(k))) return "claude-opus-4-6";
+
+  // Haiku signals: short, simple
+  if (words <= 12 && /^(hi|hello|hey|yes|no|ok|thanks|sure|yep|nah|what is|who is|when is|where is|how much|how many)/i.test(lower)) {
+    return "claude-haiku-4-5";
+  }
+
+  // Default: Sonnet
+  return "claude-sonnet-4-6";
+}
+
 export const chatRouter = Router();
 
 // Lazy-init stores (set by server.js via setDb)
@@ -233,8 +257,14 @@ chatRouter.post("/send", async (req, res) => {
   // Resolve provider
   const activeProvider = settingsStore.getActiveProvider();
   const providerId = reqProvider || activeProvider?.provider;
-  const model = reqModel || activeProvider?.model;
+  let model = reqModel || activeProvider?.model;
   const apiKey = activeProvider?.apiKey;
+
+  // Auto model routing — classify message complexity
+  const autoRoute = settingsStore.get("ai.autoRoute") === true;
+  if (autoRoute && !reqModel) {
+    model = classifyMessageModel(message);
+  }
 
   if (!providerId || !activeProvider?.ready) {
     return res.status(400).json({ error: "No AI provider configured. Go to Settings to configure one." });
@@ -296,6 +326,11 @@ chatRouter.post("/send", async (req, res) => {
 
   // Send conversation ID (useful when auto-created)
   sendSSE(res, "conversation", { id: convId });
+
+  // Tell frontend which model was selected (useful for auto-routing)
+  if (autoRoute && !reqModel) {
+    sendSSE(res, "model_selected", { model });
+  }
 
   // Detect voice mode — Claude responds normally (tables, formatting, etc.)
   // The TTS pipeline strips non-speakable content before reading aloud.

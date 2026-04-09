@@ -790,6 +790,16 @@ const Chat = {
         text,
         // onText (content for text, null + event for tool/thinking events)
         (content, event) => {
+          if (event?.type === "model_selected") {
+            // Auto-routing: update session bar badge with the chosen model
+            const badge = document.getElementById("sessionModel");
+            if (badge) {
+              const alias = event.model?.includes("opus") ? "OPUS" :
+                           event.model?.includes("haiku") ? "HAIKU" : "SONNET";
+              badge.textContent = alias;
+            }
+            return;
+          }
           if (event?.type === "thinking") {
             // Show/keep thinking indicator — don't remove it, it stays until text/tools arrive
             if (!hasReceivedText) {

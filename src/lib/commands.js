@@ -87,6 +87,36 @@ const COMMANDS = {
     },
   },
 
+  auto: {
+    description: "Toggle auto model routing (haiku for simple, sonnet for general, opus for complex)",
+    usage: "/auto [on|off]",
+    handler: (args, ctx) => {
+      const settingsStore = ctx.settingsStore;
+      if (!settingsStore) return "Settings not available.";
+
+      const current = settingsStore.get("ai.autoRoute") === true;
+
+      if (!args) {
+        // Toggle
+        settingsStore.set("ai.autoRoute", !current);
+        return !current
+          ? "Auto-routing **enabled** — Haiku for simple, Sonnet for general, Opus for complex."
+          : "Auto-routing **disabled** — using default model.";
+      }
+
+      if (args.toLowerCase() === "on") {
+        settingsStore.set("ai.autoRoute", true);
+        return "Auto-routing **enabled** — Haiku for simple, Sonnet for general, Opus for complex.";
+      }
+      if (args.toLowerCase() === "off") {
+        settingsStore.set("ai.autoRoute", false);
+        return "Auto-routing **disabled** — using default model.";
+      }
+
+      return "Usage: `/auto` (toggle), `/auto on`, `/auto off`";
+    },
+  },
+
   system: {
     description: "Set or show the system prompt for this conversation",
     usage: "/system [prompt]",
