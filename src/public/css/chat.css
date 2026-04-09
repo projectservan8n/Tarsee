@@ -838,6 +838,27 @@ details[open] .block-preview { display: none; }
    9. Empty State
    ========================================================================== */
 
+/* Load more button for pagination */
+.load-more-btn {
+  text-align: center;
+  padding: var(--space-3) var(--space-4);
+  margin: var(--space-2) auto var(--space-4);
+  max-width: var(--message-max-width);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  border: var(--space-px) solid var(--border-light);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--duration-normal) var(--ease-default);
+}
+
+.load-more-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
 .empty-state {
   text-align: center;
   padding: var(--space-12) var(--space-5);

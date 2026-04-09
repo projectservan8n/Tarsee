@@ -120,8 +120,12 @@ chatRouter.get("/conversations/:id", (req, res) => {
   const conv = convStore.get(req.params.id);
   if (!conv) return res.status(404).json({ error: "Conversation not found" });
 
-  const messages = convStore.getMessages(req.params.id);
-  res.json({ ...conv, messages });
+  // Support ?limit=N and ?all=true for pagination
+  const all = req.query.all === "true";
+  const limit = all ? undefined : parseInt(req.query.limit, 10) || 50;
+  const messages = limit ? convStore.getRecentMessages(req.params.id, limit) : convStore.getMessages(req.params.id);
+  const totalMessages = convStore.messageCount ? convStore.messageCount(req.params.id) : messages.length;
+  res.json({ ...conv, messages, totalMessages });
 });
 
 /**

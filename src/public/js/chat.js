@@ -513,11 +513,13 @@ const Chat = {
     else if (ch?.platform === "telegram" && topbarName.startsWith("Chat with")) topbarName = topbarName.replace("Chat with ", "");
     this.elements.topbarTitle.textContent = `${icon} ${topbarName}`;
 
-    // Load messages
+    // Load messages (last 50 for speed, load more on demand)
     if (conversationId) {
       try {
         const data = await API.getConversation(conversationId);
-        this.renderMessages(data.messages || []);
+        const total = data.totalMessages || data.messages?.length || 0;
+        const older = total - (data.messages?.length || 0);
+        this.renderMessages(data.messages || [], older > 0 ? older : 0, conversationId);
       } catch {
         this.elements.chatArea.innerHTML = "";
       }
@@ -531,20 +533,52 @@ const Chat = {
   },
 
   // --- Messages ---
-  renderMessages(messages) {
+  renderMessages(messages, olderCount = 0, conversationId = null) {
     this.elements.chatArea.innerHTML = "";
     this.lastMessageRole = null;
     this.lastMessageTime = 0;
+
+    // Show "load more" button if there are older messages on the server
+    if (olderCount > 0 && conversationId) {
+      const loadMoreBtn = document.createElement("div");
+      loadMoreBtn.className = "load-more-btn";
+      loadMoreBtn.textContent = `Load ${olderCount} older messages`;
+      loadMoreBtn.addEventListener("click", async () => {
+        loadMoreBtn.textContent = "Loading...";
+        try {
+          const data = await API.json(`/api/chat/conversations/${conversationId}?all=true`);
+          const allMsgs = data.messages || [];
+          const scrollPos = this.elements.chatArea.scrollHeight;
+          loadMoreBtn.remove();
+          // Prepend older messages
+          const olderMsgs = allMsgs.slice(0, allMsgs.length - messages.length);
+          const frag = document.createDocumentFragment();
+          const tempLastRole = this.lastMessageRole;
+          const tempLastTime = this.lastMessageTime;
+          this.lastMessageRole = null;
+          this.lastMessageTime = 0;
+          for (const msg of olderMsgs) {
+            frag.appendChild(this._createMessageEl(msg.role, msg.content));
+          }
+          this.elements.chatArea.insertBefore(frag, this.elements.chatArea.firstChild);
+          this.lastMessageRole = tempLastRole;
+          this.lastMessageTime = tempLastTime;
+          this.elements.chatArea.scrollTop = this.elements.chatArea.scrollHeight - scrollPos;
+        } catch {
+          loadMoreBtn.textContent = "Failed to load — click to retry";
+        }
+      });
+      this.elements.chatArea.appendChild(loadMoreBtn);
+    }
+
     for (const msg of messages) {
       this.appendMessage(msg.role, msg.content);
     }
     this.scrollToBottom();
   },
 
-  appendMessage(role, content, isStreaming = false) {
+  _createMessageEl(role, content, isStreaming = false) {
     const msg = document.createElement("div");
-
-    // Slack-style grouping: same sender within 5 minutes
     const now = Date.now();
     const isGrouped = (role === this.lastMessageRole) && (now - this.lastMessageTime < 5 * 60 * 1000);
     msg.className = `message ${role}${isGrouped ? " grouped" : ""}`;
@@ -553,7 +587,6 @@ const Chat = {
       ? `<img src="/icon-32.png" alt="" class="avatar-img">`
       : "U";
 
-    // Copy button for assistant messages
     const copyBtn = role === "assistant" && !isStreaming
       ? `<button class="msg-copy-btn">Copy</button>`
       : "";
@@ -569,7 +602,11 @@ const Chat = {
 
     this.lastMessageRole = role;
     this.lastMessageTime = now;
+    return msg;
+  },
 
+  appendMessage(role, content, isStreaming = false) {
+    const msg = this._createMessageEl(role, content, isStreaming);
     this.elements.chatArea.appendChild(msg);
     this.scrollToBottom();
     return msg;
@@ -748,24 +785,18 @@ const Chat = {
       this.currentChannelKey = "web:default";
     }
 
-    // Handle /clear locally — clear display, keep history
-    if (text === "/clear") {
-      this.elements.chatArea.innerHTML = "";
-      this.appendMessage("assistant", "Chat cleared. History preserved in database.");
-      this.elements.sendBtn.disabled = false;
-      this.elements.messageInput.focus();
-      return;
-    }
-
-    // Handle /reset — create fresh conversation for this channel
-    if (text === "/reset") {
+    // Handle /clear and /reset — both start a fresh conversation now
+    if (text === "/clear" || text === "/reset") {
       this.currentConversationId = null;
       this.lastMessageRole = null;
       this.lastMessageTime = 0;
       this.elements.chatArea.innerHTML = "";
-      this.appendMessage("assistant", "Session reset. Starting fresh conversation for this channel.");
       this.elements.sendBtn.disabled = false;
       this.elements.messageInput.focus();
+      // Show welcome screen instead of empty chat
+      this.elements.chatArea.style.display = "none";
+      this.elements.welcomeScreen.style.display = "flex";
+      this.loadChannels(); // Refresh sidebar
       return;
     }
 
