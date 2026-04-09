@@ -214,6 +214,7 @@ html, body {
 
 .sidebar-footer {
   padding: var(--space-3);
+  padding-bottom: calc(env(safe-area-inset-bottom, var(--space-3)) + var(--space-1));
   border-top: var(--space-px) solid var(--border-light);
 }
 
@@ -1847,7 +1848,9 @@ html, body {
     grid-template-rows: 1fr;
     grid-template-areas: "sidebar content";
     height: 100vh;
-    padding-top: 0;
+    height: 100dvh;
+    /* Keep safe area for iPad PWA — status bar still overlaps */
+    padding-top: env(safe-area-inset-top, 0px);
   }
 
   /* Sidebar → static grid area */
@@ -1921,7 +1924,7 @@ html, body {
 
   /* Input area — desktop: gradient bg, no border-top */
   .input-area {
-    padding: var(--space-3) var(--space-6) var(--space-5);
+    padding: var(--space-3) var(--space-6) calc(env(safe-area-inset-bottom, var(--space-5)) + var(--space-2));
     background: linear-gradient(to top, var(--bg) 60%, transparent);
     border-top: none;
   }
