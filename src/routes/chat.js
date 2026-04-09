@@ -237,11 +237,18 @@ chatRouter.post("/send", async (req, res) => {
     });
 
     if (cmdResult.handled) {
-      return res.json({
-        command: true,
-        response: cmdResult.response,
-        conversationId: convId || null,
-      });
+      // Playbook: send steps to AI instead of displaying as command response
+      if (cmdResult.response?.startsWith("__PLAYBOOK__")) {
+        // Override the message with the playbook prompt, fall through to AI
+        req.body.message = cmdResult.response.replace("__PLAYBOOK__\n", "");
+        message = req.body.message;
+      } else {
+        return res.json({
+          command: true,
+          response: cmdResult.response,
+          conversationId: convId || null,
+        });
+      }
     }
   }
 

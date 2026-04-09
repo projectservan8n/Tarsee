@@ -134,6 +134,7 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | `/stats` | Analytics summary (tokens, messages, memories, uptime) |
 | `/status` | System status |
 | `/cron` | Manage scheduled tasks |
+| `/play [name\|list\|save\|delete]` | Run or manage playbooks (multi-step AI workflows) |
 | `/remember [fact]` | Save to memory |
 | `/webhook list\|add\|remove` | Manage webhook triggers (external events → AI) |
 | `/doctor [fix]` | Diagnostics + auto-repair |
