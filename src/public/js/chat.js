@@ -750,7 +750,10 @@ const Chat = {
     const thinkingEl = document.createElement("div");
     thinkingEl.className = "chat-thinking";
     thinkingEl.innerHTML = '<span class="thinking-text">Thinking</span><span class="thinking-dots"></span>';
-    assistantMsg.querySelector(".message-text")?.appendChild(thinkingEl);
+    // Insert AFTER .message-text (not inside it) so updateStreamingMessage doesn't blow it away
+    const msgContent = assistantMsg.querySelector(".message-content");
+    const msgText = assistantMsg.querySelector(".message-text");
+    if (msgContent && msgText) msgContent.insertBefore(thinkingEl, msgText);
     let hasReceivedText = false;
     let fullResponse = "";
     let toolBlocks = ""; // Accumulated tool call/result HTML
