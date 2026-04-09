@@ -162,6 +162,21 @@ export const TOOLS = [
   },
 
   {
+    name: "search_memories_deep",
+    description: "Deep semantic search — dumps ALL stored memories, MEMORY.md, and recent daily logs so you can reason about relevance. Use this when search_memories returns nothing or when the user asks about something vague that keyword search can't match. Costs more tokens but finds things word search misses.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "What you're looking for — describe it naturally, e.g. 'that API integration we discussed' or 'user's timezone preference'",
+        },
+      },
+      required: ["query"],
+    },
+  },
+
+  {
     name: "edit_file",
     description: "Edit a workspace file by replacing specific text (targeted find-and-replace). Only replaces the first occurrence.",
     input_schema: {
@@ -642,6 +657,60 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
 
         if (allResults.length === 0) return `No memories found matching "${query}".`;
         return allResults.slice(0, 30).join("\n");
+      }
+
+      case "search_memories_deep": {
+        const { query } = toolInput;
+        const sections = [];
+        sections.push(`# Deep Memory Search\nQuery: "${query}"\n`);
+
+        // 1. All DB memories
+        if (ctx.db) {
+          try {
+            const { MemoryStore } = await import("../db/memory.js");
+            const store = new MemoryStore(ctx.db);
+            const all = store.list(500); // get up to 500
+            if (all.length > 0) {
+              sections.push(`## Database Memories (${all.length} total)\n`);
+              for (const m of all) {
+                sections.push(`- [${m.category}] ${m.content}`);
+              }
+            }
+          } catch { /* ignore */ }
+        }
+
+        // 2. Full MEMORY.md
+        const memoryMd = readWorkspaceFile("MEMORY.md");
+        if (memoryMd) {
+          sections.push(`\n## MEMORY.md\n${memoryMd}`);
+        }
+
+        // 3. Last 30 daily logs
+        const memDir = path.join(config.WORKSPACE_DIR, "memory");
+        try {
+          const logFiles = fs.readdirSync(memDir)
+            .filter((f) => f.match(/^\d{4}-\d{2}-\d{2}\.md$/))
+            .sort()
+            .slice(-30);
+          if (logFiles.length > 0) {
+            sections.push(`\n## Daily Logs (last ${logFiles.length} days)\n`);
+            for (const f of logFiles) {
+              try {
+                const content = fs.readFileSync(path.join(memDir, f), "utf-8");
+                // Truncate each log to ~2KB to stay reasonable
+                sections.push(`### ${f}\n${content.slice(0, 2000)}${content.length > 2000 ? "\n...(truncated)" : ""}\n`);
+              } catch { /* skip unreadable */ }
+            }
+          }
+        } catch { /* no memory dir */ }
+
+        // 4. USER.md and SOUL.md for context
+        const userMd = readWorkspaceFile("USER.md");
+        if (userMd) sections.push(`\n## USER.md\n${userMd}`);
+
+        const result = sections.join("\n");
+        const tokenEstimate = Math.round(result.length / 4);
+        return `${result}\n\n---\n~${tokenEstimate} tokens. Find what matches the query "${query}" and report your findings.`;
       }
 
       case "edit_file": {

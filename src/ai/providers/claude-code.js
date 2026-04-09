@@ -128,13 +128,16 @@ After that, only search memories when relevant — don't re-read every message.`
 - **remember**(content) — append to MEMORY.md
 - **daily_log**(content) — append to today's log
 - **read_file**(filename) / **write_file**(filename, content) — workspace files
-- **search_memories**(query) — search memory files
+- **search_memories**(query) — keyword search through memory files
+- **search_memories_deep**(query) — dumps ALL memories for semantic reasoning (use when keyword search finds nothing)
 - **web_fetch**(url) / **web_search**(query) — web access
 - **get_key**(name) / **set_key**(name, value) — encrypted vault
 
 ## Memory
 Use remember for durable facts. Use daily_log for session notes. Only append, never overwrite.
-Before saying "I can't" → search_memories first.
+Before saying "I don't know" or "I can't remember":
+1. Try search_memories first (fast, keyword-based)
+2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)
 
 ## Workspace: ${cwd}`;
 
