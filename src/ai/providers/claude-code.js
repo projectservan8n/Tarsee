@@ -176,17 +176,18 @@ Before saying "I can't" → search_memories first.
               yield { type: "text", content: evt.delta.text };
               everStreamed = true;
             } else if (evt.delta?.type === "thinking_delta" && evt.delta.thinking) {
-              // Don't emit thinking as text — skip it silently
-              // (thinking bloats the response and confuses users)
+              // Don't emit thinking content as text — but signal that thinking is active
               everStreamed = true;
             }
           } else if (evt?.type === "content_block_start") {
             if (evt.content_block?.type === "thinking") {
               inThinking = true;
+              yield { type: "thinking", status: "start" };
             }
           } else if (evt?.type === "content_block_stop") {
             if (inThinking) {
               inThinking = false;
+              yield { type: "thinking", status: "stop" };
             }
           }
           break;

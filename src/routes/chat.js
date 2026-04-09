@@ -342,6 +342,8 @@ chatRouter.post("/send", async (req, res) => {
         if (event.type === "text") {
           fullResponse += event.content;
           sendSSE(res, "text", { content: event.content });
+        } else if (event.type === "thinking") {
+          sendSSE(res, "thinking", { status: event.status });
         } else if (event.type === "tool_use") {
           sendSSE(res, "tool_call", { id: event.id, name: event.name, input: event.input });
         } else if (event.type === "tool_result") {
@@ -409,6 +411,8 @@ chatRouter.post("/send", async (req, res) => {
           roundText += event.content;
           fullResponse += event.content;
           sendSSE(res, "text", { content: event.content });
+        } else if (event.type === "thinking") {
+          sendSSE(res, "thinking", { status: event.status });
         } else if (event.type === "tool_use") {
           toolCalls.push({ id: event.id, name: event.name, input: event.input });
           // Notify client about tool call

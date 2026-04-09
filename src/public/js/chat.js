@@ -764,8 +764,21 @@ const Chat = {
       await API.sendMessage(
         this.currentConversationId,
         text,
-        // onText (content for text, null + event for tool events)
+        // onText (content for text, null + event for tool/thinking events)
         (content, event) => {
+          if (event?.type === "thinking") {
+            // Show/keep thinking indicator — don't remove it, it stays until text/tools arrive
+            if (!hasReceivedText) {
+              const existing = assistantMsg.querySelector(".chat-thinking");
+              if (!existing) {
+                const thinkingEl = document.createElement("div");
+                thinkingEl.className = "chat-thinking";
+                thinkingEl.innerHTML = '<span class="thinking-text">Thinking</span><span class="thinking-dots"></span>';
+                assistantMsg.querySelector(".message-text")?.appendChild(thinkingEl);
+              }
+            }
+            return;
+          }
           if (event?.type === "tool_call") {
             // Remove thinking indicator when tools start
             if (!hasReceivedText) {
