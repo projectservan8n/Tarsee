@@ -113,9 +113,15 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | `/help` | Show all commands |
 | `/model opus\|sonnet\|haiku` | Switch AI model |
 | `/think low\|medium\|high\|max` | Set thinking effort for the session |
-| `/briefing` | Run morning briefing now |
-| `/briefing on\|off` | Enable/disable daily morning briefing |
-| `/briefing time <0-23>` | Set briefing hour |
+| `/auto [on\|off]` | Toggle auto model routing (haiku/sonnet/opus by complexity) |
+| `/briefing [on\|off\|time]` | Morning briefing — run now, schedule daily, or set time |
+| `/send telegram\|discord\|web` | Forward conversation context to another channel |
+| `/fork [from #N]` | Branch conversation — copy history into new session |
+| `/play [name\|list\|save\|delete]` | Run or manage playbooks (multi-step AI workflows) |
+| `/email [check\|summary\|draft]` | Check inbox, summarize, or draft emails |
+| `/webhook [list\|add\|remove]` | Manage webhook triggers (external events → AI) |
+| `/stats` | Analytics summary (tokens, messages, memories, uptime) |
+| `/files [search term]` | List or search workspace files |
 | `/clear` | New conversation |
 | `/status` | System status |
 | `/cron` | Manage scheduled tasks |

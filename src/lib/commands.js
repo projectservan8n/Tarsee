@@ -89,6 +89,41 @@ const COMMANDS = {
     },
   },
 
+  send: {
+    description: "Forward conversation context to another channel",
+    usage: "/send [telegram|discord|web]",
+    handler: async (args, ctx) => {
+      if (!args) return "Usage: `/send telegram`, `/send discord`, `/send web`";
+      const target = args.toLowerCase().trim();
+      const validChannels = ["telegram", "discord", "web"];
+      if (!validChannels.includes(target)) return `Unknown channel. Use: ${validChannels.join(", ")}`;
+
+      if (!ctx.conversationId || !ctx.convStore) return "No active conversation.";
+
+      // Get last 10 messages
+      const messages = ctx.convStore.getRecentMessages(ctx.conversationId, 10);
+      if (!messages.length) return "No messages to forward.";
+
+      // Build summary
+      const lines = messages.map((m) => {
+        const role = m.role === "user" ? "You" : "Tarsee";
+        const text = m.content.length > 300 ? m.content.slice(0, 300) + "..." : m.content;
+        return `**${role}:** ${text}`;
+      });
+
+      const summary = `📨 **Conversation handoff**\n\n${lines.join("\n\n")}`;
+
+      // Send via tools
+      try {
+        const { executeTool } = await import("./tools.js");
+        await executeTool("send_message", { channel: target, message: summary }, ctx);
+        return `Sent to **${target}**.`;
+      } catch (err) {
+        return `Failed to send: ${err.message}`;
+      }
+    },
+  },
+
   system: {
     description: "Set or show the system prompt for this conversation",
     usage: "/system [prompt]",
