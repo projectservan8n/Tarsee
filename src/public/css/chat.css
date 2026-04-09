@@ -134,7 +134,133 @@
 
 
 /* ==========================================================================
-   2. Tool Blocks
+   2. Timeline — Claude Code VS Code style
+   ========================================================================== */
+
+.tl-timeline {
+  position: relative;
+  padding-left: var(--space-5);
+}
+
+/* Vertical line */
+.tl-timeline::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--border);
+  border-radius: 1px;
+}
+
+.tl-item {
+  position: relative;
+  padding-bottom: var(--space-3);
+}
+
+.tl-item:last-child {
+  padding-bottom: 0;
+}
+
+/* Dot on the vertical line */
+.tl-dot {
+  position: absolute;
+  left: calc(-1 * var(--space-5) + 3px);
+  top: 6px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--text-muted);
+  border: 2px solid var(--bg);
+  z-index: 1;
+}
+
+.tl-dot.running {
+  background: var(--warning);
+  animation: pulse 1.5s infinite;
+}
+
+.tl-dot.done {
+  background: var(--success);
+}
+
+/* Text items */
+.tl-text .tl-dot {
+  background: var(--accent);
+}
+
+.tl-text .tl-content {
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  color: var(--text);
+}
+
+/* Tool items */
+.tl-tool .tl-content {
+  background: var(--bg-surface);
+  border: var(--space-px) solid var(--border-light);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.tl-tool-header {
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tl-tool-name {
+  font-weight: 600;
+  font-size: var(--text-sm);
+  color: var(--accent);
+}
+
+.tl-tool-detail {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+}
+
+.tl-tool-in,
+.tl-tool-out {
+  border-top: var(--space-px) solid var(--border-light);
+  padding: var(--space-1) var(--space-3);
+}
+
+.tl-io-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  margin-right: var(--space-2);
+}
+
+.tl-tool-in .tl-io-label { color: var(--info); }
+.tl-tool-out .tl-io-label { color: var(--success); }
+
+.tl-tool-code {
+  margin: 0;
+  padding: var(--space-1) 0;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+}
+
+
+/* ==========================================================================
+   2b. Legacy Tool Blocks (kept for non-timeline contexts)
    ========================================================================== */
 
 .tool-block {
