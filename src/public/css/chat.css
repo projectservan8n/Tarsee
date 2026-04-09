@@ -142,17 +142,7 @@
   padding-left: var(--space-5);
 }
 
-/* Vertical line */
-.tl-timeline::before {
-  content: '';
-  position: absolute;
-  left: 7px;
-  top: 4px;
-  bottom: 4px;
-  width: 2px;
-  background: var(--border);
-  border-radius: 1px;
-}
+/* No global vertical line — each item draws its own connector */
 
 .tl-item {
   position: relative;
@@ -163,7 +153,19 @@
   padding-bottom: 0;
 }
 
-/* Dot on the vertical line */
+/* Connector line from this dot down to the next item's dot */
+.tl-item:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: calc(-1 * var(--space-5) + 7px);
+  top: 18px; /* below the dot */
+  bottom: calc(-1 * var(--space-3) + 7px); /* up to next dot */
+  width: 2px;
+  background: var(--border);
+  border-radius: 1px;
+}
+
+/* Dot on the timeline */
 .tl-dot {
   position: absolute;
   left: calc(-1 * var(--space-5) + 4px);
@@ -262,7 +264,7 @@
 /* Timeline mobile */
 @media (max-width: 768px) {
   .tl-timeline { padding-left: var(--space-4); }
-  .tl-timeline::before { left: 5px; }
+  .tl-item:not(:last-child)::before { left: calc(-1 * var(--space-4) + 5px); }
   .tl-dot { left: calc(-1 * var(--space-4) + 2px); width: 7px; height: 7px; }
   .tl-tool-header { padding: var(--space-1) var(--space-2); }
   .tl-tool-name { font-size: var(--text-xs); }
@@ -413,9 +415,26 @@
   margin: var(--space-1-5) var(--space-0);
 }
 
+.message-text ul {
+  list-style: disc;
+}
+
+.message-text ul li::marker {
+  color: var(--text-muted);
+}
+
+.message-text ol li::marker {
+  color: var(--text-muted);
+}
+
 .message-text li {
   margin-bottom: 3px;
 }
+
+/* Timeline text items also inherit list styles */
+.tl-content ul { list-style: disc; }
+.tl-content ul li::marker { color: var(--text-muted); }
+.tl-content ol li::marker { color: var(--text-muted); }
 
 .message-text a {
   color: var(--accent);
