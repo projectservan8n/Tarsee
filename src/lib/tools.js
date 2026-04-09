@@ -351,64 +351,6 @@ export const TOOLS = [
   },
 
   {
-    name: "spawn_agent",
-    description: "Spawn a background subagent to work on a task independently. The subagent runs as a separate AI conversation with its own tool access. Use this for: long-running tasks, parallel research, monitoring jobs, or delegating work. Returns a task ID you can check later.",
-    input_schema: {
-      type: "object",
-      properties: {
-        task: {
-          type: "string",
-          description: "Detailed description of what the subagent should do",
-        },
-        name: {
-          type: "string",
-          description: "Short name for this agent task (e.g. 'research-competitors', 'monitor-site')",
-        },
-      },
-      required: ["task"],
-    },
-  },
-
-  {
-    name: "list_agents",
-    description: "List all spawned subagents and their current status (running, completed, failed).",
-    input_schema: {
-      type: "object",
-      properties: {},
-    },
-  },
-
-  {
-    name: "get_agent_result",
-    description: "Get the result/output of a completed subagent by its task ID.",
-    input_schema: {
-      type: "object",
-      properties: {
-        task_id: {
-          type: "string",
-          description: "The task ID returned by spawn_agent",
-        },
-      },
-      required: ["task_id"],
-    },
-  },
-
-  {
-    name: "stop_agent",
-    description: "Stop a running subagent by its task ID.",
-    input_schema: {
-      type: "object",
-      properties: {
-        task_id: {
-          type: "string",
-          description: "The task ID to stop",
-        },
-      },
-      required: ["task_id"],
-    },
-  },
-
-  {
     name: "get_key",
     description: "Retrieve an API key or secret from the secure vault. Use this when you need a key for a task (e.g., Google Places API key, Stripe key, etc). Keys are stored encrypted and only decrypted when needed.",
     input_schema: {
@@ -984,58 +926,6 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
         const rawText = pdfBuffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s{3,}/g, " ").trim();
         if (rawText.length < 50) return "Could not extract meaningful text from this PDF. Install poppler-utils (pdftotext) for better PDF support.";
         return truncate(`(Raw text extraction — install pdftotext for better results)\n\n${rawText}`, MAX_RESULT);
-      }
-
-      case "spawn_agent": {
-        const { task, name } = toolInput;
-        if (!task) return "Error: 'task' is required.";
-        try {
-          const { spawnAgent } = await import("./subagents.js");
-          const result = spawnAgent({ task, name, settingsStore: ctx.settingsStore, db: ctx.db });
-          return `Agent "${result.name}" spawned (ID: ${result.taskId}). It's working in the background. Use list_agents to check progress or get_agent_result to get output.`;
-        } catch (err) {
-          return `spawn_agent error: ${err.message}`;
-        }
-      }
-
-      case "list_agents": {
-        try {
-          const { listAgents } = await import("./subagents.js");
-          const agents = listAgents();
-          if (agents.length === 0) return "No subagents running or completed.";
-          return agents.map((a) =>
-            `[${a.status}] ${a.name} (${a.id}) — ${a.task}${a.resultPreview ? `\n  Preview: ${a.resultPreview}` : ""}`
-          ).join("\n\n");
-        } catch (err) {
-          return `list_agents error: ${err.message}`;
-        }
-      }
-
-      case "get_agent_result": {
-        const { task_id } = toolInput;
-        if (!task_id) return "Error: 'task_id' is required.";
-        try {
-          const { getAgentResult } = await import("./subagents.js");
-          const agent = getAgentResult(task_id);
-          if (!agent) return `Agent not found: ${task_id}`;
-          if (agent.status === "running") return `Agent "${agent.name}" is still running. Check back later.`;
-          if (agent.error) return `Agent "${agent.name}" failed: ${agent.error}`;
-          return `**Agent: ${agent.name}** (${agent.status})\n**Task:** ${agent.task}\n**Result:**\n${truncate(agent.result || "(no output)", MAX_RESULT)}`;
-        } catch (err) {
-          return `get_agent_result error: ${err.message}`;
-        }
-      }
-
-      case "stop_agent": {
-        const { task_id } = toolInput;
-        if (!task_id) return "Error: 'task_id' is required.";
-        try {
-          const { stopAgent } = await import("./subagents.js");
-          const stopped = stopAgent(task_id);
-          return stopped ? `Agent ${task_id} stopped.` : `Agent not found: ${task_id}`;
-        } catch (err) {
-          return `stop_agent error: ${err.message}`;
-        }
       }
 
       case "get_key": {

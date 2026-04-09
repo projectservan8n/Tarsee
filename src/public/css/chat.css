@@ -88,39 +88,49 @@
   background: var(--accent-subtle);
 }
 
-/* Effort segmented pill control */
-.effort-pills {
+/* Effort toggle button — cycles through levels on tap */
+.effort-toggle {
   display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-0-5) var(--space-2);
   background: rgba(255, 255, 255, 0.04);
-  border-radius: var(--radius-sm);
   border: var(--space-px) solid var(--border-light);
-  overflow: hidden;
-}
-
-.effort-pill {
-  padding: var(--space-0-5) var(--space-1-5);
-  background: transparent;
-  border: none;
+  border-radius: var(--radius-full);
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   font-family: var(--font-body);
   cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-default);
-  letter-spacing: 0.3px;
+  transition: all var(--duration-normal) var(--ease-default);
   -webkit-tap-highlight-color: transparent;
+  white-space: nowrap;
+}
+
+.effort-toggle:hover {
+  border-color: var(--border-hover);
+  color: var(--text-secondary);
+}
+
+.effort-toggle:active {
+  transform: scale(0.95);
+}
+
+.effort-icon {
+  font-size: 11px;
   line-height: 1;
 }
 
-.effort-pill:hover {
-  color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.04);
+.effort-label {
+  line-height: 1;
 }
 
-.effort-pill.active {
-  color: var(--accent);
-  background: var(--accent-subtle);
-}
+/* Effort level colors */
+.effort-toggle[data-level=""] { color: var(--text-muted); }
+.effort-toggle[data-level="low"] { color: var(--success); border-color: rgba(52, 211, 153, 0.25); }
+.effort-toggle[data-level="medium"] { color: var(--info); border-color: rgba(96, 165, 250, 0.25); }
+.effort-toggle[data-level="high"] { color: var(--warning); border-color: rgba(251, 191, 36, 0.25); }
+.effort-toggle[data-level="max"] { color: #a78bfa; border-color: rgba(167, 139, 250, 0.3); background: rgba(167, 139, 250, 0.08); }
 
 
 /* ==========================================================================
