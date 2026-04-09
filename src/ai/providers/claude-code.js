@@ -68,6 +68,7 @@ export async function* chat({
   sessionId,
   onSessionId,
   toolCtx,
+  effort,
 }) {
   // Extract the latest user message — separate text and images
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
@@ -98,6 +99,11 @@ export async function* chat({
     mcpServers: { tarsee: tarseeMcp },
     additionalDirectories: [skillsDir],
   };
+
+  // Thinking effort: low, medium, high, max
+  if (effort && ["low", "medium", "high", "max"].includes(effort)) {
+    queryOptions.effort = effort;
+  }
 
   // OpenClaw-style: lightweight system prompt + tool-based memory access
   // DON'T inject full files — tell agent to read them on demand

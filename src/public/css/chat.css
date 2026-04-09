@@ -82,6 +82,35 @@
   background: var(--accent-subtle);
 }
 
+/* Effort dropdown */
+.effort-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: var(--space-px) solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-family: var(--font-body);
+  padding: var(--space-0-5) var(--space-2);
+  cursor: pointer;
+  transition: all var(--duration-normal) var(--ease-default);
+  min-width: 50px;
+  text-align: center;
+}
+
+.effort-select:hover,
+.effort-select:focus {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+
+.effort-select option {
+  background: var(--bg-surface);
+  color: var(--text);
+}
+
 
 /* ==========================================================================
    2. Tool Blocks

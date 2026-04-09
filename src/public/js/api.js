@@ -111,7 +111,7 @@ const API = {
   },
 
   // --- Chat (SSE streaming) ---
-  async sendMessage(conversationId, message, onText, onDone, onError, channelKey, attachments) {
+  async sendMessage(conversationId, message, onText, onDone, onError, channelKey, attachments, effort) {
     const csrf = this.getCsrfToken();
     const headers = {
       "Content-Type": "application/json",
@@ -122,6 +122,7 @@ const API = {
     if (channelKey) body.channelKey = channelKey;
     if (conversationId) body.conversationId = conversationId;
     if (attachments && attachments.length) body.attachments = attachments;
+    if (effort) body.effort = effort;
 
     const res = await fetch("/api/chat/send", {
       method: "POST",

@@ -888,7 +888,9 @@ const Chat = {
         // channelKey
         this.currentChannelKey,
         // attachments
-        attachments.length ? attachments : undefined
+        attachments.length ? attachments : undefined,
+        // effort
+        this.getEffort()
       );
     } catch (err) {
       this.finishStreaming(assistantMsg);
@@ -1033,6 +1035,11 @@ const Chat = {
       });
       setTimeout(() => this.sendQueued(next.text, next.attachments), 300);
     }
+  },
+
+  getEffort() {
+    const select = document.getElementById("effortSelect");
+    return select?.value || undefined;
   },
 
   stopGeneration() {
