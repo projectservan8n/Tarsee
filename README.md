@@ -39,7 +39,7 @@ Being honest — some of these projects are massive with huge communities. Tarse
 | **Memory** | Persistent + deep search | Session-based with group isolation | SQLite + per-group files | JSONL memory store | Token-based memory |
 | **Auth** | Claude subscription (OAuth) | OAuth + API keys | API keys | API keys + OAuth | API keys + OAuth |
 | **LLM support** | Claude only | Claude only | Claude only | 30+ providers | Multi-provider |
-| **Self-host cost** | ~$16/mo Railway | Higher (more resources) | Moderate | ~$10/mo (runs on anything) | Low |
+| **Self-host cost** | ~$2-10/mo Railway | Higher (more resources) | Moderate | ~$10/mo (runs on anything) | Low |
 
 ### Why choose Tarsee?
 
