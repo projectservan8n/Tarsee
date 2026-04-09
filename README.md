@@ -116,6 +116,7 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | `/status` | System status |
 | `/cron` | Manage scheduled tasks |
 | `/remember [fact]` | Save to memory |
+| `/files [search term]` | List or search workspace files |
 | `/doctor [fix]` | Diagnostics + auto-repair |
 | `/export` | Export conversation |
 

@@ -87,6 +87,66 @@ const COMMANDS = {
     },
   },
 
+  files: {
+    description: "List or search workspace files",
+    usage: "/files [search term]",
+    handler: async (_args, ctx) => {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const config = (await import("../config/env.js")).default;
+      const wsDir = config.WORKSPACE_DIR;
+
+      const listDir = (dir, prefix = "") => {
+        const entries = [];
+        try {
+          for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+            const fullPath = path.join(dir, item.name);
+            const relPath = prefix ? `${prefix}/${item.name}` : item.name;
+            if (item.isDirectory()) {
+              entries.push({ name: relPath + "/", type: "dir", size: 0 });
+              entries.push(...listDir(fullPath, relPath));
+            } else {
+              const stat = fs.statSync(fullPath);
+              entries.push({ name: relPath, type: "file", size: stat.size });
+            }
+          }
+        } catch { /* ignore */ }
+        return entries;
+      };
+
+      const allFiles = listDir(wsDir);
+
+      if (_args) {
+        // Search
+        const query = _args.toLowerCase();
+        const matches = allFiles.filter((f) => f.name.toLowerCase().includes(query));
+        if (!matches.length) return `No files matching "${_args}".`;
+        const lines = matches.slice(0, 30).map((f) => `- ${f.type === "dir" ? "📁" : "📄"} \`${f.name}\` ${f.size ? `(${(f.size / 1024).toFixed(1)}KB)` : ""}`);
+        return `**Files matching "${_args}" (${matches.length}):**\n${lines.join("\n")}`;
+      }
+
+      // List all
+      const fileCount = allFiles.filter((f) => f.type === "file").length;
+      const dirCount = allFiles.filter((f) => f.type === "dir").length;
+      const totalSize = allFiles.reduce((sum, f) => sum + f.size, 0);
+
+      const topFiles = allFiles.filter((f) => !f.name.includes("/") && f.type === "file");
+      const lines = topFiles.map((f) => `- 📄 \`${f.name}\` (${(f.size / 1024).toFixed(1)}KB)`);
+
+      const dirs = allFiles.filter((f) => !f.name.includes("/") && f.type === "dir");
+      const dirLines = dirs.map((f) => `- 📁 \`${f.name}\``);
+
+      return [
+        `**Workspace Files** — ${fileCount} files, ${dirCount} dirs, ${(totalSize / 1024).toFixed(0)}KB total`,
+        "",
+        ...dirLines,
+        ...lines,
+        "",
+        "Search: `/files <term>` | Open file manager from the topbar"
+      ].join("\n");
+    },
+  },
+
   system: {
     description: "Set or show the system prompt for this conversation",
     usage: "/system [prompt]",
