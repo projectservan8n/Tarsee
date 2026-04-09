@@ -2,9 +2,9 @@
 
 **Your personal Claude Code agent, running 24/7 in the cloud.**
 
-Talk to Claude from anywhere — web, Telegram, Discord, or voice. It remembers everything, runs tools, schedules tasks, and manages a team of AI agents. Uses your Claude Max/Pro subscription. No API keys needed.
+Talk to Claude from anywhere — web, Telegram, Discord, or voice. It remembers everything, runs tools, and schedules tasks. Uses your Claude Max/Pro subscription. No API keys needed.
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/tarsee)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/O2Ux8R?referralCode=sIH3US&utm_medium=integration&utm_source=template&utm_campaign=generic)
 
 ---
 
