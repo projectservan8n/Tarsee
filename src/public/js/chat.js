@@ -58,7 +58,12 @@ const Chat = {
       const el = this.elements.messageInput;
       el.style.height = "auto";
       el.style.height = Math.min(el.scrollHeight, 200) + "px";
-      this.elements.sendBtn.disabled = !(el.value.trim() || this.pendingFiles.length);
+      const hasText = el.value.trim() || this.pendingFiles.length;
+      this.elements.sendBtn.disabled = !hasText;
+      // During streaming: show send button (for queueing) when there's text, stop when empty
+      if (this.isStreaming) {
+        this.elements.sendBtn.classList.toggle("stop-mode", !hasText);
+      }
       this.handleCommandPalette();
     });
 
@@ -89,11 +94,11 @@ const Chat = {
         }
       }
 
-      // Normal Enter to send
+      // Normal Enter to send (or queue if streaming)
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        if (!this.isStreaming && (this.elements.messageInput.value.trim() || this.pendingFiles.length)) {
-          this.send();
+        if (this.elements.messageInput.value.trim() || this.pendingFiles.length) {
+          this.send(); // send() handles queueing internally when isStreaming
         }
       }
 
@@ -112,8 +117,12 @@ const Chat = {
     });
 
     this.elements.sendBtn.addEventListener("click", () => {
-      if (this.isStreaming) {
+      if (this.isStreaming && !this.elements.messageInput.value.trim()) {
+        // Empty input + streaming = stop generation
         this.stopGeneration();
+      } else if (this.isStreaming && this.elements.messageInput.value.trim()) {
+        // Has text + streaming = queue the message
+        this.send();
       } else {
         this.send();
       }
