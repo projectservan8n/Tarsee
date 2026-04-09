@@ -171,13 +171,13 @@
           <span class="session-status" id="sessionStatus">New Session</span>
         </div>
         <div class="session-bar-right">
-          <select class="effort-select" id="effortSelect" title="Thinking effort">
-            <option value="">Auto</option>
-            <option value="low">Low</option>
-            <option value="medium">Med</option>
-            <option value="high">High</option>
-            <option value="max">Max</option>
-          </select>
+          <div class="effort-pills" id="effortSelect" title="Thinking effort">
+            <button class="effort-pill active" data-effort="">Auto</button>
+            <button class="effort-pill" data-effort="low">Lo</button>
+            <button class="effort-pill" data-effort="medium">Med</button>
+            <button class="effort-pill" data-effort="high">Hi</button>
+            <button class="effort-pill" data-effort="max">Max</button>
+          </div>
           <div class="context-bar" title="Context window usage">
             <div class="context-bar-fill" id="contextBarFill" style="width:0%"></div>
           </div>

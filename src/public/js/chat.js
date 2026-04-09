@@ -229,6 +229,7 @@ const Chat = {
     this.loadChannels();
     this.loadCommands();
     this.loadBotName();
+    this.initEffortPills();
   },
 
   updateSessionBar() {
@@ -803,9 +804,10 @@ const Chat = {
             // Auto-routing: update session bar badge with the chosen model
             const badge = document.getElementById("sessionModel");
             if (badge) {
-              const alias = event.model?.includes("opus") ? "OPUS" :
-                           event.model?.includes("haiku") ? "HAIKU" : "SONNET";
-              badge.textContent = alias;
+              const isOpus = event.model?.includes("opus");
+              const isHaiku = event.model?.includes("haiku");
+              badge.textContent = isOpus ? "OPUS" : isHaiku ? "HAIKU" : "SONNET";
+              badge.className = "session-model model-" + (isOpus ? "opus" : isHaiku ? "haiku" : "sonnet");
             }
             return;
           }
@@ -1057,8 +1059,19 @@ const Chat = {
   },
 
   getEffort() {
-    const select = document.getElementById("effortSelect");
-    return select?.value || undefined;
+    const active = document.querySelector(".effort-pill.active");
+    return active?.dataset.effort || undefined;
+  },
+
+  initEffortPills() {
+    const container = document.getElementById("effortSelect");
+    if (!container) return;
+    container.addEventListener("click", (e) => {
+      const pill = e.target.closest(".effort-pill");
+      if (!pill) return;
+      container.querySelectorAll(".effort-pill").forEach((p) => p.classList.remove("active"));
+      pill.classList.add("active");
+    });
   },
 
   stopGeneration() {
