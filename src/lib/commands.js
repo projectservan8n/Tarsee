@@ -301,36 +301,67 @@ const COMMANDS = {
   },
 
   email: {
-    description: "Check or manage email via gog CLI (Gmail)",
-    usage: "/email [check|summary|draft <details>]",
+    description: "Check or manage email — Gmail (gog) + Zoho (himalaya)",
+    usage: "/email [check|summary|draft <details>|gmail|zoho]",
     handler: (args) => {
-      if (!args) return "**Email (via gog CLI):**\n- `/email check` — List unread emails\n- `/email summary` — Summarize today's inbox\n- `/email draft <to> <subject>` — Draft an email";
+      if (!args) return "**Email:**\n- `/email check` — Check both Gmail + Zoho\n- `/email gmail` — Gmail only\n- `/email zoho` — Zoho only\n- `/email summary` — Summarize today's inbox (both)\n- `/email draft <to> <subject>` — Draft an email";
       const cmd = args.toLowerCase().split(/\s+/)[0];
-      if (cmd === "check") return `__PLAYBOOK__\nCheck my email inbox for unread messages using the gog CLI.
 
-Run this exact Bash command:
+      if (cmd === "check" || cmd === "all") return `__PLAYBOOK__\nCheck ALL email inboxes for unread messages.
+
+**Step 1 — Gmail (gog):**
 \`\`\`
 gog gmail search "is:unread" --plain 2>&1 | head -50
 \`\`\`
 
-Then summarize each unread email: sender, subject, and 1-line preview. If gog fails, tell me the error.`;
+**Step 2 — Zoho (himalaya):**
+\`\`\`
+himalaya envelope list --folder INBOX -s unread 2>&1 | head -50
+\`\`\`
 
-      if (cmd === "summary") return `__PLAYBOOK__\nSummarize my email inbox for today using gog CLI.
+Combine results from both. For each email: sender, subject, 1-line preview. Group by account (Gmail / Zoho). If either tool fails, note the error and show results from the other.`;
 
-Run this Bash command:
+      if (cmd === "gmail") return `__PLAYBOOK__\nCheck Gmail inbox for unread messages.
+
+\`\`\`
+gog gmail search "is:unread" --plain 2>&1 | head -50
+\`\`\`
+
+Summarize: sender, subject, 1-line preview.`;
+
+      if (cmd === "zoho") return `__PLAYBOOK__\nCheck Zoho inbox for unread messages using himalaya.
+
+\`\`\`
+himalaya envelope list --folder INBOX -s unread 2>&1 | head -50
+\`\`\`
+
+Summarize: sender, subject, 1-line preview.`;
+
+      if (cmd === "summary") return `__PLAYBOOK__\nSummarize today's email from ALL accounts.
+
+**Gmail:**
 \`\`\`
 gog gmail search "newer_than:1d" --plain 2>&1 | head -80
 \`\`\`
 
-Group emails by priority: urgent/action-needed first, FYI/newsletters last. Keep each summary to 1-2 lines.`;
+**Zoho:**
+\`\`\`
+himalaya envelope list --folder INBOX 2>&1 | head -80
+\`\`\`
+
+Combine both. Group by priority: urgent/action-needed first, FYI/newsletters last. 1-2 lines each.`;
 
       if (cmd === "draft") return `__PLAYBOOK__\nDraft an email. Details: ${args.slice(6).trim()}
 
-Write a professional email draft and show it to me for approval. Read USER.md for my writing style.
-To send after approval, use: \`gog gmail messages send --to <email> --subject "<subject>" --body "<body>"\`
-Do NOT send without my explicit approval.`;
+Write a professional email draft and show it for approval. Read USER.md for my writing style.
 
-      return "Use: `/email check`, `/email summary`, `/email draft <details>`";
+To send after approval:
+- **Gmail:** \`gog gmail messages send --to <email> --subject "<subject>" --body "<body>"\`
+- **Zoho:** \`himalaya message send --from <zoho-email> --to <email> --subject "<subject>" --body "<body>"\`
+
+Do NOT send without my explicit approval. Ask which account to send from.`;
+
+      return "Use: `/email check`, `/email gmail`, `/email zoho`, `/email summary`, `/email draft <details>`";
     },
   },
 
