@@ -115,6 +115,7 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | `/clear` | New conversation |
 | `/status` | System status |
 | `/cron` | Manage scheduled tasks |
+| `/email [check\|summary\|draft]` | Check inbox, summarize, or draft emails |
 | `/remember [fact]` | Save to memory |
 | `/doctor [fix]` | Diagnostics + auto-repair |
 | `/export` | Export conversation |

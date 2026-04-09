@@ -87,6 +87,42 @@ const COMMANDS = {
     },
   },
 
+  email: {
+    description: "Check or manage email (uses configured email tool)",
+    usage: "/email [check|summary|draft <to> <subject>]",
+    handler: (args, ctx) => {
+      if (!args) {
+        return [
+          "**Email Commands:**",
+          "",
+          "`/email check` — Check for new unread emails",
+          "`/email summary` — Summarize today's inbox",
+          "`/email draft <to> <subject>` — Draft an email reply",
+          "",
+          "These work by asking the AI to use its tools (Bash, web_fetch) to interact with your email.",
+          "Set up Gmail CLI access in the web terminal first: `gog auth login`"
+        ].join("\n");
+      }
+
+      const cmd = args.toLowerCase().split(/\s+/)[0];
+
+      if (cmd === "check") {
+        return "__PLAYBOOK__\nCheck my email inbox for unread messages. Use the gog CLI tool or the Bash tool to check email. List sender, subject, and a 1-line preview for each unread email. If gog is not available, check if there's any other email tool configured.";
+      }
+
+      if (cmd === "summary") {
+        return "__PLAYBOOK__\nSummarize my email inbox for today. Use gog CLI or Bash to check email. Group by priority: urgent/action-needed first, FYI/newsletters last. Keep each summary to 1-2 lines.";
+      }
+
+      if (cmd === "draft") {
+        const rest = args.slice(6).trim();
+        return `__PLAYBOOK__\nDraft an email. Details: ${rest}\n\nWrite a professional email draft and show it to me for approval before sending. Use my usual writing style from USER.md.`;
+      }
+
+      return "Unknown email command. Use `/email check`, `/email summary`, or `/email draft <details>`";
+    },
+  },
+
   system: {
     description: "Set or show the system prompt for this conversation",
     usage: "/system [prompt]",
