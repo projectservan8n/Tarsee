@@ -776,15 +776,13 @@ const Chat = {
       textEl.insertAdjacentHTML("afterend", this.renderMessageAttachments(attachments));
     }
 
-    // Create streaming assistant message with thinking indicator
+    // Create streaming assistant message with thinking indicator as initial content
     const assistantMsg = this.appendMessage("assistant", "", true);
-    const thinkingEl = document.createElement("div");
-    thinkingEl.className = "chat-thinking";
-    thinkingEl.innerHTML = '<span class="thinking-text">Thinking</span><span class="thinking-dots"></span>';
-    // Insert AFTER .message-text (not inside it) so updateStreamingMessage doesn't blow it away
-    const msgContent = assistantMsg.querySelector(".message-content");
-    const msgText = assistantMsg.querySelector(".message-text");
-    if (msgContent && msgText) msgContent.insertBefore(thinkingEl, msgText);
+    const msgTextEl = assistantMsg.querySelector(".message-text");
+    if (msgTextEl) {
+      msgTextEl.innerHTML = '<div class="chat-thinking"><span class="thinking-text">Thinking</span><span class="thinking-dots"></span></div>';
+      msgTextEl.classList.remove("streaming-cursor"); // Don't show cursor while thinking
+    }
     let hasReceivedText = false;
     let fullResponse = "";
     let toolBlocks = ""; // Accumulated tool call/result HTML
@@ -825,12 +823,7 @@ const Chat = {
             return;
           }
           if (event?.type === "tool_call") {
-            // Remove thinking indicator when tools start
-            if (!hasReceivedText) {
-              hasReceivedText = true;
-              const thinkEl = assistantMsg.querySelector(".chat-thinking");
-              if (thinkEl) thinkEl.remove();
-            }
+            if (!hasReceivedText) hasReceivedText = true;
             // Clean tool block — name + detail, collapsible input
             // Build human-readable detail based on tool type
             const inp = event.input || {};
@@ -871,12 +864,8 @@ const Chat = {
             this.scrollToBottom();
             return;
           }
-          // Normal text — remove thinking indicator on first text
-          if (!hasReceivedText) {
-            hasReceivedText = true;
-            const thinkEl = assistantMsg.querySelector(".chat-thinking");
-            if (thinkEl) thinkEl.remove();
-          }
+          // Normal text — updateStreamingMessage will overwrite thinking indicator
+          if (!hasReceivedText) hasReceivedText = true;
           fullResponse += content;
           // Strip setup marker and [REMEMBER: ...] markers from display
           let displayText = fullResponse.split("|||PERSONALITY_COMPLETE|||")[0];
