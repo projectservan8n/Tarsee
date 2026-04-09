@@ -864,7 +864,9 @@ const Chat = {
         // channelKey
         this.currentChannelKey,
         // attachments
-        attachments.length ? attachments : undefined
+        attachments.length ? attachments : undefined,
+        // effort
+        this.getEffort()
       );
     } catch (err) {
       this.finishStreaming(assistantMsg);
@@ -876,6 +878,11 @@ const Chat = {
     this.elements.sendBtn.classList.remove("stop-mode");
     this.elements.sendBtn.title = "Send";
     this.elements.messageInput.focus();
+  },
+
+  getEffort() {
+    const select = document.getElementById("effortSelect");
+    return select?.value || undefined;
   },
 
   stopGeneration() {

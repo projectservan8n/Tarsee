@@ -62,6 +62,31 @@ const COMMANDS = {
     },
   },
 
+  think: {
+    description: "Set thinking effort (low, medium, high, max)",
+    usage: "/think [low|medium|high|max]",
+    handler: (args, ctx) => {
+      const levels = { low: "low", medium: "medium", med: "medium", high: "high", max: "max" };
+      const settingsStore = ctx.settingsStore;
+      if (!settingsStore) return "Settings not available.";
+
+      if (!args) {
+        const current = ctx.conversationId
+          ? settingsStore.get(`session.${ctx.conversationId}.effort`) || "default"
+          : "default";
+        return `**Current effort:** ${current}\n\n**Options:**\n- \`/think low\` — Minimal thinking, fastest\n- \`/think medium\` — Balanced\n- \`/think high\` — Deep reasoning (default)\n- \`/think max\` — Maximum effort (Opus only)`;
+      }
+
+      const level = levels[args.toLowerCase()];
+      if (!level) return `Unknown level. Use: low, medium, high, or max`;
+
+      if (ctx.conversationId) {
+        settingsStore.set(`session.${ctx.conversationId}.effort`, level);
+      }
+      return `Thinking effort set to **${level}**`;
+    },
+  },
+
   system: {
     description: "Set or show the system prompt for this conversation",
     usage: "/system [prompt]",

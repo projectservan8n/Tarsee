@@ -174,7 +174,7 @@ chatRouter.post("/stop", (req, res) => {
  * Body: { conversationId, message, provider?, model? }
  */
 chatRouter.post("/send", async (req, res) => {
-  const { conversationId, channelKey, message, attachments, provider: reqProvider, model: reqModel } = req.body || {};
+  let { conversationId, channelKey, message, attachments, provider: reqProvider, model: reqModel, effort: reqEffort } = req.body || {};
 
   // Track activity for idle session reset
   trackActivity();
@@ -241,7 +241,14 @@ chatRouter.post("/send", async (req, res) => {
   }
 
   // Strip voice mode prefix before saving
-  const cleanMessage = message.startsWith("[voice] ") ? message.slice(8) : message;
+  let cleanMessage = message.startsWith("[voice] ") ? message.slice(8) : message;
+
+  // Per-message thinking effort prefix: "!think do this" or "!! do this"
+  const thinkMatch = cleanMessage.match(/^(?:!think\s+|!!\s*)(.*)/s);
+  if (thinkMatch) {
+    cleanMessage = thinkMatch[1];
+    if (!reqEffort) reqEffort = "max"; // !think = max effort for this message
+  }
 
   // Save user message (text only — no base64 blobs in DB)
   convStore.addMessage(convId, { role: "user", content: cleanMessage });
@@ -328,6 +335,9 @@ chatRouter.post("/send", async (req, res) => {
         const last = ccMessages[ccMessages.length - 1];
         if (last.role === "user") last.content = userContentForAI;
       }
+      // Resolve effort: per-request > session setting > default
+      const effort = reqEffort || settingsStore.get(`session.${convId}.effort`) || undefined;
+
       const stream = mod.chat({
         messages: ccMessages,
         model,
@@ -336,6 +346,7 @@ chatRouter.post("/send", async (req, res) => {
         sessionId: existingSessionId,
         onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
         toolCtx,
+        effort,
       });
 
       for await (const event of stream) {
