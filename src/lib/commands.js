@@ -100,11 +100,9 @@ const COMMANDS = {
 
       if (!ctx.conversationId || !ctx.convStore) return "No active conversation.";
 
-      // Get last 10 messages
       const messages = ctx.convStore.getRecentMessages(ctx.conversationId, 10);
       if (!messages.length) return "No messages to forward.";
 
-      // Build summary
       const lines = messages.map((m) => {
         const role = m.role === "user" ? "You" : "Tarsee";
         const text = m.content.length > 300 ? m.content.slice(0, 300) + "..." : m.content;
@@ -113,7 +111,6 @@ const COMMANDS = {
 
       const summary = `📨 **Conversation handoff**\n\n${lines.join("\n\n")}`;
 
-      // Send via tools
       try {
         const { executeTool } = await import("./tools.js");
         await executeTool("send_message", { channel: target, message: summary }, ctx);
@@ -121,6 +118,35 @@ const COMMANDS = {
       } catch (err) {
         return `Failed to send: ${err.message}`;
       }
+    },
+  },
+
+  auto: {
+    description: "Toggle auto model routing (haiku for simple, sonnet for general, opus for complex)",
+    usage: "/auto [on|off]",
+    handler: (args, ctx) => {
+      const settingsStore = ctx.settingsStore;
+      if (!settingsStore) return "Settings not available.";
+
+      const current = settingsStore.get("ai.autoRoute") === true;
+
+      if (!args) {
+        settingsStore.set("ai.autoRoute", !current);
+        return !current
+          ? "Auto-routing **enabled** — Haiku for simple, Sonnet for general, Opus for complex."
+          : "Auto-routing **disabled** — using default model.";
+      }
+
+      if (args.toLowerCase() === "on") {
+        settingsStore.set("ai.autoRoute", true);
+        return "Auto-routing **enabled** — Haiku for simple, Sonnet for general, Opus for complex.";
+      }
+      if (args.toLowerCase() === "off") {
+        settingsStore.set("ai.autoRoute", false);
+        return "Auto-routing **disabled** — using default model.";
+      }
+
+      return "Usage: `/auto` (toggle), `/auto on`, `/auto off`";
     },
   },
 

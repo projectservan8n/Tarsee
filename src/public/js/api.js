@@ -174,6 +174,7 @@ const API = {
             else if (eventType === "tool_result") onText?.(null, { type: "tool_result", ...parsed });
             else if (eventType === "done") onDone?.(parsed);
             else if (eventType === "error") onError?.(parsed.message);
+            else if (eventType === "model_selected") onText?.(null, { type: "model_selected", ...parsed });
             else if (eventType === "conversation") onDone?.({ conversationId: parsed.id, type: "conversation" });
           } catch {}
           eventType = null;
