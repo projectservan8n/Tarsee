@@ -87,6 +87,46 @@ const COMMANDS = {
     },
   },
 
+  stats: {
+    description: "Show analytics summary (tokens, messages, memories)",
+    usage: "/stats",
+    handler: (_args, ctx) => {
+      const db = ctx.db;
+      if (!db) return "Database not available.";
+
+      const msgCount = db.prepare("SELECT COUNT(*) as count FROM messages").get()?.count || 0;
+      const todayMsgs = db.prepare("SELECT COUNT(*) as count FROM messages WHERE created_at >= date('now')").get()?.count || 0;
+      const convCount = db.prepare("SELECT COUNT(*) as count FROM conversations").get()?.count || 0;
+
+      const tokens = db.prepare(`
+        SELECT COALESCE(SUM(tokens_in), 0) as ti, COALESCE(SUM(tokens_out), 0) as to_,
+          COALESCE(SUM(CASE WHEN created_at >= date('now') THEN tokens_in ELSE 0 END), 0) as today_in,
+          COALESCE(SUM(CASE WHEN created_at >= date('now') THEN tokens_out ELSE 0 END), 0) as today_out
+        FROM messages
+      `).get() || {};
+
+      let memCount = 0;
+      try { memCount = db.prepare("SELECT COUNT(*) as count FROM bot_memory").get()?.count || 0; } catch {}
+
+      const mem = process.memoryUsage();
+      const uptime = Math.floor(process.uptime());
+      const hrs = Math.floor(uptime / 3600);
+      const mins = Math.floor((uptime % 3600) / 60);
+
+      return [
+        "**Tarsee Analytics**",
+        "",
+        `**Uptime:** ${hrs}h ${mins}m | **RAM:** ${Math.round(mem.rss / 1024 / 1024)}MB`,
+        `**Conversations:** ${convCount} | **Messages:** ${msgCount} (${todayMsgs} today)`,
+        `**Tokens (all time):** ${(tokens.ti || 0).toLocaleString()} in / ${(tokens.to_ || 0).toLocaleString()} out`,
+        `**Tokens (today):** ${(tokens.today_in || 0).toLocaleString()} in / ${(tokens.today_out || 0).toLocaleString()} out`,
+        `**Memories:** ${memCount}`,
+        "",
+        "Full dashboard: open Settings → Canvas tab (coming soon) or call `GET /api/analytics`"
+      ].join("\n");
+    },
+  },
+
   system: {
     description: "Set or show the system prompt for this conversation",
     usage: "/system [prompt]",

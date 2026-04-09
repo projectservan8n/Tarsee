@@ -113,6 +113,7 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | `/help` | Show all commands |
 | `/model opus\|sonnet\|haiku` | Switch AI model |
 | `/clear` | New conversation |
+| `/stats` | Analytics summary (tokens, messages, memories, uptime) |
 | `/status` | System status |
 | `/cron` | Manage scheduled tasks |
 | `/remember [fact]` | Save to memory |

@@ -38,6 +38,7 @@ import { canvasMiddleware } from "./lib/canvas.js";
 import { acpRouter } from "./routes/acp.js";
 import { cronRouter } from "./routes/cron.js";
 import { agentsRouter } from "./routes/agents.js";
+import { analyticsRouter } from "./routes/analytics.js";
 
 import { writePid, removePid } from "./daemon/pid.js";
 
@@ -111,6 +112,7 @@ app.use("/api/skills", requireAuth, csrfProtect, skillsRouter);
 app.use("/api/acp", requireAuth, csrfProtect, acpRouter);
 app.use("/api/cron", requireAuth, csrfProtect, cronRouter);
 app.use("/api/agents", requireAuth, csrfProtect, agentsRouter);
+app.use("/api/analytics", requireAuth, csrfProtect, analyticsRouter);
 
 // SPA fallback — serve index.html for client-side routes
 // Express 5 requires named wildcard params (bare * is invalid)
