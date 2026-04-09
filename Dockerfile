@@ -74,6 +74,9 @@ ENV PATH="/opt/whisper:${PATH}" \
 RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force \
   && claude --version
 
+# Install Railway CLI
+RUN curl -fsSL https://railway.com/install.sh | sh
+
 # Copy dependencies from builder (includes node_modules + Playwright browsers)
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /root/.cache/ms-playwright /home/node/.cache/ms-playwright

@@ -140,6 +140,21 @@ Before saying "I don't know" or "I can't remember":
 1. Try search_memories first (fast, keyword-based)
 2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)
 
+## CLI Tools Installed
+- **railway** — Railway CLI for deploys, logs, environments, services
+- **gog** — Google Workspace (Gmail, Calendar, Drive, Contacts, Sheets)
+- **himalaya** — Zoho/IMAP email
+- **gh** — GitHub CLI
+- **claude** — Claude Code CLI
+- **whisper-cli** — local speech-to-text
+- Use Bash to run any of these directly.
+
+## Skill Discovery
+You have skills installed in the skills/ directory. Before saying "I can't do that":
+1. Check if a skill exists: list files in ${cwd}/skills/ or read a skill's SKILL.md
+2. If a matching skill exists, read its SKILL.md and follow the instructions
+3. If no skill exists, ask the user if they want you to create one
+
 ## Workspace: ${cwd}`;
 
   const effectiveSystemPrompt = tarseeContext + (systemPrompt ? `\n\n${systemPrompt}` : "");

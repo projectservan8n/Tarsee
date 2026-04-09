@@ -413,9 +413,26 @@
   margin: var(--space-1-5) var(--space-0);
 }
 
+.message-text ul {
+  list-style: disc;
+}
+
+.message-text ul li::marker {
+  color: var(--text-muted);
+}
+
+.message-text ol li::marker {
+  color: var(--text-muted);
+}
+
 .message-text li {
   margin-bottom: 3px;
 }
+
+/* Timeline text items also inherit list styles */
+.tl-content ul { list-style: disc; }
+.tl-content ul li::marker { color: var(--text-muted); }
+.tl-content ol li::marker { color: var(--text-muted); }
 
 .message-text a {
   color: var(--accent);
