@@ -115,6 +115,7 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | `/clear` | New conversation |
 | `/status` | System status |
 | `/cron` | Manage scheduled tasks |
+| `/play [name\|list\|save\|delete]` | Run or manage playbooks (multi-step AI workflows) |
 | `/remember [fact]` | Save to memory |
 | `/doctor [fix]` | Diagnostics + auto-repair |
 | `/export` | Export conversation |

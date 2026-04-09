@@ -87,6 +87,56 @@ const COMMANDS = {
     },
   },
 
+  play: {
+    description: "Run a saved playbook (multi-step AI workflow)",
+    usage: "/play [name] or /play list or /play save <name> <steps>",
+    handler: (args, ctx) => {
+      const settingsStore = ctx.settingsStore;
+      if (!settingsStore) return "Settings not available.";
+
+      const playbooks = settingsStore.get("playbooks") || {};
+
+      if (!args || args.toLowerCase() === "list") {
+        const entries = Object.entries(playbooks);
+        if (entries.length === 0) return "No playbooks saved.\n\nCreate one: `/play save morning-routine Check emails, summarize unread, draft replies`\n\nOr just tell the AI: \"Save a playbook called weekly-report that does X, Y, Z\"";
+        const lines = entries.map(([name, p]) => `- **${name}** — ${p.steps?.length || 0} steps: ${(p.description || p.steps?.[0] || "").slice(0, 60)}...`);
+        return `**Playbooks (${entries.length}):**\n${lines.join("\n")}\n\nRun: \`/play <name>\``;
+      }
+
+      const parts = args.split(/\s+/);
+      const cmd = parts[0].toLowerCase();
+
+      if (cmd === "save" && parts[1]) {
+        const name = parts[1].toLowerCase().replace(/[^a-z0-9-]/g, "-");
+        const stepsRaw = parts.slice(2).join(" ");
+        if (!stepsRaw) return "Usage: `/play save <name> Step 1, Step 2, Step 3`";
+
+        // Split by commas, newlines, or numbered lists
+        const steps = stepsRaw.split(/[,\n]|(?:\d+\.\s)/).map((s) => s.trim()).filter(Boolean);
+        playbooks[name] = { steps, description: stepsRaw.slice(0, 200), created: new Date().toISOString() };
+        settingsStore.set("playbooks", playbooks);
+        return `Playbook **${name}** saved with ${steps.length} steps.\n\nRun it: \`/play ${name}\``;
+      }
+
+      if (cmd === "delete" && parts[1]) {
+        const name = parts[1];
+        if (!playbooks[name]) return `Playbook "${name}" not found.`;
+        delete playbooks[name];
+        settingsStore.set("playbooks", playbooks);
+        return `Playbook **${name}** deleted.`;
+      }
+
+      // Run a playbook by name
+      const name = cmd;
+      const playbook = playbooks[name];
+      if (!playbook) return `Playbook "${name}" not found. Use \`/play list\` to see available playbooks.`;
+
+      // Return the playbook steps as a structured prompt for the AI to execute
+      const stepsText = playbook.steps.map((s, i) => `${i + 1}. ${s}`).join("\n");
+      return `__PLAYBOOK__\nExecute this playbook step by step. Complete each step before moving to the next. Report progress after each step.\n\n**Playbook: ${name}**\n${stepsText}`;
+    },
+  },
+
   system: {
     description: "Set or show the system prompt for this conversation",
     usage: "/system [prompt]",
