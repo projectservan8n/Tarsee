@@ -1372,8 +1372,11 @@ const Chat = {
     // Strikethrough
     html = html.replace(/~~(.+?)~~/g, "<del>$1</del>");
 
-    // Links
+    // Markdown links [text](url)
     html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+
+    // Auto-link bare URLs (not already inside an href or <a> tag)
+    html = html.replace(/(?<!href="|">)(https?:\/\/[^\s<"')\]]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
 
     // Re-inject code blocks
     for (let i = 0; i < codeBlocks.length; i++) {
