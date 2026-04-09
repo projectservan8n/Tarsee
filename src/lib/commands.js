@@ -301,14 +301,35 @@ const COMMANDS = {
   },
 
   email: {
-    description: "Check or manage email",
+    description: "Check or manage email via gog CLI (Gmail)",
     usage: "/email [check|summary|draft <details>]",
     handler: (args) => {
-      if (!args) return "**Email:** `/email check`, `/email summary`, `/email draft <to> <subject>`";
+      if (!args) return "**Email (via gog CLI):**\n- `/email check` — List unread emails\n- `/email summary` — Summarize today's inbox\n- `/email draft <to> <subject>` — Draft an email";
       const cmd = args.toLowerCase().split(/\s+/)[0];
-      if (cmd === "check") return "__PLAYBOOK__\nCheck my email inbox for unread messages. Use gog CLI or Bash. List sender, subject, and 1-line preview.";
-      if (cmd === "summary") return "__PLAYBOOK__\nSummarize my email inbox for today. Group by priority.";
-      if (cmd === "draft") return `__PLAYBOOK__\nDraft an email: ${args.slice(6).trim()}\n\nShow draft for approval before sending.`;
+      if (cmd === "check") return `__PLAYBOOK__\nCheck my email inbox for unread messages using the gog CLI.
+
+Run this exact Bash command:
+\`\`\`
+gog gmail search "is:unread" --plain 2>&1 | head -50
+\`\`\`
+
+Then summarize each unread email: sender, subject, and 1-line preview. If gog fails, tell me the error.`;
+
+      if (cmd === "summary") return `__PLAYBOOK__\nSummarize my email inbox for today using gog CLI.
+
+Run this Bash command:
+\`\`\`
+gog gmail search "newer_than:1d" --plain 2>&1 | head -80
+\`\`\`
+
+Group emails by priority: urgent/action-needed first, FYI/newsletters last. Keep each summary to 1-2 lines.`;
+
+      if (cmd === "draft") return `__PLAYBOOK__\nDraft an email. Details: ${args.slice(6).trim()}
+
+Write a professional email draft and show it to me for approval. Read USER.md for my writing style.
+To send after approval, use: \`gog gmail messages send --to <email> --subject "<subject>" --body "<body>"\`
+Do NOT send without my explicit approval.`;
+
       return "Use: `/email check`, `/email summary`, `/email draft <details>`";
     },
   },
