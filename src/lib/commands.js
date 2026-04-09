@@ -150,6 +150,169 @@ const COMMANDS = {
     },
   },
 
+  webhook: {
+    description: "Manage webhook triggers (external events → AI)",
+    usage: "/webhook [add <id> <prompt>|remove <id>|list]",
+    handler: (args, ctx) => {
+      const settingsStore = ctx.settingsStore;
+      if (!settingsStore) return "Settings not available.";
+      const hooks = settingsStore.get("webhooks") || {};
+      if (!args || args.toLowerCase() === "list") {
+        const entries = Object.entries(hooks);
+        if (entries.length === 0) return "No webhooks configured.\n\nAdd one: `/webhook add github-pr Review this PR: {{payload}}`";
+        const lines = entries.map(([id, h]) => `- **${id}** → ${h.prompt?.slice(0, 60) || "(default)"}...`);
+        const token = settingsStore.get("api.token") || "(not set)";
+        return `**Webhooks (${entries.length}):**\n${lines.join("\n")}\n\n**URL:** \`POST /api/webhooks/<id>?token=${token}\``;
+      }
+      const parts = args.split(/\s+/);
+      const cmd = parts[0].toLowerCase();
+      if (cmd === "add" && parts[1]) {
+        const id = parts[1];
+        const prompt = parts.slice(2).join(" ") || null;
+        hooks[id] = { prompt, channel: "web:default", created: new Date().toISOString() };
+        settingsStore.set("webhooks", hooks);
+        const token = settingsStore.get("api.token") || "(not set)";
+        return `Webhook **${id}** created.\n\n**URL:** \`POST /api/webhooks/${id}?token=${token}\`\n\nSend a JSON POST to trigger the AI.`;
+      }
+      if (cmd === "remove" && parts[1]) {
+        if (!hooks[parts[1]]) return `Webhook "${parts[1]}" not found.`;
+        delete hooks[parts[1]];
+        settingsStore.set("webhooks", hooks);
+        return `Webhook **${parts[1]}** removed.`;
+      }
+      return "Usage: `/webhook list`, `/webhook add <id> <prompt>`, `/webhook remove <id>`";
+    },
+  },
+
+  stats: {
+    description: "Show analytics summary (tokens, messages, memories)",
+    usage: "/stats",
+    handler: (_args, ctx) => {
+      const db = ctx.db;
+      if (!db) return "Database not available.";
+      const msgCount = db.prepare("SELECT COUNT(*) as count FROM messages").get()?.count || 0;
+      const todayMsgs = db.prepare("SELECT COUNT(*) as count FROM messages WHERE created_at >= date('now')").get()?.count || 0;
+      const convCount = db.prepare("SELECT COUNT(*) as count FROM conversations").get()?.count || 0;
+      const tokens = db.prepare(`SELECT COALESCE(SUM(tokens_in),0) as ti, COALESCE(SUM(tokens_out),0) as to_, COALESCE(SUM(CASE WHEN created_at >= date('now') THEN tokens_in ELSE 0 END),0) as today_in, COALESCE(SUM(CASE WHEN created_at >= date('now') THEN tokens_out ELSE 0 END),0) as today_out FROM messages`).get() || {};
+      let memCount = 0;
+      try { memCount = db.prepare("SELECT COUNT(*) as count FROM bot_memory").get()?.count || 0; } catch {}
+      const mem = process.memoryUsage();
+      const uptime = Math.floor(process.uptime());
+      const hrs = Math.floor(uptime / 3600);
+      const mins = Math.floor((uptime % 3600) / 60);
+      return [
+        "**Tarsee Analytics**", "",
+        `**Uptime:** ${hrs}h ${mins}m | **RAM:** ${Math.round(mem.rss / 1024 / 1024)}MB`,
+        `**Conversations:** ${convCount} | **Messages:** ${msgCount} (${todayMsgs} today)`,
+        `**Tokens (all time):** ${(tokens.ti||0).toLocaleString()} in / ${(tokens.to_||0).toLocaleString()} out`,
+        `**Tokens (today):** ${(tokens.today_in||0).toLocaleString()} in / ${(tokens.today_out||0).toLocaleString()} out`,
+        `**Memories:** ${memCount}`,
+      ].join("\n");
+    },
+  },
+
+  play: {
+    description: "Run a saved playbook (multi-step AI workflow)",
+    usage: "/play [name] or /play list or /play save <name> <steps>",
+    handler: (args, ctx) => {
+      const settingsStore = ctx.settingsStore;
+      if (!settingsStore) return "Settings not available.";
+      const playbooks = settingsStore.get("playbooks") || {};
+      if (!args || args.toLowerCase() === "list") {
+        const entries = Object.entries(playbooks);
+        if (entries.length === 0) return "No playbooks saved.\n\nCreate: `/play save morning-routine Check emails, summarize, draft replies`";
+        const lines = entries.map(([name, p]) => `- **${name}** — ${p.steps?.length || 0} steps`);
+        return `**Playbooks:**\n${lines.join("\n")}\n\nRun: \`/play <name>\``;
+      }
+      const parts = args.split(/\s+/);
+      const cmd = parts[0].toLowerCase();
+      if (cmd === "save" && parts[1]) {
+        const name = parts[1].toLowerCase().replace(/[^a-z0-9-]/g, "-");
+        const stepsRaw = parts.slice(2).join(" ");
+        if (!stepsRaw) return "Usage: `/play save <name> Step 1, Step 2, Step 3`";
+        const steps = stepsRaw.split(/[,\n]|(?:\d+\.\s)/).map((s) => s.trim()).filter(Boolean);
+        playbooks[name] = { steps, created: new Date().toISOString() };
+        settingsStore.set("playbooks", playbooks);
+        return `Playbook **${name}** saved with ${steps.length} steps. Run: \`/play ${name}\``;
+      }
+      if (cmd === "delete" && parts[1]) {
+        if (!playbooks[parts[1]]) return `Playbook "${parts[1]}" not found.`;
+        delete playbooks[parts[1]];
+        settingsStore.set("playbooks", playbooks);
+        return `Playbook **${parts[1]}** deleted.`;
+      }
+      const playbook = playbooks[cmd];
+      if (!playbook) return `Playbook "${cmd}" not found. Use \`/play list\`.`;
+      const stepsText = playbook.steps.map((s, i) => `${i + 1}. ${s}`).join("\n");
+      return `__PLAYBOOK__\nExecute this playbook step by step:\n\n**Playbook: ${cmd}**\n${stepsText}`;
+    },
+  },
+
+  fork: {
+    description: "Branch conversation — copy history into new session",
+    usage: "/fork [from message #N]",
+    handler: (args, ctx) => {
+      if (!ctx.conversationId || !ctx.convStore) return "No active conversation.";
+      const sourceConv = ctx.convStore.get(ctx.conversationId);
+      if (!sourceConv) return "Conversation not found.";
+      const messages = ctx.convStore.getMessages(ctx.conversationId);
+      if (!messages.length) return "No messages to fork.";
+      let forkFrom = messages.length;
+      if (args) { const n = parseInt(args, 10); if (!isNaN(n) && n > 0 && n <= messages.length) forkFrom = n; }
+      const forkedMessages = messages.slice(0, forkFrom);
+      const title = `Fork of ${sourceConv.title || "conversation"} (${forkedMessages.length} msgs)`;
+      const newConv = ctx.convStore.create({ title });
+      for (const msg of forkedMessages) {
+        ctx.convStore.addMessage(newConv.id, { role: msg.role, content: msg.content, provider: msg.provider, model: msg.model });
+      }
+      return `Forked! **${title}** — ${forkedMessages.length} messages copied. Switch to it from the sidebar.`;
+    },
+  },
+
+  files: {
+    description: "List or search workspace files",
+    usage: "/files [search term]",
+    handler: async (_args) => {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const config = (await import("../config/env.js")).default;
+      const wsDir = config.WORKSPACE_DIR;
+      const listDir = (dir, prefix = "") => {
+        const entries = [];
+        try {
+          for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+            const relPath = prefix ? `${prefix}/${item.name}` : item.name;
+            if (item.isDirectory()) { entries.push({ name: relPath + "/", type: "dir", size: 0 }); entries.push(...listDir(path.join(dir, item.name), relPath)); }
+            else { const stat = fs.statSync(path.join(dir, item.name)); entries.push({ name: relPath, type: "file", size: stat.size }); }
+          }
+        } catch {}
+        return entries;
+      };
+      const allFiles = listDir(wsDir);
+      if (_args) {
+        const matches = allFiles.filter((f) => f.name.toLowerCase().includes(_args.toLowerCase()));
+        if (!matches.length) return `No files matching "${_args}".`;
+        return `**Files matching "${_args}":**\n${matches.slice(0, 20).map((f) => `- ${f.type === "dir" ? "📁" : "📄"} \`${f.name}\``).join("\n")}`;
+      }
+      const fileCount = allFiles.filter((f) => f.type === "file").length;
+      const topItems = allFiles.filter((f) => !f.name.includes("/"));
+      return `**Workspace** — ${fileCount} files\n${topItems.map((f) => `- ${f.type === "dir" ? "📁" : "📄"} \`${f.name}\``).join("\n")}`;
+    },
+  },
+
+  email: {
+    description: "Check or manage email",
+    usage: "/email [check|summary|draft <details>]",
+    handler: (args) => {
+      if (!args) return "**Email:** `/email check`, `/email summary`, `/email draft <to> <subject>`";
+      const cmd = args.toLowerCase().split(/\s+/)[0];
+      if (cmd === "check") return "__PLAYBOOK__\nCheck my email inbox for unread messages. Use gog CLI or Bash. List sender, subject, and 1-line preview.";
+      if (cmd === "summary") return "__PLAYBOOK__\nSummarize my email inbox for today. Group by priority.";
+      if (cmd === "draft") return `__PLAYBOOK__\nDraft an email: ${args.slice(6).trim()}\n\nShow draft for approval before sending.`;
+      return "Use: `/email check`, `/email summary`, `/email draft <details>`";
+    },
+  },
+
   system: {
     description: "Set or show the system prompt for this conversation",
     usage: "/system [prompt]",
