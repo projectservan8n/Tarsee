@@ -87,6 +87,54 @@ const COMMANDS = {
     },
   },
 
+  fork: {
+    description: "Branch the conversation — copy history into a new session to explore alternatives",
+    usage: "/fork [from message #N]",
+    handler: (args, ctx) => {
+      if (!ctx.conversationId || !ctx.convStore) return "No active conversation.";
+
+      const sourceConv = ctx.convStore.get(ctx.conversationId);
+      if (!sourceConv) return "Conversation not found.";
+
+      const messages = ctx.convStore.getMessages(ctx.conversationId);
+      if (!messages.length) return "No messages to fork.";
+
+      // Optional: fork from a specific message number
+      let forkFrom = 0;
+      if (args) {
+        const n = parseInt(args, 10);
+        if (!isNaN(n) && n > 0 && n <= messages.length) {
+          forkFrom = n - 1; // 0-indexed
+        }
+      }
+
+      const forkedMessages = forkFrom > 0 ? messages.slice(0, forkFrom) : messages;
+
+      // Create new conversation
+      const title = `Fork of ${sourceConv.title || "conversation"} (${forkedMessages.length} msgs)`;
+      const newConv = ctx.convStore.create({ title });
+
+      // Copy messages
+      for (const msg of forkedMessages) {
+        ctx.convStore.addMessage(newConv.id, {
+          role: msg.role,
+          content: msg.content,
+          provider: msg.provider,
+          model: msg.model,
+        });
+      }
+
+      // Store fork relationship
+      if (ctx.settingsStore) {
+        const forks = ctx.settingsStore.get(`conv.${ctx.conversationId}.forks`) || [];
+        forks.push({ id: newConv.id, fromMessage: forkFrom || messages.length, created: new Date().toISOString() });
+        ctx.settingsStore.set(`conv.${ctx.conversationId}.forks`, forks);
+      }
+
+      return `Forked! New conversation: **${title}**\n\nCopied ${forkedMessages.length} messages. Switch to it from the sidebar.\n\nConversation ID: \`${newConv.id}\``;
+    },
+  },
+
   system: {
     description: "Set or show the system prompt for this conversation",
     usage: "/system [prompt]",
