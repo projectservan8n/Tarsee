@@ -1073,19 +1073,30 @@ const Chat = {
     }
   },
 
+  _effortLevel: "",
+  _effortLevels: [
+    { value: "", icon: "⚡", label: "Auto" },
+    { value: "low", icon: "🐇", label: "Quick" },
+    { value: "medium", icon: "⚖️", label: "Balanced" },
+    { value: "high", icon: "🧠", label: "Deep" },
+    { value: "max", icon: "🔮", label: "Maximum" },
+  ],
+
   getEffort() {
-    const active = document.querySelector(".effort-pill.active");
-    return active?.dataset.effort || undefined;
+    return this._effortLevel || undefined;
   },
 
   initEffortPills() {
-    const container = document.getElementById("effortSelect");
-    if (!container) return;
-    container.addEventListener("click", (e) => {
-      const pill = e.target.closest(".effort-pill");
-      if (!pill) return;
-      container.querySelectorAll(".effort-pill").forEach((p) => p.classList.remove("active"));
-      pill.classList.add("active");
+    const btn = document.getElementById("effortToggle");
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      const levels = this._effortLevels;
+      const idx = levels.findIndex((l) => l.value === this._effortLevel);
+      const next = levels[(idx + 1) % levels.length];
+      this._effortLevel = next.value;
+      document.getElementById("effortIcon").textContent = next.icon;
+      document.getElementById("effortLabel").textContent = next.label;
+      btn.dataset.level = next.value;
     });
   },
 

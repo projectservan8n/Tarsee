@@ -184,32 +184,8 @@ const COMMANDS = {
     },
   },
 
-  stats: {
-    description: "Show analytics summary (tokens, messages, memories)",
-    usage: "/stats",
-    handler: (_args, ctx) => {
-      const db = ctx.db;
-      if (!db) return "Database not available.";
-      const msgCount = db.prepare("SELECT COUNT(*) as count FROM messages").get()?.count || 0;
-      const todayMsgs = db.prepare("SELECT COUNT(*) as count FROM messages WHERE created_at >= date('now')").get()?.count || 0;
-      const convCount = db.prepare("SELECT COUNT(*) as count FROM conversations").get()?.count || 0;
-      const tokens = db.prepare(`SELECT COALESCE(SUM(tokens_in),0) as ti, COALESCE(SUM(tokens_out),0) as to_, COALESCE(SUM(CASE WHEN created_at >= date('now') THEN tokens_in ELSE 0 END),0) as today_in, COALESCE(SUM(CASE WHEN created_at >= date('now') THEN tokens_out ELSE 0 END),0) as today_out FROM messages`).get() || {};
-      let memCount = 0;
-      try { memCount = db.prepare("SELECT COUNT(*) as count FROM bot_memory").get()?.count || 0; } catch {}
-      const mem = process.memoryUsage();
-      const uptime = Math.floor(process.uptime());
-      const hrs = Math.floor(uptime / 3600);
-      const mins = Math.floor((uptime % 3600) / 60);
-      return [
-        "**Tarsee Analytics**", "",
-        `**Uptime:** ${hrs}h ${mins}m | **RAM:** ${Math.round(mem.rss / 1024 / 1024)}MB`,
-        `**Conversations:** ${convCount} | **Messages:** ${msgCount} (${todayMsgs} today)`,
-        `**Tokens (all time):** ${(tokens.ti||0).toLocaleString()} in / ${(tokens.to_||0).toLocaleString()} out`,
-        `**Tokens (today):** ${(tokens.today_in||0).toLocaleString()} in / ${(tokens.today_out||0).toLocaleString()} out`,
-        `**Memories:** ${memCount}`,
-      ].join("\n");
-    },
-  },
+  // /stats → alias for /status
+  stats: { description: "Alias for /status", usage: "/stats", handler: (args, ctx) => COMMANDS.status.handler(args, ctx) },
 
   play: {
     description: "Run a saved playbook (multi-step AI workflow)",
@@ -474,35 +450,50 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
   },
 
   status: {
-    description: "Show system status",
+    description: "Full system dashboard — uptime, tokens, messages, channels, memory",
     usage: "/status",
     handler: (_args, ctx) => {
       const mem = process.memoryUsage();
       const uptime = Math.floor(process.uptime());
-      const hours = Math.floor(uptime / 3600);
+      const hrs = Math.floor(uptime / 3600);
       const mins = Math.floor((uptime % 3600) / 60);
-      const secs = uptime % 60;
 
       const lines = [
         "**Tarsee Status**",
         "",
-        `**Uptime:** ${hours}h ${mins}m ${secs}s`,
-        `**Memory:** ${Math.round(mem.rss / 1024 / 1024)}MB RSS, ${Math.round(mem.heapUsed / 1024 / 1024)}MB heap`,
-        `**Node:** ${process.version}`,
+        `⏱ **Uptime:** ${hrs}h ${mins}m | **RAM:** ${Math.round(mem.rss / 1024 / 1024)}MB`,
       ];
 
+      // Provider + model
       if (ctx.settingsStore) {
         const active = ctx.settingsStore.getActiveProvider();
-        lines.push(`**Provider:** ${active?.provider || "none"}`);
-        lines.push(`**Model:** ${active?.model || "default"}`);
+        const autoRoute = ctx.settingsStore.get("ai.autoRoute") === true;
+        lines.push(`🤖 **Model:** ${active?.model || "default"}${autoRoute ? " (auto-routing ON)" : ""}`);
       }
 
+      // Channels
       if (ctx.channelManager) {
         const status = ctx.channelManager.getStatus();
-        const channelLines = Object.entries(status)
-          .map(([type, s]) => `  ${type}: ${s.status}`)
-          .join("\n");
-        lines.push(`**Channels:**\n${channelLines}`);
+        const chLines = Object.entries(status).map(([t, s]) => `${t}: ${s.status}`).join(" · ");
+        lines.push(`📡 **Channels:** ${chLines}`);
+      }
+
+      // Messages + tokens (if DB available)
+      if (ctx.db) {
+        try {
+          const msgCount = ctx.db.prepare("SELECT COUNT(*) as c FROM messages").get()?.c || 0;
+          const todayMsgs = ctx.db.prepare("SELECT COUNT(*) as c FROM messages WHERE created_at >= date('now')").get()?.c || 0;
+          const convCount = ctx.db.prepare("SELECT COUNT(*) as c FROM conversations").get()?.c || 0;
+          const tokens = ctx.db.prepare(`SELECT COALESCE(SUM(tokens_in),0) as ti, COALESCE(SUM(tokens_out),0) as to_, COALESCE(SUM(CASE WHEN created_at >= date('now') THEN tokens_in ELSE 0 END),0) as tdi, COALESCE(SUM(CASE WHEN created_at >= date('now') THEN tokens_out ELSE 0 END),0) as tdo FROM messages`).get() || {};
+          let memCount = 0;
+          try { memCount = ctx.db.prepare("SELECT COUNT(*) as c FROM bot_memory").get()?.c || 0; } catch {}
+
+          lines.push("");
+          lines.push(`💬 **Conversations:** ${convCount} | **Messages:** ${msgCount} (${todayMsgs} today)`);
+          lines.push(`🔢 **Tokens today:** ${(tokens.tdi||0).toLocaleString()} in / ${(tokens.tdo||0).toLocaleString()} out`);
+          lines.push(`📊 **Tokens all-time:** ${(tokens.ti||0).toLocaleString()} in / ${(tokens.to_||0).toLocaleString()} out`);
+          lines.push(`🧠 **Memories:** ${memCount}`);
+        } catch { /* ignore */ }
       }
 
       return lines.join("\n");
@@ -810,14 +801,8 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
     },
   },
 
-  new: {
-    description: "Start a new session (alias for /clear)",
-    usage: "/new",
-    handler: (_args, ctx) => {
-      if (ctx.clearConversation) ctx.clearConversation();
-      return "New session started.";
-    },
-  },
+  // /new → alias for /clear
+  new: { description: "Alias for /clear", usage: "/new", handler: (_args, ctx) => COMMANDS.clear.handler(_args, ctx) },
 
   config: {
     description: "Show or set a config value",
@@ -859,38 +844,8 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
     },
   },
 
-  usage: {
-    description: "Show token usage and cost estimate",
-    usage: "/usage",
-    handler: async (_args, ctx) => {
-      const db = ctx.db;
-      if (!db) return "Database not available.";
-
-      try {
-        const total = db.prepare("SELECT COUNT(*) as count FROM messages").get();
-        const userMsgs = db.prepare("SELECT COUNT(*) as count FROM messages WHERE role='user'").get();
-        const aiMsgs = db.prepare("SELECT COUNT(*) as count FROM messages WHERE role='assistant'").get();
-        const convs = db.prepare("SELECT COUNT(*) as count FROM conversations").get();
-
-        // Estimate token count from message content
-        const contentRows = db.prepare("SELECT SUM(LENGTH(content)) as chars FROM messages").get();
-        const estTokens = Math.round((contentRows.chars || 0) / 4);
-
-        const lines = [
-          "**Usage Statistics**",
-          "",
-          `**Conversations:** ${convs.count}`,
-          `**Total messages:** ${total.count}`,
-          `  User: ${userMsgs.count}`,
-          `  Assistant: ${aiMsgs.count}`,
-          `**Est. tokens:** ~${estTokens.toLocaleString()} (based on message length)`,
-        ];
-        return lines.join("\n");
-      } catch (err) {
-        return `Usage error: ${err.message}`;
-      }
-    },
-  },
+  // /usage → alias for /status
+  usage: { description: "Alias for /status", usage: "/usage", handler: (_args, ctx) => COMMANDS.status.handler(_args, ctx) },
 
   doctor: {
     description: "Run diagnostics and self-heal (use /doctor fix to auto-repair)",
