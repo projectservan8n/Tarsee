@@ -102,6 +102,16 @@ export function createTarseeMcp(ctx) {
       ),
 
       tool(
+        "tarsee_search_memories_deep",
+        "Deep semantic search — reads ALL memories, MEMORY.md, and last 30 daily logs so you can reason about what's relevant. Use when keyword search returns nothing or the query is vague/conceptual.",
+        { query: z.string().describe("What you're looking for — natural language description") },
+        async (args) => {
+          const result = await executeTool("search_memories_deep", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      tool(
         "tarsee_web_fetch",
         "Fetch a URL and return its content (HTML converted to text, or raw for APIs).",
         { url: z.string().describe("URL to fetch"), raw: z.boolean().optional().describe("Return raw response (for APIs)") },
