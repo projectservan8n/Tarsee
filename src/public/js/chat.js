@@ -646,9 +646,9 @@ const Chat = {
   // --- File Attachments ---
   addPendingFiles(files) {
     for (const file of files) {
-      // Limit individual file to 10 MB
-      if (file.size > 10 * 1024 * 1024) {
-        App.showToast(`File "${file.name}" exceeds 10 MB limit`, "error");
+      // Limit individual file to 20 MB (Claude supports up to 32MB for PDFs, 20MB for images)
+      if (file.size > 20 * 1024 * 1024) {
+        App.showToast(`File "${file.name}" exceeds 20 MB limit`, "error");
         continue;
       }
       this.pendingFiles.push(file);
@@ -673,15 +673,26 @@ const Chat = {
     container.style.display = "flex";
     container.innerHTML = this.pendingFiles.map((file, i) => {
       const isImage = file.type.startsWith("image/");
+      const url = URL.createObjectURL(file);
       const thumb = isImage
-        ? `<img src="${URL.createObjectURL(file)}" alt="">`
+        ? `<img src="${url}" alt="" class="att-preview-img" data-url="${url}">`
         : `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/></svg>`;
-      return `<div class="chat-attachment-thumb">
+      const sizeKB = (file.size / 1024).toFixed(0);
+      return `<div class="chat-attachment-thumb" title="${escapeHtml(file.name)} (${sizeKB}KB)">
         ${thumb}
         <span class="att-name">${escapeHtml(file.name)}</span>
         <button class="chat-attachment-remove" data-index="${i}" title="Remove">&times;</button>
       </div>`;
     }).join("");
+
+    // Click previews to open lightbox/viewer
+    container.querySelectorAll(".chat-attachment-thumb").forEach((thumb, i) => {
+      thumb.style.cursor = "pointer";
+      thumb.addEventListener("click", (e) => {
+        if (e.target.closest(".chat-attachment-remove")) return; // Don't trigger on X button
+        this.previewFile(this.pendingFiles[i]);
+      });
+    });
 
     container.querySelectorAll(".chat-attachment-remove").forEach((btn) => {
       btn.addEventListener("click", () => this.removePendingFile(parseInt(btn.dataset.index, 10)));
@@ -726,12 +737,25 @@ const Chat = {
     if (images.length) {
       html += '<div class="message-images">';
       for (const img of images) {
-        html += `<img src="data:${escapeHtml(img.mediaType)};base64,${img.data}" alt="${escapeHtml(img.name)}">`;
+        const src = `data:${escapeHtml(img.mediaType)};base64,${img.data}`;
+        html += `<img src="${src}" alt="${escapeHtml(img.name)}" class="clickable-image" onclick="Chat.openLightbox('${src.replace(/'/g, "\\'")}')" style="cursor:pointer">`;
       }
       html += "</div>";
     }
     for (const f of others) {
-      html += `<div class="message-file-chip"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/></svg> ${escapeHtml(f.name)}</div>`;
+      const name = f.name || "file";
+      const lname = name.toLowerCase();
+      const isPdf = lname.endsWith(".pdf") || f.mediaType === "application/pdf";
+      const isSheet = lname.endsWith(".csv") || lname.endsWith(".tsv") || lname.endsWith(".xlsx") || lname.endsWith(".xls");
+      const isText = [".txt",".md",".json",".js",".py",".ts",".html",".css",".yml",".yaml",".xml",".sh",".sql",".go",".rs",".java",".c",".cpp",".rb",".php"].some(e => lname.endsWith(e));
+      const previewable = isPdf || isSheet || isText;
+      const dataIdx = this._storeAttachmentData(f);
+      if (previewable) {
+        html += `<div class="message-file-chip message-file-previewable" onclick="Chat.previewStoredFile(${dataIdx})" title="Click to preview"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/></svg> ${escapeHtml(name)} <span style="color:var(--text-muted);font-size:10px">▸ preview</span></div>`;
+      } else {
+        const dataUrl = `data:${f.mediaType || "application/octet-stream"};base64,${f.data}`;
+        html += `<a class="message-file-chip" href="${dataUrl}" download="${escapeHtml(name)}" title="Click to download"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/></svg> ${escapeHtml(name)}</a>`;
+      }
     }
     return html;
   },
@@ -1230,6 +1254,247 @@ const Chat = {
     } catch (err) {
       App.showToast("Failed to delete: " + err.message, "error");
     }
+  },
+
+  // --- Attachment data store (for previewing sent attachments) ---
+  _attachmentStore: [],
+  _storeAttachmentData(att) {
+    const idx = this._attachmentStore.length;
+    this._attachmentStore.push(att);
+    return idx;
+  },
+  previewStoredFile(idx) {
+    const att = this._attachmentStore[idx];
+    if (!att) return;
+    // Create a fake File-like object for previewFile
+    const blob = new Blob([Uint8Array.from(atob(att.data), c => c.charCodeAt(0))], { type: att.mediaType });
+    blob.name = att.name;
+    this.previewFile(blob);
+  },
+
+  // --- Preview / Lightbox ---
+  openLightbox(src, type) {
+    const existing = document.querySelector(".lightbox-overlay");
+    if (existing) existing.remove();
+    const overlay = document.createElement("div");
+    overlay.className = "lightbox-overlay";
+
+    if (type === "pdf") {
+      overlay.innerHTML = `<iframe src="${src}" class="lightbox-frame"></iframe><button class="lightbox-close">&times;</button>`;
+    } else if (type === "sheet") {
+      overlay.innerHTML = `<div class="lightbox-sheet">${src}</div><button class="lightbox-close">&times;</button>`;
+    } else {
+      overlay.innerHTML = `<img src="${src}" class="lightbox-img"><button class="lightbox-close">&times;</button>`;
+    }
+
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay || e.target.classList.contains("lightbox-close")) overlay.remove();
+    });
+    // Escape to close
+    const escHandler = (e) => { if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", escHandler); } };
+    document.addEventListener("keydown", escHandler);
+    document.body.appendChild(overlay);
+  },
+
+  /** Parse CSV/TSV text into an HTML table */
+  csvToTable(text, separator) {
+    const sep = separator || (text.includes("\t") ? "\t" : ",");
+    const rows = text.trim().split("\n").map(r => r.split(sep));
+    if (rows.length === 0) return "<p>Empty file</p>";
+    let html = '<table class="md-table"><thead><tr>';
+    for (const cell of rows[0]) html += `<th>${escapeHtml(cell.trim())}</th>`;
+    html += "</tr></thead><tbody>";
+    for (let i = 1; i < rows.length && i < 200; i++) {
+      html += "<tr>";
+      for (const cell of rows[i]) html += `<td>${escapeHtml(cell.trim())}</td>`;
+      html += "</tr>";
+    }
+    html += "</tbody></table>";
+    if (rows.length > 200) html += `<p style="color:var(--text-muted);font-size:12px">Showing first 200 of ${rows.length} rows</p>`;
+    return html;
+  },
+
+  /** Preview a file attachment — routes to correct preview type */
+  previewFile(file) {
+    const name = file.name?.toLowerCase() || "";
+    const type = file.type || "";
+
+    // Image
+    if (type.startsWith("image/")) {
+      const url = file instanceof File ? URL.createObjectURL(file) : `data:${type};base64,${file.data}`;
+      this.openLightbox(url);
+      return;
+    }
+
+    // PDF
+    if (type === "application/pdf" || name.endsWith(".pdf")) {
+      const url = file instanceof File ? URL.createObjectURL(file) : `data:application/pdf;base64,${file.data}`;
+      this.openLightbox(url, "pdf");
+      return;
+    }
+
+    // CSV / TSV
+    if (name.endsWith(".csv") || name.endsWith(".tsv")) {
+      if (file instanceof File) {
+        file.text().then((text) => this.openLightbox(this.csvToTable(text), "sheet"));
+      } else {
+        const text = atob(file.data);
+        this.openLightbox(this.csvToTable(text), "sheet");
+      }
+      return;
+    }
+
+    // XLSX — parse with lightweight reader
+    if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+      if (file instanceof File) {
+        file.arrayBuffer().then((buf) => this._parseXlsx(buf));
+      } else {
+        const binary = atob(file.data);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        this._parseXlsx(bytes.buffer);
+      }
+      return;
+    }
+
+    // Text/code files — show in preformatted block
+    const textExts = [".txt", ".md", ".json", ".js", ".py", ".ts", ".html", ".css", ".yml", ".yaml", ".xml", ".sh", ".env", ".log", ".sql", ".go", ".rs", ".java", ".c", ".cpp", ".h", ".rb", ".php"];
+    if (textExts.some(ext => name.endsWith(ext)) || type.startsWith("text/")) {
+      if (file instanceof File) {
+        file.text().then((text) => {
+          const html = `<pre style="white-space:pre-wrap;font-family:var(--font-mono);font-size:13px;max-height:80vh;overflow:auto;padding:16px;color:var(--text)">${escapeHtml(text.slice(0, 50000))}</pre>`;
+          this.openLightbox(html, "sheet");
+        });
+      }
+      return;
+    }
+
+    // Fallback — download
+    if (file instanceof File) {
+      const url = URL.createObjectURL(file);
+      const a = document.createElement("a");
+      a.href = url; a.download = file.name; a.click();
+      URL.revokeObjectURL(url);
+    }
+  },
+
+  /** Simple XLSX parser — extracts first sheet as HTML table */
+  async _parseXlsx(buffer) {
+    try {
+      // Use JSZip-like approach: xlsx is a zip of XML files
+      // Minimal inline parser — extracts shared strings + sheet1 data
+      const { entries } = await this._unzip(buffer);
+      const sharedStringsXml = entries["xl/sharedStrings.xml"] || "";
+      const sheet1Xml = entries["xl/worksheets/sheet1.xml"] || "";
+
+      // Parse shared strings
+      const strings = [];
+      const ssMatches = sharedStringsXml.matchAll(/<t[^>]*>([^<]*)<\/t>/g);
+      for (const m of ssMatches) strings.push(m[1]);
+
+      // Parse sheet rows
+      const rows = [];
+      const rowMatches = sheet1Xml.matchAll(/<row[^>]*>([\s\S]*?)<\/row>/g);
+      for (const rm of rowMatches) {
+        const cells = [];
+        const cellMatches = rm[1].matchAll(/<c[^>]*(?:t="s"[^>]*)?>[\s\S]*?<v>(\d+)<\/v>[\s\S]*?<\/c>|<c[^>]*>[\s\S]*?<v>([^<]*)<\/v>[\s\S]*?<\/c>/g);
+        for (const cm of cellMatches) {
+          if (cm[1] !== undefined) cells.push(strings[parseInt(cm[1])] || "");
+          else if (cm[2] !== undefined) cells.push(cm[2]);
+          else cells.push("");
+        }
+        rows.push(cells);
+      }
+
+      if (rows.length === 0) { this.openLightbox("<p>Empty spreadsheet</p>", "sheet"); return; }
+
+      let html = '<table class="md-table"><thead><tr>';
+      for (const cell of rows[0]) html += `<th>${escapeHtml(cell)}</th>`;
+      html += "</tr></thead><tbody>";
+      for (let i = 1; i < rows.length && i < 200; i++) {
+        html += "<tr>";
+        for (const cell of rows[i]) html += `<td>${escapeHtml(cell)}</td>`;
+        html += "</tr>";
+      }
+      html += "</tbody></table>";
+      if (rows.length > 200) html += `<p style="color:var(--text-muted);font-size:12px">Showing first 200 of ${rows.length} rows</p>`;
+      this.openLightbox(html, "sheet");
+    } catch (err) {
+      App.showToast("Could not preview spreadsheet: " + err.message, "error");
+    }
+  },
+
+  /** Minimal ZIP extractor for XLSX (no dependencies) */
+  async _unzip(buffer) {
+    const entries = {};
+    try {
+      // Use DecompressionStream API (modern browsers)
+      const blob = new Blob([buffer]);
+      const ds = new Response(blob.stream().pipeThrough(new DecompressionStream("deflate-raw")));
+      // Fallback: try native unzip via Response
+      // Actually, zip files need proper parsing. Use a simpler approach:
+      // Read the zip directory and extract XML entries
+      const view = new DataView(buffer);
+      const bytes = new Uint8Array(buffer);
+
+      // Find end of central directory
+      let eocdOffset = -1;
+      for (let i = bytes.length - 22; i >= 0; i--) {
+        if (view.getUint32(i, true) === 0x06054b50) { eocdOffset = i; break; }
+      }
+      if (eocdOffset === -1) return { entries };
+
+      const cdOffset = view.getUint32(eocdOffset + 16, true);
+      const cdCount = view.getUint16(eocdOffset + 10, true);
+
+      let pos = cdOffset;
+      for (let i = 0; i < cdCount; i++) {
+        if (view.getUint32(pos, true) !== 0x02014b50) break;
+        const compMethod = view.getUint16(pos + 10, true);
+        const compSize = view.getUint32(pos + 20, true);
+        const uncompSize = view.getUint32(pos + 24, true);
+        const nameLen = view.getUint16(pos + 28, true);
+        const extraLen = view.getUint16(pos + 30, true);
+        const commentLen = view.getUint16(pos + 32, true);
+        const localOffset = view.getUint32(pos + 42, true);
+        const name = new TextDecoder().decode(bytes.slice(pos + 46, pos + 46 + nameLen));
+
+        // Read from local file header
+        const lfhPos = localOffset;
+        const lfNameLen = view.getUint16(lfhPos + 26, true);
+        const lfExtraLen = view.getUint16(lfhPos + 28, true);
+        const dataStart = lfhPos + 30 + lfNameLen + lfExtraLen;
+        const rawData = bytes.slice(dataStart, dataStart + compSize);
+
+        if (name.endsWith(".xml") || name.endsWith(".rels")) {
+          if (compMethod === 0) {
+            entries[name] = new TextDecoder().decode(rawData);
+          } else if (compMethod === 8) {
+            try {
+              const ds = new DecompressionStream("deflate-raw");
+              const writer = ds.writable.getWriter();
+              writer.write(rawData);
+              writer.close();
+              const reader = ds.readable.getReader();
+              const chunks = [];
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+              }
+              const totalLen = chunks.reduce((s, c) => s + c.length, 0);
+              const result = new Uint8Array(totalLen);
+              let off = 0;
+              for (const c of chunks) { result.set(c, off); off += c.length; }
+              entries[name] = new TextDecoder().decode(result);
+            } catch { /* skip unreadable entry */ }
+          }
+        }
+
+        pos += 46 + nameLen + extraLen + commentLen;
+      }
+    } catch { /* zip parsing failed */ }
+    return { entries };
   },
 
   // --- Utilities ---

@@ -317,11 +317,26 @@ chatRouter.post("/send", async (req, res) => {
           source: { type: "base64", media_type: "application/pdf", data: att.data },
         });
       } else {
-        // Generic file — include as text description
-        contentBlocks.push({
-          type: "text",
-          text: `[Attached file: ${att.name || "file"} (${att.mediaType || "application/octet-stream"})]`,
-        });
+        // Generic file — save to disk so Claude can Read it
+        try {
+          const fs = await import("node:fs");
+          const path = await import("node:path");
+          const config = (await import("../config/env.js")).default;
+          const uploadsDir = path.default.join(config.WORKSPACE_DIR, "uploads");
+          fs.default.mkdirSync(uploadsDir, { recursive: true });
+          const safeName = (att.name || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
+          const filePath = path.default.join(uploadsDir, `${Date.now()}-${safeName}`);
+          fs.default.writeFileSync(filePath, Buffer.from(att.data, "base64"));
+          contentBlocks.push({
+            type: "text",
+            text: `[Attached file saved: ${att.name || "file"} → ${filePath}]\nYou can read this file with the Read tool at: ${filePath}`,
+          });
+        } catch (err) {
+          contentBlocks.push({
+            type: "text",
+            text: `[Attached file: ${att.name || "file"} (${att.mediaType || "application/octet-stream"}) — failed to save: ${err.message}]`,
+          });
+        }
       }
     }
     contentBlocks.push({ type: "text", text: message });

@@ -941,6 +941,94 @@ details[open] .block-preview { display: none; }
   color: var(--text-muted);
 }
 
+/* Make file chips look clickable */
+.message-file-chip {
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.message-file-chip:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--border-hover);
+}
+
+/* Lightbox overlay for image preview */
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  animation: fadeIn var(--duration-normal) var(--ease-default);
+}
+
+.lightbox-img {
+  max-width: 90vw;
+  max-height: 90vh;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  object-fit: contain;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  font-size: 24px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--duration-fast) var(--ease-default);
+}
+
+.lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* PDF viewer in lightbox */
+.lightbox-frame {
+  width: 90vw;
+  height: 90vh;
+  border: none;
+  border-radius: var(--radius-lg);
+  background: #fff;
+}
+
+/* Spreadsheet / text preview in lightbox */
+.lightbox-sheet {
+  width: 90vw;
+  max-height: 90vh;
+  overflow: auto;
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  color: var(--text);
+}
+
+.lightbox-sheet .md-table {
+  font-size: var(--text-sm);
+}
+
+/* Previewable file chips */
+.message-file-previewable {
+  cursor: pointer;
+}
+
+.message-file-previewable:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--accent);
+}
+
 /* Drag-drop overlay on chat area */
 .chat-area.drag-over::after {
   content: 'Drop files here';
