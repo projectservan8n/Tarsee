@@ -16,26 +16,46 @@
 
 ## Why Tarsee?
 
-I was an [OpenClaw](https://github.com/nicholasgriffintn/OpenClaw) user. It worked great — until Anthropic changed their billing so OAuth tokens used through OpenClaw started counting against your usage. The resource overhead was also heavy: OpenClaw runs a full Lit/TypeScript/Vite frontend with 150+ TypeScript files, 12K+ lines of CSS, and needs significantly more RAM.
+I was using [OpenClaw](https://github.com/openclaw/openclaw) to run Claude Code 24/7. It worked — until Anthropic changed their billing so OAuth tokens used through these wrappers started counting against your subscription usage. That's fine, but the resource overhead was heavy for what I needed.
 
-I just wanted Claude Code running 24/7 that I could talk to from my phone. So I wrapped the Claude Code SDK directly and built a lightweight frontend.
+I just wanted Claude Code running 24/7 that I could talk to from my phone. So I wrapped the Claude Code SDK directly and built a lightweight frontend. No build step, no TypeScript compile, no framework overhead.
 
 Haven't looked into Claude Cowork yet, but if you love Claude Code and want it always on from any device, this is it.
 
-### Tarsee vs OpenClaw
+### How Tarsee Compares
 
-| | Tarsee | OpenClaw |
-|---|--------|----------|
-| **Frontend** | Vanilla HTML/CSS/JS (no build step) | Lit + TypeScript + Vite (150+ files) |
-| **CSS** | ~4K lines | ~12K lines |
-| **RAM usage** | ~200-400MB | ~800MB+ |
-| **Build time** | ~2 min | ~5 min+ |
-| **Monthly cost** | ~$16/mo on Railway | ~$30-40/mo on Railway |
-| **Mobile** | PWA with PIN pad, voice mode | PWA (basic) |
-| **Channels** | Web + Telegram + Discord + Voice | Web only |
-| **Memory** | Persistent across sessions + deep search | Session-based |
-| **Tools** | 15+ MCP tools, 23 skills, canvas, webhooks | Standard Claude Code tools |
-| **Auth** | Claude Max/Pro subscription (OAuth) | Claude Max/Pro subscription (OAuth) |
+Being honest — some of these projects are massive with huge communities. Tarsee is small and focused. Here's where it fits:
+
+| | Tarsee | [OpenClaw](https://github.com/openclaw/openclaw) | [NanoClaw](https://github.com/qwibitai/nanoclaw) | [PicoClaw](https://github.com/sipeed/picoclaw) | [Nanobot](https://github.com/HKUDS/nanobot) |
+|---|--------|----------|----------|----------|---------|
+| **Stars** | New | 353K | 27K | 28K | 39K |
+| **Language** | Node.js | Node.js + TypeScript | TypeScript | Go | Python |
+| **Frontend** | Vanilla HTML/CSS/JS | React + Primer UI | React | Go Web UI + TUI | Python CLI |
+| **Build step** | None | TypeScript + Vite | TypeScript | Go compile | pip install |
+| **RAM** | ~200-400MB | Higher (full React stack) | Moderate | <10MB | Low |
+| **Channels** | Web, Telegram, Discord, Voice | 24+ (WhatsApp, Slack, Signal, etc.) | WhatsApp, Telegram, Discord, Slack | 18+ (Telegram, Discord, WeChat, etc.) | 12+ (Telegram, Discord, WhatsApp, etc.) |
+| **Voice** | Yes (whisper.cpp + Edge TTS) | Yes (wake word, ElevenLabs) | No | No | Telegram/WeChat voice |
+| **Mobile** | PWA + iOS PIN pad | Native iOS/Android apps | Via messaging apps | Android APK | Via messaging apps |
+| **Memory** | Persistent + deep search | Session-based with group isolation | SQLite + per-group files | JSONL memory store | Token-based memory |
+| **Auth** | Claude subscription (OAuth) | OAuth + API keys | API keys | API keys + OAuth | API keys + OAuth |
+| **LLM support** | Claude only | Claude only | Claude only | 30+ providers | Multi-provider |
+| **Self-host cost** | ~$16/mo Railway | Higher (more resources) | Moderate | ~$10/mo (runs on anything) | Low |
+
+### Why choose Tarsee?
+
+- **You want simplicity** — no build step, no TypeScript, no framework. Just Node.js serving HTML.
+- **You want Claude specifically** — Tarsee wraps Claude Code SDK directly. Not multi-provider, not trying to be everything.
+- **You want it cheap** — runs on $16/mo Railway with 2GB RAM. No API costs if you have Claude Max/Pro.
+- **You want voice + mobile** — PWA with local speech-to-text, hold-to-talk, iOS PIN pad login.
+- **You want memory** — persistent memory across sessions with deep semantic search.
+
+### Why choose something else?
+
+- **You need 20+ channels** — OpenClaw or PicoClaw support way more platforms.
+- **You need native mobile apps** — OpenClaw has actual iOS/Android apps.
+- **You need multi-provider** — PicoClaw supports 30+ LLMs. Tarsee is Claude-only.
+- **You need minimal resources** — PicoClaw runs on <10MB RAM. Tarsee needs ~200MB.
+- **You want a massive community** — OpenClaw has 353K stars and thousands of contributors.
 
 Tarsee is a Claude Code wrapper — not a fork, not a rewrite. It uses `@anthropic-ai/claude-agent-sdk` directly, so you get the exact same Claude Code experience with all built-in tools (Read, Write, Edit, Bash, Grep, Glob) plus Tarsee's own tools on top.
 
