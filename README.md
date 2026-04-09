@@ -1,10 +1,43 @@
-# Tarsee
+<p align="center">
+  <img src="Tarsee.png" alt="Tarsee" width="120">
+</p>
 
-**Your personal Claude Code agent, running 24/7 in the cloud.**
+<h1 align="center">Tarsee</h1>
 
-Talk to Claude from anywhere — web, Telegram, Discord, or voice. It remembers everything, runs tools, and schedules tasks. Uses your Claude Max/Pro subscription. No API keys needed.
+<p align="center"><strong>Your personal Claude Code agent, running 24/7 in the cloud.</strong></p>
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/O2Ux8R?referralCode=sIH3US&utm_medium=integration&utm_source=template&utm_campaign=generic)
+<p align="center">Talk to Claude from anywhere — web, Telegram, Discord, or voice. It remembers everything, runs tools, and schedules tasks. Uses your Claude Max/Pro subscription. No API keys needed.</p>
+
+<p align="center">
+  <a href="https://railway.com/deploy/O2Ux8R?referralCode=sIH3US&utm_medium=integration&utm_source=template&utm_campaign=generic"><img src="https://railway.com/button.svg" alt="Deploy on Railway"></a>
+</p>
+
+---
+
+## Why Tarsee?
+
+I was an [OpenClaw](https://github.com/nicholasgriffintn/OpenClaw) user. It worked great — until Anthropic changed their billing so OAuth tokens used through OpenClaw started counting against your usage. The resource overhead was also heavy: OpenClaw runs a full Lit/TypeScript/Vite frontend with 150+ TypeScript files, 12K+ lines of CSS, and needs significantly more RAM.
+
+I just wanted Claude Code running 24/7 that I could talk to from my phone. So I wrapped the Claude Code SDK directly and built a lightweight frontend.
+
+Haven't looked into Claude Cowork yet, but if you love Claude Code and want it always on from any device, this is it.
+
+### Tarsee vs OpenClaw
+
+| | Tarsee | OpenClaw |
+|---|--------|----------|
+| **Frontend** | Vanilla HTML/CSS/JS (no build step) | Lit + TypeScript + Vite (150+ files) |
+| **CSS** | ~4K lines | ~12K lines |
+| **RAM usage** | ~200-400MB | ~800MB+ |
+| **Build time** | ~2 min | ~5 min+ |
+| **Monthly cost** | ~$16/mo on Railway | ~$30-40/mo on Railway |
+| **Mobile** | PWA with PIN pad, voice mode | PWA (basic) |
+| **Channels** | Web + Telegram + Discord + Voice | Web only |
+| **Memory** | Persistent across sessions + deep search | Session-based |
+| **Tools** | 15+ MCP tools, 23 skills, canvas, webhooks | Standard Claude Code tools |
+| **Auth** | Claude Max/Pro subscription (OAuth) | Claude Max/Pro subscription (OAuth) |
+
+Tarsee is a Claude Code wrapper — not a fork, not a rewrite. It uses `@anthropic-ai/claude-agent-sdk` directly, so you get the exact same Claude Code experience with all built-in tools (Read, Write, Edit, Bash, Grep, Glob) plus Tarsee's own tools on top.
 
 ---
 
@@ -128,11 +161,9 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | `/play [name\|list\|save\|delete]` | Run or manage playbooks (multi-step AI workflows) |
 | `/email [check\|summary\|draft]` | Check inbox, summarize, or draft emails |
 | `/webhook [list\|add\|remove]` | Manage webhook triggers (external events → AI) |
-| `/stats` | Analytics summary (tokens, messages, memories, uptime) |
 | `/files [search term]` | List or search workspace files |
+| `/status` | Full dashboard (uptime, tokens, messages, channels) |
 | `/clear` | New conversation |
-| `/stats` | Analytics summary (tokens, messages, memories, uptime) |
-| `/status` | System status |
 | `/cron` | Manage scheduled tasks |
 | `/remember [fact]` | Save to memory |
 | `/doctor [fix]` | Diagnostics + auto-repair |
@@ -197,7 +228,7 @@ src/
   server.js                    # Express + HTTP server
   ai/
     providers/claude-code.js   # Agent SDK wrapper
-    tarsee-mcp.js              # 30+ MCP tools
+    tarsee-mcp.js              # 15+ MCP tools
   lib/
     tools.js, commands.js      # Tool registry + chat commands
     cron.js                    # Scheduler
