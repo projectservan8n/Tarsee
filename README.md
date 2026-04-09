@@ -59,8 +59,16 @@ The SDK auto-refreshes tokens — you only need to log in once. If you ever get 
 - **Free text-to-speech** — Microsoft Edge TTS. No API key, no rate limits.
 - **Smart TTS** — tables and code shown visually, spoken response is a clean conversational summary.
 
+### Canvas / Artifacts
+- **Live HTML/CSS/JS** — Ask for a dashboard, chart, calculator, or mini-app → renders as an interactive iframe right in chat.
+- **Sandboxed** — Each canvas runs in a sandboxed iframe with its own URL.
+- **Persistent** — Canvases are saved to the volume and accessible at `/canvas/<id>/`.
+
 ### Tools & Automation
-- **12+ MCP tools** — send messages, schedule tasks, remember facts, search the web, manage files, encrypted vault, and more.
+- **15+ MCP tools** — send messages, schedule tasks, remember facts, search the web, create canvases, manage files, encrypted vault, and more.
+- **Proactive briefings** — `/briefing on` schedules a daily morning summary pushed to all channels.
+- **Auto model routing** — `/auto on` picks haiku/sonnet/opus based on message complexity.
+- **Deep memory search** — AI reads all memories semantically when keyword search fails.
 - **Cron scheduler** — recurring AI tasks or direct tool actions. One-time reminders auto-delete.
 - **Web terminal** — browser-based shell access via xterm.js.
 - **File manager** — browse, edit, and create workspace files from the UI.

@@ -1169,6 +1169,13 @@ const Chat = {
     const blocks = [];
     const PH = (i) => `\x00BLOCK${i}\x00`;
 
+    // Canvas embeds: /canvas/id/ → inline iframe
+    text = text.replace(/\/canvas\/([a-z0-9-]+)\/?/g, (_m, canvasId) => {
+      const i = blocks.length;
+      blocks.push(`<div class="canvas-embed"><div class="canvas-embed-header"><span class="canvas-embed-title">Canvas: ${escapeHtml(canvasId)}</span><a href="/canvas/${canvasId}/" target="_blank" class="canvas-embed-open">Open ↗</a></div><iframe src="/canvas/${canvasId}/" class="canvas-iframe" sandbox="allow-scripts allow-same-origin" loading="lazy"></iframe></div>`);
+      return PH(i);
+    });
+
     // Thinking / reasoning blocks: <thinking>, <antThinking>, <reasoning>
     text = text.replace(/<(thinking|antThinking|antml:thinking|reasoning)>([\s\S]*?)<\/\1>/g, (_m, tag, content) => {
       const i = blocks.length;
