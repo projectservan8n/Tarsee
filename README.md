@@ -29,9 +29,31 @@ That's it. Claude Code auto-updates on every restart. OAuth tokens auto-refresh.
 
 You need an active [Claude Max or Pro](https://claude.ai) subscription with Claude Code enabled.
 
+**Step 1: Install Claude Code (if you haven't)**
+```bash
+npx @anthropic-ai/claude-code
+```
+This opens your browser — log in with your Claude account. Once authenticated, credentials are saved locally.
+
+**Step 2: Copy the credentials**
+
 **macOS:**
 ```bash
+cat ~/.claude/.credentials.json
+```
+If that doesn't exist, try:
+```bash
 security find-generic-password -s "Claude Code-credentials" -w
+```
+
+**Windows (CMD):**
+```cmd
+type "%USERPROFILE%\.claude\.credentials.json"
+```
+
+**Windows (PowerShell):**
+```powershell
+Get-Content "$env:USERPROFILE\.claude\.credentials.json"
 ```
 
 **Linux:**
@@ -39,7 +61,13 @@ security find-generic-password -s "Claude Code-credentials" -w
 cat ~/.claude/.credentials.json
 ```
 
-Copy the full JSON output into the `CLAUDE_OAUTH_CREDENTIALS` environment variable. Tarsee auto-refreshes the token — you only do this once.
+**Step 3: Paste into Railway**
+
+Copy the entire JSON output and set it as the `CLAUDE_OAUTH_CREDENTIALS` environment variable in Railway.
+
+Tarsee auto-refreshes the token — you only need to do this once.
+
+> **Tip:** If you also use Claude Code locally on the same machine, the shared OAuth refresh token can cause conflicts (one kicks the other out). Grab credentials from a machine you *don't* use Claude Code on daily to avoid this.
 
 ---
 
@@ -59,14 +87,8 @@ Copy the full JSON output into the `CLAUDE_OAUTH_CREDENTIALS` environment variab
 - **Free text-to-speech** — Microsoft Edge TTS. No API key, no rate limits.
 - **Smart TTS** — tables and code shown visually, spoken response is a clean conversational summary.
 
-### Multi-Agent Team
-- **5 agents** — Orchestrator (Opus), Coder (Opus), Researcher (Sonnet), Writer (Sonnet), Quick (Haiku).
-- **Persistent workspaces** — each agent has its own memory at `/data/tarsee/agents/{id}/`.
-- **Nicknames** — "Hey Luis, write a script..." routes to the right agent.
-- **Parallel work** — spawn multiple agents to research, code, and write simultaneously.
-
 ### Tools & Automation
-- **30+ MCP tools** — send messages, schedule tasks, remember facts, search the web, manage files, spawn agents, encrypted vault, and more.
+- **12+ MCP tools** — send messages, schedule tasks, remember facts, search the web, manage files, encrypted vault, and more.
 - **Cron scheduler** — recurring AI tasks or direct tool actions. One-time reminders auto-delete.
 - **Web terminal** — browser-based shell access via xterm.js.
 - **File manager** — browse, edit, and create workspace files from the UI.
@@ -91,7 +113,6 @@ Tarsee Server (Railway)
   |     +-- MCP tools: send_message, schedule_task, remember,
   |         spawn_agent, web_fetch, web_search, etc.
   |
-  +-- Agent Team (Coder, Researcher, Writer, Quick)
   +-- Voice: whisper.cpp STT + Edge TTS
   +-- Workspace: SOUL.md, MEMORY.md, USER.md
   +-- SQLite: conversations, settings, vault
@@ -187,7 +208,6 @@ src/
   lib/
     tools.js, commands.js      # Tool registry + chat commands
     cron.js                    # Scheduler
-    agent-registry.js          # Multi-agent system
     oauth-refresh.js           # Token auto-refresh
   channels/
     telegram.js, discord.js    # Bot integrations
