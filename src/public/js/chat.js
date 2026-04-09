@@ -785,10 +785,22 @@ const Chat = {
     }
     let hasReceivedText = false;
     let fullResponse = "";
-    let toolBlocks = ""; // Accumulated tool call/result HTML
+    let currentTextChunk = ""; // Text accumulated since last tool
+    const timeline = []; // Array of {type: "text"|"tool", html: "..."} in order
+    let lastToolIndex = -1; // Index of last tool block in timeline (for adding output)
     // Buffer early content — show thinking for at least 1s
     const thinkingStartTime = Date.now();
     let pendingContent = null; // Buffered first updateStreamingMessage call
+
+    const renderTimeline = () => {
+      const items = timeline.map((item, i) => {
+        if (item.type === "text") {
+          return `<div class="tl-item tl-text"><div class="tl-dot"></div><div class="tl-content">${item.html}</div></div>`;
+        }
+        return `<div class="tl-item tl-tool"><div class="tl-dot ${item.status || "running"}"></div><div class="tl-content">${item.html}</div></div>`;
+      }).join("");
+      return `<div class="tl-timeline">${items}</div>`;
+    };
 
     this.isStreaming = true;
     this.elements.sendBtn.disabled = false;
@@ -826,20 +838,24 @@ const Chat = {
             return;
           }
           if (event?.type === "tool_call") {
+            // Flush any accumulated text before this tool
+            if (currentTextChunk.trim()) {
+              let displayText = currentTextChunk.split("|||PERSONALITY_COMPLETE|||")[0];
+              displayText = displayText.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n").trim();
+              if (displayText) timeline.push({ type: "text", html: this.renderMarkdown(displayText) });
+              currentTextChunk = "";
+            }
+
             if (!hasReceivedText) {
               hasReceivedText = true;
-              // Ensure thinking shows for at least 1s
               const elapsed = Date.now() - thinkingStartTime;
               if (elapsed < 1000) {
-                pendingContent = () => {
-                  this.updateStreamingMessage(assistantMsg, toolBlocks, true);
-                  this.scrollToBottom();
-                };
+                pendingContent = () => { this.updateStreamingMessage(assistantMsg, renderTimeline(), true); this.scrollToBottom(); };
                 setTimeout(() => { if (pendingContent) { pendingContent(); pendingContent = null; } }, 1000 - elapsed);
+                // Still add to timeline, just delay rendering
               }
             }
-            // Clean tool block — name + detail, collapsible input
-            // Build human-readable detail based on tool type
+
             const inp = event.input || {};
             let detail = "";
             let label = event.name;
@@ -851,44 +867,44 @@ const Chat = {
             else if (event.name === "Glob") { detail = inp.pattern || ""; label = "Find"; }
             else { detail = inp.command || inp.filename || inp.url || inp.query || inp.message || inp.task || inp.schedule || inp.key || JSON.stringify(inp).slice(0, 80); }
 
-            toolBlocks += `<details class="tool-block">
-              <summary class="tool-block-header">
-                <span class="tool-indicator running"></span>
-                <span class="tool-name">${escapeHtml(label)}</span>
-                <span class="tool-detail">${escapeHtml(String(detail).slice(0, 120))}</span>
-              </summary>
-              <div class="tool-block-body">
-                <pre class="tool-block-code">${escapeHtml(String(detail).slice(0, 500) || "(no args)")}</pre>
-              </div>
-            </details>`;
-            this.updateStreamingMessage(assistantMsg, toolBlocks, true);
-            this.scrollToBottom();
+            const toolHtml = `<div class="tl-tool-header"><span class="tl-tool-name">${escapeHtml(label)}</span> <span class="tl-tool-detail">${escapeHtml(String(detail).slice(0, 100))}</span></div><div class="tl-tool-in"><span class="tl-io-label">IN</span><pre class="tl-tool-code">${escapeHtml(String(detail).slice(0, 500) || "(no args)")}</pre></div>`;
+            lastToolIndex = timeline.length;
+            timeline.push({ type: "tool", status: "running", html: toolHtml });
+            if (!pendingContent) { this.updateStreamingMessage(assistantMsg, renderTimeline(), true); this.scrollToBottom(); }
             return;
           }
           if (event?.type === "tool_result") {
-            const resultText = event.result || "";
-            // Update indicator to done
-            toolBlocks = toolBlocks.replace(/running"><\/span>(?![\s\S]*running"><\/span>)/, 'done"></span>');
-            // Add output (only if there's content)
-            if (resultText && resultText !== "(no output)") {
-              const outputHtml = `<div class="tool-block-output"><pre class="tool-block-code">${escapeHtml(resultText.slice(0, 2000))}</pre></div>`;
-              toolBlocks = toolBlocks.replace(/<\/div>\s*<\/details>$/, outputHtml + "</div></details>");
+            if (lastToolIndex >= 0 && timeline[lastToolIndex]) {
+              timeline[lastToolIndex].status = "done";
+              const resultText = event.result || "";
+              if (resultText && resultText !== "(no output)") {
+                timeline[lastToolIndex].html += `<div class="tl-tool-out"><span class="tl-io-label">OUT</span><pre class="tl-tool-code">${escapeHtml(resultText.slice(0, 2000))}</pre></div>`;
+              }
             }
-            this.updateStreamingMessage(assistantMsg, toolBlocks, true);
+            // Reset text chunk so next text starts a new timeline item
+            currentTextChunk = "";
+            this.updateStreamingMessage(assistantMsg, renderTimeline(), true);
             this.scrollToBottom();
             return;
           }
-          // Normal text
+          // Normal text — accumulate into current chunk
           fullResponse += content;
+          currentTextChunk += content;
           const renderUpdate = () => {
-            let displayText = fullResponse.split("|||PERSONALITY_COMPLETE|||")[0];
-            displayText = displayText.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n");
-            this.updateStreamingMessage(assistantMsg, toolBlocks + this.renderMarkdown(displayText), true);
+            // Update the last text item in timeline or add new one
+            const lastItem = timeline[timeline.length - 1];
+            let displayChunk = currentTextChunk.split("|||PERSONALITY_COMPLETE|||")[0];
+            displayChunk = displayChunk.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n").trim();
+            if (lastItem?.type === "text") {
+              lastItem.html = this.renderMarkdown(displayChunk);
+            } else if (displayChunk) {
+              timeline.push({ type: "text", html: this.renderMarkdown(displayChunk) });
+            }
+            this.updateStreamingMessage(assistantMsg, renderTimeline(), true);
             this.scrollToBottom();
           };
           if (!hasReceivedText) {
             hasReceivedText = true;
-            // Ensure thinking shows for at least 1s before first content
             const elapsed = Date.now() - thinkingStartTime;
             if (elapsed < 1000) {
               setTimeout(renderUpdate, 1000 - elapsed);
