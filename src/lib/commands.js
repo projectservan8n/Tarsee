@@ -1,4 +1,6 @@
 import { AI_PROVIDERS } from "../config/constants.js";
+import { addCronJob, removeCronJob, loadCronJobs, runCronJob, startCronScheduler } from "./cron.js";
+import { executeTool } from "./tools.js";
 
 /**
  * Chat command processor.
@@ -117,6 +119,81 @@ const COMMANDS = {
 
       ctx.convStore.updateTitle(ctx.conversationId, args.slice(0, 200));
       return `Conversation renamed to **${args.slice(0, 200)}**`;
+    },
+  },
+
+  briefing: {
+    description: "Morning briefing — trigger now, or schedule daily",
+    usage: "/briefing [on|off|time <0-23>]",
+    handler: (args, ctx) => {
+      const settingsStore = ctx.settingsStore;
+      if (!settingsStore) return "Settings not available.";
+
+      const BRIEFING_ID = "cron_briefingam";
+      const BRIEFING_PROMPT = `Morning Briefing — run automatically.
+1. Check today's date and day of week
+2. Read MEMORY.md for any scheduled events, deadlines, or reminders
+3. Search daily logs from the last 3 days for context on ongoing work
+4. Summarize what's happening today and any pending action items
+5. Send the briefing to all active channels using send_message (telegram if configured, always web)
+
+Keep it concise — 5-10 bullet points max. Be direct and useful.`;
+
+      if (!args) {
+        // Trigger immediate briefing
+        const job = { id: "briefing-now", prompt: BRIEFING_PROMPT, channel: "web:default" };
+        runCronJob(job).catch(() => {});
+        return "Running briefing now...";
+      }
+
+      const cmd = args.toLowerCase().split(/\s+/);
+
+      if (cmd[0] === "on") {
+        const hour = settingsStore.get("briefing.hour") || 8;
+        try {
+          // Remove existing if any
+          removeCronJob(BRIEFING_ID);
+        } catch { /* ignore */ }
+        addCronJob({
+          schedule: `0 ${hour} * * *`,
+          prompt: BRIEFING_PROMPT,
+          channel: "web:default",
+          name: "briefingam",
+        });
+        return `Morning briefing enabled — runs daily at **${hour}:00**\n\nChange time: \`/briefing time <hour>\`\nDisable: \`/briefing off\``;
+      }
+
+      if (cmd[0] === "off") {
+        const removed = removeCronJob(BRIEFING_ID);
+        if (removed) {
+          startCronScheduler(); // Restart to pick up changes
+          return "Morning briefing disabled.";
+        }
+        return "No briefing scheduled.";
+      }
+
+      if (cmd[0] === "time" && cmd[1]) {
+        const hour = parseInt(cmd[1], 10);
+        if (isNaN(hour) || hour < 0 || hour > 23) return "Hour must be 0-23.";
+        settingsStore.set("briefing.hour", hour);
+
+        // Update existing job if running
+        const jobs = loadCronJobs();
+        const existing = jobs.find((j) => j.id === BRIEFING_ID);
+        if (existing) {
+          removeCronJob(BRIEFING_ID);
+          addCronJob({
+            schedule: `0 ${hour} * * *`,
+            prompt: BRIEFING_PROMPT,
+            channel: "web:default",
+            name: "briefingam",
+          });
+          return `Briefing time changed to **${hour}:00** daily.`;
+        }
+        return `Briefing hour saved as **${hour}:00**. Enable with \`/briefing on\`.`;
+      }
+
+      return "Usage: `/briefing` (run now), `/briefing on`, `/briefing off`, `/briefing time <0-23>`";
     },
   },
 

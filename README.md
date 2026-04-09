@@ -112,6 +112,10 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 |---------|-------------|
 | `/help` | Show all commands |
 | `/model opus\|sonnet\|haiku` | Switch AI model |
+| `/think low\|medium\|high\|max` | Set thinking effort for the session |
+| `/briefing` | Run morning briefing now |
+| `/briefing on\|off` | Enable/disable daily morning briefing |
+| `/briefing time <0-23>` | Set briefing hour |
 | `/clear` | New conversation |
 | `/status` | System status |
 | `/cron` | Manage scheduled tasks |
