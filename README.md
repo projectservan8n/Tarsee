@@ -112,6 +112,7 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 |---------|-------------|
 | `/help` | Show all commands |
 | `/model opus\|sonnet\|haiku` | Switch AI model |
+| `/send telegram\|discord\|web` | Forward conversation to another channel |
 | `/clear` | New conversation |
 | `/status` | System status |
 | `/cron` | Manage scheduled tasks |
