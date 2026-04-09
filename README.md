@@ -15,59 +15,31 @@ Talk to Claude from anywhere — web, Telegram, Discord, or voice. It remembers 
 
    | Variable | Required | Description |
    |----------|----------|-------------|
-   | `SETUP_PASSWORD` | Yes | Password for the web UI |
+   | `SETUP_PASSWORD` | Yes | 4-digit PIN for the web UI (mobile uses an iOS-style keypad) |
    | `ENCRYPTION_KEY` | Yes | `openssl rand -hex 32` |
-   | `CLAUDE_OAUTH_CREDENTIALS` | Yes | Your Claude subscription credentials ([how to get](#getting-claude-credentials)) |
    | `NODE_ENV` | Yes | `production` |
 
 3. Add a **Volume** mounted at `/data`
-4. Deploy — open the URL, log in, start chatting
+4. Deploy — open the URL, log in with your password
+5. Open **Terminal** (icon in topbar) and run `claude login`
+6. Follow the browser auth flow — done!
 
-That's it. Claude Code auto-updates on every restart. OAuth tokens auto-refresh. Everything persists on the volume.
+That's it. Credentials are stored on the volume and auto-refresh. No env vars to manage. Claude Code CLI auto-updates on every restart.
 
-### Getting Claude Credentials
+### Authenticating with Claude
 
 You need an active [Claude Max or Pro](https://claude.ai) subscription with Claude Code enabled.
 
-**Step 1: Install Claude Code (if you haven't)**
+**Run this in the Tarsee web terminal:**
 ```bash
-npx @anthropic-ai/claude-code
-```
-This opens your browser — log in with your Claude account. Once authenticated, credentials are saved locally.
-
-**Step 2: Copy the credentials**
-
-**macOS:**
-```bash
-cat ~/.claude/.credentials.json
-```
-If that doesn't exist, try:
-```bash
-security find-generic-password -s "Claude Code-credentials" -w
+claude login
 ```
 
-**Windows (CMD):**
-```cmd
-type "%USERPROFILE%\.claude\.credentials.json"
-```
+This opens a browser auth flow. Once you authenticate, credentials are saved to the Railway volume at `/data/tarsee/.claude-code-home/.credentials.json` and persist across restarts, redeploys, and image rebuilds.
 
-**Windows (PowerShell):**
-```powershell
-Get-Content "$env:USERPROFILE\.claude\.credentials.json"
-```
+The SDK auto-refreshes tokens — you only need to log in once. If you ever get logged out, just run `claude login` again from the terminal.
 
-**Linux:**
-```bash
-cat ~/.claude/.credentials.json
-```
-
-**Step 3: Paste into Railway**
-
-Copy the entire JSON output and set it as the `CLAUDE_OAUTH_CREDENTIALS` environment variable in Railway.
-
-Tarsee auto-refreshes the token — you only need to do this once.
-
-> **Tip:** If you also use Claude Code locally on the same machine, the shared OAuth refresh token can cause conflicts (one kicks the other out). Grab credentials from a machine you *don't* use Claude Code on daily to avoid this.
+> **Why not an env var?** OAuth refresh tokens are single-use. If you set credentials as an env var, every redeploy overwrites the SDK's refreshed token with the stale original, causing auth failures. Logging in directly on the server avoids this entirely.
 
 ---
 
@@ -153,12 +125,13 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SETUP_PASSWORD` | Yes | — | Web UI login password |
+| `SETUP_PASSWORD` | Yes | — | 4-digit PIN for the web UI |
 | `ENCRYPTION_KEY` | Yes | — | AES-256 key. `openssl rand -hex 32` |
-| `CLAUDE_OAUTH_CREDENTIALS` | Yes | — | Claude subscription credentials JSON |
 | `NODE_ENV` | Yes | — | Set to `production` |
 | `CLAUDE_DEFAULT_MODEL` | No | `claude-sonnet-4-6` | Default model for new sessions |
 | `ELEVENLABS_API_KEY` | No | — | Premium TTS voices (Edge TTS is free) |
+
+> **Note:** Claude credentials are NOT set via env var. Run `claude login` in the web terminal after deploying. See [Authenticating with Claude](#authenticating-with-claude).
 
 ---
 
@@ -174,9 +147,10 @@ docker run -d \
   -e NODE_ENV=production \
   -e SETUP_PASSWORD=your-password \
   -e ENCRYPTION_KEY=$(openssl rand -hex 32) \
-  -e CLAUDE_OAUTH_CREDENTIALS='{"claudeAiOauth":{...}}' \
   tarsee
 ```
+
+After starting, open the web terminal and run `claude login` to authenticate.
 
 Requirements: Docker, Claude Max/Pro subscription.
 

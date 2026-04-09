@@ -24,35 +24,15 @@ if [ -d /data ]; then
   ln -sf /data/tarsee/.claude-code-home /home/node/.claude
 fi
 
-# Write Claude Code credentials from env var (subscription auth, no API key).
-# Set CLAUDE_OAUTH_CREDENTIALS in Railway with the JSON from your local machine.
-# IMPORTANT: Only write if no credentials file exists on the volume yet.
-# The SDK refreshes tokens automatically and writes updated tokens to disk.
-# Overwriting on every boot would clobber the SDK's refreshed tokens with the
-# stale env var copy, causing auth failures after the first refresh cycle.
-if [ -n "$CLAUDE_OAUTH_CREDENTIALS" ]; then
-  CRED_DIR="${CLAUDE_CONFIG_DIR:-/home/node/.claude}"
-  CRED_FILE="$CRED_DIR/.credentials.json"
-  mkdir -p "$CRED_DIR"
-
-  if [ ! -f "$CRED_FILE" ]; then
-    # First boot or volume wiped — seed from env var
-    echo "$CLAUDE_OAUTH_CREDENTIALS" > "$CRED_FILE"
-    chmod 600 "$CRED_FILE"
-    echo "[entrypoint] Credentials seeded from env var (first boot)"
-  else
-    echo "[entrypoint] Credentials file exists on volume — preserving SDK-refreshed tokens"
-  fi
-
-  chown -R node:node "$CRED_DIR"
-
-  # Also ensure ~/.claude points to the right place (some SDK paths check HOME)
-  if [ "$CRED_DIR" != "/home/node/.claude" ] && [ ! -f /home/node/.claude/.credentials.json ]; then
-    mkdir -p /home/node/.claude
-    cp "$CRED_FILE" /home/node/.claude/.credentials.json
-    chmod 600 /home/node/.claude/.credentials.json
-    chown -R node:node /home/node/.claude
-  fi
+# Claude Code credentials live on the volume at /data/tarsee/.claude-code-home/.credentials.json
+# (symlinked to ~/.claude). The SDK auto-refreshes tokens and writes them back to disk.
+# To authenticate: open the web terminal and run `claude login`.
+# No env var needed — credentials persist on the volume across restarts/redeploys.
+CRED_FILE="/data/tarsee/.claude-code-home/.credentials.json"
+if [ -f "$CRED_FILE" ]; then
+  echo "[entrypoint] Claude credentials found on volume"
+else
+  echo "[entrypoint] No credentials found — open the web terminal and run: claude login"
 fi
 
 # Ensure claude CLI is in PATH for web terminal sessions
