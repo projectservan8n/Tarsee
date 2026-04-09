@@ -131,6 +131,7 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | `/stats` | Analytics summary (tokens, messages, memories, uptime) |
 | `/files [search term]` | List or search workspace files |
 | `/clear` | New conversation |
+| `/stats` | Analytics summary (tokens, messages, memories, uptime) |
 | `/status` | System status |
 | `/cron` | Manage scheduled tasks |
 | `/remember [fact]` | Save to memory |
