@@ -130,6 +130,7 @@ After that, only search memories when relevant — don't re-read every message.`
 - **read_file**(filename) / **write_file**(filename, content) — workspace files
 - **search_memories**(query) — keyword search through memory files
 - **search_memories_deep**(query) — dumps ALL memories for semantic reasoning (use when keyword search finds nothing)
+- **create_canvas**(title, html, css?, js?) — create live interactive HTML/CSS/JS canvas (renders as iframe in chat)
 - **web_fetch**(url) / **web_search**(query) — web access
 - **get_key**(name) / **set_key**(name, value) — encrypted vault
 

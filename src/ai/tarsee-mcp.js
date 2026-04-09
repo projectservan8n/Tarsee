@@ -112,6 +112,21 @@ export function createTarseeMcp(ctx) {
       ),
 
       tool(
+        "tarsee_create_canvas",
+        "Create an interactive HTML/CSS/JS canvas — renders as a live iframe in chat. Use for dashboards, charts, visualizations, mini-apps, calculators, or any interactive UI the user requests.",
+        {
+          title: z.string().describe("Canvas title/ID (used in URL, lowercase, hyphens ok)"),
+          html: z.string().describe("HTML content (the body, no need for full document)"),
+          css: z.string().optional().describe("CSS styles"),
+          js: z.string().optional().describe("JavaScript code"),
+        },
+        async (args) => {
+          const result = await executeTool("create_canvas", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      tool(
         "tarsee_web_fetch",
         "Fetch a URL and return its content (HTML converted to text, or raw for APIs).",
         { url: z.string().describe("URL to fetch"), raw: z.boolean().optional().describe("Return raw response (for APIs)") },
