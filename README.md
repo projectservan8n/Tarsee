@@ -83,7 +83,7 @@ Tarsee Server (Railway)
   +-- Claude Code Agent SDK (subscription auth, auto-updates)
   |     +-- Built-in: Read, Write, Edit, Bash, Grep, Glob
   |     +-- MCP tools: send_message, schedule_task, remember,
-  |         spawn_agent, web_fetch, web_search, etc.
+  |         create_canvas, web_fetch, web_search, etc.
   |
   +-- Voice: whisper.cpp STT + Edge TTS
   +-- Workspace: SOUL.md, MEMORY.md, USER.md
@@ -116,6 +116,7 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | `/status` | System status |
 | `/cron` | Manage scheduled tasks |
 | `/remember [fact]` | Save to memory |
+| `/webhook list\|add\|remove` | Manage webhook triggers (external events → AI) |
 | `/doctor [fix]` | Diagnostics + auto-repair |
 | `/export` | Export conversation |
 

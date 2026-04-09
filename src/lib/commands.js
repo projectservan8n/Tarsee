@@ -87,6 +87,47 @@ const COMMANDS = {
     },
   },
 
+  webhook: {
+    description: "Manage webhook triggers (external events → AI)",
+    usage: "/webhook [add <id> <prompt>|remove <id>|list]",
+    handler: (args, ctx) => {
+      const settingsStore = ctx.settingsStore;
+      if (!settingsStore) return "Settings not available.";
+
+      const hooks = settingsStore.get("webhooks") || {};
+
+      if (!args || args.toLowerCase() === "list") {
+        const entries = Object.entries(hooks);
+        if (entries.length === 0) return "No webhooks configured.\n\nAdd one: `/webhook add github-pr Review this PR: {{payload}}`";
+        const lines = entries.map(([id, h]) => `- **${id}** → ${h.prompt?.slice(0, 60) || "(default)"}...`);
+        const token = settingsStore.get("api.token") || "(not set)";
+        return `**Webhooks (${entries.length}):**\n${lines.join("\n")}\n\n**URL:** \`POST /api/webhooks/<id>?token=${token}\``;
+      }
+
+      const parts = args.split(/\s+/);
+      const cmd = parts[0].toLowerCase();
+
+      if (cmd === "add" && parts[1]) {
+        const id = parts[1];
+        const prompt = parts.slice(2).join(" ") || null;
+        hooks[id] = { prompt, channel: "web:default", created: new Date().toISOString() };
+        settingsStore.set("webhooks", hooks);
+        const token = settingsStore.get("api.token") || "(not set)";
+        return `Webhook **${id}** created.\n\n**URL:** \`POST /api/webhooks/${id}?token=${token}\`\n\nSend a JSON POST to trigger the AI.`;
+      }
+
+      if (cmd === "remove" && parts[1]) {
+        const id = parts[1];
+        if (!hooks[id]) return `Webhook "${id}" not found.`;
+        delete hooks[id];
+        settingsStore.set("webhooks", hooks);
+        return `Webhook **${id}** removed.`;
+      }
+
+      return "Usage: `/webhook list`, `/webhook add <id> <prompt template>`, `/webhook remove <id>`\n\nUse `{{payload}}` in prompt for the webhook body.";
+    },
+  },
+
   system: {
     description: "Set or show the system prompt for this conversation",
     usage: "/system [prompt]",
