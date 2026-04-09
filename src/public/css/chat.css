@@ -859,6 +859,40 @@ details[open] .block-preview { display: none; }
   background: rgba(255, 255, 255, 0.2);
 }
 
+/* PDF viewer in lightbox */
+.lightbox-frame {
+  width: 90vw;
+  height: 90vh;
+  border: none;
+  border-radius: var(--radius-lg);
+  background: #fff;
+}
+
+/* Spreadsheet / text preview in lightbox */
+.lightbox-sheet {
+  width: 90vw;
+  max-height: 90vh;
+  overflow: auto;
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  color: var(--text);
+}
+
+.lightbox-sheet .md-table {
+  font-size: var(--text-sm);
+}
+
+/* Previewable file chips */
+.message-file-previewable {
+  cursor: pointer;
+}
+
+.message-file-previewable:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--accent);
+}
+
 /* Drag-drop overlay on chat area */
 .chat-area.drag-over::after {
   content: 'Drop files here';
