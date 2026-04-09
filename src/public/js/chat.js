@@ -786,6 +786,9 @@ const Chat = {
     let hasReceivedText = false;
     let fullResponse = "";
     let toolBlocks = ""; // Accumulated tool call/result HTML
+    // Buffer early content — show thinking for at least 1s
+    const thinkingStartTime = Date.now();
+    let pendingContent = null; // Buffered first updateStreamingMessage call
 
     this.isStreaming = true;
     this.elements.sendBtn.disabled = false;
@@ -823,7 +826,18 @@ const Chat = {
             return;
           }
           if (event?.type === "tool_call") {
-            if (!hasReceivedText) hasReceivedText = true;
+            if (!hasReceivedText) {
+              hasReceivedText = true;
+              // Ensure thinking shows for at least 1s
+              const elapsed = Date.now() - thinkingStartTime;
+              if (elapsed < 1000) {
+                pendingContent = () => {
+                  this.updateStreamingMessage(assistantMsg, toolBlocks, true);
+                  this.scrollToBottom();
+                };
+                setTimeout(() => { if (pendingContent) { pendingContent(); pendingContent = null; } }, 1000 - elapsed);
+              }
+            }
             // Clean tool block — name + detail, collapsible input
             // Build human-readable detail based on tool type
             const inp = event.input || {};
@@ -864,14 +878,26 @@ const Chat = {
             this.scrollToBottom();
             return;
           }
-          // Normal text — updateStreamingMessage will overwrite thinking indicator
-          if (!hasReceivedText) hasReceivedText = true;
+          // Normal text
           fullResponse += content;
-          // Strip setup marker and [REMEMBER: ...] markers from display
-          let displayText = fullResponse.split("|||PERSONALITY_COMPLETE|||")[0];
-          displayText = displayText.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n");
-          this.updateStreamingMessage(assistantMsg, toolBlocks + this.renderMarkdown(displayText), true);
-          this.scrollToBottom();
+          const renderUpdate = () => {
+            let displayText = fullResponse.split("|||PERSONALITY_COMPLETE|||")[0];
+            displayText = displayText.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n");
+            this.updateStreamingMessage(assistantMsg, toolBlocks + this.renderMarkdown(displayText), true);
+            this.scrollToBottom();
+          };
+          if (!hasReceivedText) {
+            hasReceivedText = true;
+            // Ensure thinking shows for at least 1s before first content
+            const elapsed = Date.now() - thinkingStartTime;
+            if (elapsed < 1000) {
+              setTimeout(renderUpdate, 1000 - elapsed);
+            } else {
+              renderUpdate();
+            }
+          } else {
+            renderUpdate();
+          }
           // Notify setup module
           if (typeof Setup !== "undefined") Setup.handleStreamingText(fullResponse);
         },
