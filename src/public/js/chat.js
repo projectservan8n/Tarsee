@@ -19,6 +19,7 @@ const Chat = {
   lastMessageRole: null,
   lastMessageTime: 0,
   pendingFiles: [],
+  messageQueue: [],
 
   elements: {},
 
@@ -692,7 +693,27 @@ const Chat = {
   async send() {
     const text = this.elements.messageInput.value.trim();
     const hasFiles = this.pendingFiles.length > 0;
-    if ((!text && !hasFiles) || this.isStreaming) return;
+    if (!text && !hasFiles) return;
+
+    // Queue if already streaming
+    if (this.isStreaming) {
+      const attachments = hasFiles ? await this.buildAttachments() : [];
+      if (hasFiles) { this.pendingFiles = []; this.renderAttachmentsPreview(); }
+      this.elements.messageInput.value = "";
+      this.elements.messageInput.style.height = "auto";
+      this.elements.sendBtn.disabled = true;
+
+      this.messageQueue.push({ text, attachments });
+      // Show queued message in chat with badge
+      const queuedMsg = this.appendMessage("user", text);
+      const badge = document.createElement("span");
+      badge.className = "queue-badge";
+      badge.textContent = `Queued #${this.messageQueue.length}`;
+      queuedMsg.querySelector(".message-role")?.appendChild(badge);
+      queuedMsg.dataset.queued = "true";
+      this.scrollToBottom();
+      return;
+    }
 
     // Build attachments from pending files before clearing
     let attachments = [];
@@ -879,6 +900,139 @@ const Chat = {
     this.elements.sendBtn.classList.remove("stop-mode");
     this.elements.sendBtn.title = "Send";
     this.elements.messageInput.focus();
+
+    // Drain queue — send next queued message
+    if (this.messageQueue.length > 0) {
+      const next = this.messageQueue.shift();
+      // Remove "Queued" badges and update remaining positions
+      document.querySelectorAll('.queue-badge').forEach((b, i) => {
+        if (i === 0) b.remove(); // Remove badge from the one being sent now
+        else b.textContent = `Queued #${i}`;
+      });
+      // Small delay so the user sees the transition
+      setTimeout(() => this.sendQueued(next.text, next.attachments), 300);
+    }
+  },
+
+  /** Send a queued message (already displayed in chat) */
+  async sendQueued(text, attachments) {
+    // Show chat area
+    this.elements.welcomeScreen.style.display = "none";
+    this.elements.chatArea.style.display = "flex";
+    this.elements.inputArea.style.display = "block";
+
+    if (!this.currentChannelKey) {
+      this.currentChannelKey = `web:default`;
+    }
+
+    // Session bar
+    const sessionBar = document.getElementById("sessionBar");
+    if (sessionBar) sessionBar.style.display = "flex";
+
+    // Create assistant message with thinking indicator
+    const assistantMsg = this.appendMessage("assistant", "", true);
+    const thinkingEl = document.createElement("div");
+    thinkingEl.className = "chat-thinking";
+    thinkingEl.innerHTML = '<span class="thinking-text">Thinking</span><span class="thinking-dots"></span>';
+    const msgContent = assistantMsg.querySelector(".message-content");
+    const msgText = assistantMsg.querySelector(".message-text");
+    if (msgContent && msgText) msgContent.insertBefore(thinkingEl, msgText);
+    let hasReceivedText = false;
+    let fullResponse = "";
+    let toolBlocks = "";
+
+    this.isStreaming = true;
+    this.elements.sendBtn.disabled = false;
+    this.elements.sendBtn.classList.add("stop-mode");
+    this.elements.sendBtn.title = "Stop generation (Esc)";
+
+    try {
+      await API.sendMessage(
+        this.currentConversationId,
+        text,
+        (content, event) => {
+          if (event?.type === "thinking") return;
+          if (event?.type === "tool_call") {
+            if (!hasReceivedText) {
+              hasReceivedText = true;
+              const thinkEl = assistantMsg.querySelector(".chat-thinking");
+              if (thinkEl) thinkEl.remove();
+            }
+            const inp = event.input || {};
+            let detail = "";
+            let label = event.name;
+            if (event.name === "Bash") { detail = inp.command || ""; }
+            else if (event.name === "Read") { detail = inp.file_path || inp.filename || ""; label = "Read"; }
+            else if (event.name === "Write") { detail = inp.file_path || inp.filename || ""; label = "Write"; }
+            else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
+            else if (event.name === "Grep") { detail = `"${inp.pattern || ""}" ${inp.path || ""}`; label = "Search"; }
+            else if (event.name === "Glob") { detail = inp.pattern || ""; label = "Find"; }
+            else { detail = inp.command || inp.filename || inp.url || inp.query || inp.message || inp.task || inp.schedule || inp.key || JSON.stringify(inp).slice(0, 80); }
+            toolBlocks += `<details class="tool-block"><summary class="tool-block-header"><span class="tool-indicator running"></span><span class="tool-name">${escapeHtml(label)}</span><span class="tool-detail">${escapeHtml(String(detail).slice(0, 120))}</span></summary><div class="tool-block-body"><pre class="tool-block-code">${escapeHtml(String(detail).slice(0, 500) || "(no args)")}</pre></div></details>`;
+            this.updateStreamingMessage(assistantMsg, toolBlocks, true);
+            this.scrollToBottom();
+            return;
+          }
+          if (event?.type === "tool_result") {
+            const resultText = event.result || "";
+            toolBlocks = toolBlocks.replace(/running"><\/span>(?![\s\S]*running"><\/span>)/, 'done"></span>');
+            if (resultText && resultText !== "(no output)") {
+              toolBlocks = toolBlocks.replace(/<\/div>\s*<\/details>$/, `<div class="tool-block-output"><pre class="tool-block-code">${escapeHtml(resultText.slice(0, 2000))}</pre></div></div></details>`);
+            }
+            this.updateStreamingMessage(assistantMsg, toolBlocks, true);
+            this.scrollToBottom();
+            return;
+          }
+          if (!hasReceivedText) {
+            hasReceivedText = true;
+            const thinkEl = assistantMsg.querySelector(".chat-thinking");
+            if (thinkEl) thinkEl.remove();
+          }
+          fullResponse += content;
+          let displayText = fullResponse.split("|||PERSONALITY_COMPLETE|||")[0];
+          displayText = displayText.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n");
+          this.updateStreamingMessage(assistantMsg, toolBlocks + this.renderMarkdown(displayText), true);
+          this.scrollToBottom();
+        },
+        (data) => {
+          if (data?.type === "conversation" && data.conversationId) {
+            this.currentConversationId = data.conversationId;
+          }
+          this.finishStreaming(assistantMsg);
+          this.updateSessionBar();
+          this.loadChannels();
+        },
+        (error) => {
+          this.finishStreaming(assistantMsg);
+          if (!fullResponse) {
+            assistantMsg.querySelector(".message-text").innerHTML =
+              `<span class="text-danger">${escapeHtml(error)}</span>`;
+          }
+          App.showToast(error, "error");
+        },
+        this.currentChannelKey,
+        attachments.length ? attachments : undefined
+      );
+    } catch (err) {
+      this.finishStreaming(assistantMsg);
+      App.showToast(err.message, "error");
+    }
+
+    this.isStreaming = false;
+    this.elements.sendBtn.disabled = false;
+    this.elements.sendBtn.classList.remove("stop-mode");
+    this.elements.sendBtn.title = "Send";
+    this.elements.messageInput.focus();
+
+    // Continue draining queue
+    if (this.messageQueue.length > 0) {
+      const next = this.messageQueue.shift();
+      document.querySelectorAll('.queue-badge').forEach((b, i) => {
+        if (i === 0) b.remove();
+        else b.textContent = `Queued #${i}`;
+      });
+      setTimeout(() => this.sendQueued(next.text, next.attachments), 300);
+    }
   },
 
   stopGeneration() {
