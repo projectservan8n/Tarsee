@@ -609,9 +609,9 @@ const Chat = {
   // --- File Attachments ---
   addPendingFiles(files) {
     for (const file of files) {
-      // Limit individual file to 10 MB
-      if (file.size > 10 * 1024 * 1024) {
-        App.showToast(`File "${file.name}" exceeds 10 MB limit`, "error");
+      // Limit individual file to 20 MB (Claude supports up to 32MB for PDFs, 20MB for images)
+      if (file.size > 20 * 1024 * 1024) {
+        App.showToast(`File "${file.name}" exceeds 20 MB limit`, "error");
         continue;
       }
       this.pendingFiles.push(file);
@@ -636,15 +636,25 @@ const Chat = {
     container.style.display = "flex";
     container.innerHTML = this.pendingFiles.map((file, i) => {
       const isImage = file.type.startsWith("image/");
+      const url = URL.createObjectURL(file);
       const thumb = isImage
-        ? `<img src="${URL.createObjectURL(file)}" alt="">`
+        ? `<img src="${url}" alt="" class="att-preview-img" data-url="${url}">`
         : `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/></svg>`;
-      return `<div class="chat-attachment-thumb">
+      const sizeKB = (file.size / 1024).toFixed(0);
+      return `<div class="chat-attachment-thumb" title="${escapeHtml(file.name)} (${sizeKB}KB)">
         ${thumb}
         <span class="att-name">${escapeHtml(file.name)}</span>
         <button class="chat-attachment-remove" data-index="${i}" title="Remove">&times;</button>
       </div>`;
     }).join("");
+
+    // Click image previews to open lightbox
+    container.querySelectorAll(".att-preview-img").forEach((img) => {
+      img.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.openLightbox(img.dataset.url);
+      });
+    });
 
     container.querySelectorAll(".chat-attachment-remove").forEach((btn) => {
       btn.addEventListener("click", () => this.removePendingFile(parseInt(btn.dataset.index, 10)));
@@ -689,12 +699,14 @@ const Chat = {
     if (images.length) {
       html += '<div class="message-images">';
       for (const img of images) {
-        html += `<img src="data:${escapeHtml(img.mediaType)};base64,${img.data}" alt="${escapeHtml(img.name)}">`;
+        const src = `data:${escapeHtml(img.mediaType)};base64,${img.data}`;
+        html += `<img src="${src}" alt="${escapeHtml(img.name)}" class="clickable-image" onclick="Chat.openLightbox('${src.replace(/'/g, "\\'")}')" style="cursor:pointer">`;
       }
       html += "</div>";
     }
     for (const f of others) {
-      html += `<div class="message-file-chip"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/></svg> ${escapeHtml(f.name)}</div>`;
+      const dataUrl = `data:${f.mediaType || "application/octet-stream"};base64,${f.data}`;
+      html += `<a class="message-file-chip" href="${dataUrl}" download="${escapeHtml(f.name)}" title="Click to download"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/></svg> ${escapeHtml(f.name)}</a>`;
     }
     return html;
   },
@@ -1172,6 +1184,19 @@ const Chat = {
     } catch (err) {
       App.showToast("Failed to delete: " + err.message, "error");
     }
+  },
+
+  // --- Lightbox ---
+  openLightbox(src) {
+    const existing = document.querySelector(".lightbox-overlay");
+    if (existing) existing.remove();
+    const overlay = document.createElement("div");
+    overlay.className = "lightbox-overlay";
+    overlay.innerHTML = `<img src="${src}" class="lightbox-img"><button class="lightbox-close">&times;</button>`;
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay || e.target.classList.contains("lightbox-close")) overlay.remove();
+    });
+    document.body.appendChild(overlay);
   },
 
   // --- Utilities ---
