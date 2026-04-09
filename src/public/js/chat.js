@@ -1514,8 +1514,41 @@ const Chat = {
   /**
    * Markdown renderer with tool call, tool response, and thinking block support.
    */
+  /** Render a persisted timeline from saved JSON data */
+  renderTimelineFromData(items) {
+    const parts = items.map((item) => {
+      if (item.type === "text") {
+        const html = this.renderMarkdown(item.text || "");
+        return `<div class="tl-item tl-text"><div class="tl-dot"></div><div class="tl-content">${html}</div></div>`;
+      }
+      if (item.type === "tool") {
+        let toolHtml = `<div class="tl-tool-header"><span class="tl-tool-name">${escapeHtml(item.name || "Tool")}</span> <span class="tl-tool-detail">${escapeHtml(item.detail || "")}</span></div>`;
+        if (item.input) {
+          toolHtml += `<div class="tl-tool-in"><span class="tl-io-label">IN</span><pre class="tl-tool-code">${escapeHtml(item.input)}</pre></div>`;
+        }
+        if (item.output && item.output !== "(no output)") {
+          toolHtml += `<div class="tl-tool-out"><span class="tl-io-label">OUT</span><pre class="tl-tool-code">${escapeHtml(item.output)}</pre></div>`;
+        }
+        return `<div class="tl-item tl-tool"><div class="tl-dot done"></div><div class="tl-content">${toolHtml}</div></div>`;
+      }
+      return "";
+    }).join("");
+    return `<div class="tl-timeline">${parts}</div>`;
+  },
+
   renderMarkdown(text) {
     if (!text) return "";
+
+    // Check for persisted timeline JSON from DB
+    if (text.startsWith('{"__timeline":true')) {
+      try {
+        const data = JSON.parse(text);
+        if (data.__timeline && data.items) {
+          return this.renderTimelineFromData(data.items);
+        }
+      } catch { /* not valid JSON, render as normal markdown */ }
+    }
+
     // Strip any [REMEMBER: ...] markers that leaked through
     text = text.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n").trim();
 

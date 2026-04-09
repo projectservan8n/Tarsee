@@ -375,6 +375,9 @@ chatRouter.post("/send", async (req, res) => {
   }) + voiceHint;
 
   let fullResponse = "";
+  let currentTextChunk = "";
+  const timeline = []; // Track timeline for persistence: [{type:"text",text:""},{type:"tool",name:"",detail:"",input:"",output:"",status:"done"}]
+  let lastToolIdx = -1;
   let usage = {};
   const tools = getToolDefinitions();
   const toolCtx = { db: req.app.get("db"), settingsStore, conversationId: convId, channelManager: req.app.get("channelManager") };
@@ -391,7 +394,14 @@ chatRouter.post("/send", async (req, res) => {
       const existingSessionId = convStore.getClaudeSessionId(convId);
       const mod = await import("../ai/providers/claude-code.js");
       // Build messages with image blocks for the last user message
-      const ccMessages = history.map((m) => ({ role: m.role, content: m.content }));
+      const ccMessages = history.map((m) => {
+        // Extract plain text from timeline JSON for AI context
+        let content = m.content;
+        if (content?.startsWith('{"__timeline":true')) {
+          try { content = JSON.parse(content).text || content; } catch {}
+        }
+        return { role: m.role, content };
+      });
       if (userContentForAI !== message && ccMessages.length > 0) {
         const last = ccMessages[ccMessages.length - 1];
         if (last.role === "user") last.content = userContentForAI;
@@ -413,12 +423,34 @@ chatRouter.post("/send", async (req, res) => {
       for await (const event of stream) {
         if (event.type === "text") {
           fullResponse += event.content;
+          currentTextChunk += event.content;
           sendSSE(res, "text", { content: event.content });
         } else if (event.type === "thinking") {
           sendSSE(res, "thinking", { status: event.status });
         } else if (event.type === "tool_use") {
+          // Flush text to timeline
+          if (currentTextChunk.trim()) {
+            const last = timeline[timeline.length - 1];
+            if (last?.type === "text") { last.text = currentTextChunk; }
+            else { timeline.push({ type: "text", text: currentTextChunk }); }
+          }
+          currentTextChunk = "";
+          const inp = event.input || {};
+          let detail = "";
+          let label = event.name;
+          if (event.name === "Bash") detail = inp.command || "";
+          else if (event.name === "Read") { detail = inp.file_path || ""; label = "Read"; }
+          else if (event.name === "Write") { detail = inp.file_path || ""; label = "Write"; }
+          else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
+          else detail = inp.command || inp.file_path || inp.url || inp.query || JSON.stringify(inp).slice(0, 80);
+          lastToolIdx = timeline.length;
+          timeline.push({ type: "tool", name: label, detail: String(detail).slice(0, 200), input: String(detail).slice(0, 500), output: "", status: "running" });
           sendSSE(res, "tool_call", { id: event.id, name: event.name, input: event.input });
         } else if (event.type === "tool_result") {
+          if (lastToolIdx >= 0 && timeline[lastToolIdx]) {
+            timeline[lastToolIdx].status = "done";
+            timeline[lastToolIdx].output = (event.result || "").slice(0, 2000);
+          }
           sendSSE(res, "tool_result", { id: event.id, name: event.name, result: event.result });
         } else if (event.type === "usage") {
           usage = { ...usage, ...event.usage };
@@ -428,12 +460,23 @@ chatRouter.post("/send", async (req, res) => {
           break;
         }
       }
+      // Flush remaining text
+      if (currentTextChunk.trim()) {
+        const last = timeline[timeline.length - 1];
+        if (last?.type === "text") { last.text = currentTextChunk; }
+        else { timeline.push({ type: "text", text: currentTextChunk }); }
+      }
 
-      if (fullResponse) {
-        fullResponse = extractAndSaveMemories(fullResponse, req.app.get("db"), convId);
+      if (fullResponse || timeline.some(t => t.type === "tool")) {
+        fullResponse = fullResponse ? extractAndSaveMemories(fullResponse, req.app.get("db"), convId) : "";
+        // Save with timeline metadata if tools were used
+        const hasTools = timeline.some(t => t.type === "tool");
+        const content = hasTools
+          ? JSON.stringify({ __timeline: true, items: timeline, text: fullResponse })
+          : fullResponse;
         convStore.addMessage(convId, {
           role: "assistant",
-          content: fullResponse,
+          content,
           provider: providerId,
           model,
           tokensIn: usage.input_tokens,
