@@ -166,13 +166,13 @@
 /* Dot on the vertical line */
 .tl-dot {
   position: absolute;
-  left: calc(-1 * var(--space-5) + 3px);
-  top: 6px;
-  width: 10px;
-  height: 10px;
+  left: calc(-1 * var(--space-5) + 4px);
+  top: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: var(--radius-full);
   background: var(--text-muted);
-  border: 2px solid var(--bg);
+  border: none;
   z-index: 1;
 }
 
@@ -256,6 +256,19 @@
   color: var(--text-secondary);
   background: none;
   border: none;
+}
+
+
+/* Timeline mobile */
+@media (max-width: 768px) {
+  .tl-timeline { padding-left: var(--space-4); }
+  .tl-timeline::before { left: 5px; }
+  .tl-dot { left: calc(-1 * var(--space-4) + 2px); width: 7px; height: 7px; }
+  .tl-tool-header { padding: var(--space-1) var(--space-2); }
+  .tl-tool-name { font-size: var(--text-xs); }
+  .tl-tool-detail { font-size: 10px; max-width: 150px; }
+  .tl-tool-in, .tl-tool-out { padding: var(--space-1) var(--space-2); }
+  .tl-tool-code { font-size: 11px; max-height: 120px; }
 }
 
 

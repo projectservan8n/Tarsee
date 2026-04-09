@@ -893,13 +893,9 @@ const Chat = {
             return;
           }
           if (event?.type === "tool_call") {
-            // Flush any accumulated text before this tool
-            if (currentTextChunk.trim()) {
-              let displayText = currentTextChunk.split("|||PERSONALITY_COMPLETE|||")[0];
-              displayText = displayText.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n").trim();
-              if (displayText) timeline.push({ type: "text", html: this.renderMarkdown(displayText) });
-              currentTextChunk = "";
-            }
+            // Finalize current text chunk (it's already in the timeline from renderUpdate)
+            // Just reset the chunk so next text starts a new timeline item
+            currentTextChunk = "";
 
             if (!hasReceivedText) {
               hasReceivedText = true;

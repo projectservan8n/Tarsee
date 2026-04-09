@@ -1,5 +1,5 @@
 // Tarsee Service Worker v2 — PWA install, offline shell, stale-while-revalidate
-const CACHE_NAME = "tarsee-v2";
+const CACHE_NAME = "tarsee-v3";
 
 const APP_SHELL = [
   "/",
