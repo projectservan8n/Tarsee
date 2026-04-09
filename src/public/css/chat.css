@@ -858,7 +858,25 @@ details[open] .block-preview { display: none; }
 
 
 /* ==========================================================================
-   12. Markdown Tables (.md-table)
+   12. Message Queue Badge
+   ========================================================================== */
+
+.queue-badge {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: var(--space-0-5) var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-subtle);
+  border-radius: var(--radius-full);
+  vertical-align: middle;
+  animation: fadeIn var(--duration-normal) var(--ease-default);
+}
+
+
+/* ==========================================================================
+   13. Markdown Tables (.md-table)
    ========================================================================== */
 
 .md-table {
