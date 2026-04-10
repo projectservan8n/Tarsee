@@ -473,9 +473,12 @@ chatRouter.post("/send", async (req, res) => {
           else if (event.name === "Read") { detail = inp.file_path || ""; label = "Read"; }
           else if (event.name === "Write") { detail = inp.file_path || ""; label = "Write"; }
           else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
+          else if (event.name === "TodoWrite") { label = "Update Todos"; detail = ""; }
           else detail = inp.command || inp.file_path || inp.url || inp.query || JSON.stringify(inp).slice(0, 80);
           lastToolIdx = timeline.length;
-          timeline.push({ type: "tool", name: label, detail: String(detail).slice(0, 200), input: String(detail).slice(0, 500), output: "", status: "running" });
+          const timelineItem = { type: "tool", name: label, detail: String(detail).slice(0, 200), input: String(detail).slice(0, 500), output: "", status: "running" };
+          if (event.name === "TodoWrite" && Array.isArray(inp.todos)) timelineItem.todos = inp.todos;
+          timeline.push(timelineItem);
           sendSSE(res, "tool_call", { id: event.id, name: event.name, input: event.input });
           broadcastToOthers(convId, "tool_call", { id: event.id, name: event.name, input: event.input });
           auditLog?.log({ action: "tool.call", target: event.name, actor: "claude", ip: req.ip, detail: String(detail).slice(0, 200) });

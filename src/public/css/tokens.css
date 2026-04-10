@@ -72,7 +72,7 @@
 
   /* ---------- Typography ---------- */
 
-  --font-body: 'DM Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-body: 'Poppins', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
 
   --text-2xs:  9px;

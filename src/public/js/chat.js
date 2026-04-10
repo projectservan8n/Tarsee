@@ -926,9 +926,22 @@ const Chat = {
             else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
             else if (event.name === "Grep") { detail = `"${inp.pattern || ""}" ${inp.path || ""}`; label = "Search"; }
             else if (event.name === "Glob") { detail = inp.pattern || ""; label = "Find"; }
+            else if (event.name === "TodoWrite") { label = "Update Todos"; detail = ""; }
             else { detail = inp.command || inp.filename || inp.url || inp.query || inp.message || inp.task || inp.schedule || inp.key || JSON.stringify(inp).slice(0, 80); }
 
-            const toolHtml = `<div class="tl-tool-header"><span class="tl-tool-name">${escapeHtml(label)}</span> <span class="tl-tool-detail">${escapeHtml(String(detail).slice(0, 100))}</span></div><div class="tl-tool-in"><span class="tl-io-label">IN</span><pre class="tl-tool-code">${escapeHtml(String(detail).slice(0, 500) || "(no args)")}</pre></div>`;
+            // Special rendering for TodoWrite — show checklist
+            let toolHtml;
+            if (event.name === "TodoWrite" && Array.isArray(inp.todos)) {
+              toolHtml = `<div class="tl-tool-header"><span class="tl-tool-name"><i class="ph ph-list-checks"></i> Update Todos</span></div><div class="tl-todos">${inp.todos.map(t => {
+                const icon = t.status === "completed" ? '<i class="ph ph-check-circle tl-todo-done"></i>'
+                  : t.status === "in_progress" ? '<i class="ph ph-circle-notch tl-todo-active"></i>'
+                  : '<i class="ph ph-circle tl-todo-pending"></i>';
+                const cls = t.status === "completed" ? "tl-todo-item done" : t.status === "in_progress" ? "tl-todo-item active" : "tl-todo-item";
+                return `<div class="${cls}">${icon} <span>${escapeHtml(t.status === "in_progress" ? (t.activeForm || t.content) : t.content)}</span></div>`;
+              }).join("")}</div>`;
+            } else {
+              toolHtml = `<div class="tl-tool-header"><span class="tl-tool-name">${escapeHtml(label)}</span> <span class="tl-tool-detail">${escapeHtml(String(detail).slice(0, 100))}</span></div><div class="tl-tool-in"><span class="tl-io-label">IN</span><pre class="tl-tool-code">${escapeHtml(String(detail).slice(0, 500) || "(no args)")}</pre></div>`;
+            }
             lastToolIndex = timeline.length;
             timeline.push({ type: "tool", status: "running", html: toolHtml });
             if (!pendingContent) { this.updateStreamingMessage(assistantMsg, renderTimeline(), true); this.scrollToBottom(); }
@@ -1727,6 +1740,17 @@ const Chat = {
         return `<div class="tl-item tl-text"><div class="tl-dot"></div><div class="tl-content">${html}</div></div>`;
       }
       if (item.type === "tool") {
+        // Special rendering for saved TodoWrite
+        if (item.todos && Array.isArray(item.todos)) {
+          const todosHtml = item.todos.map(t => {
+            const icon = t.status === "completed" ? '<i class="ph ph-check-circle tl-todo-done"></i>'
+              : t.status === "in_progress" ? '<i class="ph ph-circle-notch tl-todo-active"></i>'
+              : '<i class="ph ph-circle tl-todo-pending"></i>';
+            const cls = t.status === "completed" ? "tl-todo-item done" : t.status === "in_progress" ? "tl-todo-item active" : "tl-todo-item";
+            return `<div class="${cls}">${icon} <span>${escapeHtml(t.content)}</span></div>`;
+          }).join("");
+          return `<div class="tl-item tl-tool"><div class="tl-dot done"></div><div class="tl-content"><div class="tl-tool-header"><span class="tl-tool-name"><i class="ph ph-list-checks"></i> Update Todos</span></div><div class="tl-todos">${todosHtml}</div></div></div>`;
+        }
         let toolHtml = `<div class="tl-tool-header"><span class="tl-tool-name">${escapeHtml(item.name || "Tool")}</span> <span class="tl-tool-detail">${escapeHtml(item.detail || "")}</span></div>`;
         if (item.input) {
           toolHtml += `<div class="tl-tool-in"><span class="tl-io-label">IN</span><pre class="tl-tool-code">${escapeHtml(item.input)}</pre></div>`;

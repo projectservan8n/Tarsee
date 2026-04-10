@@ -537,6 +537,53 @@
   border-radius: var(--space-px);
 }
 
+/* ==========================================================================
+   Todo list rendering (from TodoWrite tool calls)
+   ========================================================================== */
+
+.tl-todos {
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.tl-todo-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: var(--leading-normal);
+}
+
+.tl-todo-item.done {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.tl-todo-item.active {
+  color: var(--text);
+}
+
+.tl-todo-item i {
+  flex-shrink: 0;
+  font-size: var(--text-base);
+}
+
+.tl-todo-done {
+  color: var(--success);
+}
+
+.tl-todo-active {
+  color: var(--accent);
+  animation: spin 1.5s linear infinite;
+}
+
+.tl-todo-pending {
+  color: var(--text-muted);
+}
+
 /* Typing indicator from other devices */
 .typing-indicator {
   display: none;
