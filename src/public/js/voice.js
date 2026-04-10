@@ -700,9 +700,9 @@ const Voice = {
         const headers = { "Content-Type": "application/json" };
         if (csrf) headers["X-CSRF-Token"] = csrf;
 
-        // Abort if TTS fetch takes too long (25s)
+        // Abort if TTS fetch takes too long (12s — Edge TTS should respond in <5s)
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 25_000);
+        const timeout = setTimeout(() => controller.abort(), 12_000);
 
         const res = await fetch("/api/voice/tts-stream", {
           method: "POST",
@@ -731,9 +731,9 @@ const Voice = {
         return; // Success — exit retry loop
       } catch (err) {
         console.warn(`[voice] TTS attempt ${attempt + 1} failed:`, err.message);
-        if (attempt === 0 && text.length > 150) {
+        if (attempt === 0 && text.length > 80) {
           // Retry with much shorter text
-          text = text.slice(0, 150) + ". See chat for details.";
+          text = text.slice(0, 80) + ". Check chat for details.";
           continue;
         }
       }
@@ -856,11 +856,11 @@ const Voice = {
       .replace(/\n{3,}/g, "\n\n")            // collapse whitespace
       .trim();
 
-    // Cap at 400 chars — Edge TTS times out on anything longer
-    if (text.length > 400) {
-      // Try to cut at a sentence boundary
-      const cutoff = text.lastIndexOf(".", 380);
-      text = text.slice(0, cutoff > 200 ? cutoff + 1 : 380) + " Check the chat for full details.";
+    // Cap at 250 chars — Edge TTS is reliable under this, times out above
+    if (text.length > 250) {
+      // Cut at sentence boundary
+      const cutoff = text.lastIndexOf(".", 230);
+      text = text.slice(0, cutoff > 100 ? cutoff + 1 : 230) + " See chat for more.";
     }
 
     return text;
