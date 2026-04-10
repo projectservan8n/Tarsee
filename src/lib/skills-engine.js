@@ -160,7 +160,13 @@ export function getSkillsPromptContext() {
 
   const lines = skills.map((s) => `- **${s.name}**: ${s.description}`);
 
-  return `\n\nYou have these specialized skills available. When a user's request clearly matches a skill, load and follow its instructions:\n${lines.join("\n")}`;
+  return `\n\n## Skills
+You have these specialized skills available. Each skill has a SKILL.md file with detailed instructions, credentials, tokens, and configuration. **IMPORTANT: When a task matches a skill, ALWAYS read its SKILL.md first** — skills often contain API keys, tokens, CLI configs, and setup instructions you need.
+
+Read a skill with: \`cat /data/tarsee/workspace/skills/{name}/SKILL.md 2>/dev/null || cat /app/src/skills/{name}/SKILL.md\`
+
+Available skills:
+${lines.join("\n")}`;
 }
 
 /**
