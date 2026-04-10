@@ -474,11 +474,10 @@
                 <select id="settingsVoiceEngine">
                   <option value="auto">Auto (best available)</option>
                   <option value="elevenlabs">ElevenLabs (cloud, premium)</option>
-                  <option value="kokoro">Kokoro (local, free)</option>
                   <option value="edge-tts">Edge TTS (Microsoft, free)</option>
                   <option value="stub">Disabled</option>
                 </select>
-                <div class="hint">Auto tries: ElevenLabs → Kokoro → Edge TTS. Kokoro runs locally (~200MB RAM). Edge TTS is free via Microsoft servers.</div>
+                <div class="hint">Auto tries: ElevenLabs → Edge TTS. Edge TTS is free via Microsoft servers (no API key).</div>
               </div>
               <div class="form-group" id="elevenlabsKeyGroup" style="display:none">
                 <label>ElevenLabs API Key</label>

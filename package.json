@@ -22,7 +22,6 @@
     "busboy": "^1.6.0",
     "discord.js": "^14.0.0",
     "express": "^5.1.0",
-    "kokoro-js": "^1.2.1",
     "node-cron": "^4.2.1",
     "node-edge-tts": "^1.2.10",
     "node-pty": "^1.1.0",

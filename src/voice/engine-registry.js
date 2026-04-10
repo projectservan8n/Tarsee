@@ -28,9 +28,8 @@ export async function initTTSEngine(settingsStore) {
     console.warn(`[voice] Preferred engine "${enginePref}" unavailable, falling back`);
   }
 
-  // Auto: try ElevenLabs → Edge TTS → Kokoro → Stub
-  // Edge TTS before Kokoro because Kokoro needs writable cache dir
-  for (const name of ["elevenlabs", "edge-tts", "kokoro"]) {
+  // Auto: try ElevenLabs → Edge TTS → Stub
+  for (const name of ["elevenlabs", "edge-tts"]) {
     const voiceForEngine = (name === enginePref) ? defaultVoice : null;
     const engine = await tryEngine(name, settingsStore, voiceForEngine);
     if (engine) {
@@ -59,16 +58,6 @@ async function tryEngine(name, settingsStore, defaultVoice) {
         if (await el.isAvailable()) {
           console.log(`[voice] ElevenLabs TTS active (voice: ${defaultVoice || "default"})`);
           return el;
-        }
-        return null;
-      }
-
-      case "kokoro": {
-        const { KokoroTTSEngine } = await import("./kokoro-engine.js");
-        const kokoro = new KokoroTTSEngine(defaultVoice);
-        if (await kokoro.isAvailable()) {
-          console.log("[voice] Kokoro TTS active (local, free)");
-          return kokoro;
         }
         return null;
       }

@@ -524,14 +524,6 @@ const Settings = {
         { id: "ErXwobaYiN019PkySvjV", name: "Antoni" },
         { id: "MF3mGyEYCl7XYWbV9V6O", name: "Elli" },
       ],
-      "kokoro": [
-        { id: "af_heart", name: "Heart (Female)" },
-        { id: "af_alloy", name: "Alloy (Female)" },
-        { id: "am_adam", name: "Adam (Male)" },
-        { id: "am_michael", name: "Michael (Male)" },
-        { id: "bf_emma", name: "Emma (British F)" },
-        { id: "bm_george", name: "George (British M)" },
-      ],
       "edge-tts": [
         { id: "en-US-AndrewMultilingualNeural", name: "Andrew (US)" },
         { id: "en-US-AvaMultilingualNeural", name: "Ava (US)" },
