@@ -188,9 +188,11 @@ const Chat = {
         }
       }
       if (text) {
+        const origHTML = copyBtn.innerHTML;
         navigator.clipboard.writeText(text).then(() => {
-          copyBtn.textContent = "Copied!";
-          setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
+          copyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+          copyBtn.style.opacity = "1";
+          setTimeout(() => { copyBtn.innerHTML = origHTML; copyBtn.style.opacity = ""; }, 1500);
         }).catch(() => {
           // Fallback for non-HTTPS
           const ta = document.createElement("textarea");
@@ -199,8 +201,9 @@ const Chat = {
           ta.select();
           document.execCommand("copy");
           document.body.removeChild(ta);
-          copyBtn.textContent = "Copied!";
-          setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
+          copyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+          copyBtn.style.opacity = "1";
+          setTimeout(() => { copyBtn.innerHTML = origHTML; copyBtn.style.opacity = ""; }, 1500);
         });
       }
     });
@@ -592,8 +595,9 @@ const Chat = {
       ? `<img src="/icon-32.png" alt="" class="avatar-img">`
       : "U";
 
+    const copyIcon = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5" stroke="currentColor" stroke-width="1.3"/></svg>';
     const copyBtn = role === "assistant" && !isStreaming
-      ? `<button class="msg-copy-btn">Copy</button>`
+      ? `<button class="msg-copy-btn" title="Copy">${copyIcon}</button>`
       : "";
 
     msg.innerHTML = `
@@ -642,7 +646,8 @@ const Chat = {
     if (!msgEl.querySelector(".msg-copy-btn")) {
       const btn = document.createElement("button");
       btn.className = "msg-copy-btn";
-      btn.textContent = "Copy";
+      btn.title = "Copy";
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5" stroke="currentColor" stroke-width="1.3"/></svg>';
       btn.onclick = () => navigator.clipboard.writeText(textEl.textContent);
       msgEl.appendChild(btn);
     }

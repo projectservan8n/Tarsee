@@ -426,7 +426,7 @@ html, body {
 }
 
 .message:hover {
-  background: var(--bg-surface-hover);
+  background: transparent;
 }
 
 .message-avatar {
@@ -551,45 +551,29 @@ html, body {
   display: none;
 }
 
-/* Message hover actions */
-.message-actions {
-  display: none;
+/* Copy icon — subtle, top-right, hover only */
+.msg-copy-btn {
   position: absolute;
-  top: calc(-1 * var(--space-2));
+  top: var(--space-2);
   right: var(--space-2);
-  background: var(--bg-elevated);
-  border: var(--space-px) solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-0-5);
-  gap: var(--space-0-5);
-  box-shadow: var(--shadow-md);
-}
-
-.message:hover .message-actions {
-  display: flex;
-}
-
-.message-action-btn {
   background: none;
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  padding: var(--space-1) var(--space-1-5);
+  padding: var(--space-1);
   border-radius: var(--radius-sm);
-  font-size: var(--text-xs);
-  transition: all var(--duration-normal) var(--ease-default);
+  opacity: 0;
+  transition: opacity var(--duration-normal) var(--ease-default), color var(--duration-fast);
+  line-height: 1;
 }
 
-.message-action-btn:hover {
-  background: var(--bg-surface-hover);
+.message:hover .msg-copy-btn {
+  opacity: 0.4;
+}
+
+.msg-copy-btn:hover {
+  opacity: 1;
   color: var(--text);
-}
-
-/* Copy button */
-.msg-copy-btn {
-  font-size: var(--text-xs);
-  padding: var(--space-0-5) var(--space-1-5);
-  opacity: 0.6;
 }
 
 
