@@ -34,7 +34,7 @@ Being honest — some of these projects are massive with huge communities. Tarse
 | **Build step** | None | TypeScript + Vite | TypeScript | Go compile | pip install |
 | **RAM** | ~200-400MB | Higher (full React stack) | Moderate | <10MB | Low |
 | **Channels** | Web, Telegram, Discord, Voice | 24+ (WhatsApp, Slack, Signal, etc.) | WhatsApp, Telegram, Discord, Slack | 18+ (Telegram, Discord, WeChat, etc.) | 12+ (Telegram, Discord, WhatsApp, etc.) |
-| **Voice** | Yes (whisper.cpp + Edge TTS) | Yes (wake word, ElevenLabs) | No | No | Telegram/WeChat voice |
+| **Voice** | Yes (faster-whisper + Edge TTS) | Yes (wake word, ElevenLabs) | No | No | Telegram/WeChat voice |
 | **Mobile** | PWA + iOS PIN pad | Native iOS/Android apps | Via messaging apps | Android APK | Via messaging apps |
 | **Memory** | Persistent + deep search | Session-based with group isolation | SQLite + per-group files | JSONL memory store | Token-based memory |
 | **Auth** | Claude subscription (OAuth) | OAuth + API keys | API keys | API keys + OAuth | API keys + OAuth |
@@ -108,7 +108,7 @@ The SDK auto-refreshes tokens — you only need to log in once. If you ever get 
 - **Hold-to-talk or tap-to-toggle** — full-screen conversational UI with waveform visualization.
 - **Spacebar shortcut** — hold space to talk, Space+C to cancel.
 - **Drag to cancel** — slide away from the orb or mic button to discard recording.
-- **Local speech-to-text** — whisper.cpp (tiny.en, ~75MB). No API key. Runs on CPU.
+- **Local speech-to-text** — faster-whisper (CTranslate2, 4x faster than OpenAI whisper). Configurable models: tiny.en / base.en / small.en. No API key. Runs on CPU.
 - **Free text-to-speech** — Microsoft Edge TTS. No API key, no rate limits.
 - **Smart TTS** — tables and code shown visually, spoken response is a clean conversational summary.
 
@@ -156,7 +156,7 @@ Tarsee Server (Railway)
   |     +-- MCP tools: send_message, schedule_task, remember,
   |         create_canvas, web_fetch, web_search, etc.
   |
-  +-- Voice: whisper.cpp STT + Edge TTS
+  +-- Voice: faster-whisper STT + Edge TTS
   +-- Workspace: SOUL.md, MEMORY.md, USER.md
   +-- SQLite: conversations, settings, vault
   +-- Channels: Telegram, Discord (always online)
@@ -267,7 +267,7 @@ src/
     telegram.js, discord.js    # Bot integrations
     websocket.js               # Web UI real-time
   voice/
-    stt-handler.js             # whisper.cpp STT
+    stt-handler.js             # faster-whisper STT
     edge-tts-engine.js         # Free TTS
   public/                      # Web UI (vanilla HTML/CSS/JS, PWA)
 ```

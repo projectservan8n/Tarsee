@@ -16,22 +16,10 @@ RUN npm install --omit=dev
 # Install Playwright + Chromium
 RUN npx playwright install chromium --with-deps
 
-# Build whisper.cpp from source (no pre-built Linux binaries available)
-RUN apt-get update && apt-get install -y --no-install-recommends git cmake \
-  && git clone --depth 1 --branch v1.8.4 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper \
-  && cd /tmp/whisper \
-  && cmake -B build -DCMAKE_BUILD_TYPE=Release \
-  && cmake --build build -j$(nproc) --target whisper-cli \
-  && mkdir -p /app/whisper-bin \
-  && cp build/bin/whisper-cli /app/whisper-bin/ \
-  && find build -name '*.so*' -exec cp {} /app/whisper-bin/ \; \
-  && ls -la /app/whisper-bin/ \
-  && rm -rf /tmp/whisper /var/lib/apt/lists/*
-
-# Stage 2: Runtime with Playwright (Chromium)
+# Stage 2: Runtime with Playwright (Chromium) + faster-whisper (STT)
 FROM node:22-bookworm-slim
 
-# System deps: Playwright browser deps + gosu for entrypoint
+# System deps: Playwright browser deps + Python for faster-whisper + ffmpeg
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     tini \
@@ -56,21 +44,20 @@ RUN apt-get update \
     libcairo2 \
     libasound2 \
     libwayland-client0 \
-    # Audio conversion for whisper.cpp STT
+    # Audio conversion for STT
     ffmpeg \
+    # Python for faster-whisper
+    python3 \
+    python3-pip \
   && rm -rf /var/lib/apt/lists/*
+
+# Install faster-whisper (CTranslate2 backend — 4x faster than OpenAI whisper)
+RUN pip3 install --no-cache-dir --break-system-packages faster-whisper
 
 ENV NODE_ENV=production
 WORKDIR /app
 
-# Copy whisper.cpp binary from builder
-COPY --from=builder /app/whisper-bin /opt/whisper
-
-ENV PATH="/opt/whisper:${PATH}" \
-    LD_LIBRARY_PATH="/opt/whisper:${LD_LIBRARY_PATH}"
-
 # Install Claude Code CLI globally (Agent SDK spawns this binary)
-# Installed in runtime stage so the binary is available at /usr/local/bin/claude
 RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force \
   && claude --version
 
@@ -88,9 +75,8 @@ COPY entrypoint.sh ./entrypoint.sh
 ARG RAILWAY_GIT_COMMIT_SHA=""
 ENV TARSEE_COMMIT_SHA=${RAILWAY_GIT_COMMIT_SHA}
 
-# Fix permissions + create writable cache for Kokoro/HuggingFace
-RUN mkdir -p /app/node_modules/@huggingface/transformers/.cache \
-  && chown -R node:node /home/node/.cache /app/node_modules/@huggingface \
+# Fix permissions
+RUN chown -R node:node /home/node/.cache \
   && chmod +x /app/entrypoint.sh
 
 # Tell Playwright where browsers are

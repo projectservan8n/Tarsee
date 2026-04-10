@@ -1,50 +1,43 @@
 /**
- * Speech-to-text — whisper.cpp (local, free, no API key needed).
- * Supports multiple model sizes — configurable in Settings > Voice.
- * English-only models for best accuracy per MB.
+ * Speech-to-text — faster-whisper (local, free, no API key needed).
+ * Uses CTranslate2 backend — ~4x faster than OpenAI's original whisper.
+ * Runs on CPU, supports multiple model sizes.
  *
- * Models:
- *   tiny.en   (~75MB)  — fastest, good for short commands
- *   base.en   (~140MB) — best balance of speed + accuracy (default)
- *   small.en  (~460MB) — near-perfect, slower on 0.5 vCPU
+ * Models (auto-downloaded on first use):
+ *   tiny.en   (~75MB)  — fastest, basic accuracy
+ *   base.en   (~140MB) — balanced speed + accuracy (default)
+ *   small.en  (~460MB) — best accuracy, slower on CPU
  */
 
-import { execSync, execFileSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 
 const MODELS_DIR = path.join(process.env.TARSEE_DATA_DIR || process.env.TARSEE_STATE_DIR || "/data/tarsee", "whisper-models");
 
-const MODELS = {
-  "tiny.en":  { file: "ggml-tiny.en.bin",  url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",  sizeMB: 75 },
-  "base.en":  { file: "ggml-base.en.bin",  url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",  sizeMB: 140 },
-  "small.en": { file: "ggml-small.en.bin", url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin", sizeMB: 460 },
-};
-
+const VALID_MODELS = ["tiny.en", "base.en", "small.en"];
 const DEFAULT_MODEL = "base.en";
 
-// Cache the current model preference
 let _cachedModelName = null;
 
 function getModelName(settingsStore) {
   if (_cachedModelName) return _cachedModelName;
   const pref = settingsStore?.get?.("voice.stt_model");
-  _cachedModelName = (pref && MODELS[pref]) ? pref : DEFAULT_MODEL;
+  _cachedModelName = (pref && VALID_MODELS.includes(pref)) ? pref : DEFAULT_MODEL;
   return _cachedModelName;
 }
 
-// Reset cache when settings change
 export function resetSTTModelCache() {
   _cachedModelName = null;
 }
 
 /**
- * Check if whisper-cli is available.
+ * Check if faster-whisper is available.
  */
-function isWhisperAvailable() {
+function isFasterWhisperAvailable() {
   try {
-    execSync("which whisper-cli", { stdio: "ignore" });
+    execSync("python3 -c \"import faster_whisper\"", { stdio: "ignore", timeout: 5000 });
     return true;
   } catch {
     return false;
@@ -52,29 +45,10 @@ function isWhisperAvailable() {
 }
 
 /**
- * Download the model if not present.
- */
-async function ensureModel(modelName) {
-  const model = MODELS[modelName] || MODELS[DEFAULT_MODEL];
-  fs.mkdirSync(MODELS_DIR, { recursive: true });
-  const modelPath = path.join(MODELS_DIR, model.file);
-  if (fs.existsSync(modelPath)) return modelPath;
-
-  console.log(`[stt] Downloading whisper ${modelName} model (~${model.sizeMB}MB)...`);
-  const res = await fetch(model.url);
-  if (!res.ok) throw new Error(`Model download failed: ${res.status}`);
-  const buffer = Buffer.from(await res.arrayBuffer());
-  fs.writeFileSync(modelPath, buffer);
-  console.log(`[stt] Model downloaded: ${modelPath} (${Math.round(buffer.length / 1024 / 1024)}MB)`);
-  return modelPath;
-}
-
-/**
- * Transcribe audio using local whisper.cpp.
+ * Transcribe audio using faster-whisper (Python).
  */
 async function transcribeLocal(audioBuffer, settingsStore) {
   const modelName = getModelName(settingsStore);
-  const modelPath = await ensureModel(modelName);
 
   const tmpDir = "/tmp";
   const tmpInput = path.join(tmpDir, `stt-${crypto.randomBytes(4).toString("hex")}.webm`);
@@ -83,38 +57,41 @@ async function transcribeLocal(audioBuffer, settingsStore) {
   try {
     fs.writeFileSync(tmpInput, audioBuffer);
 
-    // Convert to WAV (whisper-cli needs 16kHz mono WAV)
+    // Convert to WAV 16kHz mono
     execFileSync("ffmpeg", ["-i", tmpInput, "-ar", "16000", "-ac", "1", "-f", "wav", tmpWav, "-y"], {
       stdio: "ignore",
       timeout: 10_000,
     });
 
-    // Tune threads based on model size
-    // Railway is 0.5-2 vCPU depending on plan
-    const threads = modelName === "small.en" ? "4" : "2";
+    // Timeout scales with model: tiny=20s, base=40s, small=90s
+    const timeout = modelName === "small.en" ? 90_000 : modelName === "base.en" ? 40_000 : 20_000;
 
-    // Timeout scales with model: tiny=15s, base=30s, small=60s
-    const timeout = modelName === "small.en" ? 60_000 : modelName === "base.en" ? 30_000 : 15_000;
+    // Run faster-whisper via Python
+    // model_size_or_path downloads automatically to HF cache on first use
+    const script = `
+import sys, json
+from faster_whisper import WhisperModel
+model = WhisperModel("${modelName}", device="cpu", compute_type="int8")
+segments, info = model.transcribe("${tmpWav}", language="en", beam_size=1, best_of=1, vad_filter=True)
+text = " ".join(s.text.strip() for s in segments)
+print(json.dumps({"text": text, "language": info.language, "duration": round(info.duration, 1)}))
+`;
 
-    const output = execFileSync("whisper-cli", [
-      "-m", modelPath,
-      "-f", tmpWav,
-      "--no-timestamps",
-      "--language", "en",
-      "--threads", threads,
-      "--beam-size", "1",
-      "--best-of", "1",
-    ], { encoding: "utf8", timeout });
+    const output = execFileSync("python3", ["-c", script], {
+      encoding: "utf8",
+      timeout,
+      env: {
+        ...process.env,
+        HF_HOME: path.join(MODELS_DIR, "hf_cache"),
+        TRANSFORMERS_CACHE: path.join(MODELS_DIR, "hf_cache"),
+      },
+    });
 
-    // Parse output — whisper-cli prints text lines
-    const text = output
-      .split("\n")
-      .filter(line => !line.startsWith("[") && line.trim())
-      .join(" ")
-      .trim();
+    const result = JSON.parse(output.trim());
+    const text = (result.text || "").trim();
 
-    console.log(`[stt] Whisper ${modelName}: "${text.slice(0, 80)}${text.length > 80 ? "..." : ""}"`);
-    return { transcript: text, language: "en", provider: `whisper-cpp (${modelName})` };
+    console.log(`[stt] faster-whisper (${modelName}): "${text.slice(0, 80)}${text.length > 80 ? "..." : ""}" [${result.duration}s audio]`);
+    return { transcript: text, language: result.language || "en", provider: `faster-whisper (${modelName})` };
   } finally {
     try { fs.unlinkSync(tmpInput); } catch {}
     try { fs.unlinkSync(tmpWav); } catch {}
@@ -152,17 +129,17 @@ async function transcribeAPI(audioBuffer, language, apiKey) {
 }
 
 /**
- * Transcribe audio — tries local whisper.cpp first, falls back to API.
+ * Transcribe audio — tries faster-whisper first, falls back to API.
  */
 export async function transcribeAudio(audioBuffer, language, opts = {}) {
   const settingsStore = opts.settingsStore;
 
-  // Try local whisper.cpp first (free, no API key)
-  if (isWhisperAvailable()) {
+  // Try faster-whisper first (free, local, no API key)
+  if (isFasterWhisperAvailable()) {
     try {
       return await transcribeLocal(audioBuffer, settingsStore);
     } catch (err) {
-      console.warn("[stt] Local whisper failed, trying API:", err.message);
+      console.warn("[stt] faster-whisper failed, trying API fallback:", err.message);
     }
   }
 
@@ -173,7 +150,7 @@ export async function transcribeAudio(audioBuffer, language, opts = {}) {
   }
 
   throw Object.assign(
-    new Error("Speech-to-text unavailable. whisper-cli not found and no OpenAI API key configured."),
+    new Error("Speech-to-text unavailable. faster-whisper not installed and no OpenAI API key configured."),
     { status: 501 }
   );
 }
@@ -182,9 +159,19 @@ export async function transcribeAudio(audioBuffer, language, opts = {}) {
  * Get available STT models info (for settings UI).
  */
 export function getSTTModels() {
-  return Object.entries(MODELS).map(([name, info]) => ({
-    name,
-    sizeMB: info.sizeMB,
-    downloaded: fs.existsSync(path.join(MODELS_DIR, info.file)),
-  }));
+  fs.mkdirSync(MODELS_DIR, { recursive: true });
+  return VALID_MODELS.map(name => {
+    // faster-whisper downloads models to HF cache, check if cached
+    const cacheDir = path.join(MODELS_DIR, "hf_cache");
+    let downloaded = false;
+    try {
+      // HF cache stores models in a directory pattern
+      if (fs.existsSync(cacheDir)) {
+        const entries = fs.readdirSync(cacheDir, { recursive: true }).join(" ");
+        downloaded = entries.includes(name.replace(".", "-"));
+      }
+    } catch {}
+    const sizeMB = name === "tiny.en" ? 75 : name === "base.en" ? 140 : 460;
+    return { name, sizeMB, downloaded };
+  });
 }
