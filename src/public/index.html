@@ -499,6 +499,21 @@
                 <div id="voicesList" class="voice-settings mt-2"></div>
               </div>
             </div>
+            <div class="settings-section">
+              <h3>Speech-to-Text (STT)</h3>
+              <div class="hint mb-3">Local whisper.cpp — runs on CPU, no API key, no limits. Larger models are more accurate but slower.</div>
+              <div class="form-group">
+                <label>Whisper Model</label>
+                <select id="settingsSTTModel">
+                  <option value="tiny.en">tiny.en (~75MB) — fastest, basic accuracy</option>
+                  <option value="base.en" selected>base.en (~140MB) — balanced (recommended)</option>
+                  <option value="small.en">small.en (~460MB) — best accuracy, slower</option>
+                </select>
+                <div class="hint">Model downloads automatically on first use. Larger models need more RAM and CPU time.</div>
+              </div>
+              <div id="sttModelStatus" class="text-muted text-sm mt-2"></div>
+              <button class="btn btn-sm mt-2" id="saveSTTBtn">Save STT Settings</button>
+            </div>
           </div>
 
           <!-- Skills Tab -->

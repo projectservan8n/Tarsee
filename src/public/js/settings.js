@@ -228,6 +228,20 @@ const Settings = {
       this.elements.saveVoiceBtn.addEventListener("click", () => this.saveVoiceSettings());
     }
 
+    // STT model save
+    const saveSTTBtn = document.getElementById("saveSTTBtn");
+    if (saveSTTBtn) {
+      saveSTTBtn.addEventListener("click", async () => {
+        const model = document.getElementById("settingsSTTModel").value;
+        try {
+          await API.json("/api/voice/stt-model", { method: "POST", body: { model } });
+          App.showToast(`STT model set to ${model}`, "success");
+          this.loadSTTModelStatus();
+        } catch (e) { App.showToast(e.message, "error"); }
+      });
+      this.loadSTTModelStatus();
+    }
+
     // Show/hide ElevenLabs key field based on engine selection
     if (this.elements.voiceEngine) {
       this.elements.voiceEngine.addEventListener("change", () => {
@@ -592,6 +606,21 @@ const Settings = {
       this.elements.voiceCloneBtn.disabled = false;
       this.elements.voiceCloneBtn.textContent = "Clone Voice";
     }
+  },
+
+  async loadSTTModelStatus() {
+    const status = document.getElementById("sttModelStatus");
+    const select = document.getElementById("settingsSTTModel");
+    if (!status) return;
+    try {
+      const data = await API.json("/api/voice/stt-models");
+      if (select && data.current) select.value = data.current;
+      const lines = (data.models || []).map(m => {
+        const dl = m.downloaded ? "downloaded" : "not downloaded";
+        return `${m.name} (${m.sizeMB}MB) — ${dl}`;
+      });
+      status.textContent = lines.join(" · ");
+    } catch { status.textContent = "Could not check STT models."; }
   },
 
   async saveVoiceSettings() {

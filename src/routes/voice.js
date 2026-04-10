@@ -2,10 +2,34 @@ import { Router } from "express";
 import Busboy from "busboy";
 import { getTTSEngine, initTTSEngine } from "../voice/engine-registry.js";
 import { cloneVoice, listVoiceProfiles } from "../voice/clone-handler.js";
-import { transcribeAudio } from "../voice/stt-handler.js";
+import { transcribeAudio, getSTTModels, resetSTTModelCache } from "../voice/stt-handler.js";
 import { LIMITS } from "../config/constants.js";
 
 export const voiceRouter = Router();
+
+/**
+ * GET /api/voice/stt-models
+ * List available STT models and their download status.
+ */
+voiceRouter.get("/stt-models", (req, res) => {
+  const sStore = req.app.get("settingsStore");
+  const currentModel = sStore?.get("voice.stt_model") || "base.en";
+  res.json({ models: getSTTModels(), current: currentModel });
+});
+
+/**
+ * POST /api/voice/stt-model
+ * Set the STT model. Downloads on next transcription.
+ */
+voiceRouter.post("/stt-model", (req, res) => {
+  const { model } = req.body || {};
+  const valid = ["tiny.en", "base.en", "small.en"];
+  if (!valid.includes(model)) return res.status(400).json({ error: `Invalid model. Valid: ${valid.join(", ")}` });
+  const sStore = req.app.get("settingsStore");
+  sStore.set("voice.stt_model", model);
+  resetSTTModelCache();
+  res.json({ ok: true, model });
+});
 
 /**
  * GET /api/voice/status
