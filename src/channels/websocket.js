@@ -12,6 +12,7 @@ import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { handleTerminalConnection } from "../websocket/terminal-handler.js";
+import { getGatewayManager } from "../lib/gateway.js";
 
 /**
  * Sets up WebSocket server on the existing HTTP server.
@@ -162,6 +163,17 @@ export function setupWebSocket(server, db, app) {
           ws._currentAbort.abort();
           ws._currentAbort = null;
           ws.send(JSON.stringify({ type: "stopped" }));
+        }
+        return;
+      }
+
+      // Handle typing indicator broadcast
+      if (msg.type === "typing") {
+        const gw = getGatewayManager();
+        for (const [, conn] of gw.connections) {
+          if (conn.ws !== ws && conn.ws?.readyState === 1) {
+            try { conn.ws.send(JSON.stringify({ type: "typing", channel: msg.channel || "web" })); } catch { /* ignore */ }
+          }
         }
         return;
       }

@@ -125,6 +125,14 @@ The SDK auto-refreshes tokens — you only need to log in once. If you ever get 
 - **Cron scheduler** — recurring AI tasks or direct tool actions. One-time reminders auto-delete.
 - **Web terminal** — browser-based shell access via xterm.js.
 - **File manager** — browse, edit, and create workspace files from the UI.
+- **REST API** — `/api/v1/message` endpoint for iOS Shortcuts, scripts, and automations.
+
+### Search & Analytics
+- **Full-text search** — FTS5 search across all conversations from the sidebar.
+- **Token usage chart** — daily/weekly visual graph with model breakdown in Settings > Usage.
+- **Audit log** — timestamped log of all tool executions, logins, and settings changes.
+- **QR code** — scan from desktop to instantly open Tarsee on your phone.
+- **Typing indicator** — see when you're typing on another device in real-time.
 
 ### Memory & Identity
 - **Workspace files** — SOUL.md (personality), MEMORY.md (knowledge), USER.md (user info), IDENTITY.md.

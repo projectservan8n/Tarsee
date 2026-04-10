@@ -240,6 +240,8 @@ const Settings = {
     // Load data for new tabs
     if (tabName === "security") { this.loadToolPermissions(); }
     if (tabName === "canvas") { this.loadCanvasGallery(); }
+    if (tabName === "audit") { this.loadAuditLog(); }
+    if (tabName === "usage") { this.loadUsageChart(); }
   },
 
   // --- Open / Close ---
@@ -1011,5 +1013,151 @@ const Settings = {
     if (!gallery) return;
     gallery.innerHTML = '<a href="/canvas/" target="_blank" class="btn btn-sm" style="margin-bottom:8px">Open Canvas Gallery</a>';
     if (empty) empty.style.display = "none";
+  },
+
+  async loadUsageChart() {
+    try {
+      const data = await API.json("/api/analytics");
+      const stats = document.getElementById("usageStats");
+      const models = document.getElementById("usageModels");
+
+      if (stats) {
+        const fmt = (n) => n >= 1000000 ? (n / 1000000).toFixed(1) + "M" : n >= 1000 ? (n / 1000).toFixed(1) + "K" : n;
+        stats.innerHTML = `
+          <div class="usage-stat"><div class="usage-stat-value">${fmt(data.tokens?.today?.in + data.tokens?.today?.out)}</div><div class="usage-stat-label">Tokens Today</div></div>
+          <div class="usage-stat"><div class="usage-stat-value">${fmt(data.tokens?.week?.in + data.tokens?.week?.out)}</div><div class="usage-stat-label">This Week</div></div>
+          <div class="usage-stat"><div class="usage-stat-value">${fmt(data.tokens?.allTime?.in + data.tokens?.allTime?.out)}</div><div class="usage-stat-label">All Time</div></div>
+          <div class="usage-stat"><div class="usage-stat-value">${data.messages?.today || 0}</div><div class="usage-stat-label">Messages Today</div></div>
+        `;
+      }
+
+      // Draw chart
+      const canvas = document.getElementById("usageChart");
+      if (canvas && data.tokens?.daily?.length) {
+        this._drawTokenChart(canvas, data.tokens.daily);
+      }
+
+      // Model breakdown
+      if (models && data.models?.length) {
+        models.innerHTML = data.models.map(m => {
+          const name = (m.model || "unknown").replace("claude-", "").replace(/-\d.*/, "");
+          const total = (m.tokens_in || 0) + (m.tokens_out || 0);
+          const fmt = total >= 1000000 ? (total / 1000000).toFixed(1) + "M" : total >= 1000 ? (total / 1000).toFixed(1) + "K" : total;
+          return `<div class="usage-model-card"><span class="usage-model-name">${name}</span><span class="usage-model-count">${m.count} msgs / ${fmt} tokens</span></div>`;
+        }).join("");
+      }
+    } catch { /* ignore */ }
+  },
+
+  _drawTokenChart(canvas, daily) {
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = 200 * dpr;
+    canvas.style.width = rect.width + "px";
+    canvas.style.height = "200px";
+    ctx.scale(dpr, dpr);
+
+    const w = rect.width;
+    const h = 200;
+    const pad = { top: 20, right: 20, bottom: 30, left: 50 };
+    const plotW = w - pad.left - pad.right;
+    const plotH = h - pad.top - pad.bottom;
+
+    // Clear
+    ctx.clearRect(0, 0, w, h);
+
+    const values = daily.map(d => (d.tokens_in || 0) + (d.tokens_out || 0));
+    const max = Math.max(...values, 1);
+    const barW = Math.max(plotW / values.length - 4, 2);
+
+    // Y-axis labels
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--text-muted").trim() || "#6b6b63";
+    ctx.font = "11px monospace";
+    ctx.textAlign = "right";
+    for (let i = 0; i <= 4; i++) {
+      const y = pad.top + plotH - (plotH * i / 4);
+      const val = Math.round(max * i / 4);
+      const label = val >= 1000000 ? (val / 1000000).toFixed(1) + "M" : val >= 1000 ? (val / 1000).toFixed(0) + "K" : val;
+      ctx.fillText(label, pad.left - 8, y + 4);
+      // Grid line
+      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--border-light").trim() || "#2f2e2b";
+      ctx.lineWidth = 0.5;
+      ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
+    }
+
+    // Bars
+    const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#c45a35";
+    values.forEach((val, i) => {
+      const x = pad.left + (plotW / values.length) * i + 2;
+      const barH = (val / max) * plotH;
+      const y = pad.top + plotH - barH;
+
+      ctx.fillStyle = accent;
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      ctx.roundRect(x, y, barW, barH, 3);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    });
+
+    // X-axis labels (dates)
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--text-muted").trim() || "#6b6b63";
+    ctx.textAlign = "center";
+    daily.forEach((d, i) => {
+      if (i % Math.ceil(daily.length / 7) === 0) {
+        const x = pad.left + (plotW / values.length) * i + barW / 2;
+        const label = d.day?.slice(5) || "";
+        ctx.fillText(label, x, h - 8);
+      }
+    });
+  },
+
+  _auditOffset: 0,
+
+  async loadAuditLog(append = false) {
+    const container = document.getElementById("auditLogEntries");
+    const loadMoreBtn = document.getElementById("auditLoadMore");
+    if (!container) return;
+
+    if (!append) {
+      this._auditOffset = 0;
+      container.innerHTML = '<div class="text-muted text-sm">Loading...</div>';
+    }
+
+    try {
+      const data = await API.json(`/api/admin/audit?limit=50&offset=${this._auditOffset}`);
+      const entries = data.entries || [];
+
+      if (!append) container.innerHTML = "";
+
+      if (!entries.length && !append) {
+        container.innerHTML = '<div class="text-muted text-sm">No audit entries yet.</div>';
+        if (loadMoreBtn) loadMoreBtn.style.display = "none";
+        return;
+      }
+
+      for (const e of entries) {
+        const div = document.createElement("div");
+        div.className = "audit-entry";
+        const actionClass = e.action?.startsWith("auth") ? "auth" : e.action?.startsWith("tool") ? "tool" : "setting";
+        const time = e.created_at ? new Date(e.created_at + "Z").toLocaleString() : "";
+        div.innerHTML = `
+          <span class="audit-entry-time">${time}</span>
+          <span class="audit-entry-action ${actionClass}">${e.action}${e.target ? ` → ${e.target}` : ""}</span>
+          <span class="audit-entry-detail" title="${e.detail || ""}">${e.detail || e.ip || ""}</span>
+        `;
+        container.appendChild(div);
+      }
+
+      this._auditOffset += entries.length;
+      if (loadMoreBtn) {
+        loadMoreBtn.style.display = entries.length >= 50 ? "block" : "none";
+        loadMoreBtn.onclick = () => this.loadAuditLog(true);
+      }
+    } catch {
+      if (!append) container.innerHTML = '<div class="text-muted text-sm">Failed to load audit log.</div>';
+    }
   },
 };

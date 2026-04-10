@@ -58,6 +58,17 @@ analyticsRouter.get("/", (req, res) => {
     ORDER BY day ASC
   `).all() || [];
 
+  // Daily token usage (last 14 days)
+  const dailyTokens = db.prepare(`
+    SELECT date(created_at) as day,
+      COALESCE(SUM(tokens_in), 0) as tokens_in,
+      COALESCE(SUM(tokens_out), 0) as tokens_out
+    FROM messages
+    WHERE created_at >= date('now', '-14 days')
+    GROUP BY day
+    ORDER BY day ASC
+  `).all() || [];
+
   // Model usage breakdown
   const modelUsage = db.prepare(`
     SELECT model, COUNT(*) as count,
@@ -118,6 +129,7 @@ analyticsRouter.get("/", (req, res) => {
       allTime: { in: tokenStats.total_in, out: tokenStats.total_out },
       today: { in: tokenStats.today_in, out: tokenStats.today_out },
       week: { in: tokenStats.week_in, out: tokenStats.week_out },
+      daily: dailyTokens,
     },
     models: modelUsage,
     channels: channelActivity,

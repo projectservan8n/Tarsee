@@ -21,10 +21,14 @@ authRouter.post("/login", (req, res) => {
   }
 
   if (!validatePassword(password)) {
+    const auditLog = req.app.get("auditLog");
+    auditLog?.log({ action: "auth.login_failed", actor: "user", ip: req.ip });
     return res.status(401).json({ error: "Invalid password" });
   }
 
   const sessionId = createSession(req.ip || req.socket?.remoteAddress);
+  const auditLog = req.app.get("auditLog");
+  auditLog?.log({ action: "auth.login", actor: "user", ip: req.ip });
 
   res.cookie("tarsee_session", sessionId, {
     httpOnly: true,

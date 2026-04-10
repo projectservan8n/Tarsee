@@ -79,19 +79,19 @@
         <span class="pin-dot"></span>
         <span class="pin-dot"></span>
       </div>
-      <div class="pin-grid">
-        <button class="pin-key" data-digit="1"><span class="pin-digit">1</span></button>
-        <button class="pin-key" data-digit="2"><span class="pin-digit">2</span><span class="pin-letters">ABC</span></button>
-        <button class="pin-key" data-digit="3"><span class="pin-digit">3</span><span class="pin-letters">DEF</span></button>
-        <button class="pin-key" data-digit="4"><span class="pin-digit">4</span><span class="pin-letters">GHI</span></button>
-        <button class="pin-key" data-digit="5"><span class="pin-digit">5</span><span class="pin-letters">JKL</span></button>
-        <button class="pin-key" data-digit="6"><span class="pin-digit">6</span><span class="pin-letters">MNO</span></button>
-        <button class="pin-key" data-digit="7"><span class="pin-digit">7</span><span class="pin-letters">PQRS</span></button>
-        <button class="pin-key" data-digit="8"><span class="pin-digit">8</span><span class="pin-letters">TUV</span></button>
-        <button class="pin-key" data-digit="9"><span class="pin-digit">9</span><span class="pin-letters">WXYZ</span></button>
-        <button class="pin-key pin-key-empty"></button>
-        <button class="pin-key" data-digit="0"><span class="pin-digit">0</span></button>
-        <button class="pin-key pin-key-delete" id="pinDelete">
+      <div class="pin-grid" role="group" aria-label="PIN entry keypad">
+        <button class="pin-key" data-digit="1" aria-label="1"><span class="pin-digit">1</span></button>
+        <button class="pin-key" data-digit="2" aria-label="2 ABC"><span class="pin-digit">2</span><span class="pin-letters">ABC</span></button>
+        <button class="pin-key" data-digit="3" aria-label="3 DEF"><span class="pin-digit">3</span><span class="pin-letters">DEF</span></button>
+        <button class="pin-key" data-digit="4" aria-label="4 GHI"><span class="pin-digit">4</span><span class="pin-letters">GHI</span></button>
+        <button class="pin-key" data-digit="5" aria-label="5 JKL"><span class="pin-digit">5</span><span class="pin-letters">JKL</span></button>
+        <button class="pin-key" data-digit="6" aria-label="6 MNO"><span class="pin-digit">6</span><span class="pin-letters">MNO</span></button>
+        <button class="pin-key" data-digit="7" aria-label="7 PQRS"><span class="pin-digit">7</span><span class="pin-letters">PQRS</span></button>
+        <button class="pin-key" data-digit="8" aria-label="8 TUV"><span class="pin-digit">8</span><span class="pin-letters">TUV</span></button>
+        <button class="pin-key" data-digit="9" aria-label="9 WXYZ"><span class="pin-digit">9</span><span class="pin-letters">WXYZ</span></button>
+        <button class="pin-key pin-key-empty" aria-hidden="true"></button>
+        <button class="pin-key" data-digit="0" aria-label="0"><span class="pin-digit">0</span></button>
+        <button class="pin-key pin-key-delete" id="pinDelete" aria-label="Delete">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M9 18l6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="rotate(180 12 12)"/><path d="M19 6H9l-5 6 5 6h10a1 1 0 001-1V7a1 1 0 00-1-1z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
@@ -111,6 +111,10 @@
       <div class="sidebar-header">
         <div class="logo"><img src="/icon-32.png" alt="Tarsee" class="avatar-img"></div>
         <h1>Tarsee</h1>
+      </div>
+      <div class="sidebar-search">
+        <input type="text" id="searchInput" class="search-input" placeholder="Search messages..." aria-label="Search conversations">
+        <div class="search-results" id="searchResults" style="display:none"></div>
       </div>
       <div class="channel-list" id="channelList">
         <!-- Dynamically populated with channels -->
@@ -142,6 +146,9 @@
           <button class="topbar-icon-btn" id="fileManagerBtn" title="Files">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h4l2 2h6v8H2V3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
           </button>
+          <button class="topbar-icon-btn desktop-only" id="qrCodeBtn" title="QR Code for Mobile">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="10" y="10" width="3" height="3" fill="currentColor"/></svg>
+          </button>
           <button class="topbar-icon-btn" id="voiceModeBtn" title="Voice">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2a2.5 2.5 0 012.5 2.5v3a2.5 2.5 0 01-5 0v-3A2.5 2.5 0 018 2z" stroke="currentColor" stroke-width="1.3"/><path d="M4 7.5a4 4 0 008 0M8 13v-1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
           </button>
@@ -171,7 +178,7 @@
           <span class="session-status" id="sessionStatus">New Session</span>
         </div>
         <div class="session-bar-right">
-          <button class="effort-toggle" id="effortToggle" title="Thinking effort — tap to cycle">
+          <button class="effort-toggle" id="effortToggle" title="Thinking effort — tap to cycle" role="button" aria-label="Thinking effort level">
             <span class="effort-icon" id="effortIcon">⚡</span>
             <span class="effort-label" id="effortLabel">Auto</span>
           </button>
@@ -247,6 +254,14 @@
           <button class="settings-tab" data-tab="canvas">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.2"/><path d="M5 8h6M8 5v6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
             Canvas
+          </button>
+          <button class="settings-tab" data-tab="usage">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 12l3-4 3 2 3-5 3 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 14h12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            Usage
+          </button>
+          <button class="settings-tab" data-tab="audit">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 2h8a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M6 5h4M6 8h4M6 11h2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            Audit Log
           </button>
         </div>
 
@@ -554,6 +569,18 @@
             </div>
           </div>
 
+          <!-- Usage Tab -->
+          <div class="settings-tab-panel" data-tab="usage">
+            <h2>Token Usage</h2>
+            <div class="settings-section">
+              <div class="usage-stats" id="usageStats"></div>
+              <div class="usage-chart-container">
+                <canvas id="usageChart" width="600" height="200"></canvas>
+              </div>
+              <div class="usage-models" id="usageModels"></div>
+            </div>
+          </div>
+
           <!-- Canvas Tab -->
           <div class="settings-tab-panel" data-tab="canvas">
             <h2>Canvas</h2>
@@ -561,6 +588,16 @@
               <div class="hint mb-3">AI-generated interactive UIs. Ask the AI to create a canvas for dashboards, visualizations, or mini-apps.</div>
               <div id="canvasGallery"></div>
               <div id="canvasEmpty" class="text-muted text-sm">No canvas projects yet. Ask the AI to create one!</div>
+            </div>
+          </div>
+
+          <!-- Audit Log Tab -->
+          <div class="settings-tab-panel" data-tab="audit">
+            <h2>Audit Log</h2>
+            <div class="settings-section">
+              <div class="hint mb-3">All tool executions, logins, and settings changes are logged here.</div>
+              <div id="auditLogEntries" class="audit-log-list"></div>
+              <button class="btn btn-ghost btn-sm" id="auditLoadMore" style="display:none">Load more</button>
             </div>
           </div>
         </div>
@@ -640,6 +677,7 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <!-- Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
   <script src="/js/api.js"></script>
   <script src="/js/chat.js"></script>
   <script src="/js/voice.js"></script>

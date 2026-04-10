@@ -39,11 +39,13 @@ export const chatRouter = Router();
 // Lazy-init stores (set by server.js via setDb)
 let convStore = null;
 let settingsStore = null;
+let auditLog = null;
 
 chatRouter.use((req, _res, next) => {
   if (!convStore) {
     convStore = new ConversationStore(req.app.get("db"));
     settingsStore = new SettingsStore(req.app.get("db"), req.app.get("auditLog"));
+    auditLog = req.app.get("auditLog");
   }
   next();
 });
@@ -100,6 +102,17 @@ chatRouter.get("/conversations", (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const offset = Number(req.query.offset) || 0;
   res.json({ conversations: convStore.list(limit, offset) });
+});
+
+/**
+ * GET /api/chat/search?q=keyword
+ * Full-text search across all messages.
+ */
+chatRouter.get("/search", (req, res) => {
+  const q = req.query.q;
+  const limit = Math.min(Number(req.query.limit) || 30, 100);
+  if (!q || !q.trim()) return res.json({ results: [] });
+  res.json({ results: convStore.search(q, limit) });
 });
 
 /**
@@ -446,6 +459,7 @@ chatRouter.post("/send", async (req, res) => {
           lastToolIdx = timeline.length;
           timeline.push({ type: "tool", name: label, detail: String(detail).slice(0, 200), input: String(detail).slice(0, 500), output: "", status: "running" });
           sendSSE(res, "tool_call", { id: event.id, name: event.name, input: event.input });
+          auditLog?.log({ action: "tool.call", target: event.name, actor: "claude", ip: req.ip, detail: String(detail).slice(0, 200) });
         } else if (event.type === "tool_result") {
           if (lastToolIdx >= 0 && timeline[lastToolIdx]) {
             timeline[lastToolIdx].status = "done";

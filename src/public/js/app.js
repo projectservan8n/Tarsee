@@ -165,6 +165,49 @@ const App = {
       if (window.innerWidth > 768) closeSidebar();
     });
 
+    // QR Code button
+    const qrBtn = document.getElementById("qrCodeBtn");
+    if (qrBtn) {
+      qrBtn.addEventListener("click", () => {
+        // Remove existing modal
+        document.getElementById("qrModal")?.remove();
+
+        const url = window.location.href;
+        const modal = document.createElement("div");
+        modal.id = "qrModal";
+        modal.className = "delete-modal-overlay";
+        modal.innerHTML = `
+          <div class="delete-modal" style="text-align:center;max-width:320px">
+            <div class="delete-modal-header">Scan on Mobile</div>
+            <div id="qrCanvas" style="margin:16px auto;"></div>
+            <p class="text-muted text-sm" style="word-break:break-all">${url}</p>
+            <div class="delete-modal-actions">
+              <button class="btn btn-ghost" id="qrClose">Close</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(modal);
+
+        // Generate QR code
+        if (typeof qrcode !== "undefined") {
+          const qr = qrcode(0, "M");
+          qr.addData(url);
+          qr.make();
+          document.getElementById("qrCanvas").innerHTML = qr.createSvgTag(6, 0);
+          // Style the SVG
+          const svg = document.querySelector("#qrCanvas svg");
+          if (svg) {
+            svg.style.borderRadius = "8px";
+            svg.style.background = "#fff";
+            svg.style.padding = "12px";
+          }
+        }
+
+        document.getElementById("qrClose").addEventListener("click", () => modal.remove());
+        modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
+      });
+    }
+
     // Refresh CSRF token periodically (every hour)
     setInterval(() => {
       fetch("/", { credentials: "same-origin" }).catch(() => {});

@@ -53,8 +53,12 @@ const Chat = {
     this.elements.commandPalette = palette;
     this.elements.commandPaletteList = palette.querySelector(".command-palette-list");
 
+    // Typing indicator WebSocket
+    this._initTypingSocket();
+
     // Auto-resize textarea + command palette trigger
     this.elements.messageInput.addEventListener("input", () => {
+      this._sendTypingIndicator();
       const el = this.elements.messageInput;
       el.style.height = "auto";
       el.style.height = Math.min(el.scrollHeight, 200) + "px";
@@ -230,6 +234,7 @@ const Chat = {
     this.loadCommands();
     this.loadBotName();
     this.initEffortPills();
+    this.initSearch();
   },
 
   updateSessionBar() {
@@ -1164,6 +1169,103 @@ const Chat = {
       document.getElementById("effortIcon").textContent = next.icon;
       document.getElementById("effortLabel").textContent = next.label;
       btn.dataset.level = next.value;
+    });
+  },
+
+  _typingWs: null,
+  _typingDebounce: null,
+  _typingIndicatorTimeout: null,
+
+  _initTypingSocket() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const url = `${proto}//${location.host}/ws`;
+    try {
+      this._typingWs = new WebSocket(url);
+      this._typingWs.onopen = () => {
+        // Auth with session
+        const token = localStorage.getItem("tarsee_api_token");
+        if (token) this._typingWs.send(JSON.stringify({ type: "auth", token }));
+      };
+      this._typingWs.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.type === "typing") this._showTypingIndicator(data.channel);
+        } catch { /* ignore */ }
+      };
+      this._typingWs.onerror = () => {};
+      this._typingWs.onclose = () => {
+        // Reconnect after 5s
+        setTimeout(() => this._initTypingSocket(), 5000);
+      };
+    } catch { /* ignore */ }
+  },
+
+  _sendTypingIndicator() {
+    clearTimeout(this._typingDebounce);
+    this._typingDebounce = setTimeout(() => {
+      if (this._typingWs?.readyState === 1) {
+        this._typingWs.send(JSON.stringify({ type: "typing", channel: "web" }));
+      }
+    }, 500);
+  },
+
+  _showTypingIndicator(channel) {
+    // Show a brief typing indicator in the chat area
+    let el = document.getElementById("typingIndicator");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "typingIndicator";
+      el.className = "typing-indicator";
+      el.innerHTML = '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span> <span class="typing-label">typing on another device...</span>';
+      this.elements.chatArea?.appendChild(el);
+    }
+    el.style.display = "flex";
+    clearTimeout(this._typingIndicatorTimeout);
+    this._typingIndicatorTimeout = setTimeout(() => { el.style.display = "none"; }, 3000);
+  },
+
+  initSearch() {
+    const input = document.getElementById("searchInput");
+    const results = document.getElementById("searchResults");
+    if (!input || !results) return;
+
+    let debounce = null;
+    input.addEventListener("input", () => {
+      clearTimeout(debounce);
+      const q = input.value.trim();
+      if (!q) { results.style.display = "none"; return; }
+      debounce = setTimeout(async () => {
+        try {
+          const data = await API.searchMessages(q);
+          if (!data.results?.length) {
+            results.innerHTML = '<div class="search-empty">No results</div>';
+          } else {
+            results.innerHTML = data.results.map(r => `
+              <div class="search-result-item" data-conv="${r.conversation_id}">
+                <div class="search-result-title">${escapeHtml(r.conversation_title)} &middot; ${r.role}</div>
+                <div class="search-result-snippet">${r.snippet}</div>
+              </div>
+            `).join("");
+          }
+          results.style.display = "block";
+        } catch { results.style.display = "none"; }
+      }, 300);
+    });
+
+    results.addEventListener("click", (e) => {
+      const item = e.target.closest(".search-result-item");
+      if (!item) return;
+      const convId = item.dataset.conv;
+      // Find the channel for this conversation and open it
+      const ch = this.channels?.find(c => c.conversationId === convId);
+      if (ch) this.openChannel(ch.key, convId);
+      results.style.display = "none";
+      input.value = "";
+    });
+
+    // Close on click outside
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".sidebar-search")) results.style.display = "none";
     });
   },
 

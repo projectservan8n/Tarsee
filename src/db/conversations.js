@@ -53,6 +53,17 @@ export class ConversationStore {
     this._clearAllSessions = this.db.prepare(
       "UPDATE conversations SET claude_session_id = NULL WHERE claude_session_id IS NOT NULL"
     );
+    this._searchMessages = this.db.prepare(`
+      SELECT m.id, m.conversation_id, m.role, m.content, m.created_at,
+             c.title as conversation_title,
+             snippet(messages_fts, 0, '<mark>', '</mark>', '...', 48) as snippet
+      FROM messages_fts
+      JOIN messages m ON m.rowid = messages_fts.rowid
+      JOIN conversations c ON c.id = m.conversation_id
+      WHERE messages_fts MATCH ?
+      ORDER BY rank
+      LIMIT ?
+    `);
   }
 
   /**
@@ -161,6 +172,22 @@ export class ConversationStore {
    */
   setClaudeSessionId(conversationId, claudeSessionId) {
     this._updateClaudeSessionId.run(claudeSessionId, conversationId);
+  }
+
+  /**
+   * Full-text search across all messages.
+   * Returns matching messages with conversation title and highlighted snippet.
+   */
+  search(query, limit = 30) {
+    if (!query || !query.trim()) return [];
+    // Escape FTS5 special chars and add prefix matching
+    const escaped = query.trim().replace(/['"]/g, "").replace(/\s+/g, " ");
+    const ftsQuery = escaped.split(" ").map(w => `"${w}"*`).join(" ");
+    try {
+      return this._searchMessages.all(ftsQuery, limit);
+    } catch {
+      return [];
+    }
   }
 
   /**

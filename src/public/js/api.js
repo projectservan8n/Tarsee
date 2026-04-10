@@ -89,6 +89,11 @@ const API = {
     return this.json("/api/chat/channels");
   },
 
+  // --- Search ---
+  async searchMessages(query, limit = 30) {
+    return this.json(`/api/chat/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+  },
+
   // --- Conversations ---
   async listConversations(limit = 50, offset = 0) {
     return this.json(`/api/chat/conversations?limit=${limit}&offset=${offset}`);

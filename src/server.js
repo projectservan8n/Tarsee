@@ -40,6 +40,7 @@ import { cronRouter } from "./routes/cron.js";
 import { agentsRouter } from "./routes/agents.js";
 import { webhookRouter } from "./routes/webhooks.js";
 import { analyticsRouter } from "./routes/analytics.js";
+import { externalApiRouter } from "./routes/external-api.js";
 
 import { writePid, removePid } from "./daemon/pid.js";
 
@@ -115,6 +116,7 @@ app.use("/api/cron", requireAuth, csrfProtect, cronRouter);
 app.use("/api/agents", requireAuth, csrfProtect, agentsRouter);
 app.use("/api/webhooks", webhookRouter); // Token auth, no session/CSRF needed
 app.use("/api/analytics", requireAuth, csrfProtect, analyticsRouter);
+app.use("/api/v1", requireAuth, externalApiRouter); // Bearer token auth, no CSRF needed for API clients
 
 // SPA fallback — serve index.html for client-side routes
 // Express 5 requires named wildcard params (bare * is invalid)

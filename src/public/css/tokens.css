@@ -32,6 +32,23 @@
   --accent-subtle:      rgba(196, 90, 53, 0.12);
   --accent-glow:        rgba(196, 90, 53, 0.25);
 
+  /* Overlay variants */
+  --overlay-light:      rgba(0, 0, 0, 0.3);
+  --overlay-medium:     rgba(0, 0, 0, 0.45);
+  --overlay-heavy:      rgba(0, 0, 0, 0.6);
+  --overlay-dense:      rgba(0, 0, 0, 0.7);
+  --overlay-opaque:     rgba(0, 0, 0, 0.85);
+
+  /* Model badge colors */
+  --model-opus:         #a78bfa;
+  --model-opus-subtle:  rgba(167, 139, 250, 0.15);
+  --model-opus-border:  rgba(167, 139, 250, 0.3);
+  --model-opus-bg:      rgba(167, 139, 250, 0.08);
+  --model-sonnet:       var(--accent);
+  --model-sonnet-subtle: var(--accent-subtle);
+  --model-haiku:        #34d399;
+  --model-haiku-subtle: rgba(52, 211, 153, 0.15);
+
   --success:            #34d399;
   --success-subtle:     rgba(52, 211, 153, 0.12);
   --warning:            #fbbf24;
@@ -58,6 +75,7 @@
   --font-body: 'DM Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
 
+  --text-2xs:  9px;
   --text-xs:   11px;
   --text-sm:   12px;
   --text-base: 14px;
