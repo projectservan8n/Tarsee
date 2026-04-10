@@ -644,7 +644,10 @@ const Voice = {
     try {
       await API.sendMessage(
         Chat.currentConversationId, voiceText,
-        (content) => { if (content) fullResponse += content; },
+        (content, event) => {
+          if (content) fullResponse += content;
+          if (event) this._handleVoiceEvent(event);
+        },
         async (data) => {
           if (data?.type === "conversation") {
             Chat.currentConversationId = data.conversationId;
@@ -771,6 +774,73 @@ const Voice = {
     turn.appendChild(bubble);
     container.appendChild(turn);
     container.scrollTop = container.scrollHeight;
+  },
+
+  /**
+   * Handle streaming events in voice mode — update status with what's happening.
+   */
+  _handleVoiceEvent(event) {
+    if (!event) return;
+    const statusEl = this.elements.status;
+
+    if (event.type === "thinking") {
+      if (event.status === "start") {
+        this._setVoiceStatus("Thinking...");
+      }
+      return;
+    }
+
+    if (event.type === "tool_call") {
+      const name = event.name || "";
+      const inp = event.input || {};
+      let status = "";
+
+      if (name === "Bash") {
+        const cmd = (inp.command || "").split(" ")[0].split("/").pop();
+        status = `Running ${cmd || "command"}...`;
+      } else if (name === "Read") {
+        const file = (inp.file_path || inp.filename || "").split("/").pop();
+        status = `Reading ${file || "file"}...`;
+      } else if (name === "Write") {
+        const file = (inp.file_path || inp.filename || "").split("/").pop();
+        status = `Writing ${file || "file"}...`;
+      } else if (name === "Edit") {
+        const file = (inp.file_path || "").split("/").pop();
+        status = `Editing ${file || "file"}...`;
+      } else if (name === "Grep" || name === "Search") {
+        status = `Searching for "${(inp.pattern || "").slice(0, 20)}"...`;
+      } else if (name === "Glob" || name === "Find") {
+        status = `Finding files...`;
+      } else if (name === "TodoWrite") {
+        status = "Updating tasks...";
+      } else if (name.startsWith("tarsee_")) {
+        const tool = name.replace("tarsee_", "").replace(/_/g, " ");
+        status = `Running ${tool}...`;
+      } else if (name === "browser") {
+        const action = inp.action || "";
+        if (action === "navigate") status = "Opening page...";
+        else if (action === "screenshot") status = "Taking screenshot...";
+        else if (action === "click") status = "Clicking element...";
+        else if (action === "type") status = "Typing text...";
+        else if (action === "solve_captcha") status = "Solving captcha...";
+        else status = `Browser: ${action}...`;
+      } else {
+        status = `Running ${name}...`;
+      }
+
+      this._setVoiceStatus(status);
+      return;
+    }
+
+    if (event.type === "tool_result") {
+      this._setVoiceStatus("Processing...");
+      return;
+    }
+  },
+
+  _setVoiceStatus(text) {
+    this._stopThinkingAnimation();
+    this.elements.status.textContent = text;
   },
 
   /** Animated "Thinking..." ellipsis in status text. */
