@@ -9,6 +9,21 @@ import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { trackActivity } from "../lib/session-reset.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
+import { getGatewayManager } from "../lib/gateway.js";
+
+/**
+ * Broadcast an SSE-like event to all WebSocket clients except the originating one.
+ * This enables cross-device realtime sync — your Mac sees what your PC is streaming.
+ */
+function broadcastToOthers(convId, eventType, data) {
+  const gw = getGatewayManager();
+  const msg = JSON.stringify({ type: "sync", convId, event: eventType, data });
+  for (const [, conn] of gw.connections) {
+    if (conn.ws?.readyState === 1) {
+      try { conn.ws.send(msg); } catch { /* ignore */ }
+    }
+  }
+}
 
 /**
  * Classify message complexity for auto model routing.
@@ -306,6 +321,7 @@ chatRouter.post("/send", async (req, res) => {
 
   // Save user message (text only — no base64 blobs in DB)
   convStore.addMessage(convId, { role: "user", content: cleanMessage });
+  broadcastToOthers(convId, "user_message", { content: cleanMessage, conversationId: convId });
 
   // Build user content blocks for the AI when attachments are present
   let userContentForAI = cleanMessage;
@@ -438,8 +454,10 @@ chatRouter.post("/send", async (req, res) => {
           fullResponse += event.content;
           currentTextChunk += event.content;
           sendSSE(res, "text", { content: event.content });
+          broadcastToOthers(convId, "text", { content: event.content });
         } else if (event.type === "thinking") {
           sendSSE(res, "thinking", { status: event.status });
+          broadcastToOthers(convId, "thinking", { status: event.status });
         } else if (event.type === "tool_use") {
           // Flush text to timeline
           if (currentTextChunk.trim()) {
@@ -459,6 +477,7 @@ chatRouter.post("/send", async (req, res) => {
           lastToolIdx = timeline.length;
           timeline.push({ type: "tool", name: label, detail: String(detail).slice(0, 200), input: String(detail).slice(0, 500), output: "", status: "running" });
           sendSSE(res, "tool_call", { id: event.id, name: event.name, input: event.input });
+          broadcastToOthers(convId, "tool_call", { id: event.id, name: event.name, input: event.input });
           auditLog?.log({ action: "tool.call", target: event.name, actor: "claude", ip: req.ip, detail: String(detail).slice(0, 200) });
         } else if (event.type === "tool_result") {
           if (lastToolIdx >= 0 && timeline[lastToolIdx]) {
@@ -466,6 +485,7 @@ chatRouter.post("/send", async (req, res) => {
             timeline[lastToolIdx].output = (event.result || "").slice(0, 2000);
           }
           sendSSE(res, "tool_result", { id: event.id, name: event.name, result: event.result });
+          broadcastToOthers(convId, "tool_result", { id: event.id, name: event.name, result: event.result });
         } else if (event.type === "usage") {
           usage = { ...usage, ...event.usage };
         } else if (event.type === "error") {
@@ -501,6 +521,7 @@ chatRouter.post("/send", async (req, res) => {
         convStore.updateTitle(convId, message.slice(0, LIMITS.MAX_CONVERSATION_TITLE));
       }
       sendSSE(res, "done", { conversationId: convId, usage });
+      broadcastToOthers(convId, "done", { conversationId: convId });
     } catch (err) {
       if (!controller.signal.aborted) {
         sendSSE(res, "error", { message: err.message });

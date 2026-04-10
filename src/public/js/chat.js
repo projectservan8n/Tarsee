@@ -1190,6 +1190,7 @@ const Chat = {
         try {
           const data = JSON.parse(e.data);
           if (data.type === "typing") this._showTypingIndicator(data.channel);
+          else if (data.type === "sync") this._handleSyncEvent(data);
         } catch { /* ignore */ }
       };
       this._typingWs.onerror = () => {};
@@ -1222,6 +1223,103 @@ const Chat = {
     el.style.display = "flex";
     clearTimeout(this._typingIndicatorTimeout);
     this._typingIndicatorTimeout = setTimeout(() => { el.style.display = "none"; }, 3000);
+  },
+
+  _syncStreamingEl: null,
+  _syncTimeline: [],
+  _syncFullText: "",
+
+  _handleSyncEvent(data) {
+    // Only process events for the conversation we're currently viewing
+    if (data.convId !== this.currentConversationId) return;
+    // Don't process if we're the one streaming (we already have SSE)
+    if (this.isStreaming) return;
+
+    const evt = data.event;
+    const d = data.data;
+
+    if (evt === "user_message") {
+      // Another device sent a message — show it
+      this.appendMessage("user", d.content);
+      return;
+    }
+
+    if (evt === "thinking") {
+      if (d.status === "start") {
+        // Create assistant message with thinking indicator
+        if (!this._syncStreamingEl) {
+          this._syncStreamingEl = this.appendMessage("assistant", "");
+          this._syncTimeline = [];
+          this._syncFullText = "";
+        }
+        const textEl = this._syncStreamingEl?.querySelector(".message-text");
+        if (textEl && !textEl.querySelector(".streaming-dots")) {
+          textEl.innerHTML = '<span class="streaming-dots"><span></span><span></span><span></span></span>';
+        }
+      }
+      return;
+    }
+
+    if (evt === "text") {
+      if (!this._syncStreamingEl) {
+        this._syncStreamingEl = this.appendMessage("assistant", "");
+        this._syncTimeline = [];
+        this._syncFullText = "";
+      }
+      this._syncFullText += d.content;
+      const textEl = this._syncStreamingEl?.querySelector(".message-text");
+      if (textEl) textEl.innerHTML = this.renderMarkdown(this._syncFullText);
+      this.scrollToBottom();
+      return;
+    }
+
+    if (evt === "tool_call") {
+      if (!this._syncStreamingEl) {
+        this._syncStreamingEl = this.appendMessage("assistant", "");
+        this._syncTimeline = [];
+        this._syncFullText = "";
+      }
+      const inp = d.input || {};
+      const detail = inp.command || inp.file_path || inp.url || inp.query || "";
+      this._syncTimeline.push({ type: "tool", name: d.name, detail: String(detail).slice(0, 200), status: "running" });
+      this._renderSyncTimeline();
+      return;
+    }
+
+    if (evt === "tool_result") {
+      const last = this._syncTimeline[this._syncTimeline.length - 1];
+      if (last) last.status = "done";
+      this._renderSyncTimeline();
+      return;
+    }
+
+    if (evt === "done") {
+      this._syncStreamingEl = null;
+      this._syncTimeline = [];
+      this._syncFullText = "";
+      // Reload messages to get the final saved version
+      if (this.currentConversationId) {
+        this.openChannel(this.currentChannelKey, this.currentConversationId);
+      }
+      return;
+    }
+  },
+
+  _renderSyncTimeline() {
+    const textEl = this._syncStreamingEl?.querySelector(".message-text");
+    if (!textEl) return;
+    let html = "";
+    if (this._syncFullText) html += this.renderMarkdown(this._syncFullText);
+    html += '<div class="tl-timeline">';
+    for (const item of this._syncTimeline) {
+      if (item.type === "tool") {
+        const statusClass = item.status === "running" ? "running" : "";
+        html += `<div class="tl-item"><span class="tl-dot ${statusClass}"></span><div class="tl-tool"><div class="tl-tool-header"><span class="tl-tool-name">${escapeHtml(item.name)}</span><span class="tl-tool-detail">${escapeHtml(item.detail || "")}</span></div></div></div>`;
+      }
+    }
+    html += "</div>";
+    textEl.innerHTML = html;
+    this.scrollToBottom();
   },
 
   initSearch() {
