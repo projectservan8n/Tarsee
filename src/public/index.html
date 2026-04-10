@@ -567,6 +567,22 @@
               <div class="hint mb-3">Control which tools the AI can use.</div>
               <div id="toolPermissionsList"></div>
             </div>
+            <div class="settings-section">
+              <h3>Captcha Solver</h3>
+              <div class="hint mb-3">Auto-solve reCAPTCHA, hCaptcha, and Cloudflare Turnstile when browsing. Requires a <a href="https://2captcha.com" target="_blank" style="color:var(--accent)">2Captcha</a> or <a href="https://capsolver.com" target="_blank" style="color:var(--accent)">Capsolver</a> API key (~$2/1000 solves).</div>
+              <div class="form-group mb-3">
+                <label class="form-label">Service</label>
+                <select class="form-input" id="captchaService" style="max-width:200px">
+                  <option value="2captcha">2Captcha</option>
+                  <option value="capsolver">Capsolver</option>
+                </select>
+              </div>
+              <div class="form-group mb-3">
+                <label class="form-label">API Key</label>
+                <input type="password" class="form-input" id="captchaApiKey" placeholder="Your API key" style="max-width:400px">
+              </div>
+              <button class="btn btn-sm" id="saveCaptchaBtn">Save</button>
+            </div>
           </div>
 
           <!-- Usage Tab -->

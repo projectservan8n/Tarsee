@@ -239,13 +239,13 @@ export const TOOLS = [
 
   {
     name: "browser",
-    description: "Control a web browser. Actions: navigate (go to URL), screenshot (capture page), click (click element by selector), type (type text into element), evaluate (run JS in page), get_text (extract page text content). The browser persists across calls within a conversation.",
+    description: "Control a stealth web browser (anti-detection enabled). Actions: navigate (go to URL), screenshot (capture page), click (click element), type (type text), evaluate (run JS), get_text (extract text), wait_for (wait for selector/navigation), scroll (scroll page), select (dropdown), solve_captcha (auto-detect and solve reCAPTCHA/hCaptcha/Turnstile via 2Captcha or Capsolver). Browser persists across calls.",
     input_schema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["navigate", "screenshot", "click", "type", "evaluate", "get_text", "close"],
+          enum: ["navigate", "screenshot", "click", "type", "evaluate", "get_text", "wait_for", "scroll", "select", "solve_captcha", "close"],
           description: "The browser action to perform",
         },
         url: {
@@ -263,6 +263,19 @@ export const TOOLS = [
         script: {
           type: "string",
           description: "JavaScript code to evaluate in the page (for 'evaluate' action)",
+        },
+        value: {
+          type: "string",
+          description: "Value to select in dropdown (for 'select' action)",
+        },
+        timeout: {
+          type: "number",
+          description: "Timeout in milliseconds (for 'wait_for', default 30000)",
+        },
+        direction: {
+          type: "string",
+          enum: ["down", "up", "bottom", "top"],
+          description: "Scroll direction (for 'scroll' action, default 'down')",
         },
       },
       required: ["action"],
@@ -429,17 +442,219 @@ export function getToolDefinitions() {
 let browserInstance = null;
 let browserPage = null;
 
+const STEALTH_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
 async function ensureBrowser() {
   if (browserPage && !browserPage.isClosed()) return browserPage;
   try {
     const { chromium } = await import("playwright");
-    browserInstance = await chromium.launch({ headless: true });
-    const context = await browserInstance.newContext();
+    browserInstance = await chromium.launch({
+      headless: true,
+      args: [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--no-sandbox",
+      ],
+    });
+    const context = await browserInstance.newContext({
+      userAgent: STEALTH_UA,
+      viewport: { width: 1920, height: 1080 },
+      locale: "en-US",
+      timezoneId: "America/New_York",
+      deviceScaleFactor: 1,
+      hasTouch: false,
+      javaScriptEnabled: true,
+    });
     browserPage = await context.newPage();
+
+    // Stealth: remove webdriver flag and patch navigator
+    await browserPage.addInitScript(() => {
+      // Remove webdriver property
+      Object.defineProperty(navigator, "webdriver", { get: () => false });
+      // Fake plugins
+      Object.defineProperty(navigator, "plugins", {
+        get: () => [
+          { name: "Chrome PDF Plugin", filename: "internal-pdf-viewer" },
+          { name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai" },
+          { name: "Native Client", filename: "internal-nacl-plugin" },
+        ],
+      });
+      // Fake languages
+      Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+      // Fake permissions
+      const origQuery = window.Permissions?.prototype?.query;
+      if (origQuery) {
+        window.Permissions.prototype.query = (params) =>
+          params?.name === "notifications"
+            ? Promise.resolve({ state: Notification.permission })
+            : origQuery(params);
+      }
+      // Fake chrome runtime
+      window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {} };
+    });
+
     return browserPage;
   } catch (err) {
     throw new Error(`Failed to launch browser: ${err.message}. Make sure playwright is installed (npm i playwright).`);
   }
+}
+
+/**
+ * Solve a captcha on the current page using 2Captcha/Capsolver API.
+ * Supports reCAPTCHA v2/v3, hCaptcha, and Cloudflare Turnstile.
+ */
+async function solveCaptcha(page, settingsStore) {
+  const apiKey = settingsStore?.get("captcha.api_key");
+  const service = settingsStore?.get("captcha.service") || "2captcha";
+  if (!apiKey) return "Error: No captcha API key configured. Set 'captcha.api_key' and 'captcha.service' (2captcha or capsolver) in Settings > Security.";
+
+  const pageUrl = page.url();
+
+  // Detect captcha type
+  const captchaInfo = await page.evaluate(() => {
+    // reCAPTCHA v2
+    const recaptchaEl = document.querySelector(".g-recaptcha, [data-sitekey]");
+    if (recaptchaEl) {
+      return { type: "recaptcha_v2", sitekey: recaptchaEl.getAttribute("data-sitekey") };
+    }
+    // reCAPTCHA v3 (in script src)
+    const recaptchaScript = document.querySelector('script[src*="recaptcha"]');
+    if (recaptchaScript) {
+      const match = recaptchaScript.src.match(/render=([^&]+)/);
+      if (match && match[1] !== "explicit") return { type: "recaptcha_v3", sitekey: match[1] };
+    }
+    // hCaptcha
+    const hcaptchaEl = document.querySelector(".h-captcha, [data-hcaptcha-sitekey]");
+    if (hcaptchaEl) {
+      return { type: "hcaptcha", sitekey: hcaptchaEl.getAttribute("data-sitekey") };
+    }
+    // Cloudflare Turnstile
+    const turnstileEl = document.querySelector(".cf-turnstile, [data-turnstile-sitekey]");
+    if (turnstileEl) {
+      return { type: "turnstile", sitekey: turnstileEl.getAttribute("data-sitekey") || turnstileEl.getAttribute("data-turnstile-sitekey") };
+    }
+    return null;
+  });
+
+  if (!captchaInfo?.sitekey) return "No captcha detected on this page.";
+
+  try {
+    let token;
+    if (service === "capsolver") {
+      token = await solveWithCapsolver(apiKey, captchaInfo, pageUrl);
+    } else {
+      token = await solveWith2Captcha(apiKey, captchaInfo, pageUrl);
+    }
+
+    // Inject the solved token into the page
+    await page.evaluate(({ token, type }) => {
+      if (type === "recaptcha_v2" || type === "recaptcha_v3") {
+        const textarea = document.querySelector("#g-recaptcha-response, [name='g-recaptcha-response']");
+        if (textarea) { textarea.style.display = "block"; textarea.value = token; }
+        // Trigger callback if available
+        if (typeof window.___grecaptcha_cfg !== "undefined") {
+          const clients = window.___grecaptcha_cfg?.clients;
+          if (clients) {
+            for (const c of Object.values(clients)) {
+              const callback = c?.aa?.l?.callback || c?.aa?.callback;
+              if (typeof callback === "function") callback(token);
+            }
+          }
+        }
+      } else if (type === "hcaptcha") {
+        const textarea = document.querySelector("[name='h-captcha-response'], [name='g-recaptcha-response']");
+        if (textarea) textarea.value = token;
+        if (typeof window.hcaptcha !== "undefined") window.hcaptcha.execute();
+      } else if (type === "turnstile") {
+        const input = document.querySelector("[name='cf-turnstile-response']");
+        if (input) input.value = token;
+        if (typeof window.turnstile !== "undefined") {
+          const widgets = document.querySelectorAll(".cf-turnstile");
+          widgets.forEach(w => {
+            const widgetId = w.getAttribute("data-turnstile-widget-id");
+            if (widgetId) window.turnstile.getResponse(widgetId);
+          });
+        }
+      }
+    }, { token, type: captchaInfo.type });
+
+    return `Solved ${captchaInfo.type} captcha. Token injected into page.`;
+  } catch (err) {
+    return `Captcha solve failed: ${err.message}`;
+  }
+}
+
+async function solveWith2Captcha(apiKey, captchaInfo, pageUrl) {
+  const base = "https://2captcha.com";
+  let method, extraParams = {};
+
+  if (captchaInfo.type === "recaptcha_v2") { method = "userrecaptcha"; }
+  else if (captchaInfo.type === "recaptcha_v3") { method = "userrecaptcha"; extraParams.version = "v3"; extraParams.action = "verify"; extraParams.min_score = "0.3"; }
+  else if (captchaInfo.type === "hcaptcha") { method = "hcaptcha"; }
+  else if (captchaInfo.type === "turnstile") { method = "turnstile"; }
+
+  // Submit task
+  const params = new URLSearchParams({
+    key: apiKey, method, sitekey: captchaInfo.sitekey, pageurl: pageUrl, json: "1", ...extraParams,
+  });
+  const submitRes = await fetch(`${base}/in.php?${params}`);
+  const submitData = await submitRes.json();
+  if (submitData.status !== 1) throw new Error(submitData.request || "Submit failed");
+  const taskId = submitData.request;
+
+  // Poll for result (max 120s)
+  for (let i = 0; i < 24; i++) {
+    await new Promise(r => setTimeout(r, 5000));
+    const pollRes = await fetch(`${base}/res.php?key=${apiKey}&action=get&id=${taskId}&json=1`);
+    const pollData = await pollRes.json();
+    if (pollData.status === 1) return pollData.request;
+    if (pollData.request !== "CAPCHA_NOT_READY") throw new Error(pollData.request);
+  }
+  throw new Error("Captcha solve timed out (120s)");
+}
+
+async function solveWithCapsolver(apiKey, captchaInfo, pageUrl) {
+  const base = "https://api.capsolver.com";
+  const typeMap = {
+    recaptcha_v2: "ReCaptchaV2TaskProxyLess",
+    recaptcha_v3: "ReCaptchaV3TaskProxyLess",
+    hcaptcha: "HCaptchaTaskProxyLess",
+    turnstile: "AntiTurnstileTaskProxyLess",
+  };
+
+  // Create task
+  const taskReq = {
+    clientKey: apiKey,
+    task: {
+      type: typeMap[captchaInfo.type],
+      websiteURL: pageUrl,
+      websiteKey: captchaInfo.sitekey,
+    },
+  };
+  if (captchaInfo.type === "recaptcha_v3") {
+    taskReq.task.pageAction = "verify";
+    taskReq.task.minScore = 0.3;
+  }
+
+  const createRes = await fetch(`${base}/createTask`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(taskReq),
+  });
+  const createData = await createRes.json();
+  if (createData.errorId) throw new Error(createData.errorDescription || "Create task failed");
+  const taskId = createData.taskId;
+
+  // Poll for result (max 120s)
+  for (let i = 0; i < 24; i++) {
+    await new Promise(r => setTimeout(r, 5000));
+    const pollRes = await fetch(`${base}/getTaskResult`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientKey: apiKey, taskId }),
+    });
+    const pollData = await pollRes.json();
+    if (pollData.status === "ready") return pollData.solution?.gRecaptchaResponse || pollData.solution?.token;
+    if (pollData.status !== "processing") throw new Error(pollData.errorDescription || "Unknown error");
+  }
+  throw new Error("Captcha solve timed out (120s)");
 }
 
 /**
@@ -793,7 +1008,7 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       }
 
       case "browser": {
-        const { action, url, selector, text, script } = toolInput;
+        const { action, url, selector, text, script, value, timeout: userTimeout, direction } = toolInput;
         try {
           if (action === "close") {
             if (browserInstance) {
@@ -809,7 +1024,7 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           switch (action) {
             case "navigate": {
               if (!url) return "Error: 'url' is required for navigate action.";
-              await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+              await page.goto(url, { waitUntil: "domcontentloaded", timeout: userTimeout || 30_000 });
               const title = await page.title();
               return `Navigated to: ${page.url()}\nTitle: ${title}`;
             }
@@ -820,13 +1035,17 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
             }
             case "click": {
               if (!selector) return "Error: 'selector' is required for click action.";
-              await page.click(selector, { timeout: 10_000 });
+              await page.click(selector, { timeout: userTimeout || 10_000 });
+              await page.waitForTimeout(500); // brief settle after click
               return `Clicked element: ${selector}`;
             }
             case "type": {
               if (!selector) return "Error: 'selector' is required for type action.";
               if (!text) return "Error: 'text' is required for type action.";
-              await page.fill(selector, text);
+              // Clear field first, then type with human-like delay
+              await page.click(selector, { timeout: 5000 });
+              await page.fill(selector, "");
+              await page.type(selector, text, { delay: 50 + Math.random() * 80 });
               return `Typed "${text}" into ${selector}`;
             }
             case "evaluate": {
@@ -838,8 +1057,35 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
               const bodyText = await page.textContent("body");
               return truncate(bodyText || "(empty page)", MAX_RESULT);
             }
+            case "wait_for": {
+              if (selector) {
+                await page.waitForSelector(selector, { timeout: userTimeout || 30_000 });
+                return `Element found: ${selector}`;
+              }
+              // Wait for navigation/load
+              await page.waitForLoadState("networkidle", { timeout: userTimeout || 30_000 });
+              return `Page loaded (networkidle). URL: ${page.url()}`;
+            }
+            case "scroll": {
+              const dir = direction || "down";
+              if (dir === "bottom") await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+              else if (dir === "top") await page.evaluate(() => window.scrollTo(0, 0));
+              else if (dir === "up") await page.evaluate(() => window.scrollBy(0, -600));
+              else await page.evaluate(() => window.scrollBy(0, 600));
+              await page.waitForTimeout(300);
+              return `Scrolled ${dir}. Page height: ${await page.evaluate(() => document.body.scrollHeight)}px`;
+            }
+            case "select": {
+              if (!selector) return "Error: 'selector' is required for select action.";
+              if (!value) return "Error: 'value' is required for select action.";
+              await page.selectOption(selector, value);
+              return `Selected "${value}" in ${selector}`;
+            }
+            case "solve_captcha": {
+              return await solveCaptcha(page, ctx.settingsStore);
+            }
             default:
-              return `Unknown browser action: ${action}. Valid actions: navigate, screenshot, click, type, evaluate, get_text, close`;
+              return `Unknown browser action: ${action}. Valid: navigate, screenshot, click, type, evaluate, get_text, wait_for, scroll, select, solve_captcha, close`;
           }
         } catch (err) {
           return `Browser error (${action}): ${err.message}`;

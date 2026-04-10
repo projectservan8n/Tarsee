@@ -109,6 +109,28 @@ const Settings = {
       this.elements.runAuditBtn.addEventListener("click", () => this.loadSecurityAudit());
     }
 
+    // Captcha solver settings
+    const saveCaptchaBtn = document.getElementById("saveCaptchaBtn");
+    if (saveCaptchaBtn) {
+      saveCaptchaBtn.addEventListener("click", async () => {
+        const service = document.getElementById("captchaService").value;
+        const apiKey = document.getElementById("captchaApiKey").value.trim();
+        try {
+          await API.json("/api/settings", { method: "POST", body: { key: "captcha.service", value: service } });
+          await API.json("/api/settings", { method: "POST", body: { key: "captcha.api_key", value: apiKey } });
+          App.showToast("Captcha settings saved", "success");
+        } catch { App.showToast("Failed to save", "error"); }
+      });
+      // Load existing values
+      API.json("/api/settings").then(data => {
+        const settings = data.settings || [];
+        const svc = settings.find(s => s.key === "captcha.service")?.value;
+        const key = settings.find(s => s.key === "captcha.api_key")?.value;
+        if (svc) document.getElementById("captchaService").value = svc;
+        if (key) document.getElementById("captchaApiKey").value = key;
+      }).catch(() => {});
+    }
+
     // --- Auto-save: Bot Name (debounced) ---
     if (this.elements.botName) {
       const autoSaveName = debounce(() => this.saveIdentity(), 1200);

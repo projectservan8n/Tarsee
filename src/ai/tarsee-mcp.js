@@ -127,6 +127,25 @@ export function createTarseeMcp(ctx) {
       ),
 
       tool(
+        "tarsee_browser",
+        "Control a stealth web browser with captcha solving. Navigate pages, fill forms, click buttons, take screenshots, and auto-solve reCAPTCHA/hCaptcha/Turnstile. Browser persists across calls.",
+        {
+          action: z.enum(["navigate", "screenshot", "click", "type", "evaluate", "get_text", "wait_for", "scroll", "select", "solve_captcha", "close"]).describe("Browser action"),
+          url: z.string().optional().describe("URL to navigate to"),
+          selector: z.string().optional().describe("CSS selector for target element"),
+          text: z.string().optional().describe("Text to type"),
+          script: z.string().optional().describe("JavaScript to evaluate in page"),
+          value: z.string().optional().describe("Value for select dropdown"),
+          timeout: z.number().optional().describe("Timeout in ms (default 30000)"),
+          direction: z.enum(["down", "up", "bottom", "top"]).optional().describe("Scroll direction"),
+        },
+        async (args) => {
+          const result = await executeTool("browser", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      tool(
         "tarsee_web_fetch",
         "Fetch a URL and return its content (HTML converted to text, or raw for APIs).",
         { url: z.string().describe("URL to fetch"), raw: z.boolean().optional().describe("Return raw response (for APIs)") },

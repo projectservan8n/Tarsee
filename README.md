@@ -126,6 +126,8 @@ The SDK auto-refreshes tokens — you only need to log in once. If you ever get 
 - **Web terminal** — browser-based shell access via xterm.js.
 - **File manager** — browse, edit, and create workspace files from the UI.
 - **REST API** — `/api/v1/message` endpoint for iOS Shortcuts, scripts, and automations.
+- **Stealth browser** — Playwright with anti-detection (real fingerprints, no webdriver flag). Navigate, fill forms, screenshot, run JS.
+- **Captcha solver** — auto-detect and solve reCAPTCHA, hCaptcha, Cloudflare Turnstile via 2Captcha or Capsolver API.
 
 ### Search & Analytics
 - **Full-text search** — FTS5 search across all conversations from the sidebar.
