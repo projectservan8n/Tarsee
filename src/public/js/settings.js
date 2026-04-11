@@ -289,8 +289,10 @@ const Settings = {
           document.getElementById("piperOnnxFile").value = "";
           document.getElementById("piperJsonFile").value = "";
           document.getElementById("piperOnnxLabel").textContent = "No file";
-          document.getElementById("piperJsonLabel").textContent = "No file";
+          document.getElementById("piperJsonLabel").textContent = "No file selected";
           this.loadPiperVoices();
+          // Refresh the Default Voice dropdown if Piper is selected
+          if (this.elements.voiceEngine?.value === "piper") this.loadVoicesForEngine("piper");
         } catch (e) { App.showToast(e.message, "error"); }
         finally { piperUploadBtn.disabled = false; piperUploadBtn.textContent = origText; }
       });
@@ -582,8 +584,8 @@ const Settings = {
     }
   },
 
-  /** Load voices for a specific engine and populate the dropdown with hardcoded defaults. */
-  loadVoicesForEngine(engine) {
+  /** Load voices for a specific engine and populate the dropdown. */
+  async loadVoicesForEngine(engine) {
     if (!this.elements.defaultVoice) return;
     const voiceMap = {
       "elevenlabs": [
@@ -593,7 +595,6 @@ const Settings = {
         { id: "ErXwobaYiN019PkySvjV", name: "Antoni" },
         { id: "MF3mGyEYCl7XYWbV9V6O", name: "Elli" },
       ],
-      "piper": [], // Loaded dynamically from uploaded models
       "edge-tts": [
         { id: "en-US-AndrewMultilingualNeural", name: "Andrew (US)" },
         { id: "en-US-AvaMultilingualNeural", name: "Ava (US)" },
@@ -604,8 +605,20 @@ const Settings = {
       ],
     };
 
-    const voices = voiceMap[engine] || [];
+    let voices = voiceMap[engine] || [];
+
+    // For Piper, load uploaded voices dynamically
+    if (engine === "piper") {
+      try {
+        const data = await API.json("/api/voice/piper-voices");
+        voices = (data.voices || []).map(v => ({ id: v.id, name: v.id + ` (${v.sizeMB}MB)` }));
+      } catch { voices = []; }
+    }
+
     this.elements.defaultVoice.innerHTML = '<option value="">Engine default</option>';
+    if (engine === "piper" && voices.length === 0) {
+      this.elements.defaultVoice.innerHTML = '<option value="">No voices uploaded — add below</option>';
+    }
     for (const v of voices) {
       const opt = document.createElement("option");
       opt.value = v.id;
