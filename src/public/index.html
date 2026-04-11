@@ -503,15 +503,17 @@
                   <label class="form-label">Voice Name</label>
                   <input type="text" id="piperVoiceName" class="form-input" placeholder="e.g. amy-low" style="max-width:300px">
                 </div>
-                <div class="flex gap-2 items-center mb-2">
-                  <label class="btn btn-sm btn-ghost">
-                    .onnx <input type="file" id="piperOnnxFile" accept=".onnx" style="display:none">
+                <div class="flex gap-2 items-center flex-wrap mb-2">
+                  <label class="btn btn-sm btn-ghost" style="cursor:pointer">
+                    Choose .onnx <input type="file" id="piperOnnxFile" style="display:none">
                   </label>
-                  <span id="piperOnnxLabel" class="text-muted text-xs">No file</span>
-                  <label class="btn btn-sm btn-ghost">
-                    .onnx.json <input type="file" id="piperJsonFile" accept=".json" style="display:none">
+                  <span id="piperOnnxLabel" class="text-muted text-xs">No file selected</span>
+                </div>
+                <div class="flex gap-2 items-center flex-wrap mb-2">
+                  <label class="btn btn-sm btn-ghost" style="cursor:pointer">
+                    Choose .onnx.json <input type="file" id="piperJsonFile" style="display:none">
                   </label>
-                  <span id="piperJsonLabel" class="text-muted text-xs">No file</span>
+                  <span id="piperJsonLabel" class="text-muted text-xs">No file selected</span>
                 </div>
                 <button class="btn btn-sm" id="piperUploadBtn">Upload Voice</button>
               </div>
