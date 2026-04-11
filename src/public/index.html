@@ -520,15 +520,28 @@
             </div>
             <div class="settings-section">
               <h3>Speech-to-Text (STT)</h3>
-              <div class="hint mb-3">Local faster-whisper (CTranslate2) — 4x faster than OpenAI whisper, runs on CPU, no API key, no limits. Models auto-download on first use.</div>
               <div class="form-group">
-                <label>Whisper Model</label>
+                <label>STT Provider</label>
+                <select id="settingsSTTProvider">
+                  <option value="local">Local faster-whisper (free, no API key)</option>
+                  <option value="whisper-api">OpenAI Whisper API (good accuracy)</option>
+                  <option value="gpt-4o">OpenAI GPT-4o Transcribe (best accuracy)</option>
+                </select>
+                <div class="hint">Local is free but slower. GPT-4o is the most accurate but costs OpenAI API credits (~$0.006/min).</div>
+              </div>
+              <div class="form-group" id="openaiKeyGroup">
+                <label>OpenAI API Key</label>
+                <input type="password" id="settingsOpenaiKey" class="form-input" placeholder="sk-..." style="max-width:400px" autocomplete="off">
+                <div class="hint">Required for Whisper API and GPT-4o Transcribe. Get yours at <a href="https://platform.openai.com/api-keys" target="_blank" style="color:var(--accent)">platform.openai.com</a>.</div>
+              </div>
+              <div class="form-group">
+                <label>Local Whisper Model</label>
                 <select id="settingsSTTModel">
                   <option value="tiny.en">tiny.en (~75MB) — fastest, basic accuracy</option>
                   <option value="base.en" selected>base.en (~140MB) — balanced (recommended)</option>
                   <option value="small.en">small.en (~460MB) — best accuracy, slower</option>
                 </select>
-                <div class="hint">Model downloads automatically on first use. Larger models need more RAM and CPU time.</div>
+                <div class="hint">Only used when STT Provider is set to Local. Model downloads automatically on first use.</div>
               </div>
               <div id="sttModelStatus" class="text-muted text-sm mt-2"></div>
               <button class="btn btn-sm mt-2" id="saveSTTBtn">Save STT Settings</button>

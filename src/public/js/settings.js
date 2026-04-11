@@ -299,18 +299,35 @@ const Settings = {
       this.loadPiperVoices();
     }
 
-    // STT model save
+    // STT save (provider + model + OpenAI key)
     const saveSTTBtn = document.getElementById("saveSTTBtn");
     if (saveSTTBtn) {
       saveSTTBtn.addEventListener("click", async () => {
         const model = document.getElementById("settingsSTTModel").value;
+        const provider = document.getElementById("settingsSTTProvider")?.value || "local";
+        const openaiKey = document.getElementById("settingsOpenaiKey")?.value?.trim();
         try {
           await API.json("/api/voice/stt-model", { method: "POST", body: { model } });
-          App.showToast(`STT model set to ${model}`, "success");
+          await API.json("/api/settings", { method: "POST", body: { key: "voice.stt_provider", value: provider } });
+          if (openaiKey) {
+            // Save in both formats — voice-specific and provider-generic (for getApiKey)
+            await API.json("/api/settings", { method: "POST", body: { key: "voice.openai_api_key", value: openaiKey } });
+            await API.json("/api/settings", { method: "POST", body: { key: "ai.openai.apiKey", value: openaiKey } });
+          }
+          App.showToast(`STT: ${provider}${provider === "local" ? ` (${model})` : ""}`, "success");
           this.loadSTTModelStatus();
         } catch (e) { App.showToast(e.message, "error"); }
       });
       this.loadSTTModelStatus();
+
+      // Load saved values
+      API.json("/api/settings").then(data => {
+        const settings = data.settings || [];
+        const provider = settings.find(s => s.key === "voice.stt_provider")?.value;
+        const key = settings.find(s => s.key === "voice.openai_api_key")?.value;
+        if (provider) document.getElementById("settingsSTTProvider").value = provider;
+        if (key) document.getElementById("settingsOpenaiKey").value = key;
+      }).catch(() => {});
     }
 
     // Show/hide ElevenLabs key field based on engine selection

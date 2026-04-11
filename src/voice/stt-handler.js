@@ -99,9 +99,9 @@ print(json.dumps({"text": text, "language": info.language, "duration": round(inf
 }
 
 /**
- * Transcribe audio using OpenAI Whisper API (fallback).
+ * Transcribe audio using OpenAI Whisper API.
  */
-async function transcribeAPI(audioBuffer, language, apiKey) {
+async function transcribeWhisperAPI(audioBuffer, language, apiKey) {
   const boundary = "----TarseeSTTBoundary" + Date.now();
   const parts = [];
 
@@ -129,24 +129,78 @@ async function transcribeAPI(audioBuffer, language, apiKey) {
 }
 
 /**
- * Transcribe audio — tries faster-whisper first, falls back to API.
+ * Transcribe audio using OpenAI GPT-4o Transcribe.
+ * Better accuracy than Whisper, handles accents and noisy audio well.
+ * Uses more API credits than whisper-1.
+ */
+async function transcribeGPT4o(audioBuffer, language, apiKey) {
+  const boundary = "----TarseeSTTBoundary" + Date.now();
+  const parts = [];
+
+  parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.webm"\r\nContent-Type: audio/webm\r\n\r\n`);
+  parts.push(audioBuffer);
+  parts.push("\r\n");
+  parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\ngpt-4o-transcribe\r\n`);
+  parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\njson\r\n`);
+  parts.push(`--${boundary}--\r\n`);
+
+  const body = Buffer.concat(parts.map(p => typeof p === "string" ? Buffer.from(p) : p));
+
+  const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": `multipart/form-data; boundary=${boundary}` },
+    body,
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!res.ok) throw new Error(`GPT-4o Transcribe error (${res.status}): ${await res.text()}`);
+  const data = await res.json();
+  console.log(`[stt] GPT-4o Transcribe: "${data.text?.slice(0, 80)}..."`);
+  return { transcript: data.text || "", language: language?.split("-")[0] || "en", provider: "gpt-4o-transcribe" };
+}
+
+/**
+ * Transcribe audio — uses configured provider.
+ * Priority based on setting voice.stt_provider:
+ *   "gpt-4o"         → GPT-4o Transcribe (best accuracy, costs API credits)
+ *   "whisper-api"     → OpenAI Whisper API (good, cheaper)
+ *   "local" (default) → faster-whisper local (free, no API key)
  */
 export async function transcribeAudio(audioBuffer, language, opts = {}) {
   const settingsStore = opts.settingsStore;
+  const provider = settingsStore?.get?.("voice.stt_provider") || "local";
+  const openaiKey = settingsStore?.getApiKey?.("openai");
 
-  // Try faster-whisper first (free, local, no API key)
+  // GPT-4o Transcribe — best accuracy
+  if (provider === "gpt-4o" && openaiKey) {
+    try {
+      return await transcribeGPT4o(audioBuffer, language, openaiKey);
+    } catch (err) {
+      console.warn("[stt] GPT-4o Transcribe failed, falling back:", err.message);
+    }
+  }
+
+  // OpenAI Whisper API
+  if (provider === "whisper-api" && openaiKey) {
+    try {
+      return await transcribeWhisperAPI(audioBuffer, language, openaiKey);
+    } catch (err) {
+      console.warn("[stt] Whisper API failed, falling back:", err.message);
+    }
+  }
+
+  // Local faster-whisper (free, no API key)
   if (isFasterWhisperAvailable()) {
     try {
       return await transcribeLocal(audioBuffer, settingsStore);
     } catch (err) {
-      console.warn("[stt] faster-whisper failed, trying API fallback:", err.message);
+      console.warn("[stt] faster-whisper failed:", err.message);
     }
   }
 
-  // Fallback to OpenAI API
-  const openaiKey = settingsStore?.getApiKey?.("openai");
+  // Last resort fallbacks
   if (openaiKey) {
-    return await transcribeAPI(audioBuffer, language, openaiKey);
+    return await transcribeWhisperAPI(audioBuffer, language, openaiKey);
   }
 
   throw Object.assign(
