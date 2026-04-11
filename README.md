@@ -6,7 +6,9 @@
 
 <p align="center"><strong>Your personal Claude Code agent, running 24/7 in the cloud.</strong></p>
 
-<p align="center">Talk to Claude from anywhere — web, Telegram, Discord, or voice. It remembers everything, runs tools, and schedules tasks. Uses your Claude Max/Pro subscription. No API keys needed.</p>
+<p align="center">Talk to Claude from anywhere — web, Telegram, Discord, or voice. It remembers everything, runs tools, and schedules tasks. Uses your Claude Max subscription. No API keys needed.</p>
+
+> **Tarsee is built for Claude Max subscribers.** It runs a persistent Claude Code agent that uses your subscription for every message. Pro subscribers will hit usage limits quickly — Max (especially 5x) is strongly recommended for daily use.
 
 <p align="center">
   <a href="https://railway.com/deploy/O2Ux8R?referralCode=sIH3US&utm_medium=integration&utm_source=template&utm_campaign=generic"><img src="https://railway.com/button.svg" alt="Deploy on Railway"></a>
@@ -45,9 +47,10 @@ Being honest — some of these projects are massive with huge communities. Tarse
 
 - **You want simplicity** — no build step, no TypeScript, no framework. Just Node.js serving HTML.
 - **You want Claude specifically** — Tarsee wraps Claude Code SDK directly. Not multi-provider, not trying to be everything.
-- **You want it cheap** — runs on $16/mo Railway with 2GB RAM. No API costs if you have Claude Max/Pro.
+- **You want it cheap** — runs on $2-10/mo Railway. No API costs with Claude Max.
 - **You want voice + mobile** — PWA with local speech-to-text, hold-to-talk, iOS PIN pad login.
 - **You want memory** — persistent memory across sessions with deep semantic search.
+- **You want browser automation** — stealth Playwright with captcha solving built in.
 
 ### Why choose something else?
 
@@ -81,7 +84,7 @@ That's it. Credentials are stored on the volume and auto-refresh. No env vars to
 
 ### Authenticating with Claude
 
-You need an active [Claude Max or Pro](https://claude.ai) subscription with Claude Code enabled.
+You need an active [Claude Max](https://claude.ai) subscription with Claude Code enabled. **Max is strongly recommended** — Pro will hit usage limits with a persistent agent.
 
 **Run this in the Tarsee web terminal:**
 ```bash
@@ -99,26 +102,31 @@ The SDK auto-refreshes tokens — you only need to log in once. If you ever get 
 ## What You Get
 
 ### Chat Everywhere
-- **Web UI** — Full chat with markdown rendering, code blocks, tables, file attachments, image paste, session management. PWA — save to homescreen on iOS/Android.
+- **Web UI** — Full chat with markdown rendering, code blocks, tables, file attachments, image paste, drag-and-drop, multi-file upload. PWA — save to homescreen on iOS/Android.
 - **Telegram** — Text, photos, PDFs, voice messages, video notes. Group @mention support, inline buttons, forwarded message detection.
 - **Discord** — Text, images, PDFs, voice messages. Always-online bot with presence status.
+- **Cross-device sync** — all devices update in real-time via WebSocket. See tool calls, text streaming, and typing indicators across devices.
 - **All channels share** the same AI, memory, and tools.
 
 ### Voice Mode
 - **Hold-to-talk or tap-to-toggle** — full-screen conversational UI with waveform visualization.
+- **Live tool status** — shows "Reading file...", "Running command...", "Calculating..." instead of generic "Thinking..."
 - **Spacebar shortcut** — hold space to talk, Space+C to cancel.
 - **Drag to cancel** — slide away from the orb or mic button to discard recording.
 - **Local speech-to-text** — faster-whisper (CTranslate2, 4x faster than OpenAI whisper). Configurable models: tiny.en / base.en / small.en. No API key. Runs on CPU.
-- **Free text-to-speech** — Microsoft Edge TTS. No API key, no rate limits.
+- **Free text-to-speech** — Microsoft Edge TTS with 19 voices, 3 retries, markdown stripping. No API key, no rate limits.
 - **Smart TTS** — tables and code shown visually, spoken response is a clean conversational summary.
 
 ### Canvas / Artifacts
 - **Live HTML/CSS/JS** — Ask for a dashboard, chart, calculator, or mini-app → renders as an interactive iframe right in chat.
-- **Sandboxed** — Each canvas runs in a sandboxed iframe with its own URL.
+- **Canvas gallery** — browse all your canvases at `/canvas/`.
 - **Persistent** — Canvases are saved to the volume and accessible at `/canvas/<id>/`.
 
 ### Tools & Automation
-- **15+ MCP tools** — send messages, schedule tasks, remember facts, search the web, create canvases, manage files, encrypted vault, and more.
+- **20+ MCP tools** — send messages, schedule tasks, remember facts, search the web, create canvases, manage files, encrypted vault, calculator, browser, and more.
+- **Calculator** — precise math tool so Claude never hallucinates numbers. Arithmetic, percentages, Math.* functions.
+- **Stealth browser** — Playwright with anti-detection (real fingerprints, no webdriver flag). Navigate, fill forms, screenshot, scroll, wait, run JS.
+- **Captcha solver** — auto-detect and solve reCAPTCHA, hCaptcha, Cloudflare Turnstile via 2Captcha or Capsolver API.
 - **Proactive briefings** — `/briefing on` schedules a daily morning summary pushed to all channels.
 - **Auto model routing** — `/auto on` picks haiku/sonnet/opus based on message complexity.
 - **Deep memory search** — AI reads all memories semantically when keyword search fails.
@@ -126,15 +134,14 @@ The SDK auto-refreshes tokens — you only need to log in once. If you ever get 
 - **Web terminal** — browser-based shell access via xterm.js.
 - **File manager** — browse, edit, and create workspace files from the UI.
 - **REST API** — `/api/v1/message` endpoint for iOS Shortcuts, scripts, and automations.
-- **Stealth browser** — Playwright with anti-detection (real fingerprints, no webdriver flag). Navigate, fill forms, screenshot, run JS.
-- **Captcha solver** — auto-detect and solve reCAPTCHA, hCaptcha, Cloudflare Turnstile via 2Captcha or Capsolver API.
+- **Skills** — modular instruction packs with credentials and configs. Claude reads them automatically when relevant.
 
 ### Search & Analytics
-- **Full-text search** — FTS5 search across all conversations from the sidebar.
-- **Token usage chart** — daily/weekly visual graph with model breakdown in Settings > Usage.
+- **Token usage chart** — daily/weekly visual bar chart with model breakdown in Settings > Usage.
 - **Audit log** — timestamped log of all tool executions, logins, and settings changes.
 - **QR code** — scan from desktop to instantly open Tarsee on your phone.
 - **Typing indicator** — see when you're typing on another device in real-time.
+- **Todo rendering** — Claude's task lists render as styled checklists with progress indicators.
 
 ### Memory & Identity
 - **Workspace files** — SOUL.md (personality), MEMORY.md (knowledge), USER.md (user info), IDENTITY.md.
@@ -154,9 +161,10 @@ Tarsee Server (Railway)
   +-- Claude Code Agent SDK (subscription auth, auto-updates)
   |     +-- Built-in: Read, Write, Edit, Bash, Grep, Glob
   |     +-- MCP tools: send_message, schedule_task, remember,
-  |         create_canvas, web_fetch, web_search, etc.
+  |         create_canvas, calculator, browser, web_search, etc.
   |
   +-- Voice: faster-whisper STT + Edge TTS
+  +-- Browser: Playwright (stealth) + captcha solving
   +-- Workspace: SOUL.md, MEMORY.md, USER.md
   +-- SQLite: conversations, settings, vault
   +-- Channels: Telegram, Discord (always online)
@@ -201,6 +209,25 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 
 ---
 
+## Settings
+
+| Tab | What's there |
+|-----|-------------|
+| **Identity** | Bot name (set via IDENTITY.md) |
+| **Workspace** | SOUL.md, USER.md, MEMORY.md editors |
+| **AI Provider** | Model selection, API config |
+| **Channels** | Telegram, Discord tokens |
+| **Automation** | Cron jobs, webhooks |
+| **Voice** | TTS engine (Edge TTS / ElevenLabs), STT model (tiny/base/small), voice selection |
+| **Skills** | Create, edit, delete instruction packs |
+| **Memories** | View and manage stored memories |
+| **Security** | Security audit, tool permissions, captcha solver config |
+| **Canvas** | Gallery of AI-generated interactive UIs |
+| **Usage** | Token usage chart, daily/weekly stats, model breakdown |
+| **Audit Log** | All tool executions, logins, settings changes |
+
+---
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
@@ -232,7 +259,7 @@ docker run -d \
 
 After starting, open the web terminal and run `claude login` to authenticate.
 
-Requirements: Docker, Claude Max/Pro subscription.
+Requirements: Docker, Claude Max subscription (Pro will work but will hit limits quickly).
 
 ---
 
@@ -246,6 +273,7 @@ Requirements: Docker, Claude Max/Pro subscription.
 - Path traversal protection
 - OAuth auto-refresh (tokens never stored in plain text)
 - Session isolation per conversation
+- Audit log for all tool executions and logins
 
 ---
 
@@ -258,17 +286,22 @@ src/
   server.js                    # Express + HTTP server
   ai/
     providers/claude-code.js   # Agent SDK wrapper
-    tarsee-mcp.js              # 15+ MCP tools
+    tarsee-mcp.js              # 20+ MCP tools
   lib/
     tools.js, commands.js      # Tool registry + chat commands
     cron.js                    # Scheduler
-    oauth-refresh.js           # Token auto-refresh
+    canvas.js                  # Canvas/artifact server
+    security-audit.js          # Security checks
   channels/
     telegram.js, discord.js    # Bot integrations
-    websocket.js               # Web UI real-time
+    websocket.js               # Web UI real-time + cross-device sync
   voice/
     stt-handler.js             # faster-whisper STT
-    edge-tts-engine.js         # Free TTS
+    edge-tts-engine.js         # Free TTS (19 voices)
+  routes/
+    chat.js                    # Chat API + SSE streaming
+    external-api.js            # REST API (/api/v1/)
+    analytics.js               # Token usage stats
   public/                      # Web UI (vanilla HTML/CSS/JS, PWA)
 ```
 
