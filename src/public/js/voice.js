@@ -690,28 +690,33 @@ const Voice = {
     }
   },
 
-  /** Speak text via streaming TTS. Retries once on failure. */
+  /** Speak text via chunked TTS — splits into sentences, plays first chunk fast while rest generates. */
   async speak(text) {
     if (!text?.trim()) return;
     this.isSpeaking = true;
+    this._stopSpeaking = false;
     this.setOrbState("speaking");
     this.elements.status.textContent = "Speaking...";
 
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // Split into sentence chunks (~200 chars each for fast generation)
+    const chunks = this._splitIntoChunks(text, 200);
+
+    for (let i = 0; i < chunks.length; i++) {
+      if (this._stopSpeaking || !this.isSpeaking) break;
+
       try {
         const csrf = API.getCsrfToken();
         const headers = { "Content-Type": "application/json" };
         if (csrf) headers["X-CSRF-Token"] = csrf;
 
-        // Abort if TTS fetch takes too long (30s — longer text needs more time)
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 30_000);
+        const timeout = setTimeout(() => controller.abort(), 15_000);
 
         const res = await fetch("/api/voice/tts-stream", {
           method: "POST",
           headers,
           credentials: "same-origin",
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({ text: chunks[i] }),
           signal: controller.signal,
         });
         clearTimeout(timeout);
@@ -719,35 +724,53 @@ const Voice = {
         if (!res.ok) throw new Error("TTS failed");
 
         const audioBlob = await res.blob();
-        if (audioBlob.size < 100) throw new Error("Empty audio");
+        if (audioBlob.size < 100) continue; // Skip empty chunks
 
-        const audioUrl = URL.createObjectURL(audioBlob);
-        const audio = this.elements.audio;
-        audio.src = audioUrl;
-        audio.onended = () => { URL.revokeObjectURL(audioUrl); this.isSpeaking = false; this.setOrbState("idle"); this.elements.status.textContent = "Hold to talk"; };
-        audio.onerror = () => { URL.revokeObjectURL(audioUrl); this.isSpeaking = false; this.setOrbState("idle"); };
-        await audio.play().catch(() => { this.isSpeaking = false; this.setOrbState("idle"); });
-
-        // Safety timeout
-        const estimatedMs = Math.max(3000, (text.length / 5 / 150) * 60000 + 2000);
-        setTimeout(() => { if (this.isSpeaking) { this.isSpeaking = false; this.setOrbState("idle"); this.elements.status.textContent = "Hold to talk"; } }, estimatedMs);
-        return; // Success — exit retry loop
+        // Play this chunk and wait for it to finish before next
+        await new Promise((resolve, reject) => {
+          const audioUrl = URL.createObjectURL(audioBlob);
+          const audio = this.elements.audio;
+          audio.src = audioUrl;
+          audio.onended = () => { URL.revokeObjectURL(audioUrl); resolve(); };
+          audio.onerror = () => { URL.revokeObjectURL(audioUrl); resolve(); };
+          audio.play().catch(resolve);
+        });
       } catch (err) {
-        console.warn(`[voice] TTS attempt ${attempt + 1} failed:`, err.message);
-        if (attempt === 0 && text.length > 300) {
-          // Retry with shorter text
-          text = text.slice(0, 300) + ". Check chat for the rest.";
-          continue;
-        }
+        console.warn(`[voice] TTS chunk ${i + 1}/${chunks.length} failed:`, err.message);
+        // Skip failed chunk, try next
       }
     }
-    // Both attempts failed — show response in chat, don't block
+
     this.isSpeaking = false;
+    this._stopSpeaking = false;
     this.setOrbState("idle");
-    this.elements.status.textContent = "Response in chat · Hold to talk";
+    this.elements.status.textContent = "Hold to talk";
+  },
+
+  /**
+   * Split text into chunks at sentence boundaries, targeting maxLen chars per chunk.
+   */
+  _splitIntoChunks(text, maxLen) {
+    const sentences = text.match(/[^.!?]+[.!?]+\s*/g) || [text];
+    const chunks = [];
+    let current = "";
+
+    for (const sentence of sentences) {
+      if ((current + sentence).length > maxLen && current) {
+        chunks.push(current.trim());
+        current = sentence;
+      } else {
+        current += sentence;
+      }
+    }
+    if (current.trim()) chunks.push(current.trim());
+
+    // If no sentence boundaries found, just return the whole text
+    return chunks.length ? chunks : [text];
   },
 
   stopSpeaking() {
+    this._stopSpeaking = true;
     this.elements.audio.pause();
     this.elements.audio.currentTime = 0;
     this.isSpeaking = false;
