@@ -69,13 +69,13 @@ analyticsRouter.get("/", (req, res) => {
     ORDER BY day ASC
   `).all() || [];
 
-  // Model usage breakdown
+  // Model usage breakdown (Anthropic/Claude models only)
   const modelUsage = db.prepare(`
     SELECT model, COUNT(*) as count,
       COALESCE(SUM(tokens_in), 0) as tokens_in,
       COALESCE(SUM(tokens_out), 0) as tokens_out
     FROM messages
-    WHERE model IS NOT NULL AND created_at >= date('now', '-30 days')
+    WHERE model IS NOT NULL AND model LIKE 'claude%' AND created_at >= date('now', '-30 days')
     GROUP BY model
     ORDER BY count DESC
   `).all() || [];
