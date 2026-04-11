@@ -66,7 +66,30 @@ export class CanvasServer {
 // Express middleware to serve canvas files
 export function canvasMiddleware(req, res, next) {
   if (!req.path.startsWith("/canvas/")) return next();
-  const parts = req.path.replace("/canvas/", "").split("/");
+  const parts = req.path.replace("/canvas/", "").split("/").filter(Boolean);
+
+  // Gallery: /canvas/ with no ID → list all canvases
+  if (parts.length === 0) {
+    try {
+      const canvases = fs.readdirSync(CANVAS_DIR, { withFileTypes: true })
+        .filter(d => d.isDirectory() && fs.existsSync(path.join(CANVAS_DIR, d.name, "index.html")))
+        .map(d => {
+          const stat = fs.statSync(path.join(CANVAS_DIR, d.name, "index.html"));
+          return { name: d.name, size: stat.size, modified: stat.mtime };
+        })
+        .sort((a, b) => b.modified - a.modified);
+
+      if (canvases.length === 0) {
+        return res.send(`<!DOCTYPE html><html><head><title>Canvas Gallery</title><style>body{background:#1a1a1a;color:#ececec;font-family:Poppins,sans-serif;padding:40px;text-align:center}h1{color:#c45a35}p{color:#a8a8a0}</style></head><body><h1>Canvas Gallery</h1><p>No canvases yet. Ask Tarsee to create one!</p></body></html>`);
+      }
+
+      const items = canvases.map(c => `<a href="/canvas/${c.name}/" style="display:block;background:#2b2a27;border-radius:8px;padding:16px;margin:8px 0;text-decoration:none;color:#ececec;border:1px solid #3a3935"><strong>${c.name}</strong><br><span style="color:#a8a8a0;font-size:12px">${Math.round(c.size/1024)}KB &middot; ${c.modified.toLocaleDateString()}</span></a>`).join("");
+      return res.send(`<!DOCTYPE html><html><head><title>Canvas Gallery</title><style>body{background:#1a1a1a;color:#ececec;font-family:Poppins,sans-serif;padding:40px;max-width:600px;margin:0 auto}h1{color:#c45a35}a:hover{border-color:#c45a35!important}</style></head><body><h1>Canvas Gallery</h1>${items}</body></html>`);
+    } catch {
+      return res.status(500).send("Error loading gallery");
+    }
+  }
+
   const canvasId = parts[0];
   const filename = parts.slice(1).join("/") || "index.html";
   const filePath = path.join(CANVAS_DIR, canvasId, filename);
