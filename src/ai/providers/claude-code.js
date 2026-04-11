@@ -133,6 +133,8 @@ After that, only search memories when relevant — don't re-read every message.`
 - **create_canvas**(title, html, css?, js?) — create live interactive HTML/CSS/JS canvas (renders as iframe in chat)
 - **web_fetch**(url) / **web_search**(query) — web access
 - **get_key**(name) / **set_key**(name, value) — encrypted vault
+- **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head
+- **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving
 
 ## Memory
 Use remember for durable facts. Use daily_log for session notes. Only append, never overwrite.

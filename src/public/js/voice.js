@@ -813,6 +813,8 @@ const Voice = {
         status = `Finding files...`;
       } else if (name === "TodoWrite") {
         status = "Updating tasks...";
+      } else if (name === "calculator") {
+        status = "Calculating...";
       } else if (name.startsWith("tarsee_")) {
         const tool = name.replace("tarsee_", "").replace(/_/g, " ");
         status = `Running ${tool}...`;

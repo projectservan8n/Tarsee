@@ -283,6 +283,21 @@ export const TOOLS = [
   },
 
   {
+    name: "calculator",
+    description: "Evaluate a math expression with precision. Use this for ANY math: arithmetic, percentages, unit conversions, financial calculations, etc. Never do math in your head — always use this tool. Supports: +, -, *, /, **, %, Math.sqrt(), Math.round(), Math.ceil(), Math.floor(), Math.abs(), Math.log(), Math.PI, Math.E, parentheses.",
+    input_schema: {
+      type: "object",
+      properties: {
+        expression: {
+          type: "string",
+          description: "Math expression to evaluate, e.g. '(149 * 12) * 0.85' or 'Math.sqrt(144) + 5'",
+        },
+      },
+      required: ["expression"],
+    },
+  },
+
+  {
     name: "web_search",
     description: "Search the web using DuckDuckGo. Returns titles, URLs, and snippets for the top results. Free, no API key needed.",
     input_schema: {
@@ -1004,6 +1019,25 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           return `Scheduled ${freq} task (${desc}): ${name || job.id} at ${schedule}`;
         } catch (err) {
           return `schedule_task error: ${err.message}`;
+        }
+      }
+
+      case "calculator": {
+        const { expression } = toolInput;
+        if (!expression) return "Error: 'expression' is required.";
+        // Whitelist: only allow math chars, Math.*, numbers, parentheses, spaces
+        const sanitized = expression.trim();
+        if (!/^[0-9+\-*/.%() ,eE\s]|Math\./g.test(sanitized) && /[a-zA-Z]/.test(sanitized.replace(/Math\.\w+/g, ""))) {
+          return `Error: Invalid expression. Only math operators and Math.* functions allowed.`;
+        }
+        try {
+          // Safe eval — only Math globals available
+          const fn = new Function("Math", `"use strict"; return (${sanitized});`);
+          const result = fn(Math);
+          if (typeof result !== "number" || !isFinite(result)) return `Result: ${result} (not a finite number)`;
+          return `${expression} = ${result}`;
+        } catch (err) {
+          return `Math error: ${err.message}`;
         }
       }
 

@@ -127,6 +127,18 @@ export function createTarseeMcp(ctx) {
       ),
 
       tool(
+        "tarsee_calculator",
+        "Evaluate a math expression with precision. Use for ANY math — arithmetic, percentages, conversions, financial calculations. Never do math in your head.",
+        {
+          expression: z.string().describe("Math expression, e.g. '(149 * 12) * 0.85' or 'Math.sqrt(144)'"),
+        },
+        async (args) => {
+          const result = await executeTool("calculator", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      tool(
         "tarsee_browser",
         "Control a stealth web browser with captcha solving. Navigate pages, fill forms, click buttons, take screenshots, and auto-solve reCAPTCHA/hCaptcha/Turnstile. Browser persists across calls.",
         {
