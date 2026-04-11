@@ -132,6 +132,25 @@
   word-break: break-word;
 }
 
+.voice-turn .voice-turn-text ul,
+.voice-turn .voice-turn-text ol {
+  padding-left: var(--space-5);
+  margin: var(--space-1) 0;
+}
+
+.voice-turn .voice-turn-text li {
+  list-style-type: "–  ";
+  margin-bottom: var(--space-1);
+}
+
+.voice-turn .voice-turn-text p {
+  margin-bottom: var(--space-2);
+}
+
+.voice-turn .voice-turn-text p:last-child {
+  margin-bottom: 0;
+}
+
 /* Interim / currently-being-spoken */
 .voice-turn.interim .voice-turn-text {
   animation: pulse 1.5s ease-in-out infinite;
