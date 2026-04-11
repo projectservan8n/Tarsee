@@ -9,7 +9,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 
 const MAX_RETRIES = 3;
-const TTS_TIMEOUT = 12_000; // 12s per attempt — Edge TTS should respond in <5s for short text
+const TTS_TIMEOUT = 30_000; // 30s per attempt — longer text needs more time
 
 export class EdgeTTSEngine extends TTSEngine {
   constructor(voice) {
