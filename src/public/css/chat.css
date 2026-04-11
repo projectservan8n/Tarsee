@@ -411,31 +411,57 @@
 .message-text h3 { font-size: 1.05em; }
 
 .message-text ul,
-.message-text ol {
-  padding-left: var(--space-6);
-  margin: var(--space-1-5) var(--space-0);
+.message-text ol,
+.tl-content ul,
+.tl-content ol {
+  padding-left: var(--space-5);
+  margin: var(--space-2) 0;
 }
 
-.message-text ul {
-  list-style: disc;
+.message-text ul,
+.tl-content ul {
+  list-style: none;
 }
 
-.message-text ul li::marker {
+.message-text ul li,
+.tl-content ul li {
+  position: relative;
+  padding-left: var(--space-4);
+  margin-bottom: var(--space-1);
+}
+
+.message-text ul li::before,
+.tl-content ul li::before {
+  content: "";
+  position: absolute;
+  left: var(--space-1);
+  top: 0.6em;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--text-muted);
+}
+
+.message-text ol,
+.tl-content ol {
+  list-style: decimal;
+}
+
+.message-text ol li,
+.tl-content ol li {
+  margin-bottom: var(--space-1);
+}
+
+.message-text li::marker,
+.tl-content li::marker {
   color: var(--text-muted);
 }
 
-.message-text ol li::marker {
-  color: var(--text-muted);
+/* Nested lists */
+.message-text ul ul,
+.tl-content ul ul {
+  margin: var(--space-1) 0;
 }
-
-.message-text li {
-  margin-bottom: 3px;
-}
-
-/* Timeline text items also inherit list styles */
-.tl-content ul { list-style: disc; }
-.tl-content ul li::marker { color: var(--text-muted); }
-.tl-content ol li::marker { color: var(--text-muted); }
 
 .message-text a {
   color: var(--accent);
