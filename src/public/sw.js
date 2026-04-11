@@ -53,9 +53,10 @@ self.addEventListener("activate", (event) => {
 
 // Fetch strategies
 self.addEventListener("fetch", (event) => {
-  // Skip non-GET, API, and WebSocket requests
+  // Skip non-GET, API, WebSocket, and external requests
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return; // Don't intercept CDN/external requests
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/ws")) return;
 
   const isNavigation = event.request.mode === "navigate";

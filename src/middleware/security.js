@@ -32,8 +32,8 @@ function verifyCsrfToken(token) {
  */
 export function securityHeaders(_req, res, next) {
   res.set("X-Content-Type-Options", "nosniff");
-  res.set("X-Frame-Options", "DENY");
-  res.set("X-XSS-Protection", "0");  // Deprecated, but some scanners check for it
+  res.set("X-Frame-Options", "SAMEORIGIN"); // Allow canvas iframes from same origin
+  res.set("X-XSS-Protection", "0");
   res.set("Referrer-Policy", "same-origin");
   res.set("Permissions-Policy", "camera=(), microphone=(self), geolocation=()");
   res.set("Content-Security-Policy", [
@@ -42,8 +42,9 @@ export function securityHeaders(_req, res, next) {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://cdn.tailwindcss.com",
     "img-src 'self' data: blob:",
     "media-src 'self' blob:",
-    "connect-src 'self' ws: wss: https://cdn.jsdelivr.net https://fonts.googleapis.com https://fonts.gstatic.com",
+    "connect-src 'self' ws: wss: https://cdn.jsdelivr.net https://cdn.tailwindcss.com https://fonts.googleapis.com https://fonts.gstatic.com",
     "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net",
+    "frame-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
