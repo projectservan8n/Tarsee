@@ -4,6 +4,7 @@ import { getTTSEngine, initTTSEngine } from "../voice/engine-registry.js";
 import { cloneVoice, listVoiceProfiles } from "../voice/clone-handler.js";
 import { transcribeAudio, getSTTModels, resetSTTModelCache } from "../voice/stt-handler.js";
 import { LIMITS } from "../config/constants.js";
+import { savePiperVoice, deletePiperVoice, listPiperVoices } from "../voice/piper-engine.js";
 
 export const voiceRouter = Router();
 
@@ -29,6 +30,67 @@ voiceRouter.post("/stt-model", (req, res) => {
   sStore.set("voice.stt_model", model);
   resetSTTModelCache();
   res.json({ ok: true, model });
+});
+
+/**
+ * GET /api/voice/piper-voices
+ * List uploaded Piper voice models.
+ */
+voiceRouter.get("/piper-voices", (req, res) => {
+  res.json({ voices: listPiperVoices() });
+});
+
+/**
+ * POST /api/voice/piper-upload
+ * Upload a Piper voice model (.onnx + .onnx.json pair).
+ * Multipart form: 'onnx' file + 'json' file + 'name' field.
+ */
+voiceRouter.post("/piper-upload", async (req, res) => {
+  try {
+    const { onnxBuffer, jsonBuffer, name } = await new Promise((resolve, reject) => {
+      const busboy = Busboy({ headers: req.headers, limits: { fileSize: 200 * 1024 * 1024 } }); // 200MB max
+      let onnxBuffer = null, jsonBuffer = null, name = "custom-voice";
+
+      busboy.on("file", (fieldname, stream) => {
+        const chunks = [];
+        stream.on("data", c => chunks.push(c));
+        stream.on("end", () => {
+          const buf = Buffer.concat(chunks);
+          if (fieldname === "onnx") onnxBuffer = buf;
+          else if (fieldname === "json") jsonBuffer = buf;
+        });
+        stream.on("limit", () => reject(Object.assign(new Error("File too large (max 200MB)"), { status: 413 })));
+      });
+
+      busboy.on("field", (fieldname, value) => {
+        if (fieldname === "name") name = value.trim() || "custom-voice";
+      });
+
+      busboy.on("finish", () => {
+        if (!onnxBuffer) return reject(Object.assign(new Error("Missing .onnx file (field: 'onnx')"), { status: 400 }));
+        if (!jsonBuffer) return reject(Object.assign(new Error("Missing .onnx.json file (field: 'json')"), { status: 400 }));
+        resolve({ onnxBuffer, jsonBuffer, name });
+      });
+
+      busboy.on("error", reject);
+      req.pipe(busboy);
+    });
+
+    const result = savePiperVoice(onnxBuffer, jsonBuffer, name);
+    res.status(201).json(result);
+  } catch (err) {
+    const status = err.status || 500;
+    res.status(status).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/voice/piper-voices/:id
+ * Delete a Piper voice model.
+ */
+voiceRouter.delete("/piper-voices/:id", (req, res) => {
+  deletePiperVoice(req.params.id);
+  res.json({ ok: true });
 });
 
 /**

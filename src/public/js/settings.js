@@ -228,6 +228,51 @@ const Settings = {
       this.elements.saveVoiceBtn.addEventListener("click", () => this.saveVoiceSettings());
     }
 
+    // Piper voice file labels
+    document.getElementById("piperOnnxFile")?.addEventListener("change", (e) => {
+      document.getElementById("piperOnnxLabel").textContent = e.target.files[0]?.name || "No file";
+    });
+    document.getElementById("piperJsonFile")?.addEventListener("change", (e) => {
+      document.getElementById("piperJsonLabel").textContent = e.target.files[0]?.name || "No file";
+    });
+
+    // Piper voice upload
+    const piperUploadBtn = document.getElementById("piperUploadBtn");
+    if (piperUploadBtn) {
+      piperUploadBtn.addEventListener("click", async () => {
+        const name = document.getElementById("piperVoiceName").value.trim();
+        const onnxFile = document.getElementById("piperOnnxFile").files[0];
+        const jsonFile = document.getElementById("piperJsonFile").files[0];
+        if (!name) return App.showToast("Enter a voice name", "error");
+        if (!onnxFile) return App.showToast("Select .onnx file", "error");
+        if (!jsonFile) return App.showToast("Select .onnx.json file", "error");
+
+        piperUploadBtn.disabled = true;
+        piperUploadBtn.textContent = "Uploading...";
+        try {
+          const form = new FormData();
+          form.append("name", name);
+          form.append("onnx", onnxFile);
+          form.append("json", jsonFile);
+          const csrf = API.getCsrfToken();
+          const headers = {};
+          if (csrf) headers["X-CSRF-Token"] = csrf;
+          const res = await fetch("/api/voice/piper-upload", { method: "POST", headers, body: form, credentials: "same-origin" });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Upload failed");
+          App.showToast(`Voice "${data.name}" uploaded`, "success");
+          document.getElementById("piperVoiceName").value = "";
+          document.getElementById("piperOnnxFile").value = "";
+          document.getElementById("piperJsonFile").value = "";
+          document.getElementById("piperOnnxLabel").textContent = "No file";
+          document.getElementById("piperJsonLabel").textContent = "No file";
+          this.loadPiperVoices();
+        } catch (e) { App.showToast(e.message, "error"); }
+        finally { piperUploadBtn.disabled = false; piperUploadBtn.textContent = "Upload Voice"; }
+      });
+      this.loadPiperVoices();
+    }
+
     // STT model save
     const saveSTTBtn = document.getElementById("saveSTTBtn");
     if (saveSTTBtn) {
@@ -524,6 +569,7 @@ const Settings = {
         { id: "ErXwobaYiN019PkySvjV", name: "Antoni" },
         { id: "MF3mGyEYCl7XYWbV9V6O", name: "Elli" },
       ],
+      "piper": [], // Loaded dynamically from uploaded models
       "edge-tts": [
         { id: "en-US-AndrewMultilingualNeural", name: "Andrew (US)" },
         { id: "en-US-AvaMultilingualNeural", name: "Ava (US)" },
@@ -598,6 +644,37 @@ const Settings = {
       this.elements.voiceCloneBtn.disabled = false;
       this.elements.voiceCloneBtn.textContent = "Clone Voice";
     }
+  },
+
+  async loadPiperVoices() {
+    const list = document.getElementById("piperVoicesList");
+    if (!list) return;
+    try {
+      const data = await API.json("/api/voice/piper-voices");
+      if (!data.voices?.length) {
+        list.innerHTML = '<div class="text-muted text-sm">No Piper voices uploaded yet.</div>';
+        return;
+      }
+      list.innerHTML = data.voices.map(v => `
+        <div class="audit-entry" style="margin-bottom:4px">
+          <span class="audit-entry-action">${v.id}</span>
+          <span class="audit-entry-detail">${v.sizeMB}MB</span>
+          <button class="btn btn-sm btn-ghost" onclick="Settings.deletePiperVoice('${v.id}')" style="color:var(--danger);padding:2px 8px">Delete</button>
+        </div>
+      `).join("");
+    } catch { list.innerHTML = '<div class="text-muted text-sm">Failed to load voices.</div>'; }
+  },
+
+  async deletePiperVoice(id) {
+    if (!confirm(`Delete voice "${id}"?`)) return;
+    try {
+      const csrf = API.getCsrfToken();
+      const headers = {};
+      if (csrf) headers["X-CSRF-Token"] = csrf;
+      await fetch(`/api/voice/piper-voices/${id}`, { method: "DELETE", headers, credentials: "same-origin" });
+      App.showToast("Voice deleted", "success");
+      this.loadPiperVoices();
+    } catch { App.showToast("Failed to delete", "error"); }
   },
 
   async loadSTTModelStatus() {

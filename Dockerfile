@@ -51,8 +51,8 @@ RUN apt-get update \
     python3-pip \
   && rm -rf /var/lib/apt/lists/*
 
-# Install faster-whisper (CTranslate2 backend — 4x faster than OpenAI whisper)
-RUN pip3 install --no-cache-dir --break-system-packages faster-whisper
+# Install faster-whisper (STT) + piper-tts (ultra-fast local TTS)
+RUN pip3 install --no-cache-dir --break-system-packages faster-whisper piper-tts
 
 ENV NODE_ENV=production
 WORKDIR /app

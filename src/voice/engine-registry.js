@@ -28,8 +28,8 @@ export async function initTTSEngine(settingsStore) {
     console.warn(`[voice] Preferred engine "${enginePref}" unavailable, falling back`);
   }
 
-  // Auto: try ElevenLabs → Edge TTS → Stub
-  for (const name of ["elevenlabs", "edge-tts"]) {
+  // Auto: try Piper (fastest) → ElevenLabs → Edge TTS → Stub
+  for (const name of ["piper", "elevenlabs", "edge-tts"]) {
     const voiceForEngine = (name === enginePref) ? defaultVoice : null;
     const engine = await tryEngine(name, settingsStore, voiceForEngine);
     if (engine) {
@@ -58,6 +58,16 @@ async function tryEngine(name, settingsStore, defaultVoice) {
         if (await el.isAvailable()) {
           console.log(`[voice] ElevenLabs TTS active (voice: ${defaultVoice || "default"})`);
           return el;
+        }
+        return null;
+      }
+
+      case "piper": {
+        const { PiperTTSEngine } = await import("./piper-engine.js");
+        const piper = new PiperTTSEngine(defaultVoice);
+        if (await piper.isAvailable()) {
+          console.log("[voice] Piper TTS active (local, ultra-fast)");
+          return piper;
         }
         return null;
       }
