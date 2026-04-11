@@ -2139,8 +2139,8 @@ html, body {
   border-radius: var(--radius-md);
   padding: var(--space-3);
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  gap: var(--space-0-5);
 }
 
 .usage-model-name {

@@ -1083,10 +1083,11 @@ const Settings = {
       // Model breakdown
       if (models && data.models?.length) {
         models.innerHTML = data.models.map(m => {
-          const name = (m.model || "unknown").replace("claude-", "").replace(/-\d.*/, "");
+          const raw = m.model || "unknown";
+          const name = raw.replace("claude-", "").replace(/-202\d.*/, "").replace("4-6", "4.6").replace("4-5", "4.5");
           const total = (m.tokens_in || 0) + (m.tokens_out || 0);
           const fmt = total >= 1000000 ? (total / 1000000).toFixed(1) + "M" : total >= 1000 ? (total / 1000).toFixed(1) + "K" : total;
-          return `<div class="usage-model-card"><span class="usage-model-name">${name}</span><span class="usage-model-count">${m.count} msgs / ${fmt} tokens</span></div>`;
+          return `<div class="usage-model-card"><span class="usage-model-name">${name}</span><span class="usage-model-count">${m.count} msgs &middot; ${fmt} tokens</span></div>`;
         }).join("");
       }
     } catch { /* ignore */ }
