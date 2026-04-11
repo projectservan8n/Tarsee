@@ -3,6 +3,7 @@
  * Checks for common security issues and misconfigurations.
  */
 
+import fs from "node:fs";
 import { isEncryptionEnabled } from "./vault.js";
 
 export function runAudit(settingsStore) {
@@ -18,18 +19,11 @@ export function runAudit(settingsStore) {
     issues.push({ severity: "warning", message: "No SETUP_PASSWORD set. Anyone can access the UI.", fix: "Set SETUP_PASSWORD env var" });
   }
 
-  // Check OAuth credentials
-  if (!process.env.CLAUDE_OAUTH_CREDENTIALS) {
-    issues.push({ severity: "info", message: "No CLAUDE_OAUTH_CREDENTIALS env var set. Claude Code auth relies on cached credentials.", fix: "Set CLAUDE_OAUTH_CREDENTIALS for reliable auth" });
-  }
-
-  // Check channel tokens
-  const channels = ["discord", "telegram", "slack"];
-  for (const c of channels) {
-    const config = settingsStore?.get?.(`channel.${c}`);
-    if (config?.token && !config.token.startsWith("enc:")) {
-      issues.push({ severity: "warning", message: `${c} token stored unencrypted.`, fix: "Set ENCRYPTION_KEY to auto-encrypt" });
-    }
+  // Check Claude auth — look for credentials file, not env var
+  const homeDir = process.env.CLAUDE_CODE_HOME || "/data/tarsee/.claude-code-home";
+  const credPath = `${homeDir}/.credentials.json`;
+  if (!fs.existsSync(credPath)) {
+    issues.push({ severity: "warning", message: "No Claude credentials found. Run 'claude login' in the web terminal.", fix: "Open Terminal and run: claude login" });
   }
 
   // Check NODE_ENV
@@ -37,13 +31,13 @@ export function runAudit(settingsStore) {
     issues.push({ severity: "info", message: "NODE_ENV is not 'production'. Some security features may be relaxed.", fix: "Set NODE_ENV=production" });
   }
 
-  // Check exposed ports
-  if (process.env.PORT === "80" || process.env.PORT === "443") {
-    issues.push({ severity: "info", message: `Running on port ${process.env.PORT}. Ensure TLS termination is configured.`, fix: "Use a reverse proxy (nginx, Caddy) for TLS" });
+  // All good
+  if (issues.length === 0) {
+    issues.push({ severity: "info", message: "All security checks passed.", fix: "" });
   }
 
   return {
-    passed: issues.filter((i) => i.severity === "info").length === issues.length,
+    passed: issues.every(i => i.severity === "info"),
     issues,
     summary: {
       critical: issues.filter((i) => i.severity === "critical").length,
