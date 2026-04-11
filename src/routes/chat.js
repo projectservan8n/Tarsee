@@ -469,15 +469,16 @@ chatRouter.post("/send", async (req, res) => {
           const inp = event.input || {};
           let detail = "";
           let label = event.name;
+          const isTodo = event.name === "TodoWrite" || event.name === "todowrite" || event.name === "todo_write";
           if (event.name === "Bash") detail = inp.command || "";
           else if (event.name === "Read") { detail = inp.file_path || ""; label = "Read"; }
           else if (event.name === "Write") { detail = inp.file_path || ""; label = "Write"; }
           else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
-          else if (event.name === "TodoWrite") { label = "Update Todos"; detail = ""; }
+          else if (isTodo) { label = "Update Todos"; detail = ""; }
           else detail = inp.command || inp.file_path || inp.url || inp.query || JSON.stringify(inp).slice(0, 80);
           lastToolIdx = timeline.length;
           const timelineItem = { type: "tool", name: label, detail: String(detail).slice(0, 200), input: String(detail).slice(0, 500), output: "", status: "running" };
-          if (event.name === "TodoWrite" && Array.isArray(inp.todos)) timelineItem.todos = inp.todos;
+          if (isTodo && Array.isArray(inp.todos)) timelineItem.todos = inp.todos;
           timeline.push(timelineItem);
           sendSSE(res, "tool_call", { id: event.id, name: event.name, input: event.input });
           broadcastToOthers(convId, "tool_call", { id: event.id, name: event.name, input: event.input });

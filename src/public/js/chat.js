@@ -926,12 +926,13 @@ const Chat = {
             else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
             else if (event.name === "Grep") { detail = `"${inp.pattern || ""}" ${inp.path || ""}`; label = "Search"; }
             else if (event.name === "Glob") { detail = inp.pattern || ""; label = "Find"; }
-            else if (event.name === "TodoWrite") { label = "Update Todos"; detail = ""; }
+            else if (event.name === "TodoWrite" || event.name === "todowrite" || event.name === "todo_write") { label = "Update Todos"; detail = ""; }
             else { detail = inp.command || inp.filename || inp.url || inp.query || inp.message || inp.task || inp.schedule || inp.key || JSON.stringify(inp).slice(0, 80); }
 
             // Special rendering for TodoWrite — show checklist
+            const isTodoEvent = event.name === "TodoWrite" || event.name === "todowrite" || event.name === "todo_write";
             let toolHtml;
-            if (event.name === "TodoWrite" && Array.isArray(inp.todos)) {
+            if (isTodoEvent && Array.isArray(inp.todos)) {
               toolHtml = `<div class="tl-tool-header"><span class="tl-tool-name"><i class="ph ph-list-checks"></i> Update Todos</span></div><div class="tl-todos">${inp.todos.map(t => {
                 const icon = t.status === "completed" ? '<i class="ph ph-check-circle tl-todo-done"></i>'
                   : t.status === "in_progress" ? '<i class="ph ph-circle-notch tl-todo-active"></i>'
