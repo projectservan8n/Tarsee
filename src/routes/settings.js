@@ -167,10 +167,10 @@ settingsRouter.post("/general", (req, res) => {
     return res.status(400).json({ error: "Key is required" });
   }
 
-  // Prevent overwriting protected keys
-  const protectedPrefixes = ["ai.", "channel."];
+  // Prevent overwriting protected keys (except API keys set via Settings UI)
+  const protectedPrefixes = ["channel."];
   if (protectedPrefixes.some((p) => key.startsWith(p))) {
-    return res.status(400).json({ error: "Use the dedicated endpoint for provider/channel settings" });
+    return res.status(400).json({ error: "Use the dedicated endpoint for channel settings" });
   }
 
   settingsStore.set(key, value);

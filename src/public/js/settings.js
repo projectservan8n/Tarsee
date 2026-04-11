@@ -116,8 +116,8 @@ const Settings = {
         const service = document.getElementById("captchaService").value;
         const apiKey = document.getElementById("captchaApiKey").value.trim();
         try {
-          await API.json("/api/settings", { method: "POST", body: { key: "captcha.service", value: service } });
-          await API.json("/api/settings", { method: "POST", body: { key: "captcha.api_key", value: apiKey } });
+          await API.json("/api/settings/general", { method: "POST", body: { key: "captcha.service", value: service } });
+          await API.json("/api/settings/general", { method: "POST", body: { key: "captcha.api_key", value: apiKey } });
           App.showToast("Captcha settings saved", "success");
         } catch { App.showToast("Failed to save", "error"); }
       });
@@ -308,11 +308,11 @@ const Settings = {
         const openaiKey = document.getElementById("settingsOpenaiKey")?.value?.trim();
         try {
           await API.json("/api/voice/stt-model", { method: "POST", body: { model } });
-          await API.json("/api/settings", { method: "POST", body: { key: "voice.stt_provider", value: provider } });
+          await API.json("/api/settings/general", { method: "POST", body: { key: "voice.stt_provider", value: provider } });
           if (openaiKey) {
             // Save in both formats — voice-specific and provider-generic (for getApiKey)
-            await API.json("/api/settings", { method: "POST", body: { key: "voice.openai_api_key", value: openaiKey } });
-            await API.json("/api/settings", { method: "POST", body: { key: "ai.openai.apiKey", value: openaiKey } });
+            await API.json("/api/settings/general", { method: "POST", body: { key: "voice.openai_api_key", value: openaiKey } });
+            await API.json("/api/settings/general", { method: "POST", body: { key: "ai.openai.apiKey", value: openaiKey } });
           }
           App.showToast(`STT: ${provider}${provider === "local" ? ` (${model})` : ""}`, "success");
           this.loadSTTModelStatus();
