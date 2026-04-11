@@ -159,7 +159,9 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
 
 ## Workspace: ${cwd}`;
 
-  const effectiveSystemPrompt = tarseeContext + (systemPrompt ? `\n\n${systemPrompt}` : "");
+  let effectiveSystemPrompt = tarseeContext + (systemPrompt ? `\n\n${systemPrompt}` : "");
+  // Strip invalid Unicode surrogates that break JSON serialization
+  effectiveSystemPrompt = effectiveSystemPrompt.replace(/[\uD800-\uDFFF]/g, "");
   queryOptions.systemPrompt = effectiveSystemPrompt;
 
   // Resume existing session if available

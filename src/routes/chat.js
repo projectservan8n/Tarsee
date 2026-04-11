@@ -429,6 +429,8 @@ chatRouter.post("/send", async (req, res) => {
         if (content?.startsWith('{"__timeline":true')) {
           try { content = JSON.parse(content).text || content; } catch {}
         }
+        // Strip invalid Unicode surrogates that break JSON
+        if (typeof content === "string") content = content.replace(/[\uD800-\uDFFF]/g, "");
         return { role: m.role, content };
       });
       if (userContentForAI !== message && ccMessages.length > 0) {
