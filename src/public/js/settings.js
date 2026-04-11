@@ -248,19 +248,43 @@ const Settings = {
         if (!jsonFile) return App.showToast("Select .onnx.json file", "error");
 
         piperUploadBtn.disabled = true;
-        piperUploadBtn.textContent = "Uploading...";
+        const origText = piperUploadBtn.textContent;
+        piperUploadBtn.textContent = "Uploading 0%...";
+
         try {
           const form = new FormData();
           form.append("name", name);
           form.append("onnx", onnxFile);
           form.append("json", jsonFile);
-          const csrf = API.getCsrfToken();
-          const headers = {};
-          if (csrf) headers["X-CSRF-Token"] = csrf;
-          const res = await fetch("/api/voice/piper-upload", { method: "POST", headers, body: form, credentials: "same-origin" });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || "Upload failed");
-          App.showToast(`Voice "${data.name}" uploaded`, "success");
+          const sizeMB = ((onnxFile.size + jsonFile.size) / 1024 / 1024).toFixed(1);
+
+          const data = await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("POST", "/api/voice/piper-upload");
+            const csrf = API.getCsrfToken();
+            if (csrf) xhr.setRequestHeader("X-CSRF-Token", csrf);
+            xhr.withCredentials = true;
+
+            xhr.upload.onprogress = (e) => {
+              if (e.lengthComputable) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                piperUploadBtn.textContent = `Uploading ${pct}% (${sizeMB}MB)...`;
+              }
+            };
+
+            xhr.onload = () => {
+              try {
+                const res = JSON.parse(xhr.responseText);
+                if (xhr.status >= 200 && xhr.status < 300) resolve(res);
+                else reject(new Error(res.error || `Upload failed (${xhr.status})`));
+              } catch { reject(new Error("Invalid response")); }
+            };
+
+            xhr.onerror = () => reject(new Error("Network error"));
+            xhr.send(form);
+          });
+
+          App.showToast(`Voice "${data.name}" uploaded (${sizeMB}MB)`, "success");
           document.getElementById("piperVoiceName").value = "";
           document.getElementById("piperOnnxFile").value = "";
           document.getElementById("piperJsonFile").value = "";
@@ -268,7 +292,7 @@ const Settings = {
           document.getElementById("piperJsonLabel").textContent = "No file";
           this.loadPiperVoices();
         } catch (e) { App.showToast(e.message, "error"); }
-        finally { piperUploadBtn.disabled = false; piperUploadBtn.textContent = "Upload Voice"; }
+        finally { piperUploadBtn.disabled = false; piperUploadBtn.textContent = origText; }
       });
       this.loadPiperVoices();
     }
