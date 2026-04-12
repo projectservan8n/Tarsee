@@ -196,6 +196,11 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
       messageCount++;
       if (signal?.aborted) break;
 
+      // Log all message types for debugging tool visibility
+      if (!["stream_event", "assistant"].includes(message.type)) {
+        console.log(`[claude-code] Message type: ${message.type}`, JSON.stringify(message).slice(0, 300));
+      }
+
       switch (message.type) {
         case "stream_event": {
           // Token-by-token streaming — text deltas and thinking
@@ -243,6 +248,7 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
           if (Array.isArray(message.message?.content)) {
             for (const block of message.message.content) {
               if (block.type === "tool_use") {
+                console.log(`[claude-code] Tool call: ${block.name}`, block.input ? Object.keys(block.input).join(",") : "no-input");
                 yield {
                   type: "tool_use",
                   id: block.id,
