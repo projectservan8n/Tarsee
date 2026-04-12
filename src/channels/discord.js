@@ -180,8 +180,22 @@ export async function createDiscordBot(config, db) {
       message.react(ackEmoji).catch(() => {});
     }
 
-    // Show typing indicator
-    message.channel.sendTyping().catch(() => {});
+    // Send initial "Thinking..." message that we'll edit in-place
+    let statusMsg = null;
+    try {
+      statusMsg = await message.reply("💭 Thinking...");
+    } catch {
+      statusMsg = await message.channel.send("💭 Thinking...");
+    }
+
+    // Helper: edit the status message (debounced to avoid rate limits)
+    let lastEdit = 0;
+    const editStatus = async (text) => {
+      const now = Date.now();
+      if (now - lastEdit < 2000) return; // Min 2s between edits
+      lastEdit = now;
+      try { await statusMsg.edit(text); } catch { /* rate limited or deleted */ }
+    };
 
     // Build full system prompt (identity + memory + skills)
     const history = convStore.getRecentMessages(convId, 15);
@@ -204,6 +218,7 @@ You can use these special markers in your response:
       const toolCtx = { db, settingsStore, conversationId: convId };
       const MAX_TOOL_ROUNDS = 15;
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
+      const toolLog = []; // Track tool names for status display
 
       // Enrich last user message with image blocks if attachments present
       if (imageAttachments.length > 0 && workingMessages.length > 0) {
@@ -215,12 +230,6 @@ You can use these special markers in your response:
         }
       }
 
-      // Keep typing indicator alive every 8s while processing
-      const typingInterval = setInterval(() => {
-        message.channel.sendTyping().catch(() => {});
-      }, 8_000);
-
-      try {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const toolCalls = [];
         let roundText = "";
@@ -260,25 +269,28 @@ You can use these special markers in your response:
         }
         workingMessages.push({ role: "assistant", content: assistantContent });
 
-        // Execute tools
+        // Execute tools and update status message
         const toolResults = [];
         for (const tc of toolCalls) {
+          const shortName = tc.name.replace("mcp__tarsee__tarsee_", "").replace("mcp__tarsee__", "");
+          toolLog.push(shortName);
+          const statusLines = toolLog.map((t, i) => i === toolLog.length - 1 ? `⚙️ Running **${t}**...` : `✅ ${t}`);
+          await editStatus(statusLines.join("\n"));
+
           console.log(`[discord] tool: ${tc.name}`);
           const result = await executeTool(tc.name, tc.input, toolCtx);
           toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
         }
         workingMessages.push({ role: "user", content: toolResults });
 
-        // Keep typing indicator alive during tool rounds
-        message.channel.sendTyping().catch(() => {});
+        // Mark last tool as done
+        const doneLines = toolLog.map(t => `✅ ${t}`);
+        await editStatus(doneLines.join("\n") + "\n💭 Thinking...");
       }
 
-      // Save and send final response
+      // Final response — edit the status message with clean text
       if (fullResponse) {
-        // Extract memories before parsing reactions
         fullResponse = extractAndSaveMemories(fullResponse, db, convId);
-
-        // Parse agent reactions
         const { cleanText, reactions } = parseReactions(fullResponse);
 
         convStore.addMessage(convId, {
@@ -293,26 +305,31 @@ You can use these special markers in your response:
           message.reactions.cache.get(ackEmoji)?.users.remove(client.user.id).catch(() => {});
         }
 
-        // Apply agent reactions to the user's message
+        // Apply agent reactions
         for (const emoji of reactions) {
           message.react(emoji).catch(() => {});
         }
 
-        // Discord has 2000 char limit — split if needed
+        // Replace status message with final response
+        // Discord 2000 char limit — if too long, edit with first chunk and send rest as new messages
         const chunks = splitMessage(cleanText, 2000);
-        for (const chunk of chunks) {
-          await retryOnRateLimit(() => message.reply(chunk));
+        try {
+          await statusMsg.edit(chunks[0]);
+        } catch {
+          await retryOnRateLimit(() => message.reply(chunks[0]));
         }
-      }
-      } finally {
-        clearInterval(typingInterval);
+        for (let i = 1; i < chunks.length; i++) {
+          await retryOnRateLimit(() => message.reply(chunks[i]));
+        }
+      } else {
+        try { await statusMsg.delete(); } catch {}
       }
     } catch (err) {
       console.error("[discord] chat error:", err.message);
       if (ackEmoji) {
         message.reactions.cache.get(ackEmoji)?.users.remove(client.user.id).catch(() => {});
       }
-      await message.reply("Sorry, I encountered an error processing your message.").catch(() => {});
+      try { await statusMsg.edit("Sorry, I encountered an error processing your message."); } catch {}
     }
   });
 
