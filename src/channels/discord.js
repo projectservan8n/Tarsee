@@ -74,11 +74,11 @@ export async function createDiscordBot(config, db) {
       const allowed = allowedIds.includes(effectiveChannelId) || allowedIds.includes(message.author.id) || allowedIds.includes(message.channel.id);
       if (!allowed && !isDM) return;
       if (isDM && !allowedIds.includes(message.author.id)) return;
-    } else {
-      // No allowlist: require mention in guilds (default behavior)
-      if (!isDM && !isThread) {
-        if (!message.mentions.has(client.user)) return;
-      }
+    }
+
+    // In guilds (servers): always require @mention — don't reply to every message
+    if (!isDM && !isThread) {
+      if (!message.mentions.has(client.user)) return;
     }
 
     // In threads: always respond (no mention needed)
