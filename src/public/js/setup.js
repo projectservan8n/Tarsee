@@ -27,18 +27,23 @@ const Setup = {
         <div style="margin-bottom:16px">
           <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px">
             <span style="background:var(--accent);color:var(--text-inverse);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px;font-weight:700">1</span>
-            <div><strong>Open the Terminal</strong><br><span style="color:var(--text-muted);font-size:13px">Click the button below to open a server terminal</span></div>
+            <div><strong>Open Tarsee's Server Terminal</strong><br><span style="color:var(--text-muted);font-size:13px">This opens a terminal on the server where Tarsee runs (not your local machine)</span></div>
           </div>
           <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px">
             <span style="background:var(--accent);color:var(--text-inverse);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px;font-weight:700">2</span>
-            <div><strong>Run <code style="background:var(--bg-input);padding:2px 6px;border-radius:4px">claude login</code></strong><br><span style="color:var(--text-muted);font-size:13px">Follow the browser auth flow with your Claude Max account</span></div>
+            <div><strong>Click inside the terminal, then type:</strong><br>
+              <code id="setupCmd" style="background:var(--bg-input);padding:4px 10px;border-radius:4px;display:inline-flex;align-items:center;gap:8px;margin-top:4px;cursor:pointer;user-select:all" title="Click to copy">claude login</code>
+              <span id="setupCmdCopied" style="color:var(--success);font-size:11px;margin-left:6px;display:none">Copied!</span>
+              <br><span style="color:var(--text-muted);font-size:13px;margin-top:4px;display:block">A link will appear — open it in your browser and log in with your Claude Max account.<br>
+              <em>Tip: To copy the login link, highlight it and right-click → Copy (Ctrl+C won't work in the terminal)</em></span>
+            </div>
           </div>
           <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px">
             <span style="background:var(--accent);color:var(--text-inverse);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px;font-weight:700">3</span>
-            <div><strong>Come back and click "I'm connected"</strong><br><span style="color:var(--text-muted);font-size:13px">Tarsee will verify your credentials and start up</span></div>
+            <div><strong>Come back here and click "I'm connected"</strong><br><span style="color:var(--text-muted);font-size:13px">Tarsee will verify your credentials and you're all set</span></div>
           </div>
         </div>
-        <a href="/terminal.html" target="_blank" class="btn btn-ghost" style="width:100%;padding:12px;font-size:14px;margin-bottom:10px;text-align:center;display:block;text-decoration:none">Open Terminal →</a>
+        <a href="/terminal.html" target="_blank" class="btn btn-ghost" style="width:100%;padding:12px;font-size:14px;margin-bottom:10px;text-align:center;display:block;text-decoration:none">Open Tarsee's Terminal →</a>
         <div id="setupError" style="color:var(--danger);font-size:13px;margin-bottom:12px;display:none"></div>
         <button class="btn btn-primary" id="setupConnectBtn" style="width:100%;padding:12px;font-size:14px">I'm connected — Start Chatting</button>
         <p style="text-align:center;margin-top:14px;font-size:11px;color:var(--text-muted)">
@@ -46,6 +51,17 @@ const Setup = {
         </p>
       </div>
     `;
+
+    // Click-to-copy for claude login command
+    const cmdEl = document.getElementById("setupCmd");
+    if (cmdEl) {
+      cmdEl.addEventListener("click", () => {
+        navigator.clipboard.writeText("claude login").then(() => {
+          const copied = document.getElementById("setupCmdCopied");
+          if (copied) { copied.style.display = "inline"; setTimeout(() => copied.style.display = "none", 2000); }
+        }).catch(() => {});
+      });
+    }
 
     document.getElementById("setupConnectBtn").addEventListener("click", () => this.saveAndProceed());
   },

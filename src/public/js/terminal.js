@@ -44,6 +44,8 @@
   // Mount terminal
   term.open(document.getElementById("terminal"));
   fitAddon.fit();
+  // Auto-focus so user can type immediately
+  term.focus();
 
   // Handle window resize
   window.addEventListener("resize", () => {
