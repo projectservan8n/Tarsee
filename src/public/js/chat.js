@@ -1060,15 +1060,20 @@ const Chat = {
 
     // Create assistant message with thinking indicator
     const assistantMsg = this.appendMessage("assistant", "", true);
-    const thinkingEl = document.createElement("div");
-    thinkingEl.className = "chat-thinking";
-    thinkingEl.innerHTML = '<span class="thinking-text">Thinking</span><span class="thinking-dots"></span>';
-    const msgContent = assistantMsg.querySelector(".message-content");
     const msgText = assistantMsg.querySelector(".message-text");
-    if (msgContent && msgText) msgContent.insertBefore(thinkingEl, msgText);
-    let hasReceivedText = false;
-    let fullResponse = "";
-    let toolBlocks = "";
+    if (msgText) msgText.innerHTML = '<span class="streaming-dots"><span></span><span></span><span></span></span>';
+
+    const timeline = [];
+    let currentTextChunk = "";
+    let lastToolIndex = -1;
+    let pendingContent = null;
+
+    const renderTimeline = () => {
+      return '<div class="tl-timeline">' + timeline.map((item) => {
+        if (item.type === "text") return `<div class="tl-item tl-text"><div class="tl-dot"></div><div class="tl-content">${this.renderMarkdown(item.text)}</div></div>`;
+        return `<div class="tl-item tl-tool"><div class="tl-dot ${item.status || "running"}"></div><div class="tl-content">${item.html}</div></div>`;
+      }).join("") + '</div>';
+    };
 
     this.isStreaming = true;
     this.elements.sendBtn.disabled = false;
@@ -1082,46 +1087,67 @@ const Chat = {
         (content, event) => {
           if (event?.type === "thinking") return;
           if (event?.type === "tool_call") {
-            if (!hasReceivedText) {
-              hasReceivedText = true;
-              const thinkEl = assistantMsg.querySelector(".chat-thinking");
-              if (thinkEl) thinkEl.remove();
+            // Flush text to timeline
+            if (currentTextChunk.trim()) {
+              const last = timeline[timeline.length - 1];
+              if (last?.type === "text") last.text = currentTextChunk;
+              else timeline.push({ type: "text", text: currentTextChunk });
             }
+            currentTextChunk = "";
+
             const inp = event.input || {};
             let detail = "";
             let label = event.name;
+            const isTodoEvent = event.name === "TodoWrite" || event.name === "todowrite" || event.name === "todo_write";
             if (event.name === "Bash") { detail = inp.command || ""; }
             else if (event.name === "Read") { detail = inp.file_path || inp.filename || ""; label = "Read"; }
             else if (event.name === "Write") { detail = inp.file_path || inp.filename || ""; label = "Write"; }
             else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
             else if (event.name === "Grep") { detail = `"${inp.pattern || ""}" ${inp.path || ""}`; label = "Search"; }
             else if (event.name === "Glob") { detail = inp.pattern || ""; label = "Find"; }
+            else if (isTodoEvent) { label = "Update Todos"; detail = ""; }
             else { detail = inp.command || inp.filename || inp.url || inp.query || inp.message || inp.task || inp.schedule || inp.key || JSON.stringify(inp).slice(0, 80); }
-            toolBlocks += `<details class="tool-block"><summary class="tool-block-header"><span class="tool-indicator running"></span><span class="tool-name">${escapeHtml(label)}</span><span class="tool-detail">${escapeHtml(String(detail).slice(0, 120))}</span></summary><div class="tool-block-body"><pre class="tool-block-code">${escapeHtml(String(detail).slice(0, 500) || "(no args)")}</pre></div></details>`;
-            this.updateStreamingMessage(assistantMsg, toolBlocks, true);
+
+            let toolHtml;
+            if (isTodoEvent && Array.isArray(inp.todos)) {
+              toolHtml = `<div class="tl-tool-header"><span class="tl-tool-name"><i class="ph ph-list-checks"></i> Update Todos</span></div><div class="tl-todos">${inp.todos.map(t => {
+                const icon = t.status === "completed" ? '<i class="ph ph-check-circle tl-todo-done"></i>' : t.status === "in_progress" ? '<i class="ph ph-circle-notch tl-todo-active"></i>' : '<i class="ph ph-circle tl-todo-pending"></i>';
+                const cls = t.status === "completed" ? "tl-todo-item done" : t.status === "in_progress" ? "tl-todo-item active" : "tl-todo-item";
+                return `<div class="${cls}">${icon} <span>${escapeHtml(t.status === "in_progress" ? (t.activeForm || t.content) : t.content)}</span></div>`;
+              }).join("")}</div>`;
+            } else {
+              toolHtml = `<div class="tl-tool-header"><span class="tl-tool-name">${escapeHtml(label)}</span> <span class="tl-tool-detail">${escapeHtml(String(detail).slice(0, 100))}</span></div><div class="tl-tool-in"><span class="tl-io-label">IN</span><pre class="tl-tool-code">${escapeHtml(String(detail).slice(0, 500) || "(no args)")}</pre></div>`;
+            }
+            lastToolIndex = timeline.length;
+            timeline.push({ type: "tool", status: "running", html: toolHtml });
+            this.updateStreamingMessage(assistantMsg, renderTimeline(), true);
             this.scrollToBottom();
             return;
           }
           if (event?.type === "tool_result") {
-            const resultText = event.result || "";
-            toolBlocks = toolBlocks.replace(/running"><\/span>(?![\s\S]*running"><\/span>)/, 'done"></span>');
-            if (resultText && resultText !== "(no output)") {
-              toolBlocks = toolBlocks.replace(/<\/div>\s*<\/details>$/, `<div class="tool-block-output"><pre class="tool-block-code">${escapeHtml(resultText.slice(0, 2000))}</pre></div></div></details>`);
+            if (lastToolIndex >= 0 && timeline[lastToolIndex]) {
+              timeline[lastToolIndex].status = "done";
+              const resultText = event.result || "";
+              if (resultText && resultText !== "(no output)") {
+                timeline[lastToolIndex].html += `<div class="tl-tool-out"><span class="tl-io-label">OUT</span><pre class="tl-tool-code">${escapeHtml(resultText.slice(0, 2000))}</pre></div>`;
+              }
             }
-            this.updateStreamingMessage(assistantMsg, toolBlocks, true);
+            currentTextChunk = "";
+            this.updateStreamingMessage(assistantMsg, renderTimeline(), true);
             this.scrollToBottom();
             return;
           }
-          if (!hasReceivedText) {
-            hasReceivedText = true;
-            const thinkEl = assistantMsg.querySelector(".chat-thinking");
-            if (thinkEl) thinkEl.remove();
+          if (content) {
+            currentTextChunk += content;
+            const last = timeline[timeline.length - 1];
+            if (last?.type === "text") last.text = currentTextChunk;
+            else if (!last || last.type === "tool") timeline.push({ type: "text", text: currentTextChunk });
+
+            pendingContent = () => { this.updateStreamingMessage(assistantMsg, renderTimeline(), true); this.scrollToBottom(); };
+            if (!this._queuedRaf) {
+              this._queuedRaf = requestAnimationFrame(() => { this._queuedRaf = null; if (pendingContent) { pendingContent(); pendingContent = null; } });
+            }
           }
-          fullResponse += content;
-          let displayText = fullResponse.split("|||PERSONALITY_COMPLETE|||")[0];
-          displayText = displayText.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n");
-          this.updateStreamingMessage(assistantMsg, toolBlocks + this.renderMarkdown(displayText), true);
-          this.scrollToBottom();
         },
         (data) => {
           if (data?.type === "conversation" && data.conversationId) {
@@ -1133,9 +1159,9 @@ const Chat = {
         },
         (error) => {
           this.finishStreaming(assistantMsg);
-          if (!fullResponse) {
-            assistantMsg.querySelector(".message-text").innerHTML =
-              `<span class="text-danger">${escapeHtml(error)}</span>`;
+          const textEl = assistantMsg.querySelector(".message-text");
+          if (textEl && !currentTextChunk) {
+            textEl.innerHTML = `<span class="text-danger">${escapeHtml(error)}</span>`;
           }
           App.showToast(error, "error");
         },
