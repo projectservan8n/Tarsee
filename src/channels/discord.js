@@ -59,30 +59,26 @@ export async function createDiscordBot(config, db) {
 
     // Check if this channel/DM is allowed
     const isDM = !message.guild;
-    if (isDM && config.allowDMs === false) return;
-
-    // For threads: always respond if parent channel is allowed
     const isThread = message.channel.isThread?.();
     const effectiveChannelId = isThread ? message.channel.parentId : message.channel.id;
 
-    // Check allowlist (from config or settings DB)
-    const dbAllowlist = settingsStore.get("allowlist.discord");
-    const allowedIds = config.allowedChannels?.length > 0 ? config.allowedChannels : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
+    // DMs: always respond (this is YOUR personal agent)
+    // No allowlist check for DMs — if someone can DM the bot, they can talk to it
+    if (isDM) {
+      // Proceed to message handling
+    } else {
+      // Guild messages: check allowlist + require @mention
+      const dbAllowlist = settingsStore.get("allowlist.discord");
+      const allowedIds = config.allowedChannels?.length > 0 ? config.allowedChannels : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
 
-    if (allowedIds.length > 0) {
-      // Check if channel, user, or DM is allowed
-      const allowed = allowedIds.includes(effectiveChannelId) || allowedIds.includes(message.author.id) || allowedIds.includes(message.channel.id);
-      if (!allowed && !isDM) return;
-      if (isDM && !allowedIds.includes(message.author.id)) return;
+      if (allowedIds.length > 0) {
+        const allowed = allowedIds.includes(effectiveChannelId) || allowedIds.includes(message.author.id) || allowedIds.includes(message.channel.id);
+        if (!allowed) return;
+      }
+
+      // Always require @mention in servers (threads exempt)
+      if (!isThread && !message.mentions.has(client.user)) return;
     }
-
-    // In guilds (servers): always require @mention — don't reply to every message
-    if (!isDM && !isThread) {
-      if (!message.mentions.has(client.user)) return;
-    }
-
-    // In threads: always respond (no mention needed)
-    // In DMs: always respond
 
     let content = message.content
       .replace(new RegExp(`<@!?${client.user.id}>`), "")
