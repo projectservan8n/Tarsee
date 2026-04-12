@@ -21,66 +21,47 @@ const Setup = {
       <div class="setup-card-header">
         <div class="logo-large"><img src="/icon-192.png" alt="Tarsee" style="width:100%;height:100%;object-fit:cover;border-radius:inherit"></div>
         <h2>Welcome to Tarsee</h2>
-        <p>Your personal AI gateway. Connect in under a minute.</p>
+        <p>Your personal AI agent. Let's get connected.</p>
       </div>
       <div class="setup-card-body">
-        <div class="form-group" style="display:none">
-          <select id="setupProvider">
-            <option value="claude-code" selected>Claude Code (Agent)</option>
-          </select>
-          <input type="password" id="setupApiKey">
-          <input type="text" id="setupModel" value="claude-sonnet-4-6">
-          <input type="text" id="setupBaseUrl">
+        <div style="margin-bottom:16px">
+          <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px">
+            <span style="background:var(--accent);color:var(--text-inverse);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px;font-weight:700">1</span>
+            <div><strong>Open the Terminal</strong><br><span style="color:var(--text-muted);font-size:13px">Click the button below to open a server terminal</span></div>
+          </div>
+          <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px">
+            <span style="background:var(--accent);color:var(--text-inverse);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px;font-weight:700">2</span>
+            <div><strong>Run <code style="background:var(--bg-input);padding:2px 6px;border-radius:4px">claude login</code></strong><br><span style="color:var(--text-muted);font-size:13px">Follow the browser auth flow with your Claude Max account</span></div>
+          </div>
+          <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px">
+            <span style="background:var(--accent);color:var(--text-inverse);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px;font-weight:700">3</span>
+            <div><strong>Come back and click "I'm connected"</strong><br><span style="color:var(--text-muted);font-size:13px">Tarsee will verify your credentials and start up</span></div>
+          </div>
         </div>
-        <div class="hint" style="margin-bottom:12px">
-          Tarsee uses Claude Code with your Claude Max/Pro subscription.<br>
-          Set <code>CLAUDE_OAUTH_CREDENTIALS</code> in your Railway environment variables.
-        </div>
+        <a href="/terminal.html" target="_blank" class="btn btn-ghost" style="width:100%;padding:12px;font-size:14px;margin-bottom:10px;text-align:center;display:block;text-decoration:none">Open Terminal →</a>
         <div id="setupError" style="color:var(--danger);font-size:13px;margin-bottom:12px;display:none"></div>
-        <button class="btn btn-primary" id="setupConnectBtn" style="width:100%;padding:12px;font-size:14px">Connect & Start Chatting</button>
+        <button class="btn btn-primary" id="setupConnectBtn" style="width:100%;padding:12px;font-size:14px">I'm connected — Start Chatting</button>
         <p style="text-align:center;margin-top:14px;font-size:11px;color:var(--text-muted)">
-          You can also set API keys via environment variables
+          Requires Claude Max subscription. Pro works but hits limits quickly.
         </p>
       </div>
     `;
-
-    // Show base URL for custom provider
-    document.getElementById("setupProvider").addEventListener("change", (e) => {
-      document.getElementById("setupBaseUrlGroup").style.display =
-        e.target.value === "custom" ? "block" : "none";
-    });
 
     document.getElementById("setupConnectBtn").addEventListener("click", () => this.saveAndProceed());
   },
 
   async saveAndProceed() {
-    const provider = document.getElementById("setupProvider").value;
-    const apiKey = document.getElementById("setupApiKey").value.trim();
-    const model = document.getElementById("setupModel").value.trim();
-    const baseUrl = document.getElementById("setupBaseUrl")?.value.trim();
     const errorEl = document.getElementById("setupError");
-
-    if (!provider) {
-      errorEl.textContent = "Please select a provider";
-      errorEl.style.display = "block";
-      return;
-    }
-    if (!apiKey) {
-      errorEl.textContent = "Please enter an API key";
-      errorEl.style.display = "block";
-      return;
-    }
-
     errorEl.style.display = "none";
     document.getElementById("setupConnectBtn").disabled = true;
-    document.getElementById("setupConnectBtn").textContent = "Connecting...";
+    document.getElementById("setupConnectBtn").textContent = "Checking credentials...";
 
     try {
+      // Save default Claude Code provider (no API key needed — uses claude login)
       await API.saveProvider({
-        provider,
-        apiKey,
-        model: model || undefined,
-        baseUrl: baseUrl || undefined,
+        provider: "claude-code",
+        apiKey: "subscription",
+        model: "claude-sonnet-4-6",
       });
 
       // Mark setup as started so it doesn't re-trigger if interview is interrupted
@@ -96,7 +77,7 @@ const Setup = {
       errorEl.textContent = err.message;
       errorEl.style.display = "block";
       document.getElementById("setupConnectBtn").disabled = false;
-      document.getElementById("setupConnectBtn").textContent = "Connect & Start Chatting";
+      document.getElementById("setupConnectBtn").textContent = "I'm connected — Start Chatting";
     }
   },
 
