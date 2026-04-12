@@ -59,5 +59,20 @@ else
   echo "[entrypoint] Claude Code: $NEW_VERSION (latest)"
 fi
 
+# Auto-generate ENCRYPTION_KEY if not set (persist on volume)
+if [ -z "$ENCRYPTION_KEY" ] && [ -d /data ]; then
+  KEY_FILE="/data/tarsee/.encryption-key"
+  if [ -f "$KEY_FILE" ]; then
+    export ENCRYPTION_KEY=$(cat "$KEY_FILE")
+    echo "[entrypoint] Loaded ENCRYPTION_KEY from volume"
+  else
+    export ENCRYPTION_KEY=$(openssl rand -hex 32)
+    echo "$ENCRYPTION_KEY" > "$KEY_FILE"
+    chmod 600 "$KEY_FILE"
+    chown node:node "$KEY_FILE"
+    echo "[entrypoint] Generated ENCRYPTION_KEY (saved to volume)"
+  fi
+fi
+
 # Drop to node user and start the app
 exec gosu node node src/server.js

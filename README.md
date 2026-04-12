@@ -67,13 +67,13 @@ Tarsee is a Claude Code wrapper — not a fork, not a rewrite. It uses `@anthrop
 ## Quick Start (Railway)
 
 1. Click **Deploy on Railway** above
-2. Set these environment variables:
+2. Set these environment variables (template pre-fills defaults — just change the password):
 
    | Variable | Required | Description |
    |----------|----------|-------------|
-   | `SETUP_PASSWORD` | Yes | 4-digit PIN for the web UI (mobile uses an iOS-style keypad) |
-   | `ENCRYPTION_KEY` | Yes | `openssl rand -hex 32` |
-   | `NODE_ENV` | Yes | `production` |
+   | `SETUP_PASSWORD` | Yes | 4-digit PIN for the web UI — **change this** |
+   | `ENCRYPTION_KEY` | Auto | Auto-generated if not set. Or use `openssl rand -hex 32` |
+   | `NODE_ENV` | Auto | Pre-set to `production` |
 
 3. Add a **Volume** mounted at `/data`
 4. Deploy — open the URL, log in with your password
