@@ -451,6 +451,26 @@ chatRouter.post("/send", async (req, res) => {
         effort,
       });
 
+      // Loop prevention: track recent tool calls to detect stuck patterns
+      const toolHistory = []; // { name, detail, isError }
+      const MAX_TOOL_CALLS = 50; // absolute max tools per message
+      let totalToolCalls = 0;
+
+      const detectLoop = () => {
+        if (toolHistory.length < 3) return false;
+        const last3 = toolHistory.slice(-3);
+        // Same tool + same error 3x in a row = stuck
+        if (last3.every(t => t.isError && t.name === last3[0].name)) return `${last3[0].name} failed 3 times in a row`;
+        // Same tool + same input 3x in a row = stuck
+        if (last3.every(t => t.detail === last3[0].detail && t.name === last3[0].name)) return `${last3[0].name} called 3 times with same input`;
+        // Too many total tool calls
+        if (totalToolCalls >= MAX_TOOL_CALLS) return `exceeded ${MAX_TOOL_CALLS} tool calls`;
+        // 5 consecutive errors (any tool)
+        const last5 = toolHistory.slice(-5);
+        if (last5.length >= 5 && last5.every(t => t.isError)) return "5 consecutive tool errors";
+        return false;
+      };
+
       for await (const event of stream) {
         if (event.type === "text") {
           fullResponse += event.content;
@@ -482,6 +502,8 @@ chatRouter.post("/send", async (req, res) => {
           const timelineItem = { type: "tool", name: label, detail: String(detail).slice(0, 200), input: String(detail).slice(0, 500), output: "", status: "running" };
           if (isTodo && Array.isArray(inp.todos)) timelineItem.todos = inp.todos;
           timeline.push(timelineItem);
+          totalToolCalls++;
+          toolHistory.push({ name: event.name, detail: String(detail).slice(0, 100), isError: false });
           sendSSE(res, "tool_call", { id: event.id, name: event.name, input: event.input });
           broadcastToOthers(convId, "tool_call", { id: event.id, name: event.name, input: event.input });
           auditLog?.log({ action: "tool.call", target: event.name, actor: "claude", ip: req.ip, detail: String(detail).slice(0, 200) });
@@ -490,6 +512,21 @@ chatRouter.post("/send", async (req, res) => {
             timeline[lastToolIdx].status = "done";
             timeline[lastToolIdx].output = (event.result || "").slice(0, 2000);
           }
+          // Track errors for loop detection
+          const resultStr = event.result || "";
+          const isErr = resultStr.includes("Error") || resultStr.includes("error") || resultStr.includes("Forbidden") || resultStr.includes("ENOTFOUND") || resultStr.includes("not found") || resultStr.includes("command not found");
+          if (toolHistory.length > 0) toolHistory[toolHistory.length - 1].isError = isErr;
+
+          // Check for loops — abort if stuck
+          const loopReason = detectLoop();
+          if (loopReason) {
+            console.warn(`[loop-guard] Aborting: ${loopReason} (${totalToolCalls} total tool calls)`);
+            sendSSE(res, "text", { content: `\n\n**Loop detected — stopped automatically.** (${loopReason})\n\nI was repeating the same failing operation. Let me know what you'd like me to try differently.` });
+            fullResponse += `\n\n**Loop detected — stopped automatically.** (${loopReason})`;
+            controller.abort();
+            break;
+          }
+
           sendSSE(res, "tool_result", { id: event.id, name: event.name, result: event.result });
           broadcastToOthers(convId, "tool_result", { id: event.id, name: event.name, result: event.result });
         } else if (event.type === "usage") {
