@@ -773,6 +773,13 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
 
       case "web_fetch": {
         const { url, method, headers, body } = toolInput;
+        // URL safety check
+        const { checkUrlSafety: checkFetchUrl } = await import("./url-safety.js");
+        const fetchSafety = await checkFetchUrl(url, ctx.settingsStore);
+        if (!fetchSafety.safe) {
+          console.warn(`[web_fetch] Blocked: ${url}: ${fetchSafety.reason}`);
+          return `BLOCKED: ${fetchSafety.reason}. URL: ${url}`;
+        }
         const res = await fetch(url, {
           method: method || "GET",
           headers: headers || {},
@@ -1058,6 +1065,13 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           switch (action) {
             case "navigate": {
               if (!url) return "Error: 'url' is required for navigate action.";
+              // URL safety check before navigating
+              const { checkUrlSafety } = await import("./url-safety.js");
+              const safety = await checkUrlSafety(url, ctx.settingsStore);
+              if (!safety.safe) {
+                console.warn(`[browser] Blocked navigation to ${url}: ${safety.reason}`);
+                return `BLOCKED: ${safety.reason}. URL: ${url}\n\nThis URL was flagged as potentially dangerous. If you're sure it's safe, ask the user to confirm.`;
+              }
               await page.goto(url, { waitUntil: "domcontentloaded", timeout: userTimeout || 30_000 });
               const title = await page.title();
               return `Navigated to: ${page.url()}\nTitle: ${title}`;
