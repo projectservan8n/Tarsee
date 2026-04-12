@@ -278,13 +278,19 @@ You can use these special markers in your response:
       text = `[Forwarded from ${from}]: ${text}`;
     }
 
+    // Include replied-to message as context
+    const repliedMsg = ctx.message.reply_to_message;
+    if (repliedMsg && repliedMsg.text) {
+      const repliedFrom = repliedMsg.from?.first_name || repliedMsg.from?.username || "someone";
+      text = `[Replying to ${repliedFrom}: "${repliedMsg.text.slice(0, 500)}"]\n\n${text}`;
+    }
+
     // In groups: only respond if mentioned by @username or replied to
     if (ctx.chat.type === "group" || ctx.chat.type === "supergroup") {
       const botUsername = ctx.botInfo?.username;
       const isMentioned = botUsername && text.includes(`@${botUsername}`);
-      const isReply = ctx.message.reply_to_message?.from?.id === ctx.botInfo?.id;
-      if (!isMentioned && !isReply) return; // Ignore messages not directed at the bot
-      // Strip the @mention from text
+      const isReply = repliedMsg?.from?.id === ctx.botInfo?.id;
+      if (!isMentioned && !isReply) return;
       if (botUsername) text = text.replace(new RegExp(`@${botUsername}\\b`, "gi"), "").trim();
     }
 

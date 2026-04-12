@@ -84,6 +84,17 @@ export async function createDiscordBot(config, db) {
       .replace(new RegExp(`<@!?${client.user.id}>`), "")
       .trim();
 
+    // Include replied-to message as context
+    if (message.reference?.messageId) {
+      try {
+        const repliedMsg = await message.channel.messages.fetch(message.reference.messageId);
+        if (repliedMsg?.content) {
+          const repliedFrom = repliedMsg.author?.displayName || repliedMsg.author?.username || "someone";
+          content = `[Replying to ${repliedFrom}: "${repliedMsg.content.slice(0, 500)}"]\n\n${content}`;
+        }
+      } catch { /* referenced message deleted or inaccessible */ }
+    }
+
     // Download attachments from Discord CDN (images, PDFs, voice)
     const mediaAttachments = [];
     let voiceTranscript = "";
