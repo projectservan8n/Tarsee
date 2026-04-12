@@ -411,12 +411,18 @@
 .message-text h3 { font-size: 1.05em; }
 
 .message-text ul,
-.message-text ol,
-.tl-content ul,
-.tl-content ol {
+.message-text ol {
   padding-left: var(--space-6);
   margin: var(--space-2) 0;
   margin-left: var(--space-4);
+}
+
+/* Timeline lists need extra indent to sit clearly inside content, not on the timeline line */
+.tl-content ul,
+.tl-content ol {
+  padding-left: var(--space-8);
+  margin: var(--space-2) 0;
+  margin-left: var(--space-2);
 }
 
 .message-text ul,
