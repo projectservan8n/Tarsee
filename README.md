@@ -67,35 +67,33 @@ Tarsee is a Claude Code wrapper — not a fork, not a rewrite. It uses `@anthrop
 ## Quick Start (Railway)
 
 1. Click **Deploy on Railway** above
-2. Set these environment variables (template pre-fills defaults — just change the password):
+2. **Change the `SETUP_PASSWORD`** — this is your 4-digit PIN to access the web UI. Everything else is pre-configured.
+3. Deploy — open the URL, log in with your PIN
+4. The setup wizard will guide you through connecting your Claude account:
+   - Click **"Open Tarsee's Terminal"** — this opens a terminal on the server (not your local machine)
+   - Click inside the terminal, then type `claude login`
+   - A login link will appear — **highlight it and right-click → Copy** (Ctrl+C won't work in the terminal)
+   - Open the link in your browser and authenticate with your Claude Max account
+   - Come back and click **"I'm connected"** — done!
 
-   | Variable | Required | Description |
-   |----------|----------|-------------|
-   | `SETUP_PASSWORD` | Yes | 4-digit PIN for the web UI — **change this** |
-   | `ENCRYPTION_KEY` | Auto | Auto-generated if not set. Or use `openssl rand -hex 32` |
-   | `NODE_ENV` | Auto | Pre-set to `production` |
-
-3. Add a **Volume** mounted at `/data`
-4. Deploy — open the URL, log in with your password
-5. Open **Terminal** (icon in topbar) and run `claude login`
-6. Follow the browser auth flow — done!
-
-That's it. Credentials are stored on the volume and auto-refresh. No env vars to manage. Claude Code CLI auto-updates on every restart.
+That's it. Credentials are stored on the Railway volume and auto-refresh. No env vars to manage. Claude Code CLI auto-updates on every restart.
 
 ### Authenticating with Claude
 
 You need an active [Claude Max](https://claude.ai) subscription with Claude Code enabled. **Max is strongly recommended** — Pro will hit usage limits with a persistent agent.
 
-**Run this in the Tarsee web terminal:**
-```bash
-claude login
-```
-
-This opens a browser auth flow. Once you authenticate, credentials are saved to the Railway volume at `/data/tarsee/.claude-code-home/.credentials.json` and persist across restarts, redeploys, and image rebuilds.
-
-The SDK auto-refreshes tokens — you only need to log in once. If you ever get logged out, just run `claude login` again from the terminal.
+Credentials are saved to the Railway volume at `/data/tarsee/.claude-code-home/.credentials.json` and persist across restarts, redeploys, and image rebuilds. The SDK auto-refreshes tokens — you only need to log in once. If you ever get logged out, just run `claude login` again from the terminal (icon in topbar).
 
 > **Why not an env var?** OAuth refresh tokens are single-use. If you set credentials as an env var, every redeploy overwrites the SDK's refreshed token with the stale original, causing auth failures. Logging in directly on the server avoids this entirely.
+
+### Staying Updated
+
+If you deployed from the Railway template, your instance is a snapshot — it won't auto-update. To get the latest features:
+
+1. Go to your Railway service → **Settings → Source**
+2. Connect it to `projectservan8n/Tarsee` on GitHub
+3. Every push to main will auto-deploy to your instance
+4. Your data on `/data` is safe — the volume persists across redeploys
 
 ---
 
