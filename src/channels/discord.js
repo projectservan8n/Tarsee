@@ -90,7 +90,7 @@ export async function createDiscordBot(config, db) {
         const repliedMsg = await message.channel.messages.fetch(message.reference.messageId);
         if (repliedMsg?.content) {
           const repliedFrom = repliedMsg.author?.displayName || repliedMsg.author?.username || "someone";
-          content = `[Replying to ${repliedFrom}: "${repliedMsg.content.slice(0, 500)}"]\n\n${content}`;
+          content = `[Replying to ${repliedFrom}: "${repliedMsg.content}"]\n\n${content}`;
         }
       } catch { /* referenced message deleted or inaccessible */ }
     }

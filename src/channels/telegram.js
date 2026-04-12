@@ -282,7 +282,7 @@ You can use these special markers in your response:
     const repliedMsg = ctx.message.reply_to_message;
     if (repliedMsg && repliedMsg.text) {
       const repliedFrom = repliedMsg.from?.first_name || repliedMsg.from?.username || "someone";
-      text = `[Replying to ${repliedFrom}: "${repliedMsg.text.slice(0, 500)}"]\n\n${text}`;
+      text = `[Replying to ${repliedFrom}: "${repliedMsg.text}"]\n\n${text}`;
     }
 
     // In groups: only respond if mentioned by @username or replied to
