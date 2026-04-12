@@ -85,12 +85,14 @@ html, body {
 }
 
 .sidebar-header {
-  padding: var(--space-3) var(--space-4);
+  height: var(--topbar-height-mobile);
+  padding: 0 var(--space-4);
   border-bottom: var(--space-px) solid var(--border);
   display: flex;
   align-items: center;
   gap: var(--space-3);
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .sidebar-header .logo {
@@ -1949,6 +1951,10 @@ html, body {
 
   .sidebar.open {
     box-shadow: none;
+  }
+
+  .sidebar-header {
+    height: var(--topbar-height);
   }
 
   .sidebar-overlay {

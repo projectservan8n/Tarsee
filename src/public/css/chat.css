@@ -13,8 +13,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-1) var(--space-4);
-  background: var(--bg-surface);
+  padding: var(--space-0-5) var(--space-4);
+  background: var(--bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: var(--space-px) solid var(--border-light);
