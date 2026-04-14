@@ -2,6 +2,7 @@ import { MemoryStore } from "../db/memory.js";
 import { getSkillsPromptContext } from "./skills-engine.js";
 import { getLearningHint } from "./personality-learner.js";
 import { getBootstrapContext, readWorkspaceFile } from "./workspace-files.js";
+import { getBootContextSummary } from "./boot-context.js";
 
 const MAX_TOTAL_BYTES = 50 * 1024; // 50KB total prompt budget (trimmed from 150KB)
 
@@ -79,6 +80,12 @@ export function buildSystemPrompt({
   // Skills list (just names, not full docs)
   if (skillsContext) {
     prompt += skillsContext;
+  }
+
+  // Boot context — what was happening before redeploy (only on first few messages)
+  if (messageCount <= 1) {
+    const bootCtx = getBootContextSummary();
+    if (bootCtx) prompt += bootCtx;
   }
 
   if (conversationPrompt) {

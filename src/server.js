@@ -179,6 +179,12 @@ import { startSessionReset, stopSessionReset } from "./lib/session-reset.js";
 import { ConversationStore } from "./db/conversations.js";
 const convStore = new ConversationStore(db);
 convStore.clearAllSessions(); // Force fresh MCP tool registration on boot
+
+// --- Boot context: save/restore conversation context across redeploys ---
+import { saveBootContext } from "./lib/boot-context.js";
+// Save context every 5 minutes so it's fresh if server crashes
+setInterval(() => saveBootContext(db), 5 * 60 * 1000);
+saveBootContext(db); // Initial save on boot
 startSessionReset({ db, settingsStore, convStore });
 
 // --- OAuth: Let the Claude Code SDK handle its own token refresh ---
@@ -237,6 +243,7 @@ function shutdown(signal) {
   console.log(`[tarsee] ${signal} received, shutting down...`);
   stopTTSEngine();
   stopHeartbeat();
+  saveBootContext(db); // Persist context before shutdown
   stopSessionReset();
   stopCronScheduler();
   channelManager.stopAll();
