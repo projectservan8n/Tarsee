@@ -187,94 +187,6 @@ const COMMANDS = {
   // /stats → alias for /status
   stats: { description: "Alias for /status", usage: "/stats", handler: (args, ctx) => COMMANDS.status.handler(args, ctx) },
 
-  play: {
-    description: "Run a saved playbook (multi-step AI workflow)",
-    usage: "/play [name] or /play list or /play save <name> <steps>",
-    handler: (args, ctx) => {
-      const settingsStore = ctx.settingsStore;
-      if (!settingsStore) return "Settings not available.";
-      const playbooks = settingsStore.get("playbooks") || {};
-      if (!args || args.toLowerCase() === "list") {
-        const entries = Object.entries(playbooks);
-        if (entries.length === 0) return "No playbooks saved.\n\nCreate: `/play save morning-routine Check emails, summarize, draft replies`";
-        const lines = entries.map(([name, p]) => `- **${name}** — ${p.steps?.length || 0} steps`);
-        return `**Playbooks:**\n${lines.join("\n")}\n\nRun: \`/play <name>\``;
-      }
-      const parts = args.split(/\s+/);
-      const cmd = parts[0].toLowerCase();
-      if (cmd === "save" && parts[1]) {
-        const name = parts[1].toLowerCase().replace(/[^a-z0-9-]/g, "-");
-        const stepsRaw = parts.slice(2).join(" ");
-        if (!stepsRaw) return "Usage: `/play save <name> Step 1, Step 2, Step 3`";
-        const steps = stepsRaw.split(/[,\n]|(?:\d+\.\s)/).map((s) => s.trim()).filter(Boolean);
-        playbooks[name] = { steps, created: new Date().toISOString() };
-        settingsStore.set("playbooks", playbooks);
-        return `Playbook **${name}** saved with ${steps.length} steps. Run: \`/play ${name}\``;
-      }
-      if (cmd === "delete" && parts[1]) {
-        if (!playbooks[parts[1]]) return `Playbook "${parts[1]}" not found.`;
-        delete playbooks[parts[1]];
-        settingsStore.set("playbooks", playbooks);
-        return `Playbook **${parts[1]}** deleted.`;
-      }
-      const playbook = playbooks[cmd];
-      if (!playbook) return `Playbook "${cmd}" not found. Use \`/play list\`.`;
-      const stepsText = playbook.steps.map((s, i) => `${i + 1}. ${s}`).join("\n");
-      return `__PLAYBOOK__\nExecute this playbook step by step:\n\n**Playbook: ${cmd}**\n${stepsText}`;
-    },
-  },
-
-  fork: {
-    description: "Branch conversation — copy history into new session",
-    usage: "/fork [from message #N]",
-    handler: (args, ctx) => {
-      if (!ctx.conversationId || !ctx.convStore) return "No active conversation.";
-      const sourceConv = ctx.convStore.get(ctx.conversationId);
-      if (!sourceConv) return "Conversation not found.";
-      const messages = ctx.convStore.getMessages(ctx.conversationId);
-      if (!messages.length) return "No messages to fork.";
-      let forkFrom = messages.length;
-      if (args) { const n = parseInt(args, 10); if (!isNaN(n) && n > 0 && n <= messages.length) forkFrom = n; }
-      const forkedMessages = messages.slice(0, forkFrom);
-      const title = `Fork of ${sourceConv.title || "conversation"} (${forkedMessages.length} msgs)`;
-      const newConv = ctx.convStore.create({ title });
-      for (const msg of forkedMessages) {
-        ctx.convStore.addMessage(newConv.id, { role: msg.role, content: msg.content, provider: msg.provider, model: msg.model });
-      }
-      return `Forked! **${title}** — ${forkedMessages.length} messages copied. Switch to it from the sidebar.`;
-    },
-  },
-
-  files: {
-    description: "List or search workspace files",
-    usage: "/files [search term]",
-    handler: async (_args) => {
-      const fs = await import("node:fs");
-      const path = await import("node:path");
-      const config = (await import("../config/env.js")).default;
-      const wsDir = config.WORKSPACE_DIR;
-      const listDir = (dir, prefix = "") => {
-        const entries = [];
-        try {
-          for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
-            const relPath = prefix ? `${prefix}/${item.name}` : item.name;
-            if (item.isDirectory()) { entries.push({ name: relPath + "/", type: "dir", size: 0 }); entries.push(...listDir(path.join(dir, item.name), relPath)); }
-            else { const stat = fs.statSync(path.join(dir, item.name)); entries.push({ name: relPath, type: "file", size: stat.size }); }
-          }
-        } catch {}
-        return entries;
-      };
-      const allFiles = listDir(wsDir);
-      if (_args) {
-        const matches = allFiles.filter((f) => f.name.toLowerCase().includes(_args.toLowerCase()));
-        if (!matches.length) return `No files matching "${_args}".`;
-        return `**Files matching "${_args}":**\n${matches.slice(0, 20).map((f) => `- ${f.type === "dir" ? "📁" : "📄"} \`${f.name}\``).join("\n")}`;
-      }
-      const fileCount = allFiles.filter((f) => f.type === "file").length;
-      const topItems = allFiles.filter((f) => !f.name.includes("/"));
-      return `**Workspace** — ${fileCount} files\n${topItems.map((f) => `- ${f.type === "dir" ? "📁" : "📄"} \`${f.name}\``).join("\n")}`;
-    },
-  },
 
   email: {
     description: "Check or manage email — Gmail (gog) + Zoho (himalaya)",
@@ -338,39 +250,6 @@ To send after approval:
 Do NOT send without my explicit approval. Ask which account to send from.`;
 
       return "Use: `/email check`, `/email gmail`, `/email zoho`, `/email summary`, `/email draft <details>`";
-    },
-  },
-
-  system: {
-    description: "Set or show the system prompt for this conversation",
-    usage: "/system [prompt]",
-    handler: (args, ctx) => {
-      if (!ctx.conversationId || !ctx.convStore) {
-        return "No active conversation.";
-      }
-
-      const conv = ctx.convStore.get(ctx.conversationId);
-      if (!conv) return "Conversation not found.";
-
-      if (!args) {
-        const prompt = conv.system_prompt || "(none)";
-        return `**System prompt:**\n${prompt}`;
-      }
-
-      ctx.convStore.update(ctx.conversationId, { systemPrompt: args });
-      return `System prompt updated.`;
-    },
-  },
-
-  title: {
-    description: "Rename the current conversation",
-    usage: "/title [new title]",
-    handler: (args, ctx) => {
-      if (!args) return "Usage: `/title My Conversation Name`";
-      if (!ctx.conversationId || !ctx.convStore) return "No active conversation.";
-
-      ctx.convStore.updateTitle(ctx.conversationId, args.slice(0, 200));
-      return `Conversation renamed to **${args.slice(0, 200)}**`;
     },
   },
 
@@ -568,40 +447,6 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
     },
   },
 
-  soul: {
-    description: "Show current SOUL.md personality summary",
-    usage: "/soul",
-    handler: async () => {
-      try {
-        const { readWorkspaceFile } = await import("./workspace-files.js");
-        const soul = readWorkspaceFile("SOUL.md");
-        if (!soul || soul.trim().length < 10) {
-          return "No soul defined yet. Edit **SOUL.md** in Settings to give your bot personality.";
-        }
-        return `**Current Soul:**\n\n${soul.slice(0, 2000)}`;
-      } catch (err) {
-        return `Failed to read SOUL.md: ${err.message}`;
-      }
-    },
-  },
-
-  daily: {
-    description: "Add a note to today's daily memory log",
-    usage: "/daily [note]",
-    handler: async (args) => {
-      if (!args) return "Usage: `/daily Met with client about project scope`";
-
-      try {
-        const { appendDailyLog } = await import("./workspace-files.js");
-        appendDailyLog(args);
-        const today = new Date().toISOString().slice(0, 10);
-        return `Logged to **memory/${today}.md**: "${args}"`;
-      } catch (err) {
-        return `Failed to write daily log: ${err.message}`;
-      }
-    },
-  },
-
   skills: {
     description: "List available skills",
     usage: "/skills",
@@ -623,77 +468,6 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
         return lines.join("\n");
       } catch (err) {
         return `Failed to load skills: ${err.message}`;
-      }
-    },
-  },
-
-  reset: {
-    description: "Create a fresh session for the current channel (keeps history in DB)",
-    usage: "/reset",
-    handler: async (_args, ctx) => {
-      if (!ctx.conversationId || !ctx.convStore || !ctx.settingsStore) {
-        return "No active conversation to reset.";
-      }
-
-      // Find which channel_conv key points to this conversation
-      const channelSettings = ctx.settingsStore.getByPrefix("channel_conv.");
-      let channelKey = null;
-      for (const { key, value } of channelSettings) {
-        if (value === ctx.conversationId) {
-          channelKey = key.replace("channel_conv.", "");
-          break;
-        }
-      }
-
-      if (!channelKey) {
-        return "Could not determine which channel this conversation belongs to.";
-      }
-
-      // Create a new conversation for this channel
-      const conv = ctx.convStore.create({
-        title: channelKey === "web:default" ? "Web Chat" : channelKey,
-      });
-      ctx.settingsStore.set(`channel_conv.${channelKey}`, conv.id);
-
-      return `Session reset. Fresh conversation started for **${channelKey}**. Previous history is still in the database.`;
-    },
-  },
-
-  identity: {
-    description: "Show parsed IDENTITY.md metadata",
-    usage: "/identity",
-    handler: async () => {
-      try {
-        const { parseIdentityFile } = await import("./workspace-files.js");
-        const parsed = parseIdentityFile();
-        const keys = Object.keys(parsed);
-        if (keys.length === 0) {
-          return "No identity defined yet. Edit **IDENTITY.md** in Settings to set name, emoji, creature, vibe.";
-        }
-        const lines = ["**Identity**", ""];
-        for (const [k, v] of Object.entries(parsed)) {
-          lines.push(`- **${k}:** ${v}`);
-        }
-        return lines.join("\n");
-      } catch (err) {
-        return `Failed to read IDENTITY.md: ${err.message}`;
-      }
-    },
-  },
-
-  tools: {
-    description: "Show current TOOLS.md capabilities",
-    usage: "/tools",
-    handler: async () => {
-      try {
-        const { readWorkspaceFile } = await import("./workspace-files.js");
-        const content = readWorkspaceFile("TOOLS.md");
-        if (!content || content.trim().length < 10) {
-          return "No tools defined yet. Edit **TOOLS.md** in Settings.";
-        }
-        return `**Tools & Capabilities:**\n\n${content.slice(0, 2000)}`;
-      } catch (err) {
-        return `Failed to read TOOLS.md: ${err.message}`;
       }
     },
   },
@@ -752,43 +526,6 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
     },
   },
 
-  forget: {
-    description: "List and manage bot memories",
-    usage: "/forget",
-    handler: async (_args, ctx) => {
-      try {
-        const { MemoryStore } = await import("../db/memory.js");
-        const db = ctx.db;
-        if (!db) return "Database not available.";
-
-        const store = new MemoryStore(db);
-        const memories = store.list(20);
-
-        if (memories.length === 0) return "No memories stored yet.";
-
-        const lines = ["**Bot Memories** (manage in Settings > Memories)", ""];
-        for (const m of memories) {
-          lines.push(`- [${m.category}] ${m.content}`);
-        }
-        lines.push("", `Total: ${store.count()} memories`);
-        return lines.join("\n");
-      } catch (err) {
-        return `Failed to load memories: ${err.message}`;
-      }
-    },
-  },
-
-  // ── Session & system commands ──────────────────────────────────
-
-  restart: {
-    description: "Restart the server (Railway auto-restarts the process)",
-    usage: "/restart",
-    handler: (_args, _ctx) => {
-      setTimeout(() => process.exit(0), 500);
-      return "**Restarting Tarsee…** The server will be back in a few seconds.";
-    },
-  },
-
   stop: {
     description: "Stop the current AI generation",
     usage: "/stop",
@@ -803,46 +540,6 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
 
   // /new → alias for /clear
   new: { description: "Alias for /clear", usage: "/new", handler: (_args, ctx) => COMMANDS.clear.handler(_args, ctx) },
-
-  config: {
-    description: "Show or set a config value",
-    usage: "/config [key] [value]",
-    handler: (args, ctx) => {
-      const settingsStore = ctx.settingsStore;
-      if (!settingsStore) return "Settings not available.";
-
-      if (!args) {
-        // Show all non-secret settings
-        const all = settingsStore.getByPrefix("");
-        const lines = ["**Configuration**", ""];
-        for (const { key, value } of all) {
-          if (key.includes("apiKey") || key.includes("token") || key.includes("secret")) {
-            lines.push(`\`${key}\` = ••••••`);
-          } else {
-            lines.push(`\`${key}\` = ${value}`);
-          }
-        }
-        if (lines.length === 2) lines.push("(no settings stored)");
-        return lines.join("\n");
-      }
-
-      const parts = args.split(/\s+/);
-      const key = parts[0];
-      const value = parts.slice(1).join(" ");
-
-      if (!value) {
-        // Get single key
-        const v = settingsStore.get(key);
-        if (v === undefined || v === null) return `\`${key}\` is not set.`;
-        if (key.includes("apiKey") || key.includes("token")) return `\`${key}\` = ••••••`;
-        return `\`${key}\` = ${v}`;
-      }
-
-      // Set key
-      settingsStore.set(key, value);
-      return `Set \`${key}\` = ${value}`;
-    },
-  },
 
   // /usage → alias for /status
   usage: { description: "Alias for /status", usage: "/usage", handler: (_args, ctx) => COMMANDS.status.handler(_args, ctx) },
@@ -861,103 +558,6 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
         return formatDiagnostics(diagnostics, repairs);
       } catch (err) {
         return `Doctor error: ${err.message}`;
-      }
-    },
-  },
-
-  reload: {
-    description: "Force-reload workspace files and skills cache",
-    usage: "/reload",
-    handler: async () => {
-      try {
-        const { invalidateCache } = await import("./workspace-files.js");
-        invalidateCache();
-
-        const skills = await import("./skills-engine.js");
-        skills.invalidateCache();
-
-        return "**Reloaded.** Workspace files and skills cache cleared. Changes take effect on next message.";
-      } catch (err) {
-        return `Reload error: ${err.message}`;
-      }
-    },
-  },
-
-  update: {
-    description: "Check for updates and hot-swap code from GitHub",
-    usage: "/update",
-    handler: async () => {
-      const { execSync } = await import("node:child_process");
-      const fs = await import("node:fs");
-      const path = await import("node:path");
-
-      const REPO = "https://github.com/projectservan8n/Tarsee.git";
-      const CACHE_DIR = path.join(process.env.TARSEE_STATE_DIR || "/data/tarsee", "repo-cache");
-      const APP_DIR = "/app";
-
-      try {
-        // Get current version
-        const pkg = JSON.parse(fs.readFileSync(path.join(APP_DIR, "package.json"), "utf8"));
-        const currentCommit = process.env.TARSEE_COMMIT_SHA?.slice(0, 7) || "unknown";
-
-        // Fetch latest from GitHub
-        if (fs.existsSync(path.join(CACHE_DIR, ".git"))) {
-          execSync("git fetch origin main --depth=1", { cwd: CACHE_DIR, stdio: "ignore", timeout: 30_000 });
-          execSync("git reset --hard origin/main", { cwd: CACHE_DIR, stdio: "ignore" });
-        } else {
-          fs.mkdirSync(CACHE_DIR, { recursive: true });
-          execSync(`git clone --depth=1 ${REPO} ${CACHE_DIR}`, { stdio: "ignore", timeout: 60_000 });
-        }
-
-        const latestCommit = execSync("git rev-parse --short HEAD", { cwd: CACHE_DIR, encoding: "utf8" }).trim();
-        const latestPkg = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, "package.json"), "utf8"));
-
-        // Check if deps changed (would need a full redeploy)
-        const currentDeps = JSON.stringify(pkg.dependencies || {});
-        const latestDeps = JSON.stringify(latestPkg.dependencies || {});
-        const depsChanged = currentDeps !== latestDeps;
-
-        if (currentCommit === latestCommit) {
-          return `**Already up to date.** v${pkg.version} (${currentCommit})`;
-        }
-
-        // Get commit log between versions
-        let changelog = "";
-        try {
-          changelog = execSync(`git log --oneline -10`, { cwd: CACHE_DIR, encoding: "utf8" }).trim();
-        } catch { /* ignore */ }
-
-        if (depsChanged) {
-          return `**Update available:** ${currentCommit} -> ${latestCommit} (v${latestPkg.version})\n\n` +
-            `**Dependencies changed** — this update requires a full redeploy from your Railway dashboard.\n\n` +
-            `**Recent changes:**\n\`\`\`\n${changelog}\n\`\`\``;
-        }
-
-        // Hot-swap src/ files
-        const srcFrom = path.join(CACHE_DIR, "src");
-        const srcTo = path.join(APP_DIR, "src");
-        execSync(`cp -rf ${srcFrom}/* ${srcTo}/`, { stdio: "ignore" });
-
-        // Also update entrypoint.sh and package.json version
-        try { fs.copyFileSync(path.join(CACHE_DIR, "entrypoint.sh"), path.join(APP_DIR, "entrypoint.sh")); } catch {}
-        try { fs.copyFileSync(path.join(CACHE_DIR, "package.json"), path.join(APP_DIR, "package.json")); } catch {}
-
-        // Update commit SHA env
-        process.env.TARSEE_COMMIT_SHA = latestCommit;
-
-        // Invalidate caches
-        try {
-          const { invalidateCache } = await import("./workspace-files.js");
-          invalidateCache();
-          const skills = await import("./skills-engine.js");
-          skills.invalidateCache();
-        } catch { /* ignore */ }
-
-        return `**Updated!** ${currentCommit} -> ${latestCommit} (v${latestPkg.version})\n\n` +
-          `**Recent changes:**\n\`\`\`\n${changelog}\n\`\`\`\n\n` +
-          `Hot-swapped \`src/\` files. Run \`/restart\` to apply, or it takes effect on next server restart.`;
-      } catch (err) {
-        return `**Update failed:** ${err.message}`;
       }
     },
   },
