@@ -97,27 +97,70 @@ function scanDirectory(dir, source) {
 /**
  * Scan all skill locations and return a merged list.
  */
+/**
+ * Scan INSTALLED skills only (workspace directory).
+ * Only installed skills are active and injected into the system prompt.
+ */
 export function scanSkills() {
   const now = Date.now();
   if (cachedSkills && now - cacheTime < CACHE_TTL_MS) {
     return cachedSkills;
   }
 
-  const builtIn = scanDirectory(getBuiltInSkillsDir(), "built-in");
-  const custom = scanDirectory(getCustomSkillsDir(), "custom");
-
-  // Custom skills override built-in if same name
-  const byName = new Map();
-  for (const s of builtIn) byName.set(s.name, s);
-  for (const s of custom) byName.set(s.name, s);
-
-  cachedSkills = Array.from(byName.values());
+  // Only workspace/skills — installed skills are the active ones
+  cachedSkills = scanDirectory(getCustomSkillsDir(), "installed");
   cacheTime = now;
   return cachedSkills;
 }
 
 /**
- * Get brief skills list (for prompt injection + UI listing).
+ * Get all available skills (built-in) with installed status.
+ */
+export function getAllSkillsWithStatus() {
+  const builtIn = scanDirectory(getBuiltInSkillsDir(), "built-in");
+  const installed = scanDirectory(getCustomSkillsDir(), "installed");
+  const installedNames = new Set(installed.map(s => s.name));
+
+  return builtIn.map(s => ({
+    name: s.name,
+    description: s.description,
+    source: s.source,
+    installed: installedNames.has(s.name),
+  }));
+}
+
+/**
+ * Install a skill — copy from built-in to workspace.
+ */
+export function installSkill(name) {
+  const srcDir = path.join(getBuiltInSkillsDir(), name);
+  const destDir = path.join(getCustomSkillsDir(), name);
+  if (!fs.existsSync(srcDir)) throw new Error(`Skill "${name}" not found`);
+  fs.mkdirSync(destDir, { recursive: true });
+  // Copy all files recursively
+  const copyDir = (src, dest) => {
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+      const srcPath = path.join(src, entry.name);
+      const destPath = path.join(dest, entry.name);
+      if (entry.isDirectory()) { fs.mkdirSync(destPath, { recursive: true }); copyDir(srcPath, destPath); }
+      else fs.copyFileSync(srcPath, destPath);
+    }
+  };
+  copyDir(srcDir, destDir);
+  invalidateCache();
+}
+
+/**
+ * Uninstall a skill — remove from workspace.
+ */
+export function uninstallSkill(name) {
+  const destDir = path.join(getCustomSkillsDir(), name);
+  if (fs.existsSync(destDir)) fs.rmSync(destDir, { recursive: true });
+  invalidateCache();
+}
+
+/**
+ * Get brief skills list (installed only, for prompt injection).
  */
 export function getSkillsList() {
   return scanSkills().map((s) => ({

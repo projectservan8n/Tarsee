@@ -999,23 +999,22 @@ const Settings = {
       const builtinSkills = skills.filter(s => s.source !== "custom");
 
       const renderSkill = (s) => {
-        const st = statusMap[s.name];
-        const badge = st?.status === "ready" ? '<span class="memory-badge" style="background:rgba(76,175,80,0.15);color:#4caf50">ready</span>'
-          : st?.status === "needs_install" ? `<span class="memory-badge" style="background:rgba(244,67,54,0.15);color:#f44336">needs: ${(st.missing || []).join(", ")}</span>`
-          : '';
-        return `<div class="skill-card">
+        const isInstalled = s.installed === true;
+        const badge = isInstalled
+          ? '<span class="memory-badge" style="background:rgba(76,175,80,0.15);color:#4caf50">installed</span>'
+          : '<span class="memory-badge" style="background:rgba(158,158,158,0.15);color:#9e9e9e">not installed</span>';
+        const actionBtn = isInstalled
+          ? `<button class="btn btn-sm" data-skill-uninstall="${s.name}" style="color:var(--danger)">Uninstall</button>`
+          : `<button class="btn btn-sm" data-skill-install="${s.name}" style="color:var(--success)">Install</button>`;
+        return `<div class="skill-card" style="${isInstalled ? "" : "opacity:0.6"}">
           <div style="display: flex; justify-content: space-between; align-items: center">
             <div>
               <strong>${escapeHtml(s.name)}</strong>
               ${badge}
             </div>
-            <div style="display: flex; gap: 4px">
-              ${s.source === "custom" ? `
-                <button class="btn btn-sm" data-skill-edit="${s.name}">Edit</button>
-                <button class="btn btn-sm" style="color: var(--danger)" data-skill-delete="${s.name}">Delete</button>
-              ` : `
-                <button class="btn btn-sm" data-skill-view="${s.name}">View</button>
-              `}
+            <div style="display: flex; gap: 4px; align-items: center">
+              ${actionBtn}
+              ${isInstalled ? `<button class="btn btn-sm" data-skill-view="${s.name}">View</button>` : ""}
             </div>
           </div>
           <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px">${escapeHtml(s.description)}</div>
@@ -1041,6 +1040,28 @@ const Settings = {
       });
       this.elements.skillsList.querySelectorAll("[data-skill-view]").forEach((btn) => {
         btn.addEventListener("click", () => this.viewSkill(btn.dataset.skillView));
+      });
+      this.elements.skillsList.querySelectorAll("[data-skill-install]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const name = btn.dataset.skillInstall;
+          btn.disabled = true; btn.textContent = "Installing...";
+          try {
+            await API.json("/api/skills/install", { method: "POST", body: { name } });
+            App.showToast(`${name} installed`, "success");
+            this.loadSkills();
+          } catch (e) { App.showToast(e.message, "error"); btn.disabled = false; btn.textContent = "Install"; }
+        });
+      });
+      this.elements.skillsList.querySelectorAll("[data-skill-uninstall]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const name = btn.dataset.skillUninstall;
+          btn.disabled = true; btn.textContent = "Removing...";
+          try {
+            await API.json("/api/skills/uninstall", { method: "POST", body: { name } });
+            App.showToast(`${name} uninstalled`, "success");
+            this.loadSkills();
+          } catch (e) { App.showToast(e.message, "error"); btn.disabled = false; btn.textContent = "Uninstall"; }
+        });
       });
     } catch {
       this.elements.skillsList.innerHTML = "";

@@ -4,27 +4,71 @@ import path from "node:path";
 import config from "../config/env.js";
 import {
   scanSkills,
+  getAllSkillsWithStatus,
   getSkillContent,
   getCustomSkillsDir,
   invalidateCache,
+  installSkill,
+  uninstallSkill,
 } from "../lib/skills-engine.js";
 
 export const skillsRouter = Router();
 
 /**
- * GET / — List all available skills (built-in + custom).
+ * GET / — List all available skills with install status.
  */
 skillsRouter.get("/", (_req, res) => {
   try {
-    const skills = scanSkills().map((s) => ({
-      name: s.name,
-      description: s.description,
-      source: s.source,
-    }));
-    res.json({ skills });
+    res.json({ skills: getAllSkillsWithStatus() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+/**
+ * POST /install — Install a skill (copy from built-in to workspace).
+ * Body: { name: string }
+ */
+skillsRouter.post("/install", (req, res) => {
+  const { name } = req.body || {};
+  if (!name) return res.status(400).json({ error: "Skill name required" });
+  try {
+    installSkill(name);
+    res.json({ ok: true, name, installed: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /uninstall — Uninstall a skill (remove from workspace).
+ * Body: { name: string }
+ */
+skillsRouter.post("/uninstall", (req, res) => {
+  const { name } = req.body || {};
+  if (!name) return res.status(400).json({ error: "Skill name required" });
+  try {
+    uninstallSkill(name);
+    res.json({ ok: true, name, installed: false });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /setup — Bulk install skills (used during onboarding).
+ * Body: { install: string[] }
+ */
+skillsRouter.post("/setup", (req, res) => {
+  const { install } = req.body || {};
+  if (!Array.isArray(install)) return res.status(400).json({ error: "install array required" });
+  const installed = [];
+  const failed = [];
+  for (const name of install) {
+    try { installSkill(name); installed.push(name); }
+    catch { failed.push(name); }
+  }
+  res.json({ ok: true, installed, failed });
 });
 
 /**

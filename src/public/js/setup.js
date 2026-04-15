@@ -80,7 +80,80 @@ const Setup = {
         model: "claude-sonnet-4-6",
       });
 
-      // Mark setup as started so it doesn't re-trigger if interview is interrupted
+      // Show skill picker before proceeding
+      this.showSkillPicker();
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.style.display = "block";
+      document.getElementById("setupConnectBtn").disabled = false;
+      document.getElementById("setupConnectBtn").textContent = "I'm connected — Start Chatting";
+    }
+  },
+
+  /**
+   * Step 2: Skill picker — let user choose which skills to enable.
+   */
+  async showSkillPicker() {
+    const wizard = document.getElementById("setupWizard");
+    wizard.style.display = "flex";
+
+    // Fetch all available skills
+    let skills = [];
+    try {
+      const data = await API.json("/api/skills");
+      skills = data.skills || [];
+    } catch { skills = []; }
+
+    const skillCards = skills.map(s => {
+      const checked = s.installed ? "checked" : "";
+      return `<label class="setup-skill-item" style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg-input);border-radius:8px;cursor:pointer;border:1px solid var(--border)">
+        <input type="checkbox" name="skill" value="${s.name}" ${checked} style="margin-top:3px;accent-color:var(--accent)">
+        <div>
+          <strong style="font-size:13px">${s.name}</strong>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${s.description || "No description"}</div>
+        </div>
+      </label>`;
+    }).join("");
+
+    document.getElementById("setupContent").innerHTML = `
+      <div class="setup-card-header">
+        <div class="logo-large"><img src="/icon-192.png" alt="Tarsee" style="width:100%;height:100%;object-fit:cover;border-radius:inherit"></div>
+        <h2>Choose Your Skills</h2>
+        <p style="color:var(--text-muted);font-size:13px">Skills give your agent specialized abilities. You can always change these later in Settings.</p>
+      </div>
+      <div class="setup-card-body">
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <button class="btn btn-sm btn-ghost" id="setupSkillsAll">Select All</button>
+          <button class="btn btn-sm btn-ghost" id="setupSkillsNone">Deselect All</button>
+        </div>
+        <div id="setupSkillsList" style="display:flex;flex-direction:column;gap:6px;max-height:350px;overflow-y:auto;padding-right:4px">
+          ${skillCards}
+        </div>
+        <button class="btn btn-primary" id="setupSkillsSave" style="width:100%;padding:12px;font-size:14px;margin-top:16px">Continue</button>
+      </div>
+    `;
+
+    // Select all / deselect all
+    document.getElementById("setupSkillsAll").addEventListener("click", () => {
+      document.querySelectorAll('#setupSkillsList input[type="checkbox"]').forEach(cb => cb.checked = true);
+    });
+    document.getElementById("setupSkillsNone").addEventListener("click", () => {
+      document.querySelectorAll('#setupSkillsList input[type="checkbox"]').forEach(cb => cb.checked = false);
+    });
+
+    // Save and proceed
+    document.getElementById("setupSkillsSave").addEventListener("click", async () => {
+      const install = [];
+      document.querySelectorAll('#setupSkillsList input[type="checkbox"]:checked').forEach(cb => install.push(cb.value));
+
+      document.getElementById("setupSkillsSave").disabled = true;
+      document.getElementById("setupSkillsSave").textContent = `Installing ${install.length} skills...`;
+
+      try {
+        await API.json("/api/skills/setup", { method: "POST", body: { install } });
+      } catch { /* ignore */ }
+
+      // Mark setup as completed
       await API.json("/api/settings/general", {
         method: "POST",
         body: { key: "setup.completed", value: "true" },
@@ -89,12 +162,7 @@ const Setup = {
       // Boot the app and start personality interview
       App.bootApp();
       this.startPersonalityInterview();
-    } catch (err) {
-      errorEl.textContent = err.message;
-      errorEl.style.display = "block";
-      document.getElementById("setupConnectBtn").disabled = false;
-      document.getElementById("setupConnectBtn").textContent = "I'm connected — Start Chatting";
-    }
+    });
   },
 
   /**
