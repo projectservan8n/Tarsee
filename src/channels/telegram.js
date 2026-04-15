@@ -551,8 +551,11 @@ function mdToTelegramHtml(text) {
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
     // Headings (## text) → bold
     .replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>")
-    // Blockquotes (> text)
-    .replace(/^>\s?(.+)$/gm, "<blockquote>$1</blockquote>");
+    // Blockquotes (> text) — merge consecutive lines into single blockquote
+    .replace(/(^>\s?.+$(\n^>\s?.+$)*)/gm, (block) => {
+      const lines = block.split("\n").map(l => l.replace(/^>\s?/, "")).join("\n");
+      return `<blockquote>${lines}</blockquote>`;
+    });
 
   // 3. Restore code blocks
   text = text.replace(/\x00CODEBLOCK_(\d+)\x00/g, (_m, idx) => codeBlocks[parseInt(idx)]);
