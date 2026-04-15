@@ -907,7 +907,11 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           }
         } catch { /* no memory dir */ }
 
-        // 4. USER.md and SOUL.md for context
+        // 4. Conversation summaries (auto-generated from idle conversations)
+        const summaries = readWorkspaceFile("memory/summaries.md");
+        if (summaries) sections.push(`\n## Conversation Summaries\n${summaries}`);
+
+        // 5. USER.md for context
         const userMd = readWorkspaceFile("USER.md");
         if (userMd) sections.push(`\n## USER.md\n${userMd}`);
 

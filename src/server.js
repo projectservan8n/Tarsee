@@ -194,6 +194,10 @@ startSessionReset({ db, settingsStore, convStore });
 // import { startOAuthRefresh } from "./lib/oauth-refresh.js";
 // startOAuthRefresh();
 
+// --- Auto-summarize idle conversations ---
+import { startAutoSummarize, stopAutoSummarize } from "./lib/auto-summarize.js";
+startAutoSummarize(db);
+
 // --- Cron scheduler ---
 import { initCron, startCronScheduler, stopCronScheduler } from "./lib/cron.js";
 initCron({ db, settingsStore, convStore });
@@ -244,6 +248,7 @@ function shutdown(signal) {
   stopTTSEngine();
   stopHeartbeat();
   saveBootContext(db); // Persist context before shutdown
+  stopAutoSummarize();
   stopSessionReset();
   stopCronScheduler();
   channelManager.stopAll();
