@@ -117,10 +117,27 @@ export async function createTelegramBot(config, db) {
       ctx.react?.(ackEmoji).catch?.(() => {});
     }
 
-    // Send typing action
-    await ctx.sendChatAction("typing").catch(() => {});
+    // Send initial status message that we'll edit in-place
+    let statusMsg = null;
+    try {
+      statusMsg = await ctx.reply("💭 Thinking...", {
+        ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
+      });
+    } catch {
+      statusMsg = await ctx.reply("💭 Thinking...");
+    }
 
-    // Build full system prompt (identity + memory + skills)
+    // Helper: edit status message (debounced to avoid rate limits)
+    let lastEdit = 0;
+    const editStatus = async (text) => {
+      if (!statusMsg) return;
+      const now = Date.now();
+      if (now - lastEdit < 2500) return; // Min 2.5s between edits
+      lastEdit = now;
+      try { await ctx.telegram.editMessageText(chatId, statusMsg.message_id, null, text); } catch { /* rate limited or deleted */ }
+    };
+
+    // Build full system prompt
     const history = convStore.getRecentMessages(convId, 15);
     const conv = convStore.get(convId);
     const systemPrompt = buildSystemPrompt({
@@ -139,11 +156,7 @@ You can use these special markers in your response:
     const tools = getToolDefinitions();
     const toolCtx = { db, settingsStore, conversationId: convId };
     const MAX_TOOL_ROUNDS = 15;
-
-    // Keep typing indicator alive while processing
-    const typingInterval = setInterval(() => {
-      ctx.sendChatAction("typing").catch(() => {});
-    }, 4000);
+    const toolLog = [];
 
     try {
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
@@ -153,9 +166,7 @@ You can use these special markers in your response:
         const last = workingMessages[workingMessages.length - 1];
         if (last.role === "user") {
           const contentBlocks = [];
-          for (const att of attachments) {
-            contentBlocks.push(att);
-          }
+          for (const att of attachments) contentBlocks.push(att);
           contentBlocks.push({ type: "text", text: typeof last.content === "string" ? last.content : text });
           last.content = contentBlocks;
         }
@@ -190,7 +201,6 @@ You can use these special markers in your response:
           }
         }
 
-        // No tool calls — done
         if (toolCalls.length === 0 || stopReason !== "tool_use") break;
 
         // Build assistant message with tool_use blocks
@@ -201,21 +211,27 @@ You can use these special markers in your response:
         }
         workingMessages.push({ role: "assistant", content: assistantContent });
 
-        // Execute tools
+        // Execute tools and update status
         const toolResults = [];
         for (const tc of toolCalls) {
-          console.log(`[telegram] tool: ${tc.name}(${JSON.stringify(tc.input).slice(0, 80)})`);
+          const shortName = tc.name.replace("mcp__tarsee__tarsee_", "").replace("mcp__tarsee__", "");
+          toolLog.push(shortName);
+          const statusLines = toolLog.map((t, i) => i === toolLog.length - 1 ? `⚙️ ${t}...` : `✅ ${t}`);
+          await editStatus(statusLines.join("\n"));
+
+          console.log(`[telegram] tool: ${tc.name}`);
           const result = await executeTool(tc.name, tc.input, toolCtx);
           toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
         }
         workingMessages.push({ role: "user", content: toolResults });
+
+        // Mark last tool done
+        const doneLines = toolLog.map(t => `✅ ${t}`);
+        await editStatus(doneLines.join("\n") + "\n💭 Thinking...");
       }
 
       if (fullResponse) {
-        // Extract memories before parsing reactions
         fullResponse = extractAndSaveMemories(fullResponse, db, convId);
-
-        // Parse agent reactions and buttons
         const { cleanText, reactions, buttons } = parseReactions(fullResponse);
 
         convStore.addMessage(convId, {
@@ -225,46 +241,49 @@ You can use these special markers in your response:
           model: activeProvider.model,
         });
 
-        // Apply agent reactions to the original message
+        // Apply agent reactions
         for (const emoji of reactions) {
           if (ctx.message?.message_id) {
             ctx.telegram.setMessageReaction?.(chatId, ctx.message.message_id, [{ type: "emoji", emoji }]).catch(() => {});
           }
         }
 
-        // Send final text (convert markdown to Telegram HTML)
+        // Replace status message with final response
         const htmlText = mdToTelegramHtml(cleanText);
         const chunks = splitMessage(htmlText, 4096);
 
-        for (let i = 0; i < chunks.length; i++) {
+        // Edit first chunk into the status message
+        try {
+          const opts = { parse_mode: "HTML" };
+          if (buttons?.length > 0 && chunks.length <= 1) {
+            opts.reply_markup = { inline_keyboard: buttonsToKeyboard(buttons) };
+          }
+          await ctx.telegram.editMessageText(chatId, statusMsg.message_id, null, chunks[0], opts);
+        } catch {
+          // Edit failed — send as new message
+          await ctx.reply(chunks[0], { parse_mode: "HTML" }).catch(() => ctx.reply(chunks[0].replace(/<[^>]+>/g, "")));
+        }
+
+        // Send remaining chunks as new messages
+        for (let i = 1; i < chunks.length; i++) {
           const isLast = i === chunks.length - 1;
           const opts = { parse_mode: "HTML" };
-          if (replyToMessageId && i === 0) opts.reply_to_message_id = replyToMessageId;
-
-          // Attach inline buttons to the last chunk
           if (isLast && buttons?.length > 0) {
-            opts.reply_markup = {
-              inline_keyboard: buttonsToKeyboard(buttons),
-            };
+            opts.reply_markup = { inline_keyboard: buttonsToKeyboard(buttons) };
           }
-
-          await ctx.reply(chunks[i], opts).catch(() =>
-            ctx.reply(chunks[i].replace(/<[^>]+>/g, ""))
-          );
+          await ctx.reply(chunks[i], opts).catch(() => ctx.reply(chunks[i].replace(/<[^>]+>/g, "")));
         }
 
-        // If no text chunks but we have buttons, send buttons alone
         if (chunks.length === 0 && buttons?.length > 0) {
-          await ctx.reply("Choose:", {
-            reply_markup: { inline_keyboard: buttonsToKeyboard(buttons) },
-          });
+          await ctx.reply("Choose:", { reply_markup: { inline_keyboard: buttonsToKeyboard(buttons) } });
         }
+      } else {
+        // No response — delete status message
+        try { await ctx.telegram.deleteMessage(chatId, statusMsg.message_id); } catch {}
       }
     } catch (err) {
       console.error("[telegram] chat error:", err.message);
-      await ctx.reply("Sorry, I encountered an error processing your message.").catch(() => {});
-    } finally {
-      clearInterval(typingInterval);
+      try { await ctx.telegram.editMessageText(chatId, statusMsg.message_id, null, "Sorry, I encountered an error."); } catch {}
     }
   }
 
