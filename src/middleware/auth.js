@@ -2,14 +2,16 @@ import crypto from "node:crypto";
 import config from "../config/env.js";
 import { LIMITS } from "../config/constants.js";
 
-// --- Rate limiting state ---
-const authAttempts = new Map(); // ip → { count, resetAt }
+// --- Rate limiting + lockout state ---
+const authAttempts = new Map(); // ip → { count, resetAt, failures, lockedUntil }
 
 // Clean up stale entries every 5 minutes
 setInterval(() => {
   const now = Date.now();
   for (const [ip, entry] of authAttempts) {
-    if (now >= entry.resetAt) authAttempts.delete(ip);
+    if (now >= entry.resetAt && (!entry.lockedUntil || now >= entry.lockedUntil)) {
+      authAttempts.delete(ip);
+    }
   }
 }, 5 * 60_000).unref();
 
@@ -149,25 +151,74 @@ export function requireAuth(req, res, next) {
 /**
  * Middleware: Rate limits authentication attempts per IP.
  */
+/**
+ * Progressive lockout for brute-force protection.
+ * 4-digit PIN = 10K combinations, so we need aggressive lockout:
+ *
+ *   Failures 1-3:  no delay (typos happen)
+ *   Failures 4-5:  30 second lockout
+ *   Failures 6-7:  2 minute lockout
+ *   Failures 8-9:  10 minute lockout
+ *   Failures 10+:  1 hour lockout (IP is blocked)
+ *
+ * Plus: max 5 attempts per 60-second window (rate limit).
+ * Combined: brute-forcing 10K PINs takes ~2,000 hours.
+ */
 export function rateLimitAuth(req, res, next) {
   const ip = req.ip || req.socket?.remoteAddress || "unknown";
   const now = Date.now();
-  const window = LIMITS.RATE_LIMIT_AUTH_WINDOW_MS;
-  const max = LIMITS.RATE_LIMIT_AUTH_MAX;
 
   let entry = authAttempts.get(ip);
-  if (!entry || now >= entry.resetAt) {
-    entry = { count: 0, resetAt: now + window };
+  if (!entry) {
+    entry = { count: 0, resetAt: now + 60_000, failures: 0, lockedUntil: 0 };
     authAttempts.set(ip, entry);
   }
 
-  if (entry.count >= max) {
-    const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+  // Check lockout first
+  if (entry.lockedUntil && now < entry.lockedUntil) {
+    const retryAfter = Math.ceil((entry.lockedUntil - now) / 1000);
     res.set("Retry-After", String(retryAfter));
-    return res.status(429).json({ error: "Too many authentication attempts. Try again later." });
+    return res.status(429).json({ error: `Locked out. Try again in ${retryAfter}s.` });
   }
 
-  // Increment on every attempt (successful attempts won't hit this path often)
+  // Rate limit: max 5 per 60s window
+  if (now >= entry.resetAt) {
+    entry.count = 0;
+    entry.resetAt = now + 60_000;
+  }
+
+  if (entry.count >= 5) {
+    const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+    res.set("Retry-After", String(retryAfter));
+    return res.status(429).json({ error: "Too many attempts. Try again later." });
+  }
+
   entry.count++;
   next();
+}
+
+/**
+ * Record a failed login attempt and apply progressive lockout.
+ */
+export function recordFailedAttempt(ip) {
+  let entry = authAttempts.get(ip);
+  if (!entry) {
+    entry = { count: 0, resetAt: Date.now() + 60_000, failures: 0, lockedUntil: 0 };
+    authAttempts.set(ip, entry);
+  }
+  entry.failures++;
+
+  // Progressive lockout
+  if (entry.failures >= 10) entry.lockedUntil = Date.now() + 60 * 60_000;       // 1 hour
+  else if (entry.failures >= 8) entry.lockedUntil = Date.now() + 10 * 60_000;    // 10 min
+  else if (entry.failures >= 6) entry.lockedUntil = Date.now() + 2 * 60_000;     // 2 min
+  else if (entry.failures >= 4) entry.lockedUntil = Date.now() + 30_000;          // 30s
+}
+
+/**
+ * Clear failed attempts for an IP (call on successful login).
+ */
+export function clearFailedAttempts(ip) {
+  const entry = authAttempts.get(ip);
+  if (entry) { entry.failures = 0; entry.lockedUntil = 0; }
 }

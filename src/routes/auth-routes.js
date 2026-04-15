@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { validatePassword, createSession, destroySession } from "../middleware/auth.js";
+import { validatePassword, createSession, destroySession, recordFailedAttempt, clearFailedAttempts } from "../middleware/auth.js";
 import config from "../config/env.js";
 
 export const authRouter = Router();
@@ -23,9 +23,12 @@ authRouter.post("/login", (req, res) => {
   if (!validatePassword(password)) {
     const auditLog = req.app.get("auditLog");
     auditLog?.log({ action: "auth.login_failed", actor: "user", ip: req.ip });
+    recordFailedAttempt(req.ip);
     return res.status(401).json({ error: "Invalid password" });
   }
 
+  // Successful login — clear lockout
+  clearFailedAttempts(req.ip);
   const sessionId = createSession(req.ip || req.socket?.remoteAddress);
   const auditLog = req.app.get("auditLog");
   auditLog?.log({ action: "auth.login", actor: "user", ip: req.ip });
