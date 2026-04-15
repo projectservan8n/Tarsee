@@ -127,6 +127,20 @@ export function createTarseeMcp(ctx) {
       ),
 
       tool(
+        "tarsee_datetime",
+        "Get current date/time/day or convert timezones. ALWAYS use this for dates and days of the week — never guess.",
+        {
+          timezone: z.string().optional().describe("IANA timezone, e.g. 'Asia/Manila', 'America/New_York'. Default: Asia/Manila"),
+          date: z.string().optional().describe("Date to check, e.g. '2026-04-17' or 'next friday'"),
+          format: z.enum(["full", "date", "time", "day", "iso"]).optional().describe("Output format"),
+        },
+        async (args) => {
+          const result = await executeTool("datetime", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      tool(
         "tarsee_calculator",
         "Evaluate a math expression with precision. Use for ANY math — arithmetic, percentages, conversions, financial calculations. Never do math in your head.",
         {

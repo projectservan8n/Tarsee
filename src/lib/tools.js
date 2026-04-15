@@ -298,6 +298,30 @@ export const TOOLS = [
   },
 
   {
+    name: "datetime",
+    description: "Get the current date, time, day of week, or convert between timezones. ALWAYS use this tool when mentioning dates, days of the week, or times — never guess from LLM inference. Use for: 'what day is April 17?', 'what time is it in Manila?', 'how many days until Friday?'",
+    input_schema: {
+      type: "object",
+      properties: {
+        timezone: {
+          type: "string",
+          description: "IANA timezone, e.g. 'Asia/Manila', 'America/New_York', 'UTC'. Default: Asia/Manila",
+        },
+        date: {
+          type: "string",
+          description: "Optional date to check, e.g. '2026-04-17' or 'next friday'. If omitted, returns current date/time.",
+        },
+        format: {
+          type: "string",
+          enum: ["full", "date", "time", "day", "iso"],
+          description: "Output format. 'full' = everything, 'day' = just the day of week, 'iso' = ISO 8601",
+        },
+      },
+      required: [],
+    },
+  },
+
+  {
     name: "web_search",
     description: "Search the web using DuckDuckGo. Returns titles, URLs, and snippets for the top results. Free, no API key needed.",
     input_schema: {
@@ -1045,6 +1069,63 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           return `${expression} = ${result}`;
         } catch (err) {
           return `Math error: ${err.message}`;
+        }
+      }
+
+      case "datetime": {
+        const { timezone, date: dateInput, format } = toolInput;
+        const tz = timezone || "Asia/Manila";
+        try {
+          let targetDate;
+          if (dateInput) {
+            // Parse relative dates
+            const lower = (dateInput || "").toLowerCase().trim();
+            if (lower === "today" || !lower) targetDate = new Date();
+            else if (lower === "tomorrow") { targetDate = new Date(); targetDate.setDate(targetDate.getDate() + 1); }
+            else if (lower === "yesterday") { targetDate = new Date(); targetDate.setDate(targetDate.getDate() - 1); }
+            else if (lower.startsWith("next ")) {
+              const dayNames = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+              const target = dayNames.indexOf(lower.replace("next ", ""));
+              if (target >= 0) {
+                targetDate = new Date();
+                const current = targetDate.getDay();
+                const diff = ((target - current + 7) % 7) || 7;
+                targetDate.setDate(targetDate.getDate() + diff);
+              } else targetDate = new Date(dateInput);
+            }
+            else targetDate = new Date(dateInput);
+          } else {
+            targetDate = new Date();
+          }
+
+          if (isNaN(targetDate.getTime())) return `Error: Could not parse date "${dateInput}"`;
+
+          const opts = { timeZone: tz };
+          const full = targetDate.toLocaleString("en-US", { ...opts, weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
+          const dayOfWeek = targetDate.toLocaleString("en-US", { ...opts, weekday: "long" });
+          const dateOnly = targetDate.toLocaleString("en-US", { ...opts, year: "numeric", month: "long", day: "numeric" });
+          const timeOnly = targetDate.toLocaleString("en-US", { ...opts, hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
+          const iso = targetDate.toISOString();
+
+          if (format === "day") return `${dayOfWeek}`;
+          if (format === "date") return `${dateOnly} (${dayOfWeek})`;
+          if (format === "time") return `${timeOnly} (${tz})`;
+          if (format === "iso") return iso;
+
+          // Full format
+          let result = `${full}\nTimezone: ${tz}\nDay: ${dayOfWeek}\nISO: ${iso}`;
+
+          // Add days-until info if checking a future date
+          const now = new Date();
+          const diffMs = targetDate.getTime() - now.getTime();
+          const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+          if (diffDays > 0) result += `\n${diffDays} days from now`;
+          else if (diffDays < 0) result += `\n${Math.abs(diffDays)} days ago`;
+          else result += `\nToday`;
+
+          return result;
+        } catch (err) {
+          return `Datetime error: ${err.message}`;
         }
       }
 
