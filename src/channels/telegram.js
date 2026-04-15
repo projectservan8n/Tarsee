@@ -117,6 +117,12 @@ export async function createTelegramBot(config, db) {
       ctx.react?.(ackEmoji).catch?.(() => {});
     }
 
+    // Keep typing indicator alive while processing
+    await ctx.sendChatAction("typing").catch(() => {});
+    const typingInterval = setInterval(() => {
+      ctx.sendChatAction("typing").catch(() => {});
+    }, 4000);
+
     // Send initial status message that we'll edit in-place
     let statusMsg = null;
     try {
@@ -284,6 +290,8 @@ You can use these special markers in your response:
     } catch (err) {
       console.error("[telegram] chat error:", err.message);
       try { await ctx.telegram.editMessageText(chatId, statusMsg.message_id, null, "Sorry, I encountered an error."); } catch {}
+    } finally {
+      clearInterval(typingInterval);
     }
   }
 
