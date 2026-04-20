@@ -85,7 +85,11 @@ export async function* chat({
   // Skills directory — Claude Code discovers SKILL.md files here
   const skillsDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "skills");
 
-  const allTools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"];
+  const builtinTools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"];
+  // Without the mcp__tarsee__* entry, allowedTools silently filters out every
+  // tarsee_* tool even though the server is registered and the system prompt
+  // advertises them — Claude ends up shelling out to curl/Telegram instead.
+  const allTools = [...builtinTools, "mcp__tarsee__*"];
 
   const queryOptions = {
     cwd,
@@ -170,7 +174,7 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
     queryOptions.resume = sessionId;
   }
 
-  console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}, media: ${mediaBlocks.length}, mcp: ${tarseeMcp ? "yes" : "NO"}`);
+  console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}, media: ${mediaBlocks.length}, mcp: ${tarseeMcp ? "yes" : "NO"}, allowedTools: ${allTools.join(",")}`);
 
   // Build prompt: use AsyncIterable with image content blocks if images present
   let queryPrompt;
