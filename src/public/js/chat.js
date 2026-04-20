@@ -1994,11 +1994,11 @@ const Chat = {
       return `<blockquote>${lines.join("<br>")}</blockquote>`;
     });
 
-    // Ordered lists (1. item)
-    html = html.replace(/(^|<br>)\d+\.\s(.+?)(?=<br>|$)/g, "$1<li>$2</li>");
+    // Ordered lists (1. item) — tag with a sentinel so we can tell OL from UL later
+    html = html.replace(/(^|<br>)\d+\.\s(.+?)(?=<br>|$)/g, "$1<oli>$2</oli>");
 
     // Unordered lists (- item)
-    html = html.replace(/(^|<br>)- (.+?)(?=<br>|$)/g, "$1<li>$2</li>");
+    html = html.replace(/(^|<br>)- (.+?)(?=<br>|$)/g, "$1<uli>$2</uli>");
 
     // Inline code
     html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
@@ -2023,12 +2023,16 @@ const Chat = {
       html = html.replace(`\x01CODE${i}\x01`, codeBlocks[i]);
     }
 
-    // Wrap consecutive <li>…</li> runs in a <ul> so CSS bullet styling applies
-    // (without this the browser draws default bullets outside the element,
-    // which visually collides with tool-call timeline dots on the left margin).
-    html = html.replace(/(?:<li>[\s\S]*?<\/li>(?:<br>)?)+/g, (run) => {
-      const cleaned = run.replace(/<br>/g, "");
-      return `<ul>${cleaned}</ul>`;
+    // Wrap consecutive list-item sentinels into real <ol>/<ul> blocks.
+    // Keeping OL and UL distinct preserves numbering for ordered lists and
+    // lets the themed ::before bullet apply cleanly to unordered lists.
+    html = html.replace(/(?:<oli>[\s\S]*?<\/oli>(?:<br>)?)+/g, (run) => {
+      const inner = run.replace(/<br>/g, "").replace(/<oli>/g, "<li>").replace(/<\/oli>/g, "</li>");
+      return `<ol>${inner}</ol>`;
+    });
+    html = html.replace(/(?:<uli>[\s\S]*?<\/uli>(?:<br>)?)+/g, (run) => {
+      const inner = run.replace(/<br>/g, "").replace(/<uli>/g, "<li>").replace(/<\/uli>/g, "</li>");
+      return `<ul>${inner}</ul>`;
     });
 
     // ── Re-inject extracted blocks ──
