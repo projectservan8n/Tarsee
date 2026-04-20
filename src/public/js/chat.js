@@ -1226,9 +1226,11 @@ const Chat = {
 
   _initDiagramListener() {
     window.addEventListener("message", (event) => {
+      // Defense-in-depth: same-origin check (canvas iframes run allow-same-origin).
+      if (event.origin !== location.origin) return;
       const data = event.data;
       if (!data || data.type !== "tarsee:diagram-click") return;
-      // Verify the source is one of our canvas iframes (same-origin, /canvas/ path)
+      // Verify the source is one of our canvas iframes
       const iframes = document.querySelectorAll('iframe.canvas-iframe');
       let trusted = false;
       for (const f of iframes) {
@@ -1244,15 +1246,9 @@ const Chat = {
       const question = custom
         || (sublabel ? `Tell me more about: ${label} — ${sublabel}` : `Tell me more about: ${label}`);
 
-      // Populate the input and send through the normal flow
-      if (this.isStreaming) {
-        // Queue rather than dropping
-        this.elements.messageInput.value = question;
-        this.elements.sendBtn.disabled = false;
-      } else {
-        this.elements.messageInput.value = question;
-        this.elements.sendBtn.disabled = false;
-      }
+      // Reuse the normal send path — send() handles queueing during streaming.
+      this.elements.messageInput.value = question;
+      this.elements.sendBtn.disabled = false;
       this.send();
     });
   },

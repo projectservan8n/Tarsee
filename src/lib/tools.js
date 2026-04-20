@@ -1435,7 +1435,8 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           const { CanvasServer } = await import("./canvas.js");
           const { renderDiagramHtml } = await import("./diagram-renderer.js");
           const canvas = CanvasServer.create();
-          const canvasId = "diagram-" + title.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 40);
+          const slug = title.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+          const canvasId = "diagram-" + (slug || Math.random().toString(36).slice(2, 8));
           const html = renderDiagramHtml({ title, nodes, edges, legend, diagramId: canvasId });
           const result = canvas.serve(canvasId, html);
           return `Diagram created! View at: /canvas/${canvasId}/  (${nodes.length} nodes, ${edges.length} edges, ${result.size} bytes)`;

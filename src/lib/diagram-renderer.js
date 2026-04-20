@@ -129,9 +129,18 @@ export function renderDiagramHtml(spec) {
   const nodesHtml = nodes.map((n) => renderNode(n, positions.get(n.id))).join("");
   const edgesSvg = renderEdges(edges, positions);
   const legendHtml = renderLegend(spec.legend);
-  const questionMap = JSON.stringify(
+  // Safe-serialize for embedding inside a <script> tag: escape '</', line
+  // separators, and paragraph separators so user-influenced strings can't
+  // break out of the script context.
+  const scriptSafe = (v) =>
+    JSON.stringify(v)
+      .replace(/</g, "\\u003c")
+      .replace(/\u2028/g, "\\u2028")
+      .replace(/\u2029/g, "\\u2029");
+  const questionMap = scriptSafe(
     Object.fromEntries(nodes.filter((n) => n.question).map((n) => [n.id, n.question]))
   );
+  const diagramIdJs = scriptSafe(spec.diagramId || spec.title || "diagram");
 
   return `<!DOCTYPE html>
 <html>
@@ -171,7 +180,7 @@ ${legendHtml}
 <script>
 (function() {
   const questions = ${questionMap};
-  const diagramId = ${JSON.stringify(spec.diagramId || spec.title || "diagram")};
+  const diagramId = ${diagramIdJs};
   document.querySelectorAll('.node:not(.is-note)').forEach((el) => {
     el.addEventListener('click', () => {
       const nodeId = el.dataset.nodeId;

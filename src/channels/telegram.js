@@ -204,7 +204,11 @@ You can use these special markers in your response:
             fullResponse += event.content;
           } else if (event.type === "tool_use") {
             toolCalls.push({ id: event.id, name: event.name, input: event.input });
-            fullResponse += `\n<tool_call>${JSON.stringify({ name: event.name, arguments: event.input })}</tool_call>\n`;
+            // Neutralize any literal closing tags inside the payload so the
+            // strip regex below can't terminate early on such content.
+            const callJson = JSON.stringify({ name: event.name, arguments: event.input })
+              .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
+            fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
           } else if (event.type === "done") {
             stopReason = event.stopReason || "end_turn";
             break;
@@ -232,7 +236,8 @@ You can use these special markers in your response:
           console.log(`[telegram] tool: ${tc.name}`);
           const result = await executeTool(tc.name, tc.input, toolCtx);
           toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
-          const resultText = typeof result === "string" ? result : JSON.stringify(result);
+          const resultText = (typeof result === "string" ? result : JSON.stringify(result))
+            .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
           fullResponse += `\n<tool_response>${resultText}</tool_response>\n`;
         }
         workingMessages.push({ role: "user", content: toolResults });
