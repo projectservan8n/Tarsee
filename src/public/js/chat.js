@@ -56,6 +56,9 @@ const Chat = {
     // Typing indicator WebSocket
     this._initTypingSocket();
 
+    // Diagram node clicks: iframes post a message when a node is clicked
+    this._initDiagramListener();
+
     // Auto-resize textarea + command palette trigger
     this.elements.messageInput.addEventListener("input", () => {
       this._sendTypingIndicator();
@@ -1221,6 +1224,39 @@ const Chat = {
   _typingDebounce: null,
   _typingIndicatorTimeout: null,
 
+  _initDiagramListener() {
+    window.addEventListener("message", (event) => {
+      const data = event.data;
+      if (!data || data.type !== "tarsee:diagram-click") return;
+      // Verify the source is one of our canvas iframes (same-origin, /canvas/ path)
+      const iframes = document.querySelectorAll('iframe.canvas-iframe');
+      let trusted = false;
+      for (const f of iframes) {
+        if (f.contentWindow === event.source) { trusted = true; break; }
+      }
+      if (!trusted) return;
+
+      const label = String(data.label || "").slice(0, 200);
+      const sublabel = String(data.sublabel || "").slice(0, 200);
+      const custom = typeof data.question === "string" ? data.question.slice(0, 500) : "";
+      if (!label && !custom) return;
+
+      const question = custom
+        || (sublabel ? `Tell me more about: ${label} — ${sublabel}` : `Tell me more about: ${label}`);
+
+      // Populate the input and send through the normal flow
+      if (this.isStreaming) {
+        // Queue rather than dropping
+        this.elements.messageInput.value = question;
+        this.elements.sendBtn.disabled = false;
+      } else {
+        this.elements.messageInput.value = question;
+        this.elements.sendBtn.disabled = false;
+      }
+      this.send();
+    });
+  },
+
   _initTypingSocket() {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${proto}//${location.host}/ws`;
@@ -1991,7 +2027,16 @@ const Chat = {
       html = html.replace(`\x01CODE${i}\x01`, codeBlocks[i]);
     }
 
+    // Wrap consecutive <li>…</li> runs in a <ul> so CSS bullet styling applies
+    // (without this the browser draws default bullets outside the element,
+    // which visually collides with tool-call timeline dots on the left margin).
+    html = html.replace(/(?:<li>[\s\S]*?<\/li>(?:<br>)?)+/g, (run) => {
+      const cleaned = run.replace(/<br>/g, "");
+      return `<ul>${cleaned}</ul>`;
+    });
+
     // ── Re-inject extracted blocks ──
+    // Done AFTER list wrapping so tool-call blocks never get swallowed into a <ul>.
     for (let i = 0; i < blocks.length; i++) {
       html = html.replace(escapeHtml(PH(i)), blocks[i]);
     }

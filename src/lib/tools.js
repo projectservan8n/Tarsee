@@ -463,6 +463,58 @@ export const TOOLS = [
       required: ["title", "html"],
     },
   },
+
+  {
+    name: "create_diagram",
+    description: "Render a clickable flowchart/diagram (processes, workflows, architecture, decision trees). Embeds as an interactive iframe in chat — clicking a node posts a follow-up question back to the conversation. Prefer this over ASCII art or lengthy prose for multi-step flows.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Diagram title (also used as URL slug)" },
+        nodes: {
+          type: "array",
+          description: "Diagram nodes. Each node has a unique id.",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "Unique node id" },
+              label: { type: "string", description: "Main label shown in the node" },
+              sublabel: { type: "string", description: "Optional secondary line under the main label" },
+              kind: { type: "string", enum: ["trigger", "processing", "decision", "output", "note"], description: "Node type — drives color: trigger=grey (sources/storage), processing=purple (actions), decision=amber (yes/no branches), output=teal (results), note=transparent (annotation, not clickable)" },
+              question: { type: "string", description: "Optional custom question to ask when this node is clicked. Defaults to 'Tell me more about: <label>'" },
+            },
+            required: ["id", "label", "kind"],
+          },
+        },
+        edges: {
+          type: "array",
+          description: "Directional connections between nodes.",
+          items: {
+            type: "object",
+            properties: {
+              from: { type: "string", description: "Source node id" },
+              to: { type: "string", description: "Target node id" },
+              label: { type: "string", description: "Optional edge label, e.g. 'Yes', 'No', 'fails'" },
+            },
+            required: ["from", "to"],
+          },
+        },
+        legend: {
+          type: "array",
+          description: "Optional legend pills shown below the diagram.",
+          items: {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["trigger", "processing", "decision", "output", "note"] },
+              label: { type: "string" },
+            },
+            required: ["kind"],
+          },
+        },
+      },
+      required: ["title", "nodes", "edges"],
+    },
+  },
 ];
 
 /**
@@ -1362,6 +1414,33 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           return `Canvas created! View at: /canvas/${canvasId}/  (${result.size} bytes)`;
         } catch (err) {
           return `create_canvas error: ${err.message}`;
+        }
+      }
+
+      case "create_diagram": {
+        const { title, nodes, edges, legend } = toolInput;
+        try {
+          if (!Array.isArray(nodes) || nodes.length === 0) {
+            return "create_diagram error: nodes array is required and must be non-empty";
+          }
+          if (!Array.isArray(edges)) {
+            return "create_diagram error: edges array is required";
+          }
+          const ids = new Set(nodes.map((n) => n.id));
+          for (const e of edges) {
+            if (!ids.has(e.from) || !ids.has(e.to)) {
+              return `create_diagram error: edge references unknown node id (${e.from} -> ${e.to})`;
+            }
+          }
+          const { CanvasServer } = await import("./canvas.js");
+          const { renderDiagramHtml } = await import("./diagram-renderer.js");
+          const canvas = CanvasServer.create();
+          const canvasId = "diagram-" + title.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 40);
+          const html = renderDiagramHtml({ title, nodes, edges, legend, diagramId: canvasId });
+          const result = canvas.serve(canvasId, html);
+          return `Diagram created! View at: /canvas/${canvasId}/  (${nodes.length} nodes, ${edges.length} edges, ${result.size} bytes)`;
+        } catch (err) {
+          return `create_diagram error: ${err.message}`;
         }
       }
 

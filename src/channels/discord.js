@@ -264,6 +264,9 @@ You can use these special markers in your response:
             fullResponse += event.content;
           } else if (event.type === "tool_use") {
             toolCalls.push({ id: event.id, name: event.name, input: event.input });
+            // Serialize into fullResponse so the web UI can re-render the tool call
+            // when this conversation is viewed later.
+            fullResponse += `\n<tool_call>${JSON.stringify({ name: event.name, arguments: event.input })}</tool_call>\n`;
           } else if (event.type === "done") {
             stopReason = event.stopReason || "end_turn";
             break;
@@ -291,6 +294,8 @@ You can use these special markers in your response:
           console.log(`[discord] tool: ${tc.name}`);
           const result = await executeTool(tc.name, tc.input, toolCtx);
           toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
+          const resultText = typeof result === "string" ? result : JSON.stringify(result);
+          fullResponse += `\n<tool_response>${resultText}</tool_response>\n`;
         }
         workingMessages.push({ role: "user", content: toolResults });
 
@@ -321,15 +326,18 @@ You can use these special markers in your response:
           message.react(emoji).catch(() => {});
         }
 
-        // Replace status message with final response
-        // Discord 2000 char limit — if too long, edit with first chunk and send rest as new messages
-        const chunks = splitMessage(cleanText, 2000);
-        try {
-          await statusMsg.edit(chunks[0]);
-        } catch {
-          await retryOnRateLimit(() => message.reply(chunks[0]));
-        }
-        for (let i = 1; i < chunks.length; i++) {
+        // Strip tool_call/tool_response XML — those are only for web-UI replay,
+        // Discord users see the prose only.
+        const displayText = cleanText
+          .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+          .replace(/<tool_response>[\s\S]*?<\/tool_response>/g, "")
+          .replace(/\n{3,}/g, "\n\n")
+          .trim();
+        // Delete the status bubble and send the final answer as a fresh reply
+        // so Discord fires notifications / unread markers properly (edits don't).
+        try { await statusMsg.delete(); } catch {}
+        const chunks = splitMessage(displayText, 2000);
+        for (let i = 0; i < chunks.length; i++) {
           await retryOnRateLimit(() => message.reply(chunks[i]));
         }
       } else {

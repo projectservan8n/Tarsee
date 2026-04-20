@@ -123,14 +123,17 @@ export async function createTelegramBot(config, db) {
       ctx.sendChatAction("typing").catch(() => {});
     }, 4000);
 
-    // Send initial status message that we'll edit in-place
+    // Send initial status message that we'll edit in-place.
+    // disable_notification=true: we don't want the user pinged for "Thinking..." —
+    // the final answer is sent as a fresh reply below and that one notifies.
     let statusMsg = null;
     try {
       statusMsg = await ctx.reply("💭 Thinking...", {
+        disable_notification: true,
         ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
       });
     } catch {
-      statusMsg = await ctx.reply("💭 Thinking...");
+      statusMsg = await ctx.reply("💭 Thinking...", { disable_notification: true });
     }
 
     // Helper: edit status message (debounced to avoid rate limits)
@@ -201,6 +204,7 @@ You can use these special markers in your response:
             fullResponse += event.content;
           } else if (event.type === "tool_use") {
             toolCalls.push({ id: event.id, name: event.name, input: event.input });
+            fullResponse += `\n<tool_call>${JSON.stringify({ name: event.name, arguments: event.input })}</tool_call>\n`;
           } else if (event.type === "done") {
             stopReason = event.stopReason || "end_turn";
             break;
@@ -228,6 +232,8 @@ You can use these special markers in your response:
           console.log(`[telegram] tool: ${tc.name}`);
           const result = await executeTool(tc.name, tc.input, toolCtx);
           toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
+          const resultText = typeof result === "string" ? result : JSON.stringify(result);
+          fullResponse += `\n<tool_response>${resultText}</tool_response>\n`;
         }
         workingMessages.push({ role: "user", content: toolResults });
 
@@ -254,24 +260,21 @@ You can use these special markers in your response:
           }
         }
 
-        // Replace status message with final response
-        const htmlText = mdToTelegramHtml(cleanText);
+        // Strip tool_call/tool_response XML — those are stored for web-UI replay only.
+        const displayText = cleanText
+          .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+          .replace(/<tool_response>[\s\S]*?<\/tool_response>/g, "")
+          .replace(/\n{3,}/g, "\n\n")
+          .trim();
+        const htmlText = mdToTelegramHtml(displayText);
         const chunks = splitMessage(htmlText, 4096);
 
-        // Edit first chunk into the status message
-        try {
-          const opts = { parse_mode: "HTML" };
-          if (buttons?.length > 0 && chunks.length <= 1) {
-            opts.reply_markup = { inline_keyboard: buttonsToKeyboard(buttons) };
-          }
-          await ctx.telegram.editMessageText(chatId, statusMsg.message_id, null, chunks[0], opts);
-        } catch {
-          // Edit failed — send as new message
-          await ctx.reply(chunks[0], { parse_mode: "HTML" }).catch(() => ctx.reply(chunks[0].replace(/<[^>]+>/g, "")));
-        }
+        // Delete the status bubble so the final answer arrives as a fresh,
+        // notification-triggering reply (editMessageText is silent on Telegram).
+        try { await ctx.telegram.deleteMessage(chatId, statusMsg.message_id); } catch {}
 
-        // Send remaining chunks as new messages
-        for (let i = 1; i < chunks.length; i++) {
+        // Send final chunks as new replies — each one triggers a real notification + preview.
+        for (let i = 0; i < chunks.length; i++) {
           const isLast = i === chunks.length - 1;
           const opts = { parse_mode: "HTML" };
           if (isLast && buttons?.length > 0) {

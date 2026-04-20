@@ -127,6 +127,34 @@ export function createTarseeMcp(ctx) {
       ),
 
       tool(
+        "tarsee_create_diagram",
+        "Render a clickable flowchart/diagram in chat. Use for multi-step processes, workflows, architecture, decision trees. Each clickable node triggers a follow-up question when the user clicks it.",
+        {
+          title: z.string().describe("Diagram title"),
+          nodes: z.array(z.object({
+            id: z.string(),
+            label: z.string(),
+            sublabel: z.string().optional(),
+            kind: z.enum(["trigger", "processing", "decision", "output", "note"]),
+            question: z.string().optional(),
+          })).describe("Diagram nodes"),
+          edges: z.array(z.object({
+            from: z.string(),
+            to: z.string(),
+            label: z.string().optional(),
+          })).describe("Directional connections"),
+          legend: z.array(z.object({
+            kind: z.enum(["trigger", "processing", "decision", "output", "note"]),
+            label: z.string().optional(),
+          })).optional(),
+        },
+        async (args) => {
+          const result = await executeTool("create_diagram", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      tool(
         "tarsee_datetime",
         "Get current date/time/day or convert timezones. ALWAYS use this for dates and days of the week — never guess.",
         {
