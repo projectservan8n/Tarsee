@@ -146,32 +146,31 @@
 
 .tl-item {
   position: relative;
-  padding-bottom: var(--space-3);
+  padding-bottom: var(--space-2);
 }
 
 .tl-item:last-child {
   padding-bottom: 0;
 }
 
-/* Connector line from this dot down to the next item's dot */
+/* Hairline connector from this dot down to the next item's dot */
 .tl-item:not(:last-child)::before {
   content: '';
   position: absolute;
   left: calc(-1 * var(--space-5) + 7px);
-  top: 18px; /* below the dot */
-  bottom: calc(-1 * var(--space-3) + 7px); /* up to next dot */
-  width: 2px;
+  top: 16px;
+  bottom: calc(-1 * var(--space-2) + 6px);
+  width: 1px;
   background: var(--border);
-  border-radius: 1px;
 }
 
-/* Dot on the timeline */
+/* Dot on the timeline — small, flat, muted by default */
 .tl-dot {
   position: absolute;
-  left: calc(-1 * var(--space-5) + 4px);
-  top: 7px;
-  width: 8px;
-  height: 8px;
+  left: calc(-1 * var(--space-5) + 5px);
+  top: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: var(--radius-full);
   background: var(--text-muted);
   border: none;
@@ -187,9 +186,9 @@
   background: var(--success);
 }
 
-/* Text items */
+/* Text items — keep the dot muted like Claude Code; no accent fill */
 .tl-text .tl-dot {
-  background: var(--accent);
+  background: var(--text-muted);
 }
 
 .tl-text .tl-content {
@@ -266,7 +265,7 @@
 @media (max-width: 768px) {
   .tl-timeline { padding-left: var(--space-4); }
   .tl-item:not(:last-child)::before { left: calc(-1 * var(--space-4) + 5px); }
-  .tl-dot { left: calc(-1 * var(--space-4) + 2px); width: 7px; height: 7px; }
+  .tl-dot { left: calc(-1 * var(--space-4) + 3px); width: 6px; height: 6px; top: 7px; }
   .tl-tool-header { padding: var(--space-1) var(--space-2); }
   .tl-tool-name { font-size: var(--text-xs); }
   .tl-tool-detail { font-size: var(--text-sm); max-width: 150px; }
@@ -417,12 +416,14 @@
   margin-left: var(--space-4);
 }
 
-/* Timeline lists need extra indent to sit clearly inside content, not on the timeline line */
+/* Timeline and message lists: tight, muted markers so nothing fights with
+   the timeline dots on the left gutter. */
+.message-text ul,
+.message-text ol,
 .tl-content ul,
 .tl-content ol {
-  padding-left: var(--space-8);
-  margin: var(--space-2) 0;
-  margin-left: var(--space-2);
+  padding-left: var(--space-5);
+  margin: var(--space-1) 0;
 }
 
 .message-text ul,
@@ -433,20 +434,21 @@
 .message-text ul li,
 .tl-content ul li {
   position: relative;
-  padding-left: var(--space-4);
-  margin-bottom: var(--space-1);
+  padding-left: var(--space-3);
+  margin-bottom: 2px;
 }
 
 .message-text ul li::before,
 .tl-content ul li::before {
   content: "";
   position: absolute;
-  left: var(--space-1);
-  top: 0.6em;
-  width: 5px;
-  height: 5px;
+  left: 0;
+  top: 0.65em;
+  width: 4px;
+  height: 4px;
   border-radius: var(--radius-full);
   background: var(--text-muted);
+  opacity: 0.7;
 }
 
 .message-text ol,
@@ -456,12 +458,15 @@
 
 .message-text ol li,
 .tl-content ol li {
-  margin-bottom: var(--space-1);
+  margin-bottom: 2px;
+  padding-left: var(--space-1);
 }
 
 .message-text li::marker,
 .tl-content li::marker {
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm);
 }
 
 /* Nested lists */
