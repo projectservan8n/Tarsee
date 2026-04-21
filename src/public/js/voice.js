@@ -157,6 +157,16 @@ const Voice = {
     orb.addEventListener("touchend", () => {
       this.onPressEnd(Date.now() - pressStart);
     });
+
+    // Keyboard: Enter / Space toggle recording on the orb. The global
+    // keyboard handler in _initKeyboard handles hold-to-talk via Spacebar
+    // anywhere in the voice panel; this entry makes the orb itself AT-friendly.
+    orb.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        this.toggleRecording?.();
+      }
+    });
   },
 
   /** Set up chat mic button: hold-to-record + tap-to-toggle + drag-to-cancel. */

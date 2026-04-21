@@ -192,31 +192,42 @@ const Chat = {
       }
       if (text) {
         const origHTML = copyBtn.innerHTML;
-        navigator.clipboard.writeText(text).then(() => {
-          copyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        const flashSuccess = () => {
+          copyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
           copyBtn.style.opacity = "1";
-          setTimeout(() => { copyBtn.innerHTML = origHTML; copyBtn.style.opacity = ""; }, 1500);
-        }).catch(() => {
+          copyBtn.classList.add("copy-success");
+          setTimeout(() => {
+            copyBtn.innerHTML = origHTML;
+            copyBtn.style.opacity = "";
+            copyBtn.classList.remove("copy-success");
+          }, 1500);
+        };
+        navigator.clipboard.writeText(text).then(flashSuccess).catch(() => {
           // Fallback for non-HTTPS
           const ta = document.createElement("textarea");
           ta.value = text;
           document.body.appendChild(ta);
           ta.select();
-          document.execCommand("copy");
+          try { document.execCommand("copy"); } catch {}
           document.body.removeChild(ta);
-          copyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-          copyBtn.style.opacity = "1";
-          setTimeout(() => { copyBtn.innerHTML = origHTML; copyBtn.style.opacity = ""; }, 1500);
+          flashSuccess();
         });
       }
     });
 
-    // Welcome suggestion cards
+    // Welcome suggestion cards — clickable + keyboard activated (tabindex=0 set in markup)
+    const activateSuggestion = (el) => {
+      this.elements.messageInput.value = el.dataset.msg;
+      this.elements.sendBtn.disabled = false;
+      this.elements.messageInput.focus();
+    };
     document.querySelectorAll(".welcome-suggestion").forEach((el) => {
-      el.addEventListener("click", () => {
-        this.elements.messageInput.value = el.dataset.msg;
-        this.elements.sendBtn.disabled = false;
-        this.elements.messageInput.focus();
+      el.addEventListener("click", () => activateSuggestion(el));
+      el.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          activateSuggestion(el);
+        }
       });
     });
 
@@ -265,7 +276,8 @@ const Chat = {
         const maxTokens = 1_000_000;
         const pct = Math.min(100, Math.round((approxTokens / maxTokens) * 100));
         this.elements.contextBarFill.style.width = `${pct}%`;
-        this.elements.contextBarFill.className = `context-bar-fill${pct > 80 ? " danger" : pct > 50 ? " warning" : ""}`;
+        // Match the CSS class names — was "warning" which doesn't match ".warn".
+        this.elements.contextBarFill.className = `context-bar-fill${pct > 80 ? " danger" : pct > 50 ? " warn" : ""}`;
         this.elements.contextLabel.textContent = `${pct}%`;
         this.elements.sessionStatus.textContent = msgs.length > 0 ? `${msgs.length} messages` : "New Session";
       }).catch(() => {});
@@ -443,6 +455,10 @@ const Chat = {
     const el = this.elements.channelList;
     if (!el) return;
     el.innerHTML = "";
+    // Scroll fade hint — purely decorative, ignored by AT.
+    const fade = document.createElement("div");
+    fade.className = "channel-list-scroll-fade";
+    fade.setAttribute("aria-hidden", "true");
 
     // Always ensure web:default is visible
     const hasWeb = this.channels.some((c) => c.key === "web:default");
@@ -501,6 +517,8 @@ const Chat = {
         el.appendChild(item);
       }
     }
+
+    el.appendChild(fade);
   },
 
   async openChannel(channelKey, conversationId) {
@@ -1256,11 +1274,13 @@ const Chat = {
   _initTypingSocket() {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${proto}//${location.host}/ws`;
+    this._typingReconnect = this._typingReconnect || { attempts: 0, timer: null };
     try {
       this._typingWs = new WebSocket(url);
       this._typingWs.onopen = () => {
-        // Auth with session
-        const token = localStorage.getItem("tarsee_api_token");
+        // Successful connection resets backoff
+        this._typingReconnect.attempts = 0;
+        const token = API.token || localStorage.getItem("tarsee_api_token");
         if (token) this._typingWs.send(JSON.stringify({ type: "auth", token }));
       };
       this._typingWs.onmessage = (e) => {
@@ -1272,10 +1292,21 @@ const Chat = {
       };
       this._typingWs.onerror = () => {};
       this._typingWs.onclose = () => {
-        // Reconnect after 5s
-        setTimeout(() => this._initTypingSocket(), 5000);
+        // Exponential backoff with cap + jitter — avoid thundering herd
+        // if the server is down.
+        const attempt = ++this._typingReconnect.attempts;
+        const base = Math.min(30_000, 1000 * Math.pow(2, Math.min(attempt, 5)));
+        const jitter = Math.floor(Math.random() * 1000);
+        clearTimeout(this._typingReconnect.timer);
+        this._typingReconnect.timer = setTimeout(() => this._initTypingSocket(), base + jitter);
       };
-    } catch { /* ignore */ }
+    } catch {
+      // Schedule a retry even if construction threw
+      const attempt = ++this._typingReconnect.attempts;
+      const base = Math.min(30_000, 1000 * Math.pow(2, Math.min(attempt, 5)));
+      clearTimeout(this._typingReconnect.timer);
+      this._typingReconnect.timer = setTimeout(() => this._initTypingSocket(), base);
+    }
   },
 
   _sendTypingIndicator() {
@@ -1560,11 +1591,14 @@ const Chat = {
       overlay.innerHTML = `<img src="${src}" class="lightbox-img"><button class="lightbox-close">&times;</button>`;
     }
 
+    const escHandler = (e) => { if (e.key === "Escape") closeLightbox(); };
+    const closeLightbox = () => {
+      document.removeEventListener("keydown", escHandler);
+      overlay.remove();
+    };
     overlay.addEventListener("click", (e) => {
-      if (e.target === overlay || e.target.classList.contains("lightbox-close")) overlay.remove();
+      if (e.target === overlay || e.target.classList.contains("lightbox-close")) closeLightbox();
     });
-    // Escape to close
-    const escHandler = (e) => { if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", escHandler); } };
     document.addEventListener("keydown", escHandler);
     document.body.appendChild(overlay);
   },

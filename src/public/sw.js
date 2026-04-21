@@ -1,5 +1,6 @@
-// Tarsee Service Worker v2 — PWA install, offline shell, stale-while-revalidate
-const CACHE_NAME = "tarsee-v4";
+// Tarsee Service Worker — PWA install, offline shell, network-first for code.
+// Bump CACHE_NAME when shipping SW behavior changes to force old caches out.
+const CACHE_NAME = "tarsee-v5";
 
 const APP_SHELL = [
   "/",
@@ -61,7 +62,8 @@ self.addEventListener("fetch", (event) => {
 
   const isNavigation = event.request.mode === "navigate";
   const ext = url.pathname.split(".").pop();
-  const isStatic = ["css", "js", "png", "ico", "json", "woff2"].includes(ext);
+  const isCode = ext === "js" || ext === "css" || ext === "html";
+  const isAsset = ["png", "ico", "json", "woff2", "svg", "webp", "jpg", "jpeg"].includes(ext);
 
   if (isNavigation) {
     // HTML navigation: network-first, fallback to offline page
@@ -76,8 +78,23 @@ self.addEventListener("fetch", (event) => {
         })
         .catch(() => caches.match("/offline.html"))
     );
-  } else if (isStatic) {
-    // Static assets: stale-while-revalidate
+  } else if (isCode) {
+    // Code assets (JS/CSS/HTML): network-first so deploys take effect
+    // immediately. Cache is a fallback only when offline — prevents stale
+    // JS/CSS from breaking the app after the server ships new code.
+    event.respondWith(
+      fetch(event.request)
+        .then((res) => {
+          if (res.ok) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return res;
+        })
+        .catch(() => caches.match(event.request))
+    );
+  } else if (isAsset) {
+    // Static binary assets: cache-first (don't change often, big wins for cold start)
     event.respondWith(
       caches.match(event.request).then((cached) => {
         const networkFetch = fetch(event.request).then((res) => {
@@ -86,7 +103,7 @@ self.addEventListener("fetch", (event) => {
             caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
           }
           return res;
-        });
+        }).catch(() => cached);
         return cached || networkFetch;
       })
     );

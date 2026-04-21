@@ -154,8 +154,11 @@ const Settings = {
       const statusEl = document.getElementById(statusId);
       const autoSave = debounce(async () => {
         if (statusEl) { statusEl.textContent = "Saving..."; statusEl.className = "save-status saving"; }
-        await this.saveWorkspaceFile(name, el.value, true);
-        if (statusEl) { statusEl.textContent = "Saved"; statusEl.className = "save-status saved"; }
+        const ok = await this.saveWorkspaceFile(name, el.value, true);
+        if (statusEl) {
+          statusEl.textContent = ok ? "Saved" : "Save failed";
+          statusEl.className = ok ? "save-status saved" : "save-status error";
+        }
         setTimeout(() => { if (statusEl) { statusEl.textContent = ""; statusEl.className = "save-status"; } }, 2000);
       }, 1500);
       el.addEventListener("input", autoSave);
@@ -823,8 +826,13 @@ const Settings = {
         body: { name, content },
       });
       if (!silent) App.showToast(`${name} saved`, "success");
+      return true;
     } catch (err) {
-      if (!silent) App.showToast(err.message, "error");
+      // Errors always surface even in silent mode — silent was only
+      // meant to suppress success noise from per-keystroke autosave,
+      // not hide failures from the user.
+      App.showToast(`${name}: ${err.message}`, "error");
+      return false;
     }
   },
 
