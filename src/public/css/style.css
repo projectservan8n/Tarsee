@@ -2166,9 +2166,13 @@ html, body {
     display: none !important;
   }
 
-  /* Show desktop-only elements on desktop */
+  /* Show desktop-only elements on desktop.
+     `revert` lets each element fall back to whatever display its own class
+     defines — critical for .topbar-icon-btn (inline-flex) where forcing
+     `display: block` would kill the SVG flex-centering and shove the icon
+     to the upper-left of the button. */
   .desktop-only {
-    display: block !important;
+    display: revert !important;
   }
 
   /* Main content → grid area */
