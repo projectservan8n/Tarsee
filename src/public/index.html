@@ -22,25 +22,6 @@
   <!-- Design System -->
   <link rel="stylesheet" href="/css/tokens.css">
   <link rel="stylesheet" href="/css/utilities.css">
-  <!-- Tailwind CDN -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            surface: '#2b2a27',
-            'surface-hover': '#353430',
-            accent: { DEFAULT: '#c45a35', hover: '#d4663d', subtle: 'rgba(196,90,53,0.12)' },
-          },
-          fontFamily: {
-            body: ['Poppins', 'system-ui', '-apple-system', 'sans-serif'],
-            mono: ['JetBrains Mono', 'Fira Code', 'SF Mono', 'monospace'],
-          },
-        },
-      },
-    }
-  </script>
   <!-- Component Styles -->
   <link rel="stylesheet" href="/css/style.css">
   <link rel="stylesheet" href="/css/chat.css">
@@ -370,7 +351,13 @@
                 </select>
               </div>
               <div class="form-group" style="display:none">
-                <input type="password" id="settingsApiKey" autocomplete="off">
+                <!-- Wrapped in a no-op <form> so the browser doesn't warn
+                     about a password field outside any form. autocomplete=off
+                     keeps password managers from offering to save API keys
+                     as login credentials. display:contents keeps layout. -->
+                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                  <input type="password" id="settingsApiKey" autocomplete="off">
+                </form>
               </div>
               <div class="form-group">
                 <label>Model</label>
@@ -396,11 +383,15 @@
               <div>
               <div class="form-group">
                 <label>Telegram Bot Token</label>
-                <input type="password" id="settingsTelegramToken" placeholder="123456:ABC... (from @BotFather)" autocomplete="off">
+                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                  <input type="password" id="settingsTelegramToken" placeholder="123456:ABC... (from @BotFather)" autocomplete="off">
+                </form>
               </div>
               <div class="form-group">
                 <label>Discord Bot Token</label>
-                <input type="password" id="settingsDiscordToken" placeholder="Bot token (from Discord Developer Portal)" autocomplete="off">
+                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                  <input type="password" id="settingsDiscordToken" placeholder="Bot token (from Discord Developer Portal)" autocomplete="off">
+                </form>
               </div>
               </div>
               <button class="btn btn-primary" id="saveChannelsBtn">Save Channels</button>
@@ -559,7 +550,9 @@
               </div>
               <div class="form-group" id="openaiKeyGroup">
                 <label>OpenAI API Key</label>
-                <input type="password" id="settingsOpenaiKey" class="form-input" placeholder="sk-..." style="max-width:400px" autocomplete="off">
+                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                  <input type="password" id="settingsOpenaiKey" class="form-input" placeholder="sk-..." style="max-width:400px" autocomplete="off">
+                </form>
                 <div class="hint">Required for Whisper API and GPT-4o Transcribe. Get yours at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">platform.openai.com</a>.</div>
               </div>
               <div class="form-group">
@@ -654,7 +647,9 @@
               </div>
               <div class="form-group mb-3">
                 <label class="form-label">API Key</label>
-                <input type="password" class="form-input" id="captchaApiKey" placeholder="Your API key" style="max-width:400px">
+                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                  <input type="password" class="form-input" id="captchaApiKey" placeholder="Your API key" style="max-width:400px" autocomplete="off">
+                </form>
               </div>
               <button class="btn btn-sm" id="saveCaptchaBtn">Save</button>
             </div>
