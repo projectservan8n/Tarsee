@@ -49,6 +49,23 @@
   --glass-soft:         rgba(255, 255, 255, 0.08);
   --glass-medium:       rgba(255, 255, 255, 0.15);
 
+  /* Liquid-glass surfaces — semi-transparent backgrounds meant to pair with
+     backdrop-filter: blur(...) saturate(180%). Values balance iOS 26 feel
+     with enough opacity that text contrast still passes WCAG AA.
+     Fallback: when backdrop-filter isn't supported these degrade to a
+     darker solid tone (--bg-glass-solid). */
+  --bg-glass:           rgba(26, 26, 26, 0.72);
+  --bg-glass-strong:    rgba(26, 26, 26, 0.86);
+  --bg-glass-surface:   rgba(43, 42, 39, 0.78);
+  --bg-glass-sidebar:   rgba(30, 30, 28, 0.82);
+  --bg-glass-solid:     #1f1f1d;            /* fallback for no-backdrop-filter */
+  --blur-sm:            blur(16px) saturate(160%);
+  --blur-md:            blur(28px) saturate(180%);
+  --blur-lg:            blur(40px) saturate(180%);
+  /* 1px inner-top highlight simulating a light source on glass edge */
+  --glass-highlight:    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --glass-highlight-strong: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+
   /* Model badge colors */
   --model-opus:         #a78bfa;
   --model-opus-subtle:  rgba(167, 139, 250, 0.15);
@@ -121,13 +138,16 @@
   --space-12:  48px;
 
 
-  /* ---------- Radius ---------- */
+  /* ---------- Radius ----------
+     Concentric with iOS device bezels: containers that sit near the edge
+     want 24-28px so their inner radius lines up with the screen corner.
+     Smaller elements scale down proportionally. */
 
   --radius-sm:   6px;
-  --radius-md:   8px;
-  --radius-lg:   12px;
-  --radius-xl:   16px;
-  --radius-2xl:  20px;
+  --radius-md:   10px;
+  --radius-lg:   14px;
+  --radius-xl:   20px;
+  --radius-2xl:  28px;
   --radius-full: 9999px;
 
 

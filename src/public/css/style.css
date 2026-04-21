@@ -335,13 +335,26 @@ html, body {
 .topbar {
   height: var(--topbar-height-mobile);
   padding: 0 var(--space-3);
-  border-bottom: var(--space-px) solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: var(--bg);
   flex-shrink: 0;
   z-index: var(--z-sticky);
+  /* Liquid-glass treatment: solid fallback first, then glass override where
+     backdrop-filter is supported. The hairline border is replaced with a
+     specular highlight that reads as "light hitting the top edge of glass". */
+  background: var(--bg-glass-solid);
+  border-bottom: var(--space-px) solid var(--border);
+  box-shadow: var(--glass-highlight);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .topbar {
+    background: var(--bg-glass);
+    -webkit-backdrop-filter: var(--blur-md);
+    backdrop-filter: var(--blur-md);
+    border-bottom-color: transparent;
+  }
 }
 
 .topbar-left {
@@ -2538,4 +2551,123 @@ html.keyboard-open .chat-area {
   .topbar-right {
     gap: var(--space-1);
   }
+}
+
+
+/* ==========================================================================
+   iOS 26 "Liquid Glass" treatments (mobile + iPad)
+   Desktop keeps the warm-charcoal solid look; small screens get the glass
+   sidebar drawer, floating composer, and specular highlights that iOS 26
+   apps use. Everything wrapped in @supports so the solid fallback is safe.
+   ========================================================================== */
+
+.glass-highlight {
+  box-shadow: var(--glass-highlight), var(--shadow-md);
+}
+
+/* Voice orb: subtle specular rim so the "listening/speaking" pulse reads
+   as light on glass rather than a flat color blob. */
+.voice-orb {
+  box-shadow: var(--glass-highlight-strong);
+}
+
+/* Primary button: same light-on-edge treatment — separates it from ghost. */
+.btn-primary {
+  box-shadow: var(--glass-highlight), var(--shadow-sm);
+}
+.btn-primary:hover {
+  box-shadow: var(--glass-highlight-strong), var(--shadow-md);
+}
+
+/* Mobile & iPad-portrait glass drawer + floating composer.
+   Scope to max-width: 1024px so iPad lands in the glass treatment too. */
+@media (max-width: 1024px) {
+
+  /* Sidebar drawer (mobile only — desktop static sidebar stays solid). */
+  @media (max-width: 767px) {
+    .sidebar {
+      background: var(--bg-glass-solid);
+      border-right-color: transparent;
+      box-shadow: var(--glass-highlight);
+    }
+    @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+      .sidebar {
+        background: var(--bg-glass-sidebar);
+        -webkit-backdrop-filter: var(--blur-lg);
+        backdrop-filter: var(--blur-lg);
+      }
+      .sidebar.open {
+        /* Drop the hard shadow + specular highlight when open so the glass
+           edge catches the light against the darkened main content. */
+        box-shadow: var(--glass-highlight-strong), var(--shadow-xl);
+      }
+    }
+
+    /* Floating composer: the single biggest iOS-native polish lever. */
+    .input-area {
+      background: transparent;
+      border-top: none;
+      padding: 0 var(--space-2) calc(env(safe-area-inset-bottom, var(--space-2)) + var(--space-2) + var(--keyboard-inset, 0px));
+    }
+    .input-container {
+      border-radius: var(--radius-2xl);
+      background: var(--bg-glass-solid);
+      border-color: transparent;
+      box-shadow: var(--glass-highlight), 0 8px 24px rgba(0, 0, 0, 0.35);
+    }
+    @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+      .input-container {
+        background: var(--bg-glass-surface);
+        -webkit-backdrop-filter: var(--blur-md);
+        backdrop-filter: var(--blur-md);
+      }
+    }
+    .input-container:focus-within {
+      box-shadow: var(--glass-highlight-strong),
+                  0 0 0 2px var(--accent-subtle),
+                  0 8px 24px rgba(0, 0, 0, 0.4);
+    }
+    /* Reserve bottom space in the chat so the last message isn't tucked
+       behind the floating composer. */
+    .chat-area {
+      padding-bottom: var(--space-3);
+    }
+
+    /* Session bar on mobile — matches the glass composer aesthetic */
+    .session-bar {
+      border-bottom: none;
+      box-shadow: var(--glass-highlight);
+    }
+  }
+
+  /* Modals, lightbox, voice panel get softer rounded corners on small
+     screens — not full glass (text on these needs max contrast) but
+     concentric with the floating composer. */
+  .delete-modal,
+  .kbd-overlay-panel {
+    border-radius: var(--radius-2xl);
+    box-shadow: var(--glass-highlight), var(--shadow-xl);
+  }
+
+  .voice-panel {
+    border-radius: 0;  /* full-screen, but content inside gets soft radii */
+  }
+
+  .lightbox-img,
+  .lightbox-frame,
+  .lightbox-sheet {
+    border-radius: var(--radius-2xl);
+  }
+}
+
+/* Even on desktop, the command palette + modals benefit from the concentric
+   radius bump the tokens already gave them. Specular highlight on modals
+   adds depth without changing the base aesthetic. */
+.delete-modal-overlay .delete-modal,
+.kbd-overlay-panel {
+  box-shadow: var(--glass-highlight), var(--shadow-xl);
+}
+
+.command-palette {
+  box-shadow: var(--glass-highlight), var(--shadow-lg);
 }
