@@ -401,15 +401,45 @@ const Chat = {
     this.paletteIndex = 0;
     this.paletteCommands = commands;
 
-    this.elements.commandPaletteList.innerHTML = commands
-      .map((cmd, i) =>
-        `<div class="command-palette-item${i === 0 ? " active" : ""}" data-index="${i}">
-          <span class="command-palette-name">/${escapeHtml(cmd.name)}</span>
-          <span class="command-palette-desc">${escapeHtml(cmd.description)}</span>
-        </div>`
-      ).join("");
+    // Group by category, preserving insertion order so the categories
+    // line up with how getCommandList orders them.
+    const groups = new Map();
+    commands.forEach((cmd) => {
+      const cat = cmd.category || "Other";
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat).push(cmd);
+    });
 
-    this.elements.commandPaletteList.querySelectorAll(".command-palette-item").forEach((el) => {
+    // Flatten back to a positional index for keyboard nav.
+    const flat = [];
+    let html = "";
+    groups.forEach((items, cat) => {
+      html += `<div class="cmd-palette-section-title">${escapeHtml(cat)}</div>`;
+      items.forEach((cmd) => {
+        const idx = flat.length;
+        flat.push(cmd);
+        // Right-aligned hint = the usage shape minus the leading "/name"
+        const usage = cmd.usage || `/${cmd.name}`;
+        const hintMatch = usage.match(/^\/\S+\s+(.+)$/);
+        const hint = hintMatch ? hintMatch[1] : "";
+        html += `<div class="cmd-palette-item${idx === 0 ? " active" : ""}" data-index="${idx}" role="option">
+          <div class="cmd-palette-row-main">
+            <span class="cmd-palette-name">/${escapeHtml(cmd.name)}</span>
+            <span class="cmd-palette-desc">${escapeHtml(cmd.description || "")}</span>
+          </div>
+          ${hint ? `<span class="cmd-palette-hint">${escapeHtml(hint)}</span>` : ""}
+        </div>`;
+      });
+    });
+    this.paletteCommands = flat;
+
+    this.elements.commandPaletteList.innerHTML = html;
+
+    // Replace any previous filter input — the input lives at the top of the
+    // palette and forwards keystrokes to the textarea so the existing
+    // filter pipeline still drives results. We do NOT add it inside the
+    // composer flow; keyboard nav from the textarea continues to work.
+    this.elements.commandPaletteList.querySelectorAll(".cmd-palette-item").forEach((el) => {
       el.addEventListener("click", () => this.selectPaletteItem(parseInt(el.dataset.index, 10)));
       el.addEventListener("mouseenter", () => {
         this.paletteIndex = parseInt(el.dataset.index, 10);
@@ -439,7 +469,7 @@ const Chat = {
   },
 
   updatePaletteHighlight() {
-    const items = this.elements.commandPaletteList.querySelectorAll(".command-palette-item");
+    const items = this.elements.commandPaletteList.querySelectorAll(".cmd-palette-item");
     items.forEach((el, i) => el.classList.toggle("active", i === this.paletteIndex));
     items[this.paletteIndex]?.scrollIntoView({ block: "nearest" });
   },

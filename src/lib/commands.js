@@ -633,11 +633,33 @@ export async function processCommand(message, ctx = {}) {
 
 /**
  * Get the list of commands (for UI hints).
+ *
+ * Each command is auto-categorized by name so the palette can render
+ * grouped sections without us touching every COMMAND entry. Override by
+ * adding a `category: "..."` field directly on a command if needed.
  */
+const CATEGORY_RULES = [
+  { cat: "Context", names: ["clear", "new", "send", "export", "remember", "memory"] },
+  { cat: "Model",   names: ["model", "think", "auto-route", "voice"] },
+  { cat: "Automation", names: ["webhook", "cron", "briefing"] },
+  { cat: "Comms",   names: ["email"] },
+  { cat: "Tools",   names: ["skill", "doctor", "stop", "status", "stats", "usage", "version"] },
+  { cat: "Help",    names: ["help"] },
+];
+
+function categorize(name, cmd) {
+  if (cmd.category) return cmd.category;
+  for (const rule of CATEGORY_RULES) {
+    if (rule.names.includes(name)) return rule.cat;
+  }
+  return "Other";
+}
+
 export function getCommandList() {
   return Object.entries(COMMANDS).map(([name, cmd]) => ({
     name,
     description: cmd.description,
     usage: cmd.usage,
+    category: categorize(name, cmd),
   }));
 }

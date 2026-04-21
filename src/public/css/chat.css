@@ -935,6 +935,11 @@ details[open] .block-preview { display: none; }
    7. Command Palette
    ========================================================================== */
 
+/* ----------------------------------------------------------------------
+   Command palette — grouped sections, right-aligned hints.
+   Mirrors the Claude Code VS Code extension's slash menu so the surface
+   reads as "categorized list of actions" instead of a flat dropdown.
+---------------------------------------------------------------------- */
 .command-palette {
   position: absolute;
   bottom: 100%;
@@ -946,47 +951,97 @@ details[open] .block-preview { display: none; }
   background: var(--bg-elevated);
   border: var(--space-px) solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
-  max-height: 280px;
+  box-shadow: var(--glass-highlight), var(--shadow-lg);
+  max-height: 360px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   z-index: var(--z-overlay);
   animation: paletteIn var(--duration-normal) var(--ease-default);
 }
 
-.command-palette-list {
-  padding: var(--space-1);
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .command-palette {
+    background: var(--bg-glass-strong);
+    -webkit-backdrop-filter: var(--blur-md);
+    backdrop-filter: var(--blur-md);
+  }
 }
 
-.command-palette-item {
+.command-palette-list {
+  padding: var(--space-1) 0 var(--space-1);
+}
+
+/* Section title — small uppercase label between groups */
+.cmd-palette-section-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: 0;
+  padding: var(--space-2) var(--space-3) var(--space-1);
+}
+.cmd-palette-section-title:not(:first-child) {
+  border-top: var(--space-px) solid var(--border-light);
+  margin-top: var(--space-1);
+  padding-top: var(--space-3);
+}
+
+/* Individual command row — name + description on the left, hint on right */
+.cmd-palette-item {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-3);
-  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-default);
+  border-radius: 0;  /* full-bleed rows like the VS Code menu */
 }
 
-.command-palette-item:hover,
-.command-palette-item.active {
-  background: var(--accent-subtle);
+.cmd-palette-item:hover,
+.cmd-palette-item.active {
+  background: var(--bg-surface-hover);
 }
 
-.command-palette-name {
-  font-family: var(--font-mono);
+.cmd-palette-row-main {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 1;
+}
+
+.cmd-palette-name {
+  font-family: var(--font-body);
   font-size: var(--text-base);
-  font-weight: 600;
-  color: var(--accent);
+  font-weight: 500;
+  color: var(--text);
   white-space: nowrap;
   flex-shrink: 0;
 }
 
-.command-palette-desc {
+.cmd-palette-desc {
   font-size: var(--text-sm);
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cmd-palette-hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  margin-left: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* Mobile: tighten spacing so the menu fits on phones */
+@media (max-width: 480px) {
+  .command-palette { max-height: 50vh; }
+  .cmd-palette-item { padding: var(--space-2) var(--space-3); }
+  .cmd-palette-desc { display: none; }  /* description truncates poorly on narrow */
 }
 
 
