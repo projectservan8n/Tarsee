@@ -42,6 +42,13 @@
   --overlay-dense:      rgba(0, 0, 0, 0.7);
   --overlay-opaque:     rgba(0, 0, 0, 0.85);
 
+  /* Light-on-dark glass tints (used by PIN pad keys + similar surfaces).
+     Kept separate from --overlay-* (which tints OVER content toward black)
+     because these tint a dark surface TOWARD lighter glass. */
+  --glass-subtle:       rgba(255, 255, 255, 0.04);
+  --glass-soft:         rgba(255, 255, 255, 0.08);
+  --glass-medium:       rgba(255, 255, 255, 0.15);
+
   /* Model badge colors */
   --model-opus:         #a78bfa;
   --model-opus-subtle:  rgba(167, 139, 250, 0.15);

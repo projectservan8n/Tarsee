@@ -66,7 +66,10 @@ html, body {
   top: 0;
   bottom: 0;
   width: var(--sidebar-width);
-  max-width: 85vw;
+  /* Always leave a ~44px sliver of the main content visible when the drawer
+     is open so users have a visual tap target to close it. The old 85vw
+     cap was dead on any device wider than ~305px. */
+  max-width: calc(100vw - 44px);
   padding-top: env(safe-area-inset-top, 0px);
   z-index: var(--z-sidebar);
   transform: translateX(-100%);
@@ -77,6 +80,8 @@ html, body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* Don't let scrolling the channel list bounce-scroll the whole app. */
+  overscroll-behavior: contain;
 }
 
 .sidebar.open {
@@ -866,8 +871,12 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 100vh on iOS Safari with the URL bar visible overflows the card — use
+     dvh so the viewport matches what the user can actually see. */
   min-height: 100vh;
+  min-height: 100dvh;
   padding: var(--space-5);
+  padding-bottom: calc(var(--space-5) + env(safe-area-inset-bottom, 0px));
   background: var(--bg);
 }
 
@@ -934,7 +943,9 @@ html, body {
   align-items: center;
   justify-content: center;
   min-height: 100vh;
+  min-height: 100dvh;
   padding: var(--space-5);
+  padding-bottom: calc(var(--space-5) + env(safe-area-inset-bottom, 0px));
   background: var(--bg);
 }
 
@@ -1869,7 +1880,7 @@ html, body {
   height: 80px;
   border-radius: var(--radius-full);
   border: 1px solid var(--border-hover);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--glass-subtle);
   color: var(--text);
   cursor: pointer;
   display: flex;
@@ -1883,11 +1894,11 @@ html, body {
 }
 
 .pin-key:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--glass-soft);
 }
 
 .pin-key:active {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--glass-medium);
   transform: scale(0.95);
 }
 
@@ -1909,7 +1920,7 @@ html, body {
 }
 
 .pin-key-delete:active {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--glass-subtle);
   color: var(--text);
 }
 
@@ -1934,9 +1945,13 @@ html, body {
 
 /* ==========================================================================
    25. Responsive — desktop overrides
+   Breakpoint at 768px: iPad (all sizes) and larger get the static-sidebar
+   layout. iPad Mini portrait (744px) and phones stay on the mobile drawer.
+   Mobile rules use `max-width: 768px` (inclusive), so at exactly 768 the
+   later desktop rules override via cascade order — intentional.
    ========================================================================== */
 
-@media (min-width: 769px) {
+@media (min-width: 768px) {
 
   /* App layout → grid with sidebar */
   .app {
@@ -2077,13 +2092,19 @@ html, body {
 }
 
 /* ==========================================================================
-   26. iPad / tablet tweaks (769px – 1024px)
+   26. iPad / tablet tweaks (768px – 1024px)
+   Narrower sidebar and tighter padding so iPad portrait (768-834px)
+   doesn't feel cramped when both sidebar and chat share the viewport.
    ========================================================================== */
 
-@media (min-width: 769px) and (max-width: 1024px) {
+@media (min-width: 768px) and (max-width: 1024px) {
 
   :root {
     --sidebar-width: 220px;
+    /* Give the settings tab column a touch more room on iPad so the labels
+       don't truncate — desktop uses 180px but iPad has less horizontal real
+       estate once the main sidebar and content padding are subtracted. */
+    --settings-sidebar-width: 200px;
   }
 
   .chat-area {
@@ -2096,6 +2117,13 @@ html, body {
 
   .settings-content {
     padding: var(--space-4) var(--space-6) var(--space-8);
+  }
+
+  /* Voice panel sized between mobile and full desktop so the orb doesn't
+     dominate iPad portrait. */
+  .voice-orb {
+    width: 112px;
+    height: 112px;
   }
 }
 
@@ -2416,4 +2444,98 @@ html, body {
 .lightbox-sheet {
   background: var(--bg-elevated);
   color: var(--text);
+}
+
+
+/* ==========================================================================
+   Audit round 2: Mobile + iPad polish (2026-04-21)
+   ========================================================================== */
+
+/* ---- Prevent accidental pull-to-refresh / rubber-banding on iOS ---- */
+.chat-area,
+.console-panel,
+.sidebar,
+.settings-content,
+.voice-conversation {
+  overscroll-behavior: contain;
+}
+html, body {
+  /* Page itself shouldn't bounce — individual scroll regions handle it. */
+  overscroll-behavior-y: none;
+}
+
+/* ---- Virtual keyboard inset (set by app.js via visualViewport) ---- */
+.input-area {
+  padding-bottom: calc(
+    env(safe-area-inset-bottom, var(--space-2)) +
+    var(--space-1) +
+    var(--keyboard-inset, 0px)
+  );
+}
+html.keyboard-open .chat-area {
+  /* Auto-scroll behaviour + tighter bottom so the newest message shows
+     when the keyboard pushes the viewport up. */
+  scroll-padding-bottom: calc(var(--keyboard-inset, 0px) + var(--space-4));
+}
+
+/* ---- Short landscape viewports (phones rotated) ---- */
+@media (max-height: 600px) and (orientation: landscape) {
+  /* PIN pad: shrink the grid so it fits without scrolling. */
+  .pin-grid {
+    grid-template-columns: repeat(3, 56px);
+    gap: var(--space-2);
+  }
+  .pin-key {
+    width: 56px;
+    height: 56px;
+  }
+  .pin-digit {
+    font-size: 22px;
+  }
+  .pin-letters {
+    display: none;
+  }
+  .pin-dots {
+    margin-bottom: var(--space-2);
+  }
+  .pin-title {
+    font-size: var(--text-lg);
+    margin-bottom: var(--space-2);
+  }
+
+  /* Welcome: kill the big hero so suggestions + composer fit. */
+  .welcome .logo-large {
+    width: 40px;
+    height: 40px;
+    margin-bottom: var(--space-2);
+  }
+  .welcome h2 {
+    font-size: var(--text-lg);
+    margin-bottom: var(--space-1);
+  }
+  .welcome p {
+    font-size: var(--text-sm);
+    margin-bottom: var(--space-3);
+  }
+  .welcome-hint {
+    display: none;
+  }
+
+  /* Chat padding collapses so the tail of the conversation is visible. */
+  .chat-area {
+    padding: var(--space-2) var(--space-3);
+  }
+}
+
+/* ---- Tiny phones (≤360px) ---- */
+@media (max-width: 360px) {
+  :root {
+    --sidebar-width: 240px;
+  }
+  .topbar {
+    padding: 0 var(--space-2);
+  }
+  .topbar-right {
+    gap: var(--space-1);
+  }
 }

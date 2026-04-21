@@ -231,6 +231,7 @@
 
 .console-panel.maximized {
   height: calc(100vh - var(--topbar-height));
+  height: calc(100dvh - var(--topbar-height));
 }
 
 /* --- 7. Console Badge --- */
@@ -268,5 +269,12 @@
 @media (max-width: 768px) {
   .console-panel {
     left: 0;
+  }
+  /* Leave more chat visible on phones — 45dvh instead of the 340px desktop
+     default which swallows most of a 667px screen after topbar/input. */
+  .console-panel.open {
+    height: 45dvh;
+    /* Respect the home indicator so the command input isn't under it. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 }
