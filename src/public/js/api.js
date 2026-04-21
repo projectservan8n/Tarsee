@@ -38,7 +38,19 @@ const API = {
       opts.body = JSON.stringify(opts.body);
     }
 
-    const res = await fetch(path, { ...opts, headers, credentials: "same-origin" });
+    let res;
+    try {
+      res = await fetch(path, { ...opts, headers, credentials: "same-origin" });
+    } catch (err) {
+      // Surface offline / network failures instead of letting callers hang
+      // on a silently rejected promise.
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        if (window.App?.showToast) App.showToast("You're offline — changes will retry when you reconnect", "info");
+      } else if (window.App?.showToast) {
+        App.showToast("Network error — check your connection", "error");
+      }
+      throw err;
+    }
 
     if (res.status === 401) {
       // Session expired — redirect to login
@@ -71,8 +83,21 @@ const API = {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Login failed");
-    this.token = data.apiToken;
+    await this.loadApiToken();
     return data;
+  },
+
+  async loadApiToken() {
+    try {
+      const res = await fetch("/api/auth/api-token", { credentials: "same-origin" });
+      if (res.ok) {
+        const { apiToken } = await res.json();
+        this.token = apiToken || null;
+        if (this.token) {
+          try { localStorage.setItem("tarsee_api_token", this.token); } catch {}
+        }
+      }
+    } catch {}
   },
 
   async logout() {

@@ -326,6 +326,25 @@ chatRouter.post("/send", async (req, res) => {
   // Build user content blocks for the AI when attachments are present
   let userContentForAI = cleanMessage;
   if (Array.isArray(attachments) && attachments.length > 0) {
+    // Defend against OOM: cap attachment count and per-attachment decoded size.
+    if (attachments.length > 10) {
+      return res.status(413).json({ error: "Too many attachments (max 10)" });
+    }
+    let totalBytes = 0;
+    for (const att of attachments) {
+      const b64 = typeof att?.data === "string" ? att.data : "";
+      // Approximate decoded size from base64 length (each 4 chars → 3 bytes)
+      const approxBytes = Math.floor((b64.length * 3) / 4);
+      if (approxBytes > LIMITS.UPLOAD_MAX_BYTES) {
+        return res.status(413).json({
+          error: `Attachment too large (max ${LIMITS.UPLOAD_MAX_BYTES} bytes per file)`,
+        });
+      }
+      totalBytes += approxBytes;
+    }
+    if (totalBytes > LIMITS.UPLOAD_MAX_BYTES * 2) {
+      return res.status(413).json({ error: "Total attachment size too large" });
+    }
     const contentBlocks = [];
     for (const att of attachments) {
       if (att.type === "image") {
@@ -415,9 +434,22 @@ chatRouter.post("/send", async (req, res) => {
   // --- Claude Code provider: runs its own agentic loop ---
   if (providerId === "claude-code") {
     const controller = new AbortController();
+    // If a previous stream is still active for this conversation, abort it
+    // before replacing — prevents two streams writing to the same convo and
+    // the old stream's cleanup clobbering the new one.
+    const previous = activeRequests.get(convId);
+    if (previous && previous !== controller) {
+      try { previous.abort(); } catch {}
+    }
     activeRequests.set(convId, controller);
-    // Abort if client disconnects the SSE stream
-    res.on("close", () => { if (!res.writableEnded) { controller.abort(); } activeRequests.delete(convId); });
+    // Abort if client disconnects the SSE stream. Only delete the map entry
+    // if WE still own it — a newer request may have replaced us.
+    res.on("close", () => {
+      if (!res.writableEnded) { try { controller.abort(); } catch {} }
+      if (activeRequests.get(convId) === controller) {
+        activeRequests.delete(convId);
+      }
+    });
 
     try {
       const existingSessionId = convStore.getClaudeSessionId(convId);
@@ -569,9 +601,12 @@ chatRouter.post("/send", async (req, res) => {
       if (!controller.signal.aborted) {
         sendSSE(res, "error", { message: err.message });
       }
+    } finally {
+      if (activeRequests.get(convId) === controller) {
+        activeRequests.delete(convId);
+      }
+      if (!res.writableEnded) res.end();
     }
-    activeRequests.delete(convId);
-    res.end();
     return;
   }
 
@@ -666,8 +701,8 @@ chatRouter.post("/send", async (req, res) => {
 
     sendSSE(res, "done", { conversationId: convId, usage });
   } catch (err) {
-    sendSSE(res, "error", { message: err.message });
+    if (!res.writableEnded) sendSSE(res, "error", { message: err.message });
+  } finally {
+    if (!res.writableEnded) res.end();
   }
-
-  res.end();
 });

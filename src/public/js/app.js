@@ -11,8 +11,12 @@ const App = {
         this.showLogin();
       } else if (!authenticated && !needsPassword) {
         // No password set — auto-authenticate (dev mode)
+        await API.loadApiToken();
         this.showApp();
       } else {
+        // Already authenticated (session cookie still valid) — hydrate API token
+        // from the session-protected endpoint so WebSocket + external calls work.
+        await API.loadApiToken();
         this.showApp();
       }
     } catch (err) {
@@ -28,18 +32,32 @@ const App = {
     // Desktop: classic form login
     const form = document.getElementById("loginForm");
     const errorEl = document.getElementById("loginError");
+    const submitBtn = form.querySelector("button[type='submit']");
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       errorEl.style.display = "none";
 
       const password = document.getElementById("loginPassword").value;
+      // Disable the submit button so a second click can't race the first —
+      // and give visible feedback that something is happening.
+      const prevLabel = submitBtn?.textContent;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.setAttribute("aria-busy", "true");
+        submitBtn.textContent = "Signing in…";
+      }
       try {
         await API.login(password);
         this.showApp();
       } catch (err) {
         errorEl.textContent = err.message;
         errorEl.style.display = "block";
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.removeAttribute("aria-busy");
+          if (prevLabel) submitBtn.textContent = prevLabel;
+        }
       }
     });
 
@@ -212,6 +230,96 @@ const App = {
     setInterval(() => {
       fetch("/", { credentials: "same-origin" }).catch(() => {});
     }, 60 * 60 * 1000);
+
+    // Offline / online indicator — one persistent banner at the top of the
+    // screen, announced to assistive tech via role="status".
+    const offlineBanner = document.createElement("div");
+    offlineBanner.id = "offlineBanner";
+    offlineBanner.className = "offline-banner";
+    offlineBanner.setAttribute("role", "status");
+    offlineBanner.setAttribute("aria-live", "polite");
+    offlineBanner.textContent = "You're offline — changes will retry when you reconnect";
+    document.body.appendChild(offlineBanner);
+
+    const updateOnline = () => {
+      const online = navigator.onLine !== false;
+      offlineBanner.classList.toggle("visible", !online);
+    };
+    window.addEventListener("online", () => {
+      updateOnline();
+      this.showToast("Back online", "success");
+    });
+    window.addEventListener("offline", updateOnline);
+    updateOnline();
+
+    // Global keyboard shortcuts. Only fire when the user isn't typing into
+    // an input field, otherwise `?` would block text entry.
+    document.addEventListener("keydown", (e) => {
+      const target = e.target;
+      const typing =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.tagName === "SELECT" ||
+        target?.isContentEditable;
+
+      // `?` toggles the shortcut overlay. Uses shift-slash on US layout so
+      // we also accept "/" with shift — matches the GitHub / Linear muscle memory.
+      if (!typing && (e.key === "?" || (e.key === "/" && e.shiftKey))) {
+        e.preventDefault();
+        this.toggleKbdOverlay();
+      }
+
+      // Escape closes the overlay when it's open.
+      if (e.key === "Escape" && document.getElementById("kbdOverlay")) {
+        document.getElementById("kbdOverlay")?.remove();
+      }
+    });
+  },
+
+  toggleKbdOverlay() {
+    const existing = document.getElementById("kbdOverlay");
+    if (existing) { existing.remove(); return; }
+
+    const overlay = document.createElement("div");
+    overlay.id = "kbdOverlay";
+    overlay.className = "kbd-overlay";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-label", "Keyboard shortcuts");
+    overlay.innerHTML = `
+      <div class="kbd-overlay-panel">
+        <h3>Keyboard shortcuts</h3>
+        <div class="kbd-group">
+          <div class="kbd-group-title">Navigation</div>
+          <span class="kbd-label">Show this help</span>
+          <span class="kbd-keys"><span class="kbd-key">?</span></span>
+          <span class="kbd-label">Close dialogs / cancel</span>
+          <span class="kbd-keys"><span class="kbd-key">Esc</span></span>
+
+          <div class="kbd-group-title">Composer</div>
+          <span class="kbd-label">Command palette</span>
+          <span class="kbd-keys"><span class="kbd-key">/</span></span>
+          <span class="kbd-label">Send message</span>
+          <span class="kbd-keys"><span class="kbd-key">Enter</span></span>
+          <span class="kbd-label">New line</span>
+          <span class="kbd-keys"><span class="kbd-key">Shift</span><span class="kbd-key">Enter</span></span>
+          <span class="kbd-label">Max thinking effort for this message</span>
+          <span class="kbd-keys"><span class="kbd-key">!!</span></span>
+
+          <div class="kbd-group-title">Voice</div>
+          <span class="kbd-label">Hold to talk (when voice panel is open)</span>
+          <span class="kbd-keys"><span class="kbd-key">Space</span></span>
+          <span class="kbd-label">Cancel recording</span>
+          <span class="kbd-keys"><span class="kbd-key">Space</span><span class="kbd-key">C</span></span>
+        </div>
+        <div style="text-align:right">
+          <button class="btn btn-sm" id="kbdClose">Close</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+    document.getElementById("kbdClose")?.addEventListener("click", () => overlay.remove());
   },
 
   /**

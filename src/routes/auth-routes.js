@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { validatePassword, createSession, destroySession, recordFailedAttempt, clearFailedAttempts } from "../middleware/auth.js";
+import { validatePassword, createSession, destroySession, recordFailedAttempt, clearFailedAttempts, requireAuth } from "../middleware/auth.js";
 import config from "../config/env.js";
 
 export const authRouter = Router();
@@ -41,10 +41,19 @@ authRouter.post("/login", (req, res) => {
     path: "/",
   });
 
-  res.json({
-    ok: true,
-    apiToken: config.API_TOKEN, // Return API token for WebSocket/external use
-  });
+  // Do NOT return the API token here — fetch it separately via /api/auth/api-token
+  // (session-authenticated) so it doesn't end up in access logs or browser history.
+  res.json({ ok: true });
+});
+
+/**
+ * GET /api/auth/api-token
+ * Returns the API token for the authenticated session (used by WebSocket + external clients).
+ * Requires an active session — the token is never returned in the login response body.
+ */
+authRouter.get("/api-token", requireAuth, (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ apiToken: config.API_TOKEN });
 });
 
 /**
