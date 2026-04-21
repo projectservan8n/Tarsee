@@ -94,6 +94,17 @@ export function setupWebSocket(server, db, app) {
     ws._tarsee_db = db;
     ws._tarsee_channelManager = app?.get?.("channelManager") || null;
 
+    // Register this connection with the gateway so cross-device broadcasts
+    // (chat sync, typing indicators) actually reach other open tabs/devices.
+    // Without this, GatewayManager.connections is empty and broadcastToOthers()
+    // is silently a no-op.
+    const gw = getGatewayManager();
+    const clientId = crypto.randomUUID();
+    ws._tarsee_clientId = clientId;
+    if (ws.isAuthenticated) {
+      gw.addConnection(clientId, ws);
+    }
+
     // If already authenticated via session/token at upgrade, send auth_ok immediately
     if (ws.isAuthenticated) {
       ws.send(JSON.stringify({ type: "auth_ok" }));
@@ -116,6 +127,10 @@ export function setupWebSocket(server, db, app) {
         } else if (validateApiToken(msg.token)) {
           ws.isAuthenticated = true;
           clearTimeout(ws.authTimeout);
+          // Late-auth path: register with gateway now that we trust them.
+          if (ws._tarsee_clientId) {
+            getGatewayManager().addConnection(ws._tarsee_clientId, ws);
+          }
           ws.send(JSON.stringify({ type: "auth_ok" }));
         } else {
           ws.send(JSON.stringify({ type: "auth_error", error: "Invalid token" }));
@@ -210,6 +225,10 @@ export function setupWebSocket(server, db, app) {
 
     ws.on("close", () => {
       clearTimeout(ws.authTimeout);
+      // Drop from gateway so broadcasts stop trying to send to a dead socket.
+      if (ws._tarsee_clientId) {
+        getGatewayManager().removeConnection(ws._tarsee_clientId);
+      }
     });
   });
 
