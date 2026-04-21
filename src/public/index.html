@@ -777,6 +777,9 @@
   <script src="/js/setup.js"></script>
   <script src="/js/files.js"></script>
   <script src="/js/app.js"></script>
+  <!-- Custom <select> replacement runs last so settings.js has already
+       wired its event listeners on the native selects before we wrap them. -->
+  <script src="/js/custom-select.js"></script>
   <script src="/js/sw-register.js"></script>
 </body>
 </html>
