@@ -40,6 +40,7 @@ const Chat = {
       topbarTitle: document.getElementById("topbarTitle"),
       chatFileInput: document.getElementById("chatFileInput"),
       attachBtn: document.getElementById("attachBtn"),
+      slashBtn: document.getElementById("slashBtn"),
       attachmentsPreview: document.getElementById("attachmentsPreview"),
     };
 
@@ -137,6 +138,22 @@ const Chat = {
 
     // File upload: attach button triggers hidden input
     this.elements.attachBtn.addEventListener("click", () => this.elements.chatFileInput.click());
+
+    // Slash button: opens the command palette without requiring the user to
+    // type "/". Inserts a slash if the input is empty so the palette has
+    // something to filter; otherwise just shows the full command list.
+    this.elements.slashBtn?.addEventListener("click", () => {
+      const input = this.elements.messageInput;
+      if (!input.value.startsWith("/")) {
+        input.value = "/" + input.value;
+        input.dispatchEvent(new Event("input"));
+      }
+      input.focus();
+      // Place caret at end so further typing filters the list.
+      const len = input.value.length;
+      input.setSelectionRange(len, len);
+      this.showPalette(this.commands);
+    });
     this.elements.chatFileInput.addEventListener("change", (e) => {
       if (e.target.files.length) {
         this.addPendingFiles(Array.from(e.target.files));
@@ -893,7 +910,7 @@ const Chat = {
 
     this.isStreaming = true;
     this.elements.sendBtn.disabled = false;
-    this.elements.sendBtn.classList.add("stop-mode");
+    this.elements.sendBtn.classList.add("stop-mode", "is-streaming");
     this.elements.sendBtn.title = "Stop generation (Esc)";
 
     try {
@@ -1050,7 +1067,7 @@ const Chat = {
 
     this.isStreaming = false;
     this.elements.sendBtn.disabled = false;
-    this.elements.sendBtn.classList.remove("stop-mode");
+    this.elements.sendBtn.classList.remove("stop-mode", "is-streaming");
     this.elements.sendBtn.title = "Send";
     this.elements.messageInput.focus();
 
@@ -1101,7 +1118,7 @@ const Chat = {
 
     this.isStreaming = true;
     this.elements.sendBtn.disabled = false;
-    this.elements.sendBtn.classList.add("stop-mode");
+    this.elements.sendBtn.classList.add("stop-mode", "is-streaming");
     this.elements.sendBtn.title = "Stop generation (Esc)";
 
     try {
@@ -1199,7 +1216,7 @@ const Chat = {
 
     this.isStreaming = false;
     this.elements.sendBtn.disabled = false;
-    this.elements.sendBtn.classList.remove("stop-mode");
+    this.elements.sendBtn.classList.remove("stop-mode", "is-streaming");
     this.elements.sendBtn.title = "Send";
     this.elements.messageInput.focus();
 

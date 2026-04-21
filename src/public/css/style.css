@@ -609,36 +609,51 @@ html, body {
   border-top: var(--space-px) solid var(--border);
 }
 
+/* Composer: 2-row layout matching Claude Code's VS Code extension.
+   Row 1 = textarea + voice mic. Row 2 = attach + slash + spacer + send.
+   The container owns the rounded border and shadow; rows are transparent. */
 .input-container {
   max-width: var(--input-max-width);
   margin: 0 auto;
   background: var(--bg-elevated);
   border: var(--space-px) solid var(--border);
-  border-radius: var(--radius-2xl);
-  padding: var(--space-1);
+  border-radius: var(--radius-xl);
+  padding: var(--space-2) var(--space-2) var(--space-1);
   display: flex;
-  align-items: flex-end;
-  gap: var(--space-0-5);
+  flex-direction: column;
+  gap: var(--space-1);
   box-shadow: var(--shadow-sm);
   transition: border-color var(--duration-normal) var(--ease-default),
               box-shadow var(--duration-normal) var(--ease-default);
 }
 
 .input-container:focus-within {
-  border-color: var(--accent);
+  border-color: var(--border-hover);
   box-shadow: 0 0 0 var(--space-0-5) var(--accent-subtle), var(--shadow-sm);
 }
+
+.input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.input-row-top {
+  align-items: flex-end;
+}
+
+.input-spacer { flex: 1 1 auto; }
 
 .input-container textarea {
   flex: 1;
   border: none;
   outline: none;
-  padding: var(--space-3) var(--space-3);
+  padding: var(--space-2) var(--space-3);
   font-family: var(--font-body);
-  font-size: var(--text-lg); /* 16px prevents iOS zoom */
+  font-size: var(--text-md);  /* 15px reads cleaner in a 2-row composer */
   line-height: var(--leading-normal);
   resize: none;
-  min-height: var(--space-6);
+  min-height: 28px;
   max-height: 200px;
   background: transparent;
   color: var(--text);
@@ -651,35 +666,84 @@ html, body {
   overflow: hidden;
 }
 
+/* All composer buttons share base layout. Variants below add color. */
 .input-btn {
-  width: var(--space-10);
-  height: var(--space-10);
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  margin: 0;
   border: none;
   border-radius: var(--radius-md);
   cursor: pointer;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--duration-normal) var(--ease-default);
+  transition: background var(--duration-fast) var(--ease-default),
+              color var(--duration-fast) var(--ease-default),
+              transform var(--duration-fast) var(--ease-default);
   flex-shrink: 0;
   background: transparent;
   color: var(--text-muted);
+  font: inherit;
+  line-height: 1;
 }
 
-.input-btn:hover {
+.input-btn > svg { display: block; flex-shrink: 0; }
+
+.input-btn-ghost:hover {
   background: var(--bg-surface-hover);
   color: var(--text);
 }
-
-.input-btn.send {
-  background: var(--accent);
+.input-btn-ghost:focus-visible {
+  outline: none;
+  background: var(--bg-surface-hover);
   color: var(--text);
-  border-radius: var(--radius-full);
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
+/* Send button: square-rounded, accent-filled, with stop-icon swap when
+   .is-streaming is set (so the same button doubles as a stop control). */
+.input-btn-send {
+  width: 32px;
+  height: 32px;
+  background: var(--accent);
+  color: var(--text-inverse);
+  border-radius: var(--radius-md);
+  box-shadow: var(--glass-highlight, none);
+}
+.input-btn-send:hover {
+  background: var(--accent-hover);
+}
+.input-btn-send:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+.input-btn-send:disabled {
+  background: var(--bg-surface-hover);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.input-btn-send .send-icon-stop { display: none; }
+.input-btn-send.is-streaming .send-icon-arrow { display: none; }
+.input-btn-send.is-streaming .send-icon-stop { display: block; }
+.input-btn-send.is-streaming {
+  background: var(--bg-surface);
+  color: var(--text);
+}
+.input-btn-send.is-streaming:hover {
+  background: var(--bg-surface-hover);
+}
+
+/* Legacy `.input-btn.send` selector (kept as alias in case any code path
+   still toggles it). New code should prefer .input-btn-send. */
+.input-btn.send {
+  background: var(--accent);
+  color: var(--text-inverse);
+  border-radius: var(--radius-md);
+}
 .input-btn.send:hover {
   background: var(--accent-hover);
-  transform: scale(1.05);
 }
 
 .input-btn.send:active {
