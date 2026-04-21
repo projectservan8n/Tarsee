@@ -148,23 +148,14 @@
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 3h4l2 2h6v8H2V3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
           </button>
           <button class="topbar-icon-btn desktop-only" id="qrCodeBtn" title="QR Code for Mobile" aria-label="Show QR code to open on mobile">
+            <!-- Classic 4-corner viewfinder/scanner bracket — the same glyph
+                 iOS Camera + Wallet use for "scan". Four-fold symmetric so
+                 it visually centers cleanly inside the button. -->
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <!-- Three corner position markers (outer square + inner dot) make
-                   this read as "QR code" at a glance. All three corners match
-                   in size + inner treatment so the icon is visually balanced. -->
-              <rect x="1.5" y="1.5" width="5" height="5" rx="0.5" stroke="currentColor" stroke-width="1.2"/>
-              <rect x="3" y="3" width="2" height="2" fill="currentColor"/>
-              <rect x="9.5" y="1.5" width="5" height="5" rx="0.5" stroke="currentColor" stroke-width="1.2"/>
-              <rect x="11" y="3" width="2" height="2" fill="currentColor"/>
-              <rect x="1.5" y="9.5" width="5" height="5" rx="0.5" stroke="currentColor" stroke-width="1.2"/>
-              <rect x="3" y="11" width="2" height="2" fill="currentColor"/>
-              <!-- Data dots in the bottom-right where the 4th position marker
-                   isn't — matches real QR code visual grammar. -->
-              <rect x="9.5" y="9.5" width="1.5" height="1.5" fill="currentColor"/>
-              <rect x="13" y="9.5" width="1.5" height="1.5" fill="currentColor"/>
-              <rect x="11.25" y="11.25" width="1.5" height="1.5" fill="currentColor"/>
-              <rect x="9.5" y="13" width="1.5" height="1.5" fill="currentColor"/>
-              <rect x="13" y="13" width="1.5" height="1.5" fill="currentColor"/>
+              <path d="M2 5V3a1 1 0 011-1h2M11 2h2a1 1 0 011 1v2M2 11v2a1 1 0 001 1h2M14 11v2a1 1 0 01-1 1h-2"
+                stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <!-- Tiny center dot so it's not a hollow viewfinder -->
+              <rect x="6.5" y="6.5" width="3" height="3" rx="0.5" fill="currentColor"/>
             </svg>
           </button>
           <button class="topbar-icon-btn" id="voiceModeBtn" title="Voice" aria-label="Open voice mode">

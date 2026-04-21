@@ -193,12 +193,17 @@ const App = {
         const url = window.location.href;
         const modal = document.createElement("div");
         modal.id = "qrModal";
-        modal.className = "delete-modal-overlay";
+        modal.className = "delete-modal-overlay qr-modal-overlay";
+        // Modal uses flex column centering on the QR holder so the SVG sits
+        // dead-center regardless of its rendered width — text-align:center
+        // alone doesn't center block-level SVG output from the qrcode lib.
         modal.innerHTML = `
-          <div class="delete-modal" style="text-align:center;max-width:320px">
-            <div class="delete-modal-header">Scan on Mobile</div>
-            <div id="qrCanvas" style="margin:16px auto;"></div>
-            <p class="text-muted text-sm" style="word-break:break-all">${url}</p>
+          <div class="delete-modal qr-modal">
+            <div class="delete-modal-header qr-modal-header">Scan on Mobile</div>
+            <div class="qr-canvas-holder">
+              <div id="qrCanvas" class="qr-canvas"></div>
+            </div>
+            <p class="qr-modal-url">${escapeAttr(url)}</p>
             <div class="delete-modal-actions">
               <button class="btn btn-ghost" id="qrClose">Close</button>
             </div>
@@ -211,19 +216,29 @@ const App = {
           const qr = qrcode(0, "M");
           qr.addData(url);
           qr.make();
-          document.getElementById("qrCanvas").innerHTML = qr.createSvgTag(6, 0);
-          // Style the SVG
+          // Render at 5px modules — fits a 240px max-width holder cleanly.
+          document.getElementById("qrCanvas").innerHTML = qr.createSvgTag(5, 0);
           const svg = document.querySelector("#qrCanvas svg");
           if (svg) {
-            svg.style.borderRadius = "8px";
-            svg.style.background = "#fff";
-            svg.style.padding = "12px";
+            // Force the SVG to fill the holder so flex centers it predictably.
+            svg.removeAttribute("width");
+            svg.removeAttribute("height");
+            svg.style.width = "100%";
+            svg.style.height = "auto";
+            svg.style.display = "block";
           }
         }
 
         document.getElementById("qrClose").addEventListener("click", () => modal.remove());
         modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
       });
+    }
+
+    // Escape HTML attribute values for safe interpolation.
+    function escapeAttr(s) {
+      return String(s).replace(/[&<>"']/g, (c) => (
+        { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]
+      ));
     }
 
     // Refresh CSRF token periodically (every hour)

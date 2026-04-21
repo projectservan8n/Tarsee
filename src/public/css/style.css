@@ -1527,6 +1527,66 @@ html, body {
   justify-content: flex-end;
 }
 
+/* QR modal — flex-column centering for the QR canvas + URL.
+   The qrcode library renders an SVG that's a block element, so
+   text-align:center on the parent doesn't center it. We use flex on a
+   dedicated holder + cap the SVG width so it can never push outside. */
+.qr-modal {
+  max-width: 320px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.qr-modal-header {
+  width: 100%;
+  text-align: center;
+  margin-bottom: 0;
+}
+
+.qr-canvas-holder {
+  width: 240px;
+  max-width: 100%;
+  margin: 0 auto;
+  background: #fff;
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qr-canvas {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qr-canvas svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.qr-modal-url {
+  width: 100%;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  word-break: break-all;
+  text-align: center;
+  margin: 0;
+}
+
+.qr-modal .delete-modal-actions {
+  width: 100%;
+  justify-content: center;
+}
+
 .delete-modal-cancel {
   background: var(--bg-surface);
   border: var(--space-px) solid var(--border);
