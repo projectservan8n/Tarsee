@@ -239,6 +239,8 @@ const Voice = {
       btn.classList.add("voice-active");
       cancelHint.style.display = "flex";
       startTimer();
+      // Haptic: "recording started".
+      App.buzz?.(20);
 
       const chunks = [];
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";

@@ -231,6 +231,30 @@ const App = {
       fetch("/", { credentials: "same-origin" }).catch(() => {});
     }, 60 * 60 * 1000);
 
+    // --- iOS virtual keyboard handling ---
+    // iOS Safari doesn't resize the layout viewport when the keyboard opens;
+    // it just slides content up so the composer can end up behind the keys.
+    // Mirror the keyboard height onto a CSS var so layout can reserve space.
+    if (typeof window.visualViewport !== "undefined") {
+      const vv = window.visualViewport;
+      const updateKeyboardInset = () => {
+        const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+        document.documentElement.style.setProperty("--keyboard-inset", inset + "px");
+        document.documentElement.classList.toggle("keyboard-open", inset > 80);
+      };
+      vv.addEventListener("resize", updateKeyboardInset);
+      vv.addEventListener("scroll", updateKeyboardInset);
+      updateKeyboardInset();
+
+      // When the message input gets focus on a phone, make sure the
+      // composer scrolls into view after the keyboard animation settles.
+      const input = document.getElementById("messageInput");
+      input?.addEventListener("focus", () => {
+        if (window.innerWidth > 768) return;
+        setTimeout(() => input.scrollIntoView({ block: "end", behavior: "smooth" }), 280);
+      });
+    }
+
     // Offline / online indicator — one persistent banner at the top of the
     // screen, announced to assistive tech via role="status".
     const offlineBanner = document.createElement("div");
@@ -332,10 +356,22 @@ const App = {
     toast.textContent = message;
     container.appendChild(toast);
 
+    // Tiny haptic cue on touch devices — Android honors this, iOS ignores it.
+    if (type === "success") this.buzz([8, 40, 8]);
+    else if (type === "error") this.buzz([20, 60, 20]);
+
     setTimeout(() => {
       toast.classList.add("removing");
       setTimeout(() => toast.remove(), 200);
     }, 4000);
+  },
+
+  /**
+   * Fire a haptic pattern if the device supports it. Ignored silently on iOS
+   * and desktop. Keep patterns short — long vibrations feel nagging.
+   */
+  buzz(pattern) {
+    try { navigator.vibrate?.(pattern); } catch { /* noop */ }
   },
 };
 

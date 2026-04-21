@@ -797,6 +797,9 @@ const Chat = {
     const hasFiles = this.pendingFiles.length > 0;
     if (!text && !hasFiles) return;
 
+    // Subtle tactile ack on touch devices (Android; iOS ignores).
+    App.buzz?.(12);
+
     // Queue if already streaming
     if (this.isStreaming) {
       const attachments = hasFiles ? await this.buildAttachments() : [];
