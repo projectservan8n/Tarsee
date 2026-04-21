@@ -374,6 +374,14 @@ html, body {
   /* 44px touch target (was 40px — fat-fingered adjacent buttons on mobile). */
   width: 44px;
   height: 44px;
+  /* Reset all browser-default button padding/line-height so the inner SVG
+     centers exactly. Without this, <button> elements pick up a small UA
+     padding that shifts the flex-centered icon by 1-2px versus the <a>
+     elements that share the same class — visible as off-center icons. */
+  padding: 0;
+  margin: 0;
+  line-height: 1;
+  font: inherit;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -384,6 +392,12 @@ html, body {
   justify-content: center;
   transition: all var(--duration-normal) var(--ease-default);
   text-decoration: none;
+}
+
+/* SVG inside an icon button should never inherit baseline/sizing weirdness. */
+.topbar-icon-btn > svg {
+  display: block;
+  flex-shrink: 0;
 }
 
 .topbar-icon-btn:hover {

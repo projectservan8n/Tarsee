@@ -148,7 +148,24 @@
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 3h4l2 2h6v8H2V3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
           </button>
           <button class="topbar-icon-btn desktop-only" id="qrCodeBtn" title="QR Code for Mobile" aria-label="Show QR code to open on mobile">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="10" y="10" width="3" height="3" fill="currentColor"/></svg>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <!-- Three corner position markers (outer square + inner dot) make
+                   this read as "QR code" at a glance. All three corners match
+                   in size + inner treatment so the icon is visually balanced. -->
+              <rect x="1.5" y="1.5" width="5" height="5" rx="0.5" stroke="currentColor" stroke-width="1.2"/>
+              <rect x="3" y="3" width="2" height="2" fill="currentColor"/>
+              <rect x="9.5" y="1.5" width="5" height="5" rx="0.5" stroke="currentColor" stroke-width="1.2"/>
+              <rect x="11" y="3" width="2" height="2" fill="currentColor"/>
+              <rect x="1.5" y="9.5" width="5" height="5" rx="0.5" stroke="currentColor" stroke-width="1.2"/>
+              <rect x="3" y="11" width="2" height="2" fill="currentColor"/>
+              <!-- Data dots in the bottom-right where the 4th position marker
+                   isn't — matches real QR code visual grammar. -->
+              <rect x="9.5" y="9.5" width="1.5" height="1.5" fill="currentColor"/>
+              <rect x="13" y="9.5" width="1.5" height="1.5" fill="currentColor"/>
+              <rect x="11.25" y="11.25" width="1.5" height="1.5" fill="currentColor"/>
+              <rect x="9.5" y="13" width="1.5" height="1.5" fill="currentColor"/>
+              <rect x="13" y="13" width="1.5" height="1.5" fill="currentColor"/>
+            </svg>
           </button>
           <button class="topbar-icon-btn" id="voiceModeBtn" title="Voice" aria-label="Open voice mode">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2a2.5 2.5 0 012.5 2.5v3a2.5 2.5 0 01-5 0v-3A2.5 2.5 0 018 2z" stroke="currentColor" stroke-width="1.3"/><path d="M4 7.5a4 4 0 008 0M8 13v-1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
