@@ -2999,3 +2999,60 @@ html.keyboard-open .chat-area {
   .cs-item { padding: var(--space-3); font-size: var(--text-base); }
   .cs-panel { max-height: 60vh !important; }
 }
+
+
+/* ==========================================================================
+   Mobile composer — collapse 2-row Claude Code layout to single row.
+   Phones expect the iOS Messages pattern: [+] [textarea] [mic] [send]
+   in one compact row. The desktop 2-row split (textarea/voice on top,
+   attach/slash/spacer/send underneath) wastes vertical space on a phone
+   where the keyboard already eats half the screen.
+
+   We use display:contents on .input-row to dissolve the row wrappers so
+   all 6 children flow into .input-container directly, then reorder via
+   `order:` and hide the bits that don't belong on mobile.
+   ========================================================================== */
+@media (max-width: 767px) {
+  .input-container {
+    flex-direction: row;
+    align-items: flex-end;
+    gap: var(--space-1);
+    padding: var(--space-1-5);
+  }
+  .input-row {
+    display: contents;
+  }
+
+  /* Keep the textarea between the leading + and trailing mic/send.
+     Without explicit order, the .input-row-bottom children would render
+     after the textarea (DOM order). */
+  #attachBtn      { order: 1; }
+  #messageInput   { order: 2; }
+  #voiceInputBtn  { order: 3; }
+  #sendBtn        { order: 4; }
+
+  /* Slash / + spacer don't belong in the single-row mobile layout.
+     Slash menu is still reachable: type "/" in the textarea. */
+  #slashBtn,
+  .input-spacer {
+    display: none;
+  }
+
+  /* Compact textarea so the row stays one-line tall when empty. */
+  .input-container textarea {
+    padding: var(--space-2) var(--space-2);
+    font-size: var(--text-md);
+    min-height: 32px;
+  }
+
+  /* Shrink the trailing buttons so the textarea has more room. */
+  .input-btn {
+    width: 36px;
+    height: 36px;
+  }
+  .input-btn-send {
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-full);  /* round send button on mobile feels iOS-native */
+  }
+}
