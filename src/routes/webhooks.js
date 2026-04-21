@@ -16,6 +16,7 @@ import { SettingsStore } from "../db/settings.js";
 import { ConversationStore } from "../db/conversations.js";
 import { runCronJob } from "../lib/cron.js";
 import { requireAuth } from "../middleware/auth.js";
+import config from "../config/env.js";
 
 export const webhookRouter = Router();
 
@@ -45,6 +46,11 @@ function timingSafeEq(a, b) {
 /**
  * Verify webhook token from the Authorization: Bearer header only.
  * Query-param tokens are rejected to prevent leakage via logs/history.
+ *
+ * Accepts either the server's canonical API_TOKEN (from env/disk) or an
+ * optional override stored in settings under "api.token" — the latter
+ * lets operators issue a webhook-only token without exposing the full
+ * server token. Either one passes.
  */
 function verifyWebhookToken(req) {
   const auth = req.headers.authorization;
@@ -52,8 +58,12 @@ function verifyWebhookToken(req) {
   const token = auth.slice(7).trim();
   if (!token) return false;
 
+  if (config.API_TOKEN && timingSafeEq(token, config.API_TOKEN)) return true;
+
   const storedToken = settingsStore.get("api.token");
-  return !!storedToken && timingSafeEq(token, storedToken);
+  if (storedToken && timingSafeEq(token, storedToken)) return true;
+
+  return false;
 }
 
 /**

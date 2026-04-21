@@ -167,16 +167,27 @@ const COMMANDS = {
   webhook: {
     description: "Manage webhook triggers (external events → AI)",
     usage: "/webhook [add <id> <prompt>|remove <id>|list]",
-    handler: (args, ctx) => {
+    handler: async (args, ctx) => {
       const settingsStore = ctx.settingsStore;
       if (!settingsStore) return "Settings not available.";
       const hooks = settingsStore.get("webhooks") || {};
+      // Prefer the settings override (if operator set one) else fall back
+      // to the canonical API_TOKEN so the printed curl actually works.
+      const resolveToken = async () => {
+        const override = settingsStore.get("api.token");
+        if (override) return override;
+        try {
+          const { default: config } = await import("../config/env.js");
+          return config.API_TOKEN || "(not set)";
+        } catch { return "(not set)"; }
+      };
+
       if (!args || args.toLowerCase() === "list") {
         const entries = Object.entries(hooks);
         if (entries.length === 0) return "No webhooks configured.\n\nAdd one: `/webhook add github-pr Review this PR: {{payload}}`";
         const lines = entries.map(([id, h]) => `- **${id}** → ${h.prompt?.slice(0, 60) || "(default)"}...`);
-        const token = settingsStore.get("api.token") || "(not set)";
-        return `**Webhooks (${entries.length}):**\n${lines.join("\n")}\n\n**URL:** \`POST /api/webhooks/<id>?token=${token}\``;
+        const token = await resolveToken();
+        return `**Webhooks (${entries.length}):**\n${lines.join("\n")}\n\n**Trigger:**\n\`\`\`\ncurl -X POST /api/webhooks/<id> \\\n  -H "Authorization: Bearer ${token}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"key":"value"}'\n\`\`\``;
       }
       const parts = args.split(/\s+/);
       const cmd = parts[0].toLowerCase();
@@ -185,8 +196,8 @@ const COMMANDS = {
         const prompt = parts.slice(2).join(" ") || null;
         hooks[id] = { prompt, channel: "web:default", created: new Date().toISOString() };
         settingsStore.set("webhooks", hooks);
-        const token = settingsStore.get("api.token") || "(not set)";
-        return `Webhook **${id}** created.\n\n**URL:** \`POST /api/webhooks/${id}?token=${token}\`\n\nSend a JSON POST to trigger the AI.`;
+        const token = await resolveToken();
+        return `Webhook **${id}** created.\n\n**Trigger:**\n\`\`\`\ncurl -X POST /api/webhooks/${id} \\\n  -H "Authorization: Bearer ${token}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"key":"value"}'\n\`\`\`\n\nSend any JSON body; reference it in prompts as \`{{payload}}\` or \`{{json}}\`.`;
       }
       if (cmd === "remove" && parts[1]) {
         if (!hooks[parts[1]]) return `Webhook "${parts[1]}" not found.`;
