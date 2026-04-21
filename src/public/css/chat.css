@@ -1037,19 +1037,22 @@ details[open] .block-preview { display: none; }
   max-width: 110px;
 }
 
-/* X button to remove a pending file */
+/* X button to remove a pending file.
+   Visual is a compact 20px dot (scale not shrunk so it doesn't dominate the
+   thumbnail), but the element itself is 32px with padding so it passes the
+   touch-target guideline. On pointer devices we keep the tiny-visual vibe
+   via ::before. */
 .chat-attachment-remove {
   position: absolute;
-  top: -6px;
-  right: -6px;
-  width: var(--space-5);
-  height: var(--space-5);
+  top: -10px;
+  right: -10px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   border-radius: var(--radius-full);
-  background: var(--danger);
-  color: var(--text);
+  background: transparent;
+  color: transparent;
   border: none;
-  font-size: var(--text-xs);
-  line-height: 1;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1058,7 +1061,29 @@ details[open] .block-preview { display: none; }
   transition: opacity var(--duration-normal) var(--ease-default);
 }
 
-.chat-attachment-thumb:hover .chat-attachment-remove {
+.chat-attachment-remove::before {
+  content: "×";
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--danger);
+  color: var(--text);
+  font-size: var(--text-xs);
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-attachment-remove:focus-visible {
+  outline: none;
+}
+.chat-attachment-remove:focus-visible::before {
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.chat-attachment-thumb:hover .chat-attachment-remove,
+.chat-attachment-remove:focus-visible {
   opacity: 1;
 }
 
@@ -1144,7 +1169,8 @@ details[open] .block-preview { display: none; }
   height: 44px;
   border-radius: var(--radius-full);
   border: none;
-  background: rgba(255, 255, 255, 0.1);
+  /* Tokenized — was rgba(255,255,255,0.1/0.2) hardcoded. */
+  background: var(--bg-surface);
   color: var(--text);
   font-size: 24px;
   cursor: pointer;
@@ -1155,16 +1181,23 @@ details[open] .block-preview { display: none; }
 }
 
 .lightbox-close:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--bg-surface-hover);
 }
 
-/* PDF viewer in lightbox */
+.lightbox-close:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* PDF viewer in lightbox.
+   Tokenized — was hardcoded #fff. PDFs still render over the iframe's own
+   bg so setting a token-friendly frame ensures the chrome matches dark mode. */
 .lightbox-frame {
   width: 90vw;
   height: 90vh;
   border: none;
   border-radius: var(--radius-lg);
-  background: #fff;
+  background: var(--bg-elevated);
 }
 
 /* Spreadsheet / text preview in lightbox */
@@ -1268,7 +1301,9 @@ details[open] .block-preview { display: none; }
   font-family: var(--font-body);
   opacity: 0;
   transition: all var(--duration-normal) var(--ease-default);
-  z-index: var(--z-base);
+  /* Float above message content, not under it. --z-base (0) meant the copy
+     button could be obscured by inline content with its own stacking context. */
+  z-index: var(--z-sticky);
 }
 
 .message:hover .msg-copy-btn {
@@ -1278,6 +1313,12 @@ details[open] .block-preview { display: none; }
 .msg-copy-btn:hover {
   background: var(--bg-surface-hover);
   color: var(--text);
+}
+
+.msg-copy-btn:focus-visible {
+  outline: none;
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 

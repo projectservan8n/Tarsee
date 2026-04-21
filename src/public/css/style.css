@@ -267,8 +267,11 @@ html, body {
 
 .channel-item .channel-delete {
   display: none;
-  width: var(--space-6);
-  height: var(--space-6);
+  /* 44px min touch target per WCAG 2.5.5. Uses padding on a small icon so
+     visual footprint stays tight while the hit area passes AA. */
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -350,8 +353,9 @@ html, body {
 }
 
 .topbar-icon-btn {
-  width: var(--space-10);
-  height: var(--space-10);
+  /* 44px touch target (was 40px — fat-fingered adjacent buttons on mobile). */
+  width: 44px;
+  height: 44px;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -367,6 +371,11 @@ html, body {
 .topbar-icon-btn:hover {
   background: var(--bg-surface-hover);
   color: var(--text);
+}
+
+.topbar-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 .topbar-title {
@@ -553,30 +562,7 @@ html, body {
   display: none;
 }
 
-/* Copy icon — subtle, top-right, hover only */
-.msg-copy-btn {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: var(--space-1);
-  border-radius: var(--radius-sm);
-  opacity: 0;
-  transition: opacity var(--duration-normal) var(--ease-default), color var(--duration-fast);
-  line-height: 1;
-}
-
-.message:hover .msg-copy-btn {
-  opacity: 0.4;
-}
-
-.msg-copy-btn:hover {
-  opacity: 1;
-  color: var(--text);
-}
+/* .msg-copy-btn is defined in chat.css (single source of truth). */
 
 
 /* ==========================================================================
@@ -848,6 +834,13 @@ html, body {
   color: var(--text);
   background: var(--bg-surface-hover);
   transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.welcome-suggestion:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 .welcome-hint {
@@ -1040,10 +1033,29 @@ html, body {
 .btn:hover {
   background: var(--bg-surface-hover);
   border-color: var(--border-hover);
+  box-shadow: var(--shadow-sm);
 }
 
 .btn:active {
   transform: scale(0.97);
+}
+
+/* Keyboard-only focus ring — previously buttons had no visible focus at all. */
+.btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.btn[aria-busy="true"] {
+  opacity: 0.75;
+  cursor: progress;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 .btn-primary {
@@ -2216,4 +2228,192 @@ html, body {
     text-align: left;
     max-width: none;
   }
+}
+
+
+/* ==========================================================================
+   Audit-remediation additions: offline banner, keyboard overlay, skeletons,
+   empty states, context gauge, code copy feedback, sidebar scroll fade.
+   ========================================================================== */
+
+/* ---- Offline banner (always mounted, only visible when .visible) ---- */
+.offline-banner {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -100%);
+  z-index: var(--z-toast);
+  padding: var(--space-2) var(--space-4);
+  margin-top: var(--space-2);
+  background: var(--warning-subtle);
+  color: var(--warning);
+  border: var(--space-px) solid var(--warning);
+  border-radius: var(--radius-full);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  box-shadow: var(--shadow-md);
+  transition: transform var(--duration-normal) var(--ease-ios);
+  pointer-events: none;
+}
+.offline-banner.visible {
+  transform: translate(-50%, 0);
+}
+
+/* ---- Keyboard shortcut overlay (triggered by `?` key) ---- */
+.kbd-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: var(--overlay-dense);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  animation: fadeIn var(--duration-normal) var(--ease-default);
+}
+.kbd-overlay-panel {
+  background: var(--bg-elevated);
+  border: var(--space-px) solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl);
+  padding: var(--space-6);
+  max-width: 640px;
+  width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+  animation: scaleIn var(--duration-normal) var(--ease-spring);
+}
+.kbd-overlay-panel h3 {
+  font-size: var(--text-lg);
+  margin-bottom: var(--space-4);
+  color: var(--text);
+}
+.kbd-group {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-2) var(--space-4);
+  align-items: center;
+  margin-bottom: var(--space-4);
+}
+.kbd-group-title {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  margin-top: var(--space-2);
+}
+.kbd-label {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.kbd-keys {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+.kbd-key {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  background: var(--bg-input);
+  border: var(--space-px) solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  color: var(--text);
+  min-width: 24px;
+  text-align: center;
+}
+
+/* ---- Skeleton loader ---- */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-surface) 0%,
+    var(--bg-surface-hover) 50%,
+    var(--bg-surface) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+.skeleton-line { height: 12px; margin-bottom: var(--space-2); }
+.skeleton-line.short { width: 45%; }
+.skeleton-line.medium { width: 70%; }
+.skeleton-line.long { width: 92%; }
+.skeleton-block { height: 64px; margin-bottom: var(--space-2); border-radius: var(--radius-md); }
+
+/* ---- Empty state ---- */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+  color: var(--text-muted);
+}
+.empty-state-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: var(--space-3);
+  font-size: var(--text-xl);
+}
+.empty-state-title {
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: 600;
+  margin-bottom: var(--space-1);
+}
+.empty-state-text {
+  font-size: var(--text-sm);
+  max-width: 320px;
+  line-height: var(--leading-relaxed);
+}
+
+/* ---- Code block copy feedback (success flash) ---- */
+.copy-success {
+  background: var(--success-subtle) !important;
+  color: var(--success) !important;
+  border-color: var(--success) !important;
+  transition: all var(--duration-normal) var(--ease-default);
+}
+
+/* ---- Sidebar bottom scroll fade hint ---- */
+.channel-list {
+  position: relative;
+}
+.channel-list-scroll-fade {
+  position: sticky;
+  bottom: 0;
+  height: 24px;
+  margin-top: -24px;
+  background: linear-gradient(to bottom, transparent, var(--bg-sidebar));
+  pointer-events: none;
+}
+
+/* ---- Voice orb listening glow (was plain) ---- */
+.voice-orb.listening {
+  filter: drop-shadow(0 0 12px var(--accent-glow));
+}
+
+/* ---- Context bar — warn color at >80% ---- */
+.context-bar-fill.warn { background: var(--warning); }
+.context-bar-fill.danger { background: var(--danger); }
+
+/* ---- save-status error variant (was only saving/saved) ---- */
+.save-status.error {
+  color: var(--danger);
+}
+
+/* ---- Lightbox tokenized (was hardcoded white) ---- */
+.lightbox-frame,
+.lightbox-sheet {
+  background: var(--bg-elevated);
+  color: var(--text);
 }

@@ -24,7 +24,10 @@
 
   --text:               #ececec;
   --text-secondary:     #a8a8a0;
-  --text-muted:         #6b6b63;
+  /* --text-muted lightened from #6b6b63 (contrast 1.9:1 — fails WCAG AA)
+     to #9a9a92 (≈4.6:1 on --bg #1a1a1a). Used for timestamps, typing
+     labels, and disabled states — must remain readable. */
+  --text-muted:         #9a9a92;
   --text-inverse:       #1a1a1a;
 
   --accent:             #c45a35;
