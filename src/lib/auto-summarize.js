@@ -97,3 +97,49 @@ export function startAutoSummarize(db) {
 export function stopAutoSummarize() {
   if (_interval) { clearInterval(_interval); _interval = null; }
 }
+
+/**
+ * Summarize one specific conversation on demand (for /clear).
+ * Writes a short extractive summary to memory/summaries.md so the
+ * conversation's gist survives being cleared.
+ */
+export function summarizeConversation(db, conversationId) {
+  if (!db || !conversationId) return { skipped: true, reason: "no conversation" };
+  try {
+    const convStore = new ConversationStore(db);
+    const conv = convStore.get(conversationId);
+    if (!conv) return { skipped: true, reason: "conversation not found" };
+
+    const msgCount = convStore.messageCount(conversationId);
+    if (msgCount < 2) return { skipped: true, reason: "too short to summarize" };
+
+    const messages = convStore.getRecentMessages(conversationId, 20);
+    if (!messages.length) return { skipped: true, reason: "no messages" };
+
+    const stripTimeline = (content) => {
+      let c = content || "";
+      if (c.startsWith('{"__timeline":true')) {
+        try { c = JSON.parse(c).text || ""; } catch {}
+      }
+      return c;
+    };
+
+    const userMsgs = messages.filter(m => m.role === "user").map(m => stripTimeline(m.content).slice(0, 150));
+    const assistantMsgs = messages.filter(m => m.role === "assistant").map(m => stripTimeline(m.content).slice(0, 150));
+    if (userMsgs.length === 0) return { skipped: true, reason: "no user messages" };
+
+    const date = new Date(conv.updated_at || Date.now()).toLocaleDateString("en-US", {
+      weekday: "short", month: "short", day: "numeric", year: "numeric",
+    });
+    const topics = userMsgs.slice(0, 3).join(" | ");
+    const lastResponse = assistantMsgs[assistantMsgs.length - 1] || "";
+    const summary = `### ${date} — ${conv.title || "Untitled"} (cleared, ${msgCount} msgs)\n- Topics: ${topics}\n- Last: ${lastResponse.slice(0, 200)}\n`;
+
+    appendWorkspaceFile("memory/summaries.md", "\n" + summary);
+    _summarizedIds.add(conversationId);
+    return { ok: true, msgCount };
+  } catch (err) {
+    console.warn("[auto-summarize] summarizeConversation error:", err.message);
+    return { skipped: true, reason: err.message };
+  }
+}

@@ -1,4 +1,9 @@
 import { Router } from "express";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import crypto from "node:crypto";
+import Busboy from "busboy";
 import config from "../config/env.js";
 import { isEncryptionEnabled } from "../lib/vault.js";
 import { AuditLog } from "../db/audit.js";
@@ -118,4 +123,144 @@ adminRouter.post("/channels/:type/stop", async (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+/**
+ * GET /api/admin/backup
+ * Stream a consistent SQLite snapshot of the main database.
+ *
+ * Uses better-sqlite3's online backup API so the live DB stays usable
+ * during the snapshot. The file is produced in a tmp location, streamed
+ * to the client, then deleted.
+ */
+adminRouter.get("/backup", async (req, res) => {
+  const db = req.app.get("db");
+  if (!db) return res.status(500).json({ error: "Database not initialized" });
+
+  const auditLog = req.app.get("auditLog");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const tmpFile = path.join(os.tmpdir(), `tarsee-backup-${stamp}-${crypto.randomBytes(6).toString("hex")}.db`);
+
+  try {
+    await db.backup(tmpFile);
+    const stat = fs.statSync(tmpFile);
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Length", String(stat.size));
+    res.setHeader("Content-Disposition", `attachment; filename="tarsee-backup-${stamp}.db"`);
+    res.setHeader("Cache-Control", "no-store");
+
+    const stream = fs.createReadStream(tmpFile);
+    stream.on("close", () => fs.promises.unlink(tmpFile).catch(() => {}));
+    stream.on("error", () => fs.promises.unlink(tmpFile).catch(() => {}));
+    stream.pipe(res);
+
+    auditLog?.log({ action: "admin.backup", actor: "user", ip: req.ip, detail: `${stat.size} bytes` });
+  } catch (err) {
+    fs.promises.unlink(tmpFile).catch(() => {});
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/admin/restore
+ * Accept an uploaded SQLite backup file (multipart/form-data, field "backup")
+ * and stage it under STATE_DIR/restore/. The file is validated as SQLite by
+ * checking the 16-byte header magic before it is accepted. Applying the
+ * restore requires a server restart — we deliberately do NOT auto-swap the
+ * live DB because other subsystems (cron, channels) hold cached state.
+ *
+ * Response contains the staged path. Operator runbook: stop server → move
+ * file over the live DB → restart.
+ */
+const SQLITE_HEADER = Buffer.from("SQLite format 3\x00", "binary");
+
+adminRouter.post("/restore", (req, res) => {
+  if (!/multipart\/form-data/i.test(req.headers["content-type"] || "")) {
+    return res.status(400).json({ error: "Use multipart/form-data with a 'backup' file field" });
+  }
+
+  const auditLog = req.app.get("auditLog");
+  const restoreDir = path.join(config.STATE_DIR, "restore");
+  fs.mkdirSync(restoreDir, { recursive: true });
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const stagedPath = path.join(restoreDir, `staged-${stamp}.db`);
+
+  const busboy = Busboy({
+    headers: req.headers,
+    limits: {
+      files: 1,
+      fileSize: 500 * 1024 * 1024, // 500MB cap — SQLite files rarely larger
+    },
+  });
+
+  let gotFile = false;
+  let headerOk = false;
+  let bytes = 0;
+  let aborted = false;
+
+  busboy.on("file", (_name, stream, info) => {
+    gotFile = true;
+    const out = fs.createWriteStream(stagedPath);
+    let headerBuf = Buffer.alloc(0);
+
+    stream.on("data", (chunk) => {
+      if (!headerOk) {
+        headerBuf = Buffer.concat([headerBuf, chunk]);
+        if (headerBuf.length >= SQLITE_HEADER.length) {
+          if (!headerBuf.subarray(0, SQLITE_HEADER.length).equals(SQLITE_HEADER)) {
+            aborted = true;
+            stream.unpipe(out);
+            out.destroy();
+            fs.promises.unlink(stagedPath).catch(() => {});
+            if (!res.headersSent) res.status(400).json({ error: "Not a valid SQLite database file" });
+            req.unpipe(busboy);
+            return;
+          }
+          headerOk = true;
+        }
+      }
+      bytes += chunk.length;
+    });
+
+    stream.on("limit", () => {
+      aborted = true;
+      stream.unpipe(out);
+      out.destroy();
+      fs.promises.unlink(stagedPath).catch(() => {});
+      if (!res.headersSent) res.status(413).json({ error: "Backup file too large" });
+    });
+
+    stream.pipe(out);
+    out.on("close", () => {
+      if (aborted || res.headersSent) return;
+      if (!headerOk) {
+        fs.promises.unlink(stagedPath).catch(() => {});
+        return res.status(400).json({ error: "File too short to validate as SQLite" });
+      }
+      auditLog?.log({
+        action: "admin.restore_staged",
+        actor: "user",
+        ip: req.ip,
+        detail: `${info.filename || "uploaded"} → ${stagedPath} (${bytes} bytes)`,
+      });
+      res.json({
+        ok: true,
+        stagedPath,
+        bytes,
+        next: "Stop the server, move this file over the live DB at " + config.DB_PATH + ", then restart.",
+      });
+    });
+  });
+
+  busboy.on("error", (err) => {
+    if (!res.headersSent) res.status(400).json({ error: err.message });
+  });
+  busboy.on("finish", () => {
+    if (!gotFile && !res.headersSent) {
+      res.status(400).json({ error: "No file uploaded (field must be 'backup')" });
+    }
+  });
+
+  req.pipe(busboy);
 });

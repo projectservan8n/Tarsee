@@ -25,13 +25,27 @@ const COMMANDS = {
   },
 
   clear: {
-    description: "Start a new conversation",
+    description: "Start a new conversation (saves a summary first)",
     usage: "/clear",
-    handler: (_args, ctx) => {
+    handler: async (_args, ctx) => {
+      let summaryNote = "";
+      // Summarize the conversation before clearing so we don't lose the
+      // gist. Lives in memory/summaries.md — searchable by Claude later.
+      if (ctx.db && ctx.conversationId) {
+        try {
+          const { summarizeConversation } = await import("./auto-summarize.js");
+          const result = summarizeConversation(ctx.db, ctx.conversationId);
+          if (result?.ok) {
+            summaryNote = `\n\nSaved a summary of the previous ${result.msgCount} messages to \`memory/summaries.md\`.`;
+          }
+        } catch (err) {
+          console.warn("[commands] /clear summarize failed:", err?.message);
+        }
+      }
       if (ctx.clearConversation) {
         ctx.clearConversation();
       }
-      return "Conversation cleared. Starting fresh.";
+      return "Conversation cleared. Starting fresh." + summaryNote;
     },
   },
 
