@@ -1,7 +1,13 @@
 {
   "name": "tarsee",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
+  "author": "Tony Herrera <tony@opusautomations.com>",
+  "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://github.com/projectservan8n/Tarsee",
+  "bugs": {
+    "url": "https://github.com/projectservan8n/Tarsee/issues"
+  },
   "bin": {
     "tarsee": "./src/cli/index.js"
   },
@@ -14,7 +20,8 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "test": "node --test test/**/*.test.js",
-    "lint": "node -c src/server.js"
+    "lint": "node -c src/server.js",
+    "syntax-check": "node -c src/server.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.92",

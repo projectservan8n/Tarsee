@@ -1,0 +1,40 @@
+# Keep build context small & prevent leakage of dev-only / large assets.
+# The Dockerfile only COPYs specific paths, but a tight .dockerignore also
+# keeps `docker build` fast and prevents accidental leaks if the COPY list
+# ever widens.
+
+node_modules
+npm-debug.log
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+
+# Build artifacts / local state
+data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Tooling & docs that should never ship
+.claude/
+CLAUDE.md
+.clauderc
+.claude-session*
+docs/
+test/
+*.md
+!README.md
+
+# Large vendored assets that must never be baked into the image
+piper-voices/
+openclaw-main/
+clawdbot-railway-template/

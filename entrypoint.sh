@@ -42,21 +42,27 @@ if [ -f /usr/local/bin/claude ]; then
   chown node:node /home/node/.bashrc
 fi
 
-# Auto-update Claude Code CLI on boot (non-blocking, 60s timeout)
+# Optional Claude Code CLI auto-update on boot.
+# Set TARSEE_AUTO_UPDATE_CLI=1 to opt in. Off by default so boots are
+# deterministic + fast (~60s saved). The image already pins a working
+# version at build time.
 CURRENT_VERSION=$(claude --version 2>/dev/null | head -1 || echo "unknown")
-echo "[entrypoint] Claude Code: $CURRENT_VERSION — checking for updates..."
-npm install -g @anthropic-ai/claude-code@latest --prefer-online 2>/dev/null &
-UPDATE_PID=$!
-# Wait up to 60s for update, then move on
-( sleep 60 && kill $UPDATE_PID 2>/dev/null ) &
-TIMER_PID=$!
-wait $UPDATE_PID 2>/dev/null
-kill $TIMER_PID 2>/dev/null
-NEW_VERSION=$(claude --version 2>/dev/null | head -1 || echo "unknown")
-if [ "$CURRENT_VERSION" != "$NEW_VERSION" ]; then
-  echo "[entrypoint] Claude Code updated: $CURRENT_VERSION → $NEW_VERSION"
+if [ "${TARSEE_AUTO_UPDATE_CLI:-0}" = "1" ]; then
+  echo "[entrypoint] Claude Code: $CURRENT_VERSION — checking for updates..."
+  npm install -g @anthropic-ai/claude-code@latest --prefer-online 2>/dev/null &
+  UPDATE_PID=$!
+  ( sleep 60 && kill $UPDATE_PID 2>/dev/null ) &
+  TIMER_PID=$!
+  wait $UPDATE_PID 2>/dev/null
+  kill $TIMER_PID 2>/dev/null
+  NEW_VERSION=$(claude --version 2>/dev/null | head -1 || echo "unknown")
+  if [ "$CURRENT_VERSION" != "$NEW_VERSION" ]; then
+    echo "[entrypoint] Claude Code updated: $CURRENT_VERSION → $NEW_VERSION"
+  else
+    echo "[entrypoint] Claude Code: $NEW_VERSION (latest)"
+  fi
 else
-  echo "[entrypoint] Claude Code: $NEW_VERSION (latest)"
+  echo "[entrypoint] Claude Code: $CURRENT_VERSION (auto-update off; TARSEE_AUTO_UPDATE_CLI=1 to enable)"
 fi
 
 # Auto-generate ENCRYPTION_KEY if not set (persist on volume)

@@ -3,7 +3,9 @@ builder = "dockerfile"
 
 [deploy]
 healthcheckPath = "/healthz"
-healthcheckTimeout = 300
+# Fail fast on wedged boots — /healthz is the fast-path endpoint.
+# Previous 300s hid real problems for five minutes per deploy.
+healthcheckTimeout = 60
 restartPolicyType = "on_failure"
 requiredMountPath = "/data"
 
