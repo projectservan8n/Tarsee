@@ -2113,8 +2113,17 @@ html, body {
 }
 
 /* Mobile-first: hide desktop elements, show mobile elements */
-.desktop-only { display: none; }
-.mobile-only { display: flex; }
+/* Mobile/desktop visibility utilities.
+   Each element keeps its own natural display — these rules only HIDE,
+   never force a display value. So a .desktop-only .topbar-icon-btn on
+   desktop stays inline-flex (its own class), instead of being clobbered
+   to block (which kills SVG flex centering inside the button). */
+@media (max-width: 767px) {
+  .desktop-only { display: none !important; }
+}
+@media (min-width: 768px) {
+  .mobile-only { display: none !important; }
+}
 
 /* ==========================================================================
    25. Responsive — desktop overrides
@@ -2161,19 +2170,10 @@ html, body {
     display: none;
   }
 
-  /* Hide mobile-only elements on desktop */
-  .mobile-only {
-    display: none !important;
-  }
-
-  /* Show desktop-only elements on desktop.
-     `revert` lets each element fall back to whatever display its own class
-     defines — critical for .topbar-icon-btn (inline-flex) where forcing
-     `display: block` would kill the SVG flex-centering and shove the icon
-     to the upper-left of the button. */
-  .desktop-only {
-    display: revert !important;
-  }
+  /* (.mobile-only / .desktop-only display rules are media-scoped above and
+     deliberately never set a display value on .desktop-only on desktop —
+     so the element keeps whatever display its own class declares.
+     See the comment at the top of the file's visibility utilities.) */
 
   /* Main content → grid area */
   .main {
