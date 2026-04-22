@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { Telegraf } from "telegraf";
 import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
@@ -8,6 +10,7 @@ import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
+import envConfig from "../config/env.js";
 
 /**
  * Creates and starts a Telegram bot.
@@ -40,7 +43,25 @@ export async function createTelegramBot(config, db) {
     const res = await fetch(fileLink.href);
     const buffer = Buffer.from(await res.arrayBuffer());
     const contentType = res.headers.get("content-type") || "image/jpeg";
-    return { data: buffer.toString("base64"), mediaType: contentType };
+    return { data: buffer.toString("base64"), mediaType: contentType, buffer };
+  }
+
+  /**
+   * Save a downloaded file to WORKSPACE_DIR/uploads so Claude can reach it
+   * via Read/Bash. Returns the absolute path or null on failure.
+   */
+  function saveDocumentToDisk(buffer, fileName) {
+    try {
+      const uploadsDir = path.join(envConfig.WORKSPACE_DIR, "uploads");
+      fs.mkdirSync(uploadsDir, { recursive: true });
+      const safeName = (fileName || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
+      const filePath = path.join(uploadsDir, `telegram-${Date.now()}-${safeName}`);
+      fs.writeFileSync(filePath, buffer);
+      return filePath;
+    } catch (err) {
+      console.error("[telegram] saveDocumentToDisk failed:", err.message);
+      return null;
+    }
   }
 
   /**
@@ -372,25 +393,39 @@ You can use these special markers in your response:
     }
   });
 
-  // --- Document handler (files including images and PDFs) ---
+  // --- Document handler (files including images, PDFs, and generic files) ---
   bot.on("document", async (ctx) => {
     try {
       const doc = ctx.message.document;
       const mime = doc.mime_type || "";
       const caption = ctx.message.caption || "";
+      const sizeKb = Math.round((doc.file_size || 0) / 1024);
 
       if (mime.startsWith("image/")) {
         const { data, mediaType } = await downloadTelegramFile(doc.file_id);
         const attachment = { type: "image", source: { type: "base64", media_type: mediaType, data } };
         await handleMessage(ctx, caption || "Please analyze this image.", null, [attachment]);
       } else if (mime === "application/pdf") {
-        // Download PDF and pass as text description with base64
-        const { data } = await downloadTelegramFile(doc.file_id);
-        const text = caption || `[PDF attached: ${doc.file_name}]`;
-        // Save PDF info for Claude to process via Bash tools
-        await handleMessage(ctx, `${text}\n\n[PDF file: ${doc.file_name} (${Math.round(doc.file_size / 1024)}KB) — base64 data available in this message]`);
+        // PDF: multimodal document block + save to disk so Claude's Read
+        // tool can reach it if needed.
+        const { data, buffer } = await downloadTelegramFile(doc.file_id);
+        const attachment = { type: "document", source: { type: "base64", media_type: "application/pdf", data } };
+        const savedPath = saveDocumentToDisk(buffer, doc.file_name);
+        const pathNote = savedPath
+          ? `\n\n[PDF attached: ${doc.file_name} (${sizeKb}KB) → ${savedPath}] — multimodal PDF block provided above; you can also Read this file directly at the path.`
+          : "";
+        await handleMessage(ctx, (caption || "Please analyze this PDF.") + pathNote, null, [attachment]);
       } else {
-        await handleMessage(ctx, caption || `[Sent file: ${doc.file_name} (${mime})]`);
+        // Generic file (txt/json/csv/docx/zip/etc.) — save to disk and
+        // surface the path to Claude so it can Read the file. Previously
+        // the bytes were thrown away after a one-line description.
+        const { buffer } = await downloadTelegramFile(doc.file_id);
+        const savedPath = saveDocumentToDisk(buffer, doc.file_name);
+        const note = savedPath
+          ? `[Attached file saved: ${doc.file_name} (${mime || "unknown"}, ${sizeKb}KB) → ${savedPath}]\nYou can read this file with the Read tool at: ${savedPath}`
+          : `[Sent file: ${doc.file_name} (${mime}) — failed to save to disk]`;
+        const text = caption ? `${caption}\n\n${note}` : note;
+        await handleMessage(ctx, text);
       }
     } catch (err) {
       console.error("[telegram] document handler error:", err.message);
