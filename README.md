@@ -11,7 +11,7 @@
 > **Tarsee is built for Claude Max subscribers.** It runs a persistent Claude Code agent that uses your subscription for every message. Pro subscribers will hit usage limits quickly — Max (especially 5x) is strongly recommended for daily use.
 
 <p align="center">
-  <a href="https://railway.com/deploy/O2Ux8R?referralCode=sIH3US&utm_medium=integration&utm_source=template&utm_campaign=generic"><img src="https://railway.com/button.svg" alt="Deploy on Railway"></a>
+  <a href="https://railway.com/deploy/tarsee?referralCode=sIH3US&utm_medium=integration&utm_source=template&utm_campaign=generic"><img src="https://railway.com/button.svg" alt="Deploy on Railway"></a>
 </p>
 
 ---
