@@ -268,20 +268,53 @@ export function createTarseeMcp(ctx) {
 
       tool(
         "tarsee_get_key",
-        "Get a value from the encrypted key vault.",
-        { key: z.string().describe("Key name") },
+        "Get a value from the encrypted key vault. The session system prompt " +
+        "already includes an inventory of what's available — use this tool to " +
+        "fetch the actual value when you need to USE a key, not to check whether " +
+        "one exists.",
+        { key: z.string().describe("Key name (matches an entry from the inventory)") },
         async (args) => {
-          const result = await executeTool("get_key", args, ctx);
+          // executeTool's get_key case destructures `name` — map the MCP-level `key` to that.
+          const result = await executeTool("get_key", { name: args.key }, ctx);
           return { content: [{ type: "text", text: result }] };
         }
       ),
 
       tool(
         "tarsee_set_key",
-        "Store a value in the encrypted key vault.",
-        { key: z.string().describe("Key name"), value: z.string().describe("Value to store") },
+        "Store a value in the encrypted key vault. Use when the user gives you " +
+        "a new credential (API key, token, password) to remember across sessions.",
+        {
+          key: z.string().describe("Key name (uppercase with underscores, e.g. STRIPE_SECRET)"),
+          value: z.string().describe("Secret value — stored encrypted at rest"),
+          description: z.string().optional().describe("What this key is for (surfaced in the next session's inventory)"),
+        },
         async (args) => {
-          const result = await executeTool("set_key", args, ctx);
+          const result = await executeTool("set_key", { name: args.key, value: args.value, description: args.description }, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      tool(
+        "tarsee_list_keys",
+        "Re-query the vault live for the current list of keys. The session " +
+        "system prompt already snapshots this at start, so only call this if " +
+        "you just set/deleted a key or suspect the inventory is stale. Returns " +
+        "names + descriptions only — values require tarsee_get_key.",
+        {},
+        async () => {
+          const result = await executeTool("list_keys", {}, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      tool(
+        "tarsee_delete_key",
+        "Remove a key from the encrypted vault. Use when the user explicitly " +
+        "asks to forget or rotate a credential.",
+        { key: z.string().describe("Key name to delete") },
+        async (args) => {
+          const result = await executeTool("delete_key", { name: args.key }, ctx);
           return { content: [{ type: "text", text: result }] };
         }
       ),

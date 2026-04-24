@@ -417,6 +417,7 @@ chatRouter.post("/send", async (req, res) => {
   const effectiveSystemPrompt = buildSystemPrompt({
     settingsStore,
     db: req.app.get("db"),
+    channelManager: req.app.get("channelManager"),
     conversationId: convId,
     messageCount: history.length,
     conversationPrompt: conv?.system_prompt,

@@ -322,6 +322,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   const effectiveSystemPrompt = buildSystemPrompt({
     settingsStore,
     db: ws._tarsee_db,
+    channelManager: ws._tarsee_channelManager,
     conversationId: convId,
     messageCount: history.length,
     conversationPrompt: conv?.system_prompt,

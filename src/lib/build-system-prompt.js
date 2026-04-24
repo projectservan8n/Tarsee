@@ -3,6 +3,7 @@ import { getSkillsPromptContext } from "./skills-engine.js";
 import { getLearningHint } from "./personality-learner.js";
 import { getBootstrapContext, readWorkspaceFile } from "./workspace-files.js";
 import { getBootContextSummary } from "./boot-context.js";
+import { getCredentialInventory, renderInventoryPromptSection } from "./credential-inventory.js";
 
 const MAX_TOTAL_BYTES = 50 * 1024; // 50KB total prompt budget (trimmed from 150KB)
 
@@ -38,6 +39,7 @@ export function buildSystemPrompt({
   messageCount = 0,
   conversationPrompt = null,
   channelHint = "",
+  channelManager = null,
 }) {
   // 1. Workspace files: AGENTS → SOUL → IDENTITY → USER → TOOLS → MEMORY
   const bootstrapContext = getBootstrapContext();
@@ -86,6 +88,20 @@ export function buildSystemPrompt({
   if (messageCount <= 1) {
     const bootCtx = getBootContextSummary();
     if (bootCtx) prompt += bootCtx;
+  }
+
+  // Credential inventory — one-shot preload at session start so Claude
+  // knows what's available without running a tool. Worth the ~200
+  // tokens once per session to save a round-trip on every "use X" ask.
+  if (messageCount <= 1) {
+    try {
+      const inv = getCredentialInventory({ settingsStore, channelManager });
+      const section = renderInventoryPromptSection(inv);
+      if (section) prompt += section;
+    } catch (err) {
+      // Never block prompt assembly on an inventory failure.
+      console.warn("[prompt] credential inventory failed:", err.message);
+    }
   }
 
   if (conversationPrompt) {

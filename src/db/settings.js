@@ -208,32 +208,73 @@ export class SettingsStore {
   }
 
   /**
-   * Log which API keys are configured (masked) at startup.
-   * Call once during server init.
+   * Log what credentials are reachable at startup — AI providers,
+   * vault contents, and known env-only integrations. Masks every
+   * value. Also runs a vault integrity check so a changed
+   * ENCRYPTION_KEY after a redeploy surfaces loudly instead of the
+   * first time a tool silently returns null.
    */
   logKeyStatus() {
-    const providers = ["elevenlabs"];
-    const lines = providers.map((id) => {
-      const dbKey = this.get(`ai.${id}.apiKey`);
-      const providerDef = AI_PROVIDERS[id];
-      const envName = providerDef?.envKey || `${id.toUpperCase()}_API_KEY`;
-      const envKey = process.env[envName];
+    const lines = [];
 
-      if (dbKey) {
-        const masked = typeof dbKey === "string" && dbKey.length > 8
-          ? `${dbKey.slice(0, 4)}...${dbKey.slice(-4)}`
-          : "****";
-        return `  ${id}: ${masked} (vault)`;
+    // AI providers — enumerate AI_PROVIDERS dynamically instead of hardcoding.
+    lines.push("  AI providers:");
+    for (const [id, def] of Object.entries(AI_PROVIDERS)) {
+      const dbKey = this.get(`ai.${id}.apiKey`);
+      const envKey = def.envKey ? process.env[def.envKey] : null;
+      if (def.noKeyRequired) {
+        lines.push(`    ${id}: implicit (no key required)`);
+      } else if (dbKey) {
+        lines.push(`    ${id}: ${maskForLog(dbKey)} (vault)`);
+      } else if (envKey) {
+        lines.push(`    ${id}: ${maskForLog(envKey)} (env)`);
+      } else {
+        lines.push(`    ${id}: not set`);
       }
-      if (envKey) {
-        const masked = envKey.length > 8
-          ? `${envKey.slice(0, 4)}...${envKey.slice(-4)}`
-          : "****";
-        return `  ${id}: ${masked} (env)`;
-      }
-      return `  ${id}: not set`;
-    });
-    console.log(`[keys] API key status:\n${lines.join("\n")}`);
+    }
+
+    // Env-only integrations (ElevenLabs, captcha) — same check, different home.
+    const envOnly = [
+      { id: "elevenlabs", dbKey: this.get("ai.elevenlabs.apiKey"), envVal: process.env.ELEVENLABS_API_KEY },
+      { id: "captcha",    dbKey: this.get("captcha.api_key"),      envVal: process.env.CAPTCHA_API_KEY },
+    ];
+    lines.push("  Integrations:");
+    for (const i of envOnly) {
+      if (i.dbKey) lines.push(`    ${i.id}: ${maskForLog(i.dbKey)} (vault)`);
+      else if (i.envVal) lines.push(`    ${i.id}: ${maskForLog(i.envVal)} (env)`);
+      else lines.push(`    ${i.id}: not set`);
+    }
+
+    // Vault — user-scoped credentials, integrity-checked.
+    try {
+      // Lazy import to avoid circular dep and to work even if the vault
+      // file doesn't exist yet on first boot.
+      import("../lib/credential-inventory.js").then(({ verifyVaultIntegrity }) => {
+        const { total, ok, broken } = verifyVaultIntegrity();
+        if (total === 0) {
+          console.log("[keys] Vault: empty");
+          return;
+        }
+        if (broken.length === 0) {
+          console.log(`[keys] Vault: ${ok}/${total} keys decrypted OK`);
+          return;
+        }
+        console.warn(`[keys] Vault: ${ok}/${total} keys decrypted, ${broken.length} UNREADABLE:`);
+        for (const b of broken) {
+          console.warn(`    - ${b.name}: ${b.reason}`);
+        }
+        console.warn(
+          "[keys] Unreadable vault entries usually mean ENCRYPTION_KEY changed. " +
+          "Either restore the original key or re-save these entries in plaintext."
+        );
+      }).catch((err) => {
+        console.warn("[keys] Vault integrity check failed:", err.message);
+      });
+    } catch (err) {
+      console.warn("[keys] Vault integrity check failed:", err.message);
+    }
+
+    console.log(`[keys] Credentials status:\n${lines.join("\n")}`);
   }
 
   /**
@@ -253,6 +294,11 @@ function tryParse(value) {
   } catch {
     return value;
   }
+}
+
+function maskForLog(value) {
+  if (typeof value !== "string" || value.length < 8) return "****";
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
 /**
