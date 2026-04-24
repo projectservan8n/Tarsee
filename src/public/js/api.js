@@ -235,6 +235,7 @@ const API = {
             else if (eventType === "error") onError?.(parsed.message);
             else if (eventType === "model_selected") onText?.(null, { type: "model_selected", ...parsed });
             else if (eventType === "conversation") onDone?.({ conversationId: parsed.id, type: "conversation" });
+            else if (eventType === "heartbeat") { /* server idle keep-alive — no-op */ }
           } catch {}
           eventType = null;
         }

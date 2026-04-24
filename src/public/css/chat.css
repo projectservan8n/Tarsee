@@ -1217,6 +1217,15 @@ details[open] .block-preview { display: none; }
   justify-content: center;
   cursor: pointer;
   animation: fadeIn var(--duration-normal) var(--ease-default);
+  /* Allow pinch-zoom on the attachment viewer. The viewport meta keeps
+     pinch disabled everywhere else; the openLightbox() JS helper relaxes
+     it while the overlay is open and restores it on close. */
+  touch-action: pinch-zoom;
+}
+.lightbox-overlay .lightbox-img,
+.lightbox-overlay .lightbox-frame,
+.lightbox-overlay .lightbox-sheet {
+  touch-action: pinch-zoom;
 }
 
 .lightbox-img {

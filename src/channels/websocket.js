@@ -193,6 +193,29 @@ export function setupWebSocket(server, db, app) {
         return;
       }
 
+      // Resume sync: replay buffered events for a conversation newer than
+      // lastEventId. Clients call this after reconnecting (phone unlock,
+      // network drop, bfcache restore) so they can catch up on tool calls /
+      // streaming text that happened while their WS was dead.
+      if (msg.type === "sync.resume") {
+        const gw = getGatewayManager();
+        const events = gw.replay(msg.convId, Number(msg.lastEventId) || 0);
+        for (const e of events) {
+          try {
+            ws.send(JSON.stringify({
+              type: "sync",
+              convId: msg.convId,
+              event: e.event,
+              data: e.data,
+              eventId: e.id,
+              replay: true,
+            }));
+          } catch { /* ignore */ }
+        }
+        try { ws.send(JSON.stringify({ type: "sync.resumed", convId: msg.convId, count: events.length })); } catch {}
+        return;
+      }
+
       // Handle chat (with queueing)
       if (msg.type === "chat") {
         if (ws._chatBusy) {
@@ -281,6 +304,8 @@ async function handleChat(ws, msg, convStore, settingsStore) {
 
   // Save user message (text only — no base64 blobs in DB)
   convStore.addMessage(convId, { role: "user", content: message });
+  // Mirror to other devices viewing this conversation.
+  getGatewayManager().broadcast(convId, "user_message", { content: message, conversationId: convId });
 
   // Build user content blocks for the AI when attachments are present
   let userContentForAI = message;
@@ -338,6 +363,19 @@ async function handleChat(ws, msg, convStore, settingsStore) {
 
   // --- Claude Code provider: runs its own agentic loop ---
   if (providerId === "claude-code") {
+    // Heartbeat + 3-min idle abort for parity with the HTTP SSE path.
+    let lastEventAt = Date.now();
+    let idleAborted = false;
+    const hb = setInterval(() => {
+      if (ws.readyState !== ws.OPEN) return clearInterval(hb);
+      try { ws.send(JSON.stringify({ type: "heartbeat", ts: Date.now() })); } catch {}
+      if (Date.now() - lastEventAt > 3 * 60_000) {
+        idleAborted = true;
+        clearInterval(hb);
+        try { ws._currentAbort?.abort(); } catch {}
+      }
+    }, 15_000);
+
     try {
       const controller = new AbortController();
       ws._currentAbort = controller; // expose for /stop
@@ -356,15 +394,23 @@ async function handleChat(ws, msg, convStore, settingsStore) {
         toolCtx,
       });
 
+      const gw = getGatewayManager();
       for await (const event of stream) {
         if (ws.readyState !== ws.OPEN) break;
+        lastEventAt = Date.now();
         if (event.type === "text") {
           fullResponse += event.content;
           ws.send(JSON.stringify({ type: "text", content: event.content }));
+          gw.broadcast(convId, "text", { content: event.content });
+        } else if (event.type === "thinking") {
+          ws.send(JSON.stringify({ type: "thinking", status: event.status }));
+          gw.broadcast(convId, "thinking", { status: event.status });
         } else if (event.type === "tool_use") {
           ws.send(JSON.stringify({ type: "tool_call", id: event.id, name: event.name, input: event.input }));
+          gw.broadcast(convId, "tool_call", { id: event.id, name: event.name, input: event.input });
         } else if (event.type === "tool_result") {
           ws.send(JSON.stringify({ type: "tool_result", id: event.id, name: event.name, result: event.result }));
+          gw.broadcast(convId, "tool_result", { id: event.id, name: event.name, result: event.result });
         } else if (event.type === "usage") {
           usage = { ...usage, ...event.usage };
         } else if (event.type === "error") {
@@ -392,18 +438,40 @@ async function handleChat(ws, msg, convStore, settingsStore) {
       if (ws.readyState === ws.OPEN) {
         ws.send(JSON.stringify({ type: "done", conversationId: convId, usage }));
       }
+      gw.broadcast(convId, "done", { conversationId: convId });
     } catch (err) {
       if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: "error", message: err.message }));
+        const message = idleAborted
+          ? "Claude Code stopped responding (3 min idle). Try again."
+          : err.message;
+        ws.send(JSON.stringify({ type: "error", message }));
       }
+    } finally {
+      clearInterval(hb);
     }
     return;
   }
+
+  // Heartbeat + 3-min idle abort for the generic provider branch too.
+  let lastEventAt2 = Date.now();
+  let idleAborted2 = false;
+  const hb2 = setInterval(() => {
+    if (ws.readyState !== ws.OPEN) return clearInterval(hb2);
+    try { ws.send(JSON.stringify({ type: "heartbeat", ts: Date.now() })); } catch {}
+    if (Date.now() - lastEventAt2 > 3 * 60_000) {
+      idleAborted2 = true;
+      clearInterval(hb2);
+    }
+  }, 15_000);
 
   try {
     const controller = new AbortController();
     const onClose = () => controller.abort();
     ws.on("close", onClose);
+    // Abort the stream if the idle watchdog fires.
+    const idleWatch = setInterval(() => {
+      if (idleAborted2) { try { controller.abort(); } catch {} clearInterval(idleWatch); }
+    }, 5_000);
 
     // Replace the last user message content with the attachment-enriched version
     let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
@@ -427,16 +495,20 @@ async function handleChat(ws, msg, convStore, settingsStore) {
         tools,
       });
 
+      const gw = getGatewayManager();
       for await (const event of stream) {
         if (ws.readyState !== ws.OPEN) break;
+        lastEventAt2 = Date.now();
 
         if (event.type === "text") {
           roundText += event.content;
           fullResponse += event.content;
           ws.send(JSON.stringify({ type: "text", content: event.content }));
+          gw.broadcast(convId, "text", { content: event.content });
         } else if (event.type === "tool_use") {
           toolCalls.push({ id: event.id, name: event.name, input: event.input });
           ws.send(JSON.stringify({ type: "tool_call", id: event.id, name: event.name, input: event.input }));
+          gw.broadcast(convId, "tool_call", { id: event.id, name: event.name, input: event.input });
         } else if (event.type === "usage") {
           usage = { ...usage, ...event.usage };
         } else if (event.type === "done") {
@@ -461,9 +533,11 @@ async function handleChat(ws, msg, convStore, settingsStore) {
         console.log(`[tools] executing: ${tc.name}(${JSON.stringify(tc.input).slice(0, 100)})`);
         const result = await executeTool(tc.name, tc.input, toolCtx);
         toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
+        const short = result.slice(0, 500);
         if (ws.readyState === ws.OPEN) {
-          ws.send(JSON.stringify({ type: "tool_result", id: tc.id, name: tc.name, result: result.slice(0, 500) }));
+          ws.send(JSON.stringify({ type: "tool_result", id: tc.id, name: tc.name, result: short }));
         }
+        gw.broadcast(convId, "tool_result", { id: tc.id, name: tc.name, result: short });
       }
       workingMessages.push({ role: "user", content: toolResults });
     }
@@ -490,10 +564,16 @@ async function handleChat(ws, msg, convStore, settingsStore) {
     if (ws.readyState === ws.OPEN) {
       ws.send(JSON.stringify({ type: "done", conversationId: convId, usage }));
     }
+    getGatewayManager().broadcast(convId, "done", { conversationId: convId });
   } catch (err) {
     if (ws.readyState === ws.OPEN) {
-      ws.send(JSON.stringify({ type: "error", message: err.message }));
+      const message = idleAborted2
+        ? "Model stopped responding (3 min idle). Try again."
+        : err.message;
+      ws.send(JSON.stringify({ type: "error", message }));
     }
+  } finally {
+    clearInterval(hb2);
   }
 }
 

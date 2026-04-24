@@ -980,6 +980,7 @@ const Chat = {
     };
 
     this.isStreaming = true;
+    this._streamingConvId = this.currentConversationId;
     this.elements.sendBtn.disabled = false;
     this.elements.sendBtn.classList.add("stop-mode", "is-streaming");
     this.elements.sendBtn.title = "Stop generation (Esc)";
@@ -1137,6 +1138,7 @@ const Chat = {
     }
 
     this.isStreaming = false;
+    this._streamingConvId = null;
     this.elements.sendBtn.disabled = false;
     this.elements.sendBtn.classList.remove("stop-mode", "is-streaming");
     this.elements.sendBtn.title = "Send";
@@ -1188,6 +1190,7 @@ const Chat = {
     };
 
     this.isStreaming = true;
+    this._streamingConvId = this.currentConversationId;
     this.elements.sendBtn.disabled = false;
     this.elements.sendBtn.classList.add("stop-mode", "is-streaming");
     this.elements.sendBtn.title = "Stop generation (Esc)";
@@ -1286,6 +1289,7 @@ const Chat = {
     }
 
     this.isStreaming = false;
+    this._streamingConvId = null;
     this.elements.sendBtn.disabled = false;
     this.elements.sendBtn.classList.remove("stop-mode", "is-streaming");
     this.elements.sendBtn.title = "Send";
@@ -1408,23 +1412,64 @@ const Chat = {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${proto}//${location.host}/ws`;
     this._typingReconnect = this._typingReconnect || { attempts: 0, timer: null };
+    // Track the highest eventId we've received per conversation so we can
+    // ask the server to replay anything we missed while the WS was dead.
+    this._lastEventIdByConv = this._lastEventIdByConv || {};
+    const clearHeartbeat = () => {
+      if (this._typingHb) { clearInterval(this._typingHb); this._typingHb = null; }
+      if (this._typingPongTimer) { clearTimeout(this._typingPongTimer); this._typingPongTimer = null; }
+    };
     try {
+      clearHeartbeat();
       this._typingWs = new WebSocket(url);
       this._typingWs.onopen = () => {
         // Successful connection resets backoff
         this._typingReconnect.attempts = 0;
         const token = API.token || localStorage.getItem("tarsee_api_token");
         if (token) this._typingWs.send(JSON.stringify({ type: "auth", token }));
+        // Ask the server to replay any events we missed for the conversation
+        // we're currently viewing (if any).
+        if (this.currentConversationId) {
+          const lastId = this._lastEventIdByConv[this.currentConversationId] || 0;
+          try {
+            this._typingWs.send(JSON.stringify({
+              type: "sync.resume",
+              convId: this.currentConversationId,
+              lastEventId: lastId,
+            }));
+          } catch { /* ignore */ }
+        }
+        // Heartbeat: ping every 25s. If no pong in 10s, treat the socket as
+        // dead — iOS silently stalls WS connections when backgrounded and
+        // never fires `close`, so we need our own liveness check.
+        this._typingHb = setInterval(() => {
+          if (this._typingWs?.readyState !== 1) return;
+          try { this._typingWs.send(JSON.stringify({ type: "ping" })); } catch {}
+          clearTimeout(this._typingPongTimer);
+          this._typingPongTimer = setTimeout(() => {
+            try { this._typingWs?.close(); } catch {}
+          }, 10_000);
+        }, 25_000);
       };
       this._typingWs.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data);
-          if (data.type === "typing") this._showTypingIndicator(data.channel);
-          else if (data.type === "sync") this._handleSyncEvent(data);
+          if (data.type === "pong") {
+            clearTimeout(this._typingPongTimer);
+          } else if (data.type === "typing") {
+            this._showTypingIndicator(data.channel);
+          } else if (data.type === "sync") {
+            if (data.eventId && data.convId) {
+              const prev = this._lastEventIdByConv[data.convId] || 0;
+              if (data.eventId > prev) this._lastEventIdByConv[data.convId] = data.eventId;
+            }
+            this._handleSyncEvent(data);
+          }
         } catch { /* ignore */ }
       };
       this._typingWs.onerror = () => {};
       this._typingWs.onclose = () => {
+        clearHeartbeat();
         // Exponential backoff with cap + jitter — avoid thundering herd
         // if the server is down.
         const attempt = ++this._typingReconnect.attempts;
@@ -1439,6 +1484,26 @@ const Chat = {
       const base = Math.min(30_000, 1000 * Math.pow(2, Math.min(attempt, 5)));
       clearTimeout(this._typingReconnect.timer);
       this._typingReconnect.timer = setTimeout(() => this._initTypingSocket(), base);
+    }
+
+    // Force a reconnect on resume events. iOS + Android Chrome can leave the
+    // WS in a zombie state when the tab is backgrounded; the events fire
+    // when the user returns, and we slam the dead socket so onclose +
+    // backoff picks up a fresh one.
+    if (!this._typingWsResumeBound) {
+      this._typingWsResumeBound = true;
+      const forceReconnect = () => {
+        if (this._typingWs && this._typingWs.readyState !== 1) {
+          try { this._typingWs.close(); } catch {}
+        } else if (!this._typingWs) {
+          this._initTypingSocket();
+        }
+      };
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") forceReconnect();
+      });
+      window.addEventListener("pageshow", forceReconnect);
+      window.addEventListener("online", forceReconnect);
     }
   },
 
@@ -1473,8 +1538,10 @@ const Chat = {
   _handleSyncEvent(data) {
     // Only process events for the conversation we're currently viewing
     if (data.convId !== this.currentConversationId) return;
-    // Don't process if we're the one streaming (we already have SSE)
-    if (this.isStreaming) return;
+    // Dedup only against the conversation THIS device is actively driving.
+    // If we're streaming conv A but viewing conv B, we still want B's sync
+    // events — don't drop them just because isStreaming is true.
+    if (this.isStreaming && this._streamingConvId === data.convId) return;
 
     const evt = data.event;
     const d = data.data;
@@ -1710,6 +1777,20 @@ const Chat = {
   },
 
   // --- Preview / Lightbox ---
+  _setViewportScalable(enabled) {
+    // The app shell uses maximum-scale=1, user-scalable=no to block pinch-
+    // zoom. Lightbox is the one surface where pinch should work, so we
+    // rewrite the viewport meta for its lifetime.
+    const meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) return;
+    meta.setAttribute(
+      "content",
+      enabled
+        ? "width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover"
+        : "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    );
+  },
+
   openLightbox(src, type) {
     const existing = document.querySelector(".lightbox-overlay");
     if (existing) existing.remove();
@@ -1724,9 +1805,11 @@ const Chat = {
       overlay.innerHTML = `<img src="${src}" class="lightbox-img"><button class="lightbox-close">&times;</button>`;
     }
 
+    this._setViewportScalable(true);
     const escHandler = (e) => { if (e.key === "Escape") closeLightbox(); };
     const closeLightbox = () => {
       document.removeEventListener("keydown", escHandler);
+      this._setViewportScalable(false);
       overlay.remove();
     };
     overlay.addEventListener("click", (e) => {

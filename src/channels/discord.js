@@ -251,22 +251,13 @@ export async function createDiscordBot(config, db) {
       message.react(ackEmoji).catch(() => {});
     }
 
-    // Send initial "Thinking..." message that we'll edit in-place
-    let statusMsg = null;
-    try {
-      statusMsg = await message.reply("💭 Thinking...");
-    } catch {
-      statusMsg = await message.channel.send("💭 Thinking...");
-    }
-
-    // Helper: edit the status message (debounced to avoid rate limits)
-    let lastEdit = 0;
-    const editStatus = async (text) => {
-      const now = Date.now();
-      if (now - lastEdit < 2000) return; // Min 2s between edits
-      lastEdit = now;
-      try { await statusMsg.edit(text); } catch { /* rate limited or deleted */ }
-    };
+    // No "💭 Thinking..." placeholder — we surface progress via the native
+    // typing indicator only, and the final reply is the only message that
+    // shows up in the channel.
+    const typingInterval = setInterval(() => {
+      message.channel.sendTyping().catch(() => {});
+    }, 8000);
+    message.channel.sendTyping().catch(() => {});
 
     // Build full system prompt (identity + memory + skills)
     const history = convStore.getRecentMessages(convId, 15);
@@ -284,12 +275,24 @@ You can use these special markers in your response:
 
     let fullResponse = "";
 
+    // Idle watchdog — abort if SDK goes 3 min without emitting anything.
+    const controller = new AbortController();
+    let lastEventAt = Date.now();
+    let idleAborted = false;
+    const IDLE_ABORT_MS = 3 * 60_000;
+    const idleTimer = setInterval(() => {
+      if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
+        idleAborted = true;
+        try { controller.abort(); } catch {}
+        clearInterval(idleTimer);
+      }
+    }, 15_000);
+
     try {
       const tools = getToolDefinitions();
       const toolCtx = { db, settingsStore, conversationId: convId };
       const MAX_TOOL_ROUNDS = 15;
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
-      const toolLog = []; // Track tool names for status display
 
       // Enrich last user message with image blocks if attachments present
       if (imageAttachments.length > 0 && workingMessages.length > 0) {
@@ -316,9 +319,11 @@ You can use these special markers in your response:
           toolCtx,
           sessionId: existingSessionId,
           onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
+          signal: controller.signal,
         });
 
         for await (const event of stream) {
+          lastEventAt = Date.now();
           if (event.type === "text") {
             roundText += event.content;
             fullResponse += event.content;
@@ -347,14 +352,9 @@ You can use these special markers in your response:
         }
         workingMessages.push({ role: "assistant", content: assistantContent });
 
-        // Execute tools and update status message
+        // Execute tools silently — Discord users only see the final reply.
         const toolResults = [];
         for (const tc of toolCalls) {
-          const shortName = tc.name.replace("mcp__tarsee__tarsee_", "").replace("mcp__tarsee__", "");
-          toolLog.push(shortName);
-          const statusLines = toolLog.map((t, i) => i === toolLog.length - 1 ? `⚙️ Running **${t}**...` : `✅ ${t}`);
-          await editStatus(statusLines.join("\n"));
-
           console.log(`[discord] tool: ${tc.name}`);
           const result = await executeTool(tc.name, tc.input, toolCtx);
           toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
@@ -363,10 +363,6 @@ You can use these special markers in your response:
           fullResponse += `\n<tool_response>${resultText}</tool_response>\n`;
         }
         workingMessages.push({ role: "user", content: toolResults });
-
-        // Mark last tool as done
-        const doneLines = toolLog.map(t => `✅ ${t}`);
-        await editStatus(doneLines.join("\n") + "\n💭 Thinking...");
       }
 
       // Final response — edit the status message with clean text
@@ -398,22 +394,27 @@ You can use these special markers in your response:
           .replace(/<tool_response>[\s\S]*?<\/tool_response>/g, "")
           .replace(/\n{3,}/g, "\n\n")
           .trim();
-        // Delete the status bubble and send the final answer as a fresh reply
-        // so Discord fires notifications / unread markers properly (edits don't).
-        try { await statusMsg.delete(); } catch {}
         const chunks = splitMessage(displayText, 2000);
         for (let i = 0; i < chunks.length; i++) {
           await retryOnRateLimit(() => message.reply(chunks[i]));
         }
+      } else if (idleAborted) {
+        await message.reply("⚠️ Claude Code stopped responding (3 min idle). Try again — maybe with a smaller ask.").catch(() => {});
       } else {
-        try { await statusMsg.delete(); } catch {}
+        await message.reply("⚠️ No response generated. Try rephrasing?").catch(() => {});
       }
     } catch (err) {
       console.error("[discord] chat error:", err.message);
       if (ackEmoji) {
         message.reactions.cache.get(ackEmoji)?.users.remove(client.user.id).catch(() => {});
       }
-      try { await statusMsg.edit("Sorry, I encountered an error processing your message."); } catch {}
+      const reason = idleAborted
+        ? "⚠️ Claude Code stopped responding (3 min idle). Try again — maybe with a smaller ask."
+        : `⚠️ Error: ${err.message || "something went wrong"}. Try again.`;
+      await message.reply(reason).catch(() => {});
+    } finally {
+      clearInterval(typingInterval);
+      clearInterval(idleTimer);
     }
   });
 
