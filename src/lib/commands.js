@@ -852,6 +852,26 @@ artifact. Just confirm.`;
 };
 
 /**
+ * A handful of commands (/checkpoint, /ultrareview, /email check, …) return
+ * a playbook instead of a plain reply: a string prefixed with
+ * "__PLAYBOOK__\n" that the caller should feed to the AI as the user's
+ * turn, not echo back. Channels forget to check this and end up sending
+ * the entire playbook back to the user as a message. This helper
+ * centralises the check + prefix stripping.
+ *
+ * @param {{ handled?: boolean, response?: string } | null | undefined} cmdResult
+ * @returns {string|null} The stripped playbook body, or null if the
+ *   result is a normal command response.
+ */
+export function extractPlaybookPrompt(cmdResult) {
+  if (!cmdResult?.handled) return null;
+  const r = cmdResult.response;
+  if (typeof r !== "string") return null;
+  if (!r.startsWith("__PLAYBOOK__\n")) return null;
+  return r.slice("__PLAYBOOK__\n".length);
+}
+
+/**
  * Process a potential command message.
  *
  * @param {string} message - The raw user message

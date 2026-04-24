@@ -4,7 +4,7 @@ import { Telegraf } from "telegraf";
 import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
-import { processCommand } from "../lib/commands.js";
+import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
@@ -86,7 +86,12 @@ export async function createTelegramBot(config, db) {
 
     const channelKey = getChannelKey(ctx);
 
-    // Check for commands
+    // Check for commands. Commands can either (a) return a plain reply
+    // to echo back, or (b) return a __PLAYBOOK__ sentinel that's meant to
+    // be fed to the AI as the user's next turn. We detect (b) and fall
+    // through to the normal AI pipeline instead of sending the playbook
+    // text back at the user.
+    let aiPromptOverride = null;
     if (text.startsWith("/")) {
       const existingConvId = settingsStore.get(`channel_conv.${channelKey}`);
       const cmdResult = await processCommand(text, {
@@ -96,14 +101,19 @@ export async function createTelegramBot(config, db) {
       });
 
       if (cmdResult.handled) {
-        const chunks = splitMessage(mdToTelegramHtml(cmdResult.response), 4096);
-        for (const chunk of chunks) {
-          await ctx.reply(chunk, {
-            parse_mode: "HTML",
-            ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
-          }).catch(() => ctx.reply(chunk.replace(/<[^>]+>/g, "")));
+        const playbook = extractPlaybookPrompt(cmdResult);
+        if (playbook) {
+          aiPromptOverride = playbook;
+        } else {
+          const chunks = splitMessage(mdToTelegramHtml(cmdResult.response), 4096);
+          for (const chunk of chunks) {
+            await ctx.reply(chunk, {
+              parse_mode: "HTML",
+              ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
+            }).catch(() => ctx.reply(chunk.replace(/<[^>]+>/g, "")));
+          }
+          return;
         }
-        return;
       }
     }
 
@@ -183,6 +193,14 @@ You can use these special markers in your response:
 
     try {
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
+
+      // Slash-command playbooks: keep the user's literal "/checkpoint" in
+      // the DB / chat history, but swap the AI-visible last user turn for
+      // the playbook body so the model acts on it.
+      if (aiPromptOverride && workingMessages.length > 0) {
+        const last = workingMessages[workingMessages.length - 1];
+        if (last.role === "user") last.content = aiPromptOverride;
+      }
 
       // Enrich last user message with image blocks if attachments present
       if (attachments.length > 0 && workingMessages.length > 0) {
