@@ -104,7 +104,10 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Telegram** — Text, photos, PDFs, voice messages, video notes. Group @mention support, inline buttons, forwarded message detection.
 - **Discord** — Text, images, PDFs, voice messages. Always-online bot with presence status.
 - **Email** — Real-time over IMAP IDLE + SMTP. Mention keyword (default `@tarsee`) gates replies; CC/BCC/forwards are absorbed as context without an outbound. Works with any mailbox you own (Gmail, Outlook, iCloud, Zoho, FastMail, Yahoo, self-hosted).
+- **Attachment save-to-disk** — every image, PDF, voice note, and document sent via Discord, Telegram, email, or web lands in `workspace/uploads/` so Claude can read, transform, and reference it across turns (not just in the message it arrived on).
 - **Cross-device sync** — all devices update in real-time via WebSocket. See tool calls, text streaming, and typing indicators across devices.
+- **Session recap** — resume a conversation idle >30 min and a dismissible "Last time" card summarizes the last few exchanges before the first new message. Zero AI cost (extractive summary).
+- **Web Push notifications** — iOS/Android/desktop push via VAPID when cron jobs finish, webhooks fire, or Claude proactively pings you via the `tarsee_push_notification` MCP tool. Opt-in from Settings > Appearance.
 - **All channels share** the same AI, memory, and tools.
 
 ### Voice Mode
@@ -122,7 +125,7 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Persistent** — Canvases are saved to the volume and accessible at `/canvas/<id>/`.
 
 ### Tools & Automation
-- **20+ MCP tools** — send messages, schedule tasks, remember facts, search the web, create canvases, manage files, encrypted vault, calculator, browser, and more.
+- **20+ MCP tools** — send messages, schedule tasks, remember facts, search the web, create canvases, manage files, encrypted vault, calculator, browser, push notifications, email threads, and more.
 - **Calculator** — precise math tool so Claude never hallucinates numbers. Arithmetic, percentages, Math.* functions.
 - **Stealth browser** — Playwright with anti-detection (real fingerprints, no webdriver flag). Navigate, fill forms, screenshot, scroll, wait, run JS.
 - **Captcha solver** — auto-detect and solve reCAPTCHA, hCaptcha, Cloudflare Turnstile via 2Captcha or Capsolver API.
@@ -133,7 +136,9 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Web terminal** — browser-based shell access via xterm.js.
 - **File manager** — browse, edit, and create workspace files from the UI.
 - **REST API** — `/api/v1/message` endpoint for iOS Shortcuts, scripts, and automations.
-- **Skills** — modular instruction packs with credentials and configs. Claude reads them automatically when relevant.
+- **Skills** — modular instruction packs with credentials and configs. Claude reads them automatically when relevant. Ships with `/ultrareview` (3-agent parallel branch review — correctness / architecture / UX-a11y) and `/fewer-permission-prompts` (proposes a tool-allowlist patch from your audit log) preinstalled.
+- **`/checkpoint` — cross-restart handoff** — manual AI-synthesized `CHECKPOINT.md` before a known redeploy, plus an activity-gated auto-checkpoint every 6h as a safety net. On the next boot, the checkpoint is injected into the system prompt so work picks up mid-thought instead of starting cold.
+- **Retention** — daily 03:00 sweep prunes conversations idle >14 days and checkpoint archives older than 30 days (or >50 files). Keeps the most recent thread per channel so Discord/Telegram/email session continuity never breaks. One-line summaries of pruned conversations append to `memory/archived-conversations.md` so nothing vanishes without a record. Configurable via `retention.*` settings or `/retention` command.
 
 ### Search & Analytics
 - **Token usage chart** — daily/weekly visual bar chart with model breakdown in Settings > Usage.
@@ -146,13 +151,18 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Workspace files** — SOUL.md (personality), MEMORY.md (knowledge), USER.md (user info), IDENTITY.md.
 - **Auto-memory** — Claude saves important facts as you chat. Memories persist across sessions.
 - **Daily logs** — timestamped notes auto-appended to `memory/YYYY-MM-DD.md`.
+- **Checkpoints** — `CHECKPOINT.md` on the volume survives redeploys. Read once on the next boot, then archived to `memory/checkpoints/<timestamp>.md` for grep-able history.
+
+### Appearance & Controls
+- **Themes** — `warm-charcoal` (default, terracotta accent), `noir` (pure black OLED-friendly), `solarized-light` (daylight), `jarvis-blue` (cyan accent). Switch from Settings > Appearance or via `/theme <name>`. Plugin-shipped themes are loaded from `ui.themes.plugin` automatically.
+- **Effort slider** — 6-notch touch-native slider (auto / low / medium / high / max / xhigh) for setting Claude's thinking effort. Long-press the effort toggle on the composer to open; `/effort` opens it via keyboard. `xhigh` (Ultra) is available on Opus 4.7.
 
 ---
 
 ## How It Works
 
 ```
-You (web / telegram / discord / voice)
+You (web / telegram / discord / email / voice / iOS push)
   |
   v
 Tarsee Server (Railway)
@@ -160,13 +170,17 @@ Tarsee Server (Railway)
   +-- Claude Code Agent SDK (subscription auth, auto-updates)
   |     +-- Built-in: Read, Write, Edit, Bash, Grep, Glob
   |     +-- MCP tools: send_message, schedule_task, remember,
-  |         create_canvas, calculator, browser, web_search, etc.
+  |         create_canvas, calculator, browser, web_search,
+  |         push_notification, send_email_thread, configure_email, etc.
   |
-  +-- Voice: faster-whisper STT + Edge TTS
-  +-- Browser: Playwright (stealth) + captcha solving
-  +-- Workspace: SOUL.md, MEMORY.md, USER.md
-  +-- SQLite: conversations, settings, vault
-  +-- Channels: Telegram, Discord (always online)
+  +-- Voice:      faster-whisper STT + Edge TTS
+  +-- Browser:    Playwright (stealth) + captcha solving
+  +-- Workspace:  SOUL.md, MEMORY.md, USER.md, CHECKPOINT.md
+  +-- SQLite:     conversations, settings, vault, bot_memory, push_subs
+  +-- Channels:   Telegram, Discord, Email (IMAP IDLE + SMTP)
+  +-- Continuity: /checkpoint + 6h auto-checkpoint + session recap card
+  +-- Retention:  daily 03:00 sweep (14d convs, 30d/50-file checkpoints)
+  +-- Push:       VAPID + service worker — cron/webhook/tool fires
 ```
 
 ---
@@ -230,13 +244,15 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 |---------|-------------|
 | `/help` | Show all commands |
 | `/model opus\|sonnet\|haiku` | Switch AI model |
-| `/think low\|medium\|high\|max` | Set thinking effort for the session |
+| `/think low\|medium\|high\|max\|xhigh` | Set thinking effort for the session (xhigh on Opus 4.7) |
+| `/effort` | Open the 6-notch effort slider (touch-native) |
+| `/theme [name]` | List or switch themes: warm-charcoal, noir, solarized-light, jarvis-blue |
 | `/auto [on\|off]` | Toggle auto model routing (haiku/sonnet/opus by complexity) |
 | `/briefing [on\|off\|time]` | Morning briefing — run now, schedule daily, or set time |
-| `/send telegram\|discord\|web` | Forward conversation context to another channel |
+| `/send telegram\|discord\|email\|web` | Forward conversation context to another channel |
 | `/fork [from #N]` | Branch conversation — copy history into new session |
 | `/play [name\|list\|save\|delete]` | Run or manage playbooks (multi-step AI workflows) |
-| `/email [check\|summary\|draft]` | Check inbox, summarize, or draft emails |
+| `/email [check\|summary\|draft]` | Check inbox, summarize, or draft emails (CLI helpers — see also the email channel for real-time chat) |
 | `/webhook [list\|add\|remove]` | Manage webhook triggers (external events → AI) |
 | `/files [search term]` | List or search workspace files |
 | `/status` | Full dashboard (uptime, tokens, messages, channels) |
@@ -245,6 +261,10 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `/remember [fact]` | Save to memory |
 | `/doctor [fix]` | Diagnostics + auto-repair |
 | `/export` | Export conversation |
+| `/checkpoint [list\|show]` | Write CHECKPOINT.md for the next boot — manual handoff (auto fires every 6h too) |
+| `/retention [run]` | Preview or run the daily retention sweep on demand |
+| `/ultrareview` | 3-agent parallel review of the current git branch (correctness / architecture / UX-a11y) |
+| `/fewer-prompts` | Propose a tool-allowlist patch from your audit log to reduce permission prompts |
 
 ---
 
@@ -255,10 +275,11 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | **Identity** | Bot name (set via IDENTITY.md) |
 | **Workspace** | SOUL.md, USER.md, MEMORY.md editors |
 | **AI Provider** | Model selection, API config |
-| **Channels** | Telegram, Discord tokens |
-| **Automation** | Cron jobs, webhooks |
+| **Channels** | Telegram, Discord, Email (IMAP + SMTP with provider presets, mention keyword, reply-all marker, allowlist) |
+| **Appearance** | Theme switcher (4 built-in + plugin themes) + Web Push enable/disable/test |
+| **Automation** | Cron jobs, webhooks, retention settings |
 | **Voice** | TTS engine (Edge TTS / ElevenLabs), STT model (tiny/base/small), voice selection |
-| **Skills** | Create, edit, delete instruction packs |
+| **Skills** | Create, edit, delete instruction packs (includes preinstalled `/ultrareview` + `/fewer-permission-prompts`) |
 | **Memories** | View and manage stored memories |
 | **Security** | Security audit, tool permissions, captcha solver config |
 | **Canvas** | Gallery of AI-generated interactive UIs |
