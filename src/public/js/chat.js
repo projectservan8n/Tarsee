@@ -232,6 +232,49 @@ const Chat = {
       }
     });
 
+    // Canvas embed menu — "..." button opens Copy/Download. Clicking
+    // anywhere else closes the menu.
+    document.addEventListener("click", (e) => {
+      const btn = e.target.closest(".canvas-embed-menu-btn");
+      if (btn) {
+        e.stopPropagation();
+        const embed = btn.closest(".canvas-embed");
+        const menu = embed?.querySelector(".canvas-embed-menu");
+        const wasOpen = menu?.classList.contains("open");
+        // Close any other open menus first.
+        document.querySelectorAll(".canvas-embed-menu.open").forEach(m => m.classList.remove("open"));
+        document.querySelectorAll(".canvas-embed-menu-btn.open").forEach(b => { b.classList.remove("open"); b.setAttribute("aria-expanded", "false"); });
+        if (!wasOpen && menu) {
+          menu.classList.add("open");
+          btn.classList.add("open");
+          btn.setAttribute("aria-expanded", "true");
+        }
+        return;
+      }
+
+      const copyItem = e.target.closest(".canvas-embed-menu-item[data-canvas-action='copy']");
+      if (copyItem) {
+        e.preventDefault();
+        const embed = copyItem.closest(".canvas-embed");
+        const canvasId = embed?.dataset.canvasId;
+        if (canvasId) {
+          const url = `${location.origin}/canvas/${canvasId}/`;
+          navigator.clipboard.writeText(url).then(() => {
+            if (window.App?.showToast) App.showToast("Link copied", "success");
+          }).catch(() => {});
+        }
+        embed?.querySelector(".canvas-embed-menu")?.classList.remove("open");
+        embed?.querySelector(".canvas-embed-menu-btn")?.classList.remove("open");
+        return;
+      }
+
+      // Click outside — close any open menu.
+      if (!e.target.closest(".canvas-embed-menu")) {
+        document.querySelectorAll(".canvas-embed-menu.open").forEach(m => m.classList.remove("open"));
+        document.querySelectorAll(".canvas-embed-menu-btn.open").forEach(b => { b.classList.remove("open"); b.setAttribute("aria-expanded", "false"); });
+      }
+    });
+
     // Welcome suggestion cards — clickable + keyboard activated (tabindex=0 set in markup)
     const activateSuggestion = (el) => {
       this.elements.messageInput.value = el.dataset.msg;
@@ -2096,12 +2139,59 @@ const Chat = {
     const blocks = [];
     const PH = (i) => `\x00BLOCK${i}\x00`;
 
-    // Canvas embeds: /canvas/id/ or full URL → inline iframe
-    text = text.replace(/(?:https?:\/\/[^\s/]+)?\/canvas\/([a-z0-9-]+)\/?/g, (_m, canvasId) => {
+    // Canvas embeds: render the diagram/canvas inline with a floating "..."
+    // menu (Copy link / Download file). Same feel as Claude's inline
+    // diagrams — no header chrome.
+    //
+    // The model sometimes wraps the canvas URL in a redundant
+    // <a href="/canvas/id/" target="_blank" ...>View Diagram</a> link
+    // AND also drops a bare /canvas/id/ somewhere. If we just run the
+    // URL regex, we end up with (a) two iframes for the same canvas and
+    // (b) a broken <a> tag leaking attributes like `target="_blank"
+    // rel="noopener">View Diagram` as visible text once the href is
+    // replaced by a placeholder. So we:
+    //   1. Strip anchor wrappers around canvas URLs first.
+    //   2. Dedupe by canvasId across the whole message — only one embed
+    //      per canvas, extras collapse away.
+    const seenCanvas = new Set();
+    const canvasEmbedHtml = (canvasId) => {
+      const safeId = escapeHtml(canvasId);
+      return `<div class="canvas-embed" data-canvas-id="${safeId}">
+        <iframe src="/canvas/${safeId}/" class="canvas-iframe" sandbox="allow-scripts allow-same-origin" loading="lazy"></iframe>
+        <button type="button" class="canvas-embed-menu-btn" aria-label="Diagram options" aria-haspopup="menu" aria-expanded="false">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="3" cy="8" r="1.5" fill="currentColor"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><circle cx="13" cy="8" r="1.5" fill="currentColor"/></svg>
+        </button>
+        <div class="canvas-embed-menu" role="menu">
+          <button type="button" class="canvas-embed-menu-item" data-canvas-action="copy" role="menuitem">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M5.5 5.5h7.5v7.5h-7.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M3 3h7.5v2.5M3 3v7.5h2.5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+            Copy to clipboard
+          </button>
+          <a class="canvas-embed-menu-item" href="/canvas/${safeId}/" download="${safeId}.html" role="menuitem">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2v9m0 0l-3-3m3 3l3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.5 12v1.5a1 1 0 001 1h9a1 1 0 001-1V12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            Download file
+          </a>
+        </div>
+      </div>`;
+    };
+    const placeCanvas = (canvasId) => {
+      if (seenCanvas.has(canvasId)) return ""; // dedupe extras
+      seenCanvas.add(canvasId);
       const i = blocks.length;
-      blocks.push(`<div class="canvas-embed"><div class="canvas-embed-header"><span class="canvas-embed-title">Canvas: ${escapeHtml(canvasId)}</span><a href="/canvas/${canvasId}/" target="_blank" class="canvas-embed-open">Open ↗</a></div><iframe src="/canvas/${canvasId}/" class="canvas-iframe" sandbox="allow-scripts allow-same-origin" loading="lazy"></iframe></div>`);
+      blocks.push(canvasEmbedHtml(canvasId));
       return PH(i);
-    });
+    };
+
+    // 1. Anchor-wrapped canvas URLs: <a href="/canvas/id/" ...>anything</a>
+    text = text.replace(
+      /<a\s+[^>]*href=["'](?:https?:\/\/[^\s/"']+)?\/canvas\/([a-z0-9-]+)\/?["'][^>]*>[\s\S]*?<\/a>/gi,
+      (_m, canvasId) => placeCanvas(canvasId)
+    );
+
+    // 2. Bare canvas URLs (or full URLs pointing at /canvas/id/).
+    text = text.replace(
+      /(?:https?:\/\/[^\s/]+)?\/canvas\/([a-z0-9-]+)\/?/g,
+      (_m, canvasId) => placeCanvas(canvasId)
+    );
 
     // Thinking / reasoning blocks: <thinking>, <antThinking>, <reasoning>
     text = text.replace(/<(thinking|antThinking|antml:thinking|reasoning)>([\s\S]*?)<\/\1>/g, (_m, tag, content) => {
