@@ -4,7 +4,7 @@ import { Telegraf } from "telegraf";
 import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
-import { processCommand } from "../lib/commands.js";
+import { processCommand, extractPlaybookPrompt, getCommandList } from "../lib/commands.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
@@ -86,7 +86,12 @@ export async function createTelegramBot(config, db) {
 
     const channelKey = getChannelKey(ctx);
 
-    // Check for commands
+    // Check for commands. Commands can either (a) return a plain reply
+    // to echo back, or (b) return a __PLAYBOOK__ sentinel that's meant to
+    // be fed to the AI as the user's next turn. We detect (b) and fall
+    // through to the normal AI pipeline instead of sending the playbook
+    // text back at the user.
+    let aiPromptOverride = null;
     if (text.startsWith("/")) {
       const existingConvId = settingsStore.get(`channel_conv.${channelKey}`);
       const cmdResult = await processCommand(text, {
@@ -96,14 +101,19 @@ export async function createTelegramBot(config, db) {
       });
 
       if (cmdResult.handled) {
-        const chunks = splitMessage(mdToTelegramHtml(cmdResult.response), 4096);
-        for (const chunk of chunks) {
-          await ctx.reply(chunk, {
-            parse_mode: "HTML",
-            ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
-          }).catch(() => ctx.reply(chunk.replace(/<[^>]+>/g, "")));
+        const playbook = extractPlaybookPrompt(cmdResult);
+        if (playbook) {
+          aiPromptOverride = playbook;
+        } else {
+          const chunks = splitMessage(mdToTelegramHtml(cmdResult.response), 4096);
+          for (const chunk of chunks) {
+            await ctx.reply(chunk, {
+              parse_mode: "HTML",
+              ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
+            }).catch(() => ctx.reply(chunk.replace(/<[^>]+>/g, "")));
+          }
+          return;
         }
-        return;
       }
     }
 
@@ -183,6 +193,14 @@ You can use these special markers in your response:
 
     try {
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
+
+      // Slash-command playbooks: keep the user's literal "/checkpoint" in
+      // the DB / chat history, but swap the AI-visible last user turn for
+      // the playbook body so the model acts on it.
+      if (aiPromptOverride && workingMessages.length > 0) {
+        const last = workingMessages[workingMessages.length - 1];
+        if (last.role === "user") last.content = aiPromptOverride;
+      }
 
       // Enrich last user message with image blocks if attachments present
       if (attachments.length > 0 && workingMessages.length > 0) {
@@ -498,20 +516,27 @@ You can use these special markers in your response:
   // Use polling (no webhook needed)
   await bot.launch({ dropPendingUpdates: true });
 
-  // Register /commands dropdown in Telegram
-  bot.telegram.setMyCommands([
-    { command: "help", description: "Show available commands" },
-    { command: "model", description: "Switch model (opus, sonnet, haiku)" },
-    { command: "clear", description: "Start a new conversation" },
-    { command: "status", description: "System status" },
-    { command: "soul", description: "Show personality" },
-    { command: "skills", description: "List available skills" },
-    { command: "cron", description: "Manage scheduled tasks" },
-    { command: "remember", description: "Save to memory" },
-    { command: "daily", description: "Today's log" },
-    { command: "export", description: "Export conversation" },
-    { command: "doctor", description: "Run diagnostics" },
-  ]).then(() => console.log("[telegram] Commands registered")).catch(e => console.warn("[telegram] Failed to register commands:", e.message));
+  // Register the /commands dropdown with Telegram so typing "/" in a chat
+  // pops up the native command suggestions. Derive it from the shared
+  // command registry so new commands automatically show up here instead
+  // of needing a hardcoded list to stay in sync.
+  //
+  // Telegram rules: name must match ^[a-z0-9_]{1,32}$, description must
+  // be 3–256 chars, max 100 commands total. We filter + truncate rather
+  // than silently dropping the whole set if one entry is out of spec.
+  try {
+    const tgCommands = getCommandList()
+      .filter((c) => /^[a-z0-9_]{1,32}$/.test(c.name) && c.description)
+      .map((c) => ({
+        command: c.name,
+        description: String(c.description).slice(0, 256),
+      }))
+      .slice(0, 100);
+    await bot.telegram.setMyCommands(tgCommands);
+    console.log(`[telegram] registered ${tgCommands.length} commands with Telegram`);
+  } catch (err) {
+    console.warn("[telegram] Failed to register commands:", err.message);
+  }
 
   console.log(`[telegram] bot started`);
 

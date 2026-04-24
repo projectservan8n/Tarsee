@@ -4,7 +4,7 @@ import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { initSSE, sendSSE } from "../lib/stream-utils.js";
 import { LIMITS, CLAUDE_MODELS, resolveModelAlias } from "../config/constants.js";
-import { processCommand, getCommandList } from "../lib/commands.js";
+import { processCommand, getCommandList, extractPlaybookPrompt } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { trackActivity } from "../lib/session-reset.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
@@ -279,7 +279,11 @@ chatRouter.post("/send", async (req, res) => {
     }
   }
 
-  // Check for commands
+  // Check for commands. __PLAYBOOK__ sentinel responses get fed to the AI
+  // as the user's turn instead of echoed; we keep the original /command
+  // text as the user-visible message in the conversation so the chat
+  // history doesn't show a wall of playbook prose.
+  let aiPromptOverride = null;
   if (message.startsWith("/")) {
     const cmdResult = await processCommand(message, {
       settingsStore,
@@ -290,11 +294,9 @@ chatRouter.post("/send", async (req, res) => {
     });
 
     if (cmdResult.handled) {
-      // Playbook: send steps to AI instead of displaying as command response
-      if (cmdResult.response?.startsWith("__PLAYBOOK__")) {
-        // Override the message with the playbook prompt, fall through to AI
-        req.body.message = cmdResult.response.replace("__PLAYBOOK__\n", "");
-        message = req.body.message;
+      const playbook = extractPlaybookPrompt(cmdResult);
+      if (playbook) {
+        aiPromptOverride = playbook;
       } else {
         return res.json({
           command: true,
@@ -344,8 +346,12 @@ chatRouter.post("/send", async (req, res) => {
   convStore.addMessage(convId, { role: "user", content: cleanMessage });
   broadcastToOthers(convId, "user_message", { content: cleanMessage, conversationId: convId });
 
-  // Build user content blocks for the AI when attachments are present
-  let userContentForAI = cleanMessage;
+  // Build user content blocks for the AI when attachments are present.
+  // aiPromptOverride (populated upstream if the user typed a __PLAYBOOK__
+  // command like /checkpoint) wins over the literal message text — the
+  // stored convStore entry above keeps the original "/checkpoint" so
+  // history UI stays readable, but the AI sees the playbook body.
+  let userContentForAI = aiPromptOverride || cleanMessage;
   if (Array.isArray(attachments) && attachments.length > 0) {
     // Defend against OOM: cap attachment count and per-attachment decoded size.
     if (attachments.length > 10) {

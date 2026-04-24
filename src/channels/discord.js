@@ -4,7 +4,7 @@ import { Client, GatewayIntentBits, Events, ActivityType, ChannelType } from "di
 import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
-import { processCommand } from "../lib/commands.js";
+import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
@@ -194,7 +194,9 @@ export async function createDiscordBot(config, db) {
 
     const channelKey = getChannelKey(message);
 
-    // Check for commands
+    // Check for commands. __PLAYBOOK__ responses should be routed to the
+    // AI as a prompt, not echoed back as a chat message.
+    let aiPromptOverride = null;
     if (content.startsWith("/")) {
       const existingConvId = settingsStore.get(`channel_conv.${channelKey}`);
       const cmdResult = await processCommand(content, {
@@ -204,11 +206,16 @@ export async function createDiscordBot(config, db) {
       });
 
       if (cmdResult.handled) {
-        const chunks = splitMessage(cmdResult.response, 2000);
-        for (const chunk of chunks) {
-          await message.reply(chunk);
+        const playbook = extractPlaybookPrompt(cmdResult);
+        if (playbook) {
+          aiPromptOverride = playbook;
+        } else {
+          const chunks = splitMessage(cmdResult.response, 2000);
+          for (const chunk of chunks) {
+            await message.reply(chunk);
+          }
+          return;
         }
-        return;
       }
     }
 
@@ -293,6 +300,13 @@ You can use these special markers in your response:
       const toolCtx = { db, settingsStore, conversationId: convId };
       const MAX_TOOL_ROUNDS = 15;
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
+
+      // Slash-command playbooks: swap the AI-visible last user turn for
+      // the playbook body while the stored message stays as "/checkpoint".
+      if (aiPromptOverride && workingMessages.length > 0) {
+        const last = workingMessages[workingMessages.length - 1];
+        if (last.role === "user") last.content = aiPromptOverride;
+      }
 
       // Enrich last user message with image blocks if attachments present
       if (imageAttachments.length > 0 && workingMessages.length > 0) {

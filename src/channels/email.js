@@ -33,7 +33,7 @@ import config from "../config/env.js";
 import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
-import { processCommand } from "../lib/commands.js";
+import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import {
@@ -310,7 +310,10 @@ export async function createEmailBot(rawConfig, db) {
       return;
     }
 
-    // Process commands ("/something") before engaging the AI.
+    // Process commands ("/something") before engaging the AI. __PLAYBOOK__
+    // sentinel responses are forwarded to the AI as the user's turn instead
+    // of being mailed back verbatim.
+    let aiPromptOverride = null;
     if (stripped.startsWith("/")) {
       try {
         const cmdResult = await processCommand(stripped, {
@@ -318,12 +321,17 @@ export async function createEmailBot(rawConfig, db) {
           conversationId: convId,
         });
         if (cmdResult?.handled) {
-          await sendReply({
-            incoming: mail,
-            bodyText: cmdResult.response,
-            replyAll,
-          });
-          return;
+          const playbook = extractPlaybookPrompt(cmdResult);
+          if (playbook) {
+            aiPromptOverride = playbook;
+          } else {
+            await sendReply({
+              incoming: mail,
+              bodyText: cmdResult.response,
+              replyAll,
+            });
+            return;
+          }
         }
       } catch (err) {
         console.warn("[email] command handler error:", err?.message);
@@ -355,6 +363,12 @@ export async function createEmailBot(rawConfig, db) {
     try {
       const toolCtx = { db, settingsStore, conversationId: convId };
       const workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
+      // Slash-command playbooks: swap the AI-visible last user turn for
+      // the playbook body while the stored email/message stays as-sent.
+      if (aiPromptOverride && workingMessages.length > 0) {
+        const last = workingMessages[workingMessages.length - 1];
+        if (last.role === "user") last.content = aiPromptOverride;
+      }
       // The very last message is the one we just saved — already has the
       // full context prefix, so Claude sees the whole picture.
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {

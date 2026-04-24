@@ -6,7 +6,7 @@ import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { AuditLog } from "../db/audit.js";
 import { WS_CODES } from "../config/constants.js";
-import { processCommand } from "../lib/commands.js";
+import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
 import { logCapture } from "../lib/log-capture.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
@@ -274,7 +274,9 @@ async function handleChat(ws, msg, convStore, settingsStore) {
     return;
   }
 
-  // Check for commands
+  // Check for commands. __PLAYBOOK__ commands (like /checkpoint) get
+  // their response fed to the AI as the user's turn instead of echoed.
+  let aiPromptOverride = null;
   if (message.startsWith("/")) {
     const cmdResult = await processCommand(message, {
       settingsStore,
@@ -283,8 +285,13 @@ async function handleChat(ws, msg, convStore, settingsStore) {
     });
 
     if (cmdResult.handled) {
-      ws.send(JSON.stringify({ type: "command", response: cmdResult.response }));
-      return;
+      const playbook = extractPlaybookPrompt(cmdResult);
+      if (playbook) {
+        aiPromptOverride = playbook;
+      } else {
+        ws.send(JSON.stringify({ type: "command", response: cmdResult.response }));
+        return;
+      }
     }
   }
 
@@ -307,8 +314,11 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   // Mirror to other devices viewing this conversation.
   getGatewayManager().broadcast(convId, "user_message", { content: message, conversationId: convId });
 
-  // Build user content blocks for the AI when attachments are present
-  let userContentForAI = message;
+  // Build user content blocks for the AI when attachments are present.
+  // If a slash command returned a __PLAYBOOK__ sentinel, use the playbook
+  // as the AI-visible user turn while the stored /checkpoint stays in the
+  // conversation history as-typed.
+  let userContentForAI = aiPromptOverride || message;
   if (Array.isArray(attachments) && attachments.length > 0) {
     const contentBlocks = [];
     for (const att of attachments) {
@@ -384,8 +394,15 @@ async function handleChat(ws, msg, convStore, settingsStore) {
 
       const existingSessionId = convStore.getClaudeSessionId(convId);
       const mod = await import("../ai/providers/claude-code.js");
+      const ccMessages = history.map((m) => ({ role: m.role, content: m.content }));
+      // Apply playbook override to the last user turn so the AI sees the
+      // playbook body instead of the literal "/checkpoint" token.
+      if (aiPromptOverride && ccMessages.length > 0) {
+        const last = ccMessages[ccMessages.length - 1];
+        if (last.role === "user") last.content = aiPromptOverride;
+      }
       const stream = mod.chat({
-        messages: history.map((m) => ({ role: m.role, content: m.content })),
+        messages: ccMessages,
         model: activeProvider.model,
         systemPrompt: effectiveSystemPrompt,
         signal: controller.signal,
