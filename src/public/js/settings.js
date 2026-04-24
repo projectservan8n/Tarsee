@@ -77,7 +77,61 @@ const Settings = {
       runAuditBtn: document.getElementById("runAuditBtn"),
       // Appearance
       theme: document.getElementById("settingsTheme"),
+      enablePushBtn: document.getElementById("enablePushBtn"),
+      disablePushBtn: document.getElementById("disablePushBtn"),
+      testPushBtn: document.getElementById("testPushBtn"),
+      pushStatus: document.getElementById("pushStatus"),
     };
+
+    // --- Push notifications (per-device toggle) ---
+    const refreshPushStatus = async () => {
+      if (!window.TarseePush) {
+        if (this.elements.pushStatus) this.elements.pushStatus.textContent = "Not supported in this browser.";
+        this.elements.enablePushBtn?.setAttribute("disabled", "");
+        return;
+      }
+      const status = await window.TarseePush.status();
+      const on = status === "subscribed";
+      if (this.elements.enablePushBtn) this.elements.enablePushBtn.style.display = on ? "none" : "";
+      if (this.elements.disablePushBtn) this.elements.disablePushBtn.style.display = on ? "" : "none";
+      if (this.elements.testPushBtn) this.elements.testPushBtn.style.display = on ? "" : "none";
+      const label = {
+        unsupported: "Not supported in this browser.",
+        denied: "Notifications blocked in browser settings.",
+        default: "Not enabled yet.",
+        subscribed: "✓ Enabled on this device.",
+        "granted-unsubscribed": "Permission granted — click Enable to subscribe.",
+      }[status] || status;
+      if (this.elements.pushStatus) this.elements.pushStatus.textContent = label;
+    };
+
+    this.elements.enablePushBtn?.addEventListener("click", async () => {
+      try {
+        await window.TarseePush.enable();
+        App.showToast?.("Push enabled — try the test button.", "success");
+      } catch (err) {
+        App.showToast?.("Push: " + err.message, "error");
+      }
+      refreshPushStatus();
+    });
+    this.elements.disablePushBtn?.addEventListener("click", async () => {
+      try { await window.TarseePush.disable(); App.showToast?.("Push disabled on this device.", "info"); }
+      catch (err) { App.showToast?.(err.message, "error"); }
+      refreshPushStatus();
+    });
+    this.elements.testPushBtn?.addEventListener("click", async () => {
+      try {
+        const res = await API.json("/api/push/test", {
+          method: "POST",
+          body: { message: "Push test from Settings." },
+        });
+        App.showToast?.(`Sent ${res.sent}/${res.total} · failed ${res.failed}`, res.sent ? "success" : "error");
+      } catch (err) {
+        App.showToast?.("Test failed: " + err.message, "error");
+      }
+    });
+    // Kick an initial status check on settings open.
+    refreshPushStatus();
 
     // --- Theme picker ---
     // Reflect current theme on open, persist + apply instantly on change.

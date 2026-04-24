@@ -38,6 +38,7 @@ import { acpRouter } from "./routes/acp.js";
 import { webhookRouter } from "./routes/webhooks.js";
 import { analyticsRouter } from "./routes/analytics.js";
 import { externalApiRouter } from "./routes/external-api.js";
+import { pushRouter } from "./routes/push.js";
 
 import { writePid, removePid } from "./daemon/pid.js";
 
@@ -110,6 +111,7 @@ app.use("/api/skills", requireAuth, csrfProtect, skillsRouter);
 app.use("/api/acp", requireAuth, csrfProtect, acpRouter);
 app.use("/api/webhooks", webhookRouter); // Token auth, no session/CSRF needed
 app.use("/api/analytics", requireAuth, csrfProtect, analyticsRouter);
+app.use("/api/push", requireAuth, csrfProtect, pushRouter);
 app.use("/api/v1", requireAuth, externalApiRouter); // Bearer token auth, no CSRF needed for API clients
 
 // SPA fallback — serve index.html for client-side routes
@@ -162,6 +164,18 @@ try {
   memoryStore.syncToMemoryFile();
 } catch (err) {
   console.warn("[tarsee] memory sync error:", err.message);
+}
+
+// --- Web Push (VAPID + subscription store) ---
+// Initialized before any route handler needs it. Generates a VAPID key
+// pair on first boot and persists to settings. Routes are declared
+// below (in external-api.js since they also serve the public key to
+// anonymous clients for subscribe flow).
+import { initPush } from "./lib/push.js";
+try {
+  initPush(db, auditLog);
+} catch (err) {
+  console.warn("[tarsee] push init error:", err.message);
 }
 
 // --- Auto-install high-leverage skills on first boot ---

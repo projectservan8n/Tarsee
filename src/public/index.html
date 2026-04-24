@@ -728,6 +728,17 @@
               </div>
               <div class="theme-preview-grid" id="themePreviewGrid"></div>
             </div>
+
+            <div class="settings-section">
+              <h3>Push Notifications</h3>
+              <div class="hint mb-3">Let Tarsee wake this device when cron jobs, webhooks, or channel messages fire while the app is in the background. Per-device — enable on every device you want pings on.</div>
+              <div class="form-group">
+                <button class="btn btn-primary btn-sm" id="enablePushBtn">Enable on this device</button>
+                <button class="btn btn-ghost btn-sm" id="disablePushBtn" style="display:none">Disable on this device</button>
+                <button class="btn btn-ghost btn-sm" id="testPushBtn" style="display:none">Send test</button>
+                <div class="hint mt-2" id="pushStatus">Checking status…</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
