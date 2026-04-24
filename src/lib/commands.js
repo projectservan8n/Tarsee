@@ -3,6 +3,7 @@ import { addCronJob, removeCronJob, loadCronJobs, runCronJob, startCronScheduler
 import { executeTool } from "./tools.js";
 import { getSkillContent, installSkill, scanSkills } from "./skills-engine.js";
 import { hasCheckpoint, peekCheckpoint, listRecentCheckpoints, CHECKPOINT_FILE_PATH } from "./checkpoint.js";
+import { preview as previewRetention, runNow as runRetentionNow } from "./retention.js";
 
 /**
  * Chat command processor.
@@ -404,6 +405,66 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
       }
 
       return "Usage: `/briefing` (run now), `/briefing on`, `/briefing off`, `/briefing time <0-23>`";
+    },
+  },
+
+  // Inspect/trigger retention sweep — auto-deletes old conversations
+  // and checkpoint archives. Runs daily at 03:00; this is the manual
+  // knob for inspection + on-demand run.
+  retention: {
+    description: "Preview or run the retention sweep (auto-deletes old conversations + checkpoints)",
+    usage: "/retention [preview|run]",
+    category: "Tools",
+    handler: async (args, ctx) => {
+      const sub = (args || "").toLowerCase().trim() || "preview";
+      const settings = ctx.settingsStore;
+
+      if (sub === "run") {
+        try {
+          const result = await runRetentionNow();
+          return `**Retention sweep complete.**\n- ${result.convs} conversations deleted\n- ${result.checks} checkpoint archives deleted\n\nSummaries of pruned conversations appended to \`memory/archived-conversations.md\`.`;
+        } catch (err) {
+          return `Retention run failed: ${err.message}`;
+        }
+      }
+
+      // Default: preview (dry-run).
+      try {
+        const p = previewRetention();
+        const lines = [];
+        lines.push(`**Retention preview** — *nothing has been deleted yet*`);
+        lines.push("");
+        lines.push(`**Config:** conversations ${p.config.convDays}d · checkpoints ${p.config.checkDays}d (max ${p.config.checkMax} files)`);
+        lines.push("");
+        lines.push(`**Conversations that WOULD be deleted (${p.conversations.length}):**`);
+        if (p.conversations.length === 0) {
+          lines.push("_None — nothing older than the cutoff._");
+        } else {
+          for (const c of p.conversations.slice(0, 20)) {
+            lines.push(`- ${(c.updated_at || "").slice(0, 10)} · ${c.title || "Untitled"} · ${c.msg_count} msgs`);
+          }
+          if (p.conversations.length > 20) lines.push(`_…and ${p.conversations.length - 20} more._`);
+        }
+        lines.push("");
+        lines.push(`**Checkpoints that WOULD be deleted (${p.checkpoints.length}):**`);
+        if (p.checkpoints.length === 0) {
+          lines.push("_None._");
+        } else {
+          for (const c of p.checkpoints.slice(0, 10)) {
+            lines.push(`- ${c.name} (${c.age_days}d old)`);
+          }
+          if (p.checkpoints.length > 10) lines.push(`_…and ${p.checkpoints.length - 10} more._`);
+        }
+        lines.push("");
+        const lastRun = settings?.get("retention.last_run_at");
+        if (lastRun) lines.push(`_Last sweep: ${lastRun}_`);
+        lines.push("");
+        lines.push("Run now: `/retention run`");
+        lines.push("Tune: set `retention.conversations_days`, `retention.checkpoints_days`, `retention.checkpoints_max` in settings.");
+        return lines.join("\n");
+      } catch (err) {
+        return `Retention preview failed: ${err.message}`;
+      }
     },
   },
 
@@ -826,7 +887,7 @@ const CATEGORY_RULES = [
   { cat: "Appearance", names: ["theme"] },
   { cat: "Automation", names: ["webhook", "cron", "briefing"] },
   { cat: "Comms",   names: ["email"] },
-  { cat: "Tools",   names: ["skill", "doctor", "stop", "status", "stats", "usage", "version", "ultrareview", "fewer-prompts"] },
+  { cat: "Tools",   names: ["skill", "doctor", "stop", "status", "stats", "usage", "version", "ultrareview", "fewer-prompts", "retention", "checkpoint"] },
   { cat: "Help",    names: ["help"] },
 ];
 

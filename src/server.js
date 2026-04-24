@@ -243,6 +243,14 @@ startAutoSummarize(db);
 import { startAutoCheckpoint, stopAutoCheckpoint } from "./lib/auto-checkpoint.js";
 startAutoCheckpoint({ db });
 
+// --- Retention sweep ---
+// Daily at 03:00 — prunes conversations idle > 14d (archiving a one-line
+// summary first) and checkpoint files older than 30d / over 50-file cap.
+// Keeps the SQLite DB from ballooning once Tarsee has been running for a
+// few weeks on Railway.
+import { startRetention, stopRetention } from "./lib/retention.js";
+startRetention({ db });
+
 // --- Cron scheduler ---
 import { initCron, startCronScheduler, stopCronScheduler } from "./lib/cron.js";
 initCron({ db, settingsStore, convStore });
@@ -295,6 +303,7 @@ function shutdown(signal) {
   saveBootContext(db); // Persist context before shutdown
   stopAutoSummarize();
   stopAutoCheckpoint();
+  stopRetention();
   stopSessionReset();
   stopCronScheduler();
   channelManager.stopAll();
