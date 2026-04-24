@@ -596,6 +596,12 @@ const Chat = {
         const total = data.totalMessages || data.messages?.length || 0;
         const older = total - (data.messages?.length || 0);
         this.renderMessages(data.messages || [], older > 0 ? older : 0, conversationId);
+        // Session recap — if the server flagged this convo as stale, show
+        // a dismissible card above the first message summarizing what was
+        // going on. Null means "recently active, no recap needed".
+        if (data.recap?.text) {
+          this.renderSessionRecap(data.recap);
+        }
       } catch {
         this.elements.chatArea.innerHTML = "";
       }
@@ -680,6 +686,36 @@ const Chat = {
     this.lastMessageRole = role;
     this.lastMessageTime = now;
     return msg;
+  },
+
+  /**
+   * Render the session-recap card above the first message when a stale
+   * conversation is resumed. Dismissible — hides for the rest of this
+   * device's viewing session.
+   */
+  renderSessionRecap(recap) {
+    if (!recap?.text) return;
+    const chatArea = this.elements.chatArea;
+    if (!chatArea) return;
+
+    // Don't double-render if one is already there.
+    chatArea.querySelector(".session-recap")?.remove();
+
+    const card = document.createElement("div");
+    card.className = "session-recap";
+    card.setAttribute("role", "status");
+    card.innerHTML = `
+      <div class="session-recap-content">
+        <div class="session-recap-label">Last time</div>
+        <div class="session-recap-text"></div>
+      </div>
+      <button type="button" class="session-recap-dismiss" aria-label="Dismiss recap">×</button>
+    `;
+    card.querySelector(".session-recap-text").textContent = recap.text;
+    card.querySelector(".session-recap-dismiss").addEventListener("click", () => card.remove());
+
+    // Insert at top of chat area so it sits above the first real message.
+    chatArea.insertBefore(card, chatArea.firstChild);
   },
 
   appendMessage(role, content, isStreaming = false) {
