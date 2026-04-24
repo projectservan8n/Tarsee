@@ -95,7 +95,8 @@ const Setup = {
     document.getElementById("setupConnectBtn").textContent = "Checking...";
 
     try {
-      await API.saveProvider({ provider: "claude-code", apiKey: "subscription", model: "claude-sonnet-4-6" });
+      // Omit model — server fills from its registry's recommended entry.
+      await API.saveProvider({ provider: "claude-code", apiKey: "subscription" });
       this.showSkillPicker();
     } catch (err) {
       errorEl.textContent = err.message;

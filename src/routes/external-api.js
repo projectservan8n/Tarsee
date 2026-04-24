@@ -4,6 +4,7 @@ import { chatStream } from "../ai/router.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { SettingsStore } from "../db/settings.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
+import { getRecommendedModel } from "../config/constants.js";
 
 export const externalApiRouter = Router();
 
@@ -47,7 +48,7 @@ externalApiRouter.post("/message", async (req, res) => {
     const messages = convStore.getRecentMessages(convId, 20);
     const history = messages.map(m => ({ role: m.role, content: m.content }));
 
-    const model = settingsStore?.get("ai.claude-code.model") || "claude-sonnet-4-6";
+    const model = settingsStore?.get("ai.claude-code.model") || getRecommendedModel();
     const systemPrompt = await buildSystemPrompt(req.app, convId);
     const toolDefs = getToolDefinitions(req.app);
     const toolCtx = { app: req.app, conversationId: convId };

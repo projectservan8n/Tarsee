@@ -386,9 +386,9 @@
               <div class="form-group">
                 <label>Model</label>
                 <select id="settingsModel" class="w-full">
-                  <option value="claude-opus-4-6">Claude Opus 4.6 — 1M context (recommended)</option>
-                  <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (faster, cheaper)</option>
-                  <option value="claude-haiku-4-5">Claude Haiku 4.5 (fastest)</option>
+                  <!-- Populated dynamically from /api/chat/models on page load.
+                       The server owns the model registry so adding a new Claude
+                       model is a one-line change in src/config/constants.js. -->
                 </select>
               </div>
               <div class="form-group" id="customBaseUrlGroup" style="display:none">

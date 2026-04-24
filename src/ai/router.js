@@ -1,4 +1,4 @@
-import { AI_PROVIDERS } from "../config/constants.js";
+import { AI_PROVIDERS, getRecommendedModel } from "../config/constants.js";
 
 // Lazy-loaded provider module
 let claudeCodeModule = null;
@@ -27,7 +27,7 @@ export async function* chatStream(opts) {
 
   yield* claudeCodeModule.chat({
     messages,
-    model: model || providerDef?.defaultModel || "claude-sonnet-4-6",
+    model: model || providerDef?.defaultModel || getRecommendedModel(),
     systemPrompt,
     signal,
     toolCtx,

@@ -3,7 +3,7 @@ import { chatStream, getAvailableProviders } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { initSSE, sendSSE } from "../lib/stream-utils.js";
-import { LIMITS } from "../config/constants.js";
+import { LIMITS, CLAUDE_MODELS, resolveModelAlias } from "../config/constants.js";
 import { processCommand, getCommandList } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { trackActivity } from "../lib/session-reset.js";
@@ -27,7 +27,9 @@ function broadcastToOthers(convId, eventType, data) {
 
 /**
  * Classify message complexity for auto model routing.
- * Heuristic only — no AI calls.
+ * Heuristic only — no AI calls. Returns a *tier* which gets resolved to
+ * the latest concrete model in that tier from the central registry, so
+ * when Anthropic ships a new Opus this routing picks it up automatically.
  */
 function classifyMessageModel(message) {
   const words = message.split(/\s+/).length;
@@ -38,15 +40,15 @@ function classifyMessageModel(message) {
     "analyze", "complex", "explain how", "write a", "build", "create a", "deploy",
     "optimize", "migrate", "security", "performance", "!think", "!!"];
   const hasCode = message.includes("```") || /\b(function|const|import|class|def|async|await)\s/.test(message);
-  if (hasCode || opusKeywords.some((k) => lower.includes(k))) return "claude-opus-4-6";
+  if (hasCode || opusKeywords.some((k) => lower.includes(k))) return resolveModelAlias("opus");
 
   // Haiku signals: short, simple
   if (words <= 12 && /^(hi|hello|hey|yes|no|ok|thanks|sure|yep|nah|what is|who is|when is|where is|how much|how many)/i.test(lower)) {
-    return "claude-haiku-4-5";
+    return resolveModelAlias("haiku");
   }
 
-  // Default: Sonnet
-  return "claude-sonnet-4-6";
+  // Default: Sonnet tier
+  return resolveModelAlias("sonnet");
 }
 
 export const chatRouter = Router();
@@ -79,6 +81,16 @@ chatRouter.get("/providers", (_req, res) => {
  */
 chatRouter.get("/commands", (_req, res) => {
   res.json({ commands: getCommandList() });
+});
+
+/**
+ * GET /api/chat/models
+ * List every Claude model Tarsee knows about, straight from the central
+ * registry. The Settings dropdown calls this on load so adding a new
+ * model in constants.js is enough to make it show up in the UI.
+ */
+chatRouter.get("/models", (_req, res) => {
+  res.json({ models: CLAUDE_MODELS });
 });
 
 /**

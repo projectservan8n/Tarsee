@@ -276,12 +276,17 @@ const Chat = {
     if (!bar) return;
     bar.style.display = "flex";
 
-    // Model name — read from server settings
-    const alias = { "claude-opus-4-6": "opus", "claude-sonnet-4-6": "sonnet", "claude-haiku-4-5": "haiku" };
-    API.json("/api/settings").then(data => {
-      const model = (data.settings || []).find(s => s.key === "ai.claude-code.model")?.value;
-      this.elements.sessionModel.textContent = alias[model] || alias[Object.keys(alias).find(k => k.includes("opus"))] || "opus";
-    }).catch(() => {});
+    // Model name — pair the active model id with its registry tier so the
+    // session bar shows "opus" / "sonnet" / "haiku" for any known model.
+    Promise.all([
+      API.json("/api/settings").catch(() => ({ settings: [] })),
+      API.json("/api/chat/models").catch(() => ({ models: [] })),
+    ]).then(([settingsData, modelsData]) => {
+      const activeId = (settingsData.settings || []).find((s) => s.key === "ai.claude-code.model")?.value;
+      const models = modelsData.models || [];
+      const meta = models.find((m) => m.id === activeId);
+      this.elements.sessionModel.textContent = meta?.tier || (activeId ? activeId.split("-")[1] : "opus");
+    });
 
     // Context usage (approximate from message count)
     if (this.currentConversationId) {

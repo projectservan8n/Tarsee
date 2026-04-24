@@ -1,4 +1,4 @@
-import { AI_PROVIDERS } from "../config/constants.js";
+import { AI_PROVIDERS, CLAUDE_MODELS, CLAUDE_MODELS_BY_ID, resolveModelAlias, getRecommendedModel } from "../config/constants.js";
 import { addCronJob, removeCronJob, loadCronJobs, runCronJob, startCronScheduler } from "./cron.js";
 import { executeTool } from "./tools.js";
 import { getSkillContent, installSkill, scanSkills } from "./skills-engine.js";
@@ -53,31 +53,33 @@ const COMMANDS = {
   },
 
   model: {
-    description: "Show or switch the AI model (opus, sonnet, haiku)",
-    usage: "/model [opus|sonnet|haiku]",
+    description: "Show or switch the AI model (opus, sonnet, haiku, or any model id)",
+    usage: "/model [opus|sonnet|haiku|<model-id>]",
     handler: (args, ctx) => {
       const settingsStore = ctx.settingsStore;
       if (!settingsStore) return "Settings not available.";
 
-      const MODELS = {
-        opus: "claude-opus-4-6",
-        sonnet: "claude-sonnet-4-6",
-        haiku: "claude-haiku-4-5",
-      };
-
       const active = settingsStore.getActiveProvider();
 
       if (!args) {
-        const model = active?.model || "claude-opus-4-6";
-        const alias = Object.entries(MODELS).find(([, v]) => v === model)?.[0] || model;
-        return `**Current model:** ${alias} (\`${model}\`)\n\n**Available:**\n- \`/model opus\` — Opus 4.6 (smartest, 1M context)\n- \`/model sonnet\` — Sonnet 4.6 (fast, 1M context)\n- \`/model haiku\` — Haiku 4.5 (fastest)`;
+        const current = active?.model || getRecommendedModel();
+        const meta = CLAUDE_MODELS_BY_ID[current];
+        const label = meta ? `${meta.displayName} (${meta.tier}, ${meta.context})` : current;
+        const available = CLAUDE_MODELS.map(
+          (m) => `- \`/model ${m.tier}\` — ${m.displayName} (${m.context}${m.recommended ? ", recommended" : ""})`
+        ).join("\n");
+        return `**Current model:** ${label}\n\n**Available:**\n${available}\n\nYou can also pass a full model id (e.g. \`/model claude-opus-4-7\`).`;
       }
 
       const provider = active?.provider || "claude-code";
-      const modelId = MODELS[args.toLowerCase()] || args;
-      settingsStore.set(`ai.${provider}.model`, modelId);
-      const alias = Object.entries(MODELS).find(([, v]) => v === modelId)?.[0] || modelId;
-      return `Model switched to **${alias}** (\`${modelId}\`)`;
+      const resolved = resolveModelAlias(args);
+      if (!resolved) {
+        const knownIds = CLAUDE_MODELS.map((m) => `\`${m.id}\``).join(", ");
+        return `Unknown model \`${args}\`. Known: opus, sonnet, haiku, or: ${knownIds}.`;
+      }
+      settingsStore.set(`ai.${provider}.model`, resolved);
+      const meta = CLAUDE_MODELS_BY_ID[resolved];
+      return `Model switched to **${meta?.displayName || resolved}** (\`${resolved}\`)`;
     },
   },
 

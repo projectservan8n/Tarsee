@@ -93,7 +93,7 @@ export async function* chat({
 
   const queryOptions = {
     cwd,
-    model: model || config.CLAUDE_DEFAULT_MODEL || "claude-opus-4-6",
+    model: model || config.CLAUDE_DEFAULT_MODEL,
     tools: allTools,
     allowedTools: allTools,
     permissionMode: "bypassPermissions",

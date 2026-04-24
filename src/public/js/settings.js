@@ -551,6 +551,10 @@ const Settings = {
 
   async load() {
     try {
+      // Populate the model dropdown FIRST so setting its value below actually sticks —
+      // assigning to <select>.value silently no-ops if the matching <option> isn't there.
+      await this.loadModelsDropdown();
+
       const { settings } = await API.getSettings();
 
       // Provider (always claude-code)
@@ -617,11 +621,39 @@ const Settings = {
     try {
       await API.saveProvider({
         provider: "claude-code",
-        model: this.elements.model.value || "claude-sonnet-4-6",
+        model: this.elements.model.value,
       });
       App.showToast("Model saved", "success");
     } catch (err) {
       App.showToast(err.message, "error");
+    }
+  },
+
+  /**
+   * Populate the Settings > AI Provider model dropdown from the server's
+   * central model registry. Called on page load so new models added in
+   * src/config/constants.js show up without any client-side code change.
+   */
+  async loadModelsDropdown() {
+    const select = this.elements.model;
+    if (!select) return;
+    try {
+      const { models } = await API.json("/api/chat/models");
+      if (!Array.isArray(models) || !models.length) return;
+      const current = select.value;
+      select.innerHTML = models.map((m) => {
+        const notes = [m.context];
+        if (m.recommended) notes.push("recommended");
+        return `<option value="${m.id}">${m.displayName} (${notes.join(", ")})</option>`;
+      }).join("");
+      // Restore previous selection if still present; otherwise leave on the first option.
+      if (current && models.some((m) => m.id === current)) {
+        select.value = current;
+      }
+    } catch (err) {
+      // Leave the (empty) select alone — saveProvider still works with whatever
+      // value is already stored server-side; the dropdown just won't render.
+      console.warn("[settings] Failed to load model list:", err.message);
     }
   },
 

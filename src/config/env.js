@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getRecommendedModel } from "./constants.js";
 
 // --- Port ---
 const PORT = Number.parseInt(process.env.PORT ?? process.env.TARSEE_PORT ?? "3000", 10);
@@ -154,7 +155,10 @@ const DB_PATH = path.join(DATA_DIR, "tarsee.db");
 
 // --- Claude Code Configuration ---
 const CLAUDE_WORKSPACE_DIR = process.env.CLAUDE_WORKSPACE_DIR?.trim() || WORKSPACE_DIR;
-const CLAUDE_DEFAULT_MODEL = process.env.CLAUDE_DEFAULT_MODEL?.trim() || "claude-opus-4-6";
+// Default comes from the central model registry (constants.js) so adding
+// a new model doesn't require touching this file. The env override still
+// wins if set — useful for pinning a specific model on a deployment.
+const CLAUDE_DEFAULT_MODEL = process.env.CLAUDE_DEFAULT_MODEL?.trim() || getRecommendedModel();
 
 // --- Frozen config export ---
 const config = Object.freeze({

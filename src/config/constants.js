@@ -1,10 +1,72 @@
+// --- Claude Model Registry ---
+// Single source of truth for every Claude model Tarsee exposes. Adding a
+// new model = one entry here. The Settings dropdown, /model command,
+// default fallback, and auto-routing all read from this registry — no
+// more updating six files every time Anthropic ships a new version.
+//
+// Fields:
+//   id           — canonical API model ID used in every request
+//   displayName  — what shows in the Settings dropdown
+//   tier         — opus | sonnet | haiku (used by /model aliases + routing)
+//   context      — human-readable context window size for the UI hint
+//   recommended  — exactly one entry should be true; used as the default
+//                  when no DB setting or env var is configured
+//   released     — YYYY-MM; used to pick "latest" when a tier has multiple
+//                  models (newest wins)
+export const CLAUDE_MODELS = Object.freeze([
+  { id: "claude-opus-4-7",   displayName: "Claude Opus 4.7",   tier: "opus",   context: "1M",  recommended: true,  released: "2026-01" },
+  { id: "claude-opus-4-6",   displayName: "Claude Opus 4.6",   tier: "opus",   context: "1M",  recommended: false, released: "2025-10" },
+  { id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", tier: "sonnet", context: "1M",  recommended: false, released: "2025-10" },
+  { id: "claude-haiku-4-5",  displayName: "Claude Haiku 4.5",  tier: "haiku",  context: "200K", recommended: false, released: "2025-10" },
+]);
+
+/** Flatten to id-keyed map for O(1) lookups. */
+export const CLAUDE_MODELS_BY_ID = Object.freeze(
+  Object.fromEntries(CLAUDE_MODELS.map((m) => [m.id, m]))
+);
+
+/** The default model when nothing else is configured. */
+export function getRecommendedModel() {
+  return (CLAUDE_MODELS.find((m) => m.recommended) || CLAUDE_MODELS[0]).id;
+}
+
+/**
+ * Resolve a tier shorthand (opus / sonnet / haiku) or a partial match
+ * to a concrete model ID. Returns the newest model in that tier so
+ * "/model opus" always picks the latest Opus without code changes when
+ * a new one ships.
+ */
+export function resolveModelAlias(alias) {
+  if (!alias) return null;
+  const a = String(alias).toLowerCase().trim();
+
+  // Exact match first — if the user typed a full ID, honor it.
+  if (CLAUDE_MODELS_BY_ID[a]) return a;
+
+  // Tier shorthand → newest in that tier
+  const tierMatches = CLAUDE_MODELS
+    .filter((m) => m.tier === a)
+    .sort((x, y) => (y.released || "").localeCompare(x.released || ""));
+  if (tierMatches.length) return tierMatches[0].id;
+
+  // Substring match (e.g. "opus-4-6" → "claude-opus-4-6")
+  const sub = CLAUDE_MODELS.find((m) => m.id.includes(a));
+  return sub ? sub.id : null;
+}
+
+/** All model IDs that are known, for allowlist checks. */
+export function isKnownModel(id) {
+  return !!CLAUDE_MODELS_BY_ID[id];
+}
+
 // --- AI Provider Definitions ---
 export const AI_PROVIDERS = Object.freeze({
   "claude-code": {
     id: "claude-code",
     name: "Claude Code (Agent)",
     envKey: null,
-    defaultModel: "claude-opus-4-6",
+    // Lazy getter so defaultModel always tracks the registry's recommended entry.
+    get defaultModel() { return getRecommendedModel(); },
     baseUrl: null,
     noKeyRequired: true,
   },

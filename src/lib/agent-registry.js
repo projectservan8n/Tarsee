@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveModelAlias } from "../config/constants.js";
 
 /**
  * Agent Registry — manages agent definitions (Coder, Researcher, Writer, etc.)
@@ -7,6 +8,10 @@ import path from "node:path";
  * Each agent has: id, name, model, system prompt, allowed tools, color.
  * Stored in settings DB as "agents.registry" JSON.
  * The orchestrator (main Claude session) uses these to delegate tasks.
+ *
+ * Models are resolved by tier (opus/sonnet/haiku) from the central
+ * CLAUDE_MODELS registry, so the defaults always point at the latest
+ * model in each tier without code changes when a new one ships.
  */
 
 const DEFAULT_AGENTS = [
@@ -14,7 +19,7 @@ const DEFAULT_AGENTS = [
     id: "coder",
     name: "Coder",
     nickname: "",
-    model: "claude-opus-4-6",
+    model: resolveModelAlias("opus"),
     prompt: "You are a senior software engineer. Write clean, production-grade code. Debug thoroughly. Always test your work. Use Read, Write, Edit, Bash, Grep, Glob tools. Be concise — code speaks louder than explanations.",
     tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
     color: "#4caf50",
@@ -25,7 +30,7 @@ const DEFAULT_AGENTS = [
     id: "researcher",
     name: "Researcher",
     nickname: "",
-    model: "claude-sonnet-4-6",
+    model: resolveModelAlias("sonnet"),
     prompt: "You are a thorough researcher. Search the web, read documents, analyze data, and summarize findings. Be comprehensive but concise. Cite sources. Use web_fetch, web_search, Read tools.",
     tools: ["Read", "Bash", "Glob", "Grep"],
     color: "#2196f3",
@@ -36,7 +41,7 @@ const DEFAULT_AGENTS = [
     id: "writer",
     name: "Writer",
     nickname: "",
-    model: "claude-sonnet-4-6",
+    model: resolveModelAlias("sonnet"),
     prompt: "You are a professional writer. Draft emails, documents, reports, and content. Match the user's tone and style. Be clear, concise, and compelling. Use Read and Write tools for file output.",
     tools: ["Read", "Write", "Edit", "Bash"],
     color: "#ff9800",
@@ -47,7 +52,7 @@ const DEFAULT_AGENTS = [
     id: "quick",
     name: "Quick",
     nickname: "",
-    model: "claude-haiku-4-5",
+    model: resolveModelAlias("haiku"),
     prompt: "You are a fast assistant for simple tasks. Answer quickly, format data, do calculations, lookups. Be extremely concise — one sentence when possible.",
     tools: ["Read", "Bash", "Grep"],
     color: "#9c27b0",
