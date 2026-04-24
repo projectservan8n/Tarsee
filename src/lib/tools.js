@@ -1054,6 +1054,24 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
         const { channel, message, channel_id } = toolInput;
         const preview = message.length > 80 ? message.slice(0, 80) + "..." : message;
 
+        // Email needs an explicit target — the threadKey stored under
+        // channel_conv.email:<threadKey> is a Message-ID, not an address,
+        // and we don't want to guess which recipient to reach. Require
+        // channel_id for email; suggest tarsee_send_email_thread for
+        // full thread control.
+        if (channel === "email") {
+          if (!channel_id) {
+            return "send_message to email requires channel_id = target email address. For threaded outbound (with In-Reply-To), use tarsee_send_email_thread instead.";
+          }
+          if (!ctx.channelManager) return "send_message error: channel manager unavailable";
+          try {
+            await ctx.channelManager.sendMessage("email", channel_id, message);
+            return `Email sent to ${channel_id}: ${preview}`;
+          } catch (err) {
+            return `send_message email error: ${err.message}`;
+          }
+        }
+
         // For external channels (Telegram, Discord, Slack), push via ChannelManager
         if (channel !== "web" && ctx.channelManager) {
           try {
@@ -1442,6 +1460,85 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           return `Diagram created! View at: /canvas/${canvasId}/  (${nodes.length} nodes, ${edges.length} edges, ${result.size} bytes)`;
         } catch (err) {
           return `create_diagram error: ${err.message}`;
+        }
+      }
+
+      case "configure_email_channel": {
+        // Partial-update: only keys passed are written, rest preserved.
+        // Chat-driven setup path for the email channel — see plan file.
+        if (!ctx.settingsStore) return "configure_email_channel error: settings store unavailable";
+        const prev = ctx.settingsStore.get("channel.email") || {};
+        const input = toolInput || {};
+        const merged = {
+          enabled: input.enabled !== undefined ? !!input.enabled : (prev.enabled ?? false),
+          tarseeEmailAddress: input.tarseeEmailAddress ?? prev.tarseeEmailAddress ?? (input.imap?.user ?? prev.imap?.user ?? ""),
+          fromName: input.fromName ?? prev.fromName ?? "Tarsee",
+          defaultSubject: input.defaultSubject ?? prev.defaultSubject ?? "Tarsee",
+          mentionKeyword: input.mentionKeyword ?? prev.mentionKeyword ?? "tarsee",
+          replyAllMarker: input.replyAllMarker ?? prev.replyAllMarker ?? "[reply-all]",
+          allowlistFromAddresses: Array.isArray(input.allowlistFromAddresses)
+            ? input.allowlistFromAddresses
+            : (prev.allowlistFromAddresses || []),
+          imap: {
+            host: input.imap?.host ?? prev.imap?.host ?? "",
+            port: Number(input.imap?.port ?? prev.imap?.port ?? 993),
+            user: input.imap?.user ?? prev.imap?.user ?? "",
+            password: input.imap?.password ?? prev.imap?.password ?? "",
+            secure: input.imap?.secure !== false,
+          },
+          smtp: {
+            host: input.smtp?.host ?? prev.smtp?.host ?? "",
+            port: Number(input.smtp?.port ?? prev.smtp?.port ?? 465),
+            user: input.smtp?.user ?? prev.smtp?.user ?? "",
+            password: input.smtp?.password ?? prev.smtp?.password ?? "",
+            secure: input.smtp?.secure !== false,
+          },
+        };
+        ctx.settingsStore.set("channel.email", merged);
+
+        // Restart the channel if fully configured + enabled.
+        if (merged.enabled && merged.imap.host && merged.imap.user && merged.smtp.host && merged.smtp.user) {
+          if (ctx.channelManager) {
+            try { await ctx.channelManager.restart("email"); }
+            catch (err) { return `Email saved, but restart failed: ${err.message}`; }
+          }
+        } else if (!merged.enabled && ctx.channelManager) {
+          try { await ctx.channelManager.stop("email"); } catch {}
+        }
+
+        // Human-readable confirmation with passwords masked.
+        const maskPw = (p) => (p ? "•".repeat(Math.min(16, p.length)) : "(not set)");
+        const allowlistSummary = merged.allowlistFromAddresses.length
+          ? `${merged.allowlistFromAddresses.length} address${merged.allowlistFromAddresses.length === 1 ? "" : "es"} (${merged.allowlistFromAddresses[0]}${merged.allowlistFromAddresses.length > 1 ? ", …" : ""})`
+          : "empty — WARNING: allows any sender";
+        return [
+          "✓ Email channel configured:",
+          `  Mailbox:     ${merged.tarseeEmailAddress || "(not set)"}`,
+          `  IMAP:        ${merged.imap.host || "(not set)"}:${merged.imap.port} as ${merged.imap.user || "(not set)"} (password ${maskPw(merged.imap.password)})`,
+          `  SMTP:        ${merged.smtp.host || "(not set)"}:${merged.smtp.port} as ${merged.smtp.user || "(not set)"} (password ${maskPw(merged.smtp.password)})`,
+          `  Mention:     @${merged.mentionKeyword}`,
+          `  Reply-all:   ${merged.replyAllMarker}`,
+          `  Allowlist:   ${allowlistSummary}`,
+          `  Enabled:     ${merged.enabled ? "yes — IMAP IDLE connecting…" : "no"}`,
+        ].join("\n");
+      }
+
+      case "send_email_thread": {
+        const { to, cc, subject, body, inReplyTo } = toolInput || {};
+        if (!to) return "send_email_thread error: 'to' is required";
+        if (!subject) return "send_email_thread error: 'subject' is required";
+        if (!body) return "send_email_thread error: 'body' is required";
+        if (!ctx.channelManager) return "send_email_thread error: channel manager unavailable";
+        const emailChannel = ctx.channelManager.channels?.get?.("email");
+        if (!emailChannel?.bot?.sendNew) {
+          return "send_email_thread error: email channel not running. Configure it in Settings > Channels > Email or via tarsee_configure_email_channel.";
+        }
+        try {
+          const { messageId } = await emailChannel.bot.sendNew({ to, cc, subject, body, inReplyTo });
+          const toDisplay = Array.isArray(to) ? to.join(", ") : to;
+          return `Email ${inReplyTo ? "reply" : "thread"} sent to ${toDisplay}. Message-ID: ${messageId || "(unknown)"}`;
+        } catch (err) {
+          return `send_email_thread error: ${err.message}`;
         }
       }
 

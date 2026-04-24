@@ -17,9 +17,11 @@ export class ChannelManager {
    * Starts all configured channels.
    */
   async startAll() {
-    const channels = ["discord", "telegram"];
+    // Email has a different "ready" check than token-based channels —
+    // it needs imap + smtp config + enabled, not a single token.
+    const tokenChannels = ["discord", "telegram"];
 
-    for (const type of channels) {
+    for (const type of tokenChannels) {
       try {
         const channelConfig = this.settings.get(`channel.${type}`);
         if (channelConfig?.enabled && channelConfig?.token) {
@@ -28,6 +30,16 @@ export class ChannelManager {
       } catch (err) {
         console.warn(`[channels] failed to start ${type}:`, err.message);
       }
+    }
+
+    // Email
+    try {
+      const emailConfig = this.settings.get("channel.email");
+      if (isEmailReady(emailConfig)) {
+        await this.start("email", emailConfig);
+      }
+    } catch (err) {
+      console.warn("[channels] failed to start email:", err.message);
     }
   }
 
@@ -53,6 +65,11 @@ export class ChannelManager {
         case "telegram": {
           const { createTelegramBot } = await import("./telegram.js");
           bot = await createTelegramBot(channelConfig, this.db);
+          break;
+        }
+        case "email": {
+          const { createEmailBot } = await import("./email.js");
+          bot = await createEmailBot(channelConfig, this.db);
           break;
         }
         default:
@@ -97,7 +114,12 @@ export class ChannelManager {
    */
   async restart(type) {
     const channelConfig = this.settings.get(`channel.${type}`);
-    if (!channelConfig?.enabled || !channelConfig?.token) {
+    // Email uses imap/smtp instead of a single token — different readiness check.
+    if (type === "email") {
+      if (!isEmailReady(channelConfig)) {
+        throw new Error("email is not configured or not enabled");
+      }
+    } else if (!channelConfig?.enabled || !channelConfig?.token) {
       throw new Error(`${type} is not configured or not enabled`);
     }
     await this.start(type, channelConfig);
@@ -137,6 +159,28 @@ export class ChannelManager {
         };
       }
     }
+    // Email uses a different readiness shape
+    if (!result.email) {
+      const config = this.settings.get("channel.email");
+      result.email = {
+        status: isEmailReady(config) ? "stopped" : "not_configured",
+      };
+    }
     return result;
   }
+}
+
+/**
+ * Email is "ready to start" when it's enabled + has both IMAP and SMTP
+ * host+user configured. Passwords are stored separately (encrypted) so we
+ * can't check them here without decryption; the channel will fail fast
+ * on connect if they're missing, which surfaces as a clean error.
+ */
+function isEmailReady(c) {
+  return !!(
+    c &&
+    c.enabled &&
+    c.imap?.host && c.imap?.user &&
+    c.smtp?.host && c.smtp?.user
+  );
 }
