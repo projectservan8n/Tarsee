@@ -247,22 +247,25 @@ const App = {
     }, 60 * 60 * 1000);
 
     // --- iOS virtual keyboard handling ---
-    // iOS Safari doesn't resize the layout viewport when the keyboard opens;
-    // it just slides content up so the composer can end up behind the keys.
-    // Mirror the keyboard height onto a CSS var so layout can reserve space.
+    // Drive the app shell height from visualViewport.height. When the software
+    // keyboard opens, visualViewport shrinks — the flex-anchored composer then
+    // rides up with the new bottom edge and sits flush with the keyboard,
+    // matching Claude's app. (`100dvh` alone doesn't work on iOS because it
+    // only tracks URL-bar / orientation changes, not keyboard show/hide.)
     if (typeof window.visualViewport !== "undefined") {
       const vv = window.visualViewport;
-      const updateKeyboardInset = () => {
-        const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-        document.documentElement.style.setProperty("--keyboard-inset", inset + "px");
-        document.documentElement.classList.toggle("keyboard-open", inset > 80);
+      const updateAppHeight = () => {
+        document.documentElement.style.setProperty("--app-height", vv.height + "px");
+        document.documentElement.classList.toggle(
+          "keyboard-open",
+          window.innerHeight - vv.height > 80
+        );
       };
-      vv.addEventListener("resize", updateKeyboardInset);
-      vv.addEventListener("scroll", updateKeyboardInset);
-      updateKeyboardInset();
+      vv.addEventListener("resize", updateAppHeight);
+      vv.addEventListener("scroll", updateAppHeight);
+      window.addEventListener("orientationchange", () => setTimeout(updateAppHeight, 200));
+      updateAppHeight();
 
-      // When the message input gets focus on a phone, make sure the
-      // composer scrolls into view after the keyboard animation settles.
       const input = document.getElementById("messageInput");
       input?.addEventListener("focus", () => {
         if (window.innerWidth > 768) return;
@@ -270,26 +273,9 @@ const App = {
       });
     }
 
-    // Offline / online indicator — one persistent banner at the top of the
-    // screen, announced to assistive tech via role="status".
-    const offlineBanner = document.createElement("div");
-    offlineBanner.id = "offlineBanner";
-    offlineBanner.className = "offline-banner";
-    offlineBanner.setAttribute("role", "status");
-    offlineBanner.setAttribute("aria-live", "polite");
-    offlineBanner.textContent = "You're offline — changes will retry when you reconnect";
-    document.body.appendChild(offlineBanner);
-
-    const updateOnline = () => {
-      const online = navigator.onLine !== false;
-      offlineBanner.classList.toggle("visible", !online);
-    };
-    window.addEventListener("online", () => {
-      updateOnline();
-      this.showToast("Back online", "success");
-    });
-    window.addEventListener("offline", updateOnline);
-    updateOnline();
+    // Offline / online state — surfaced only as a transient toast. No persistent banner.
+    window.addEventListener("online", () => this.showToast("Back online", "success"));
+    window.addEventListener("offline", () => this.showToast("You're offline — changes will retry when you reconnect", "warning"));
 
     // Global keyboard shortcuts. Only fire when the user isn't typing into
     // an input field, otherwise `?` would block text entry.

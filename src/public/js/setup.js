@@ -57,8 +57,14 @@ const Setup = {
           <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px">
             <span style="background:var(--accent);color:var(--text-inverse);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px;font-weight:700">2</span>
             <div><strong>Click inside the terminal, then type:</strong><br>
-              <code id="setupCmd" style="background:var(--bg-input);padding:4px 10px;border-radius:4px;display:inline-flex;align-items:center;gap:8px;margin-top:4px;cursor:pointer;user-select:all" title="Click to copy">claude login</code>
-              <span id="setupCmdCopied" style="color:var(--success);font-size:11px;margin-left:6px;display:none">Copied!</span>
+              <button type="button" id="setupCmd" class="setup-copy-chip" aria-label="Copy command: claude login">
+                <span class="setup-copy-cmd">claude login</span>
+                <svg class="setup-copy-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M5.5 5.5h7.5v7.5h-7.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                  <path d="M3 3h7.5v2.5M3 3v7.5h2.5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                </svg>
+                <span class="setup-copy-label">Copy</span>
+              </button>
               <br><span style="color:var(--text-muted);font-size:13px;margin-top:4px;display:block">A link will appear — open it in your browser and log in with your Claude Max account.<br>
               <em>Tip: To copy the login link, highlight it and right-click → Copy (Ctrl+C won't work in the terminal)</em></span>
             </div>
@@ -77,11 +83,23 @@ const Setup = {
       </div>
     `;
 
-    // Click-to-copy
+    // Click-to-copy with an in-chip success flash (green bg + checkmark).
     document.getElementById("setupCmd")?.addEventListener("click", () => {
+      const btn = document.getElementById("setupCmd");
+      const iconEl = btn?.querySelector(".setup-copy-icon");
+      const labelEl = btn?.querySelector(".setup-copy-label");
+      if (!btn || !iconEl || !labelEl) return;
+      const origIcon = iconEl.innerHTML;
+      const origLabel = labelEl.textContent;
       navigator.clipboard.writeText("claude login").then(() => {
-        const el = document.getElementById("setupCmdCopied");
-        if (el) { el.style.display = "inline"; setTimeout(() => el.style.display = "none", 2000); }
+        btn.classList.add("copied");
+        iconEl.innerHTML = '<path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>';
+        labelEl.textContent = "Copied";
+        setTimeout(() => {
+          btn.classList.remove("copied");
+          iconEl.innerHTML = origIcon;
+          labelEl.textContent = origLabel;
+        }, 1500);
       }).catch(() => {});
     });
 

@@ -117,34 +117,14 @@ export async function createTelegramBot(config, db) {
       ctx.react?.(ackEmoji).catch?.(() => {});
     }
 
-    // Keep typing indicator alive while processing
+    // Keep the native "typing..." indicator alive while processing. No
+    // "💭 Thinking..." placeholder message — we used to send one and edit
+    // it with tool progress, but users found it noisy. Final reply is the
+    // only bubble the user sees.
     await ctx.sendChatAction("typing").catch(() => {});
     const typingInterval = setInterval(() => {
       ctx.sendChatAction("typing").catch(() => {});
     }, 4000);
-
-    // Send initial status message that we'll edit in-place.
-    // disable_notification=true: we don't want the user pinged for "Thinking..." —
-    // the final answer is sent as a fresh reply below and that one notifies.
-    let statusMsg = null;
-    try {
-      statusMsg = await ctx.reply("💭 Thinking...", {
-        disable_notification: true,
-        ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
-      });
-    } catch {
-      statusMsg = await ctx.reply("💭 Thinking...", { disable_notification: true });
-    }
-
-    // Helper: edit status message (debounced to avoid rate limits)
-    let lastEdit = 0;
-    const editStatus = async (text) => {
-      if (!statusMsg) return;
-      const now = Date.now();
-      if (now - lastEdit < 2500) return; // Min 2.5s between edits
-      lastEdit = now;
-      try { await ctx.telegram.editMessageText(chatId, statusMsg.message_id, null, text); } catch { /* rate limited or deleted */ }
-    };
 
     // Build full system prompt
     const history = convStore.getRecentMessages(convId, 15);
@@ -165,7 +145,20 @@ You can use these special markers in your response:
     const tools = getToolDefinitions();
     const toolCtx = { db, settingsStore, conversationId: convId };
     const MAX_TOOL_ROUNDS = 15;
-    const toolLog = [];
+
+    // Idle watchdog: if the SDK goes 3 min without emitting an event we abort
+    // and send the user an explicit message instead of hanging forever.
+    const controller = new AbortController();
+    let lastEventAt = Date.now();
+    let idleAborted = false;
+    const IDLE_ABORT_MS = 3 * 60_000;
+    const idleTimer = setInterval(() => {
+      if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
+        idleAborted = true;
+        try { controller.abort(); } catch {}
+        clearInterval(idleTimer);
+      }
+    }, 15_000);
 
     try {
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
@@ -196,9 +189,11 @@ You can use these special markers in your response:
           toolCtx,
           sessionId: existingSessionId,
           onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
+          signal: controller.signal,
         });
 
         for await (const event of stream) {
+          lastEventAt = Date.now();
           if (event.type === "text") {
             roundText += event.content;
             fullResponse += event.content;
@@ -225,14 +220,9 @@ You can use these special markers in your response:
         }
         workingMessages.push({ role: "assistant", content: assistantContent });
 
-        // Execute tools and update status
+        // Execute tools silently — Telegram users only see the final reply.
         const toolResults = [];
         for (const tc of toolCalls) {
-          const shortName = tc.name.replace("mcp__tarsee__tarsee_", "").replace("mcp__tarsee__", "");
-          toolLog.push(shortName);
-          const statusLines = toolLog.map((t, i) => i === toolLog.length - 1 ? `⚙️ ${t}...` : `✅ ${t}`);
-          await editStatus(statusLines.join("\n"));
-
           console.log(`[telegram] tool: ${tc.name}`);
           const result = await executeTool(tc.name, tc.input, toolCtx);
           toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
@@ -241,10 +231,6 @@ You can use these special markers in your response:
           fullResponse += `\n<tool_response>${resultText}</tool_response>\n`;
         }
         workingMessages.push({ role: "user", content: toolResults });
-
-        // Mark last tool done
-        const doneLines = toolLog.map(t => `✅ ${t}`);
-        await editStatus(doneLines.join("\n") + "\n💭 Thinking...");
       }
 
       if (fullResponse) {
@@ -274,10 +260,6 @@ You can use these special markers in your response:
         const htmlText = mdToTelegramHtml(displayText);
         const chunks = splitMessage(htmlText, 4096);
 
-        // Delete the status bubble so the final answer arrives as a fresh,
-        // notification-triggering reply (editMessageText is silent on Telegram).
-        try { await ctx.telegram.deleteMessage(chatId, statusMsg.message_id); } catch {}
-
         // Send final chunks as new replies — each one triggers a real notification + preview.
         for (let i = 0; i < chunks.length; i++) {
           const isLast = i === chunks.length - 1;
@@ -291,15 +273,20 @@ You can use these special markers in your response:
         if (chunks.length === 0 && buttons?.length > 0) {
           await ctx.reply("Choose:", { reply_markup: { inline_keyboard: buttonsToKeyboard(buttons) } });
         }
+      } else if (idleAborted) {
+        await ctx.reply("⚠️ Claude Code stopped responding (3 min idle). Try again — maybe with a smaller ask.").catch(() => {});
       } else {
-        // No response — delete status message
-        try { await ctx.telegram.deleteMessage(chatId, statusMsg.message_id); } catch {}
+        await ctx.reply("⚠️ No response generated. Try rephrasing?").catch(() => {});
       }
     } catch (err) {
       console.error("[telegram] chat error:", err.message);
-      try { await ctx.telegram.editMessageText(chatId, statusMsg.message_id, null, "Sorry, I encountered an error."); } catch {}
+      const reason = idleAborted
+        ? "⚠️ Claude Code stopped responding (3 min idle). Try again — maybe with a smaller ask."
+        : `⚠️ Error: ${err.message || "something went wrong"}. Try again.`;
+      await ctx.reply(reason).catch(() => {});
     } finally {
       clearInterval(typingInterval);
+      clearInterval(idleTimer);
     }
   }
 

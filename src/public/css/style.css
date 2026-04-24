@@ -51,6 +51,10 @@ html, body {
   flex-direction: column;
   height: 100vh;
   height: 100dvh;
+  /* JS overrides this via --app-height from visualViewport.height so the
+     flex container shrinks when the software keyboard opens — pins the
+     composer flush to the top of the keyboard (Claude-app behavior). */
+  height: var(--app-height, 100dvh);
   overflow: hidden;
   padding-top: env(safe-area-inset-top, 0px);
 }
@@ -450,7 +454,8 @@ html, body {
    ========================================================================== */
 
 .chat-area {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;  /* iOS: lets the flex child shrink when keyboard opens */
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: var(--space-3) var(--space-2);
@@ -1088,13 +1093,15 @@ html, body {
   font-weight: 700;
   margin: 0 0 var(--space-1);
   letter-spacing: var(--tracking-tight);
-  color: var(--text);
+  color: #ffffff;  /* Pure white on orange header — crisper than --text (#ececec) */
 }
 
 .setup-card-header p {
   font-size: var(--text-base);
-  opacity: 0.85;
+  color: #ffffff;
+  opacity: 1;
   margin: 0;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.15);
 }
 
 .setup-card-body {
@@ -1116,6 +1123,51 @@ html, body {
 
 .setup-card .form-group {
   text-align: left;
+}
+
+/* ---- Click-to-copy chip used in the setup wizard ---- */
+.setup-copy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-3);
+  margin-top: var(--space-1);
+  background: var(--bg-input);
+  border: var(--space-px) solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-default),
+              border-color var(--duration-fast) var(--ease-default),
+              color var(--duration-fast) var(--ease-default);
+}
+.setup-copy-chip:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-hover);
+}
+.setup-copy-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.setup-copy-chip .setup-copy-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.setup-copy-chip .setup-copy-label {
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+}
+.setup-copy-chip.copied {
+  background: var(--success-subtle);
+  border-color: var(--success);
+}
+.setup-copy-chip.copied .setup-copy-icon,
+.setup-copy-chip.copied .setup-copy-label {
+  color: var(--success);
 }
 
 
@@ -2120,6 +2172,17 @@ html, body {
    to block (which kills SVG flex centering inside the button). */
 @media (max-width: 767px) {
   .desktop-only { display: none !important; }
+
+  /* iOS auto-zooms any focused input with computed font-size < 16px, and
+     ignores user-scalable=no since iOS 10. Bump every focusable control to
+     16px on phone-sized viewports to stop the zoom-in-on-tap behavior.
+     Desktop keeps the designed 13–15px sizes. */
+  input,
+  textarea,
+  select,
+  [contenteditable="true"] {
+    font-size: 16px !important;
+  }
 }
 @media (min-width: 768px) {
   .mobile-only { display: none !important; }
@@ -2441,29 +2504,6 @@ html, body {
    empty states, context gauge, code copy feedback, sidebar scroll fade.
    ========================================================================== */
 
-/* ---- Offline banner (always mounted, only visible when .visible) ---- */
-.offline-banner {
-  position: fixed;
-  top: 0;
-  left: 50%;
-  transform: translate(-50%, -100%);
-  z-index: var(--z-toast);
-  padding: var(--space-2) var(--space-4);
-  margin-top: var(--space-2);
-  background: var(--warning-subtle);
-  color: var(--warning);
-  border: var(--space-px) solid var(--warning);
-  border-radius: var(--radius-full);
-  font-size: var(--text-sm);
-  font-weight: 500;
-  box-shadow: var(--shadow-md);
-  transition: transform var(--duration-normal) var(--ease-ios);
-  pointer-events: none;
-}
-.offline-banner.visible {
-  transform: translate(-50%, 0);
-}
-
 /* ---- Keyboard shortcut overlay (triggered by `?` key) ---- */
 .kbd-overlay {
   position: fixed;
@@ -2641,18 +2681,12 @@ html, body {
   overscroll-behavior-y: none;
 }
 
-/* ---- Virtual keyboard inset (set by app.js via visualViewport) ---- */
-.input-area {
-  padding-bottom: calc(
-    env(safe-area-inset-bottom, var(--space-2)) +
-    var(--space-1) +
-    var(--keyboard-inset, 0px)
-  );
-}
+/* Keyboard positioning is handled by --app-height (see .app rule above):
+   the flex container shrinks, pushing .input-area up naturally. Only keep
+   a small scroll-padding so the newest message isn't tucked under the
+   composer when the keyboard is open. */
 html.keyboard-open .chat-area {
-  /* Auto-scroll behaviour + tighter bottom so the newest message shows
-     when the keyboard pushes the viewport up. */
-  scroll-padding-bottom: calc(var(--keyboard-inset, 0px) + var(--space-4));
+  scroll-padding-bottom: var(--space-4);
 }
 
 /* ---- Short landscape viewports (phones rotated) ---- */
@@ -2771,7 +2805,7 @@ html.keyboard-open .chat-area {
     .input-area {
       background: transparent;
       border-top: none;
-      padding: 0 var(--space-2) calc(env(safe-area-inset-bottom, var(--space-2)) + var(--space-2) + var(--keyboard-inset, 0px));
+      padding: 0 var(--space-2) calc(env(safe-area-inset-bottom, var(--space-2)) + var(--space-2));
     }
     .input-container {
       border-radius: var(--radius-2xl);

@@ -12,17 +12,14 @@ import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { getGatewayManager } from "../lib/gateway.js";
 
 /**
- * Broadcast an SSE-like event to all WebSocket clients except the originating one.
- * This enables cross-device realtime sync — your Mac sees what your PC is streaming.
+ * Broadcast an SSE-like event to all connected WebSocket clients and record
+ * it in the gateway's replay buffer. The originating client dedupes against
+ * its own SSE stream via an `isStreaming` guard on the same conversation,
+ * so we don't need to filter the sender here — doing so would skip the
+ * gateway's buffer entry for the sender's own reconnects.
  */
 function broadcastToOthers(convId, eventType, data) {
-  const gw = getGatewayManager();
-  const msg = JSON.stringify({ type: "sync", convId, event: eventType, data });
-  for (const [, conn] of gw.connections) {
-    if (conn.ws?.readyState === 1) {
-      try { conn.ws.send(msg); } catch { /* ignore */ }
-    }
-  }
+  getGatewayManager().broadcast(convId, eventType, data);
 }
 
 /**
@@ -451,6 +448,25 @@ chatRouter.post("/send", async (req, res) => {
       }
     });
 
+    // Heartbeat + idle watchdog. Emits a `heartbeat` SSE event every 15s so
+    // proxies don't buffer the response to death, and aborts the stream if
+    // the SDK produces no events for 3 minutes (otherwise users see nothing
+    // and have to send a second message to unblock).
+    let lastEventAt = Date.now();
+    const HEARTBEAT_MS = 15_000;
+    const IDLE_ABORT_MS = 3 * 60_000;
+    const hb = setInterval(() => {
+      if (res.writableEnded) return clearInterval(hb);
+      try { sendSSE(res, "heartbeat", { ts: Date.now() }); } catch {}
+      if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
+        clearInterval(hb);
+        try { controller.abort(); } catch {}
+        try { sendSSE(res, "error", { message: "Claude Code stopped responding (3 min idle). Try again." }); } catch {}
+        try { sendSSE(res, "done", { conversationId: convId }); } catch {}
+        if (!res.writableEnded) res.end();
+      }
+    }, HEARTBEAT_MS);
+
     try {
       const existingSessionId = convStore.getClaudeSessionId(convId);
       const mod = await import("../ai/providers/claude-code.js");
@@ -504,6 +520,7 @@ chatRouter.post("/send", async (req, res) => {
       };
 
       for await (const event of stream) {
+        lastEventAt = Date.now();
         if (event.type === "text") {
           fullResponse += event.content;
           currentTextChunk += event.content;
@@ -602,6 +619,7 @@ chatRouter.post("/send", async (req, res) => {
         sendSSE(res, "error", { message: err.message });
       }
     } finally {
+      clearInterval(hb);
       if (activeRequests.get(convId) === controller) {
         activeRequests.delete(convId);
       }
@@ -609,6 +627,26 @@ chatRouter.post("/send", async (req, res) => {
     }
     return;
   }
+
+  // Heartbeat + idle abort for non-Claude-Code providers too.
+  let lastEventAt2 = Date.now();
+  const HEARTBEAT_MS = 15_000;
+  const IDLE_ABORT_MS = 3 * 60_000;
+  const genericController = new AbortController();
+  res.on("close", () => {
+    if (!res.writableEnded) { try { genericController.abort(); } catch {} }
+  });
+  const hb2 = setInterval(() => {
+    if (res.writableEnded) return clearInterval(hb2);
+    try { sendSSE(res, "heartbeat", { ts: Date.now() }); } catch {}
+    if (Date.now() - lastEventAt2 > IDLE_ABORT_MS) {
+      clearInterval(hb2);
+      try { genericController.abort(); } catch {}
+      try { sendSSE(res, "error", { message: "Model stopped responding (3 min idle). Try again." }); } catch {}
+      try { sendSSE(res, "done", { conversationId: convId }); } catch {}
+      if (!res.writableEnded) res.end();
+    }
+  }, HEARTBEAT_MS);
 
   try {
     // Build the working message array (may grow with tool results)
@@ -630,11 +668,12 @@ chatRouter.post("/send", async (req, res) => {
         baseUrl: activeProvider?.baseUrl,
         messages: workingMessages,
         systemPrompt: effectiveSystemPrompt,
-        signal: req.signal,
+        signal: genericController.signal,
         tools,
       });
 
       for await (const event of stream) {
+        lastEventAt2 = Date.now();
         if (event.type === "text") {
           roundText += event.content;
           fullResponse += event.content;
@@ -703,6 +742,7 @@ chatRouter.post("/send", async (req, res) => {
   } catch (err) {
     if (!res.writableEnded) sendSSE(res, "error", { message: err.message });
   } finally {
+    clearInterval(hb2);
     if (!res.writableEnded) res.end();
   }
 });
