@@ -79,10 +79,13 @@ const COMMANDS = {
   },
 
   think: {
-    description: "Set thinking effort (low, medium, high, max)",
-    usage: "/think [low|medium|high|max]",
+    description: "Set thinking effort (low, medium, high, max, xhigh)",
+    usage: "/think [low|medium|high|max|xhigh]",
     handler: (args, ctx) => {
-      const levels = { low: "low", medium: "medium", med: "medium", high: "high", max: "max" };
+      const levels = {
+        low: "low", medium: "medium", med: "medium",
+        high: "high", max: "max", xhigh: "xhigh", ultra: "xhigh",
+      };
       const settingsStore = ctx.settingsStore;
       if (!settingsStore) return "Settings not available.";
 
@@ -90,16 +93,65 @@ const COMMANDS = {
         const current = ctx.conversationId
           ? settingsStore.get(`session.${ctx.conversationId}.effort`) || "default"
           : "default";
-        return `**Current effort:** ${current}\n\n**Options:**\n- \`/think low\` — Minimal thinking, fastest\n- \`/think medium\` — Balanced\n- \`/think high\` — Deep reasoning (default)\n- \`/think max\` — Maximum effort (Opus only)`;
+        return `**Current effort:** ${current}\n\n**Options:**\n- \`/think low\` — Minimal thinking, fastest\n- \`/think medium\` — Balanced\n- \`/think high\` — Deep reasoning (default)\n- \`/think max\` — Maximum effort (Opus only)\n- \`/think xhigh\` — Extra-high budget (Opus 4.7 only)`;
       }
 
       const level = levels[args.toLowerCase()];
-      if (!level) return `Unknown level. Use: low, medium, high, or max`;
+      if (!level) return `Unknown level. Use: low, medium, high, max, or xhigh`;
 
       if (ctx.conversationId) {
         settingsStore.set(`session.${ctx.conversationId}.effort`, level);
       }
       return `Thinking effort set to **${level}**`;
+    },
+  },
+
+  // Alias of /think that also triggers the slider UI on the client.
+  // Server-side behavior is identical; the web frontend intercepts the
+  // command response and opens the effort slider if no argument was given.
+  effort: {
+    description: "Set thinking effort via slider or shortcut",
+    usage: "/effort [low|medium|high|max|xhigh]",
+    handler: (args, ctx) => {
+      if (!args) {
+        // Signal the client to open the slider. The frontend looks for
+        // this sentinel in the command response and shows the slider
+        // instead of printing this line.
+        return "__OPEN_EFFORT_SLIDER__";
+      }
+      return COMMANDS.think.handler(args, ctx);
+    },
+  },
+
+  theme: {
+    description: "Switch the UI theme (warm-charcoal, noir, solarized-light, jarvis-blue)",
+    usage: "/theme [name]",
+    handler: (args, ctx) => {
+      const settingsStore = ctx.settingsStore;
+      if (!settingsStore) return "Settings not available.";
+
+      // Built-in themes. Plugin-shipped themes also land here via
+      // plugin-loader — settings key "ui.themes.available" stores the
+      // unified list.
+      const builtIn = ["warm-charcoal", "noir", "solarized-light", "jarvis-blue"];
+      const pluginThemes = settingsStore.get("ui.themes.plugin") || [];
+      const all = [...builtIn, ...pluginThemes];
+
+      if (!args || args.toLowerCase() === "list") {
+        const current = settingsStore.get("ui.theme") || "warm-charcoal";
+        const lines = all.map((t) => (t === current ? `- **${t}** (current)` : `- ${t}`));
+        return `**Available themes:**\n${lines.join("\n")}\n\nSwitch with \`/theme <name>\`.`;
+      }
+
+      const name = args.toLowerCase().trim();
+      if (!all.includes(name)) {
+        return `Unknown theme \`${name}\`. Available: ${all.join(", ")}.`;
+      }
+
+      settingsStore.set("ui.theme", name);
+      // Client picks up the theme change via the __SET_THEME__ sentinel
+      // so the switch is instant without a page reload.
+      return `__SET_THEME__:${name}|Theme set to **${name}**.`;
     },
   },
 
@@ -640,10 +692,11 @@ export async function processCommand(message, ctx = {}) {
  */
 const CATEGORY_RULES = [
   { cat: "Context", names: ["clear", "new", "send", "export", "remember", "memory"] },
-  { cat: "Model",   names: ["model", "think", "auto-route", "voice"] },
+  { cat: "Model",   names: ["model", "think", "effort", "auto-route", "voice"] },
+  { cat: "Appearance", names: ["theme"] },
   { cat: "Automation", names: ["webhook", "cron", "briefing"] },
   { cat: "Comms",   names: ["email"] },
-  { cat: "Tools",   names: ["skill", "doctor", "stop", "status", "stats", "usage", "version"] },
+  { cat: "Tools",   names: ["skill", "doctor", "stop", "status", "stats", "usage", "version", "ultrareview", "fewer-prompts"] },
   { cat: "Help",    names: ["help"] },
 ];
 

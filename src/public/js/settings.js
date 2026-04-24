@@ -75,7 +75,35 @@ const Settings = {
       skillSaveBtn: document.getElementById("skillSaveBtn"),
       skillCancelBtn: document.getElementById("skillCancelBtn"),
       runAuditBtn: document.getElementById("runAuditBtn"),
+      // Appearance
+      theme: document.getElementById("settingsTheme"),
     };
+
+    // --- Theme picker ---
+    // Reflect current theme on open, persist + apply instantly on change.
+    if (this.elements.theme) {
+      const current = (() => {
+        try { return localStorage.getItem("tarsee_theme") || "warm-charcoal"; }
+        catch { return "warm-charcoal"; }
+      })();
+      // "dark" was the legacy value before the theme switcher — alias it.
+      this.elements.theme.value = current === "dark" ? "warm-charcoal" : current;
+
+      this.elements.theme.addEventListener("change", async () => {
+        const name = this.elements.theme.value;
+        document.documentElement.setAttribute("data-theme", name);
+        try { localStorage.setItem("tarsee_theme", name); } catch {}
+        // Persist to server so other devices signed in to the same account
+        // can see the pick via /api/settings. Failure is non-fatal — the
+        // local-storage value is the authoritative per-device theme.
+        try {
+          await API.json("/api/settings/general", {
+            method: "POST",
+            body: { key: "ui.theme", value: name },
+          });
+        } catch { /* server side optional */ }
+      });
+    }
 
     // Toggle settings page open/close
     this.elements.openBtn.addEventListener("click", () => {

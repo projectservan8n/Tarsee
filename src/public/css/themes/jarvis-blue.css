@@ -1,0 +1,39 @@
+/* ==========================================================================
+   Theme: JARVIS Blue
+   Deep navy base with cyan/electric-blue accent — the MCU JARVIS UI palette.
+   Keeps Tarsee's warm sidebar rhythm but swaps chromatic weight to cool
+   blues. Reads as a "cockpit" / "ops panel" rather than warm charcoal.
+   ========================================================================== */
+
+[data-theme="jarvis-blue"] {
+  --bg:                 #0b1a2a;   /* deep navy */
+  --bg-surface:         #11283d;
+  --bg-surface-hover:   #173450;
+  --bg-elevated:        #142e45;
+  --bg-input:           #0d2033;
+  --bg-sidebar:         #0a1626;
+
+  --border:             #1e3d5c;
+  --border-light:       #163049;
+  --border-hover:       #2a5278;
+
+  --text:               #e6f1ff;
+  --text-secondary:     #9ab3cf;
+  --text-muted:         #6f8aa8;
+  --text-inverse:       #0b1a2a;
+
+  --accent:             #39c5ff;   /* JARVIS cyan */
+  --accent-hover:       #4fd0ff;
+  --accent-subtle:      rgba(57, 197, 255, 0.14);
+  --accent-glow:        rgba(57, 197, 255, 0.32);
+
+  --bg-glass:           rgba(11, 26, 42, 0.72);
+  --bg-glass-strong:    rgba(11, 26, 42, 0.88);
+  --bg-glass-surface:   rgba(20, 46, 69, 0.78);
+  --bg-glass-sidebar:   rgba(10, 22, 38, 0.84);
+  --bg-glass-solid:     #0e2236;
+
+  /* Cyan accent glow on top edge instead of neutral white */
+  --glass-highlight:         inset 0 1px 0 rgba(57, 197, 255, 0.12);
+  --glass-highlight-strong:  inset 0 1px 0 rgba(57, 197, 255, 0.22);
+}
