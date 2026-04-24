@@ -103,6 +103,7 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Web UI** — Full chat with markdown rendering, code blocks, tables, file attachments, image paste, drag-and-drop, multi-file upload. PWA — save to homescreen on iOS/Android.
 - **Telegram** — Text, photos, PDFs, voice messages, video notes. Group @mention support, inline buttons, forwarded message detection.
 - **Discord** — Text, images, PDFs, voice messages. Always-online bot with presence status.
+- **Email** — Real-time over IMAP IDLE + SMTP. Mention keyword (default `@tarsee`) gates replies; CC/BCC/forwards are absorbed as context without an outbound. Works with any mailbox you own (Gmail, Outlook, iCloud, Zoho, FastMail, Yahoo, self-hosted).
 - **Cross-device sync** — all devices update in real-time via WebSocket. See tool calls, text streaming, and typing indicators across devices.
 - **All channels share** the same AI, memory, and tools.
 
@@ -178,8 +179,48 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 |---------|-----------------|----------|
 | Telegram | [@BotFather](https://t.me/BotFather) | Text, photos, PDFs, voice, video notes, inline buttons, groups |
 | Discord | [Developer Portal](https://discord.com/developers) | Text, images, PDFs, voice messages, reactions, presence |
+| Email | IMAP + SMTP (any provider — see below) | Real-time mail, `@mention` gate, CC/BCC context absorb, threaded replies |
 
 **Discord:** Enable **Message Content Intent** in Bot settings. Invite with Send Messages, Read Messages, Add Reactions permissions.
+
+---
+
+### Email channel
+
+Tarsee can live in any mailbox you own and reply in real-time. Inbound mail where the body contains `@tarsee` (configurable) triggers a reply; everything else is absorbed silently so Claude remembers the thread and can answer questions about it later. CC'd, BCC'd, and forwarded mail never triggers an outbound reply.
+
+**Setup (two paths — pick one):**
+
+1. **Settings UI** — open `Settings > Channels > Email`, click a provider preset (Gmail / Outlook / iCloud / Zoho / FastMail / Yahoo), paste your email + app password, save.
+2. **Chat** — tell Tarsee in conversation: *"Set up email. Mailbox `tarsee@example.com`, Gmail app password `xxxx-xxxx-xxxx-xxxx`, only allow `you@example.com`."* Tarsee calls the `tarsee_configure_email_channel` MCP tool and the channel starts immediately.
+
+Both paths write to the same `channel.email` record. The Settings UI renders whatever's configured regardless of which path set it.
+
+**App passwords** (most providers require one instead of your login password):
+
+| Provider | App-password page | IMAP / SMTP |
+|---|---|---|
+| Gmail | [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) | `imap.gmail.com:993` / `smtp.gmail.com:465` |
+| Outlook / 365 | [account.microsoft.com/security](https://account.microsoft.com/security) → App passwords | `outlook.office365.com:993` / `smtp.office365.com:587` |
+| iCloud | [account.apple.com](https://account.apple.com) → Sign-In and Security → App-Specific Passwords | `imap.mail.me.com:993` / `smtp.mail.me.com:587` |
+| Zoho | Zoho Mail → Settings → Mail Accounts → IMAP Access | `imap.zoho.com:993` / `smtp.zoho.com:465` |
+| FastMail | [fastmail.com](https://fastmail.com) → Settings → Passwords & Security | `imap.fastmail.com:993` / `smtp.fastmail.com:465` |
+| Yahoo | [login.yahoo.com/account/security](https://login.yahoo.com/account/security) → Generate app password | `imap.mail.yahoo.com:993` / `smtp.mail.yahoo.com:465` |
+
+Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
+
+**Mention keyword** — defaults to `@tarsee`. Change it in Settings to `@jarvis`, `@bot`, or whatever alias you want. The leading `@` is part of what you type so it's obvious what you're setting.
+
+**Reply-all** — opt-in only. Include `[reply-all]` in the subject (or type `@tarsee reply-all` in the body) and Tarsee will reply to everyone in To + CC. Default is reply-to-sender only.
+
+**Sender allowlist** — strongly recommended. Only emails from listed addresses get processed. Leave empty for dev mode (not safe for production mailboxes). Newsletters and auto-reply loops are always dropped regardless (RFC 3834 `Auto-Submitted` / `Precedence` / `List-Id` headers).
+
+**Troubleshooting:**
+- **"Authentication failed"** — you probably pasted your login password. Most providers require an app-specific password (usually 16 characters with hyphens). See the table above.
+- **"IDLE disconnected"** — harmless. IMAP servers close IDLE after ~29 minutes; Tarsee reconnects automatically.
+- **Gmail "less secure apps"** — not relevant anymore. Use an app password and keep 2FA on.
+- **Outlook modern auth** — enterprise tenants may require OAuth instead of app passwords. If your admin disabled basic auth, ask them to allow it for this mailbox or use a different provider.
+- **Reply arrived but wasn't threaded** — verify your mail client shows `In-Reply-To` and `References` headers. Some bespoke clients strip them.
 
 ---
 
