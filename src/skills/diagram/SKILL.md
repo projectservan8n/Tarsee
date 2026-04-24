@@ -5,7 +5,9 @@ description: Render clickable flowcharts and diagrams for processes, decisions, 
 
 # Diagrams
 
-You have a `create_diagram` tool that renders a clickable flowchart inline in chat. The user can click any node to ask a follow-up question about it. Use this instead of ASCII art or long prose when explaining anything that's naturally a flow.
+You have a `tarsee_create_diagram` tool that renders a clickable flowchart inline in chat. The user can click any node to ask a follow-up question about it. Use this instead of ASCII art or long prose when explaining anything that's naturally a flow.
+
+**Important:** the tool is named `tarsee_create_diagram`, not `create_diagram`. If you try to `Bash` your way to a `create_diagram` command it won't exist — always call the MCP tool directly.
 
 ## When to use
 
@@ -41,27 +43,27 @@ You have a `create_diagram` tool that renders a clickable flowchart inline in ch
 
 ## Example
 
-For a question like *"How does our order-status notification flow work?"*, call:
+For a question like *"How does a webhook-triggered alert flow work?"*, call:
 
 ```json
 {
-  "title": "Order status notification",
+  "title": "Webhook-triggered alert flow",
   "nodes": [
-    {"id": "src",    "kind": "trigger",    "label": "Xylem drops AS400 spreadsheet", "sublabel": "Order status file — no ERP needed"},
-    {"id": "parse",  "kind": "processing", "label": "Parse order rows",              "sublabel": "Read kit code, ETA, status, account"},
-    {"id": "check",  "kind": "decision",   "label": "Backorder or ETA changed?",     "sublabel": "Compare against previous file"},
-    {"id": "skip",   "kind": "trigger",    "label": "No change",                     "sublabel": "Skip row"},
-    {"id": "compose","kind": "processing", "label": "Compose notification",          "sublabel": "Account name, kit code, new ETA, reason"},
-    {"id": "send",   "kind": "output",     "label": "Send proactive update",         "sublabel": "Email to distributor"},
-    {"id": "log",    "kind": "output",     "label": "Log to Google Sheets",          "sublabel": "Account, kit code, ETA, timestamp, sent"}
+    {"id": "hook",   "kind": "trigger",    "label": "Webhook fires",         "sublabel": "Incoming HTTP POST with payload"},
+    {"id": "parse",  "kind": "processing", "label": "Parse payload",         "sublabel": "Validate shape, extract fields"},
+    {"id": "check",  "kind": "decision",   "label": "Matches alert rules?",  "sublabel": "Compare against configured thresholds"},
+    {"id": "skip",   "kind": "trigger",    "label": "Ignore",                "sublabel": "Log and drop"},
+    {"id": "compose","kind": "processing", "label": "Compose message",       "sublabel": "Summary, severity, link to dashboard"},
+    {"id": "send",   "kind": "output",     "label": "Notify user",           "sublabel": "Push, email, or chat message"},
+    {"id": "log",    "kind": "output",     "label": "Record event",          "sublabel": "Write to audit log"}
   ],
   "edges": [
-    {"from": "src", "to": "parse", "label": "n8n watches folder"},
-    {"from": "parse", "to": "check"},
-    {"from": "check", "to": "skip", "label": "No"},
-    {"from": "check", "to": "compose", "label": "Yes"},
+    {"from": "hook",    "to": "parse"},
+    {"from": "parse",   "to": "check"},
+    {"from": "check",   "to": "skip",    "label": "No"},
+    {"from": "check",   "to": "compose", "label": "Yes"},
     {"from": "compose", "to": "send"},
-    {"from": "send", "to": "log"}
+    {"from": "send",    "to": "log"}
   ],
   "legend": [
     {"kind": "trigger"}, {"kind": "processing"},

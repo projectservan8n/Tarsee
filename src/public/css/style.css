@@ -1237,6 +1237,40 @@ html, body {
   color: var(--text);
 }
 
+/* Inline checkbox row — overrides .form-group label's block layout so the
+   checkbox sits next to its text instead of stacking + stretching full-width.
+   Higher specificity via double class is deliberate. */
+.form-group label.checkbox-label,
+label.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: 0;
+  cursor: pointer;
+  user-select: none;
+}
+/* Reset the full-width form-input styling when the input is a checkbox — the
+   generic `.form-group input` rule paints padding/border/background across
+   the whole width, which turns the checkbox into a stretched bar. */
+.form-group input[type="checkbox"],
+.checkbox-label input[type="checkbox"] {
+  width: auto;
+  height: auto;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.checkbox-label span {
+  font-size: var(--text-base);
+  font-weight: 500;
+  color: var(--text);
+}
+
 .form-group input,
 .form-group select,
 .form-group textarea {
