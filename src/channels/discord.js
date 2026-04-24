@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { Client, GatewayIntentBits, Events, ActivityType, ChannelType } from "discord.js";
 import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
@@ -8,6 +10,7 @@ import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
+import config from "../config/env.js";
 
 /**
  * Creates and starts a Discord bot.
@@ -95,36 +98,76 @@ export async function createDiscordBot(config, db) {
       } catch { /* referenced message deleted or inaccessible */ }
     }
 
-    // Download attachments from Discord CDN (images, PDFs, voice)
-    const mediaAttachments = [];
+    // Download attachments from Discord CDN.
+    //   Images → base64 image content block (multimodal)
+    //   PDFs   → base64 document content block AND saved to workspace so Claude's
+    //            Read tool can also reach them
+    //   Audio  → transcribed via whisper
+    //   Anything else (txt/json/csv/docx/...) → saved to workspace and surfaced
+    //            to Claude via a text block pointing at the path. Matches the
+    //            web composer's handling so Claude can Bash/Read the file.
+    const mediaAttachments = [];    // multimodal content blocks for model
+    const savedFileNotes = [];      // text notes describing files on disk
     let voiceTranscript = "";
+    const uploadsDir = path.join(config.WORKSPACE_DIR, "uploads");
+    if (message.attachments?.size > 0) {
+      try { fs.mkdirSync(uploadsDir, { recursive: true }); } catch {}
+    }
+    const saveToDisk = (buffer, att) => {
+      const safeName = (att.name || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
+      const filePath = path.join(uploadsDir, `discord-${Date.now()}-${safeName}`);
+      try {
+        fs.writeFileSync(filePath, buffer);
+        return filePath;
+      } catch (err) {
+        console.error("[discord] saveToDisk failed:", err.message);
+        return null;
+      }
+    };
+
     if (message.attachments?.size > 0) {
       for (const [, att] of message.attachments) {
         try {
           const res = await fetch(att.url);
           const buffer = Buffer.from(await res.arrayBuffer());
-          if (att.contentType?.startsWith("image/")) {
+          const ct = att.contentType || "";
+
+          if (ct.startsWith("image/")) {
             mediaAttachments.push({
               type: "image",
-              source: { type: "base64", media_type: att.contentType, data: buffer.toString("base64") },
+              source: { type: "base64", media_type: ct, data: buffer.toString("base64") },
             });
-          } else if (att.contentType === "application/pdf") {
+          } else if (ct === "application/pdf" || att.name?.toLowerCase().endsWith(".pdf")) {
+            // PDF: multimodal document block + also save to disk so Claude can
+            // Read it with tools if needed.
             mediaAttachments.push({
               type: "document",
               source: { type: "base64", media_type: "application/pdf", data: buffer.toString("base64") },
             });
-          } else if (att.contentType?.startsWith("audio/") || att.name?.endsWith(".ogg") || att.name?.endsWith(".webm")) {
+            const savedPath = saveToDisk(buffer, att);
+            if (savedPath) {
+              savedFileNotes.push(`[PDF attached: ${att.name} → ${savedPath}] — multimodal PDF block provided above; you can also Read this file directly at the path.`);
+            }
+          } else if (ct.startsWith("audio/") || att.name?.endsWith(".ogg") || att.name?.endsWith(".webm")) {
             // Voice message — transcribe with whisper
-            console.log(`[discord] voice attachment: ${att.name} (${att.contentType})`);
+            console.log(`[discord] voice attachment: ${att.name} (${ct})`);
             message.channel.sendTyping().catch(() => {});
             const result = await transcribeAudio(buffer, "en", { settingsStore });
             if (result.transcript?.trim()) {
               voiceTranscript = result.transcript;
               console.log(`[discord] transcribed: "${voiceTranscript.slice(0, 80)}..."`);
             }
+          } else {
+            // Generic file (txt, json, csv, docx, zip, etc.) — save to disk
+            // and surface the path to Claude so it can Read the file.
+            const savedPath = saveToDisk(buffer, att);
+            if (savedPath) {
+              const sizeKb = Math.round(buffer.length / 1024);
+              savedFileNotes.push(`[Attached file saved: ${att.name} (${ct || "unknown"}, ${sizeKb}KB) → ${savedPath}]\nYou can read this file with the Read tool at: ${savedPath}`);
+            }
           }
         } catch (err) {
-          console.error("[discord] Failed to process attachment:", err.message);
+          console.error("[discord] Failed to process attachment:", err.message, att?.name);
         }
       }
     }
@@ -137,8 +180,17 @@ export async function createDiscordBot(config, db) {
       content = `${content}\n\n[Voice message]: ${voiceTranscript}`;
     }
 
-    // Need either text or images to proceed
-    if (!content && imageAttachments.length === 0) return;
+    // Fold saved-file notes into the text content so Claude sees where the
+    // files are on disk even if it's text-only (no multimodal block).
+    if (savedFileNotes.length > 0) {
+      const notes = savedFileNotes.join("\n");
+      content = content ? `${content}\n\n${notes}` : notes;
+    }
+
+    // Need either text or any attachment (multimodal or saved-to-disk) to proceed.
+    // Previously returned when there were no images; that swallowed messages
+    // whose only payload was a .txt / .json / other generic file.
+    if (!content && imageAttachments.length === 0 && savedFileNotes.length === 0) return;
 
     const channelKey = getChannelKey(message);
 
@@ -171,11 +223,19 @@ export async function createDiscordBot(config, db) {
       settingsStore.set(`channel_conv.${channelKey}`, convId);
     }
 
-    // Save user message (text only — no base64 in DB)
-    const displayText = content || "Please analyze this image.";
+    // Save user message (text only — no base64 in DB).
+    // Display text already includes saved-file notes folded in above, so
+    // viewing this convo in the web UI shows the file paths the AI saw.
+    const displayText = content || (imageAttachments.length ? "Please analyze this image." : "(attachment)");
+    const mediaCount = imageAttachments.length;
+    const fileCount = savedFileNotes.length;
+    const mediaSuffix = [
+      mediaCount ? `[+${mediaCount} media]` : null,
+      fileCount ? `[+${fileCount} file${fileCount > 1 ? "s" : ""}]` : null,
+    ].filter(Boolean).join(" ");
     convStore.addMessage(convId, {
       role: "user",
-      content: `[${message.author.username}]: ${displayText}${imageAttachments.length ? ` [+${imageAttachments.length} image(s)]` : ""}`,
+      content: `[${message.author.username}]: ${displayText}${mediaSuffix ? ` ${mediaSuffix}` : ""}`,
     });
 
     // Get provider config
