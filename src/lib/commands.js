@@ -2,6 +2,7 @@ import { AI_PROVIDERS } from "../config/constants.js";
 import { addCronJob, removeCronJob, loadCronJobs, runCronJob, startCronScheduler } from "./cron.js";
 import { executeTool } from "./tools.js";
 import { getSkillContent, installSkill, scanSkills } from "./skills-engine.js";
+import { hasCheckpoint, peekCheckpoint, listRecentCheckpoints, CHECKPOINT_FILE_PATH } from "./checkpoint.js";
 
 /**
  * Chat command processor.
@@ -403,6 +404,104 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
       }
 
       return "Usage: `/briefing` (run now), `/briefing on`, `/briefing off`, `/briefing time <0-23>`";
+    },
+  },
+
+  // Checkpoint the current session to a detailed handoff document so a
+  // follow-on instance (after container wipe / redeploy) can pick up the
+  // context. Writes to workspace/CHECKPOINT.md; the next session's first
+  // message automatically consumes + archives it via buildSystemPrompt.
+  checkpoint: {
+    description: "Write a detailed session handoff to CHECKPOINT.md before a restart",
+    usage: "/checkpoint [list|show]",
+    category: "Context",
+    handler: (args, _ctx) => {
+      const sub = (args || "").toLowerCase().trim();
+
+      if (sub === "list") {
+        const recent = listRecentCheckpoints(10);
+        if (recent.length === 0) return "No archived checkpoints yet. Run `/checkpoint` to create one.";
+        const lines = recent.map((c) => `- ${c.name} (${Math.round(c.size / 1024)} KB)`);
+        return `**Recent checkpoints (${recent.length}):**\n${lines.join("\n")}\n\nLocation: \`memory/checkpoints/\``;
+      }
+
+      if (sub === "show") {
+        const body = peekCheckpoint();
+        if (!body) return "No active checkpoint. Run `/checkpoint` to create one.";
+        return `**Current CHECKPOINT.md (unconsumed):**\n\n${body.slice(0, 8000)}`;
+      }
+
+      // Default: return a detailed playbook prompting Claude to write
+      // an exhaustive handoff to CHECKPOINT.md. The prompt is opinionated
+      // so the output is actually useful after a wipe.
+      return `__PLAYBOOK__
+You're about to be restarted with a container wipe (Railway redeploy).
+Write a COMPREHENSIVE handoff document to \`${CHECKPOINT_FILE_PATH}\` so
+the next Tarsee instance can pick up exactly where we left off.
+
+Use the \`tarsee_write_file\` tool with filename = "CHECKPOINT.md".
+
+The document MUST cover every section below. Be specific, concrete, and
+include code/commands/IDs where they exist. No vague summaries.
+
+\`\`\`markdown
+# Tarsee Session Checkpoint
+*Written: <ISO timestamp you generate>*
+*Session context: <1-2 sentence framing of what this session was about>*
+
+## Active Projects
+For each project the user mentioned or worked on this session, write:
+- **Project name** — client/context (e.g. "Sydneywide — Chris", "AgenticScale — Twilio")
+- Current status (what's done, what's in-flight, what's blocked)
+- Recent decisions + rationale
+- Next concrete step
+- Key files, repos, or branches touched
+- Any pending action items
+
+## Keys / Credentials Referenced
+List every API key, bot token, account, or credential that came up this
+session. DO NOT include the actual secret values — those are in the
+vault. Reference by semantic name + where it's stored:
+- e.g. "Twilio Account SID (agenticscale): vault key \`twilio.sid\`"
+- e.g. "Chris's SendGrid key: vault key \`sydneywide.sendgrid\`"
+- Note any keys that WEREN'T stored and need to be re-added on next boot.
+
+## Open Questions / Blockers
+Anything the user asked that wasn't fully resolved. Anything waiting on
+them vs. waiting on you vs. waiting on an external party.
+
+## Pending Scheduled Work
+- Cron jobs that might fire during the restart window — list their IDs
+  and what they do, so the new instance knows not to double-fire.
+- Webhooks expected to receive traffic
+- Long-running tasks that got interrupted (if any)
+
+## Recent Conversation Summary
+5-10 bullets on what's been discussed in this session, ordered
+chronologically. Each bullet: 1-2 sentences.
+
+## Context You Should Re-Absorb
+- MEMORY.md entries that were updated this session (with \`/remember\`)
+- Any SOUL.md / IDENTITY.md / USER.md changes
+- Settings or configuration that changed (model, effort, theme, push,
+  cron, skills installed)
+
+## Next Action on Reboot
+ONE clear first action the next instance should take. Example:
+"Greet the user, confirm you've absorbed this checkpoint, then resume
+the Twilio webhook fix — the merge was blocked by the auth-token race,
+see line 45 of src/channels/webhook.js."
+
+## Anything Else
+Free-form — inside jokes, running gags, the user's current mood,
+specific tone to use, things to avoid bringing up, etc.
+\`\`\`
+
+After writing the file, reply to me with a ONE-LINE confirmation in the
+format: "Checkpoint written: N sections, M KB. Safe to restart."
+
+Do NOT paraphrase the whole file back to me — the file itself is the
+artifact. Just confirm.`;
     },
   },
 

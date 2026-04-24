@@ -236,6 +236,13 @@ startSessionReset({ db, settingsStore, convStore });
 import { startAutoSummarize, stopAutoSummarize } from "./lib/auto-summarize.js";
 startAutoSummarize(db);
 
+// --- Auto-checkpoint ---
+// Every 6h (gated by activity), write a deterministic CHECKPOINT.md so
+// an unplanned restart can still pick up where we left off. Manual
+// /checkpoint still produces a richer AI-synthesized handoff on demand.
+import { startAutoCheckpoint, stopAutoCheckpoint } from "./lib/auto-checkpoint.js";
+startAutoCheckpoint({ db });
+
 // --- Cron scheduler ---
 import { initCron, startCronScheduler, stopCronScheduler } from "./lib/cron.js";
 initCron({ db, settingsStore, convStore });
@@ -287,6 +294,7 @@ function shutdown(signal) {
   stopHeartbeat();
   saveBootContext(db); // Persist context before shutdown
   stopAutoSummarize();
+  stopAutoCheckpoint();
   stopSessionReset();
   stopCronScheduler();
   channelManager.stopAll();
