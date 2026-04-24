@@ -15,7 +15,7 @@ const Setup = {
   totalSteps: 4,
 
   // Skills recommended by default for new users
-  DEFAULT_SKILLS: ["weather", "github", "gog", "summarize", "canvas", "nano-pdf", "session-logs", "frontend-design", "gsap-core", "gsap-scrolltrigger"],
+  DEFAULT_SKILLS: ["weather", "github", "gog", "summarize", "nano-pdf", "session-logs", "frontend-design", "gsap-core", "gsap-scrolltrigger"],
 
   /** Render the progress bar HTML */
   _progressBar(step) {
