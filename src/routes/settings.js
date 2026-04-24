@@ -26,6 +26,25 @@ settingsRouter.get("/", (_req, res) => {
     if (s.key.endsWith(".apiKey") && typeof s.value === "string" && s.value.length > 4) {
       return { ...s, value: "***" + s.value.slice(-4) };
     }
+    // Email channel: strip nested imap/smtp passwords, expose hasPassword flags only.
+    // The generic mask in SettingsStore.all() only walks top-level keys and does not
+    // treat "channel.email" as a secret, so the raw passwords would otherwise leak.
+    if (s.key === "channel.email" && s.value && typeof s.value === "object") {
+      const v = s.value;
+      const scrub = (sub) => {
+        if (!sub || typeof sub !== "object") return sub;
+        const { password, ...rest } = sub;
+        return { ...rest, hasPassword: !!password };
+      };
+      return {
+        ...s,
+        value: {
+          ...v,
+          imap: scrub(v.imap),
+          smtp: scrub(v.smtp),
+        },
+      };
+    }
     return s;
   });
 
@@ -60,15 +79,75 @@ settingsRouter.post("/provider", (req, res) => {
 /**
  * POST /api/settings/channel
  * Configure a messaging channel.
- * Body: { type: "discord"|"telegram"|"slack", token, appToken?, enabled, ...opts }
+ *
+ * Token-based channels (Discord, Telegram, Slack):
+ *   Body: { type, token, appToken?, enabled, ...opts }
+ *
+ * Email channel:
+ *   Body: { type: "email", enabled, tarseeEmailAddress, imap:{host,port,user,password},
+ *           smtp:{host,port,user,password}, allowlistFromAddresses?:string[],
+ *           mentionKeyword?:string, replyAllMarker?:string, fromName?:string }
+ *   Passwords in imap.password / smtp.password auto-encrypt via the
+ *   vault's .password$ regex (see src/lib/vault.js).
  */
 settingsRouter.post("/channel", (req, res) => {
-  const { type, token, appToken, enabled, ...opts } = req.body || {};
+  const body = req.body || {};
+  const { type, enabled } = body;
 
-  if (!["discord", "telegram", "slack"].includes(type)) {
-    return res.status(400).json({ error: "Invalid channel type. Valid: discord, telegram, slack" });
+  if (!["discord", "telegram", "slack", "email"].includes(type)) {
+    return res.status(400).json({ error: "Invalid channel type. Valid: discord, telegram, slack, email" });
   }
 
+  if (type === "email") {
+    const { tarseeEmailAddress, imap, smtp, allowlistFromAddresses, mentionKeyword, replyAllMarker, fromName, defaultSubject } = body;
+    if (enabled) {
+      if (!imap?.host || !imap?.user) return res.status(400).json({ error: "IMAP host + user required" });
+      if (!smtp?.host || !smtp?.user) return res.status(400).json({ error: "SMTP host + user required" });
+    }
+    // Preserve existing passwords if caller didn't supply them (allows
+    // save-without-retyping-password flow in the UI).
+    const prev = settingsStore.get("channel.email") || {};
+    const payload = {
+      enabled: !!enabled,
+      tarseeEmailAddress: tarseeEmailAddress || prev.tarseeEmailAddress || imap?.user || "",
+      fromName: fromName || prev.fromName || "Tarsee",
+      defaultSubject: defaultSubject || prev.defaultSubject || "Tarsee",
+      mentionKeyword: mentionKeyword || prev.mentionKeyword || "tarsee",
+      replyAllMarker: replyAllMarker || prev.replyAllMarker || "[reply-all]",
+      allowlistFromAddresses: Array.isArray(allowlistFromAddresses)
+        ? allowlistFromAddresses
+        : (prev.allowlistFromAddresses || []),
+      imap: {
+        host: imap?.host || prev.imap?.host || "",
+        port: Number(imap?.port ?? prev.imap?.port ?? 993),
+        user: imap?.user || prev.imap?.user || "",
+        password: imap?.password || prev.imap?.password || "",
+        secure: imap?.secure !== false,
+      },
+      smtp: {
+        host: smtp?.host || prev.smtp?.host || "",
+        port: Number(smtp?.port ?? prev.smtp?.port ?? 465),
+        user: smtp?.user || prev.smtp?.user || "",
+        password: smtp?.password || prev.smtp?.password || "",
+        secure: smtp?.secure !== false,
+      },
+    };
+    settingsStore.set("channel.email", payload);
+
+    const channelManager = req.app.get("channelManager");
+    if (channelManager && enabled && payload.imap.host && payload.smtp.host) {
+      channelManager.restart("email").catch((err) => {
+        console.warn("[channels] auto-start email failed:", err.message);
+      });
+    } else if (channelManager && !enabled) {
+      channelManager.stop("email").catch(() => {});
+    }
+
+    return res.json({ ok: true, type: "email", enabled: !!enabled });
+  }
+
+  // Token-based channels (Discord, Telegram, Slack)
+  const { token, appToken, ...opts } = body;
   if (enabled && !token) {
     return res.status(400).json({ error: "Token is required to enable a channel" });
   }
@@ -80,7 +159,6 @@ settingsRouter.post("/channel", (req, res) => {
     ...opts,
   });
 
-  // Auto-start/restart the channel immediately
   const channelManager = req.app.get("channelManager");
   if (channelManager && enabled && token) {
     channelManager.restart(type).catch((err) => {

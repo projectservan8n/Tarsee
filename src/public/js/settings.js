@@ -25,6 +25,24 @@ const Settings = {
       discordToken: document.getElementById("settingsDiscordToken"),
       telegramToken: document.getElementById("settingsTelegramToken"),
       saveChannelsBtn: document.getElementById("saveChannelsBtn"),
+      // Email channel
+      emailEnabled: document.getElementById("settingsEmailEnabled"),
+      emailAddress: document.getElementById("settingsEmailAddress"),
+      emailImapHost: document.getElementById("settingsEmailImapHost"),
+      emailImapPort: document.getElementById("settingsEmailImapPort"),
+      emailImapUser: document.getElementById("settingsEmailImapUser"),
+      emailImapPassword: document.getElementById("settingsEmailImapPassword"),
+      emailSmtpHost: document.getElementById("settingsEmailSmtpHost"),
+      emailSmtpPort: document.getElementById("settingsEmailSmtpPort"),
+      emailSmtpUser: document.getElementById("settingsEmailSmtpUser"),
+      emailSmtpPassword: document.getElementById("settingsEmailSmtpPassword"),
+      emailMentionKeyword: document.getElementById("settingsEmailMentionKeyword"),
+      emailReplyAllMarker: document.getElementById("settingsEmailReplyAllMarker"),
+      emailFromName: document.getElementById("settingsEmailFromName"),
+      emailAllowlist: document.getElementById("settingsEmailAllowlist"),
+      emailMentionHint: document.getElementById("emailMentionHint"),
+      emailChannelStatus: document.getElementById("emailChannelStatus"),
+      saveEmailChannelBtn: document.getElementById("saveEmailChannelBtn"),
       apiToken: document.getElementById("settingsApiToken"),
       // Identity
       botName: document.getElementById("settingsBotName"),
@@ -103,6 +121,20 @@ const Settings = {
     this.elements.saveProviderBtn.addEventListener("click", () => this.saveProvider());
     this.elements.saveChannelsBtn.addEventListener("click", () => this.saveChannels());
     document.getElementById("saveAllowlistBtn")?.addEventListener("click", () => this.saveAllowlist());
+    this.elements.saveEmailChannelBtn?.addEventListener("click", () => this.saveEmailChannel());
+
+    // Email preset buttons
+    document.querySelectorAll(".email-preset-btn").forEach((btn) => {
+      btn.addEventListener("click", () => this.applyEmailPreset(btn.dataset.preset));
+    });
+
+    // Keep the "triggers on @tarsee" hint in sync with the user's keyword
+    if (this.elements.emailMentionKeyword && this.elements.emailMentionHint) {
+      this.elements.emailMentionKeyword.addEventListener("input", () => {
+        const v = this.elements.emailMentionKeyword.value.trim() || "@tarsee";
+        this.elements.emailMentionHint.textContent = v;
+      });
+    }
 
     // Security handlers
     if (this.elements.runAuditBtn) {
@@ -461,6 +493,9 @@ const Settings = {
       if (discordAllow) document.getElementById("settingsDiscordAllowlist").value = Array.isArray(discordAllow) ? discordAllow.join("\n") : discordAllow;
       if (slackAllow) document.getElementById("settingsSlackAllowlist").value = Array.isArray(slackAllow) ? slackAllow.join("\n") : slackAllow;
 
+      // Email channel
+      this.loadEmailChannel(settings);
+
       // API token
       if (API.token) this.elements.apiToken.value = API.token;
 
@@ -529,6 +564,116 @@ const Settings = {
       App.showToast("Allowlist saved", "success");
     } catch (err) {
       App.showToast(err.message, "error");
+    }
+  },
+
+  loadEmailChannel(settings) {
+    const cfg = settings.find((s) => s.key === "channel.email")?.value || {};
+    const e = this.elements;
+    if (!e.emailEnabled) return; // UI not present
+
+    e.emailEnabled.checked = !!cfg.enabled;
+    e.emailAddress.value = cfg.tarseeEmailAddress || "";
+    e.emailImapHost.value = cfg.imap?.host || "";
+    e.emailImapPort.value = cfg.imap?.port || "";
+    e.emailImapUser.value = cfg.imap?.user || "";
+    // Passwords are never returned plaintext — show placeholder only if a pw exists server-side
+    e.emailImapPassword.value = "";
+    e.emailImapPassword.placeholder = cfg.imap?.hasPassword
+      ? "••••••••  (leave blank to keep existing)"
+      : "16-character app password (not your login password)";
+    e.emailSmtpHost.value = cfg.smtp?.host || "";
+    e.emailSmtpPort.value = cfg.smtp?.port || "";
+    e.emailSmtpUser.value = cfg.smtp?.user || "";
+    e.emailSmtpPassword.value = "";
+    e.emailSmtpPassword.placeholder = cfg.smtp?.hasPassword
+      ? "••••••••  (leave blank to keep existing)"
+      : "16-character app password (not your login password)";
+
+    e.emailMentionKeyword.value = cfg.mentionKeyword || "@tarsee";
+    e.emailReplyAllMarker.value = cfg.replyAllMarker || "[reply-all]";
+    e.emailFromName.value = cfg.fromName || "";
+
+    const allow = cfg.allowlistFromAddresses;
+    e.emailAllowlist.value = Array.isArray(allow) ? allow.join("\n") : (allow || "");
+
+    if (e.emailMentionHint) {
+      e.emailMentionHint.textContent = e.emailMentionKeyword.value.trim() || "@tarsee";
+    }
+  },
+
+  applyEmailPreset(name) {
+    const presets = {
+      gmail:    { imapHost: "imap.gmail.com",        imapPort: 993, smtpHost: "smtp.gmail.com",        smtpPort: 465 },
+      outlook:  { imapHost: "outlook.office365.com", imapPort: 993, smtpHost: "smtp.office365.com",    smtpPort: 587 },
+      icloud:   { imapHost: "imap.mail.me.com",      imapPort: 993, smtpHost: "smtp.mail.me.com",      smtpPort: 587 },
+      zoho:     { imapHost: "imap.zoho.com",         imapPort: 993, smtpHost: "smtp.zoho.com",         smtpPort: 465 },
+      fastmail: { imapHost: "imap.fastmail.com",     imapPort: 993, smtpHost: "smtp.fastmail.com",     smtpPort: 465 },
+      yahoo:    { imapHost: "imap.mail.yahoo.com",   imapPort: 993, smtpHost: "smtp.mail.yahoo.com",   smtpPort: 465 },
+      custom:   null,
+    };
+    if (name === "custom") {
+      this.elements.emailImapHost.value = "";
+      this.elements.emailImapPort.value = "";
+      this.elements.emailSmtpHost.value = "";
+      this.elements.emailSmtpPort.value = "";
+      this.elements.emailImapHost.focus();
+      return;
+    }
+    const p = presets[name];
+    if (!p) return;
+    this.elements.emailImapHost.value = p.imapHost;
+    this.elements.emailImapPort.value = p.imapPort;
+    this.elements.emailSmtpHost.value = p.smtpHost;
+    this.elements.emailSmtpPort.value = p.smtpPort;
+  },
+
+  async saveEmailChannel() {
+    try {
+      const e = this.elements;
+      const parseAddrs = (v) => (v || "").split(/[\n,]/).map((s) => s.trim().toLowerCase()).filter(Boolean);
+
+      const payload = {
+        type: "email",
+        enabled: !!e.emailEnabled.checked,
+        tarseeEmailAddress: e.emailAddress.value.trim(),
+        imap: {
+          host: e.emailImapHost.value.trim(),
+          port: Number(e.emailImapPort.value) || 993,
+          user: e.emailImapUser.value.trim(),
+        },
+        smtp: {
+          host: e.emailSmtpHost.value.trim(),
+          port: Number(e.emailSmtpPort.value) || 465,
+          user: e.emailSmtpUser.value.trim(),
+        },
+        mentionKeyword: e.emailMentionKeyword.value.trim() || "@tarsee",
+        replyAllMarker: e.emailReplyAllMarker.value.trim() || "[reply-all]",
+        fromName: e.emailFromName.value.trim(),
+        allowlistFromAddresses: parseAddrs(e.emailAllowlist.value),
+      };
+
+      // Only include passwords if the user typed new ones — empty string means "keep existing"
+      const imapPw = e.emailImapPassword.value;
+      const smtpPw = e.emailSmtpPassword.value;
+      if (imapPw) payload.imap.password = imapPw;
+      if (smtpPw) payload.smtp.password = smtpPw;
+
+      if (e.emailChannelStatus) e.emailChannelStatus.textContent = "Saving...";
+      await API.saveChannel(payload);
+
+      // Clear password fields after save so they don't show plaintext in the DOM
+      e.emailImapPassword.value = "";
+      e.emailSmtpPassword.value = "";
+
+      if (e.emailChannelStatus) e.emailChannelStatus.textContent = payload.enabled ? "Saved — channel starting." : "Saved — channel disabled.";
+      App.showToast("Email channel saved", "success");
+
+      // Refresh to pick up hasPassword flags
+      setTimeout(() => this.loadSettings(), 500);
+    } catch (err) {
+      if (this.elements.emailChannelStatus) this.elements.emailChannelStatus.textContent = "";
+      App.showToast(err.message || "Failed to save email channel", "error");
     }
   },
 

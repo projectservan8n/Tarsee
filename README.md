@@ -103,7 +103,11 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Web UI** — Full chat with markdown rendering, code blocks, tables, file attachments, image paste, drag-and-drop, multi-file upload. PWA — save to homescreen on iOS/Android.
 - **Telegram** — Text, photos, PDFs, voice messages, video notes. Group @mention support, inline buttons, forwarded message detection.
 - **Discord** — Text, images, PDFs, voice messages. Always-online bot with presence status.
+- **Email** — Real-time over IMAP IDLE + SMTP. Mention keyword (default `@tarsee`) gates replies; CC/BCC/forwards are absorbed as context without an outbound. Works with any mailbox you own (Gmail, Outlook, iCloud, Zoho, FastMail, Yahoo, self-hosted).
+- **Attachment save-to-disk** — every image, PDF, voice note, and document sent via Discord, Telegram, email, or web lands in `workspace/uploads/` so Claude can read, transform, and reference it across turns (not just in the message it arrived on).
 - **Cross-device sync** — all devices update in real-time via WebSocket. See tool calls, text streaming, and typing indicators across devices.
+- **Session recap** — resume a conversation idle >30 min and a dismissible "Last time" card summarizes the last few exchanges before the first new message. Zero AI cost (extractive summary).
+- **Web Push notifications** — iOS/Android/desktop push via VAPID when cron jobs finish, webhooks fire, or Claude proactively pings you via the `tarsee_push_notification` MCP tool. Opt-in from Settings > Appearance.
 - **All channels share** the same AI, memory, and tools.
 
 ### Voice Mode
@@ -121,7 +125,7 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Persistent** — Canvases are saved to the volume and accessible at `/canvas/<id>/`.
 
 ### Tools & Automation
-- **20+ MCP tools** — send messages, schedule tasks, remember facts, search the web, create canvases, manage files, encrypted vault, calculator, browser, and more.
+- **20+ MCP tools** — send messages, schedule tasks, remember facts, search the web, create canvases, manage files, encrypted vault, calculator, browser, push notifications, email threads, and more.
 - **Calculator** — precise math tool so Claude never hallucinates numbers. Arithmetic, percentages, Math.* functions.
 - **Stealth browser** — Playwright with anti-detection (real fingerprints, no webdriver flag). Navigate, fill forms, screenshot, scroll, wait, run JS.
 - **Captcha solver** — auto-detect and solve reCAPTCHA, hCaptcha, Cloudflare Turnstile via 2Captcha or Capsolver API.
@@ -132,7 +136,9 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Web terminal** — browser-based shell access via xterm.js.
 - **File manager** — browse, edit, and create workspace files from the UI.
 - **REST API** — `/api/v1/message` endpoint for iOS Shortcuts, scripts, and automations.
-- **Skills** — modular instruction packs with credentials and configs. Claude reads them automatically when relevant.
+- **Skills** — modular instruction packs with credentials and configs. Claude reads them automatically when relevant. Ships with `/ultrareview` (3-agent parallel branch review — correctness / architecture / UX-a11y) and `/fewer-permission-prompts` (proposes a tool-allowlist patch from your audit log) preinstalled.
+- **`/checkpoint` — cross-restart handoff** — manual AI-synthesized `CHECKPOINT.md` before a known redeploy, plus an activity-gated auto-checkpoint every 6h as a safety net. On the next boot, the checkpoint is injected into the system prompt so work picks up mid-thought instead of starting cold.
+- **Retention** — daily 03:00 sweep prunes conversations idle >14 days and checkpoint archives older than 30 days (or >50 files). Keeps the most recent thread per channel so Discord/Telegram/email session continuity never breaks. One-line summaries of pruned conversations append to `memory/archived-conversations.md` so nothing vanishes without a record. Configurable via `retention.*` settings or `/retention` command.
 
 ### Search & Analytics
 - **Token usage chart** — daily/weekly visual bar chart with model breakdown in Settings > Usage.
@@ -145,13 +151,18 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Workspace files** — SOUL.md (personality), MEMORY.md (knowledge), USER.md (user info), IDENTITY.md.
 - **Auto-memory** — Claude saves important facts as you chat. Memories persist across sessions.
 - **Daily logs** — timestamped notes auto-appended to `memory/YYYY-MM-DD.md`.
+- **Checkpoints** — `CHECKPOINT.md` on the volume survives redeploys. Read once on the next boot, then archived to `memory/checkpoints/<timestamp>.md` for grep-able history.
+
+### Appearance & Controls
+- **Themes** — `warm-charcoal` (default, terracotta accent), `noir` (pure black OLED-friendly), `solarized-light` (daylight), `jarvis-blue` (cyan accent). Switch from Settings > Appearance or via `/theme <name>`. Plugin-shipped themes are loaded from `ui.themes.plugin` automatically.
+- **Effort slider** — 6-notch touch-native slider (auto / low / medium / high / max / xhigh) for setting Claude's thinking effort. Long-press the effort toggle on the composer to open; `/effort` opens it via keyboard. `xhigh` (Ultra) is available on Opus 4.7.
 
 ---
 
 ## How It Works
 
 ```
-You (web / telegram / discord / voice)
+You (web / telegram / discord / email / voice / iOS push)
   |
   v
 Tarsee Server (Railway)
@@ -159,13 +170,17 @@ Tarsee Server (Railway)
   +-- Claude Code Agent SDK (subscription auth, auto-updates)
   |     +-- Built-in: Read, Write, Edit, Bash, Grep, Glob
   |     +-- MCP tools: send_message, schedule_task, remember,
-  |         create_canvas, calculator, browser, web_search, etc.
+  |         create_canvas, calculator, browser, web_search,
+  |         push_notification, send_email_thread, configure_email, etc.
   |
-  +-- Voice: faster-whisper STT + Edge TTS
-  +-- Browser: Playwright (stealth) + captcha solving
-  +-- Workspace: SOUL.md, MEMORY.md, USER.md
-  +-- SQLite: conversations, settings, vault
-  +-- Channels: Telegram, Discord (always online)
+  +-- Voice:      faster-whisper STT + Edge TTS
+  +-- Browser:    Playwright (stealth) + captcha solving
+  +-- Workspace:  SOUL.md, MEMORY.md, USER.md, CHECKPOINT.md
+  +-- SQLite:     conversations, settings, vault, bot_memory, push_subs
+  +-- Channels:   Telegram, Discord, Email (IMAP IDLE + SMTP)
+  +-- Continuity: /checkpoint + 6h auto-checkpoint + session recap card
+  +-- Retention:  daily 03:00 sweep (14d convs, 30d/50-file checkpoints)
+  +-- Push:       VAPID + service worker — cron/webhook/tool fires
 ```
 
 ---
@@ -178,8 +193,48 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 |---------|-----------------|----------|
 | Telegram | [@BotFather](https://t.me/BotFather) | Text, photos, PDFs, voice, video notes, inline buttons, groups |
 | Discord | [Developer Portal](https://discord.com/developers) | Text, images, PDFs, voice messages, reactions, presence |
+| Email | IMAP + SMTP (any provider — see below) | Real-time mail, `@mention` gate, CC/BCC context absorb, threaded replies |
 
 **Discord:** Enable **Message Content Intent** in Bot settings. Invite with Send Messages, Read Messages, Add Reactions permissions.
+
+---
+
+### Email channel
+
+Tarsee can live in any mailbox you own and reply in real-time. Inbound mail where the body contains `@tarsee` (configurable) triggers a reply; everything else is absorbed silently so Claude remembers the thread and can answer questions about it later. CC'd, BCC'd, and forwarded mail never triggers an outbound reply.
+
+**Setup (two paths — pick one):**
+
+1. **Settings UI** — open `Settings > Channels > Email`, click a provider preset (Gmail / Outlook / iCloud / Zoho / FastMail / Yahoo), paste your email + app password, save.
+2. **Chat** — tell Tarsee in conversation: *"Set up email. Mailbox `tarsee@example.com`, Gmail app password `xxxx-xxxx-xxxx-xxxx`, only allow `you@example.com`."* Tarsee calls the `tarsee_configure_email_channel` MCP tool and the channel starts immediately.
+
+Both paths write to the same `channel.email` record. The Settings UI renders whatever's configured regardless of which path set it.
+
+**App passwords** (most providers require one instead of your login password):
+
+| Provider | App-password page | IMAP / SMTP |
+|---|---|---|
+| Gmail | [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) | `imap.gmail.com:993` / `smtp.gmail.com:465` |
+| Outlook / 365 | [account.microsoft.com/security](https://account.microsoft.com/security) → App passwords | `outlook.office365.com:993` / `smtp.office365.com:587` |
+| iCloud | [account.apple.com](https://account.apple.com) → Sign-In and Security → App-Specific Passwords | `imap.mail.me.com:993` / `smtp.mail.me.com:587` |
+| Zoho | Zoho Mail → Settings → Mail Accounts → IMAP Access | `imap.zoho.com:993` / `smtp.zoho.com:465` |
+| FastMail | [fastmail.com](https://fastmail.com) → Settings → Passwords & Security | `imap.fastmail.com:993` / `smtp.fastmail.com:465` |
+| Yahoo | [login.yahoo.com/account/security](https://login.yahoo.com/account/security) → Generate app password | `imap.mail.yahoo.com:993` / `smtp.mail.yahoo.com:465` |
+
+Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
+
+**Mention keyword** — defaults to `@tarsee`. Change it in Settings to `@jarvis`, `@bot`, or whatever alias you want. The leading `@` is part of what you type so it's obvious what you're setting.
+
+**Reply-all** — opt-in only. Include `[reply-all]` in the subject (or type `@tarsee reply-all` in the body) and Tarsee will reply to everyone in To + CC. Default is reply-to-sender only.
+
+**Sender allowlist** — strongly recommended. Only emails from listed addresses get processed. Leave empty for dev mode (not safe for production mailboxes). Newsletters and auto-reply loops are always dropped regardless (RFC 3834 `Auto-Submitted` / `Precedence` / `List-Id` headers).
+
+**Troubleshooting:**
+- **"Authentication failed"** — you probably pasted your login password. Most providers require an app-specific password (usually 16 characters with hyphens). See the table above.
+- **"IDLE disconnected"** — harmless. IMAP servers close IDLE after ~29 minutes; Tarsee reconnects automatically.
+- **Gmail "less secure apps"** — not relevant anymore. Use an app password and keep 2FA on.
+- **Outlook modern auth** — enterprise tenants may require OAuth instead of app passwords. If your admin disabled basic auth, ask them to allow it for this mailbox or use a different provider.
+- **Reply arrived but wasn't threaded** — verify your mail client shows `In-Reply-To` and `References` headers. Some bespoke clients strip them.
 
 ---
 
@@ -189,13 +244,15 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 |---------|-------------|
 | `/help` | Show all commands |
 | `/model opus\|sonnet\|haiku` | Switch AI model |
-| `/think low\|medium\|high\|max` | Set thinking effort for the session |
+| `/think low\|medium\|high\|max\|xhigh` | Set thinking effort for the session (xhigh on Opus 4.7) |
+| `/effort` | Open the 6-notch effort slider (touch-native) |
+| `/theme [name]` | List or switch themes: warm-charcoal, noir, solarized-light, jarvis-blue |
 | `/auto [on\|off]` | Toggle auto model routing (haiku/sonnet/opus by complexity) |
 | `/briefing [on\|off\|time]` | Morning briefing — run now, schedule daily, or set time |
-| `/send telegram\|discord\|web` | Forward conversation context to another channel |
+| `/send telegram\|discord\|email\|web` | Forward conversation context to another channel |
 | `/fork [from #N]` | Branch conversation — copy history into new session |
 | `/play [name\|list\|save\|delete]` | Run or manage playbooks (multi-step AI workflows) |
-| `/email [check\|summary\|draft]` | Check inbox, summarize, or draft emails |
+| `/email [check\|summary\|draft]` | Check inbox, summarize, or draft emails (CLI helpers — see also the email channel for real-time chat) |
 | `/webhook [list\|add\|remove]` | Manage webhook triggers (external events → AI) |
 | `/files [search term]` | List or search workspace files |
 | `/status` | Full dashboard (uptime, tokens, messages, channels) |
@@ -204,6 +261,10 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | `/remember [fact]` | Save to memory |
 | `/doctor [fix]` | Diagnostics + auto-repair |
 | `/export` | Export conversation |
+| `/checkpoint [list\|show]` | Write CHECKPOINT.md for the next boot — manual handoff (auto fires every 6h too) |
+| `/retention [run]` | Preview or run the daily retention sweep on demand |
+| `/ultrareview` | 3-agent parallel review of the current git branch (correctness / architecture / UX-a11y) |
+| `/fewer-prompts` | Propose a tool-allowlist patch from your audit log to reduce permission prompts |
 
 ---
 
@@ -214,10 +275,11 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | **Identity** | Bot name (set via IDENTITY.md) |
 | **Workspace** | SOUL.md, USER.md, MEMORY.md editors |
 | **AI Provider** | Model selection, API config |
-| **Channels** | Telegram, Discord tokens |
-| **Automation** | Cron jobs, webhooks |
+| **Channels** | Telegram, Discord, Email (IMAP + SMTP with provider presets, mention keyword, reply-all marker, allowlist) |
+| **Appearance** | Theme switcher (4 built-in + plugin themes) + Web Push enable/disable/test |
+| **Automation** | Cron jobs, webhooks, retention settings |
 | **Voice** | TTS engine (Edge TTS / ElevenLabs), STT model (tiny/base/small), voice selection |
-| **Skills** | Create, edit, delete instruction packs |
+| **Skills** | Create, edit, delete instruction packs (includes preinstalled `/ultrareview` + `/fewer-permission-prompts`) |
 | **Memories** | View and manage stored memories |
 | **Security** | Security audit, tool permissions, captcha solver config |
 | **Canvas** | Gallery of AI-generated interactive UIs |

@@ -21,10 +21,57 @@ export function createTarseeMcp(ctx) {
   const allTools = [
       tool(
         "tarsee_send_message",
-        "Send a message to a channel (Telegram, Discord, Slack, or web chat). Use this to proactively notify the user.",
-        { channel: z.enum(["telegram", "discord", "slack", "web"]).describe("Channel to send to"), message: z.string().describe("Message text"), channel_id: z.string().optional().describe("Specific chat/channel ID (auto-resolved if omitted)") },
+        "Send a message to a channel (Telegram, Discord, Slack, email, or web chat). Use this to proactively notify the user. For email, channel_id MUST be the target address; for threaded email replies with In-Reply-To headers, use tarsee_send_email_thread instead.",
+        { channel: z.enum(["telegram", "discord", "slack", "email", "web"]).describe("Channel to send to"), message: z.string().describe("Message text"), channel_id: z.string().optional().describe("Specific chat/channel ID (auto-resolved if omitted — required for email)") },
         async (args) => {
           const result = await executeTool("send_message", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      tool(
+        "tarsee_configure_email_channel",
+        "Configure the email channel when the user tells you their IMAP/SMTP credentials in chat. Partial-update — only the fields you pass get written; existing values stay. Passwords are stored encrypted. Call this instead of asking the user to open Settings. Infer common provider hosts (Gmail: imap.gmail.com:993 / smtp.gmail.com:465; Outlook: outlook.office365.com:993 / smtp.office365.com:587; iCloud: imap.mail.me.com:993 / smtp.mail.me.com:587; Zoho: imap.zoho.com:993 / smtp.zoho.com:465; FastMail: imap.fastmail.com:993 / smtp.fastmail.com:465) from the user's email domain when they don't specify.",
+        {
+          tarseeEmailAddress: z.string().optional().describe("The mailbox Tarsee answers at, e.g. 'tarsee@yourcompany.com'"),
+          imap: z.object({
+            host: z.string().optional(),
+            port: z.number().optional().describe("Default 993"),
+            user: z.string().optional().describe("Usually the same as the mailbox address"),
+            password: z.string().optional().describe("App password — stored encrypted"),
+            secure: z.boolean().optional(),
+          }).optional(),
+          smtp: z.object({
+            host: z.string().optional(),
+            port: z.number().optional().describe("Default 465 (implicit TLS) or 587 (STARTTLS)"),
+            user: z.string().optional(),
+            password: z.string().optional().describe("App password — stored encrypted"),
+            secure: z.boolean().optional(),
+          }).optional(),
+          allowlistFromAddresses: z.array(z.string()).optional().describe("Only reply to emails from these addresses. Empty = accept from anyone (dev mode — warn the user)."),
+          mentionKeyword: z.string().optional().describe("Without leading @. Default 'tarsee'. Tarsee only replies when the body contains this mention."),
+          replyAllMarker: z.string().optional().describe("Subject marker that opts into reply-all. Default '[reply-all]'."),
+          fromName: z.string().optional().describe("Display name on outbound mail. Default 'Tarsee'."),
+          enabled: z.boolean().optional().describe("Toggle the channel on/off. Leave undefined to preserve current state."),
+        },
+        async (args) => {
+          const result = await executeTool("configure_email_channel", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      tool(
+        "tarsee_send_email_thread",
+        "Start a new email thread or reply to an existing one with proper threading headers (In-Reply-To + References). Use this for proactive outbound email — you don't need to wait for the recipient to email first. Body is plain text; no markdown formatting survives email well. For replies, pass inReplyTo with the Message-ID from the inbound email.",
+        {
+          to: z.union([z.string(), z.array(z.string())]).describe("Primary recipient(s). Single address string or array."),
+          cc: z.union([z.string(), z.array(z.string())]).optional().describe("Optional CC recipients"),
+          subject: z.string().describe("Subject line (Tarsee adds 'Re: ' automatically when inReplyTo is set)"),
+          body: z.string().describe("Plain text body"),
+          inReplyTo: z.string().optional().describe("Message-ID of the email you're replying to (include angle brackets). Omit for new threads."),
+        },
+        async (args) => {
+          const result = await executeTool("send_email_thread", args, ctx);
           return { content: [{ type: "text", text: result }] };
         }
       ),
@@ -221,20 +268,53 @@ export function createTarseeMcp(ctx) {
 
       tool(
         "tarsee_get_key",
-        "Get a value from the encrypted key vault.",
-        { key: z.string().describe("Key name") },
+        "Get a value from the encrypted key vault. The session system prompt " +
+        "already includes an inventory of what's available — use this tool to " +
+        "fetch the actual value when you need to USE a key, not to check whether " +
+        "one exists.",
+        { key: z.string().describe("Key name (matches an entry from the inventory)") },
         async (args) => {
-          const result = await executeTool("get_key", args, ctx);
+          // executeTool's get_key case destructures `name` — map the MCP-level `key` to that.
+          const result = await executeTool("get_key", { name: args.key }, ctx);
           return { content: [{ type: "text", text: result }] };
         }
       ),
 
       tool(
         "tarsee_set_key",
-        "Store a value in the encrypted key vault.",
-        { key: z.string().describe("Key name"), value: z.string().describe("Value to store") },
+        "Store a value in the encrypted key vault. Use when the user gives you " +
+        "a new credential (API key, token, password) to remember across sessions.",
+        {
+          key: z.string().describe("Key name (uppercase with underscores, e.g. STRIPE_SECRET)"),
+          value: z.string().describe("Secret value — stored encrypted at rest"),
+          description: z.string().optional().describe("What this key is for (surfaced in the next session's inventory)"),
+        },
         async (args) => {
-          const result = await executeTool("set_key", args, ctx);
+          const result = await executeTool("set_key", { name: args.key, value: args.value, description: args.description }, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      tool(
+        "tarsee_list_keys",
+        "Re-query the vault live for the current list of keys. The session " +
+        "system prompt already snapshots this at start, so only call this if " +
+        "you just set/deleted a key or suspect the inventory is stale. Returns " +
+        "names + descriptions only — values require tarsee_get_key.",
+        {},
+        async () => {
+          const result = await executeTool("list_keys", {}, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      tool(
+        "tarsee_delete_key",
+        "Remove a key from the encrypted vault. Use when the user explicitly " +
+        "asks to forget or rotate a credential.",
+        { key: z.string().describe("Key name to delete") },
+        async (args) => {
+          const result = await executeTool("delete_key", { name: args.key }, ctx);
           return { content: [{ type: "text", text: result }] };
         }
       ),

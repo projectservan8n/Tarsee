@@ -397,6 +397,113 @@
               <button class="btn btn-primary" id="saveChannelsBtn">Save Channels</button>
             </div>
 
+            <div class="settings-section" id="emailChannelSection">
+              <h3>Email</h3>
+              <div class="hint mb-3">
+                Chat with Tarsee over email, real-time. Inbound emails with <code id="emailMentionHint">@tarsee</code> in the body trigger a reply; everything else is absorbed as context so future questions can draw from it. Works with any mailbox you own (Gmail, Outlook, iCloud, Zoho, FastMail, ProtonMail Bridge, self-hosted) via IMAP + SMTP.
+              </div>
+
+              <div class="form-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="settingsEmailEnabled">
+                  <span>Enable email channel</span>
+                </label>
+              </div>
+
+              <div class="form-group">
+                <label>Tarsee's email address</label>
+                <input type="email" id="settingsEmailAddress" placeholder="tarsee@example.com" autocomplete="off">
+                <div class="hint">Whichever mailbox you've created for Tarsee. This is what inbound mail is sent to and outbound mail is sent from.</div>
+              </div>
+
+              <div class="form-group">
+                <label>Provider presets</label>
+                <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                  <button type="button" class="btn btn-sm btn-secondary email-preset-btn" data-preset="gmail">Gmail</button>
+                  <button type="button" class="btn btn-sm btn-secondary email-preset-btn" data-preset="outlook">Outlook</button>
+                  <button type="button" class="btn btn-sm btn-secondary email-preset-btn" data-preset="icloud">iCloud</button>
+                  <button type="button" class="btn btn-sm btn-secondary email-preset-btn" data-preset="zoho">Zoho</button>
+                  <button type="button" class="btn btn-sm btn-secondary email-preset-btn" data-preset="fastmail">FastMail</button>
+                  <button type="button" class="btn btn-sm btn-secondary email-preset-btn" data-preset="yahoo">Yahoo</button>
+                  <button type="button" class="btn btn-sm btn-secondary email-preset-btn" data-preset="custom">Custom</button>
+                </div>
+                <div class="hint">Click a provider to auto-fill IMAP + SMTP host and port.</div>
+              </div>
+
+              <h4 style="margin-top:18px; margin-bottom:8px;">IMAP (inbound — Tarsee reads mail)</h4>
+              <div class="form-row" style="display:grid; grid-template-columns: 2fr 1fr; gap:12px;">
+                <div class="form-group">
+                  <label>Host</label>
+                  <input type="text" id="settingsEmailImapHost" placeholder="imap.gmail.com" autocomplete="off">
+                </div>
+                <div class="form-group">
+                  <label>Port</label>
+                  <input type="number" id="settingsEmailImapPort" placeholder="993" autocomplete="off">
+                </div>
+              </div>
+              <div class="form-group">
+                <label>User</label>
+                <input type="text" id="settingsEmailImapUser" placeholder="tarsee@example.com" autocomplete="off">
+              </div>
+              <div class="form-group">
+                <label>App password</label>
+                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                  <input type="password" id="settingsEmailImapPassword" placeholder="16-character app password (not your login password)" autocomplete="new-password">
+                </form>
+                <div class="hint">Most providers require an <strong>app-specific password</strong>, not your regular login password. See the README for per-provider setup links.</div>
+              </div>
+
+              <h4 style="margin-top:18px; margin-bottom:8px;">SMTP (outbound — Tarsee replies)</h4>
+              <div class="form-row" style="display:grid; grid-template-columns: 2fr 1fr; gap:12px;">
+                <div class="form-group">
+                  <label>Host</label>
+                  <input type="text" id="settingsEmailSmtpHost" placeholder="smtp.gmail.com" autocomplete="off">
+                </div>
+                <div class="form-group">
+                  <label>Port</label>
+                  <input type="number" id="settingsEmailSmtpPort" placeholder="465" autocomplete="off">
+                </div>
+              </div>
+              <div class="form-group">
+                <label>User</label>
+                <input type="text" id="settingsEmailSmtpUser" placeholder="tarsee@example.com" autocomplete="off">
+              </div>
+              <div class="form-group">
+                <label>App password</label>
+                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                  <input type="password" id="settingsEmailSmtpPassword" placeholder="16-character app password (not your login password)" autocomplete="new-password">
+                </form>
+                <div class="hint">Leave blank to keep the existing password — only type here to change it.</div>
+              </div>
+
+              <h4 style="margin-top:18px; margin-bottom:8px;">Reply behavior</h4>
+              <div class="form-group">
+                <label>Mention keyword</label>
+                <input type="text" id="settingsEmailMentionKeyword" placeholder="@tarsee" autocomplete="off">
+                <div class="hint">Tarsee only replies if this keyword appears in the email body (after quote-strip). Swap for <code>@jarvis</code>, <code>@bot</code>, or anything else.</div>
+              </div>
+              <div class="form-group">
+                <label>Reply-all subject marker</label>
+                <input type="text" id="settingsEmailReplyAllMarker" placeholder="[reply-all]" autocomplete="off">
+                <div class="hint">If this appears in the subject, Tarsee replies to everyone in To + CC. Otherwise reply-to-sender only.</div>
+              </div>
+              <div class="form-group">
+                <label>Display name (optional)</label>
+                <input type="text" id="settingsEmailFromName" placeholder="Tarsee" autocomplete="off">
+                <div class="hint">The name shown on outbound mail, e.g. <code>Tarsee &lt;tarsee@example.com&gt;</code>.</div>
+              </div>
+
+              <h4 style="margin-top:18px; margin-bottom:8px;">Sender allowlist</h4>
+              <div class="form-group">
+                <label>Only respond to emails from these addresses</label>
+                <textarea id="settingsEmailAllowlist" rows="4" placeholder="one address per line&#10;you@example.com&#10;teammate@example.com" spellcheck="false" class="textarea-mono"></textarea>
+                <div class="hint"><strong>Strongly recommended.</strong> Leave empty to allow all senders (dev mode only — not safe for production mailboxes). Tarsee will still drop newsletters and auto-reply loops regardless.</div>
+              </div>
+
+              <button class="btn btn-primary" id="saveEmailChannelBtn">Save Email Channel</button>
+              <span id="emailChannelStatus" class="hint" style="margin-left:12px;"></span>
+            </div>
+
             <div class="settings-section">
               <h3>Allowlist</h3>
               <div class="hint mb-3">Control who can talk to the bot. Leave empty to allow everyone.</div>

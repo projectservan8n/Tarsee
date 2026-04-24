@@ -1,5 +1,19 @@
 [build]
 builder = "dockerfile"
+# Only rebuild/redeploy when files that actually affect the container change.
+# Commits that only touch docs, tests, issue templates, CI configs, or the
+# plan/memory scratchpads do not trigger a redeploy on user installations
+# (and in turn do not wipe their running containers). If you add a new
+# top-level directory that MUST ship, add it here.
+watchPatterns = [
+  "src/**",
+  "package.json",
+  "package-lock.json",
+  "Dockerfile",
+  ".dockerignore",
+  "entrypoint.sh",
+  "railway.toml",
+]
 
 [deploy]
 healthcheckPath = "/healthz"
