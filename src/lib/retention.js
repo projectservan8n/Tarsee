@@ -134,12 +134,20 @@ async function runSweep(settings) {
 
   const prunedConvs = pruneConversations(convDays, settings);
   const prunedChecks = pruneCheckpoints(checkDays, checkMax);
+  // After deleting conversations, clean up any dangling back-references in
+  // memory tables. Two tables have conv pointers without FK constraints:
+  //   bot_memory.source_conversation_id      — learned fact → convo origin
+  //   compaction_cache.conversation_id       — per-conv summary cache
+  // Memories stay (the fact is still true), but we NULL the origin pointer
+  // and drop the cache rows so they don't accumulate forever.
+  const orphans = cleanupOrphanedReferences();
 
   settings.set("retention.last_pruned_convs", prunedConvs);
   settings.set("retention.last_pruned_checks", prunedChecks);
+  settings.set("retention.last_orphan_cleanup", orphans);
 
-  console.log(`[retention] sweep done — pruned ${prunedConvs} conversations, ${prunedChecks} checkpoints`);
-  return { convs: prunedConvs, checks: prunedChecks };
+  console.log(`[retention] sweep done — pruned ${prunedConvs} conversations, ${prunedChecks} checkpoints, cleaned ${orphans.memories} memory backrefs + ${orphans.cache} cache rows`);
+  return { convs: prunedConvs, checks: prunedChecks, orphans };
 }
 
 // ------------------------------------------------------------------
@@ -262,4 +270,44 @@ function pruneCheckpoints(days, maxFiles) {
     try { fs.unlinkSync(e.path); deleted++; } catch { /* best-effort */ }
   }
   return deleted;
+}
+
+// ------------------------------------------------------------------
+// Orphan cleanup
+// Two tables reference conversations.id without a foreign key, so rows
+// linger after a cascade delete wipes the conversation. Left alone they
+// don't break anything (memories still read, compaction_cache is scoped
+// per query), but they grow unbounded and make the DB less tidy.
+// ------------------------------------------------------------------
+
+function cleanupOrphanedReferences() {
+  let memories = 0;
+  let cache = 0;
+  try {
+    // bot_memory: NULL out source_conversation_id where the target is gone.
+    // We deliberately keep the row (the fact is still true; only the origin
+    // pointer is stale). The LIMIT 0 inner select is a defensive no-op — we
+    // want UPDATE ... WHERE NOT EXISTS matching, which SQLite supports via
+    // correlated subquery.
+    const r1 = _db.prepare(`
+      UPDATE bot_memory
+      SET source_conversation_id = NULL
+      WHERE source_conversation_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.id = bot_memory.source_conversation_id)
+    `).run();
+    memories = r1.changes || 0;
+  } catch (err) {
+    console.warn("[retention] bot_memory cleanup failed:", err?.message);
+  }
+  try {
+    // compaction_cache: delete rows pointing at dead convos.
+    const r2 = _db.prepare(`
+      DELETE FROM compaction_cache
+      WHERE NOT EXISTS (SELECT 1 FROM conversations c WHERE c.id = compaction_cache.conversation_id)
+    `).run();
+    cache = r2.changes || 0;
+  } catch (err) {
+    console.warn("[retention] compaction_cache cleanup failed:", err?.message);
+  }
+  return { memories, cache };
 }
