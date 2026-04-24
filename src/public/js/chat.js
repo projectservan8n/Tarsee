@@ -596,6 +596,12 @@ const Chat = {
         const total = data.totalMessages || data.messages?.length || 0;
         const older = total - (data.messages?.length || 0);
         this.renderMessages(data.messages || [], older > 0 ? older : 0, conversationId);
+        // Session recap — if the server flagged this convo as stale, show
+        // a dismissible card above the first message summarizing what was
+        // going on. Null means "recently active, no recap needed".
+        if (data.recap?.text) {
+          this.renderSessionRecap(data.recap);
+        }
       } catch {
         this.elements.chatArea.innerHTML = "";
       }
@@ -680,6 +686,36 @@ const Chat = {
     this.lastMessageRole = role;
     this.lastMessageTime = now;
     return msg;
+  },
+
+  /**
+   * Render the session-recap card above the first message when a stale
+   * conversation is resumed. Dismissible — hides for the rest of this
+   * device's viewing session.
+   */
+  renderSessionRecap(recap) {
+    if (!recap?.text) return;
+    const chatArea = this.elements.chatArea;
+    if (!chatArea) return;
+
+    // Don't double-render if one is already there.
+    chatArea.querySelector(".session-recap")?.remove();
+
+    const card = document.createElement("div");
+    card.className = "session-recap";
+    card.setAttribute("role", "status");
+    card.innerHTML = `
+      <div class="session-recap-content">
+        <div class="session-recap-label">Last time</div>
+        <div class="session-recap-text"></div>
+      </div>
+      <button type="button" class="session-recap-dismiss" aria-label="Dismiss recap">×</button>
+    `;
+    card.querySelector(".session-recap-text").textContent = recap.text;
+    card.querySelector(".session-recap-dismiss").addEventListener("click", () => card.remove());
+
+    // Insert at top of chat area so it sits above the first real message.
+    chatArea.insertBefore(card, chatArea.firstChild);
   },
 
   appendMessage(role, content, isStreaming = false) {
@@ -1268,23 +1304,65 @@ const Chat = {
     { value: "medium", icon: "⚖️", label: "Balanced" },
     { value: "high", icon: "🧠", label: "Deep" },
     { value: "max", icon: "🔮", label: "Maximum" },
+    { value: "xhigh", icon: "🌌", label: "Ultra" },
   ],
 
   getEffort() {
     return this._effortLevel || undefined;
   },
 
+  setEffort(value) {
+    const lvl = this._effortLevels.find((l) => l.value === value);
+    if (!lvl) return;
+    this._effortLevel = lvl.value;
+    const btn = document.getElementById("effortToggle");
+    if (btn) {
+      btn.dataset.level = lvl.value;
+      const iconEl = document.getElementById("effortIcon");
+      const labelEl = document.getElementById("effortLabel");
+      if (iconEl) iconEl.textContent = lvl.icon;
+      if (labelEl) labelEl.textContent = lvl.label;
+    }
+  },
+
   initEffortPills() {
     const btn = document.getElementById("effortToggle");
     if (!btn) return;
-    btn.addEventListener("click", () => {
+
+    // Short tap: cycle through levels (fallback for narrow screens where
+    // the slider would be cramped). Long-press or focus: open slider.
+    let pressTimer = null;
+    let longPressFired = false;
+    const LONG_PRESS_MS = 500;
+
+    const openSlider = () => {
+      longPressFired = true;
+      window.EffortSlider?.open();
+    };
+
+    btn.addEventListener("pointerdown", () => {
+      longPressFired = false;
+      pressTimer = setTimeout(openSlider, LONG_PRESS_MS);
+    });
+    btn.addEventListener("pointerup", () => { clearTimeout(pressTimer); });
+    btn.addEventListener("pointerleave", () => { clearTimeout(pressTimer); });
+    btn.addEventListener("pointercancel", () => { clearTimeout(pressTimer); });
+
+    btn.addEventListener("click", (e) => {
+      // If long-press already fired, don't also cycle.
+      if (longPressFired) { e.preventDefault(); return; }
       const levels = this._effortLevels;
       const idx = levels.findIndex((l) => l.value === this._effortLevel);
       const next = levels[(idx + 1) % levels.length];
-      this._effortLevel = next.value;
-      document.getElementById("effortIcon").textContent = next.icon;
-      document.getElementById("effortLabel").textContent = next.label;
-      btn.dataset.level = next.value;
+      this.setEffort(next.value);
+    });
+
+    // Keyboard users: space/enter opens the slider too.
+    btn.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown" || e.key === "Enter") {
+        e.preventDefault();
+        openSlider();
+      }
     });
   },
 

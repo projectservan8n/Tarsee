@@ -1,0 +1,36 @@
+/* ==========================================================================
+   Theme: Warm Charcoal (default)
+   Claude Desktop's original palette. Already declared in tokens.css under
+   :root, but re-declared here so the theme switcher can override on demand
+   after a different theme has been applied. Keep in sync with tokens.css.
+   ========================================================================== */
+
+[data-theme="warm-charcoal"],
+[data-theme="dark"] {
+  --bg:                 #1a1a1a;
+  --bg-surface:         #2b2a27;
+  --bg-surface-hover:   #353430;
+  --bg-elevated:        #2b2a27;
+  --bg-input:           #1f1e1b;
+  --bg-sidebar:         #1e1e1c;
+
+  --border:             #3a3935;
+  --border-light:       #2f2e2b;
+  --border-hover:       #4a4945;
+
+  --text:               #ececec;
+  --text-secondary:     #a8a8a0;
+  --text-muted:         #9a9a92;
+  --text-inverse:       #1a1a1a;
+
+  --accent:             #c45a35;
+  --accent-hover:       #d4663d;
+  --accent-subtle:      rgba(196, 90, 53, 0.12);
+  --accent-glow:        rgba(196, 90, 53, 0.25);
+
+  --bg-glass:           rgba(26, 26, 26, 0.72);
+  --bg-glass-strong:    rgba(26, 26, 26, 0.86);
+  --bg-glass-surface:   rgba(43, 42, 39, 0.78);
+  --bg-glass-sidebar:   rgba(30, 30, 28, 0.82);
+  --bg-glass-solid:     #1f1f1d;
+}

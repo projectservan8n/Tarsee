@@ -3,6 +3,7 @@ import { getSkillsPromptContext } from "./skills-engine.js";
 import { getLearningHint } from "./personality-learner.js";
 import { getBootstrapContext, readWorkspaceFile } from "./workspace-files.js";
 import { getBootContextSummary } from "./boot-context.js";
+import { readAndArchiveCheckpoint } from "./checkpoint.js";
 import { getCredentialInventory, renderInventoryPromptSection } from "./credential-inventory.js";
 
 const MAX_TOTAL_BYTES = 50 * 1024; // 50KB total prompt budget (trimmed from 150KB)
@@ -88,6 +89,26 @@ export function buildSystemPrompt({
   if (messageCount <= 1) {
     const bootCtx = getBootContextSummary();
     if (bootCtx) prompt += bootCtx;
+  }
+
+  // Checkpoint — user-written detailed handoff from a previous instance
+  // (dropped via /checkpoint before a planned restart). Inject on the
+  // VERY first message of a session only, and consume atomically so the
+  // handoff is surfaced exactly once. Takes precedence over boot-context:
+  // it's explicit, detailed, and written by the last Claude instance
+  // that was actively engaged with the current work.
+  if (messageCount === 0) {
+    const checkpointBody = readAndArchiveCheckpoint();
+    if (checkpointBody) {
+      prompt += `\n\n## Handoff from previous instance
+*This CHECKPOINT.md was written by your previous self before a container
+wipe. It's the deliberate handoff — treat it as authoritative for what
+was in-flight. After absorbing, confirm to the user in ONE line that
+you've picked up the context and continue from the "Next Action on
+Reboot" step.*
+
+${checkpointBody.trim()}`;
+    }
   }
 
   // Credential inventory — one-shot preload at session start so Claude

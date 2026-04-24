@@ -1,12 +1,25 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="warm-charcoal">
 <head>
   <meta charset="utf-8">
+  <!-- Apply saved theme BEFORE any CSS loads — prevents a flash of the
+       default palette on every pageload for users who picked a non-default
+       theme. Falls back to warm-charcoal if nothing is saved. -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("tarsee_theme");
+        // Alias the old hardcoded "dark" value (was in HTML pre-theme-switcher).
+        if (t === "dark") t = "warm-charcoal";
+        if (t) document.documentElement.setAttribute("data-theme", t);
+      } catch (e) { /* localStorage blocked — keep default */ }
+    })();
+  </script>
   <!-- Allow pinch-zoom for low-vision users (WCAG 1.4.4). 16px inputs
        already prevent iOS input auto-zoom, so removing user-scalable=no
        costs nothing. -->
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#1a1a1a">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -21,6 +34,13 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <!-- Design System -->
   <link rel="stylesheet" href="/css/tokens.css">
+  <!-- Theme overrides — each file is scoped to [data-theme="NAME"] so only
+       the matching one takes effect. Loading all at once keeps theme
+       switching instant (no stylesheet fetch). -->
+  <link rel="stylesheet" href="/css/themes/warm-charcoal.css">
+  <link rel="stylesheet" href="/css/themes/noir.css">
+  <link rel="stylesheet" href="/css/themes/solarized-light.css">
+  <link rel="stylesheet" href="/css/themes/jarvis-blue.css">
   <link rel="stylesheet" href="/css/utilities.css">
   <!-- Component Styles -->
   <link rel="stylesheet" href="/css/style.css">
@@ -268,6 +288,10 @@
           <button class="settings-tab" data-tab="audit">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 2h8a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M6 5h4M6 8h4M6 11h2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
             Audit Log
+          </button>
+          <button class="settings-tab" data-tab="appearance">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 2a6 6 0 000 12V2z" fill="currentColor"/></svg>
+            Appearance
           </button>
         </div>
 
@@ -793,6 +817,36 @@
               <button class="btn btn-ghost btn-sm" id="auditLoadMore" style="display:none">Load more</button>
             </div>
           </div>
+
+          <!-- Appearance Tab -->
+          <div class="settings-tab-panel" data-tab="appearance">
+            <h2>Appearance</h2>
+            <div class="settings-section">
+              <h3>Theme</h3>
+              <div class="hint mb-3">Pick a palette. Saved to this device and applied instantly — no reload needed.</div>
+              <div class="form-group">
+                <label>Theme</label>
+                <select id="settingsTheme">
+                  <option value="warm-charcoal">Warm Charcoal (default)</option>
+                  <option value="noir">Noir — pure OLED black</option>
+                  <option value="solarized-light">Solarized Light</option>
+                  <option value="jarvis-blue">JARVIS Blue</option>
+                </select>
+              </div>
+              <div class="theme-preview-grid" id="themePreviewGrid"></div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Push Notifications</h3>
+              <div class="hint mb-3">Let Tarsee wake this device when cron jobs, webhooks, or channel messages fire while the app is in the background. Per-device — enable on every device you want pings on.</div>
+              <div class="form-group">
+                <button class="btn btn-primary btn-sm" id="enablePushBtn">Enable on this device</button>
+                <button class="btn btn-ghost btn-sm" id="disablePushBtn" style="display:none">Disable on this device</button>
+                <button class="btn btn-ghost btn-sm" id="testPushBtn" style="display:none">Send test</button>
+                <div class="hint mt-2" id="pushStatus">Checking status…</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </main>
@@ -879,6 +933,9 @@
   <script src="/js/setup.js"></script>
   <script src="/js/files.js"></script>
   <script src="/js/app.js"></script>
+  <!-- Effort slider (segmented UI for thinking effort). Must load before
+       custom-select so the slider's own markup isn't accidentally enhanced. -->
+  <script src="/js/effort-slider.js"></script>
   <!-- Custom <select> replacement runs last so settings.js has already
        wired its event listeners on the native selects before we wrap them. -->
   <script src="/js/custom-select.js"></script>

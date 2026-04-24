@@ -38,6 +38,7 @@ import { acpRouter } from "./routes/acp.js";
 import { webhookRouter } from "./routes/webhooks.js";
 import { analyticsRouter } from "./routes/analytics.js";
 import { externalApiRouter } from "./routes/external-api.js";
+import { pushRouter } from "./routes/push.js";
 
 import { writePid, removePid } from "./daemon/pid.js";
 
@@ -110,6 +111,7 @@ app.use("/api/skills", requireAuth, csrfProtect, skillsRouter);
 app.use("/api/acp", requireAuth, csrfProtect, acpRouter);
 app.use("/api/webhooks", webhookRouter); // Token auth, no session/CSRF needed
 app.use("/api/analytics", requireAuth, csrfProtect, analyticsRouter);
+app.use("/api/push", requireAuth, csrfProtect, pushRouter);
 app.use("/api/v1", requireAuth, externalApiRouter); // Bearer token auth, no CSRF needed for API clients
 
 // SPA fallback — serve index.html for client-side routes
@@ -164,6 +166,42 @@ try {
   console.warn("[tarsee] memory sync error:", err.message);
 }
 
+// --- Web Push (VAPID + subscription store) ---
+// Initialized before any route handler needs it. Generates a VAPID key
+// pair on first boot and persists to settings. Routes are declared
+// below (in external-api.js since they also serve the public key to
+// anonymous clients for subscribe flow).
+import { initPush } from "./lib/push.js";
+try {
+  initPush(db, auditLog);
+} catch (err) {
+  console.warn("[tarsee] push init error:", err.message);
+}
+
+// --- Auto-install high-leverage skills on first boot ---
+// ultrareview + fewer-permission-prompts are the two Claude Code v2.1.111
+// skills we want available out of the box. They live in src/skills/ (ship
+// with the image) but must be copied to workspace/skills/ to be active
+// (skills-engine only scans the workspace dir). Idempotent — skips if
+// already installed, so re-deploys don't clobber user modifications.
+import { installSkill, scanSkills as _scanSkills } from "./lib/skills-engine.js";
+try {
+  const installed = new Set(_scanSkills().map((s) => s.name));
+  const defaultSkills = ["ultrareview", "fewer-permission-prompts"];
+  for (const name of defaultSkills) {
+    if (!installed.has(name)) {
+      try {
+        installSkill(name);
+        console.log(`[tarsee] installed default skill: ${name}`);
+      } catch (err) {
+        console.warn(`[tarsee] failed to install ${name}:`, err.message);
+      }
+    }
+  }
+} catch (err) {
+  console.warn("[tarsee] default-skill bootstrap error:", err.message);
+}
+
 // --- Boot runner (BOOT.md on every restart) ---
 import { runBootChecklist } from "./lib/boot-runner.js";
 runBootChecklist({ db, settingsStore }).catch((err) => {
@@ -197,6 +235,21 @@ startSessionReset({ db, settingsStore, convStore });
 // --- Auto-summarize idle conversations ---
 import { startAutoSummarize, stopAutoSummarize } from "./lib/auto-summarize.js";
 startAutoSummarize(db);
+
+// --- Auto-checkpoint ---
+// Every 6h (gated by activity), write a deterministic CHECKPOINT.md so
+// an unplanned restart can still pick up where we left off. Manual
+// /checkpoint still produces a richer AI-synthesized handoff on demand.
+import { startAutoCheckpoint, stopAutoCheckpoint } from "./lib/auto-checkpoint.js";
+startAutoCheckpoint({ db });
+
+// --- Retention sweep ---
+// Daily at 03:00 — prunes conversations idle > 14d (archiving a one-line
+// summary first) and checkpoint files older than 30d / over 50-file cap.
+// Keeps the SQLite DB from ballooning once Tarsee has been running for a
+// few weeks on Railway.
+import { startRetention, stopRetention } from "./lib/retention.js";
+startRetention({ db });
 
 // --- Cron scheduler ---
 import { initCron, startCronScheduler, stopCronScheduler } from "./lib/cron.js";
@@ -249,6 +302,8 @@ function shutdown(signal) {
   stopHeartbeat();
   saveBootContext(db); // Persist context before shutdown
   stopAutoSummarize();
+  stopAutoCheckpoint();
+  stopRetention();
   stopSessionReset();
   stopCronScheduler();
   channelManager.stopAll();

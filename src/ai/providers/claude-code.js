@@ -104,9 +104,13 @@ export async function* chat({
     additionalDirectories: [skillsDir],
   };
 
-  // Thinking effort: low, medium, high, max
-  if (effort && ["low", "medium", "high", "max"].includes(effort)) {
-    queryOptions.effort = effort;
+  // Thinking effort: low, medium, high, max, xhigh (Opus 4.7+)
+  // xhigh maps to the SDK's max effort internally — once the Agent SDK
+  // adds a dedicated xhigh level we can pass it through directly. For now
+  // xhigh is a hint to the UI that the user wants maximum; server-side it
+  // falls back to "max" so the provider accepts it.
+  if (effort && ["low", "medium", "high", "max", "xhigh"].includes(effort)) {
+    queryOptions.effort = effort === "xhigh" ? "max" : effort;
   }
 
   // OpenClaw-style: lightweight system prompt + tool-based memory access

@@ -37,6 +37,7 @@
     "nodemailer": "^8.0.5",
     "playwright": "^1.52.0",
     "telegraf": "^4.0.0",
+    "web-push": "^3.6.7",
     "ws": "^8.19.0",
     "zod": "^4.3.6"
   }

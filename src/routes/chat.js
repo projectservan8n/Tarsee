@@ -144,7 +144,7 @@ chatRouter.post("/conversations", (req, res) => {
  * GET /api/chat/conversations/:id
  * Get conversation with messages.
  */
-chatRouter.get("/conversations/:id", (req, res) => {
+chatRouter.get("/conversations/:id", async (req, res) => {
   const conv = convStore.get(req.params.id);
   if (!conv) return res.status(404).json({ error: "Conversation not found" });
 
@@ -153,7 +153,19 @@ chatRouter.get("/conversations/:id", (req, res) => {
   const limit = all ? undefined : parseInt(req.query.limit, 10) || 50;
   const messages = limit ? convStore.getRecentMessages(req.params.id, limit) : convStore.getMessages(req.params.id);
   const totalMessages = convStore.messageCount ? convStore.messageCount(req.params.id) : messages.length;
-  res.json({ ...conv, messages, totalMessages });
+
+  // Session recap — if the convo has been idle long enough, include a
+  // short "last time we..." summary so the client can show a dismissible
+  // card above the first message. Null if nothing stale enough.
+  let recap = null;
+  try {
+    recap = await convStore.getSessionRecap(req.params.id, 30);
+  } catch (err) {
+    // Defensive — recap is optional, never block conversation load on it.
+    console.warn("[chat] getSessionRecap failed:", err?.message);
+  }
+
+  res.json({ ...conv, messages, totalMessages, recap });
 });
 
 /**

@@ -143,6 +143,76 @@ export class ConversationStore {
   }
 
   /**
+   * Session recap — if the conversation has been idle for >= staleMinutes,
+   * return a short human-readable "last time we..." summary. Used when a
+   * client resumes an old conversation on a new device.
+   *
+   * Lazy-synthesizes via summarizeConversation() from auto-summarize.js,
+   * which is a cheap extractive summary (no AI call). Returns null when:
+   *   - conversation doesn't exist
+   *   - last activity < staleMinutes ago (no recap needed)
+   *   - conversation has < 3 messages (nothing to summarize)
+   */
+  async getSessionRecap(conversationId, staleMinutes = 30) {
+    const conv = this.get(conversationId);
+    if (!conv) return null;
+    if (!conv.updated_at) return null;
+
+    const updated = new Date(conv.updated_at).getTime();
+    if (Number.isNaN(updated)) return null;
+    const ageMs = Date.now() - updated;
+    if (ageMs < staleMinutes * 60_000) return null;
+
+    const msgCount = this.messageCount(conversationId);
+    if (msgCount < 3) return null;
+
+    // Pull a fresh summary — summarizeConversation is defensive (returns
+    // {skipped: true} if anything's wrong) so we just check ok.
+    try {
+      const { summarizeConversation } = await import("../lib/auto-summarize.js");
+      const result = summarizeConversation(this.db, conversationId);
+      if (!result?.ok) return null;
+
+      // summarizeConversation writes a section to memory/summaries.md.
+      // For the wire format we return just the synthesized text: topics +
+      // last assistant response, which is what the user wants to see.
+      const messages = this.getRecentMessages(conversationId, 15);
+      const stripTimeline = (content) => {
+        let c = content || "";
+        if (c.startsWith('{"__timeline":true')) {
+          try { c = JSON.parse(c).text || ""; } catch {}
+        }
+        return c;
+      };
+      const userMsgs = messages
+        .filter((m) => m.role === "user")
+        .slice(-3)
+        .map((m) => stripTimeline(m.content).replace(/^\[[^\]]+\]:\s*/, "").slice(0, 140));
+      const lastAssistant = messages
+        .filter((m) => m.role === "assistant")
+        .slice(-1)
+        .map((m) => stripTimeline(m.content).slice(0, 220))[0] || "";
+
+      const ageHrs = Math.round(ageMs / 3_600_000);
+      const ageLabel = ageHrs < 1 ? "< 1 hr" : ageHrs < 24 ? `${ageHrs} hr` : `${Math.round(ageHrs / 24)} days`;
+
+      return {
+        text: [
+          `Last active ${ageLabel} ago · ${msgCount} messages total.`,
+          userMsgs.length ? `You were asking about: ${userMsgs.join(" · ")}` : null,
+          lastAssistant ? `Last response: ${lastAssistant}` : null,
+        ].filter(Boolean).join("\n"),
+        ageMs,
+        messageCount: msgCount,
+        at: new Date().toISOString(),
+      };
+    } catch (err) {
+      console.warn("[conv] getSessionRecap error:", err?.message);
+      return null;
+    }
+  }
+
+  /**
    * Add a message to a conversation.
    */
   addMessage(conversationId, { role, content, provider, model, tokensIn, tokensOut }) {

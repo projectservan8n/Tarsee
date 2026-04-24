@@ -110,6 +110,10 @@ async function runCronJobWithRetry(job) {
     if (!result.error) {
       // Success — reset error counter
       jobState.set(job.id, { lastRun: Date.now(), lastStatus: "ok", lastError: null, consecutiveErrors: 0 });
+      // Fire a push notification so the user knows the job finished even
+      // if they're not watching the app. Best-effort — failures don't
+      // affect the job result.
+      notifyJobComplete(job, "ok").catch(() => {});
       return result;
     }
 
@@ -126,8 +130,38 @@ async function runCronJobWithRetry(job) {
       await new Promise((r) => setTimeout(r, delay));
     } else {
       console.error(`[cron] Job "${job.id}" failed after ${MAX_RETRIES + 1} attempts: ${result.error}`);
+      // Push only on FINAL failure, not on intermediate retries.
+      notifyJobComplete(job, "error", result.error).catch(() => {});
     }
   }
+}
+
+/**
+ * Fire a Web Push notification for a cron-job status transition.
+ * Skips if push module isn't initialized yet (boot race) or if there
+ * are no subscriptions. Title/body kept short so iOS/Android don't
+ * truncate awkwardly.
+ */
+async function notifyJobComplete(job, status, errMsg = null) {
+  try {
+    const { sendPush } = await import("./push.js");
+    const name = job.name || job.id || "cron";
+    if (status === "ok") {
+      await sendPush({
+        title: `Tarsee · ${name}`,
+        body: "Job finished.",
+        tag: `cron-${job.id}`,
+        url: "/",
+      });
+    } else {
+      await sendPush({
+        title: `Tarsee · ${name} failed`,
+        body: (errMsg || "").slice(0, 140),
+        tag: `cron-${job.id}-error`,
+        url: "/",
+      });
+    }
+  } catch { /* push not wired or no subscriptions — silently ignore */ }
 }
 
 /**

@@ -172,7 +172,36 @@ const API = {
     if (contentType.includes("application/json")) {
       const data = await res.json();
       if (data.command) {
-        onText?.(data.response);
+        // Intercept command sentinels before rendering. These are signals
+        // from server-side command handlers that the client needs to perform
+        // a side effect (theme switch, open slider, etc.). The sentinel
+        // prefix is stripped before showing the human-readable part of the
+        // response, or swallowed entirely if there's no user-visible text.
+        let response = data.response || "";
+
+        // __SET_THEME__:name|Human message
+        const themeMatch = /^__SET_THEME__:([a-z0-9-]+)\|(.*)$/is.exec(response);
+        if (themeMatch) {
+          const [, themeName, humanMsg] = themeMatch;
+          try {
+            document.documentElement.setAttribute("data-theme", themeName);
+            localStorage.setItem("tarsee_theme", themeName);
+          } catch { /* localStorage blocked */ }
+          response = humanMsg;
+        }
+
+        // __OPEN_EFFORT_SLIDER__ — opens the effort slider if present, else
+        // fall back to a static hint.
+        if (response.trim() === "__OPEN_EFFORT_SLIDER__") {
+          if (window.EffortSlider?.open) {
+            window.EffortSlider.open();
+            response = "Opened effort slider.";
+          } else {
+            response = "Tap the effort badge in the session bar to change.";
+          }
+        }
+
+        onText?.(response);
         onDone?.({ conversationId: data.conversationId, type: "command" });
         return;
       }

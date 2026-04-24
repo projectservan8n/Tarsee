@@ -1,6 +1,9 @@
 import { AI_PROVIDERS } from "../config/constants.js";
 import { addCronJob, removeCronJob, loadCronJobs, runCronJob, startCronScheduler } from "./cron.js";
 import { executeTool } from "./tools.js";
+import { getSkillContent, installSkill, scanSkills } from "./skills-engine.js";
+import { hasCheckpoint, peekCheckpoint, listRecentCheckpoints, CHECKPOINT_FILE_PATH } from "./checkpoint.js";
+import { preview as previewRetention, runNow as runRetentionNow } from "./retention.js";
 
 /**
  * Chat command processor.
@@ -79,10 +82,13 @@ const COMMANDS = {
   },
 
   think: {
-    description: "Set thinking effort (low, medium, high, max)",
-    usage: "/think [low|medium|high|max]",
+    description: "Set thinking effort (low, medium, high, max, xhigh)",
+    usage: "/think [low|medium|high|max|xhigh]",
     handler: (args, ctx) => {
-      const levels = { low: "low", medium: "medium", med: "medium", high: "high", max: "max" };
+      const levels = {
+        low: "low", medium: "medium", med: "medium",
+        high: "high", max: "max", xhigh: "xhigh", ultra: "xhigh",
+      };
       const settingsStore = ctx.settingsStore;
       if (!settingsStore) return "Settings not available.";
 
@@ -90,16 +96,65 @@ const COMMANDS = {
         const current = ctx.conversationId
           ? settingsStore.get(`session.${ctx.conversationId}.effort`) || "default"
           : "default";
-        return `**Current effort:** ${current}\n\n**Options:**\n- \`/think low\` — Minimal thinking, fastest\n- \`/think medium\` — Balanced\n- \`/think high\` — Deep reasoning (default)\n- \`/think max\` — Maximum effort (Opus only)`;
+        return `**Current effort:** ${current}\n\n**Options:**\n- \`/think low\` — Minimal thinking, fastest\n- \`/think medium\` — Balanced\n- \`/think high\` — Deep reasoning (default)\n- \`/think max\` — Maximum effort (Opus only)\n- \`/think xhigh\` — Extra-high budget (Opus 4.7 only)`;
       }
 
       const level = levels[args.toLowerCase()];
-      if (!level) return `Unknown level. Use: low, medium, high, or max`;
+      if (!level) return `Unknown level. Use: low, medium, high, max, or xhigh`;
 
       if (ctx.conversationId) {
         settingsStore.set(`session.${ctx.conversationId}.effort`, level);
       }
       return `Thinking effort set to **${level}**`;
+    },
+  },
+
+  // Alias of /think that also triggers the slider UI on the client.
+  // Server-side behavior is identical; the web frontend intercepts the
+  // command response and opens the effort slider if no argument was given.
+  effort: {
+    description: "Set thinking effort via slider or shortcut",
+    usage: "/effort [low|medium|high|max|xhigh]",
+    handler: (args, ctx) => {
+      if (!args) {
+        // Signal the client to open the slider. The frontend looks for
+        // this sentinel in the command response and shows the slider
+        // instead of printing this line.
+        return "__OPEN_EFFORT_SLIDER__";
+      }
+      return COMMANDS.think.handler(args, ctx);
+    },
+  },
+
+  theme: {
+    description: "Switch the UI theme (warm-charcoal, noir, solarized-light, jarvis-blue)",
+    usage: "/theme [name]",
+    handler: (args, ctx) => {
+      const settingsStore = ctx.settingsStore;
+      if (!settingsStore) return "Settings not available.";
+
+      // Built-in themes. Plugin-shipped themes also land here via
+      // plugin-loader — settings key "ui.themes.available" stores the
+      // unified list.
+      const builtIn = ["warm-charcoal", "noir", "solarized-light", "jarvis-blue"];
+      const pluginThemes = settingsStore.get("ui.themes.plugin") || [];
+      const all = [...builtIn, ...pluginThemes];
+
+      if (!args || args.toLowerCase() === "list") {
+        const current = settingsStore.get("ui.theme") || "warm-charcoal";
+        const lines = all.map((t) => (t === current ? `- **${t}** (current)` : `- ${t}`));
+        return `**Available themes:**\n${lines.join("\n")}\n\nSwitch with \`/theme <name>\`.`;
+      }
+
+      const name = args.toLowerCase().trim();
+      if (!all.includes(name)) {
+        return `Unknown theme \`${name}\`. Available: ${all.join(", ")}.`;
+      }
+
+      settingsStore.set("ui.theme", name);
+      // Client picks up the theme change via the __SET_THEME__ sentinel
+      // so the switch is instant without a page reload.
+      return `__SET_THEME__:${name}|Theme set to **${name}**.`;
     },
   },
 
@@ -350,6 +405,194 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
       }
 
       return "Usage: `/briefing` (run now), `/briefing on`, `/briefing off`, `/briefing time <0-23>`";
+    },
+  },
+
+  // Inspect/trigger retention sweep — auto-deletes old conversations
+  // and checkpoint archives. Runs daily at 03:00; this is the manual
+  // knob for inspection + on-demand run.
+  retention: {
+    description: "Preview or run the retention sweep (auto-deletes old conversations + checkpoints)",
+    usage: "/retention [preview|run]",
+    category: "Tools",
+    handler: async (args, ctx) => {
+      const sub = (args || "").toLowerCase().trim() || "preview";
+      const settings = ctx.settingsStore;
+
+      if (sub === "run") {
+        try {
+          const result = await runRetentionNow();
+          return `**Retention sweep complete.**\n- ${result.convs} conversations deleted\n- ${result.checks} checkpoint archives deleted\n\nSummaries of pruned conversations appended to \`memory/archived-conversations.md\`.`;
+        } catch (err) {
+          return `Retention run failed: ${err.message}`;
+        }
+      }
+
+      // Default: preview (dry-run).
+      try {
+        const p = previewRetention();
+        const lines = [];
+        lines.push(`**Retention preview** — *nothing has been deleted yet*`);
+        lines.push("");
+        lines.push(`**Config:** conversations ${p.config.convDays}d · checkpoints ${p.config.checkDays}d (max ${p.config.checkMax} files)`);
+        lines.push("");
+        lines.push(`**Conversations that WOULD be deleted (${p.conversations.length}):**`);
+        if (p.conversations.length === 0) {
+          lines.push("_None — nothing older than the cutoff._");
+        } else {
+          for (const c of p.conversations.slice(0, 20)) {
+            lines.push(`- ${(c.updated_at || "").slice(0, 10)} · ${c.title || "Untitled"} · ${c.msg_count} msgs`);
+          }
+          if (p.conversations.length > 20) lines.push(`_…and ${p.conversations.length - 20} more._`);
+        }
+        lines.push("");
+        lines.push(`**Checkpoints that WOULD be deleted (${p.checkpoints.length}):**`);
+        if (p.checkpoints.length === 0) {
+          lines.push("_None._");
+        } else {
+          for (const c of p.checkpoints.slice(0, 10)) {
+            lines.push(`- ${c.name} (${c.age_days}d old)`);
+          }
+          if (p.checkpoints.length > 10) lines.push(`_…and ${p.checkpoints.length - 10} more._`);
+        }
+        lines.push("");
+        const lastRun = settings?.get("retention.last_run_at");
+        if (lastRun) lines.push(`_Last sweep: ${lastRun}_`);
+        lines.push("");
+        lines.push("Run now: `/retention run`");
+        lines.push("Tune: set `retention.conversations_days`, `retention.checkpoints_days`, `retention.checkpoints_max` in settings.");
+        return lines.join("\n");
+      } catch (err) {
+        return `Retention preview failed: ${err.message}`;
+      }
+    },
+  },
+
+  // Checkpoint the current session to a detailed handoff document so a
+  // follow-on instance (after container wipe / redeploy) can pick up the
+  // context. Writes to workspace/CHECKPOINT.md; the next session's first
+  // message automatically consumes + archives it via buildSystemPrompt.
+  checkpoint: {
+    description: "Write a detailed session handoff to CHECKPOINT.md before a restart",
+    usage: "/checkpoint [list|show]",
+    category: "Context",
+    handler: (args, _ctx) => {
+      const sub = (args || "").toLowerCase().trim();
+
+      if (sub === "list") {
+        const recent = listRecentCheckpoints(10);
+        if (recent.length === 0) return "No archived checkpoints yet. Run `/checkpoint` to create one.";
+        const lines = recent.map((c) => `- ${c.name} (${Math.round(c.size / 1024)} KB)`);
+        return `**Recent checkpoints (${recent.length}):**\n${lines.join("\n")}\n\nLocation: \`memory/checkpoints/\``;
+      }
+
+      if (sub === "show") {
+        const body = peekCheckpoint();
+        if (!body) return "No active checkpoint. Run `/checkpoint` to create one.";
+        return `**Current CHECKPOINT.md (unconsumed):**\n\n${body.slice(0, 8000)}`;
+      }
+
+      // Default: return a detailed playbook prompting Claude to write
+      // an exhaustive handoff to CHECKPOINT.md. The prompt is opinionated
+      // so the output is actually useful after a wipe.
+      return `__PLAYBOOK__
+You're about to be restarted with a container wipe (Railway redeploy).
+Write a COMPREHENSIVE handoff document to \`${CHECKPOINT_FILE_PATH}\` so
+the next Tarsee instance can pick up exactly where we left off.
+
+Use the \`tarsee_write_file\` tool with filename = "CHECKPOINT.md".
+
+The document MUST cover every section below. Be specific, concrete, and
+include code/commands/IDs where they exist. No vague summaries.
+
+\`\`\`markdown
+# Tarsee Session Checkpoint
+*Written: <ISO timestamp you generate>*
+*Session context: <1-2 sentence framing of what this session was about>*
+
+## Active Projects
+For each project the user mentioned or worked on this session, write:
+- **Project name** — client/context (e.g. "Sydneywide — Chris", "AgenticScale — Twilio")
+- Current status (what's done, what's in-flight, what's blocked)
+- Recent decisions + rationale
+- Next concrete step
+- Key files, repos, or branches touched
+- Any pending action items
+
+## Keys / Credentials Referenced
+List every API key, bot token, account, or credential that came up this
+session. DO NOT include the actual secret values — those are in the
+vault. Reference by semantic name + where it's stored:
+- e.g. "Twilio Account SID (agenticscale): vault key \`twilio.sid\`"
+- e.g. "Chris's SendGrid key: vault key \`sydneywide.sendgrid\`"
+- Note any keys that WEREN'T stored and need to be re-added on next boot.
+
+## Open Questions / Blockers
+Anything the user asked that wasn't fully resolved. Anything waiting on
+them vs. waiting on you vs. waiting on an external party.
+
+## Pending Scheduled Work
+- Cron jobs that might fire during the restart window — list their IDs
+  and what they do, so the new instance knows not to double-fire.
+- Webhooks expected to receive traffic
+- Long-running tasks that got interrupted (if any)
+
+## Recent Conversation Summary
+5-10 bullets on what's been discussed in this session, ordered
+chronologically. Each bullet: 1-2 sentences.
+
+## Context You Should Re-Absorb
+- MEMORY.md entries that were updated this session (with \`/remember\`)
+- Any SOUL.md / IDENTITY.md / USER.md changes
+- Settings or configuration that changed (model, effort, theme, push,
+  cron, skills installed)
+
+## Next Action on Reboot
+ONE clear first action the next instance should take. Example:
+"Greet the user, confirm you've absorbed this checkpoint, then resume
+the Twilio webhook fix — the merge was blocked by the auth-token race,
+see line 45 of src/channels/webhook.js."
+
+## Anything Else
+Free-form — inside jokes, running gags, the user's current mood,
+specific tone to use, things to avoid bringing up, etc.
+\`\`\`
+
+After writing the file, reply to me with a ONE-LINE confirmation in the
+format: "Checkpoint written: N sections, M KB. Safe to restart."
+
+Do NOT paraphrase the whole file back to me — the file itself is the
+artifact. Just confirm.`;
+    },
+  },
+
+  // Run the ultrareview skill — multi-agent code review on current branch.
+  // Both this and /fewer-prompts use the __PLAYBOOK__ mechanism to feed
+  // the skill body to Claude as a user-message prefix, same pattern as
+  // the /email subcommands.
+  ultrareview: {
+    description: "Deep multi-agent code review on the current branch",
+    usage: "/ultrareview",
+    category: "Tools",
+    handler: (_args, _ctx) => {
+      const skill = getSkillContent("ultrareview");
+      if (!skill?.content) {
+        return "UltraReview skill isn't installed. Try `/skills` to see what's available, or re-deploy to trigger auto-install.";
+      }
+      return `__PLAYBOOK__\nFollow the UltraReview skill exactly:\n\n${skill.content}`;
+    },
+  },
+
+  "fewer-prompts": {
+    description: "Propose a tool-permission allowlist based on recent audit log",
+    usage: "/fewer-prompts",
+    category: "Tools",
+    handler: (_args, _ctx) => {
+      const skill = getSkillContent("fewer-permission-prompts");
+      if (!skill?.content) {
+        return "fewer-permission-prompts skill isn't installed. Try `/skills` to see what's available, or re-deploy to trigger auto-install.";
+      }
+      return `__PLAYBOOK__\nFollow the fewer-permission-prompts skill exactly:\n\n${skill.content}`;
     },
   },
 
@@ -640,10 +883,11 @@ export async function processCommand(message, ctx = {}) {
  */
 const CATEGORY_RULES = [
   { cat: "Context", names: ["clear", "new", "send", "export", "remember", "memory"] },
-  { cat: "Model",   names: ["model", "think", "auto-route", "voice"] },
+  { cat: "Model",   names: ["model", "think", "effort", "auto-route", "voice"] },
+  { cat: "Appearance", names: ["theme"] },
   { cat: "Automation", names: ["webhook", "cron", "briefing"] },
   { cat: "Comms",   names: ["email"] },
-  { cat: "Tools",   names: ["skill", "doctor", "stop", "status", "stats", "usage", "version"] },
+  { cat: "Tools",   names: ["skill", "doctor", "stop", "status", "stats", "usage", "version", "ultrareview", "fewer-prompts", "retention", "checkpoint"] },
   { cat: "Help",    names: ["help"] },
 ];
 

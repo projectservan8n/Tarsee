@@ -122,3 +122,59 @@ self.addEventListener("fetch", (event) => {
     );
   }
 });
+
+
+// ---------------------------------------------------------------------------
+// Web Push
+// Handles `push` events (incoming notifications from the server via the
+// browser's push service) and `notificationclick` (user taps the notification,
+// we focus an existing tab or open a new one pointing at the relevant URL).
+// Payload shape written by src/lib/push.js:
+//   { title, body, url?, tag?, icon?, badge? }
+// ---------------------------------------------------------------------------
+self.addEventListener("push", (event) => {
+  if (!event.data) return;
+  let payload;
+  try {
+    payload = event.data.json();
+  } catch {
+    payload = { title: "Tarsee", body: event.data.text() };
+  }
+
+  const options = {
+    body: payload.body || "",
+    icon: payload.icon || "/icon-192.png",
+    badge: payload.badge || "/icon-192.png",
+    tag: payload.tag || "tarsee",
+    data: { url: payload.url || "/" },
+    // Coalesce multiple messages with the same tag so Tarsee doesn't
+    // spam the notification tray when a cron fires several in a row.
+    renotify: true,
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(payload.title || "Tarsee", options),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data?.url || "/";
+
+  event.waitUntil((async () => {
+    // Focus an existing Tarsee tab if any is open; otherwise open a new one.
+    const allClients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const client of allClients) {
+      // Same-origin tabs only.
+      if (new URL(client.url).origin === self.location.origin) {
+        await client.focus();
+        // If the existing tab is at root, navigate it to the target URL.
+        if (targetUrl && targetUrl !== "/" && client.url !== targetUrl) {
+          client.navigate?.(targetUrl).catch(() => {});
+        }
+        return;
+      }
+    }
+    await self.clients.openWindow(targetUrl);
+  })());
+});

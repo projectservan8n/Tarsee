@@ -329,6 +329,29 @@ export function createTarseeMcp(ctx) {
         }
       ),
 
+      tool(
+        "tarsee_push_notification",
+        "Send a Web Push notification to all the user's registered devices (iPhone/iPad PWA, laptop browsers). Use this for time-sensitive pings — cron completions, webhook alerts, proactive reminders — when the user may not have the app open. Non-urgent follow-ups should use tarsee_send_message instead.",
+        {
+          title: z.string().describe("Short headline — appears as the notification title. Keep under 50 chars."),
+          body: z.string().describe("One- or two-sentence body. Keep under 200 chars; platforms truncate."),
+          url: z.string().optional().describe("Deep-link URL on tap. Defaults to the app root. Use e.g. '/?conv=xxx' to jump to a specific conversation."),
+          tag: z.string().optional().describe("Grouping tag — pushes with the same tag replace each other in the tray instead of stacking."),
+        },
+        async (args) => {
+          try {
+            const { sendPush } = await import("../lib/push.js");
+            const res = await sendPush(args);
+            if (res.total === 0) {
+              return { content: [{ type: "text", text: "No devices have subscribed to push notifications yet. Ask the user to enable them from Settings > Appearance." }] };
+            }
+            return { content: [{ type: "text", text: `Push sent to ${res.sent}/${res.total} devices · ${res.failed} failed · ${res.evicted} evicted as gone.` }] };
+          } catch (err) {
+            return { content: [{ type: "text", text: "Push failed: " + err.message }] };
+          }
+        }
+      ),
+
   ];
 
   console.log(`[mcp] Creating Tarsee MCP server: ${allTools.length} tools, names: ${allTools.map(t => t.name).join(", ")}`);

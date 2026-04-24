@@ -131,6 +131,11 @@
 .effort-toggle[data-level="medium"] { color: var(--info); border-color: var(--info-subtle); }
 .effort-toggle[data-level="high"] { color: var(--warning); border-color: var(--warning-subtle); }
 .effort-toggle[data-level="max"] { color: var(--model-opus); border-color: var(--model-opus-border); background: var(--model-opus-bg); }
+.effort-toggle[data-level="xhigh"] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
 
 
 /* ==========================================================================
@@ -1561,5 +1566,93 @@ details[open] .block-preview { display: none; }
   .block-body {
     padding: var(--space-2) var(--space-3);
     font-size: var(--text-sm);
+  }
+}
+
+
+/* ==========================================================================
+   Session recap card
+   Shown at the top of the chat area when a stale conversation (> 30 min
+   idle) is resumed, giving a brief "last time you…" summary before the
+   user scrolls into the full scrollback.
+   ========================================================================== */
+.session-recap {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  max-width: var(--message-max-width);
+  margin: var(--space-4) auto var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  border-left: 3px solid var(--accent);
+  box-shadow: var(--glass-highlight), var(--shadow-sm);
+  animation: fadeIn var(--duration-normal) var(--ease-default);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .session-recap {
+    background: var(--bg-glass-surface);
+    -webkit-backdrop-filter: var(--blur-sm);
+    backdrop-filter: var(--blur-sm);
+  }
+}
+
+.session-recap-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-recap-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  margin-bottom: var(--space-1);
+}
+
+.session-recap-text {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: var(--leading-relaxed);
+  white-space: pre-line;
+}
+
+.session-recap-dismiss {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-xl);
+  line-height: 1;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background var(--duration-fast) var(--ease-default),
+              color var(--duration-fast) var(--ease-default);
+}
+
+.session-recap-dismiss:hover,
+.session-recap-dismiss:focus-visible {
+  outline: none;
+  background: var(--bg-surface-hover);
+  color: var(--text);
+}
+
+/* Mobile tighten */
+@media (max-width: 768px) {
+  .session-recap {
+    margin: var(--space-3) var(--space-3) var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+  .session-recap-text {
+    font-size: var(--text-xs);
   }
 }

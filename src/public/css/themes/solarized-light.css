@@ -1,0 +1,62 @@
+/* ==========================================================================
+   Theme: Solarized Light
+   Classic Ethan Schoonover-inspired cream/paper palette. Readable in direct
+   sunlight — useful for outdoor iPad use. Accent shifts to burnt orange
+   (base00 adjacent) which still reads as "Tarsee terracotta" in a lighter
+   chromatic register. Text inversion: dark text on light base.
+   ========================================================================== */
+
+[data-theme="solarized-light"] {
+  --bg:                 #fdf6e3;  /* base3 */
+  --bg-surface:         #eee8d5;  /* base2 */
+  --bg-surface-hover:   #e6dfc6;
+  --bg-elevated:        #f5eed5;
+  --bg-input:           #fbf3db;
+  --bg-sidebar:         #eee8d5;
+
+  --border:             #93a1a1;  /* base1 */
+  --border-light:       #d3cbb5;
+  --border-hover:       #657b83;  /* base00 */
+
+  --text:               #073642;  /* base02 */
+  --text-secondary:     #586e75;  /* base01 */
+  --text-muted:         #657b83;  /* base00 */
+  --text-inverse:       #fdf6e3;
+
+  --accent:             #cb4b16;  /* solarized orange */
+  --accent-hover:       #dc5c26;
+  --accent-subtle:      rgba(203, 75, 22, 0.12);
+  --accent-glow:        rgba(203, 75, 22, 0.22);
+
+  --bg-glass:           rgba(253, 246, 227, 0.78);
+  --bg-glass-strong:    rgba(253, 246, 227, 0.92);
+  --bg-glass-surface:   rgba(238, 232, 213, 0.82);
+  --bg-glass-sidebar:   rgba(238, 232, 213, 0.88);
+  --bg-glass-solid:     #f5eed5;
+
+  /* Light-on-dark glass tints don't make sense on a light surface; invert
+     them so glass + pressed states still read. */
+  --glass-subtle:       rgba(0, 0, 0, 0.04);
+  --glass-soft:         rgba(0, 0, 0, 0.08);
+  --glass-medium:       rgba(0, 0, 0, 0.14);
+
+  --glass-highlight:         inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  --glass-highlight-strong:  inset 0 1px 0 rgba(255, 255, 255, 0.55);
+
+  /* Overlay variants stay dark (they sit on top of content) */
+  --overlay-light:      rgba(7, 54, 66, 0.2);
+  --overlay-medium:     rgba(7, 54, 66, 0.35);
+  --overlay-heavy:      rgba(7, 54, 66, 0.5);
+  --overlay-dense:      rgba(7, 54, 66, 0.65);
+  --overlay-opaque:     rgba(7, 54, 66, 0.82);
+}
+
+/* Shadows need more presence on a light bg — the default dark shadows
+   fade. Lighten opacity + tint with accent subtly. */
+[data-theme="solarized-light"] {
+  --shadow-xs: 0 1px 2px rgba(7, 54, 66, 0.12);
+  --shadow-sm: 0 1px 3px rgba(7, 54, 66, 0.14);
+  --shadow-md: 0 4px 8px rgba(7, 54, 66, 0.14);
+  --shadow-lg: 0 8px 24px rgba(7, 54, 66, 0.18);
+  --shadow-xl: 0 16px 48px rgba(7, 54, 66, 0.22);
+}
