@@ -164,6 +164,30 @@ try {
   console.warn("[tarsee] memory sync error:", err.message);
 }
 
+// --- Auto-install high-leverage skills on first boot ---
+// ultrareview + fewer-permission-prompts are the two Claude Code v2.1.111
+// skills we want available out of the box. They live in src/skills/ (ship
+// with the image) but must be copied to workspace/skills/ to be active
+// (skills-engine only scans the workspace dir). Idempotent — skips if
+// already installed, so re-deploys don't clobber user modifications.
+import { installSkill, scanSkills as _scanSkills } from "./lib/skills-engine.js";
+try {
+  const installed = new Set(_scanSkills().map((s) => s.name));
+  const defaultSkills = ["ultrareview", "fewer-permission-prompts"];
+  for (const name of defaultSkills) {
+    if (!installed.has(name)) {
+      try {
+        installSkill(name);
+        console.log(`[tarsee] installed default skill: ${name}`);
+      } catch (err) {
+        console.warn(`[tarsee] failed to install ${name}:`, err.message);
+      }
+    }
+  }
+} catch (err) {
+  console.warn("[tarsee] default-skill bootstrap error:", err.message);
+}
+
 // --- Boot runner (BOOT.md on every restart) ---
 import { runBootChecklist } from "./lib/boot-runner.js";
 runBootChecklist({ db, settingsStore }).catch((err) => {

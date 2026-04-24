@@ -1,6 +1,7 @@
 import { AI_PROVIDERS } from "../config/constants.js";
 import { addCronJob, removeCronJob, loadCronJobs, runCronJob, startCronScheduler } from "./cron.js";
 import { executeTool } from "./tools.js";
+import { getSkillContent, installSkill, scanSkills } from "./skills-engine.js";
 
 /**
  * Chat command processor.
@@ -402,6 +403,36 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
       }
 
       return "Usage: `/briefing` (run now), `/briefing on`, `/briefing off`, `/briefing time <0-23>`";
+    },
+  },
+
+  // Run the ultrareview skill — multi-agent code review on current branch.
+  // Both this and /fewer-prompts use the __PLAYBOOK__ mechanism to feed
+  // the skill body to Claude as a user-message prefix, same pattern as
+  // the /email subcommands.
+  ultrareview: {
+    description: "Deep multi-agent code review on the current branch",
+    usage: "/ultrareview",
+    category: "Tools",
+    handler: (_args, _ctx) => {
+      const skill = getSkillContent("ultrareview");
+      if (!skill?.content) {
+        return "UltraReview skill isn't installed. Try `/skills` to see what's available, or re-deploy to trigger auto-install.";
+      }
+      return `__PLAYBOOK__\nFollow the UltraReview skill exactly:\n\n${skill.content}`;
+    },
+  },
+
+  "fewer-prompts": {
+    description: "Propose a tool-permission allowlist based on recent audit log",
+    usage: "/fewer-prompts",
+    category: "Tools",
+    handler: (_args, _ctx) => {
+      const skill = getSkillContent("fewer-permission-prompts");
+      if (!skill?.content) {
+        return "fewer-permission-prompts skill isn't installed. Try `/skills` to see what's available, or re-deploy to trigger auto-install.";
+      }
+      return `__PLAYBOOK__\nFollow the fewer-permission-prompts skill exactly:\n\n${skill.content}`;
     },
   },
 
