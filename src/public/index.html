@@ -815,6 +815,9 @@
   <script src="/js/setup.js"></script>
   <script src="/js/files.js"></script>
   <script src="/js/app.js"></script>
+  <!-- Effort slider (segmented UI for thinking effort). Must load before
+       custom-select so the slider's own markup isn't accidentally enhanced. -->
+  <script src="/js/effort-slider.js"></script>
   <!-- Custom <select> replacement runs last so settings.js has already
        wired its event listeners on the native selects before we wrap them. -->
   <script src="/js/custom-select.js"></script>

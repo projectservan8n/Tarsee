@@ -131,6 +131,11 @@
 .effort-toggle[data-level="medium"] { color: var(--info); border-color: var(--info-subtle); }
 .effort-toggle[data-level="high"] { color: var(--warning); border-color: var(--warning-subtle); }
 .effort-toggle[data-level="max"] { color: var(--model-opus); border-color: var(--model-opus-border); background: var(--model-opus-bg); }
+.effort-toggle[data-level="xhigh"] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
 
 
 /* ==========================================================================

@@ -1268,23 +1268,65 @@ const Chat = {
     { value: "medium", icon: "⚖️", label: "Balanced" },
     { value: "high", icon: "🧠", label: "Deep" },
     { value: "max", icon: "🔮", label: "Maximum" },
+    { value: "xhigh", icon: "🌌", label: "Ultra" },
   ],
 
   getEffort() {
     return this._effortLevel || undefined;
   },
 
+  setEffort(value) {
+    const lvl = this._effortLevels.find((l) => l.value === value);
+    if (!lvl) return;
+    this._effortLevel = lvl.value;
+    const btn = document.getElementById("effortToggle");
+    if (btn) {
+      btn.dataset.level = lvl.value;
+      const iconEl = document.getElementById("effortIcon");
+      const labelEl = document.getElementById("effortLabel");
+      if (iconEl) iconEl.textContent = lvl.icon;
+      if (labelEl) labelEl.textContent = lvl.label;
+    }
+  },
+
   initEffortPills() {
     const btn = document.getElementById("effortToggle");
     if (!btn) return;
-    btn.addEventListener("click", () => {
+
+    // Short tap: cycle through levels (fallback for narrow screens where
+    // the slider would be cramped). Long-press or focus: open slider.
+    let pressTimer = null;
+    let longPressFired = false;
+    const LONG_PRESS_MS = 500;
+
+    const openSlider = () => {
+      longPressFired = true;
+      window.EffortSlider?.open();
+    };
+
+    btn.addEventListener("pointerdown", () => {
+      longPressFired = false;
+      pressTimer = setTimeout(openSlider, LONG_PRESS_MS);
+    });
+    btn.addEventListener("pointerup", () => { clearTimeout(pressTimer); });
+    btn.addEventListener("pointerleave", () => { clearTimeout(pressTimer); });
+    btn.addEventListener("pointercancel", () => { clearTimeout(pressTimer); });
+
+    btn.addEventListener("click", (e) => {
+      // If long-press already fired, don't also cycle.
+      if (longPressFired) { e.preventDefault(); return; }
       const levels = this._effortLevels;
       const idx = levels.findIndex((l) => l.value === this._effortLevel);
       const next = levels[(idx + 1) % levels.length];
-      this._effortLevel = next.value;
-      document.getElementById("effortIcon").textContent = next.icon;
-      document.getElementById("effortLabel").textContent = next.label;
-      btn.dataset.level = next.value;
+      this.setEffort(next.value);
+    });
+
+    // Keyboard users: space/enter opens the slider too.
+    btn.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown" || e.key === "Enter") {
+        e.preventDefault();
+        openSlider();
+      }
     });
   },
 

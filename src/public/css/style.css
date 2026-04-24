@@ -3056,3 +3056,144 @@ html.keyboard-open .chat-area {
     border-radius: var(--radius-full);  /* round send button on mobile feels iOS-native */
   }
 }
+
+
+/* ==========================================================================
+   Effort slider panel — segmented control for thinking effort.
+   Appears on long-press / keyboard-activation of the .effort-toggle or
+   on `/effort` with no arg. Body-attached overlay so it never gets
+   clipped by session-bar overflow.
+   ========================================================================== */
+.effort-slider-panel {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: var(--overlay-medium);
+  display: none;
+  align-items: flex-end;
+  justify-content: center;
+  padding: var(--space-4);
+  opacity: 0;
+  transition: opacity var(--duration-normal) var(--ease-default);
+}
+.effort-slider-panel.is-open {
+  display: flex;
+  opacity: 1;
+}
+@media (min-width: 768px) {
+  .effort-slider-panel {
+    align-items: center;
+  }
+}
+
+.effort-slider-card {
+  background: var(--bg-elevated);
+  border: var(--space-px) solid var(--border);
+  border-radius: var(--radius-2xl);
+  padding: var(--space-4);
+  width: 100%;
+  max-width: 460px;
+  box-shadow: var(--glass-highlight), var(--shadow-xl);
+  transform: translateY(100%);
+  transition: transform var(--duration-normal) var(--ease-ios);
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .effort-slider-card {
+    background: var(--bg-glass-strong);
+    -webkit-backdrop-filter: var(--blur-md);
+    backdrop-filter: var(--blur-md);
+  }
+}
+.effort-slider-panel.is-open .effort-slider-card {
+  transform: translateY(0);
+}
+@media (min-width: 768px) {
+  .effort-slider-card { transform: scale(0.96); }
+  .effort-slider-panel.is-open .effort-slider-card { transform: scale(1); }
+}
+
+.effort-slider-title {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  margin-bottom: var(--space-3);
+  text-align: center;
+}
+
+.effort-slider-track {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: var(--space-1);
+  background: var(--bg-surface);
+  padding: var(--space-1);
+  border-radius: var(--radius-xl);
+}
+
+.effort-seg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-0-5);
+  padding: var(--space-2) var(--space-1);
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  min-height: 56px;
+  transition: background var(--duration-fast) var(--ease-default),
+              color var(--duration-fast) var(--ease-default);
+}
+
+.effort-seg:hover,
+.effort-seg:focus-visible {
+  outline: none;
+  color: var(--text);
+  background: var(--bg-surface-hover);
+}
+
+.effort-seg.is-active {
+  background: var(--accent);
+  color: var(--text-inverse);
+  box-shadow: var(--glass-highlight);
+}
+
+.effort-seg-icon {
+  font-size: var(--text-xl);
+  line-height: 1;
+}
+
+.effort-seg-label {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.effort-slider-hint {
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  text-align: center;
+  min-height: 1.3em;
+}
+
+/* Very narrow phones: drop labels, keep icons only. */
+@media (max-width: 400px) {
+  .effort-seg-label { display: none; }
+  .effort-seg { min-height: 44px; }
+}
+
+
+/* ==========================================================================
+   Theme preview grid (Settings > Appearance, below the <select>).
+   Optional visual preview tiles — mostly aspirational here; if you want
+   live thumbnails wire them in later.
+   ========================================================================== */
+.theme-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
