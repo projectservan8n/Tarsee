@@ -66,7 +66,108 @@
 }
 
 .context-bar-fill.warning { background: var(--warning); }
-.context-bar-fill.danger  { background: var(--danger); }
+.context-bar-fill.danger  {
+  background: var(--danger);
+  animation: contextPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes contextPulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .context-bar-fill.danger { animation: none; }
+}
+
+/* Banner shown above the composer when prompt size crosses 90% of the
+   model's context window. Dismissible per-conversation; cleared on
+   channel switch. Uses the same warning palette as the meter. */
+.context-warning-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+  background: var(--warning-subtle);
+  border: var(--space-px) solid var(--warning);
+  border-radius: var(--radius-md);
+  color: var(--warning);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+}
+
+.context-warning-text { flex: 1; }
+
+.context-warning-dismiss {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: var(--text-lg);
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 var(--space-1);
+  opacity: 0.7;
+}
+
+.context-warning-dismiss:hover { opacity: 1; }
+
+/* Recovery card shown when the SDK actually trips a "prompt is too long"
+   error. The snapshot has already been written server-side; this just
+   tells the user what to do next. */
+.context-overflow-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  margin-bottom: var(--space-2);
+  background: var(--danger-subtle);
+  border: var(--space-px) solid var(--danger);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.context-overflow-title {
+  color: var(--danger);
+  font-weight: 600;
+  font-size: var(--text-base);
+}
+
+.context-overflow-body code {
+  padding: 0 var(--space-1);
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.context-overflow-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.context-overflow-fresh,
+.context-overflow-dismiss {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  border: var(--space-px) solid var(--border-light);
+  background: transparent;
+  color: var(--text);
+}
+
+.context-overflow-fresh {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.context-overflow-fresh:hover { background: var(--accent-hover); }
+.context-overflow-dismiss:hover { background: rgba(255, 255, 255, 0.06); }
 
 .context-label {
   font-size: var(--text-sm);

@@ -285,7 +285,18 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
             onSessionId(sid);
           }
           if (message.usage) {
-            yield { type: "usage", usage: message.usage };
+            // Forward cache fields too so the frontend can compute true
+            // prompt size = input + cache_read + cache_creation. Without
+            // these we'd undercount filled context whenever caching kicks in.
+            yield {
+              type: "usage",
+              usage: {
+                input_tokens: message.usage.input_tokens || 0,
+                output_tokens: message.usage.output_tokens || 0,
+                cache_read_input_tokens: message.usage.cache_read_input_tokens || 0,
+                cache_creation_input_tokens: message.usage.cache_creation_input_tokens || 0,
+              },
+            };
           }
           // Yield result text as fallback if nothing was streamed at all
           if (!everStreamed && message.result) {

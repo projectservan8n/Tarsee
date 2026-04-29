@@ -3,7 +3,8 @@ import { chatStream, getAvailableProviders } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { initSSE, sendSSE } from "../lib/stream-utils.js";
-import { LIMITS, CLAUDE_MODELS, resolveModelAlias } from "../config/constants.js";
+import { LIMITS, CLAUDE_MODELS, CLAUDE_MODELS_BY_ID, resolveModelAlias } from "../config/constants.js";
+import { snapshotForContextOverflow } from "../lib/auto-checkpoint.js";
 import { processCommand, getCommandList, extractPlaybookPrompt } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { trackActivity } from "../lib/session-reset.js";
@@ -47,6 +48,35 @@ function classifyMessageModel(message) {
   // Default: Sonnet tier
   return resolveModelAlias("sonnet");
 }
+
+// Resolve the registry's human-readable context size ("1M", "200K") to a
+// concrete token count for the live context meter. Unknown models fall back
+// to 1M so the bar shows *something* rather than dividing by zero.
+function contextTokensForModel(modelId) {
+  const meta = modelId && CLAUDE_MODELS_BY_ID[modelId];
+  const c = (meta && meta.context) || "1M";
+  if (c === "200K") return 200_000;
+  if (c === "1M") return 1_000_000;
+  const m = String(c).match(/^(\d+)\s*(K|M)$/i);
+  if (!m) return 1_000_000;
+  return Number(m[1]) * (m[2].toUpperCase() === "M" ? 1_000_000 : 1_000);
+}
+
+// Sum the prompt-side fields of an Anthropic usage object — this is what
+// counts against the context window. cache_read and cache_creation tokens
+// are part of the prompt the model sees, so they fill the window even
+// though they don't bill at the same rate as fresh input.
+function promptTokensFromUsage(u) {
+  if (!u) return 0;
+  return (u.input_tokens || 0)
+    + (u.cache_read_input_tokens || 0)
+    + (u.cache_creation_input_tokens || 0);
+}
+
+// Threshold at which we proactively snapshot before the next turn might
+// trip "prompt is too long". Conservative enough that even a long reply
+// won't push us over. Applied after each completed turn.
+const CONTEXT_AUTOSAVE_PCT = 95;
 
 export const chatRouter = Router();
 
@@ -643,9 +673,30 @@ chatRouter.post("/send", async (req, res) => {
       if (convStore.messageCount(convId) <= 2) {
         convStore.updateTitle(convId, message.slice(0, LIMITS.MAX_CONVERSATION_TITLE));
       }
-      sendSSE(res, "done", { conversationId: convId, usage });
+      const contextTokens = contextTokensForModel(model);
+      const promptTokens = promptTokensFromUsage(usage);
+      const pct = contextTokens ? (promptTokens / contextTokens) * 100 : 0;
+      let checkpointed = false;
+      if (pct >= CONTEXT_AUTOSAVE_PCT) {
+        try {
+          const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, `auto: ${Math.round(pct)}% threshold`);
+          checkpointed = !!path;
+        } catch (e) {
+          console.warn("[chat] threshold snapshot failed:", e?.message);
+        }
+      }
+      sendSSE(res, "done", { conversationId: convId, usage, model, contextTokens, checkpointed });
       broadcastToOthers(convId, "done", { conversationId: convId });
     } catch (err) {
+      const isOverflow = /prompt is too long|context_length_exceeded|input length|too many tokens/i.test(err.message || "");
+      if (isOverflow) {
+        try {
+          const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, "auto: overflow error");
+          sendSSE(res, "context_overflow", { checkpointPath: path, message: err.message });
+        } catch (e) {
+          console.warn("[chat] overflow snapshot failed:", e?.message);
+        }
+      }
       if (!controller.signal.aborted) {
         sendSSE(res, "error", { message: err.message });
       }
@@ -769,8 +820,29 @@ chatRouter.post("/send", async (req, res) => {
       convStore.updateTitle(convId, title);
     }
 
-    sendSSE(res, "done", { conversationId: convId, usage });
+    const contextTokens = contextTokensForModel(model);
+    const promptTokens = promptTokensFromUsage(usage);
+    const pct = contextTokens ? (promptTokens / contextTokens) * 100 : 0;
+    let checkpointed = false;
+    if (pct >= CONTEXT_AUTOSAVE_PCT) {
+      try {
+        const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, `auto: ${Math.round(pct)}% threshold`);
+        checkpointed = !!path;
+      } catch (e) {
+        console.warn("[chat] threshold snapshot failed:", e?.message);
+      }
+    }
+    sendSSE(res, "done", { conversationId: convId, usage, model, contextTokens, checkpointed });
   } catch (err) {
+    const isOverflow = /prompt is too long|context_length_exceeded|input length|too many tokens/i.test(err.message || "");
+    if (isOverflow) {
+      try {
+        const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, "auto: overflow error");
+        if (!res.writableEnded) sendSSE(res, "context_overflow", { checkpointPath: path, message: err.message });
+      } catch (e) {
+        console.warn("[chat] overflow snapshot failed:", e?.message);
+      }
+    }
     if (!res.writableEnded) sendSSE(res, "error", { message: err.message });
   } finally {
     clearInterval(hb2);
