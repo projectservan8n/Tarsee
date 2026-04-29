@@ -21,6 +21,13 @@ const Chat = {
   pendingFiles: [],
   messageQueue: [],
 
+  // Live context-window telemetry from the most recent turn. Lets us
+  // render a real prompt-token meter instead of the chars/4 estimate.
+  // Reset on conversation switch so a stale fill doesn't bleed across.
+  _lastUsage: null,
+  _lastContextTokens: null,
+  _overflowBannerDismissed: false,
+
   elements: {},
 
   // Command palette state
@@ -331,26 +338,119 @@ const Chat = {
       this.elements.sessionModel.textContent = meta?.tier || (activeId ? activeId.split("-")[1] : "opus");
     });
 
-    // Context usage (approximate from message count)
-    if (this.currentConversationId) {
+    // If we have live token data from the last turn, that's authoritative —
+    // it's the actual prompt size the model just saw. Otherwise show the
+    // message count and leave the bar where the live data left it.
+    if (this._lastUsage && this._lastContextTokens) {
+      this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
+    } else if (this.currentConversationId) {
+      // No live usage yet (just switched conversations) — show message
+      // count as status, leave the bar at its stored width.
       API.json(`/api/chat/conversations/${this.currentConversationId}`).then(data => {
         const msgs = data.messages || [];
-        const totalChars = msgs.reduce((sum, m) => sum + (m.content?.length || 0), 0);
-        // Rough estimate: 4 chars per token, 1M token window
-        const approxTokens = Math.round(totalChars / 4);
-        const maxTokens = 1_000_000;
-        const pct = Math.min(100, Math.round((approxTokens / maxTokens) * 100));
-        this.elements.contextBarFill.style.width = `${pct}%`;
-        // Match the CSS class names — was "warning" which doesn't match ".warn".
-        this.elements.contextBarFill.className = `context-bar-fill${pct > 80 ? " danger" : pct > 50 ? " warn" : ""}`;
-        this.elements.contextLabel.textContent = `${pct}%`;
         this.elements.sessionStatus.textContent = msgs.length > 0 ? `${msgs.length} messages` : "New Session";
       }).catch(() => {});
     } else {
       this.elements.sessionStatus.textContent = "New Session";
       this.elements.contextBarFill.style.width = "0%";
+      this.elements.contextBarFill.className = "context-bar-fill";
       this.elements.contextLabel.textContent = "0%";
     }
+  },
+
+  // Real prompt size = fresh input + cache hits + cache writes. All three
+  // count against the context window even though they price differently.
+  promptTokensFromUsage(u) {
+    if (!u) return 0;
+    return (u.input_tokens || 0)
+      + (u.cache_read_input_tokens || 0)
+      + (u.cache_creation_input_tokens || 0);
+  },
+
+  formatTokenCount(n) {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + "M";
+    if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
+    return String(n || 0);
+  },
+
+  // The single source of truth for the context meter. Called from the live
+  // SSE `usage` event and from `updateSessionBar` on conversation switch.
+  // Thresholds: <75% accent, 75-89% warning, 90%+ danger.
+  applyContextMeter(promptTokens, contextTokens) {
+    if (!this.elements.contextBarFill || !this.elements.contextLabel) return;
+    const pct = contextTokens > 0
+      ? Math.min(100, Math.round((promptTokens / contextTokens) * 100))
+      : 0;
+    this.elements.contextBarFill.style.width = `${pct}%`;
+    let cls = "context-bar-fill";
+    if (pct >= 90) cls += " danger";
+    else if (pct >= 75) cls += " warning";
+    this.elements.contextBarFill.className = cls;
+    this.elements.contextLabel.textContent = `${pct}%`;
+    const tip = `${this.formatTokenCount(promptTokens)} / ${this.formatTokenCount(contextTokens)} tokens — auto-checkpoints at 95%`;
+    this.elements.contextBarFill.parentElement?.setAttribute("title", tip);
+    this.elements.contextLabel.title = tip;
+    if (pct >= 90 && !this._overflowBannerDismissed) {
+      this.showContextWarningBanner(pct);
+    } else if (pct < 90) {
+      this.hideContextWarningBanner();
+    }
+  },
+
+  showContextWarningBanner(pct) {
+    const inputArea = this.elements.inputArea;
+    if (!inputArea) return;
+    let banner = document.getElementById("contextWarningBanner");
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = "contextWarningBanner";
+      banner.className = "context-warning-banner";
+      banner.innerHTML = `
+        <span class="context-warning-text"></span>
+        <button type="button" class="context-warning-dismiss" aria-label="Dismiss">×</button>
+      `;
+      banner.querySelector(".context-warning-dismiss").addEventListener("click", () => {
+        this._overflowBannerDismissed = true;
+        this.hideContextWarningBanner();
+      });
+      inputArea.insertBefore(banner, inputArea.firstChild);
+    }
+    banner.querySelector(".context-warning-text").textContent =
+      `Context is ${pct}% full. Run /checkpoint to save state, then /clear — auto-snapshots at 95%.`;
+    banner.style.display = "flex";
+  },
+
+  hideContextWarningBanner() {
+    const banner = document.getElementById("contextWarningBanner");
+    if (banner) banner.style.display = "none";
+  },
+
+  showOverflowRecoveryCard(checkpointPath) {
+    const inputArea = this.elements.inputArea;
+    if (!inputArea) return;
+    let card = document.getElementById("contextOverflowCard");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "contextOverflowCard";
+      card.className = "context-overflow-card";
+      card.innerHTML = `
+        <div class="context-overflow-title">Context overflowed — snapshot saved</div>
+        <div class="context-overflow-body">Your last message pushed the model past its window. Tarsee saved a recovery checkpoint to <code class="context-overflow-path"></code>. Start a fresh session and the next instance will read this checkpoint as a handoff.</div>
+        <div class="context-overflow-actions">
+          <button type="button" class="context-overflow-fresh">Start fresh session</button>
+          <button type="button" class="context-overflow-dismiss">Dismiss</button>
+        </div>
+      `;
+      card.querySelector(".context-overflow-fresh").addEventListener("click", () => {
+        card.remove();
+        // Reuse the existing reset-session endpoint via the New button.
+        document.getElementById("newSessionBtn")?.click();
+      });
+      card.querySelector(".context-overflow-dismiss").addEventListener("click", () => card.remove());
+      inputArea.insertBefore(card, inputArea.firstChild);
+    }
+    card.querySelector(".context-overflow-path").textContent = checkpointPath || "workspace/CHECKPOINT.md";
+    card.style.display = "flex";
   },
 
   async loadCommands() {
@@ -624,6 +724,14 @@ const Chat = {
 
     this.currentChannelKey = channelKey;
     this.currentConversationId = conversationId || null;
+    // Switching channels invalidates the prior turn's token telemetry —
+    // reset so the meter reflects the new conversation's state, not stale
+    // numbers from whichever channel we just left.
+    this._lastUsage = null;
+    this._lastContextTokens = null;
+    this._overflowBannerDismissed = false;
+    this.hideContextWarningBanner();
+    document.getElementById("contextOverflowCard")?.remove();
     this.elements.welcomeScreen.style.display = "none";
     this.elements.chatArea.style.display = "flex";
     this.elements.inputArea.style.display = "block";
@@ -1034,6 +1142,20 @@ const Chat = {
         text,
         // onText (content for text, null + event for tool/thinking events)
         (content, event) => {
+          if (event?.type === "usage") {
+            // Live token telemetry from the just-completed turn. We may
+            // not have contextTokens yet (it lands on the `done` event)
+            // but we can still stash the usage and wait.
+            this._lastUsage = { ...(this._lastUsage || {}), ...event };
+            if (this._lastContextTokens) {
+              this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
+            }
+            return;
+          }
+          if (event?.type === "context_overflow") {
+            this.showOverflowRecoveryCard(event.checkpointPath);
+            return;
+          }
           if (event?.type === "model_selected") {
             // Auto-routing: update session bar badge with the chosen model
             const badge = document.getElementById("sessionModel");
@@ -1153,6 +1275,18 @@ const Chat = {
           if (data?.type === "conversation" && data.conversationId) {
             this.currentConversationId = data.conversationId;
           }
+          // The terminal `done` event carries the context window size for
+          // the model that ran. Combine with the usage we stashed during
+          // streaming and finalize the meter for this turn.
+          if (data?.contextTokens) {
+            this._lastContextTokens = data.contextTokens;
+            if (this._lastUsage) {
+              this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
+            }
+          }
+          if (data?.checkpointed) {
+            App.showToast("Context near limit — auto-checkpoint saved", "info");
+          }
           this.finishStreaming(assistantMsg);
           this.updateSessionBar();
           this.loadChannels();
@@ -1243,6 +1377,17 @@ const Chat = {
         this.currentConversationId,
         text,
         (content, event) => {
+          if (event?.type === "usage") {
+            this._lastUsage = { ...(this._lastUsage || {}), ...event };
+            if (this._lastContextTokens) {
+              this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
+            }
+            return;
+          }
+          if (event?.type === "context_overflow") {
+            this.showOverflowRecoveryCard(event.checkpointPath);
+            return;
+          }
           if (event?.type === "thinking") return;
           if (event?.type === "tool_call") {
             // Flush text to timeline
@@ -1310,6 +1455,15 @@ const Chat = {
         (data) => {
           if (data?.type === "conversation" && data.conversationId) {
             this.currentConversationId = data.conversationId;
+          }
+          if (data?.contextTokens) {
+            this._lastContextTokens = data.contextTokens;
+            if (this._lastUsage) {
+              this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
+            }
+          }
+          if (data?.checkpointed) {
+            App.showToast("Context near limit — auto-checkpoint saved", "info");
           }
           this.finishStreaming(assistantMsg);
           this.updateSessionBar();

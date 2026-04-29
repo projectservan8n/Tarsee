@@ -98,7 +98,7 @@ async function runCheck() {
  * Assemble a markdown snapshot of current server state.
  * No AI calls — pure DB + filesystem reads.
  */
-function composeMechanicalCheckpoint(db, settings) {
+export function composeMechanicalCheckpoint(db, settings) {
   const now = new Date();
   const lines = [];
 
@@ -224,4 +224,38 @@ function composeMechanicalCheckpoint(db, settings) {
   lines.push("");
 
   return lines.join("\n");
+}
+
+/**
+ * Synchronous, AI-free snapshot for context-overflow recovery.
+ *
+ * Called from chat.js when a turn pushes the context window past the
+ * danger threshold (95%) or when the SDK throws "prompt is too long".
+ * Writes to the same CHECKPOINT.md path the manual flow uses, so the
+ * next session's buildSystemPrompt picks it up via readAndArchiveCheckpoint.
+ *
+ * `reason` is prepended so the next instance knows this snapshot was
+ * forced rather than user-initiated (and that the conversation may end
+ * mid-thought).
+ */
+export function snapshotForContextOverflow(db, settings, reason) {
+  if (!db) return null;
+  const body = composeMechanicalCheckpoint(db, settings);
+  if (!body) return null;
+  const header = [
+    "# Tarsee Context-Overflow Snapshot",
+    `*Auto-saved: ${new Date().toISOString()}*`,
+    `*Trigger: ${reason}*`,
+    "*This was an emergency snapshot — the user's last message may have been truncated by the model. Re-read the most recent conversation in the dump below before proceeding, and confirm with the user where they were.*",
+    "",
+    "",
+  ].join("\n");
+  fs.mkdirSync(path.dirname(CHECKPOINT_FILE_PATH), { recursive: true });
+  fs.writeFileSync(CHECKPOINT_FILE_PATH, header + body, "utf8");
+  try {
+    settings?.set("checkpoint.last_auto_at", Date.now());
+    settings?.set("checkpoint.last_overflow_at", Date.now());
+  } catch { /* ignore */ }
+  console.log(`[auto-checkpoint] overflow snapshot written: ${reason}`);
+  return CHECKPOINT_FILE_PATH;
 }
