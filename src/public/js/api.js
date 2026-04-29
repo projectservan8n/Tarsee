@@ -141,6 +141,14 @@ const API = {
   },
 
   // --- Chat (SSE streaming) ---
+  // External abort handle — chat.js calls this from the tab-wake guard
+  // when a stream went stale during sleep / Memory Saver freeze. Safe to
+  // call when nothing is in flight.
+  abortStream() {
+    try { this._activeStream?.abort(); } catch { /* already gone */ }
+    this._activeStream = null;
+  },
+
   async sendMessage(conversationId, message, onText, onDone, onError, channelKey, attachments, effort) {
     const csrf = this.getCsrfToken();
     const headers = {
@@ -154,14 +162,52 @@ const API = {
     if (attachments && attachments.length) body.attachments = attachments;
     if (effort) body.effort = effort;
 
-    const res = await fetch("/api/chat/send", {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      credentials: "same-origin",
-    });
+    // AbortController + heartbeat watchdog. Server emits `event: heartbeat`
+    // every 15s, so anything past ~40s of silence means the underlying
+    // connection died (tab freeze, sleep, Wi-Fi drop). Without this the
+    // reader would hang indefinitely and the UI would show "Thinking…"
+    // forever after wake.
+    if (this._activeStream) {
+      // A previous stream is still around — abort it before replacing so
+      // we don't leak two readers fighting over the same UI.
+      try { this._activeStream.abort(); } catch {}
+    }
+    const ac = new AbortController();
+    this._activeStream = ac;
+    let lastEventAt = Date.now();
+    const STREAM_IDLE_LIMIT_MS = 40_000;
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastEventAt > STREAM_IDLE_LIMIT_MS) {
+        clearInterval(watchdog);
+        try { ac.abort(); } catch {}
+      }
+    }, 5_000);
+    const finishWatchdog = () => {
+      clearInterval(watchdog);
+      if (this._activeStream === ac) this._activeStream = null;
+    };
+
+    let res;
+    try {
+      res = await fetch("/api/chat/send", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        credentials: "same-origin",
+        signal: ac.signal,
+      });
+    } catch (err) {
+      finishWatchdog();
+      if (err?.name === "AbortError") {
+        onError?.("Connection lost — tap to retry");
+      } else {
+        onError?.(err?.message || "Network error");
+      }
+      return;
+    }
 
     if (!res.ok) {
+      finishWatchdog();
       const data = await res.json().catch(() => ({}));
       onError?.(data.error || `HTTP ${res.status}`);
       return;
@@ -203,6 +249,7 @@ const API = {
 
         onText?.(response);
         onDone?.({ conversationId: data.conversationId, type: "command" });
+        finishWatchdog();
         return;
       }
     }
@@ -211,37 +258,53 @@ const API = {
     const decoder = new TextDecoder();
     let buffer = "";
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        // Any chunk — including the SSE heartbeat, which used to be a
+        // no-op — counts as proof of life and resets the watchdog.
+        lastEventAt = Date.now();
+        if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
 
-      let eventType = null;
-      for (const line of lines) {
-        if (line.startsWith("event: ")) {
-          eventType = line.slice(7).trim();
-        } else if (line.startsWith("data: ")) {
-          const data = line.slice(6).trim();
-          try {
-            const parsed = JSON.parse(data);
-            if (eventType === "text") onText?.(parsed.content);
-            else if (eventType === "thinking") onText?.(null, { type: "thinking", ...parsed });
-            else if (eventType === "tool_call") onText?.(null, { type: "tool_call", ...parsed });
-            else if (eventType === "tool_result") onText?.(null, { type: "tool_result", ...parsed });
-            else if (eventType === "done") onDone?.(parsed);
-            else if (eventType === "error") onError?.(parsed.message);
-            else if (eventType === "model_selected") onText?.(null, { type: "model_selected", ...parsed });
-            else if (eventType === "conversation") onDone?.({ conversationId: parsed.id, type: "conversation" });
-            else if (eventType === "usage") onText?.(null, { type: "usage", ...parsed });
-            else if (eventType === "context_overflow") onText?.(null, { type: "context_overflow", ...parsed });
-            else if (eventType === "heartbeat") { /* server idle keep-alive — no-op */ }
-          } catch {}
-          eventType = null;
+        let eventType = null;
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith("data: ")) {
+            const data = line.slice(6).trim();
+            try {
+              const parsed = JSON.parse(data);
+              if (eventType === "text") onText?.(parsed.content);
+              else if (eventType === "thinking") onText?.(null, { type: "thinking", ...parsed });
+              else if (eventType === "tool_call") onText?.(null, { type: "tool_call", ...parsed });
+              else if (eventType === "tool_result") onText?.(null, { type: "tool_result", ...parsed });
+              else if (eventType === "done") onDone?.(parsed);
+              else if (eventType === "error") onError?.(parsed.message);
+              else if (eventType === "model_selected") onText?.(null, { type: "model_selected", ...parsed });
+              else if (eventType === "conversation") onDone?.({ conversationId: parsed.id, type: "conversation" });
+              else if (eventType === "usage") onText?.(null, { type: "usage", ...parsed });
+              else if (eventType === "context_overflow") onText?.(null, { type: "context_overflow", ...parsed });
+              else if (eventType === "heartbeat") { /* liveness only — already reset lastEventAt above */ }
+            } catch {}
+            eventType = null;
+          }
         }
       }
+    } catch (err) {
+      // AbortError fires on watchdog trip OR on chat.js wake-time abort.
+      // Either way the stream is dead; tell the caller so the UI can
+      // clean up the spinner and prompt for retry.
+      if (err?.name === "AbortError") {
+        onError?.("Connection lost — tap to retry");
+      } else {
+        onError?.(err?.message || "Stream interrupted");
+      }
+    } finally {
+      finishWatchdog();
     }
   },
 

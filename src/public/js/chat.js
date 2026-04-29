@@ -319,6 +319,51 @@ const Chat = {
     this.loadBotName();
     this.initEffortPills();
     this.initSearch();
+    this._initStreamResumeWatchers();
+  },
+
+  // Tab-wake guard for the in-flight SSE turn. Chrome's Memory Saver and
+  // OS sleep silently kill the underlying connection; the WebSocket layer
+  // handles its own reconnect already, but the SSE reader would hang
+  // forever. When the tab returns visible we abort any stale stream
+  // (which trips the existing onError → finishStreaming path) and refetch
+  // the conversation tail in case the server actually finished the turn
+  // while we were frozen.
+  _initStreamResumeWatchers() {
+    if (this._streamResumeBound) return;
+    this._streamResumeBound = true;
+    let _lastWakeAt = 0;
+    const onWake = () => {
+      // visibilitychange + pageshow + online can all fire in quick
+      // succession on the same wake — debounce to one refetch per second.
+      const now = Date.now();
+      if (now - _lastWakeAt < 1000) return;
+      _lastWakeAt = now;
+      if (this.isStreaming) {
+        try { API.abortStream?.(); } catch { /* ignore */ }
+        if (window.App?.showToast) App.showToast("Reconnected — recovered last turn", "info");
+      }
+      this._refetchActiveConversation();
+    };
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") onWake();
+    });
+    window.addEventListener("online", onWake);
+    window.addEventListener("pageshow", onWake);
+  },
+
+  // Re-pull the current conversation from the server so any messages that
+  // landed while we were asleep show up. Cheap one-shot — the WebSocket
+  // sync.resume path covers incremental sync separately.
+  async _refetchActiveConversation() {
+    if (!this.currentConversationId || this.isStreaming) return;
+    try {
+      const data = await API.getConversation(this.currentConversationId);
+      const msgs = data.messages || [];
+      const total = data.totalMessages || msgs.length;
+      const older = total - msgs.length;
+      this.renderMessages(msgs, older > 0 ? older : 0, this.currentConversationId);
+    } catch { /* ignore — silent retry on next wake */ }
   },
 
   updateSessionBar() {
