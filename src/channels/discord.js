@@ -10,7 +10,7 @@ import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
-import config from "../config/env.js";
+import envConfig from "../config/env.js";
 
 /**
  * Creates and starts a Discord bot.
@@ -109,7 +109,7 @@ export async function createDiscordBot(config, db) {
     const mediaAttachments = [];    // multimodal content blocks for model
     const savedFileNotes = [];      // text notes describing files on disk
     let voiceTranscript = "";
-    const uploadsDir = path.join(config.WORKSPACE_DIR, "uploads");
+    const uploadsDir = path.join(envConfig.WORKSPACE_DIR, "uploads");
     if (message.attachments?.size > 0) {
       try { fs.mkdirSync(uploadsDir, { recursive: true }); } catch {}
     }
