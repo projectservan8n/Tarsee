@@ -9,6 +9,7 @@ import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
+import { toolStatusLabel, toolDoneLabel } from "../lib/tool-status.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
 import envConfig from "../config/env.js";
 
@@ -295,6 +296,76 @@ You can use these special markers in your response:
       }
     }, 15_000);
 
+    // Streaming-segment state — same shape as Telegram's. Each text block
+    // between tool boundaries becomes its own Discord message that
+    // edit-streams as tokens arrive. Tool calls produce ephemeral status
+    // messages ("⚙️ Running command…" → "✓ Command done") so Discord
+    // users see realtime feedback like the CLI's narration trail.
+    let segmentMsg = null;        // discord.js Message object
+    let segmentText = "";
+    let lastSegmentEditAt = 0;
+    const SEGMENT_EDIT_DEBOUNCE_MS = 1100; // Discord channel cap is 5 req / 5s
+    const toolMsgById = new Map(); // tool_use_id → discord.js Message
+    const sentSegments = [];
+
+    const renderSegmentDisplay = (raw) => {
+      const { cleanText } = parseReactions(raw);
+      return cleanText
+        .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+        .replace(/<tool_response>[\s\S]*?<\/tool_response>/g, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+    };
+
+    const flushSegmentEdit = async (final = false) => {
+      if (!segmentMsg || !segmentText) return;
+      const now = Date.now();
+      if (!final && now - lastSegmentEditAt < SEGMENT_EDIT_DEBOUNCE_MS) return;
+      lastSegmentEditAt = now;
+      const text = renderSegmentDisplay(segmentText.slice(0, 2000));
+      if (!text) return;
+      try {
+        await retryOnRateLimit(() => segmentMsg.edit(text));
+      } catch { /* best-effort */ }
+    };
+
+    const closeSegment = async () => {
+      if (!segmentMsg) { segmentText = ""; return; }
+      await flushSegmentEdit(true);
+      // If segment overflowed Discord's 2000-char cap, send remainder as
+      // new replies so the user sees the full thing.
+      if (segmentText.length > 2000) {
+        for (let i = 2000; i < segmentText.length; i += 2000) {
+          const chunkText = renderSegmentDisplay(segmentText.slice(i, i + 2000));
+          if (!chunkText) continue;
+          for (const piece of splitMessage(chunkText, 2000)) {
+            await retryOnRateLimit(() => message.reply(piece));
+          }
+        }
+      }
+      sentSegments.push(segmentText);
+      segmentMsg = null;
+      segmentText = "";
+    };
+
+    const postToolStatus = async (event) => {
+      try {
+        const label = toolStatusLabel(event.name, event.input);
+        const msg = await retryOnRateLimit(() => message.reply(`-# ⚙️ *${label}*`));
+        if (msg) toolMsgById.set(event.id, msg);
+      } catch { /* best-effort */ }
+    };
+    const markToolDone = async (id, name, input, result) => {
+      const msg = toolMsgById.get(id);
+      if (!msg) return;
+      const resultStr = typeof result === "string" ? result : JSON.stringify(result || "");
+      const isErr = /error|forbidden|not found|enotfound|command not found/i.test(resultStr);
+      const label = toolDoneLabel(name, input || {}, isErr);
+      const text = isErr ? `-# ❌ *${label}*` : `-# ✓ *${label}*`;
+      try { await retryOnRateLimit(() => msg.edit(text)); } catch { /* best-effort */ }
+      toolMsgById.delete(id);
+    };
+
     try {
       const tools = getToolDefinitions();
       const toolCtx = { db, settingsStore, conversationId: convId };
@@ -341,15 +412,22 @@ You can use these special markers in your response:
           if (event.type === "text") {
             roundText += event.content;
             fullResponse += event.content;
+            // Stream this delta into the current segment message — create
+            // the placeholder on first text of each segment.
+            if (!segmentMsg) {
+              try {
+                segmentMsg = await retryOnRateLimit(() => message.reply("…"));
+              } catch { /* fall through to batched send at the end */ }
+            }
+            segmentText += event.content;
+            await flushSegmentEdit(false);
           } else if (event.type === "tool_use") {
+            await closeSegment();
             toolCalls.push({ id: event.id, name: event.name, input: event.input });
-            // Serialize into fullResponse so the web UI can re-render the tool call
-            // when this conversation is viewed later. Neutralize any literal
-            // closing tags inside the payload so the strip regex below can't
-            // terminate early on content that happens to contain them.
             const callJson = JSON.stringify({ name: event.name, arguments: event.input })
               .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
             fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
+            await postToolStatus(event);
           } else if (event.type === "done") {
             stopReason = event.stopReason || "end_turn";
             break;
@@ -366,7 +444,7 @@ You can use these special markers in your response:
         }
         workingMessages.push({ role: "assistant", content: assistantContent });
 
-        // Execute tools silently — Discord users only see the final reply.
+        // Execute tools and update each status message as results land.
         const toolResults = [];
         for (const tc of toolCalls) {
           console.log(`[discord] tool: ${tc.name}`);
@@ -375,11 +453,11 @@ You can use these special markers in your response:
           const resultText = (typeof result === "string" ? result : JSON.stringify(result))
             .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
           fullResponse += `\n<tool_response>${resultText}</tool_response>\n`;
+          await markToolDone(tc.id, tc.name, tc.input, result);
         }
         workingMessages.push({ role: "user", content: toolResults });
       }
 
-      // Final response — edit the status message with clean text
       if (fullResponse) {
         fullResponse = extractAndSaveMemories(fullResponse, db, convId);
         const { cleanText, reactions } = parseReactions(fullResponse);
@@ -401,16 +479,12 @@ You can use these special markers in your response:
           message.react(emoji).catch(() => {});
         }
 
-        // Strip tool_call/tool_response XML — those are only for web-UI replay,
-        // Discord users see the prose only.
-        const displayText = cleanText
-          .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
-          .replace(/<tool_response>[\s\S]*?<\/tool_response>/g, "")
-          .replace(/\n{3,}/g, "\n\n")
-          .trim();
-        const chunks = splitMessage(displayText, 2000);
-        for (let i = 0; i < chunks.length; i++) {
-          await retryOnRateLimit(() => message.reply(chunks[i]));
+        // Close the final narration segment — its content has been
+        // edit-streaming during the loop. If nothing user-facing came
+        // out (model only emitted tool calls), surface a soft note.
+        await closeSegment();
+        if (sentSegments.length === 0) {
+          await message.reply("⚠️ Done — no message body.").catch(() => {});
         }
       } else if (idleAborted) {
         await message.reply("⚠️ Claude Code stopped responding (3 min idle). Try again — maybe with a smaller ask.").catch(() => {});

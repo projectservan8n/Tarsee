@@ -322,27 +322,50 @@ const Chat = {
     this._initStreamResumeWatchers();
   },
 
-  // Tab-wake guard for the in-flight SSE turn. Chrome's Memory Saver and
-  // OS sleep silently kill the underlying connection; the WebSocket layer
-  // handles its own reconnect already, but the SSE reader would hang
-  // forever. When the tab returns visible we abort any stale stream
-  // (which trips the existing onError → finishStreaming path) and refetch
-  // the conversation tail in case the server actually finished the turn
-  // while we were frozen.
+  // Tab-wake handoff. With the server-side fix in place (chat.js no
+  // longer aborts the AI generator when the SSE socket dies), every
+  // event that landed during sleep is buffered in the gateway and
+  // replayed via the existing WS `sync.resume` channel. On wake we
+  //   (a) drop our claim to be "the streaming owner" so _handleSyncEvent
+  //       at L1786 stops short-circuiting,
+  //   (b) abort the (probably-dead) SSE reader so its spinner clears,
+  //   (c) trigger sync.resume to backfill any missed text/tool events,
+  //   (d) refetch the conversation as belt-and-suspenders for slept-past
+  //       the gateway's 10-minute buffer window.
   _initStreamResumeWatchers() {
     if (this._streamResumeBound) return;
     this._streamResumeBound = true;
     let _lastWakeAt = 0;
     const onWake = () => {
-      // visibilitychange + pageshow + online can all fire in quick
-      // succession on the same wake — debounce to one refetch per second.
       const now = Date.now();
       if (now - _lastWakeAt < 1000) return;
       _lastWakeAt = now;
+
       if (this.isStreaming) {
+        // Hand off ownership to the WS sync path. The SSE reader may still
+        // be alive (Chrome usually preserves it through brief tab
+        // backgrounding) — if it is, abort drops the doubled-up rendering.
+        // If it isn't, the gateway has every event we missed.
         try { API.abortStream?.(); } catch { /* ignore */ }
-        if (window.App?.showToast) App.showToast("Reconnected — recovered last turn", "info");
+        this.isStreaming = false;
+        this._streamingConvId = null;
+        this.elements.sendBtn?.classList.remove("stop-mode", "is-streaming");
+        if (this.elements.sendBtn) this.elements.sendBtn.title = "Send";
+        if (window.App?.showToast) App.showToast("Reconnected — recovering last turn", "info");
       }
+
+      // Force a sync.resume even if the WS stayed alive through the wake.
+      if (this.currentConversationId && this._typingWs?.readyState === 1) {
+        const lastId = (this._lastEventIdByConv || {})[this.currentConversationId] || 0;
+        try {
+          this._typingWs.send(JSON.stringify({
+            type: "sync.resume",
+            convId: this.currentConversationId,
+            lastEventId: lastId,
+          }));
+        } catch { /* ignore */ }
+      }
+
       this._refetchActiveConversation();
     };
     document.addEventListener("visibilitychange", () => {

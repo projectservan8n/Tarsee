@@ -11,6 +11,7 @@ import { trackActivity } from "../lib/session-reset.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { getGatewayManager } from "../lib/gateway.js";
+import { redactSecrets, redactDeep } from "../lib/redact.js";
 
 /**
  * Broadcast an SSE-like event to all connected WebSocket clients and record
@@ -488,6 +489,18 @@ chatRouter.post("/send", async (req, res) => {
   const tools = getToolDefinitions();
   const toolCtx = { db: req.app.get("db"), settingsStore, conversationId: convId, channelManager: req.app.get("channelManager") };
   const MAX_TOOL_ROUNDS = 15;
+  // Snapshot of `req.ip` — read once now, because once the socket closes
+  // the `req.ip` getter pulls from a destroyed socket and may return
+  // undefined. Audit log calls after `res.close` use this instead.
+  const reqIp = req.ip;
+
+  // Tool-call redaction toggle. Default ON: every tool input/output sent
+  // to the timeline / DB / broadcast gets pattern-matched for secrets
+  // (sk-..., AKIA..., DATABASE_URL=…, etc). Set `ui.redactSecrets = false`
+  // in settings to expose values for debugging.
+  const redactOn = settingsStore.get("ui.redactSecrets") !== false;
+  const redactStr = redactOn ? redactSecrets : (s) => s;
+  const redactObj = redactOn ? redactDeep : (v) => v;
 
   // --- Claude Code provider: runs its own agentic loop ---
   if (providerId === "claude-code") {
@@ -500,30 +513,39 @@ chatRouter.post("/send", async (req, res) => {
       try { previous.abort(); } catch {}
     }
     activeRequests.set(convId, controller);
-    // Abort if client disconnects the SSE stream. Only delete the map entry
-    // if WE still own it — a newer request may have replaced us.
+    // Tab freeze / OS sleep / Wi-Fi blip will close the SSE socket while
+    // the model is still producing. Don't abort the generator on socket
+    // close — let it run to completion so the assistant message persists
+    // and `broadcastToOthers` keeps populating the gateway buffer for
+    // sync.resume on reconnect. The only legitimate aborter is the
+    // "new message replaces this turn" path above (lines 498-501).
+    let clientDetached = false;
     res.on("close", () => {
-      if (!res.writableEnded) { try { controller.abort(); } catch {} }
-      if (activeRequests.get(convId) === controller) {
-        activeRequests.delete(convId);
-      }
+      clientDetached = true;
     });
 
-    // Heartbeat + idle watchdog. Emits a `heartbeat` SSE event every 15s so
-    // proxies don't buffer the response to death, and aborts the stream if
-    // the SDK produces no events for 3 minutes (otherwise users see nothing
-    // and have to send a second message to unblock).
+    // Heartbeat + idle watchdog. Emits a `heartbeat` SSE event every 15s
+    // so proxies don't buffer the response to death (skipped once the
+    // client detaches — there's no socket to feed). Idle abort still
+    // fires if the SDK produces no events for 3 minutes — that's a
+    // stuck-model guard, unrelated to the client connection.
     let lastEventAt = Date.now();
     const HEARTBEAT_MS = 15_000;
     const IDLE_ABORT_MS = 3 * 60_000;
     const hb = setInterval(() => {
-      if (res.writableEnded) return clearInterval(hb);
-      try { sendSSE(res, "heartbeat", { ts: Date.now() }); } catch {}
+      if (res.writableEnded || clientDetached) {
+        if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
+          clearInterval(hb);
+          try { controller.abort(); } catch {}
+        }
+        return;
+      }
+      sendSSE(res, "heartbeat", { ts: Date.now() });
       if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
         clearInterval(hb);
         try { controller.abort(); } catch {}
-        try { sendSSE(res, "error", { message: "Claude Code stopped responding (3 min idle). Try again." }); } catch {}
-        try { sendSSE(res, "done", { conversationId: convId }); } catch {}
+        sendSSE(res, "error", { message: "Claude Code stopped responding (3 min idle). Try again." });
+        sendSSE(res, "done", { conversationId: convId });
         if (!res.writableEnded) res.end();
       }
     }, HEARTBEAT_MS);
@@ -608,19 +630,33 @@ chatRouter.post("/send", async (req, res) => {
           else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
           else if (isTodo) { label = "Update Todos"; detail = ""; }
           else detail = inp.command || inp.file_path || inp.url || inp.query || JSON.stringify(inp).slice(0, 80);
+          // Pattern-redact secrets before they enter the timeline / SSE / WS
+          // broadcast. Bash command lines and inline tool inputs are the
+          // common leak vectors (e.g. `curl -H "Authorization: Bearer …"`).
+          // TodoWrite items are user-authored content, not secrets — pass
+          // through unchanged.
+          detail = redactStr(String(detail));
+          const safeInput = isTodo ? event.input : redactObj(event.input);
           lastToolIdx = timeline.length;
-          const timelineItem = { type: "tool", name: label, detail: String(detail).slice(0, 200), input: String(detail).slice(0, 500), output: "", status: "running" };
+          const timelineItem = { type: "tool", name: label, detail: detail.slice(0, 200), input: detail.slice(0, 500), output: "", status: "running" };
           if (isTodo && Array.isArray(inp.todos)) timelineItem.todos = inp.todos;
           timeline.push(timelineItem);
           totalToolCalls++;
-          toolHistory.push({ name: event.name, detail: String(detail).slice(0, 100), isError: false });
-          sendSSE(res, "tool_call", { id: event.id, name: event.name, input: event.input });
-          broadcastToOthers(convId, "tool_call", { id: event.id, name: event.name, input: event.input });
-          auditLog?.log({ action: "tool.call", target: event.name, actor: "claude", ip: req.ip, detail: String(detail).slice(0, 200) });
+          toolHistory.push({ name: event.name, detail: detail.slice(0, 100), isError: false });
+          sendSSE(res, "tool_call", { id: event.id, name: event.name, input: safeInput });
+          broadcastToOthers(convId, "tool_call", { id: event.id, name: event.name, input: safeInput });
+          auditLog?.log({ action: "tool.call", target: event.name, actor: "claude", ip: reqIp, detail: detail.slice(0, 200) });
         } else if (event.type === "tool_result") {
+          // Redact stdout/stderr from tools before it goes anywhere user-
+          // visible or persistent. Bash runs that print env vars, Read of
+          // .env files, etc. — this is the highest-volume leak vector.
+          // Loop-detection still uses the raw `event.result` string for
+          // its error-keyword scan, since redaction never adds tokens
+          // that match the error patterns.
+          const safeResult = redactStr(event.result || "");
           if (lastToolIdx >= 0 && timeline[lastToolIdx]) {
             timeline[lastToolIdx].status = "done";
-            timeline[lastToolIdx].output = (event.result || "").slice(0, 2000);
+            timeline[lastToolIdx].output = safeResult.slice(0, 2000);
           }
           // Track errors for loop detection
           const resultStr = event.result || "";
@@ -637,8 +673,8 @@ chatRouter.post("/send", async (req, res) => {
             break;
           }
 
-          sendSSE(res, "tool_result", { id: event.id, name: event.name, result: event.result });
-          broadcastToOthers(convId, "tool_result", { id: event.id, name: event.name, result: event.result });
+          sendSSE(res, "tool_result", { id: event.id, name: event.name, result: safeResult });
+          broadcastToOthers(convId, "tool_result", { id: event.id, name: event.name, result: safeResult });
         } else if (event.type === "usage") {
           usage = { ...usage, ...event.usage };
         } else if (event.type === "error") {
@@ -710,22 +746,31 @@ chatRouter.post("/send", async (req, res) => {
     return;
   }
 
-  // Heartbeat + idle abort for non-Claude-Code providers too.
+  // Heartbeat + idle abort for non-Claude-Code providers too. Same
+  // tab-survival contract as the Claude Code path: socket close does
+  // NOT abort; only the 3-min stuck-model watchdog does.
   let lastEventAt2 = Date.now();
   const HEARTBEAT_MS = 15_000;
   const IDLE_ABORT_MS = 3 * 60_000;
   const genericController = new AbortController();
+  let clientDetached2 = false;
   res.on("close", () => {
-    if (!res.writableEnded) { try { genericController.abort(); } catch {} }
+    clientDetached2 = true;
   });
   const hb2 = setInterval(() => {
-    if (res.writableEnded) return clearInterval(hb2);
-    try { sendSSE(res, "heartbeat", { ts: Date.now() }); } catch {}
+    if (res.writableEnded || clientDetached2) {
+      if (Date.now() - lastEventAt2 > IDLE_ABORT_MS) {
+        clearInterval(hb2);
+        try { genericController.abort(); } catch {}
+      }
+      return;
+    }
+    sendSSE(res, "heartbeat", { ts: Date.now() });
     if (Date.now() - lastEventAt2 > IDLE_ABORT_MS) {
       clearInterval(hb2);
       try { genericController.abort(); } catch {}
-      try { sendSSE(res, "error", { message: "Model stopped responding (3 min idle). Try again." }); } catch {}
-      try { sendSSE(res, "done", { conversationId: convId }); } catch {}
+      sendSSE(res, "error", { message: "Model stopped responding (3 min idle). Try again." });
+      sendSSE(res, "done", { conversationId: convId });
       if (!res.writableEnded) res.end();
     }
   }, HEARTBEAT_MS);
@@ -764,8 +809,8 @@ chatRouter.post("/send", async (req, res) => {
           sendSSE(res, "thinking", { status: event.status });
         } else if (event.type === "tool_use") {
           toolCalls.push({ id: event.id, name: event.name, input: event.input });
-          // Notify client about tool call
-          sendSSE(res, "tool_call", { id: event.id, name: event.name, input: event.input });
+          // Notify client about tool call (input redacted before broadcast)
+          sendSSE(res, "tool_call", { id: event.id, name: event.name, input: redactObj(event.input) });
         } else if (event.type === "usage") {
           usage = { ...usage, ...event.usage };
         } else if (event.type === "done") {
@@ -791,8 +836,10 @@ chatRouter.post("/send", async (req, res) => {
         console.log(`[tools] executing: ${tc.name}(${JSON.stringify(tc.input).slice(0, 100)})`);
         const result = await executeTool(tc.name, tc.input, toolCtx);
         toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
-        // Notify client about tool result
-        sendSSE(res, "tool_result", { id: tc.id, name: tc.name, result: result.slice(0, 500) });
+        // Notify client about tool result. The model still gets the raw
+        // result above (for accurate context), but the UI/timeline/log
+        // sees a redacted copy.
+        sendSSE(res, "tool_result", { id: tc.id, name: tc.name, result: redactStr(result).slice(0, 500) });
       }
       workingMessages.push({ role: "user", content: toolResults });
     }

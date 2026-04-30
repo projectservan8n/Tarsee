@@ -764,6 +764,16 @@
               <div id="toolPermissionsList"></div>
             </div>
             <div class="settings-section">
+              <h3>Privacy</h3>
+              <div class="hint mb-3">Redact API keys, tokens, and connection strings from tool calls and tool output before they appear in the chat or get saved.</div>
+              <div class="form-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="settingsRedactSecrets" checked>
+                  <span>Redact secrets in tool calls (recommended)</span>
+                </label>
+              </div>
+            </div>
+            <div class="settings-section">
               <h3>Captcha Solver</h3>
               <div class="hint mb-3">Auto-solve reCAPTCHA, hCaptcha, and Cloudflare Turnstile when browsing. Requires a <a href="https://2captcha.com" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">2Captcha</a> or <a href="https://capsolver.com" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">Capsolver</a> API key (~$2/1000 solves).</div>
               <div class="form-group mb-3">

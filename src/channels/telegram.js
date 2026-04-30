@@ -9,6 +9,7 @@ import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
+import { toolStatusLabel, toolDoneLabel } from "../lib/tool-status.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
 import envConfig from "../config/env.js";
 
@@ -191,6 +192,101 @@ You can use these special markers in your response:
       }
     }, 15_000);
 
+    // Streaming-segment state — each text block between tool boundaries
+    // becomes its own Telegram message that edit-streams as tokens arrive.
+    // Tool calls produce ephemeral status messages ("Running command…"
+    // → "✓ Command done") so the user sees realtime progress instead of
+    // a long silence. The DB still gets the full XML-wrapped transcript
+    // so subsequent turns and the webapp see the complete history.
+    let segmentMsgId = null;
+    let segmentText = "";
+    let lastSegmentEditAt = 0;
+    const SEGMENT_EDIT_DEBOUNCE_MS = 900; // Telegram edit cap is ~1/sec/message
+    const toolMsgById = new Map(); // tool_use_id → status message_id
+    const sentSegments = []; // for closeSegment overflow tracking, debug only
+
+    const editMessageSafe = async (msgId, html, opts = {}) => {
+      try {
+        await ctx.telegram.editMessageText(chatId, msgId, undefined, html, { parse_mode: "HTML", ...opts });
+      } catch (e) {
+        const code = e?.response?.error_code || e?.code;
+        // 400 "message is not modified" → benign. 429 → fall through; the
+        // next debounced edit will retry. Fallback strip-on-error in case
+        // of malformed HTML.
+        if (code === 400 && /not modified/i.test(e?.description || e?.message || "")) return;
+        if (code === 400) {
+          try { await ctx.telegram.editMessageText(chatId, msgId, undefined, html.replace(/<[^>]+>/g, ""), opts); } catch {}
+        }
+      }
+    };
+
+    const renderSegmentDisplay = (raw) => {
+      // Strip [react:] / [buttons:] markers for display — they're parsed
+      // post-hoc from the saved fullResponse, so the user shouldn't see
+      // them mid-stream.
+      const { cleanText } = parseReactions(raw);
+      const stripped = cleanText
+        .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+        .replace(/<tool_response>[\s\S]*?<\/tool_response>/g, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+      return mdToTelegramHtml(stripped);
+    };
+
+    const flushSegmentEdit = async (final = false) => {
+      if (!segmentMsgId || !segmentText) return;
+      const now = Date.now();
+      if (!final && now - lastSegmentEditAt < SEGMENT_EDIT_DEBOUNCE_MS) return;
+      lastSegmentEditAt = now;
+      const html = renderSegmentDisplay(segmentText.slice(0, 4096));
+      if (!html) return; // empty after stripping markers — wait for more
+      await editMessageSafe(segmentMsgId, html);
+    };
+
+    const closeSegment = async (extraOpts = null) => {
+      if (!segmentMsgId) { segmentText = ""; return; }
+      await flushSegmentEdit(true);
+      // If the segment text overflowed, send remainder as new replies so
+      // the user sees the full thing.
+      if (segmentText.length > 4096) {
+        for (let i = 4096; i < segmentText.length; i += 4096) {
+          const html = renderSegmentDisplay(segmentText.slice(i, i + 4096));
+          if (!html) continue;
+          const chunks = splitMessage(html, 4096);
+          for (const chunk of chunks) {
+            await ctx.reply(chunk, { parse_mode: "HTML", ...(extraOpts || {}) })
+              .catch(() => ctx.reply(chunk.replace(/<[^>]+>/g, ""), extraOpts || {}));
+          }
+        }
+      } else if (extraOpts && segmentMsgId) {
+        // Re-edit the final segment with the extras (e.g. inline_keyboard
+        // for buttons attached to the last narration block).
+        const html = renderSegmentDisplay(segmentText.slice(0, 4096));
+        if (html) await editMessageSafe(segmentMsgId, html, extraOpts);
+      }
+      sentSegments.push(segmentText);
+      segmentMsgId = null;
+      segmentText = "";
+    };
+
+    const postToolStatus = async (event) => {
+      try {
+        const label = toolStatusLabel(event.name, event.input);
+        const msg = await ctx.reply(`<i>⚙️ ${escapeHtml(label)}</i>`, { parse_mode: "HTML" });
+        toolMsgById.set(event.id, msg.message_id);
+      } catch { /* best-effort */ }
+    };
+    const markToolDone = async (id, name, input, result) => {
+      const msgId = toolMsgById.get(id);
+      if (!msgId) return;
+      const resultStr = typeof result === "string" ? result : JSON.stringify(result || "");
+      const isErr = /error|forbidden|not found|enotfound|command not found/i.test(resultStr);
+      const label = toolDoneLabel(name, input || {}, isErr);
+      const html = isErr ? `<i>❌ ${escapeHtml(label)}</i>` : `<i>✓ ${escapeHtml(label)}</i>`;
+      await editMessageSafe(msgId, html);
+      toolMsgById.delete(id);
+    };
+
     try {
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
@@ -236,13 +332,26 @@ You can use these special markers in your response:
           if (event.type === "text") {
             roundText += event.content;
             fullResponse += event.content;
+            // Stream this delta into the current segment message — create
+            // the placeholder on first text of each segment.
+            if (!segmentMsgId) {
+              try {
+                const placeholder = await ctx.reply("…");
+                segmentMsgId = placeholder.message_id;
+              } catch { /* if reply fails just keep accumulating; we'll
+                            fall back to a final batched send */ }
+            }
+            segmentText += event.content;
+            await flushSegmentEdit(false);
           } else if (event.type === "tool_use") {
+            // Narration ends here — finalize the visible segment and post
+            // the tool status indicator.
+            await closeSegment();
             toolCalls.push({ id: event.id, name: event.name, input: event.input });
-            // Neutralize any literal closing tags inside the payload so the
-            // strip regex below can't terminate early on such content.
             const callJson = JSON.stringify({ name: event.name, arguments: event.input })
               .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
             fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
+            await postToolStatus(event);
           } else if (event.type === "done") {
             stopReason = event.stopReason || "end_turn";
             break;
@@ -259,7 +368,7 @@ You can use these special markers in your response:
         }
         workingMessages.push({ role: "assistant", content: assistantContent });
 
-        // Execute tools silently — Telegram users only see the final reply.
+        // Execute tools and update each status message as results land.
         const toolResults = [];
         for (const tc of toolCalls) {
           console.log(`[telegram] tool: ${tc.name}`);
@@ -268,6 +377,7 @@ You can use these special markers in your response:
           const resultText = (typeof result === "string" ? result : JSON.stringify(result))
             .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
           fullResponse += `\n<tool_response>${resultText}</tool_response>\n`;
+          await markToolDone(tc.id, tc.name, tc.input, result);
         }
         workingMessages.push({ role: "user", content: toolResults });
       }
@@ -283,34 +393,29 @@ You can use these special markers in your response:
           model: activeProvider.model,
         });
 
-        // Apply agent reactions
+        // Apply agent reactions to the user's original message.
         for (const emoji of reactions) {
           if (ctx.message?.message_id) {
             ctx.telegram.setMessageReaction?.(chatId, ctx.message.message_id, [{ type: "emoji", emoji }]).catch(() => {});
           }
         }
 
-        // Strip tool_call/tool_response XML — those are stored for web-UI replay only.
-        const displayText = cleanText
-          .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
-          .replace(/<tool_response>[\s\S]*?<\/tool_response>/g, "")
-          .replace(/\n{3,}/g, "\n\n")
-          .trim();
-        const htmlText = mdToTelegramHtml(displayText);
-        const chunks = splitMessage(htmlText, 4096);
+        // Close the final narration segment. If buttons were emitted,
+        // attach them to the last segment via inline_keyboard, or — if
+        // the model replied with buttons but no text — send a separate
+        // "Choose:" message.
+        const buttonOpts = buttons?.length > 0
+          ? { reply_markup: { inline_keyboard: buttonsToKeyboard(buttons) } }
+          : null;
 
-        // Send final chunks as new replies — each one triggers a real notification + preview.
-        for (let i = 0; i < chunks.length; i++) {
-          const isLast = i === chunks.length - 1;
-          const opts = { parse_mode: "HTML" };
-          if (isLast && buttons?.length > 0) {
-            opts.reply_markup = { inline_keyboard: buttonsToKeyboard(buttons) };
-          }
-          await ctx.reply(chunks[i], opts).catch(() => ctx.reply(chunks[i].replace(/<[^>]+>/g, "")));
-        }
-
-        if (chunks.length === 0 && buttons?.length > 0) {
-          await ctx.reply("Choose:", { reply_markup: { inline_keyboard: buttonsToKeyboard(buttons) } });
+        if (segmentMsgId || segmentText) {
+          await closeSegment(buttonOpts);
+        } else if (buttonOpts) {
+          await ctx.reply("Choose:", buttonOpts);
+        } else if (sentSegments.length === 0) {
+          // Model produced only tool calls + nothing user-facing.
+          // Surface a soft note so the chat doesn't look broken.
+          await ctx.reply("⚠️ Done — no message body.").catch(() => {});
         }
       } else if (idleAborted) {
         await ctx.reply("⚠️ Claude Code stopped responding (3 min idle). Try again — maybe with a smaller ask.").catch(() => {});

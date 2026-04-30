@@ -1,11 +1,14 @@
 /**
- * Sends a Server-Sent Event to the response.
+ * Sends a Server-Sent Event to the response. No-op once the socket is gone —
+ * the generator may keep emitting after the client tab freezes / reloads, and
+ * we want those calls to fall through silently instead of throwing.
  * @param {import('express').Response} res
  * @param {string} event - Event name
  * @param {*} data - Data to JSON-serialize
  */
 export function sendSSE(res, event, data) {
-  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  if (res.writableEnded || res.destroyed) return;
+  try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* socket gone */ }
 }
 
 /**

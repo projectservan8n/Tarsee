@@ -25,6 +25,8 @@ const Settings = {
       discordToken: document.getElementById("settingsDiscordToken"),
       telegramToken: document.getElementById("settingsTelegramToken"),
       saveChannelsBtn: document.getElementById("saveChannelsBtn"),
+      // Privacy / redaction toggle (security tab)
+      redactSecrets: document.getElementById("settingsRedactSecrets"),
       // Email channel
       emailEnabled: document.getElementById("settingsEmailEnabled"),
       emailAddress: document.getElementById("settingsEmailAddress"),
@@ -581,6 +583,25 @@ const Settings = {
 
       // Email channel
       this.loadEmailChannel(settings);
+
+      // Privacy: redact-secrets toggle (default on if unset)
+      if (this.elements.redactSecrets) {
+        const redactSetting = settings.find((s) => s.key === "ui.redactSecrets")?.value;
+        this.elements.redactSecrets.checked = redactSetting !== false;
+        if (!this.elements._redactSecretsBound) {
+          this.elements._redactSecretsBound = true;
+          this.elements.redactSecrets.addEventListener("change", async (e) => {
+            try {
+              await API.json("/api/settings/general", {
+                method: "POST",
+                body: { key: "ui.redactSecrets", value: !!e.target.checked },
+              });
+            } catch (err) {
+              window.App?.showToast?.(err?.message || "Failed to save", "error");
+            }
+          });
+        }
+      }
 
       // API token
       if (API.token) this.elements.apiToken.value = API.token;

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { redactSecrets } from "../src/lib/redact.js";
+import { redactSecrets, redactDeep } from "../src/lib/redact.js";
 
 describe("redactSecrets", () => {
   it("redacts OpenAI API keys", () => {
@@ -62,5 +62,73 @@ describe("redactSecrets", () => {
     const result = redactSecrets(input);
     assert.ok(!result.includes("sk-abc123456789xyz"));
     assert.ok(!result.includes("xoxb-123456789012"));
+  });
+
+  it("redacts Stripe live/test secret keys", () => {
+    assert.ok(!redactSecrets("sk_live_abcdefghijklmnopqrstuv").includes("sk_live_abc"));
+    assert.ok(!redactSecrets("sk_test_abcdefghijklmnopqrstuv").includes("sk_test_abc"));
+    assert.ok(!redactSecrets("whsec_1234567890abcdefghij").includes("whsec_1234"));
+  });
+
+  it("redacts AWS access key IDs", () => {
+    assert.equal(
+      redactSecrets("creds: AKIAIOSFODNN7EXAMPLE"),
+      "creds: [REDACTED]"
+    );
+  });
+
+  it("redacts Bearer tokens in Authorization headers", () => {
+    const input = `Authorization: Bearer abcdef1234567890tokenvalue`;
+    const out = redactSecrets(input);
+    assert.ok(out.includes("Authorization: Bearer "));
+    assert.ok(!out.includes("abcdef1234567890tokenvalue"));
+  });
+
+  it("redacts DB connection string passwords", () => {
+    const out = redactSecrets("postgres://user:supersecret123@db.example.com/mydb");
+    assert.ok(out.includes("postgres://user:[REDACTED]@db.example.com/mydb"));
+  });
+
+  it("redacts JWT-shaped tokens", () => {
+    const jwt = "eyJhbGciOiJIUzI1NiIs.eyJzdWIiOiIxMjM0NTY3ODkwIiw.SflKxwRJSMeKKF2QT4f";
+    const out = redactSecrets(`token ${jwt} end`);
+    assert.ok(out.includes("token "));
+    assert.ok(out.includes("[REDACTED]"));
+    assert.ok(!out.includes("eyJhbGc"));
+  });
+
+  it("redacts inline KEY=value secrets but leaves URLs alone", () => {
+    assert.equal(
+      redactSecrets("MY_API_KEY=hunter2_password"),
+      "MY_API_KEY=[REDACTED]"
+    );
+    // KEY=URL should NOT be redacted (false-positive guard)
+    assert.equal(
+      redactSecrets("PUBLIC_KEY=https://example.com/key.pem"),
+      "PUBLIC_KEY=https://example.com/key.pem"
+    );
+  });
+});
+
+describe("redactDeep", () => {
+  it("redacts secrets inside nested objects (e.g. tool inputs)", () => {
+    const input = {
+      command: 'curl -H "Authorization: Bearer sk-ant-FAKEkey1234567890abcd"',
+      cwd: "/tmp",
+      env: { OPENAI_API_KEY: "sk-fakefakefakefakefakefakefakefake" },
+    };
+    const out = redactDeep(input);
+    assert.ok(!JSON.stringify(out).includes("sk-ant-FAKEkey"));
+    assert.ok(!JSON.stringify(out).includes("sk-fakefake"));
+    assert.equal(out.cwd, "/tmp"); // safe values pass through
+  });
+
+  it("preserves arrays and non-string values", () => {
+    const input = { items: ["safe", "ghp_secrettoken1234567890abc"], n: 42, b: true };
+    const out = redactDeep(input);
+    assert.equal(out.n, 42);
+    assert.equal(out.b, true);
+    assert.equal(out.items[0], "safe");
+    assert.ok(!out.items[1].includes("ghp_secret"));
   });
 });
