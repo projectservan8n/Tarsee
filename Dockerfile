@@ -13,18 +13,26 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev
 
-# Install Playwright + Chromium
-RUN npx playwright install chromium --with-deps
+# Install Playwright + Chromium (binary only — runtime libs are installed
+# in the runtime stage; --with-deps here would just apt-install hundreds
+# of MB into the builder image that gets discarded).
+RUN npx playwright install chromium
 
 # Stage 2: Runtime with Playwright (Chromium) + faster-whisper (STT)
 FROM node:22-bookworm-slim
 
-# System deps: Playwright browser deps + Python for faster-whisper + ffmpeg
+# System deps: Playwright browser deps + Python for faster-whisper.
+# ffmpeg is installed separately as a static binary below — the apt
+# `ffmpeg` package on Bookworm pulls in ~200 transitive packages
+# (libllvm15, libicu72, Mesa, SDL2, PulseAudio, libpython3.11-stdlib,
+# libpocketsphinx, etc.) that Tarsee never uses. Static binary saves
+# ~25–28 minutes of build time and several hundred MB of image size.
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     tini \
     ca-certificates \
     gosu \
+    xz-utils \
     # Playwright/Chromium dependencies
     libnss3 \
     libnspr4 \
@@ -44,12 +52,21 @@ RUN apt-get update \
     libcairo2 \
     libasound2 \
     libwayland-client0 \
-    # Audio conversion for STT
-    ffmpeg \
     # Python for faster-whisper
     python3 \
     python3-pip \
   && rm -rf /var/lib/apt/lists/*
+
+# Static ffmpeg + ffprobe (johnvansickle.com builds — self-contained,
+# zero transitive deps). Used by whisper STT preprocessing
+# (16 kHz mono WAV resample) and the video-frames skill.
+RUN curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
+      -o /tmp/ffmpeg.tar.xz \
+  && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp \
+  && mv /tmp/ffmpeg-*-amd64-static/ffmpeg /usr/local/bin/ffmpeg \
+  && mv /tmp/ffmpeg-*-amd64-static/ffprobe /usr/local/bin/ffprobe \
+  && chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
+  && rm -rf /tmp/ffmpeg*
 
 # Install faster-whisper (STT) + piper-tts (ultra-fast local TTS)
 RUN pip3 install --no-cache-dir --break-system-packages faster-whisper piper-tts
