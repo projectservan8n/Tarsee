@@ -31,6 +31,7 @@ RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     tini \
     ca-certificates \
+    curl \
     gosu \
     xz-utils \
     # Playwright/Chromium dependencies
