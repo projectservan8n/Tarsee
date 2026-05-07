@@ -251,6 +251,12 @@ settingsRouter.post("/general", (req, res) => {
     return res.status(400).json({ error: "Use the dedicated endpoint for channel settings" });
   }
 
+  // Enum-shaped settings — defend the API even though the UI dropdown
+  // already constrains the input. Anyone can hit /api/settings/general.
+  if (key.endsWith(".mention_mode") && value !== "required" && value !== "off") {
+    return res.status(400).json({ error: "mention_mode must be 'required' or 'off'" });
+  }
+
   settingsStore.set(key, value);
 
   // Hot-reload: re-init TTS engine when voice settings change (no restart needed)

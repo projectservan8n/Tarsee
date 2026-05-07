@@ -99,6 +99,7 @@ export async function createTelegramBot(config, db) {
         settingsStore,
         convStore,
         conversationId: existingConvId,
+        platform: "telegram",
       });
 
       if (cmdResult.handled) {
@@ -451,12 +452,19 @@ You can use these special markers in your response:
       text = `[Replying to ${repliedFrom}: "${repliedMsg.text}"]\n\n${text}`;
     }
 
-    // In groups: only respond if mentioned by @username or replied to
+    // In groups: optionally require @mention or reply-to-bot. Toggleable via
+    // telegram.mention_mode setting — "required" (default) keeps the prior
+    // behavior; "off" lets allowlisted users chat without tagging the bot.
+    // Always strip the bot's @handle from the text so the model never sees
+    // it, regardless of mode.
     if (ctx.chat.type === "group" || ctx.chat.type === "supergroup") {
       const botUsername = ctx.botInfo?.username;
-      const isMentioned = botUsername && text.includes(`@${botUsername}`);
-      const isReply = repliedMsg?.from?.id === ctx.botInfo?.id;
-      if (!isMentioned && !isReply) return;
+      const mentionMode = settingsStore.get("telegram.mention_mode") === "off" ? "off" : "required";
+      if (mentionMode === "required") {
+        const isMentioned = botUsername && text.includes(`@${botUsername}`);
+        const isReply = repliedMsg?.from?.id === ctx.botInfo?.id;
+        if (!isMentioned && !isReply) return;
+      }
       if (botUsername) text = text.replace(new RegExp(`@${botUsername}\\b`, "gi"), "").trim();
     }
 

@@ -46,6 +46,12 @@ const Settings = {
       emailChannelStatus: document.getElementById("emailChannelStatus"),
       saveEmailChannelBtn: document.getElementById("saveEmailChannelBtn"),
       apiToken: document.getElementById("settingsApiToken"),
+      apiTokenReveal: document.getElementById("settingsApiTokenReveal"),
+      apiTokenCopy: document.getElementById("settingsApiTokenCopy"),
+      // Mention mode (per-platform toggle for guild/group bots)
+      discordMentionMode: document.getElementById("settingsDiscordMentionMode"),
+      telegramMentionMode: document.getElementById("settingsTelegramMentionMode"),
+      saveMentionModeBtn: document.getElementById("saveMentionModeBtn"),
       // Identity
       botName: document.getElementById("settingsBotName"),
       // Workspace files
@@ -205,7 +211,14 @@ const Settings = {
     this.elements.saveProviderBtn.addEventListener("click", () => this.saveProvider());
     this.elements.saveChannelsBtn.addEventListener("click", () => this.saveChannels());
     document.getElementById("saveAllowlistBtn")?.addEventListener("click", () => this.saveAllowlist());
+    this.elements.saveMentionModeBtn?.addEventListener("click", () => this.saveMentionMode());
     this.elements.saveEmailChannelBtn?.addEventListener("click", () => this.saveEmailChannel());
+
+    // API Token mask + reveal + copy. The token sits in API.token already
+    // (loaded at login for WebSocket auth), so the reveal toggle is purely
+    // a display concern — no extra fetch needed.
+    this.elements.apiTokenReveal?.addEventListener("click", () => this.toggleApiTokenReveal());
+    this.elements.apiTokenCopy?.addEventListener("click", () => this.copyApiToken());
 
     // Email preset buttons
     document.querySelectorAll(".email-preset-btn").forEach((btn) => {
@@ -603,8 +616,27 @@ const Settings = {
         }
       }
 
-      // API token
-      if (API.token) this.elements.apiToken.value = API.token;
+      // API token — render masked by default. The full value is in API.token
+      // already; reveal/copy buttons read from there. Reset reveal state on
+      // every (re)load so revisiting the page doesn't expose a previously-
+      // revealed token.
+      this._apiTokenRevealed = false;
+      if (this.elements.apiToken) {
+        this.elements.apiToken.value = this.maskedApiToken();
+      }
+      if (this.elements.apiTokenReveal) {
+        this.elements.apiTokenReveal.textContent = "Reveal";
+      }
+
+      // Mention mode (Discord/Telegram per-platform toggle)
+      const discordMode = settings.find((s) => s.key === "discord.mention_mode")?.value;
+      const telegramMode = settings.find((s) => s.key === "telegram.mention_mode")?.value;
+      if (this.elements.discordMentionMode) {
+        this.elements.discordMentionMode.value = discordMode === "off" ? "off" : "required";
+      }
+      if (this.elements.telegramMentionMode) {
+        this.elements.telegramMentionMode.value = telegramMode === "off" ? "off" : "required";
+      }
 
       // Identity
       const botName = settings.find((s) => s.key === "identity.name")?.value;
@@ -699,6 +731,84 @@ const Settings = {
       App.showToast("Allowlist saved", "success");
     } catch (err) {
       App.showToast(err.message, "error");
+    }
+  },
+
+  async saveMentionMode() {
+    try {
+      const discordMode = this.elements.discordMentionMode?.value === "off" ? "off" : "required";
+      const telegramMode = this.elements.telegramMentionMode?.value === "off" ? "off" : "required";
+
+      // Footgun guard: warn if switching to "off" while the matching allowlist
+      // is empty. Empty allowlist + mode=off means the bot will respond to
+      // anyone in any channel/chat it can see. Confirm before saving.
+      const discordAllow = (document.getElementById("settingsDiscordAllowlist")?.value || "").split("\n").map(s => s.trim()).filter(Boolean);
+      const telegramAllow = (document.getElementById("settingsTelegramAllowlist")?.value || "").split("\n").map(s => s.trim()).filter(Boolean);
+      const dangers = [];
+      if (discordMode === "off" && discordAllow.length === 0) dangers.push("Discord");
+      if (telegramMode === "off" && telegramAllow.length === 0) dangers.push("Telegram");
+      if (dangers.length > 0) {
+        const ok = window.confirm(
+          `${dangers.join(" and ")}: mention mode is OFF and the allowlist is empty.\n\n` +
+          `The bot will respond to EVERY message in EVERY ${dangers.length > 1 ? "channel/chat" : (dangers[0] === "Discord" ? "channel" : "chat")} it can see.\n\n` +
+          `Continue?`
+        );
+        if (!ok) return;
+      }
+
+      await API.json("/api/settings/general", { method: "POST", body: { key: "discord.mention_mode", value: discordMode } });
+      await API.json("/api/settings/general", { method: "POST", body: { key: "telegram.mention_mode", value: telegramMode } });
+      App.showToast("Bot behavior saved", "success");
+    } catch (err) {
+      App.showToast(err.message || "Failed to save bot behavior", "error");
+    }
+  },
+
+  /** Build a `first4…last4` mask of the current API token, or a placeholder. */
+  maskedApiToken() {
+    const t = API?.token;
+    if (!t || t.length < 12) return "••••••••";
+    return `${t.slice(0, 4)}${"•".repeat(Math.max(8, t.length - 8))}${t.slice(-4)}`;
+  },
+
+  toggleApiTokenReveal() {
+    if (!this.elements.apiToken) return;
+    this._apiTokenRevealed = !this._apiTokenRevealed;
+    if (this._apiTokenRevealed) {
+      this.elements.apiToken.value = API?.token || "";
+      if (this.elements.apiTokenReveal) this.elements.apiTokenReveal.textContent = "Hide";
+    } else {
+      this.elements.apiToken.value = this.maskedApiToken();
+      if (this.elements.apiTokenReveal) this.elements.apiTokenReveal.textContent = "Reveal";
+    }
+  },
+
+  async copyApiToken() {
+    const token = API?.token;
+    if (!token) {
+      App.showToast("No API token to copy", "error");
+      return;
+    }
+    try {
+      // Modern clipboard API. Requires secure context (HTTPS or localhost).
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(token);
+        App.showToast("API token copied", "success");
+        return;
+      }
+      // Legacy fallback for environments without the clipboard API.
+      const ta = document.createElement("textarea");
+      ta.value = token;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "absolute";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      App.showToast(ok ? "API token copied" : "Press Ctrl+C to copy", ok ? "success" : "error");
+    } catch (err) {
+      App.showToast("Copy failed: " + (err?.message || "unknown"), "error");
     }
   },
 

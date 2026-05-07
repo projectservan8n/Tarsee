@@ -541,6 +541,31 @@
 
               <button class="btn btn-sm btn-primary" id="saveAllowlistBtn">Save Allowlist</button>
             </div>
+
+            <div class="settings-section">
+              <h3>Bot Behavior</h3>
+              <div class="hint mb-3">Whether allowed users have to @mention the bot for it to respond. Allowlist still controls who can talk to the bot — this only changes whether they need to tag Tarsee.</div>
+
+              <div class="form-group">
+                <label>Discord — Mention mode</label>
+                <select id="settingsDiscordMentionMode">
+                  <option value="required">Require @mention (default)</option>
+                  <option value="off">Respond to every message from allowed users (lazy)</option>
+                </select>
+                <div class="hint">DMs and threads always respond regardless of this setting.</div>
+              </div>
+
+              <div class="form-group">
+                <label>Telegram — Mention mode</label>
+                <select id="settingsTelegramMentionMode">
+                  <option value="required">Require @mention or reply-to-bot (default)</option>
+                  <option value="off">Respond to every message from allowed chats (lazy)</option>
+                </select>
+                <div class="hint">Private chats always respond regardless of this setting.</div>
+              </div>
+
+              <button class="btn btn-sm btn-primary" id="saveMentionModeBtn">Save Bot Behavior</button>
+            </div>
           </div>
 
 
@@ -744,8 +769,12 @@
               <h3>API Token</h3>
               <div class="form-group">
                 <label>Your API Token</label>
-                <input type="text" id="settingsApiToken" readonly spellcheck="false" class="textarea-mono">
-                <div class="hint">Use this token for WebSocket and REST API authentication.</div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                  <input type="text" id="settingsApiToken" readonly spellcheck="false" class="textarea-mono" style="flex:1; font-family: monospace;">
+                  <button type="button" class="btn btn-sm btn-secondary" id="settingsApiTokenReveal">Reveal</button>
+                  <button type="button" class="btn btn-sm btn-secondary" id="settingsApiTokenCopy">Copy</button>
+                </div>
+                <div class="hint">Used for WebSocket and REST API authentication. Hidden by default — click Reveal to see the full token, or Copy to put it on the clipboard without revealing.</div>
               </div>
             </div>
           </div>

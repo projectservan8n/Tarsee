@@ -221,6 +221,62 @@ const COMMANDS = {
     },
   },
 
+  mention: {
+    description: "Show or set whether the bot requires @mention to respond (Discord/Telegram)",
+    usage: "/mention [required|off|status] [discord|telegram]",
+    handler: (args, ctx) => {
+      const settingsStore = ctx.settingsStore;
+      if (!settingsStore) return "Settings not available.";
+
+      const PLATFORMS = ["discord", "telegram"];
+      const valueAlias = {
+        required: "required", on: "required", always: "required", strict: "required",
+        off: "off", lazy: "off", any: "off", none: "off",
+      };
+
+      const readMode = (p) => settingsStore.get(`${p}.mention_mode`) === "off" ? "off" : "required";
+      const labelFor = (mode) => mode === "off"
+        ? "**OFF** — responds to any allowed message (lazy)"
+        : "**REQUIRED** — must @mention or reply to the bot";
+
+      const tokens = (args || "").trim().split(/\s+/).filter(Boolean);
+
+      // No args, or "status" — print current state for both platforms.
+      if (tokens.length === 0 || tokens[0].toLowerCase() === "status") {
+        const lines = ["**Mention mode**", ""];
+        for (const p of PLATFORMS) lines.push(`- ${p}: ${labelFor(readMode(p))}`);
+        lines.push("", "Set with `/mention required` or `/mention off`. Add `discord` or `telegram` to target a specific platform.");
+        return lines.join("\n");
+      }
+
+      const t0 = tokens[0].toLowerCase();
+      const t1 = tokens[1]?.toLowerCase();
+
+      let value, platform;
+      if (valueAlias[t0]) {
+        value = valueAlias[t0];
+        if (t1 && PLATFORMS.includes(t1)) {
+          platform = t1;
+        } else if (ctx.platform && PLATFORMS.includes(ctx.platform)) {
+          platform = ctx.platform;
+        } else {
+          return `Pick a platform: \`/mention ${t0} discord\` or \`/mention ${t0} telegram\`.`;
+        }
+      } else if (PLATFORMS.includes(t0)) {
+        // Reversed order: /mention discord off
+        platform = t0;
+        const v = t1 ? valueAlias[t1] : null;
+        if (!v) return "Usage: `/mention required|off [discord|telegram]`";
+        value = v;
+      } else {
+        return "Unknown value. Use `required` (must @mention) or `off` (any allowed message). Example: `/mention off telegram`.";
+      }
+
+      settingsStore.set(`${platform}.mention_mode`, value);
+      return `Mention mode for **${platform}** set to ${labelFor(value)}.`;
+    },
+  },
+
   webhook: {
     description: "Manage webhook triggers (external events → AI)",
     usage: "/webhook [add <id> <prompt>|remove <id>|list]",

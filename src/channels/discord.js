@@ -71,7 +71,7 @@ export async function createDiscordBot(config, db) {
     if (isDM) {
       // Proceed to message handling
     } else {
-      // Guild messages: check allowlist + require @mention
+      // Guild messages: check allowlist first (always), then mention gate (toggleable)
       const dbAllowlist = settingsStore.get("allowlist.discord");
       const allowedIds = config.allowedChannels?.length > 0 ? config.allowedChannels : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
 
@@ -80,8 +80,13 @@ export async function createDiscordBot(config, db) {
         if (!allowed) return;
       }
 
-      // Always require @mention in servers (threads exempt)
-      if (!isThread && !message.mentions.has(client.user)) return;
+      // Mention gate. discord.mention_mode controls whether the bot ignores
+      // non-mention messages in guild channels:
+      //   "required" (default) — must @mention the bot
+      //   "off"                — respond to any allowed message (lazy mode)
+      // Threads remain exempt regardless — preserves prior thread carve-out.
+      const mentionMode = settingsStore.get("discord.mention_mode") === "off" ? "off" : "required";
+      if (mentionMode === "required" && !isThread && !message.mentions.has(client.user)) return;
     }
 
     let content = message.content
@@ -204,6 +209,7 @@ export async function createDiscordBot(config, db) {
         settingsStore,
         convStore,
         conversationId: existingConvId,
+        platform: "discord",
       });
 
       if (cmdResult.handled) {
