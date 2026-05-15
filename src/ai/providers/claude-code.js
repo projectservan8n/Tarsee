@@ -23,6 +23,37 @@ import config from "../../config/env.js";
  * Extract media blocks (images, PDFs) from content array.
  * Returns { mediaBlocks: ContentBlockParam[], text: string }
  */
+/**
+ * Classify a text payload that arrived in a `result` or `error` event from
+ * the Claude Agent SDK. Returns `null` if it looks like normal model output,
+ * or `{ recoverable }` when the payload is actually a wire-level API error.
+ *
+ * `recoverable: true` means the caller can clear the stored session id and
+ * retry the same turn fresh. The two cases we see most often:
+ *   1. `diagnostics.previous_message_id` 400s — the resumed session is
+ *      sending a stale or invalid message id and the API rejects it.
+ *   2. Generic "session not found / invalid session" surfaces.
+ *
+ * Other API errors (4xx that are about user input, 5xx server errors) are
+ * marked non-recoverable so the channel surfaces them to the user instead
+ * of looping.
+ */
+function classifyAgentError(text) {
+  if (!text || typeof text !== "string") return null;
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const isApiError =
+    /^API Error[:\s]/i.test(trimmed) ||
+    /diagnostics\.previous_message_id/i.test(trimmed) ||
+    /previous_message_id/i.test(trimmed) ||
+    /\b(?:must be the id from a prior)\b/i.test(trimmed);
+  if (!isApiError) return null;
+  const recoverable =
+    /previous_message_id/i.test(trimmed) ||
+    /session.*(?:expired|invalid|not found|corrupt)/i.test(trimmed);
+  return { recoverable };
+}
+
 function extractMedia(content) {
   if (!Array.isArray(content)) return { mediaBlocks: [], text: typeof content === "string" ? content : "hello" };
   const mediaBlocks = [];
@@ -298,9 +329,20 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
               },
             };
           }
+          const resultText = message.result || "";
+          const classified = classifyAgentError(resultText);
+          if (classified) {
+            // API/SDK error landed in result.result — don't leak it as a chat
+            // reply, surface as a structured error event so the channel layer
+            // can decide whether to retry, clear the session, or show a clean
+            // user-facing message.
+            yield { type: "error", message: resultText, recoverable: classified.recoverable };
+            yield { type: "done", stopReason: "error" };
+            break;
+          }
           // Yield result text as fallback if nothing was streamed at all
-          if (!everStreamed && message.result) {
-            yield { type: "text", content: message.result };
+          if (!everStreamed && resultText) {
+            yield { type: "text", content: resultText };
           }
           yield { type: "done", stopReason: "end_turn" };
           break;
@@ -308,6 +350,7 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
 
         case "error": {
           const errMsg = message.error?.message || message.error || "Unknown Claude Code error";
+          const classified = classifyAgentError(errMsg);
           // Detect auth failures
           if (/unauthorized|authentication|login|credential/i.test(errMsg)) {
             yield {
@@ -315,7 +358,7 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
               content: `**Authentication required.** Run \`claude login\` in the Tarsee terminal to authenticate with your Claude subscription.\n\nError: ${errMsg}`,
             };
           }
-          yield { type: "error", message: errMsg };
+          yield { type: "error", message: errMsg, recoverable: !!classified?.recoverable };
           yield { type: "done", stopReason: "error" };
           break;
         }

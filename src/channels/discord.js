@@ -395,10 +395,18 @@ You can use these special markers in your response:
         }
       }
 
+      // One-shot retry budget for recoverable session-corruption errors
+      // (Anthropic API rejecting diagnostics.previous_message_id from a
+      // stale resumed session). Mirror the same pattern as the Telegram
+      // handler so both channels self-heal on a corrupt session.
+      let sessionRetried = false;
+      let surfacedError = null;
+
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const toolCalls = [];
         let roundText = "";
         let stopReason = "end_turn";
+        let recoverRound = false;
 
         const existingSessionId = convStore.getClaudeSessionId(convId);
         const stream = chatStream({
@@ -434,12 +442,28 @@ You can use these special markers in your response:
               .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
             fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
             await postToolStatus(event);
+          } else if (event.type === "error") {
+            if (event.recoverable && !sessionRetried) {
+              sessionRetried = true;
+              recoverRound = true;
+              convStore.setClaudeSessionId(convId, null);
+              console.warn(`[discord] session corrupt, clearing and retrying: ${String(event.message || "").slice(0, 200)}`);
+              if (segmentMsg) {
+                try { await segmentMsg.delete(); } catch {}
+                segmentMsg = null;
+                segmentText = "";
+              }
+            } else {
+              surfacedError = event.message;
+            }
           } else if (event.type === "done") {
             stopReason = event.stopReason || "end_turn";
             break;
           }
         }
 
+        if (recoverRound) { round--; continue; }
+        if (surfacedError) break;
         if (toolCalls.length === 0 || stopReason !== "tool_use") break;
 
         // Build assistant content blocks
@@ -492,6 +516,12 @@ You can use these special markers in your response:
         if (sentSegments.length === 0) {
           await message.reply("⚠️ Done — no message body.").catch(() => {});
         }
+      } else if (surfacedError) {
+        const isSessionErr = /previous_message_id|session/i.test(String(surfacedError));
+        const userMsg = isSessionErr
+          ? "⚠️ Session reset due to a transient API hiccup. Just send your message again — your history is preserved."
+          : `⚠️ Upstream error: ${String(surfacedError).slice(0, 200)}\n\nTry again — if it keeps happening, /clear and try fresh.`;
+        await message.reply(userMsg).catch(() => {});
       } else if (idleAborted) {
         await message.reply("⚠️ Claude Code stopped responding (3 min idle). Try again — maybe with a smaller ask.").catch(() => {});
       } else {

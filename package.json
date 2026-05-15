@@ -24,7 +24,7 @@
     "syntax-check": "node -c src/server.js"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.92",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.142",
     "better-sqlite3": "^11.0.0",
     "busboy": "^1.6.0",
     "discord.js": "^14.0.0",

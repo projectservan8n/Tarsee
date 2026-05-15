@@ -310,10 +310,19 @@ You can use these special markers in your response:
         }
       }
 
+      // One-shot retry budget for recoverable session-corruption errors
+      // (Anthropic API rejecting diagnostics.previous_message_id from a
+      // stale resumed session). We clear the stored session id and retry
+      // the SAME round once. Further rounds use the cleared (null) session
+      // so we don't loop on the same corrupt state.
+      let sessionRetried = false;
+      let surfacedError = null;
+
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const toolCalls = [];
         let roundText = "";
         let stopReason = "end_turn";
+        let recoverRound = false;
 
         const existingSessionId = convStore.getClaudeSessionId(convId);
         const stream = chatStream({
@@ -353,12 +362,30 @@ You can use these special markers in your response:
               .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
             fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
             await postToolStatus(event);
+          } else if (event.type === "error") {
+            if (event.recoverable && !sessionRetried) {
+              sessionRetried = true;
+              recoverRound = true;
+              convStore.setClaudeSessionId(convId, null);
+              console.warn(`[telegram] session corrupt, clearing and retrying: ${String(event.message || "").slice(0, 200)}`);
+              // Drop any half-built segment placeholder so we don't leave
+              // a stray "…" message hanging when the retry succeeds.
+              if (segmentMsgId) {
+                try { await ctx.telegram.deleteMessage(chatId, segmentMsgId); } catch {}
+                segmentMsgId = null;
+                segmentText = "";
+              }
+            } else {
+              surfacedError = event.message;
+            }
           } else if (event.type === "done") {
             stopReason = event.stopReason || "end_turn";
             break;
           }
         }
 
+        if (recoverRound) { round--; continue; }
+        if (surfacedError) break;
         if (toolCalls.length === 0 || stopReason !== "tool_use") break;
 
         // Build assistant message with tool_use blocks
@@ -418,6 +445,15 @@ You can use these special markers in your response:
           // Surface a soft note so the chat doesn't look broken.
           await ctx.reply("⚠️ Done — no message body.").catch(() => {});
         }
+      } else if (surfacedError) {
+        // Show a clean recovery message instead of leaking the raw API
+        // error string. Session has already been cleared above, so the
+        // next user message will start fresh.
+        const isSessionErr = /previous_message_id|session/i.test(String(surfacedError));
+        const userMsg = isSessionErr
+          ? "⚠️ Session reset due to a transient API hiccup. Just send your message again — your history is preserved."
+          : `⚠️ Upstream error: ${String(surfacedError).slice(0, 200)}\n\nTry again — if it keeps happening, /clear and try fresh.`;
+        await ctx.reply(userMsg).catch(() => {});
       } else if (idleAborted) {
         await ctx.reply("⚠️ Claude Code stopped responding (3 min idle). Try again — maybe with a smaller ask.").catch(() => {});
       } else {
