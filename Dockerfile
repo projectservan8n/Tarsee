@@ -80,7 +80,11 @@ RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force \
   && claude --version
 
 # Install Railway CLI
-RUN curl -fsSL https://railway.com/install.sh | sh
+# Pipe to `bash`, not `sh`. /bin/sh on bookworm-slim is dash, and the
+# Railway installer uses bashisms (`${var/x/y}`) that dash rejects with
+# "Bad substitution" — the binary actually installs but the post-install
+# step fails with exit code 2, killing the whole build.
+RUN curl -fsSL https://railway.com/install.sh | bash
 
 # Copy dependencies from builder (includes node_modules + Playwright browsers)
 COPY --from=builder /app/node_modules ./node_modules
