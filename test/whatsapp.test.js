@@ -104,6 +104,25 @@ describe("isAllowlisted", () => {
   it("finds a match anywhere in a multi-entry list", () => {
     assert.equal(isAllowlisted(chatId, ["+1 555 0100", "+44 770 090 0000", "+1 555 0200"]), true);
   });
+
+  it("suffix-matches when the entry omits the country code", () => {
+    // WhatsApp delivers full international form (e.g. PH "+63" prefix).
+    // Operator pasting local-without-country-code still matches.
+    // NOTE: leading-zero trunk prefixes (e.g. "0917..." for PH) are not
+    // auto-handled — country-specific logic would need libphonenumber.
+    const phChatId = "639171234567@s.whatsapp.net";
+    assert.equal(isAllowlisted(phChatId, ["917 123 4567"]), true);
+    assert.equal(isAllowlisted(phChatId, ["9171234567"]), true);
+  });
+
+  it("does not over-match on short suffix entries", () => {
+    // 6 digits — too short to be a phone, must not match
+    assert.equal(isAllowlisted("639171234567@s.whatsapp.net", ["234567"]), false);
+  });
+
+  it("does not match when the suffix is wrong", () => {
+    assert.equal(isAllowlisted("639171234567@s.whatsapp.net", ["555 0100"]), false);
+  });
 });
 
 describe("isDirectMessage", () => {

@@ -58,12 +58,26 @@ export function normalizeWhatsappId(value) {
  * normalized to digit-only form so users can paste phone numbers however
  * they like (with or without +, spaces, dashes, or the @s.whatsapp.net
  * suffix).
+ *
+ * Matching rules (most → least specific):
+ *   1. Exact digit match.
+ *   2. Suffix match — entry is the trailing portion of the chat id. This
+ *      handles "omitted country code" cases where the operator pasted
+ *      a local-format number (e.g. "917 123 4567") but WhatsApp delivers
+ *      the full international form ("639171234567"). Requires the entry
+ *      to be at least 7 digits so a tiny number can't over-match.
  */
 export function isAllowlisted(chatId, allowlist) {
   if (!Array.isArray(allowlist) || allowlist.length === 0) return true;
   const target = normalizeWhatsappId(chatId);
   if (!target) return false;
-  return allowlist.some((entry) => normalizeWhatsappId(entry) === target);
+  return allowlist.some((entry) => {
+    const normalized = normalizeWhatsappId(entry);
+    if (!normalized) return false;
+    if (normalized === target) return true;
+    if (normalized.length >= 7 && target.endsWith(normalized)) return true;
+    return false;
+  });
 }
 
 /**
@@ -265,7 +279,12 @@ export async function createWhatsAppBot(config, db) {
       : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
     const allowed = Array.isArray(rawAllow) ? rawAllow.filter(Boolean) : [];
     if (!isAllowlisted(chatId, allowed)) {
-      console.log(`[whatsapp] dropping message from non-allowlisted chat: ${chatId}`);
+      const normalizedTarget = normalizeWhatsappId(chatId);
+      const normalizedAllow = allowed.map((e) => normalizeWhatsappId(e)).filter(Boolean);
+      console.log(
+        `[whatsapp] dropping non-allowlisted chat — target=${normalizedTarget} ` +
+        `allow=[${normalizedAllow.join(",")}]`
+      );
       return;
     }
 
