@@ -19,7 +19,7 @@ export class ChannelManager {
   async startAll() {
     // Email has a different "ready" check than token-based channels —
     // it needs imap + smtp config + enabled, not a single token.
-    const tokenChannels = ["discord", "telegram"];
+    const tokenChannels = ["discord", "telegram", "whatsapp"];
 
     for (const type of tokenChannels) {
       try {
@@ -70,6 +70,11 @@ export class ChannelManager {
         case "email": {
           const { createEmailBot } = await import("./email.js");
           bot = await createEmailBot(channelConfig, this.db);
+          break;
+        }
+        case "whatsapp": {
+          const { createWhatsAppBot } = await import("./whatsapp.js");
+          bot = await createWhatsAppBot(channelConfig, this.db);
           break;
         }
         default:
@@ -151,7 +156,7 @@ export class ChannelManager {
       };
     }
     // Add unconfigured channels
-    for (const type of ["discord", "telegram"]) {
+    for (const type of ["discord", "telegram", "whatsapp"]) {
       if (!result[type]) {
         const config = this.settings.get(`channel.${type}`);
         result[type] = {

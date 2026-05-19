@@ -25,6 +25,13 @@ const Settings = {
       discordToken: document.getElementById("settingsDiscordToken"),
       telegramToken: document.getElementById("settingsTelegramToken"),
       saveChannelsBtn: document.getElementById("saveChannelsBtn"),
+      // WhatsApp channel (via WHAPI)
+      whatsappEnabled: document.getElementById("settingsWhatsappEnabled"),
+      whatsappToken: document.getElementById("settingsWhatsappToken"),
+      whatsappWebhookUrl: document.getElementById("settingsWhatsappWebhookUrl"),
+      whatsappWebhookCopy: document.getElementById("settingsWhatsappWebhookCopy"),
+      whatsappWebhookRegenerate: document.getElementById("settingsWhatsappWebhookRegenerate"),
+      saveWhatsappBtn: document.getElementById("saveWhatsappBtn"),
       // Privacy / redaction toggle (security tab)
       redactSecrets: document.getElementById("settingsRedactSecrets"),
       // Email channel
@@ -213,6 +220,9 @@ const Settings = {
     document.getElementById("saveAllowlistBtn")?.addEventListener("click", () => this.saveAllowlist());
     this.elements.saveMentionModeBtn?.addEventListener("click", () => this.saveMentionMode());
     this.elements.saveEmailChannelBtn?.addEventListener("click", () => this.saveEmailChannel());
+    this.elements.saveWhatsappBtn?.addEventListener("click", () => this.saveWhatsappChannel());
+    this.elements.whatsappWebhookCopy?.addEventListener("click", () => this.copyWhatsappWebhook());
+    this.elements.whatsappWebhookRegenerate?.addEventListener("click", () => this.regenerateWhatsappSecret());
 
     // API Token mask + reveal + copy. The token sits in API.token already
     // (loaded at login for WebSocket auth), so the reveal toggle is purely
@@ -597,6 +607,9 @@ const Settings = {
       // Email channel
       this.loadEmailChannel(settings);
 
+      // WhatsApp channel (via WHAPI)
+      this.loadWhatsappChannel(settings);
+
       // Privacy: redact-secrets toggle (default on if unset)
       if (this.elements.redactSecrets) {
         const redactSetting = settings.find((s) => s.key === "ui.redactSecrets")?.value;
@@ -707,6 +720,85 @@ const Settings = {
       // Leave the (empty) select alone — saveProvider still works with whatever
       // value is already stored server-side; the dropdown just won't render.
       console.warn("[settings] Failed to load model list:", err.message);
+    }
+  },
+
+  loadWhatsappChannel(settings) {
+    const cfg = settings.find((s) => s.key === "channel.whatsapp")?.value || {};
+    const e = this.elements;
+    if (!e.whatsappEnabled) return; // UI not present
+    e.whatsappEnabled.checked = !!cfg.enabled;
+    // Token is returned raw from the server (matches Discord/Telegram pattern).
+    // Show in masked password field; users can re-type to rotate.
+    if (e.whatsappToken) {
+      e.whatsappToken.value = cfg.token || "";
+      e.whatsappToken.placeholder = cfg.token
+        ? "Stored — replace to rotate"
+        : "Get it from panel.whapi.cloud → Channel → Token";
+    }
+    if (e.whatsappWebhookUrl) {
+      if (cfg.webhook_secret) {
+        e.whatsappWebhookUrl.value = `${location.origin}/api/channels/whapi/${cfg.webhook_secret}`;
+      } else {
+        e.whatsappWebhookUrl.value = "";
+        e.whatsappWebhookUrl.placeholder = "Save the channel first to generate this URL";
+      }
+    }
+  },
+
+  async saveWhatsappChannel() {
+    try {
+      const token = this.elements.whatsappToken.value.trim();
+      const enabled = this.elements.whatsappEnabled.checked;
+      const result = await API.saveChannel({ type: "whatsapp", token, enabled });
+      if (result?.webhook_url && this.elements.whatsappWebhookUrl) {
+        this.elements.whatsappWebhookUrl.value = `${location.origin}${result.webhook_url}`;
+      }
+      App.showToast(enabled ? "WhatsApp channel saved + starting" : "WhatsApp channel saved", "success");
+    } catch (err) {
+      App.showToast(err.message || "Failed to save WhatsApp channel", "error");
+    }
+  },
+
+  async copyWhatsappWebhook() {
+    const url = this.elements.whatsappWebhookUrl?.value;
+    if (!url) {
+      App.showToast("No webhook URL to copy — save the channel first", "error");
+      return;
+    }
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+        App.showToast("Webhook URL copied", "success");
+        return;
+      }
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "absolute";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      App.showToast(ok ? "Webhook URL copied" : "Press Ctrl+C to copy", ok ? "success" : "error");
+    } catch (err) {
+      App.showToast("Copy failed: " + (err?.message || "unknown"), "error");
+    }
+  },
+
+  async regenerateWhatsappSecret() {
+    if (!window.confirm("Regenerate the webhook secret? The current URL will stop working until you update it in the WHAPI dashboard.")) {
+      return;
+    }
+    try {
+      const r = await API.json("/api/settings/channel/whatsapp/regenerate-secret", { method: "POST" });
+      if (r?.webhook_url && this.elements.whatsappWebhookUrl) {
+        this.elements.whatsappWebhookUrl.value = `${location.origin}${r.webhook_url}`;
+      }
+      App.showToast("New secret generated — update WHAPI dashboard", "info");
+    } catch (err) {
+      App.showToast(err.message || "Failed to regenerate secret", "error");
     }
   },
 

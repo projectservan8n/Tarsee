@@ -418,6 +418,42 @@
               <button class="btn btn-primary" id="saveChannelsBtn">Save Channels</button>
             </div>
 
+            <div class="settings-section" id="whatsappChannelSection">
+              <h3>WhatsApp (via WHAPI)</h3>
+              <div class="hint mb-3">
+                Connect a WhatsApp number through <a href="https://panel.whapi.cloud" target="_blank" rel="noopener">WHAPI Cloud</a>.
+                Free tier is enough for personal use. Direct messages only — group messages are ignored.
+                Voice notes are transcribed locally; images and PDFs are sent to Claude vision.
+              </div>
+
+              <div class="form-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="settingsWhatsappEnabled">
+                  <span>Enable WhatsApp channel</span>
+                </label>
+              </div>
+
+              <div class="form-group">
+                <label>WHAPI Bearer Token</label>
+                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                  <input type="password" id="settingsWhatsappToken" placeholder="Get it from panel.whapi.cloud → Channel → Token" autocomplete="off">
+                </form>
+                <div class="hint">Stored in your Tarsee database. Each WhatsApp number = one WHAPI channel = one token.</div>
+              </div>
+
+              <div class="form-group">
+                <label>Webhook URL <span class="hint" style="font-weight:normal">(paste this into WHAPI dashboard)</span></label>
+                <div style="display:flex; gap:8px;">
+                  <input type="text" id="settingsWhatsappWebhookUrl" readonly placeholder="Save the channel first to generate this URL" style="flex:1;">
+                  <button type="button" class="btn btn-sm btn-secondary" id="settingsWhatsappWebhookCopy">Copy</button>
+                  <button type="button" class="btn btn-sm btn-secondary" id="settingsWhatsappWebhookRegenerate" title="Generate a new secret (invalidates the current URL)">Regenerate</button>
+                </div>
+                <div class="hint">In the WHAPI dashboard: Settings → Webhooks → paste this URL, select event <code>messages</code>, save.</div>
+              </div>
+
+              <button class="btn btn-primary" id="saveWhatsappBtn">Save WhatsApp Channel</button>
+            </div>
+
             <div class="settings-section" id="emailChannelSection">
               <h3>Email</h3>
               <div class="hint mb-3">

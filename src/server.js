@@ -36,6 +36,7 @@ import { getGatewayManager } from "./lib/gateway.js";
 import { canvasMiddleware } from "./lib/canvas.js";
 import { acpRouter } from "./routes/acp.js";
 import { webhookRouter } from "./routes/webhooks.js";
+import { whapiRouter } from "./routes/whapi.js";
 import { analyticsRouter } from "./routes/analytics.js";
 import { externalApiRouter } from "./routes/external-api.js";
 import { pushRouter } from "./routes/push.js";
@@ -110,6 +111,7 @@ app.use("/api/memory", requireAuth, csrfProtect, memoryRouter);
 app.use("/api/skills", requireAuth, csrfProtect, skillsRouter);
 app.use("/api/acp", requireAuth, csrfProtect, acpRouter);
 app.use("/api/webhooks", webhookRouter); // Token auth, no session/CSRF needed
+app.use("/api/channels/whapi", whapiRouter); // Per-channel secret in URL, no session/CSRF
 app.use("/api/analytics", requireAuth, csrfProtect, analyticsRouter);
 app.use("/api/push", requireAuth, csrfProtect, pushRouter);
 app.use("/api/v1", requireAuth, externalApiRouter); // Bearer token auth, no CSRF needed for API clients

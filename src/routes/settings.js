@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { Router } from "express";
 import { SettingsStore } from "../db/settings.js";
 import { AI_PROVIDERS } from "../config/constants.js";
@@ -94,8 +95,8 @@ settingsRouter.post("/channel", (req, res) => {
   const body = req.body || {};
   const { type, enabled } = body;
 
-  if (!["discord", "telegram", "slack", "email"].includes(type)) {
-    return res.status(400).json({ error: "Invalid channel type. Valid: discord, telegram, slack, email" });
+  if (!["discord", "telegram", "slack", "email", "whatsapp"].includes(type)) {
+    return res.status(400).json({ error: "Invalid channel type. Valid: discord, telegram, slack, email, whatsapp" });
   }
 
   if (type === "email") {
@@ -146,6 +147,41 @@ settingsRouter.post("/channel", (req, res) => {
     return res.json({ ok: true, type: "email", enabled: !!enabled });
   }
 
+  if (type === "whatsapp") {
+    // WhatsApp via WHAPI. Each channel needs a per-instance webhook secret
+    // (WHAPI does not sign webhooks) — minted on first enable, preserved
+    // across re-saves, regenerated only via the dedicated endpoint below.
+    const prev = settingsStore.get("channel.whatsapp") || {};
+    const { token, baseUrl } = body;
+    if (enabled && !token && !prev.token) {
+      return res.status(400).json({ error: "WHAPI token required to enable" });
+    }
+    const webhook_secret = prev.webhook_secret || crypto.randomBytes(32).toString("hex");
+    const payload = {
+      enabled: !!enabled,
+      token: token || prev.token || null,
+      baseUrl: baseUrl || prev.baseUrl || "https://gate.whapi.cloud",
+      webhook_secret,
+    };
+    settingsStore.set("channel.whatsapp", payload);
+
+    const channelManager = req.app.get("channelManager");
+    if (channelManager && payload.enabled && payload.token) {
+      channelManager.restart("whatsapp").catch((err) => {
+        console.warn("[channels] auto-start whatsapp failed:", err.message);
+      });
+    } else if (channelManager) {
+      channelManager.stop("whatsapp").catch(() => {});
+    }
+
+    return res.json({
+      ok: true,
+      type: "whatsapp",
+      enabled: payload.enabled,
+      webhook_url: `/api/channels/whapi/${webhook_secret}`,
+    });
+  }
+
   // Token-based channels (Discord, Telegram, Slack)
   const { token, appToken, ...opts } = body;
   if (enabled && !token) {
@@ -169,6 +205,26 @@ settingsRouter.post("/channel", (req, res) => {
   }
 
   res.json({ ok: true, type, enabled: !!enabled });
+});
+
+/**
+ * POST /api/settings/channel/whatsapp/regenerate-secret
+ * Mints a fresh webhook secret for the WhatsApp channel. The old URL
+ * stops working immediately — the operator must paste the new one into
+ * the WHAPI dashboard.
+ */
+settingsRouter.post("/channel/whatsapp/regenerate-secret", (req, res) => {
+  const prev = settingsStore.get("channel.whatsapp") || {};
+  if (!prev.token) {
+    return res.status(400).json({ error: "Configure the WhatsApp channel before regenerating its secret" });
+  }
+  const webhook_secret = crypto.randomBytes(32).toString("hex");
+  settingsStore.set("channel.whatsapp", { ...prev, webhook_secret });
+  res.json({
+    ok: true,
+    webhook_secret,
+    webhook_url: `/api/channels/whapi/${webhook_secret}`,
+  });
 });
 
 /**

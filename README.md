@@ -6,7 +6,7 @@
 
 <p align="center"><strong>Your personal Claude Code agent, running 24/7 in the cloud.</strong></p>
 
-<p align="center">Talk to Claude from anywhere — web, Telegram, Discord, or voice. It remembers everything, runs tools, and schedules tasks. Uses your Claude Max subscription. No API keys needed.</p>
+<p align="center">Talk to Claude from anywhere — web, Telegram, Discord, WhatsApp, email, or voice. It remembers everything, runs tools, and schedules tasks. Uses your Claude Max subscription. No API keys needed.</p>
 
 > **Tarsee is built for Claude Max subscribers.** It runs a persistent Claude Code agent that uses your subscription for every message. Pro subscribers will hit usage limits quickly — Max (especially 5x) is strongly recommended for daily use.
 
@@ -104,7 +104,8 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Telegram** — Text, photos, PDFs, voice messages, video notes. Group @mention support, inline buttons, forwarded message detection.
 - **Discord** — Text, images, PDFs, voice messages. Always-online bot with presence status.
 - **Email** — Real-time over IMAP IDLE + SMTP. Mention keyword (default `@tarsee`) gates replies; CC/BCC/forwards are absorbed as context without an outbound. Works with any mailbox you own (Gmail, Outlook, iCloud, Zoho, FastMail, Yahoo, self-hosted).
-- **Attachment save-to-disk** — every image, PDF, voice note, and document sent via Discord, Telegram, email, or web lands in `workspace/uploads/` so Claude can read, transform, and reference it across turns (not just in the message it arrived on).
+- **WhatsApp** — Text, images, PDFs, voice notes (Whisper-transcribed), and documents via [WHAPI Cloud](https://whapi.cloud) (free tier OK). Direct messages only. Per-channel webhook secret in URL, auto-generated on first enable.
+- **Attachment save-to-disk** — every image, PDF, voice note, and document sent via Discord, Telegram, email, WhatsApp, or web lands in `workspace/uploads/` so Claude can read, transform, and reference it across turns (not just in the message it arrived on).
 - **Cross-device sync** — all devices update in real-time via WebSocket. See tool calls, text streaming, and typing indicators across devices.
 - **Session recap** — resume a conversation idle >30 min and a dismissible "Last time" card summarizes the last few exchanges before the first new message. Zero AI cost (extractive summary).
 - **Web Push notifications** — iOS/Android/desktop push via VAPID when cron jobs finish, webhooks fire, or Claude proactively pings you via the `tarsee_push_notification` MCP tool. Opt-in from Settings > Appearance.
@@ -195,8 +196,19 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | Telegram | [@BotFather](https://t.me/BotFather) | Text, photos, PDFs, voice, video notes, inline buttons, groups |
 | Discord | [Developer Portal](https://discord.com/developers) | Text, images, PDFs, voice messages, reactions, presence |
 | Email | IMAP + SMTP (any provider — see below) | Real-time mail, `@mention` gate, CC/BCC context absorb, threaded replies |
+| WhatsApp | [WHAPI Cloud](https://panel.whapi.cloud) | Text, images, PDFs, voice notes (Whisper-transcribed), documents. DMs only. |
 
 **Discord:** Enable **Message Content Intent** in Bot settings. Invite with Send Messages, Read Messages, Add Reactions permissions.
+
+**WhatsApp:** Tarsee uses [WHAPI Cloud](https://whapi.cloud) as the WhatsApp gateway (free tier is enough for personal use). Setup:
+
+1. Sign up at [panel.whapi.cloud](https://panel.whapi.cloud), create a channel, scan the QR code with the WhatsApp account you want Tarsee to use.
+2. Copy the **Bearer token** from the channel's Token tab.
+3. In Tarsee → `Settings > Channels > WhatsApp`, paste the token, check Enable, click Save. A **webhook URL** appears.
+4. Copy that URL into WHAPI dashboard → `Settings > Webhooks`, select event `messages`, save.
+5. Send a WhatsApp message to your bot's number — Tarsee replies via Claude.
+
+Direct messages only; group messages are silently ignored. Voice notes are transcribed locally via faster-whisper. Images and PDFs go to Claude vision. Other documents (DOCX, XLSX, ZIP, TXT, CSV, etc.) are saved to `workspace/uploads/` and Claude can `Read` them with the file tool.
 
 ---
 
