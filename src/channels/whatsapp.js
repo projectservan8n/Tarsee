@@ -115,6 +115,42 @@ export async function createWhatsAppBot(config, db) {
     return { buffer, contentType };
   }
 
+  /**
+   * Resolve a media reference from a WHAPI inbound message to bytes.
+   *
+   * WHAPI's webhook payload shape varies by channel settings — some send
+   * a presigned `link` URL, others send `url`, and some send only the
+   * media `id` (requiring a follow-up GET /media/<id> with the bearer
+   * token to fetch the file). We accept all variants so the operator
+   * doesn't have to know which webhook option WHAPI gave them.
+   */
+  async function resolveMedia(src) {
+    if (!src || typeof src !== "object") {
+      throw new Error("no media payload");
+    }
+    const directUrl = src.link || src.url || src.media || src.file_url;
+    if (directUrl) return downloadWhapiMedia(directUrl);
+
+    const mediaId = src.id || src.media_id;
+    if (mediaId) {
+      // /media/<id> returns the binary directly (or 302 → CDN); follow redirects
+      const url = `${baseUrl}/media/${encodeURIComponent(mediaId)}`;
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        redirect: "follow",
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`media id fetch ${res.status}: ${body.slice(0, 200)}`);
+      }
+      const buffer = Buffer.from(await res.arrayBuffer());
+      const contentType = res.headers.get("content-type") || src.mime_type || "application/octet-stream";
+      return { buffer, contentType };
+    }
+    throw new Error(`no link/url/id in payload — got keys: ${Object.keys(src).join(", ")}`);
+  }
+
   function saveDocumentToDisk(buffer, fileName) {
     try {
       const uploadsDir = path.join(envConfig.WORKSPACE_DIR, "uploads");
@@ -462,12 +498,14 @@ You can use these special markers in your response:
           case "voice":
           case "audio": {
             const src = msg.voice || msg.audio || {};
-            const mediaUrl = src.link;
-            if (!mediaUrl) {
-              await sendMessage(chatId, "Couldn't read the voice message.").catch(() => {});
+            let buffer;
+            try {
+              ({ buffer } = await resolveMedia(src));
+            } catch (err) {
+              console.error(`[whatsapp] voice fetch failed: ${err.message}`, "msg keys:", Object.keys(src));
+              await sendMessage(chatId, `Couldn't fetch the voice message (${err.message}).`).catch(() => {});
               break;
             }
-            const { buffer } = await downloadWhapiMedia(mediaUrl);
             const result = await transcribeAudio(buffer, "en", { settingsStore });
             if (!result.transcript?.trim()) {
               await sendMessage(chatId, "Couldn't understand the voice message.").catch(() => {});
@@ -479,13 +517,15 @@ You can use these special markers in your response:
           }
           case "image": {
             const img = msg.image || {};
-            const mediaUrl = img.link;
             const caption = img.caption || "";
-            if (!mediaUrl) {
-              await sendMessage(chatId, "Couldn't read the image.").catch(() => {});
+            let buffer; let contentType;
+            try {
+              ({ buffer, contentType } = await resolveMedia(img));
+            } catch (err) {
+              console.error(`[whatsapp] image fetch failed: ${err.message}`, "msg keys:", Object.keys(img));
+              await sendMessage(chatId, `Couldn't fetch the image (${err.message}).`).catch(() => {});
               break;
             }
-            const { buffer, contentType } = await downloadWhapiMedia(mediaUrl);
             const mediaType = img.mime_type || contentType || "image/jpeg";
             const attachment = {
               type: "image",
@@ -496,16 +536,18 @@ You can use these special markers in your response:
           }
           case "document": {
             const doc = msg.document || {};
-            const mediaUrl = doc.link;
             const filename = doc.filename || "file";
             const mime = doc.mime_type || "";
             const caption = doc.caption || "";
             const sizeKb = Math.round((doc.file_size || 0) / 1024);
-            if (!mediaUrl) {
-              await sendMessage(chatId, "Couldn't read the document.").catch(() => {});
+            let buffer;
+            try {
+              ({ buffer } = await resolveMedia(doc));
+            } catch (err) {
+              console.error(`[whatsapp] document fetch failed: ${err.message}`, "msg keys:", Object.keys(doc));
+              await sendMessage(chatId, `Couldn't fetch "${filename}" (${err.message}).`).catch(() => {});
               break;
             }
-            const { buffer } = await downloadWhapiMedia(mediaUrl);
 
             if (mime === "application/pdf") {
               const attachment = {
@@ -535,14 +577,16 @@ You can use these special markers in your response:
           }
           case "video": {
             const vid = msg.video || {};
-            const mediaUrl = vid.link;
             const caption = vid.caption || "";
             const sizeKb = Math.round((vid.file_size || 0) / 1024);
-            if (!mediaUrl) {
-              await sendMessage(chatId, "Couldn't read the video.").catch(() => {});
+            let buffer;
+            try {
+              ({ buffer } = await resolveMedia(vid));
+            } catch (err) {
+              console.error(`[whatsapp] video fetch failed: ${err.message}`, "msg keys:", Object.keys(vid));
+              await sendMessage(chatId, `Couldn't fetch the video (${err.message}).`).catch(() => {});
               break;
             }
-            const { buffer } = await downloadWhapiMedia(mediaUrl);
             const savedPath = saveDocumentToDisk(buffer, `video-${Date.now()}.mp4`);
             const note = savedPath
               ? `[Video saved: (${sizeKb}KB) → ${savedPath}] You can read this file with the Read tool.`
