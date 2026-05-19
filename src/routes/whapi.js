@@ -45,11 +45,36 @@ whapiRouter.post("/:secret", async (req, res) => {
   res.status(200).json({ ok: true });
 
   const channelManager = req.app.get("channelManager");
-  const channel = channelManager?.channels?.get("whatsapp");
-  if (!channel?.bot?.handleInbound) {
-    console.warn("[whapi] channel not running, dropping inbound");
+  if (!channelManager) {
+    console.warn("[whapi] no channelManager available — server still booting?");
     return;
   }
+
+  let channel = channelManager.channels?.get("whatsapp");
+
+  // Self-heal: settings say the channel is enabled + has a token, but it
+  // isn't in the running map. That happens if the server booted before the
+  // user enabled the channel, or if a prior startup error left it stuck.
+  // Try to start it now so the very next webhook delivery succeeds.
+  if (!channel?.bot?.handleInbound && cfg.enabled && cfg.token) {
+    try {
+      console.log("[whapi] channel not running but config is valid — starting now");
+      await channelManager.start("whatsapp", cfg);
+      channel = channelManager.channels?.get("whatsapp");
+    } catch (err) {
+      console.error("[whapi] lazy-start failed:", err.message);
+      return;
+    }
+  }
+
+  if (!channel?.bot?.handleInbound) {
+    console.warn(
+      `[whapi] channel not running, dropping inbound — ` +
+      `enabled=${!!cfg.enabled} hasToken=${!!cfg.token} bot=${!!channel?.bot}`
+    );
+    return;
+  }
+
   channel.bot.handleInbound(req.body).catch((err) => {
     console.error("[whapi] inbound error:", err.message);
   });
