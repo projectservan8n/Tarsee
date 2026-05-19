@@ -8,6 +8,7 @@ const PLATFORM_ICONS = {
   discord: "\u{1F4AC}",   // 💬
   telegram: "\u{2708}\uFE0F", // ✈️
   slack: "\u{1F4BC}",     // 💼
+  whatsapp: "\u{1F4F1}",  // 📱
 };
 
 const Chat = {
@@ -737,8 +738,8 @@ const Chat = {
     }
 
     // Platform labels
-    const platformLabels = { web: "Web", telegram: "Telegram", discord: "Discord" };
-    const platformOrder = ["web", "telegram", "discord"];
+    const platformLabels = { web: "Web", telegram: "Telegram", discord: "Discord", whatsapp: "WhatsApp" };
+    const platformOrder = ["web", "telegram", "discord", "whatsapp"];
 
     for (const platform of platformOrder) {
       const items = groups[platform];
@@ -762,6 +763,7 @@ const Chat = {
         let displayName = ch.title;
         if (ch.key === "web:default") displayName = "Main Session";
         else if (ch.platform === "telegram" && ch.title.startsWith("Chat with")) displayName = ch.title.replace("Chat with ", "");
+        else if (ch.platform === "whatsapp" && ch.title.startsWith("WhatsApp · ")) displayName = ch.title.replace("WhatsApp · ", "");
         else if (ch.platform !== "web" && ch.title.length > 25) displayName = ch.title.slice(0, 25) + "...";
 
         item.innerHTML = `
@@ -811,6 +813,7 @@ const Chat = {
     let topbarName = ch?.title || channelKey;
     if (channelKey === "web:default") topbarName = "Main Session";
     else if (ch?.platform === "telegram" && topbarName.startsWith("Chat with")) topbarName = topbarName.replace("Chat with ", "");
+    else if (ch?.platform === "whatsapp" && topbarName.startsWith("WhatsApp · ")) topbarName = topbarName.replace("WhatsApp · ", "");
     this.elements.topbarTitle.textContent = `${icon} ${topbarName}`;
 
     // Load messages (last 50 for speed, load more on demand)

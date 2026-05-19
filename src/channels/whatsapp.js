@@ -41,6 +41,32 @@ export function getChannelKey(chatId) {
 }
 
 /**
+ * Normalize a WhatsApp identifier (chat id or phone) to digits only.
+ * "447700900000@s.whatsapp.net" → "447700900000"
+ * "+44 770 090 0000"           → "447700900000"
+ * "(044) 7700-900000"          → "447700900000"
+ * Returns "" for falsy or non-string input.
+ */
+export function normalizeWhatsappId(value) {
+  if (typeof value !== "string") return "";
+  const stripped = value.split("@")[0]; // drop @s.whatsapp.net / @g.us
+  return stripped.replace(/\D+/g, ""); // digits only
+}
+
+/**
+ * True if `chatId` matches at least one entry in `allowlist`. Both sides are
+ * normalized to digit-only form so users can paste phone numbers however
+ * they like (with or without +, spaces, dashes, or the @s.whatsapp.net
+ * suffix).
+ */
+export function isAllowlisted(chatId, allowlist) {
+  if (!Array.isArray(allowlist) || allowlist.length === 0) return true;
+  const target = normalizeWhatsappId(chatId);
+  if (!target) return false;
+  return allowlist.some((entry) => normalizeWhatsappId(entry) === target);
+}
+
+/**
  * Classify a WHAPI message as DM or group based on the WhatsApp chat id
  * suffix. DMs end in `@s.whatsapp.net`, groups in `@g.us`.
  */
@@ -230,12 +256,15 @@ export async function createWhatsAppBot(config, db) {
   // --- Main message handler ---
 
   async function handleMessage(chatId, fromName, text, attachments = [], replyToId = null) {
-    // Allowlist check (optional)
+    // Allowlist check (optional). Empty list = allow everyone.
+    // Entries can be the full chat id (447700900000@s.whatsapp.net) or just
+    // the phone in any common format (+44 770 090 0000, 447700900000, etc).
     const dbAllowlist = settingsStore.get("allowlist.whatsapp");
-    const allowed = config.allowedChats?.length > 0
+    const rawAllow = config.allowedChats?.length > 0
       ? config.allowedChats
       : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
-    if (allowed.length > 0 && !allowed.includes(chatId)) {
+    const allowed = Array.isArray(rawAllow) ? rawAllow.filter(Boolean) : [];
+    if (!isAllowlisted(chatId, allowed)) {
       console.log(`[whatsapp] dropping message from non-allowlisted chat: ${chatId}`);
       return;
     }

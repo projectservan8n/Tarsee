@@ -14,7 +14,7 @@ process.env.TARSEE_WORKSPACE_DIR = path.join(TMP_DIR, "workspace");
 process.env.TARSEE_DATA_DIR = path.join(TMP_DIR, "data");
 process.env.ENCRYPTION_KEY = "test-key-for-unit-tests-only-32chars!";
 
-const { splitMessage, getChannelKey, isDirectMessage } = await import("../src/channels/whatsapp.js");
+const { splitMessage, getChannelKey, isDirectMessage, normalizeWhatsappId, isAllowlisted } = await import("../src/channels/whatsapp.js");
 const { whapiRouter } = await import("../src/routes/whapi.js");
 const { initDb } = await import("../src/db/sqlite.js");
 const { SettingsStore } = await import("../src/db/settings.js");
@@ -55,6 +55,54 @@ describe("getChannelKey", () => {
   });
   it("formats group chat ids", () => {
     assert.equal(getChannelKey("123456@g.us"), "whatsapp:123456@g.us");
+  });
+});
+
+describe("normalizeWhatsappId", () => {
+  it("strips the @s.whatsapp.net suffix", () => {
+    assert.equal(normalizeWhatsappId("447700900000@s.whatsapp.net"), "447700900000");
+  });
+  it("strips +, spaces, dashes, parens", () => {
+    assert.equal(normalizeWhatsappId("+44 770 090 0000"), "447700900000");
+    assert.equal(normalizeWhatsappId("(044) 7700-900000"), "0447700900000");
+    assert.equal(normalizeWhatsappId("44-7700-900000"), "447700900000");
+  });
+  it("returns empty string for bogus input", () => {
+    assert.equal(normalizeWhatsappId(null), "");
+    assert.equal(normalizeWhatsappId(undefined), "");
+    assert.equal(normalizeWhatsappId(""), "");
+    assert.equal(normalizeWhatsappId(12345), "");
+  });
+});
+
+describe("isAllowlisted", () => {
+  const chatId = "447700900000@s.whatsapp.net";
+
+  it("returns true when allowlist is empty (allow everyone)", () => {
+    assert.equal(isAllowlisted(chatId, []), true);
+    assert.equal(isAllowlisted(chatId, null), true);
+    assert.equal(isAllowlisted(chatId, undefined), true);
+  });
+
+  it("matches when the allowlist contains the exact chat id", () => {
+    assert.equal(isAllowlisted(chatId, ["447700900000@s.whatsapp.net"]), true);
+  });
+
+  it("matches when the allowlist contains just the phone", () => {
+    assert.equal(isAllowlisted(chatId, ["447700900000"]), true);
+  });
+
+  it("matches when the allowlist entry has + and spaces", () => {
+    assert.equal(isAllowlisted(chatId, ["+44 770 090 0000"]), true);
+  });
+
+  it("rejects non-matching phones", () => {
+    assert.equal(isAllowlisted(chatId, ["19999999999"]), false);
+    assert.equal(isAllowlisted(chatId, ["447700900001"]), false);
+  });
+
+  it("finds a match anywhere in a multi-entry list", () => {
+    assert.equal(isAllowlisted(chatId, ["+1 555 0100", "+44 770 090 0000", "+1 555 0200"]), true);
   });
 });
 

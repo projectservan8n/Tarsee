@@ -600,9 +600,11 @@ const Settings = {
       const telegramAllow = settings.find((s) => s.key === "allowlist.telegram")?.value;
       const discordAllow = settings.find((s) => s.key === "allowlist.discord")?.value;
       const slackAllow = settings.find((s) => s.key === "allowlist.slack")?.value;
+      const whatsappAllow = settings.find((s) => s.key === "allowlist.whatsapp")?.value;
       if (telegramAllow) document.getElementById("settingsTelegramAllowlist").value = Array.isArray(telegramAllow) ? telegramAllow.join("\n") : telegramAllow;
       if (discordAllow) document.getElementById("settingsDiscordAllowlist").value = Array.isArray(discordAllow) ? discordAllow.join("\n") : discordAllow;
       if (slackAllow) document.getElementById("settingsSlackAllowlist").value = Array.isArray(slackAllow) ? slackAllow.join("\n") : slackAllow;
+      if (whatsappAllow) document.getElementById("settingsWhatsappAllowlist").value = Array.isArray(whatsappAllow) ? whatsappAllow.join("\n") : whatsappAllow;
 
       // Email channel
       this.loadEmailChannel(settings);
@@ -820,6 +822,7 @@ const Settings = {
       const parse = (id) => (document.getElementById(id)?.value || "").split("\n").map(s => s.trim()).filter(Boolean);
       await API.json("/api/settings/general", { method: "POST", body: { key: "allowlist.telegram", value: JSON.stringify(parse("settingsTelegramAllowlist")) } });
       await API.json("/api/settings/general", { method: "POST", body: { key: "allowlist.discord", value: JSON.stringify(parse("settingsDiscordAllowlist")) } });
+      await API.json("/api/settings/general", { method: "POST", body: { key: "allowlist.whatsapp", value: JSON.stringify(parse("settingsWhatsappAllowlist")) } });
       App.showToast("Allowlist saved", "success");
     } catch (err) {
       App.showToast(err.message, "error");
