@@ -143,6 +143,10 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **`/checkpoint` — cross-restart handoff** — manual AI-synthesized `CHECKPOINT.md` before a known redeploy, plus an activity-gated auto-checkpoint every 6h as a safety net. On the next boot, the checkpoint is injected into the system prompt so work picks up mid-thought instead of starting cold.
 - **Retention** — daily 03:00 sweep prunes conversations idle >14 days and checkpoint archives older than 30 days (or >50 files). Keeps the most recent thread per channel so Discord/Telegram/email session continuity never breaks. One-line summaries of pruned conversations append to `memory/archived-conversations.md` so nothing vanishes without a record. Configurable via `retention.*` settings or `/retention` command.
 
+### Models
+- **Alias-first model registry** — the default is the bare `opus` alias, which Claude Code resolves to the newest Opus at request time. Pinned ids (`claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`, …) remain selectable when you need a frozen, reproducible model. This replaced a hardcoded pin that had silently fallen two releases behind: the registry named Opus 4.7 as the default long after Opus 4.8 and Opus 5 shipped, so every session ran on an outdated model until someone edited the file. Aliases make that class of bug impossible.
+- **Tiers** — `opus`, `sonnet`, `haiku` and `fable` are all available as always-latest aliases, and `/model <name>` accepts either an alias or a pinned id.
+
 ### Search & Analytics
 - **Live context meter** — the session bar shows a real-time prompt-token fill % against the active model's context window (1M for Opus/Sonnet, 200K for Haiku). Counts cache reads and cache writes too — that's the actual prompt size hitting the model. Bar turns yellow at 75%, red and pulsing at 90%, with a dismissible banner above the composer. At 95% Tarsee writes a mechanical snapshot to `CHECKPOINT.md` automatically; if a turn still trips "prompt is too long", the snapshot is written from the catch path and a recovery card is shown in chat with a one-click "Start fresh session" button. The next boot reads that checkpoint as the handoff so you pick up mid-thought.
 - **Token usage chart** — daily/weekly visual bar chart with model breakdown in Settings > Usage.
@@ -312,7 +316,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `SETUP_PASSWORD` | Yes | — | 4-digit PIN for the web UI |
 | `ENCRYPTION_KEY` | Yes | — | AES-256 key. `openssl rand -hex 32` |
 | `NODE_ENV` | Yes | — | Set to `production` |
-| `CLAUDE_DEFAULT_MODEL` | No | `claude-opus-4-7` | Default model for new sessions. Falls back to whichever model carries `recommended: true` in `src/config/constants.js` — currently Opus, so **every new session runs on Opus** unless you set this. |
+| `CLAUDE_DEFAULT_MODEL` | No | `opus` | Default model for new sessions. Defaults to the **`opus` alias**, which Claude Code resolves to the newest Opus at request time — so a new Anthropic release is picked up with no code change. Set a pinned id (e.g. `claude-opus-5`) if you need a frozen model, or `sonnet` / `haiku` for a cheaper default. |
 | `ELEVENLABS_API_KEY` | No | — | Premium TTS voices (Edge TTS is free) |
 | `TARSEE_CHANNEL_IDLE_ABORT_MS` | No | `1200000` (20 min) | Abandon a turn after this long with no stream event. Keep finite. |
 | `TARSEE_SESSION_JSONL_MAX_MB` | No | `8` | Transcript size cap. Past it, the next turn starts a fresh Claude session instead of resuming the bloat. |

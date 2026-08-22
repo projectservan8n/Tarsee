@@ -12,11 +12,35 @@
 //   recommended  — exactly one entry should be true; used as the default
 //                  when no DB setting or env var is configured
 //   released     — YYYY-MM; used to pick "latest" when a tier has multiple
-//                  models (newest wins)
+//                  models (newest wins). Alias rows omit it on purpose.
+//   alias        — true for the bare tier names. Claude Code resolves these
+//                  to the newest model in that tier at request time, so the
+//                  default never goes stale when Anthropic ships a release.
+//
+// WHY ALIASES ARE FIRST: this registry previously pinned Opus 4.7 as the
+// default. Opus 4.8 and Opus 5 shipped after that and the pin never moved,
+// so every session silently ran two releases behind. Pointing the default at
+// an alias makes that class of bug impossible — pinned rows below remain for
+// anyone who needs a reproducible, frozen model.
 export const CLAUDE_MODELS = Object.freeze([
-  { id: "claude-opus-4-7",   displayName: "Claude Opus 4.7",   tier: "opus",   context: "1M",  recommended: true,  released: "2026-01" },
-  { id: "claude-opus-4-6",   displayName: "Claude Opus 4.6",   tier: "opus",   context: "1M",  recommended: false, released: "2025-10" },
-  { id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", tier: "sonnet", context: "1M",  recommended: false, released: "2025-10" },
+  // Aliases — always the latest model in that tier. Zero maintenance; the
+  // default lives here. Verified: the Claude Code CLI documents `--model` as
+  // accepting "an alias for the latest model (e.g. 'fable', 'opus', or
+  // 'sonnet')", and the Agent SDK forwards `model` to it verbatim.
+  { id: "opus",              displayName: "Opus · latest",     tier: "opus",   context: "1M",   recommended: true,  alias: true },
+  { id: "sonnet",            displayName: "Sonnet · latest",   tier: "sonnet", context: "1M",   recommended: false, alias: true },
+  { id: "haiku",             displayName: "Haiku · latest",    tier: "haiku",  context: "200K", recommended: false, alias: true },
+  { id: "fable",             displayName: "Fable · latest",    tier: "fable",  context: "1M",   recommended: false, alias: true },
+
+  // Pinned versions — opt in for reproducibility. Add a row when you want a
+  // NEW pin; you never need to touch these just to get the latest model.
+  { id: "claude-fable-5",    displayName: "Claude Fable 5",    tier: "fable",  context: "1M",   recommended: false, released: "2026-05" },
+  { id: "claude-opus-5",     displayName: "Claude Opus 5",     tier: "opus",   context: "1M",   recommended: false, released: "2026-04" },
+  { id: "claude-opus-4-8",   displayName: "Claude Opus 4.8",   tier: "opus",   context: "1M",   recommended: false, released: "2026-02" },
+  { id: "claude-opus-4-7",   displayName: "Claude Opus 4.7",   tier: "opus",   context: "1M",   recommended: false, released: "2026-01" },
+  { id: "claude-opus-4-6",   displayName: "Claude Opus 4.6",   tier: "opus",   context: "1M",   recommended: false, released: "2025-10" },
+  { id: "claude-sonnet-5",   displayName: "Claude Sonnet 5",   tier: "sonnet", context: "1M",   recommended: false, released: "2026-04" },
+  { id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", tier: "sonnet", context: "1M",   recommended: false, released: "2025-10" },
   { id: "claude-haiku-4-5",  displayName: "Claude Haiku 4.5",  tier: "haiku",  context: "200K", recommended: false, released: "2025-10" },
 ]);
 
