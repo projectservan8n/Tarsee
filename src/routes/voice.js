@@ -24,7 +24,7 @@ voiceRouter.get("/stt-models", (req, res) => {
  */
 voiceRouter.post("/stt-model", (req, res) => {
   const { model } = req.body || {};
-  const valid = ["tiny.en", "base.en", "small.en"];
+  const valid = ["tiny.en", "base.en", "small.en", "tiny", "base", "small"];
   if (!valid.includes(model)) return res.status(400).json({ error: `Invalid model. Valid: ${valid.join(", ")}` });
   const sStore = req.app.get("settingsStore");
   sStore.set("voice.stt_model", model);

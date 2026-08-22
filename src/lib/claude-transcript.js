@@ -67,6 +67,15 @@ export function projectsRoots() {
   return roots;
 }
 
+/**
+ * Candidate Claude home directories (the `.claude` dirs themselves, not their
+ * `projects/` subdir). Same reasoning as projectsRoots(): HOME is unreliable in
+ * this container, so probe rather than assume.
+ */
+export function claudeHomes() {
+  return projectsRoots().map((r) => path.dirname(r));
+}
+
 /** First candidate root that actually exists on disk (or the first candidate). */
 export function projectsRoot() {
   const roots = projectsRoots();

@@ -10,8 +10,13 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY package.json ./
-RUN npm install --omit=dev
+# Copy the lockfile too and use `npm ci`, not `npm install`. With package.json
+# alone, every rebuild re-resolves the semver ranges — @anthropic-ai/claude-agent-sdk
+# floats on ^0.3.x — so an image rebuilt from an unchanged commit could ship a
+# different dependency tree and break a deploy with no code change. `npm ci`
+# installs exactly the locked tree, so a given commit always builds the same image.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 # Install Playwright + Chromium (binary only — runtime libs are installed
 # in the runtime stage; --with-deps here would just apt-install hundreds

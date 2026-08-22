@@ -120,6 +120,8 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Free text-to-speech** — Microsoft Edge TTS with 19 voices, 3 retries, markdown stripping. No API key, no rate limits.
 - **Smart TTS** — tables and code shown visually, spoken response is a clean conversational summary.
 
+- **Multilingual speech-to-text** — the bare `tiny`/`base`/`small` Whisper checkpoints auto-detect the spoken language; the `.en` variants are English-only and will return garbage for other languages. Switch in Settings > Voice.
+
 ### Canvas / Artifacts
 - **Live HTML/CSS/JS** — Ask for a dashboard, chart, calculator, or mini-app → renders as an interactive iframe right in chat.
 - **Canvas gallery** — browse all your canvases at `/canvas/`.
@@ -292,7 +294,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | **Channels** | Telegram, Discord, WhatsApp (WHAPI), Email (IMAP + SMTP with provider presets, mention keyword, reply-all marker, allowlist) |
 | **Appearance** | Theme switcher (4 built-in + plugin themes) + Web Push enable/disable/test |
 | **Automation** | Cron jobs, webhooks, retention settings |
-| **Voice** | TTS engine (Edge TTS / ElevenLabs), STT model (tiny/base/small), voice selection |
+| **Voice** | TTS engine (Edge TTS / ElevenLabs), STT model, voice selection. Pick `tiny.en`/`base.en`/`small.en` for English-only, or `tiny`/`base`/`small` for **multilingual** transcription with language auto-detect (needed for Tagalog, Taglish and other non-English voice notes — the `.en` checkpoints cannot transcribe them at all). |
 | **Skills** | Create, edit, delete instruction packs (includes preinstalled `/ultrareview` + `/fewer-permission-prompts`) |
 | **Memories** | View and manage stored memories |
 | **Security** | Security audit, tool permissions, captcha solver config |
@@ -310,7 +312,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `SETUP_PASSWORD` | Yes | — | 4-digit PIN for the web UI |
 | `ENCRYPTION_KEY` | Yes | — | AES-256 key. `openssl rand -hex 32` |
 | `NODE_ENV` | Yes | — | Set to `production` |
-| `CLAUDE_DEFAULT_MODEL` | No | `claude-sonnet-4-6` | Default model for new sessions |
+| `CLAUDE_DEFAULT_MODEL` | No | `claude-opus-4-7` | Default model for new sessions. Falls back to whichever model carries `recommended: true` in `src/config/constants.js` — currently Opus, so **every new session runs on Opus** unless you set this. |
 | `ELEVENLABS_API_KEY` | No | — | Premium TTS voices (Edge TTS is free) |
 | `TARSEE_CHANNEL_IDLE_ABORT_MS` | No | `1200000` (20 min) | Abandon a turn after this long with no stream event. Keep finite. |
 | `TARSEE_SESSION_JSONL_MAX_MB` | No | `8` | Transcript size cap. Past it, the next turn starts a fresh Claude session instead of resuming the bloat. |

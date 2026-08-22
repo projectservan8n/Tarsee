@@ -16,8 +16,15 @@ import crypto from "node:crypto";
 
 const MODELS_DIR = path.join(process.env.TARSEE_DATA_DIR || process.env.TARSEE_STATE_DIR || "/data/tarsee", "whisper-models");
 
-const VALID_MODELS = ["tiny.en", "base.en", "small.en"];
+// `.en` models are ENGLISH-ONLY: they cannot transcribe Tagalog/Taglish or any
+// other language no matter what `language` is passed. The bare variants are
+// multilingual and auto-detect. Both are offered so English-only deployments
+// keep the smaller/faster model while multilingual ones can opt in.
+const VALID_MODELS = ["tiny.en", "base.en", "small.en", "tiny", "base", "small"];
 const DEFAULT_MODEL = "base.en";
+
+/** True for the English-only checkpoints. */
+const isEnglishOnly = (m) => m.endsWith(".en");
 
 let _cachedModelName = null;
 
@@ -64,7 +71,8 @@ async function transcribeLocal(audioBuffer, settingsStore) {
     });
 
     // Timeout scales with model: tiny=20s, base=40s, small=90s
-    const timeout = modelName === "small.en" ? 90_000 : modelName === "base.en" ? 40_000 : 20_000;
+    const size = modelName.replace(/\.en$/, "");
+    const timeout = size === "small" ? 90_000 : size === "base" ? 40_000 : 20_000;
 
     // Run faster-whisper via Python
     // model_size_or_path downloads automatically to HF cache on first use
@@ -72,7 +80,7 @@ async function transcribeLocal(audioBuffer, settingsStore) {
 import sys, json
 from faster_whisper import WhisperModel
 model = WhisperModel("${modelName}", device="cpu", compute_type="int8")
-segments, info = model.transcribe("${tmpWav}", language="en", beam_size=1, best_of=1, vad_filter=True)
+segments, info = model.transcribe("${tmpWav}", ${isEnglishOnly(modelName) ? 'language="en", ' : ""}beam_size=1, best_of=1, vad_filter=True)
 text = " ".join(s.text.strip() for s in segments)
 print(json.dumps({"text": text, "language": info.language, "duration": round(info.duration, 1)}))
 `;
@@ -91,7 +99,7 @@ print(json.dumps({"text": text, "language": info.language, "duration": round(inf
     const text = (result.text || "").trim();
 
     console.log(`[stt] faster-whisper (${modelName}): "${text.slice(0, 80)}${text.length > 80 ? "..." : ""}" [${result.duration}s audio]`);
-    return { transcript: text, language: result.language || "en", provider: `faster-whisper (${modelName})` };
+    return { transcript: text, language: result.language || (isEnglishOnly(modelName) ? "en" : "auto"), provider: `faster-whisper (${modelName})` };
   } finally {
     try { fs.unlinkSync(tmpInput); } catch {}
     try { fs.unlinkSync(tmpWav); } catch {}
@@ -184,7 +192,8 @@ export function getSTTModels() {
         downloaded = entries.includes(name.replace(".", "-"));
       }
     } catch {}
-    const sizeMB = name === "tiny.en" ? 75 : name === "base.en" ? 140 : 460;
-    return { name, sizeMB, downloaded };
+    const base = name.replace(/\.en$/, "");
+    const sizeMB = base === "tiny" ? 75 : base === "base" ? 140 : 460;
+    return { name, sizeMB, downloaded, multilingual: !isEnglishOnly(name) };
   });
 }

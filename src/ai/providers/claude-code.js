@@ -15,7 +15,6 @@ import fs from "node:fs";
 import path from "node:path";
 import config from "../../config/env.js";
 import { isTranscriptOverCap, transcriptSizeMB, SESSION_JSONL_MAX_MB } from "../../lib/claude-transcript.js";
-
 /**
  * Extract image blocks from content array.
  * Returns { images: ImageBlockParam[], text: string }

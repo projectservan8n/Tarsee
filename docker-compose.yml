@@ -14,11 +14,12 @@ services:
       - TARSEE_STATE_DIR=/data/tarsee
       - TARSEE_WORKSPACE_DIR=/data/tarsee/workspace
       - TARSEE_DATA_DIR=/data/tarsee/data
-      # AI Provider keys (set in .env file or env)
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      # NOTE: no ANTHROPIC_API_KEY here, deliberately. Tarsee authenticates with
+      # a Claude SUBSCRIPTION via `claude login` in the built-in web terminal;
+      # credentials persist on the volume. Passing an API key through would
+      # silently switch billing to metered per-token API usage.
+      # Third-party keys (ElevenLabs, OpenAI Whisper, captcha) are stored in the
+      # encrypted vault via Settings, not passed as environment variables.
       # Optional encryption key for stored secrets
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
     restart: unless-stopped

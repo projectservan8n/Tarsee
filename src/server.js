@@ -61,6 +61,22 @@ if (isEncryptionEnabled()) {
 }
 
 // --- Initialize database ---
+// --- Billing guard -------------------------------------------------------
+// Tarsee authenticates with a Claude SUBSCRIPTION (`claude login`, credentials
+// on the volume). If ANTHROPIC_API_KEY is present, the CLI and the Agent SDK
+// will silently prefer API-key auth, moving every turn onto metered per-token
+// billing with no visible change in behaviour. Checked at BOOT rather than
+// inside the provider, because the provider is imported lazily on the first
+// turn — by which point nobody is reading the log.
+if (process.env.ANTHROPIC_API_KEY) {
+  console.warn(
+    "[tarsee] WARNING: ANTHROPIC_API_KEY is set. Claude may authenticate with that key "
+    + "instead of your Claude subscription, which bills PER TOKEN rather than against your "
+    + "plan. Tarsee expects subscription auth via `claude login`. Unset ANTHROPIC_API_KEY "
+    + "unless you have deliberately chosen metered API billing.",
+  );
+}
+
 const db = initDb(config.DB_PATH);
 // Hydrate login sessions from disk so a restart/deploy doesn't sign everyone
 // out. Must run before any route that calls requireAuth.
@@ -280,6 +296,10 @@ app.set("channelManager", channelManager);
 // Wire into cron so scheduled tasks can send to channels
 import { setCronChannelManager } from "./lib/cron.js";
 setCronChannelManager(channelManager);
+// MUST stay unawaited, and MUST stay below server.listen(). The retry ladder in
+// _startWithRetry backs off up to ~152s per channel in the worst case, while
+// railway.toml sets healthcheckTimeout=60 — awaiting this would fail the deploy
+// healthcheck before the first channel finished retrying.
 channelManager.startAll().catch((err) => {
   console.warn("[tarsee] channel startup error:", err.message);
 });

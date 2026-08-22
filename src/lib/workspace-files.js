@@ -144,7 +144,19 @@ export function getBootstrapContext() {
  */
 export function getHeartbeatContext() {
   const content = readWorkspaceFile("HEARTBEAT.md");
-  if (!content || content.trim().length < 5) return "";
+  if (!content) return "";
+  // Strip markdown headings and HTML comments BEFORE the emptiness check.
+  // The default-shipped file is a heading plus instructional <!-- comments -->,
+  // which passes a naive trim>5 test while containing no actual instructions.
+  // The template's own text says "Leave empty to skip ... (saves tokens)" — but
+  // the naive check never skipped, so every deployment burned a full Claude turn
+  // on boot and again every ~30 minutes, forever, to conclude there was nothing
+  // to do. Worse, it makes the model invent work to justify the turn.
+  const significant = content
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/^#.*$/gm, "")
+    .trim();
+  if (significant.length < 5) return "";
   return truncateContent(content);
 }
 
@@ -154,7 +166,19 @@ export function getHeartbeatContext() {
  */
 export function getBootContext() {
   const content = readWorkspaceFile("BOOT.md");
-  if (!content || content.trim().length < 5) return "";
+  if (!content) return "";
+  // Strip markdown headings and HTML comments BEFORE the emptiness check.
+  // The default-shipped file is a heading plus instructional <!-- comments -->,
+  // which passes a naive trim>5 test while containing no actual instructions.
+  // The template's own text says "Leave empty to skip ... (saves tokens)" — but
+  // the naive check never skipped, so every deployment burned a full Claude turn
+  // on boot and again every ~30 minutes, forever, to conclude there was nothing
+  // to do. Worse, it makes the model invent work to justify the turn.
+  const significant = content
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/^#.*$/gm, "")
+    .trim();
+  if (significant.length < 5) return "";
   return truncateContent(content);
 }
 

@@ -5,6 +5,7 @@
 
 import fs from "node:fs";
 import { isEncryptionEnabled } from "./vault.js";
+import { claudeHomes } from "./claude-transcript.js";
 
 export function runAudit(settingsStore) {
   const issues = [];
@@ -19,10 +20,19 @@ export function runAudit(settingsStore) {
     issues.push({ severity: "warning", message: "No SETUP_PASSWORD set. Anyone can access the UI.", fix: "Set SETUP_PASSWORD env var" });
   }
 
-  // Check Claude auth — look for credentials file, not env var
-  const homeDir = process.env.CLAUDE_CODE_HOME || "/data/tarsee/.claude-code-home";
-  const credPath = `${homeDir}/.credentials.json`;
-  if (!fs.existsSync(credPath)) {
+  // Check Claude auth — look for the credentials file, not an env var.
+  // A single hardcoded path is unreliable here: the Dockerfile sets no USER and
+  // `gosu node` does not rewrite HOME, so credentials may sit under
+  // /home/node/.claude, under $HOME, or directly on the volume. Probe all of
+  // them (the same candidate list the transcript resolver uses) instead of
+  // guessing — otherwise an authenticated deployment reports itself logged out.
+  const credHomes = process.env.CLAUDE_CODE_HOME
+    ? [process.env.CLAUDE_CODE_HOME]
+    : claudeHomes();
+  const hasCreds = credHomes.some((h) => {
+    try { return fs.existsSync(`${h}/.credentials.json`); } catch { return false; }
+  });
+  if (!hasCreds) {
     issues.push({ severity: "warning", message: "No Claude credentials found. Run 'claude login' in the web terminal.", fix: "Open Terminal and run: claude login" });
   }
 
