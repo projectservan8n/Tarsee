@@ -29,7 +29,7 @@ const MB = 1048576;
  * Default cap before a session is considered too bloated to resume.
  *
  * The Mac build uses 3 MB, but its default model has a 200k window. This
- * build's default (claude-opus-4-7) has a 1M window, so 3 MB would abandon
+ * build's default (the `opus` alias) has a 1M window, so 3 MB would abandon
  * sessions that are still perfectly healthy. 8 MB is the equivalent headroom.
  */
 export const SESSION_JSONL_MAX_MB =

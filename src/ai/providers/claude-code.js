@@ -85,7 +85,8 @@ function extractMedia(content) {
  *
  * @param {object} opts
  * @param {Array} opts.messages - Conversation history (we extract the latest user message)
- * @param {string} opts.model - Model ID (claude-sonnet-4-6, claude-opus-4-6, etc.)
+ * @param {string} opts.model - Model ID or tier alias (opus, sonnet, haiku, fable,
+ *   or a pinned id like claude-opus-5). Forwarded to the CLI as --model.
  * @param {string} [opts.systemPrompt] - System prompt (passed as context to Claude Code)
  * @param {AbortSignal} [opts.signal] - Abort signal
  * @param {string} [opts.sessionId] - Claude Code session ID for resumption
@@ -135,13 +136,17 @@ export async function* chat({
     additionalDirectories: [skillsDir],
   };
 
-  // Thinking effort: low, medium, high, max, xhigh (Opus 4.7+)
-  // xhigh maps to the SDK's max effort internally — once the Agent SDK
-  // adds a dedicated xhigh level we can pass it through directly. For now
-  // xhigh is a hint to the UI that the user wants maximum; server-side it
-  // falls back to "max" so the provider accepts it.
-  if (effort && ["low", "medium", "high", "max", "xhigh"].includes(effort)) {
-    queryOptions.effort = effort === "xhigh" ? "max" : effort;
+  // Thinking effort. `xhigh` sits BETWEEN high and max, and is the sweet spot
+  // for most coding and agentic work.
+  //
+  // This used to rewrite xhigh -> max, with a comment saying the Agent SDK had
+  // no dedicated xhigh level yet. It does now — the installed SDK types effort
+  // as ('low'|'medium'|'high'|'xhigh'|'max') and performs its own per-model
+  // downgrade when a model doesn't support a level. So the rewrite no longer
+  // works around anything; it just silently charged users MORE effort than they
+  // asked for. Pass the level through and let the SDK resolve it.
+  if (effort && ["low", "medium", "high", "xhigh", "max"].includes(effort)) {
+    queryOptions.effort = effort;
   }
 
   // OpenClaw-style: lightweight system prompt + tool-based memory access

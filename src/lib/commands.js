@@ -91,7 +91,7 @@ const COMMANDS = {
         const available = CLAUDE_MODELS.map(
           (m) => `- \`/model ${m.tier}\` — ${m.displayName} (${m.context}${m.recommended ? ", recommended" : ""})`
         ).join("\n");
-        return `**Current model:** ${label}\n\n**Available:**\n${available}\n\nYou can also pass a full model id (e.g. \`/model claude-opus-4-7\`).`;
+        return `**Current model:** ${label}\n\n**Available:**\n${available}\n\nYou can also pass a full model id (e.g. \`/model claude-opus-5\`) to pin a specific version instead of tracking the latest.`;
       }
 
       const provider = active?.provider || "claude-code";
@@ -121,7 +121,7 @@ const COMMANDS = {
         const current = ctx.conversationId
           ? settingsStore.get(`session.${ctx.conversationId}.effort`) || "default"
           : "default";
-        return `**Current effort:** ${current}\n\n**Options:**\n- \`/think low\` — Minimal thinking, fastest\n- \`/think medium\` — Balanced\n- \`/think high\` — Deep reasoning (default)\n- \`/think max\` — Maximum effort (Opus only)\n- \`/think xhigh\` — Extra-high budget (Opus 4.7 only)`;
+        return `**Current effort:** ${current}\n\n**Options:**\n- \`/think low\` — Minimal thinking, fastest\n- \`/think medium\` — Balanced\n- \`/think high\` — Deep reasoning (default)\n- \`/think xhigh\` — Extra-high; the sweet spot for most coding and agentic work\n- \`/think max\` — Maximum effort, when correctness matters more than cost`;
       }
 
       const level = levels[args.toLowerCase()];
