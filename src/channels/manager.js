@@ -17,36 +17,70 @@ export class ChannelManager {
    * Starts all configured channels.
    */
   async startAll() {
-    // Email has a different "ready" check than token-based channels —
-    // it needs imap + smtp config + enabled, not a single token.
+    // Channels start in PARALLEL. This used to be a serial await-loop, which
+    // meant one slow channel blocked every channel after it — and because
+    // WhatsApp was registered last, a stuck Telegram poller (e.g. minutes of
+    // 409 retries against another poller) stopped WhatsApp from EVER starting.
+    // A failure in one channel must never gate the others.
+    //
+    // Email has a different "ready" check than token-based channels — it needs
+    // imap + smtp config + enabled, not a single token.
     const tokenChannels = ["discord", "telegram", "whatsapp"];
+    const tasks = [];
 
     for (const type of tokenChannels) {
-      try {
-        const channelConfig = this.settings.get(`channel.${type}`);
-        if (channelConfig?.enabled && channelConfig?.token) {
-          await this.start(type, channelConfig);
-        }
-      } catch (err) {
-        console.warn(`[channels] failed to start ${type}:`, err.message);
-      }
+      const channelConfig = this.settings.get(`channel.${type}`);
+      if (!channelConfig?.enabled || !channelConfig?.token) continue;
+      tasks.push(this._startWithRetry(type, channelConfig));
     }
 
-    // Email
-    try {
-      const emailConfig = this.settings.get("channel.email");
-      if (isEmailReady(emailConfig)) {
-        await this.start("email", emailConfig);
+    const emailConfig = this.settings.get("channel.email");
+    if (isEmailReady(emailConfig)) {
+      tasks.push(
+        this.start("email", emailConfig).catch((err) =>
+          console.warn("[channels] failed to start email:", err.message),
+        ),
+      );
+    }
+
+    // server.js already treats startAll() as fire-and-forget; allSettled just
+    // lets us surface one completion log once everything has settled.
+    const results = await Promise.allSettled(tasks);
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    console.log(`[channels] startup settled: ${ok}/${results.length} channel(s) running`);
+  }
+
+  /**
+   * Start a channel, retrying with exponential backoff. Transient network
+   * failures at boot (DNS not up yet, upstream 5xx) previously killed a
+   * channel for the whole process lifetime — on Railway that means until
+   * the next deploy, because there is no console to restart it by hand.
+   */
+  async _startWithRetry(type, channelConfig, maxAttempts = 8) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await this.start(type, channelConfig);
+        return;
+      } catch (err) {
+        const last = attempt === maxAttempts;
+        console.warn(
+          `[channels] start ${type} attempt ${attempt}/${maxAttempts} failed:`, err.message,
+          "| code=" + (err.code || "?"),
+          "| errno=" + (err.errno || "?"),
+          "| cause=" + (err.cause?.code || err.cause?.message || "?"),
+        );
+        if (last) return;
+        const delay = Math.min(2_000 * Math.pow(2, attempt - 1), 45_000); // 2,4,8,16,32,45,45s
+        console.warn(`[channels] retrying ${type} in ${delay}ms...`);
+        await new Promise((r) => setTimeout(r, delay));
       }
-    } catch (err) {
-      console.warn("[channels] failed to start email:", err.message);
     }
   }
 
   /**
    * Starts a specific channel.
    */
-  async start(type, channelConfig) {
+  async start(type, channelConfig, opts = {}) {
     // Stop existing instance if running
     if (this.channels.has(type)) {
       await this.stop(type);
@@ -64,7 +98,10 @@ export class ChannelManager {
         }
         case "telegram": {
           const { createTelegramBot } = await import("./telegram.js");
-          bot = await createTelegramBot(channelConfig, this.db);
+          // opts carries deliverPending: when the health monitor relaunches a
+          // WEDGED poller, the queued updates are real messages the stuck
+          // poller failed to pull, so they must be delivered not dropped.
+          bot = await createTelegramBot(channelConfig, this.db, opts);
           break;
         }
         case "email": {
@@ -117,7 +154,7 @@ export class ChannelManager {
   /**
    * Restarts a specific channel.
    */
-  async restart(type) {
+  async restart(type, opts = {}) {
     const channelConfig = this.settings.get(`channel.${type}`);
     // Email uses imap/smtp instead of a single token — different readiness check.
     if (type === "email") {
@@ -127,7 +164,7 @@ export class ChannelManager {
     } else if (!channelConfig?.enabled || !channelConfig?.token) {
       throw new Error(`${type} is not configured or not enabled`);
     }
-    await this.start(type, channelConfig);
+    await this.start(type, channelConfig, opts);
   }
 
   /**

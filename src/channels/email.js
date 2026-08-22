@@ -319,6 +319,8 @@ export async function createEmailBot(rawConfig, db) {
         const cmdResult = await processCommand(stripped, {
           settingsStore, convStore,
           conversationId: convId,
+          platform: "email", // was missing — platform-gated commands misrouted
+          db,                // was missing — /clear silently no-op'd
         });
         if (cmdResult?.handled) {
           const playbook = extractPlaybookPrompt(cmdResult);
@@ -360,6 +362,8 @@ export async function createEmailBot(rawConfig, db) {
     });
 
     let fullResponse = "";
+    // Token usage for this turn — drives Settings -> Token Health.
+    let tokenUsage = {};
     try {
       const toolCtx = { db, settingsStore, conversationId: convId };
       const workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
@@ -384,6 +388,7 @@ export async function createEmailBot(rawConfig, db) {
         });
         for await (const event of stream) {
           if (event.type === "text") fullResponse += event.content;
+          else if (event.type === "usage") tokenUsage = { ...tokenUsage, ...event.usage };
           else if (event.type === "done") { stopReason = event.stopReason || "end_turn"; break; }
         }
         if (stopReason !== "tool_use") break;
@@ -400,6 +405,10 @@ export async function createEmailBot(rawConfig, db) {
         content: fullResponse,
         provider: activeProvider.provider,
         model: activeProvider.model,
+        tokensIn: (tokenUsage.input_tokens || 0)
+          + (tokenUsage.cache_read_input_tokens || 0)
+          + (tokenUsage.cache_creation_input_tokens || 0) || null,
+        tokensOut: tokenUsage.output_tokens ?? null,
       });
 
       await sendReply({
@@ -445,13 +454,15 @@ export async function createEmailBot(rawConfig, db) {
     });
 
     const subject = normalizeReplySubject(incoming.subject);
+    const replyParts = applySignature(String(bodyText || "").slice(0, 100_000), cfg.signature);
 
     await smtp.sendMail({
       from: `"${cfg.fromName || "Tarsee"}" <${selfAddress}>`,
       to: recipients.to.join(", "),
       cc: recipients.cc.length ? recipients.cc.join(", ") : undefined,
       subject,
-      text: String(bodyText || "").slice(0, 100_000),
+      text: replyParts.text,
+      ...(replyParts.html ? { html: replyParts.html } : {}),
       inReplyTo,
       references,
     });
@@ -513,11 +524,13 @@ export async function createEmailBot(rawConfig, db) {
     sendMessage: async (chatId, message) => {
       const to = String(chatId).split(",").map((s) => s.trim()).filter(Boolean);
       if (to.length === 0) throw new Error("email.sendMessage needs a target address in chatId");
+      const parts = applySignature(String(message || ""), cfg.signature);
       await smtp.sendMail({
         from: `"${cfg.fromName || "Tarsee"}" <${selfAddress}>`,
         to: to.join(", "),
         subject: cfg.defaultSubject || "Tarsee message",
-        text: String(message || ""),
+        text: parts.text,
+        ...(parts.html ? { html: parts.html } : {}),
       });
     },
 
@@ -533,19 +546,29 @@ export async function createEmailBot(rawConfig, db) {
      * @param {string} [opts.inReplyTo]  Message-ID to thread under
      * @returns {Promise<{messageId: string}>}
      */
-    sendNew: async ({ to, cc, subject, body, inReplyTo }) => {
+    /**
+     * @param {Array<{path: string, filename?: string}>} [opts.attachments]
+     *        Files to attach as real MIME parts. Pass these instead of inlining
+     *        `<#part>` / Mutt-style markup in the body — that markup is plain
+     *        text to nodemailer and ships verbatim to the recipient.
+     */
+    sendNew: async ({ to, cc, subject, body, inReplyTo, attachments }) => {
       const toArr = Array.isArray(to) ? to : String(to).split(",").map((s) => s.trim()).filter(Boolean);
       const ccArr = cc ? (Array.isArray(cc) ? cc : String(cc).split(",").map((s) => s.trim()).filter(Boolean)) : [];
+      const atts = normalizeAttachments(attachments);
+      const parts = applySignature(String(body || ""), cfg.signature);
       const info = await smtp.sendMail({
         from: `"${cfg.fromName || "Tarsee"}" <${selfAddress}>`,
         to: toArr.join(", "),
         cc: ccArr.length ? ccArr.join(", ") : undefined,
         subject: inReplyTo ? normalizeReplySubject(subject) : (subject || "(no subject)"),
-        text: String(body || ""),
+        text: parts.text,
+        ...(parts.html ? { html: parts.html } : {}),
+        ...(atts.length ? { attachments: atts } : {}),
         inReplyTo,
         references: inReplyTo,
       });
-      return { messageId: info.messageId };
+      return { messageId: info.messageId, attachmentCount: atts.length };
     },
   };
 }
@@ -563,6 +586,8 @@ function normalizeConfig(c) {
     defaultSubject: c.defaultSubject || "Tarsee",
     mentionKeyword: c.mentionKeyword || DEFAULT_MENTION_KEYWORD,
     replyAllMarker: c.replyAllMarker || DEFAULT_REPLY_ALL_MARKER,
+    // Outbound signature — plain text, or HTML (rendered as multipart/alternative).
+    signature: typeof c.signature === "string" ? c.signature : "",
     allowlistFromAddresses: Array.isArray(c.allowlistFromAddresses)
       ? c.allowlistFromAddresses
       : [],
@@ -572,4 +597,60 @@ function normalizeConfig(c) {
   // Strip leading "@" from mentionKeyword — we always match with a prefix "@".
   if (out.mentionKeyword.startsWith("@")) out.mentionKeyword = out.mentionKeyword.slice(1);
   return out;
+}
+
+
+/**
+ * Normalize an attachments spec into nodemailer's format. Accepts a path
+ * string, an object with {path|filepath|file}, or a pass-through inline
+ * content/cid attachment. Throws early if a path does not exist so the model
+ * gets a real error instead of silently sending a mail with nothing attached.
+ */
+function normalizeAttachments(atts) {
+  if (!atts) return [];
+  const arr = Array.isArray(atts) ? atts : [atts];
+  const out = [];
+  for (const a of arr) {
+    if (!a) continue;
+    if (typeof a === "string") {
+      if (!fs.existsSync(a)) throw new Error(`attachment path not found: ${a}`);
+      out.push({ path: a, filename: path.basename(a) });
+      continue;
+    }
+    if (typeof a !== "object") continue;
+    const p = a.path || a.filepath || a.file;
+    if (p) {
+      if (!fs.existsSync(p)) throw new Error(`attachment path not found: ${p}`);
+      out.push({ path: p, filename: a.filename || path.basename(p), contentType: a.contentType });
+      continue;
+    }
+    if (a.content || a.raw) out.push(a); // inline content / cid
+  }
+  return out;
+}
+
+/**
+ * Build the body + signature for nodemailer. Returns { text, html? }.
+ * A plain-text signature is appended to the text part; an HTML signature
+ * additionally produces a multipart/alternative html part so it renders.
+ */
+function applySignature(body, signature) {
+  const bodyStr = String(body || "");
+  const sig = (signature || "").trim();
+  if (!sig) return { text: bodyStr };
+
+  const isHtml = /<[a-z][^>]*>/i.test(sig);
+  const trimmed = bodyStr.replace(/\s+$/, "");
+  if (!isHtml) return { text: `${trimmed}\n\n${sig}\n` };
+
+  return {
+    text: `${trimmed}\n\n${htmlToText(sig)}\n`,
+    html: `<div style="white-space:pre-wrap;font-family:-apple-system,Helvetica,Arial,sans-serif">${escapeHtml(bodyStr)}</div><br>${sig}`,
+  };
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
 }

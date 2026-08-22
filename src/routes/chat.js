@@ -531,7 +531,13 @@ chatRouter.post("/send", async (req, res) => {
     // stuck-model guard, unrelated to the client connection.
     let lastEventAt = Date.now();
     const HEARTBEAT_MS = 15_000;
-    const IDLE_ABORT_MS = 3 * 60_000;
+    // Idle abort: how long a turn may go with NO stream event before we give up.
+    // Was a hard 3 minutes, which killed legitimate long research/tool turns.
+    // Now configurable, but deliberately FINITE — the Mac build sets this to
+    // ~2e9 (23 days), which is only safe there because its PTY pool has a
+    // heartbeat + dead-socket detector. This build has neither, so an infinite
+    // value would wedge a turn forever with no console to kill it from.
+    const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
     const hb = setInterval(() => {
       if (res.writableEnded || clientDetached) {
         if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
@@ -702,7 +708,9 @@ chatRouter.post("/send", async (req, res) => {
           content,
           provider: providerId,
           model,
-          tokensIn: usage.input_tokens,
+          tokensIn: (usage.input_tokens || 0)
+          + (usage.cache_read_input_tokens || 0)
+          + (usage.cache_creation_input_tokens || 0) || null,
           tokensOut: usage.output_tokens,
         });
       }
@@ -751,7 +759,13 @@ chatRouter.post("/send", async (req, res) => {
   // NOT abort; only the 3-min stuck-model watchdog does.
   let lastEventAt2 = Date.now();
   const HEARTBEAT_MS = 15_000;
-  const IDLE_ABORT_MS = 3 * 60_000;
+  // Idle abort: how long a turn may go with NO stream event before we give up.
+  // Was a hard 3 minutes, which killed legitimate long research/tool turns.
+  // Now configurable, but deliberately FINITE — the Mac build sets this to
+  // ~2e9 (23 days), which is only safe there because its PTY pool has a
+  // heartbeat + dead-socket detector. This build has neither, so an infinite
+  // value would wedge a turn forever with no console to kill it from.
+  const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
   const genericController = new AbortController();
   let clientDetached2 = false;
   res.on("close", () => {
@@ -856,7 +870,9 @@ chatRouter.post("/send", async (req, res) => {
         content: fullResponse,
         provider: providerId,
         model,
-        tokensIn: usage.input_tokens,
+        tokensIn: (usage.input_tokens || 0)
+          + (usage.cache_read_input_tokens || 0)
+          + (usage.cache_creation_input_tokens || 0) || null,
         tokensOut: usage.output_tokens,
       });
     }

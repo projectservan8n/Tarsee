@@ -357,14 +357,14 @@ export const TOOLS = [
 
   {
     name: "send_message",
-    description: "Send a message to a specific channel. Use this to proactively message the user on Telegram, Discord, or Slack, or to send data/files to the chat.",
+    description: "Send a message to a specific channel. Use this to proactively message the user on Telegram, Discord, WhatsApp, Slack or email, or to send data/files to the chat.",
     input_schema: {
       type: "object",
       properties: {
         channel: {
           type: "string",
-          description: "The channel to send to",
-          enum: ["web", "discord", "telegram", "slack"],
+          description: "The channel to send to. `email` requires channel_id (the target address).",
+          enum: ["web", "discord", "telegram", "whatsapp", "slack", "email"],
         },
         message: {
           type: "string",

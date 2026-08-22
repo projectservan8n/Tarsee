@@ -14,6 +14,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import fs from "node:fs";
 import path from "node:path";
 import config from "../../config/env.js";
+import { isTranscriptOverCap, transcriptSizeMB, SESSION_JSONL_MAX_MB } from "../../lib/claude-transcript.js";
 
 /**
  * Extract image blocks from content array.
@@ -204,9 +205,21 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
   effectiveSystemPrompt = effectiveSystemPrompt.replace(/[\uD800-\uDFFF]/g, "");
   queryOptions.systemPrompt = effectiveSystemPrompt;
 
-  // Resume existing session if available
+  // Resume existing session if available — unless its transcript has grown
+  // past the cap. Claude Code re-reads the whole .jsonl on resume, so a
+  // bloated transcript refills the context window before the user's message
+  // is even considered: turns get slower, more expensive, and eventually
+  // hang. Past the cap we start a FRESH session instead of resuming the
+  // bloat. (Settings -> Token Health surfaces which sessions are near it.)
   if (sessionId) {
-    queryOptions.resume = sessionId;
+    if (isTranscriptOverCap(sessionId)) {
+      const mb = transcriptSizeMB(sessionId);
+      console.warn(
+        `[claude-code] session ${sessionId} transcript ${mb}MB > ${SESSION_JSONL_MAX_MB}MB cap — starting FRESH instead of resuming the bloat`,
+      );
+    } else {
+      queryOptions.resume = sessionId;
+    }
   }
 
   console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}, media: ${mediaBlocks.length}, mcp: ${tarseeMcp ? "yes" : "NO"}, allowedTools: ${allTools.join(",")}`);

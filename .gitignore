@@ -17,3 +17,25 @@ docs/superpowers/
 clawdbot-railway-template/
 piper-voices/
 openclaw-main/
+
+# === Credential safety guards ===
+# This is a PUBLIC repository. These patterns catch credential-shaped files
+# before an accidental `git add .` makes them permanent in public history.
+vault.json
+vault*.json
+*-vault.json
+keys.json
+keys-export.json
+secrets.json
+credentials.json
+**/*.credentials.json
+**/*.secret.json
+**/api-keys.json
+
+# Claude Code OAuth credentials (entrypoint.sh symlinks these to the volume)
+.claude-code-home/
+.encryption-key
+
+# A migration bundle copied in from another deployment — contains the DB,
+# workspace files, encrypted vault and live sessions.
+tarsee-migration/

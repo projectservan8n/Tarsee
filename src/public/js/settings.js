@@ -508,6 +508,45 @@ const Settings = {
     if (tabName === "canvas") { this.loadCanvasGallery(); }
     if (tabName === "audit") { this.loadAuditLog(); }
     if (tabName === "usage") { this.loadUsageChart(); }
+    if (tabName === "health") { this.loadContextHealth(); }
+  },
+
+  async loadContextHealth() {
+    const el = document.getElementById("contextHealthContent");
+    if (!el) return;
+    const btn = document.getElementById("refreshContextHealthBtn");
+    if (btn && !btn._wired) { btn._wired = true; btn.addEventListener("click", () => this.loadContextHealth()); }
+    el.textContent = "Loading…";
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    const fmt = (n) => n >= 1000 ? Math.round(n / 1000) + "k" : String(n);
+    try {
+      const data = await API.json("/api/admin/context-health");
+      if (!data.conversations || !data.conversations.length) { el.textContent = "No conversations yet."; return; }
+      const body = data.conversations.map((c) => {
+        const color = c.status === "critical" ? "#ef4444" : c.status === "warning" ? "#f59e0b" : "#22c55e";
+        const mb = c.transcriptMB != null ? c.transcriptMB + " MB" : "—";
+        const reset = c.willResetNextTurn ? ' <span style="color:#f59e0b;font-size:11px">↻ resets next turn</span>' : "";
+        // An estimate must never be shown as if it were measured telemetry.
+        const approx = c.measured ? "" : "~";
+        const est = c.measured ? "" : ' <span style="color:var(--text-muted);font-size:11px">est.</span>';
+        return `<tr style="border-top:1px solid var(--border)">
+          <td style="padding:7px 8px">${esc(c.title)}</td>
+          <td style="padding:7px 8px;text-align:right">${c.messages}</td>
+          <td style="padding:7px 8px;text-align:right;white-space:nowrap">${mb}${reset}</td>
+          <td style="padding:7px 8px;text-align:right;white-space:nowrap">${approx}${fmt(c.contextTokens)} / ${fmt(c.contextWindow)}</td>
+          <td style="padding:7px 8px;text-align:right;white-space:nowrap"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>${approx}${c.contextPct}%${est}</td>
+        </tr>`;
+      }).join("");
+      el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="text-align:left;color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px">
+          <th style="padding:6px 8px">Conversation</th><th style="padding:6px 8px;text-align:right">Msgs</th>
+          <th style="padding:6px 8px;text-align:right">Transcript</th><th style="padding:6px 8px;text-align:right">Context</th>
+          <th style="padding:6px 8px;text-align:right">Fill</th>
+        </tr></thead><tbody>${body}</tbody></table>
+        <div class="hint mt-2">Transcript cap: ${data.sessionCapMB} MB · 🟢 &lt;80% · 🟡 warning · 🔴 &gt;95% · “est.” means no token telemetry recorded yet for that conversation.</div>`;
+    } catch (err) {
+      el.textContent = "Could not load token health.";
+    }
   },
 
   // --- Open / Close ---

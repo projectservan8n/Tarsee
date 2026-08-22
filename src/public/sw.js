@@ -1,6 +1,6 @@
 // Tarsee Service Worker — PWA install, offline shell, network-first for code.
 // Bump CACHE_NAME when shipping SW behavior changes to force old caches out.
-const CACHE_NAME = "tarsee-v5";
+const CACHE_NAME = "tarsee-v6";
 
 const APP_SHELL = [
   "/",

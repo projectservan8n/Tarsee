@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { validatePassword, createSession, destroySession, recordFailedAttempt, clearFailedAttempts, requireAuth } from "../middleware/auth.js";
+import { validatePassword, createSession, destroySession, recordFailedAttempt, clearFailedAttempts, requireAuth, sessionMaxAgeMs } from "../middleware/auth.js";
 import config from "../config/env.js";
 
 export const authRouter = Router();
@@ -37,7 +37,7 @@ authRouter.post("/login", (req, res) => {
     httpOnly: true,
     sameSite: "Strict",
     secure: config.NODE_ENV === "production",
-    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    maxAge: sessionMaxAgeMs(), // kept in lockstep with the server-side session
     path: "/",
   });
 

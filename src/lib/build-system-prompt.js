@@ -2,7 +2,6 @@ import { MemoryStore } from "../db/memory.js";
 import { getSkillsPromptContext } from "./skills-engine.js";
 import { getLearningHint } from "./personality-learner.js";
 import { getBootstrapContext, readWorkspaceFile } from "./workspace-files.js";
-import { getBootContextSummary } from "./boot-context.js";
 import { readAndArchiveCheckpoint } from "./checkpoint.js";
 import { getCredentialInventory, renderInventoryPromptSection } from "./credential-inventory.js";
 
@@ -85,11 +84,16 @@ export function buildSystemPrompt({
     prompt += skillsContext;
   }
 
-  // Boot context — what was happening before redeploy (only on first few messages)
-  if (messageCount <= 1) {
-    const bootCtx = getBootContextSummary();
-    if (bootCtx) prompt += bootCtx;
-  }
+  // Boot context injection REMOVED: it broadcast the last user message +
+  // assistant reply of the 3 most-recent conversations across ALL channels
+  // into every conversation's early system prompt. That leaked one channel's
+  // content into another (e.g. a Telegram exchange surfacing in a Discord
+  // answer) — unacceptable once more than one person or channel is in play.
+  // Per-conversation continuity is already handled by each conversation's own
+  // resumed session (which now survives restarts, see server.js), so this
+  // cross-conversation summary was both leaky AND redundant. Durable shared
+  // knowledge still flows via MEMORY.md / USER.md / bot_memory — those are
+  // intentional shared facts, not private chatter.
 
   // Checkpoint — user-written detailed handoff from a previous instance
   // (dropped via /checkpoint before a planned restart). Inject on the

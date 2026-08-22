@@ -286,6 +286,10 @@
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 2h8a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M6 5h4M6 8h4M6 11h2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
             Audit Log
           </button>
+          <button class="settings-tab" data-tab="health">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 8h3l2-5 3 10 2-5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Token Health
+          </button>
           <button class="settings-tab" data-tab="appearance">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 2a6 6 0 000 12V2z" fill="currentColor"/></svg>
             Appearance
@@ -896,6 +900,16 @@
           </div>
 
           <!-- Appearance Tab -->
+          <!-- Token Health Tab -->
+          <div class="settings-tab-panel" data-tab="health">
+            <h2>Token Health</h2>
+            <div class="settings-section">
+              <div class="hint mb-3">Per-conversation context-window fill plus the Claude session transcript size — the real bloat signal. Sessions past the cap start <strong>fresh</strong> on their next turn instead of resuming the bloat, which is what prevents context-bloat hangs. Sorted biggest transcript first.</div>
+              <button class="btn btn-sm mb-3" id="refreshContextHealthBtn">Refresh</button>
+              <div id="contextHealthContent" class="text-muted text-sm">Loading…</div>
+            </div>
+          </div>
+
           <div class="settings-tab-panel" data-tab="appearance">
             <h2>Appearance</h2>
             <div class="settings-section">

@@ -7,6 +7,12 @@ import Busboy from "busboy";
 import config from "../config/env.js";
 import { isEncryptionEnabled } from "../lib/vault.js";
 import { AuditLog } from "../db/audit.js";
+import { CLAUDE_MODELS_BY_ID, getRecommendedModel } from "../config/constants.js";
+import {
+  transcriptSizeMB,
+  isTranscriptOverCap,
+  SESSION_JSONL_MAX_MB,
+} from "../lib/claude-transcript.js";
 
 export const adminRouter = Router();
 
@@ -263,4 +269,107 @@ adminRouter.post("/restore", (req, res) => {
   });
 
   req.pipe(busboy);
+});
+
+
+/**
+ * Parse a model registry context string ("1M", "200k") into a token count.
+ * Falls back to 200k for anything unrecognised.
+ */
+function contextWindowTokens(modelId) {
+  const override = Number(process.env.TARSEE_MODEL_CONTEXT_TOKENS);
+  if (override > 0) return override;
+  const raw = CLAUDE_MODELS_BY_ID[modelId]?.context
+    || CLAUDE_MODELS_BY_ID[getRecommendedModel()]?.context;
+  const m = /^([\d.]+)\s*([MmKk])?$/.exec(String(raw || "").trim());
+  if (!m) return 200_000;
+  const n = parseFloat(m[1]);
+  const unit = (m[2] || "").toLowerCase();
+  if (unit === "m") return Math.round(n * 1_000_000);
+  if (unit === "k") return Math.round(n * 1_000);
+  return Math.round(n);
+}
+
+/**
+ * GET /api/admin/context-health
+ *
+ * Per-conversation context-window health: how full the model's context
+ * actually is, plus the Claude session transcript (.jsonl) size — the real
+ * driver of bloat-hangs. Sorted biggest-transcript-first so the hang-prone
+ * conversations stand out.
+ *
+ * IMPORTANT — how contextPct is computed:
+ * Context fill is a POINT-IN-TIME measure: the prompt size of the most recent
+ * turn. It is NOT the running total of every token the conversation ever used
+ * (summing those yields nonsense like 832% once a chat is long enough). We
+ * therefore take the LAST assistant message's tokens_in, which the channels
+ * now record as input + cache_read + cache_creation — the true prompt size.
+ *
+ * Conversations whose transcript is past the cap are flagged
+ * `willResetNextTurn`; the provider enforces that same cap by refusing to
+ * resume, so the flag reflects real behaviour rather than predicting it.
+ */
+adminRouter.get("/context-health", (req, res) => {
+  try {
+    const db = req.app.get("db");
+    if (!db) return res.status(500).json({ error: "db unavailable" });
+
+    const convs = db.prepare(
+      "SELECT id, title, model, claude_session_id, updated_at FROM conversations ORDER BY updated_at DESC LIMIT 80",
+    ).all();
+
+    const rows = convs.map((c) => {
+      const messages = db.prepare(
+        "SELECT COUNT(*) n FROM messages WHERE conversation_id=?",
+      ).get(c.id)?.n || 0;
+
+      // Last recorded prompt size = current context fill.
+      const lastIn = db.prepare(
+        `SELECT tokens_in FROM messages
+          WHERE conversation_id=? AND tokens_in IS NOT NULL AND tokens_in > 0
+          ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+      ).get(c.id)?.tokens_in || 0;
+
+      // Cumulative spend is still useful, but it is a DIFFERENT number and is
+      // reported separately so the two can never be confused again.
+      const totals = db.prepare(
+        `SELECT COALESCE(SUM(tokens_in),0) ti, COALESCE(SUM(tokens_out),0) tou
+           FROM messages WHERE conversation_id=?`,
+      ).get(c.id) || { ti: 0, tou: 0 };
+
+      const contextWindow = contextWindowTokens(c.model);
+      const measured = lastIn > 0;
+      // Only estimate when we genuinely have no telemetry for this chat.
+      const tokensEst = measured ? lastIn : messages * 80;
+      const contextPct = Math.min(
+        100,
+        Math.round((tokensEst / contextWindow) * 1000) / 10,
+      );
+      const transcriptMB = transcriptSizeMB(c.claude_session_id);
+
+      return {
+        id: c.id,
+        title: c.title || "(untitled)",
+        messages,
+        contextTokens: tokensEst,
+        contextWindow,
+        contextPct,
+        // Callers must not present an estimate as a measurement.
+        measured,
+        status: contextPct > 95 ? "critical" : contextPct > 80 ? "warning" : "healthy",
+        lifetimeTokensIn: totals.ti,
+        lifetimeTokensOut: totals.tou,
+        transcriptMB,
+        willResetNextTurn: isTranscriptOverCap(c.claude_session_id),
+        updatedAt: c.updated_at,
+      };
+    }).sort((a, b) => (b.transcriptMB || 0) - (a.transcriptMB || 0));
+
+    res.json({
+      sessionCapMB: SESSION_JSONL_MAX_MB,
+      conversations: rows,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });

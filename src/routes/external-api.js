@@ -49,9 +49,25 @@ externalApiRouter.post("/message", async (req, res) => {
     const history = messages.map(m => ({ role: m.role, content: m.content }));
 
     const model = settingsStore?.get("ai.claude-code.model") || getRecommendedModel();
-    const systemPrompt = await buildSystemPrompt(req.app, convId);
-    const toolDefs = getToolDefinitions(req.app);
-    const toolCtx = { app: req.app, conversationId: convId };
+    // buildSystemPrompt takes a destructured options object, not (app, convId).
+    // Passing req.app as the first arg means settingsStore + db come back
+    // undefined and the MemoryStore constructor crashes with "Cannot read
+    // properties of undefined (reading 'prepare')". Likewise getToolDefinitions()
+    // takes no arguments, and executeTool expects the real handles in toolCtx —
+    // not an { app } wrapper it never unwraps.
+    const systemPrompt = buildSystemPrompt({
+      settingsStore: req.app.get("settingsStore"),
+      db: req.app.get("db"),
+      conversationId: convId,
+      channelManager: req.app.get("channelManager"),
+    });
+    const toolDefs = getToolDefinitions();
+    const toolCtx = {
+      db: req.app.get("db"),
+      settingsStore: req.app.get("settingsStore"),
+      channelManager: req.app.get("channelManager"),
+      conversationId: convId,
+    };
 
     // Stream and collect response
     let fullText = "";
@@ -63,10 +79,13 @@ externalApiRouter.post("/message", async (req, res) => {
       tools: toolDefs,
       executeTool: (name, input) => executeTool(name, input, toolCtx),
       conversationId: convId,
-      claudeSessionId: convStore.getClaudeSessionId(convId),
+      // `claudeSessionId` is the wrong key — the provider expects `sessionId`,
+      // so claude never resumed across turns and every message spawned a fresh
+      // session that re-read the whole workspace.
+      sessionId: convStore.getClaudeSessionId(convId),
+      onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
     })) {
       if (event.type === "text") fullText += event.content;
-      else if (event.type === "session_id") convStore.setClaudeSessionId(convId, event.sessionId);
     }
 
     // Save assistant message

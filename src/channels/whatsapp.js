@@ -301,6 +301,7 @@ export async function createWhatsAppBot(config, db) {
         convStore,
         conversationId: existingConvId,
         platform: "whatsapp",
+        db, // was missing — /clear silently no-op'd
       });
       if (cmdResult.handled) {
         const playbook = extractPlaybookPrompt(cmdResult);
@@ -341,7 +342,13 @@ export async function createWhatsAppBot(config, db) {
     const controller = new AbortController();
     let lastEventAt = Date.now();
     let idleAborted = false;
-    const IDLE_ABORT_MS = 3 * 60_000;
+    // Idle abort: how long a turn may go with NO stream event before we give up.
+    // Was a hard 3 minutes, which killed legitimate long research/tool turns.
+    // Now configurable, but deliberately FINITE — the Mac build sets this to
+    // ~2e9 (23 days), which is only safe there because its PTY pool has a
+    // heartbeat + dead-socket detector. This build has neither, so an infinite
+    // value would wedge a turn forever with no console to kill it from.
+    const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
     const idleTimer = setInterval(() => {
       if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
         idleAborted = true;
@@ -390,6 +397,10 @@ You can use these special markers in your response:
       // One-shot retry budget for session-corruption recovery (same pattern as telegram)
       let sessionRetried = false;
       let surfacedError = null;
+      // Token usage for this turn — drives Settings -> Token Health.
+      // Channels previously recorded NO token data at all, so every
+      // channel conversation showed up as an estimate instead of real numbers.
+      let tokenUsage = {};
 
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const toolCalls = [];
@@ -407,6 +418,9 @@ You can use these special markers in your response:
           toolCtx,
           sessionId: existingSessionId,
           onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
+          // Resolve per-session thinking effort so /think works here too
+          // (web chat calls the provider directly; channels go via the router).
+          effort: settingsStore.get(`session.${convId}.effort`) || undefined,
           signal: controller.signal,
         });
 
@@ -429,6 +443,8 @@ You can use these special markers in your response:
             } else {
               surfacedError = event.message;
             }
+          } else if (event.type === "usage") {
+            tokenUsage = { ...tokenUsage, ...event.usage };
           } else if (event.type === "done") {
             stopReason = event.stopReason || "end_turn";
             break;
@@ -478,6 +494,13 @@ You can use these special markers in your response:
           content: visible || "(empty)",
           provider: activeProvider.provider,
           model: activeProvider.model,
+          // True prompt size = input + cache_read + cache_creation. Using
+          // input_tokens alone undercounts context fill whenever caching
+          // kicks in (which is almost always on a long session).
+          tokensIn: (tokenUsage.input_tokens || 0)
+            + (tokenUsage.cache_read_input_tokens || 0)
+            + (tokenUsage.cache_creation_input_tokens || 0) || null,
+          tokensOut: tokenUsage.output_tokens ?? null,
         });
 
         if (visible) {

@@ -8,7 +8,7 @@ import config from "./config/env.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { LIMITS } from "./config/constants.js";
 import { securityHeaders, csrfProtect, generateCsrfCookie } from "./middleware/security.js";
-import { sessionAuth, requireAuth, rateLimitAuth } from "./middleware/auth.js";
+import { sessionAuth, requireAuth, rateLimitAuth, initSessionStore } from "./middleware/auth.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { initDb } from "./db/sqlite.js";
 import { healthRouter } from "./routes/health.js";
@@ -62,6 +62,9 @@ if (isEncryptionEnabled()) {
 
 // --- Initialize database ---
 const db = initDb(config.DB_PATH);
+// Hydrate login sessions from disk so a restart/deploy doesn't sign everyone
+// out. Must run before any route that calls requireAuth.
+initSessionStore(db);
 
 // --- Express app ---
 const app = express();
@@ -218,7 +221,20 @@ startHeartbeat({ db, settingsStore });
 import { startSessionReset, stopSessionReset } from "./lib/session-reset.js";
 import { ConversationStore } from "./db/conversations.js";
 const convStore = new ConversationStore(db);
-convStore.clearAllSessions(); // Force fresh MCP tool registration on boot
+// DON'T wipe session ids on boot by default — that is what made conversations
+// "forget" after every deploy/restart, which on Railway is EVERY deploy since
+// the container is replaced. The MCP server is passed fresh in queryOptions on
+// every spawn (including resumes), so a resumed session already registers the
+// current tools; clearing was unnecessary and broke cross-deploy continuity.
+// Bloated sessions are handled separately by the transcript cap in the
+// provider, so preserving the id here cannot resurrect a hang-prone session.
+// Set TARSEE_CLEAR_SESSIONS_ON_BOOT=1 to restore the old wipe.
+if (process.env.TARSEE_CLEAR_SESSIONS_ON_BOOT === "1") {
+  convStore.clearAllSessions();
+  console.log("[boot] cleared all claude session ids (TARSEE_CLEAR_SESSIONS_ON_BOOT=1)");
+} else {
+  console.log("[boot] preserving claude session ids — conversations will resume across this restart");
+}
 
 // --- Boot context: save/restore conversation context across redeploys ---
 import { saveBootContext } from "./lib/boot-context.js";
@@ -268,6 +284,12 @@ channelManager.startAll().catch((err) => {
   console.warn("[tarsee] channel startup error:", err.message);
 });
 
+// Watchdog: auto-recover a Telegram poller that wedged at boot. Matters more
+// on Railway than on a workstation — there is no console here to restart a
+// dead channel by hand, so without this it stays dead until the next deploy.
+import { startChannelHealth, stopChannelHealth } from "./lib/channel-health.js";
+startChannelHealth({ channelManager, db });
+
 // --- Security manager ---
 const securityManager = getSecurityManager(settingsStore);
 app.set("securityManager", securityManager);
@@ -308,6 +330,7 @@ function shutdown(signal) {
   stopRetention();
   stopSessionReset();
   stopCronScheduler();
+  stopChannelHealth();
   channelManager.stopAll();
   server.close(() => {
     removePid();

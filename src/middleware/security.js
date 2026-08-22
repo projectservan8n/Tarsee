@@ -1,7 +1,12 @@
 import crypto from "node:crypto";
 
 // --- CSRF: HMAC-signed tokens (stateless, survives restarts) ---
-const CSRF_TOKEN_MAX_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours
+// 2 hours was too short: the cookie is only re-issued on an HTML page load, so
+// a tab left open longer than that failed its next POST with "CSRF token
+// invalid or expired". The token is HMAC-signed and stateless, so a longer
+// bound is safe — it still expires, it just outlives a working day.
+const CSRF_TOKEN_MAX_AGE_MS =
+  (Number(process.env.TARSEE_CSRF_MAX_AGE_HOURS) || 24) * 60 * 60 * 1000;
 
 // Derive a stable CSRF secret from ENCRYPTION_KEY or generate a persistent one.
 // Using ENCRYPTION_KEY means tokens survive restarts as long as env is stable.

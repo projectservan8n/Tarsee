@@ -144,6 +144,7 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 ### Search & Analytics
 - **Live context meter** — the session bar shows a real-time prompt-token fill % against the active model's context window (1M for Opus/Sonnet, 200K for Haiku). Counts cache reads and cache writes too — that's the actual prompt size hitting the model. Bar turns yellow at 75%, red and pulsing at 90%, with a dismissible banner above the composer. At 95% Tarsee writes a mechanical snapshot to `CHECKPOINT.md` automatically; if a turn still trips "prompt is too long", the snapshot is written from the catch path and a recovery card is shown in chat with a one-click "Start fresh session" button. The next boot reads that checkpoint as the handoff so you pick up mid-thought.
 - **Token usage chart** — daily/weekly visual bar chart with model breakdown in Settings > Usage.
+- **Token Health** (Settings > Token Health) — a per-conversation view of how full each context window actually is, alongside the Claude session transcript (`.jsonl`) size, which is the real driver of bloat-hangs. Fill is measured point-in-time (the most recent turn's prompt size, counting cache reads and cache writes), not a running total of every token the chat ever spent — the lifetime figure is reported separately so the two can't be confused. Conversations whose transcript passes `TARSEE_SESSION_JSONL_MAX_MB` are flagged `resets next turn`, and the provider enforces that same cap by refusing to resume, so the flag reflects real behaviour rather than predicting it. Conversations with no recorded telemetry are labelled `est.` rather than shown as if measured. All channels (Telegram, Discord, WhatsApp, email, web) now record token usage — previously only web chat did, so channel conversations had no data at all.
 - **Audit log** — timestamped log of all tool executions, logins, and settings changes.
 - **QR code** — scan from desktop to instantly open Tarsee on your phone.
 - **Typing indicator** — see when you're typing on another device in real-time.
@@ -288,7 +289,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | **Identity** | Bot name (set via IDENTITY.md) |
 | **Workspace** | SOUL.md, USER.md, MEMORY.md editors |
 | **AI Provider** | Model selection, API config |
-| **Channels** | Telegram, Discord, Email (IMAP + SMTP with provider presets, mention keyword, reply-all marker, allowlist) |
+| **Channels** | Telegram, Discord, WhatsApp (WHAPI), Email (IMAP + SMTP with provider presets, mention keyword, reply-all marker, allowlist) |
 | **Appearance** | Theme switcher (4 built-in + plugin themes) + Web Push enable/disable/test |
 | **Automation** | Cron jobs, webhooks, retention settings |
 | **Voice** | TTS engine (Edge TTS / ElevenLabs), STT model (tiny/base/small), voice selection |
@@ -297,6 +298,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | **Security** | Security audit, tool permissions, captcha solver config |
 | **Canvas** | Gallery of AI-generated interactive UIs |
 | **Usage** | Token usage chart, daily/weekly stats, model breakdown |
+| **Token Health** | Per-conversation context-window fill, Claude transcript (.jsonl) size, and which sessions will reset on their next turn |
 | **Audit Log** | All tool executions, logins, settings changes |
 
 ---
@@ -310,6 +312,13 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `NODE_ENV` | Yes | — | Set to `production` |
 | `CLAUDE_DEFAULT_MODEL` | No | `claude-sonnet-4-6` | Default model for new sessions |
 | `ELEVENLABS_API_KEY` | No | — | Premium TTS voices (Edge TTS is free) |
+| `TARSEE_CHANNEL_IDLE_ABORT_MS` | No | `1200000` (20 min) | Abandon a turn after this long with no stream event. Keep finite. |
+| `TARSEE_SESSION_JSONL_MAX_MB` | No | `8` | Transcript size cap. Past it, the next turn starts a fresh Claude session instead of resuming the bloat. |
+| `TARSEE_MODEL_CONTEXT_TOKENS` | No | from model registry | Override the context window assumed by Token Health. |
+| `TARSEE_SESSION_MAX_AGE_DAYS` | No | `30` | Login session lifetime. Sessions persist to SQLite and survive redeploys. |
+| `TARSEE_CSRF_MAX_AGE_HOURS` | No | `24` | CSRF token lifetime. |
+| `TARSEE_CHANNEL_HEALTH_MS` | No | `60000` | How often the watchdog probes for a wedged Telegram poller. |
+| `TARSEE_CLEAR_SESSIONS_ON_BOOT` | No | off | Set `1` to restore the old behaviour of wiping every Claude session id on boot. |
 
 > **Note:** Claude credentials are NOT set via env var. Run `claude login` in the web terminal after deploying. See [Authenticating with Claude](#authenticating-with-claude).
 

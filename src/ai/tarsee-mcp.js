@@ -22,7 +22,7 @@ export function createTarseeMcp(ctx) {
       tool(
         "tarsee_send_message",
         "Send a message to a channel (Telegram, Discord, Slack, email, or web chat). Use this to proactively notify the user. For email, channel_id MUST be the target address; for threaded email replies with In-Reply-To headers, use tarsee_send_email_thread instead.",
-        { channel: z.enum(["telegram", "discord", "slack", "email", "web"]).describe("Channel to send to"), message: z.string().describe("Message text"), channel_id: z.string().optional().describe("Specific chat/channel ID (auto-resolved if omitted — required for email)") },
+        { channel: z.enum(["telegram", "discord", "whatsapp", "slack", "email", "web"]).describe("Channel to send to"), message: z.string().describe("Message text"), channel_id: z.string().optional().describe("Specific chat/channel ID (auto-resolved if omitted — required for email)") },
         async (args) => {
           const result = await executeTool("send_message", args, ctx);
           return { content: [{ type: "text", text: result }] };
@@ -101,9 +101,14 @@ export function createTarseeMcp(ctx) {
       tool(
         "tarsee_remember",
         "Save an important fact or note to long-term memory. This persists across conversations and restarts.",
-        { content: z.string().describe("The fact or note to remember") },
+        {
+          content: z.string().describe("The fact or note to remember"),
+          category: z.string().optional().describe("Optional category label, e.g. 'preference', 'fact', 'project'"),
+        },
         async (args) => {
-          const result = await executeTool("remember", args, ctx);
+          // executeTool("remember") destructures { fact, category } — map `content`
+          // onto `fact` or the memory row is written as undefined.
+          const result = await executeTool("remember", { fact: args.content, category: args.category }, ctx);
           return { content: [{ type: "text", text: result }] };
         }
       ),
@@ -113,7 +118,8 @@ export function createTarseeMcp(ctx) {
         "Append an entry to today's daily memory log (memory/YYYY-MM-DD.md).",
         { content: z.string().describe("Log entry to append") },
         async (args) => {
-          const result = await executeTool("daily_log", args, ctx);
+          // executeTool("daily_log") destructures { note } — map `content` onto it.
+          const result = await executeTool("daily_log", { note: args.content }, ctx);
           return { content: [{ type: "text", text: result }] };
         }
       ),
@@ -259,9 +265,12 @@ export function createTarseeMcp(ctx) {
       tool(
         "tarsee_web_search",
         "Search the web and return results.",
-        { query: z.string().describe("Search query"), num_results: z.number().optional().describe("Number of results (default 5)") },
+        { query: z.string().describe("Search query"), num_results: z.number().optional().describe("Number of results, 1-10 (default 5)") },
         async (args) => {
-          const result = await executeTool("web_search", args, ctx);
+          // executeTool("web_search") destructures { query, max_results } — map
+          // `num_results` onto it, otherwise the count is silently ignored and
+          // every search returns the default 5.
+          const result = await executeTool("web_search", { query: args.query, max_results: args.num_results }, ctx);
           return { content: [{ type: "text", text: result }] };
         }
       ),

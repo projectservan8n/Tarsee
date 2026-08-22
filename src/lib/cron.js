@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { buildSystemPrompt } from "./build-system-prompt.js";
 import { chatStream } from "../ai/router.js";
 import { appendDailyLog } from "./workspace-files.js";
+import { resolveModelAlias, isKnownModel } from "../config/constants.js";
 
 /**
  * Cron job scheduler — run AI tasks on a schedule.
@@ -17,6 +18,45 @@ import { appendDailyLog } from "./workspace-files.js";
 
 let _db = null;
 let _settingsStore = null;
+
+/**
+ * Zero-token complexity heuristic for a cron PROMPT. Costs NOTHING (pure
+ * keyword match) — the whole point is to keep crons cheap. Returns a tier
+ * ("opus"/"sonnet") only when the prompt clearly warrants more than the cheap
+ * floor; otherwise null → the Haiku floor handles it. An explicit `job.model`
+ * ALWAYS overrides this. Gated by the `cron.autoTier` setting (default on).
+ */
+function autoTierForPrompt(prompt) {
+  const p = String(prompt || "").toLowerCase();
+  if (!p.trim()) return null;
+  // Hard / ambiguous engineering & investigation → Opus.
+  if (/\b(refactor|re-?architect|root[\s-]?cause|debug why|investigate why|figure out why|audit the|migrate|rewrite|redesign)\b/.test(p)) return "opus";
+  // Real agent work that must land correctly → Sonnet.
+  if (/\b(push|deploy|commit|open (a )?pr|pull request|apply (the )?plan|implement|scaffold|edit the code|write (the )?code|create the (app|site|page|feature|tool)|run the deploy|fix the)\b/.test(p)) return "sonnet";
+  return null;
+}
+
+/**
+ * Resolve the model a cron job runs on. Priority (cheapest-first floor):
+ *   1. Explicit per-job tier `job.model` — always wins.
+ *   2. Zero-token complexity heuristic on the prompt (if `cron.autoTier` on).
+ *   3. `cron.defaultModel` floor (Haiku — keeps crons ~free).
+ *   4. Global active-provider model.
+ *
+ * Without this every scheduled job ran on the globally-recommended model,
+ * which is Opus — so a trivial daily reminder cost an Opus turn.
+ */
+function resolveCronModel(job, activeProvider) {
+  let pick = job.model;
+  if (!pick) {
+    const autoTier = _settingsStore?.get("cron.autoTier");
+    if (autoTier !== false && autoTier !== "false") {
+      pick = autoTierForPrompt(job.prompt);
+    }
+  }
+  pick = pick || _settingsStore?.get("cron.defaultModel") || activeProvider?.model;
+  return resolveModelAlias(pick) || pick;
+}
 let _convStore = null;
 let _channelManager = null;
 const activeJobs = new Map(); // id → cron.ScheduledTask
@@ -221,6 +261,11 @@ export async function runCronJob(job) {
     },
   ];
 
+  // Resolve the model ONCE up front (see resolveCronModel): explicit per-job
+  // tier → zero-token complexity heuristic → cheap floor → provider default.
+  const jobModel = resolveCronModel(job, activeProvider);
+  console.log(`[cron] Job "${job.id}" model → ${jobModel}`);
+
   // Timeout protection
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), JOB_TIMEOUT_MS);
@@ -230,7 +275,7 @@ export async function runCronJob(job) {
     const toolCtx = { db: _db, settingsStore: _settingsStore, conversationId: null, channelManager: _channelManager };
     const stream = chatStream({
       provider: activeProvider.provider,
-      model: activeProvider.model,
+      model: jobModel,
       apiKey: activeProvider.apiKey,
       baseUrl: activeProvider.baseUrl,
       messages,
@@ -260,7 +305,7 @@ export async function runCronJob(job) {
         role: "assistant",
         content: `**[Cron: ${job.id}]**\n\n${fullResponse}`,
         provider: activeProvider.provider,
-        model: activeProvider.model,
+        model: jobModel,
       });
     }
 

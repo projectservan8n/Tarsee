@@ -75,9 +75,9 @@ export function getBootContextSummary() {
     summary += `\nMessages today: ${ctx.todayMessages}`;
 
     for (const conv of ctx.recentConversations) {
-      const convAge = Date.now() - new Date(conv.updatedAt).getTime();
+      const convAge = Date.now() - new Date(conv.updatedAt + "Z").getTime();
       if (convAge > 24 * 3600000) continue; // Skip conversations older than 24h
-      summary += `\n\n**${conv.title}** (${conv.model || "unknown"}, ${new Date(conv.updatedAt).toLocaleTimeString()}):`;
+      summary += `\n\n**${conv.title}** (${conv.model || "unknown"}, ${new Date(conv.updatedAt + "Z").toLocaleTimeString()}):`;
       if (conv.lastUserMessage) summary += `\n- User: "${conv.lastUserMessage.slice(0, 150)}"`;
       if (conv.lastAssistantResponse) summary += `\n- You replied: "${conv.lastAssistantResponse.slice(0, 150)}"`;
     }

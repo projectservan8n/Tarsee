@@ -158,7 +158,10 @@ export class ConversationStore {
     if (!conv) return null;
     if (!conv.updated_at) return null;
 
-    const updated = new Date(conv.updated_at).getTime();
+    // SQLite's datetime('now') stores naive UTC ('YYYY-MM-DD HH:MM:SS' with no
+    // trailing Z). new Date() parses that as LOCAL time, so on a non-UTC host
+    // every row appears N hours stale even when just written. Force UTC.
+    const updated = new Date(conv.updated_at + "Z").getTime();
     if (Number.isNaN(updated)) return null;
     const ageMs = Date.now() - updated;
     if (ageMs < staleMinutes * 60_000) return null;
@@ -270,7 +273,7 @@ export class ConversationStore {
 
     // Session idle timeout: if no messages in 2 hours, start fresh
     const IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000;
-    const updatedAt = conv.updated_at ? new Date(conv.updated_at).getTime() : 0;
+    const updatedAt = conv.updated_at ? new Date(conv.updated_at + "Z").getTime() : 0;
     if (Date.now() - updatedAt > IDLE_TIMEOUT_MS) {
       console.log(`[session] Session for conv ${conversationId} expired (idle > 2h), starting fresh`);
       this._updateClaudeSessionId.run(null, conversationId);

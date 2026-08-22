@@ -12,6 +12,10 @@ import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { handleTerminalConnection } from "../websocket/terminal-handler.js";
+
+// See the note in telegram.js: finite by design — this build has no PTY
+// heartbeat to fall back on, so an unbounded idle window can wedge a turn.
+const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
 import { getGatewayManager } from "../lib/gateway.js";
 
 /**
@@ -282,6 +286,10 @@ async function handleChat(ws, msg, convStore, settingsStore) {
       settingsStore,
       convStore,
       conversationId,
+      platform: "web", // was missing — platform-gated commands misrouted
+      // handleChat is a top-level function — the `db` handle from
+      // setupWebSocket() is NOT in scope here, so reach it via the store.
+      db: convStore?.db,
     });
 
     if (cmdResult.handled) {
@@ -379,7 +387,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
     const hb = setInterval(() => {
       if (ws.readyState !== ws.OPEN) return clearInterval(hb);
       try { ws.send(JSON.stringify({ type: "heartbeat", ts: Date.now() })); } catch {}
-      if (Date.now() - lastEventAt > 3 * 60_000) {
+      if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
         idleAborted = true;
         clearInterval(hb);
         try { ws._currentAbort?.abort(); } catch {}
@@ -447,7 +455,9 @@ async function handleChat(ws, msg, convStore, settingsStore) {
           content: fullResponse,
           provider: providerId,
           model: activeProvider.model,
-          tokensIn: usage.input_tokens,
+          tokensIn: (usage.input_tokens || 0)
+          + (usage.cache_read_input_tokens || 0)
+          + (usage.cache_creation_input_tokens || 0) || null,
           tokensOut: usage.output_tokens,
         });
       }
@@ -475,7 +485,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   const hb2 = setInterval(() => {
     if (ws.readyState !== ws.OPEN) return clearInterval(hb2);
     try { ws.send(JSON.stringify({ type: "heartbeat", ts: Date.now() })); } catch {}
-    if (Date.now() - lastEventAt2 > 3 * 60_000) {
+    if (Date.now() - lastEventAt2 > IDLE_ABORT_MS) {
       idleAborted2 = true;
       clearInterval(hb2);
     }
@@ -573,7 +583,9 @@ async function handleChat(ws, msg, convStore, settingsStore) {
         content: fullResponse,
         provider: activeProvider.provider,
         model: activeProvider.model,
-        tokensIn: usage.input_tokens,
+        tokensIn: (usage.input_tokens || 0)
+          + (usage.cache_read_input_tokens || 0)
+          + (usage.cache_creation_input_tokens || 0) || null,
         tokensOut: usage.output_tokens,
       });
     }

@@ -7,7 +7,7 @@ const authAttempts = new Map(); // ip → { count, resetAt, failures, lockedUnti
 
 // Clean up stale entries every 5 minutes
 setInterval(() => {
-  const now = Date.now();
+  const cutoff = Date.now() - SESSION_MAX_AGE_MS;
   for (const [ip, entry] of authAttempts) {
     if (now >= entry.resetAt && (!entry.lockedUntil || now >= entry.lockedUntil)) {
       authAttempts.delete(ip);
@@ -52,14 +52,49 @@ function extractSessionToken(req) {
 
 // --- Active sessions ---
 const sessions = new Map(); // sessionId → { createdAt, ip }
-const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+// Persisted to SQLite (see initSessionStore): the in-memory Map is a
+// write-through cache hydrated from disk on boot, so a restart or a Railway
+// deploy no longer logs the whole team out. Railway REPLACES the container on
+// every deploy, so without this every deploy signed everyone out.
+// Override with TARSEE_SESSION_MAX_AGE_DAYS.
+const SESSION_MAX_AGE_MS =
+  (Number(process.env.TARSEE_SESSION_MAX_AGE_DAYS) || 30) * 24 * 60 * 60 * 1000;
+let _sessionDb = null;
+
+/**
+ * Wire the sessions cache to SQLite. Creates the table, drops expired rows,
+ * and hydrates surviving sessions so logins persist across restarts. Called
+ * once at boot from server.js, right after initDb.
+ */
+export function initSessionStore(db) {
+  _sessionDb = db;
+  db.exec(`CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    ip TEXT
+  )`);
+  const cutoff = Date.now() - SESSION_MAX_AGE_MS;
+  try { db.prepare("DELETE FROM sessions WHERE created_at < ?").run(cutoff); } catch {}
+  let restored = 0;
+  try {
+    for (const r of db.prepare("SELECT id, created_at, ip FROM sessions").all()) {
+      sessions.set(r.id, { createdAt: r.created_at, ip: r.ip });
+      restored++;
+    }
+  } catch {}
+  console.log(`[auth] session store ready — ${restored} session(s) restored from disk (survive restarts)`);
+}
+
+/** Session lifetime in ms — exported so cookie maxAge cannot drift from it. */
+export function sessionMaxAgeMs() { return SESSION_MAX_AGE_MS; }
 
 // Clean up expired sessions every 30 minutes
 setInterval(() => {
   const now = Date.now();
   for (const [id, session] of sessions) {
-    if (now - session.createdAt > SESSION_MAX_AGE_MS) sessions.delete(id);
+    if (session.createdAt < cutoff) sessions.delete(id);
   }
+  try { _sessionDb?.prepare("DELETE FROM sessions WHERE created_at < ?").run(cutoff); } catch {}
 }, 30 * 60_000).unref();
 
 /**
@@ -67,7 +102,9 @@ setInterval(() => {
  */
 export function createSession(ip) {
   const sessionId = crypto.randomBytes(32).toString("hex");
-  sessions.set(sessionId, { createdAt: Date.now(), ip });
+  const createdAt = Date.now();
+  sessions.set(sessionId, { createdAt, ip });
+  try { _sessionDb?.prepare("INSERT OR REPLACE INTO sessions (id, created_at, ip) VALUES (?, ?, ?)").run(sessionId, createdAt, ip); } catch {}
   return sessionId;
 }
 
@@ -76,6 +113,7 @@ export function createSession(ip) {
  */
 export function destroySession(sessionId) {
   sessions.delete(sessionId);
+  try { _sessionDb?.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId); } catch {}
 }
 
 /**

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import https from "node:https";
 import { Telegraf } from "telegraf";
 import { chatStream } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
@@ -20,11 +21,51 @@ import envConfig from "../config/env.js";
  * @param {import('better-sqlite3').Database} db
  * @returns {Promise<{stop: Function}>}
  */
-export async function createTelegramBot(config, db) {
+export async function createTelegramBot(config, db, opts = {}) {
   const convStore = new ConversationStore(db);
   const settingsStore = new SettingsStore(db);
 
-  const bot = new Telegraf(config.token);
+  // Telegraf's default handlerTimeout (90s) abandons a handler mid-turn — the
+  // reply gets generated but NEVER delivered, and stderr fills with
+  // "Promise timed out after 90000 milliseconds". Long agent turns are the norm
+  // here, so effectively disable it (largest setTimeout-safe value).
+  //
+  // NOTE: the Mac build also pins the HTTPS agent to `family: 4`. That is
+  // deliberately NOT ported — Railway's egress is dual-stack and forcing IPv4
+  // there is a regression risk, not a fix. keepAlive alone is the portable win.
+  const tgAgent = new https.Agent({ keepAlive: true });
+  const bot = new Telegraf(config.token, {
+    telegram: { agent: tgAgent },
+    handlerTimeout: 2_000_000_000,
+  });
+
+  // ── Inbound dedup ──────────────────────────────────────────────────────
+  // Telegram re-delivers any update the poller pulled but didn't CONFIRM (via
+  // the next getUpdates offset) before it was stopped — e.g. on a container
+  // restart or a channel relaunch. Without dedup that arrives as the SAME
+  // message processed twice. Drop repeats by update_id, bounded to 1000.
+  const _seenUpdates = new Set();
+  const _seenOrder = [];
+  let _updatesReceived = 0;
+  let _handlerActive = 0;
+  let _lastUpdateAt = 0;
+  bot.use(async (ctx, next) => {
+    const uid = ctx.update?.update_id;
+    if (uid != null) {
+      if (_seenUpdates.has(uid)) {
+        console.warn(`[telegram] dropped duplicate update_id=${uid}`);
+        return; // already processed — don't double-handle
+      }
+      _seenUpdates.add(uid);
+      _seenOrder.push(uid);
+      if (_seenOrder.length > 1000) _seenUpdates.delete(_seenOrder.shift());
+    }
+    _updatesReceived++;
+    _lastUpdateAt = Date.now();
+    _handlerActive++;
+    try { await next(); }
+    finally { _handlerActive--; }
+  });
 
   /**
    * Resolve channel key — supports topics (forum threads).
@@ -100,6 +141,9 @@ export async function createTelegramBot(config, db) {
         convStore,
         conversationId: existingConvId,
         platform: "telegram",
+        // `db` was missing — /clear could not do its DB cleanup and silently
+        // no-op'd, letting sessions accumulate huge transcripts.
+        db,
       });
 
       if (cmdResult.handled) {
@@ -184,7 +228,13 @@ You can use these special markers in your response:
     const controller = new AbortController();
     let lastEventAt = Date.now();
     let idleAborted = false;
-    const IDLE_ABORT_MS = 3 * 60_000;
+    // Idle abort: how long a turn may go with NO stream event before we give up.
+    // Was a hard 3 minutes, which killed legitimate long research/tool turns.
+    // Now configurable, but deliberately FINITE — the Mac build sets this to
+    // ~2e9 (23 days), which is only safe there because its PTY pool has a
+    // heartbeat + dead-socket detector. This build has neither, so an infinite
+    // value would wedge a turn forever with no console to kill it from.
+    const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
     const idleTimer = setInterval(() => {
       if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
         idleAborted = true;
@@ -317,6 +367,10 @@ You can use these special markers in your response:
       // so we don't loop on the same corrupt state.
       let sessionRetried = false;
       let surfacedError = null;
+      // Token usage for this turn — drives Settings -> Token Health.
+      // Channels previously recorded NO token data at all, so every
+      // channel conversation showed up as an estimate instead of real numbers.
+      let tokenUsage = {};
 
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const toolCalls = [];
@@ -334,6 +388,9 @@ You can use these special markers in your response:
           toolCtx,
           sessionId: existingSessionId,
           onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
+          // Resolve per-session thinking effort so /think works here too
+          // (web chat calls the provider directly; channels go via the router).
+          effort: settingsStore.get(`session.${convId}.effort`) || undefined,
           signal: controller.signal,
         });
 
@@ -378,6 +435,8 @@ You can use these special markers in your response:
             } else {
               surfacedError = event.message;
             }
+          } else if (event.type === "usage") {
+            tokenUsage = { ...tokenUsage, ...event.usage };
           } else if (event.type === "done") {
             stopReason = event.stopReason || "end_turn";
             break;
@@ -419,6 +478,13 @@ You can use these special markers in your response:
           content: cleanText,
           provider: activeProvider.provider,
           model: activeProvider.model,
+          // True prompt size = input + cache_read + cache_creation. Using
+          // input_tokens alone undercounts context fill whenever caching
+          // kicks in (which is almost always on a long session).
+          tokensIn: (tokenUsage.input_tokens || 0)
+            + (tokenUsage.cache_read_input_tokens || 0)
+            + (tokenUsage.cache_creation_input_tokens || 0) || null,
+          tokensOut: tokenUsage.output_tokens ?? null,
         });
 
         // Apply agent reactions to the user's original message.
@@ -662,8 +728,22 @@ You can use these special markers in your response:
     console.error("[telegram] bot error:", err.message);
   });
 
-  // Use polling (no webhook needed)
-  await bot.launch({ dropPendingUpdates: true });
+  // Use polling (no webhook needed).
+  //
+  // NOTE: bot.launch() must NOT be awaited. Telegraf's promise resolves only
+  // once polling is "ready", which on a flaky network can take >90s or never
+  // resolve. If it never resolves, createTelegramBot() never returns and
+  // ChannelManager never registers the bot — breaking every outbound tool
+  // (tarsee_send_message, send_message) even though inbound still flows.
+  // Worse, B starts channels serially, so a wedged Telegram also prevents
+  // Discord, Email and WhatsApp from ever starting.
+  //
+  // On a cold boot we drop whatever queued while the container was down. When
+  // the health monitor relaunches a STUCK poller those queued updates are real
+  // messages the wedged poller failed to pull, so we deliver them instead.
+  bot.launch({ dropPendingUpdates: !opts.deliverPending }).catch((err) => {
+    console.error("[telegram] bot.launch error (polling will retry):", err.message);
+  });
 
   // Register the /commands dropdown with Telegram so typing "/" in a chat
   // pops up the native command suggestions. Derive it from the shared
@@ -693,6 +773,18 @@ You can use these special markers in your response:
     stop: async () => {
       bot.stop("Tarsee shutdown");
     },
+    /**
+     * Poller health for the channel-health monitor.
+     *  - updatesReceived: 0 means the poller has pulled NOTHING since launch
+     *    (a genuine boot-race wedge — safe to relaunch).
+     *  - handlerActive: >0 means a turn is being processed right now — the
+     *    poll loop is legitimately busy, NOT stuck; don't relaunch.
+     */
+    health: () => ({
+      updatesReceived: _updatesReceived,
+      handlerActive: _handlerActive,
+      lastUpdateAt: _lastUpdateAt,
+    }),
     /** Send a message to a Telegram chat (outbound push). */
     sendMessage: async (chatId, text) => {
       const html = mdToTelegramHtml(text);

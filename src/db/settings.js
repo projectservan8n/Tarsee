@@ -34,6 +34,11 @@ export class SettingsStore {
     // Decrypt if it's an encrypted value
     value = decryptIfEncrypted(value);
 
+    // Long bare integers (Discord snowflakes, Telegram chat IDs, …) exceed
+    // Number.MAX_SAFE_INTEGER and silently lose precision through JSON.parse
+    // (e.g. …648422 → …648300). Parsing them is never right — keep as string.
+    if (typeof value === "string" && /^\d{15,}$/.test(value)) return value;
+
     try {
       return JSON.parse(value);
     } catch {

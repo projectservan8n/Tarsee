@@ -32,6 +32,7 @@ const COMMANDS = {
     usage: "/clear",
     handler: async (_args, ctx) => {
       let summaryNote = "";
+      let clearedCount = 0;
       // Summarize the conversation before clearing so we don't lose the
       // gist. Lives in memory/summaries.md — searchable by Claude later.
       if (ctx.db && ctx.conversationId) {
@@ -44,11 +45,33 @@ const COMMANDS = {
         } catch (err) {
           console.warn("[commands] /clear summarize failed:", err?.message);
         }
+
+        // Actually clear the conversation. Previously this relied entirely on
+        // ctx.clearConversation being supplied by the calling channel — which
+        // NO channel wired up, so /clear silently no-op'd everywhere and
+        // sessions accumulated thousands of transcript entries.
+        //
+        // We DELETE messages but keep the conversations row (the channel
+        // mapping stays valid), and NULL claude_session_id so the next spawn
+        // starts a fresh claude session — without that, claude would --resume
+        // the same session and reload the prior (now-deleted) transcript from
+        // its own .jsonl.
+        try {
+          const r1 = ctx.db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(ctx.conversationId);
+          clearedCount = r1?.changes || 0;
+          ctx.db.prepare("UPDATE conversations SET claude_session_id = NULL, updated_at = datetime('now') WHERE id = ?").run(ctx.conversationId);
+        } catch (err) {
+          console.warn("[commands] /clear DB cleanup failed:", err?.message);
+        }
       }
+      // Belt-and-suspenders: if a channel still wires up a custom
+      // clearConversation (e.g. web chat doing extra in-memory cleanup),
+      // call it too. Safe because our DB cleanup is idempotent.
       if (ctx.clearConversation) {
         ctx.clearConversation();
       }
-      return "Conversation cleared. Starting fresh." + summaryNote;
+      const countNote = clearedCount > 0 ? ` (${clearedCount} messages deleted, claude session reset)` : "";
+      return "Conversation cleared. Starting fresh." + countNote + summaryNote;
     },
   },
 
@@ -162,11 +185,11 @@ const COMMANDS = {
 
   send: {
     description: "Forward conversation context to another channel",
-    usage: "/send [telegram|discord|web]",
+    usage: "/send [telegram|discord|whatsapp|web]",
     handler: async (args, ctx) => {
-      if (!args) return "Usage: `/send telegram`, `/send discord`, `/send web`";
+      if (!args) return "Usage: `/send telegram`, `/send discord`, `/send whatsapp`, `/send web`";
       const target = args.toLowerCase().trim();
-      const validChannels = ["telegram", "discord", "web"];
+      const validChannels = ["telegram", "discord", "whatsapp", "web"];
       if (!validChannels.includes(target)) return `Unknown channel. Use: ${validChannels.join(", ")}`;
 
       if (!ctx.conversationId || !ctx.convStore) return "No active conversation.";

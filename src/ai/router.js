@@ -17,7 +17,7 @@ let claudeCodeModule = null;
  * @returns {AsyncGenerator<{type: string, content?: string, usage?: object}>}
  */
 export async function* chatStream(opts) {
-  const { messages, model, systemPrompt, signal, toolCtx, sessionId, onSessionId } = opts;
+  const { messages, model, systemPrompt, signal, toolCtx, sessionId, onSessionId, effort } = opts;
 
   if (!claudeCodeModule) {
     claudeCodeModule = await import("./providers/claude-code.js");
@@ -33,6 +33,11 @@ export async function* chatStream(opts) {
     toolCtx,
     sessionId,
     onSessionId,
+    // Forwarded so /think works on channels too. Without this the provider
+    // never receives an effort level and /think was a silent no-op on
+    // Telegram / Discord / WhatsApp / email (web chat calls the provider
+    // directly and so was unaffected).
+    effort,
   });
 }
 
