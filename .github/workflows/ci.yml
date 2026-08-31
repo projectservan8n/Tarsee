@@ -1,0 +1,45 @@
+name: CI
+
+# The lint step here is the point of this workflow. `npm run lint` used to be a
+# parse check, which cannot see an out-of-scope variable in a callback, so a
+# guaranteed 30-minute crash loop shipped green and both deployments sat dead
+# for nine days. A lint nobody runs is the same as no lint, so it runs here on
+# every push and pull request.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22 is the floor declared in package.json engines; 24 is current.
+        node: ["22", "24"]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # The suite does not drive a real browser, so skip the ~300MB download.
+      - run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+      - run: npm run lint
+
+      - run: npm test

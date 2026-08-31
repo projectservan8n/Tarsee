@@ -34,7 +34,11 @@ export class EdgeTTSEngine extends TTSEngine {
     if (!text) throw new Error("Text is required");
 
     // Strip emojis — Edge TTS reads them aloud as descriptions
+    // The class deliberately includes the ZWJ and variation selectors as bare
+    // members: we are deleting every codepoint of a sequence, not matching the
+    // sequence as one grapheme, so splitting it apart is the desired result.
     text = text
+      // eslint-disable-next-line no-misleading-character-class
       .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2702}-\u{27B0}\u{200D}\u{20E3}\u{FE0F}]/gu, "")
       .replace(/\s{2,}/g, " ")
       .trim();

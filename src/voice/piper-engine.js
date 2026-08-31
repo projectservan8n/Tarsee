@@ -65,7 +65,11 @@ export class PiperTTSEngine extends TTSEngine {
     if (!text) throw new Error("Text is required");
 
     // Strip emojis and markdown
+    // As in edge-tts-engine.js: the ZWJ and variation selectors are bare
+    // members on purpose, because this deletes every codepoint of a sequence
+    // rather than matching the sequence as a single grapheme.
     text = text
+      // eslint-disable-next-line no-misleading-character-class
       .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2702}-\u{27B0}\u{200D}\u{20E3}\u{FE0F}]/gu, "")
       .replace(/```[\s\S]*?```/g, "")
       .replace(/`[^`]+`/g, "")

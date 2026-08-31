@@ -881,6 +881,9 @@ function mdToTelegramHtml(text) {
     });
 
   // 3. Restore code blocks
+  // NUL is deliberate here: it is the sentinel wrapping the placeholder token,
+  // chosen because it cannot occur in the Telegram message text being escaped.
+  // eslint-disable-next-line no-control-regex
   text = text.replace(/\x00CODEBLOCK_(\d+)\x00/g, (_m, idx) => codeBlocks[parseInt(idx)]);
 
   return text;

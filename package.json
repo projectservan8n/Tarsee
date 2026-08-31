@@ -20,7 +20,7 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "test": "node --test test/**/*.test.js",
-    "lint": "node -c src/server.js",
+    "lint": "eslint . --max-warnings 0",
     "syntax-check": "node -c src/server.js"
   },
   "dependencies": {
@@ -40,5 +40,10 @@
     "web-push": "^3.6.7",
     "ws": "^8.19.0",
     "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.9.1",
+    "globals": "^17.11.0"
   }
 }
