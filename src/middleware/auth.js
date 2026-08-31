@@ -5,13 +5,19 @@ import { LIMITS } from "../config/constants.js";
 // --- Rate limiting + lockout state ---
 const authAttempts = new Map(); // ip → { count, resetAt, failures, lockedUntil }
 
-// Clean up stale entries every 5 minutes
+// Clean up stale entries every 5 minutes. Housekeeping timers run outside any
+// request, so an uncaught throw here takes the whole process down — keep the
+// body wrapped.
 setInterval(() => {
-  const cutoff = Date.now() - SESSION_MAX_AGE_MS;
-  for (const [ip, entry] of authAttempts) {
-    if (now >= entry.resetAt && (!entry.lockedUntil || now >= entry.lockedUntil)) {
-      authAttempts.delete(ip);
+  try {
+    const now = Date.now();
+    for (const [ip, entry] of authAttempts) {
+      if (now >= entry.resetAt && (!entry.lockedUntil || now >= entry.lockedUntil)) {
+        authAttempts.delete(ip);
+      }
     }
+  } catch (err) {
+    console.error("[auth] rate-limit sweep failed:", err);
   }
 }, 5 * 60_000).unref();
 
@@ -88,13 +94,17 @@ export function initSessionStore(db) {
 /** Session lifetime in ms — exported so cookie maxAge cannot drift from it. */
 export function sessionMaxAgeMs() { return SESSION_MAX_AGE_MS; }
 
-// Clean up expired sessions every 30 minutes
+// Clean up expired sessions every 30 minutes (memory + disk).
 setInterval(() => {
-  const now = Date.now();
-  for (const [id, session] of sessions) {
-    if (session.createdAt < cutoff) sessions.delete(id);
+  try {
+    const cutoff = Date.now() - SESSION_MAX_AGE_MS;
+    for (const [id, session] of sessions) {
+      if (session.createdAt < cutoff) sessions.delete(id);
+    }
+    try { _sessionDb?.prepare("DELETE FROM sessions WHERE created_at < ?").run(cutoff); } catch {}
+  } catch (err) {
+    console.error("[auth] session sweep failed:", err);
   }
-  try { _sessionDb?.prepare("DELETE FROM sessions WHERE created_at < ?").run(cutoff); } catch {}
 }, 30 * 60_000).unref();
 
 /**
