@@ -5,6 +5,7 @@ import { AI_PROVIDERS } from "../config/constants.js";
 import { getAvailableProviders } from "../ai/router.js";
 import { readWorkspaceFile, writeWorkspaceFile, hasBootstrapFile, deleteBootstrapFile } from "../lib/workspace-files.js";
 import { initTTSEngine } from "../voice/engine-registry.js";
+import { redactSecretFields } from "../lib/vault.js";
 
 export const settingsRouter = Router();
 
@@ -27,24 +28,18 @@ settingsRouter.get("/", (_req, res) => {
     if (s.key.endsWith(".apiKey") && typeof s.value === "string" && s.value.length > 4) {
       return { ...s, value: "***" + s.value.slice(-4) };
     }
-    // Email channel: strip nested imap/smtp passwords, expose hasPassword flags only.
-    // The generic mask in SettingsStore.all() only walks top-level keys and does not
-    // treat "channel.email" as a secret, so the raw passwords would otherwise leak.
-    if (s.key === "channel.email" && s.value && typeof s.value === "object") {
-      const v = s.value;
-      const scrub = (sub) => {
-        if (!sub || typeof sub !== "object") return sub;
-        const { password, ...rest } = sub;
-        return { ...rest, hasPassword: !!password };
-      };
-      return {
-        ...s,
-        value: {
-          ...v,
-          imap: scrub(v.imap),
-          smtp: scrub(v.smtp),
-        },
-      };
+    // Strip credential fields out of ANY structured setting, at any depth.
+    //
+    // This used to special-case `channel.email` only, so IMAP and SMTP
+    // passwords were hidden while the Telegram bot token, the Discord bot
+    // token, the Slack app token and the WHAPI webhook secret were all
+    // returned in cleartext to anything that could call this endpoint —
+    // including the debug console and any script holding the API token.
+    // Each of those is enough to impersonate the bot on its platform.
+    // Fields come back as `hasToken` / `hasPassword` booleans, which is all
+    // the UI ever needed to render "configured".
+    if (s.value && typeof s.value === "object") {
+      return { ...s, value: redactSecretFields(s.value) };
     }
     return s;
   });
@@ -182,16 +177,27 @@ settingsRouter.post("/channel", (req, res) => {
     });
   }
 
-  // Token-based channels (Discord, Telegram, Slack)
+  // Token-based channels (Discord, Telegram, Slack).
+  //
+  // Preserve the stored token when the client does not send one, the way the
+  // email and WhatsApp branches already do. GET /api/settings no longer hands
+  // back bot tokens in cleartext, so the settings form cannot round-trip one
+  // it never received; without this, saving any unrelated channel option (an
+  // allowlist edit, toggling mention mode) would blank the token and silently
+  // disconnect the bot.
   const { token, appToken, ...opts } = body;
-  if (enabled && !token) {
+  const prevChannel = settingsStore.get(`channel.${type}`) || {};
+  const effectiveToken = token || prevChannel.token || null;
+  const effectiveAppToken = appToken || prevChannel.appToken || null;
+  if (enabled && !effectiveToken) {
     return res.status(400).json({ error: "Token is required to enable a channel" });
   }
 
   settingsStore.set(`channel.${type}`, {
+    ...prevChannel,
     enabled: !!enabled,
-    token: token || null,
-    appToken: appToken || null,
+    token: effectiveToken,
+    appToken: effectiveAppToken,
     ...opts,
   });
 
@@ -225,6 +231,22 @@ settingsRouter.post("/channel/whatsapp/regenerate-secret", (req, res) => {
     webhook_secret,
     webhook_url: `/api/channels/whapi/${webhook_secret}`,
   });
+});
+
+/**
+ * GET /api/settings/channel/whatsapp/webhook-url
+ *
+ * The operator has to paste this URL into the WHAPI dashboard, so unlike the
+ * bot tokens it genuinely has to reach the browser. It is served from its own
+ * endpoint rather than riding along in the bulk settings payload, so the
+ * secret is disclosed only when the WhatsApp panel actually asks for it.
+ */
+settingsRouter.get("/channel/whatsapp/webhook-url", (_req, res) => {
+  const cfg = settingsStore.get("channel.whatsapp") || {};
+  if (!cfg.webhook_secret) {
+    return res.json({ configured: false, webhook_url: null });
+  }
+  res.json({ configured: true, webhook_url: `/api/channels/whapi/${cfg.webhook_secret}` });
 });
 
 /**

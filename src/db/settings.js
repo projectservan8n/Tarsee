@@ -1,4 +1,12 @@
-import { encryptIfSecret, decryptIfEncrypted, isSecretKey, maskSecret, isEncrypted } from "../lib/vault.js";
+import {
+  encryptIfSecret,
+  decryptIfEncrypted,
+  isSecretKey,
+  maskSecret,
+  isEncrypted,
+  encryptSecretFields,
+  decryptSecretFields,
+} from "../lib/vault.js";
 import { AI_PROVIDERS } from "../config/constants.js";
 
 /**
@@ -40,7 +48,10 @@ export class SettingsStore {
     if (typeof value === "string" && /^\d{15,}$/.test(value)) return value;
 
     try {
-      return JSON.parse(value);
+      // Decrypt any credential fields nested inside the parsed object. A value
+      // written before field-level encryption existed is plaintext and passes
+      // straight through, so this upgrades in place with no migration.
+      return decryptSecretFields(JSON.parse(value));
     } catch {
       return value;
     }
@@ -51,9 +62,14 @@ export class SettingsStore {
    * Secrets are automatically encrypted at rest.
    */
   set(key, value, opts = {}) {
-    let serialized = typeof value === "string" ? value : JSON.stringify(value);
+    // Encrypt credential FIELDS inside structured values before serializing.
+    // The key-name test below only sees the top-level key, so a channel config
+    // object (channel.telegram, channel.email, …) never matched it and every
+    // bot token and mailbox password was stored in plaintext.
+    const guarded = value && typeof value === "object" ? encryptSecretFields(value) : value;
+    let serialized = typeof guarded === "string" ? guarded : JSON.stringify(guarded);
 
-    // Auto-encrypt secrets
+    // Auto-encrypt secrets whose KEY name marks the whole value as a secret.
     serialized = encryptIfSecret(key, serialized);
 
     this._set.run(key, serialized);

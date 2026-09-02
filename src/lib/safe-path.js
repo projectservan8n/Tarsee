@@ -8,6 +8,40 @@ import path from "node:path";
  * @param {string[]} allowedRoots - Array of absolute directory paths that are allowed
  * @returns {string} The resolved, validated absolute path
  */
+/**
+ * Names that must never be readable or writable through a file API, even when
+ * they sit inside an allowed root.
+ *
+ * Defence in depth behind the root check. The file routes used to allow
+ * STATE_DIR, which is the parent of the workspace and holds the Claude OAuth
+ * credentials, the encryption key, the master API token, the live SQLite
+ * database and the hooks directory that is imported at boot — so "browse my
+ * files" was also "read every credential and write code that runs on restart".
+ * The roots are tightened now; this list means a future root change, a symlink,
+ * or a nested copy cannot quietly re-open the same hole.
+ */
+const DENIED_SEGMENTS = [
+  ".credentials.json",
+  ".encryption-key",
+  "api.token",
+  ".claude-code-home",
+  "vault.json",
+];
+
+/** Anything matching these is a database or its sidecars. */
+const DENIED_PATTERNS = [/\.db$/i, /\.db-wal$/i, /\.db-shm$/i, /\.credentials\.json$/i];
+
+/**
+ * True when a resolved path points at something that must never be served.
+ * @param {string} resolvedPath - an already-resolved absolute path
+ * @returns {boolean}
+ */
+export function isSensitivePath(resolvedPath) {
+  const segments = String(resolvedPath).split(/[\\/]/);
+  if (segments.some((s) => DENIED_SEGMENTS.includes(s))) return true;
+  return DENIED_PATTERNS.some((re) => re.test(resolvedPath));
+}
+
 export function safePath(userPath, allowedRoots) {
   if (!userPath || typeof userPath !== "string") {
     throw new Error("Invalid path");
@@ -24,6 +58,9 @@ export function safePath(userPath, allowedRoots) {
   for (const root of allowedRoots) {
     const absRoot = path.resolve(root);
     if (normalised === absRoot || normalised.startsWith(absRoot + path.sep)) {
+      if (isSensitivePath(normalised)) {
+        throw new Error("Path is not accessible");
+      }
       return normalised;
     }
   }

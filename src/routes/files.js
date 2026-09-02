@@ -7,7 +7,15 @@ import { LIMITS } from "../config/constants.js";
 
 export const filesRouter = Router();
 
-const ALLOWED_ROOTS = [config.WORKSPACE_DIR, config.STATE_DIR];
+// The workspace ONLY.
+//
+// STATE_DIR used to be listed here as well. It is the workspace's parent and
+// holds the Claude OAuth credentials, the encryption key, the master API token,
+// the live SQLite database and the hooks directory that gets imported on every
+// boot — so the file manager could read every credential the deployment owns
+// and write code that would execute on the next restart. Nothing in the UI ever
+// needed to browse outside the workspace.
+const ALLOWED_ROOTS = [config.WORKSPACE_DIR];
 
 /**
  * GET /api/files/ls?path=...

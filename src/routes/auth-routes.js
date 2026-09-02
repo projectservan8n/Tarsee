@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { validatePassword, createSession, destroySession, recordFailedAttempt, clearFailedAttempts, requireAuth, sessionMaxAgeMs } from "../middleware/auth.js";
+import { validatePassword, createSession, destroySession, recordFailedAttempt, clearFailedAttempts, requireAuth, sessionMaxAgeMs, rateLimitAuth } from "../middleware/auth.js";
 import config from "../config/env.js";
 
 export const authRouter = Router();
@@ -9,7 +9,10 @@ export const authRouter = Router();
  * Body: { password: string }
  * Returns session cookie on success.
  */
-authRouter.post("/login", (req, res) => {
+// rateLimitAuth sits on THIS route only. Mounted on the whole router it also
+// throttled GET /status, which the web UI polls, so normal use burned the
+// 5-per-minute budget and locked people out of their own login.
+authRouter.post("/login", rateLimitAuth, (req, res) => {
   const { password } = req.body || {};
 
   if (!password || typeof password !== "string") {

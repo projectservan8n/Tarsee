@@ -627,12 +627,18 @@ const Settings = {
       if (model) this.elements.model.value = model;
 
       // Channels
+      // Bot tokens are never sent to the browser any more — the server
+      // reports `hasToken` instead. Show that the channel is configured and
+      // leave the field empty; submitting it empty keeps the stored token,
+      // and typing a new one rotates it.
       for (const type of ["discord", "telegram"]) {
         const config = settings.find((s) => s.key === `channel.${type}`)?.value;
-        if (config?.token) {
-          const el = type === "discord" ? this.elements.discordToken : this.elements.telegramToken;
-          el.value = config.token;
-        }
+        const el = type === "discord" ? this.elements.discordToken : this.elements.telegramToken;
+        if (!el) continue;
+        el.value = "";
+        el.placeholder = config?.hasToken
+          ? "Stored — type a new token to replace it"
+          : "Paste the bot token";
       }
 
       // Allowlists
@@ -769,21 +775,26 @@ const Settings = {
     const e = this.elements;
     if (!e.whatsappEnabled) return; // UI not present
     e.whatsappEnabled.checked = !!cfg.enabled;
-    // Token is returned raw from the server (matches Discord/Telegram pattern).
-    // Show in masked password field; users can re-type to rotate.
+    // The token is no longer sent to the browser; the server reports whether
+    // one is stored. Leave the field empty and rotate by typing a new one.
     if (e.whatsappToken) {
-      e.whatsappToken.value = cfg.token || "";
-      e.whatsappToken.placeholder = cfg.token
+      e.whatsappToken.value = "";
+      e.whatsappToken.placeholder = cfg.hasToken
         ? "Stored — replace to rotate"
         : "Get it from panel.whapi.cloud → Channel → Token";
     }
     if (e.whatsappWebhookUrl) {
-      if (cfg.webhook_secret) {
-        e.whatsappWebhookUrl.value = `${location.origin}/api/channels/whapi/${cfg.webhook_secret}`;
-      } else {
-        e.whatsappWebhookUrl.value = "";
-        e.whatsappWebhookUrl.placeholder = "Save the channel first to generate this URL";
-      }
+      // The secret no longer rides along in the bulk settings payload, so ask
+      // the dedicated endpoint for it only while this panel is on screen.
+      e.whatsappWebhookUrl.value = "";
+      e.whatsappWebhookUrl.placeholder = "Save the channel first to generate this URL";
+      API.json("/api/settings/channel/whatsapp/webhook-url")
+        .then(({ configured, webhook_url }) => {
+          if (configured && webhook_url) {
+            e.whatsappWebhookUrl.value = `${location.origin}${webhook_url}`;
+          }
+        })
+        .catch(() => { /* leave the placeholder in place */ });
     }
   },
 

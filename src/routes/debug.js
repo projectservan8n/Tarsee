@@ -3,6 +3,32 @@ import fs from "node:fs";
 import config from "../config/env.js";
 import { getTTSEngine } from "../voice/engine-registry.js";
 import { logCapture } from "../lib/log-capture.js";
+import { isSecretKey, redactSecretFields, isEncrypted } from "../lib/vault.js";
+
+/**
+ * Render a stored setting for the debug console without disclosing credentials.
+ *
+ * The previous checks looked only at the KEY name, for the substrings "apiKey",
+ * "token" and "secret". Every channel stores its whole config as one JSON
+ * object under a key like `channel.telegram`, which contains none of those
+ * words — so the console printed the raw value, bot token and mailbox password
+ * included, to anyone who could open it.
+ *
+ * @param {string} key
+ * @param {string} raw - the value exactly as stored
+ * @returns {string} safe to display
+ */
+function safeConfigValue(key, raw) {
+  if (raw == null) return "(null)";
+  if (isSecretKey(key) || isEncrypted(raw)) return "••••••";
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      return JSON.stringify(redactSecretFields(parsed)).slice(0, 200);
+    }
+  } catch { /* not JSON — fall through to the plain string path */ }
+  return String(raw).slice(0, 80);
+}
 
 export const debugRouter = Router();
 
@@ -150,12 +176,7 @@ export const ALLOWED_COMMANDS = {
       if (!db) return "Database not available";
       const rows = db.prepare("SELECT key, value FROM settings ORDER BY key").all();
       if (rows.length === 0) return "(no settings)";
-      return rows.map((r) => {
-        const val = (r.key.includes("apiKey") || r.key.includes("token") || r.key.includes("secret"))
-          ? "••••••"
-          : r.value?.slice(0, 80);
-        return `${r.key} = ${val}`;
-      }).join("\n");
+      return rows.map((r) => `${r.key} = ${safeConfigValue(r.key, r.value)}`).join("\n");
     },
   },
 
@@ -167,8 +188,7 @@ export const ALLOWED_COMMANDS = {
       if (!args) return "Usage: config.get <key>";
       const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(args);
       if (!row) return `${args}: (not set)`;
-      if (args.includes("apiKey") || args.includes("token")) return `${args}: ••••••`;
-      return `${args}: ${row.value}`;
+      return `${args}: ${safeConfigValue(args, row.value)}`;
     },
   },
 

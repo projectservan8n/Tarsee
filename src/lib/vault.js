@@ -130,6 +130,110 @@ export function isSecretKey(key) {
 }
 
 /**
+ * Field names that hold a credential inside a structured setting value.
+ *
+ * The key-name patterns above only ever see the TOP-LEVEL settings key, and
+ * every channel stores its whole config as one JSON object: `channel.telegram`,
+ * `channel.email`, `channel.whatsapp`. None of those key names match, so the
+ * bot tokens, IMAP and SMTP passwords, and webhook secrets inside them were
+ * written to SQLite in plaintext — on a product that logs "credential
+ * encryption: ENABLED" at boot and audits every write as "(encrypted)".
+ *
+ * Matching on the FIELD name inside the object closes that gap.
+ */
+const SECRET_FIELD_PATTERN = /(token|password|secret|apikey|api_key|credential|passphrase)/i;
+
+/**
+ * Recursively encrypt credential-bearing fields inside a structured value.
+ *
+ * Only string leaves whose own field name looks like a credential are touched,
+ * so the rest of the config stays readable in the database and in backups.
+ * Already-encrypted values pass through, which keeps this idempotent across
+ * the read-modify-write cycle the settings routes use.
+ *
+ * @param {*} value - any JSON-ish value
+ * @returns {*} the same shape, with secret leaves encrypted
+ */
+export function encryptSecretFields(value) {
+  if (Array.isArray(value)) return value.map(encryptSecretFields);
+  if (!value || typeof value !== "object") return value;
+
+  const out = {};
+  for (const [field, inner] of Object.entries(value)) {
+    if (typeof inner === "string" && inner && SECRET_FIELD_PATTERN.test(field)) {
+      out[field] = isEncrypted(inner) ? inner : encrypt(inner);
+    } else if (inner && typeof inner === "object") {
+      out[field] = encryptSecretFields(inner);
+    } else {
+      out[field] = inner;
+    }
+  }
+  return out;
+}
+
+/**
+ * Recursively decrypt any encrypted string leaves in a structured value.
+ *
+ * Deliberately keyed on the value's own prefix rather than the field name:
+ * a field renamed after it was written must still decrypt, and a value that
+ * was stored before this existed is plaintext and passes straight through.
+ *
+ * @param {*} value
+ * @returns {*}
+ */
+export function decryptSecretFields(value) {
+  if (Array.isArray(value)) return value.map(decryptSecretFields);
+  if (!value || typeof value !== "object") {
+    return isEncrypted(value) ? decrypt(value) : value;
+  }
+
+  const out = {};
+  for (const [field, inner] of Object.entries(value)) {
+    if (isEncrypted(inner)) {
+      try {
+        out[field] = decrypt(inner);
+      } catch (err) {
+        // A rotated or missing ENCRYPTION_KEY must not take down every read of
+        // this setting. Surface the field as empty and say so once.
+        console.error(`[vault] could not decrypt field "${field}": ${err.message}`);
+        out[field] = "";
+      }
+    } else if (inner && typeof inner === "object") {
+      out[field] = decryptSecretFields(inner);
+    } else {
+      out[field] = inner;
+    }
+  }
+  return out;
+}
+
+/**
+ * Redact credential-bearing fields for display, replacing each with a boolean
+ * `has<Field>` marker so a UI can still show "password is set" without ever
+ * receiving it.
+ *
+ * @param {*} value
+ * @returns {*}
+ */
+export function redactSecretFields(value) {
+  if (Array.isArray(value)) return value.map(redactSecretFields);
+  if (!value || typeof value !== "object") return value;
+
+  const out = {};
+  for (const [field, inner] of Object.entries(value)) {
+    if (typeof inner === "string" && SECRET_FIELD_PATTERN.test(field)) {
+      const marker = `has${field.charAt(0).toUpperCase()}${field.slice(1)}`;
+      out[marker] = !!inner;
+    } else if (inner && typeof inner === "object") {
+      out[field] = redactSecretFields(inner);
+    } else {
+      out[field] = inner;
+    }
+  }
+  return out;
+}
+
+/**
  * Encrypt a value if the key indicates it's a secret.
  * @param {string} key - The settings key
  * @param {string} value - The value to potentially encrypt

@@ -8,7 +8,7 @@ import config from "./config/env.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { LIMITS } from "./config/constants.js";
 import { securityHeaders, csrfProtect, generateCsrfCookie } from "./middleware/security.js";
-import { sessionAuth, requireAuth, rateLimitAuth, initSessionStore } from "./middleware/auth.js";
+import { sessionAuth, requireAuth, initSessionStore } from "./middleware/auth.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { initDb } from "./db/sqlite.js";
 import { healthRouter } from "./routes/health.js";
@@ -114,6 +114,16 @@ initSessionStore(db);
 const app = express();
 app.disable("x-powered-by");
 
+// Behind Railway (and any other reverse proxy) every request arrives from the
+// proxy's address, so `req.ip` was the SAME value for every visitor on earth.
+// The auth rate limiter and the progressive lockout are both keyed on it, which
+// meant one attacker's failed logins locked out the legitimate operator, and
+// five requests a minute was the budget for all users combined. Trusting one
+// proxy hop makes req.ip the real client address from X-Forwarded-For.
+// Deliberately `1` rather than `true`: trusting the whole chain lets a client
+// forge the header and defeat the limiter it is meant to feed.
+app.set("trust proxy", 1);
+
 // Make db available to route handlers via app.get("db")
 app.set("db", db);
 
@@ -147,7 +157,12 @@ app.use(express.static(publicDir, {
 
 // --- Routes ---
 app.use(healthRouter);
-app.use("/api/auth", rateLimitAuth, authRouter);
+// Rate limiting belongs on the login attempt itself, not on the whole router.
+// Mounted here it also counted GET /status (which the web UI polls), GET
+// /api-token and POST /logout against a 5-per-minute budget, so ordinary use
+// of the app locked the user out of their own login. Applied inside
+// auth-routes.js on POST /login only.
+app.use("/api/auth", authRouter);
 app.use("/api/chat", requireAuth, csrfProtect, chatRouter);
 app.use("/api/voice", requireAuth, csrfProtect, voiceRouter);
 app.use("/api/settings", requireAuth, csrfProtect, settingsRouter);
