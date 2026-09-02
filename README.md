@@ -143,6 +143,20 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **`/checkpoint` — cross-restart handoff** — manual AI-synthesized `CHECKPOINT.md` before a known redeploy, plus an activity-gated auto-checkpoint every 6h as a safety net. On the next boot, the checkpoint is injected into the system prompt so work picks up mid-thought instead of starting cold.
 - **Retention** — daily 03:00 sweep prunes conversations idle >14 days and checkpoint archives older than 30 days (or >50 files). Keeps the most recent thread per channel so Discord/Telegram/email session continuity never breaks. One-line summaries of pruned conversations append to `memory/archived-conversations.md` so nothing vanishes without a record. Configurable via `retention.*` settings or `/retention` command.
 
+### Cost Controls
+- **Cheap floor for unattended work** — cron jobs, the 30-minute heartbeat and the boot checklist run on the Haiku alias by default, not the interactive model. Raise a specific one with the `cron.defaultModel`, `heartbeat.model` or `boot.model` setting, or per job with `job.model`. A zero-token keyword heuristic escalates a cron job to Sonnet or Opus when its prompt clearly warrants it.
+- **Hard ceilings** — every background turn carries a wall-clock timeout, a turn cap well below the interactive limit, and a spend ceiling enforced by the Agent SDK. A job that hits one is reported as failed, not as a successful empty run.
+- **No duplicate boot spend** — BOOT.md runs once per build, keyed to the commit and a hash of the file. A crash-looping container no longer pays for a model turn on every restart.
+- **One turn at a time per conversation** — a second message queues instead of starting a concurrent turn against the same Claude session.
+- **Automatic fallback** — an overloaded model steps down a tier rather than failing the turn.
+
+### Security
+- **Tool Permissions are enforced** — Settings > Tool Permissions gates real execution at the single point every tool call passes through. Setting a tool to `always_deny` stops it, tells the model not to work around it, and records the attempt in the audit log.
+- **Credentials encrypted at rest** — bot tokens, IMAP/SMTP passwords and webhook secrets are encrypted field-by-field inside channel configs, and are never returned to the browser (the API reports `hasToken` / `hasPassword` instead).
+- **SSRF protection** — the fetch and browser tools refuse loopback, RFC1918 and link-local targets, including the `169.254.169.254` cloud metadata endpoint.
+- **Scoped file access** — the file manager is confined to the workspace and cannot reach the Claude credentials, encryption key, API token or database.
+- **Isolated canvases** — model-authored pages require a login and run in a sandboxed null origin, so a prompt-injected canvas cannot reach Tarsee's API or storage.
+
 ### Models
 - **Alias-first model registry** — the default is the bare `opus` alias, which Claude Code resolves to the newest Opus at request time. Pinned ids (`claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`, …) remain selectable when you need a frozen, reproducible model. This replaced a hardcoded pin that had silently fallen two releases behind: the registry named Opus 4.7 as the default long after Opus 4.8 and Opus 5 shipped, so every session ran on an outdated model until someone edited the file. Aliases make that class of bug impossible.
 - **Tiers** — `fable`, `opus`, `sonnet` and `haiku` are all available as always-latest aliases, in capability-descending order, and `/model <name>` accepts either an alias or a pinned id. Fable is the top tier: `/model fable` tracks the newest Fable release, and `claude-fable-5-1` is selectable as a frozen pin.
