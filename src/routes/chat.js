@@ -3,7 +3,7 @@ import { chatStream, getAvailableProviders } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { initSSE, sendSSE } from "../lib/stream-utils.js";
-import { LIMITS, CLAUDE_MODELS, CLAUDE_MODELS_BY_ID, resolveModelAlias } from "../config/constants.js";
+import { LIMITS, CLAUDE_MODELS, CLAUDE_MODELS_BY_ID, resolveModelAlias, tierOf } from "../config/constants.js";
 import { snapshotForContextOverflow } from "../lib/auto-checkpoint.js";
 import { processCommand, getCommandList, extractPlaybookPrompt } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
@@ -461,7 +461,11 @@ chatRouter.post("/send", async (req, res) => {
 
   // Tell frontend which model was selected (useful for auto-routing)
   if (autoRoute && !reqModel) {
-    sendSSE(res, "model_selected", { model });
+    // Send the tier too. The client used to derive it with
+    // `model.includes("opus") ? … : "sonnet"`, which silently labelled every
+    // Fable turn "SONNET". The registry already knows the answer, so let the
+    // server answer instead of making the browser guess at string matching.
+    sendSSE(res, "model_selected", { model, tier: tierOf(model) });
   }
 
   // Detect voice mode — Claude responds normally (tables, formatting, etc.)

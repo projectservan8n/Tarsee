@@ -56,7 +56,19 @@ const baseRules = { ...js.configs.recommended.rules, ...nonDefectRules };
 export default [
   {
     // src/skills is vendored skill documentation, not application code.
-    ignores: ["node_modules/**", "data/**", "src/skills/**"],
+    //
+    // The three git-ignored vendor checkouts are listed too. They are not in
+    // the repository, so CI never saw them and `npm run lint` passed there
+    // while failing on any developer machine that had them on disk — a lint
+    // that is green in CI and red locally is one people learn to ignore.
+    ignores: [
+      "node_modules/**",
+      "data/**",
+      "src/skills/**",
+      "openclaw-main/**",
+      "clawdbot-railway-template/**",
+      "piper-voices/**",
+    ],
   },
 
   // Everything that runs in Node: server, channels, libs, CLI, tests.

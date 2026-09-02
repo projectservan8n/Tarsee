@@ -303,8 +303,23 @@ async function handleChat(ws, msg, convStore, settingsStore) {
     }
   }
 
-  // Get or create conversation
+  // Get or create conversation.
+  //
+  // A client-supplied id must be checked before use. messages.conversation_id
+  // is a NOT NULL foreign key and `foreign_keys = ON`, so inserting against a
+  // deleted conversation throws SQLITE_CONSTRAINT out of this async handler —
+  // an unhandled rejection that kills the process. Two tabs open on one
+  // conversation, delete in the first, send from the second, and the whole
+  // server goes down; any authenticated client could also do it on purpose.
   let convId = conversationId;
+  if (convId && !convStore.get(convId)) {
+    ws.send(JSON.stringify({
+      type: "error",
+      message: "That conversation no longer exists. Start a new one.",
+      code: "conversation_not_found",
+    }));
+    return;
+  }
   if (!convId) {
     const conv = convStore.create({ title: message.slice(0, 100) });
     convId = conv.id;

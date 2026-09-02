@@ -77,8 +77,58 @@ function escapeHtml(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
+/**
+ * Lock a canvas response into an opaque origin.
+ *
+ * Canvas HTML is written by the model, and the model reads untrusted input:
+ * inbound email, WhatsApp messages, fetched web pages. A prompt injection that
+ * reaches create_canvas used to get script execution on Tarsee's own origin —
+ * the page could call /api/auth/api-token, read the vault through /api/files,
+ * and exfiltrate the Claude credentials, because the app-wide CSP allows
+ * 'unsafe-inline' and the chat embedded it with allow-same-origin.
+ *
+ * The CSP `sandbox` directive applies to top-level navigations as well as
+ * frames, so it holds whether the canvas is opened directly or embedded. No
+ * allow-same-origin: the page still renders and its own scripts still run, but
+ * in a null origin with no access to Tarsee's cookies, storage, or same-origin
+ * API surface.
+ */
+function applyCanvasIsolation(res) {
+  res.set("Content-Security-Policy", [
+    "sandbox allow-scripts allow-forms allow-modals allow-popups",
+    "default-src 'self' data: blob:",
+    "script-src 'self' 'unsafe-inline' data: blob: https://cdn.jsdelivr.net https://cdn.tailwindcss.com",
+    "style-src 'self' 'unsafe-inline' data: https://fonts.googleapis.com https://cdn.jsdelivr.net https://cdn.tailwindcss.com",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
+    // No 'self' here: a canvas has no business calling Tarsee's own API.
+    "connect-src https://cdn.jsdelivr.net https://cdn.tailwindcss.com",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join("; "));
+  res.set("Cross-Origin-Opener-Policy", "same-origin");
+  res.set("Cross-Origin-Resource-Policy", "same-origin");
+  res.set("X-Content-Type-Options", "nosniff");
+}
+
 export function canvasMiddleware(req, res, next) {
   if (!req.path.startsWith("/canvas/")) return next();
+
+  // Canvases are private. They routinely contain whatever the user asked the
+  // agent to visualise — revenue dashboards, customer lists, internal process
+  // diagrams — and this middleware is mounted before any auth, so /canvas/
+  // used to enumerate and serve every canvas ever generated to anyone who
+  // found the URL. Require the same session or API token the rest of the app
+  // does; the chat iframe is same-origin and sends the cookie automatically.
+  if (!req.auth?.authenticated) {
+    return res.status(401).type("html").send(
+      "<!DOCTYPE html><html><body style=\"background:#1a1a1a;color:#ececec;font-family:sans-serif;padding:40px\">"
+      + "<h1>Sign in required</h1><p>Log in to Tarsee to view this canvas.</p></body></html>",
+    );
+  }
+
+  applyCanvasIsolation(res);
   const parts = req.path.replace("/canvas/", "").split("/").filter(Boolean);
 
   // Gallery: /canvas/ with no ID → list all canvases

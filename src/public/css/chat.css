@@ -42,6 +42,7 @@
 
 /* Model-specific colors */
 .session-model { background: var(--accent-subtle); color: var(--accent); }
+.session-model.model-fable { background: var(--model-fable-subtle); color: var(--model-fable); }
 .session-model.model-opus { background: var(--model-opus-subtle); color: var(--model-opus); }
 .session-model.model-sonnet { background: var(--accent-subtle); color: var(--accent); }
 .session-model.model-haiku { background: var(--model-haiku-subtle); color: var(--model-haiku); }

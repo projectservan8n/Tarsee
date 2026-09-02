@@ -1,7 +1,11 @@
 /**
  * EffortSlider — segmented control for picking Claude thinking effort.
  * Replaces the single cycling button (which is still available as a
- * fallback) with a 6-notch slider: auto / low / medium / high / max / xhigh.
+ * fallback) with a 6-notch slider: auto / low / medium / high / xhigh / max.
+ *
+ * Order matters — the notches ascend in cost. `xhigh` sits BETWEEN high and
+ * max, so listing max first (as this did) told users the last notch was a
+ * step up from maximum when it is a step down.
  *
  * Public API:
  *   window.EffortSlider.open()   — show the panel, focused on current level
@@ -19,8 +23,8 @@
     { value: "low",    icon: "🐇", label: "Quick",     hint: "Minimal thinking, fastest responses" },
     { value: "medium", icon: "⚖️", label: "Balanced",  hint: "Default for typical chat" },
     { value: "high",   icon: "🧠", label: "Deep",      hint: "Thorough reasoning, takes longer" },
-    { value: "max",    icon: "🔮", label: "Maximum",   hint: "Heaviest thinking budget (Opus)" },
-    { value: "xhigh",  icon: "🌌", label: "Ultra",     hint: "Opus 4.7 extra-high budget" },
+    { value: "xhigh",  icon: "🌌", label: "Ultra",     hint: "Sweet spot for coding and agentic work" },
+    { value: "max",    icon: "🔮", label: "Maximum",   hint: "Heaviest thinking — when correctness beats cost" },
   ];
 
   let panelEl = null;

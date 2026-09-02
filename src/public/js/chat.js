@@ -404,7 +404,11 @@ const Chat = {
       const activeId = (settingsData.settings || []).find((s) => s.key === "ai.claude-code.model")?.value;
       const models = modelsData.models || [];
       const meta = models.find((m) => m.id === activeId);
-      this.elements.sessionModel.textContent = meta?.tier || (activeId ? activeId.split("-")[1] : "opus");
+      const tier = meta?.tier || (activeId ? activeId.split("-")[1] : "opus");
+      this.elements.sessionModel.textContent = tier;
+      // Colour the badge to match the tier. Without this the session bar kept
+      // whatever class the last auto-routed turn left behind.
+      this.elements.sessionModel.className = "session-model model-" + tier;
     });
 
     // If we have live token data from the last turn, that's authoritative —
@@ -959,8 +963,8 @@ const Chat = {
         textEl.innerHTML = content;
       } else {
         // Hide incomplete XML blocks during streaming (they render as raw text until closed)
-        const cleaned = hideIncompleteBlocks(content);
-        textEl.innerHTML = this.renderMarkdown(cleaned);
+        const { text: cleaned, nonce } = hideIncompleteBlocks(content);
+        textEl.innerHTML = this.renderMarkdown(cleaned, nonce);
       }
     }
   },
@@ -1231,10 +1235,12 @@ const Chat = {
             // Auto-routing: update session bar badge with the chosen model
             const badge = document.getElementById("sessionModel");
             if (badge) {
-              const isOpus = event.model?.includes("opus");
-              const isHaiku = event.model?.includes("haiku");
-              badge.textContent = isOpus ? "OPUS" : isHaiku ? "HAIKU" : "SONNET";
-              badge.className = "session-model model-" + (isOpus ? "opus" : isHaiku ? "haiku" : "sonnet");
+              // Trust the tier the server resolved from the model registry.
+              // Guessing it here with substring checks mislabelled anything
+              // that was not opus/haiku — every Fable turn read "SONNET".
+              const tier = event.tier || "";
+              badge.textContent = (tier || event.model || "").toUpperCase();
+              badge.className = "session-model" + (tier ? " model-" + tier : "");
             }
             return;
           }
@@ -2342,7 +2348,17 @@ const Chat = {
     return `<div class="tl-timeline">${parts}</div>`;
   },
 
-  renderMarkdown(text) {
+  /**
+   * Render message text to HTML.
+   *
+   * @param {string} text - message content. UNTRUSTED: it may come from any
+   *   channel sender, so everything not explicitly extracted here is escaped.
+   * @param {string} [streamNonce] - random token from hideIncompleteBlocks
+   *   identifying the transient "still streaming" placeholders it injected.
+   *   Supplied only on the live streaming path; persisted messages never carry
+   *   one, so a stored message cannot fake an indicator.
+   */
+  renderMarkdown(text, streamNonce) {
     if (!text) return "";
 
     // Check for persisted timeline JSON from DB
@@ -2382,7 +2398,14 @@ const Chat = {
     const canvasEmbedHtml = (canvasId) => {
       const safeId = escapeHtml(canvasId);
       return `<div class="canvas-embed" data-canvas-id="${safeId}">
-        <iframe src="/canvas/${safeId}/" class="canvas-iframe" sandbox="allow-scripts allow-same-origin" loading="lazy"></iframe>
+        <!-- No allow-same-origin. Canvas HTML is model-authored and the model
+             reads untrusted input, so pairing allow-scripts with
+             allow-same-origin handed any prompt injection full authority on
+             Tarsee's origin: the API token, the vault, the Claude credentials.
+             Dropping it keeps scripts working inside a null origin. The server
+             sends a matching CSP sandbox header so a directly-opened canvas is
+             covered too. -->
+        <iframe src="/canvas/${safeId}/" class="canvas-iframe" sandbox="allow-scripts" loading="lazy"></iframe>
         <button type="button" class="canvas-embed-menu-btn" aria-label="Diagram options" aria-haspopup="menu" aria-expanded="false">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="3" cy="8" r="1.5" fill="currentColor"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><circle cx="13" cy="8" r="1.5" fill="currentColor"/></svg>
         </button>
@@ -2467,12 +2490,27 @@ const Chat = {
       return PH(i);
     });
 
-    // Streaming indicator divs (injected by hideIncompleteBlocks during streaming)
-    text = text.replace(/<div class="block-streaming-indicator">[\s\S]*?<\/div>/g, (match) => {
-      const i = blocks.length;
-      blocks.push(match);
-      return PH(i);
-    });
+    // Streaming indicator (injected by hideIncompleteBlocks during streaming).
+    //
+    // This used to match `<div class="block-streaming-indicator">…</div>` in
+    // the message text and re-inject the match verbatim, AFTER escaping and
+    // bypassing it. Message text is attacker-controllable — anyone who can
+    // reach a channel can send that exact div — so it was stored XSS: the
+    // payload ran as soon as the owner opened the conversation, with the API
+    // token in localStorage in reach. The indicator is now addressed by a
+    // random per-render nonce no inbound message can predict, and the markup
+    // is built here from an escaped label instead of passed through.
+    if (streamNonce) {
+      const nonceRe = new RegExp(`\\[\\[${streamNonce}:([^\\]]*)\\]\\]`, "g");
+      text = text.replace(nonceRe, (_m, label) => {
+        const i = blocks.length;
+        blocks.push(
+          `<div class="block-streaming-indicator"><span class="streaming-dots">`
+          + `<span></span><span></span><span></span></span> ${escapeHtml(label)}…</div>`,
+        );
+        return PH(i);
+      });
+    }
 
     // ── Now escape HTML on the remaining text ──
     let html = escapeHtml(text);
@@ -2623,7 +2661,19 @@ function escapeHtml(text) {
  * text until the closing tag arrives. This replaces any unclosed block tags
  * with a nice "working" indicator so the user doesn't see raw XML.
  */
+/**
+ * Replace a still-unclosed XML block with a transient "working" marker.
+ *
+ * Returns the rewritten text plus the random nonce delimiting each marker.
+ * The marker is deliberately NOT HTML: renderMarkdown builds the element
+ * itself from the escaped label. Emitting raw HTML here is what made this an
+ * XSS sink, because renderMarkdown then had to recognise that same HTML
+ * inside attacker-supplied message text and pass it through unescaped.
+ *
+ * @returns {{text: string, nonce: string}}
+ */
 function hideIncompleteBlocks(text) {
+  const nonce = streamMarkerNonce();
   const blockTags = ["thinking", "antThinking", "antml:thinking", "reasoning", "tool_call", "tool_use", "tool_response", "tool_result", "function_calls", "function_response", "invoke", "search_results", "artifact", "result"];
   let result = text;
 
@@ -2641,13 +2691,23 @@ function hideIncompleteBlocks(text) {
         const label = tag.includes("think") || tag.includes("reason") ? "Thinking" :
                       tag.includes("tool_call") || tag.includes("tool_use") ? "Running tool" :
                       tag.includes("tool_r") ? "Processing result" : "Working";
-        result = result.slice(0, lastOpen) +
-          `\n<div class="block-streaming-indicator"><span class="streaming-dots"><span></span><span></span><span></span></span> ${label}…</div>`;
+        result = result.slice(0, lastOpen) + `\n[[${nonce}:${label}]]`;
       }
     }
   }
 
-  return result;
+  return { text: result, nonce };
+}
+
+/**
+ * A fresh unguessable marker per render. Inbound message text cannot contain
+ * it, which is the point: the streaming placeholder must not be forgeable by
+ * whoever sent the message.
+ */
+function streamMarkerNonce() {
+  const buf = new Uint32Array(2);
+  crypto.getRandomValues(buf);
+  return `TSTREAM${buf[0].toString(36)}${buf[1].toString(36)}`;
 }
 
 // ── Tool & Thinking Block Renderers ──────────────────────────────────

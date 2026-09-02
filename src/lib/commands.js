@@ -76,8 +76,8 @@ const COMMANDS = {
   },
 
   model: {
-    description: "Show or switch the AI model (opus, sonnet, haiku, or any model id)",
-    usage: "/model [opus|sonnet|haiku|<model-id>]",
+    description: "Show or switch the AI model (fable, opus, sonnet, haiku, or any model id)",
+    usage: "/model [fable|opus|sonnet|haiku|<model-id>]",
     handler: (args, ctx) => {
       const settingsStore = ctx.settingsStore;
       if (!settingsStore) return "Settings not available.";
@@ -88,17 +88,24 @@ const COMMANDS = {
         const current = active?.model || getRecommendedModel();
         const meta = CLAUDE_MODELS_BY_ID[current];
         const label = meta ? `${meta.displayName} (${meta.tier}, ${meta.context})` : current;
-        const available = CLAUDE_MODELS.map(
-          (m) => `- \`/model ${m.tier}\` — ${m.displayName} (${m.context}${m.recommended ? ", recommended" : ""})`
+        // Print aliases as `/model <tier>` and pinned rows as their real id.
+        // Every row used to render as `/model ${m.tier}`, so eleven models
+        // collapsed into four repeated commands and there was no way to learn
+        // a pinned id from the help itself.
+        const aliases = CLAUDE_MODELS.filter((m) => m.alias).map(
+          (m) => `- \`/model ${m.id}\` — ${m.displayName} (${m.context}${m.recommended ? ", default" : ""})`
         ).join("\n");
-        return `**Current model:** ${label}\n\n**Available:**\n${available}\n\nYou can also pass a full model id (e.g. \`/model claude-opus-5\`) to pin a specific version instead of tracking the latest.`;
+        const pinned = CLAUDE_MODELS.filter((m) => !m.alias).map(
+          (m) => `- \`/model ${m.id}\` — ${m.displayName} (${m.context})`
+        ).join("\n");
+        return `**Current model:** ${label}\n\n**Always-latest aliases** (recommended — never go stale):\n${aliases}\n\n**Pinned versions** (reproducible, frozen):\n${pinned}`;
       }
 
       const provider = active?.provider || "claude-code";
       const resolved = resolveModelAlias(args);
       if (!resolved) {
         const knownIds = CLAUDE_MODELS.map((m) => `\`${m.id}\``).join(", ");
-        return `Unknown model \`${args}\`. Known: opus, sonnet, haiku, or: ${knownIds}.`;
+        return `Unknown model \`${args}\`. Known aliases: fable, opus, sonnet, haiku. Pinned ids: ${knownIds}.`;
       }
       settingsStore.set(`ai.${provider}.model`, resolved);
       const meta = CLAUDE_MODELS_BY_ID[resolved];
@@ -121,7 +128,7 @@ const COMMANDS = {
         const current = ctx.conversationId
           ? settingsStore.get(`session.${ctx.conversationId}.effort`) || "default"
           : "default";
-        return `**Current effort:** ${current}\n\n**Options:**\n- \`/think low\` — Minimal thinking, fastest\n- \`/think medium\` — Balanced\n- \`/think high\` — Deep reasoning (default)\n- \`/think xhigh\` — Extra-high; the sweet spot for most coding and agentic work\n- \`/think max\` — Maximum effort, when correctness matters more than cost`;
+        return `**Current effort:** ${current}\n\n**Options** (ascending cost):\n- \`/think low\` — Minimal thinking, fastest\n- \`/think medium\` — Balanced\n- \`/think high\` — Deep reasoning (default)\n- \`/think xhigh\` — Extra-high; the sweet spot for most coding and agentic work\n- \`/think max\` — Maximum effort, when correctness matters more than cost`;
       }
 
       const level = levels[args.toLowerCase()];

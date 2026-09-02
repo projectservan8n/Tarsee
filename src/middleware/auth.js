@@ -146,9 +146,16 @@ export function validateApiToken(token) {
  * Returns true if the request has a valid session cookie.
  */
 export function validateSessionFromRequest(req) {
-  // If no password is required, all connections are allowed
-  if (!config.SETUP_PASSWORD) return true;
-
+  // No blanket bypass when SETUP_PASSWORD is unset.
+  //
+  // This used to `return true` in that case, and websocket.js uses this
+  // function to gate the /terminal upgrade. So a deploy that forgot
+  // SETUP_PASSWORD (or typo'd the variable name) published an unauthenticated
+  // root-capable shell: anyone could open wss://<host>/terminal and read the
+  // Claude OAuth credentials, the encryption key and every channel token off
+  // the volume. A missing password must mean "no session can be valid", not
+  // "every request is valid" — callers already fall back to the API token,
+  // which is always generated.
   const sessionToken = extractSessionToken(req);
   if (!sessionToken || !sessions.has(sessionToken)) return false;
 

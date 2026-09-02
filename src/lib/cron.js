@@ -3,6 +3,7 @@ import { buildSystemPrompt } from "./build-system-prompt.js";
 import { chatStream } from "../ai/router.js";
 import { appendDailyLog } from "./workspace-files.js";
 import { resolveModelAlias, isKnownModel } from "../config/constants.js";
+import config from "../config/env.js";
 
 /**
  * Cron job scheduler — run AI tasks on a schedule.
@@ -118,6 +119,12 @@ function scheduleJob(job) {
     return;
   }
 
+  // Interpret the expression in the agent's configured zone, not the
+  // container's. Railway containers run UTC, so "0 8 * * *" fired at 8am UTC
+  // — the middle of the night for most operators — while the scheduling tool
+  // told the model to write local times. Passing `timezone` makes the two
+  // agree. `config.TIMEZONE` is validated at boot, so node-cron cannot throw
+  // on a bogus zone here.
   const task = cron.schedule(job.schedule, () => {
     runCronJobWithRetry(job).then(() => {
       // Auto-delete one-time jobs after they fire
@@ -128,7 +135,7 @@ function scheduleJob(job) {
     }).catch((err) => {
       console.error(`[cron] Job ${job.id} fatal error:`, err.message);
     });
-  });
+  }, { timezone: config.TIMEZONE });
 
   activeJobs.set(job.id, task);
 }

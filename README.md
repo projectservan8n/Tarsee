@@ -35,7 +35,7 @@ Being honest — some of these projects are massive with huge communities. Tarse
 | **Frontend** | Vanilla HTML/CSS/JS | React + Primer UI | React | Go Web UI + TUI | Python CLI |
 | **Build step** | None | TypeScript + Vite | TypeScript | Go compile | pip install |
 | **RAM** | ~200-400MB | Higher (full React stack) | Moderate | <10MB | Low |
-| **Channels** | Web, Telegram, Discord, Voice | 24+ (WhatsApp, Slack, Signal, etc.) | WhatsApp, Telegram, Discord, Slack | 18+ (Telegram, Discord, WeChat, etc.) | 12+ (Telegram, Discord, WhatsApp, etc.) |
+| **Channels** | Web, Telegram, Discord, WhatsApp, Email, Voice | 24+ (WhatsApp, Slack, Signal, etc.) | WhatsApp, Telegram, Discord, Slack | 18+ (Telegram, Discord, WeChat, etc.) | 12+ (Telegram, Discord, WhatsApp, etc.) |
 | **Voice** | Yes (faster-whisper + Edge TTS) | Yes (wake word, ElevenLabs) | No | No | Telegram/WeChat voice |
 | **Mobile** | PWA + iOS PIN pad | Native iOS/Android apps | Via messaging apps | Android APK | Via messaging apps |
 | **Memory** | Persistent + deep search | Session-based with group isolation | SQLite + per-group files | JSONL memory store | Token-based memory |
@@ -145,7 +145,8 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 
 ### Models
 - **Alias-first model registry** — the default is the bare `opus` alias, which Claude Code resolves to the newest Opus at request time. Pinned ids (`claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`, …) remain selectable when you need a frozen, reproducible model. This replaced a hardcoded pin that had silently fallen two releases behind: the registry named Opus 4.7 as the default long after Opus 4.8 and Opus 5 shipped, so every session ran on an outdated model until someone edited the file. Aliases make that class of bug impossible.
-- **Tiers** — `opus`, `sonnet`, `haiku` and `fable` are all available as always-latest aliases, and `/model <name>` accepts either an alias or a pinned id.
+- **Tiers** — `fable`, `opus`, `sonnet` and `haiku` are all available as always-latest aliases, in capability-descending order, and `/model <name>` accepts either an alias or a pinned id. Fable is the top tier: `/model fable` tracks the newest Fable release, and `claude-fable-5-1` is selectable as a frozen pin.
+- **Automatic fallback** — every turn ships a `--fallback-model` ladder one tier below whatever you chose, so an overloaded Fable turn degrades to Opus instead of failing.
 
 ### Search & Analytics
 - **Live context meter** — the session bar shows a real-time prompt-token fill % against the active model's context window (1M for Opus/Sonnet, 200K for Haiku). Counts cache reads and cache writes too — that's the actual prompt size hitting the model. Bar turns yellow at 75%, red and pulsing at 90%, with a dismissible banner above the composer. At 95% Tarsee writes a mechanical snapshot to `CHECKPOINT.md` automatically; if a turn still trips "prompt is too long", the snapshot is written from the catch path and a recovery card is shown in chat with a one-click "Start fresh session" button. The next boot reads that checkpoint as the handoff so you pick up mid-thought.
@@ -164,7 +165,7 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 
 ### Appearance & Controls
 - **Themes** — `warm-charcoal` (default, terracotta accent), `noir` (pure black OLED-friendly), `solarized-light` (daylight), `jarvis-blue` (cyan accent). Switch from Settings > Appearance or via `/theme <name>`. Plugin-shipped themes are loaded from `ui.themes.plugin` automatically.
-- **Effort slider** — 6-notch touch-native slider (auto / low / medium / high / max / xhigh) for setting Claude's thinking effort. Long-press the effort toggle on the composer to open; `/effort` opens it via keyboard. `xhigh` (Ultra) is available on Opus 4.7.
+- **Effort slider** — 6-notch touch-native slider (auto / low / medium / high / xhigh / max) for setting Claude's thinking effort, in ascending cost order. Long-press the effort toggle on the composer to open; `/effort` opens it via keyboard. `xhigh` (Ultra) is the sweet spot for coding and agentic work.
 
 ---
 
@@ -263,8 +264,8 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all commands |
-| `/model opus\|sonnet\|haiku` | Switch AI model |
-| `/think low\|medium\|high\|max\|xhigh` | Set thinking effort for the session (xhigh on Opus 4.7) |
+| `/model fable\|opus\|sonnet\|haiku` | Switch AI model (alias tracks latest) or pass a pinned id like `claude-fable-5-1` |
+| `/think low\|medium\|high\|xhigh\|max` | Set thinking effort for the session (ascending cost; `xhigh` sits between high and max) |
 | `/effort` | Open the 6-notch effort slider (touch-native) |
 | `/theme [name]` | List or switch themes: warm-charcoal, noir, solarized-light, jarvis-blue |
 | `/auto [on\|off]` | Toggle auto model routing (haiku/sonnet/opus by complexity) |
@@ -313,7 +314,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SETUP_PASSWORD` | Yes | — | 4-digit PIN for the web UI |
+| `SETUP_PASSWORD` | Yes | — | 4-digit PIN for the web UI. **Required in production** — the server refuses to boot without it, because nobody could log in and the web terminal would be exposed. |
 | `ENCRYPTION_KEY` | Yes | — | AES-256 key. `openssl rand -hex 32` |
 | `NODE_ENV` | Yes | — | Set to `production` |
 | `CLAUDE_DEFAULT_MODEL` | No | `opus` | Default model for new sessions. Defaults to the **`opus` alias**, which Claude Code resolves to the newest Opus at request time — so a new Anthropic release is picked up with no code change. Set a pinned id (e.g. `claude-opus-5`) if you need a frozen model, or `sonnet` / `haiku` for a cheaper default. |
@@ -325,6 +326,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `TARSEE_CSRF_MAX_AGE_HOURS` | No | `24` | CSRF token lifetime. |
 | `TARSEE_CHANNEL_HEALTH_MS` | No | `60000` | How often the watchdog probes for a wedged Telegram poller. |
 | `TARSEE_CLEAR_SESSIONS_ON_BOOT` | No | off | Set `1` to restore the old behaviour of wiping every Claude session id on boot. |
+| `TARSEE_TIMEZONE` | No | host zone | IANA zone the agent reasons in for "today", "tomorrow at 9", and cron schedules (e.g. `Europe/Berlin`). Railway containers run UTC, so set this or your 8am reminders fire at 8am UTC. An unrecognised zone falls back to UTC with a warning. |
 
 > **Note:** Claude credentials are NOT set via env var. Run `claude login` in the web terminal after deploying. See [Authenticating with Claude](#authenticating-with-claude).
 

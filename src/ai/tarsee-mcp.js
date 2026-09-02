@@ -11,6 +11,7 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { executeTool } from "../lib/tools.js";
+import config from "../config/env.js";
 
 /**
  * Create a Tarsee MCP server with platform tools.
@@ -78,15 +79,23 @@ export function createTarseeMcp(ctx) {
 
       tool(
         "tarsee_schedule_task",
-        "Schedule a task using cron syntax. Supports one-time and recurring. For simple notifications, use action (direct, instant). For complex tasks, use prompt (AI session).\n\nEXAMPLES:\n- One-time reminder: schedule='30 12 7 4 *', once=true, action={tool:'send_message', args:{channel:'telegram', message:'Meeting now!'}}\n- Daily recurring: schedule='0 1 * * *', action={tool:'send_message', args:{channel:'telegram', message:'Good morning!'}}\n- Complex: schedule='0 1 * * 1', prompt='Check calendar and summarize the week'\n\nALWAYS prefer action over prompt for send_message tasks. Set once=true for one-time reminders (auto-deletes after firing). Server is UTC — user is PHT (UTC+8), so subtract 8 hours.",
+        `Schedule a task using cron syntax. Supports one-time and recurring. For simple notifications, use action (direct, instant). For complex tasks, use prompt (AI session).\n\nEXAMPLES:\n- One-time reminder: schedule='30 12 7 4 *', once=true, action={tool:'send_message', args:{channel:'telegram', message:'Meeting now!'}}\n- Daily recurring: schedule='0 8 * * *', action={tool:'send_message', args:{channel:'telegram', message:'Good morning!'}}\n- Complex: schedule='0 8 * * 1', prompt='Check calendar and summarize the week'\n\nALWAYS prefer action over prompt for send_message tasks. Set once=true for one-time reminders (auto-deletes after firing). Cron expressions are interpreted in ${config.TIMEZONE} — call tarsee_datetime to confirm the current local time before scheduling.`,
         {
-          schedule: z.string().describe("Cron expression. Format: 'min hour day month weekday'. Server is UTC — subtract 8 for PHT."),
+          schedule: z.string().describe(`Cron expression. Format: 'min hour day month weekday'. Interpreted in ${config.TIMEZONE}.`),
           name: z.string().optional().describe("Human-friendly name"),
           once: z.boolean().optional().describe("If true, job auto-deletes after firing once. Use for one-time reminders."),
           prompt: z.string().optional().describe("AI prompt for complex tasks (spawns full Claude session)"),
           action: z.object({
             tool: z.string().describe("Tool to execute directly (e.g. 'send_message')"),
-            args: z.record(z.any()).describe("Tool arguments (e.g. {channel:'telegram', message:'Hello!'})"),
+            // MUST pass a key schema. zod 4 removed the single-argument form:
+            // `z.record(z.any())` builds an object whose keyType is undefined,
+            // and converting it to JSON Schema throws inside the MCP server's
+            // tools/list handler. That failure is not isolated to this tool —
+            // it fails the whole list call, so EVERY mcp__tarsee__* tool went
+            // invisible to Claude while the system prompt kept advertising
+            // them. That is the real cause of the agent shelling out to curl
+            // instead of calling tarsee_send_message. See test/mcp-tools.test.js.
+            args: z.record(z.string(), z.any()).describe("Tool arguments (e.g. {channel:'telegram', message:'Hello!'})"),
           }).optional().describe("Direct tool action — instant, no AI needed. Use for simple notifications."),
         },
         async (args) => {
@@ -211,7 +220,7 @@ export function createTarseeMcp(ctx) {
         "tarsee_datetime",
         "Get current date/time/day or convert timezones. ALWAYS use this for dates and days of the week — never guess.",
         {
-          timezone: z.string().optional().describe("IANA timezone, e.g. 'Asia/Manila', 'America/New_York'. Default: Asia/Manila"),
+          timezone: z.string().optional().describe(`IANA timezone, e.g. 'Europe/Berlin', 'America/New_York'. Default: ${config.TIMEZONE}`),
           date: z.string().optional().describe("Date to check, e.g. '2026-04-17' or 'next friday'"),
           format: z.enum(["full", "date", "time", "day", "iso"]).optional().describe("Output format"),
         },

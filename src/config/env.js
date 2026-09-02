@@ -160,6 +160,29 @@ const CLAUDE_WORKSPACE_DIR = process.env.CLAUDE_WORKSPACE_DIR?.trim() || WORKSPA
 // wins if set — useful for pinning a specific model on a deployment.
 const CLAUDE_DEFAULT_MODEL = process.env.CLAUDE_DEFAULT_MODEL?.trim() || getRecommendedModel();
 
+// --- Timezone ---
+// The zone the agent reasons in for "today", "tomorrow at 9", and cron help.
+// This used to be hardcoded to Asia/Manila in three places, which is wrong for
+// every user of an open-source project who does not happen to live there — a
+// German user asking for a 9am reminder silently got one at 3am. Resolve the
+// host zone (UTC on Railway unless the service sets TZ) and let TARSEE_TIMEZONE
+// override it.
+function resolveTimezone() {
+  const configured = process.env.TARSEE_TIMEZONE?.trim();
+  const candidate = configured || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!candidate) return "UTC";
+  try {
+    // Throws RangeError on a bogus zone; better to fall back than to crash
+    // every datetime call for the life of the process.
+    new Intl.DateTimeFormat("en-US", { timeZone: candidate }).format(new Date());
+    return candidate;
+  } catch {
+    console.warn(`[config] Unknown timezone ${JSON.stringify(candidate)} — falling back to UTC`);
+    return "UTC";
+  }
+}
+const TIMEZONE = resolveTimezone();
+
 // --- Frozen config export ---
 const config = Object.freeze({
   PORT,
@@ -176,6 +199,7 @@ const config = Object.freeze({
   // Claude Code
   CLAUDE_WORKSPACE_DIR,
   CLAUDE_DEFAULT_MODEL,
+  TIMEZONE,
 });
 
 export default config;

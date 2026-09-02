@@ -17,6 +17,11 @@
 //                  to the newest model in that tier at request time, so the
 //                  default never goes stale when Anthropic ships a release.
 //
+// TIER ORDER: fable > opus > sonnet > haiku, capability-descending. Anything
+// that escalates or de-escalates a model (auto-routing, cron tiering, the
+// session badge) reads MODEL_TIERS rather than hardcoding names, so adding a
+// future tier does not mean hunting through six files again.
+//
 // WHY ALIASES ARE FIRST: this registry previously pinned Opus 4.7 as the
 // default. Opus 4.8 and Opus 5 shipped after that and the pin never moved,
 // so every session silently ran two releases behind. Pointing the default at
@@ -24,9 +29,9 @@
 // anyone who needs a reproducible, frozen model.
 export const CLAUDE_MODELS = Object.freeze([
   // Aliases — always the latest model in that tier. Zero maintenance; the
-  // default lives here. Verified: the Claude Code CLI documents `--model` as
-  // accepting "an alias for the latest model (e.g. 'fable', 'opus', or
-  // 'sonnet')", and the Agent SDK forwards `model` to it verbatim.
+  // default lives here. Verified against the installed CLI (2.1.239), whose
+  // `--model` help reads "Provide an alias for the latest model (e.g.
+  // 'fable', 'opus', or 'sonnet')". The Agent SDK forwards `model` verbatim.
   { id: "opus",              displayName: "Opus · latest",     tier: "opus",   context: "1M",   recommended: true,  alias: true },
   { id: "sonnet",            displayName: "Sonnet · latest",   tier: "sonnet", context: "1M",   recommended: false, alias: true },
   { id: "haiku",             displayName: "Haiku · latest",    tier: "haiku",  context: "200K", recommended: false, alias: true },
@@ -34,6 +39,7 @@ export const CLAUDE_MODELS = Object.freeze([
 
   // Pinned versions — opt in for reproducibility. Add a row when you want a
   // NEW pin; you never need to touch these just to get the latest model.
+  { id: "claude-fable-5-1",  displayName: "Claude Fable 5.1",  tier: "fable",  context: "1M",   recommended: false, released: "2026-08" },
   { id: "claude-fable-5",    displayName: "Claude Fable 5",    tier: "fable",  context: "1M",   recommended: false, released: "2026-05" },
   { id: "claude-opus-5",     displayName: "Claude Opus 5",     tier: "opus",   context: "1M",   recommended: false, released: "2026-04" },
   { id: "claude-opus-4-8",   displayName: "Claude Opus 4.8",   tier: "opus",   context: "1M",   recommended: false, released: "2026-02" },
@@ -49,6 +55,14 @@ export const CLAUDE_MODELS_BY_ID = Object.freeze(
   Object.fromEntries(CLAUDE_MODELS.map((m) => [m.id, m]))
 );
 
+/**
+ * Tiers in capability-descending order: fable > opus > sonnet > haiku.
+ * Consumers that escalate/de-escalate (auto-routing, cron tiering) index into
+ * this instead of hardcoding tier names, so a new tier is one row here plus
+ * one alias row above.
+ */
+export const MODEL_TIERS = Object.freeze(["fable", "opus", "sonnet", "haiku"]);
+
 /** The default model when nothing else is configured. */
 export function getRecommendedModel() {
   return (CLAUDE_MODELS.find((m) => m.recommended) || CLAUDE_MODELS[0]).id;
@@ -63,24 +77,51 @@ export function getRecommendedModel() {
 export function resolveModelAlias(alias) {
   if (!alias) return null;
   const a = String(alias).toLowerCase().trim();
+  if (!a) return null;
 
-  // Exact match first — if the user typed a full ID, honor it.
+  // Exact match first — if the user typed a full ID or a bare tier alias,
+  // honor it. Tier aliases have rows of their own, so "opus" resolves to the
+  // alias (always-latest) rather than to whatever pin happens to be newest.
   if (CLAUDE_MODELS_BY_ID[a]) return a;
 
-  // Tier shorthand → newest in that tier
-  const tierMatches = CLAUDE_MODELS
-    .filter((m) => m.tier === a)
-    .sort((x, y) => (y.released || "").localeCompare(x.released || ""));
-  if (tierMatches.length) return tierMatches[0].id;
+  // Tier shorthand → the tier's alias row if it has one, else newest pin.
+  // (Every tier ships an alias today; the fallback is for a tier added as a
+  // pin-only row.)
+  const tierMatches = CLAUDE_MODELS.filter((m) => m.tier === a);
+  if (tierMatches.length) {
+    const aliasRow = tierMatches.find((m) => m.alias);
+    if (aliasRow) return aliasRow.id;
+    return [...tierMatches].sort((x, y) => (y.released || "").localeCompare(x.released || ""))[0].id;
+  }
 
-  // Substring match (e.g. "opus-4-6" → "claude-opus-4-6")
-  const sub = CLAUDE_MODELS.find((m) => m.id.includes(a));
-  return sub ? sub.id : null;
+  // Partial match (e.g. "opus-4-6" → "claude-opus-4-6"). Prefer the SHORTEST
+  // id that contains the input: "fable-5" must resolve to claude-fable-5, not
+  // to claude-fable-5-1 just because a newer sibling sorts earlier in the
+  // array. A user pinning a version wants the version they typed.
+  const subs = CLAUDE_MODELS
+    .filter((m) => m.id.includes(a))
+    .sort((x, y) => x.id.length - y.id.length);
+  return subs.length ? subs[0].id : null;
 }
 
 /** All model IDs that are known, for allowlist checks. */
 export function isKnownModel(id) {
   return !!CLAUDE_MODELS_BY_ID[id];
+}
+
+/**
+ * The tier a model id belongs to, for badges and routing.
+ *
+ * Falls back to parsing the id when the registry has not been taught a model
+ * yet — a brand-new `claude-fable-6` should still render a Fable badge rather
+ * than an empty one the day it ships. Returns null when nothing matches.
+ */
+export function tierOf(modelId) {
+  if (!modelId) return null;
+  const id = String(modelId).toLowerCase().trim();
+  const known = CLAUDE_MODELS_BY_ID[id];
+  if (known) return known.tier;
+  return MODEL_TIERS.find((t) => id.includes(t)) || null;
 }
 
 // --- AI Provider Definitions ---

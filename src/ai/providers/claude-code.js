@@ -14,6 +14,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import fs from "node:fs";
 import path from "node:path";
 import config from "../../config/env.js";
+import { MODEL_TIERS, tierOf } from "../../config/constants.js";
 import { isTranscriptOverCap, transcriptSizeMB, SESSION_JSONL_MAX_MB } from "../../lib/claude-transcript.js";
 /**
  * Extract image blocks from content array.
@@ -52,6 +53,25 @@ function classifyAgentError(text) {
     /previous_message_id/i.test(trimmed) ||
     /session.*(?:expired|invalid|not found|corrupt)/i.test(trimmed);
   return { recoverable };
+}
+
+/**
+ * Build a comma-separated `--fallback-model` ladder for a chosen model.
+ *
+ * The Claude Code CLI accepts a list and tries each in turn when the primary
+ * is overloaded or unavailable. We descend the tier order (fable > opus >
+ * sonnet > haiku) starting one tier below the requested model, using bare tier
+ * aliases so the ladder never pins a stale version. Haiku has nothing below
+ * it, so it gets no ladder.
+ *
+ * @param {string} modelId - resolved model id or tier alias
+ * @returns {string|undefined} comma-separated aliases, or undefined for none
+ */
+function fallbackLadderFor(modelId) {
+  const tier = tierOf(modelId);
+  if (!tier) return undefined;
+  const below = MODEL_TIERS.slice(MODEL_TIERS.indexOf(tier) + 1);
+  return below.length ? below.join(",") : undefined;
 }
 
 function extractMedia(content) {
@@ -123,6 +143,20 @@ export async function* chat({
   // advertises them — Claude ends up shelling out to curl/Telegram instead.
   const allTools = [...builtinTools, "mcp__tarsee__*"];
 
+  // Abort plumbing. `query()` accepts exactly two keys — `prompt` and
+  // `options` — so the `signal` this function used to pass as a third
+  // top-level key was silently dropped on the floor. Nothing could cancel a
+  // turn: the web Stop button, the cron 2-minute timeout, and the channel
+  // idle-abort all resolved their own promises while the Claude Code
+  // subprocess kept running (and kept billing) to completion. The SDK's real
+  // mechanism is options.abortController, so bridge the caller's signal onto
+  // one here.
+  const abortController = new AbortController();
+  if (signal) {
+    if (signal.aborted) abortController.abort();
+    else signal.addEventListener("abort", () => abortController.abort(), { once: true });
+  }
+
   const queryOptions = {
     cwd,
     model: model || config.CLAUDE_DEFAULT_MODEL,
@@ -134,6 +168,12 @@ export async function* chat({
     includePartialMessages: true,
     mcpServers: { tarsee: tarseeMcp },
     additionalDirectories: [skillsDir],
+    abortController,
+    // Keep the agent answering when the chosen model is saturated. The CLI
+    // takes a comma-separated ladder and walks it in order; we step DOWN one
+    // tier at a time from whatever was asked for, so a Fable turn degrades to
+    // Opus rather than failing outright.
+    fallbackModel: fallbackLadderFor(model || config.CLAUDE_DEFAULT_MODEL),
   };
 
   // Thinking effort. `xhigh` sits BETWEEN high and max, and is the sweet spot
@@ -384,6 +424,21 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
           // Capture session ID from init event
           if (message.session_id && onSessionId) {
             onSessionId(message.session_id);
+          }
+          // Surface MCP connection status. The tarsee server can fail to
+          // register (a bad tool schema fails the whole tools/list call) while
+          // the system prompt keeps advertising twenty tools, so the model
+          // improvises with curl and Bash and the failure looks like bad
+          // prompting. Nothing logged this, so it went unnoticed. Log loudly
+          // when the server did not come up connected.
+          if (Array.isArray(message.mcp_servers)) {
+            for (const srv of message.mcp_servers) {
+              if (srv?.status && srv.status !== "connected") {
+                console.error(
+                  `[claude-code] MCP server "${srv.name}" is ${srv.status} — its tools are NOT available to Claude this turn.`,
+                );
+              }
+            }
           }
           break;
         }

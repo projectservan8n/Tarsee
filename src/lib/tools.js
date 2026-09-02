@@ -299,13 +299,13 @@ export const TOOLS = [
 
   {
     name: "datetime",
-    description: "Get the current date, time, day of week, or convert between timezones. ALWAYS use this tool when mentioning dates, days of the week, or times — never guess from LLM inference. Use for: 'what day is April 17?', 'what time is it in Manila?', 'how many days until Friday?'",
+    description: `Get the current date, time, day of week, or convert between timezones. ALWAYS use this tool when mentioning dates, days of the week, or times — never guess from LLM inference. Use for: 'what day is April 17?', 'what time is it in Tokyo?', 'how many days until Friday?'. The agent's local zone is ${config.TIMEZONE}.`,
     input_schema: {
       type: "object",
       properties: {
         timezone: {
           type: "string",
-          description: "IANA timezone, e.g. 'Asia/Manila', 'America/New_York', 'UTC'. Default: Asia/Manila",
+          description: `IANA timezone, e.g. 'Europe/Berlin', 'America/New_York', 'UTC'. Default: ${config.TIMEZONE}`,
         },
         date: {
           type: "string",
@@ -1148,7 +1148,7 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
 
       case "datetime": {
         const { timezone, date: dateInput, format } = toolInput;
-        const tz = timezone || "Asia/Manila";
+        const tz = timezone || config.TIMEZONE;
         try {
           let targetDate;
           if (dateInput) {

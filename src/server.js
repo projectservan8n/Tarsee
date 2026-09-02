@@ -47,10 +47,38 @@ import { writePid, removePid } from "./daemon/pid.js";
 logCapture.install();
 writePid();
 
+// --- Last-resort crash guards ---
+// Tarsee is an always-on agent whose whole value is being reachable. A single
+// rejected promise in one async event listener — a Discord reply to a deleted
+// message, a SQLite constraint from a stale conversation id — would otherwise
+// terminate Node under its default unhandled-rejection policy and take every
+// channel down with it. Individual handlers are guarded at their own call
+// sites; this is the backstop that keeps an unforeseen one from ending the
+// process. Both are logged loudly so they still get fixed rather than hidden.
+process.on("unhandledRejection", (reason) => {
+  console.error("[tarsee] UNHANDLED REJECTION (process kept alive):", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[tarsee] UNCAUGHT EXCEPTION (process kept alive):", err);
+});
+
 // --- Enforce encryption in production ---
 if (config.NODE_ENV === "production" && !isEncryptionEnabled()) {
   console.error("[tarsee] FATAL: ENCRYPTION_KEY environment variable is required in production.");
   console.error("[tarsee] Set a strong random key (e.g., openssl rand -hex 32) to encrypt credentials at rest.");
+  process.exit(1);
+}
+
+// --- Enforce a login password in production ---
+// Without SETUP_PASSWORD the HTTP login route already 500s and no session can
+// ever be issued, so the web UI is unusable — the deploy is broken whether or
+// not we say so. It used to be worse than broken: validateSessionFromRequest
+// returned true for everyone, which published /terminal as an unauthenticated
+// shell. Fail fast and say why instead of serving a dead, dangerous instance.
+if (config.NODE_ENV === "production" && !config.SETUP_PASSWORD) {
+  console.error("[tarsee] FATAL: SETUP_PASSWORD environment variable is required in production.");
+  console.error("[tarsee] Without it nobody can log in, and the web terminal would be exposed.");
+  console.error("[tarsee] Set SETUP_PASSWORD to the PIN you want to use, then redeploy.");
   process.exit(1);
 }
 

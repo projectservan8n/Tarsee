@@ -57,6 +57,15 @@ export async function createDiscordBot(config, db) {
   }
 
   client.on(Events.MessageCreate, async (message) => {
+    // The whole body runs inside try/catch. Everything from the allowlist
+    // parse down to the first `message.reply` used to sit OUTSIDE any handler,
+    // and this is an async listener: a rejected promise there is an unhandled
+    // rejection, which on Node 22 terminates the process. Ordinary Discord
+    // conditions reach it — replying in a channel where the bot lacks Send
+    // Messages, or to a message the author deleted (DiscordAPIError 10008) —
+    // so one bad reply took down Telegram, WhatsApp, email, the web UI and any
+    // in-flight turn with it.
+    try {
     // Ignore bots and self
     if (message.author.bot) return;
     if (message.author.id === client.user?.id) return;
@@ -66,15 +75,26 @@ export async function createDiscordBot(config, db) {
     const isThread = message.channel.isThread?.();
     const effectiveChannelId = isThread ? message.channel.parentId : message.channel.id;
 
-    // DMs: always respond (this is YOUR personal agent)
-    // No allowlist check for DMs — if someone can DM the bot, they can talk to it
+    // Resolve the allowlist once — DMs need it too.
+    const dbAllowlist = settingsStore.get("allowlist.discord");
+    const allowedIds = config.allowedChannels?.length > 0
+      ? config.allowedChannels
+      : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
+
     if (isDM) {
-      // Proceed to message handling
+      // DMs are NOT automatically trusted. A bot must share a guild for anyone
+      // to DM it, so "can DM the bot" is not proof of being the operator — it
+      // means any member of any server the bot sits in could open a DM and get
+      // a Bash-capable agent running on the operator's volume and Claude
+      // subscription. Require the author to be allowlisted. An empty allowlist
+      // still means "no restriction configured", matching guild behaviour, but
+      // that is now a deliberate, documented choice rather than a DM-only hole.
+      if (allowedIds.length > 0 && !allowedIds.includes(message.author.id)) {
+        console.warn(`[discord] ignoring DM from non-allowlisted user ${message.author.id}`);
+        return;
+      }
     } else {
       // Guild messages: check allowlist first (always), then mention gate (toggleable)
-      const dbAllowlist = settingsStore.get("allowlist.discord");
-      const allowedIds = config.allowedChannels?.length > 0 ? config.allowedChannels : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
-
       if (allowedIds.length > 0) {
         const allowed = allowedIds.includes(effectiveChannelId) || allowedIds.includes(message.author.id) || allowedIds.includes(message.channel.id);
         if (!allowed) return;
@@ -562,6 +582,11 @@ You can use these special markers in your response:
     } finally {
       clearInterval(typingInterval);
       clearInterval(idleTimer);
+    }
+    } catch (err) {
+      console.error("[discord] message handler error:", err);
+      // Best-effort: tell the user something broke rather than going silent.
+      message.reply("⚠️ Something went wrong handling that message.").catch(() => {});
     }
   });
 
