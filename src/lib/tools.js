@@ -755,8 +755,100 @@ async function solveWithCapsolver(apiKey, captchaInfo, pageUrl) {
  * @param {object} ctx - Context with db, settingsStore, conversationId
  * @returns {Promise<string>}
  */
+/** One AuditLog per database handle, so policy denials are always recorded. */
+const auditLogByDb = new WeakMap();
+
+/**
+ * Apply the operator's tool policy to a call that is about to run.
+ *
+ * Returns a string to send back to the model INSTEAD of running the tool when
+ * the call is refused, or null to proceed. Refusals are phrased for the model:
+ * it needs to understand the tool will not work and stop retrying it, rather
+ * than seeing an opaque failure and trying a shell workaround.
+ *
+ * Denials are written to the audit log, because "the agent tried to do X and
+ * was stopped" is exactly the record a business needs to keep.
+ *
+ * @param {string} toolName
+ * @param {object} toolInput
+ * @param {object} ctx - tool context; ctx.settingsStore and ctx.auditLog optional
+ * @returns {Promise<string|null>}
+ */
+async function checkToolPolicy(toolName, toolInput, ctx) {
+  let sm;
+  try {
+    const { getSecurityManager } = await import("./security-manager.js");
+    sm = getSecurityManager(ctx?.settingsStore);
+    // Most call sites build a tool context with a db but no audit log, so
+    // derive one rather than losing the denial record.
+    if (!ctx?.auditLog && ctx?.db) {
+      let log = auditLogByDb.get(ctx.db);
+      if (!log) {
+        const { AuditLog } = await import("../db/audit.js");
+        log = new AuditLog(ctx.db);
+        auditLogByDb.set(ctx.db, log);
+      }
+      ctx = { ...ctx, auditLog: log };
+    }
+  } catch (err) {
+    // Never let the policy layer itself break tool execution.
+    console.warn("[tools] security manager unavailable:", err.message);
+    return null;
+  }
+
+  try {
+    const validation = sm.validateToolInput(toolName, toolInput || {});
+    if (!validation.valid) {
+      return `Refused: ${validation.reason}.`;
+    }
+
+    const channel = ctx?.channel || null;
+    const verdict = sm.checkToolPermission(toolName, toolInput || {}, channel);
+
+    if (!verdict.allowed) {
+      console.warn(`[tools] DENIED ${toolName}: ${verdict.reason}`);
+      try {
+        ctx?.auditLog?.log?.({
+          action: "tool.denied",
+          target: toolName,
+          actor: channel || "agent",
+          detail: verdict.reason,
+        });
+      } catch { /* audit is best-effort; never block the refusal on it */ }
+      return `Refused by security policy: ${verdict.reason}. Do not retry this tool or attempt to work around it — ask the operator to change the setting in Settings > Tool Permissions.`;
+    }
+
+    if (verdict.warning) {
+      console.warn(`[tools] WARNING ${toolName}: ${verdict.warning}`);
+      try {
+        ctx?.auditLog?.log?.({
+          action: "tool.warning",
+          target: toolName,
+          actor: channel || "agent",
+          detail: verdict.warning,
+        });
+      } catch { /* best-effort */ }
+    }
+  } catch (err) {
+    // A bug in a policy rule must not become a denial of every tool.
+    console.warn(`[tools] policy check failed for ${toolName}:`, err.message);
+  }
+
+  return null;
+}
+
 export async function executeTool(toolName, toolInput, ctx = {}) {
   const MAX_RESULT = 50_000; // 50KB max result
+
+  // Policy gate. Settings > Tool Permissions has always let an operator set a
+  // tool to always_deny, and SecurityManager has always implemented the check
+  // — but nothing ever called it, so the admin UI was a control that changed a
+  // stored value and enforced nothing. Denying `exec` in the UI left the agent
+  // free to run shell commands. Every tool call, from the MCP server and from
+  // the legacy channel loop alike, funnels through this function, so this is
+  // the one place the policy has to be applied.
+  const gate = await checkToolPolicy(toolName, toolInput, ctx);
+  if (gate) return gate;
 
   try {
     switch (toolName) {

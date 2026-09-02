@@ -4,7 +4,15 @@
  */
 
 const DANGEROUS_COMMANDS = /\b(rm\s+-rf|sudo|chmod\s+777|mkfs|dd\s+if|shutdown|reboot|kill\s+-9|iptables|passwd)\b/i;
-const PRIVATE_IP_REGEX = /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|0\.|localhost|::1|\[::1\])/;
+// Hosts a tool must never be pointed at.
+//
+// 169.254.0.0/16 is the addition that matters most in a cloud deployment:
+// 169.254.169.254 is the instance metadata endpoint on AWS, GCP and Azure, and
+// on many setups it hands out credentials to anything that can make an HTTP
+// request from the box. An agent that fetches URLs found in an email or a web
+// page is exactly such a requester, so leaving it out made prompt injection a
+// credential-theft path. The rest close the usual loopback and RFC1918 holes.
+const PRIVATE_IP_REGEX = /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.|localhost$|localhost\.|::1|\[::1\]|\[?fd[0-9a-f]{2}:|\[?fe80:)/i;
 
 const toolPermissions = new Map();
 const toolRateLimits = new Map(); // toolName -> { calls: [], maxPerMinute }
