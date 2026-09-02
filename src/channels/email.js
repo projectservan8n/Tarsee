@@ -31,6 +31,7 @@ import nodemailer from "nodemailer";
 
 import config from "../config/env.js";
 import { chatStream } from "../ai/router.js";
+import { withConversationTurn } from "../lib/conversation-lock.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
@@ -364,6 +365,11 @@ export async function createEmailBot(rawConfig, db) {
     let fullResponse = "";
     // Token usage for this turn — drives Settings -> Token Health.
     let tokenUsage = {};
+    // One turn at a time per conversation. Without this, two messages in the
+    // same chat started two turns that both resumed the SAME Claude session
+    // id, appending to one transcript from two processes. Replies interleaved
+    // and the session could be left corrupt enough to break every later turn.
+    await withConversationTurn(convId, async () => {
     try {
       const toolCtx = { db, settingsStore, conversationId: convId };
       const workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
@@ -424,6 +430,7 @@ export async function createEmailBot(rawConfig, db) {
         replyAll,
       }).catch(() => {});
     }
+    });
   }
 
   /**

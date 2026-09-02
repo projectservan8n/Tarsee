@@ -2,7 +2,8 @@ import cron from "node-cron";
 import { buildSystemPrompt } from "./build-system-prompt.js";
 import { chatStream } from "../ai/router.js";
 import { appendDailyLog } from "./workspace-files.js";
-import { resolveModelAlias, isKnownModel } from "../config/constants.js";
+import { resolveModelAlias, isKnownModel, BACKGROUND_DEFAULTS } from "../config/constants.js";
+import { runBackgroundTurn, resolveBackgroundModel } from "./background-turn.js";
 import config from "../config/env.js";
 
 /**
@@ -55,15 +56,21 @@ function resolveCronModel(job, activeProvider) {
       pick = autoTierForPrompt(job.prompt);
     }
   }
-  pick = pick || _settingsStore?.get("cron.defaultModel") || activeProvider?.model;
-  return resolveModelAlias(pick) || pick;
+  // The floor. `cron.defaultModel` is a user override that nothing writes by
+  // default, and the old fallback after it was `activeProvider.model` — the
+  // global Opus alias. So the "Haiku floor keeps crons ~free" contract in the
+  // comment above was never in force: every trivial reminder ran top-tier.
+  // Fall back to the shared cheap background floor instead of the interactive
+  // default, which is what the docs always claimed happened.
+  pick = pick || _settingsStore?.get("cron.defaultModel");
+  return resolveBackgroundModel(pick);
 }
 let _convStore = null;
 let _channelManager = null;
 const activeJobs = new Map(); // id → cron.ScheduledTask
 const jobState = new Map();   // id → { lastRun, lastStatus, lastError, consecutiveErrors }
 
-const JOB_TIMEOUT_MS = 120_000; // 2 minutes max per job
+const JOB_TIMEOUT_MS = BACKGROUND_DEFAULTS.TIMEOUT_MS; // hard wall-clock cap per job
 const MAX_CONSECUTIVE_ERRORS = 5; // Auto-disable after this many failures
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 5_000;
@@ -273,58 +280,39 @@ export async function runCronJob(job) {
   const jobModel = resolveCronModel(job, activeProvider);
   console.log(`[cron] Job "${job.id}" model → ${jobModel}`);
 
-  // Timeout protection
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), JOB_TIMEOUT_MS);
+  const toolCtx = { db: _db, settingsStore: _settingsStore, conversationId: null, channelManager: _channelManager };
+  const { text: fullResponse, error } = await runBackgroundTurn({
+    label: `cron:${job.id}`,
+    model: jobModel,
+    messages,
+    systemPrompt,
+    toolCtx,
+    timeoutMs: JOB_TIMEOUT_MS,
+  });
 
-  try {
-    let fullResponse = "";
-    const toolCtx = { db: _db, settingsStore: _settingsStore, conversationId: null, channelManager: _channelManager };
-    const stream = chatStream({
+  // A stream `error` event used to be logged and then fall through to the
+  // success path, so an expired credential or a turn-limit stop was recorded
+  // as a completed job that happened to say nothing. Surface it instead: the
+  // retry ladder and the auto-disable counter both key off this.
+  if (error) {
+    return { error };
+  }
+
+  // Deliver to channel conversation
+  const channelKey = job.channel || "web:default";
+  const convId = _settingsStore.get(`channel_conv.${channelKey}`);
+
+  if (convId && _convStore) {
+    _convStore.addMessage(convId, {
+      role: "assistant",
+      content: `**[Cron: ${job.id}]**\n\n${fullResponse}`,
       provider: activeProvider.provider,
       model: jobModel,
-      apiKey: activeProvider.apiKey,
-      baseUrl: activeProvider.baseUrl,
-      messages,
-      systemPrompt,
-      toolCtx,
-      signal: controller.signal,
     });
-
-    for await (const event of stream) {
-      if (event.type === "text") {
-        fullResponse += event.content;
-      } else if (event.type === "error") {
-        console.error(`[cron] Job "${job.id}" stream error:`, event.message);
-      } else if (event.type === "done") {
-        break;
-      }
-    }
-
-    clearTimeout(timeout);
-
-    // Deliver to channel conversation
-    const channelKey = job.channel || "web:default";
-    const convId = _settingsStore.get(`channel_conv.${channelKey}`);
-
-    if (convId && _convStore) {
-      _convStore.addMessage(convId, {
-        role: "assistant",
-        content: `**[Cron: ${job.id}]**\n\n${fullResponse}`,
-        provider: activeProvider.provider,
-        model: jobModel,
-      });
-    }
-
-    appendDailyLog(`[cron:${job.id}] ${fullResponse.slice(0, 200)}`);
-    console.log(`[cron] Job "${job.id}" completed: ${fullResponse.slice(0, 100)}`);
-    return { response: fullResponse };
-  } catch (err) {
-    clearTimeout(timeout);
-    const errMsg = err.name === "AbortError" ? `Timed out after ${JOB_TIMEOUT_MS / 1000}s` : err.message;
-    console.error(`[cron] Job "${job.id}" failed:`, errMsg);
-    return { error: errMsg };
   }
+
+  appendDailyLog(`[cron:${job.id}] ${fullResponse.slice(0, 200)}`);
+  return { response: fullResponse };
 }
 
 /**

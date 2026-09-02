@@ -3,6 +3,7 @@ import path from "node:path";
 import https from "node:https";
 import { Telegraf } from "telegraf";
 import { chatStream } from "../ai/router.js";
+import { withConversationTurn } from "../lib/conversation-lock.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand, extractPlaybookPrompt, getCommandList } from "../lib/commands.js";
@@ -338,6 +339,14 @@ You can use these special markers in your response:
       toolMsgById.delete(id);
     };
 
+    // One turn at a time per chat. Telegram delivers messages as fast as
+    // they are sent, and each one resolved the same conversation and resumed
+    // the same Claude session id, so two processes appended to one transcript.
+    // In a group chat with two people talking that happened constantly, and it
+    // could leave the session corrupt enough that every later turn failed.
+    // Follow-ups queue instead of racing: a quick correction is usually meant
+    // to be read, not dropped.
+    await withConversationTurn(convId, async () => {
     try {
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
@@ -535,6 +544,13 @@ You can use these special markers in your response:
       clearInterval(typingInterval);
       clearInterval(idleTimer);
     }
+    }, {
+      onQueued: (ahead) => {
+        ctx.reply(ahead === 1
+          ? "⏳ Still working on your last message — yours is next."
+          : `⏳ Queued (${ahead} ahead).`).catch(() => {});
+      },
+    });
   }
 
   // --- Main text handler ---

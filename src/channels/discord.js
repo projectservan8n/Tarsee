@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Client, GatewayIntentBits, Events, ActivityType, ChannelType } from "discord.js";
 import { chatStream } from "../ai/router.js";
+import { withConversationTurn } from "../lib/conversation-lock.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
@@ -399,6 +400,11 @@ You can use these special markers in your response:
       toolMsgById.delete(id);
     };
 
+    // One turn at a time per conversation. Without this, two messages in the
+    // same chat started two turns that both resumed the SAME Claude session
+    // id, appending to one transcript from two processes. Replies interleaved
+    // and the session could be left corrupt enough to break every later turn.
+    await withConversationTurn(convId, async () => {
     try {
       const tools = getToolDefinitions();
       const toolCtx = { db, settingsStore, conversationId: convId };
@@ -583,6 +589,11 @@ You can use these special markers in your response:
       clearInterval(typingInterval);
       clearInterval(idleTimer);
     }
+    }, {
+      onQueued: () => {
+        message.reply("⏳ Still working on your last message — yours is next.").catch(() => {});
+      },
+    });
     } catch (err) {
       console.error("[discord] message handler error:", err);
       // Best-effort: tell the user something broke rather than going silent.

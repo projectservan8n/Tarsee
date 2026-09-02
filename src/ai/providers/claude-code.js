@@ -121,6 +121,8 @@ export async function* chat({
   onSessionId,
   toolCtx,
   effort,
+  maxTurns,
+  maxBudgetUsd,
 }) {
   // Extract the latest user message — separate text and images
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
@@ -164,7 +166,9 @@ export async function* chat({
     allowedTools: allTools,
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
-    maxTurns: 50,
+    // Interactive chat keeps the generous ceiling; background callers pass a
+    // much lower one, because an unattended loop is where cost runs away.
+    maxTurns: maxTurns ?? 50,
     includePartialMessages: true,
     mcpServers: { tarsee: tarseeMcp },
     additionalDirectories: [skillsDir],
@@ -175,6 +179,13 @@ export async function* chat({
     // Opus rather than failing outright.
     fallbackModel: fallbackLadderFor(model || config.CLAUDE_DEFAULT_MODEL),
   };
+
+  // Spend ceiling, when the caller sets one. The SDK ends the turn itself on
+  // reaching it, which is the only ceiling that survives a loop we fail to
+  // notice from the outside.
+  if (typeof maxBudgetUsd === "number" && maxBudgetUsd > 0) {
+    queryOptions.maxBudgetUsd = maxBudgetUsd;
+  }
 
   // Thinking effort. `xhigh` sits BETWEEN high and max, and is the sweet spot
   // for most coding and agentic work.
@@ -385,6 +396,26 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
                 cache_creation_input_tokens: message.usage.cache_creation_input_tokens || 0,
               },
             };
+          }
+          // A `result` message is NOT necessarily a success. The SDK uses the
+          // same type for error_during_execution / error_max_turns /
+          // error_max_budget_usd / error_max_structured_output_retries, and
+          // those carry no `result` field at all — they carry `errors[]`. This
+          // used to read `message.result || ""`, find nothing, and emit a
+          // normal end_turn, so a job that burned its entire turn budget was
+          // recorded as having completed successfully with an empty answer.
+          if (message.subtype && message.subtype !== "success") {
+            const detail = Array.isArray(message.errors) && message.errors.length
+              ? message.errors.join("; ")
+              : message.subtype;
+            const friendly = message.subtype === "error_max_turns"
+              ? `Stopped after hitting the turn limit (${message.num_turns} turns). The task needs to be broken into smaller steps.`
+              : message.subtype === "error_max_budget_usd"
+                ? "Stopped after hitting the configured spend ceiling for this task."
+                : `Claude Code ended with ${message.subtype}: ${detail}`;
+            yield { type: "error", message: friendly, recoverable: false, subtype: message.subtype };
+            yield { type: "done", stopReason: message.subtype };
+            break;
           }
           const resultText = message.result || "";
           const classified = classifyAgentError(resultText);

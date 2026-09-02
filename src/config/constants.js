@@ -137,6 +137,27 @@ export const AI_PROVIDERS = Object.freeze({
   },
 });
 
+// --- Background work budget ---
+// Cron jobs, the heartbeat and the boot checklist run with nobody watching, so
+// they are where an always-on agent quietly burns a subscription. Each one gets
+// a cheap default model, a hard wall-clock timeout, a turn cap and a dollar
+// ceiling. These are the FLOOR: an explicit per-job model or a complexity
+// heuristic can raise the tier, and every value is overridable per call.
+export const BACKGROUND_DEFAULTS = Object.freeze({
+  // Bare tier alias, so the floor tracks the newest Haiku without edits.
+  MODEL: "haiku",
+  // A background turn that has not produced anything in this long is wedged.
+  TIMEOUT_MS: 120_000,
+  // Scheduled work should be a handful of tool calls, not a 50-turn agent loop.
+  MAX_TURNS: 12,
+  // Belt-and-braces spend ceiling enforced by the Agent SDK itself. Subscription
+  // auth is not metered per token, but this still bounds a runaway loop and is
+  // the only ceiling that applies if someone sets an API key.
+  MAX_BUDGET_USD: 0.5,
+  // The boot checklist gets a little more room: it runs once per deploy.
+  BOOT_TIMEOUT_MS: 180_000,
+});
+
 // --- Size Limits ---
 export const LIMITS = Object.freeze({
   JSON_BODY_MAX: "50mb",

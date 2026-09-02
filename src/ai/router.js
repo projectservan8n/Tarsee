@@ -17,7 +17,7 @@ let claudeCodeModule = null;
  * @returns {AsyncGenerator<{type: string, content?: string, usage?: object}>}
  */
 export async function* chatStream(opts) {
-  const { messages, model, systemPrompt, signal, toolCtx, sessionId, onSessionId, effort } = opts;
+  const { messages, model, systemPrompt, signal, toolCtx, sessionId, onSessionId, effort, maxTurns, maxBudgetUsd } = opts;
 
   if (!claudeCodeModule) {
     claudeCodeModule = await import("./providers/claude-code.js");
@@ -38,6 +38,10 @@ export async function* chatStream(opts) {
     // Telegram / Discord / WhatsApp / email (web chat calls the provider
     // directly and so was unaffected).
     effort,
+    // Ceilings for unattended work. Undefined on the interactive path, which
+    // keeps the provider's generous interactive defaults.
+    maxTurns,
+    maxBudgetUsd,
   });
 }
 

@@ -251,11 +251,10 @@ try {
   console.warn("[tarsee] default-skill bootstrap error:", err.message);
 }
 
-// --- Boot runner (BOOT.md on every restart) ---
-import { runBootChecklist } from "./lib/boot-runner.js";
-runBootChecklist({ db, settingsStore }).catch((err) => {
-  console.warn("[tarsee] boot runner error:", err.message);
-});
+// --- Boot runner ---
+// Runs once per BUILD, not once per process start (see boot-runner.js), and is
+// kicked off further down — after the channel manager exists, so a BOOT.md task
+// that reports to Telegram or Discord has a transport to report through.
 
 // --- Heartbeat system ---
 import { startHeartbeat, stopHeartbeat } from "./lib/heartbeat.js";
@@ -324,6 +323,19 @@ app.set("channelManager", channelManager);
 // Wire into cron so scheduled tasks can send to channels
 import { setCronChannelManager } from "./lib/cron.js";
 setCronChannelManager(channelManager);
+// Same for the heartbeat. It starts before the channel manager exists, so
+// without this late wiring a HEARTBEAT.md task that decided to notify the user
+// called tarsee_send_message against an undefined transport and failed
+// silently — the agent believed it had messaged you and it had not.
+import { setHeartbeatChannelManager } from "./lib/heartbeat.js";
+setHeartbeatChannelManager(channelManager);
+
+// --- Boot checklist (BOOT.md, once per build) ---
+// Deliberately here rather than earlier in boot: it needs the channel manager.
+import { runBootChecklist } from "./lib/boot-runner.js";
+runBootChecklist({ db, settingsStore, channelManager }).catch((err) => {
+  console.warn("[tarsee] boot runner error:", err.message);
+});
 // MUST stay unawaited, and MUST stay below server.listen(). The retry ladder in
 // _startWithRetry backs off up to ~152s per channel in the worst case, while
 // railway.toml sets healthcheckTimeout=60 — awaiting this would fail the deploy
