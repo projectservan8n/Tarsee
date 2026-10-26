@@ -267,14 +267,13 @@ const API = {
           response = humanMsg;
         }
 
-        // __OPEN_EFFORT_SLIDER__ — opens the effort slider if present, else
-        // fall back to a static hint.
+        // __OPEN_EFFORT_SLIDER__ (/effort with no level): the picker opens on its Effort list.
         if (response.trim() === "__OPEN_EFFORT_SLIDER__") {
-          if (window.EffortSlider?.open) {
-            window.EffortSlider.open();
-            response = "Opened effort slider.";
+          if (window.ModelPicker?.open) {
+            window.ModelPicker.open({ sub: "effort" });
+            response = "Pick the effort in the list above the box.";
           } else {
-            response = "Tap the effort badge in the session bar to change.";
+            response = "Tap the model and effort beside Send to change it.";
           }
         }
 

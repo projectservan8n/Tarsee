@@ -225,9 +225,9 @@
                 <span class="context-bar"><span class="context-bar-fill" id="contextBarFill" style="width:0%"></span></span>
                 <span class="context-label" id="contextLabel">0%</span>
               </span>
-              <span class="session-model" id="sessionModel" title="The model on this chat">Sonnet</span>
-              <button type="button" class="effort-toggle" id="effortToggle" title="Thinking effort: tap to change, hold for all levels" aria-label="Thinking effort level">
-                <span class="effort-label" id="effortLabel">Auto</span>
+              <!-- The model and the effort of this chat: one button that opens the picker (js/model-picker.js). -->
+              <button type="button" class="model-picker-btn" id="modelPickerBtn" aria-haspopup="menu" aria-expanded="false" title="Model and effort">
+                <span class="mp-model" id="sessionModel">Sonnet</span><span class="mp-sep" aria-hidden="true">·</span><span class="mp-effort" id="effortLabel">Medium</span>
               </button>
               <span class="sr-only" id="sessionStatus" aria-live="polite"></span>
             </div>
@@ -1058,6 +1058,8 @@
   <script src="/js/dialogs.js"></script>
   <script src="/js/api.js"></script>
   <script src="/js/chat-core.js"></script>   <!-- the chat's rules with no page: groups, steps, addresses, Markdown -->
+  <script src="/js/model-picker-core.js"></script>   <!-- the model picker's rules with no page -->
+  <script src="/js/model-picker.js"></script>   <!-- the composer's model and effort menu, as Claude Code's -->
   <script src="/js/chat.js"></script>
   <script src="/js/live.js"></script>
   <script src="/js/voice.js"></script>
@@ -1067,9 +1069,6 @@
   <script src="/js/setup.js"></script>
   <script src="/js/files.js"></script>
   <script src="/js/app.js"></script>
-  <!-- Effort slider (segmented UI for thinking effort). Must load before
-       custom-select so the slider's own markup isn't accidentally enhanced. -->
-  <script src="/js/effort-slider.js"></script>
   <!-- Custom <select> replacement runs last so settings.js has already
        wired its event listeners on the native selects before we wrap them. -->
   <script src="/js/custom-select.js"></script>

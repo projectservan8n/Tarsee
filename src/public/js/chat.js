@@ -321,7 +321,7 @@ const Chat = {
     this.loadChannels();
     this.loadCommands();
     this.loadBotName();
-    this.initEffortPills();
+    window.ModelPicker?.init(document.getElementById("modelPickerBtn"));
     this.initSearch();
     this._initStreamResumeWatchers();
   },
@@ -378,6 +378,7 @@ const Chat = {
       }
 
       this._refetchActiveConversation();
+      this._loadPick({ fresh: true });   // (a model or an effort picked on another device meanwhile)
     };
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") onWake();
@@ -412,7 +413,8 @@ const Chat = {
    * the context is (a number from another chat would be wrong here).
    */
   updateSessionBar() {
-    this._loadModelName();
+    if (!this._picker) this.refreshPicker(true);
+    this._loadPick();
     const meter = document.getElementById("contextMeter");
     if (this._lastUsage && this._lastContextTokens) {
       this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
@@ -422,29 +424,6 @@ const Chat = {
       if (this.elements.contextBarFill) { this.elements.contextBarFill.style.width = "0%"; this.elements.contextBarFill.className = "context-bar-fill"; }
       if (this.elements.contextLabel) this.elements.contextLabel.textContent = "0%";
     }
-  },
-
-  /** "Claude Sonnet 5.5" / "sonnet" / "claude-opus-5-5" as the composer shows it: "Sonnet 5.5". */
-  modelLabel(idOrName, meta = null) {
-    const name = String(meta?.currentlyName || meta?.displayName || idOrName || "").replace(/^Claude\s+/i, "").replace(/\s*·\s*latest$/i, "").trim();
-    const m = /^claude-([a-z]+)-(\d+)-(\d+)/i.exec(name);
-    if (m) return `${m[1].charAt(0).toUpperCase()}${m[1].slice(1)} ${m[2]}.${m[3]}`;
-    return name ? name.charAt(0).toUpperCase() + name.slice(1) : "Claude";
-  },
-
-  async _loadModelName() {
-    if (this._modelNameAsked) return;
-    this._modelNameAsked = true;
-    try {
-      const [settingsData, modelsData] = await Promise.all([
-        API.json("/api/settings").catch(() => ({ settings: [] })),
-        API.json("/api/chat/models").catch(() => ({ models: [] })),
-      ]);
-      this._models = modelsData.models || [];
-      const activeId = (settingsData.settings || []).find((s) => s.key === "ai.claude-code.model")?.value;
-      const meta = this._models.find((m) => m.id === activeId || m.currently === activeId) || null;
-      if (this.elements.sessionModel && !this._turnModel) this.elements.sessionModel.textContent = this.modelLabel(activeId || "sonnet", meta);
-    } catch { this._modelNameAsked = false; }
   },
 
   // Real prompt size = fresh input + cache hits + cache writes. All three
@@ -905,6 +884,10 @@ const Chat = {
   /** The server made the conversation for the chat on screen (its first message): it gets its own address now. */
   onConversationCreated(convId) {
     if (!convId) return;
+    // What was picked before the first message is this chat's own now.
+    const pending = this._pickConv === null && (this._pick.model || this._pick.effort) ? { ...this._pick } : null;
+    this._pickConv = convId;
+    if (pending) API.json(`/api/chat/conversations/${encodeURIComponent(convId)}/picker`, { method: "PUT", body: pending }).catch(() => {});
     document.getElementById("appScreen")?.classList.remove("is-new-chat");
     this._setAddress(Core.chatPath(convId), { replace: true });
   },
@@ -1750,6 +1733,7 @@ const Chat = {
             }
             return;
           }
+          if (data?.type === "command") this.afterPickCommand(text);
           this.handleTurnDone(data);
           if (raf) { cancelAnimationFrame(raf); paintText(); }
           steps.finish({ state: data?.stopReason === "stopped" ? "stopped" : "done" });
@@ -1765,7 +1749,8 @@ const Chat = {
         },
         this.currentChannelKey,
         attachments.length ? attachments : undefined,
-        this.getEffort()
+        this.getEffort(),
+        { model: this.getModel() },
       );
     } catch (err) {
       steps.finish({ state: "failed", error: err.message });
@@ -1827,12 +1812,7 @@ const Chat = {
       this.showOverflowRecoveryCard(event.checkpointPath);
     } else if (event?.type === "model_selected") {
       // Auto-routing: the composer shows the model this turn runs on.
-      const badge = document.getElementById("sessionModel");
-      if (badge && event.model) {
-        this._turnModel = event.model;
-        const meta = (this._models || []).find((m) => m.id === event.model || m.currently === event.model) || null;
-        badge.textContent = this.modelLabel(event.model, meta);
-      }
+      if (event.model) { this._turnModel = event.model; this._paintPicker(); }
     }
   },
 
@@ -1915,73 +1895,101 @@ const Chat = {
     await this._streamReply(text, attachments || []);
   },
 
-  _effortLevel: "",
-  // (Words only: no emoji in the UI.)
-  _effortLevels: [
-    { value: "", label: "Auto" },
-    { value: "low", label: "Quick" },
-    { value: "medium", label: "Balanced" },
-    { value: "high", label: "Deep" },
-    { value: "max", label: "Maximum" },
-    { value: "xhigh", label: "Ultra" },
-  ],
+  /* ------------------------------------------------------------ the model and the effort (js/model-picker.js) */
 
+  _picker: null,          // the list: Claude Code's own catalog, from GET /api/chat/models
+  _pickerAt: 0,
+  _pickDefaults: { model: "sonnet", effort: "medium" },
+  _pick: { model: null, effort: null },   // this chat's own; null is the default
+  _pickConv: undefined,   // the chat _pick belongs to
+
+  /** The model and effort a new chat sends with its first message (an existing chat's are on the server). */
   getEffort() {
-    return this._effortLevel || undefined;
+    return this.currentConversationId ? undefined : (this._pick.effort || undefined);
+  },
+  getModel() {
+    return this.currentConversationId ? undefined : (this._pick.model || undefined);
   },
 
-  setEffort(value) {
-    const lvl = this._effortLevels.find((l) => l.value === value);
-    if (!lvl) return;
-    this._effortLevel = lvl.value;
-    const btn = document.getElementById("effortToggle");
-    if (btn) {
-      btn.dataset.level = lvl.value;
-      btn.setAttribute("aria-label", `Thinking effort: ${lvl.label}`);
-      const labelEl = document.getElementById("effortLabel");
-      if (labelEl) labelEl.textContent = lvl.label;
+  /** The list, asked again when the menu opens and it is more than five minutes old (a new model shows up). */
+  async refreshPicker(force = false) {
+    if (!force && this._picker && Date.now() - this._pickerAt < 5 * 60_000) return;
+    if (this._pickerAsking) return;
+    this._pickerAsking = true;
+    try {
+      const data = await API.json("/api/chat/models");
+      this._models = data.models || [];
+      if (data.picker) { this._picker = data.picker; this._pickerAt = Date.now(); }
+      if (data.defaults) this._pickDefaults = data.defaults;
+      this._paintPicker();
+      window.ModelPicker?.refresh();
+    } catch { /* the button keeps what it shows */ } finally { this._pickerAsking = false; }
+  },
+
+  /** This chat's own model and effort (a chat is only asked once per visit, unless `fresh`). */
+  async _loadPick({ fresh = false } = {}) {
+    const id = this.currentConversationId || null;
+    if (!fresh && this._pickConv === id) return;
+    if (this._pickConv !== id) { this._pick = { model: null, effort: null }; this._pickConv = id; this._paintPicker(); }
+    if (!id) return;
+    try {
+      const data = await API.json(`/api/chat/conversations/${encodeURIComponent(id)}/picker`);
+      if (this.currentConversationId !== id) return;
+      this._pick = { model: data.model || null, effort: data.effort || null };
+      if (data.defaults) this._pickDefaults = data.defaults;
+      this._paintPicker();
+      window.ModelPicker?.refresh();
+    } catch { /* the defaults stay shown */ }
+  },
+
+  /** Picked in the menu: shown at once, saved for the chat (a new chat saves it once its first message makes it). */
+  async setPick(change) {
+    const before = { ...this._pick };
+    this._pick = { ...this._pick, ...change };
+    // A model without the chat's level runs at the nearest one it has: save that, as Claude Code does.
+    if ("model" in change && this._pick.effort && this._picker) {
+      const entry = ModelPickerCore.entryFor(this._picker, this._pick.model || this._pickDefaults.model);
+      const level = ModelPickerCore.effortFor(entry, this._pick.effort, this._pickDefaults.effort);
+      if (level && level !== this._pick.effort) this._pick.effort = level;
+    }
+    this._turnModel = null;
+    this._paintPicker();
+    const id = this.currentConversationId;
+    if (!id) return;
+    try {
+      const body = {};
+      if (this._pick.model !== before.model) body.model = this._pick.model;
+      if (this._pick.effort !== before.effort) body.effort = this._pick.effort;
+      if (!Object.keys(body).length) return;
+      const data = await API.json(`/api/chat/conversations/${encodeURIComponent(id)}/picker`, { method: "PUT", body });
+      if (this.currentConversationId === id) { this._pick = { model: data.model || null, effort: data.effort || null }; this._paintPicker(); }
+    } catch (err) {
+      if (this.currentConversationId === id) { this._pick = before; this._paintPicker(); }
+      App.showToast(`Couldn't change it: ${err.message}`, "error");
     }
   },
 
-  initEffortPills() {
-    const btn = document.getElementById("effortToggle");
-    if (!btn) return;
+  /** /model changes the default, /think and /effort this chat's level: the button shows it. */
+  afterPickCommand(text) {
+    if (!/^\/(model|think|effort)\b/i.test(String(text || ""))) return;
+    this.refreshPicker(true);
+    this._loadPick({ fresh: true });
+  },
 
-    // Short tap: cycle through levels (fallback for narrow screens where
-    // the slider would be cramped). Long-press or focus: open slider.
-    let pressTimer = null;
-    let longPressFired = false;
-    const LONG_PRESS_MS = 500;
-
-    const openSlider = () => {
-      longPressFired = true;
-      window.EffortSlider?.open();
-    };
-
-    btn.addEventListener("pointerdown", () => {
-      longPressFired = false;
-      pressTimer = setTimeout(openSlider, LONG_PRESS_MS);
-    });
-    btn.addEventListener("pointerup", () => { clearTimeout(pressTimer); });
-    btn.addEventListener("pointerleave", () => { clearTimeout(pressTimer); });
-    btn.addEventListener("pointercancel", () => { clearTimeout(pressTimer); });
-
-    btn.addEventListener("click", (e) => {
-      // If long-press already fired, don't also cycle.
-      if (longPressFired) { e.preventDefault(); return; }
-      const levels = this._effortLevels;
-      const idx = levels.findIndex((l) => l.value === this._effortLevel);
-      const next = levels[(idx + 1) % levels.length];
-      this.setEffort(next.value);
-    });
-
-    // Keyboard users: space/enter opens the slider too.
-    btn.addEventListener("keydown", (e) => {
-      if (e.key === "ArrowDown" || e.key === "Enter") {
-        e.preventDefault();
-        openSlider();
-      }
-    });
+  /** The composer's button: "Sonnet 5.5 · High". */
+  _paintPicker() {
+    const btn = document.getElementById("modelPickerBtn");
+    if (!btn || typeof ModelPickerCore === "undefined") return;
+    const label = ModelPickerCore.buttonLabel(this._picker, this._pick, this._pickDefaults);
+    // Auto routing (no model of the chat's own): the model the turn ran on.
+    const model = !this._pick.model && this._turnModel ? ModelPickerCore.modelName(this._picker, this._turnModel) : label.model;
+    if (this.elements.sessionModel) this.elements.sessionModel.textContent = model;
+    const effortEl = document.getElementById("effortLabel");
+    if (effortEl) effortEl.textContent = label.effort;
+    btn.classList.toggle("no-effort", !label.effort);
+    btn.dataset.level = label.level || "";
+    btn.title = label.title;
+    btn.setAttribute("aria-label", label.title);
   },
 
   _typingWs: null,

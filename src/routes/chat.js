@@ -3,7 +3,9 @@ import { chatStream, getAvailableProviders } from "../ai/router.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { initSSE, sendSSE } from "../lib/stream-utils.js";
-import { LIMITS, CLAUDE_MODELS, CLAUDE_MODELS_BY_ID, resolveModelAlias, tierOf } from "../config/constants.js";
+import { LIMITS, CLAUDE_MODELS, CLAUDE_MODELS_BY_ID, resolveModelAlias, tierOf, getRecommendedModel } from "../config/constants.js";
+import { getModelPicker } from "../lib/model-catalog.js";
+import { EFFORT_IDS, TARSEE_DEFAULT_EFFORT } from "../lib/model-picker.js";
 import { snapshotForContextOverflow } from "../lib/auto-checkpoint.js";
 import { processCommand, getCommandList, extractPlaybookPrompt } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
@@ -117,12 +119,63 @@ chatRouter.get("/commands", (_req, res) => {
 
 /**
  * GET /api/chat/models
- * List every Claude model Tarsee knows about, straight from the central
- * registry. The Settings dropdown calls this on load so adding a new
- * model in constants.js is enough to make it show up in the UI.
+ * Every Claude model in Tarsee's table (the Settings dropdown), plus the
+ * composer's picker: Claude Code's own list, the newest of each family on top
+ * and older ones under More models (lib/model-catalog.js), and the defaults a
+ * chat runs on when it has no model or effort of its own.
  */
 chatRouter.get("/models", (_req, res) => {
-  res.json({ models: CLAUDE_MODELS });
+  const picker = getModelPicker({ defaultEffort: settingsStore.get("ai.defaultEffort") || undefined });
+  res.json({ models: CLAUDE_MODELS, picker, defaults: pickerDefaults() });
+});
+
+/** What a chat runs on when it has no model or effort of its own: the default model (Sonnet) at Medium. */
+function pickerDefaults() {
+  return {
+    model: settingsStore.get("ai.claude-code.model") || getRecommendedModel(),
+    effort: settingsStore.get("ai.defaultEffort") || TARSEE_DEFAULT_EFFORT,
+  };
+}
+function chatPick(convId) {
+  return {
+    model: settingsStore.get(`session.${convId}.model`) || null,
+    effort: settingsStore.get(`session.${convId}.effort`) || null,
+    defaults: pickerDefaults(),
+  };
+}
+
+/**
+ * GET /api/chat/conversations/:id/picker
+ * The model and effort this chat has of its own (null: the default), as the composer's picker shows them.
+ */
+chatRouter.get("/conversations/:id/picker", (req, res) => {
+  if (!convStore.get(req.params.id)) return res.status(404).json({ error: "Conversation not found" });
+  res.json(chatPick(req.params.id));
+});
+
+/**
+ * PUT /api/chat/conversations/:id/picker  { model?, effort? }
+ * Give this chat a model or an effort (null goes back to the default). Its
+ * next turn, on any channel, runs on it (providers/claude-code.js withChatModel).
+ */
+chatRouter.put("/conversations/:id/picker", (req, res) => {
+  const convId = req.params.id;
+  if (!convStore.get(convId)) return res.status(404).json({ error: "Conversation not found" });
+  const body = req.body || {};
+  if ("model" in body) {
+    const raw = body.model == null || body.model === "" ? null : String(body.model).toLowerCase().trim();
+    const picker = getModelPicker();
+    const listed = raw && [...picker.main, ...picker.more].some((e) => e.id === raw || e.alias === raw);
+    const model = raw && (listed ? raw : resolveModelAlias(raw));
+    if (raw && !model) return res.status(400).json({ error: `Unknown model ${raw}` });
+    if (model) settingsStore.set(`session.${convId}.model`, model); else settingsStore.delete(`session.${convId}.model`);
+  }
+  if ("effort" in body) {
+    const effort = body.effort == null || body.effort === "" ? null : String(body.effort).toLowerCase().trim();
+    if (effort && !EFFORT_IDS.includes(effort)) return res.status(400).json({ error: `Unknown effort ${effort}` });
+    if (effort) settingsStore.set(`session.${convId}.effort`, effort); else settingsStore.delete(`session.${convId}.effort`);
+  }
+  res.json({ ok: true, ...chatPick(convId) });
 });
 
 /**
@@ -416,8 +469,8 @@ chatRouter.post("/send", async (req, res) => {
   let model = reqModel || activeProvider?.model;
   const apiKey = activeProvider?.apiKey;
 
-  // Auto model routing — classify message complexity
-  const autoRoute = settingsStore.get("ai.autoRoute") === true;
+  // Auto model routing: classify message complexity. A chat given a model of its own in the picker keeps it.
+  const autoRoute = settingsStore.get("ai.autoRoute") === true && !settingsStore.get(`session.${convId}.model`);
   if (autoRoute && !reqModel) {
     model = classifyMessageModel(message);
   }

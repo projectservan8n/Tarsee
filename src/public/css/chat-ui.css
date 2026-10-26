@@ -789,32 +789,115 @@
   color: var(--text-muted);
   min-width: 0;
 }
-.composer-meta .session-model {
+/* The model and the effort of this chat, one button ("Sonnet 5.5 · High") that opens the picker. A tap target of at
+   least 32px, nothing laid over it. */
+.model-picker-btn {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-full);
   background: none;
   color: var(--text-secondary);
-  padding: 0 4px;
-  font-size: var(--text-xs);
-  font-weight: 500;
-  text-transform: none;
-  letter-spacing: 0;
-  border-radius: 0;
-  white-space: nowrap;
-}
-.composer-meta .effort-toggle {
-  border: none;
-  background: none;
-  color: var(--text-muted);
   font: inherit;
   font-size: var(--text-xs);
-  padding: 4px 8px;
-  border-radius: var(--radius-md);
-  min-height: 0;
-  height: auto;
+  white-space: nowrap;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
 }
-.composer-meta .effort-toggle:hover { background: var(--bg-surface-hover); color: var(--text); }
-.composer-meta .effort-toggle[data-level]:not([data-level=""]) { color: var(--text-secondary); background: none; border: none; }
-.composer-meta .effort-label { font-size: inherit; }
+.model-picker-btn:hover, .model-picker-btn[aria-expanded="true"] { background: var(--bg-surface-hover); color: var(--text); }
+.model-picker-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.model-picker-btn .mp-model { font-weight: 500; }
+.model-picker-btn .mp-sep, .model-picker-btn .mp-effort { color: var(--text-muted); }
+.model-picker-btn:hover .mp-effort, .model-picker-btn[aria-expanded="true"] .mp-effort { color: var(--text-secondary); }
+.model-picker-btn.no-effort .mp-sep, .model-picker-btn.no-effort .mp-effort { display: none; }
+
+/* The picker (js/model-picker.js), drawn like Claude Code's: the newest models numbered, Effort and More models
+   opening beside it (in its place on a phone). */
+.mp-menu {
+  position: fixed;
+  z-index: var(--z-modal);
+  width: max-content;
+  min-width: 210px;
+  max-width: min(320px, calc(100vw - 16px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  animation: fadeIn var(--duration-fast) var(--ease-default);
+}
+.mp-menu.is-behind { visibility: hidden; }
+.mp-submenu { min-width: 200px; }
+.mp-submenu.mp-effort { width: 300px; }
+.mp-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mp-item:hover:not([disabled]), .mp-item:focus-visible, .mp-item.is-open { background: var(--bg-surface-hover); outline: none; }
+.mp-item[disabled] { color: var(--text-muted); cursor: default; }
+.mp-text { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
+.mp-text.mp-row { flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mp-name { white-space: nowrap; }
+.mp-note { margin-top: 1px; font-size: var(--text-xs); line-height: 1.35; white-space: normal; color: var(--text-muted); }
+.mp-note.is-warning { color: var(--warning); }
+.mp-end { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; color: var(--text-muted); font-size: var(--text-sm); }
+.mp-key { font: inherit; font-variant-numeric: tabular-nums; color: var(--text-muted); min-width: 10px; text-align: right; }
+.mp-check { color: var(--accent); }
+.mp-value { color: var(--text-muted); }
+.mp-chevron { color: var(--text-muted); }
+.mp-divider { height: 1px; margin: 4px 6px; background: var(--border-light); }
+.mp-head { margin: 0; padding: 8px 10px 6px; font-size: var(--text-sm); line-height: 1.45; color: var(--text-muted); }
+.mp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.mp-badge.is-warning { border-color: var(--warning-subtle); background: var(--warning-subtle); color: var(--warning); }
+/* A small warning sign, drawn: a triangle with a mark in it. */
+.mp-warn {
+  width: 10px;
+  height: 9px;
+  background: currentColor;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  position: relative;
+}
+.mp-warn::after { content: ""; position: absolute; left: 4.5px; top: 3px; width: 1px; height: 3px; background: var(--bg-surface); }
+.mp-back { color: var(--text-secondary); gap: 8px; }
+.mp-back .mp-name { color: var(--text); font-weight: 500; }
+@media (max-width: 639px) {
+  .mp-menu, .mp-submenu.mp-effort { width: min(300px, calc(100vw - 24px)); max-width: calc(100vw - 24px); }
+  .mp-item { min-height: 40px; }
+}
 .context-meter { display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; }
 .context-meter[hidden] { display: none; }
 .context-meter .context-bar { width: 32px; height: 4px; border-radius: var(--radius-full); background: var(--border); overflow: hidden; margin: 0; }
@@ -849,7 +932,7 @@
 }
 
 @media (max-width: 380px) {
-  .composer-meta .session-model { display: none; }
+  .model-picker-btn { padding: 0 8px; }
   #qrCodeBtn, .console-toggle-btn { display: none; }
 }
 

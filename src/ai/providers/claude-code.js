@@ -14,7 +14,10 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import fs from "node:fs";
 import path from "node:path";
 import config from "../../config/env.js";
-import { MODEL_TIERS, tierOf } from "../../config/constants.js";
+import { MODEL_TIERS, tierOf, getRecommendedModel } from "../../config/constants.js";
+import { SettingsStore } from "../../db/settings.js";
+import { resolveModel } from "../../lib/model-catalog.js";
+import { EFFORT_IDS, TARSEE_DEFAULT_EFFORT } from "../../lib/model-picker.js";
 import { isTranscriptOverCap, transcriptSizeMB, SESSION_JSONL_MAX_MB } from "../../lib/claude-transcript.js";
 import { stepsFromSdkMessage, toolResultsFromSdkMessage } from "../../lib/tool-steps.js";
 /**
@@ -65,14 +68,44 @@ function classifyAgentError(text) {
  * aliases so the ladder never pins a stale version. Haiku has nothing below
  * it, so it gets no ladder.
  *
+ * Each step is resolved to the newest model of its tier (lib/model-catalog.js):
+ * the CLI the SDK bundles would take a bare tier word to an older model.
+ *
  * @param {string} modelId - resolved model id or tier alias
- * @returns {string|undefined} comma-separated aliases, or undefined for none
+ * @returns {string|undefined} comma-separated models, or undefined for none
  */
 function fallbackLadderFor(modelId) {
   const tier = tierOf(modelId);
   if (!tier) return undefined;
   const below = MODEL_TIERS.slice(MODEL_TIERS.indexOf(tier) + 1);
-  return below.length ? below.join(",") : undefined;
+  return below.length ? below.map((t) => resolveModel(t)).join(",") : undefined;
+}
+
+/**
+ * A conversation's own model and effort, picked in the composer's picker
+ * (settings session.<id>.model / session.<id>.effort), for every channel's
+ * turns in it. A model the caller chose on purpose (not the default: auto
+ * routing, an API caller) is kept. Unset, a conversation thinks at the default
+ * effort (ai.defaultEffort, Medium) rather than the CLI's own. Background work
+ * (crons, the heartbeat, the boot checklist) has no conversation and keeps
+ * its own model and effort.
+ */
+export function withChatModel(opts) {
+  const conv = opts?.toolCtx?.conversationId;
+  const db = opts?.toolCtx?.db;
+  if (!conv || (!db && !opts?.toolCtx?.settingsStore)) return opts;
+  try {
+    const store = opts.toolCtx.settingsStore || new SettingsStore(db);
+    const out = { ...opts };
+    const picked = store.get(`session.${conv}.model`);
+    const defaultModel = store.get("ai.claude-code.model") || getRecommendedModel();
+    if (picked && (!opts.model || opts.model === defaultModel)) out.model = picked;
+    if (!out.effort) {
+      const effort = store.get(`session.${conv}.effort`) || store.get("ai.defaultEffort") || TARSEE_DEFAULT_EFFORT;
+      if (EFFORT_IDS.includes(effort)) out.effort = effort;
+    }
+    return out;
+  } catch { return opts; }
 }
 
 function extractMedia(content) {
@@ -115,6 +148,7 @@ function extractMedia(content) {
  * at work, a Telegram or Discord one included.
  */
 export async function* chat(opts) {
+  opts = withChatModel(opts);
   const liveConv = opts?.liveDisabled ? null : (opts?.liveConversationId || opts?.toolCtx?.conversationId || null);
   if (!liveConv) { yield* chatEngine(opts); return; }
   let live = null;
@@ -248,7 +282,8 @@ async function* chatEngine({
 
   const queryOptions = {
     cwd,
-    model: model || config.CLAUDE_DEFAULT_MODEL,
+    // A bare tier word becomes the newest model of that tier (see fallbackLadderFor).
+    model: resolveModel(model || config.CLAUDE_DEFAULT_MODEL),
     tools: allTools,
     allowedTools: allTools,
     permissionMode: "bypassPermissions",

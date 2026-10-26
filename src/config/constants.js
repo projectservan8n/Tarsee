@@ -29,11 +29,13 @@
 // anyone who needs a reproducible, frozen model.
 export const CLAUDE_MODELS = Object.freeze([
   // Aliases — always the latest model in that tier. Zero maintenance; the
-  // default lives here. Verified against the installed CLI (2.1.239), whose
-  // `--model` help reads "Provide an alias for the latest model (e.g.
-  // 'fable', 'opus', or 'sonnet')". The Agent SDK forwards `model` verbatim.
-  { id: "opus",              displayName: "Opus · latest",     tier: "opus",   context: "1M",   recommended: true,  alias: true },
-  { id: "sonnet",            displayName: "Sonnet · latest",   tier: "sonnet", context: "1M",   recommended: false, alias: true },
+  // default lives here (Sonnet, at the Medium effort lib/model-picker.js sets).
+  // The Agent SDK runs its own bundled CLI, which would take a bare alias to
+  // the newest model it knew when it was built, so the provider resolves an
+  // alias to the newest model in Claude Code's current catalog before each
+  // turn (lib/model-catalog.js resolveModel).
+  { id: "opus",              displayName: "Opus · latest",     tier: "opus",   context: "1M",   recommended: false, alias: true },
+  { id: "sonnet",            displayName: "Sonnet · latest",   tier: "sonnet", context: "1M",   recommended: true,  alias: true },
   { id: "haiku",             displayName: "Haiku · latest",    tier: "haiku",  context: "200K", recommended: false, alias: true },
   { id: "fable",             displayName: "Fable · latest",    tier: "fable",  context: "1M",   recommended: false, alias: true },
 

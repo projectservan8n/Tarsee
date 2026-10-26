@@ -486,6 +486,7 @@ const Live = {
           if (data?.type === "command") {
             // Commands are answered by the server directly and not saved.
             confirmed = true;
+            Chat.afterPickCommand?.(item.text);   // /model, /think, /effort: the picker's button shows the change
             this.dropPending(item.clientMsgId);
             this.markSent(el, null);
             el.classList.add("local-command");
@@ -510,7 +511,7 @@ const Live = {
         item.channelKey,
         attachments.length ? attachments : undefined,
         Chat.getEffort(),
-        { clientMsgId: item.clientMsgId, independent: true },
+        { clientMsgId: item.clientMsgId, independent: true, model: Chat.getModel?.() },
       );
     } finally {
       this.inflight.delete(item.clientMsgId);

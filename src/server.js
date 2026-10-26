@@ -12,6 +12,7 @@ import { sessionAuth, requireAuth, initSessionStore } from "./middleware/auth.js
 import { errorHandler } from "./middleware/error-handler.js";
 import { initDb } from "./db/sqlite.js";
 import { initLiveBus } from "./lib/live-bus.js";
+import { initModelCatalog } from "./lib/model-catalog.js";
 import { healthRouter } from "./routes/health.js";
 import { authRouter } from "./routes/auth-routes.js";
 import { chatRouter } from "./routes/chat.js";
@@ -111,6 +112,9 @@ const db = initDb(config.DB_PATH);
 // Live dashboard timeline (conversation_events). Must start before any channel
 // can persist a message or run a turn.
 initLiveBus(db);
+// Which Claude models exist (the composer's picker, and "sonnet" -> the newest
+// Sonnet before each turn): read from the installed Claude Code, off the request path.
+initModelCatalog();
 // Hydrate login sessions from disk so a restart/deploy doesn't sign everyone
 // out. Must run before any route that calls requireAuth.
 initSessionStore(db);

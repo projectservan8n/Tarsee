@@ -119,16 +119,18 @@ const COMMANDS = {
     handler: (args, ctx) => {
       const levels = {
         low: "low", medium: "medium", med: "medium",
-        high: "high", max: "max", xhigh: "xhigh", ultra: "xhigh",
+        high: "high", max: "max", xhigh: "xhigh", extra: "xhigh", ultra: "xhigh",
       };
       const settingsStore = ctx.settingsStore;
       if (!settingsStore) return "Settings not available.";
 
       if (!args) {
+        // Unset, a chat runs at the default (ai.defaultEffort, else Medium: providers/claude-code.js withChatModel).
+        const fallback = `${settingsStore.get("ai.defaultEffort") || "medium"} (the default)`;
         const current = ctx.conversationId
-          ? settingsStore.get(`session.${ctx.conversationId}.effort`) || "default"
-          : "default";
-        return `**Current effort:** ${current}\n\n**Options** (ascending cost):\n- \`/think low\` — Minimal thinking, fastest\n- \`/think medium\` — Balanced\n- \`/think high\` — Deep reasoning (default)\n- \`/think xhigh\` — Extra-high; the sweet spot for most coding and agentic work\n- \`/think max\` — Maximum effort, when correctness matters more than cost`;
+          ? settingsStore.get(`session.${ctx.conversationId}.effort`) || fallback
+          : fallback;
+        return `**Current effort:** ${current}\n\n**Options** (ascending cost):\n- \`/think low\` — Minimal thinking, fastest\n- \`/think medium\` — Balanced (the default)\n- \`/think high\` — Deep reasoning\n- \`/think xhigh\` — Extra-high; the sweet spot for most coding and agentic work\n- \`/think max\` — Maximum effort, when correctness matters more than cost\n\nThe model and effort button beside Send sets the same thing.`;
       }
 
       const level = levels[args.toLowerCase()];
@@ -141,11 +143,11 @@ const COMMANDS = {
     },
   },
 
-  // Alias of /think that also triggers the slider UI on the client.
+  // Alias of /think that also opens the composer's picker on the client.
   // Server-side behavior is identical; the web frontend intercepts the
-  // command response and opens the effort slider if no argument was given.
+  // command response and opens the picker's Effort list if no argument was given.
   effort: {
-    description: "Set thinking effort via slider or shortcut",
+    description: "Set thinking effort (opens the picker's Effort list with no level)",
     usage: "/effort [low|medium|high|max|xhigh]",
     handler: (args, ctx) => {
       if (!args) {
