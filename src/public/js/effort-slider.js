@@ -19,12 +19,12 @@
   "use strict";
 
   const LEVELS = [
-    { value: "",       icon: "⚡", label: "Auto",      hint: "Server picks based on message complexity" },
-    { value: "low",    icon: "🐇", label: "Quick",     hint: "Minimal thinking, fastest responses" },
-    { value: "medium", icon: "⚖️", label: "Balanced",  hint: "Default for typical chat" },
-    { value: "high",   icon: "🧠", label: "Deep",      hint: "Thorough reasoning, takes longer" },
-    { value: "xhigh",  icon: "🌌", label: "Ultra",     hint: "Sweet spot for coding and agentic work" },
-    { value: "max",    icon: "🔮", label: "Maximum",   hint: "Heaviest thinking — when correctness beats cost" },
+    { value: "",       label: "Auto",      hint: "Server picks based on message complexity" },
+    { value: "low",    label: "Quick",     hint: "Minimal thinking, fastest responses" },
+    { value: "medium", label: "Balanced",  hint: "Default for typical chat" },
+    { value: "high",   label: "Deep",      hint: "Thorough reasoning, takes longer" },
+    { value: "xhigh",  label: "Ultra",     hint: "Sweet spot for coding and agentic work" },
+    { value: "max",    label: "Maximum",   hint: "Heaviest thinking — when correctness beats cost" },
   ];
 
   let panelEl = null;
@@ -42,7 +42,6 @@
       <button type="button" class="effort-seg" role="radio" aria-checked="false"
               data-value="${l.value}" data-idx="${i}"
               aria-label="${l.label} — ${l.hint}">
-        <span class="effort-seg-icon">${l.icon}</span>
         <span class="effort-seg-label">${l.label}</span>
       </button>
     `).join("");

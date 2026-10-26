@@ -65,7 +65,7 @@ const Setup = {
                 </svg>
                 <span class="setup-copy-label">Copy</span>
               </button>
-              <br><span style="color:var(--text-muted);font-size:13px;margin-top:4px;display:block">A link will appear — open it in your browser and log in with your Claude Max account.<br>
+              <br><span style="color:var(--text-muted);font-size:13px;margin-top:4px;display:block">A link will appear: open it in your browser and log in with your Claude Max account.<br>
               <em>Tip: To copy the login link, highlight it and right-click → Copy (Ctrl+C won't work in the terminal)</em></span>
             </div>
           </div>
@@ -76,7 +76,7 @@ const Setup = {
         </div>
         <a href="/terminal.html" target="_blank" class="btn btn-ghost" style="width:100%;padding:12px;font-size:14px;margin-bottom:10px;text-align:center;display:block;text-decoration:none">Open Tarsee's Terminal →</a>
         <div id="setupError" style="color:var(--danger);font-size:13px;margin-bottom:12px;display:none"></div>
-        <button class="btn btn-primary" id="setupConnectBtn" style="width:100%;padding:12px;font-size:14px">I'm connected — Next →</button>
+        <button class="btn btn-primary" id="setupConnectBtn" style="width:100%;padding:12px;font-size:14px">I'm connected, next</button>
         <p style="text-align:center;margin-top:14px;font-size:11px;color:var(--text-muted)">
           Requires Claude Max subscription. Pro works but hits limits quickly.
         </p>
@@ -120,7 +120,7 @@ const Setup = {
       errorEl.textContent = err.message;
       errorEl.style.display = "block";
       document.getElementById("setupConnectBtn").disabled = false;
-      document.getElementById("setupConnectBtn").textContent = "I'm connected — Next →";
+      document.getElementById("setupConnectBtn").textContent = "I'm connected. Next →";
     }
   },
 
@@ -202,7 +202,7 @@ const Setup = {
           </ul>
         </div>
         <button class="btn btn-primary" id="setupStartInterview" style="width:100%;padding:12px;font-size:14px;margin-bottom:10px">Start Personality Chat →</button>
-        <button class="btn btn-ghost" id="setupSkipInterview" style="width:100%;padding:10px;font-size:13px;color:var(--text-muted)">Skip — use defaults</button>
+        <button class="btn btn-ghost" id="setupSkipInterview" style="width:100%;padding:10px;font-size:13px;color:var(--text-muted)">Skip and use the defaults</button>
       </div>
     `;
 
@@ -231,18 +231,16 @@ const Setup = {
       <div style="background:var(--bg-elevated);border-radius:12px;padding:24px;max-width:420px;width:100%;border:1px solid var(--border)">
         ${this._progressBar(4)}
         <h2 style="font-size:18px;margin-bottom:4px">Connect Channels</h2>
-        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">Optional — talk to your agent from Telegram or Discord too.</p>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">Optional: talk to your agent from Telegram or Discord too.</p>
 
         <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">
           <a href="https://t.me/BotFather" target="_blank" style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--bg-input);border-radius:8px;text-decoration:none;color:var(--text);border:1px solid var(--border)">
-            <span style="font-size:24px">✈️</span>
             <div>
               <strong>Telegram</strong>
               <div style="font-size:11px;color:var(--text-muted)">Create a bot with @BotFather, paste the token in Settings > Channels</div>
             </div>
           </a>
           <a href="https://discord.com/developers/applications" target="_blank" style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--bg-input);border-radius:8px;text-decoration:none;color:var(--text);border:1px solid var(--border)">
-            <span style="font-size:24px">🎮</span>
             <div>
               <strong>Discord</strong>
               <div style="font-size:11px;color:var(--text-muted)">Create a bot in Developer Portal, enable Message Content Intent</div>
@@ -252,7 +250,7 @@ const Setup = {
 
         <div style="display:flex;gap:8px">
           <button class="btn btn-ghost" id="setupChannelSettings" style="flex:1;padding:10px">Open Settings</button>
-          <button class="btn btn-primary" id="setupChannelDone" style="flex:1;padding:10px">Done — Start Chatting</button>
+          <button class="btn btn-primary" id="setupChannelDone" style="flex:1;padding:10px">Done, start chatting</button>
         </div>
       </div>
     `;
@@ -273,10 +271,10 @@ const Setup = {
   /** Welcome tour — highlight key UI elements */
   showWelcomeTour() {
     const tips = [
-      { selector: "#voiceModeBtn", text: "Hold to talk — voice mode with speech-to-text", pos: "below" },
-      { selector: "#consoleToggleBtn", text: "Server console — see what your agent is doing", pos: "below" },
-      { selector: "#settingsBtn", text: "Settings — configure everything", pos: "above" },
-      { selector: ".channel-list", text: "Your channels — web, Telegram, Discord", pos: "right" },
+      { selector: "#voiceModeBtn", text: "Hold to talk: voice mode with speech-to-text", pos: "below" },
+      { selector: "#consoleToggleBtn", text: "Server console: see what your agent is doing", pos: "below" },
+      { selector: "#settingsBtn", text: "Settings: configure everything", pos: "above" },
+      { selector: ".channel-list", text: "Your channels: web, Telegram, Discord", pos: "right" },
     ];
 
     let currentTip = 0;
@@ -362,7 +360,7 @@ const Setup = {
       }, 500);
     } catch (err) {
       console.error("[setup] Failed to start interview:", err);
-      App.showToast("Setup chat failed — configure personality in Settings", "error");
+      App.showToast("Setup chat failed: configure personality in Settings", "error");
       this.isSetupConversation = false;
       this.showChannelSetup();
     }

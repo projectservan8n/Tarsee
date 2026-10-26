@@ -384,6 +384,7 @@ export async function createEmailBot(rawConfig, db) {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         let stopReason = "end_turn";
         const stream = chatStream({
+          liveSource: "email",
           provider: activeProvider.provider,
           model: activeProvider.model,
           messages: workingMessages,

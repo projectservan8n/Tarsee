@@ -79,6 +79,7 @@ externalApiRouter.post("/message", async (req, res) => {
       tools: toolDefs,
       executeTool: (name, input) => executeTool(name, input, toolCtx),
       conversationId: convId,
+      liveSource: "api",
       // `claudeSessionId` is the wrong key — the provider expects `sessionId`,
       // so claude never resumed across turns and every message spawned a fresh
       // session that re-read the whole workspace.

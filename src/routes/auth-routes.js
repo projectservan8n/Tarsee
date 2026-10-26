@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { validatePassword, createSession, destroySession, recordFailedAttempt, clearFailedAttempts, requireAuth, sessionMaxAgeMs, rateLimitAuth } from "../middleware/auth.js";
+import { generateCsrfCookie } from "../middleware/security.js";
 import config from "../config/env.js";
 
 export const authRouter = Router();
@@ -74,6 +75,17 @@ authRouter.post("/logout", (req, res) => {
  * GET /api/auth/status
  * Returns current auth status (no password needed).
  */
+/**
+ * GET /api/auth/csrf: a fresh CSRF cookie. The cookie is otherwise only set on
+ * page loads, so a tab left open past the token's lifetime asks for a new one
+ * (js/api.js refreshCsrf) instead of failing every send with "CSRF token
+ * missing". Safe to hand out: the cookie is SameSite=Strict, and only this
+ * site's pages can read it to send it back.
+ */
+authRouter.get("/csrf", (req, res) => {
+  generateCsrfCookie(req, res, () => { res.set("Cache-Control", "no-store"); res.json({ ok: true }); });
+});
+
 authRouter.get("/status", (req, res) => {
   res.json({
     authenticated: req.auth?.authenticated || false,

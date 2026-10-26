@@ -224,98 +224,6 @@ html, body {
   padding: var(--space-2);
 }
 
-.channel-section-label {
-  font-size: var(--text-xs);
-  font-weight: 700;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-wide);
-  padding: var(--space-3) var(--space-3) var(--space-1);
-  margin-top: var(--space-1);
-}
-
-.channel-section-label:first-child {
-  margin-top: 0;
-}
-
-.channel-item {
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: all var(--duration-normal) var(--ease-default);
-  margin-bottom: var(--space-0-5);
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  color: var(--text-secondary);
-  min-height: var(--space-10);
-}
-
-.channel-item:hover {
-  background: var(--bg-surface-hover);
-  color: var(--text);
-}
-
-.channel-item.active {
-  background: var(--accent-subtle);
-  color: var(--text);
-  font-weight: 500;
-}
-
-.channel-item .channel-icon {
-  font-size: var(--text-lg);
-  width: var(--space-5);
-  text-align: center;
-  flex-shrink: 0;
-}
-
-.channel-item .channel-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-sm);
-}
-
-.channel-item .channel-time {
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.channel-item .channel-delete {
-  display: none;
-  /* 44px min touch target per WCAG 2.5.5. Uses padding on a small icon so
-     visual footprint stays tight while the hit area passes AA. */
-  width: 44px;
-  min-width: 44px;
-  height: 44px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-muted);
-  font-size: var(--text-lg);
-  cursor: pointer;
-  flex-shrink: 0;
-  line-height: 1;
-  padding: 0;
-  transition: all var(--duration-normal) var(--ease-default);
-}
-
-.channel-item:hover .channel-delete {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.channel-item:hover .channel-time {
-  display: none;
-}
-
-.channel-item .channel-delete:hover {
-  background: var(--danger-subtle);
-  color: var(--danger);
-}
 
 .sidebar-footer {
   padding: var(--space-3);
@@ -3069,62 +2977,6 @@ html.keyboard-open .chat-area {
 }
 
 
-/* ==========================================================================
-   Mobile composer — collapse 2-row Claude Code layout to single row.
-   Phones expect the iOS Messages pattern: [+] [textarea] [mic] [send]
-   in one compact row. The desktop 2-row split (textarea/voice on top,
-   attach/slash/spacer/send underneath) wastes vertical space on a phone
-   where the keyboard already eats half the screen.
-
-   We use display:contents on .input-row to dissolve the row wrappers so
-   all 6 children flow into .input-container directly, then reorder via
-   `order:` and hide the bits that don't belong on mobile.
-   ========================================================================== */
-@media (max-width: 767px) {
-  .input-container {
-    flex-direction: row;
-    align-items: flex-end;
-    gap: var(--space-1);
-    padding: var(--space-1-5);
-  }
-  .input-row {
-    display: contents;
-  }
-
-  /* Keep the textarea between the leading + and trailing mic/send.
-     Without explicit order, the .input-row-bottom children would render
-     after the textarea (DOM order). */
-  #attachBtn      { order: 1; }
-  #messageInput   { order: 2; }
-  #voiceInputBtn  { order: 3; }
-  #sendBtn        { order: 4; }
-
-  /* Slash / + spacer don't belong in the single-row mobile layout.
-     Slash menu is still reachable: type "/" in the textarea. */
-  #slashBtn,
-  .input-spacer {
-    display: none;
-  }
-
-  /* Compact textarea so the row stays one-line tall when empty. */
-  .input-container textarea {
-    padding: var(--space-2) var(--space-2);
-    font-size: var(--text-md);
-    min-height: 32px;
-  }
-
-  /* Shrink the trailing buttons so the textarea has more room. */
-  .input-btn {
-    width: 36px;
-    height: 36px;
-  }
-  .input-btn-send {
-    width: 36px;
-    height: 36px;
-    border-radius: var(--radius-full);  /* round send button on mobile feels iOS-native */
-  }
-}
-
 
 /* ==========================================================================
    Effort slider panel — segmented control for thinking effort.
@@ -3264,4 +3116,23 @@ html.keyboard-open .chat-area {
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: var(--space-2);
   margin-top: var(--space-3);
+}
+
+/* Sign out sits under Settings */
+.sidebar-footer .btn + .btn { margin-top: var(--space-1); }
+
+/* Phone login: the PIN pad only takes 4 digits; this reveals the password form */
+.pin-use-password {
+  margin-top: var(--space-4);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+}
+@media (max-width: 767px) {
+  .login-screen.use-password .pin-pad { display: none !important; }
+  .login-screen.use-password .login-card.desktop-only { display: block !important; }
 }

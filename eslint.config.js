@@ -21,6 +21,8 @@ const appGlobals = {
   API: "readonly",          // js/api.js
   App: "readonly",          // js/app.js
   Chat: "readonly",         // js/chat.js
+  ChatCore: "readonly",     // js/chat-core.js
+  Live: "readonly",         // js/live.js
   Console: "readonly",      // js/console.js
   FileManager: "readonly",  // js/files.js
   Settings: "readonly",     // js/settings.js

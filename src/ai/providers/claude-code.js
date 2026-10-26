@@ -16,6 +16,7 @@ import path from "node:path";
 import config from "../../config/env.js";
 import { MODEL_TIERS, tierOf } from "../../config/constants.js";
 import { isTranscriptOverCap, transcriptSizeMB, SESSION_JSONL_MAX_MB } from "../../lib/claude-transcript.js";
+import { stepsFromSdkMessage, toolResultsFromSdkMessage } from "../../lib/tool-steps.js";
 /**
  * Extract image blocks from content array.
  * Returns { images: ImageBlockParam[], text: string }
@@ -97,11 +98,97 @@ function extractMedia(content) {
 }
 
 /**
- * Async generator that matches Tarsee's provider interface.
+ * Public chat(): the engine below, wrapped so every turn is published to the
+ * live timeline (turn_start, each live step, turn_end) for the realtime
+ * dashboard (lib/live-bus.js). Steps are NOT passed on to callers, so
+ * Telegram/Discord/WhatsApp/email/cron behaviour is exactly as before.
+ * turn_end is published in `finally`, so it fires however the turn ends
+ * (done, error, abort, a caller that stops reading).
+ *
+ * Which conversation a turn belongs to: `liveConversationId` (crons and the
+ * heartbeat use ids like "cron:<id>" that are not conversations), else
+ * `toolCtx.conversationId`. `liveSource` says which channel it came from;
+ * `liveDisabled` keeps a turn off the timeline altogether.
+ *
+ * A turn on the timeline can also be stopped from the dashboard whichever
+ * channel started it (stopTurns below): the dashboard shows Stop on any chat
+ * at work, a Telegram or Discord one included.
+ */
+export async function* chat(opts) {
+  const liveConv = opts?.liveDisabled ? null : (opts?.liveConversationId || opts?.toolCtx?.conversationId || null);
+  if (!liveConv) { yield* chatEngine(opts); return; }
+  let live = null;
+  try { live = await import("../../lib/live-bus.js"); } catch { /* bus unavailable: run plain */ }
+  if (!live) { yield* chatEngine(opts); return; }
+
+  // Our own controller, following the caller's signal, so stopTurns() can end
+  // this turn without the caller's help.
+  const stopper = new AbortController();
+  if (opts.signal) {
+    if (opts.signal.aborted) stopper.abort();
+    else opts.signal.addEventListener("abort", () => stopper.abort(), { once: true });
+  }
+  let set = runningTurns.get(liveConv);
+  if (!set) { set = new Set(); runningTurns.set(liveConv, set); }
+  set.add(stopper);
+
+  const turnId = live.newTurnId();
+  const lastUser = [...(opts.messages || [])].reverse().find((m) => m.role === "user");
+  const promptText = typeof lastUser?.content === "string"
+    ? lastUser.content
+    : (lastUser?.content || []).filter((b) => b?.type === "text").map((b) => b.text).join(" ");
+  live.publish(liveConv, "turn_start", {
+    model: opts.model || null,
+    effort: opts.effort || null,
+    source: opts.liveSource || null,
+    prompt: String(promptText || "").slice(0, 300),
+  }, { turnId });
+  let stopReason = null;
+  let errorMsg = null;
+  try {
+    for await (const evt of chatEngine({ ...opts, signal: stopper.signal })) {
+      if (evt?.type === "step") {
+        const { type: _t, ...step } = evt;
+        live.publish(liveConv, "step", step, { turnId });
+        continue;
+      }
+      if (evt?.type === "done") stopReason = evt.stopReason || "end_turn";
+      else if (evt?.type === "error") errorMsg = evt.message || "error";
+      yield evt;
+    }
+  } finally {
+    set.delete(stopper);
+    if (!set.size && runningTurns.get(liveConv) === set) runningTurns.delete(liveConv);
+    live.publish(liveConv, "turn_end", {
+      stopReason: stopReason || (stopper.signal.aborted ? "aborted" : "ended"),
+      ...(errorMsg ? { error: String(errorMsg).slice(0, 500) } : {}),
+    }, { turnId });
+  }
+}
+
+/** Live conversation id -> controllers of the turns running in it right now. */
+const runningTurns = new Map();
+
+/**
+ * Stop every turn running in a conversation, whichever channel started it.
+ * @param {string} conversationId a conversation id, or a background job's live id
+ * @returns {number} how many turns were told to stop
+ */
+export function stopTurns(conversationId) {
+  const set = runningTurns.get(conversationId);
+  if (!set) return 0;
+  let n = 0;
+  for (const c of set) { if (!c.signal.aborted) { c.abort(); n++; } }
+  return n;
+}
+
+/**
+ * The engine: an async generator that matches Tarsee's provider interface.
  *
  * Unlike other providers, Claude Code runs its own tool loop internally.
  * We yield events as they arrive — the chat route should NOT wrap this
- * in its own tool-use loop.
+ * in its own tool-use loop. Besides text/tool_use/tool_result/usage/done it
+ * yields `step` events for the live timeline, which chat() above consumes.
  *
  * @param {object} opts
  * @param {Array} opts.messages - Conversation history (we extract the latest user message)
@@ -112,7 +199,7 @@ function extractMedia(content) {
  * @param {string} [opts.sessionId] - Claude Code session ID for resumption
  * @param {Function} [opts.onSessionId] - Callback when session ID is available
  */
-export async function* chat({
+async function* chatEngine({
   messages,
   model,
   systemPrompt,
@@ -300,6 +387,7 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
     let messageCount = 0;
     let everStreamed = false; // True if ANY text was streamed via stream_event
     let inThinking = false;
+    const seenToolIds = new Set(); // tool_use ids already turned into live steps
     for await (const message of query({ prompt: queryPrompt, options: queryOptions, signal })) {
       messageCount++;
       if (signal?.aborted) break;
@@ -331,6 +419,12 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
         }
 
         case "assistant": {
+          // Live steps (the words and each tool as it starts), for the
+          // dashboard. A subagent's own messages carry parent_tool_use_id:
+          // its inner steps stay inside its one Task step.
+          if (!message.parent_tool_use_id) {
+            for (const step of stepsFromSdkMessage(message, seenToolIds)) yield { type: "step", ...step };
+          }
           // Full assistant message — skip text if already streamed token-by-token
           if (!everStreamed) {
             const text = typeof message.message?.content === "string"
@@ -363,17 +457,18 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
           break;
         }
 
-        case "tool_result": {
-          // Tool execution result from Claude Code
-          const resultText = typeof message.content === "string"
-            ? message.content
-            : JSON.stringify(message.content || "");
-          yield {
-            type: "tool_result",
-            id: message.tool_use_id || message.id,
-            name: message.name || "tool",
-            result: resultText.slice(0, 2000),
-          };
+        case "user": {
+          // Tool results. The SDK has no "tool_result" message type: a tool's
+          // output comes back as a `user` message whose content holds a
+          // tool_result block with the tool_use_id it answers. (A case for
+          // "tool_result" sat here before and never fired, so no caller ever
+          // saw a tool's output.) Replays of earlier turns on resume are
+          // skipped, and so are a subagent's inner results.
+          if (message.isReplay || message.parent_tool_use_id) break;
+          for (const step of stepsFromSdkMessage(message, seenToolIds)) yield { type: "step", ...step };
+          for (const r of toolResultsFromSdkMessage(message)) {
+            yield { type: "tool_result", id: r.id, ok: r.ok, result: r.result.slice(0, 2000) };
+          }
           break;
         }
 
@@ -488,6 +583,14 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
       yield { type: "done", stopReason: "error" };
     }
   } catch (error) {
+    // Stopped on purpose (Stop, the idle watchdog, a caller giving up): the
+    // SDK throws "process aborted by user". That is not a failure, and must
+    // not reach the user as an error.
+    if (abortController.signal.aborted) {
+      console.log("[claude-code] Turn stopped.");
+      yield { type: "done", stopReason: "aborted" };
+      return;
+    }
     console.error("[claude-code] Exception:", error);
     const errMsg = error.message || "Claude Code crashed";
 

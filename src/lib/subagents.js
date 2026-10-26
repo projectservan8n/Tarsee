@@ -282,6 +282,9 @@ async function runAgent(agent, { settingsStore, db, channelManager, signal }) {
       signal,
       tools,
       toolCtx,
+      // A subagent runs inside its parent's conversation. Kept off the live
+      // timeline: its turn_end would mark the parent's turn as finished.
+      liveDisabled: true,
       sessionId: existingSessionId || undefined,
       onSessionId: (sid) => {
         setAgentSessionId(agent.agentId, sid, settingsStore);

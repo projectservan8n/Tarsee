@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Tarsee — Offline</title>
+  <title>Tarsee: Offline</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -59,9 +59,10 @@
 <body>
   <div class="card">
     <span class="icon" aria-hidden="true">🔌</span>
-    <h1>You're offline</h1>
-    <p>Tarsee needs a connection to your server. Check your network and try again.</p>
-    <button onclick="location.reload()">Retry</button>
+    <h1 id="title">Can't reach Tarsee</h1>
+    <p id="detail">Your server didn't answer. It may be restarting; this page reconnects by itself.</p>
+    <button id="retry" type="button">Retry now</button>
   </div>
+  <script src="/offline.js"></script>
 </body>
 </html>

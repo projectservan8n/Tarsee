@@ -96,6 +96,8 @@ export async function runBootChecklist({ db, settingsStore, channelManager = nul
   const toolCtx = { db, settingsStore, conversationId: null, channelManager };
   const { text: fullResponse, error } = await runBackgroundTurn({
     label: "boot",
+    liveId: "boot",
+    liveSource: "boot",
     // Cheap by default; `boot.model` raises it for a checklist that needs it.
     model: resolveBackgroundModel(settingsStore.get("boot.model")),
     messages,

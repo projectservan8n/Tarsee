@@ -60,6 +60,10 @@ export function resolveBackgroundModel(preferred, floor = null) {
  * @param {number} [opts.maxTurns]
  * @param {number} [opts.maxBudgetUsd]
  * @param {AbortSignal} [opts.signal] - caller's own cancellation, if any
+ * @param {string} [opts.liveId] - where the dashboard's live timeline shows
+ *   this run ("cron:<id>", "heartbeat", "boot"); background work has no
+ *   conversation of its own
+ * @param {string} [opts.liveSource] - the kind of job, for its label
  * @returns {Promise<BackgroundTurnResult>}
  */
 export async function runBackgroundTurn({
@@ -72,6 +76,8 @@ export async function runBackgroundTurn({
   maxTurns = BACKGROUND_DEFAULTS.MAX_TURNS,
   maxBudgetUsd = BACKGROUND_DEFAULTS.MAX_BUDGET_USD,
   signal,
+  liveId,
+  liveSource,
 }) {
   const chosenModel = model || resolveBackgroundModel(null);
 
@@ -100,6 +106,8 @@ export async function runBackgroundTurn({
       signal: controller.signal,
       maxTurns,
       maxBudgetUsd,
+      liveConversationId: liveId || undefined,
+      liveSource: liveSource || undefined,
     });
 
     for await (const event of stream) {

@@ -389,6 +389,7 @@ You can use these special markers in your response:
 
         const existingSessionId = convStore.getClaudeSessionId(convId);
         const stream = chatStream({
+          liveSource: "telegram",
           provider: activeProvider.provider,
           model: activeProvider.model,
           messages: workingMessages,

@@ -2,6 +2,7 @@ import { WebSocketServer } from "ws";
 import crypto from "node:crypto";
 import { validateApiToken, validateSessionFromRequest } from "../middleware/auth.js";
 import { chatStream } from "../ai/router.js";
+import { onEvent, eventsSince, eventsForTurn, activeTurnFor, activeTurnList, recentEvents } from "../lib/live-bus.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { AuditLog } from "../db/audit.js";
@@ -38,6 +39,37 @@ import { getGatewayManager } from "../lib/gateway.js";
  */
 export function setupWebSocket(server, db, app) {
   const wss = new WebSocketServer({ noServer: true });
+
+  // ── Live timeline fan-out ─────────────────────────────────────────────
+  // Every published event goes to sockets subscribed to that conversation
+  // ("live.event", full payload) and, in compact form, to sockets watching
+  // all activity ("live.activity": turn start/end, tool starts/ends and
+  // message previews, for "working" indicators across every channel).
+  const ACTIVITY_TYPES = new Set(["turn_start", "turn_end"]);
+  onEvent((evt) => {
+    let full = null;
+    let compact = null;
+    for (const ws of wss.clients) {
+      if (ws.readyState !== 1 || !ws.isAuthenticated) continue;
+      try {
+        if (ws._liveSubs?.has(evt.conversationId)) {
+          full ||= JSON.stringify({ type: "live.event", event: evt });
+          ws.send(full);
+        }
+        if (ws._liveActivity && (ACTIVITY_TYPES.has(evt.type) || (evt.type === "step" && evt.payload?.kind !== "text") || evt.type === "message")) {
+          compact ||= JSON.stringify({ type: "live.activity", event: {
+            seq: evt.seq, conversationId: evt.conversationId, turnId: evt.turnId, type: evt.type, createdAt: evt.createdAt,
+            payload: evt.type === "message"
+              ? { role: evt.payload?.role, preview: String(evt.payload?.content || "").slice(0, 140) }
+              : evt.type === "step"
+                ? { kind: evt.payload?.kind, id: evt.payload?.id, name: evt.payload?.name, summary: evt.payload?.summary, ok: evt.payload?.ok }
+                : evt.payload,
+          } });
+          ws.send(compact);
+        }
+      } catch { /* dead socket: close handler cleans up */ }
+    }
+  });
   const terminalWss = new WebSocketServer({ noServer: true });
   const convStore = new ConversationStore(db);
   const settingsStore = new SettingsStore(db);
@@ -194,6 +226,42 @@ export function setupWebSocket(server, db, app) {
             try { conn.ws.send(JSON.stringify({ type: "typing", channel: msg.channel || "web" })); } catch { /* ignore */ }
           }
         }
+        return;
+      }
+
+      // Live timeline: subscribe to one conversation from a sequence number.
+      // The reply carries everything after sinceSeq PLUS every event of the
+      // turn in progress (so a device opened mid-turn sees the whole turn so
+      // far, not just what happens next). convId is a conversation id or a
+      // background job's ("cron:<id>", "heartbeat", "boot").
+      if (msg.type === "live.subscribe" && typeof msg.convId === "string" && msg.convId.length <= 200) {
+        ws._liveSubs ||= new Set();
+        // One page follows a handful of chats; a socket asking for hundreds
+        // is a bug or abuse, and each id costs a lookup on every event.
+        if (ws._liveSubs.size >= 50 && !ws._liveSubs.has(msg.convId)) {
+          ws._liveSubs.delete(ws._liveSubs.values().next().value);
+        }
+        ws._liveSubs.add(msg.convId);
+        const since = Number(msg.sinceSeq) || 0;
+        // tail: a background job's view (cron, heartbeat) opened fresh wants
+        // its recent runs, not the oldest 1000 events since seq 0.
+        let events = msg.tail && !since ? recentEvents(msg.convId, 300) : eventsSince(msg.convId, since, 1000);
+        const turn = activeTurnFor(msg.convId);
+        if (turn) {
+          const have = new Set(events.map((e) => e.seq));
+          const turnEvents = eventsForTurn(turn.turnId).filter((e) => !have.has(e.seq));
+          events = [...turnEvents, ...events].sort((a, b) => a.seq - b.seq);
+        }
+        try { ws.send(JSON.stringify({ type: "live.backlog", convId: msg.convId, events, activeTurn: turn })); } catch {}
+        return;
+      }
+      if (msg.type === "live.unsubscribe" && msg.convId) {
+        ws._liveSubs?.delete(msg.convId);
+        return;
+      }
+      if (msg.type === "live.activity.subscribe") {
+        ws._liveActivity = true;
+        try { ws.send(JSON.stringify({ type: "live.activity.snapshot", turns: activeTurnList() })); } catch {}
         return;
       }
 
@@ -425,6 +493,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
         if (last.role === "user") last.content = aiPromptOverride;
       }
       const stream = mod.chat({
+        liveSource: "web",
         messages: ccMessages,
         model: activeProvider.model,
         systemPrompt: effectiveSystemPrompt,

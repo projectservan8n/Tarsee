@@ -18,9 +18,9 @@
   ],
   "shortcuts": [
     {
-      "name": "New Chat",
+      "name": "New chat",
       "short_name": "Chat",
-      "url": "/",
+      "url": "/chat/new",
       "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
     }
   ]

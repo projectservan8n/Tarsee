@@ -17,7 +17,10 @@ let claudeCodeModule = null;
  * @returns {AsyncGenerator<{type: string, content?: string, usage?: object}>}
  */
 export async function* chatStream(opts) {
-  const { messages, model, systemPrompt, signal, toolCtx, sessionId, onSessionId, effort, maxTurns, maxBudgetUsd } = opts;
+  const {
+    messages, model, systemPrompt, signal, toolCtx, sessionId, onSessionId, effort, maxTurns, maxBudgetUsd,
+    liveConversationId, liveSource, liveDisabled,
+  } = opts;
 
   if (!claudeCodeModule) {
     claudeCodeModule = await import("./providers/claude-code.js");
@@ -42,6 +45,12 @@ export async function* chatStream(opts) {
     // keeps the provider's generous interactive defaults.
     maxTurns,
     maxBudgetUsd,
+    // Live dashboard timeline (lib/live-bus.js): which conversation to
+    // publish this turn under (crons have no conversation), which channel it
+    // came from, or keep it off the timeline.
+    liveConversationId,
+    liveSource,
+    liveDisabled,
   });
 }
 

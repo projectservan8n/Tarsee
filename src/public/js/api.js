@@ -14,6 +14,17 @@ const API = {
   },
 
   /**
+   * A fresh CSRF cookie from the server. Tokens last two hours and a page can
+   * stay open for days (a phone's home-screen app): asked for when the cookie has
+   * run out, and once more when a send is refused for its token.
+   */
+  async refreshCsrf() {
+    this._csrfAsk ||= fetch("/api/auth/csrf", { credentials: "same-origin", cache: "no-store" }).catch(() => null).finally(() => { this._csrfAsk = null; });
+    await this._csrfAsk;
+    return this.getCsrfToken();
+  },
+
+  /**
    * Make an authenticated API request.
    */
   async request(path, opts = {}) {
@@ -21,9 +32,10 @@ const API = {
       ...(opts.headers || {}),
     };
 
-    // Add CSRF token for state-changing requests
-    if (opts.method && opts.method !== "GET") {
-      const csrf = this.getCsrfToken();
+    // Add CSRF token for state-changing requests (a fresh one first if it has run out)
+    const changes = opts.method && opts.method !== "GET";
+    if (changes) {
+      const csrf = this.getCsrfToken() || await this.refreshCsrf();
       if (csrf) headers["X-CSRF-Token"] = csrf;
     }
 
@@ -41,20 +53,34 @@ const API = {
     let res;
     try {
       res = await fetch(path, { ...opts, headers, credentials: "same-origin" });
+      // Refused for its CSRF token (run out between the check and the send, or the
+      // server's key changed): a fresh token and one more try.
+      if (res.status === 403 && changes && !opts._csrfRetry) {
+        const why = await res.clone().json().catch(() => ({}));
+        if (/CSRF token/i.test(why.error || "")) {
+          const fresh = await this.refreshCsrf();
+          if (fresh) res = await fetch(path, { ...opts, _csrfRetry: true, headers: { ...headers, "X-CSRF-Token": fresh }, credentials: "same-origin" });
+        }
+      }
     } catch (err) {
       // Surface offline / network failures instead of letting callers hang
       // on a silently rejected promise.
       if (typeof navigator !== "undefined" && navigator.onLine === false) {
-        if (window.App?.showToast) App.showToast("You're offline — changes will retry when you reconnect", "info");
+        if (window.App?.showToast) App.showToast("You're offline: changes will retry when you reconnect", "info");
       } else if (window.App?.showToast) {
-        App.showToast("Network error — check your connection", "error");
+        App.showToast("Network error: check your connection", "error");
       }
       throw err;
     }
 
     if (res.status === 401) {
-      // Session expired — redirect to login
-      window.location.reload();
+      // Session expired. Show the login screen ONCE. Reloading here was a
+      // storm: a page load fires ~15 requests at once, each 401 reloaded the
+      // page, and every reload fired 15 more (measured ~1,500 requests in 30s).
+      if (!this._authRequiredFired) {
+        this._authRequiredFired = true;
+        window.dispatchEvent(new CustomEvent("tarsee:auth-required"));
+      }
       throw new Error("Session expired");
     }
 
@@ -149,8 +175,8 @@ const API = {
     this._activeStream = null;
   },
 
-  async sendMessage(conversationId, message, onText, onDone, onError, channelKey, attachments, effort) {
-    const csrf = this.getCsrfToken();
+  async sendMessage(conversationId, message, onText, onDone, onError, channelKey, attachments, effort, opts = {}) {
+    const csrf = this.getCsrfToken() || await this.refreshCsrf();
     const headers = {
       "Content-Type": "application/json",
     };
@@ -161,19 +187,24 @@ const API = {
     if (conversationId) body.conversationId = conversationId;
     if (attachments && attachments.length) body.attachments = attachments;
     if (effort) body.effort = effort;
+    if (opts.clientMsgId) body.clientMsgId = opts.clientMsgId;
+    if (opts.model) body.model = opts.model;
 
     // AbortController + heartbeat watchdog. Server emits `event: heartbeat`
     // every 15s, so anything past ~40s of silence means the underlying
     // connection died (tab freeze, sleep, Wi-Fi drop). Without this the
     // reader would hang indefinitely and the UI would show "Thinking…"
     // forever after wake.
-    if (this._activeStream) {
+    // Live sends (opts.independent) render from the WebSocket timeline, so
+    // several can run side by side; only the legacy single-stream view needs
+    // the previous reader aborted.
+    if (this._activeStream && !opts.independent) {
       // A previous stream is still around — abort it before replacing so
       // we don't leak two readers fighting over the same UI.
       try { this._activeStream.abort(); } catch {}
     }
     const ac = new AbortController();
-    this._activeStream = ac;
+    if (!opts.independent) this._activeStream = ac;
     let lastEventAt = Date.now();
     const STREAM_IDLE_LIMIT_MS = 40_000;
     const watchdog = setInterval(() => {
@@ -199,7 +230,7 @@ const API = {
     } catch (err) {
       finishWatchdog();
       if (err?.name === "AbortError") {
-        onError?.("Connection lost — tap to retry");
+        onError?.("Connection lost: tap to retry");
       } else {
         onError?.(err?.message || "Network error");
       }
@@ -209,7 +240,7 @@ const API = {
     if (!res.ok) {
       finishWatchdog();
       const data = await res.json().catch(() => ({}));
-      onError?.(data.error || `HTTP ${res.status}`);
+      onError?.(data.error || `HTTP ${res.status}`, { status: res.status, data });
       return;
     }
 
@@ -259,18 +290,22 @@ const API = {
     let buffer = "";
 
     try {
+      let eventType = null;
       while (true) {
         const { done, value } = await reader.read();
         // Any chunk — including the SSE heartbeat, which used to be a
         // no-op — counts as proof of life and resets the watchdog.
         lastEventAt = Date.now();
+        API._lastStreamEventAt = lastEventAt; // read by Chat's wake handler
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
-
-        let eventType = null;
+        // eventType lives OUTSIDE the read loop (declared above): when the
+        // network splits "event: done" and its "data:" line across two reads,
+        // the data must still know its type. Re-declaring it here per read
+        // silently dropped the event, leaving the spinner running forever.
         for (const line of lines) {
           if (line.startsWith("event: ")) {
             eventType = line.slice(7).trim();
@@ -290,6 +325,7 @@ const API = {
               else if (eventType === "context_overflow") onText?.(null, { type: "context_overflow", ...parsed });
               else if (eventType === "heartbeat") { /* liveness only — already reset lastEventAt above */ }
             } catch {}
+            eventType = null; // one data line per event: reset so the next event can't inherit this type
             eventType = null;
           }
         }
@@ -299,7 +335,7 @@ const API = {
       // Either way the stream is dead; tell the caller so the UI can
       // clean up the spinner and prompt for retry.
       if (err?.name === "AbortError") {
-        onError?.("Connection lost — tap to retry");
+        onError?.("Connection lost: tap to retry");
       } else {
         onError?.(err?.message || "Stream interrupted");
       }

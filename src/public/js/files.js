@@ -12,6 +12,19 @@ const FileManager = {
     document.getElementById("fmClosePreview")?.addEventListener("click", () => this.closePreview());
     document.getElementById("fmSaveBtn")?.addEventListener("click", () => this.saveFile());
     document.getElementById("fmNewFile")?.addEventListener("click", () => this.newFile());
+    // Escape closes a preview, then the panel. Never an open editor: there
+    // is no unsaved-changes tracking, so that would silently drop edits.
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      const panel = document.getElementById("fileManagerPanel");
+      if (!panel || panel.style.display === "none") return;
+      const preview = document.getElementById("fmPreview");
+      const editor = document.getElementById("fmEditor");
+      if (editor && editor.style.display !== "none") return;
+      e.preventDefault();
+      if (preview && preview.style.display !== "none") this.closePreview();
+      else this.close();
+    });
   },
 
   toggle() {
@@ -51,7 +64,7 @@ const FileManager = {
       if (dirPath !== ".") {
         const parent = dirPath.includes("/") ? dirPath.split("/").slice(0, -1).join("/") || "." : ".";
         html += `<div class="fm-item fm-dir" data-path="${parent}" data-action="dir">
-          <span class="fm-icon">📁</span>
+          <span class="fm-icon">${this.folderIcon()}</span>
           <span class="fm-name">..</span>
         </div>`;
       }
@@ -61,16 +74,16 @@ const FileManager = {
         if (item.name.startsWith(".") && item.name !== ".claude") continue; // Hide dotfiles except .claude
 
         if (item.isDirectory) {
-          html += `<div class="fm-item fm-dir" data-path="${fullPath}" data-action="dir">
-            <span class="fm-icon">📁</span>
-            <span class="fm-name">${item.name}</span>
+          html += `<div class="fm-item fm-dir" data-path="${this.escapeHtml(fullPath)}" data-action="dir">
+            <span class="fm-icon">${this.folderIcon()}</span>
+            <span class="fm-name">${this.escapeHtml(item.name)}</span>
           </div>`;
         } else {
           const icon = this.getFileIcon(item.name);
           const size = item.size ? this.formatSize(item.size) : "";
-          html += `<div class="fm-item fm-file" data-path="${fullPath}" data-action="file">
+          html += `<div class="fm-item fm-file" data-path="${this.escapeHtml(fullPath)}" data-action="file">
             <span class="fm-icon">${icon}</span>
-            <span class="fm-name">${item.name}</span>
+            <span class="fm-name">${this.escapeHtml(item.name)}</span>
             <span class="fm-size">${size}</span>
           </div>`;
         }
@@ -86,7 +99,7 @@ const FileManager = {
         el.addEventListener("click", () => this.openFileView(el.dataset.path));
       });
     } catch (err) {
-      list.innerHTML = `<div class="fm-error">${err.message}</div>`;
+      list.innerHTML = `<div class="fm-error">${this.escapeHtml(err.message)}</div>`;
     }
   },
 
@@ -136,9 +149,11 @@ const FileManager = {
   },
 
   async newFile() {
+    // (The folder shown when it was pressed is where it goes, whatever the page did while it was asked.)
+    const dir = this.currentPath;
     const name = await TarseeDialog.askText({ title: "New file", label: "File name", yes: "Create", no: "Cancel" });
     if (!name) return;
-    const filePath = this.currentPath === "." ? name : `${this.currentPath}/${name}`;
+    const filePath = dir === "." ? name : `${dir}/${name}`;
     try {
       await API.json("/api/files/write", { method: "POST", body: { path: filePath, content: "" } });
       this.loadDir(this.currentPath);
@@ -158,15 +173,15 @@ const FileManager = {
     this.openFile = null;
   },
 
+  /** A file's mark in the list: a plain line drawing of a page (no emoji in the UI), its type in its title. */
   getFileIcon(name) {
-    const ext = name.split(".").pop().toLowerCase();
-    const icons = {
-      md: "📝", txt: "📄", js: "🟨", json: "📋", html: "🌐", css: "🎨",
-      py: "🐍", sh: "⚙️", yaml: "📐", yml: "📐", toml: "📐",
-      png: "🖼️", jpg: "🖼️", jpeg: "🖼️", gif: "🖼️", svg: "🖼️", webp: "🖼️",
-      pdf: "📕", db: "🗃️", sql: "🗃️", wav: "🔊", mp3: "🎵",
-    };
-    return icons[ext] || "📄";
+    const ext = String(name).includes(".") ? name.split(".").pop().toLowerCase() : "";
+    return `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 1.5h5l3.5 3.5v9a1 1 0 01-1 1h-7.5a1 1 0 01-1-1v-11.5a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1.5V5h3.5" stroke="currentColor" stroke-width="1.2"/></svg>${ext ? `<span class="sr-only">${this.escapeHtml(ext)} file</span>` : ""}`;
+  },
+
+  /** A folder's mark in the list. */
+  folderIcon() {
+    return '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.75 4a1 1 0 011-1h3.5l1.5 1.5h5.5a1 1 0 011 1v6.75a1 1 0 01-1 1h-10.5a1 1 0 01-1-1z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>';
   },
 
   formatSize(bytes) {
@@ -176,8 +191,7 @@ const FileManager = {
   },
 
   escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
+    // Quote-safe: used inside data-path attributes. Mirrors chat.js escapeHtml.
+    return String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   },
 };

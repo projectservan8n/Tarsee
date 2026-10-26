@@ -12,6 +12,10 @@ import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { getGatewayManager } from "../lib/gateway.js";
 import { redactSecrets, redactDeep } from "../lib/redact.js";
+import { messageTools, slimMessage } from "../lib/message-tools.js";   // a reply's tools; history without their inputs and outputs
+import { summarizeToolInput } from "../lib/tool-steps.js";
+import { latestSeq, activeTurnFor, recentClientMsgIds, hasClientMsgId, publish } from "../lib/live-bus.js";
+import { withConversationTurn, queueDepth } from "../lib/conversation-lock.js";
 
 /**
  * Broadcast an SSE-like event to all connected WebSocket clients and record
@@ -205,7 +209,36 @@ chatRouter.get("/conversations/:id", async (req, res) => {
     console.warn("[chat] getSessionRecap failed:", err?.message);
   }
 
-  res.json({ ...conv, messages, totalMessages, recap });
+  // Slim payload: each reply's words plus a compact list of the tools it
+  // used. A reply's tool inputs and outputs can run to megabytes, and a
+  // device opening a long chat downloaded all of it; they are fetched one
+  // reply at a time when someone opens its steps (route below). The live
+  // timeline's position comes too, so the page follows on from exactly here.
+  // ?raw=true returns the stored messages as they are.
+  const out = req.query.raw === "true" ? messages : messages.map(slimMessage);
+  res.json({
+    ...conv,
+    messages: out,
+    totalMessages,
+    recap,
+    liveSeq: latestSeq(req.params.id),
+    activeTurn: activeTurnFor(req.params.id),
+    deliveredClientIds: recentClientMsgIds(req.params.id),
+  });
+});
+
+/**
+ * GET /api/chat/conversations/:id/messages/:messageId/tools
+ * The tools one reply used, with their input and output (redacted, capped):
+ * what the chat shows when a step under "Used 12 tools" is opened. History
+ * comes slim, so this is fetched per reply, only when someone looks.
+ */
+chatRouter.get("/conversations/:id/messages/:messageId/tools", (req, res) => {
+  const row = req.app.get("db")
+    .prepare("SELECT content FROM messages WHERE id = ? AND conversation_id = ? AND role = 'assistant'")
+    .get(req.params.messageId, req.params.id);
+  if (!row) return res.status(404).json({ error: "Message not found" });
+  res.json({ tools: messageTools(row.content) });
 });
 
 /**
@@ -259,20 +292,33 @@ chatRouter.post("/conversations/:id/reset-session", (req, res) => {
 
 // Store active AbortControllers per conversation for /stop
 const activeRequests = new Map(); // convId → AbortController
+// Bumped by /stop so web turns still waiting in the conversation's queue
+// (lib/conversation-lock.js) know not to run.
+const stopEpoch = new Map();  // convId -> number
 
 /**
  * POST /api/chat/stop
- * Stop the current generation for a conversation.
+ * Stop the current generation for a conversation, and anything sent from the
+ * dashboard that is still waiting behind it.
  */
-chatRouter.post("/stop", (req, res) => {
+chatRouter.post("/stop", async (req, res) => {
   const { conversationId } = req.body || {};
+  if (!conversationId || typeof conversationId !== "string") return res.json({ ok: true, stopped: false });
+  stopEpoch.set(conversationId, (stopEpoch.get(conversationId) || 0) + 1);
+  let stopped = false;
   const controller = activeRequests.get(conversationId);
   if (controller) {
     controller.abort();
     activeRequests.delete(conversationId);
-    return res.json({ ok: true, stopped: true });
+    stopped = true;
   }
-  res.json({ ok: true, stopped: false });
+  // A turn another channel started in this chat (Telegram, Discord, a cron's
+  // run), which the dashboard shows at work too.
+  try {
+    const { stopTurns } = await import("../ai/providers/claude-code.js");
+    if (stopTurns(conversationId) > 0) stopped = true;
+  } catch { /* provider not loaded: nothing of its running */ }
+  res.json({ ok: true, stopped });
 });
 
 /**
@@ -287,8 +333,15 @@ chatRouter.post("/send", async (req, res) => {
   // Track activity for idle session reset
   trackActivity();
 
-  if (!message || typeof message !== "string") {
+  // A file on its own is a valid message.
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+  if (typeof message !== "string" || (!message.trim() && !hasAttachments)) {
     return res.status(400).json({ error: "Message is required" });
+  }
+  if (!message.trim()) {
+    message = attachments.length === 1
+      ? `(sent a file: ${String(attachments[0]?.name || attachments[0]?.type || "file").slice(0, 120)})`
+      : `(sent ${attachments.length} files)`;
   }
   if (message.length > LIMITS.MAX_MESSAGE_LENGTH) {
     return res.status(400).json({ error: "Message too long" });
@@ -310,6 +363,14 @@ chatRouter.post("/send", async (req, res) => {
     }
   }
 
+  // Retry dedupe: a device that lost the response re-sends with the same
+  // clientMsgId (the tab's own id for the message). If that message already
+  // landed, don't save or run it twice.
+  const clientMsgId = typeof req.body?.clientMsgId === "string" ? req.body.clientMsgId.slice(0, 64) : null;
+  if (clientMsgId && convId && hasClientMsgId(convId, clientMsgId)) {
+    return res.status(409).json({ duplicate: true, conversationId: convId });
+  }
+
   // Check for commands. __PLAYBOOK__ sentinel responses get fed to the AI
   // as the user's turn instead of echoed; we keep the original /command
   // text as the user-visible message in the conversation so the chat
@@ -329,6 +390,8 @@ chatRouter.post("/send", async (req, res) => {
       if (playbook) {
         aiPromptOverride = playbook;
       } else {
+        // /clear and /new wipe the conversation: tell every open device.
+        if (convId && /^\/(clear|new)\b/i.test(message)) publish(convId, "cleared", {});
         return res.json({
           command: true,
           response: cmdResult.response,
@@ -374,7 +437,14 @@ chatRouter.post("/send", async (req, res) => {
   }
 
   // Save user message (text only — no base64 blobs in DB)
-  convStore.addMessage(convId, { role: "user", content: cleanMessage });
+  convStore.addMessage(convId, { role: "user", content: cleanMessage, clientMsgId: clientMsgId || undefined });
+  // A new web chat ("New chat", created under its channel key) is named after
+  // its first message as soon as it is sent. Waiting for the reply was not
+  // enough: a second message queued meanwhile pushed the count past the
+  // first-exchange check below, and the chat stayed "New chat".
+  if (channelKey && channelKey.startsWith("web:") && channelKey !== "web:default" && convStore.get(convId)?.title === channelKey) {
+    convStore.updateTitle(convId, cleanMessage.slice(0, LIMITS.MAX_CONVERSATION_TITLE));
+  }
   broadcastToOthers(convId, "user_message", { content: cleanMessage, conversationId: convId });
 
   // Build user content blocks for the AI when attachments are present.
@@ -508,253 +578,276 @@ chatRouter.post("/send", async (req, res) => {
 
   // --- Claude Code provider: runs its own agentic loop ---
   if (providerId === "claude-code") {
-    const controller = new AbortController();
-    // If a previous stream is still active for this conversation, abort it
-    // before replacing — prevents two streams writing to the same convo and
-    // the old stream's cleanup clobbering the new one.
-    const previous = activeRequests.get(convId);
-    if (previous && previous !== controller) {
-      try { previous.abort(); } catch {}
-    }
-    activeRequests.set(convId, controller);
-    // Tab freeze / OS sleep / Wi-Fi blip will close the SSE socket while
-    // the model is still producing. Don't abort the generator on socket
-    // close — let it run to completion so the assistant message persists
-    // and `broadcastToOthers` keeps populating the gateway buffer for
-    // sync.resume on reconnect. The only legitimate aborter is the
-    // "new message replaces this turn" path above (lines 498-501).
-    let clientDetached = false;
-    res.on("close", () => {
-      clientDetached = true;
-    });
+    // Queue behind any turn already running in this conversation, from any
+    // channel, instead of cancelling it (a message sent mid-reply used to
+    // abort the reply). The user message is already saved and on the live
+    // timeline, so every device shows it at once; the reply follows when the
+    // turn ahead finishes. Socket close never cancels a turn, so a queued
+    // message still runs even if the tab that sent it is gone.
+    const epochAtEnqueue = stopEpoch.get(convId) || 0;
+    const waitingBehind = queueDepth(convId) > 0;
+    if (waitingBehind) sendSSE(res, "queued", { conversationId: convId });
+    const waitBeat = waitingBehind
+      ? setInterval(() => { if (!res.writableEnded) sendSSE(res, "heartbeat", { ts: Date.now(), queued: true }); }, 15_000)
+      : null;
+    await withConversationTurn(convId, async () => {
+      if (waitBeat) clearInterval(waitBeat);
+      if ((stopEpoch.get(convId) || 0) !== epochAtEnqueue) {
+        // Stop was pressed while this message waited: don't run it.
+        sendSSE(res, "done", { conversationId: convId, stopReason: "stopped" });
+        if (!res.writableEnded) res.end();
+        return;
+      }
+      const controller = new AbortController();
+      activeRequests.set(convId, controller);
+      // Tab freeze / OS sleep / Wi-Fi blip will close the SSE socket while
+      // the model is still producing. Don't abort the generator on socket
+      // close — let it run to completion so the assistant message persists
+      // and every device keeps following it on the live timeline. Only
+      // /stop and the idle watchdog below end a turn early.
+      let clientDetached = false;
+      res.on("close", () => {
+        clientDetached = true;
+      });
 
-    // Heartbeat + idle watchdog. Emits a `heartbeat` SSE event every 15s
-    // so proxies don't buffer the response to death (skipped once the
-    // client detaches — there's no socket to feed). Idle abort still
-    // fires if the SDK produces no events for 3 minutes — that's a
-    // stuck-model guard, unrelated to the client connection.
-    let lastEventAt = Date.now();
-    const HEARTBEAT_MS = 15_000;
-    // Idle abort: how long a turn may go with NO stream event before we give up.
-    // Was a hard 3 minutes, which killed legitimate long research/tool turns.
-    // Now configurable, but deliberately FINITE — the Mac build sets this to
-    // ~2e9 (23 days), which is only safe there because its PTY pool has a
-    // heartbeat + dead-socket detector. This build has neither, so an infinite
-    // value would wedge a turn forever with no console to kill it from.
-    const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
-    const hb = setInterval(() => {
-      if (res.writableEnded || clientDetached) {
+      // Heartbeat + idle watchdog. Emits a `heartbeat` SSE event every 15s
+      // so proxies don't buffer the response to death (skipped once the
+      // client detaches — there's no socket to feed). Idle abort still
+      // fires if the SDK produces no events for 3 minutes — that's a
+      // stuck-model guard, unrelated to the client connection.
+      let lastEventAt = Date.now();
+      const HEARTBEAT_MS = 15_000;
+      // Idle abort: how long a turn may go with NO stream event before we give up.
+      // Was a hard 3 minutes, which killed legitimate long research/tool turns.
+      // Now configurable, but deliberately FINITE — the Mac build sets this to
+      // ~2e9 (23 days), which is only safe there because its PTY pool has a
+      // heartbeat + dead-socket detector. This build has neither, so an infinite
+      // value would wedge a turn forever with no console to kill it from.
+      const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
+      const hb = setInterval(() => {
+        if (res.writableEnded || clientDetached) {
+          if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
+            clearInterval(hb);
+            try { controller.abort(); } catch {}
+          }
+          return;
+        }
+        sendSSE(res, "heartbeat", { ts: Date.now() });
         if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
           clearInterval(hb);
           try { controller.abort(); } catch {}
+          sendSSE(res, "error", { message: "Claude Code stopped responding (3 min idle). Try again." });
+          sendSSE(res, "done", { conversationId: convId });
+          if (!res.writableEnded) res.end();
         }
-        return;
-      }
-      sendSSE(res, "heartbeat", { ts: Date.now() });
-      if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
-        clearInterval(hb);
-        try { controller.abort(); } catch {}
-        sendSSE(res, "error", { message: "Claude Code stopped responding (3 min idle). Try again." });
-        sendSSE(res, "done", { conversationId: convId });
-        if (!res.writableEnded) res.end();
-      }
-    }, HEARTBEAT_MS);
+      }, HEARTBEAT_MS);
 
-    try {
-      const existingSessionId = convStore.getClaudeSessionId(convId);
-      const mod = await import("../ai/providers/claude-code.js");
-      // Build messages with image blocks for the last user message
-      const ccMessages = history.map((m) => {
-        // Extract plain text from timeline JSON for AI context
-        let content = m.content;
-        if (content?.startsWith('{"__timeline":true')) {
-          try { content = JSON.parse(content).text || content; } catch {}
+      try {
+        const existingSessionId = convStore.getClaudeSessionId(convId);
+        const mod = await import("../ai/providers/claude-code.js");
+        // Build messages with image blocks for the last user message
+        const ccMessages = history.map((m) => {
+          // Extract plain text from timeline JSON for AI context
+          let content = m.content;
+          if (content?.startsWith('{"__timeline":true')) {
+            try { content = JSON.parse(content).text || content; } catch {}
+          }
+          // Strip invalid Unicode surrogates that break JSON
+          if (typeof content === "string") content = content.replace(/[\uD800-\uDFFF]/g, "");
+          return { role: m.role, content };
+        });
+        if (userContentForAI !== message && ccMessages.length > 0) {
+          const last = ccMessages[ccMessages.length - 1];
+          if (last.role === "user") last.content = userContentForAI;
         }
-        // Strip invalid Unicode surrogates that break JSON
-        if (typeof content === "string") content = content.replace(/[\uD800-\uDFFF]/g, "");
-        return { role: m.role, content };
-      });
-      if (userContentForAI !== message && ccMessages.length > 0) {
-        const last = ccMessages[ccMessages.length - 1];
-        if (last.role === "user") last.content = userContentForAI;
-      }
-      // Resolve effort: per-request > session setting > default
-      const effort = reqEffort || settingsStore.get(`session.${convId}.effort`) || undefined;
+        // Resolve effort: per-request > session setting > default
+        const effort = reqEffort || settingsStore.get(`session.${convId}.effort`) || undefined;
 
-      const stream = mod.chat({
-        messages: ccMessages,
-        model,
-        systemPrompt: effectiveSystemPrompt,
-        signal: controller.signal,
-        sessionId: existingSessionId,
-        onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
-        toolCtx,
-        effort,
-      });
+        const stream = mod.chat({
+          messages: ccMessages,
+          model,
+          systemPrompt: effectiveSystemPrompt,
+          signal: controller.signal,
+          sessionId: existingSessionId,
+          onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
+          toolCtx,
+          effort,
+          // Publish this turn to the live timeline (other devices watch it).
+          liveConversationId: convId,
+          liveSource: "web",
+        });
 
-      // Loop prevention: track recent tool calls to detect stuck patterns
-      const toolHistory = []; // { name, detail, isError }
-      const MAX_TOOL_CALLS = 50; // absolute max tools per message
-      let totalToolCalls = 0;
+        // Loop prevention: track recent tool calls to detect stuck patterns
+        const toolHistory = []; // { name, detail, isError }
+        const toolIdxById = new Map(); // tool_use id -> its index in `timeline`
+        const MAX_TOOL_CALLS = 50; // absolute max tools per message
+        let totalToolCalls = 0;
 
-      const detectLoop = () => {
-        if (toolHistory.length < 3) return false;
-        const last3 = toolHistory.slice(-3);
-        // Same tool + same error 3x in a row = stuck
-        if (last3.every(t => t.isError && t.name === last3[0].name)) return `${last3[0].name} failed 3 times in a row`;
-        // Same tool + same input 3x in a row = stuck
-        if (last3.every(t => t.detail === last3[0].detail && t.name === last3[0].name)) return `${last3[0].name} called 3 times with same input`;
-        // Too many total tool calls
-        if (totalToolCalls >= MAX_TOOL_CALLS) return `exceeded ${MAX_TOOL_CALLS} tool calls`;
-        // 5 consecutive errors (any tool)
-        const last5 = toolHistory.slice(-5);
-        if (last5.length >= 5 && last5.every(t => t.isError)) return "5 consecutive tool errors";
-        return false;
-      };
+        const detectLoop = () => {
+          if (toolHistory.length < 3) return false;
+          const last3 = toolHistory.slice(-3);
+          // Same tool + same error 3x in a row = stuck
+          if (last3.every(t => t.isError && t.name === last3[0].name)) return `${last3[0].name} failed 3 times in a row`;
+          // Same tool + same input 3x in a row = stuck
+          if (last3.every(t => t.detail === last3[0].detail && t.name === last3[0].name)) return `${last3[0].name} called 3 times with same input`;
+          // Too many total tool calls
+          if (totalToolCalls >= MAX_TOOL_CALLS) return `exceeded ${MAX_TOOL_CALLS} tool calls`;
+          // 5 consecutive errors (any tool)
+          const last5 = toolHistory.slice(-5);
+          if (last5.length >= 5 && last5.every(t => t.isError)) return "5 consecutive tool errors";
+          return false;
+        };
 
-      for await (const event of stream) {
-        lastEventAt = Date.now();
-        if (event.type === "text") {
-          fullResponse += event.content;
-          currentTextChunk += event.content;
-          sendSSE(res, "text", { content: event.content });
-          broadcastToOthers(convId, "text", { content: event.content });
-        } else if (event.type === "thinking") {
-          sendSSE(res, "thinking", { status: event.status });
-          broadcastToOthers(convId, "thinking", { status: event.status });
-        } else if (event.type === "tool_use") {
-          // Flush text to timeline
-          if (currentTextChunk.trim()) {
-            const last = timeline[timeline.length - 1];
-            if (last?.type === "text") { last.text = currentTextChunk; }
-            else { timeline.push({ type: "text", text: currentTextChunk }); }
-          }
-          currentTextChunk = "";
-          const inp = event.input || {};
-          let detail = "";
-          let label = event.name;
-          const isTodo = event.name === "TodoWrite" || event.name === "todowrite" || event.name === "todo_write";
-          if (event.name === "Bash") detail = inp.command || "";
-          else if (event.name === "Read") { detail = inp.file_path || ""; label = "Read"; }
-          else if (event.name === "Write") { detail = inp.file_path || ""; label = "Write"; }
-          else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
-          else if (isTodo) { label = "Update Todos"; detail = ""; }
-          else detail = inp.command || inp.file_path || inp.url || inp.query || JSON.stringify(inp).slice(0, 80);
-          // Pattern-redact secrets before they enter the timeline / SSE / WS
-          // broadcast. Bash command lines and inline tool inputs are the
-          // common leak vectors (e.g. `curl -H "Authorization: Bearer …"`).
-          // TodoWrite items are user-authored content, not secrets — pass
-          // through unchanged.
-          detail = redactStr(String(detail));
-          const safeInput = isTodo ? event.input : redactObj(event.input);
-          lastToolIdx = timeline.length;
-          const timelineItem = { type: "tool", name: label, detail: detail.slice(0, 200), input: detail.slice(0, 500), output: "", status: "running" };
-          if (isTodo && Array.isArray(inp.todos)) timelineItem.todos = inp.todos;
-          timeline.push(timelineItem);
-          totalToolCalls++;
-          toolHistory.push({ name: event.name, detail: detail.slice(0, 100), isError: false });
-          sendSSE(res, "tool_call", { id: event.id, name: event.name, input: safeInput });
-          broadcastToOthers(convId, "tool_call", { id: event.id, name: event.name, input: safeInput });
-          auditLog?.log({ action: "tool.call", target: event.name, actor: "claude", ip: reqIp, detail: detail.slice(0, 200) });
-        } else if (event.type === "tool_result") {
-          // Redact stdout/stderr from tools before it goes anywhere user-
-          // visible or persistent. Bash runs that print env vars, Read of
-          // .env files, etc. — this is the highest-volume leak vector.
-          // Loop-detection still uses the raw `event.result` string for
-          // its error-keyword scan, since redaction never adds tokens
-          // that match the error patterns.
-          const safeResult = redactStr(event.result || "");
-          if (lastToolIdx >= 0 && timeline[lastToolIdx]) {
-            timeline[lastToolIdx].status = "done";
-            timeline[lastToolIdx].output = safeResult.slice(0, 2000);
-          }
-          // Track errors for loop detection
-          const resultStr = event.result || "";
-          const isErr = resultStr.includes("Error") || resultStr.includes("error") || resultStr.includes("Forbidden") || resultStr.includes("ENOTFOUND") || resultStr.includes("not found") || resultStr.includes("command not found");
-          if (toolHistory.length > 0) toolHistory[toolHistory.length - 1].isError = isErr;
+        for await (const event of stream) {
+          lastEventAt = Date.now();
+          if (event.type === "text") {
+            fullResponse += event.content;
+            currentTextChunk += event.content;
+            sendSSE(res, "text", { content: event.content });
+            broadcastToOthers(convId, "text", { content: event.content });
+          } else if (event.type === "thinking") {
+            sendSSE(res, "thinking", { status: event.status });
+            broadcastToOthers(convId, "thinking", { status: event.status });
+          } else if (event.type === "tool_use") {
+            // Flush text to timeline
+            if (currentTextChunk.trim()) {
+              const last = timeline[timeline.length - 1];
+              if (last?.type === "text") { last.text = currentTextChunk; }
+              else { timeline.push({ type: "text", text: currentTextChunk }); }
+            }
+            currentTextChunk = "";
+            const inp = event.input || {};
+            let detail = "";
+            let label = event.name;
+            const isTodo = event.name === "TodoWrite" || event.name === "todowrite" || event.name === "todo_write";
+            if (event.name === "Bash") detail = inp.command || "";
+            else if (event.name === "Read") { detail = inp.file_path || ""; label = "Read"; }
+            else if (event.name === "Write") { detail = inp.file_path || ""; label = "Write"; }
+            else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
+            else if (isTodo) { label = "Update Todos"; detail = ""; }
+            else detail = inp.command || inp.file_path || inp.url || inp.query || JSON.stringify(inp).slice(0, 80);
+            // Pattern-redact secrets before they enter the timeline / SSE / WS
+            // broadcast. Bash command lines and inline tool inputs are the
+            // common leak vectors (e.g. `curl -H "Authorization: Bearer …"`).
+            // TodoWrite items are user-authored content, not secrets — pass
+            // through unchanged.
+            detail = redactStr(String(detail));
+            const safeInput = isTodo ? event.input : redactObj(event.input);
+            lastToolIdx = timeline.length;
+            if (event.id) toolIdxById.set(event.id, lastToolIdx);
+            // summary: the step's one line in the chat (Bash's own description, a file's name), never the raw command.
+            const timelineItem = { type: "tool", name: label, summary: redactStr(summarizeToolInput(event.name, inp)), detail: detail.slice(0, 200), input: detail.slice(0, 500), output: "", status: "running" };
+            if (isTodo && Array.isArray(inp.todos)) timelineItem.todos = inp.todos;
+            timeline.push(timelineItem);
+            totalToolCalls++;
+            toolHistory.push({ name: event.name, detail: detail.slice(0, 100), isError: false });
+            sendSSE(res, "tool_call", { id: event.id, name: event.name, input: safeInput });
+            broadcastToOthers(convId, "tool_call", { id: event.id, name: event.name, input: safeInput });
+            auditLog?.log({ action: "tool.call", target: event.name, actor: "claude", ip: reqIp, detail: detail.slice(0, 200) });
+          } else if (event.type === "tool_result") {
+            // Redact stdout/stderr from tools before it goes anywhere user-
+            // visible or persistent. Bash runs that print env vars, Read of
+            // .env files, etc. — this is the highest-volume leak vector.
+            // Loop-detection still uses the raw `event.result` string for
+            // its error-keyword scan, since redaction never adds tokens
+            // that match the error patterns.
+            const safeResult = redactStr(event.result || "");
+            // Matched by the tool's id: tools can run side by side, so the
+            // result is not always the last tool's.
+            const idx = toolIdxById.has(event.id) ? toolIdxById.get(event.id) : lastToolIdx;
+            if (idx >= 0 && timeline[idx]) {
+              timeline[idx].status = event.ok === false ? "error" : "done";
+              timeline[idx].output = safeResult.slice(0, 2000);
+            }
+            // Track errors for loop detection
+            const resultStr = event.result || "";
+            const isErr = resultStr.includes("Error") || resultStr.includes("error") || resultStr.includes("Forbidden") || resultStr.includes("ENOTFOUND") || resultStr.includes("not found") || resultStr.includes("command not found");
+            if (toolHistory.length > 0) toolHistory[toolHistory.length - 1].isError = isErr;
 
-          // Check for loops — abort if stuck
-          const loopReason = detectLoop();
-          if (loopReason) {
-            console.warn(`[loop-guard] Aborting: ${loopReason} (${totalToolCalls} total tool calls)`);
-            sendSSE(res, "text", { content: `\n\n**Loop detected — stopped automatically.** (${loopReason})\n\nI was repeating the same failing operation. Let me know what you'd like me to try differently.` });
-            fullResponse += `\n\n**Loop detected — stopped automatically.** (${loopReason})`;
-            controller.abort();
+            // Check for loops — abort if stuck
+            const loopReason = detectLoop();
+            if (loopReason) {
+              console.warn(`[loop-guard] Aborting: ${loopReason} (${totalToolCalls} total tool calls)`);
+              sendSSE(res, "text", { content: `\n\n**Loop detected — stopped automatically.** (${loopReason})\n\nI was repeating the same failing operation. Let me know what you'd like me to try differently.` });
+              fullResponse += `\n\n**Loop detected — stopped automatically.** (${loopReason})`;
+              controller.abort();
+              break;
+            }
+
+            const toolName = timeline[idx]?.name || event.name || "tool";
+            sendSSE(res, "tool_result", { id: event.id, name: toolName, result: safeResult });
+            broadcastToOthers(convId, "tool_result", { id: event.id, name: toolName, result: safeResult });
+          } else if (event.type === "usage") {
+            usage = { ...usage, ...event.usage };
+          } else if (event.type === "error") {
+            sendSSE(res, "error", { message: event.message });
+          } else if (event.type === "done") {
             break;
           }
+        }
+        // Flush remaining text
+        if (currentTextChunk.trim()) {
+          const last = timeline[timeline.length - 1];
+          if (last?.type === "text") { last.text = currentTextChunk; }
+          else { timeline.push({ type: "text", text: currentTextChunk }); }
+        }
 
-          sendSSE(res, "tool_result", { id: event.id, name: event.name, result: safeResult });
-          broadcastToOthers(convId, "tool_result", { id: event.id, name: event.name, result: safeResult });
-        } else if (event.type === "usage") {
-          usage = { ...usage, ...event.usage };
-        } else if (event.type === "error") {
-          sendSSE(res, "error", { message: event.message });
-        } else if (event.type === "done") {
-          break;
+        if (fullResponse || timeline.some(t => t.type === "tool")) {
+          fullResponse = fullResponse ? extractAndSaveMemories(fullResponse, req.app.get("db"), convId) : "";
+          // Save with timeline metadata if tools were used
+          const hasTools = timeline.some(t => t.type === "tool");
+          const content = hasTools
+            ? JSON.stringify({ __timeline: true, items: timeline, text: fullResponse })
+            : fullResponse;
+          convStore.addMessage(convId, {
+            role: "assistant",
+            content,
+            provider: providerId,
+            model,
+            tokensIn: (usage.input_tokens || 0)
+            + (usage.cache_read_input_tokens || 0)
+            + (usage.cache_creation_input_tokens || 0) || null,
+            tokensOut: usage.output_tokens,
+          });
         }
-      }
-      // Flush remaining text
-      if (currentTextChunk.trim()) {
-        const last = timeline[timeline.length - 1];
-        if (last?.type === "text") { last.text = currentTextChunk; }
-        else { timeline.push({ type: "text", text: currentTextChunk }); }
-      }
-
-      if (fullResponse || timeline.some(t => t.type === "tool")) {
-        fullResponse = fullResponse ? extractAndSaveMemories(fullResponse, req.app.get("db"), convId) : "";
-        // Save with timeline metadata if tools were used
-        const hasTools = timeline.some(t => t.type === "tool");
-        const content = hasTools
-          ? JSON.stringify({ __timeline: true, items: timeline, text: fullResponse })
-          : fullResponse;
-        convStore.addMessage(convId, {
-          role: "assistant",
-          content,
-          provider: providerId,
-          model,
-          tokensIn: (usage.input_tokens || 0)
-          + (usage.cache_read_input_tokens || 0)
-          + (usage.cache_creation_input_tokens || 0) || null,
-          tokensOut: usage.output_tokens,
-        });
-      }
-      if (convStore.messageCount(convId) <= 2) {
-        convStore.updateTitle(convId, message.slice(0, LIMITS.MAX_CONVERSATION_TITLE));
-      }
-      const contextTokens = contextTokensForModel(model);
-      const promptTokens = promptTokensFromUsage(usage);
-      const pct = contextTokens ? (promptTokens / contextTokens) * 100 : 0;
-      let checkpointed = false;
-      if (pct >= CONTEXT_AUTOSAVE_PCT) {
-        try {
-          const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, `auto: ${Math.round(pct)}% threshold`);
-          checkpointed = !!path;
-        } catch (e) {
-          console.warn("[chat] threshold snapshot failed:", e?.message);
+        if (convStore.messageCount(convId) <= 2) {
+          convStore.updateTitle(convId, message.slice(0, LIMITS.MAX_CONVERSATION_TITLE));
         }
-      }
-      sendSSE(res, "done", { conversationId: convId, usage, model, contextTokens, checkpointed });
-      broadcastToOthers(convId, "done", { conversationId: convId });
-    } catch (err) {
-      const isOverflow = /prompt is too long|context_length_exceeded|input length|too many tokens/i.test(err.message || "");
-      if (isOverflow) {
-        try {
-          const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, "auto: overflow error");
-          sendSSE(res, "context_overflow", { checkpointPath: path, message: err.message });
-        } catch (e) {
-          console.warn("[chat] overflow snapshot failed:", e?.message);
+        const contextTokens = contextTokensForModel(model);
+        const promptTokens = promptTokensFromUsage(usage);
+        const pct = contextTokens ? (promptTokens / contextTokens) * 100 : 0;
+        let checkpointed = false;
+        if (pct >= CONTEXT_AUTOSAVE_PCT) {
+          try {
+            const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, `auto: ${Math.round(pct)}% threshold`);
+            checkpointed = !!path;
+          } catch (e) {
+            console.warn("[chat] threshold snapshot failed:", e?.message);
+          }
         }
+        sendSSE(res, "done", { conversationId: convId, usage, model, contextTokens, checkpointed });
+        broadcastToOthers(convId, "done", { conversationId: convId });
+      } catch (err) {
+        const isOverflow = /prompt is too long|context_length_exceeded|input length|too many tokens/i.test(err.message || "");
+        if (isOverflow) {
+          try {
+            const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, "auto: overflow error");
+            sendSSE(res, "context_overflow", { checkpointPath: path, message: err.message });
+          } catch (e) {
+            console.warn("[chat] overflow snapshot failed:", e?.message);
+          }
+        }
+        if (!controller.signal.aborted) {
+          sendSSE(res, "error", { message: err.message });
+        }
+      } finally {
+        clearInterval(hb);
+        if (activeRequests.get(convId) === controller) {
+          activeRequests.delete(convId);
+        }
+        if (!res.writableEnded) res.end();
       }
-      if (!controller.signal.aborted) {
-        sendSSE(res, "error", { message: err.message });
-      }
-    } finally {
-      clearInterval(hb);
-      if (activeRequests.get(convId) === controller) {
-        activeRequests.delete(convId);
-      }
-      if (!res.writableEnded) res.end();
-    }
+    });
     return;
   }
 

@@ -226,4 +226,26 @@ const MIGRATIONS = [
       END;
     `,
   },
+  {
+    // Live timeline: every message, turn start/end and tool step for every
+    // conversation and channel, with a sequence number that is NEVER reused
+    // (AUTOINCREMENT), so a device can always resume from "the last seq I saw",
+    // across reconnects and restarts. Feeds the realtime dashboard
+    // (lib/live-bus.js). Pruned to 14 days.
+    name: "009_conversation_events",
+    sql: `
+      CREATE TABLE IF NOT EXISTS conversation_events (
+        seq             INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT NOT NULL,
+        turn_id         TEXT,
+        type            TEXT NOT NULL,
+        payload         TEXT NOT NULL,
+        created_at      INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_conv_events_conv ON conversation_events (conversation_id, seq);
+      CREATE INDEX IF NOT EXISTS idx_conv_events_time ON conversation_events (created_at);
+      -- live.subscribe rebuilds the turn in progress by turn_id.
+      CREATE INDEX IF NOT EXISTS idx_conv_events_turn ON conversation_events (turn_id);
+    `,
+  },
 ];

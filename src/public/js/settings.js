@@ -132,7 +132,7 @@ const Settings = {
         unsupported: "Not supported in this browser.",
         denied: "Notifications blocked in browser settings.",
         default: "Not enabled yet.",
-        subscribed: "✓ Enabled on this device.",
+        subscribed: "Enabled on this device.",
         "granted-unsubscribed": "Permission granted — click Enable to subscribe.",
       }[status] || status;
       if (this.elements.pushStatus) this.elements.pushStatus.textContent = label;
@@ -543,7 +543,7 @@ const Settings = {
           <th style="padding:6px 8px;text-align:right">Transcript</th><th style="padding:6px 8px;text-align:right">Context</th>
           <th style="padding:6px 8px;text-align:right">Fill</th>
         </tr></thead><tbody>${body}</tbody></table>
-        <div class="hint mt-2">Transcript cap: ${data.sessionCapMB} MB · 🟢 &lt;80% · 🟡 warning · 🔴 &gt;95% · “est.” means no token telemetry recorded yet for that conversation.</div>`;
+        <div class="hint mt-2">Transcript cap: ${data.sessionCapMB} MB · under 80% is fine, 80 to 95% is a warning, past 95% it starts fresh · “est.” means no token telemetry recorded yet for that conversation.</div>`;
     } catch (err) {
       el.textContent = "Could not load token health.";
     }
@@ -568,8 +568,13 @@ const Settings = {
     inputArea.style.display = "none";
     this.elements.settingsPage.classList.add("open");
 
-    // Update topbar
+    // Update topbar (and the tab's title)
     document.getElementById("topbarTitle").textContent = "Settings";
+    const where = document.getElementById("topbarWhere");
+    if (where) where.textContent = "";
+    const chatMenu = document.getElementById("chatMenuBtn");
+    if (chatMenu) chatMenu.disabled = true;   // (a chat's menu has nothing to do with Settings)
+    if (typeof Chat !== "undefined") Chat._paintTitle?.();
 
     // Highlight settings button
     this.elements.openBtn.classList.add("settings-active");
@@ -586,28 +591,21 @@ const Settings = {
     const chatArea = document.getElementById("chatArea");
     const inputArea = document.getElementById("inputArea");
 
-    if (typeof Chat !== "undefined" && Chat.currentConversationId) {
-      // Has active conversation — show chat
+    if (typeof Chat !== "undefined" && Chat.currentConversationId && chatArea.querySelector(".message")) {
       welcome.style.display = "none";
       chatArea.style.display = "flex";
       inputArea.style.display = "block";
     } else {
-      // No conversation — show welcome
       welcome.style.display = "";
       chatArea.style.display = "none";
       inputArea.style.display = "block";
     }
 
-    // Restore topbar title
-    if (typeof Chat !== "undefined" && Chat.currentChannelKey) {
-      const ch = Chat.channels.find((c) => c.key === Chat.currentChannelKey);
-      if (ch) {
-        const icon = { web: "\u{1F310}", discord: "\u{1F4AC}", telegram: "\u{2708}\uFE0F", slack: "\u{1F4BC}" };
-        document.getElementById("topbarTitle").textContent = `${icon[ch.platform] || icon.web} ${ch.title}`;
-      }
-    } else {
-      document.getElementById("topbarTitle").textContent = Chat?.botName || "Tarsee";
-    }
+    // Restore the topbar's name and the tab's title (plain names: no emoji)
+    const chatMenu = document.getElementById("chatMenuBtn");
+    if (chatMenu) chatMenu.disabled = false;
+    if (typeof Chat !== "undefined" && Chat._paintHeader) Chat._paintHeader();
+    else document.getElementById("topbarTitle").textContent = "Tarsee";
 
     // Un-highlight settings button
     this.elements.openBtn.classList.remove("settings-active");

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { publishMessage } from "../lib/live-bus.js";
 
 /**
  * Conversation and message CRUD operations.
@@ -147,8 +148,7 @@ export class ConversationStore {
    * return a short human-readable "last time we..." summary. Used when a
    * client resumes an old conversation on a new device.
    *
-   * Lazy-synthesizes via summarizeConversation() from auto-summarize.js,
-   * which is a cheap extractive summary (no AI call). Returns null when:
+   * Built from the messages alone (no AI call, nothing written). Returns null when:
    *   - conversation doesn't exist
    *   - last activity < staleMinutes ago (no recap needed)
    *   - conversation has < 3 messages (nothing to summarize)
@@ -169,16 +169,12 @@ export class ConversationStore {
     const msgCount = this.messageCount(conversationId);
     if (msgCount < 3) return null;
 
-    // Pull a fresh summary — summarizeConversation is defensive (returns
-    // {skipped: true} if anything's wrong) so we just check ok.
     try {
-      const { summarizeConversation } = await import("../lib/auto-summarize.js");
-      const result = summarizeConversation(this.db, conversationId);
-      if (!result?.ok) return null;
-
-      // summarizeConversation writes a section to memory/summaries.md.
-      // For the wire format we return just the synthesized text: topics +
-      // last assistant response, which is what the user wants to see.
+      // READ-ONLY. This used to call summarizeConversation(), which APPENDS a
+      // section to memory/summaries.md, and the dashboard calls this GET every
+      // time a chat is opened or a device wakes: just looking at an idle chat
+      // kept writing summaries into the agent's memory. The recap below is
+      // built from the messages alone; the write was never used for it.
       const messages = this.getRecentMessages(conversationId, 15);
       const stripTimeline = (content) => {
         let c = content || "";
@@ -218,10 +214,14 @@ export class ConversationStore {
   /**
    * Add a message to a conversation.
    */
-  addMessage(conversationId, { role, content, provider, model, tokensIn, tokensOut }) {
+  addMessage(conversationId, { role, content, provider, model, tokensIn, tokensOut, clientMsgId }) {
     const id = crypto.randomUUID();
     this._addMessage.run(id, conversationId, role, content, provider || null, model || null, tokensIn || null, tokensOut || null);
     this._touchConversation.run(conversationId);
+    // Every channel persists through here, so this one line puts every user
+    // and assistant message on the live dashboard timeline. clientMsgId is the
+    // sending tab's own id for the message, so it can match the echo.
+    publishMessage(conversationId, { id, role, content }, clientMsgId ? { clientMsgId } : {});
     return { id, conversationId, role, content };
   }
 

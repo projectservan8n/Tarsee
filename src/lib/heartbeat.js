@@ -110,6 +110,8 @@ export async function runHeartbeat(reason = "scheduled") {
     // expensive idle loop in the product. `heartbeat.model` raises it.
     const { text: fullResponse, error } = await runBackgroundTurn({
       label: "heartbeat",
+      liveId: "heartbeat",
+      liveSource: "heartbeat",
       model: resolveBackgroundModel(_settingsStore.get("heartbeat.model")),
       messages,
       systemPrompt,

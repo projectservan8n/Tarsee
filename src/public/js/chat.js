@@ -1,21 +1,30 @@
 /**
  * Chat UI module.
- * Channel-based: each channel (web, discord, telegram, slack) has one persistent session.
- * No multi-conversation sidebar — the sidebar shows channels.
+ *
+ * Every channel (web, Discord, Telegram, WhatsApp, email) keeps one persistent
+ * conversation, and the web can have as many as you start ("New chat"). Each
+ * one has its own address, /chat/<conversationId>, as on claude.ai: switching
+ * chats pushes it, Back and Forward go between them, and a reload or a shared
+ * link opens that chat.
+ *
+ * The sidebar is plain rows grouped by where each chat lives, with no emoji or
+ * icon in front; the rules are in js/chat-core.js. A reply's tool steps never
+ * sit in the way of what was said: one quiet line in the answer's place while
+ * the agent works, folded into "Used 12 tools" above the answer once it has
+ * replied, each step one line that opens to show its input and output
+ * (Chat.createSteps, used by js/live.js too).
  */
-const PLATFORM_ICONS = {
-  web: "\u{1F310}",       // 🌐
-  discord: "\u{1F4AC}",   // 💬
-  telegram: "\u{2708}\uFE0F", // ✈️
-  slack: "\u{1F4BC}",     // 💼
-  whatsapp: "\u{1F4F1}",  // 📱
-};
+const Core = globalThis.ChatCore;
 
 const Chat = {
   currentChannelKey: null,
   currentConversationId: null,
   isStreaming: false,
   channels: [],
+  // Sidebar state kept on this device: collapsed groups, groups showing every row.
+  _collapsed: new Set(),
+  _expanded: new Set(),
+  _navQuery: "",
   botName: "Tarsee",
   lastMessageRole: null,
   lastMessageTime: 0,
@@ -38,6 +47,10 @@ const Chat = {
   paletteCommands: [],
 
   init() {
+    // Live view first: it takes over (and migrates) the old in-tab queue.
+    if (typeof Live !== "undefined") Live.init();
+    // Bring back any message that was queued but not yet sent before a reload.
+    this._restoreQueue();
     this.elements = {
       chatArea: document.getElementById("chatArea"),
       inputArea: document.getElementById("inputArea"),
@@ -122,6 +135,9 @@ const Chat = {
       if (e.key === "Escape" && this.isStreaming) {
         e.preventDefault();
         this.stopGeneration();
+      } else if (e.key === "Escape" && this.liveOn() && Live.canStop() && document.getElementById("fileManagerPanel")?.style.display !== "flex") {
+        e.preventDefault();
+        Live.stop();
       }
     });
 
@@ -196,6 +212,14 @@ const Chat = {
         e.preventDefault();
         this.addPendingFiles(files);
       }
+    });
+
+    // Attachment previews (no inline onclick: the CSP forbids inline script)
+    document.addEventListener("click", (e) => {
+      const img = e.target.closest("img.clickable-image[data-lightbox]");
+      if (img) { this.openLightbox(img.src); return; }
+      const chip = e.target.closest("[data-preview-idx]");
+      if (chip) this.previewStoredFile(Number(chip.dataset.previewIdx));
     });
 
     // Copy button delegation (works for both message copy and code block copy)
@@ -283,37 +307,16 @@ const Chat = {
       }
     });
 
-    // Welcome suggestion cards — clickable + keyboard activated (tabindex=0 set in markup)
-    const activateSuggestion = (el) => {
-      this.elements.messageInput.value = el.dataset.msg;
-      this.elements.sendBtn.disabled = false;
-      this.elements.messageInput.focus();
-    };
-    document.querySelectorAll(".welcome-suggestion").forEach((el) => {
-      el.addEventListener("click", () => activateSuggestion(el));
-      el.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          activateSuggestion(el);
-        }
-      });
-    });
-
-    // Session bar
-    this.elements.sessionBar = document.getElementById("sessionBar");
+    // The model, the effort and the context meter, small in the composer.
     this.elements.sessionModel = document.getElementById("sessionModel");
     this.elements.sessionStatus = document.getElementById("sessionStatus");
     this.elements.contextBarFill = document.getElementById("contextBarFill");
     this.elements.contextLabel = document.getElementById("contextLabel");
-    document.getElementById("newSessionBtn")?.addEventListener("click", async () => {
-      if (this.currentConversationId) {
-        try {
-          await API.json(`/api/chat/conversations/${this.currentConversationId}/reset-session`, { method: "POST" });
-          this.elements.sessionStatus.textContent = "New Session";
-          App.showToast("Session reset", "success");
-        } catch { /* ignore */ }
-      }
-    });
+    this.elements.topbarWhere = document.getElementById("topbarWhere");
+    this.elements.chatMenuBtn = document.getElementById("chatMenuBtn");
+    this._initNav();
+    this._initChatMenu();
+    this._initRouter();
 
     this.loadChannels();
     this.loadCommands();
@@ -342,17 +345,24 @@ const Chat = {
       if (now - _lastWakeAt < 1000) return;
       _lastWakeAt = now;
 
-      if (this.isStreaming) {
-        // Hand off ownership to the WS sync path. The SSE reader may still
-        // be alive (Chrome usually preserves it through brief tab
-        // backgrounding) — if it is, abort drops the doubled-up rendering.
-        // If it isn't, the gateway has every event we missed.
+      // Live view: catch up from the last sequence seen. Nothing is redrawn
+      // or aborted, so nothing on screen can vanish.
+      if (this.liveOn()) { Live.onWake(); return; }
+
+      // Only take over a stream that has actually gone quiet. Aborting a
+      // healthy one on every alt-tab killed the live reply and, with it, the
+      // drain of any queued message, which is how sent messages vanished.
+      // While the SSE stays live, isStreaming keeps the sync path deduped.
+      // The server heartbeats every 15s, so 25s of silence means it's dead
+      // and the gateway (WS sync) has every event we missed.
+      const streamSilentMs = Date.now() - (API._lastStreamEventAt || 0);
+      if (this.isStreaming && streamSilentMs > 25_000) {
         try { API.abortStream?.(); } catch { /* ignore */ }
         this.isStreaming = false;
         this._streamingConvId = null;
         this.elements.sendBtn?.classList.remove("stop-mode", "is-streaming");
         if (this.elements.sendBtn) this.elements.sendBtn.title = "Send";
-        if (window.App?.showToast) App.showToast("Reconnected — recovering last turn", "info");
+        if (window.App?.showToast) App.showToast("Reconnected: recovering last turn", "info");
       }
 
       // Force a sync.resume even if the WS stayed alive through the wake.
@@ -381,54 +391,60 @@ const Chat = {
   // sync.resume path covers incremental sync separately.
   async _refetchActiveConversation() {
     if (!this.currentConversationId || this.isStreaming) return;
+    const convAtStart = this.currentConversationId;
     try {
       const data = await API.getConversation(this.currentConversationId);
+      // The user may have sent or switched while we waited: don't paint a
+      // stale snapshot over a newer UI.
+      if (this.isStreaming || this.currentConversationId !== convAtStart) return;
       const msgs = data.messages || [];
       const total = data.totalMessages || msgs.length;
       const older = total - msgs.length;
       this.renderMessages(msgs, older > 0 ? older : 0, this.currentConversationId);
+      this._drainQueueIfIdle();
     } catch { /* ignore — silent retry on next wake */ }
   },
 
+  /**
+   * The model and the context meter in the composer. The model's name is asked
+   * for once (the server's default model) and replaced by the one a turn says
+   * it ran on; the meter shows only once a turn in this chat has said how full
+   * the context is (a number from another chat would be wrong here).
+   */
   updateSessionBar() {
-    const bar = this.elements.sessionBar;
-    if (!bar) return;
-    bar.style.display = "flex";
-
-    // Model name — pair the active model id with its registry tier so the
-    // session bar shows "opus" / "sonnet" / "haiku" for any known model.
-    Promise.all([
-      API.json("/api/settings").catch(() => ({ settings: [] })),
-      API.json("/api/chat/models").catch(() => ({ models: [] })),
-    ]).then(([settingsData, modelsData]) => {
-      const activeId = (settingsData.settings || []).find((s) => s.key === "ai.claude-code.model")?.value;
-      const models = modelsData.models || [];
-      const meta = models.find((m) => m.id === activeId);
-      const tier = meta?.tier || (activeId ? activeId.split("-")[1] : "opus");
-      this.elements.sessionModel.textContent = tier;
-      // Colour the badge to match the tier. Without this the session bar kept
-      // whatever class the last auto-routed turn left behind.
-      this.elements.sessionModel.className = "session-model model-" + tier;
-    });
-
-    // If we have live token data from the last turn, that's authoritative —
-    // it's the actual prompt size the model just saw. Otherwise show the
-    // message count and leave the bar where the live data left it.
+    this._loadModelName();
+    const meter = document.getElementById("contextMeter");
     if (this._lastUsage && this._lastContextTokens) {
       this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
-    } else if (this.currentConversationId) {
-      // No live usage yet (just switched conversations) — show message
-      // count as status, leave the bar at its stored width.
-      API.json(`/api/chat/conversations/${this.currentConversationId}`).then(data => {
-        const msgs = data.messages || [];
-        this.elements.sessionStatus.textContent = msgs.length > 0 ? `${msgs.length} messages` : "New Session";
-      }).catch(() => {});
+      if (meter) meter.hidden = false;
     } else {
-      this.elements.sessionStatus.textContent = "New Session";
-      this.elements.contextBarFill.style.width = "0%";
-      this.elements.contextBarFill.className = "context-bar-fill";
-      this.elements.contextLabel.textContent = "0%";
+      if (meter) meter.hidden = true;
+      if (this.elements.contextBarFill) { this.elements.contextBarFill.style.width = "0%"; this.elements.contextBarFill.className = "context-bar-fill"; }
+      if (this.elements.contextLabel) this.elements.contextLabel.textContent = "0%";
     }
+  },
+
+  /** "Claude Sonnet 5.5" / "sonnet" / "claude-opus-5-5" as the composer shows it: "Sonnet 5.5". */
+  modelLabel(idOrName, meta = null) {
+    const name = String(meta?.currentlyName || meta?.displayName || idOrName || "").replace(/^Claude\s+/i, "").replace(/\s*·\s*latest$/i, "").trim();
+    const m = /^claude-([a-z]+)-(\d+)-(\d+)/i.exec(name);
+    if (m) return `${m[1].charAt(0).toUpperCase()}${m[1].slice(1)} ${m[2]}.${m[3]}`;
+    return name ? name.charAt(0).toUpperCase() + name.slice(1) : "Claude";
+  },
+
+  async _loadModelName() {
+    if (this._modelNameAsked) return;
+    this._modelNameAsked = true;
+    try {
+      const [settingsData, modelsData] = await Promise.all([
+        API.json("/api/settings").catch(() => ({ settings: [] })),
+        API.json("/api/chat/models").catch(() => ({ models: [] })),
+      ]);
+      this._models = modelsData.models || [];
+      const activeId = (settingsData.settings || []).find((s) => s.key === "ai.claude-code.model")?.value;
+      const meta = this._models.find((m) => m.id === activeId || m.currently === activeId) || null;
+      if (this.elements.sessionModel && !this._turnModel) this.elements.sessionModel.textContent = this.modelLabel(activeId || "sonnet", meta);
+    } catch { this._modelNameAsked = false; }
   },
 
   // Real prompt size = fresh input + cache hits + cache writes. All three
@@ -460,7 +476,7 @@ const Chat = {
     else if (pct >= 75) cls += " warning";
     this.elements.contextBarFill.className = cls;
     this.elements.contextLabel.textContent = `${pct}%`;
-    const tip = `${this.formatTokenCount(promptTokens)} / ${this.formatTokenCount(contextTokens)} tokens — auto-checkpoints at 95%`;
+    const tip = `${this.formatTokenCount(promptTokens)} / ${this.formatTokenCount(contextTokens)} tokens: auto-checkpoints at 95%`;
     this.elements.contextBarFill.parentElement?.setAttribute("title", tip);
     this.elements.contextLabel.title = tip;
     if (pct >= 90 && !this._overflowBannerDismissed) {
@@ -489,7 +505,7 @@ const Chat = {
       inputArea.insertBefore(banner, inputArea.firstChild);
     }
     banner.querySelector(".context-warning-text").textContent =
-      `Context is ${pct}% full. Run /checkpoint to save state, then /clear — auto-snapshots at 95%.`;
+      `Context is ${pct}% full. Run /checkpoint to save state, then /clear. Auto-snapshots at 95%.`;
     banner.style.display = "flex";
   },
 
@@ -507,7 +523,7 @@ const Chat = {
       card.id = "contextOverflowCard";
       card.className = "context-overflow-card";
       card.innerHTML = `
-        <div class="context-overflow-title">Context overflowed — snapshot saved</div>
+        <div class="context-overflow-title">Context overflowed: snapshot saved</div>
         <div class="context-overflow-body">Your last message pushed the model past its window. Tarsee saved a recovery checkpoint to <code class="context-overflow-path"></code>. Start a fresh session and the next instance will read this checkpoint as a handoff.</div>
         <div class="context-overflow-actions">
           <button type="button" class="context-overflow-fresh">Start fresh session</button>
@@ -516,8 +532,7 @@ const Chat = {
       `;
       card.querySelector(".context-overflow-fresh").addEventListener("click", () => {
         card.remove();
-        // Reuse the existing reset-session endpoint via the New button.
-        document.getElementById("newSessionBtn")?.click();
+        this.resetSession();
       });
       card.querySelector(".context-overflow-dismiss").addEventListener("click", () => card.remove());
       inputArea.insertBefore(card, inputArea.firstChild);
@@ -546,60 +561,39 @@ const Chat = {
       this.setBotName("Tarsee");
     }
 
-    // Also load IDENTITY.md to get emoji for welcome screen
+    // IDENTITY.md may name it too. (Its emoji is not shown: the icon is the picture, set in Settings.)
     try {
       const identity = await API.json("/api/settings/workspace-file?name=IDENTITY.md");
       if (identity.content) this.applyIdentity(identity.content);
     } catch {
-      // ignore — use initials
+      // ignore: the name above stands
     }
   },
 
   applyIdentity(content) {
-    // Parse IDENTITY.md for emoji and name
     // Format: - **Label:** value
-    let emoji = null;
     let name = null;
-    for (const line of content.split("\n")) {
+    for (const line of String(content).split("\n")) {
       const match = line.match(/^-\s*\*\*(.+?)\*\*:?\s*(.+)/);
       if (!match) continue;
-      const label = match[1].toLowerCase().trim();
-      const value = match[2].trim();
-      if (label === "emoji" && value) emoji = value;
-      if (label === "name" && value) name = value;
+      if (match[1].toLowerCase().trim() === "name" && match[2].trim()) name = match[2].trim();
     }
-
-    // Update welcome logo with emoji if available
-    const welcomeLogo = document.getElementById("welcomeLogo");
-    if (welcomeLogo && emoji) {
-      welcomeLogo.textContent = emoji;
-      welcomeLogo.classList.add("emoji");
-    }
-
-    // If identity has a name, update bot name
-    if (name && name !== this.botName) {
-      this.setBotName(name);
-    }
+    if (name && name !== this.botName) this.setBotName(name);
   },
 
   setBotName(name) {
     this.botName = name || "Tarsee";
-    const initials = this.botName.slice(0, 2).toUpperCase();
-
-    // Update topbar title (only if showing default, not in settings)
     if (!this.currentChannelKey && !(typeof Settings !== "undefined" && Settings.isOpen)) {
       this.elements.topbarTitle.textContent = this.botName;
     }
-
-    // Update welcome screen
-    const welcomeTitle = document.getElementById("welcomeTitle");
-    if (welcomeTitle) welcomeTitle.textContent = `Welcome to ${this.botName}`;
-
-    // Update sidebar header
-    const sidebarH1 = document.querySelector(".sidebar-header h1");
-    if (sidebarH1) sidebarH1.textContent = this.botName;
-
-    // Sidebar logo and welcome logo use the tarsier image — don't overwrite with initials
+    const brand = document.querySelector(".sidebar-header .brand-name");
+    if (brand) brand.textContent = this.botName;
+    const input = this.elements.messageInput;
+    if (input) {
+      const ph = `Message ${this.botName}`;
+      if (input.dataset.idlePlaceholder) input.dataset.idlePlaceholder = ph; else input.placeholder = ph;
+    }
+    this._paintTitle();
   },
 
   // --- Command Palette ---
@@ -695,154 +689,404 @@ const Chat = {
     items[this.paletteIndex]?.scrollIntoView({ block: "nearest" });
   },
 
-  // --- Channel Management ---
+  // --- Chats: the sidebar, the addresses, opening one ---
   async loadChannels() {
     try {
       const data = await API.listChannels();
       this.channels = data.channels || [];
-      this.renderChannelList();
-
-      // Auto-open web:default channel on first load
-      if (!this.currentChannelKey) {
-        const webChannel = this.channels.find((c) => c.key === "web:default");
-        if (webChannel) {
-          this.openChannel(webChannel.key, webChannel.conversationId);
-        } else {
-          // Show welcome + input — first message will create web:default
-          this.elements.inputArea.style.display = "block";
-        }
-      }
     } catch (err) {
       console.error("Failed to load channels:", err);
-      // Still show input so user can chat
-      this.elements.inputArea.style.display = "block";
+      if (!this._routed) this.elements.inputArea.style.display = "block";
+    }
+    this.renderChannelList();
+    // The first time: open what the address asks for (a chat's own, a new one, or the one this device had open).
+    if (!this._routed) {
+      this._routed = true;
+      this.route(location.pathname, { replace: true });
+    } else if (this.currentConversationId) {
+      this._paintHeader();
     }
   },
 
+  /** The sidebar's own controls: New chat, the search box, the groups, the rows (delegated: the list is redrawn often). */
+  _initNav() {
+    try {
+      this._collapsed = new Set(JSON.parse(localStorage.getItem("tarsee_nav_collapsed") || "[]"));
+      this._expanded = new Set(JSON.parse(localStorage.getItem("tarsee_nav_expanded") || "[]"));
+    } catch { /* storage blocked: all open */ }
+    const plainClick = (e) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
+    for (const id of ["newChatBtn", "brandLink"]) {
+      document.getElementById(id)?.addEventListener("click", (e) => {
+        if (!plainClick(e)) return;   // (a new tab opens a new chat there)
+        e.preventDefault();
+        this.newChat();
+      });
+    }
+    const list = this.elements.channelList;
+    list.addEventListener("click", (e) => {
+      const row = e.target.closest(".nav-row");
+      if (row) {
+        if (!plainClick(e)) return;
+        e.preventDefault();
+        const key = row.dataset.key;
+        const id = row.dataset.convId || null;
+        if (key?.startsWith("live:") && typeof Live !== "undefined") { Live.openBackground(id); return; }
+        this.openChannel(key, id);
+        return;
+      }
+      const head = e.target.closest(".nav-group-head");
+      if (head) {
+        const g = head.dataset.group;
+        if (this._collapsed.has(g)) this._collapsed.delete(g); else this._collapsed.add(g);
+        this._saveNav();
+        this.renderChannelList();
+        list.querySelector(`.nav-group-head[data-group="${CSS.escape(g)}"]`)?.focus();
+        return;
+      }
+      const more = e.target.closest(".nav-more");
+      if (more) {
+        const g = more.dataset.group;
+        if (this._expanded.has(g)) this._expanded.delete(g); else this._expanded.add(g);
+        this._saveNav();
+        this.renderChannelList();
+      }
+    });
+    document.getElementById("sidebarCloseBtn")?.addEventListener("click", () => this._closeDrawer());
+  },
+
+  _saveNav() {
+    try {
+      localStorage.setItem("tarsee_nav_collapsed", JSON.stringify([...this._collapsed]));
+      localStorage.setItem("tarsee_nav_expanded", JSON.stringify([...this._expanded]));
+    } catch { /* memory only */ }
+  },
+
+  _closeDrawer() {
+    document.getElementById("sidebar")?.classList.remove("open");
+    document.getElementById("sidebarOverlay")?.classList.remove("active");
+    document.getElementById("menuBtn")?.setAttribute("aria-expanded", "false");
+  },
+
+  /** What the agent is doing right now, from the live feed: the chats it works in, and the background jobs at work. */
+  _activityNow() {
+    const working = new Set();
+    const background = [];
+    if (this.liveOn()) {
+      const chats = new Set((this.channels || []).map((c) => c.conversationId));
+      for (const t of Live.activity.values()) {
+        working.add(t.conversationId);
+        if (!chats.has(t.conversationId)) background.push({ conversationId: t.conversationId, label: Live.labelFor(t.conversationId), startedAt: t.startedAt });
+      }
+    }
+    return { working, background, unread: this.liveOn() ? Live.unread : new Set() };
+  },
+
+  /** The sidebar: the chats grouped by where they live (js/chat-core.js groupChats), drawn again only when it changed. */
   renderChannelList() {
     const el = this.elements.channelList;
     if (!el) return;
-    el.innerHTML = "";
-    // Scroll fade hint — purely decorative, ignored by AT.
-    const fade = document.createElement("div");
-    fade.className = "channel-list-scroll-fade";
-    fade.setAttribute("aria-hidden", "true");
-
-    // Always ensure web:default is visible
-    const hasWeb = this.channels.some((c) => c.key === "web:default");
-    const allChannels = hasWeb
-      ? this.channels
-      : [{ key: "web:default", platform: "web", title: "Main Session", conversationId: null, updatedAt: null }, ...this.channels];
-
-    // Group by platform
-    const groups = {};
-    for (const ch of allChannels) {
-      if (!groups[ch.platform]) groups[ch.platform] = [];
-      groups[ch.platform].push(ch);
-    }
-
-    // Platform labels
-    const platformLabels = { web: "Web", telegram: "Telegram", discord: "Discord", whatsapp: "WhatsApp" };
-    const platformOrder = ["web", "telegram", "discord", "whatsapp"];
-
-    for (const platform of platformOrder) {
-      const items = groups[platform];
-      if (!items || items.length === 0) continue;
-
-      // Section label
-      const label = document.createElement("div");
-      label.className = "channel-section-label";
-      label.textContent = platformLabels[platform] || platform;
-      el.appendChild(label);
-
-      for (const ch of items) {
-        const item = document.createElement("div");
-        const isActive = ch.key === this.currentChannelKey;
-        item.className = "channel-item" + (isActive ? " active" : "");
-
-        const icon = PLATFORM_ICONS[ch.platform] || PLATFORM_ICONS.web;
-        const timeAgo = ch.updatedAt ? this.timeAgo(ch.updatedAt) : "";
-
-        // Clean display name — use platform name for non-web channels
-        let displayName = ch.title;
-        if (ch.key === "web:default") displayName = "Main Session";
-        else if (ch.platform === "telegram" && ch.title.startsWith("Chat with")) displayName = ch.title.replace("Chat with ", "");
-        else if (ch.platform === "whatsapp" && ch.title.startsWith("WhatsApp · ")) displayName = ch.title.replace("WhatsApp · ", "");
-        else if (ch.platform !== "web" && ch.title.length > 25) displayName = ch.title.slice(0, 25) + "...";
-
-        item.innerHTML = `
-          <span class="channel-icon">${icon}</span>
-          <span class="channel-name">${escapeHtml(displayName)}</span>
-          <span class="channel-time">${timeAgo}</span>
-          <button class="channel-delete" title="Delete session">&times;</button>
-        `;
-
-        item.querySelector(".channel-name").addEventListener("click", () => this.openChannel(ch.key, ch.conversationId));
-        item.querySelector(".channel-icon").addEventListener("click", () => this.openChannel(ch.key, ch.conversationId));
-        item.querySelector(".channel-delete").addEventListener("click", (e) => {
-          e.stopPropagation();
-          this.showDeleteModal(displayName, ch.conversationId, ch.key);
-        });
-        el.appendChild(item);
+    const { working, background, unread } = this._activityNow();
+    const bgOpen = String(this.currentChannelKey || "").startsWith("live:") ? this.currentChannelKey.slice(5) : null;
+    const groups = Core.groupChats(this.channels, {
+      current: this.currentConversationId || bgOpen, currentKey: this.currentChannelKey, working, unread, background,
+      collapsed: this._collapsed, expanded: this._expanded, query: this._navQuery,
+    });
+    const e = escapeHtml;
+    let html = "";
+    for (const g of groups) {
+      const open = !g.collapsed;
+      html += `<section class="nav-group${open ? "" : " is-collapsed"}" data-group="${e(g.id)}">`
+        + `<button type="button" class="nav-group-head" data-group="${e(g.id)}" aria-expanded="${open}">`
+        + `<span class="nav-group-label">${e(g.label)}</span>`
+        + (g.working && !open ? '<span class="nav-dot" aria-hidden="true"></span>' : "")
+        + `<svg class="nav-group-caret" width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+        + `</button>`;
+      if (open) {
+        html += '<ul class="nav-rows">';
+        for (const r of g.rows) {
+          const cls = ["nav-row", r.current ? "is-current" : "", r.working ? "is-working" : "", r.unread ? "is-unread" : ""].filter(Boolean).join(" ");
+          const href = r.convId ? Core.chatPath(r.convId) : "/";
+          const label = `${r.name}${r.working ? `, ${this.botName} is working` : ""}${r.unread ? ", unread" : ""}`;
+          html += `<li><a class="${cls}" href="${e(href)}" data-key="${e(r.key)}"${r.convId ? ` data-conv-id="${e(r.convId)}"` : ""}${r.current ? ' aria-current="page"' : ""} aria-label="${e(label)}" title="${e(r.name)}">`
+            + `<span class="nav-row-name">${e(r.name)}</span>`
+            + `<span class="nav-row-meta">${r.working ? '<span class="nav-dot" aria-hidden="true"></span>' : ""}<span class="nav-row-time">${e(r.time)}</span></span>`
+            + `</a></li>`;
+        }
+        html += "</ul>";
+        if (g.more) html += `<button type="button" class="nav-more" data-group="${e(g.id)}">Show ${g.more} more</button>`;
+        else if (this._expanded.has(g.id) && g.total > Core.GROUP_LIMIT && !this._navQuery) html += `<button type="button" class="nav-more" data-group="${e(g.id)}">Show fewer</button>`;
       }
+      html += "</section>";
     }
-
-    el.appendChild(fade);
+    if (!groups.length) html = `<p class="nav-empty">No chats match "${e(this._navQuery)}".</p>`;
+    if (html === this._navHtml) return;
+    this._navHtml = html;
+    // Keep the keyboard where it was across a redraw (the working dots redraw the list often).
+    const focused = el.contains(document.activeElement) ? document.activeElement : null;
+    const focusKey = focused?.dataset?.key || null;
+    const focusGroup = focused?.classList?.contains("nav-group-head") ? focused.dataset.group : null;
+    el.innerHTML = html;
+    if (focusKey) el.querySelector(`.nav-row[data-key="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+    else if (focusGroup) el.querySelector(`.nav-group-head[data-group="${CSS.escape(focusGroup)}"]`)?.focus({ preventScroll: true });
   },
 
-  async openChannel(channelKey, conversationId) {
+  /** Sidebar/topbar name for a channel (js/chat-core.js chatName). */
+  displayNameFor(ch) {
+    return Core.chatName(ch);
+  },
+
+  // --- Addresses ---
+  _initRouter() {
+    window.addEventListener("popstate", () => this.route(location.pathname, { push: false }));
+  },
+
+  /**
+   * Open what an address asks for: /chat/<id> that chat, /chat/new a new one, "/" the chat this device had open
+   * last (else the Main Session). push: false when it came from Back or Forward (the address is already there).
+   */
+  route(pathname, { push = false, replace = false } = {}) {
+    const r = Core.parseChatPath(pathname);
+    if (r.kind === "chat") return this.openChat(r.id, { push, replace });
+    if (r.kind === "new") return this.newChat({ push, replace });
+    let saved = null;
+    try { saved = localStorage.getItem("tarsee_last_channel"); } catch { /* ignore */ }
+    const ch = (saved && this.channels.find((c) => c.key === saved)) || this.channels.find((c) => c.key === "web:default");
+    if (ch) return this.openChannel(ch.key, ch.conversationId, { push: false, replace: true });
+    return this.openChannel("web:default", null, { push: false, replace: true });
+  },
+
+  /** Put the open chat's address in the address bar (and in history when it is a move from one chat to another). */
+  _setAddress(path, { push = true, replace = false } = {}) {
+    if (!path || typeof history === "undefined") return;
+    const state = { convId: this.currentConversationId, key: this.currentChannelKey };
+    if (location.pathname === path) { if (replace) history.replaceState(state, "", path); return; }
+    if (push && !replace) history.pushState(state, "", path);
+    else history.replaceState(state, "", path);
+  },
+
+  /** A chat by its conversation id (from an address): its channel if it has one, a background job's view, or the conversation alone. */
+  async openChat(id, opts = {}) {
+    if (/^(cron:|heartbeat$|boot$)/.test(id) && this.liveOn()) {
+      Live.openBackground(id);
+      this._setAddress(Core.chatPath(id), opts);
+      return;
+    }
+    const ch = this.channels.find((c) => c.conversationId === id);
+    if (ch) return this.openChannel(ch.key, id, opts);
+    // Not a channel's (an older conversation, or one made by the API): open it as it is.
+    return this.openChannel(null, id, opts);
+  },
+
+  /** A new chat on the web: nothing on the server until the first message, which makes it (and its address). */
+  newChat({ push = true, replace = false } = {}) {
+    if (typeof Settings !== "undefined" && Settings.isOpen) Settings.close();
+    if (this.liveOn() && Live.convId) Live.detach();
+    const rnd = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`).replace(/-/g, "").slice(0, 12);
+    this.currentChannelKey = `web:${rnd}`;
+    this.currentConversationId = null;
+    this._lastUsage = null;
+    this._lastContextTokens = null;
+    this._currentName = "New chat";
+    this.elements.chatArea.innerHTML = "";
+    this.lastMessageRole = null;
+    this.elements.chatArea.style.display = "none";
+    this.elements.welcomeScreen.style.display = "";
+    this.elements.inputArea.style.display = "block";
+    document.getElementById("appScreen")?.classList.add("is-new-chat");
+    this._paintHeader();
+    this.updateSessionBar();
+    this.renderChannelList();
+    this._setAddress("/chat/new", { push, replace });
+    this._closeDrawer();
+    if (this.liveOn()) Live.attach(null, null);
+    if (window.matchMedia?.("(pointer: fine)").matches) this.elements.messageInput.focus();
+  },
+
+  /** The server made the conversation for the chat on screen (its first message): it gets its own address now. */
+  onConversationCreated(convId) {
+    if (!convId) return;
+    document.getElementById("appScreen")?.classList.remove("is-new-chat");
+    this._setAddress(Core.chatPath(convId), { replace: true });
+  },
+
+  /** The topbar's name and where the chat lives, and the tab's title. */
+  _paintHeader() {
+    const ch = this.channels.find((c) => (this.currentConversationId && c.conversationId === this.currentConversationId) || (!this.currentConversationId && c.key === this.currentChannelKey));
+    let name = this._currentName || this.botName;
+    if (ch) name = Core.chatName(ch);
+    else if (this.currentChannelKey === "web:default") name = "Main Session";
+    this._currentName = name;
+    if (!(typeof Settings !== "undefined" && Settings.isOpen)) this.elements.topbarTitle.textContent = name;
+    const platform = ch?.platform || String(this.currentChannelKey || "").split(":")[0];
+    // Where it lives, beside the name (not for the web's own chats, nor when the name already says it).
+    const label = platform && platform !== "web" && platform !== "live" ? Core.groupOf(platform).label : "";
+    const where = label && !name.toLowerCase().includes(label.toLowerCase()) ? label : "";
+    if (this.elements.topbarWhere) this.elements.topbarWhere.textContent = where;
+    this._paintTitle();
+  },
+
+  _paintTitle() {
+    if (typeof document === "undefined") return;
+    const settingsOpen = typeof Settings !== "undefined" && Settings.isOpen;
+    document.title = Core.pageTitle(settingsOpen ? "Settings" : this._currentName, this.botName);
+  },
+
+  async openChannel(channelKey, conversationId, { push = true, replace = false } = {}) {
     // Close settings if open
     if (typeof Settings !== "undefined" && Settings.isOpen) {
       Settings.close();
     }
 
-    this.currentChannelKey = channelKey;
+    if (this.liveOn() && Live.convId && Live.convId !== conversationId) Live.detach();
+    this.currentChannelKey = channelKey || null;
     this.currentConversationId = conversationId || null;
+    if (channelKey) { try { localStorage.setItem("tarsee_last_channel", channelKey); } catch { /* ignore */ } }
     // Switching channels invalidates the prior turn's token telemetry —
     // reset so the meter reflects the new conversation's state, not stale
     // numbers from whichever channel we just left.
     this._lastUsage = null;
     this._lastContextTokens = null;
+    this._turnModel = null;
     this._overflowBannerDismissed = false;
     this.hideContextWarningBanner();
     document.getElementById("contextOverflowCard")?.remove();
+    document.getElementById("appScreen")?.classList.remove("is-new-chat");
     this.elements.welcomeScreen.style.display = "none";
     this.elements.chatArea.style.display = "flex";
     this.elements.inputArea.style.display = "block";
-
-
-    // Update topbar with clean display name
-    const ch = this.channels.find((c) => c.key === channelKey);
-    const icon = PLATFORM_ICONS[ch?.platform] || PLATFORM_ICONS.web;
-    let topbarName = ch?.title || channelKey;
-    if (channelKey === "web:default") topbarName = "Main Session";
-    else if (ch?.platform === "telegram" && topbarName.startsWith("Chat with")) topbarName = topbarName.replace("Chat with ", "");
-    else if (ch?.platform === "whatsapp" && topbarName.startsWith("WhatsApp · ")) topbarName = topbarName.replace("WhatsApp · ", "");
-    this.elements.topbarTitle.textContent = `${icon} ${topbarName}`;
+    this._currentName = null;
+    this._paintHeader();
+    this._setAddress(conversationId ? Core.chatPath(conversationId) : "/", { push, replace });
+    this._closeDrawer();
 
     // Load messages (last 50 for speed, load more on demand)
     if (conversationId) {
       try {
         const data = await API.getConversation(conversationId);
+        // Switched again while this loaded: don't paint the old one.
+        if (this.currentConversationId !== conversationId) return;
+        if (!channelKey && data?.title) { this._currentName = String(data.title); this._paintHeader(); }
         const total = data.totalMessages || data.messages?.length || 0;
         const older = total - (data.messages?.length || 0);
         this.renderMessages(data.messages || [], older > 0 ? older : 0, conversationId);
+        if (!(data.messages || []).length) this._showEmptyChat();
         // Session recap — if the server flagged this convo as stale, show
         // a dismissible card above the first message summarizing what was
         // going on. Null means "recently active, no recap needed".
         if (data.recap?.text) {
           this.renderSessionRecap(data.recap);
         }
-      } catch {
+        if (this.liveOn()) Live.attach(conversationId, data);
+        else this._drainQueueIfIdle();
+      } catch (err) {
+        if (this.currentConversationId !== conversationId) return;
         this.elements.chatArea.innerHTML = "";
+        const note = document.createElement("div");
+        note.className = "live-note";
+        note.textContent = /not found|404/i.test(String(err?.message))
+          ? "There is no chat at this address. It may have been deleted. Start a new chat from the menu."
+          : "Couldn't load this conversation. Check the connection and open it again.";
+        this.elements.chatArea.appendChild(note);
       }
     } else {
       this.elements.chatArea.innerHTML = "";
+      this._showEmptyChat();
+      if (this.liveOn()) Live.attach(null, null);
     }
 
     this.updateSessionBar();
     this.renderChannelList();
-    this.elements.messageInput.focus();
+    // Phones: focusing pops the keyboard over the chat on every open/reload.
+    if (window.matchMedia?.("(pointer: fine)").matches) this.elements.messageInput.focus();
+  },
+
+  /** A chat with nothing in it yet: the welcome in its place (the composer stays). */
+  _showEmptyChat() {
+    if (this.elements.chatArea.querySelector(".message")) return;
+    this.elements.chatArea.style.display = "none";
+    this.elements.welcomeScreen.style.display = "";
+  },
+
+  /** The chat's menu, from its name in the topbar: rename it, start a fresh session, delete it (our own menu). */
+  _initChatMenu() {
+    const btn = this.elements.chatMenuBtn;
+    if (!btn) return;
+    let menu = null;
+    const close = (focusBack = false) => {
+      if (!menu) return;
+      menu.remove();
+      menu = null;
+      btn.setAttribute("aria-expanded", "false");
+      document.removeEventListener("pointerdown", away, true);
+      if (focusBack) btn.focus();
+    };
+    const away = (e) => { if (menu && !menu.contains(e.target) && !btn.contains(e.target)) close(); };
+    const open = () => {
+      const id = this.currentConversationId;
+      const items = [
+        { act: "rename", label: "Rename", off: !id },
+        { act: "fresh", label: "Start a fresh session", off: !id },
+        { act: "delete", label: "Delete chat", off: !id, danger: true },
+      ];
+      menu = document.createElement("div");
+      menu.className = "chat-menu";
+      menu.setAttribute("role", "menu");
+      menu.innerHTML = items.map((it) => `<button type="button" role="menuitem" class="chat-menu-item${it.danger ? " is-danger" : ""}" data-act="${it.act}"${it.off ? " disabled" : ""}>${escapeHtml(it.label)}</button>`).join("")
+        + (id ? "" : '<p class="chat-menu-note">These come once the chat has its first message.</p>');
+      document.body.appendChild(menu);
+      const r = btn.getBoundingClientRect();
+      menu.style.top = `${Math.round(r.bottom + 6)}px`;
+      menu.style.left = `${Math.round(Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)))}px`;
+      btn.setAttribute("aria-expanded", "true");
+      menu.querySelector(".chat-menu-item:not([disabled])")?.focus();
+      document.addEventListener("pointerdown", away, true);
+      menu.addEventListener("keydown", (e) => {
+        const all = [...menu.querySelectorAll(".chat-menu-item:not([disabled])")];
+        const i = all.indexOf(document.activeElement);
+        if (e.key === "Escape") { e.preventDefault(); close(true); }
+        else if (e.key === "ArrowDown") { e.preventDefault(); all[(i + 1) % all.length]?.focus(); }
+        else if (e.key === "ArrowUp") { e.preventDefault(); all[(i - 1 + all.length) % all.length]?.focus(); }
+        else if (e.key === "Tab") close();
+      });
+      menu.addEventListener("click", (e) => {
+        const item = e.target.closest(".chat-menu-item");
+        if (!item || item.disabled) return;
+        close();
+        if (item.dataset.act === "rename") this.renameChat();
+        else if (item.dataset.act === "fresh") this.resetSession();
+        else if (item.dataset.act === "delete") this.showDeleteModal(this._currentName || "this chat", this.currentConversationId, this.currentChannelKey);
+      });
+    };
+    btn.addEventListener("click", () => (menu ? close() : open()));
+  },
+
+  async renameChat() {
+    const id = this.currentConversationId;
+    if (!id) return;
+    const name = await TarseeDialog.askText({ title: "Rename this chat", label: "Name", value: this._currentName || "", yes: "Rename", no: "Cancel" });
+    if (name == null || !String(name).trim() || this.currentConversationId !== id) return;
+    try {
+      await API.updateConversation(id, { title: String(name).trim().slice(0, 120) });
+      this._currentName = String(name).trim();
+      await this.loadChannels();
+      this._paintHeader();
+    } catch (err) {
+      App.showToast(`Could not rename it: ${err.message}`, "error");
+    }
+  },
+
+  /** The agent starts this chat with a clean context; the messages stay. */
+  async resetSession() {
+    // (The conversation shown when it was asked is the one reset, whatever the page did meanwhile.)
+    const id = this.currentConversationId;
+    if (!id) return;
+    if (!(await TarseeDialog.ask({ title: "Start a fresh session?", text: `Messages stay, but ${this.botName} starts this chat with a clean context and won't recall the earlier back-and-forth.`, yes: "Start fresh", no: "Cancel" }))) return;
+    try {
+      await API.json(`/api/chat/conversations/${id}/reset-session`, { method: "POST" });
+      App.showToast("Fresh session started", "success");
+    } catch (err) {
+      App.showToast(`Could not reset it: ${err.message}`, "error");
+    }
   },
 
   // --- Messages ---
@@ -853,85 +1097,361 @@ const Chat = {
 
     // Show "load more" button if there are older messages on the server
     if (olderCount > 0 && conversationId) {
-      const loadMoreBtn = document.createElement("div");
+      const loadMoreBtn = document.createElement("button");
+      loadMoreBtn.type = "button";
       loadMoreBtn.className = "load-more-btn";
-      loadMoreBtn.textContent = `Load ${olderCount} older messages`;
+      loadMoreBtn.textContent = `Show ${olderCount} older message${olderCount === 1 ? "" : "s"}`;
       loadMoreBtn.addEventListener("click", async () => {
-        loadMoreBtn.textContent = "Loading...";
+        loadMoreBtn.textContent = "Loading…";
         try {
           const data = await API.json(`/api/chat/conversations/${conversationId}?all=true`);
           const allMsgs = data.messages || [];
           const scrollPos = this.elements.chatArea.scrollHeight;
           loadMoreBtn.remove();
-          // Prepend older messages
           const olderMsgs = allMsgs.slice(0, allMsgs.length - messages.length);
           const frag = document.createDocumentFragment();
           const tempLastRole = this.lastMessageRole;
           const tempLastTime = this.lastMessageTime;
           this.lastMessageRole = null;
           this.lastMessageTime = 0;
-          for (const msg of olderMsgs) {
-            frag.appendChild(this._createMessageEl(msg.role, msg.content));
-          }
+          for (const msg of olderMsgs) frag.appendChild(this._messageEl(msg, conversationId));
           this.elements.chatArea.insertBefore(frag, this.elements.chatArea.firstChild);
           this.lastMessageRole = tempLastRole;
           this.lastMessageTime = tempLastTime;
           this.elements.chatArea.scrollTop = this.elements.chatArea.scrollHeight - scrollPos;
         } catch {
-          loadMoreBtn.textContent = "Failed to load — click to retry";
+          loadMoreBtn.textContent = "Couldn't load them. Try again";
         }
       });
       this.elements.chatArea.appendChild(loadMoreBtn);
     }
 
-    for (const msg of messages) {
-      this.appendMessage(msg.role, msg.content);
-    }
-    this.scrollToBottom();
+    for (const msg of messages) this.elements.chatArea.appendChild(this._messageEl(msg, conversationId));
+    // Queued-but-unsent messages are not on the server yet: draw them again.
+    this._renderQueuedBubbles();
+    this.scrollToBottom(true);
   },
 
-  _createMessageEl(role, content, isStreaming = false) {
+  /** A saved message, with its tools (history comes slim: names and summaries; the details are fetched when opened). */
+  _messageEl(msg, conversationId) {
+    const el = this._createMessageEl(msg.role, msg.content, { tools: msg.tools, messageId: msg.id, convId: conversationId });
+    if (msg.id) el.dataset.messageId = msg.id;
+    return el;
+  },
+
+  /**
+   * One message. Yours: a bubble on the right (with who sent it in a channel, "[alice]: words"). The agent's: its words
+   * across the reading column, the steps it took folded into one line above them, Copy under them.
+   *   options { tools (the slim list), messageId, convId (for the steps' details), streaming }
+   */
+  _createMessageEl(role, content, options = {}) {
+    const opts = typeof options === "boolean" ? { streaming: options } : (options || {});
     const msg = document.createElement("div");
     const now = Date.now();
     const isGrouped = (role === this.lastMessageRole) && (now - this.lastMessageTime < 5 * 60 * 1000);
-    msg.className = `message ${role}${isGrouped ? " grouped" : ""}`;
-
-    const avatar = role === "assistant"
-      ? `<img src="/icon-32.png" alt="" class="avatar-img">`
-      : "U";
-
-    const copyIcon = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5" stroke="currentColor" stroke-width="1.3"/></svg>';
-    const copyBtn = role === "assistant" && !isStreaming
-      ? `<button class="msg-copy-btn" title="Copy">${copyIcon}</button>`
-      : "";
-
-    msg.innerHTML = `
-      <div class="message-avatar">${avatar}</div>
-      <div class="message-content">
-        <div class="message-role">${role === "assistant" ? escapeHtml(this.botName) : "You"}</div>
-        <div class="message-text ${isStreaming ? "streaming-cursor" : ""}">${this.renderMarkdown(content)}</div>
-      </div>
-      ${copyBtn}
-    `;
-
+    msg.className = `message ${role === "user" ? "user" : "assistant"}${isGrouped ? " grouped" : ""}`;
+    const body = document.createElement("div");
+    body.className = "message-content";
+    msg.appendChild(body);
+    if (role === "user") {
+      const { who, body: words } = Core.sender(content);
+      if (who) {
+        const w = document.createElement("div");
+        w.className = "message-who";
+        w.textContent = who;
+        body.appendChild(w);
+      }
+      const text = document.createElement("div");
+      text.className = "message-text message-bubble";
+      text.innerHTML = this.renderMarkdown(words);
+      body.appendChild(text);
+    } else {
+      const parts = Core.replyParts(content, opts.tools);
+      if (parts.tools.length || parts.notes.length) {
+        const lazy = opts.messageId && opts.convId && parts.tools.some((t) => !t.input && !t.output)
+          ? () => API.json(`/api/chat/conversations/${encodeURIComponent(opts.convId)}/messages/${encodeURIComponent(opts.messageId)}/tools`).then((d) => d.tools || [])
+          : null;
+        const steps = this.createSteps({ state: "done", items: parts.steps, lazy });
+        body.appendChild(steps.el);
+        msg._steps = steps;
+      }
+      const text = document.createElement("div");
+      text.className = "message-text";
+      text.innerHTML = this.renderMarkdown(parts.answer);
+      body.appendChild(text);
+      body.appendChild(this._actionsEl(!!opts.streaming));
+    }
     this.lastMessageRole = role;
     this.lastMessageTime = now;
     return msg;
   },
 
+  /** The quiet row under an answer: Copy. */
+  _actionsEl(hidden = false) {
+    const row = document.createElement("div");
+    row.className = "message-actions";
+    if (hidden) row.hidden = true;
+    row.innerHTML = '<button type="button" class="msg-copy-btn" title="Copy" aria-label="Copy this answer"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5" stroke="currentColor" stroke-width="1.3"/></svg></button>';
+    return row;
+  },
+
+  /** An answer's words into its message (a live reply, or a streamed one when it is done). */
+  setAnswer(msgEl, content, { tools = null } = {}) {
+    const parts = Core.replyParts(content, tools);
+    const text = msgEl.querySelector(".message-text");
+    if (text) text.innerHTML = this.renderMarkdown(parts.answer);
+    // A reply that came without its turn being watched (a reload mid-way): its own steps, if it saved any.
+    if (!msgEl._steps && (parts.tools.length || parts.notes.length)) {
+      const steps = this.createSteps({ state: "done", items: parts.steps });
+      msgEl.querySelector(".message-content")?.prepend(steps.el);
+      msgEl._steps = steps;
+    }
+    const actions = msgEl.querySelector(".message-actions");
+    if (actions) actions.hidden = !String(parts.answer || "").trim();
+    msgEl.classList.toggle("has-answer", !!String(parts.answer || "").trim());
+    return parts;
+  },
+
+  /**
+   * The steps of a turn, in the answer's place: one quiet line ("Working · 3 steps · Reading README.md" while it
+   * works, "Used 12 tools" after), that opens to the list of steps, each one line ("Read README.md") that opens to
+   * its input and output in a box that scrolls. Collapsed by default. js/live.js feeds it as the turn goes; history
+   * draws it done.
+   *   options { state: "running" | "done", startedAt, tools: [{ name, summary, input, output, ok, todos }],
+   *             notes: [text], lazy: () => Promise<[tools]> (the details of a saved reply's steps, fetched once),
+   *             onStop: () => void (a Stop button while it runs) }
+   */
+  createSteps({ state = "running", startedAt = Date.now(), tools = [], notes = [], items = null, lazy = null, onStop = null } = {}) {
+    const el = document.createElement("div");
+    el.className = "steps";
+    el.innerHTML = '<div class="steps-head"><button type="button" class="steps-line" aria-expanded="false">'
+      + '<span class="steps-dot" aria-hidden="true"></span><span class="steps-title"></span><span class="steps-detail"></span>'
+      + '<span class="steps-time"></span>'
+      + '<svg class="steps-caret" width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+      + '</button></div><div class="steps-list" hidden></div>';
+    const line = el.querySelector(".steps-line");
+    const list = el.querySelector(".steps-list");
+    const s = {
+      el, state, startedAt, endedAt: null, error: null, rows: new Map(), order: [], notes: 0, last: "", lazy, loaded: null,
+    };
+    const setOpen = (open) => {
+      list.hidden = !open;
+      line.setAttribute("aria-expanded", String(open));
+      el.classList.toggle("is-open", open);
+    };
+    line.addEventListener("click", () => setOpen(list.hidden));
+    if (onStop) {
+      const stop = document.createElement("button");
+      stop.type = "button";
+      stop.className = "steps-stop";
+      stop.textContent = "Stop";
+      stop.title = "Stop (Esc)";
+      stop.addEventListener("click", () => onStop());
+      el.querySelector(".steps-head").appendChild(stop);
+      s.stopBtn = stop;
+    }
+
+    const toolCount = () => s.order.filter((k) => s.rows.get(k)?.kind === "tool").length;
+    const failedCount = () => s.order.filter((k) => s.rows.get(k)?.ok === false).length;
+
+    s.paint = () => {
+      const now = Date.now();
+      const ms = (s.endedAt || now) - (s.startedAt || now);
+      const n = toolCount();
+      const tl = Core.turnLine({ state: s.state, tools: n, failed: failedCount(), ms: s.state === "running" || s.startedAt ? ms : null, last: s.last, error: s.error });
+      let title = tl.title;
+      let detail = tl.detail;
+      if (s.state === "done" && !n && s.notes) { title = "Thought process"; detail = ""; }
+      if (s.state === "done" && !s.startedAt) detail = failedCount() ? `${failedCount()} failed` : "";
+      el.querySelector(".steps-title").textContent = title;
+      el.querySelector(".steps-detail").textContent = detail;
+      el.querySelector(".steps-time").textContent = s.state === "running" ? Core.fmtDur(ms) : "";
+      el.dataset.state = s.state;
+      el.dataset.tone = tl.tone;
+      el.hidden = s.state === "done" && !n && !s.notes;
+      line.disabled = !s.order.length && s.state === "running";
+      for (const k of s.order) {
+        const r = s.rows.get(k);
+        if (r.kind === "tool" && !r.endedAt && r.startedAt && s.state === "running") r.time.textContent = Core.fmtDur(now - r.startedAt);
+      }
+    };
+
+    /** The body of a step (its input and output), drawn when it is first opened. */
+    const fillBody = (r) => {
+      const b = r.body;
+      b.replaceChildren();
+      if (Array.isArray(r.todos) && r.todos.length) {
+        const ul = document.createElement("ul");
+        ul.className = "step-todos";
+        for (const t of r.todos) {
+          const li = document.createElement("li");
+          li.className = `step-todo is-${t.status === "completed" ? "done" : t.status === "in_progress" ? "now" : "todo"}`;
+          li.textContent = t.status === "in_progress" ? (t.activeForm || t.content) : t.content;
+          ul.appendChild(li);
+        }
+        b.appendChild(ul);
+        return;
+      }
+      const box = (label, text) => {
+        const wrap = document.createElement("div");
+        wrap.className = "step-io";
+        const l = document.createElement("div");
+        l.className = "step-io-label";
+        l.textContent = label;
+        const pre = document.createElement("pre");
+        pre.className = "step-pre";
+        pre.textContent = text;
+        wrap.append(l, pre);
+        b.appendChild(wrap);
+      };
+      if (r.input) box("Input", r.input);
+      if (r.output) box(r.ok === false ? "Error" : "Output", r.output);
+      if (!r.input && !r.output) {
+        const p = document.createElement("p");
+        p.className = "step-none";
+        p.textContent = r.kind === "tool" && !r.endedAt && s.state === "running" ? "Still running." : "No details were kept for this step.";
+        b.appendChild(p);
+      }
+    };
+
+    const openRow = async (r) => {
+      const opening = r.body.hidden;
+      r.body.hidden = !opening;
+      r.line.setAttribute("aria-expanded", String(opening));
+      r.el.classList.toggle("is-open", opening);
+      if (!opening) return;
+      if (!r.input && !r.output && s.lazy && !r.todos) {
+        r.body.innerHTML = '<p class="step-none">Loading…</p>';
+        try {
+          s.loaded ||= s.lazy();
+          const got = await s.loaded;
+          let i = 0;
+          for (const k of s.order) {
+            const row = s.rows.get(k);
+            if (row.kind !== "tool") continue;
+            const t = got[i++];
+            if (t && !row.input && !row.output) { row.input = t.input || ""; row.output = t.output || ""; if (t.ok === false) row.ok = false; }
+          }
+        } catch { s.loaded = null; }
+      }
+      fillBody(r);
+    };
+
+    /** A tool step: { id, name, summary, input, output, ok, todos, startedAt, endedAt }. */
+    s.addTool = (t) => {
+      const key = t.id || `t${s.order.length}`;
+      if (s.rows.has(key)) return s.rows.get(key);
+      const rowEl = document.createElement("div");
+      rowEl.className = "step";
+      rowEl.innerHTML = '<button type="button" class="step-line" aria-expanded="false"><span class="step-dot" aria-hidden="true"></span>'
+        + '<span class="step-label"></span><span class="step-time"></span></button><div class="step-body" hidden></div>';
+      const r = {
+        kind: "tool", key, el: rowEl, line: rowEl.querySelector(".step-line"), body: rowEl.querySelector(".step-body"), time: rowEl.querySelector(".step-time"),
+        name: t.name, summary: t.summary || "", input: t.input || "", output: t.output || "", ok: t.ok, todos: t.todos || null,
+        startedAt: t.startedAt || null, endedAt: t.endedAt || (s.state === "running" ? null : Date.now()),
+      };
+      const label = Core.stepLabel({ name: t.name, summary: t.summary, input: t.input }, { running: s.state === "running" && !t.endedAt });
+      rowEl.querySelector(".step-label").textContent = label;
+      r.line.title = `${t.name}${t.summary ? `: ${t.summary}` : ""}`;
+      rowEl.dataset.state = s.state === "running" && !t.endedAt ? "running" : t.ok === false ? "failed" : "done";
+      r.line.addEventListener("click", () => openRow(r));
+      s.rows.set(key, r);
+      s.order.push(key);
+      list.appendChild(rowEl);
+      if (s.state === "running") s.last = Core.stepLabel({ name: t.name, summary: t.summary, input: t.input }, { running: true });
+      s.paint();
+      return r;
+    };
+
+    /** A tool finished: { ok, output, endedAt }. */
+    s.endTool = (id, { ok = true, output = "", endedAt = Date.now() } = {}) => {
+      const r = s.rows.get(id);
+      if (!r || r.endedAt) return;
+      r.endedAt = endedAt;
+      r.ok = ok;
+      if (output) r.output = output;
+      r.el.dataset.state = ok === false ? "failed" : "done";
+      r.el.querySelector(".step-label").textContent = Core.stepLabel({ name: r.name, summary: r.summary, input: r.input }, { running: false });
+      if (r.startedAt) r.time.textContent = Core.fmtDur(endedAt - r.startedAt);
+      if (!r.body.hidden) fillBody(r);
+      // Nothing running now: back to "Thinking" until the next step.
+      if (s.order.every((k) => s.rows.get(k).kind !== "tool" || s.rows.get(k).endedAt)) s.last = "Thinking";
+      s.paint();
+    };
+
+    /** What it said on the way (a text step that is not the answer). */
+    s.addNote = (text, key = null) => {
+      if (!String(text || "").trim()) return null;
+      const k = key || `n${s.order.length}`;
+      const n = document.createElement("div");
+      n.className = "step-note";
+      n.innerHTML = Chat.renderMarkdown(text);
+      n.dataset.text = String(text).slice(0, 400);
+      s.rows.set(k, { kind: "note", key: k, el: n });
+      s.order.push(k);
+      list.appendChild(n);
+      s.notes += 1;
+      s.paint();
+      return n;
+    };
+
+    /** Drop the notes that are the answer itself (it is shown under the line). */
+    s.trimNotes = (answer) => {
+      const norm = (x) => Core.plainWords(x);
+      const said = norm(answer);
+      for (const k of [...s.order].reverse()) {
+        const r = s.rows.get(k);
+        if (r.kind !== "note") break;
+        const t = norm(r.el.dataset.text).slice(0, 200);
+        if (!t || !said.includes(t)) break;
+        r.el.remove();
+        s.rows.delete(k);
+        s.order.splice(s.order.indexOf(k), 1);
+        s.notes -= 1;
+      }
+      s.paint();
+    };
+
+    /** The turn ended: { state: "done" | "stopped" | "failed" | "interrupted", endedAt, error }. */
+    s.finish = ({ state: end = "done", endedAt = Date.now(), error = null } = {}) => {
+      s.state = end;
+      s.endedAt = endedAt;
+      s.error = error;
+      for (const k of s.order) {
+        const r = s.rows.get(k);
+        if (r.kind === "tool" && !r.endedAt) {
+          r.endedAt = endedAt;
+          r.el.dataset.state = end === "done" ? "done" : "stopped";
+          r.el.querySelector(".step-label").textContent = Core.stepLabel({ name: r.name, summary: r.summary, input: r.input }, { running: false });
+        }
+      }
+      s.stopBtn?.remove();
+      s.paint();
+    };
+
+    s.count = toolCount;
+    s.setOpen = setOpen;
+    // In the order they happened (items), or the tools then the notes.
+    const ordered = Array.isArray(items) ? items : [...(tools || []).map((t) => ({ type: "tool", ...t })), ...(notes || []).map((text) => ({ type: "note", text }))];
+    for (const it of ordered) {
+      if (it.type === "note") s.addNote(it.text);
+      else s.addTool({ ...it, endedAt: it.endedAt || (state === "running" ? null : 1) });
+    }
+    if (state !== "running") s.startedAt = null;
+    s.paint();
+    return s;
+  },
+
   /**
    * Render the session-recap card above the first message when a stale
-   * conversation is resumed. Dismissible — hides for the rest of this
+   * conversation is resumed. Dismissible: hides for the rest of this
    * device's viewing session.
    */
   renderSessionRecap(recap) {
     if (!recap?.text) return;
     const chatArea = this.elements.chatArea;
     if (!chatArea) return;
-
-    // Don't double-render if one is already there.
     chatArea.querySelector(".session-recap")?.remove();
-
     const card = document.createElement("div");
     card.className = "session-recap";
     card.setAttribute("role", "status");
@@ -944,48 +1464,25 @@ const Chat = {
     `;
     card.querySelector(".session-recap-text").textContent = recap.text;
     card.querySelector(".session-recap-dismiss").addEventListener("click", () => card.remove());
-
-    // Insert at top of chat area so it sits above the first real message.
     chatArea.insertBefore(card, chatArea.firstChild);
   },
 
   appendMessage(role, content, isStreaming = false) {
-    const msg = this._createMessageEl(role, content, isStreaming);
+    const msg = this._createMessageEl(role, content, { streaming: isStreaming });
+    if (this.elements.welcomeScreen.style.display !== "none") {
+      this.elements.welcomeScreen.style.display = "none";
+      this.elements.chatArea.style.display = "flex";
+    }
     this.elements.chatArea.appendChild(msg);
     this.scrollToBottom();
     return msg;
   },
 
-  updateStreamingMessage(msgEl, content, rawHtml = false) {
-    const textEl = msgEl.querySelector(".message-text");
-    if (textEl) {
-      if (rawHtml) {
-        textEl.innerHTML = content;
-      } else {
-        // Hide incomplete XML blocks during streaming (they render as raw text until closed)
-        const { text: cleaned, nonce } = hideIncompleteBlocks(content);
-        textEl.innerHTML = this.renderMarkdown(cleaned, nonce);
-      }
-    }
-  },
-
   finishStreaming(msgEl) {
-    // Remove thinking indicator if still present
-    const thinkEl = msgEl.querySelector(".chat-thinking");
-    if (thinkEl) thinkEl.remove();
-    const textEl = msgEl.querySelector(".message-text");
-    if (textEl) {
-      textEl.classList.remove("streaming-cursor");
-    }
-    // Add copy button after streaming completes
-    if (!msgEl.querySelector(".msg-copy-btn")) {
-      const btn = document.createElement("button");
-      btn.className = "msg-copy-btn";
-      btn.title = "Copy";
-      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5" stroke="currentColor" stroke-width="1.3"/></svg>';
-      btn.onclick = () => navigator.clipboard.writeText(textEl.textContent);
-      msgEl.appendChild(btn);
-    }
+    msgEl.querySelector(".chat-thinking")?.remove();
+    msgEl.querySelector(".message-text")?.classList.remove("streaming-cursor");
+    const actions = msgEl.querySelector(".message-actions");
+    if (actions) actions.hidden = !msgEl.querySelector(".message-text")?.textContent.trim();
   },
 
   // --- File Attachments ---
@@ -1083,7 +1580,7 @@ const Chat = {
       html += '<div class="message-images">';
       for (const img of images) {
         const src = `data:${escapeHtml(img.mediaType)};base64,${img.data}`;
-        html += `<img src="${src}" alt="${escapeHtml(img.name)}" class="clickable-image" onclick="Chat.openLightbox('${src.replace(/'/g, "\\'")}')" style="cursor:pointer">`;
+        html += `<img src="${src}" alt="${escapeHtml(img.name)}" class="clickable-image" data-lightbox="1" style="cursor:pointer">`;
       }
       html += "</div>";
     }
@@ -1096,7 +1593,7 @@ const Chat = {
       const previewable = isPdf || isSheet || isText;
       const dataIdx = this._storeAttachmentData(f);
       if (previewable) {
-        html += `<div class="message-file-chip message-file-previewable" onclick="Chat.previewStoredFile(${dataIdx})" title="Click to preview"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/></svg> ${escapeHtml(name)} <span style="color:var(--text-muted);font-size:10px">▸ preview</span></div>`;
+        html += `<div class="message-file-chip message-file-previewable" data-preview-idx="${dataIdx}" role="button" tabindex="0" title="Click to preview"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/></svg> ${escapeHtml(name)} <span style="color:var(--text-muted);font-size:10px">▸ preview</span></div>`;
       } else {
         const dataUrl = `data:${f.mediaType || "application/octet-stream"};base64,${f.data}`;
         html += `<a class="message-file-chip" href="${dataUrl}" download="${escapeHtml(name)}" title="Click to download"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/></svg> ${escapeHtml(name)}</a>`;
@@ -1114,6 +1611,8 @@ const Chat = {
     // Subtle tactile ack on touch devices (Android; iOS ignores).
     App.buzz?.(12);
 
+    if (this.liveOn()) return this.sendLive(text, hasFiles);
+
     // Queue if already streaming
     if (this.isStreaming) {
       const attachments = hasFiles ? await this.buildAttachments() : [];
@@ -1122,13 +1621,14 @@ const Chat = {
       this.elements.messageInput.style.height = "auto";
       this.elements.sendBtn.disabled = true;
 
-      this.messageQueue.push({ text, attachments });
+      this.messageQueue.push({ text, attachments, convId: this.currentConversationId });
+      this._persistQueue();
       // Show queued message in chat with badge
       const queuedMsg = this.appendMessage("user", text);
       const badge = document.createElement("span");
       badge.className = "queue-badge";
       badge.textContent = `Queued #${this.messageQueue.length}`;
-      queuedMsg.querySelector(".message-role")?.appendChild(badge);
+      queuedMsg.querySelector(".message-content")?.appendChild(badge);
       queuedMsg.dataset.queued = "true";
       this.scrollToBottom();
       return;
@@ -1178,31 +1678,27 @@ const Chat = {
       const textEl = userMsg.querySelector(".message-text");
       textEl.insertAdjacentHTML("afterend", this.renderMessageAttachments(attachments));
     }
+    await this._streamReply(text, attachments);
+  },
 
-    // Create streaming assistant message with thinking indicator as initial content
+  /**
+   * The reply to one message, read from its own stream (the old view, for when the live view is off:
+   * localStorage.tarsee_live_off = "1"). The steps go in the answer's place as they come, the words under them.
+   */
+  async _streamReply(text, attachments) {
     const assistantMsg = this.appendMessage("assistant", "", true);
-    const msgTextEl = assistantMsg.querySelector(".message-text");
-    if (msgTextEl) {
-      msgTextEl.innerHTML = '<div class="chat-thinking"><span class="thinking-text">Thinking</span><span class="thinking-dots"></span></div>';
-      msgTextEl.classList.remove("streaming-cursor"); // Don't show cursor while thinking
-    }
-    let hasReceivedText = false;
+    const steps = this.createSteps({ state: "running", startedAt: Date.now(), onStop: () => this.stopGeneration() });
+    assistantMsg.querySelector(".message-content")?.prepend(steps.el);
+    assistantMsg._steps = steps;
     let fullResponse = "";
-    let currentTextChunk = ""; // Text accumulated since last tool
-    const timeline = []; // Array of {type: "text"|"tool", html: "..."} in order
-    let lastToolIndex = -1; // Index of last tool block in timeline (for adding output)
-    // Buffer early content — show thinking for at least 1s
-    const thinkingStartTime = Date.now();
-    let pendingContent = null; // Buffered first updateStreamingMessage call
-
-    const renderTimeline = () => {
-      const items = timeline.map((item, i) => {
-        if (item.type === "text") {
-          return `<div class="tl-item tl-text"><div class="tl-dot"></div><div class="tl-content">${item.html}</div></div>`;
-        }
-        return `<div class="tl-item tl-tool"><div class="tl-dot ${item.status || "running"}"></div><div class="tl-content">${item.html}</div></div>`;
-      }).join("");
-      return `<div class="tl-timeline">${items}</div>`;
+    let lastToolId = null;
+    let raf = 0;
+    const paintText = () => {
+      raf = 0;
+      const shown = fullResponse.split("|||PERSONALITY_COMPLETE|||")[0].replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n");
+      const el = assistantMsg.querySelector(".message-text");
+      if (el) el.innerHTML = this.renderMarkdown(shown);
+      this.scrollToBottom();
     };
 
     this.isStreaming = true;
@@ -1217,176 +1713,62 @@ const Chat = {
         text,
         // onText (content for text, null + event for tool/thinking events)
         (content, event) => {
-          if (event?.type === "usage") {
-            // Live token telemetry from the just-completed turn. We may
-            // not have contextTokens yet (it lands on the `done` event)
-            // but we can still stash the usage and wait.
-            this._lastUsage = { ...(this._lastUsage || {}), ...event };
-            if (this._lastContextTokens) {
-              this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
-            }
+          if (event?.type === "usage" || event?.type === "context_overflow" || event?.type === "model_selected") {
+            this.handleTurnMeta(event);
             return;
           }
-          if (event?.type === "context_overflow") {
-            this.showOverflowRecoveryCard(event.checkpointPath);
-            return;
-          }
-          if (event?.type === "model_selected") {
-            // Auto-routing: update session bar badge with the chosen model
-            const badge = document.getElementById("sessionModel");
-            if (badge) {
-              // Trust the tier the server resolved from the model registry.
-              // Guessing it here with substring checks mislabelled anything
-              // that was not opus/haiku — every Fable turn read "SONNET".
-              const tier = event.tier || "";
-              badge.textContent = (tier || event.model || "").toUpperCase();
-              badge.className = "session-model" + (tier ? " model-" + tier : "");
-            }
-            return;
-          }
-          if (event?.type === "thinking") {
-            // Show/keep thinking indicator — don't remove it, it stays until text/tools arrive
-            if (!hasReceivedText) {
-              const existing = assistantMsg.querySelector(".chat-thinking");
-              if (!existing) {
-                const thinkingEl = document.createElement("div");
-                thinkingEl.className = "chat-thinking";
-                thinkingEl.innerHTML = '<span class="thinking-text">Thinking</span><span class="thinking-dots"></span>';
-                assistantMsg.querySelector(".message-text")?.appendChild(thinkingEl);
-              }
-            }
-            return;
-          }
+          if (event?.type === "thinking") return;
           if (event?.type === "tool_call") {
-            // Finalize current text chunk (it's already in the timeline from renderUpdate)
-            // Just reset the chunk so next text starts a new timeline item
-            currentTextChunk = "";
-
-            if (!hasReceivedText) {
-              hasReceivedText = true;
-              const elapsed = Date.now() - thinkingStartTime;
-              if (elapsed < 1000) {
-                pendingContent = () => { this.updateStreamingMessage(assistantMsg, renderTimeline(), true); this.scrollToBottom(); };
-                setTimeout(() => { if (pendingContent) { pendingContent(); pendingContent = null; } }, 1000 - elapsed);
-                // Still add to timeline, just delay rendering
-              }
-            }
-
             const inp = event.input || {};
-            let detail = "";
-            let label = event.name;
-            if (event.name === "Bash") { detail = inp.command || ""; }
-            else if (event.name === "Read") { detail = inp.file_path || inp.filename || ""; label = "Read"; }
-            else if (event.name === "Write") { detail = inp.file_path || inp.filename || ""; label = "Write"; }
-            else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
-            else if (event.name === "Grep") { detail = `"${inp.pattern || ""}" ${inp.path || ""}`; label = "Search"; }
-            else if (event.name === "Glob") { detail = inp.pattern || ""; label = "Find"; }
-            else if (event.name === "TodoWrite" || event.name === "todowrite" || event.name === "todo_write") { label = "Update Todos"; detail = ""; }
-            else { detail = inp.command || inp.filename || inp.url || inp.query || inp.message || inp.task || inp.schedule || inp.key || JSON.stringify(inp).slice(0, 80); }
-
-            // Special rendering for TodoWrite — show checklist
-            const isTodoEvent = event.name === "TodoWrite" || event.name === "todowrite" || event.name === "todo_write";
-            let toolHtml;
-            if (isTodoEvent && Array.isArray(inp.todos)) {
-              toolHtml = `<div class="tl-tool-header"><span class="tl-tool-name"><i class="ph ph-list-checks"></i> Update Todos</span></div><div class="tl-todos">${inp.todos.map(t => {
-                const icon = t.status === "completed" ? '<i class="ph ph-check-circle tl-todo-done"></i>'
-                  : t.status === "in_progress" ? '<i class="ph ph-circle-notch tl-todo-active"></i>'
-                  : '<i class="ph ph-circle tl-todo-pending"></i>';
-                const cls = t.status === "completed" ? "tl-todo-item done" : t.status === "in_progress" ? "tl-todo-item active" : "tl-todo-item";
-                return `<div class="${cls}">${icon} <span>${escapeHtml(t.status === "in_progress" ? (t.activeForm || t.content) : t.content)}</span></div>`;
-              }).join("")}</div>`;
-            } else {
-              toolHtml = `<div class="tl-tool-header"><span class="tl-tool-name">${escapeHtml(label)}</span> <span class="tl-tool-detail">${escapeHtml(String(detail).slice(0, 100))}</span></div><div class="tl-tool-in"><span class="tl-io-label">IN</span><pre class="tl-tool-code">${escapeHtml(String(detail).slice(0, 500) || "(no args)")}</pre></div>`;
-            }
-            lastToolIndex = timeline.length;
-            timeline.push({ type: "tool", status: "running", html: toolHtml });
-            if (!pendingContent) { this.updateStreamingMessage(assistantMsg, renderTimeline(), true); this.scrollToBottom(); }
+            lastToolId = event.id || `t${Date.now()}`;
+            steps.addTool({
+              id: lastToolId, name: event.name, startedAt: Date.now(),
+              summary: inp.description || inp.file_path || inp.pattern || inp.url || inp.query || inp.command || "",
+              input: event.name === "Bash" && inp.command ? inp.command : JSON.stringify(inp, null, 2),
+              todos: Array.isArray(inp.todos) ? inp.todos : null,
+            });
+            this.scrollToBottom();
             return;
           }
           if (event?.type === "tool_result") {
-            if (lastToolIndex >= 0 && timeline[lastToolIndex]) {
-              timeline[lastToolIndex].status = "done";
-              const resultText = event.result || "";
-              if (resultText && resultText !== "(no output)") {
-                timeline[lastToolIndex].html += `<div class="tl-tool-out"><span class="tl-io-label">OUT</span><pre class="tl-tool-code">${escapeHtml(resultText.slice(0, 2000))}</pre></div>`;
-              }
-            }
-            // Reset text chunk so next text starts a new timeline item
-            currentTextChunk = "";
-            this.updateStreamingMessage(assistantMsg, renderTimeline(), true);
-            this.scrollToBottom();
+            const id = event.id || lastToolId;
+            if (id) steps.endTool(id, { ok: !/^error/i.test(String(event.result || "")), output: String(event.result || "").slice(0, 4000) });
             return;
           }
-          // Normal text — accumulate into current chunk
+          if (!content) return;
           fullResponse += content;
-          currentTextChunk += content;
-          const renderUpdate = () => {
-            // Update the last text item in timeline or add new one
-            const lastItem = timeline[timeline.length - 1];
-            let displayChunk = currentTextChunk.split("|||PERSONALITY_COMPLETE|||")[0];
-            displayChunk = displayChunk.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n").trim();
-            if (lastItem?.type === "text") {
-              lastItem.html = this.renderMarkdown(displayChunk);
-            } else if (displayChunk) {
-              timeline.push({ type: "text", html: this.renderMarkdown(displayChunk) });
-            }
-            this.updateStreamingMessage(assistantMsg, renderTimeline(), true);
-            this.scrollToBottom();
-          };
-          if (!hasReceivedText) {
-            hasReceivedText = true;
-            const elapsed = Date.now() - thinkingStartTime;
-            if (elapsed < 1000) {
-              setTimeout(renderUpdate, 1000 - elapsed);
-            } else {
-              renderUpdate();
-            }
-          } else {
-            renderUpdate();
-          }
-          // Notify setup module
+          if (!raf) raf = requestAnimationFrame(paintText);
           if (typeof Setup !== "undefined") Setup.handleStreamingText(fullResponse);
         },
         // onDone
         (data) => {
-          if (data?.type === "conversation" && data.conversationId) {
-            this.currentConversationId = data.conversationId;
-          }
-          // The terminal `done` event carries the context window size for
-          // the model that ran. Combine with the usage we stashed during
-          // streaming and finalize the meter for this turn.
-          if (data?.contextTokens) {
-            this._lastContextTokens = data.contextTokens;
-            if (this._lastUsage) {
-              this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
+          if (data?.type === "conversation") {
+            if (data.conversationId && !this.currentConversationId) {
+              this.currentConversationId = data.conversationId;
+              this._streamingConvId = data.conversationId;
+              this.onConversationCreated(data.conversationId);
             }
+            return;
           }
-          if (data?.checkpointed) {
-            App.showToast("Context near limit — auto-checkpoint saved", "info");
-          }
+          this.handleTurnDone(data);
+          if (raf) { cancelAnimationFrame(raf); paintText(); }
+          steps.finish({ state: data?.stopReason === "stopped" ? "stopped" : "done" });
           this.finishStreaming(assistantMsg);
-          this.updateSessionBar();
           this.loadChannels();
-          // Check for personality completion
           if (typeof Setup !== "undefined") Setup.handleStreamComplete(fullResponse);
         },
         // onError
         (error) => {
+          steps.finish({ state: fullResponse ? "done" : "failed", error });
           this.finishStreaming(assistantMsg);
-          if (!fullResponse) {
-            assistantMsg.querySelector(".message-text").innerHTML =
-              `<span class="text-danger">${escapeHtml(error)}</span>`;
-          }
           App.showToast(error, "error");
         },
-        // channelKey
         this.currentChannelKey,
-        // attachments
         attachments.length ? attachments : undefined,
-        // effort
         this.getEffort()
       );
     } catch (err) {
+      steps.finish({ state: "failed", error: err.message });
       this.finishStreaming(assistantMsg);
       App.showToast(err.message, "error");
     }
@@ -1399,195 +1781,149 @@ const Chat = {
     this.elements.messageInput.focus();
 
     // Drain queue — send next queued message
-    if (this.messageQueue.length > 0) {
-      const next = this.messageQueue.shift();
-      // Remove "Queued" badges and update remaining positions
-      document.querySelectorAll('.queue-badge').forEach((b, i) => {
-        if (i === 0) b.remove(); // Remove badge from the one being sent now
-        else b.textContent = `Queued #${i}`;
-      });
-      // Small delay so the user sees the transition
-      setTimeout(() => this.sendQueued(next.text, next.attachments), 300);
+    this._drainQueueIfIdle();
+  },
+
+  liveOn() {
+    return typeof Live !== "undefined" && Live.enabled;
+  },
+
+  /** Live send: draw the bubble now, the server queues and runs the turn. */
+  async sendLive(text, hasFiles) {
+    // /clear (and its aliases) really delete this conversation's messages
+    // on the server, so ask first. /reset used to be a client-only fake.
+    if (/^\/(clear|reset|new)\b/i.test(text)) {
+      if (!(await TarseeDialog.ask({ title: "Clear this conversation?", text: "Its messages are deleted on the server (a summary is saved to memory first). This can't be undone.", yes: "Clear it", no: "Cancel", danger: true }))) return;
+      text = text.replace(/^\/reset\b/i, "/clear");
     }
+    let attachments = [];
+    if (hasFiles) {
+      attachments = await this.buildAttachments();
+      this.pendingFiles = [];
+      this.renderAttachmentsPreview();
+    }
+    this.elements.messageInput.value = "";
+    this.elements.messageInput.style.height = "auto";
+    this.elements.sendBtn.disabled = true;
+    this.elements.welcomeScreen.style.display = "none";
+    this.elements.chatArea.style.display = "flex";
+    this.elements.inputArea.style.display = "block";
+    if (!this.currentChannelKey) this.currentChannelKey = "web:default";
+    Live.send(text, attachments);
+    this.elements.messageInput.focus();
+  },
+
+  /** Per-turn telemetry from the send stream (both send paths). */
+  handleTurnMeta(event) {
+    if (event?.type === "usage") {
+      // Live token telemetry from the just-completed turn. We may not have
+      // contextTokens yet (it lands on the `done` event) but we can still
+      // stash the usage and wait.
+      this._lastUsage = { ...(this._lastUsage || {}), ...event };
+      if (this._lastContextTokens) {
+        this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
+      }
+    } else if (event?.type === "context_overflow") {
+      this.showOverflowRecoveryCard(event.checkpointPath);
+    } else if (event?.type === "model_selected") {
+      // Auto-routing: the composer shows the model this turn runs on.
+      const badge = document.getElementById("sessionModel");
+      if (badge && event.model) {
+        this._turnModel = event.model;
+        const meta = (this._models || []).find((m) => m.id === event.model || m.currently === event.model) || null;
+        badge.textContent = this.modelLabel(event.model, meta);
+      }
+    }
+  },
+
+  /** The send stream's terminal `done` event (both send paths). */
+  handleTurnDone(data) {
+    // `done` carries the context window size for the model that ran.
+    // Combine with the stashed usage and finalize the meter for this turn.
+    if (data?.contextTokens) {
+      this._lastContextTokens = data.contextTokens;
+      if (this._lastUsage) {
+        this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
+      }
+    }
+    if (data?.checkpointed) {
+      App.showToast("Context near limit, auto-checkpoint saved", "info");
+    }
+    this.updateSessionBar();
+  },
+
+  // ── Queued messages (stopgap until the live rebuild) ─────────────────
+  // A message sent while the agent is replying is queued in the tab. It used to
+  // live ONLY in the DOM + memory: coming back to the tab redrew the chat
+  // from the server (which never had it) and wiped it, and the queue only
+  // drained from the SSE "done" that the wake handler had just aborted, so it
+  // was never sent. Now the queue is persisted, re-drawn after every redraw,
+  // and drained from every completion path.
+  _persistQueue() {
+    try {
+      localStorage.setItem("tarsee_pending_queue", JSON.stringify(
+        this.messageQueue.map((q) => ({ text: q.text, convId: q.convId || null })),
+      ));
+    } catch { /* storage unavailable: queue still works in memory */ }
+  },
+
+  _restoreQueue() {
+    try {
+      const saved = JSON.parse(localStorage.getItem("tarsee_pending_queue") || "[]");
+      if (Array.isArray(saved) && saved.length && !this.messageQueue.length) {
+        this.messageQueue = saved.filter((q) => q && q.text).map((q) => ({ text: q.text, attachments: [], convId: q.convId }));
+      }
+    } catch { /* ignore */ }
+  },
+
+  _renderQueuedBubbles() {
+    const conv = this.currentConversationId;
+    this.messageQueue.forEach((q, i) => {
+      if (q.convId && conv && q.convId !== conv) return;
+      const el = this.appendMessage("user", q.text);
+      const badge = document.createElement("span");
+      badge.className = "queue-badge";
+      badge.textContent = `Queued #${i + 1}`;
+      el.querySelector(".message-content")?.appendChild(badge);
+      el.dataset.queued = "true";
+    });
+  },
+
+  _drainQueueIfIdle() {
+    if (this.isStreaming || this._draining || this.messageQueue.length === 0) return;
+    const conv = this.currentConversationId;
+    const idx = this.messageQueue.findIndex((q) => !q.convId || !conv || q.convId === conv);
+    if (idx < 0) return;
+    this._draining = true;
+    const [next] = this.messageQueue.splice(idx, 1);
+    this._persistQueue();
+    const queued = this.elements.chatArea.querySelectorAll('[data-queued="true"]');
+    queued.forEach((el, i) => {
+      const b = el.querySelector(".queue-badge");
+      if (i === 0) { b?.remove(); delete el.dataset.queued; } else if (b) b.textContent = `Queued #${i}`;
+    });
+    // Small delay so the user sees the transition
+    setTimeout(() => { this._draining = false; this.sendQueued(next.text, next.attachments); }, 300);
   },
 
   /** Send a queued message (already displayed in chat) */
   async sendQueued(text, attachments) {
-    // Show chat area
     this.elements.welcomeScreen.style.display = "none";
     this.elements.chatArea.style.display = "flex";
     this.elements.inputArea.style.display = "block";
-
-    if (!this.currentChannelKey) {
-      this.currentChannelKey = `web:default`;
-    }
-
-    // Session bar
-    const sessionBar = document.getElementById("sessionBar");
-    if (sessionBar) sessionBar.style.display = "flex";
-
-    // Create assistant message with thinking indicator
-    const assistantMsg = this.appendMessage("assistant", "", true);
-    const msgText = assistantMsg.querySelector(".message-text");
-    if (msgText) msgText.innerHTML = '<span class="streaming-dots"><span></span><span></span><span></span></span>';
-
-    const timeline = [];
-    let currentTextChunk = "";
-    let lastToolIndex = -1;
-    let pendingContent = null;
-
-    const renderTimeline = () => {
-      return '<div class="tl-timeline">' + timeline.map((item) => {
-        if (item.type === "text") return `<div class="tl-item tl-text"><div class="tl-dot"></div><div class="tl-content">${this.renderMarkdown(item.text)}</div></div>`;
-        return `<div class="tl-item tl-tool"><div class="tl-dot ${item.status || "running"}"></div><div class="tl-content">${item.html}</div></div>`;
-      }).join("") + '</div>';
-    };
-
-    this.isStreaming = true;
-    this._streamingConvId = this.currentConversationId;
-    this.elements.sendBtn.disabled = false;
-    this.elements.sendBtn.classList.add("stop-mode", "is-streaming");
-    this.elements.sendBtn.title = "Stop generation (Esc)";
-
-    try {
-      await API.sendMessage(
-        this.currentConversationId,
-        text,
-        (content, event) => {
-          if (event?.type === "usage") {
-            this._lastUsage = { ...(this._lastUsage || {}), ...event };
-            if (this._lastContextTokens) {
-              this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
-            }
-            return;
-          }
-          if (event?.type === "context_overflow") {
-            this.showOverflowRecoveryCard(event.checkpointPath);
-            return;
-          }
-          if (event?.type === "thinking") return;
-          if (event?.type === "tool_call") {
-            // Flush text to timeline
-            if (currentTextChunk.trim()) {
-              const last = timeline[timeline.length - 1];
-              if (last?.type === "text") last.text = currentTextChunk;
-              else timeline.push({ type: "text", text: currentTextChunk });
-            }
-            currentTextChunk = "";
-
-            const inp = event.input || {};
-            let detail = "";
-            let label = event.name;
-            const isTodoEvent = event.name === "TodoWrite" || event.name === "todowrite" || event.name === "todo_write";
-            if (event.name === "Bash") { detail = inp.command || ""; }
-            else if (event.name === "Read") { detail = inp.file_path || inp.filename || ""; label = "Read"; }
-            else if (event.name === "Write") { detail = inp.file_path || inp.filename || ""; label = "Write"; }
-            else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
-            else if (event.name === "Grep") { detail = `"${inp.pattern || ""}" ${inp.path || ""}`; label = "Search"; }
-            else if (event.name === "Glob") { detail = inp.pattern || ""; label = "Find"; }
-            else if (isTodoEvent) { label = "Update Todos"; detail = ""; }
-            else { detail = inp.command || inp.filename || inp.url || inp.query || inp.message || inp.task || inp.schedule || inp.key || JSON.stringify(inp).slice(0, 80); }
-
-            let toolHtml;
-            if (isTodoEvent && Array.isArray(inp.todos)) {
-              toolHtml = `<div class="tl-tool-header"><span class="tl-tool-name"><i class="ph ph-list-checks"></i> Update Todos</span></div><div class="tl-todos">${inp.todos.map(t => {
-                const icon = t.status === "completed" ? '<i class="ph ph-check-circle tl-todo-done"></i>' : t.status === "in_progress" ? '<i class="ph ph-circle-notch tl-todo-active"></i>' : '<i class="ph ph-circle tl-todo-pending"></i>';
-                const cls = t.status === "completed" ? "tl-todo-item done" : t.status === "in_progress" ? "tl-todo-item active" : "tl-todo-item";
-                return `<div class="${cls}">${icon} <span>${escapeHtml(t.status === "in_progress" ? (t.activeForm || t.content) : t.content)}</span></div>`;
-              }).join("")}</div>`;
-            } else {
-              toolHtml = `<div class="tl-tool-header"><span class="tl-tool-name">${escapeHtml(label)}</span> <span class="tl-tool-detail">${escapeHtml(String(detail).slice(0, 100))}</span></div><div class="tl-tool-in"><span class="tl-io-label">IN</span><pre class="tl-tool-code">${escapeHtml(String(detail).slice(0, 500) || "(no args)")}</pre></div>`;
-            }
-            lastToolIndex = timeline.length;
-            timeline.push({ type: "tool", status: "running", html: toolHtml });
-            this.updateStreamingMessage(assistantMsg, renderTimeline(), true);
-            this.scrollToBottom();
-            return;
-          }
-          if (event?.type === "tool_result") {
-            if (lastToolIndex >= 0 && timeline[lastToolIndex]) {
-              timeline[lastToolIndex].status = "done";
-              const resultText = event.result || "";
-              if (resultText && resultText !== "(no output)") {
-                timeline[lastToolIndex].html += `<div class="tl-tool-out"><span class="tl-io-label">OUT</span><pre class="tl-tool-code">${escapeHtml(resultText.slice(0, 2000))}</pre></div>`;
-              }
-            }
-            currentTextChunk = "";
-            this.updateStreamingMessage(assistantMsg, renderTimeline(), true);
-            this.scrollToBottom();
-            return;
-          }
-          if (content) {
-            currentTextChunk += content;
-            const last = timeline[timeline.length - 1];
-            if (last?.type === "text") last.text = currentTextChunk;
-            else if (!last || last.type === "tool") timeline.push({ type: "text", text: currentTextChunk });
-
-            pendingContent = () => { this.updateStreamingMessage(assistantMsg, renderTimeline(), true); this.scrollToBottom(); };
-            if (!this._queuedRaf) {
-              this._queuedRaf = requestAnimationFrame(() => { this._queuedRaf = null; if (pendingContent) { pendingContent(); pendingContent = null; } });
-            }
-          }
-        },
-        (data) => {
-          if (data?.type === "conversation" && data.conversationId) {
-            this.currentConversationId = data.conversationId;
-          }
-          if (data?.contextTokens) {
-            this._lastContextTokens = data.contextTokens;
-            if (this._lastUsage) {
-              this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
-            }
-          }
-          if (data?.checkpointed) {
-            App.showToast("Context near limit — auto-checkpoint saved", "info");
-          }
-          this.finishStreaming(assistantMsg);
-          this.updateSessionBar();
-          this.loadChannels();
-        },
-        (error) => {
-          this.finishStreaming(assistantMsg);
-          const textEl = assistantMsg.querySelector(".message-text");
-          if (textEl && !currentTextChunk) {
-            textEl.innerHTML = `<span class="text-danger">${escapeHtml(error)}</span>`;
-          }
-          App.showToast(error, "error");
-        },
-        this.currentChannelKey,
-        attachments.length ? attachments : undefined
-      );
-    } catch (err) {
-      this.finishStreaming(assistantMsg);
-      App.showToast(err.message, "error");
-    }
-
-    this.isStreaming = false;
-    this._streamingConvId = null;
-    this.elements.sendBtn.disabled = false;
-    this.elements.sendBtn.classList.remove("stop-mode", "is-streaming");
-    this.elements.sendBtn.title = "Send";
-    this.elements.messageInput.focus();
-
-    // Continue draining queue
-    if (this.messageQueue.length > 0) {
-      const next = this.messageQueue.shift();
-      document.querySelectorAll('.queue-badge').forEach((b, i) => {
-        if (i === 0) b.remove();
-        else b.textContent = `Queued #${i}`;
-      });
-      setTimeout(() => this.sendQueued(next.text, next.attachments), 300);
-    }
+    if (!this.currentChannelKey) this.currentChannelKey = "web:default";
+    await this._streamReply(text, attachments || []);
   },
 
   _effortLevel: "",
+  // (Words only: no emoji in the UI.)
   _effortLevels: [
-    { value: "", icon: "⚡", label: "Auto" },
-    { value: "low", icon: "🐇", label: "Quick" },
-    { value: "medium", icon: "⚖️", label: "Balanced" },
-    { value: "high", icon: "🧠", label: "Deep" },
-    { value: "max", icon: "🔮", label: "Maximum" },
-    { value: "xhigh", icon: "🌌", label: "Ultra" },
+    { value: "", label: "Auto" },
+    { value: "low", label: "Quick" },
+    { value: "medium", label: "Balanced" },
+    { value: "high", label: "Deep" },
+    { value: "max", label: "Maximum" },
+    { value: "xhigh", label: "Ultra" },
   ],
 
   getEffort() {
@@ -1601,9 +1937,8 @@ const Chat = {
     const btn = document.getElementById("effortToggle");
     if (btn) {
       btn.dataset.level = lvl.value;
-      const iconEl = document.getElementById("effortIcon");
+      btn.setAttribute("aria-label", `Thinking effort: ${lvl.label}`);
       const labelEl = document.getElementById("effortLabel");
-      if (iconEl) iconEl.textContent = lvl.icon;
       if (labelEl) labelEl.textContent = lvl.label;
     }
   },
@@ -1673,7 +2008,7 @@ const Chat = {
       if (!label && !custom) return;
 
       const question = custom
-        || (sublabel ? `Tell me more about: ${label} — ${sublabel}` : `Tell me more about: ${label}`);
+        || (sublabel ? `Tell me more about: ${label}. ${sublabel}` : `Tell me more about: ${label}`);
 
       // Reuse the normal send path — send() handles queueing during streaming.
       this.elements.messageInput.value = question;
@@ -1701,9 +2036,12 @@ const Chat = {
         this._typingReconnect.attempts = 0;
         const token = API.token || localStorage.getItem("tarsee_api_token");
         if (token) this._typingWs.send(JSON.stringify({ type: "auth", token }));
+        // Live view: resubscribe from the last sequence seen (catches up on
+        // everything missed while the socket was down).
+        if (this.liveOn()) Live.onSocketOpen();
         // Ask the server to replay any events we missed for the conversation
         // we're currently viewing (if any).
-        if (this.currentConversationId) {
+        else if (this.currentConversationId) {
           const lastId = this._lastEventIdByConv[this.currentConversationId] || 0;
           try {
             this._typingWs.send(JSON.stringify({
@@ -1730,6 +2068,8 @@ const Chat = {
           const data = JSON.parse(e.data);
           if (data.type === "pong") {
             clearTimeout(this._typingPongTimer);
+          } else if (typeof data.type === "string" && data.type.startsWith("live.")) {
+            if (this.liveOn()) Live.onFrame(data);
           } else if (data.type === "typing") {
             this._showTypingIndicator(data.channel);
           } else if (data.type === "sync") {
@@ -1806,10 +2146,12 @@ const Chat = {
   },
 
   _syncStreamingEl: null,
-  _syncTimeline: [],
   _syncFullText: "",
 
+  /** Another device's turn, in the old view (the live view draws them itself). */
   _handleSyncEvent(data) {
+    // The live timeline draws everything when it's on; this would duplicate it.
+    if (this.liveOn()) return;
     // Only process events for the conversation we're currently viewing
     if (data.convId !== this.currentConversationId) return;
     // Dedup only against the conversation THIS device is actively driving.
@@ -1818,134 +2160,111 @@ const Chat = {
     if (this.isStreaming && this._streamingConvId === data.convId) return;
 
     const evt = data.event;
-    const d = data.data;
+    const d = data.data || {};
+    const ensure = () => {
+      if (!this._syncStreamingEl) {
+        this._syncStreamingEl = this.appendMessage("assistant", "", true);
+        const steps = this.createSteps({ state: "running", startedAt: Date.now() });
+        this._syncStreamingEl.querySelector(".message-content")?.prepend(steps.el);
+        this._syncStreamingEl._steps = steps;
+        this._syncFullText = "";
+      }
+      return this._syncStreamingEl;
+    };
 
     if (evt === "user_message") {
       // Another device sent a message — show it
       this.appendMessage("user", d.content);
       return;
     }
-
-    if (evt === "thinking") {
-      if (d.status === "start") {
-        // Create assistant message with thinking indicator
-        if (!this._syncStreamingEl) {
-          this._syncStreamingEl = this.appendMessage("assistant", "");
-          this._syncTimeline = [];
-          this._syncFullText = "";
-        }
-        const textEl = this._syncStreamingEl?.querySelector(".message-text");
-        if (textEl && !textEl.querySelector(".streaming-dots")) {
-          textEl.innerHTML = '<span class="streaming-dots"><span></span><span></span><span></span></span>';
-        }
-      }
-      return;
-    }
-
+    if (evt === "thinking") { if (d.status === "start") ensure(); return; }
     if (evt === "text") {
-      if (!this._syncStreamingEl) {
-        this._syncStreamingEl = this.appendMessage("assistant", "");
-        this._syncTimeline = [];
-        this._syncFullText = "";
-      }
-      this._syncFullText += d.content;
-      const textEl = this._syncStreamingEl?.querySelector(".message-text");
+      const el = ensure();
+      this._syncFullText += d.content || "";
+      const textEl = el.querySelector(".message-text");
       if (textEl) textEl.innerHTML = this.renderMarkdown(this._syncFullText);
       this.scrollToBottom();
       return;
     }
-
     if (evt === "tool_call") {
-      if (!this._syncStreamingEl) {
-        this._syncStreamingEl = this.appendMessage("assistant", "");
-        this._syncTimeline = [];
-        this._syncFullText = "";
-      }
+      const el = ensure();
       const inp = d.input || {};
-      const detail = inp.command || inp.file_path || inp.url || inp.query || "";
-      this._syncTimeline.push({ type: "tool", name: d.name, detail: String(detail).slice(0, 200), status: "running" });
-      this._renderSyncTimeline();
+      el._steps.addTool({ id: d.id, name: d.name, startedAt: Date.now(), summary: inp.description || inp.file_path || inp.url || inp.query || inp.command || "" });
+      this.scrollToBottom();
       return;
     }
-
     if (evt === "tool_result") {
-      const last = this._syncTimeline[this._syncTimeline.length - 1];
-      if (last) last.status = "done";
-      this._renderSyncTimeline();
+      if (this._syncStreamingEl && d.id) this._syncStreamingEl._steps.endTool(d.id, { output: String(d.result || "").slice(0, 4000) });
       return;
     }
-
     if (evt === "done") {
       this._syncStreamingEl = null;
-      this._syncTimeline = [];
       this._syncFullText = "";
-      // Reload messages to get the final saved version
+      // Reload messages to get the final saved version, then send anything queued.
       if (this.currentConversationId) {
-        this.openChannel(this.currentChannelKey, this.currentConversationId);
+        Promise.resolve(this.openChannel(this.currentChannelKey, this.currentConversationId, { push: false }))
+          .finally(() => this._drainQueueIfIdle());
       }
-      return;
     }
   },
 
-  _renderSyncTimeline() {
-    const textEl = this._syncStreamingEl?.querySelector(".message-text");
-    if (!textEl) return;
-    let html = "";
-    if (this._syncFullText) html += this.renderMarkdown(this._syncFullText);
-    html += '<div class="tl-timeline">';
-    for (const item of this._syncTimeline) {
-      if (item.type === "tool") {
-        const statusClass = item.status === "running" ? "running" : "";
-        html += `<div class="tl-item"><span class="tl-dot ${statusClass}"></span><div class="tl-tool"><div class="tl-tool-header"><span class="tl-tool-name">${escapeHtml(item.name)}</span><span class="tl-tool-detail">${escapeHtml(item.detail || "")}</span></div></div></div>`;
-      }
-    }
-    html += "</div>";
-    textEl.innerHTML = html;
-    this.scrollToBottom();
-  },
-
+  /**
+   * The sidebar's search box: the chats' names filter as you type (js/chat-core.js), and from two letters the
+   * messages that match come under them. Esc empties it.
+   */
   initSearch() {
     const input = document.getElementById("searchInput");
     const results = document.getElementById("searchResults");
     if (!input || !results) return;
 
     let debounce = null;
+    let asked = "";
+    const clear = () => {
+      input.value = "";
+      this._navQuery = "";
+      results.hidden = true;
+      results.innerHTML = "";
+      this.renderChannelList();
+    };
     input.addEventListener("input", () => {
       clearTimeout(debounce);
       const q = input.value.trim();
-      if (!q) { results.style.display = "none"; return; }
+      this._navQuery = q;
+      this.renderChannelList();
+      if (q.length < 2) { results.hidden = true; results.innerHTML = ""; return; }
       debounce = setTimeout(async () => {
+        asked = q;
         try {
           const data = await API.searchMessages(q);
-          if (!data.results?.length) {
-            results.innerHTML = '<div class="search-empty">No results</div>';
-          } else {
-            results.innerHTML = data.results.map(r => `
-              <div class="search-result-item" data-conv="${r.conversation_id}">
-                <div class="search-result-title">${escapeHtml(r.conversation_title)} &middot; ${r.role}</div>
-                <div class="search-result-snippet">${r.snippet}</div>
-              </div>
-            `).join("");
-          }
-          results.style.display = "block";
-        } catch { results.style.display = "none"; }
+          if (asked !== input.value.trim()) return;   // (typed on meanwhile)
+          const rows = data.results || [];
+          results.innerHTML = `<div class="nav-results-label">Messages</div>`
+            + (rows.length ? rows.map((r) => {
+              const ch = this.channels?.find((c) => c.conversationId === r.conversation_id);
+              const name = ch ? Core.chatName(ch) : (r.conversation_title || "A chat");
+              return `<a class="search-result-item" href="${escapeHtml(Core.chatPath(r.conversation_id))}" data-conv="${escapeHtml(r.conversation_id)}">`
+                + `<span class="search-result-title">${escapeHtml(name)}</span>`
+                + `<span class="search-result-snippet">${escapeHtml(r.snippet).replace(/&lt;(\/?)mark&gt;/g, "<$1mark>")}</span></a>`;
+            }).join("") : '<p class="search-empty">No messages match.</p>');
+          results.hidden = false;
+        } catch { results.hidden = true; }
       }, 300);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && input.value) { e.preventDefault(); clear(); }
+      else if (e.key === "Enter") {
+        // Enter opens the first chat that matches.
+        const first = this.elements.channelList.querySelector(".nav-row");
+        if (first) { e.preventDefault(); first.click(); }
+      }
     });
 
     results.addEventListener("click", (e) => {
       const item = e.target.closest(".search-result-item");
-      if (!item) return;
-      const convId = item.dataset.conv;
-      // Find the channel for this conversation and open it
-      const ch = this.channels?.find(c => c.conversationId === convId);
-      if (ch) this.openChannel(ch.key, convId);
-      results.style.display = "none";
-      input.value = "";
-    });
-
-    // Close on click outside
-    document.addEventListener("click", (e) => {
-      if (!e.target.closest(".sidebar-search")) results.style.display = "none";
+      if (!item || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+      e.preventDefault();
+      this.openChat(item.dataset.conv);
+      clear();
     });
   },
 
@@ -1971,11 +2290,11 @@ const Chat = {
     modal.id = "deleteModal";
     modal.className = "delete-modal-overlay";
     modal.innerHTML = `
-      <div class="delete-modal">
-        <div class="delete-modal-header">Delete Session</div>
-        <p class="delete-modal-text">This will permanently delete <strong>${escapeHtml(sessionName)}</strong> and all its messages.</p>
+      <div class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle">
+        <div class="delete-modal-header" id="deleteModalTitle">Delete this chat?</div>
+        <p class="delete-modal-text">This permanently deletes <strong>${escapeHtml(sessionName)}</strong> and all its messages.</p>
         <p class="delete-modal-text">Type <strong>${escapeHtml(sessionName)}</strong> to confirm:</p>
-        <input type="text" class="delete-modal-input" id="deleteConfirmInput" placeholder="Type session name..." autocomplete="off" spellcheck="false">
+        <input type="text" class="delete-modal-input" id="deleteConfirmInput" placeholder="The chat's name" autocomplete="off" spellcheck="false">
         <div class="delete-modal-actions">
           <button class="btn btn-sm delete-modal-cancel" id="deleteModalCancel">Cancel</button>
           <button class="btn btn-sm delete-modal-confirm" id="deleteModalConfirm" disabled>Delete</button>
@@ -2008,6 +2327,8 @@ const Chat = {
 
     cancelBtn.addEventListener("click", () => modal.remove());
     modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
+    // Escape anywhere in the dialog (not only in the text box) closes it.
+    modal.addEventListener("keydown", (e) => { if (e.key === "Escape") modal.remove(); });
 
     setTimeout(() => input.focus(), 50);
   },
@@ -2018,17 +2339,11 @@ const Chat = {
         await API.deleteConversation(conversationId);
       }
 
-      // If deleted the current session, reset view
-      if (channelKey === this.currentChannelKey) {
-        this.currentChannelKey = null;
-        this.currentConversationId = null;
-        this.elements.chatArea.style.display = "none";
-        this.elements.inputArea.style.display = "none";
-        this.elements.welcomeScreen.style.display = "flex";
-      }
-
-      App.showToast("Session deleted", "success");
-      this.loadChannels();
+      const wasOpen = conversationId ? conversationId === this.currentConversationId : channelKey === this.currentChannelKey;
+      App.showToast("Chat deleted", "success");
+      await this.loadChannels();
+      // The chat on screen is gone: a new chat in its place (its address too).
+      if (wasOpen) this.newChat({ replace: true });
     } catch (err) {
       App.showToast("Failed to delete: " + err.message, "error");
     }
@@ -2039,6 +2354,9 @@ const Chat = {
   _storeAttachmentData(att) {
     const idx = this._attachmentStore.length;
     this._attachmentStore.push(att);
+    // Each entry holds a whole file as base64; a long session never let go
+    // of them. Keep the last 20 previewable, free the rest.
+    if (idx >= 20) this._attachmentStore[idx - 20] = null;
     return idx;
   },
   previewStoredFile(idx) {
@@ -2052,16 +2370,16 @@ const Chat = {
 
   // --- Preview / Lightbox ---
   _setViewportScalable(enabled) {
-    // The app shell uses maximum-scale=1, user-scalable=no to block pinch-
-    // zoom. Lightbox is the one surface where pinch should work, so we
-    // rewrite the viewport meta for its lifetime.
+    // Pinch-zoom is allowed everywhere now (blocking it fails low-vision
+    // users, and iOS ignored the block anyway; inputs are 16px on phones so
+    // focusing doesn't auto-zoom). The lightbox just raises the zoom cap.
     const meta = document.querySelector('meta[name="viewport"]');
     if (!meta) return;
     meta.setAttribute(
       "content",
       enabled
-        ? "width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover"
-        : "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+        ? "width=device-width, initial-scale=1, maximum-scale=5, viewport-fit=cover"
+        : "width=device-width, initial-scale=1, viewport-fit=cover"
     );
   },
 
@@ -2295,530 +2613,134 @@ const Chat = {
   },
 
   // --- Utilities ---
-  scrollToBottom() {
+  /**
+   * Follow new content only when the reader is already at the bottom.
+   * Scrolled up to read something? Stay put and offer a "jump" pill.
+   */
+  scrollToBottom(force = false) {
     const el = this.elements.chatArea;
-    el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+    if (force || nearBottom) {
+      el.scrollTop = el.scrollHeight;
+      this._jumpPill?.classList.remove("visible");
+      return;
+    }
+    if (!this._jumpPill) {
+      const pill = document.createElement("button");
+      pill.type = "button";
+      pill.className = "jump-latest";
+      pill.textContent = "Jump to the latest";
+      pill.setAttribute("aria-label", "Jump to the latest message");
+      pill.addEventListener("click", () => this.scrollToBottom(true));
+      el.addEventListener("scroll", () => {
+        if (el.scrollHeight - el.scrollTop - el.clientHeight < 160) pill.classList.remove("visible");
+      }, { passive: true });
+      // A zero-height anchor just above the composer holds the pill.
+      const wrap = document.createElement("div");
+      wrap.className = "jump-latest-wrap";
+      wrap.appendChild(pill);
+      el.parentNode?.insertBefore(wrap, this.elements.inputArea || null);
+      this._jumpPill = pill;
+    }
+    this._jumpPill.classList.add("visible");
   },
 
   timeAgo(dateStr) {
-    if (!dateStr) return "";
-    const diff = Date.now() - new Date(dateStr).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return "now";
-    if (mins < 60) return `${mins}m`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h`;
-    const days = Math.floor(hours / 24);
-    return `${days}d`;
+    return Core.timeLabel(dateStr);
   },
 
   /**
-   * Markdown renderer with tool call, tool response, and thinking block support.
+   * A message's words as HTML (js/chat-core.js renderMarkdown, every character escaped). Before it, the blocks this
+   * page draws itself are taken out and put back after: a canvas (drawn inline, with its "..." menu), a thinking
+   * block (folded). Tool-call XML in old messages is dropped: the steps show the tools.
    */
-  /** Render a persisted timeline from saved JSON data */
-  renderTimelineFromData(items) {
-    const parts = items.map((item) => {
-      if (item.type === "text") {
-        const html = this.renderMarkdown(item.text || "");
-        return `<div class="tl-item tl-text"><div class="tl-dot"></div><div class="tl-content">${html}</div></div>`;
-      }
-      if (item.type === "tool") {
-        // Special rendering for saved TodoWrite
-        if (item.todos && Array.isArray(item.todos)) {
-          const todosHtml = item.todos.map(t => {
-            const icon = t.status === "completed" ? '<i class="ph ph-check-circle tl-todo-done"></i>'
-              : t.status === "in_progress" ? '<i class="ph ph-circle-notch tl-todo-active"></i>'
-              : '<i class="ph ph-circle tl-todo-pending"></i>';
-            const cls = t.status === "completed" ? "tl-todo-item done" : t.status === "in_progress" ? "tl-todo-item active" : "tl-todo-item";
-            return `<div class="${cls}">${icon} <span>${escapeHtml(t.content)}</span></div>`;
-          }).join("");
-          return `<div class="tl-item tl-tool"><div class="tl-dot done"></div><div class="tl-content"><div class="tl-tool-header"><span class="tl-tool-name"><i class="ph ph-list-checks"></i> Update Todos</span></div><div class="tl-todos">${todosHtml}</div></div></div>`;
-        }
-        let toolHtml = `<div class="tl-tool-header"><span class="tl-tool-name">${escapeHtml(item.name || "Tool")}</span> <span class="tl-tool-detail">${escapeHtml(item.detail || "")}</span></div>`;
-        if (item.input) {
-          toolHtml += `<div class="tl-tool-in"><span class="tl-io-label">IN</span><pre class="tl-tool-code">${escapeHtml(item.input)}</pre></div>`;
-        }
-        if (item.output && item.output !== "(no output)") {
-          toolHtml += `<div class="tl-tool-out"><span class="tl-io-label">OUT</span><pre class="tl-tool-code">${escapeHtml(item.output)}</pre></div>`;
-        }
-        return `<div class="tl-item tl-tool"><div class="tl-dot done"></div><div class="tl-content">${toolHtml}</div></div>`;
-      }
-      return "";
-    }).join("");
-    return `<div class="tl-timeline">${parts}</div>`;
-  },
-
-  /**
-   * Render message text to HTML.
-   *
-   * @param {string} text - message content. UNTRUSTED: it may come from any
-   *   channel sender, so everything not explicitly extracted here is escaped.
-   * @param {string} [streamNonce] - random token from hideIncompleteBlocks
-   *   identifying the transient "still streaming" placeholders it injected.
-   *   Supplied only on the live streaming path; persisted messages never carry
-   *   one, so a stored message cannot fake an indicator.
-   */
-  renderMarkdown(text, streamNonce) {
+  renderMarkdown(text) {
     if (!text) return "";
+    // A saved timeline that reached here whole: its words only.
+    if (String(text).startsWith('{"__timeline":true')) text = Core.replyParts(text).answer;
 
-    // Check for persisted timeline JSON from DB
-    if (text.startsWith('{"__timeline":true')) {
-      try {
-        const data = JSON.parse(text);
-        if (data.__timeline && data.items) {
-          return this.renderTimelineFromData(data.items);
-        }
-      } catch { /* not valid JSON, render as normal markdown */ }
-    }
+    // Strip any [REMEMBER: ...] markers that leaked through, and NUL characters:
+    // the blocks below are put back by \u0000<n>\u0000 markers, which a message
+    // must not be able to write itself.
+    // eslint-disable-next-line no-control-regex -- U+0000 is the renderer's own block marker
+    text = String(text).replace(/\u0000/g, "").replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n").trim();
 
-    // Strip any [REMEMBER: ...] markers that leaked through
-    text = text.replace(/\[REMEMBER:\s*.+?\]/gi, "").replace(/\n{3,}/g, "\n\n").trim();
-
-    // ── Extract special blocks BEFORE escaping HTML ──
-
-    // Placeholders for blocks we'll inject after escaping
     const blocks = [];
-    const PH = (i) => `\x00BLOCK${i}\x00`;
+    const token = (html) => `\n\u0000${blocks.push(html) - 1}\u0000\n`;
 
-    // Canvas embeds: render the diagram/canvas inline with a floating "..."
-    // menu (Copy link / Download file). Same feel as Claude's inline
-    // diagrams — no header chrome.
-    //
-    // The model sometimes wraps the canvas URL in a redundant
-    // <a href="/canvas/id/" target="_blank" ...>View Diagram</a> link
-    // AND also drops a bare /canvas/id/ somewhere. If we just run the
-    // URL regex, we end up with (a) two iframes for the same canvas and
-    // (b) a broken <a> tag leaking attributes like `target="_blank"
-    // rel="noopener">View Diagram` as visible text once the href is
-    // replaced by a placeholder. So we:
-    //   1. Strip anchor wrappers around canvas URLs first.
-    //   2. Dedupe by canvasId across the whole message — only one embed
-    //      per canvas, extras collapse away.
+    // Canvas embeds: the model sometimes wraps the canvas URL in an <a> AND drops a bare /canvas/id/ too: one embed
+    // per canvas, the anchor's leftovers gone.
     const seenCanvas = new Set();
-    const canvasEmbedHtml = (canvasId) => {
-      const safeId = escapeHtml(canvasId);
-      return `<div class="canvas-embed" data-canvas-id="${safeId}">
-        <!-- No allow-same-origin. Canvas HTML is model-authored and the model
-             reads untrusted input, so pairing allow-scripts with
-             allow-same-origin handed any prompt injection full authority on
-             Tarsee's origin: the API token, the vault, the Claude credentials.
-             Dropping it keeps scripts working inside a null origin. The server
-             sends a matching CSP sandbox header so a directly-opened canvas is
-             covered too. -->
-        <iframe src="/canvas/${safeId}/" class="canvas-iframe" sandbox="allow-scripts" loading="lazy"></iframe>
-        <button type="button" class="canvas-embed-menu-btn" aria-label="Diagram options" aria-haspopup="menu" aria-expanded="false">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="3" cy="8" r="1.5" fill="currentColor"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><circle cx="13" cy="8" r="1.5" fill="currentColor"/></svg>
-        </button>
-        <div class="canvas-embed-menu" role="menu">
-          <button type="button" class="canvas-embed-menu-item" data-canvas-action="copy" role="menuitem">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M5.5 5.5h7.5v7.5h-7.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M3 3h7.5v2.5M3 3v7.5h2.5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
-            Copy to clipboard
-          </button>
-          <a class="canvas-embed-menu-item" href="/canvas/${safeId}/" download="${safeId}.html" role="menuitem">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2v9m0 0l-3-3m3 3l3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.5 12v1.5a1 1 0 001 1h9a1 1 0 001-1V12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-            Download file
-          </a>
-        </div>
-      </div>`;
-    };
     const placeCanvas = (canvasId) => {
-      if (seenCanvas.has(canvasId)) return ""; // dedupe extras
+      if (seenCanvas.has(canvasId)) return "";
       seenCanvas.add(canvasId);
-      const i = blocks.length;
-      blocks.push(canvasEmbedHtml(canvasId));
-      return PH(i);
+      return token(canvasEmbedHtml(canvasId));
     };
+    text = text.replace(/<a\s+[^>]*href=["'](?:https?:\/\/[^\s/"']+)?\/canvas\/([a-z0-9-]+)\/?["'][^>]*>[\s\S]*?<\/a>/gi, (_m, id) => placeCanvas(id));
+    text = text.replace(/(?:https?:\/\/[^\s/)]+)?\/canvas\/([a-z0-9-]+)\/?(?=[\s)\]."',;:!?]|$)/g, (_m, id) => placeCanvas(id));
 
-    // 1. Anchor-wrapped canvas URLs: <a href="/canvas/id/" ...>anything</a>
-    text = text.replace(
-      /<a\s+[^>]*href=["'](?:https?:\/\/[^\s/"']+)?\/canvas\/([a-z0-9-]+)\/?["'][^>]*>[\s\S]*?<\/a>/gi,
-      (_m, canvasId) => placeCanvas(canvasId)
-    );
+    // Thinking / reasoning: folded.
+    text = text.replace(/<(thinking|antThinking|antml:thinking|reasoning)>([\s\S]*?)<\/\1>/g, (_m, tag, content) => token(renderThinkingBlock(tag.includes("thinking") || tag.includes("Thinking") ? "Thinking" : "Reasoning", content.trim())));
+    // Tool calls and their results written into old messages: the steps show these.
+    text = text
+      .replace(/<function_calls>[\s\S]*?<\/function_calls>/g, "")
+      .replace(/<function_response>[\s\S]*?<\/function_response>/g, "")
+      .replace(/<(tool_call|tool_use)>[\s\S]*?<\/\1>/g, "")
+      .replace(/<(tool_response|tool_result)>[\s\S]*?<\/\1>/g, "");
+    // Search results, artifacts, results: folded.
+    text = text.replace(/<(search_results|artifact|result)>([\s\S]*?)<\/\1>/g, (_m, tag, content) => token(renderGenericBlock(tag, content.trim())));
 
-    // 2. Bare canvas URLs (or full URLs pointing at /canvas/id/).
-    text = text.replace(
-      /(?:https?:\/\/[^\s/]+)?\/canvas\/([a-z0-9-]+)\/?/g,
-      (_m, canvasId) => placeCanvas(canvasId)
-    );
-
-    // Thinking / reasoning blocks: <thinking>, <antThinking>, <reasoning>
-    text = text.replace(/<(thinking|antThinking|antml:thinking|reasoning)>([\s\S]*?)<\/\1>/g, (_m, tag, content) => {
-      const i = blocks.length;
-      const label = tag.includes("thinking") ? "Thinking" : "Reasoning";
-      blocks.push(renderThinkingBlock(label, content.trim()));
-      return PH(i);
-    });
-
-    // Function calls block: <function_calls>...<invoke name="X">...<parameter>...</parameter></invoke>...</function_calls>
-    text = text.replace(/<function_calls>\s*([\s\S]*?)\s*<\/function_calls>/g, (_m, content) => {
-      const i = blocks.length;
-      blocks.push(renderFunctionCallsBlock(content.trim()));
-      return PH(i);
-    });
-
-    // Function responses: <function_response>...</function_response>
-    text = text.replace(/<function_response>\s*([\s\S]*?)\s*<\/function_response>/g, (_m, content) => {
-      const i = blocks.length;
-      blocks.push(renderToolResponseBlock(content.trim()));
-      return PH(i);
-    });
-
-    // Tool calls: <tool_call> or <tool_use>
-    text = text.replace(/<(tool_call|tool_use)>\s*(\{[\s\S]*?\})\s*<\/\1>/g, (_m, _tag, json) => {
-      const i = blocks.length;
-      blocks.push(renderToolCallBlock(json));
-      return PH(i);
-    });
-    // Also handle the named format: <tool_call>\n{"name": "...", "arguments": {...}}\n</tool_call>
-    text = text.replace(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g, (_m, content) => {
-      const i = blocks.length;
-      blocks.push(renderToolCallBlock(content));
-      return PH(i);
-    });
-
-    // Tool responses: <tool_response> or <tool_result>
-    text = text.replace(/<(tool_response|tool_result)>\s*([\s\S]*?)\s*<\/\1>/g, (_m, _tag, content) => {
-      const i = blocks.length;
-      blocks.push(renderToolResponseBlock(content.trim()));
-      return PH(i);
-    });
-
-    // Search/artifact blocks: <search_results>, <artifact>
-    text = text.replace(/<(search_results|artifact|result)>([\s\S]*?)<\/\1>/g, (_m, tag, content) => {
-      const i = blocks.length;
-      blocks.push(renderGenericBlock(tag, content.trim()));
-      return PH(i);
-    });
-
-    // Streaming indicator (injected by hideIncompleteBlocks during streaming).
-    //
-    // This used to match `<div class="block-streaming-indicator">…</div>` in
-    // the message text and re-inject the match verbatim, AFTER escaping and
-    // bypassing it. Message text is attacker-controllable — anyone who can
-    // reach a channel can send that exact div — so it was stored XSS: the
-    // payload ran as soon as the owner opened the conversation, with the API
-    // token in localStorage in reach. The indicator is now addressed by a
-    // random per-render nonce no inbound message can predict, and the markup
-    // is built here from an escaped label instead of passed through.
-    if (streamNonce) {
-      const nonceRe = new RegExp(`\\[\\[${streamNonce}:([^\\]]*)\\]\\]`, "g");
-      text = text.replace(nonceRe, (_m, label) => {
-        const i = blocks.length;
-        blocks.push(
-          `<div class="block-streaming-indicator"><span class="streaming-dots">`
-          + `<span></span><span></span><span></span></span> ${escapeHtml(label)}…</div>`,
-        );
-        return PH(i);
-      });
-    }
-
-    // ── Now escape HTML on the remaining text ──
-    let html = escapeHtml(text);
-
-    // ── Markdown formatting ──
-
-    // Code blocks FIRST (preserve newlines inside)
-    const codeBlocks = [];
-    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
-      const langLabel = lang || "code";
-      const idx = codeBlocks.length;
-      codeBlocks.push(`<div class="code-header"><span>${escapeHtml(langLabel)}</span><button class="copy-btn">Copy</button></div><pre><code>${code}</code></pre>`);
-      return `\x01CODE${idx}\x01`;
-    });
-
-    // Convert newlines to <br> BEFORE parsing block elements
-    html = html.replace(/\n/g, "<br>");
-
-    // Markdown tables: | col | col | with |---|---| separator
-    // Split into lines, find contiguous table blocks, convert to HTML
-    const lines = html.split("<br>");
-    let inTable = false;
-    let tableLines = [];
-    const outputLines = [];
-
-    const flushTable = () => {
-      if (tableLines.length < 2) {
-        outputLines.push(...tableLines);
-        tableLines = [];
-        return;
-      }
-      const rows = tableLines.map(r => r.trim()).filter(r => r.startsWith("|") && r.endsWith("|"));
-      const sepIdx = rows.findIndex(r => {
-        const cells = r.replace(/^\||\|$/g, "").split("|");
-        return cells.length >= 1 && cells.every(c => /^[\s\-:]+$/.test(c));
-      });
-      if (sepIdx === -1 || rows.length < 3) {
-        outputLines.push(...tableLines);
-        tableLines = [];
-        return;
-      }
-      const parseRow = (r) => r.replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
-      const headerRows = rows.slice(0, sepIdx);
-      const bodyRows = rows.slice(sepIdx + 1);
-      let table = '<table class="md-table">';
-      if (headerRows.length > 0) {
-        table += "<thead>";
-        for (const r of headerRows) table += "<tr>" + parseRow(r).map(c => `<th>${c}</th>`).join("") + "</tr>";
-        table += "</thead>";
-      }
-      if (bodyRows.length > 0) {
-        table += "<tbody>";
-        for (const r of bodyRows) table += "<tr>" + parseRow(r).map(c => `<td>${c}</td>`).join("") + "</tr>";
-        table += "</tbody>";
-      }
-      table += "</table>";
-      outputLines.push(table);
-      tableLines = [];
-    };
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
-        tableLines.push(line);
-      } else {
-        if (tableLines.length > 0) flushTable();
-        outputLines.push(line);
-      }
-    }
-    if (tableLines.length > 0) flushTable();
-    html = outputLines.join("<br>");
-
-    // Headings (### h3, ## h2, # h1) — at start of line
-    html = html.replace(/(^|<br>)### (.+?)(<br>|$)/g, "$1<h3>$2</h3>$3");
-    html = html.replace(/(^|<br>)## (.+?)(<br>|$)/g, "$1<h2>$2</h2>$3");
-    html = html.replace(/(^|<br>)# (.+?)(<br>|$)/g, "$1<h1>$2</h1>$3");
-
-    // Horizontal rule
-    html = html.replace(/(^|<br>)---(<br>|$)/g, "$1<hr>$2");
-
-    // Blockquotes (> text) — collect consecutive lines into one blockquote
-    html = html.replace(/((?:(?:^|<br>)&gt; .+?(?=<br>|$))+)/g, (block) => {
-      const lines = block.split("<br>").map(l => l.replace(/^&gt;\s?/, "").trim()).filter(Boolean);
-      return `<blockquote>${lines.join("<br>")}</blockquote>`;
-    });
-
-    // Ordered lists (1. item) — tag with a sentinel so we can tell OL from UL later
-    html = html.replace(/(^|<br>)\d+\.\s(.+?)(?=<br>|$)/g, "$1<oli>$2</oli>");
-
-    // Unordered lists (- item)
-    html = html.replace(/(^|<br>)- (.+?)(?=<br>|$)/g, "$1<uli>$2</uli>");
-
-    // Inline code
-    html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-
-    // Bold
-    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-
-    // Italic
-    html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
-
-    // Strikethrough
-    html = html.replace(/~~(.+?)~~/g, "<del>$1</del>");
-
-    // Markdown links [text](url)
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-
-    // Auto-link bare URLs (not already inside an href or <a> tag)
-    html = html.replace(/(?<!href="|">)(https?:\/\/[^\s<"')\]]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
-
-    // Re-inject code blocks
-    for (let i = 0; i < codeBlocks.length; i++) {
-      html = html.replace(`\x01CODE${i}\x01`, codeBlocks[i]);
-    }
-
-    // Wrap consecutive list-item sentinels into real <ol>/<ul> blocks.
-    // Keeping OL and UL distinct preserves numbering for ordered lists and
-    // lets the themed ::before bullet apply cleanly to unordered lists.
-    html = html.replace(/(?:<oli>[\s\S]*?<\/oli>(?:<br>)?)+/g, (run) => {
-      const inner = run.replace(/<br>/g, "").replace(/<oli>/g, "<li>").replace(/<\/oli>/g, "</li>");
-      return `<ol>${inner}</ol>`;
-    });
-    html = html.replace(/(?:<uli>[\s\S]*?<\/uli>(?:<br>)?)+/g, (run) => {
-      const inner = run.replace(/<br>/g, "").replace(/<uli>/g, "<li>").replace(/<\/uli>/g, "</li>");
-      return `<ul>${inner}</ul>`;
-    });
-
-    // ── Re-inject extracted blocks ──
-    // Done AFTER list wrapping so tool-call blocks never get swallowed into a <ul>.
-    for (let i = 0; i < blocks.length; i++) {
-      html = html.replace(escapeHtml(PH(i)), blocks[i]);
-    }
-
+    let html = Core.renderMarkdown(text);
+    // eslint-disable-next-line no-control-regex -- U+0000 is the renderer's own block marker
+    html = html.replace(/\u0000(\d+)\u0000/g, (_m, i) => blocks[Number(i)] ?? "");
     return html;
   },
 };
 
 function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
+  return Core.escapeHtml(text);
 }
 
-// ── Streaming block helper ───────────────────────────────────────────
-
-/**
- * During streaming, XML blocks like <tool_call>...</tool_call> appear as raw
- * text until the closing tag arrives. This replaces any unclosed block tags
- * with a nice "working" indicator so the user doesn't see raw XML.
- */
-/**
- * Replace a still-unclosed XML block with a transient "working" marker.
- *
- * Returns the rewritten text plus the random nonce delimiting each marker.
- * The marker is deliberately NOT HTML: renderMarkdown builds the element
- * itself from the escaped label. Emitting raw HTML here is what made this an
- * XSS sink, because renderMarkdown then had to recognise that same HTML
- * inside attacker-supplied message text and pass it through unescaped.
- *
- * @returns {{text: string, nonce: string}}
- */
-function hideIncompleteBlocks(text) {
-  const nonce = streamMarkerNonce();
-  const blockTags = ["thinking", "antThinking", "antml:thinking", "reasoning", "tool_call", "tool_use", "tool_response", "tool_result", "function_calls", "function_response", "invoke", "search_results", "artifact", "result"];
-  let result = text;
-
-  for (const tag of blockTags) {
-    // Check for opening tag without matching closing tag
-    const openPattern = new RegExp(`<${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}>`, "g");
-    const closePattern = new RegExp(`</${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}>`, "g");
-    const opens = (result.match(openPattern) || []).length;
-    const closes = (result.match(closePattern) || []).length;
-
-    if (opens > closes) {
-      // There's an unclosed block — replace the incomplete one with a placeholder
-      const lastOpen = result.lastIndexOf(`<${tag}>`);
-      if (lastOpen !== -1) {
-        const label = tag.includes("think") || tag.includes("reason") ? "Thinking" :
-                      tag.includes("tool_call") || tag.includes("tool_use") ? "Running tool" :
-                      tag.includes("tool_r") ? "Processing result" : "Working";
-        result = result.slice(0, lastOpen) + `\n[[${nonce}:${label}]]`;
-      }
-    }
-  }
-
-  return { text: result, nonce };
+/** Only http(s), mailto and same-site relative links are rendered as links. */
+function safeHref(url) {
+  return Core.safeHref(url);
 }
 
-/**
- * A fresh unguessable marker per render. Inbound message text cannot contain
- * it, which is the point: the streaming placeholder must not be forgeable by
- * whoever sent the message.
- */
-function streamMarkerNonce() {
-  const buf = new Uint32Array(2);
-  crypto.getRandomValues(buf);
-  return `TSTREAM${buf[0].toString(36)}${buf[1].toString(36)}`;
+/** A canvas inline, with a floating "..." menu (Copy link, Download), as Claude draws its diagrams. */
+function canvasEmbedHtml(canvasId) {
+  const safeId = escapeHtml(canvasId);
+  return `<div class="canvas-embed" data-canvas-id="${safeId}">
+    <!-- No allow-same-origin. Canvas HTML is model-authored and the model
+         reads untrusted input, so pairing allow-scripts with
+         allow-same-origin handed any prompt injection full authority on
+         Tarsee's origin: the API token, the vault, the Claude credentials.
+         Dropping it keeps scripts working inside a null origin. The server
+         sends a matching CSP sandbox header so a directly-opened canvas is
+         covered too. -->
+    <iframe src="/canvas/${safeId}/" class="canvas-iframe" sandbox="allow-scripts" loading="lazy" title="Canvas"></iframe>
+    <button type="button" class="canvas-embed-menu-btn" aria-label="Diagram options" aria-haspopup="menu" aria-expanded="false">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="3" cy="8" r="1.5" fill="currentColor"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><circle cx="13" cy="8" r="1.5" fill="currentColor"/></svg>
+    </button>
+    <div class="canvas-embed-menu" role="menu">
+      <button type="button" class="canvas-embed-menu-item" data-canvas-action="copy" role="menuitem">Copy link</button>
+      <a class="canvas-embed-menu-item" href="/canvas/${safeId}/" download="${safeId}.html" role="menuitem">Download file</a>
+    </div>
+  </div>`;
 }
-
-// ── Tool & Thinking Block Renderers ──────────────────────────────────
 
 function renderThinkingBlock(label, content) {
   const preview = escapeHtml(content.slice(0, 120).replace(/\n/g, " ")) + (content.length > 120 ? "…" : "");
-  const full = escapeHtml(content).replace(/\n/g, "<br>");
   return `<details class="block-thinking">
-    <summary><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M6 6a2 2 0 012-2 2 2 0 012 2c0 1-1 1.5-1 2.5M8 11.5v.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> ${label}<span class="block-preview">${preview}</span></summary>
-    <div class="block-body">${full}</div>
+    <summary>${escapeHtml(label)}<span class="block-preview">${preview}</span></summary>
+    <div class="block-body">${Core.renderMarkdown(content)}</div>
   </details>`;
 }
 
-function renderToolCallBlock(content) {
-  let name = "tool_call";
-  let detail = "";
-  let args = "";
-  try {
-    const parsed = JSON.parse(content);
-    name = parsed.name || "tool_call";
-    args = parsed.arguments ? JSON.stringify(parsed.arguments, null, 2) : "";
-    // Extract a useful detail from arguments
-    if (parsed.arguments) {
-      detail = parsed.arguments.path || parsed.arguments.command || parsed.arguments.query || parsed.arguments.url || "";
-      if (typeof detail === "string" && detail.length > 80) detail = detail.slice(0, 77) + "…";
-    }
-  } catch {
-    // Not valid JSON — just show raw content
-    args = content;
-  }
-
-  const argsHtml = args ? `<pre class="block-code">${escapeHtml(args)}</pre>` : "";
-  const detailHtml = detail ? `<span class="block-detail">${escapeHtml(detail)}</span>` : "";
-
-  const toolColors = {exec:"#f59e0b",read_file:"#3b82f6",write_file:"#8b5cf6",edit_file:"#8b5cf6",web_search:"#10b981",web_fetch:"#10b981",browser:"#10b981",remember:"#ec4899",search_memories:"#ec4899",spawn_agent:"#f97316",generate_image:"#06b6d4",analyze_image:"#06b6d4",create_canvas:"#a855f7",send_message:"#6366f1",schedule_task:"#eab308",pdf_read:"#ef4444"};
-  const tc = toolColors[name] || "#6b7280";
-  return `<div class="block-tool-call">
-    <div class="block-tool-header">
-      <span style="display:inline-flex;align-items:center;gap:5px;background:${tc}22;color:${tc};padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M9.5 1.5L14 6l-4.5 4.5M6.5 14.5L2 10l4.5-4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        ${escapeHtml(name)}
-      </span>
-      ${detailHtml}
-    </div>
-    ${argsHtml}
-  </div>`;
-}
-
-function renderToolResponseBlock(content) {
-  const isLong = content.length > 200;
-  const displayContent = escapeHtml(content).replace(/\n/g, "<br>");
-
-  if (isLong) {
-    const preview = escapeHtml(content.slice(0, 150).replace(/\n/g, " ")) + "…";
-    return `<details class="block-tool-response">
-      <summary><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Tool output<span class="block-preview">${preview}</span></summary>
-      <div class="block-body">${displayContent}</div>
-    </details>`;
-  }
-
-  return `<div class="block-tool-response block-tool-response--inline">
-    <div class="block-tool-response-header"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> Tool output</div>
-    <div class="block-body">${displayContent}</div>
-  </div>`;
-}
-
-function renderFunctionCallsBlock(content) {
-  // Parse <invoke name="X"><parameter name="Y">value</parameter></invoke> blocks
-  const invocations = [];
-  const invokePattern = /<invoke\s+name="([^"]+)">([\s\S]*?)<\/invoke>/g;
-  let match;
-  while ((match = invokePattern.exec(content)) !== null) {
-    const name = match[1];
-    const params = {};
-    const paramPattern = /<parameter\s+name="([^"]+)">([\s\S]*?)<\/parameter>/g;
-    let pm;
-    while ((pm = paramPattern.exec(match[2])) !== null) {
-      params[pm[1]] = pm[2].trim();
-    }
-    invocations.push({ name, params });
-  }
-
-  if (invocations.length === 0) {
-    // Fallback: show as generic tool call
-    return renderToolCallBlock(content);
-  }
-
-  return invocations.map((inv) => {
-    const detail = inv.params.cmd || inv.params.path || inv.params.command || inv.params.query || "";
-    const argsStr = Object.entries(inv.params).length > 0
-      ? JSON.stringify(inv.params, null, 2)
-      : "";
-    const argsHtml = argsStr ? `<pre class="block-code">${escapeHtml(argsStr)}</pre>` : "";
-    const detailHtml = detail ? `<span class="block-detail">${escapeHtml(detail.slice(0, 80))}</span>` : "";
-
-    return `<div class="block-tool-call">
-      <div class="block-tool-header">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M9.5 1.5L14 6l-4.5 4.5M6.5 14.5L2 10l4.5-4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span class="block-tool-name">${escapeHtml(inv.name)}</span>
-        ${detailHtml}
-      </div>
-      ${argsHtml}
-    </div>`;
-  }).join("");
-}
-
 function renderGenericBlock(tag, content) {
-  const displayContent = escapeHtml(content).replace(/\n/g, "<br>");
   const label = tag.replace(/_/g, " ");
   return `<details class="block-generic">
-    <summary><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.2"/><path d="M5 6h6M5 8h6M5 10h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg> ${escapeHtml(label)}</summary>
-    <div class="block-body">${displayContent}</div>
+    <summary>${escapeHtml(label.charAt(0).toUpperCase() + label.slice(1))}</summary>
+    <div class="block-body">${escapeHtml(content).replace(/\n/g, "<br>")}</div>
   </details>`;
 }

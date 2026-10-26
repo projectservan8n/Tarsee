@@ -283,6 +283,8 @@ export async function runCronJob(job) {
   const toolCtx = { db: _db, settingsStore: _settingsStore, conversationId: null, channelManager: _channelManager };
   const { text: fullResponse, error } = await runBackgroundTurn({
     label: `cron:${job.id}`,
+    liveId: `cron:${job.id}`,
+    liveSource: "cron",
     model: jobModel,
     messages,
     systemPrompt,

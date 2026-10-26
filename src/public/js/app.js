@@ -5,7 +5,9 @@ const App = {
   async init() {
     // Check auth status
     try {
-      const { authenticated, needsPassword } = await API.authStatus();
+      const status = await API.authStatus();
+      const { authenticated, needsPassword } = status;
+      this._auth = status;
 
       if (!authenticated && needsPassword) {
         this.showLogin();
@@ -25,9 +27,21 @@ const App = {
     }
   },
 
+  /** After a successful login: first boot shows the app; a re-login after the
+   *  session expired mid-use reloads ONCE so every module starts clean. */
+  afterLogin() {
+    if (this._appShownOnce) { window.location.reload(); return; }
+    this.showApp();
+  },
+
   showLogin() {
     document.getElementById("loginScreen").style.display = "flex";
     document.getElementById("appScreen").style.display = "none";
+    // Listeners below must be bound ONCE. showLogin now also runs when a
+    // session expires mid-use (tarsee:auth-required), and re-binding would
+    // stack handlers and submit the login several times.
+    if (this._loginBound) return;
+    this._loginBound = true;
 
     // Desktop: classic form login
     const form = document.getElementById("loginForm");
@@ -49,7 +63,7 @@ const App = {
       }
       try {
         await API.login(password);
-        this.showApp();
+        this.afterLogin();
       } catch (err) {
         errorEl.textContent = err.message;
         errorEl.style.display = "block";
@@ -63,8 +77,16 @@ const App = {
 
     document.getElementById("loginPassword").focus();
 
-    // Mobile: PIN pad
+    // Mobile: PIN pad, with a way out for passwords that aren't 4 digits
     this.initPinPad();
+    const usePw = document.getElementById("pinUsePassword");
+    if (usePw && !usePw.dataset.bound) {
+      usePw.dataset.bound = "1";
+      usePw.addEventListener("click", () => {
+        document.getElementById("loginScreen")?.classList.add("use-password");
+        document.getElementById("loginPassword")?.focus();
+      });
+    }
   },
 
   initPinPad() {
@@ -92,9 +114,11 @@ const App = {
     const tryLogin = async () => {
       try {
         await API.login(pin);
-        this.showApp();
-      } catch {
-        shakeAndClear("Wrong PIN");
+        this.afterLogin();
+      } catch (err) {
+        // Say what actually happened: a rate limit or lockout is not a wrong PIN.
+        const msg = String(err?.message || "");
+        shakeAndClear(/too many|locked out|try again/i.test(msg) ? msg : "Wrong PIN");
       }
     };
 
@@ -120,9 +144,7 @@ const App = {
   },
 
   async showApp() {
-    // Signed in: scripts that wait for a session can go on (js/brand-icon.js asks for the icon's version).
-    window.dispatchEvent(new Event("tarsee:signed-in"));
-
+    this._appShownOnce = true;
     // Check if first-time setup is needed
     try {
       const status = await API.json("/api/settings/setup-status");
@@ -148,6 +170,21 @@ const App = {
     document.getElementById("setupWizard").style.display = "none";
     document.getElementById("appScreen").style.display = "grid";
 
+    // Sign out: ends this device's session only (other devices stay in). Asked in our own dialog (js/dialogs.js), and once:
+    // a second press while it is signing out does nothing.
+    let signingOut = false;
+    document.getElementById("signOutBtn")?.addEventListener("click", async () => {
+      if (signingOut) return;
+      if (!(await TarseeDialog.ask({ title: "Sign out of Tarsee on this device?", yes: "Sign out", no: "Cancel", danger: true }))) return;
+      signingOut = true;
+      try { await API.logout(); } catch { /* the session may already be gone */ }
+      try { localStorage.removeItem("tarsee_api_token"); } catch { /* ignore */ }
+      window.location.reload();
+    });
+
+    // Signed in: the parts that waited for it (js/brand-icon.js asks for the icon's state) can go on.
+    window.dispatchEvent(new Event("tarsee:signed-in"));
+
     // Initialize modules
     Chat.init();
     Voice.init();
@@ -168,17 +205,23 @@ const App = {
     const closeSidebar = () => {
       sidebar.classList.remove("open");
       overlay.classList.remove("active");
+      menuBtn.setAttribute("aria-expanded", "false");
     };
 
     // Always bind — CSS .mobile-only hides the button on desktop
     menuBtn.addEventListener("click", () => {
       const isOpen = sidebar.classList.toggle("open");
       overlay.classList.toggle("active", isOpen);
+      menuBtn.setAttribute("aria-expanded", String(isOpen));
+      if (isOpen) setTimeout(() => document.getElementById("newChatBtn")?.focus({ preventScroll: true }), 50);
     });
     overlay.addEventListener("click", closeSidebar);
-    // Close sidebar when a channel is clicked
+    // The drawer closes when a chat is picked (Chat closes it too when it opens one), and on Esc.
     sidebar.addEventListener("click", (e) => {
-      if (e.target.closest(".channel-item")) closeSidebar();
+      if (e.target.closest(".nav-row, .search-result-item, #newChatBtn, #settingsBtn")) closeSidebar();
+    });
+    sidebar.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && sidebar.classList.contains("open")) { closeSidebar(); menuBtn.focus(); }
     });
 
     // Handle window resize
@@ -278,7 +321,7 @@ const App = {
 
     // Offline / online state — surfaced only as a transient toast. No persistent banner.
     window.addEventListener("online", () => this.showToast("Back online", "success"));
-    window.addEventListener("offline", () => this.showToast("You're offline — changes will retry when you reconnect", "warning"));
+    window.addEventListener("offline", () => this.showToast("You're offline: changes will retry when you reconnect", "warning"));
 
     // Global keyboard shortcuts. Only fire when the user isn't typing into
     // an input field, otherwise `?` would block text entry.
@@ -378,6 +421,15 @@ const App = {
     try { navigator.vibrate?.(pattern); } catch { /* noop */ }
   },
 };
+
+// A 401 anywhere (session expired) shows the login screen once, no reload storm.
+window.addEventListener("tarsee:auth-required", () => App.showLogin());
+
+// Forms that only group password fields (data-no-submit) must never submit.
+// This was an inline onsubmit; the CSP now forbids inline script.
+document.addEventListener("submit", (e) => {
+  if (e.target?.matches?.("form[data-no-submit]")) e.preventDefault();
+});
 
 // Boot
 document.addEventListener("DOMContentLoaded", () => App.init());

@@ -5,17 +5,8 @@
   <!-- Apply saved theme BEFORE any CSS loads — prevents a flash of the
        default palette on every pageload for users who picked a non-default
        theme. Falls back to warm-charcoal if nothing is saved. -->
-  <script>
-    (function () {
-      try {
-        var t = localStorage.getItem("tarsee_theme");
-        // Alias the old hardcoded "dark" value (was in HTML pre-theme-switcher).
-        if (t === "dark") t = "warm-charcoal";
-        if (t) document.documentElement.setAttribute("data-theme", t);
-      } catch (e) { /* localStorage blocked — keep default */ }
-    })();
-  </script>
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <script src="/js/theme-boot.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#1a1a1a">
   <meta name="mobile-web-app-capable" content="yes">
@@ -23,9 +14,12 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Tarsee">
   <meta name="format-detection" content="telephone=no">
+  <!-- After sign-in, js/brand-icon.js adds the icon's version to these links, so a new icon from Settings is fetched
+       at once instead of the one the browser kept. -->
   <link rel="manifest" href="/manifest.json">
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <title>Tarsee</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="16x16" href="/icon-16.png">
   <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png">
   <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -42,6 +36,8 @@
   <!-- Component Styles -->
   <link rel="stylesheet" href="/css/style.css">
   <link rel="stylesheet" href="/css/chat.css">
+  <link rel="stylesheet" href="/css/chat-ui.css">   <!-- the sidebar, the reading column, the steps, the composer -->
+
   <link rel="stylesheet" href="/css/voice.css">
   <link rel="stylesheet" href="/css/console.css">
   <link rel="stylesheet" href="/css/files.css">
@@ -96,10 +92,11 @@
         <button class="pin-key" data-digit="9" aria-label="9 WXYZ"><span class="pin-digit">9</span><span class="pin-letters">WXYZ</span></button>
         <button class="pin-key pin-key-empty" aria-hidden="true"></button>
         <button class="pin-key" data-digit="0" aria-label="0"><span class="pin-digit">0</span></button>
-        <button class="pin-key pin-key-delete" id="pinDelete" aria-label="Delete">
+        <button class="pin-key pin-key-delete" id="pinDelete" aria-label="Delete last digit">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M9 18l6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="rotate(180 12 12)"/><path d="M19 6H9l-5 6 5 6h10a1 1 0 001-1V7a1 1 0 00-1-1z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
+      <button type="button" class="pin-use-password" id="pinUsePassword">Use password instead</button>
     </div>
   </div>
 
@@ -112,19 +109,35 @@
   <div id="appScreen" class="app" style="display:none">
 
     <!-- Sidebar -->
-    <aside class="sidebar" id="sidebar">
+    <!-- Sidebar: the main menu, as on claude.ai. New chat and search at the top, then every chat grouped by where it
+         lives (Web, Telegram, Discord, WhatsApp, Email), plain rows with a quiet time (js/chat.js
+         renderChannelList, rules in js/chat-core.js), Settings and Sign out at the bottom. A drawer on a phone. -->
+    <aside class="sidebar" id="sidebar" aria-label="Chats">
       <div class="sidebar-header">
-        <div class="logo"><img src="/icon-32.png" alt="Tarsee" class="avatar-img"></div>
-        <h1>Tarsee</h1>
-      </div>
-      <div class="channel-list" id="channelList">
-        <!-- Dynamically populated with channels -->
-      </div>
-      <div class="sidebar-footer">
-        <button class="btn btn-ghost btn-sm btn-block" id="settingsBtn">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6.5 1.5h3l.5 2 1.5.9 2-.5 1.5 2.6-1.5 1.5v1.5l1.5 1.5-1.5 2.6-2-.5-1.5.9-.5 2h-3l-.5-2-1.5-.9-2 .5L1 11.5l1.5-1.5V8.5L1 7l1.5-2.6 2 .5L6 4z" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8.5" r="2" stroke="currentColor" stroke-width="1.2"/></svg>
-          Settings
+        <a class="brand" href="/chat/new" id="brandLink" aria-label="Tarsee: a new chat">
+          <img src="/icon-32.png" alt="" class="brand-icon" width="24" height="24">
+          <span class="brand-name">Tarsee</span>
+        </a>
+        <button type="button" class="topbar-icon-btn mobile-only" id="sidebarCloseBtn" aria-label="Close the menu">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         </button>
+      </div>
+      <div class="sidebar-top">
+        <a class="nav-new" id="newChatBtn" href="/chat/new">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <span>New chat</span>
+        </a>
+        <div class="sidebar-search">
+          <input type="search" id="searchInput" class="search-input" placeholder="Search chats" aria-label="Search the chats and their messages" autocomplete="off" enterkeyhint="search">
+        </div>
+      </div>
+      <nav class="channel-list" id="channelList" aria-label="Your chats">
+        <!-- The chats, drawn by js/chat.js -->
+      </nav>
+      <div id="searchResults" class="search-results" hidden></div>
+      <div class="sidebar-footer">
+        <button type="button" class="nav-foot" id="settingsBtn">Settings</button>
+        <button type="button" class="nav-foot" id="signOutBtn">Sign out</button>
       </div>
     </aside>
 
@@ -132,10 +145,15 @@
     <main class="main">
       <div class="topbar">
         <div class="topbar-left">
-          <button class="btn btn-sm mobile-only" id="menuBtn" aria-label="Open sidebar menu" aria-expanded="false" aria-controls="sidebar">
+          <button class="topbar-icon-btn mobile-only" id="menuBtn" aria-label="Open the menu" aria-expanded="false" aria-controls="sidebar">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
           </button>
-          <span class="topbar-title" id="topbarTitle">Tarsee</span>
+          <!-- The chat's name; its menu (rename, a fresh session, delete) opens from it. -->
+          <button type="button" class="chat-heading" id="chatMenuBtn" aria-haspopup="menu" aria-expanded="false" title="Chat options">
+            <span class="topbar-title" id="topbarTitle">Tarsee</span>
+            <span class="topbar-where" id="topbarWhere"></span>
+            <svg class="chat-heading-caret" width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
         </div>
         <div class="topbar-right">
           <button class="topbar-icon-btn console-toggle-btn" id="consoleToggleBtn" title="Console" aria-label="Toggle console">
@@ -164,38 +182,13 @@
         </div>
       </div>
 
-      <!-- Welcome (shown when no conversation active) -->
+      <!-- A new chat (/chat/new), or a chat with nothing in it yet. -->
       <div id="welcomeScreen" class="welcome">
-        <div class="logo-large" id="welcomeLogo"><img src="/icon-192.png" alt="Tarsee" class="avatar-img"></div>
-        <h2 id="welcomeTitle">Welcome to Tarsee</h2>
-        <p>How can I help you today?</p>
-        <div class="welcome-suggestions" id="welcomeSuggestions" role="list">
-          <div class="welcome-suggestion" role="listitem" tabindex="0" data-msg="Help me write code">Help me write code</div>
-          <div class="welcome-suggestion" role="listitem" tabindex="0" data-msg="Explain a concept">Explain a concept</div>
-          <div class="welcome-suggestion" role="listitem" tabindex="0" data-msg="Brainstorm ideas">Brainstorm ideas</div>
-          <div class="welcome-suggestion" role="listitem" tabindex="0" data-msg="Analyze some data">Analyze data</div>
-        </div>
-        <div class="welcome-hint mt-5">
-          Type <code>/</code> for commands · Press <code>?</code> for shortcuts
-        </div>
-      </div>
-
-      <!-- Session bar: model, session status, context usage -->
-      <div id="sessionBar" class="session-bar" style="display:none">
-        <div class="session-bar-left">
-          <span class="session-model" id="sessionModel">opus</span>
-          <span class="session-status" id="sessionStatus">New Session</span>
-        </div>
-        <div class="session-bar-right">
-          <button class="effort-toggle" id="effortToggle" title="Thinking effort — tap to cycle" role="button" aria-label="Thinking effort level">
-            <span class="effort-icon" id="effortIcon">⚡</span>
-            <span class="effort-label" id="effortLabel">Auto</span>
-          </button>
-          <div class="context-bar" title="Context window usage">
-            <div class="context-bar-fill" id="contextBarFill" style="width:0%"></div>
-          </div>
-          <span class="context-label" id="contextLabel">0%</span>
-          <button id="newSessionBtn" class="badge-btn" title="Start new session">New</button>
+        <div class="welcome-logo" id="welcomeLogo"><img src="/icon-192.png" alt="" width="56" height="56"></div>
+        <h2 id="welcomeTitle">How can I help?</h2>
+        <p class="welcome-sub" id="welcomeSub">Type below, or drop files in.</p>
+        <div class="welcome-hint">
+          Type <code>/</code> for commands. Press <code>?</code> for shortcuts.
         </div>
       </div>
 
@@ -206,31 +199,40 @@
 
       <div id="inputArea" class="input-area" style="display:none">
         <div id="attachmentsPreview" class="chat-attachments-preview" style="display:none"></div>
-        <!-- Composer: 2-row layout matching Claude Code VS Code extension.
-             Top row = textarea + voice mic. Bottom row = attach + slash +
-             spacer + send. The container itself owns the rounded border so
-             the rows look like one cohesive surface. -->
+        <!-- Composer, as on claude.ai: the words on top; under them attach, commands and the microphone on the left,
+             the context used, the model and the effort small on the right, then Send. -->
         <div class="input-container">
           <input type="file" id="chatFileInput" multiple style="display:none" aria-label="Attach files">
 
           <div class="input-row input-row-top">
             <label for="messageInput" class="sr-only">Message</label>
-            <textarea id="messageInput" placeholder="Message Tarsee..." rows="1" spellcheck="false" aria-label="Message"></textarea>
-            <button class="input-btn input-btn-ghost" id="voiceInputBtn" title="Voice input (hold to record, drag left to cancel)" aria-label="Record voice message">
-              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1a3 3 0 013 3v3a3 3 0 01-6 0V4a3 3 0 013-3z" stroke="currentColor" stroke-width="1.2"/><path d="M3 7a5 5 0 0010 0M8 14v-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-            </button>
+            <textarea id="messageInput" placeholder="Message Tarsee" rows="1" spellcheck="false" aria-label="Message"></textarea>
           </div>
 
           <div class="input-row input-row-bottom">
             <button class="input-btn input-btn-ghost" id="attachBtn" title="Attach files" aria-label="Attach files">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             </button>
-            <button class="input-btn input-btn-ghost" id="slashBtn" title="Commands (/) — open palette" aria-label="Open command palette">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 12.5l9-9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="2" y="2" width="12" height="12" rx="2.5" stroke="currentColor" stroke-width="1.2"/></svg>
+            <button class="input-btn input-btn-ghost" id="slashBtn" title="Commands (/)" aria-label="Open the commands">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10.5 3l-5 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <button class="input-btn input-btn-ghost" id="voiceInputBtn" title="Voice message (hold to record, slide left to cancel)" aria-label="Record a voice message">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.5a2.5 2.5 0 012.5 2.5v3.5a2.5 2.5 0 01-5 0V4A2.5 2.5 0 018 1.5z" stroke="currentColor" stroke-width="1.3"/><path d="M3.5 7.5a4.5 4.5 0 009 0M8 12v2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
             </button>
             <div class="input-spacer"></div>
+            <div class="composer-meta">
+              <span class="context-meter" id="contextMeter" title="Context window used">
+                <span class="context-bar"><span class="context-bar-fill" id="contextBarFill" style="width:0%"></span></span>
+                <span class="context-label" id="contextLabel">0%</span>
+              </span>
+              <span class="session-model" id="sessionModel" title="The model on this chat">Sonnet</span>
+              <button type="button" class="effort-toggle" id="effortToggle" title="Thinking effort: tap to change, hold for all levels" aria-label="Thinking effort level">
+                <span class="effort-label" id="effortLabel">Auto</span>
+              </button>
+              <span class="sr-only" id="sessionStatus" aria-live="polite"></span>
+            </div>
             <button class="input-btn input-btn-send" id="sendBtn" title="Send" aria-label="Send message" disabled>
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" class="send-icon-arrow"><path d="M2 8l11-6-3 6 3 6z"/></svg>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" class="send-icon-arrow"><path d="M8 13V3.5M3.5 7.5L8 3l4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
               <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" class="send-icon-stop"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg>
             </button>
           </div>
@@ -303,7 +305,7 @@
           <div class="settings-tab-panel active" data-tab="identity">
             <h2>Identity</h2>
             <div class="settings-section">
-              <div class="hint mb-2">Bot name is set by Claude Code via IDENTITY.md — tell it "change your name to X" in chat.</div>
+              <div class="hint mb-2">Bot name is set by Claude Code via IDENTITY.md. Tell it "change your name to X" in chat.</div>
               <input type="hidden" id="settingsBotName">
             </div>
 
@@ -382,7 +384,7 @@
                      about a password field outside any form. autocomplete=off
                      keeps password managers from offering to save API keys
                      as login credentials. display:contents keeps layout. -->
-                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                <form style="display:contents" autocomplete="off" data-no-submit>
                   <input type="password" id="settingsApiKey" autocomplete="off">
                 </form>
               </div>
@@ -398,7 +400,7 @@
                 <input type="text" id="settingsBaseUrl">
               </div>
               </div>
-              <div class="hint mb-3">Uses your Claude Max subscription via <code>claude login</code>. No API key needed — credentials are stored on the volume.</div>
+              <div class="hint mb-3">Uses your Claude Max subscription via <code>claude login</code>. No API key needed. Credentials are stored on the volume.</div>
               <button class="btn btn-primary" id="saveProviderBtn">Save</button>
             </div>
           </div>
@@ -410,13 +412,13 @@
               <div>
               <div class="form-group">
                 <label>Telegram Bot Token</label>
-                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                <form style="display:contents" autocomplete="off" data-no-submit>
                   <input type="password" id="settingsTelegramToken" placeholder="123456:ABC... (from @BotFather)" autocomplete="off">
                 </form>
               </div>
               <div class="form-group">
                 <label>Discord Bot Token</label>
-                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                <form style="display:contents" autocomplete="off" data-no-submit>
                   <input type="password" id="settingsDiscordToken" placeholder="Bot token (from Discord Developer Portal)" autocomplete="off">
                 </form>
               </div>
@@ -493,7 +495,7 @@
                 <div class="hint">Click a provider to auto-fill IMAP + SMTP host and port.</div>
               </div>
 
-              <h4 style="margin-top:18px; margin-bottom:8px;">IMAP (inbound — Tarsee reads mail)</h4>
+              <h4 style="margin-top:18px; margin-bottom:8px;">IMAP (inbound: Tarsee reads mail)</h4>
               <div class="form-row" style="display:grid; grid-template-columns: 2fr 1fr; gap:12px;">
                 <div class="form-group">
                   <label>Host</label>
@@ -510,13 +512,13 @@
               </div>
               <div class="form-group">
                 <label>App password</label>
-                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                <form style="display:contents" autocomplete="off" data-no-submit>
                   <input type="password" id="settingsEmailImapPassword" placeholder="16-character app password (not your login password)" autocomplete="new-password">
                 </form>
                 <div class="hint">Most providers require an <strong>app-specific password</strong>, not your regular login password. See the README for per-provider setup links.</div>
               </div>
 
-              <h4 style="margin-top:18px; margin-bottom:8px;">SMTP (outbound — Tarsee replies)</h4>
+              <h4 style="margin-top:18px; margin-bottom:8px;">SMTP (outbound: Tarsee replies)</h4>
               <div class="form-row" style="display:grid; grid-template-columns: 2fr 1fr; gap:12px;">
                 <div class="form-group">
                   <label>Host</label>
@@ -533,10 +535,10 @@
               </div>
               <div class="form-group">
                 <label>App password</label>
-                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                <form style="display:contents" autocomplete="off" data-no-submit>
                   <input type="password" id="settingsEmailSmtpPassword" placeholder="16-character app password (not your login password)" autocomplete="new-password">
                 </form>
-                <div class="hint">Leave blank to keep the existing password — only type here to change it.</div>
+                <div class="hint">Leave blank to keep the existing password. Only type here to change it.</div>
               </div>
 
               <h4 style="margin-top:18px; margin-bottom:8px;">Reply behavior</h4>
@@ -560,7 +562,7 @@
               <div class="form-group">
                 <label>Only respond to emails from these addresses</label>
                 <textarea id="settingsEmailAllowlist" rows="4" placeholder="one address per line&#10;you@example.com&#10;teammate@example.com" spellcheck="false" class="textarea-mono"></textarea>
-                <div class="hint"><strong>Strongly recommended.</strong> Leave empty to allow all senders (dev mode only — not safe for production mailboxes). Tarsee will still drop newsletters and auto-reply loops regardless.</div>
+                <div class="hint"><strong>Strongly recommended.</strong> Leave empty to allow all senders (dev mode only: not safe for production mailboxes). Tarsee will still drop newsletters and auto-reply loops regardless.</div>
               </div>
 
               <button class="btn btn-primary" id="saveEmailChannelBtn">Save Email Channel</button>
@@ -572,12 +574,12 @@
               <div class="hint mb-3">Control who can talk to the bot. Leave empty to allow everyone.</div>
 
               <div class="form-group">
-                <label>Telegram — Allowed Chat IDs</label>
+                <label>Telegram: Allowed Chat IDs</label>
                 <textarea id="settingsTelegramAllowlist" rows="3" placeholder="One per line. Chat ID (number).&#10;Message the bot, check Console logs for the chat ID.&#10;Groups: negative number e.g. -1001234567890" spellcheck="false" class="textarea-mono"></textarea>
               </div>
 
               <div class="form-group">
-                <label>Discord — Allowed Channels / Users</label>
+                <label>Discord: Allowed Channels / Users</label>
                 <textarea id="settingsDiscordAllowlist" rows="3" placeholder="One per line. Channel or User ID.&#10;Enable Developer Mode → right-click → Copy ID.&#10;Bot responds in listed channels + DMs from listed users." spellcheck="false" class="textarea-mono"></textarea>
               </div>
 
@@ -591,10 +593,10 @@
 
             <div class="settings-section">
               <h3>Bot Behavior</h3>
-              <div class="hint mb-3">Whether allowed users have to @mention the bot for it to respond. Allowlist still controls who can talk to the bot — this only changes whether they need to tag Tarsee.</div>
+              <div class="hint mb-3">Whether allowed users have to @mention the bot for it to respond. Allowlist still controls who can talk to the bot. This only changes whether they need to tag Tarsee.</div>
 
               <div class="form-group">
-                <label>Discord — Mention mode</label>
+                <label>Discord: Mention mode</label>
                 <select id="settingsDiscordMentionMode">
                   <option value="required">Require @mention (default)</option>
                   <option value="off">Respond to every message from allowed users (lazy)</option>
@@ -603,7 +605,7 @@
               </div>
 
               <div class="form-group">
-                <label>Telegram — Mention mode</label>
+                <label>Telegram: Mention mode</label>
                 <select id="settingsTelegramMentionMode">
                   <option value="required">Require @mention or reply-to-bot (default)</option>
                   <option value="off">Respond to every message from allowed chats (lazy)</option>
@@ -750,7 +752,7 @@
               </div>
               <div class="form-group" id="openaiKeyGroup">
                 <label>OpenAI API Key</label>
-                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                <form style="display:contents" autocomplete="off" data-no-submit>
                   <input type="password" id="settingsOpenaiKey" class="form-input" placeholder="sk-..." style="max-width:400px" autocomplete="off">
                 </form>
                 <div class="hint">Required for Whisper API and GPT-4o Transcribe. Get yours at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">platform.openai.com</a>.</div>
@@ -821,7 +823,7 @@
                   <button type="button" class="btn btn-sm btn-secondary" id="settingsApiTokenReveal">Reveal</button>
                   <button type="button" class="btn btn-sm btn-secondary" id="settingsApiTokenCopy">Copy</button>
                 </div>
-                <div class="hint">Used for WebSocket and REST API authentication. Hidden by default — click Reveal to see the full token, or Copy to put it on the clipboard without revealing.</div>
+                <div class="hint">Used for WebSocket and REST API authentication. Hidden by default: click Reveal to see the full token, or Copy to put it on the clipboard without revealing.</div>
               </div>
             </div>
           </div>
@@ -861,7 +863,7 @@
               </div>
               <div class="form-group mb-3">
                 <label class="form-label">API Key</label>
-                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
+                <form style="display:contents" autocomplete="off" data-no-submit>
                   <input type="password" class="form-input" id="captchaApiKey" placeholder="Your API key" style="max-width:400px" autocomplete="off">
                 </form>
               </div>
@@ -916,12 +918,12 @@
             <h2>Appearance</h2>
             <div class="settings-section">
               <h3>Theme</h3>
-              <div class="hint mb-3">Pick a palette. Saved to this device and applied instantly — no reload needed.</div>
+              <div class="hint mb-3">Pick a palette. Saved to this device and applied instantly. No reload needed.</div>
               <div class="form-group">
                 <label>Theme</label>
                 <select id="settingsTheme">
                   <option value="warm-charcoal">Warm Charcoal (default)</option>
-                  <option value="noir">Noir — pure OLED black</option>
+                  <option value="noir">Noir: pure OLED black</option>
                   <option value="solarized-light">Solarized Light</option>
                   <option value="jarvis-blue">JARVIS Blue</option>
                 </select>
@@ -946,7 +948,7 @@
 
             <div class="settings-section">
               <h3>Push Notifications</h3>
-              <div class="hint mb-3">Let Tarsee wake this device when cron jobs, webhooks, or channel messages fire while the app is in the background. Per-device — enable on every device you want pings on.</div>
+              <div class="hint mb-3">Let Tarsee wake this device when cron jobs, webhooks, or channel messages fire while the app is in the background. Per-device: enable on every device you want pings on.</div>
               <div class="form-group">
                 <button class="btn btn-primary btn-sm" id="enablePushBtn">Enable on this device</button>
                 <button class="btn btn-ghost btn-sm" id="disablePushBtn" style="display:none">Disable on this device</button>
@@ -971,7 +973,7 @@
         <button class="console-btn active" id="consoleAutoScrollBtn" title="Auto-scroll">Auto</button>
         <button class="console-btn" id="consoleClearBtn" title="Clear">Clear</button>
         <button class="console-btn" id="consoleMaxBtn" title="Maximize">Max</button>
-        <button class="console-btn" id="consoleCloseBtn" title="Close">X</button>
+        <button class="console-btn" id="consoleCloseBtn" title="Close" aria-label="Close console">X</button>
       </div>
     </div>
     <div class="console-output" id="consoleOutput"></div>
@@ -986,8 +988,8 @@
     <div class="fm-header">
       <div class="fm-breadcrumb" id="fmBreadcrumb">workspace</div>
       <div class="flex gap-1">
-        <button class="topbar-icon-btn" id="fmNewFile" title="New File">+</button>
-        <button class="topbar-icon-btn" id="fmClose">&#10005;</button>
+        <button class="topbar-icon-btn" id="fmNewFile" title="New File" aria-label="New file">+</button>
+        <button class="topbar-icon-btn" id="fmClose" title="Close" aria-label="Close file manager">&#10005;</button>
       </div>
     </div>
     <div class="fm-body">
@@ -1035,7 +1037,9 @@
   <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
   <script src="/js/dialogs.js"></script>
   <script src="/js/api.js"></script>
+  <script src="/js/chat-core.js"></script>   <!-- the chat's rules with no page: groups, steps, addresses, Markdown -->
   <script src="/js/chat.js"></script>
+  <script src="/js/live.js"></script>
   <script src="/js/voice.js"></script>
   <script src="/js/console.js"></script>
   <script src="/js/settings.js"></script>

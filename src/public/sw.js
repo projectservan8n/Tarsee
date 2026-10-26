@@ -1,12 +1,14 @@
 // Tarsee Service Worker — PWA install, offline shell, network-first for code.
 // Bump CACHE_NAME when shipping SW behavior changes to force old caches out.
-const CACHE_NAME = "tarsee-v7";
+const CACHE_NAME = "tarsee-v8";   // (v8: the dashboard chat rebuilt like claude.ai; chat-core.js, live.js and chat-ui.css join the shell)
 
 const APP_SHELL = [
   "/",
   "/offline.html",
+  "/offline.js",
   "/css/style.css",
   "/css/chat.css",
+  "/css/chat-ui.css",
   "/css/voice.css",
   "/css/tokens.css",
   "/css/utilities.css",
@@ -17,9 +19,10 @@ const APP_SHELL = [
   "/js/app.js",
   "/js/api.js",
   "/js/dialogs.js",
-  "/js/brand-icon.js",
-  "/css/brand-icon.css",
+  "/js/chat-core.js",
   "/js/chat.js",
+  "/js/theme-boot.js",
+  "/js/live.js",
   "/js/voice.js",
   "/js/settings.js",
   "/js/setup.js",
@@ -27,6 +30,8 @@ const APP_SHELL = [
 
   "/js/console.js",
   "/js/files.js",
+  "/js/brand-icon.js",
+  "/css/brand-icon.css",
   "/js/terminal.js",
   "/manifest.json",
   "/icon-32.png",
@@ -92,21 +97,23 @@ self.addEventListener("fetch", (event) => {
     );
   } else if (isCode) {
     // Code assets (JS/CSS/HTML): network-first so deploys take effect
-    // immediately. Cache is a fallback only when offline — prevents stale
-    // JS/CSS from breaking the app after the server ships new code.
+    // immediately. A blip on the line is tried once more before the cache: an
+    // old copy of one file next to new copies of the others can break the
+    // page. The cache is a fallback only when the network really is not there.
+    const fresh = () => fetch(event.request).then((res) => {
+      if (res.ok) {
+        const clone = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+      }
+      return res;
+    });
     event.respondWith(
-      fetch(event.request)
-        .then((res) => {
-          if (res.ok) {
-            const clone = res.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return res;
-        })
+      fresh()
+        .catch(() => new Promise((r) => setTimeout(r, 800)).then(fresh))
         .catch(() => caches.match(event.request))
     );
   } else if (ICON_ADDRESSES.has(url.pathname)) {
-    // The icons and the manifest: network-first. The page asks for them with ?v=<version>; offline, whatever
+    // The icon and the manifest: network-first. The page asks for them with ?v=<version>; offline, whatever
     // version was kept will do.
     event.respondWith(
       fetch(event.request)
