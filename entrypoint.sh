@@ -44,8 +44,9 @@ fi
 
 # Optional Claude Code CLI auto-update on boot.
 # Set TARSEE_AUTO_UPDATE_CLI=1 to opt in. Off by default so boots are
-# deterministic + fast (~60s saved). The image already pins a working
-# version at build time.
+# deterministic + fast (~60s saved): the image installs the version pinned in
+# the Dockerfile (CLAUDE_CODE_VERSION), and a rebuild keeps it. An update made
+# here lives in the container only, so it is redone on every boot.
 CURRENT_VERSION=$(claude --version 2>/dev/null | head -1 || echo "unknown")
 if [ "${TARSEE_AUTO_UPDATE_CLI:-0}" = "1" ]; then
   echo "[entrypoint] Claude Code: $CURRENT_VERSION — checking for updates..."

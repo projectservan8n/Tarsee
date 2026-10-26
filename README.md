@@ -34,20 +34,20 @@ Being honest — some of these projects are massive with huge communities. Tarse
 | **Language** | Node.js | Node.js + TypeScript | TypeScript | Go | Python |
 | **Frontend** | Vanilla HTML/CSS/JS | React + Primer UI | React | Go Web UI + TUI | Python CLI |
 | **Build step** | None | TypeScript + Vite | TypeScript | Go compile | pip install |
-| **RAM** | ~200-400MB | Higher (full React stack) | Moderate | <10MB | Low |
+| **RAM** | about 500 MB | Higher (full React stack) | Moderate | <10MB | Low |
 | **Channels** | Web, Telegram, Discord, WhatsApp, Email, Voice | 24+ (WhatsApp, Slack, Signal, etc.) | WhatsApp, Telegram, Discord, Slack | 18+ (Telegram, Discord, WeChat, etc.) | 12+ (Telegram, Discord, WhatsApp, etc.) |
 | **Voice** | Yes (faster-whisper + local Phonon TTS) | Yes (wake word, ElevenLabs) | No | No | Telegram/WeChat voice |
 | **Mobile** | PWA + iOS PIN pad | Native iOS/Android apps | Via messaging apps | Android APK | Via messaging apps |
 | **Memory** | Persistent + deep search | Session-based with group isolation | SQLite + per-group files | JSONL memory store | Token-based memory |
 | **Auth** | Claude subscription (OAuth) | OAuth + API keys | API keys | API keys + OAuth | API keys + OAuth |
 | **LLM support** | Claude only | Claude only | Claude only | 30+ providers | Multi-provider |
-| **Self-host cost** | ~$2-10/mo Railway | Higher (more resources) | Moderate | ~$10/mo (runs on anything) | Low |
+| **Self-host cost** | about $6/mo Railway (measured) | Higher (more resources) | Moderate | ~$10/mo (runs on anything) | Low |
 
 ### Why choose Tarsee?
 
 - **You want simplicity** — no build step, no TypeScript, no framework. Just Node.js serving HTML.
 - **You want Claude specifically** — Tarsee wraps Claude Code SDK directly. Not multi-provider, not trying to be everything.
-- **You want it cheap** — runs on $2-10/mo Railway. No API costs with Claude Max.
+- **You want it cheap** — Railway runs about $6/mo for one person's everyday use (measured, Sept 2026); Claude Max is the bigger cost. No API costs on top of it.
 - **You want voice + mobile** — PWA with local speech-to-text, hold-to-talk, iOS PIN pad login.
 - **You want memory** — persistent memory across sessions with deep semantic search.
 - **You want browser automation** — stealth Playwright with captcha solving built in.
@@ -57,7 +57,7 @@ Being honest — some of these projects are massive with huge communities. Tarse
 - **You need 20+ channels** — OpenClaw or PicoClaw support way more platforms.
 - **You need native mobile apps** — OpenClaw has actual iOS/Android apps.
 - **You need multi-provider** — PicoClaw supports 30+ LLMs. Tarsee is Claude-only.
-- **You need minimal resources** — PicoClaw runs on <10MB RAM. Tarsee needs ~200MB.
+- **You need minimal resources** — PicoClaw runs on <10MB RAM. Tarsee needs about 500 MB.
 - **You want a massive community** — OpenClaw has 353K stars and thousands of contributors.
 
 Tarsee is a Claude Code wrapper — not a fork, not a rewrite. It uses `@anthropic-ai/claude-agent-sdk` directly, so you get the exact same Claude Code experience with all built-in tools (Read, Write, Edit, Bash, Grep, Glob) plus Tarsee's own tools on top.
@@ -75,8 +75,9 @@ Tarsee is a Claude Code wrapper — not a fork, not a rewrite. It uses `@anthrop
    - A login link will appear — **highlight it and right-click → Copy** (Ctrl+C won't work in the terminal)
    - Open the link in your browser and authenticate with your Claude Max account
    - Come back and click **"I'm connected"** — done!
+5. Voice works right away: on first boot Tarsee downloads its local voice (Phonon, about 72 MB) to the volume in the background, and Edge TTS speaks in the meantime.
 
-That's it. Credentials are stored on the Railway volume and auto-refresh. No env vars to manage. Claude Code CLI auto-updates on every restart.
+That's it. Credentials are stored on the Railway volume and auto-refresh. No env vars to manage. The Claude Code CLI does **not** update itself: the image installs the version pinned in the Dockerfile (`CLAUDE_CODE_VERSION`, 2.1.308), and a rebuild keeps it. Set `TARSEE_AUTO_UPDATE_CLI=1` to install the latest on every boot instead.
 
 ### Authenticating with Claude
 
@@ -199,7 +200,7 @@ You (web / telegram / discord / email / voice / iOS push)
   v
 Tarsee Server (Railway)
   |
-  +-- Claude Code Agent SDK (subscription auth, auto-updates)
+  +-- Claude Code Agent SDK (subscription auth; CLI pinned in the Dockerfile)
   |     +-- Built-in: Read, Write, Edit, Bash, Grep, Glob
   |     +-- MCP tools: send_message, schedule_task, remember,
   |         create_canvas, calculator, browser, web_search,
@@ -340,6 +341,8 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `NODE_ENV` | Yes | — | Set to `production` |
 | `CLAUDE_DEFAULT_MODEL` | No | `sonnet` | Default model for new sessions. Defaults to the **`sonnet` alias**, which Tarsee resolves to the newest Sonnet in Claude Code's catalog before each turn — so a new Anthropic release is picked up with no code change. Set `opus` for the most capable default, a pinned id (e.g. `claude-opus-5`) if you need a frozen model, or `haiku` for a cheaper one. |
 | `ELEVENLABS_API_KEY` | No | — | Premium TTS voices. Used when ElevenLabs (or Auto) is picked in Settings > Voice, or when the key is set and no engine was ever saved; otherwise the default engine, Phonon, and its fallback, Edge TTS, are free. |
+| `VAPID_SUBJECT` | No | your Railway `https://` address, else `mailto:admin@example.com` | The contact Web Push services are given for your server's notifications: a `mailto:` or `https:` URL, e.g. `mailto:you@yourdomain.com`. Apple's push service turns away subjects that aren't a real mailto/https address. |
+| `TARSEE_AUTO_UPDATE_CLI` | No | off | Set `1` to install the latest Claude Code CLI on every boot (adds up to ~60s to each boot). Off, the image keeps the version pinned in the Dockerfile (`CLAUDE_CODE_VERSION`). |
 | `TARSEE_PHONON_AUTO_INSTALL` | No | on | Set `0` to stop Tarsee downloading Phonon's model in the background on boot when Phonon is the voice engine. The Install Phonon button in Settings > Voice still works. |
 | `TARSEE_PHONON_DIR` | No | `<data dir>/tts/phonon` | Where Phonon's model, voices and (if needed) Python venv live. On Railway that is `/data/tarsee/data/tts/phonon`, on the volume. |
 | `TARSEE_PHONON_PYTHON` | No | `python3` | Python interpreter with the `ptts` package for Phonon's worker. Without it Tarsee uses `python3`, or a private venv it creates under `TARSEE_PHONON_DIR` when `python3` lacks `ptts`. |
