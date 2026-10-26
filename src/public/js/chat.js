@@ -562,7 +562,7 @@ const Chat = {
 
   setBotName(name) {
     this.botName = name || "Tarsee";
-    if (!this.currentChannelKey && !(typeof Settings !== "undefined" && Settings.isOpen)) {
+    if (!this.currentChannelKey && !(typeof Settings !== "undefined" && Settings.isOpen) && !(typeof Usage !== "undefined" && Usage.isOpen)) {
       this.elements.topbarTitle.textContent = this.botName;
     }
     const brand = document.querySelector(".sidebar-header .brand-name");
@@ -824,6 +824,8 @@ const Chat = {
    * last (else the Main Session). push: false when it came from Back or Forward (the address is already there).
    */
   route(pathname, { push = false, replace = false } = {}) {
+    if (pathname === "/usage" && typeof Usage !== "undefined") return Usage.open({ push: false });
+    if (typeof Usage !== "undefined" && Usage.isOpen) Usage.close();
     const r = Core.parseChatPath(pathname);
     if (r.kind === "chat") return this.openChat(r.id, { push, replace });
     if (r.kind === "new") return this.newChat({ push, replace });
@@ -859,6 +861,7 @@ const Chat = {
   /** A new chat on the web: nothing on the server until the first message, which makes it (and its address). */
   newChat({ push = true, replace = false } = {}) {
     if (typeof Settings !== "undefined" && Settings.isOpen) Settings.close();
+    if (typeof Usage !== "undefined" && Usage.isOpen) Usage.close();
     if (this.liveOn() && Live.convId) Live.detach();
     const rnd = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`).replace(/-/g, "").slice(0, 12);
     this.currentChannelKey = `web:${rnd}`;
@@ -899,7 +902,7 @@ const Chat = {
     if (ch) name = Core.chatName(ch);
     else if (this.currentChannelKey === "web:default") name = "Main Session";
     this._currentName = name;
-    if (!(typeof Settings !== "undefined" && Settings.isOpen)) this.elements.topbarTitle.textContent = name;
+    if (!(typeof Settings !== "undefined" && Settings.isOpen) && !(typeof Usage !== "undefined" && Usage.isOpen)) this.elements.topbarTitle.textContent = name;
     const platform = ch?.platform || String(this.currentChannelKey || "").split(":")[0];
     // Where it lives, beside the name (not for the web's own chats, nor when the name already says it).
     const label = platform && platform !== "web" && platform !== "live" ? Core.groupOf(platform).label : "";
@@ -911,14 +914,16 @@ const Chat = {
   _paintTitle() {
     if (typeof document === "undefined") return;
     const settingsOpen = typeof Settings !== "undefined" && Settings.isOpen;
-    document.title = Core.pageTitle(settingsOpen ? "Settings" : this._currentName, this.botName);
+    const usageOpen = typeof Usage !== "undefined" && Usage.isOpen;
+    document.title = Core.pageTitle(settingsOpen ? "Settings" : usageOpen ? "Usage" : this._currentName, this.botName);
   },
 
   async openChannel(channelKey, conversationId, { push = true, replace = false } = {}) {
-    // Close settings if open
+    // Close settings (or the Usage page) if open
     if (typeof Settings !== "undefined" && Settings.isOpen) {
       Settings.close();
     }
+    if (typeof Usage !== "undefined" && Usage.isOpen) Usage.close();
 
     if (this.liveOn() && Live.convId && Live.convId !== conversationId) Live.detach();
     this.currentChannelKey = channelKey || null;
@@ -1009,13 +1014,22 @@ const Chat = {
       const items = [
         { act: "rename", label: "Rename", off: !id },
         { act: "fresh", label: "Start a fresh session", off: !id },
+        { act: "usage", label: "This chat's usage", off: !id },
         { act: "delete", label: "Delete chat", off: !id, danger: true },
       ];
       menu = document.createElement("div");
       menu.className = "chat-menu";
       menu.setAttribute("role", "menu");
-      menu.innerHTML = items.map((it) => `<button type="button" role="menuitem" class="chat-menu-item${it.danger ? " is-danger" : ""}" data-act="${it.act}"${it.off ? " disabled" : ""}>${escapeHtml(it.label)}</button>`).join("")
+      menu.innerHTML = (id ? '<div class="chat-menu-usage-slot"></div>' : "")
+        + items.map((it) => `<button type="button" role="menuitem" class="chat-menu-item${it.danger ? " is-danger" : ""}" data-act="${it.act}"${it.off ? " disabled" : ""}>${escapeHtml(it.label)}</button>`).join("")
         + (id ? "" : '<p class="chat-menu-note">These come once the chat has its first message.</p>');
+      // The chat's running total (js/usage.js), at the top once it is added up.
+      if (id && typeof Usage !== "undefined") {
+        Usage.chatData(id).then((data) => {
+          const slot = menu?.querySelector(".chat-menu-usage-slot");
+          if (slot && this.currentConversationId === id) slot.innerHTML = Usage.menuBlock(data);
+        });
+      }
       document.body.appendChild(menu);
       const r = btn.getBoundingClientRect();
       menu.style.top = `${Math.round(r.bottom + 6)}px`;
@@ -1037,6 +1051,7 @@ const Chat = {
         close();
         if (item.dataset.act === "rename") this.renameChat();
         else if (item.dataset.act === "fresh") this.resetSession();
+        else if (item.dataset.act === "usage" && typeof Usage !== "undefined") Usage.open({ conversationId: this.currentConversationId });
         else if (item.dataset.act === "delete") this.showDeleteModal(this._currentName || "this chat", this.currentConversationId, this.currentChannelKey);
       });
     };
@@ -1102,6 +1117,7 @@ const Chat = {
           this.lastMessageRole = tempLastRole;
           this.lastMessageTime = tempLastTime;
           this.elements.chatArea.scrollTop = this.elements.chatArea.scrollHeight - scrollPos;
+          if (typeof Usage !== "undefined") Usage.decorate(conversationId);
         } catch {
           loadMoreBtn.textContent = "Couldn't load them. Try again";
         }
@@ -1113,6 +1129,8 @@ const Chat = {
     // Queued-but-unsent messages are not on the server yet: draw them again.
     this._renderQueuedBubbles();
     this.scrollToBottom(true);
+    // Each reply's tokens and speed, in a quiet line under it (js/usage.js).
+    if (conversationId && typeof Usage !== "undefined") Usage.decorate(conversationId);
   },
 
   /** A saved message, with its tools (history comes slim: names and summaries; the details are fetched when opened). */

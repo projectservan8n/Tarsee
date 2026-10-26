@@ -352,6 +352,14 @@ import { initCron, startCronScheduler, stopCronScheduler } from "./lib/cron.js";
 initCron({ db, settingsStore, convStore });
 startCronScheduler();
 
+// --- Token usage ---
+// The Usage page's numbers (lib/token-usage.js): every model call read from
+// Claude Code's session transcripts into the database, a piece at a time. A read
+// a minute, and one just after each turn ends, so a reply's line has its numbers.
+import { startTokenUsage } from "./lib/token-usage.js";
+import { onEvent as onLiveEvent } from "./lib/live-bus.js";
+const stopTokenUsage = startTokenUsage(db, { onEvent: onLiveEvent });
+
 // --- Channel Manager (lazy start) ---
 const channelManager = new ChannelManager(db);
 app.set("channelManager", channelManager);
@@ -425,6 +433,7 @@ function shutdown(signal) {
   stopRetention();
   stopSessionReset();
   stopCronScheduler();
+  stopTokenUsage();
   stopChannelHealth();
   channelManager.stopAll();
   server.close(() => {

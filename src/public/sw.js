@@ -1,6 +1,6 @@
 // Tarsee Service Worker — PWA install, offline shell, network-first for code.
 // Bump CACHE_NAME when shipping SW behavior changes to force old caches out.
-const CACHE_NAME = "tarsee-v9";   // (v9: the composer's model and effort picker; v8: the dashboard chat rebuilt like claude.ai)
+const CACHE_NAME = "tarsee-v10";   // (v10: the Usage page and the model picker; usage-core.js, usage.js, usage.css, model-picker-core.js and model-picker.js join the shell. v8: the dashboard chat rebuilt like claude.ai)
 
 const APP_SHELL = [
   "/",
@@ -9,6 +9,7 @@ const APP_SHELL = [
   "/css/style.css",
   "/css/chat.css",
   "/css/chat-ui.css",
+  "/css/usage.css",
   "/css/voice.css",
   "/css/tokens.css",
   "/css/utilities.css",
@@ -22,6 +23,8 @@ const APP_SHELL = [
   "/js/chat-core.js",
   "/js/model-picker-core.js",
   "/js/model-picker.js",
+  "/js/usage-core.js",
+  "/js/usage.js",
   "/js/chat.js",
   "/js/theme-boot.js",
   "/js/live.js",

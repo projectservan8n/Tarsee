@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
+import { USAGE_SCHEMA } from "./usage-schema.js";
 
 /**
  * Initializes the SQLite database with schema migrations.
@@ -247,5 +248,12 @@ const MIGRATIONS = [
       -- live.subscribe rebuilds the turn in progress by turn_id.
       CREATE INDEX IF NOT EXISTS idx_conv_events_turn ON conversation_events (turn_id);
     `,
+  },
+  {
+    // Token usage (lib/token-usage.js): the model calls read from Claude Code's
+    // session transcripts, and each turn's sums, so the Usage page and the line
+    // under each reply read sums from here instead of parsing transcripts.
+    name: "010_token_usage",
+    sql: USAGE_SCHEMA,
   },
 ];
