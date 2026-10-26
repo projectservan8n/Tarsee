@@ -690,20 +690,40 @@
               <div class="form-group">
                 <label>TTS Engine</label>
                 <select id="settingsVoiceEngine">
+                  <option value="phonon">Phonon (local neural, free): default</option>
                   <option value="auto">Auto (best available)</option>
                   <option value="elevenlabs">ElevenLabs (cloud, premium)</option>
                   <option value="piper">Piper (local, ultra-fast)</option>
                   <option value="edge-tts">Edge TTS (Microsoft, free)</option>
                   <option value="stub">Disabled</option>
                 </select>
-                <div class="hint">Auto tries: Piper (fastest, local) → ElevenLabs → Edge TTS. Piper needs voice models uploaded below.</div>
+                <div class="hint"><strong>Phonon</strong> is the default: Gradium's open 31M model, running on this server's CPU with no API key. Edge TTS (free) speaks while Phonon downloads and whenever it fails. Auto tries: Phonon (once installed) → Piper → ElevenLabs → Edge TTS. Piper needs voice models uploaded below.</div>
+              </div>
+              <div class="form-group" id="phononGroup" style="display:none">
+                <label>Phonon</label>
+                <div class="flex gap-2 items-center flex-wrap mb-2">
+                  <span id="phononInstallStatus" class="text-muted text-sm" role="status" aria-live="polite">Checking…</span>
+                  <button type="button" class="btn btn-sm" id="phononInstallBtn" style="display:none">Install Phonon</button>
+                </div>
+                <progress id="phononInstallProgress" max="100" value="0" style="display:none;width:100%;max-width:400px;accent-color:var(--accent)" aria-label="Phonon download progress"></progress>
+                <div class="hint" id="phononInstallHint">About 70 MB (model and English voices), downloaded once to the data volume.</div>
+                <label for="settingsPhononVoice" class="mt-3">Phonon voice</label>
+                <select id="settingsPhononVoice"></select>
+                <label for="settingsPhononSpeed" class="mt-3">Phonon speed: <span id="phononSpeedValue">1.0</span>×</label>
+                <input type="range" id="settingsPhononSpeed" min="0.85" max="1.25" step="0.05" value="1" style="padding:0;border:0;background:none;height:32px;accent-color:var(--accent)">
+                <div class="hint">1.0 is Phonon's natural pace; it goes no faster than 1.25×. Phonon keeps its own voice and speed, separate from the other engines.</div>
+                <label class="checkbox-label mt-3">
+                  <input type="checkbox" id="settingsPhononBarePeso">
+                  <span>Read “P2,500” as 2,500 pesos</span>
+                </label>
+                <div class="hint">“₱2,500” and “PHP 2,500” are always read as pesos. A bare “P” is off by default because it often means something else.</div>
               </div>
               <div class="form-group" id="elevenlabsKeyGroup" style="display:none">
                 <label>ElevenLabs API Key</label>
                 <input type="text" id="settingsElevenlabsKey" placeholder="xi-..." autocomplete="off" class="secret-input">
                 <div class="hint">Get your key from elevenlabs.io/api. Stored securely in the encrypted vault.</div>
               </div>
-              <div class="form-group">
+              <div class="form-group" id="defaultVoiceGroup">
                 <label>Default Voice</label>
                 <select id="settingsDefaultVoice">
                   <option value="">Engine default</option>

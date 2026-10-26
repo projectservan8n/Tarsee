@@ -413,12 +413,23 @@ const Voice = {
         label.textContent = `Voice: ${voiceId}`;
         API.getVoices?.().then((data) => {
           const match = data?.voices?.find((v) => v.id === voiceId);
-          if (match) label.textContent = `Voice: ${match.name || voiceId}`;
+          // Not a voice of the engine that is speaking (an Edge voice while
+          // Phonon talks): show nothing rather than the wrong name.
+          label.textContent = match ? `Voice: ${match.name || voiceId}` : "";
         }).catch(() => {});
       } else {
         label.textContent = "";
       }
     }
+
+    // Start a local engine's worker (Phonon) now, so the first reply is not
+    // also paying for the model to load. A no-op for the other engines.
+    const csrf = API.getCsrfToken();
+    fetch("/api/voice/warm", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: csrf ? { "X-CSRF-Token": csrf } : {},
+    }).catch(() => {});
 
     // Prime audio element with user gesture (iOS requires this)
     this.elements.audio.load();

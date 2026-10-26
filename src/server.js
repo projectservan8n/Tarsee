@@ -224,6 +224,11 @@ initTTSEngine(settingsStore).catch((err) => {
   console.warn("[tarsee] TTS engine init error:", err.message);
 });
 
+// --- Phonon, the default TTS: download its model in the background on first boot ---
+// Edge TTS speaks until it is ready; then the engine is re-initialised.
+import { autoInstallPhonon } from "./voice/phonon-install.js";
+autoInstallPhonon(settingsStore, { onInstalled: () => initTTSEngine(settingsStore) });
+
 // --- Auth profiles ---
 import { initAuthProfiles } from "./lib/auth-profiles.js";
 initAuthProfiles(settingsStore);
