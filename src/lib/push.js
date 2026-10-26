@@ -52,8 +52,29 @@ function ensureVapidKeys() {
     s.set("push.vapid_private", priv);
     console.log("[push] generated new VAPID keypair");
   }
-  const subject = s.get("push.vapid_subject") || "mailto:tony@opusautomations.com";
-  webpush.setVapidDetails(subject, pub, priv);
+  webpush.setVapidDetails(vapidSubject(process.env, s.get("push.vapid_subject")), pub, priv);
+}
+
+const SUBJECT_RE = /^(mailto:[^\s@]+@[^\s@]+\.[^\s@]+|https:\/\/[^\s/]+\S*)$/i;
+
+/**
+ * The contact push services are given for this server's pushes (VAPID "sub"):
+ * env VAPID_SUBJECT, a mailto: or https: URL. Unset, a subject saved in
+ * settings (push.vapid_subject), else the deployment's own https address on
+ * Railway (RAILWAY_PUBLIC_DOMAIN), else a placeholder mailto. A value that is
+ * not a mailto: or https: URL is ignored with a warning: web-push would throw
+ * on it, and Apple's push service turns such subjects away.
+ */
+export function vapidSubject(env = process.env, saved = null) {
+  const fromEnv = String(env.VAPID_SUBJECT || "").trim();
+  if (fromEnv) {
+    if (SUBJECT_RE.test(fromEnv)) return fromEnv;
+    console.warn(`[push] VAPID_SUBJECT "${fromEnv}" is not a mailto: or https: URL; using the default instead`);
+  }
+  if (saved && SUBJECT_RE.test(String(saved).trim())) return String(saved).trim();
+  const domain = String(env.RAILWAY_PUBLIC_DOMAIN || "").trim();
+  if (domain && !/[\s/]/.test(domain)) return `https://${domain}`;
+  return "mailto:admin@example.com";
 }
 
 export function getPublicKey() {

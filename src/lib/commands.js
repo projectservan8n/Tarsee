@@ -605,7 +605,7 @@ include code/commands/IDs where they exist. No vague summaries.
 
 ## Active Projects
 For each project the user mentioned or worked on this session, write:
-- **Project name** — client/context (e.g. "Sydneywide — Chris", "AgenticScale — Twilio")
+- **Project name** — client/context (e.g. "Acme Bakery — website refresh", "Side project — SMS reminders")
 - Current status (what's done, what's in-flight, what's blocked)
 - Recent decisions + rationale
 - Next concrete step
@@ -616,8 +616,8 @@ For each project the user mentioned or worked on this session, write:
 List every API key, bot token, account, or credential that came up this
 session. DO NOT include the actual secret values — those are in the
 vault. Reference by semantic name + where it's stored:
-- e.g. "Twilio Account SID (agenticscale): vault key \`twilio.sid\`"
-- e.g. "Chris's SendGrid key: vault key \`sydneywide.sendgrid\`"
+- e.g. "Twilio Account SID (SMS reminders): vault key \`twilio.sid\`"
+- e.g. "Acme Bakery's SendGrid key: vault key \`acme.sendgrid\`"
 - Note any keys that WEREN'T stored and need to be re-added on next boot.
 
 ## Open Questions / Blockers
