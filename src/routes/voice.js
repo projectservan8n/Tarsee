@@ -94,6 +94,64 @@ voiceRouter.delete("/piper-voices/:id", (req, res) => {
 });
 
 /**
+ * GET /api/voice/phonon
+ * Phonon's own settings for Settings -> Voice: its voices, the chosen voice and
+ * speed, the bare-"P" peso option, and the install status (with progress while
+ * downloading).
+ */
+voiceRouter.get("/phonon", async (req, res) => {
+  const ph = await import("../voice/phonon-engine.js");
+  const { checkPhononInstall } = await import("../voice/phonon-install.js");
+  const sStore = req.app.get("settingsStore");
+  const barePeso = sStore?.get("voice.phonon.barePeso");
+  res.json({
+    install: await checkPhononInstall(),
+    active: getTTSEngine().name === "phonon",
+    voices: ph.VOICES,
+    voice: ph.findVoice(sStore?.get("voice.phonon.voice"))?.id || ph.DEFAULT_VOICE,
+    speed: ph.clampSpeed(sStore?.get("voice.phonon.speed") ?? ph.DEFAULT_SPEED),
+    speedMin: ph.SPEED_MIN,
+    speedMax: ph.SPEED_MAX,
+    barePeso: barePeso === true || barePeso === "true",
+  });
+});
+
+/**
+ * POST /api/voice/phonon/install
+ * Start (or retry) the Phonon download in the background and return the
+ * status at once; GET /api/voice/phonon reports progress. When it finishes,
+ * the TTS engine is re-initialised so Phonon takes over from Edge TTS.
+ */
+voiceRouter.post("/phonon/install", async (req, res) => {
+  const { installPhonon, getPhononInstallStatus, checkPhononInstall } = await import("../voice/phonon-install.js");
+  const { resetPhononAvailability } = await import("../voice/phonon-engine.js");
+  resetPhononAvailability(); // re-check the runtime rather than trust an old answer
+  const status = await checkPhononInstall();
+  if (status.state === "installed" || status.state === "installing") return res.json(status);
+  const sStore = req.app.get("settingsStore");
+  installPhonon({ onInstalled: () => initTTSEngine(sStore) }).catch((err) => {
+    console.warn(`[phonon] install failed: ${err.message}`);
+  });
+  res.status(202).json(getPhononInstallStatus());
+});
+
+/**
+ * POST /api/voice/warm
+ * Start a local engine's worker ahead of the first reply (voice mode opening).
+ * A no-op for engines without one.
+ */
+voiceRouter.post("/warm", async (req, res) => {
+  const engine = getTTSEngine();
+  if (typeof engine.warm !== "function") return res.json({ ok: true, engine: engine.name, warmed: false });
+  try {
+    await engine.warm();
+    res.json({ ok: true, engine: engine.name, warmed: true });
+  } catch (err) {
+    res.json({ ok: false, engine: engine.name, error: err.message });
+  }
+});
+
+/**
  * GET /api/voice/status
  * Check voice engine status.
  */

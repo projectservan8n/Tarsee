@@ -36,7 +36,7 @@ Being honest — some of these projects are massive with huge communities. Tarse
 | **Build step** | None | TypeScript + Vite | TypeScript | Go compile | pip install |
 | **RAM** | ~200-400MB | Higher (full React stack) | Moderate | <10MB | Low |
 | **Channels** | Web, Telegram, Discord, WhatsApp, Email, Voice | 24+ (WhatsApp, Slack, Signal, etc.) | WhatsApp, Telegram, Discord, Slack | 18+ (Telegram, Discord, WeChat, etc.) | 12+ (Telegram, Discord, WhatsApp, etc.) |
-| **Voice** | Yes (faster-whisper + Edge TTS) | Yes (wake word, ElevenLabs) | No | No | Telegram/WeChat voice |
+| **Voice** | Yes (faster-whisper + local Phonon TTS) | Yes (wake word, ElevenLabs) | No | No | Telegram/WeChat voice |
 | **Mobile** | PWA + iOS PIN pad | Native iOS/Android apps | Via messaging apps | Android APK | Via messaging apps |
 | **Memory** | Persistent + deep search | Session-based with group isolation | SQLite + per-group files | JSONL memory store | Token-based memory |
 | **Auth** | Claude subscription (OAuth) | OAuth + API keys | API keys | API keys + OAuth | API keys + OAuth |
@@ -117,7 +117,9 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Spacebar shortcut** — hold space to talk, Space+C to cancel.
 - **Drag to cancel** — slide away from the orb or mic button to discard recording.
 - **Local speech-to-text** — faster-whisper (CTranslate2, 4x faster than OpenAI whisper). Configurable models: tiny.en / base.en / small.en. No API key. Runs on CPU.
-- **Free text-to-speech** — Microsoft Edge TTS with 19 voices, 3 retries, markdown stripping. No API key, no rate limits.
+- **Local text-to-speech by default** — [Phonon](https://huggingface.co/gradium/phonon-31m-en), Gradium's open 31M model, runs on the server's CPU through one warm worker: no API key, no per-character cost, 25 English voices (Toby by default) and a speed setting. Peso amounts ("₱2,500", "PHP 2,500") are read as pesos; reading a bare "P2,500" that way is an opt-in setting.
+- **Downloads itself** — the model and voices (about 70 MB) go to the data volume, not the image. On first boot Tarsee fetches them in the background from pinned Hugging Face revisions, checking the weights' sha256; Settings > Voice shows the progress and has an **Install Phonon** button (and Retry if it fails). Turn the automatic download off with `TARSEE_PHONON_AUTO_INSTALL=0`, or run `node src/voice/phonon-install.js` from a terminal.
+- **Free fallback** — Microsoft Edge TTS (19 voices, 3 retries, markdown stripping, no API key) speaks while Phonon downloads, and for any sentence Phonon fails; after three failures in a row Phonon is skipped for five minutes. Tarsee never falls back to a paid engine on its own: ElevenLabs and Piper are used only when you pick them (or Auto) in Settings > Voice.
 - **Smart TTS** — tables and code shown visually, spoken response is a clean conversational summary.
 
 - **Multilingual speech-to-text** — the bare `tiny`/`base`/`small` Whisper checkpoints auto-detect the spoken language; the `.en` variants are English-only and will return garbage for other languages. Switch in Settings > Voice.
@@ -197,7 +199,7 @@ Tarsee Server (Railway)
   |         create_canvas, calculator, browser, web_search,
   |         push_notification, send_email_thread, configure_email, etc.
   |
-  +-- Voice:      faster-whisper STT + Edge TTS
+  +-- Voice:      faster-whisper STT + Phonon TTS (Edge TTS fallback)
   +-- Browser:    Playwright (stealth) + captcha solving
   +-- Workspace:  SOUL.md, MEMORY.md, USER.md, CHECKPOINT.md
   +-- SQLite:     conversations, settings, vault, bot_memory, push_subs
@@ -313,7 +315,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | **Channels** | Telegram, Discord, WhatsApp (WHAPI), Email (IMAP + SMTP with provider presets, mention keyword, reply-all marker, allowlist) |
 | **Appearance** | Theme switcher (4 built-in + plugin themes) + Web Push enable/disable/test |
 | **Automation** | Cron jobs, webhooks, retention settings |
-| **Voice** | TTS engine (Edge TTS / ElevenLabs), STT model, voice selection. Pick `tiny.en`/`base.en`/`small.en` for English-only, or `tiny`/`base`/`small` for **multilingual** transcription with language auto-detect (needed for Tagalog, Taglish and other non-English voice notes — the `.en` checkpoints cannot transcribe them at all). |
+| **Voice** | TTS engine (Phonon by default, Edge TTS, ElevenLabs, Piper, Auto), Install Phonon button with download progress, Phonon voice, speed and bare-"P" peso option, STT model, voice selection. Pick `tiny.en`/`base.en`/`small.en` for English-only, or `tiny`/`base`/`small` for **multilingual** transcription with language auto-detect (needed for Tagalog, Taglish and other non-English voice notes — the `.en` checkpoints cannot transcribe them at all). |
 | **Skills** | Create, edit, delete instruction packs (includes preinstalled `/ultrareview` + `/fewer-permission-prompts`) |
 | **Memories** | View and manage stored memories |
 | **Security** | Security audit, tool permissions, captcha solver config |
@@ -332,7 +334,11 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `ENCRYPTION_KEY` | Yes | — | AES-256 key. `openssl rand -hex 32` |
 | `NODE_ENV` | Yes | — | Set to `production` |
 | `CLAUDE_DEFAULT_MODEL` | No | `opus` | Default model for new sessions. Defaults to the **`opus` alias**, which Claude Code resolves to the newest Opus at request time — so a new Anthropic release is picked up with no code change. Set a pinned id (e.g. `claude-opus-5`) if you need a frozen model, or `sonnet` / `haiku` for a cheaper default. |
-| `ELEVENLABS_API_KEY` | No | — | Premium TTS voices (Edge TTS is free) |
+| `ELEVENLABS_API_KEY` | No | — | Premium TTS voices. Used when ElevenLabs (or Auto) is picked in Settings > Voice; the default engine, Phonon, and its fallback, Edge TTS, are free. |
+| `TARSEE_PHONON_AUTO_INSTALL` | No | on | Set `0` to stop Tarsee downloading Phonon's model in the background on boot when Phonon is the voice engine. The Install Phonon button in Settings > Voice still works. |
+| `TARSEE_PHONON_DIR` | No | `<data dir>/tts/phonon` | Where Phonon's model, voices and (if needed) Python venv live. On Railway that is `/data/tarsee/data/tts/phonon`, on the volume. |
+| `TARSEE_PHONON_PYTHON` | No | `python3` | Python interpreter with the `ptts` package for Phonon's worker. Without it Tarsee uses `python3`, or a private venv it creates under `TARSEE_PHONON_DIR` when `python3` lacks `ptts`. |
+| `TARSEE_PHONON_THREADS` | No | up to 4 | CPU threads for Phonon's worker. |
 | `TARSEE_CHANNEL_IDLE_ABORT_MS` | No | `1200000` (20 min) | Abandon a turn after this long with no stream event. Keep finite. |
 | `TARSEE_SESSION_JSONL_MAX_MB` | No | `8` | Transcript size cap. Past it, the next turn starts a fresh Claude session instead of resuming the bloat. |
 | `TARSEE_MODEL_CONTEXT_TOKENS` | No | from model registry | Override the context window assumed by Token Health. |
@@ -401,7 +407,10 @@ src/
     websocket.js               # Web UI real-time + cross-device sync
   voice/
     stt-handler.js             # faster-whisper STT
-    edge-tts-engine.js         # Free TTS (19 voices)
+    phonon-engine.js           # Default TTS: local Phonon model, warm Python worker
+    phonon-install.js          # Downloads Phonon (pinned, sha256-checked) to the volume
+    engine-registry.js         # Picks the engine; Edge TTS backs Phonon up
+    edge-tts-engine.js         # Free TTS (19 voices), the fallback
   routes/
     chat.js                    # Chat API + SSE streaming
     external-api.js            # REST API (/api/v1/)
@@ -414,3 +423,5 @@ src/
 ## License
 
 MIT
+
+Text-to-speech by [Phonon](https://huggingface.co/gradium/phonon-31m-en) from [Gradium](https://huggingface.co/gradium): the [ptts](https://github.com/gradium-ai/xn-ptts) runtime (MIT or Apache-2.0), the `phonon-31m-en` weights and the [phonon-voices](https://huggingface.co/gradium/phonon-voices) catalog (Apache-2.0). They are downloaded at runtime and are not part of this repository.

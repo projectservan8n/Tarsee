@@ -78,6 +78,16 @@ const Settings = {
       voiceEngine: document.getElementById("settingsVoiceEngine"),
       voiceEngineStatus: document.getElementById("voiceEngineStatus"),
       defaultVoice: document.getElementById("settingsDefaultVoice"),
+      defaultVoiceGroup: document.getElementById("defaultVoiceGroup"),
+      phononGroup: document.getElementById("phononGroup"),
+      phononVoice: document.getElementById("settingsPhononVoice"),
+      phononSpeed: document.getElementById("settingsPhononSpeed"),
+      phononSpeedValue: document.getElementById("phononSpeedValue"),
+      phononBarePeso: document.getElementById("settingsPhononBarePeso"),
+      phononInstallStatus: document.getElementById("phononInstallStatus"),
+      phononInstallBtn: document.getElementById("phononInstallBtn"),
+      phononInstallProgress: document.getElementById("phononInstallProgress"),
+      phononInstallHint: document.getElementById("phononInstallHint"),
       voiceCloneFile: document.getElementById("voiceOnnxFile"),
       voiceCloneUpload: document.getElementById("voiceCloneUpload"),
       voiceCloneName: document.getElementById("voiceCloneName"),
@@ -478,10 +488,17 @@ const Settings = {
         const val = this.elements.voiceEngine.value;
         const elGroup = document.getElementById("elevenlabsKeyGroup");
         if (elGroup) elGroup.style.display = val === "elevenlabs" ? "block" : "none";
-        // Reload voices for the selected engine
-        this.loadVoicesForEngine(val);
+        this.showPhononGroup(val === "phonon");
+        // Reload voices for the selected engine (Phonon has its own list)
+        if (val !== "phonon") this.loadVoicesForEngine(val);
       });
     }
+    this.elements.phononSpeed?.addEventListener("input", () => {
+      if (this.elements.phononSpeedValue) {
+        this.elements.phononSpeedValue.textContent = Number(this.elements.phononSpeed.value).toFixed(2).replace(/0$/, "");
+      }
+    });
+    this.elements.phononInstallBtn?.addEventListener("click", () => this.installPhonon());
 
     // Skills handlers
     if (this.elements.createSkillBtn) {
@@ -702,14 +719,15 @@ const Settings = {
       const botName = settings.find((s) => s.key === "identity.name")?.value;
       if (botName && this.elements.botName) this.elements.botName.value = botName;
 
-      // Voice engine
-      const voiceEngine = settings.find((s) => s.key === "voice.engine")?.value;
-      if (voiceEngine && this.elements.voiceEngine) {
+      // Voice engine (unset means Phonon, the default)
+      const voiceEngine = settings.find((s) => s.key === "voice.engine")?.value || "phonon";
+      if (this.elements.voiceEngine) {
         this.elements.voiceEngine.value = voiceEngine;
       }
       // Show ElevenLabs key field if engine is elevenlabs
       const elGroup = document.getElementById("elevenlabsKeyGroup");
       if (elGroup) elGroup.style.display = voiceEngine === "elevenlabs" ? "block" : "none";
+      this.showPhononGroup(voiceEngine === "phonon");
 
       // Default voice
       const defaultVoiceId = settings.find((s) => s.key === "voice.defaultVoiceId")?.value;
@@ -1072,12 +1090,131 @@ const Settings = {
     }
   },
 
+  /** Phonon has its own voice and speed controls; the generic Default Voice list is for the other engines. */
+  showPhononGroup(show) {
+    if (this.elements.phononGroup) this.elements.phononGroup.style.display = show ? "block" : "none";
+    if (this.elements.defaultVoiceGroup) this.elements.defaultVoiceGroup.style.display = show ? "none" : "";
+    if (show) this.loadPhonon();
+    else this._stopPhononPoll();
+  },
+
+  async loadPhonon() {
+    const sel = this.elements.phononVoice;
+    if (!sel) return;
+    try {
+      const data = await API.json("/api/voice/phonon");
+      sel.innerHTML = "";
+      for (const v of data.voices || []) {
+        const opt = document.createElement("option");
+        opt.value = v.id;
+        opt.textContent = v.name;
+        sel.appendChild(opt);
+      }
+      sel.value = data.voice;
+      const sp = this.elements.phononSpeed;
+      if (sp) {
+        sp.min = data.speedMin;
+        sp.max = data.speedMax;
+        sp.value = data.speed;
+        sp.dispatchEvent(new Event("input"));
+      }
+      if (this.elements.phononBarePeso) this.elements.phononBarePeso.checked = !!data.barePeso;
+      this.renderPhononInstall(data.install);
+    } catch {
+      sel.innerHTML = '<option value="">Could not load the Phonon voices</option>';
+    }
+  },
+
+  /** Show the install state: not installed / downloading with progress / installed / failed with retry. */
+  renderPhononInstall(install) {
+    const statusEl = this.elements.phononInstallStatus;
+    const btn = this.elements.phononInstallBtn;
+    const bar = this.elements.phononInstallProgress;
+    const hint = this.elements.phononInstallHint;
+    if (!statusEl || !install) return;
+    const phaseText = {
+      runtime: "Setting up the Python runtime",
+      model: "Downloading the model",
+      voices: "Downloading the voices",
+      check: "Testing the model",
+    };
+    let text = "";
+    let showBtn = false;
+    let btnText = "Install Phonon";
+    if (install.state === "installed") {
+      text = "Installed.";
+    } else if (install.state === "installing") {
+      text = `${phaseText[install.phase] || "Installing"}… ${install.percent}%. Edge TTS speaks until it is ready.`;
+    } else if (install.state === "failed") {
+      text = `Install failed: ${install.error || "unknown error"}. Edge TTS speaks instead.`;
+      showBtn = true;
+      btnText = "Retry";
+    } else {
+      text = "Not installed yet. Edge TTS speaks until it is.";
+      showBtn = true;
+    }
+    statusEl.textContent = text;
+    if (btn) {
+      btn.style.display = showBtn ? "" : "none";
+      btn.textContent = btnText;
+      btn.disabled = false;
+    }
+    if (bar) {
+      bar.style.display = install.state === "installing" ? "" : "none";
+      bar.value = install.percent || 0;
+    }
+    if (hint) hint.style.display = install.state === "installed" ? "none" : "";
+    if (install.state === "installing") this._startPhononPoll();
+    else {
+      const wasPolling = !!this._phononPoll;
+      this._stopPhononPoll();
+      // The engine switches to Phonon by itself when the install finishes.
+      if (wasPolling && install.state === "installed") this.loadVoiceStatus();
+    }
+  },
+
+  async installPhonon() {
+    const btn = this.elements.phononInstallBtn;
+    if (btn) btn.disabled = true;
+    try {
+      const install = await API.json("/api/voice/phonon/install", { method: "POST" });
+      this.renderPhononInstall(install);
+    } catch (err) {
+      if (btn) btn.disabled = false;
+      App.showToast(err.message || "Could not start the Phonon install", "error");
+    }
+  },
+
+  _startPhononPoll() {
+    if (this._phononPoll) return;
+    let errors = 0;
+    this._phononPoll = setInterval(async () => {
+      // Only ask while the Phonon settings are on screen; the poll stays armed
+      // so the progress is current when the Voice tab is opened again.
+      if (!this.elements.phononGroup || this.elements.phononGroup.offsetParent === null) return;
+      try {
+        // Plain fetch: a background poll should never toast or reload the page.
+        const res = await fetch("/api/voice/phonon", { credentials: "same-origin" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        errors = 0;
+        this.renderPhononInstall((await res.json()).install);
+      } catch {
+        if (++errors >= 5) this._stopPhononPoll();
+      }
+    }, 1500);
+  },
+
+  _stopPhononPoll() {
+    if (this._phononPoll) clearInterval(this._phononPoll);
+    this._phononPoll = null;
+  },
+
   async loadVoiceStatus() {
     if (!this.elements.voiceEngineStatus) return;
     try {
       const res = await API.request("/api/voice/status");
       const data = await res.json();
-      const engine = data.engine || "stub";
+      const engine = data.tts?.engine || data.engine || "stub";
       const isActive = engine !== "stub" && engine !== "none";
       const status = isActive ? `Engine: ${engine}` : "No TTS engine active";
       this.elements.voiceEngineStatus.textContent = status;
@@ -1293,6 +1430,21 @@ const Settings = {
     const engine = this.elements.voiceEngine?.value;
     if (!engine) return;
     try {
+      if (engine === "phonon") {
+        // Phonon's voice, speed and peso option are its own settings; the other
+        // engines' Default Voice is left as it was. Saved before the engine so
+        // the engine starts with them.
+        const save = (key, value) => API.json("/api/settings/general", { method: "POST", body: { key, value } });
+        const voice = this.elements.phononVoice?.value;
+        if (voice) await save("voice.phonon.voice", voice);
+        const speed = this.elements.phononSpeed?.value;
+        if (speed) await save("voice.phonon.speed", String(speed));
+        if (this.elements.phononBarePeso) await save("voice.phonon.barePeso", this.elements.phononBarePeso.checked ? "true" : "false");
+        await save("voice.engine", engine);
+        App.showToast("Voice settings saved and applied. Edge TTS speaks if Phonon is not ready.", "success");
+        this.loadVoiceStatus();
+        return;
+      }
       await API.json("/api/settings/general", {
         method: "POST",
         body: { key: "voice.engine", value: engine },

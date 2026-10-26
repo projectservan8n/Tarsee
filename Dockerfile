@@ -74,8 +74,12 @@ RUN curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-st
   && chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
   && rm -rf /tmp/ffmpeg*
 
-# Install faster-whisper (STT) + piper-tts (ultra-fast local TTS)
-RUN pip3 install --no-cache-dir --break-system-packages faster-whisper piper-tts
+# Install faster-whisper (STT) + piper-tts (ultra-fast local TTS) + ptts, the
+# runtime of Phonon, the default TTS engine (pinned; an abi3 wheel for x86_64
+# and aarch64 whose only dependency is numpy, about 20 MB). Phonon's model and
+# voices are not baked in: they are downloaded to the data volume on first boot
+# (src/voice/phonon-install.js).
+RUN pip3 install --no-cache-dir --break-system-packages faster-whisper piper-tts ptts==0.4.2
 
 ENV NODE_ENV=production
 WORKDIR /app
