@@ -47,6 +47,8 @@ export function initLiveBus(db) {
       "SELECT seq, conversation_id, turn_id, type, payload, created_at FROM conversation_events WHERE turn_id = ? ORDER BY seq ASC LIMIT 1000",
     ),
     prune: db.prepare("DELETE FROM conversation_events WHERE created_at < ?"),
+    forgetConv: db.prepare("DELETE FROM conversation_events WHERE conversation_id = ?"),
+    forgetMsg: db.prepare("DELETE FROM conversation_events WHERE conversation_id = ? AND type = 'message' AND json_extract(payload, '$.id') = ?"),
     clientIds: db.prepare(
       "SELECT json_extract(payload, '$.clientMsgId') AS c FROM conversation_events WHERE conversation_id = ? AND type = 'message' AND created_at > ? AND json_extract(payload, '$.clientMsgId') IS NOT NULL ORDER BY seq DESC LIMIT 200",
     ),
@@ -123,7 +125,8 @@ function trackTurn(evt) {
     });
   } else if (evt.type === "step") {
     const t = activeTurns.get(id);
-    if (!t) return;
+    // (A step of another turn, one that overlapped this one, is not this turn's.)
+    if (!t || (evt.turnId && t.turnId !== evt.turnId)) return;
     if (evt.payload?.kind === "usage") { t.usage = evt.payload; return; }   // tokens so far, not a step
     t.steps += 1;
     t.lastStepAt = evt.createdAt;
@@ -135,7 +138,10 @@ function trackTurn(evt) {
       t.runningTools.delete(p.id);
     }
   } else if (evt.type === "turn_end") {
-    activeTurns.delete(id);
+    // Only the turn that ended: when two overlap in one conversation, the
+    // first one's end must not make the one still running look finished.
+    const t = activeTurns.get(id);
+    if (t && (!evt.turnId || t.turnId === evt.turnId)) activeTurns.delete(id);
   }
 }
 
@@ -254,6 +260,21 @@ export function activeTurnList() {
 export function recentClientMsgIds(conversationId, sinceMs = 24 * 3_600_000) {
   if (!_db || !conversationId) return [];
   try { return _stmts.clientIds.all(conversationId, Date.now() - sinceMs).map((r) => r.c); } catch { return []; }
+}
+
+/**
+ * A deleted or cleared conversation's timeline goes with it: the events carry
+ * the messages' full text, and would otherwise stay readable for two weeks.
+ */
+export function forgetConversation(conversationId) {
+  if (!_db || !conversationId) return 0;
+  try { return _stmts.forgetConv.run(conversationId).changes; } catch { return 0; }
+}
+
+/** A deleted message's event goes with it. */
+export function forgetMessage(conversationId, messageId) {
+  if (!_db || !conversationId || !messageId) return 0;
+  try { return _stmts.forgetMsg.run(conversationId, messageId).changes; } catch { return 0; }
 }
 
 /** True when this clientMsgId was already saved in the conversation (retry dedupe). */

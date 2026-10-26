@@ -356,7 +356,7 @@ After that, only search memories when relevant — don't re-read every message.`
 - **web_fetch**(url) / **web_search**(query) — web access
 - **get_key**(name) / **set_key**(name, value) — encrypted vault
 - **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head
-- **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: Asia/Manila
+- **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: ${config.TIMEZONE}
 - **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving
 
 ## Memory

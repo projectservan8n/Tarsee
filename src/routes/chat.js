@@ -18,6 +18,7 @@ import { messageTools, slimMessage } from "../lib/message-tools.js";   // a repl
 import { summarizeToolInput } from "../lib/tool-steps.js";
 import { latestSeq, activeTurnFor, recentClientMsgIds, hasClientMsgId, publish } from "../lib/live-bus.js";
 import { withConversationTurn, queueDepth } from "../lib/conversation-lock.js";
+import { createLoopGuard } from "../lib/loop-guard.js";
 
 /**
  * Broadcast an SSE-like event to all connected WebSocket clients and record
@@ -357,7 +358,9 @@ const stopEpoch = new Map();  // convId -> number
 chatRouter.post("/stop", async (req, res) => {
   const { conversationId } = req.body || {};
   if (!conversationId || typeof conversationId !== "string") return res.json({ ok: true, stopped: false });
-  stopEpoch.set(conversationId, (stopEpoch.get(conversationId) || 0) + 1);
+  // Only a conversation with turns running or waiting has anything to cancel,
+  // so the map holds real chats, not every string ever posted here.
+  if (queueDepth(conversationId) > 0) stopEpoch.set(conversationId, (stopEpoch.get(conversationId) || 0) + 1);
   let stopped = false;
   const controller = activeRequests.get(conversationId);
   if (controller) {
@@ -489,23 +492,9 @@ chatRouter.post("/send", async (req, res) => {
     if (!reqEffort) reqEffort = "max"; // !think = max effort for this message
   }
 
-  // Save user message (text only — no base64 blobs in DB)
-  convStore.addMessage(convId, { role: "user", content: cleanMessage, clientMsgId: clientMsgId || undefined });
-  // A new web chat ("New chat", created under its channel key) is named after
-  // its first message as soon as it is sent. Waiting for the reply was not
-  // enough: a second message queued meanwhile pushed the count past the
-  // first-exchange check below, and the chat stayed "New chat".
-  if (channelKey && channelKey.startsWith("web:") && channelKey !== "web:default" && convStore.get(convId)?.title === channelKey) {
-    convStore.updateTitle(convId, cleanMessage.slice(0, LIMITS.MAX_CONVERSATION_TITLE));
-  }
-  broadcastToOthers(convId, "user_message", { content: cleanMessage, conversationId: convId });
-
-  // Build user content blocks for the AI when attachments are present.
-  // aiPromptOverride (populated upstream if the user typed a __PLAYBOOK__
-  // command like /checkpoint) wins over the literal message text — the
-  // stored convStore entry above keeps the original "/checkpoint" so
-  // history UI stays readable, but the AI sees the playbook body.
-  let userContentForAI = aiPromptOverride || cleanMessage;
+  // Refuse what cannot be sent BEFORE the message is saved: a saved message
+  // carries the tab's clientMsgId, and a retry of one refused here would then
+  // be answered "duplicate" and never run.
   if (Array.isArray(attachments) && attachments.length > 0) {
     // Defend against OOM: cap attachment count and per-attachment decoded size.
     if (attachments.length > 10) {
@@ -526,6 +515,26 @@ chatRouter.post("/send", async (req, res) => {
     if (totalBytes > LIMITS.UPLOAD_MAX_BYTES * 2) {
       return res.status(413).json({ error: "Total attachment size too large" });
     }
+  }
+
+  // Save user message (text only — no base64 blobs in DB)
+  convStore.addMessage(convId, { role: "user", content: cleanMessage, clientMsgId: clientMsgId || undefined });
+  // A new web chat ("New chat", created under its channel key) is named after
+  // its first message as soon as it is sent. Waiting for the reply was not
+  // enough: a second message queued meanwhile pushed the count past the
+  // first-exchange check below, and the chat stayed "New chat".
+  if (channelKey && channelKey.startsWith("web:") && channelKey !== "web:default" && convStore.get(convId)?.title === channelKey) {
+    convStore.updateTitle(convId, cleanMessage.slice(0, LIMITS.MAX_CONVERSATION_TITLE));
+  }
+  broadcastToOthers(convId, "user_message", { content: cleanMessage, conversationId: convId });
+
+  // Build user content blocks for the AI when attachments are present.
+  // aiPromptOverride (populated upstream if the user typed a __PLAYBOOK__
+  // command like /checkpoint) wins over the literal message text — the
+  // stored convStore entry above keeps the original "/checkpoint" so
+  // history UI stays readable, but the AI sees the playbook body.
+  let userContentForAI = aiPromptOverride || cleanMessage;
+  if (Array.isArray(attachments) && attachments.length > 0) {
     const contentBlocks = [];
     for (const att of attachments) {
       if (att.type === "image") {
@@ -730,26 +739,9 @@ chatRouter.post("/send", async (req, res) => {
           liveSource: "web",
         });
 
-        // Loop prevention: track recent tool calls to detect stuck patterns
-        const toolHistory = []; // { name, detail, isError }
+        // Loop prevention: a turn stuck repeating itself is stopped (lib/loop-guard.js).
+        const loopGuard = createLoopGuard();
         const toolIdxById = new Map(); // tool_use id -> its index in `timeline`
-        const MAX_TOOL_CALLS = 50; // absolute max tools per message
-        let totalToolCalls = 0;
-
-        const detectLoop = () => {
-          if (toolHistory.length < 3) return false;
-          const last3 = toolHistory.slice(-3);
-          // Same tool + same error 3x in a row = stuck
-          if (last3.every(t => t.isError && t.name === last3[0].name)) return `${last3[0].name} failed 3 times in a row`;
-          // Same tool + same input 3x in a row = stuck
-          if (last3.every(t => t.detail === last3[0].detail && t.name === last3[0].name)) return `${last3[0].name} called 3 times with same input`;
-          // Too many total tool calls
-          if (totalToolCalls >= MAX_TOOL_CALLS) return `exceeded ${MAX_TOOL_CALLS} tool calls`;
-          // 5 consecutive errors (any tool)
-          const last5 = toolHistory.slice(-5);
-          if (last5.length >= 5 && last5.every(t => t.isError)) return "5 consecutive tool errors";
-          return false;
-        };
 
         for await (const event of stream) {
           lastEventAt = Date.now();
@@ -792,8 +784,7 @@ chatRouter.post("/send", async (req, res) => {
             const timelineItem = { type: "tool", name: label, summary: redactStr(summarizeToolInput(event.name, inp)), detail: detail.slice(0, 200), input: detail.slice(0, 500), output: "", status: "running" };
             if (isTodo && Array.isArray(inp.todos)) timelineItem.todos = inp.todos;
             timeline.push(timelineItem);
-            totalToolCalls++;
-            toolHistory.push({ name: event.name, detail: detail.slice(0, 100), isError: false });
+            loopGuard.onCall(event.id, event.name, event.input);
             sendSSE(res, "tool_call", { id: event.id, name: event.name, input: safeInput });
             broadcastToOthers(convId, "tool_call", { id: event.id, name: event.name, input: safeInput });
             auditLog?.log({ action: "tool.call", target: event.name, actor: "claude", ip: reqIp, detail: detail.slice(0, 200) });
@@ -801,9 +792,6 @@ chatRouter.post("/send", async (req, res) => {
             // Redact stdout/stderr from tools before it goes anywhere user-
             // visible or persistent. Bash runs that print env vars, Read of
             // .env files, etc. — this is the highest-volume leak vector.
-            // Loop-detection still uses the raw `event.result` string for
-            // its error-keyword scan, since redaction never adds tokens
-            // that match the error patterns.
             const safeResult = redactStr(event.result || "");
             // Matched by the tool's id: tools can run side by side, so the
             // result is not always the last tool's.
@@ -812,15 +800,11 @@ chatRouter.post("/send", async (req, res) => {
               timeline[idx].status = event.ok === false ? "error" : "done";
               timeline[idx].output = safeResult.slice(0, 2000);
             }
-            // Track errors for loop detection
-            const resultStr = event.result || "";
-            const isErr = resultStr.includes("Error") || resultStr.includes("error") || resultStr.includes("Forbidden") || resultStr.includes("ENOTFOUND") || resultStr.includes("not found") || resultStr.includes("command not found");
-            if (toolHistory.length > 0) toolHistory[toolHistory.length - 1].isError = isErr;
-
-            // Check for loops — abort if stuck
-            const loopReason = detectLoop();
+            // Check for loops (the result's own error flag, on the call it answers) — abort if stuck
+            loopGuard.onResult(event.id, event.ok);
+            const loopReason = loopGuard.check();
             if (loopReason) {
-              console.warn(`[loop-guard] Aborting: ${loopReason} (${totalToolCalls} total tool calls)`);
+              console.warn(`[loop-guard] Aborting: ${loopReason} (${loopGuard.count} total tool calls)`);
               sendSSE(res, "text", { content: `\n\n**Loop detected — stopped automatically.** (${loopReason})\n\nI was repeating the same failing operation. Let me know what you'd like me to try differently.` });
               fullResponse += `\n\n**Loop detected — stopped automatically.** (${loopReason})`;
               controller.abort();

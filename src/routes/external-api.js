@@ -5,6 +5,7 @@ import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { SettingsStore } from "../db/settings.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { getRecommendedModel } from "../config/constants.js";
+import { withConversationTurn } from "../lib/conversation-lock.js";
 
 export const externalApiRouter = Router();
 
@@ -69,25 +70,31 @@ externalApiRouter.post("/message", async (req, res) => {
       conversationId: convId,
     };
 
-    // Stream and collect response
+    // Stream and collect response. One turn per conversation at a time, like
+    // every channel (lib/conversation-lock.js): two resumes of one Claude
+    // session at once corrupt it.
     let fullText = "";
-    for await (const event of chatStream({
-      provider: "claude-code",
-      model,
-      messages: history,
-      systemPrompt,
-      tools: toolDefs,
-      executeTool: (name, input) => executeTool(name, input, toolCtx),
-      conversationId: convId,
-      liveSource: "api",
-      // `claudeSessionId` is the wrong key — the provider expects `sessionId`,
-      // so claude never resumed across turns and every message spawned a fresh
-      // session that re-read the whole workspace.
-      sessionId: convStore.getClaudeSessionId(convId),
-      onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
-    })) {
-      if (event.type === "text") fullText += event.content;
-    }
+    await withConversationTurn(convId, async () => {
+      for await (const event of chatStream({
+        provider: "claude-code",
+        model,
+        messages: history,
+        systemPrompt,
+        tools: toolDefs,
+        executeTool: (name, input) => executeTool(name, input, toolCtx),
+        // The provider gives Tarsee's MCP tools this context (db, settings,
+        // channels) and puts the turn on the dashboard's live timeline.
+        toolCtx,
+        liveSource: "api",
+        // `claudeSessionId` is the wrong key — the provider expects `sessionId`,
+        // so claude never resumed across turns and every message spawned a fresh
+        // session that re-read the whole workspace.
+        sessionId: convStore.getClaudeSessionId(convId),
+        onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
+      })) {
+        if (event.type === "text") fullText += event.content;
+      }
+    });
 
     // Save assistant message
     convStore.addMessage(convId, { role: "assistant", content: fullText, model });

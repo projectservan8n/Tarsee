@@ -121,6 +121,9 @@ export async function runBackgroundTurn({
         // blank but green cron run.
         error = event.message || "Unknown error";
       } else if (event.type === "done") {
+        // Stopped (Stop pressed on its live view, a caller's signal): the
+        // partial text is not a finished run, and must not be posted as one.
+        if (event.stopReason === "aborted" && !error) error = "Stopped before it finished";
         break;
       }
     }

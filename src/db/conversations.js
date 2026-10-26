@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { publishMessage } from "../lib/live-bus.js";
+import { publishMessage, forgetConversation, forgetMessage } from "../lib/live-bus.js";
 
 /**
  * Conversation and message CRUD operations.
@@ -125,7 +125,9 @@ export class ConversationStore {
    * Delete a conversation and all its messages (cascade).
    */
   delete(id) {
-    return this._deleteConversation.run(id).changes > 0;
+    const gone = this._deleteConversation.run(id).changes > 0;
+    if (gone) forgetConversation(id);   // its live timeline too (lib/live-bus.js)
+    return gone;
   }
 
   /**
@@ -229,7 +231,9 @@ export class ConversationStore {
    * Delete a specific message.
    */
   deleteMessage(conversationId, messageId) {
-    return this._deleteMessage.run(messageId, conversationId).changes > 0;
+    const gone = this._deleteMessage.run(messageId, conversationId).changes > 0;
+    if (gone) forgetMessage(conversationId, messageId);
+    return gone;
   }
 
   /**

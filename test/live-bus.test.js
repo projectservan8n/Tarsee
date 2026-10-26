@@ -77,6 +77,17 @@ describe("live bus: the timeline", () => {
     assert.equal(seen.length, 1);
   });
 
+  it("two turns overlapping in one conversation: the first one's end leaves the other running", () => {
+    live.publish("c4", "turn_start", { source: "web" }, { turnId: "a" });
+    live.publish("c4", "turn_start", { source: "api" }, { turnId: "b" });
+    live.publish("c4", "turn_end", { stopReason: "end_turn" }, { turnId: "a" });
+    assert.equal(live.activeTurnFor("c4")?.turnId, "b");
+    live.publish("c4", "step", { kind: "tool_start", id: "s1", name: "Read" }, { turnId: "a" });
+    assert.equal(live.activeTurnFor("c4").steps, 0, "a step of the turn that ended is not this one's");
+    live.publish("c4", "turn_end", { stopReason: "end_turn" }, { turnId: "b" });
+    assert.equal(live.activeTurnFor("c4"), null);
+  });
+
   it("never throws, and does nothing without a conversation id", () => {
     assert.equal(live.publish(null, "step", {}), null);
     assert.equal(live.publish("c", null, {}), null);
@@ -97,6 +108,21 @@ describe("live bus: messages", () => {
     assert.ok(live.hasClientMsgId(conv.id, "tab-123"), "a retry of the same send is recognised");
     assert.ok(!live.hasClientMsgId(conv.id, "tab-999"));
     assert.deepEqual(live.recentClientMsgIds(conv.id), ["tab-123"]);
+  });
+
+  it("a deleted message, a deleted chat and a cleared chat leave nothing on the timeline", () => {
+    const store = new ConversationStore(db);
+    const conv = store.create({ title: "Forget me" });
+    const m1 = store.addMessage(conv.id, { role: "user", content: "secret one" });
+    store.addMessage(conv.id, { role: "user", content: "secret two" });
+    store.deleteMessage(conv.id, m1.id);
+    assert.deepEqual(live.eventsSince(conv.id, 0).map((e) => e.payload.content), ["secret two"]);
+    store.delete(conv.id);
+    assert.deepEqual(live.eventsSince(conv.id, 0), []);
+    const other = store.create({ title: "Clear me" });
+    store.addMessage(other.id, { role: "user", content: "x" });
+    assert.equal(live.forgetConversation(other.id), 1);
+    assert.deepEqual(live.eventsSince(other.id, 0), []);
   });
 
   it("opening a chat's recap writes nothing to memory", async () => {

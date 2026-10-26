@@ -18,6 +18,7 @@ import { handleTerminalConnection } from "../websocket/terminal-handler.js";
 // heartbeat to fall back on, so an unbounded idle window can wedge a turn.
 const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
 import { getGatewayManager } from "../lib/gateway.js";
+import { redactSecrets, redactDeep } from "../lib/redact.js";
 
 /**
  * Sets up WebSocket server on the existing HTTP server.
@@ -340,6 +341,8 @@ export function setupWebSocket(server, db, app) {
 
 async function handleChat(ws, msg, convStore, settingsStore) {
   const { conversationId, message, attachments } = msg;
+  // Tool inputs and outputs shown on screens are redacted unless turned off (as routes/chat.js does).
+  const redactOn = settingsStore?.get?.("ui.redactSecrets") !== false;
 
   if (!message || typeof message !== "string") {
     ws.send(JSON.stringify({ type: "error", message: "Message is required" }));
@@ -515,11 +518,15 @@ async function handleChat(ws, msg, convStore, settingsStore) {
           ws.send(JSON.stringify({ type: "thinking", status: event.status }));
           gw.broadcast(convId, "thinking", { status: event.status });
         } else if (event.type === "tool_use") {
-          ws.send(JSON.stringify({ type: "tool_call", id: event.id, name: event.name, input: event.input }));
-          gw.broadcast(convId, "tool_call", { id: event.id, name: event.name, input: event.input });
+          // Redacted before it reaches any screen or the replay buffer, as
+          // routes/chat.js does (ui.redactSecrets = false turns it off).
+          const input = redactOn ? redactDeep(event.input) : event.input;
+          ws.send(JSON.stringify({ type: "tool_call", id: event.id, name: event.name, input }));
+          gw.broadcast(convId, "tool_call", { id: event.id, name: event.name, input });
         } else if (event.type === "tool_result") {
-          ws.send(JSON.stringify({ type: "tool_result", id: event.id, name: event.name, result: event.result }));
-          gw.broadcast(convId, "tool_result", { id: event.id, name: event.name, result: event.result });
+          const result = redactOn ? redactSecrets(String(event.result ?? "")) : event.result;
+          ws.send(JSON.stringify({ type: "tool_result", id: event.id, name: event.name, result }));
+          gw.broadcast(convId, "tool_result", { id: event.id, name: event.name, result });
         } else if (event.type === "usage") {
           usage = { ...usage, ...event.usage };
         } else if (event.type === "error") {
@@ -618,8 +625,9 @@ async function handleChat(ws, msg, convStore, settingsStore) {
           gw.broadcast(convId, "text", { content: event.content });
         } else if (event.type === "tool_use") {
           toolCalls.push({ id: event.id, name: event.name, input: event.input });
-          ws.send(JSON.stringify({ type: "tool_call", id: event.id, name: event.name, input: event.input }));
-          gw.broadcast(convId, "tool_call", { id: event.id, name: event.name, input: event.input });
+          const shown = redactOn ? redactDeep(event.input) : event.input;
+          ws.send(JSON.stringify({ type: "tool_call", id: event.id, name: event.name, input: shown }));
+          gw.broadcast(convId, "tool_call", { id: event.id, name: event.name, input: shown });
         } else if (event.type === "usage") {
           usage = { ...usage, ...event.usage };
         } else if (event.type === "done") {
