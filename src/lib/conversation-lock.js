@@ -81,6 +81,19 @@ export function claimQueuedTurn(liveConvId) {
   return q.turnId;
 }
 
+/**
+ * Whether the turn beginning now waited behind another one of its
+ * conversation: true once per waiting slot (the provider puts a note on that
+ * prompt), false for a turn that never waited and for a second turn in the
+ * same slot.
+ */
+export function takeQueuedNote() {
+  const q = turnStore.getStore();
+  if (!q || q.noted) return false;
+  q.noted = true;
+  return true;
+}
+
 /** The queued turn whose slot is running now (the caller's own, inside its fn), or null. */
 export function currentQueuedTurn() {
   return turnStore.getStore() || null;

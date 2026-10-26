@@ -95,13 +95,29 @@ export function appendDailyLog(content) {
 }
 
 /**
+ * Most of one workspace file the system prompt carries. It was 8KB, which cut
+ * the middle out of an AGENTS.md that had grown to 16KB (measured on
+ * TarseeMacOS: the agent saw the first 5.7KB and the last 1.6KB, so the rules
+ * in between never reached it). A file over the cap is still cut, and the cut
+ * is logged so it is noticed: move task-specific sections into skills.
+ */
+export const WORKSPACE_FILE_MAX_BYTES = 12 * 1024;
+const _truncWarned = new Set();
+
+/**
  * Truncate content to a max size with 70% head + 20% tail strategy.
  * @param {string} content
- * @param {number} maxBytes - Default 20KB
+ * @param {number} maxBytes - Default WORKSPACE_FILE_MAX_BYTES (12KB)
+ * @param {string} [name] - the file's name, for the warning
  * @returns {string}
  */
-function truncateContent(content, maxBytes = 8 * 1024) {
+export function truncateContent(content, maxBytes = WORKSPACE_FILE_MAX_BYTES, name = "") {
   if (!content || Buffer.byteLength(content, "utf8") <= maxBytes) return content;
+  const key = `${name}:${content.length}`;
+  if (name && !_truncWarned.has(key)) {
+    _truncWarned.add(key);
+    console.warn(`[workspace] ${name} is ${Math.round(Buffer.byteLength(content, "utf8") / 1024)}KB, over the ${Math.round(maxBytes / 1024)}KB a prompt file may be: its middle is cut out of the system prompt`);
+  }
 
   const headSize = Math.floor(maxBytes * 0.7);
   const tailSize = Math.floor(maxBytes * 0.2);
@@ -131,7 +147,22 @@ export function getBootstrapContext() {
   for (const { name, label } of files) {
     const raw = readWorkspaceFile(name);
     if (!raw || raw.trim().length < 5) continue;
-    const content = truncateContent(raw);
+
+    // MEMORY.md grows without bound (50KB and more on a long-lived install), so
+    // it is never inlined: a pointer tells the agent to grep it for the topic
+    // at hand. Reading it whole, or carrying a cut-down copy in every prompt,
+    // costs the context for the few lines a task needs.
+    if (name === "MEMORY.md") {
+      const sizeKb = Math.max(1, Math.round(raw.length / 1024));
+      sections.push(
+        `<!-- ${label} (${name}): pointer only, not inlined -->\n`
+        + `Your long-term memory is in \`MEMORY.md\` in your workspace (~${sizeKb} KB). `
+        + `Grep it for the topic you need (\`grep -n -i "term" MEMORY.md\`) or use search_memories; never read it whole.`,
+      );
+      continue;
+    }
+
+    const content = truncateContent(raw, WORKSPACE_FILE_MAX_BYTES, name);
     sections.push(`<!-- ${label} (${name}) -->\n${content}`);
   }
 

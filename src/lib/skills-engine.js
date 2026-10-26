@@ -201,12 +201,16 @@ export function getSkillsPromptContext() {
   const skills = scanSkills();
   if (skills.length === 0) return "";
 
-  const lines = skills.map((s) => `- **${s.name}**: ${s.description}`);
+  // Names plus a short description: the full description is in each SKILL.md,
+  // which is read before using a skill anyway. At full length 68 skills took
+  // 18.5KB on TarseeMacOS, which pushed the end of the list past the 50KB prompt
+  // budget (the last skills were cut off) and cost about 4.6k tokens a call.
+  const lines = skills.map((s) => `- **${s.name}**: ${shortSkillDescription(s.description)}`);
 
   return `\n\n## Skills
 You have these specialized skills available. Each skill has a SKILL.md file with detailed instructions, credentials, tokens, and configuration. **IMPORTANT: When a task matches a skill, ALWAYS read its SKILL.md first** — skills often contain API keys, tokens, CLI configs, and setup instructions you need.
 
-Read a skill with: \`cat /data/tarsee/workspace/skills/{name}/SKILL.md 2>/dev/null || cat /app/src/skills/{name}/SKILL.md\`
+Read a skill with: \`cat "${getCustomSkillsDir()}/{name}/SKILL.md" 2>/dev/null || cat "${getBuiltInSkillsDir()}/{name}/SKILL.md"\`
 
 Available skills:
 ${lines.join("\n")}`;
@@ -218,4 +222,18 @@ ${lines.join("\n")}`;
 export function invalidateCache() {
   cachedSkills = null;
   cacheTime = 0;
+}
+
+/** How long a skill's description may be in the system prompt's list. */
+export const SKILL_PROMPT_DESC_MAX = 140;
+
+/** The first sentence of a skill description, at most SKILL_PROMPT_DESC_MAX characters. */
+export function shortSkillDescription(desc, max = SKILL_PROMPT_DESC_MAX) {
+  const flat = String(desc ?? "").replace(/\s+/g, " ").trim();
+  const m = flat.match(/^(.+?[.!?])(\s|$)/);
+  const first = m && m[1].length >= 25 ? m[1] : flat;
+  if (first.length <= max) return first;
+  const cut = first.slice(0, max);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > max * 0.6 ? cut.slice(0, sp) : cut).replace(/[,;:]$/, "") + "…";
 }

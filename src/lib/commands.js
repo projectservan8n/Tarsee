@@ -436,7 +436,7 @@ Do NOT send without my explicit approval. Ask which account to send from.`;
       const BRIEFING_ID = "cron_briefingam";
       const BRIEFING_PROMPT = `Morning Briefing — run automatically.
 1. Check today's date and day of week
-2. Read MEMORY.md for any scheduled events, deadlines, or reminders
+2. Grep MEMORY.md for scheduled events, deadlines, or reminders (e.g. \`grep -n -i -E "deadline|due|remind|meeting" MEMORY.md\`); don't read it whole
 3. Search daily logs from the last 3 days for context on ongoing work
 4. Summarize what's happening today and any pending action items
 5. Send the briefing to all active channels using send_message (telegram if configured, always web)

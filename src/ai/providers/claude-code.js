@@ -20,7 +20,8 @@ import { resolveModel } from "../../lib/model-catalog.js";
 import { EFFORT_IDS, TARSEE_DEFAULT_EFFORT } from "../../lib/model-picker.js";
 import { isTranscriptOverCap, transcriptSizeMB, SESSION_JSONL_MAX_MB } from "../../lib/claude-transcript.js";
 import { stepsFromSdkMessage, toolResultsFromSdkMessage, createStreamWatcher } from "../../lib/tool-steps.js";
-import { claimQueuedTurn } from "../../lib/conversation-lock.js";
+import { claimQueuedTurn, takeQueuedNote } from "../../lib/conversation-lock.js";
+import { costSaverEnv } from "../context-limits.js";
 /**
  * Extract image blocks from content array.
  * Returns { images: ImageBlockParam[], text: string }
@@ -177,9 +178,26 @@ function extractMedia(content) {
  */
 const USAGE_STEP_MS = 3000;
 
+/**
+ * The note on a prompt that waited behind another turn of its conversation
+ * (lib/conversation-lock.js): it is one message, sent once, even if the agent
+ * already saw it while it worked on the turn before (it can read the chat's
+ * newest messages itself and answer there). Without it, the agent told the
+ * person their one message "reached me twice" (seen on TarseeMacOS). Added once
+ * only, and never in front of a slash command.
+ */
+export const QUEUED_NOTE = "[This message came in while you were still working on the one before. If you already saw it then (in the chat's history or the database) and answered it, it is the same single message, sent once, not a second copy: do not say it reached you twice. Carry on from where you are, briefly if it is already answered.]\n\n";
+
+export function withQueuedNote(prompt) {
+  if (typeof prompt !== "string" || !prompt || prompt.startsWith(QUEUED_NOTE) || prompt.trimStart().startsWith("/")) return prompt;
+  return QUEUED_NOTE + prompt;
+}
+
 export async function* chat(opts) {
   opts = withChatModel(opts);
   if (opts.thinkingSummaries == null) opts = { ...opts, thinkingSummaries: opts.liveSource === "web" };
+  // (A turn that waited behind another in its conversation says so to the agent, once: QUEUED_NOTE.)
+  if (opts.queuedNote == null) opts = { ...opts, queuedNote: takeQueuedNote() };
   const liveConv = opts?.liveDisabled ? null : (opts?.liveConversationId || opts?.toolCtx?.conversationId || null);
   if (!liveConv) { yield* chatEngine(opts); return; }
   let live = null;
@@ -302,11 +320,13 @@ async function* chatEngine({
   maxTurns,
   maxBudgetUsd,
   thinkingSummaries = false,
+  queuedNote = false,
 }) {
   // Extract the latest user message — separate text and images
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
   const { mediaBlocks, text: extractedText } = extractMedia(lastUserMsg?.content);
   let prompt = extractedText;
+  if (queuedNote) prompt = withQueuedNote(prompt);
   const hasMedia = mediaBlocks.length > 0;
 
   const cwd = config.CLAUDE_WORKSPACE_DIR || process.cwd();
@@ -340,6 +360,10 @@ async function* chatEngine({
 
   const queryOptions = {
     cwd,
+    // The server's environment plus the context cost savers (ai/context-limits.js): compact at 180k tokens, and a
+    // Bash output past 8000 characters goes to a file with a preview. (The SDK takes this as the whole environment,
+    // so process.env comes first.)
+    env: { ...process.env, ...costSaverEnv() },
     // A bare tier word becomes the newest model of that tier (see fallbackLadderFor).
     model: resolveModel(model || config.CLAUDE_DEFAULT_MODEL),
     tools: allTools,
@@ -388,22 +412,12 @@ async function* chatEngine({
     queryOptions.thinking = { type: "adaptive", display: "summarized" };
   }
 
-  // OpenClaw-style: lightweight system prompt + tool-based memory access
-  // DON'T inject full files — tell agent to read them on demand
-  const { readWorkspaceFile } = await import("../../lib/workspace-files.js");
-
-  // Only inject a BRIEF identity summary (not the full file)
-  const soulMd = readWorkspaceFile("SOUL.md") || "";
-  const soulSummary = soulMd.split("\n").slice(0, 8).join("\n").slice(0, 500); // First 8 lines max
-
-  // Only read memory on first message of a session (no sessionId = new session)
-  const isNewSession = !sessionId;
-
+  // The head of every turn's system prompt. It used to repeat the first 8 lines
+  // of SOUL.md (about 500 bytes on every call), which the system prompt that
+  // follows carries in full (lib/build-system-prompt.js), and to tell a new
+  // session to read MEMORY.md and USER.md first: USER.md is in that prompt too,
+  // and MEMORY.md is a pointer there saying to grep it for what a task needs.
   const tarseeContext = `You ARE Tarsee — a headless AI agent running 24/7 on a server.
-${soulSummary ? `\n${soulSummary}\n` : ""}
-${isNewSession ? `## New Session — Read your memory first
-Read MEMORY.md and USER.md via mcp__tarsee__tarsee_read_file before responding to the FIRST message.
-After that, only search memories when relevant — don't re-read every message.` : ""}
 
 ## MCP Tools (call as mcp__tarsee__tarsee_<name>)
 - **send_message**(channel, message, channel_id) — push to Telegram/Discord/web
