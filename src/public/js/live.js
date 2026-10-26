@@ -156,6 +156,7 @@ const Live = {
   /** Open a background job (cron, heartbeat) as a read-only live view, at its own address. */
   openBackground(convId) {
     if (typeof Settings !== "undefined" && Settings.isOpen) Settings.close();
+    if (typeof Usage !== "undefined" && Usage.isOpen) Usage.close();
     if (this.convId && this.convId !== convId) this.wsSend({ type: "live.unsubscribe", convId: this.convId });
     Chat.currentChannelKey = "live:" + convId;
     Chat.currentConversationId = null;
@@ -316,6 +317,9 @@ const Live = {
     const state = error ? "failed" : /interrupt/i.test(reason) ? "interrupted" : /abort|stop/i.test(reason) ? "stopped" : "done";
     turn.steps.finish({ state, endedAt: turn.endedAt, error });
     turn.el.classList.remove("is-working");
+    // The line under the reply: this turn's tokens and speed, once the server has read them (js/usage.js).
+    // Only for a turn that ended just now, not for old turns replayed when a chat is opened.
+    if (typeof Usage !== "undefined" && evt.turnId && Date.now() - turn.endedAt < 60_000) Usage.turnEnded(turn.el, evt.turnId);
     // Nothing to show and no reply came: the turn leaves no trace (a reply that comes later still takes its place).
     if (!turn.answered && state === "done") {
       setTimeout(() => {

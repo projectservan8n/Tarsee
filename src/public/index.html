@@ -37,6 +37,7 @@
   <link rel="stylesheet" href="/css/style.css">
   <link rel="stylesheet" href="/css/chat.css">
   <link rel="stylesheet" href="/css/chat-ui.css">   <!-- the sidebar, the reading column, the steps, the composer -->
+  <link rel="stylesheet" href="/css/usage.css">     <!-- the Usage page and the line under each reply (js/usage.js) -->
 
   <link rel="stylesheet" href="/css/voice.css">
   <link rel="stylesheet" href="/css/console.css">
@@ -111,7 +112,7 @@
     <!-- Sidebar -->
     <!-- Sidebar: the main menu, as on claude.ai. New chat and search at the top, then every chat grouped by where it
          lives (Web, Telegram, Discord, WhatsApp, Email), plain rows with a quiet time (js/chat.js
-         renderChannelList, rules in js/chat-core.js), Settings and Sign out at the bottom. A drawer on a phone. -->
+         renderChannelList, rules in js/chat-core.js), Usage, Settings and Sign out at the bottom. A drawer on a phone. -->
     <aside class="sidebar" id="sidebar" aria-label="Chats">
       <div class="sidebar-header">
         <a class="brand" href="/chat/new" id="brandLink" aria-label="Tarsee: a new chat">
@@ -136,6 +137,7 @@
       </nav>
       <div id="searchResults" class="search-results" hidden></div>
       <div class="sidebar-footer">
+        <button type="button" class="nav-foot" id="usageBtn">Usage</button>
         <button type="button" class="nav-foot" id="settingsBtn">Settings</button>
         <button type="button" class="nav-foot" id="signOutBtn">Sign out</button>
       </div>
@@ -239,6 +241,9 @@
         </div>
       </div>
 
+      <!-- Usage (/usage): the tokens the agent used, by job, chat, model and channel, and how fast (js/usage.js). -->
+      <div id="usagePage" class="usage-page" hidden></div>
+
       <!-- Settings Page (full-page, replaces chat when open) -->
       <div id="settingsPage" class="settings-page">
         <div class="settings-tabs">
@@ -281,10 +286,6 @@
           <button class="settings-tab" data-tab="canvas">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.2"/><path d="M5 8h6M8 5v6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
             Canvas
-          </button>
-          <button class="settings-tab" data-tab="usage">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 12l3-4 3 2 3-5 3 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 14h12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-            Usage
           </button>
           <button class="settings-tab" data-tab="audit">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 2h8a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M6 5h4M6 8h4M6 11h2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
@@ -871,18 +872,6 @@
             </div>
           </div>
 
-          <!-- Usage Tab -->
-          <div class="settings-tab-panel" data-tab="usage">
-            <h2>Token Usage</h2>
-            <div class="settings-section">
-              <div class="usage-stats" id="usageStats"></div>
-              <div class="usage-chart-container">
-                <canvas id="usageChart" width="600" height="200"></canvas>
-              </div>
-              <div class="usage-models" id="usageModels"></div>
-            </div>
-          </div>
-
           <!-- Canvas Tab -->
           <div class="settings-tab-panel" data-tab="canvas">
             <h2>Canvas</h2>
@@ -1038,8 +1027,10 @@
   <script src="/js/dialogs.js"></script>
   <script src="/js/api.js"></script>
   <script src="/js/chat-core.js"></script>   <!-- the chat's rules with no page: groups, steps, addresses, Markdown -->
+  <script src="/js/usage-core.js"></script>  <!-- token counts and speeds as people read them -->
   <script src="/js/chat.js"></script>
   <script src="/js/live.js"></script>
+  <script src="/js/usage.js"></script>       <!-- the Usage page (/usage) -->
   <script src="/js/voice.js"></script>
   <script src="/js/console.js"></script>
   <script src="/js/settings.js"></script>

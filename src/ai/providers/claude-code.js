@@ -145,8 +145,12 @@ export async function* chat(opts) {
   }, { turnId });
   let stopReason = null;
   let errorMsg = null;
+  // The Claude Code session the turn runs in, named on turn_end: lib/token-usage.js reads the
+  // session's transcript and needs to know whose it is (claude_session_id changes on a reset).
+  let sessionId = null;
+  const onSessionId = (sid) => { sessionId = sid || sessionId; opts.onSessionId?.(sid); };
   try {
-    for await (const evt of chatEngine({ ...opts, signal: stopper.signal })) {
+    for await (const evt of chatEngine({ ...opts, onSessionId, signal: stopper.signal })) {
       if (evt?.type === "step") {
         const { type: _t, ...step } = evt;
         live.publish(liveConv, "step", step, { turnId });
@@ -162,6 +166,7 @@ export async function* chat(opts) {
     live.publish(liveConv, "turn_end", {
       stopReason: stopReason || (stopper.signal.aborted ? "aborted" : "ended"),
       ...(errorMsg ? { error: String(errorMsg).slice(0, 500) } : {}),
+      ...(sessionId ? { sessionId } : {}),
     }, { turnId });
   }
 }

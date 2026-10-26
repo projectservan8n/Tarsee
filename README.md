@@ -164,7 +164,7 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 
 ### Search & Analytics
 - **Live context meter** — the session bar shows a real-time prompt-token fill % against the active model's context window (1M for Opus/Sonnet, 200K for Haiku). Counts cache reads and cache writes too — that's the actual prompt size hitting the model. Bar turns yellow at 75%, red and pulsing at 90%, with a dismissible banner above the composer. At 95% Tarsee writes a mechanical snapshot to `CHECKPOINT.md` automatically; if a turn still trips "prompt is too long", the snapshot is written from the catch path and a recovery card is shown in chat with a one-click "Start fresh session" button. The next boot reads that checkpoint as the handoff so you pick up mid-thought.
-- **Token usage chart** — daily/weekly visual bar chart with model breakdown in Settings > Usage.
+- **Usage page** (`/usage`, from the sidebar) — every model call's tokens (input, cache read, cache write, output), read from Claude Code's own session transcripts: today, the last 5 hours and 7 days, a 14-day and 24-hour chart, tokens by model, channel and chat, output and total tokens per second, and each job (a chat's turns until it sits idle 45 minutes; each cron run on its own) with its turns, which you can rename, merge and split. Each reply gets a quiet line with its turn's tokens, speed and time, and a chat's menu shows its running total. Days are counted in `TARSEE_TIMEZONE`.
 - **Token Health** (Settings > Token Health) — a per-conversation view of how full each context window actually is, alongside the Claude session transcript (`.jsonl`) size, which is the real driver of bloat-hangs. Fill is measured point-in-time (the most recent turn's prompt size, counting cache reads and cache writes), not a running total of every token the chat ever spent — the lifetime figure is reported separately so the two can't be confused. Conversations whose transcript passes `TARSEE_SESSION_JSONL_MAX_MB` are flagged `resets next turn`, and the provider enforces that same cap by refusing to resume, so the flag reflects real behaviour rather than predicting it. Conversations with no recorded telemetry are labelled `est.` rather than shown as if measured. All channels (Telegram, Discord, WhatsApp, email, web) now record token usage — previously only web chat did, so channel conversations had no data at all.
 - **Audit log** — timestamped log of all tool executions, logins, and settings changes.
 - **QR code** — scan from desktop to instantly open Tarsee on your phone.
@@ -318,7 +318,6 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | **Memories** | View and manage stored memories |
 | **Security** | Security audit, tool permissions, captcha solver config |
 | **Canvas** | Gallery of AI-generated interactive UIs |
-| **Usage** | Token usage chart, daily/weekly stats, model breakdown |
 | **Token Health** | Per-conversation context-window fill, Claude transcript (.jsonl) size, and which sessions will reset on their next turn |
 | **Audit Log** | All tool executions, logins, settings changes |
 
@@ -340,7 +339,9 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `TARSEE_CSRF_MAX_AGE_HOURS` | No | `24` | CSRF token lifetime. |
 | `TARSEE_CHANNEL_HEALTH_MS` | No | `60000` | How often the watchdog probes for a wedged Telegram poller. |
 | `TARSEE_CLEAR_SESSIONS_ON_BOOT` | No | off | Set `1` to restore the old behaviour of wiping every Claude session id on boot. |
-| `TARSEE_TIMEZONE` | No | host zone | IANA zone the agent reasons in for "today", "tomorrow at 9", and cron schedules (e.g. `Europe/Berlin`). Railway containers run UTC, so set this or your 8am reminders fire at 8am UTC. An unrecognised zone falls back to UTC with a warning. |
+| `TARSEE_TIMEZONE` | No | host zone | IANA zone the agent reasons in for "today", "tomorrow at 9", and cron schedules (e.g. `Europe/Berlin`). Railway containers run UTC, so set this or your 8am reminders fire at 8am UTC. An unrecognised zone falls back to UTC with a warning. The Usage page counts its days in this zone too. |
+| `TARSEE_USAGE_BACKFILL_DAYS` | No | `14` | How far back the Usage page's first read of the Claude session transcripts goes. Later reads only take what each transcript gained. |
+| `TARSEE_USAGE_RETENTION_DAYS` | No | `90` | Token usage rows older than this are deleted. |
 
 > **Note:** Claude credentials are NOT set via env var. Run `claude login` in the web terminal after deploying. See [Authenticating with Claude](#authenticating-with-claude).
 
@@ -405,7 +406,7 @@ src/
   routes/
     chat.js                    # Chat API + SSE streaming
     external-api.js            # REST API (/api/v1/)
-    analytics.js               # Token usage stats
+    analytics.js               # Usage page API (lib/token-usage.js reads the transcripts)
   public/                      # Web UI (vanilla HTML/CSS/JS, PWA)
 ```
 

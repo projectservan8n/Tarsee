@@ -1,9 +1,17 @@
 /**
  * Analytics API — real-time metrics and usage stats.
+ *
+ *   GET  /api/analytics                  counts (conversations, messages, crons) and the process's memory
+ *   GET  /api/analytics/usage            the Usage page's overview (lib/token-usage.js)
+ *   GET  /api/analytics/usage/jobs       jobs, each with its turns
+ *   POST /api/analytics/usage/jobs/:key  rename a job, merge it with the one before, split it again
+ *   GET  /api/analytics/usage/chat/:id   a chat's total and each reply's turn
+ *   GET  /api/analytics/usage/turn/:id   one turn's numbers
  */
 import { Router } from "express";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
+import { usageIndex } from "../lib/token-usage.js";
 
 export const analyticsRouter = Router();
 
@@ -136,4 +144,126 @@ analyticsRouter.get("/", (req, res) => {
     memories: memoryCount,
     cron: { total: cronJobs.length, active: activeCrons },
   });
+});
+
+// ------------------------------------------------------------------ token usage (lib/token-usage.js)
+
+const DAY = 86_400_000;
+const JOBS_KEY = "usage.jobs";   // { names: { jobKey: name }, merges: { jobKey: keyOfTheJobBefore } }
+
+function jobOverrides() {
+  const o = settingsStore?.get(JOBS_KEY);
+  return { names: { ...(o?.names || {}) }, merges: { ...(o?.merges || {}) } };
+}
+
+/** The index, with a read started if none has run since the server began. */
+function freshIndex(db) {
+  const index = usageIndex(db);
+  if (!index.lastRefreshAt && !index.running) index.refresh();
+  return index;
+}
+
+/** Wait a moment for a read in progress (not the first, long one), so a reply that just ended has its numbers. */
+async function settle(index, ms = 2500) {
+  if (!index.running || index.progress.firstPass) return;
+  await Promise.race([index.running, new Promise((r) => setTimeout(r, ms))]);
+}
+
+/**
+ * GET /api/analytics/usage
+ * Today, the last 7 days, the last 5 hours, by model, channel and chat, the
+ * heaviest jobs, speed, and each day and hour (in the configured timezone,
+ * named in `timeZone`).
+ */
+analyticsRouter.get("/usage", (req, res) => {
+  const db = req.app.get("db");
+  const index = freshIndex(db);
+  try {
+    // windows: null. Nothing in this build reads the plan's own 5-hour and weekly limits, so those
+    // cards are simply the last 5 hours and the last 7 days.
+    res.json(index.overview({ windows: null, overrides: jobOverrides() }));
+  } catch (err) {
+    res.status(500).json({ error: `Could not add up the usage: ${err.message}` });
+  }
+});
+
+/**
+ * GET /api/analytics/usage/jobs?days=7&conversation=<id>
+ * Jobs with a turn in the last `days` days (1 to 60), newest first, each with its turns.
+ */
+analyticsRouter.get("/usage/jobs", (req, res) => {
+  const db = req.app.get("db");
+  const index = freshIndex(db);
+  const days = Math.min(60, Math.max(1, Number(req.query.days) || 7));
+  const conversationId = typeof req.query.conversation === "string" && req.query.conversation ? req.query.conversation : null;
+  const now = Date.now();
+  try {
+    const jobs = index.jobs({ from: now - days * DAY, conversationId, overrides: jobOverrides(), now });
+    const titles = index.titles([...new Set(jobs.map((j) => j.conversationId))]);
+    const turns = new Map(index.turnsBetween(now - (days + 1) * DAY, Number.MAX_SAFE_INTEGER, conversationId).map((t) => [t.turnId, t]));
+    res.json({
+      days, now, timeZone: index.timeZone, progress: index.status(),
+      jobs: jobs.slice(0, 300).map((j) => ({
+        ...j, chatTitle: titles[j.conversationId] || null,
+        turnList: j.turnIds.map((id) => turns.get(id)).filter(Boolean).map((t) => index.turnView(t, now)),
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: `Could not list the jobs: ${err.message}` });
+  }
+});
+
+/**
+ * POST /api/analytics/usage/jobs/:key   { name?: string, merge?: "previous", split?: true }
+ * Name a job (an empty name clears it), merge it with the job before it in the
+ * same chat, or split off what was merged into it.
+ */
+analyticsRouter.post("/usage/jobs/:key", (req, res) => {
+  const db = req.app.get("db");
+  const index = usageIndex(db);
+  const key = String(req.params.key || "");
+  const o = jobOverrides();
+  const now = Date.now();
+  const all = index.jobs({ from: 0, overrides: o, now });
+  const job = all.find((j) => j.key === key);
+  if (!job) return res.status(404).json({ error: "There is no such job." });
+  const body = req.body || {};
+  if (typeof body.name === "string") {
+    const name = body.name.replace(/\s+/g, " ").trim().slice(0, 80);
+    if (name) o.names[key] = name; else delete o.names[key];
+  }
+  if (body.merge === "previous") {
+    const before = all.filter((j) => j.conversationId === job.conversationId && j.startedAt < job.startedAt).sort((a, b) => b.startedAt - a.startedAt)[0];
+    if (!before) return res.status(400).json({ error: "There is no earlier job in this chat to merge it with." });
+    o.merges[key] = before.key;
+    if (o.names[key] && !o.names[before.key]) o.names[before.key] = o.names[key];
+    delete o.names[key];
+  }
+  if (body.split) for (const k of job.mergedKeys || []) delete o.merges[k];
+  settingsStore.set(JOBS_KEY, o);
+  const jobs = index.jobs({ from: 0, conversationId: job.conversationId, overrides: o, now });
+  res.json({ ok: true, job: jobs.find((j) => j.key === key || j.mergedKeys.includes(key)) || null });
+});
+
+/**
+ * GET /api/analytics/usage/chat/:id
+ * A chat's running total and each turn's numbers by the reply it ended in.
+ */
+analyticsRouter.get("/usage/chat/:id", async (req, res) => {
+  const db = req.app.get("db");
+  const index = freshIndex(db);
+  await settle(index);
+  try { res.json({ ...index.chat(String(req.params.id)), progress: index.status() }); } catch (err) {
+    res.status(500).json({ error: `Could not add up this chat: ${err.message}` });
+  }
+});
+
+/** GET /api/analytics/usage/turn/:id  One turn's numbers. */
+analyticsRouter.get("/usage/turn/:id", async (req, res) => {
+  const db = req.app.get("db");
+  const index = freshIndex(db);
+  await settle(index);
+  const t = index.turn(String(req.params.id));
+  if (!t) return res.status(404).json({ error: "No numbers for that turn yet." });
+  res.json(t);
 });
