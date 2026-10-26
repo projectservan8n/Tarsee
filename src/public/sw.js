@@ -17,6 +17,8 @@ const APP_SHELL = [
   "/js/app.js",
   "/js/api.js",
   "/js/dialogs.js",
+  "/js/brand-icon.js",
+  "/css/brand-icon.css",
   "/js/chat.js",
   "/js/voice.js",
   "/js/settings.js",
@@ -33,6 +35,14 @@ const APP_SHELL = [
   "/apple-touch-icon.png",
   "/favicon.ico",
 ];
+
+// Tarsee's icon and the manifest that names it (src/lib/brand-icon.js): an uploaded icon is served at these same
+// addresses, so kept here cache-first they would show the old picture forever. They come from the network first, and
+// from the cache only when there is no network.
+const ICON_ADDRESSES = new Set([
+  "/favicon.ico", "/icon-16.png", "/icon-32.png", "/apple-touch-icon.png", "/icon-192.png", "/icon-512.png",
+  "/icon-maskable-512.png", "/manifest.json",
+]);
 
 // Precache app shell on install
 self.addEventListener("install", (event) => {
@@ -94,6 +104,20 @@ self.addEventListener("fetch", (event) => {
           return res;
         })
         .catch(() => caches.match(event.request))
+    );
+  } else if (ICON_ADDRESSES.has(url.pathname)) {
+    // The icons and the manifest: network-first. The page asks for them with ?v=<version>; offline, whatever
+    // version was kept will do.
+    event.respondWith(
+      fetch(event.request)
+        .then((res) => {
+          if (res.ok) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return res;
+        })
+        .catch(() => caches.match(event.request, { ignoreSearch: true }))
     );
   } else if (isAsset) {
     // Static binary assets: cache-first (don't change often, big wins for cold start)

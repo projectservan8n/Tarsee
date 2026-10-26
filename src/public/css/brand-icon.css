@@ -1,0 +1,108 @@
+/* Tarsee's icon (js/brand-icon.js): the section in Settings → Appearance, and the modal that crops a new icon square.
+   Colours come from the tokens only (tokens.css), so every theme has them. The modal is a <dialog> over the whole
+   page (the top layer), the page dimmed under it, laid out like the dashboard's other modals (style.css,
+   .delete-modal); on a narrow screen the previews go under the picture and the two buttons share the row. Every
+   button is 40px tall at least, 44px under a finger. */
+
+/* ---- the section */
+.brand-icon-row { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
+.brand-icon-current {
+  flex: none; width: 72px; height: 72px; box-sizing: border-box;
+  border-radius: 22%;   /* (as a phone shows it) */
+  border: var(--space-px) solid var(--border); background: var(--bg);
+  object-fit: cover;
+}
+.brand-icon-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; flex: 1 1 220px; min-width: 0; }
+.brand-icon-status {
+  flex-basis: 100%; min-height: 1.5em;
+  font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading-normal); overflow-wrap: anywhere;
+}
+.brand-icon-status.is-error { color: var(--danger); }
+@media (pointer: coarse) { .brand-icon-actions .btn { min-height: 44px; } }
+
+/* ---- the modal: the whole page, dimmed */
+.bi-dialog {
+  position: fixed; inset: 0; box-sizing: border-box;
+  width: 100%; height: var(--app-height, 100%); max-width: none; max-height: none;
+  margin: 0; padding: var(--space-5); border: 0; overflow: hidden;
+  background: var(--overlay-heavy); color: var(--text);
+  z-index: var(--z-modal);   /* (in the top layer it is over everything anyway; this is for a browser without it) */
+}
+.bi-dialog[open] { display: flex; align-items: center; justify-content: center; }
+.bi-dialog::backdrop { background: transparent; }
+
+.bi-panel {
+  box-sizing: border-box; width: 100%; max-width: 760px; max-height: 100%; overflow-y: auto;
+  padding: var(--space-6);
+  background: var(--bg-elevated); border: var(--space-px) solid var(--border); border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl);
+  animation: scaleIn var(--duration-slow) var(--ease-default);
+}
+.bi-title { margin: 0 0 var(--space-2); font-size: var(--text-xl); font-weight: 700; color: var(--text); line-height: var(--leading-tight); }
+.bi-help { margin: 0 0 var(--space-4); font-size: var(--text-sm); color: var(--text-secondary); line-height: var(--leading-normal); }
+
+.bi-body { display: flex; align-items: flex-start; gap: var(--space-5); }
+.bi-stage-wrap { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+
+/* The picture, and the square over it: everything outside the square dimmed by a hole's shadow in a layer cut off at
+   the picture's edge (.bi-shade); the square and its corners over that, uncut, so a corner at the edge is whole. The
+   stage keeps a margin for the corners that stick out. */
+.bi-stage {
+  position: relative; margin: var(--space-3) auto;
+  background: var(--bg);
+  touch-action: none; user-select: none; -webkit-user-select: none;
+  cursor: crosshair;
+}
+.bi-shade { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.bi-hole { position: absolute; box-shadow: 0 0 0 9999px var(--overlay-dense); }
+.bi-image { display: block; width: 100%; height: 100%; pointer-events: none; user-select: none; -webkit-user-drag: none; }
+.bi-frame {
+  position: absolute; box-sizing: border-box;
+  outline: 2px solid var(--accent);
+  cursor: move; touch-action: none;
+}
+.bi-frame:focus { outline: 2px solid var(--accent); }
+.bi-frame:focus-visible { outline: 3px solid var(--accent-hover); outline-offset: 1px; }
+.bi-handle {
+  position: absolute; width: 18px; height: 18px; box-sizing: border-box;
+  border-radius: var(--radius-full);
+  background: var(--accent); border: 2px solid var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+}
+.bi-handle[data-corner="nw"] { left: -9px; top: -9px; cursor: nwse-resize; }
+.bi-handle[data-corner="ne"] { right: -9px; top: -9px; cursor: nesw-resize; }
+.bi-handle[data-corner="sw"] { left: -9px; bottom: -9px; cursor: nesw-resize; }
+.bi-handle[data-corner="se"] { right: -9px; bottom: -9px; cursor: nwse-resize; }
+@media (pointer: coarse) {
+  .bi-handle { width: 28px; height: 28px; }
+  .bi-handle[data-corner="nw"] { left: -14px; top: -14px; }
+  .bi-handle[data-corner="ne"] { right: -14px; top: -14px; }
+  .bi-handle[data-corner="sw"] { left: -14px; bottom: -14px; }
+  .bi-handle[data-corner="se"] { right: -14px; bottom: -14px; }
+}
+
+.bi-size-row { display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-sm); color: var(--text-secondary); }
+.bi-size-label { flex: none; }
+.bi-size { flex: 1 1 auto; min-width: 0; min-height: 32px; accent-color: var(--accent); }
+
+/* The previews: as the home screen and the browser tab will show it. */
+.bi-previews { flex: none; display: flex; flex-direction: column; align-items: center; gap: var(--space-4); }
+.bi-preview { margin: 0; display: flex; flex-direction: column; align-items: center; gap: var(--space-1-5); font-size: var(--text-xs); color: var(--text-muted); text-align: center; }
+.bi-prev { display: block; background: var(--bg); border: var(--space-px) solid var(--border-light); }
+.bi-prev-180 { width: 180px; height: 180px; border-radius: 22%; }
+.bi-prev-32 { width: 32px; height: 32px; border-radius: var(--radius-sm); }
+
+.bi-error { margin: var(--space-3) 0 0; font-size: var(--text-sm); color: var(--danger); line-height: var(--leading-normal); overflow-wrap: anywhere; }
+.bi-actions { display: flex; justify-content: flex-end; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-5); }
+.bi-actions .btn { justify-content: center; min-height: var(--space-10); padding: var(--space-2) var(--space-5); font-size: var(--text-sm); }
+.bi-actions .btn:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+@media (pointer: coarse) { .bi-actions .btn { min-height: 44px; } }
+
+/* A phone: the previews under the picture, side by side; the buttons share the row. */
+@media (max-width: 640px) {
+  .bi-dialog { padding: var(--space-3); }
+  .bi-panel { padding: var(--space-4); border-radius: var(--radius-lg); }
+  .bi-body { flex-direction: column; align-items: stretch; gap: var(--space-4); }
+  .bi-previews { flex-direction: row; justify-content: center; align-items: flex-end; }
+  .bi-actions .btn { flex: 1 1 0; }
+}
