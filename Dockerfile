@@ -84,8 +84,16 @@ RUN pip3 install --no-cache-dir --break-system-packages faster-whisper piper-tts
 ENV NODE_ENV=production
 WORKDIR /app
 
-# Install Claude Code CLI globally (Agent SDK spawns this binary)
-RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force \
+# Claude Code CLI, installed globally at a pinned version so every build (and
+# every student's redeploy) gets the same one. This is the `claude` you sign in
+# with from the web terminal (`claude login`), and the model picker reads its
+# list of models, so a newly released model arrives when this is bumped. Chat
+# turns run on the Agent SDK's own bundled copy, whose version follows
+# @anthropic-ai/claude-agent-sdk in package.json.
+# To move it: change CLAUDE_CODE_VERSION and rebuild, or set
+# TARSEE_AUTO_UPDATE_CLI=1 to install the latest on every boot (entrypoint.sh).
+ARG CLAUDE_CODE_VERSION=2.1.308
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force \
   && claude --version
 
 # Install Railway CLI

@@ -21,7 +21,9 @@ const MAX_TOTAL_BYTES = 50 * 1024; // 50KB total prompt budget (trimmed from 150
  *   7. Learning hint (periodic nudge)
  *   8. Fallback if everything empty
  *
- * Individual files are truncated at 20KB. Total prompt capped at 150KB.
+ * Individual files are truncated at 12KB (WORKSPACE_FILE_MAX_BYTES); MEMORY.md is
+ * a pointer to grep, not inlined. Quick memories are one line each (300 chars),
+ * skills a short description each. Total prompt capped at 50KB.
  *
  * @param {object} opts
  * @param {import('../db/settings.js').SettingsStore} opts.settingsStore

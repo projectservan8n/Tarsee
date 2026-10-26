@@ -163,12 +163,16 @@ export class MemoryStore {
    * Returns formatted memories or empty string if none.
    * These are supplementary to MEMORY.md (which is the primary source).
    */
-  getContextString(limit = 20) {
+  getContextString(limit = 20, maxChars = MEMORY_PROMPT_MAX_CHARS) {
     const memories = this.list(limit);
     if (memories.length === 0) return "";
 
-    const lines = memories.map((m) => `- [${m.category}] ${m.content}`);
-    return `\n\nAdditional quick memories:\n${lines.join("\n")}`;
+    // Each memory is a one-line reminder here, not the whole note: a row can
+    // hold a full write-up (on TarseeMacOS 10 rows were 14KB of a 50KB prompt,
+    // about 3.5k tokens re-read on every model call). The full text stays in
+    // the table and is found by searching memory.
+    const lines = memories.map((m) => `- [${m.category}] ${clipMemory(m.content, maxChars)}`);
+    return `\n\nAdditional quick memories (shortened; search memory for the full note):\n${lines.join("\n")}`;
   }
 
   /**
@@ -205,4 +209,16 @@ export class MemoryStore {
       console.warn("[memory] syncToMemoryFile error:", err.message);
     }
   }
+}
+
+/** How much of one memory goes into the system prompt. */
+export const MEMORY_PROMPT_MAX_CHARS = 300;
+
+/** One memory as a single line of at most `max` characters. */
+export function clipMemory(text, max = MEMORY_PROMPT_MAX_CHARS) {
+  const flat = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (flat.length <= max) return flat;
+  const cut = flat.slice(0, max);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > max * 0.7 ? cut.slice(0, sp) : cut) + "…";
 }

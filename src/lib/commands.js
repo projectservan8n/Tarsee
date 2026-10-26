@@ -5,6 +5,8 @@ import { getSkillContent, installSkill, scanSkills } from "./skills-engine.js";
 import { hasCheckpoint, peekCheckpoint, listRecentCheckpoints, CHECKPOINT_FILE_PATH } from "./checkpoint.js";
 import { preview as previewRetention, runNow as runRetentionNow } from "./retention.js";
 import { forgetConversation } from "./live-bus.js";
+import path from "node:path";
+import config from "../config/env.js";
 
 /**
  * Chat command processor.
@@ -436,7 +438,7 @@ Do NOT send without my explicit approval. Ask which account to send from.`;
       const BRIEFING_ID = "cron_briefingam";
       const BRIEFING_PROMPT = `Morning Briefing — run automatically.
 1. Check today's date and day of week
-2. Read MEMORY.md for any scheduled events, deadlines, or reminders
+2. Grep MEMORY.md for scheduled events, deadlines, or reminders (e.g. \`grep -n -i -E "deadline|due|remind|meeting" "${path.join(config.WORKSPACE_DIR, "MEMORY.md")}"\`); don't read it whole
 3. Search daily logs from the last 3 days for context on ongoing work
 4. Summarize what's happening today and any pending action items
 5. Send the briefing to all active channels using send_message (telegram if configured, always web)
@@ -605,7 +607,7 @@ include code/commands/IDs where they exist. No vague summaries.
 
 ## Active Projects
 For each project the user mentioned or worked on this session, write:
-- **Project name** — client/context (e.g. "Sydneywide — Chris", "AgenticScale — Twilio")
+- **Project name** — client/context (e.g. "Acme Bakery — website refresh", "Side project — SMS reminders")
 - Current status (what's done, what's in-flight, what's blocked)
 - Recent decisions + rationale
 - Next concrete step
@@ -616,8 +618,8 @@ For each project the user mentioned or worked on this session, write:
 List every API key, bot token, account, or credential that came up this
 session. DO NOT include the actual secret values — those are in the
 vault. Reference by semantic name + where it's stored:
-- e.g. "Twilio Account SID (agenticscale): vault key \`twilio.sid\`"
-- e.g. "Chris's SendGrid key: vault key \`sydneywide.sendgrid\`"
+- e.g. "Twilio Account SID (SMS reminders): vault key \`twilio.sid\`"
+- e.g. "Acme Bakery's SendGrid key: vault key \`acme.sendgrid\`"
 - Note any keys that WEREN'T stored and need to be re-added on next boot.
 
 ## Open Questions / Blockers

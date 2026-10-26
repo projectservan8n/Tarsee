@@ -238,7 +238,7 @@ async function runAgent(agent, { settingsStore, db, channelManager, signal }) {
 
   const nick = agentDef?.nickname ? ` (${agentDef.nickname})` : "";
   const agentContext = agentDef
-    ? `You are ${agentDef.name}${nick} — NOT Tarsee, NOT Nico. You are your own agent.\n\n${agentDef.prompt}\n\n${agentMemory ? `## Your Memory\n${agentMemory}\n` : ""}Your task:\n${agent.task}\n\nWork independently. Save important findings to your MEMORY.md. When done, provide a clear summary.`
+    ? `You are ${agentDef.name}${nick} — NOT Tarsee, the main agent. You are your own agent.\n\n${agentDef.prompt}\n\n${agentMemory ? `## Your Memory\n${agentMemory}\n` : ""}Your task:\n${agent.task}\n\nWork independently. Save important findings to your MEMORY.md. When done, provide a clear summary.`
     : `You are "${agent.name}". Your task:\n\n${agent.task}\n\nWork independently. Be thorough.`;
 
   const systemPrompt = buildSystemPrompt({

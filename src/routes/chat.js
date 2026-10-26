@@ -19,6 +19,7 @@ import { summarizeToolInput } from "../lib/tool-steps.js";
 import { latestSeq, activeTurnFor, recentClientMsgIds, hasClientMsgId, publish } from "../lib/live-bus.js";
 import { withConversationTurn, queueDepth, currentQueuedTurn, removeQueuedTurn, QUEUE_REMOVED } from "../lib/conversation-lock.js";
 import { createLoopGuard } from "../lib/loop-guard.js";
+import { effectiveContextWindow } from "../ai/context-limits.js";
 
 /**
  * Broadcast an SSE-like event to all connected WebSocket clients and record
@@ -59,15 +60,21 @@ function classifyMessageModel(message) {
 
 // Resolve the registry's human-readable context size ("1M", "200K") to a
 // concrete token count for the live context meter. Unknown models fall back
-// to 1M so the bar shows *something* rather than dividing by zero.
+// to 1M so the bar shows *something* rather than dividing by zero. The meter
+// measures against the auto-compact window when that is smaller (180k by
+// default, ai/context-limits.js): that is where Claude Code summarizes the
+// older part, so a full bar means "about to be summarized", not 15% of 1M.
 function contextTokensForModel(modelId) {
   const meta = modelId && CLAUDE_MODELS_BY_ID[modelId];
   const c = (meta && meta.context) || "1M";
-  if (c === "200K") return 200_000;
-  if (c === "1M") return 1_000_000;
-  const m = String(c).match(/^(\d+)\s*(K|M)$/i);
-  if (!m) return 1_000_000;
-  return Number(m[1]) * (m[2].toUpperCase() === "M" ? 1_000_000 : 1_000);
+  let n;
+  if (c === "200K") n = 200_000;
+  else if (c === "1M") n = 1_000_000;
+  else {
+    const m = String(c).match(/^(\d+)\s*(K|M)$/i);
+    n = m ? Number(m[1]) * (m[2].toUpperCase() === "M" ? 1_000_000 : 1_000) : 1_000_000;
+  }
+  return effectiveContextWindow(n);
 }
 
 // Sum the prompt-side fields of an Anthropic usage object — this is what

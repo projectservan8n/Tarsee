@@ -373,5 +373,6 @@ export function createTarseeMcp(ctx) {
   ];
 
   console.log(`[mcp] Creating Tarsee MCP server: ${allTools.length} tools, names: ${allTools.map(t => t.name).join(", ")}`);
+  // (A result past TARSEE_TOOL_RESULT_MAX_CHARS goes to a file, by Claude Code itself: ai/context-limits.js.)
   return createSdkMcpServer({ name: "tarsee", version: "1.0.0", tools: allTools });
 }
