@@ -914,8 +914,9 @@
 @media (max-width: 767px) {
   .sidebar { width: min(300px, 86vw); }
   .topbar { padding: 0 var(--space-2); }
-  /* Room for the chat's name: the console and the terminal are for a computer. */
-  .topbar-right .console-toggle-btn, .topbar-right a[href="/terminal.html"] { display: none; }
+  /* Room for the chat's name: the console is for a computer. The terminal stays, since signing Claude in
+     again (claude login) happens there, from a phone as much as anywhere. */
+  .topbar-right .console-toggle-btn { display: none; }
   .md-table-wrap .md-table { min-width: max-content; }
   .topbar-right .topbar-icon-btn { width: 34px; height: 34px; }
   .chat-heading { padding: 6px 6px; }
