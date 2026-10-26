@@ -30,9 +30,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # check-latest: use the newest release of each line, not the runner's
+      # cached one. Node 24.21.0 (the cached 24 for a while) crashes at exit
+      # with "Assertion failed: (env) != nullptr" whenever a better-sqlite3
+      # statement is freed during teardown, failing test files whose tests all
+      # passed. 24.22 fixed it. The Docker image runs Node 22.
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
+          check-latest: true
           cache: npm
 
       # The suite does not drive a real browser, so skip the ~300MB download.
