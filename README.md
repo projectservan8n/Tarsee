@@ -100,13 +100,14 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 ## What You Get
 
 ### Chat Everywhere
-- **Web UI** — Full chat with markdown rendering, code blocks, tables, file attachments, image paste, drag-and-drop, multi-file upload. PWA — save to homescreen on iOS/Android.
+- **Web UI** — A calm chat in the style of claude.ai: every chat has its own address (`/chat/<id>`, `/chat/new`) with Back/Forward and shareable links, a plain sidebar grouped by where each chat lives (Web, Telegram, Discord, WhatsApp, Email, and Background for crons and the heartbeat while they run), search, and a rename / fresh session / delete menu on each chat. Markdown, code blocks, tables, file attachments, image paste, drag-and-drop, multi-file upload. PWA — save to homescreen on iOS/Android.
+- **Tool steps that stay out of the way** — while the agent works, one quiet line in the answer's place ("Working · 3 steps · Reading README.md", with Stop); once it answers, the steps fold into "Used 12 tools" above the reply, each opening to its input and output.
 - **Telegram** — Text, photos, PDFs, voice messages, video notes. Group @mention support, inline buttons, forwarded message detection.
 - **Discord** — Text, images, PDFs, voice messages. Always-online bot with presence status.
 - **Email** — Real-time over IMAP IDLE + SMTP. Mention keyword (default `@tarsee`) gates replies; CC/BCC/forwards are absorbed as context without an outbound. Works with any mailbox you own (Gmail, Outlook, iCloud, Zoho, FastMail, Yahoo, self-hosted).
 - **WhatsApp** — Text, images, PDFs, voice notes (Whisper-transcribed), and documents via [WHAPI Cloud](https://whapi.cloud) (free tier OK). Direct messages only. Per-channel webhook secret in URL, auto-generated on first enable.
 - **Attachment save-to-disk** — every image, PDF, voice note, and document sent via Discord, Telegram, email, WhatsApp, or web lands in `workspace/uploads/` so Claude can read, transform, and reference it across turns (not just in the message it arrived on).
-- **Cross-device sync** — all devices update in real-time via WebSocket. See tool calls, text streaming, and typing indicators across devices.
+- **Live on every device** — one durable timeline per conversation (messages, turn start/end and every tool step) that every channel feeds and every device follows over WebSocket. A device that sleeps or reconnects catches up from the last event it saw, even across a restart, and a Telegram, Discord, WhatsApp or email turn can be watched (and stopped) live from the dashboard. Sends are optimistic and never lost; a message sent while a reply is running queues behind it instead of cancelling it.
 - **Session recap** — resume a conversation idle >30 min and a dismissible "Last time" card summarizes the last few exchanges before the first new message. Zero AI cost (extractive summary).
 - **Web Push notifications** — iOS/Android/desktop push via VAPID when cron jobs finish, webhooks fire, or Claude proactively pings you via the `tarsee_push_notification` MCP tool. Opt-in from Settings > Appearance.
 - **All channels share** the same AI, memory, and tools.
@@ -160,7 +161,8 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Isolated canvases** — model-authored pages require a login and run in a sandboxed null origin, so a prompt-injected canvas cannot reach Tarsee's API or storage.
 
 ### Models
-- **Alias-first model registry** — the default is the bare `opus` alias, which Claude Code resolves to the newest Opus at request time. Pinned ids (`claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`, …) remain selectable when you need a frozen, reproducible model. This replaced a hardcoded pin that had silently fallen two releases behind: the registry named Opus 4.7 as the default long after Opus 4.8 and Opus 5 shipped, so every session ran on an outdated model until someone edited the file. Aliases make that class of bug impossible.
+- **Sonnet at Medium by default** — the default is the `sonnet` alias at Medium effort (`ai.defaultEffort` changes the effort; Settings or `/model` the model). Each chat can pick its own in the composer's picker.
+- **Always the newest model** — the Agent SDK runs its own bundled Claude Code, which would take a bare alias (`opus`, `sonnet`, `haiku`, `fable`) to the newest model *it* knew when it was built, several releases behind. Tarsee reads Claude Code's current model catalog (from the installed `claude`, or the copy the CLI cached for your account) and turns an alias into the newest exact model id before every turn. Pinned ids (`claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`, …) remain selectable when you need a frozen, reproducible model.
 - **Tiers** — `fable`, `opus`, `sonnet` and `haiku` are all available as always-latest aliases, in capability-descending order, and `/model <name>` accepts either an alias or a pinned id. Fable is the top tier: `/model fable` tracks the newest Fable release, and `claude-fable-5-1` is selectable as a frozen pin.
 - **Automatic fallback** — every turn ships a `--fallback-model` ladder one tier below whatever you chose, so an overloaded Fable turn degrades to Opus instead of failing.
 
@@ -181,7 +183,9 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 
 ### Appearance & Controls
 - **Themes** — `warm-charcoal` (default, terracotta accent), `noir` (pure black OLED-friendly), `solarized-light` (daylight), `jarvis-blue` (cyan accent). Switch from Settings > Appearance or via `/theme <name>`. Plugin-shipped themes are loaded from `ui.themes.plugin` automatically.
-- **Effort slider** — 6-notch touch-native slider (auto / low / medium / high / xhigh / max) for setting Claude's thinking effort, in ascending cost order. Long-press the effort toggle on the composer to open; `/effort` opens it via keyboard. `xhigh` (Ultra) is the sweet spot for coding and agentic work.
+- **Model and effort picker** — the button beside Send ("Sonnet 5.5 · Medium") opens a picker like Claude Code's: the newest model of each family (keys 1 to 4), Effort (Low, Medium, High, Extra, Max, with the recommended level for that model) and More models. The list is Claude Code's own model catalog, so new models appear with no code change. Each chat keeps its own pick; `/effort` opens the Effort list.
+- **Your own icon** — Settings > Appearance takes a PNG, JPG, WebP or SVG, crops it square, and serves it as the favicon, tab, home-screen and app icon.
+- **Own dialogs** — every confirmation is the dashboard's own dialog, never the browser's `confirm()` / `prompt()`.
 
 ---
 
@@ -281,8 +285,8 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 |---------|-------------|
 | `/help` | Show all commands |
 | `/model fable\|opus\|sonnet\|haiku` | Switch AI model (alias tracks latest) or pass a pinned id like `claude-fable-5-1` |
-| `/think low\|medium\|high\|xhigh\|max` | Set thinking effort for the session (ascending cost; `xhigh` sits between high and max) |
-| `/effort` | Open the 6-notch effort slider (touch-native) |
+| `/think low\|medium\|high\|xhigh\|max` | Set thinking effort for the session (ascending cost; `xhigh` sits between high and max; Medium is the default) |
+| `/effort` | Open the composer picker's Effort list |
 | `/theme [name]` | List or switch themes: warm-charcoal, noir, solarized-light, jarvis-blue |
 | `/auto [on\|off]` | Toggle auto model routing (haiku/sonnet/opus by complexity) |
 | `/briefing [on\|off\|time]` | Morning briefing — run now, schedule daily, or set time |
@@ -333,7 +337,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `SETUP_PASSWORD` | Yes | — | 4-digit PIN for the web UI. **Required in production** — the server refuses to boot without it, because nobody could log in and the web terminal would be exposed. |
 | `ENCRYPTION_KEY` | Yes | — | AES-256 key. `openssl rand -hex 32` |
 | `NODE_ENV` | Yes | — | Set to `production` |
-| `CLAUDE_DEFAULT_MODEL` | No | `opus` | Default model for new sessions. Defaults to the **`opus` alias**, which Claude Code resolves to the newest Opus at request time — so a new Anthropic release is picked up with no code change. Set a pinned id (e.g. `claude-opus-5`) if you need a frozen model, or `sonnet` / `haiku` for a cheaper default. |
+| `CLAUDE_DEFAULT_MODEL` | No | `sonnet` | Default model for new sessions. Defaults to the **`sonnet` alias**, which Tarsee resolves to the newest Sonnet in Claude Code's catalog before each turn — so a new Anthropic release is picked up with no code change. Set `opus` for the most capable default, a pinned id (e.g. `claude-opus-5`) if you need a frozen model, or `haiku` for a cheaper one. |
 | `ELEVENLABS_API_KEY` | No | — | Premium TTS voices. Used when ElevenLabs (or Auto) is picked in Settings > Voice; the default engine, Phonon, and its fallback, Edge TTS, are free. |
 | `TARSEE_PHONON_AUTO_INSTALL` | No | on | Set `0` to stop Tarsee downloading Phonon's model in the background on boot when Phonon is the voice engine. The Install Phonon button in Settings > Voice still works. |
 | `TARSEE_PHONON_DIR` | No | `<data dir>/tts/phonon` | Where Phonon's model, voices and (if needed) Python venv live. On Railway that is `/data/tarsee/data/tts/phonon`, on the volume. |
