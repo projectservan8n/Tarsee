@@ -109,12 +109,8 @@ export async function createEmailBot(rawConfig, db) {
   try { fs.mkdirSync(uploadsDir, { recursive: true }); } catch {}
 
   // SMTP transporter — reused across all outbound messages.
-  const smtp = nodemailer.createTransport({
-    host: cfg.smtp.host,
-    port: cfg.smtp.port || 465,
-    secure: cfg.smtp.secure !== false && (cfg.smtp.port || 465) === 465, // 465 = implicit TLS
-    auth: { user: cfg.smtp.user, pass: cfg.smtp.password },
-  });
+  const smtp = nodemailer.createTransport(smtpTransportOptions(cfg.smtp));
+  const sender = { cfg, selfAddress };
 
   // IMAP client with IDLE support.
   let client = null;
@@ -441,42 +437,13 @@ export async function createEmailBot(rawConfig, db) {
    * Send an email reply preserving thread headers.
    */
   async function sendReply({ incoming, bodyText, replyAll }) {
-    const recipients = resolveRecipients({
-      incoming: {
-        from: incoming.from?.value?.[0],
-        to: incoming.to?.value,
-        cc: incoming.cc?.value,
-        replyTo: incoming.replyTo?.value?.[0],
-      },
-      replyAll: !!replyAll,
-      selfAddress,
-    });
-    if (recipients.to.length === 0) {
+    const built = buildReplyMail({ incoming, bodyText, replyAll }, sender);
+    if (!built) {
       console.warn("[email] no recipients resolved — skipping send");
       return;
     }
-
-    const referencesArr = Array.isArray(incoming.references)
-      ? incoming.references
-      : String(incoming.references || "").split(/\s+/).filter(Boolean);
-    const { inReplyTo, references } = buildReplyHeaders({
-      incomingMessageId: incoming.messageId,
-      references: referencesArr,
-    });
-
-    const subject = normalizeReplySubject(incoming.subject);
-    const replyParts = applySignature(String(bodyText || "").slice(0, 100_000), cfg.signature);
-
-    await smtp.sendMail({
-      from: `"${cfg.fromName || "Tarsee"}" <${selfAddress}>`,
-      to: recipients.to.join(", "),
-      cc: recipients.cc.length ? recipients.cc.join(", ") : undefined,
-      subject,
-      text: replyParts.text,
-      ...(replyParts.html ? { html: replyParts.html } : {}),
-      inReplyTo,
-      references,
-    });
+    const { mail, recipients } = built;
+    await smtp.sendMail(mail);
     console.log(`[email] sent reply to ${recipients.to.join(",")} ${recipients.cc.length ? `cc ${recipients.cc.join(",")}` : ""}`);
   }
 
@@ -533,16 +500,7 @@ export async function createEmailBot(rawConfig, db) {
      * chatId here = target email address (or comma-separated list).
      */
     sendMessage: async (chatId, message) => {
-      const to = String(chatId).split(",").map((s) => s.trim()).filter(Boolean);
-      if (to.length === 0) throw new Error("email.sendMessage needs a target address in chatId");
-      const parts = applySignature(String(message || ""), cfg.signature);
-      await smtp.sendMail({
-        from: `"${cfg.fromName || "Tarsee"}" <${selfAddress}>`,
-        to: to.join(", "),
-        subject: cfg.defaultSubject || "Tarsee message",
-        text: parts.text,
-        ...(parts.html ? { html: parts.html } : {}),
-      });
+      await smtp.sendMail(buildDirectMail(chatId, message, sender));
     },
 
     /**
@@ -563,24 +521,108 @@ export async function createEmailBot(rawConfig, db) {
      *        `<#part>` / Mutt-style markup in the body — that markup is plain
      *        text to nodemailer and ships verbatim to the recipient.
      */
-    sendNew: async ({ to, cc, subject, body, inReplyTo, attachments }) => {
-      const toArr = Array.isArray(to) ? to : String(to).split(",").map((s) => s.trim()).filter(Boolean);
-      const ccArr = cc ? (Array.isArray(cc) ? cc : String(cc).split(",").map((s) => s.trim()).filter(Boolean)) : [];
-      const atts = normalizeAttachments(attachments);
-      const parts = applySignature(String(body || ""), cfg.signature);
-      const info = await smtp.sendMail({
-        from: `"${cfg.fromName || "Tarsee"}" <${selfAddress}>`,
-        to: toArr.join(", "),
-        cc: ccArr.length ? ccArr.join(", ") : undefined,
-        subject: inReplyTo ? normalizeReplySubject(subject) : (subject || "(no subject)"),
-        text: parts.text,
-        ...(parts.html ? { html: parts.html } : {}),
-        ...(atts.length ? { attachments: atts } : {}),
-        inReplyTo,
-        references: inReplyTo,
-      });
-      return { messageId: info.messageId, attachmentCount: atts.length };
+    sendNew: async (opts) => {
+      const { mail, attachmentCount } = buildNewMail(opts, sender);
+      const info = await smtp.sendMail(mail);
+      return { messageId: info.messageId, attachmentCount };
     },
+  };
+}
+
+// ── What Tarsee sends, built apart from the sending (test/email-smtp.test.js
+//    sends these through nodemailer to a local SMTP server) ──────────────────
+
+/** nodemailer's SMTP transport options: port 465 is implicit TLS; any other port upgrades with STARTTLS when offered. */
+export function smtpTransportOptions(smtpCfg = {}) {
+  const port = smtpCfg.port || 465;
+  return {
+    host: smtpCfg.host,
+    port,
+    secure: smtpCfg.secure !== false && port === 465,
+    auth: { user: smtpCfg.user, pass: smtpCfg.password },
+  };
+}
+
+function fromHeader({ cfg, selfAddress }) {
+  return `"${cfg.fromName || "Tarsee"}" <${selfAddress}>`;
+}
+
+/**
+ * The reply to an incoming mail (as mailparser parsed it), keeping the thread:
+ * { mail, recipients }, or null when nobody is left to send to.
+ * sender: { cfg (normalized), selfAddress }
+ */
+export function buildReplyMail({ incoming, bodyText, replyAll }, sender) {
+  const { cfg, selfAddress } = sender;
+  const recipients = resolveRecipients({
+    incoming: {
+      from: incoming.from?.value?.[0],
+      to: incoming.to?.value,
+      cc: incoming.cc?.value,
+      replyTo: incoming.replyTo?.value?.[0],
+    },
+    replyAll: !!replyAll,
+    selfAddress,
+  });
+  if (recipients.to.length === 0) return null;
+
+  const referencesArr = Array.isArray(incoming.references)
+    ? incoming.references
+    : String(incoming.references || "").split(/\s+/).filter(Boolean);
+  const { inReplyTo, references } = buildReplyHeaders({
+    incomingMessageId: incoming.messageId,
+    references: referencesArr,
+  });
+
+  const replyParts = applySignature(String(bodyText || "").slice(0, 100_000), cfg.signature);
+  return {
+    recipients,
+    mail: {
+      from: fromHeader(sender),
+      to: recipients.to.join(", "),
+      cc: recipients.cc.length ? recipients.cc.join(", ") : undefined,
+      subject: normalizeReplySubject(incoming.subject),
+      text: replyParts.text,
+      ...(replyParts.html ? { html: replyParts.html } : {}),
+      inReplyTo,
+      references,
+    },
+  };
+}
+
+/** A new mail, or one continuing a thread (tarsee_send_email_thread): { mail, attachmentCount }. */
+export function buildNewMail({ to, cc, subject, body, inReplyTo, attachments }, sender) {
+  const toArr = Array.isArray(to) ? to : String(to).split(",").map((s) => s.trim()).filter(Boolean);
+  const ccArr = cc ? (Array.isArray(cc) ? cc : String(cc).split(",").map((s) => s.trim()).filter(Boolean)) : [];
+  const atts = normalizeAttachments(attachments);
+  const parts = applySignature(String(body || ""), sender.cfg.signature);
+  return {
+    attachmentCount: atts.length,
+    mail: {
+      from: fromHeader(sender),
+      to: toArr.join(", "),
+      cc: ccArr.length ? ccArr.join(", ") : undefined,
+      subject: inReplyTo ? normalizeReplySubject(subject) : (subject || "(no subject)"),
+      text: parts.text,
+      ...(parts.html ? { html: parts.html } : {}),
+      ...(atts.length ? { attachments: atts } : {}),
+      inReplyTo,
+      references: inReplyTo,
+    },
+  };
+}
+
+/** A plain message from ChannelManager.sendMessage; chatId is the address (or a comma-separated list). */
+export function buildDirectMail(chatId, message, sender) {
+  const to = String(chatId).split(",").map((s) => s.trim()).filter(Boolean);
+  if (to.length === 0) throw new Error("email.sendMessage needs a target address in chatId");
+  const parts = applySignature(String(message || ""), sender.cfg.signature);
+  return {
+    from: fromHeader(sender),
+    to: to.join(", "),
+    subject: sender.cfg.defaultSubject || "Tarsee message",
+    text: parts.text,
+    ...(parts.html ? { html: parts.html } : {}),
   };
 }
 
@@ -588,7 +630,7 @@ export async function createEmailBot(rawConfig, db) {
  * Accept either the flat legacy shape or a nested config — return the
  * canonical nested shape.
  */
-function normalizeConfig(c) {
+export function normalizeConfig(c) {
   if (!c) return {};
   const out = {
     enabled: !!c.enabled,
