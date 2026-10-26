@@ -588,6 +588,9 @@
 .steps-detail:empty { display: none; }
 .steps-time { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .steps-time:empty { display: none; }
+/* The turn's tokens so far and its speed, while it works: "84.2k tokens · 41 tk/s". */
+.steps-usage { font-size: var(--text-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.steps-usage:empty { display: none; }
 .steps-source { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; }
 .steps-caret { flex-shrink: 0; opacity: 0.7; transition: transform var(--duration-normal) var(--ease-default); }
 .steps.is-open .steps-caret { transform: rotate(90deg); }
@@ -605,6 +608,8 @@
 .steps[data-tone="danger"] .steps-title { color: var(--danger); }
 .steps[data-tone="danger"] .steps-dot { display: block; background: var(--danger); }
 .steps[data-tone="warn"] .steps-detail { color: var(--warning); }
+/* Waiting behind the turn above: a hollow, still dot, not the working pulse. */
+.steps[data-state="queued"] .steps-dot { display: block; background: none; border: 1px solid var(--text-muted); opacity: 0.8; }
 .steps-stop {
   padding: 4px 12px;
   border: 1px solid var(--border-light);
@@ -616,6 +621,7 @@
   cursor: pointer;
 }
 .steps-stop:hover { border-color: var(--danger); color: var(--danger); }
+.steps-stop:disabled { opacity: 0.5; cursor: default; }
 
 .steps-list {
   margin: var(--space-2) 0 var(--space-1) 14px;
@@ -672,6 +678,14 @@
 .step-note { padding: 4px 8px; font-size: var(--text-sm); line-height: 1.6; color: var(--text-secondary); }
 .step-note p { margin: 0 0 0.4em; }
 .step-note p:last-child { margin: 0; }
+/* What it thought (a summary), quieter than what it said. */
+.step-thought { color: var(--text-muted); font-style: italic; }
+.step-thought-label { font-size: var(--text-xs); font-style: normal; color: var(--text-muted); margin-bottom: 2px; }
+/* Why it waits: an API error it retries, compacting. */
+.step-status { padding: 4px 8px; font-size: var(--text-xs); color: var(--warning); }
+/* The list before its first step. */
+.steps-empty { margin: 0; padding: 4px 8px; font-size: var(--text-xs); color: var(--text-muted); }
+.steps-empty[hidden] { display: none; }
 .step-todos { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--text-sm); color: var(--text-secondary); }
 .step-todo { position: relative; padding-left: 20px; }
 .step-todo::before {

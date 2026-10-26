@@ -546,6 +546,8 @@ You can use these special markers in your response:
       clearInterval(idleTimer);
     }
     }, {
+      // Waiting behind the reply in progress: a "Queued" line on the dashboard too.
+      live: { source: "telegram", prompt: text },
       onQueued: (ahead) => {
         ctx.reply(ahead === 1
           ? "⏳ Still working on your last message — yours is next."

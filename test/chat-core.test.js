@@ -186,6 +186,11 @@ describe("chat core: the line in the answer's place", () => {
     assert.equal(C.turnLine({ state: "failed", error: "The model refused" }).detail, "The model refused");
     assert.equal(C.turnLine({ state: "interrupted" }).detail, "Tarsee restarted during this turn");
   });
+  it("a turn waiting behind the running one says so: not Working, not Thinking, no time", () => {
+    assert.deepEqual(C.turnLine({ state: "queued", tools: 0, ms: 12_000, last: "Thinking" }), { title: "Queued", detail: "after the reply above", tone: "muted" });
+    assert.deepEqual(C.turnLine({ state: "removed" }), { title: "Removed from the queue", detail: "", tone: "muted" });
+    for (const s of ["queued", "removed"]) assert.doesNotMatch(JSON.stringify(C.turnLine({ state: s })), /[\u2013\u2014]/, "no long dashes");
+  });
 });
 
 describe("chat core: a saved reply's parts", () => {

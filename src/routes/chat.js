@@ -17,7 +17,7 @@ import { redactSecrets, redactDeep } from "../lib/redact.js";
 import { messageTools, slimMessage } from "../lib/message-tools.js";   // a reply's tools; history without their inputs and outputs
 import { summarizeToolInput } from "../lib/tool-steps.js";
 import { latestSeq, activeTurnFor, recentClientMsgIds, hasClientMsgId, publish } from "../lib/live-bus.js";
-import { withConversationTurn, queueDepth } from "../lib/conversation-lock.js";
+import { withConversationTurn, queueDepth, currentQueuedTurn, removeQueuedTurn, QUEUE_REMOVED } from "../lib/conversation-lock.js";
 import { createLoopGuard } from "../lib/loop-guard.js";
 
 /**
@@ -351,13 +351,21 @@ const activeRequests = new Map(); // convId → AbortController
 const stopEpoch = new Map();  // convId -> number
 
 /**
- * POST /api/chat/stop
+ * POST /api/chat/stop  { conversationId, turnId? }
  * Stop the current generation for a conversation, and anything sent from the
  * dashboard that is still waiting behind it.
+ * With the turnId of a turn still waiting in the queue (the Stop on its
+ * "Queued" line), that turn leaves the queue and nothing else changes; if it
+ * began meanwhile, it is stopped as the running turn; if it already ended,
+ * nothing happens.
  */
 chatRouter.post("/stop", async (req, res) => {
-  const { conversationId } = req.body || {};
+  const { conversationId, turnId } = req.body || {};
   if (!conversationId || typeof conversationId !== "string") return res.json({ ok: true, stopped: false });
+  if (typeof turnId === "string" && turnId) {
+    if (removeQueuedTurn(turnId, conversationId)) return res.json({ ok: true, stopped: true, removed: true });
+    if (activeTurnFor(conversationId)?.turnId !== turnId) return res.json({ ok: true, stopped: false });
+  }
   // Only a conversation with turns running or waiting has anything to cancel,
   // so the map holds real chats, not every string ever posted here.
   if (queueDepth(conversationId) > 0) stopEpoch.set(conversationId, (stopEpoch.get(conversationId) || 0) + 1);
@@ -652,12 +660,19 @@ chatRouter.post("/send", async (req, res) => {
     const waitBeat = waitingBehind
       ? setInterval(() => { if (!res.writableEnded) sendSSE(res, "heartbeat", { ts: Date.now(), queued: true }); }, 15_000)
       : null;
-    await withConversationTurn(convId, async () => {
+    // While it waits it shows as "Queued · after the reply above" on every device (lib/conversation-lock.js),
+    // and becomes the working line when it begins; its own Stop takes it out of the queue alone.
+    const endWaiting = () => {
+      if (waitBeat) clearInterval(waitBeat);
+      sendSSE(res, "done", { conversationId: convId, stopReason: "stopped" });
+      if (!res.writableEnded) res.end();
+    };
+    const ran = await withConversationTurn(convId, async () => {
       if (waitBeat) clearInterval(waitBeat);
       if ((stopEpoch.get(convId) || 0) !== epochAtEnqueue) {
         // Stop was pressed while this message waited: don't run it.
-        sendSSE(res, "done", { conversationId: convId, stopReason: "stopped" });
-        if (!res.writableEnded) res.end();
+        currentQueuedTurn()?.end("aborted");
+        endWaiting();
         return;
       }
       const controller = new AbortController();
@@ -737,6 +752,9 @@ chatRouter.post("/send", async (req, res) => {
           // Publish this turn to the live timeline (other devices watch it).
           liveConversationId: convId,
           liveSource: "web",
+          // Summaries of its thinking for the live view, but not for voice mode: they make the first words
+          // come about 3s later, and a spoken reply is waited for.
+          thinkingSummaries: !/^\[voice\]/i.test(String(message || "")),
         });
 
         // Loop prevention: a turn stuck repeating itself is stopped (lib/loop-guard.js).
@@ -884,7 +902,16 @@ chatRouter.post("/send", async (req, res) => {
         }
         if (!res.writableEnded) res.end();
       }
+    }, {
+      live: {
+        source: "web",
+        prompt: message,
+        model: model || null,
+        // Its Stop took it out of the queue: this request is done now, not when the turn ahead ends.
+        onRemoved: endWaiting,
+      },
     });
+    if (ran === QUEUE_REMOVED && !res.writableEnded) endWaiting();
     return;
   }
 

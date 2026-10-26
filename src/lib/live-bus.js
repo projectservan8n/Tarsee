@@ -3,8 +3,12 @@
  *
  * Every channel (web, Telegram, Discord, WhatsApp, email, crons) ends up here:
  *   - "message"     a persisted user/assistant message (ConversationStore.addMessage)
+ *   - "turn_queued" a message came in while a turn of its conversation was running: this turn waits
+ *                   behind it (lib/conversation-lock.js); same turnId as its turn_start later, or its
+ *                   turn_end if it never begins
  *   - "turn_start"  the agent starts working on a conversation (provider)
- *   - "step"        a live step inside a turn: tool_start / tool_end / text, read from the
+ *   - "step"        a live step inside a turn: tool_start / tool_end / text / thinking / status, and
+ *                   "usage" (the turn's tokens so far and its speed, every few seconds), read from the
  *                   SDK's messages as they arrive (lib/tool-steps.js)
  *   - "turn_end"    the turn finished, failed or was stopped (provider)
  *
@@ -28,6 +32,8 @@ emitter.setMaxListeners(0);
 
 /** convId -> { turnId, startedAt, source, steps, runningTools: Map, lastStepAt } */
 const activeTurns = new Map();
+/** convId -> Map(turnId -> { turnId, queuedAt, source }): turns waiting behind the running one, oldest first. */
+const queuedTurns = new Map();
 
 export function initLiveBus(db) {
   _db = db;
@@ -68,12 +74,14 @@ export function initLiveBus(db) {
 
   // A restart kills any turn in flight. Close turns that started but never
   // ended, so no device shows the agent "working" forever on a dead turn.
+  // (A turn still waiting in the queue too: its "Queued" line must not wait forever either.)
   try {
     const open = db.prepare(`
       SELECT s.conversation_id, s.turn_id FROM conversation_events s
-      WHERE s.type = 'turn_start' AND s.created_at > ?
+      WHERE s.type IN ('turn_start', 'turn_queued') AND s.created_at > ?
         AND NOT EXISTS (SELECT 1 FROM conversation_events e
                         WHERE e.type = 'turn_end' AND e.turn_id = s.turn_id)
+      GROUP BY s.turn_id
     `).all(Date.now() - 2 * 86_400_000);
     for (const r of open) {
       publish(r.conversation_id, "turn_end", { stopReason: "interrupted", note: "Tarsee restarted during this turn" }, { turnId: r.turn_id });
@@ -112,7 +120,11 @@ function rowToEvent(r) {
 
 function trackTurn(evt) {
   const id = evt.conversationId;
-  if (evt.type === "turn_start") {
+  if (evt.type === "turn_queued") {
+    if (!queuedTurns.has(id)) queuedTurns.set(id, new Map());
+    queuedTurns.get(id).set(evt.turnId, { turnId: evt.turnId, queuedAt: evt.createdAt, source: evt.payload?.source || null });
+  } else if (evt.type === "turn_start") {
+    unqueue(id, evt.turnId);
     activeTurns.set(id, {
       conversationId: id,
       turnId: evt.turnId,
@@ -138,11 +150,19 @@ function trackTurn(evt) {
       t.runningTools.delete(p.id);
     }
   } else if (evt.type === "turn_end") {
+    unqueue(id, evt.turnId);
     // Only the turn that ended: when two overlap in one conversation, the
     // first one's end must not make the one still running look finished.
     const t = activeTurns.get(id);
     if (t && (!evt.turnId || t.turnId === evt.turnId)) activeTurns.delete(id);
   }
+}
+
+function unqueue(convId, turnId) {
+  const q = queuedTurns.get(convId);
+  if (!q) return;
+  q.delete(turnId);
+  if (!q.size) queuedTurns.delete(convId);
 }
 
 /**
@@ -260,6 +280,16 @@ export function activeTurnList() {
 export function recentClientMsgIds(conversationId, sinceMs = 24 * 3_600_000) {
   if (!_db || !conversationId) return [];
   try { return _stmts.clientIds.all(conversationId, Date.now() - sinceMs).map((r) => r.c); } catch { return []; }
+}
+
+/** Turns waiting behind a running one right now, oldest first: [{ conversationId, turnId, queuedAt, source }]. */
+export function queuedTurnList(conversationId = null) {
+  const out = [];
+  for (const [convId, q] of queuedTurns) {
+    if (conversationId && convId !== conversationId) continue;
+    for (const t of q.values()) out.push({ conversationId: convId, ...t });
+  }
+  return out;
 }
 
 /**

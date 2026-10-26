@@ -431,6 +431,9 @@ export async function createEmailBot(rawConfig, db) {
         replyAll,
       }).catch(() => {});
     }
+    }, {
+      // Waiting behind the reply in progress: a "Queued" line on the dashboard.
+      live: { source: "email", prompt: stripped || savedContent },
     });
   }
 

@@ -238,6 +238,31 @@ describe("jobs", () => {
   });
 });
 
+describe("a turn that waited in the queue", () => {
+  it("is named by the message it was queued for, not one sent while it waited; it starts when it began", async () => {
+    const at = (s) => T0 + s * 1000;
+    const qdir = fs.mkdtempSync(path.join(tmp, "projects-q-"));
+    const qdb = initDb(path.join(tmp, `usage-q-${Date.now()}.db`));
+    const ev = qdb.prepare("INSERT INTO conversation_events (conversation_id, turn_id, type, payload, created_at) VALUES (?, ?, ?, ?, ?)");
+    ev.run("convQ", null, "message", JSON.stringify({ id: "u1", role: "user", content: "[sam]: add a weekly report to the scraper" }), at(0));
+    ev.run("convQ", "A", "turn_start", JSON.stringify({ source: "discord", prompt: "[sam]: add a weekly report to the scraper" }), at(1));
+    ev.run("convQ", null, "message", JSON.stringify({ id: "u2", role: "user", content: "[sam]: and send it on Mondays" }), at(5));
+    ev.run("convQ", "B", "turn_queued", JSON.stringify({ source: "discord", prompt: "[sam]: and send it on Mondays" }), at(6));
+    ev.run("convQ", null, "message", JSON.stringify({ id: "u3", role: "user", content: "[sam]: one for the blog too" }), at(200));
+    ev.run("convQ", "C", "turn_queued", JSON.stringify({ source: "discord", prompt: "[sam]: one for the blog too" }), at(201));
+    ev.run("convQ", "A", "turn_end", JSON.stringify({ stopReason: "end_turn" }), at(250));
+    ev.run("convQ", "B", "turn_start", JSON.stringify({ source: "discord", prompt: "[sam]: and send it on Mondays" }), at(251));
+    ev.run("convQ", "C", "turn_end", JSON.stringify({ stopReason: "removed" }), at(252));
+    const qindex = new UsageIndex(qdb, { dirs: [qdir], now: () => at(500) });
+    await qindex.refresh();
+    const b = qdb.prepare("SELECT title, started_at FROM usage_turns WHERE turn_id = 'B'").get();
+    assert.equal(b.title, "and send it on Mondays");
+    assert.equal(b.started_at, at(251), "from when it began");
+    assert.equal(qdb.prepare("SELECT COUNT(*) AS n FROM usage_turns WHERE turn_id = 'C'").get().n, 0, "taken out of the queue: never a turn");
+    qdb.close();
+  });
+});
+
 describe("the index: transcripts and events into turns, read a piece at a time", () => {
   let db, dir, index, file;
   const at = (s) => T0 + s * 1000;

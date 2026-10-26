@@ -541,6 +541,9 @@ You can use these special markers in your response:
       clearInterval(idleTimer);
       typingIntervals.delete(typingInterval);
     }
+    }, {
+      // Waiting behind the reply in progress: a "Queued" line on the dashboard.
+      live: { source: "whatsapp", prompt: text },
     });
   }
 

@@ -23,6 +23,10 @@ describe("usage page: counts and speeds as people read them", () => {
     assert.equal(U.answerLine({ total: 12_400, outTps: 38.2, ms: 41_000 }), "12.4k tokens · 38 tk/s · 41s");
     assert.equal(U.answerLine({ total: 12_400, outTps: null, ms: 41_000 }), "12.4k tokens · 41s");
     assert.equal(U.answerLine({ total: 0 }), "", "a turn with no model calls has no line");
+    assert.equal(U.liveLine({ total: 84_200, nowTps: 41, outTps: 39 }), "84.2k tokens · 41 tk/s", "the latest calls' speed while it works");
+    assert.equal(U.liveLine({ total: 84_200, nowTps: null, outTps: 39 }), "84.2k tokens · 39 tk/s");
+    assert.equal(U.liveLine({ total: 45_300, nowTps: null, outTps: null }), "45.3k tokens", "the first call still going: no speed yet");
+    assert.equal(U.liveLine(null), "");
   });
   it("a breakdown: every kind of token, the total, the cache's share and both speeds", () => {
     const rows = U.breakdown({ input: 10, cacheRead: 9000, cacheWrite: 500, output: 490, total: 10_000, cacheShare: 0.9, outTps: 98, totalTps: 2000, genMs: 5000, calls: 3 });

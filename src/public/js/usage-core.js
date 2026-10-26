@@ -7,6 +7,7 @@
  *   dur           how long: 41s, 2m 05s, 1h 05m
  *   pct           a share: "96%"
  *   answerLine    the line under a reply: "12.4k tokens · 38 tk/s · 41s"
+ *   liveLine      the working line's part: "84.2k tokens · 41 tk/s"
  *   breakdown     a turn's or a job's numbers, in rows
  *   when, span    a moment and a run of time
  *   dayLabel, hourLabel   a chart bar's label
@@ -74,6 +75,16 @@
   function answerLine(t) {
     if (!t || !(t.total > 0)) return "";
     return [`${tokens(t.total)} tokens`, t.outTps != null ? tps(t.outTps) : "", t.ms != null ? dur(t.ms) : ""].filter(Boolean).join(" · ");
+  }
+
+  /**
+   * The working line's part while a turn runs. u: { total, nowTps, outTps } (a "usage" step): the speed of the
+   * latest model calls when known, else of all of them so far.
+   */
+  function liveLine(u) {
+    if (!u || !(u.total > 0)) return "";
+    const speed = u.nowTps != null ? u.nowTps : u.outTps;
+    return [`${tokens(u.total)} tokens`, speed != null ? tps(speed) : ""].filter(Boolean).join(" · ");
   }
 
   /** A turn's or a job's numbers, in rows: [{ label, value, note }]. */
@@ -148,6 +159,6 @@
     return 10 * p;
   }
 
-  const api = { setTimeZone, timeZone, tokens, tps, dur, pct, answerLine, breakdown, when, dayLabel, hourLabel, span, bars, niceMax };
+  const api = { setTimeZone, timeZone, tokens, tps, dur, pct, answerLine, liveLine, breakdown, when, dayLabel, hourLabel, span, bars, niceMax };
   globalThis.UsageCore = Object.freeze(api);
 })();

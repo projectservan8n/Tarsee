@@ -591,6 +591,8 @@ You can use these special markers in your response:
       clearInterval(idleTimer);
     }
     }, {
+      // Waiting behind the reply in progress: a "Queued" line on the dashboard too.
+      live: { source: "discord", prompt: displayText },
       onQueued: () => {
         message.reply("⏳ Still working on your last message — yours is next.").catch(() => {});
       },

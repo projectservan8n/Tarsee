@@ -5,7 +5,7 @@ import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { SettingsStore } from "../db/settings.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { getRecommendedModel } from "../config/constants.js";
-import { withConversationTurn } from "../lib/conversation-lock.js";
+import { withConversationTurn, QUEUE_REMOVED } from "../lib/conversation-lock.js";
 
 export const externalApiRouter = Router();
 
@@ -74,7 +74,7 @@ externalApiRouter.post("/message", async (req, res) => {
     // every channel (lib/conversation-lock.js): two resumes of one Claude
     // session at once corrupt it.
     let fullText = "";
-    await withConversationTurn(convId, async () => {
+    const ran = await withConversationTurn(convId, async () => {
       for await (const event of chatStream({
         provider: "claude-code",
         model,
@@ -94,7 +94,9 @@ externalApiRouter.post("/message", async (req, res) => {
       })) {
         if (event.type === "text") fullText += event.content;
       }
-    });
+    }, { live: { source: "api", prompt: message, model } });
+    // Taken out of the queue from the dashboard before it began: no reply.
+    if (ran === QUEUE_REMOVED) return res.status(409).json({ error: "Removed from the queue before it began", conversationId: convId });
 
     // Save assistant message
     convStore.addMessage(convId, { role: "assistant", content: fullText, model });

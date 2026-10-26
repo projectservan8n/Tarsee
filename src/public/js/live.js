@@ -184,6 +184,7 @@ const Live = {
     if (evt.seq > this.lastSeq) this.lastSeq = evt.seq;
     switch (evt.type) {
       case "message": this.onMessage(evt, fromBacklog); break;
+      case "turn_queued": this.onTurnQueued(evt); break;
       case "turn_start": this.onTurnStart(evt); break;
       case "step": this.onStep(evt); break;
       case "turn_end": this.onTurnEnd(evt); break;
@@ -200,12 +201,19 @@ const Live = {
 
   /** The turn a reply that comes now belongs to: the latest one still waiting for its words. */
   waitingTurn(at = Date.now()) {
-    const all = [...this.turns.values()];
+    // A turn still in the queue has said nothing yet, and one taken out of it never will: never their words.
+    const all = [...this.turns.values()].filter((t) => t.el?.isConnected && !t.queued && !t.neverBegan);
     for (let i = all.length - 1; i >= 0; i--) {
       const t = all[i];
-      if (!t.el?.isConnected) continue;
       if (t.answered) return null;   // (the newest turn has its reply: this one is a second part, or another's)
-      if (!t.ended || at - (t.endedAt || at) < LIVE_REPLY_WINDOW_MS) return t;
+      if (!t.ended) {
+        // The turn queued behind another begins the moment the one ahead ends, while its channel may still be
+        // posting that one's reply: words that come now are the earlier turn's, when it is done and has none yet.
+        const prev = all[i - 1];
+        if (prev && prev.ended && prev.endState === "done" && !prev.answered && at - (prev.endedAt || at) < LIVE_REPLY_WINDOW_MS) return prev;
+        return t;
+      }
+      if (at - (t.endedAt || at) < LIVE_REPLY_WINDOW_MS) return t;
       return null;
     }
     return null;
@@ -257,17 +265,53 @@ const Live = {
   },
 
   // ── Turns: in the answer's place ───────────────────────────────────
-  onTurnStart(evt) {
+  /**
+   * A message that came in while the turn above is still running waits behind it: its line says
+   * "Queued · after the reply above" (no timer, no tokens) and becomes the working line when it really begins
+   * (onTurnStart). Its Stop takes it out of the queue; the turn running above goes on.
+   */
+  onTurnQueued(evt) {
     if (this.turns.has(evt.turnId)) return;
+    const turn = this.drawTurn(evt, "queued");
+    turn.queued = true;
+    if (!this.pseudo) turn.steps.setStop(() => this.removeQueued(evt.turnId));
+    this.updateComposer();
+    Chat.scrollToBottom();
+  },
+
+  onTurnStart(evt) {
+    const had = this.turns.get(evt.turnId);
+    if (had) {
+      // The queued line begins: same place, now working, its timer from now.
+      if (!had.queued) return;
+      had.queued = false;
+      had.startedAt = evt.createdAt || Date.now();
+      had.source = evt.payload?.source || had.source;
+      had.steps.begin(had.startedAt);
+      had.steps.setStop(had.source === "web" ? () => this.stop() : null);
+      had.el.classList.add("is-working");
+      this.activeTurnId = evt.turnId;
+      this.updateComposer();
+      return;
+    }
+    this.drawTurn(evt, "running");
+    this.activeTurnId = evt.turnId;
+    this.updateComposer();
+    Chat.scrollToBottom();
+  },
+
+  /** A turn's message in the answer's place, with its steps line ("queued" or "running"). */
+  drawTurn(evt, state) {
     const p = evt.payload || {};
     if (Chat.elements.welcomeScreen.style.display !== "none") {
       Chat.elements.welcomeScreen.style.display = "none";
       Chat.elements.chatArea.style.display = "flex";
     }
     const el = Chat._createMessageEl("assistant", "", { streaming: true });
-    el.classList.add("is-turn", "is-working");
+    el.classList.add("is-turn");
+    if (state === "running") el.classList.add("is-working");
     el.dataset.turnId = evt.turnId;
-    const steps = Chat.createSteps({ state: "running", startedAt: evt.createdAt || Date.now(), onStop: p.source === "web" ? () => this.stop() : null });
+    const steps = Chat.createSteps({ state, startedAt: evt.createdAt || Date.now(), onStop: state === "running" && p.source === "web" ? () => this.stop() : null });
     // The chat is an aria-live log; announcing every tool step would drown
     // a screen reader. The reply itself is still announced.
     steps.el.setAttribute("aria-live", "off");
@@ -283,12 +327,10 @@ const Live = {
     }
     el.querySelector(".message-content").prepend(steps.el);
     el._steps = steps;
-    const turn = { turnId: evt.turnId, el, steps, startedAt: evt.createdAt, endedAt: null, ended: false, answered: false, source: p.source || null };
+    const turn = { turnId: evt.turnId, el, steps, startedAt: state === "running" ? evt.createdAt : null, endedAt: null, ended: false, answered: false, source: p.source || null, queued: false };
     this.turns.set(evt.turnId, turn);
     this.area().appendChild(el);
-    this.activeTurnId = evt.turnId;
-    this.updateComposer();
-    Chat.scrollToBottom();
+    return turn;
   },
 
   onStep(evt) {
@@ -301,6 +343,15 @@ const Live = {
       turn.steps.endTool(p.id, { ok: p.ok !== false, output: p.preview || "", endedAt: evt.createdAt });
     } else if (p.kind === "text" && p.text) {
       turn.steps.addNote(p.text);
+    } else if (p.kind === "thinking" && p.text) {
+      turn.steps.addThought(p.text);
+    } else if (p.kind === "status" && p.text) {
+      turn.steps.addStatus(p.text);
+    } else if (p.kind === "usage") {
+      // The turn's tokens so far, on its working line (not a step, and nothing to scroll for).
+      turn.usage = p;
+      turn.steps.setUsage(p);
+      return;
     }
     Chat.scrollToBottom();
   },
@@ -314,12 +365,37 @@ const Live = {
     turn.endedAt = evt.createdAt || Date.now();
     const reason = String(evt.payload?.stopReason || "ended");
     const error = evt.payload?.error || null;
-    const state = error ? "failed" : /interrupt/i.test(reason) ? "interrupted" : /abort|stop/i.test(reason) ? "stopped" : "done";
+    let state = error ? "failed" : /interrupt/i.test(reason) ? "interrupted" : /abort|stop|removed/i.test(reason) ? "stopped" : "done";
+    // It never began: taken out of the queue (its Stop, or the Stop of the turn above, which stops what waits
+    // behind it too), or its slot came and nothing ran (a command answered it). It used no time and no tokens.
+    const neverBegan = turn.queued;
+    if (neverBegan) {
+      turn.queued = false;
+      turn.neverBegan = true;
+      if (state === "done") {
+        // Nothing ran, nothing to say: the line goes (a reply that comes still has its own place).
+        turn.ended = true;
+        turn.el.remove();
+        this.turns.delete(evt.turnId);
+        return;
+      }
+      if (state !== "failed" && state !== "interrupted") state = "removed";
+    }
+    turn.endState = state;
     turn.steps.finish({ state, endedAt: turn.endedAt, error });
     turn.el.classList.remove("is-working");
-    // The line under the reply: this turn's tokens and speed, once the server has read them (js/usage.js).
-    // Only for a turn that ended just now, not for old turns replayed when a chat is opened.
-    if (typeof Usage !== "undefined" && evt.turnId && Date.now() - turn.endedAt < 60_000) Usage.turnEnded(turn.el, evt.turnId);
+    if (neverBegan) {
+      clearTimeout(this._chanRefresh);
+      this._chanRefresh = setTimeout(() => Chat.loadChannels(), 800);
+      return;
+    }
+    // The line under the reply: this turn's tokens and speed (the live totals now, the exact ones a moment later
+    // once the server has read them, js/usage.js). Only for a turn that ended just now, not for old turns replayed
+    // when a chat is opened.
+    const used = evt.payload?.usage || turn.usage;
+    if (typeof Usage !== "undefined" && evt.turnId && Date.now() - turn.endedAt < 60_000) {
+      Usage.turnEnded(turn.el, evt.turnId, used?.total ? { ...used, ms: turn.endedAt - (turn.startedAt || turn.endedAt) } : null);
+    }
     // Nothing to show and no reply came: the turn leaves no trace (a reply that comes later still takes its place).
     if (!turn.answered && state === "done") {
       setTimeout(() => {
@@ -363,11 +439,27 @@ const Live = {
     }
   },
 
+  /** The Stop on a queued line: that message leaves the queue, the turn running above goes on. */
+  async removeQueued(turnId) {
+    if (!this.convId || !turnId) return;
+    const turn = this.turns.get(turnId);
+    if (turn?.steps.stopBtn) turn.steps.stopBtn.disabled = true;
+    try {
+      const r = await API.json("/api/chat/stop", { method: "POST", body: { conversationId: this.convId, turnId } });
+      if (r?.removed) App.showToast("Taken out of the queue", "info");
+      else if (r?.stopped) App.showToast("It had just begun: stopping it", "info");
+      else App.showToast("It is no longer in the queue", "info");
+    } catch (err) {
+      if (turn?.steps.stopBtn) turn.steps.stopBtn.disabled = false;
+      App.showToast(err.message || "Stop failed", "error");
+    }
+  },
+
   /** Composer hint while a turn runs: sending still works, it queues. */
   updateComposer() {
     const input = Chat.elements.messageInput;
     if (!input) return;
-    const busy = !!this.activeTurnId;
+    const busy = !!this.activeTurnId || [...this.turns.values()].some((t) => t.queued && !t.ended);
     if (!input.dataset.idlePlaceholder) input.dataset.idlePlaceholder = input.placeholder || "";
     input.placeholder = busy ? `${Chat.botName || "Tarsee"} is working. Send to queue.` : input.dataset.idlePlaceholder;
   },
@@ -544,7 +636,10 @@ const Live = {
         if (e.payload?.kind === "tool_start") t.lastStepLabel = ChatCore.stepLabel({ name: e.payload.name, summary: e.payload.summary }, { running: true });
       }
     } else if (e.type === "turn_end") {
-      this.activity.delete(id);
+      // Only the turn it ends: the one queued behind it may have begun first and is running now (and a queued
+      // turn's own end, taken out of the queue, ends nothing that runs). A waiting turn is not a working dot.
+      const t = this.activity.get(id);
+      if (t && (!e.turnId || !t.turnId || t.turnId === e.turnId)) this.activity.delete(id);
     } else if (e.type === "message") {
       if (id !== this.convId && e.payload?.role === "assistant") this.unread.add(id);
     }

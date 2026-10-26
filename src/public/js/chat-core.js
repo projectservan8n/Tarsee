@@ -310,9 +310,9 @@
 
   /**
    * The line in the answer's place, while it works and after: { title, detail, tone }.
-   *   turn { state: "running" | "done" | "stopped" | "failed" | "interrupted", tools (how many), failed, ms, last (the
-   *          step on now, stepLabel's words), error }
-   * Running: "Working", "3 steps · Reading README.md". Done: "Used 12 tools", "16s" (and how many failed). A turn with
+   *   turn { state: "queued" | "running" | "done" | "stopped" | "failed" | "interrupted" | "removed", tools (how many),
+   *          failed, ms, last (the step on now, stepLabel's words), error }
+   * Queued: "Queued", "after the reply above". Running: "Working", "3 steps · Reading README.md". Done: "Used 12 tools", "16s" (and how many failed). A turn with
    * no tools at all says nothing once it is done (title ""): the answer is all there is.
    */
   function turnLine(turn) {
@@ -321,6 +321,12 @@
     const failed = Math.max(0, Number(t.failed) || 0);
     const dur = t.ms != null ? fmtDur(t.ms) : "";
     switch (t.state) {
+      // Waiting behind the turn still running in this chat: no timer, no tokens, nothing "Thinking" (two "Working"
+      // lines at once read as a bug).
+      case "queued":
+        return { title: "Queued", detail: "after the reply above", tone: "muted" };
+      case "removed":
+        return { title: "Removed from the queue", detail: "", tone: "muted" };
       case "running":
         return { title: "Working", detail: [n ? plural(n, "step") : "", t.last || "Thinking"].filter(Boolean).join(" · "), tone: "running" };
       case "stopped":

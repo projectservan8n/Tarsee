@@ -474,6 +474,7 @@ export class UsageIndex {
     this.running = null;
     this.lastRefreshAt = 0;
     this.lastAsked = new Map();   // conversation -> the last message a person sent there (syncTurns)
+    this.queuedAsked = new Map(); // turn id -> { at, asked }: a queued turn's message, kept until it begins (syncTurns)
     this.progress = { files: 0, done: 0, bytesLeft: 0, firstPass: true };
     db.exec(USAGE_SCHEMA);
     this.q = {
@@ -544,7 +545,7 @@ export class UsageIndex {
   syncTurns() {
     let last = this.meta("lastSeq", 0);
     const rows = this.db.prepare(`SELECT seq, conversation_id, turn_id, type, payload, created_at FROM conversation_events
-      WHERE seq > ? AND type IN ('turn_start', 'turn_end', 'message') ORDER BY seq ASC LIMIT 20000`);
+      WHERE seq > ? AND type IN ('turn_queued', 'turn_start', 'turn_end', 'message') ORDER BY seq ASC LIMIT 20000`);
     for (;;) {
       let batch;
       try { batch = rows.all(last); } catch { return; }   // no events table (a bare test database)
@@ -557,11 +558,19 @@ export class UsageIndex {
           if (r.type === "message" && p.role === "user") {
             // The whole message the next turn answers (the turn's own copy stops at 300 characters): its name.
             this.lastAsked.set(r.conversation_id, { at: r.created_at, text: String(p.content || "").slice(0, 4000) });
+          } else if (r.type === "turn_queued" && r.turn_id) {
+            // It begins (turn_start) once the turn ahead is done, maybe minutes and messages later: the message it
+            // answers is the one just before it was queued.
+            this.queuedAsked.set(r.turn_id, { at: r.created_at, asked: this.lastAsked.get(r.conversation_id) || null });
           } else if (r.type === "turn_start" && r.turn_id) {
-            const asked = this.lastAsked.get(r.conversation_id);
-            const words = asked && r.created_at - asked.at <= 120_000 && r.created_at >= asked.at - 5000 ? asked.text : p.prompt;
+            const q = this.queuedAsked.get(r.turn_id);
+            this.queuedAsked.delete(r.turn_id);
+            const asked = q ? q.asked : this.lastAsked.get(r.conversation_id);
+            const ref = q ? q.at : r.created_at;
+            const words = asked && ref - asked.at <= 120_000 && ref >= asked.at - 5000 ? asked.text : p.prompt;
             this.q.putTurn.run(r.turn_id, r.conversation_id, p.source || null, p.model || null, p.effort || null, String(p.prompt || "").slice(0, 300), promptTitle(words) || promptTitle(p.prompt) || null, r.created_at);
           } else if (r.type === "turn_end" && r.turn_id) {
+            this.queuedAsked.delete(r.turn_id);   // (taken out of the queue: it never began)
             // sessionId: the Claude Code session the turn ran in (src/ai/providers/claude-code.js).
             this.q.endTurn.run(r.created_at, p.stopReason || null, p.sessionId || null, r.turn_id);
           } else if (r.type === "message" && p.role === "assistant" && p.id) {

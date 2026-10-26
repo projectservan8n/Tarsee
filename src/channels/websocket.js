@@ -2,7 +2,7 @@ import { WebSocketServer } from "ws";
 import crypto from "node:crypto";
 import { validateApiToken, validateSessionFromRequest } from "../middleware/auth.js";
 import { chatStream } from "../ai/router.js";
-import { onEvent, eventsSince, eventsForTurn, activeTurnFor, activeTurnList, recentEvents } from "../lib/live-bus.js";
+import { onEvent, eventsSince, eventsForTurn, activeTurnFor, activeTurnList, queuedTurnList, recentEvents } from "../lib/live-bus.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { AuditLog } from "../db/audit.js";
@@ -46,7 +46,7 @@ export function setupWebSocket(server, db, app) {
   // ("live.event", full payload) and, in compact form, to sockets watching
   // all activity ("live.activity": turn start/end, tool starts/ends and
   // message previews, for "working" indicators across every channel).
-  const ACTIVITY_TYPES = new Set(["turn_start", "turn_end"]);
+  const ACTIVITY_TYPES = new Set(["turn_queued", "turn_start", "turn_end"]);
   onEvent((evt) => {
     let full = null;
     let compact = null;
@@ -57,7 +57,8 @@ export function setupWebSocket(server, db, app) {
           full ||= JSON.stringify({ type: "live.event", event: evt });
           ws.send(full);
         }
-        if (ws._liveActivity && (ACTIVITY_TYPES.has(evt.type) || (evt.type === "step" && evt.payload?.kind !== "text") || evt.type === "message")) {
+        // (Of the steps, only tools: the sidebar's "working" labels need nothing else, and a usage step comes every few seconds.)
+        if (ws._liveActivity && (ACTIVITY_TYPES.has(evt.type) || (evt.type === "step" && (evt.payload?.kind === "tool_start" || evt.payload?.kind === "tool_end")) || evt.type === "message")) {
           compact ||= JSON.stringify({ type: "live.activity", event: {
             seq: evt.seq, conversationId: evt.conversationId, turnId: evt.turnId, type: evt.type, createdAt: evt.createdAt,
             payload: evt.type === "message"
@@ -248,9 +249,11 @@ export function setupWebSocket(server, db, app) {
         // its recent runs, not the oldest 1000 events since seq 0.
         let events = msg.tail && !since ? recentEvents(msg.convId, 300) : eventsSince(msg.convId, since, 1000);
         const turn = activeTurnFor(msg.convId);
-        if (turn) {
+        // (and of each turn waiting behind it: its "Queued" line)
+        const open = [turn?.turnId, ...queuedTurnList(msg.convId).map((t) => t.turnId)].filter(Boolean);
+        if (open.length) {
           const have = new Set(events.map((e) => e.seq));
-          const turnEvents = eventsForTurn(turn.turnId).filter((e) => !have.has(e.seq));
+          const turnEvents = open.flatMap((id) => eventsForTurn(id)).filter((e) => !have.has(e.seq) && (have.add(e.seq), true));
           events = [...turnEvents, ...events].sort((a, b) => a.seq - b.seq);
         }
         try { ws.send(JSON.stringify({ type: "live.backlog", convId: msg.convId, events, activeTurn: turn })); } catch {}
@@ -262,7 +265,7 @@ export function setupWebSocket(server, db, app) {
       }
       if (msg.type === "live.activity.subscribe") {
         ws._liveActivity = true;
-        try { ws.send(JSON.stringify({ type: "live.activity.snapshot", turns: activeTurnList() })); } catch {}
+        try { ws.send(JSON.stringify({ type: "live.activity.snapshot", turns: activeTurnList(), queued: queuedTurnList() })); } catch {}
         return;
       }
 

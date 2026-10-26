@@ -1218,20 +1218,28 @@ const Chat = {
    * works, "Used 12 tools" after), that opens to the list of steps, each one line ("Read README.md") that opens to
    * its input and output in a box that scrolls. Collapsed by default. js/live.js feeds it as the turn goes; history
    * draws it done.
-   *   options { state: "running" | "done", startedAt, tools: [{ name, summary, input, output, ok, todos }],
+   *   options { state: "queued" | "running" | "done", startedAt, tools: [{ name, summary, input, output, ok, todos }],
    *             notes: [text], lazy: () => Promise<[tools]> (the details of a saved reply's steps, fetched once),
    *             onStop: () => void (a Stop button while it runs) }
+   * "queued": waiting behind the turn still running in this chat, "Queued · after the reply above", no timer and no
+   * tokens; begin(at) makes it the working line when the turn really begins.
+   * The line always opens, even before the first step: to what it thought (a summary, for a turn sent from the
+   * dashboard), why it waits (an API retry, compacting), or a word that nothing has happened yet.
    */
   createSteps({ state = "running", startedAt = Date.now(), tools = [], notes = [], items = null, lazy = null, onStop = null } = {}) {
     const el = document.createElement("div");
     el.className = "steps";
     el.innerHTML = '<div class="steps-head"><button type="button" class="steps-line" aria-expanded="false">'
       + '<span class="steps-dot" aria-hidden="true"></span><span class="steps-title"></span><span class="steps-detail"></span>'
-      + '<span class="steps-time"></span>'
+      + '<span class="steps-usage"></span><span class="steps-time"></span>'
       + '<svg class="steps-caret" width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
       + '</button></div><div class="steps-list" hidden></div>';
     const line = el.querySelector(".steps-line");
     const list = el.querySelector(".steps-list");
+    // What the list says while it has nothing in it yet (it opens all the same).
+    const empty = document.createElement("p");
+    empty.className = "steps-empty";
+    list.appendChild(empty);
     const s = {
       el, state, startedAt, endedAt: null, error: null, rows: new Map(), order: [], notes: 0, last: "", lazy, loaded: null,
     };
@@ -1241,16 +1249,21 @@ const Chat = {
       el.classList.toggle("is-open", open);
     };
     line.addEventListener("click", () => setOpen(list.hidden));
-    if (onStop) {
+    /** The Stop beside the line (null: none). A queued line's takes that message out of the queue, nothing else. */
+    s.setStop = (fn) => {
+      s.stopBtn?.remove();
+      s.stopBtn = null;
+      if (!fn) return;
       const stop = document.createElement("button");
       stop.type = "button";
       stop.className = "steps-stop";
       stop.textContent = "Stop";
-      stop.title = "Stop (Esc)";
-      stop.addEventListener("click", () => onStop());
+      stop.title = s.state === "queued" ? "Take this message out of the queue" : "Stop (Esc)";
+      stop.addEventListener("click", () => fn());
       el.querySelector(".steps-head").appendChild(stop);
       s.stopBtn = stop;
-    }
+    };
+    s.setStop(onStop);
 
     const toolCount = () => s.order.filter((k) => s.rows.get(k)?.kind === "tool").length;
     const failedCount = () => s.order.filter((k) => s.rows.get(k)?.ok === false).length;
@@ -1267,10 +1280,16 @@ const Chat = {
       el.querySelector(".steps-title").textContent = title;
       el.querySelector(".steps-detail").textContent = detail;
       el.querySelector(".steps-time").textContent = s.state === "running" ? Core.fmtDur(ms) : "";
+      el.querySelector(".steps-usage").textContent = s.state === "running" && s.usage && typeof UsageCore !== "undefined" ? UsageCore.liveLine(s.usage) : "";
       el.dataset.state = s.state;
       el.dataset.tone = tl.tone;
       el.hidden = s.state === "done" && !n && !s.notes;
-      line.disabled = !s.order.length && s.state === "running";
+      empty.hidden = s.order.length > 0;
+      empty.textContent = s.state === "queued"
+        ? "Waiting for the reply above to finish. It starts right after."
+        : s.state === "running"
+          ? `Nothing to show yet: ${Chat.botName || "Tarsee"} is thinking. Each step shows here as it happens.`
+          : "It ended before any step.";
       for (const k of s.order) {
         const r = s.rows.get(k);
         if (r.kind === "tool" && !r.endedAt && r.startedAt && s.state === "running") r.time.textContent = Core.fmtDur(now - r.startedAt);
@@ -1394,6 +1413,61 @@ const Chat = {
       s.notes += 1;
       s.paint();
       return n;
+    };
+
+    /** What it thought (a summary of a thinking block): a quiet paragraph that counts as a note. */
+    s.addThought = (text) => {
+      if (!String(text || "").trim()) return null;
+      const k = `th${s.order.length}`;
+      const n = document.createElement("div");
+      n.className = "step-note step-thought";
+      const label = document.createElement("div");
+      label.className = "step-thought-label";
+      label.textContent = "Thought";
+      const body = document.createElement("div");
+      body.className = "step-thought-text";
+      body.innerHTML = Chat.renderMarkdown(text);
+      n.append(label, body);
+      s.rows.set(k, { kind: "thought", key: k, el: n });
+      s.order.push(k);
+      list.appendChild(n);
+      s.notes += 1;
+      if (s.state === "running") s.last = "Thinking";
+      s.paint();
+      return n;
+    };
+
+    /** Why it is waiting (an API error it retries, compacting): one muted line. */
+    s.addStatus = (text) => {
+      if (!String(text || "").trim()) return null;
+      const k = `st${s.order.length}`;
+      const n = document.createElement("div");
+      n.className = "step-status";
+      n.textContent = text;
+      s.rows.set(k, { kind: "status", key: k, el: n });
+      s.order.push(k);
+      list.appendChild(n);
+      if (s.state === "running") s.last = s.statusLast = String(text).split(". ")[0].slice(0, 80);
+      s.paint();
+      return n;
+    };
+
+    /** The turn's tokens so far ({ total, nowTps, outTps, ... } from a usage step), for the working line. */
+    s.setUsage = (u) => {
+      s.usage = u || null;
+      // A model call going again after a retry: the line goes back from the retry's words to "Thinking".
+      if (s.statusLast && s.last === s.statusLast) s.last = "Thinking";
+      s.statusLast = null;
+      s.paint();
+    };
+
+    /** The queued turn really began: the working line from now on (its timer starts here, not at the send). */
+    s.begin = (at = Date.now()) => {
+      if (s.state !== "queued") return;
+      s.state = "running";
+      s.startedAt = at;
+      if (s.stopBtn) s.stopBtn.title = "Stop (Esc)";
+      s.paint();
     };
 
     /** Drop the notes that are the answer itself (it is shown under the line). */

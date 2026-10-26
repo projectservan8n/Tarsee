@@ -444,7 +444,9 @@ const Usage = {
    * A turn that just ended on screen (js/live.js): its line once the server has read the turn's calls
    * (it reads them a moment after every turn ends), asked twice in case that read was still going.
    */
-  turnEnded(msgEl, turnId) {
+  turnEnded(msgEl, turnId, live = null) {
+    // The live totals now (the stream's own count), then the exact numbers, subagents included, once read.
+    if (live?.total) this.attachLine(msgEl, live);
     if (!turnId) return;
     const ask = async (again) => {
       try {

@@ -19,7 +19,8 @@ import { SettingsStore } from "../../db/settings.js";
 import { resolveModel } from "../../lib/model-catalog.js";
 import { EFFORT_IDS, TARSEE_DEFAULT_EFFORT } from "../../lib/model-picker.js";
 import { isTranscriptOverCap, transcriptSizeMB, SESSION_JSONL_MAX_MB } from "../../lib/claude-transcript.js";
-import { stepsFromSdkMessage, toolResultsFromSdkMessage } from "../../lib/tool-steps.js";
+import { stepsFromSdkMessage, toolResultsFromSdkMessage, createStreamWatcher } from "../../lib/tool-steps.js";
+import { claimQueuedTurn } from "../../lib/conversation-lock.js";
 /**
  * Extract image blocks from content array.
  * Returns { images: ImageBlockParam[], text: string }
@@ -57,6 +58,23 @@ function classifyAgentError(text) {
     /previous_message_id/i.test(trimmed) ||
     /session.*(?:expired|invalid|not found|corrupt)/i.test(trimmed);
   return { recoverable };
+}
+
+/**
+ * Claude's sign-in ran out. The CLI then answers with the error as if it were
+ * the reply ("Failed to authenticate. API Error: 401 OAuth access token has
+ * expired. Re-authenticate to continue."), which classifyAgentError misses
+ * because it does not start with "API Error". It is not an answer: the turn
+ * says what to do instead. (TarseeMacOS met it as the "reply" to an ordinary
+ * question and catches it the same way.)
+ */
+const AUTH_TEXT_RE = /(Failed to authenticate|OAuth (?:access )?token (?:has )?expired|Re-authenticate to continue|API Error:\s*401)/i;
+export const AUTH_EXPIRED_MESSAGE = "**Claude's sign-in has expired**, so I can't reach the model right now. This isn't a network problem, and retrying won't fix it.\n\n"
+  + "Open the Terminal in the Tarsee dashboard (the `>_` button at the top), run `claude login` and follow the link it prints. Then send your message again.";
+
+/** Whether an SDK message's words (or its error flag) are Claude's sign-in failing rather than a reply. */
+export function isAuthFailure(text, sdkError = null) {
+  return sdkError === "authentication_failed" || AUTH_TEXT_RE.test(String(text || ""));
 }
 
 /**
@@ -146,9 +164,22 @@ function extractMedia(content) {
  * A turn on the timeline can also be stopped from the dashboard whichever
  * channel started it (stopTurns below): the dashboard shows Stop on any chat
  * at work, a Telegram or Discord one included.
+ *
+ * A turn sent from the dashboard (liveSource "web") asks for summaries of the
+ * model's thinking, which the live view shows while it works; other channels
+ * do without unless the caller sets `thinkingSummaries` (see chatEngine). A
+ * turn that waited in its chat's queue takes the id it was queued under
+ * (lib/conversation-lock.js claimQueuedTurn, or `liveTurnId`), so the same
+ * "Queued" line becomes its working line.
+ *
+ * The turn's tokens so far ("usage" steps) go out at most every
+ * USAGE_STEP_MS, and their totals ride on turn_end.
  */
+const USAGE_STEP_MS = 3000;
+
 export async function* chat(opts) {
   opts = withChatModel(opts);
+  if (opts.thinkingSummaries == null) opts = { ...opts, thinkingSummaries: opts.liveSource === "web" };
   const liveConv = opts?.liveDisabled ? null : (opts?.liveConversationId || opts?.toolCtx?.conversationId || null);
   if (!liveConv) { yield* chatEngine(opts); return; }
   let live = null;
@@ -166,7 +197,8 @@ export async function* chat(opts) {
   if (!set) { set = new Set(); runningTurns.set(liveConv, set); }
   set.add(stopper);
 
-  const turnId = live.newTurnId();
+  // (A turn that waited in its chat's queue keeps the id of its "Queued" line: the same line begins.)
+  const turnId = opts.liveTurnId || claimQueuedTurn(liveConv) || live.newTurnId();
   const lastUser = [...(opts.messages || [])].reverse().find((m) => m.role === "user");
   const promptText = typeof lastUser?.content === "string"
     ? lastUser.content
@@ -183,10 +215,27 @@ export async function* chat(opts) {
   // session's transcript and needs to know whose it is (claude_session_id changes on a reset).
   let sessionId = null;
   const onSessionId = (sid) => { sessionId = sid || sessionId; opts.onSessionId?.(sid); };
+  let usage = null;
+  let usageSentAt = 0;
+  let usageTimer = null;
+  const sendUsage = () => {
+    clearTimeout(usageTimer);
+    usageTimer = null;
+    if (!usage) return;
+    usageSentAt = Date.now();
+    live.publish(liveConv, "step", usage, { turnId });
+  };
   try {
     for await (const evt of chatEngine({ ...opts, onSessionId, signal: stopper.signal })) {
       if (evt?.type === "step") {
         const { type: _t, ...step } = evt;
+        if (step.kind === "usage") {
+          usage = step;
+          const wait = USAGE_STEP_MS - (Date.now() - usageSentAt);
+          if (wait <= 0) sendUsage();
+          else if (!usageTimer) { usageTimer = setTimeout(sendUsage, wait); usageTimer.unref?.(); }
+          continue;
+        }
         live.publish(liveConv, "step", step, { turnId });
         continue;
       }
@@ -197,10 +246,13 @@ export async function* chat(opts) {
   } finally {
     set.delete(stopper);
     if (!set.size && runningTurns.get(liveConv) === set) runningTurns.delete(liveConv);
+    if (usageTimer) sendUsage();
+    const { kind: _k, ...totals } = usage || {};
     live.publish(liveConv, "turn_end", {
       stopReason: stopReason || (stopper.signal.aborted ? "aborted" : "ended"),
       ...(errorMsg ? { error: String(errorMsg).slice(0, 500) } : {}),
       ...(sessionId ? { sessionId } : {}),
+      ...(usage ? { usage: totals } : {}),
     }, { turnId });
   }
 }
@@ -249,6 +301,7 @@ async function* chatEngine({
   effort,
   maxTurns,
   maxBudgetUsd,
+  thinkingSummaries = false,
 }) {
   // Extract the latest user message — separate text and images
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
@@ -325,6 +378,14 @@ async function* chatEngine({
   // asked for. Pass the level through and let the SDK resolve it.
   if (effort && ["low", "medium", "high", "xhigh", "max"].includes(effort)) {
     queryOptions.effort = effort;
+  }
+
+  // Summaries of the model's thinking, for the dashboard's live view (chat() turns them on for a turn sent from
+  // the dashboard, where someone is watching). Without this the API leaves thinking out ("omitted") and the live
+  // line can only say "Thinking". They cost time: the answer's first words come about 3s later on a turn that
+  // thinks, so a Telegram, Discord or email reply, which nobody watches being written, does without.
+  if (thinkingSummaries) {
+    queryOptions.thinking = { type: "adaptive", display: "summarized" };
   }
 
   // OpenClaw-style: lightweight system prompt + tool-based memory access
@@ -427,10 +488,14 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
     let messageCount = 0;
     let everStreamed = false; // True if ANY text was streamed via stream_event
     let inThinking = false;
+    let textOut = false; // True once any words went to the caller (an auth error after that is not the whole reply)
     const seenToolIds = new Set(); // tool_use ids already turned into live steps
+    // Thinking summaries, API retries, compacting and the tokens so far, for the live view (lib/tool-steps.js).
+    const watcher = createStreamWatcher();
     for await (const message of query({ prompt: queryPrompt, options: queryOptions, signal })) {
       messageCount++;
       if (signal?.aborted) break;
+      for (const step of watcher.onMessage(message)) yield { type: "step", ...step };
 
       switch (message.type) {
         case "stream_event": {
@@ -440,6 +505,7 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
             if (evt.delta?.type === "text_delta" && evt.delta.text) {
               yield { type: "text", content: evt.delta.text };
               everStreamed = true;
+              textOut = true;
             } else if (evt.delta?.type === "thinking_delta" && evt.delta.thinking) {
               // Don't emit thinking content as text — but signal that thinking is active
               everStreamed = true;
@@ -459,6 +525,18 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
         }
 
         case "assistant": {
+          // Claude's sign-in failing, delivered as if it were the reply: say what to do instead (AUTH_TEXT_RE).
+          if (!message.parent_tool_use_id && !textOut) {
+            const words = Array.isArray(message.message?.content)
+              ? message.message.content.filter((b) => b.type === "text").map((b) => b.text).join("")
+              : String(message.message?.content || "");
+            if (isAuthFailure(words, message.error)) {
+              console.error(`[claude-code] Claude's sign-in failed: ${words.slice(0, 200)}`);
+              yield { type: "text", content: AUTH_EXPIRED_MESSAGE };
+              yield { type: "done", stopReason: "auth-expired" };
+              return;
+            }
+          }
           // Live steps (the words and each tool as it starts), for the
           // dashboard. A subagent's own messages carry parent_tool_use_id:
           // its inner steps stay inside its one Task step.
@@ -478,6 +556,7 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
             if (text) {
               yield { type: "text", content: text };
               everStreamed = true;
+              textOut = true;
             }
           }
 
@@ -553,6 +632,12 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
             break;
           }
           const resultText = message.result || "";
+          if (!textOut && isAuthFailure(resultText)) {
+            console.error(`[claude-code] Claude's sign-in failed: ${resultText.slice(0, 200)}`);
+            yield { type: "text", content: AUTH_EXPIRED_MESSAGE };
+            yield { type: "done", stopReason: "auth-expired" };
+            break;
+          }
           const classified = classifyAgentError(resultText);
           if (classified) {
             // API/SDK error landed in result.result — don't leak it as a chat
@@ -566,6 +651,7 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
           // Yield result text as fallback if nothing was streamed at all
           if (!everStreamed && resultText) {
             yield { type: "text", content: resultText };
+            textOut = true;
           }
           yield { type: "done", stopReason: "end_turn" };
           break;
@@ -575,11 +661,8 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
           const errMsg = message.error?.message || message.error || "Unknown Claude Code error";
           const classified = classifyAgentError(errMsg);
           // Detect auth failures
-          if (/unauthorized|authentication|login|credential/i.test(errMsg)) {
-            yield {
-              type: "text",
-              content: `**Authentication required.** Run \`claude login\` in the Tarsee terminal to authenticate with your Claude subscription.\n\nError: ${errMsg}`,
-            };
+          if (/unauthorized|authentication|login|credential/i.test(errMsg) || isAuthFailure(errMsg)) {
+            yield { type: "text", content: `${AUTH_EXPIRED_MESSAGE}\n\nError: ${errMsg}` };
           }
           yield { type: "error", message: errMsg, recoverable: !!classified?.recoverable };
           yield { type: "done", stopReason: "error" };
@@ -619,7 +702,7 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
     }
     console.log(`[claude-code] Stream ended. Messages: ${messageCount}, streamed: ${everStreamed}`);
     if (messageCount === 0) {
-      yield { type: "text", content: "**Claude Code returned no response.** Check the server logs for details. The CLI may not be authenticated — run `claude login` in the Terminal." };
+      yield { type: "text", content: "**Claude Code returned no response.** Check the server logs for details. If its sign-in has expired, open the Terminal in the Tarsee dashboard (the `>_` button at the top) and run `claude login`." };
       yield { type: "done", stopReason: "error" };
     }
   } catch (error) {
@@ -634,11 +717,10 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
     console.error("[claude-code] Exception:", error);
     const errMsg = error.message || "Claude Code crashed";
 
-    if (/unauthorized|authentication|login|credential|ENOENT.*claude/i.test(errMsg)) {
-      yield {
-        type: "text",
-        content: `**Claude Code not authenticated.** Open the Tarsee terminal and run:\n\n\`\`\`\nclaude login\n\`\`\`\n\nThen try again.\n\nError: ${errMsg}`,
-      };
+    if (/ENOENT.*claude/i.test(errMsg)) {
+      yield { type: "text", content: `**Claude Code isn't installed where Tarsee can run it.** Check the server logs.\n\nError: ${errMsg}` };
+    } else if (/unauthorized|authentication|login|credential/i.test(errMsg) || isAuthFailure(errMsg)) {
+      yield { type: "text", content: `${AUTH_EXPIRED_MESSAGE}\n\nError: ${errMsg}` };
     }
 
     yield { type: "error", message: errMsg };

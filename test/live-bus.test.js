@@ -9,7 +9,8 @@ import path from "node:path";
 import { initDb } from "../src/db/sqlite.js";
 import { ConversationStore } from "../src/db/conversations.js";
 import * as live from "../src/lib/live-bus.js";
-import { stepsFromSdkMessage, toolResultsFromSdkMessage, displayToolName, summarizeToolInput } from "../src/lib/tool-steps.js";
+import { stepsFromSdkMessage, toolResultsFromSdkMessage, displayToolName, summarizeToolInput, createStreamWatcher } from "../src/lib/tool-steps.js";
+import { withConversationTurn, claimQueuedTurn, removeQueuedTurn, currentQueuedTurn, QUEUE_REMOVED } from "../src/lib/conversation-lock.js";
 import { messageTools, slimMessage } from "../src/lib/message-tools.js";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tarsee-live-"));
@@ -215,5 +216,148 @@ describe("message tools: slim history and a reply's tools", () => {
     assert.equal(fromChannel.length, 1);
     assert.equal(fromChannel[0].output, "ok");
     assert.ok(!fromChannel[0].input.includes("abcdefghijklmnopqrstuvwxyz0123456789"));
+  });
+});
+
+describe("the Queued line: a message waiting behind the running turn", () => {
+  const gate = () => { let open; const p = new Promise((r) => { open = r; }); return { p, open }; };
+  const of = (conv, turnId) => live.eventsForTurn(turnId).filter((e) => e.conversationId === conv).map((e) => [e.type, e.payload?.stopReason || null]);
+
+  it("goes on the timeline as queued, and the provider that begins it keeps its id: the same line starts", async () => {
+    const g = gate();
+    const a = withConversationTurn("q-1", () => g.p, { live: { source: "web", prompt: "first" } });
+    let claimed = null;
+    let second = "unset";
+    const b = withConversationTurn("q-1", async () => { claimed = claimQueuedTurn("q-1"); second = claimQueuedTurn("q-1"); }, { live: { source: "web", prompt: "second" } });
+    const waiting = live.queuedTurnList("q-1");
+    assert.equal(waiting.length, 1, "only the one that waits: the first turn never queued");
+    assert.equal(waiting[0].source, "web");
+    g.open();
+    await Promise.all([a, b]);
+    assert.equal(claimed, waiting[0].turnId);
+    assert.equal(second, null, "a second turn in the same slot gets an id of its own");
+    assert.deepEqual(of("q-1", claimed), [["turn_queued", null]], "the provider publishes its start and end, not the lock");
+  });
+
+  it("a slot no provider claims (a command answered, a failure first) ends its line", async () => {
+    const g = gate();
+    const a = withConversationTurn("q-2", () => g.p);
+    let id = null;
+    const b = withConversationTurn("q-2", async () => { id = currentQueuedTurn().turnId; }, { live: { source: "telegram", prompt: "/help" } });
+    g.open();
+    await Promise.all([a, b]);
+    assert.deepEqual(of("q-2", id), [["turn_queued", null], ["turn_end", "ended"]]);
+    assert.equal(live.queuedTurnList("q-2").length, 0);
+  });
+
+  it("a slot that fails before anything begins ends its line as failed, and the caller still gets the error", async () => {
+    const g = gate();
+    const a = withConversationTurn("q-5", () => g.p);
+    let id = null;
+    const b = withConversationTurn("q-5", () => { id = currentQueuedTurn().turnId; throw new Error("no provider"); }, { live: { source: "web", prompt: "x" } });
+    g.open();
+    await a;
+    await assert.rejects(b, /no provider/);
+    const end = live.eventsForTurn(id).find((e) => e.type === "turn_end");
+    assert.equal(end.payload.stopReason, "error");
+    assert.ok(end.payload.error);
+  });
+
+  it("its Stop takes it out alone: it never runs, its line ends at once, the turn ahead goes on", async () => {
+    const g = gate();
+    let aDone = false;
+    const a = withConversationTurn("q-3", async () => { await g.p; aDone = true; });
+    let ran = false;
+    let removedCalled = false;
+    const b = withConversationTurn("q-3", async () => { ran = true; }, { live: { source: "web", prompt: "never mind", onRemoved: () => { removedCalled = true; } } });
+    const id = live.queuedTurnList("q-3")[0].turnId;
+    assert.equal(removeQueuedTurn(id, "another-chat"), false, "only from its own chat");
+    assert.equal(removeQueuedTurn(id, "q-3"), true);
+    assert.equal(removedCalled, true);
+    assert.deepEqual(of("q-3", id), [["turn_queued", null], ["turn_end", "removed"]], "ended at once, before the turn ahead");
+    assert.equal(removeQueuedTurn(id, "q-3"), false, "once");
+    g.open();
+    assert.equal(await b, QUEUE_REMOVED);
+    await a;
+    assert.equal(ran, false);
+    assert.equal(aDone, true);
+  });
+
+  it("a turn whose slot has come is no longer in the queue: Stop it as the running turn", async () => {
+    const g = gate();
+    const a = withConversationTurn("q-4", () => Promise.resolve());
+    let id = null;
+    let removable = null;
+    const b = withConversationTurn("q-4", async () => { id = currentQueuedTurn().turnId; removable = removeQueuedTurn(id, "q-4"); await g.p; }, { live: { source: "web", prompt: "x" } });
+    await a;
+    await new Promise((r) => setTimeout(r, 5));
+    g.open();
+    await b;
+    assert.equal(removable, false);
+  });
+
+  it("a restart closes a line left queued", () => {
+    const d2 = initDb(path.join(dir, "restart.db"));
+    d2.prepare("INSERT INTO conversation_events (conversation_id, turn_id, type, payload, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run("conv-q", "turn-q", "turn_queued", JSON.stringify({ source: "web" }), Date.now() - 1000);
+    live.initLiveBus(d2);
+    const ends = d2.prepare("SELECT payload FROM conversation_events WHERE turn_id = 'turn-q' AND type = 'turn_end'").all();
+    assert.equal(ends.length, 1);
+    assert.equal(JSON.parse(ends[0].payload).stopReason, "interrupted");
+    live.initLiveBus(db);
+    d2.close();
+  });
+});
+
+describe("the stream watcher: what a turn is doing while it only says Thinking", () => {
+  const se = (event, parent = null) => ({ type: "stream_event", event, parent_tool_use_id: parent });
+
+  it("tokens so far at each call's start and end, and the speed of its output", () => {
+    let t = 1_000_000;
+    const w = createStreamWatcher({ now: () => t });
+    const [start] = w.onMessage(se({ type: "message_start", message: { id: "m1", usage: { input_tokens: 4, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 300, output_tokens: 1 } } }));
+    assert.equal(start.kind, "usage");
+    assert.equal(start.total, 40_305);
+    assert.equal(start.outTps, null, "nothing generated yet");
+    t += 4000;
+    const [end] = w.onMessage(se({ type: "message_delta", usage: { input_tokens: 4, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 300, output_tokens: 200 } }));
+    assert.equal(end.total, 40_504);
+    assert.equal(end.outTps, 50);
+    assert.equal(end.nowTps, 50);
+    // A subagent's call counts too.
+    w.onMessage(se({ type: "message_start", message: { id: "m2", usage: { input_tokens: 10, output_tokens: 0 } } }, "toolu_1"));
+    t += 1000;
+    const [sub] = w.onMessage(se({ type: "message_delta", usage: { output_tokens: 100 } }, "toolu_1"));
+    assert.equal(sub.calls, 2);
+    assert.equal(sub.output, 300);
+  });
+
+  it("a thinking summary when its block ends; nothing for thinking left out, nor for a subagent's", () => {
+    const w = createStreamWatcher();
+    w.onMessage(se({ type: "content_block_start", index: 0, content_block: { type: "thinking" } }));
+    assert.deepEqual(w.onMessage(se({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Working out the dates, " } })), []);
+    w.onMessage(se({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "then checking with cal." } }));
+    assert.deepEqual(w.onMessage(se({ type: "content_block_stop", index: 0 })), [{ kind: "thinking", text: "Working out the dates, then checking with cal." }]);
+    // Omitted thinking (no summary asked for): one empty delta.
+    w.onMessage(se({ type: "content_block_start", index: 1, content_block: { type: "thinking" } }));
+    w.onMessage(se({ type: "content_block_delta", index: 1, delta: { type: "thinking_delta", thinking: "" } }));
+    assert.deepEqual(w.onMessage(se({ type: "content_block_stop", index: 1 })), []);
+    w.onMessage(se({ type: "content_block_start", index: 0, content_block: { type: "thinking" } }, "toolu_9"));
+    w.onMessage(se({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "inside a helper" } }, "toolu_9"));
+    assert.deepEqual(w.onMessage(se({ type: "content_block_stop", index: 0 }, "toolu_9")), []);
+    // A text block's end is not a thought.
+    assert.deepEqual(w.onMessage(se({ type: "content_block_stop", index: 2 })), []);
+  });
+
+  it("why it is waiting: an API error it retries, compacting", () => {
+    const w = createStreamWatcher();
+    assert.deepEqual(w.onMessage({ type: "system", subtype: "api_retry", attempt: 2, max_retries: 10, retry_delay_ms: 4200, error_status: 529, error: "server_error" }),
+      [{ kind: "status", text: "Claude's API answered 529 (server error). Trying again in 4s (attempt 2 of 10)." }]);
+    assert.deepEqual(w.onMessage({ type: "system", subtype: "api_retry", attempt: 1, max_retries: 10, retry_delay_ms: 500, error_status: null, error: "unknown" }),
+      [{ kind: "status", text: "Could not reach Claude's API. Trying again in 1s (attempt 1 of 10)." }]);
+    assert.deepEqual(w.onMessage({ type: "system", subtype: "status", status: "compacting" }), [{ kind: "status", text: "Compacting the conversation to make room." }]);
+    assert.deepEqual(w.onMessage({ type: "system", subtype: "status", status: "requesting" }), []);
+    assert.deepEqual(w.onMessage({ type: "system", subtype: "init" }), []);
+    assert.deepEqual(w.onMessage({ type: "assistant", message: { content: [] } }), []);
   });
 });
