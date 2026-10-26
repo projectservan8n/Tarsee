@@ -136,7 +136,7 @@ const FileManager = {
   },
 
   async newFile() {
-    const name = prompt("File name:");
+    const name = await TarseeDialog.askText({ title: "New file", label: "File name", yes: "Create", no: "Cancel" });
     if (!name) return;
     const filePath = this.currentPath === "." ? name : `${this.currentPath}/${name}`;
     try {

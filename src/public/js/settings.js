@@ -840,7 +840,11 @@ const Settings = {
   },
 
   async regenerateWhatsappSecret() {
-    if (!window.confirm("Regenerate the webhook secret? The current URL will stop working until you update it in the WHAPI dashboard.")) {
+    if (!(await TarseeDialog.ask({
+      title: "Regenerate the webhook secret?",
+      text: "The current URL will stop working until you update it in the WHAPI dashboard.",
+      yes: "Regenerate", no: "Cancel", danger: true,
+    }))) {
       return;
     }
     try {
@@ -893,11 +897,12 @@ const Settings = {
       if (discordMode === "off" && discordAllow.length === 0) dangers.push("Discord");
       if (telegramMode === "off" && telegramAllow.length === 0) dangers.push("Telegram");
       if (dangers.length > 0) {
-        const ok = window.confirm(
-          `${dangers.join(" and ")}: mention mode is OFF and the allowlist is empty.\n\n` +
-          `The bot will respond to EVERY message in EVERY ${dangers.length > 1 ? "channel/chat" : (dangers[0] === "Discord" ? "channel" : "chat")} it can see.\n\n` +
-          `Continue?`
-        );
+        const ok = await TarseeDialog.ask({
+          title: `${dangers.join(" and ")}: mention mode is OFF and the allowlist is empty.`,
+          text: `The bot will respond to EVERY message in EVERY ${dangers.length > 1 ? "channel/chat" : (dangers[0] === "Discord" ? "channel" : "chat")} it can see.\n\n` +
+            `Continue?`,
+          yes: "Continue", no: "Cancel", danger: true,
+        });
         if (!ok) return;
       }
 
@@ -1258,7 +1263,7 @@ const Settings = {
   },
 
   async deletePiperVoice(id) {
-    if (!confirm(`Delete voice "${id}"?`)) return;
+    if (!(await TarseeDialog.ask({ title: `Delete voice "${id}"?`, yes: "Delete", no: "Cancel", danger: true }))) return;
     try {
       const csrf = API.getCsrfToken();
       const headers = {};
@@ -1691,7 +1696,7 @@ const Settings = {
   },
 
   async deleteSkill(name) {
-    if (!confirm(`Delete skill "${name}"?`)) return;
+    if (!(await TarseeDialog.ask({ title: `Delete skill "${name}"?`, yes: "Delete", no: "Cancel", danger: true }))) return;
     try {
       await API.request(`/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" });
       this.loadSkills();
