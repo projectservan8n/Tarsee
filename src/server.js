@@ -34,6 +34,7 @@ import { loadPlugins } from "./lib/plugin-loader.js";
 import { getSecurityManager } from "./lib/security-manager.js";
 import { getGatewayManager } from "./lib/gateway.js";
 import { canvasMiddleware } from "./lib/canvas.js";
+import { brandIconMiddleware, manifestHandler } from "./lib/brand-icon.js";
 import { acpRouter } from "./routes/acp.js";
 import { webhookRouter } from "./routes/webhooks.js";
 import { whapiRouter } from "./routes/whapi.js";
@@ -143,6 +144,12 @@ app.use((req, res, next) => {
 
 // Canvas middleware (AI-generated UIs)
 app.use(canvasMiddleware);
+
+// Tarsee's icon (Settings → Appearance; lib/brand-icon.js): an uploaded icon is sent in place of the default files,
+// and /manifest.json carries its version. Before express.static, and without sign-in: browsers fetch icons without
+// cookies, and the sign-in screen shows the icon too.
+app.use(brandIconMiddleware());
+app.use(manifestHandler(publicDir));
 
 // Static files (WebUI) — no auth required for the shell, API calls are protected
 // Short cache for CSS/JS (5min) so deploys take effect quickly; longer for images/fonts

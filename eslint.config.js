@@ -25,6 +25,7 @@ const appGlobals = {
   FileManager: "readonly",  // js/files.js
   Settings: "readonly",     // js/settings.js
   Setup: "readonly",        // js/setup.js
+  TarseeBrand: "readonly",  // js/brand-icon.js
   TarseeDialog: "readonly", // js/dialogs.js
   Voice: "readonly",        // js/voice.js
   escapeHtml: "readonly",   // js/chat.js

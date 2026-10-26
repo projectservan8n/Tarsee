@@ -6,6 +6,7 @@ import { getAvailableProviders } from "../ai/router.js";
 import { readWorkspaceFile, writeWorkspaceFile, hasBootstrapFile, deleteBootstrapFile } from "../lib/workspace-files.js";
 import { initTTSEngine } from "../voice/engine-registry.js";
 import { redactSecretFields } from "../lib/vault.js";
+import { brandStatus, saveBrandIcon, resetBrandIcon, decodeBase64 } from "../lib/brand-icon.js";
 
 export const settingsRouter = Router();
 
@@ -471,3 +472,46 @@ settingsRouter.get("/skills-status", async (_req, res) => {
   }
 });
 
+/**
+ * Tarsee's icon (Settings → Appearance; src/lib/brand-icon.js makes and serves the files).
+ * GET    /api/settings/brand-icon  { custom, version, updatedAt }
+ * POST   /api/settings/brand-icon  Body: { master: base64 PNG (square, 64 to 2048 px), original?: { name, type, data: base64 } }
+ * DELETE /api/settings/brand-icon  back to the default icon
+ * Both changes go in the audit log. The body fits inside the JSON limit (LIMITS.JSON_BODY_MAX): a 10 MB original is
+ * about 13.4 MB as base64, and the 1024 px master a few MB more.
+ */
+settingsRouter.get("/brand-icon", (_req, res) => {
+  res.json(brandStatus());
+});
+
+settingsRouter.post("/brand-icon", async (req, res) => {
+  const { master, original } = req.body || {};
+  const masterBytes = decodeBase64(master);
+  if (!masterBytes) return res.status(400).json({ error: "The icon did not come through: master must be a PNG in base64." });
+  let orig;
+  if (original != null) {
+    const data = typeof original === "object" ? decodeBase64(original.data) : null;
+    if (!data) return res.status(400).json({ error: "The original file did not come through: original.data must be base64." });
+    orig = { name: typeof original.name === "string" ? original.name : "", type: typeof original.type === "string" ? original.type : "", data };
+  }
+  try {
+    const status = await saveBrandIcon({ master: masterBytes, original: orig });
+    req.app.get("auditLog")?.log({ action: "settings.brand_icon", target: "brand-icon", actor: "user", ip: req.ip, detail: `new icon ${status.version}` });
+    res.json(status);
+  } catch (err) {
+    if (err?.status === 400) return res.status(400).json({ error: err.message });
+    console.warn("[brand-icon] save failed:", err?.message);
+    res.status(500).json({ error: `The icon could not be saved: ${err?.message || err}` });
+  }
+});
+
+settingsRouter.delete("/brand-icon", async (req, res) => {
+  try {
+    const status = await resetBrandIcon();
+    req.app.get("auditLog")?.log({ action: "settings.brand_icon_reset", target: "brand-icon", actor: "user", ip: req.ip });
+    res.json(status);
+  } catch (err) {
+    console.warn("[brand-icon] reset failed:", err?.message);
+    res.status(500).json({ error: `The icon could not be reset: ${err?.message || err}` });
+  }
+});

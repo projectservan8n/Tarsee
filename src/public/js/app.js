@@ -120,6 +120,9 @@ const App = {
   },
 
   async showApp() {
+    // Signed in: scripts that wait for a session can go on (js/brand-icon.js asks for the icon's version).
+    window.dispatchEvent(new Event("tarsee:signed-in"));
+
     // Check if first-time setup is needed
     try {
       const status = await API.json("/api/settings/setup-status");
