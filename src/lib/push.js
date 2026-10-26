@@ -52,10 +52,28 @@ function ensureVapidKeys() {
     s.set("push.vapid_private", priv);
     console.log("[push] generated new VAPID keypair");
   }
-  webpush.setVapidDetails(vapidSubject(process.env, s.get("push.vapid_subject")), pub, priv);
+  const subject = vapidSubject(process.env, s.get("push.vapid_subject"));
+  try {
+    webpush.setVapidDetails(subject, pub, priv);
+  } catch (err) {
+    // (web-push's own check can still refuse a subject that looked right; push must not stay unconfigured.)
+    console.warn(`[push] VAPID subject "${subject}" refused (${err.message}); using ${DEFAULT_SUBJECT}`);
+    webpush.setVapidDetails(DEFAULT_SUBJECT, pub, priv);
+  }
 }
 
-const SUBJECT_RE = /^(mailto:[^\s@]+@[^\s@]+\.[^\s@]+|https:\/\/[^\s/]+\S*)$/i;
+const DEFAULT_SUBJECT = "mailto:admin@example.com";
+
+/** A subject web-push takes: mailto:user@domain.tld, or an https: URL that parses with a real host. */
+function validSubject(v) {
+  const t = String(v || "").trim();
+  if (/^mailto:[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(t)) return true;
+  if (!/^https:\/\/\S+$/i.test(t)) return false;
+  try {
+    const u = new URL(t);
+    return u.protocol === "https:" && !!u.hostname;
+  } catch { return false; }
+}
 
 /**
  * The contact push services are given for this server's pushes (VAPID "sub"):
@@ -68,13 +86,13 @@ const SUBJECT_RE = /^(mailto:[^\s@]+@[^\s@]+\.[^\s@]+|https:\/\/[^\s/]+\S*)$/i;
 export function vapidSubject(env = process.env, saved = null) {
   const fromEnv = String(env.VAPID_SUBJECT || "").trim();
   if (fromEnv) {
-    if (SUBJECT_RE.test(fromEnv)) return fromEnv;
+    if (validSubject(fromEnv)) return fromEnv;
     console.warn(`[push] VAPID_SUBJECT "${fromEnv}" is not a mailto: or https: URL; using the default instead`);
   }
-  if (saved && SUBJECT_RE.test(String(saved).trim())) return String(saved).trim();
+  if (saved && validSubject(saved)) return String(saved).trim();
   const domain = String(env.RAILWAY_PUBLIC_DOMAIN || "").trim();
-  if (domain && !/[\s/]/.test(domain)) return `https://${domain}`;
-  return "mailto:admin@example.com";
+  if (domain && validSubject(`https://${domain}`) && !/[\s/]/.test(domain)) return `https://${domain}`;
+  return DEFAULT_SUBJECT;
 }
 
 export function getPublicKey() {

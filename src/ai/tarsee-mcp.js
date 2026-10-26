@@ -11,7 +11,6 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { executeTool } from "../lib/tools.js";
-import { withClippedResults } from "../lib/clip-result.js";
 import config from "../config/env.js";
 
 /**
@@ -374,7 +373,6 @@ export function createTarseeMcp(ctx) {
   ];
 
   console.log(`[mcp] Creating Tarsee MCP server: ${allTools.length} tools, names: ${allTools.map(t => t.name).join(", ")}`);
-  // A result past TARSEE_TOOL_RESULT_MAX_CHARS (12000) keeps its head and tail plus the path of a file holding all
-  // of it, so one big listing is not re-read on every later model call (lib/clip-result.js).
-  return createSdkMcpServer({ name: "tarsee", version: "1.0.0", tools: withClippedResults(allTools) });
+  // (A result past TARSEE_TOOL_RESULT_MAX_CHARS goes to a file, by Claude Code itself: ai/context-limits.js.)
+  return createSdkMcpServer({ name: "tarsee", version: "1.0.0", tools: allTools });
 }

@@ -17,8 +17,10 @@
  *     is looked at: in Docker HOME is /root while the config lives at
  *     /home/node/.claude, see lib/claude-transcript.js).
  *  2. The catalog every CLI build carries, read from the installed `claude`
- *     (the image installs the latest at build time). Read once per CLI file,
- *     in chunks, off the request path.
+ *     (the image installs the version pinned in the Dockerfile,
+ *     CLAUDE_CODE_VERSION: a model released after it arrives when it is
+ *     bumped, or with TARSEE_AUTO_UPDATE_CLI=1). Read once per CLI file, in
+ *     chunks, off the request path.
  *  3. Tarsee's own model table (config/constants.js), as the floor.
  */
 import fs from "node:fs";

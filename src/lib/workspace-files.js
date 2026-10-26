@@ -112,19 +112,36 @@ const _truncWarned = new Set();
  * @returns {string}
  */
 export function truncateContent(content, maxBytes = WORKSPACE_FILE_MAX_BYTES, name = "") {
-  if (!content || Buffer.byteLength(content, "utf8") <= maxBytes) return content;
+  if (!content) return content;
+  const bytes = Buffer.byteLength(content, "utf8");
+  if (bytes <= maxBytes) return content;
   const key = `${name}:${content.length}`;
   if (name && !_truncWarned.has(key)) {
     _truncWarned.add(key);
-    console.warn(`[workspace] ${name} is ${Math.round(Buffer.byteLength(content, "utf8") / 1024)}KB, over the ${Math.round(maxBytes / 1024)}KB a prompt file may be: its middle is cut out of the system prompt`);
+    console.warn(`[workspace] ${name} is ${Math.round(bytes / 1024)}KB, over the ${Math.round(maxBytes / 1024)}KB a prompt file may be: its middle is cut out of the system prompt`);
   }
 
-  const headSize = Math.floor(maxBytes * 0.7);
-  const tailSize = Math.floor(maxBytes * 0.2);
-
-  const head = content.slice(0, headSize);
-  const tail = content.slice(-tailSize);
+  // Head and tail measured in bytes like the cap (a file in Chinese or full of
+  // emoji has 3 or 4 bytes a character), and never cutting a character in two.
+  const head = bytesFrom(content, Math.floor(maxBytes * 0.7), "start");
+  const tail = bytesFrom(content, Math.floor(maxBytes * 0.2), "end");
   return `${head}\n\n... [truncated — file too large] ...\n\n${tail}`;
+}
+
+/** The longest start (or end) of `s` that fits in `max` UTF-8 bytes, whole characters only. */
+function bytesFrom(s, max, from) {
+  const chars = Array.from(s);
+  if (from === "end") chars.reverse();
+  const out = [];
+  let n = 0;
+  for (const c of chars) {
+    const b = Buffer.byteLength(c, "utf8");
+    if (n + b > max) break;
+    out.push(c);
+    n += b;
+  }
+  if (from === "end") out.reverse();
+  return out.join("");
 }
 
 /**
@@ -145,28 +162,91 @@ export function getBootstrapContext() {
 
   const sections = [];
   for (const { name, label } of files) {
-    const raw = readWorkspaceFile(name);
-    if (!raw || raw.trim().length < 5) continue;
-
     // MEMORY.md grows without bound (50KB and more on a long-lived install), so
-    // it is never inlined: a pointer tells the agent to grep it for the topic
-    // at hand. Reading it whole, or carrying a cut-down copy in every prompt,
-    // costs the context for the few lines a task needs.
+    // it is never inlined (nor read here, its size is enough): a pointer tells
+    // the agent to grep it for the topic at hand. Reading it whole, or carrying
+    // a cut-down copy in every prompt, costs the context for the few lines a
+    // task needs. The path is absolute: the agent's working folder
+    // (CLAUDE_WORKSPACE_DIR) can be another one.
     if (name === "MEMORY.md") {
-      const sizeKb = Math.max(1, Math.round(raw.length / 1024));
+      const memPath = path.join(config.WORKSPACE_DIR, name);
+      let size = 0;
+      try { size = fs.statSync(memPath).size; } catch { /* no MEMORY.md yet */ }
+      if (size < 5) continue;
       sections.push(
         `<!-- ${label} (${name}): pointer only, not inlined -->\n`
-        + `Your long-term memory is in \`MEMORY.md\` in your workspace (~${sizeKb} KB). `
-        + `Grep it for the topic you need (\`grep -n -i "term" MEMORY.md\`) or use search_memories; never read it whole.`,
+        + `Your long-term memory is in \`${memPath}\` (~${Math.max(1, Math.round(size / 1024))} KB). `
+        + `Grep it for the topic you need (\`grep -n -i "term" "${memPath}"\`) or use search_memories; never read it whole.`,
       );
       continue;
     }
+
+    const raw = readWorkspaceFile(name);
+    if (!raw || raw.trim().length < 5) continue;
 
     const content = truncateContent(raw, WORKSPACE_FILE_MAX_BYTES, name);
     sections.push(`<!-- ${label} (${name}) -->\n${content}`);
   }
 
   return sections.join("\n\n");
+}
+
+/**
+ * The default SOUL.md and CLAUDE.md an install was seeded with used to say
+ * "read MEMORY.md at the start of every session", which now contradicts the
+ * system prompt's "grep it, never read it whole" (and CLAUDE.md said cron runs
+ * in UTC). Existing workspaces keep their seeded files, so on boot the exact
+ * old default lines are replaced with the new ones. A line the owner changed
+ * no longer matches and is left alone. Returns the files it updated.
+ */
+const DEFAULT_UPGRADES = {
+  "SOUL.md": [
+    ["- **Persistent memory**: MEMORY.md stores everything you learn. Read it every session.",
+      "- **Persistent memory**: MEMORY.md stores everything you learn. Grep it for what a task needs."],
+    ["- Always read MEMORY.md at the start of a session to know what you've learned.",
+      "- MEMORY.md grows long: grep it for the topic at hand (`grep -n -i \"term\" MEMORY.md`) or use search_memories. Never read it whole."],
+  ],
+  "CLAUDE.md": [
+    [[
+      "## On Every Session Start",
+      "",
+      "Before responding, read your context files:",
+      "1. `SOUL.md` — your identity, personality, capabilities",
+      "2. `MEMORY.md` — accumulated knowledge, learned skills, API access",
+      "3. `USER.md` — what you know about your user",
+    ].join("\n"), [
+      "## Your Context Files",
+      "",
+      "`SOUL.md` (your identity) and `USER.md` (what you know about your user) are already",
+      "in your system prompt: don't read them again. `MEMORY.md` (accumulated knowledge,",
+      "learned skills, API access) is not, because it grows long: grep it for the topic a",
+      "task needs (`grep -n -i \"term\" MEMORY.md`) or use tarsee_search_memories, and never",
+      "read it whole.",
+    ].join("\n")],
+    ["- **tarsee_schedule_task** — Schedule cron jobs (server is UTC)",
+      "- **tarsee_schedule_task** — Schedule cron jobs (times are in the configured timezone, `TARSEE_TIMEZONE`)"],
+  ],
+};
+
+export function upgradeDefaultWorkspaceFiles(dir = config.WORKSPACE_DIR) {
+  const updated = [];
+  for (const [name, swaps] of Object.entries(DEFAULT_UPGRADES)) {
+    const file = path.join(dir, name);
+    let text;
+    try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
+    let next = text;
+    for (const [from, to] of swaps) if (next.includes(from)) next = next.split(from).join(to);
+    if (next === text) continue;
+    try {
+      fs.writeFileSync(file, next, "utf8");
+      cache.delete(name);
+      updated.push(name);
+    } catch (err) {
+      console.warn(`[workspace] could not update ${name}: ${err.message}`);
+    }
+  }
+  if (updated.length) console.log(`[workspace] updated the default memory instructions in ${updated.join(" and ")}: grep MEMORY.md, never read it whole`);
+  return updated;
 }
 
 /**

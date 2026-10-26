@@ -20,4 +20,17 @@ describe("VAPID subject", () => {
     assert.equal(vapidSubject({ VAPID_SUBJECT: "http://insecure.example" }), "mailto:admin@example.com");
     assert.equal(vapidSubject({}, "not a url"), "mailto:admin@example.com");
   });
+
+  it("an https value that only looks right is refused the way web-push would refuse it", async () => {
+    const webpush = (await import("web-push")).default;
+    for (const bad of ["https://host:abc", "https://[::1", "https://foo%zz.com"]) {
+      assert.equal(vapidSubject({ VAPID_SUBJECT: bad }), "mailto:admin@example.com", bad);
+      assert.throws(() => webpush.setVapidDetails(bad, "x", "y"), undefined, `web-push refuses ${bad} too`);
+    }
+    // Every subject this picks, web-push takes.
+    const keys = webpush.generateVAPIDKeys();
+    for (const env of [{}, { VAPID_SUBJECT: "mailto:me@my-domain.dev" }, { RAILWAY_PUBLIC_DOMAIN: "a.up.railway.app" }]) {
+      assert.doesNotThrow(() => webpush.setVapidDetails(vapidSubject(env), keys.publicKey, keys.privateKey));
+    }
+  });
 });

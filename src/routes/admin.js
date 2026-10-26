@@ -8,6 +8,7 @@ import config from "../config/env.js";
 import { isEncryptionEnabled } from "../lib/vault.js";
 import { AuditLog } from "../db/audit.js";
 import { CLAUDE_MODELS_BY_ID, getRecommendedModel } from "../config/constants.js";
+import { effectiveContextWindow } from "../ai/context-limits.js";
 import {
   transcriptSizeMB,
   isTranscriptOverCap,
@@ -273,12 +274,18 @@ adminRouter.post("/restore", (req, res) => {
 
 
 /**
- * Parse a model registry context string ("1M", "200k") into a token count.
- * Falls back to 200k for anything unrecognised.
+ * The window Token Health measures a chat against: TARSEE_MODEL_CONTEXT_TOKENS,
+ * else the model's own, capped by the auto-compact window (ai/context-limits.js:
+ * where Claude Code summarizes the older part).
  */
 function contextWindowTokens(modelId) {
   const override = Number(process.env.TARSEE_MODEL_CONTEXT_TOKENS);
   if (override > 0) return override;
+  return effectiveContextWindow(modelWindowTokens(modelId));
+}
+
+/** The model's own window from the registry (no compact window applied). */
+function modelWindowTokens(modelId) {
   const raw = CLAUDE_MODELS_BY_ID[modelId]?.context
     || CLAUDE_MODELS_BY_ID[getRecommendedModel()]?.context;
   const m = /^([\d.]+)\s*([MmKk])?$/.exec(String(raw || "").trim());

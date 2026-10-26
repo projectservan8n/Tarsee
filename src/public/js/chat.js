@@ -455,7 +455,7 @@ const Chat = {
     else if (pct >= 75) cls += " warning";
     this.elements.contextBarFill.className = cls;
     this.elements.contextLabel.textContent = `${pct}%`;
-    const tip = `${this.formatTokenCount(promptTokens)} / ${this.formatTokenCount(contextTokens)} tokens: auto-checkpoints at 95%`;
+    const tip = `${this.formatTokenCount(promptTokens)} / ${this.formatTokenCount(contextTokens)} tokens: near the limit Claude Code summarizes the older part automatically`;
     this.elements.contextBarFill.parentElement?.setAttribute("title", tip);
     this.elements.contextLabel.title = tip;
     if (pct >= 90 && !this._overflowBannerDismissed) {
@@ -484,7 +484,7 @@ const Chat = {
       inputArea.insertBefore(banner, inputArea.firstChild);
     }
     banner.querySelector(".context-warning-text").textContent =
-      `Context is ${pct}% full. Run /checkpoint to save state, then /clear. Auto-snapshots at 95%.`;
+      `Context is ${pct}% full: Claude Code will summarize the older part soon. Run /checkpoint first if you want a full record.`;
     banner.style.display = "flex";
   },
 

@@ -82,14 +82,14 @@ export function claimQueuedTurn(liveConvId) {
 }
 
 /**
- * Whether the turn beginning now waited behind another one of its
- * conversation: true once per waiting slot (the provider puts a note on that
- * prompt), false for a turn that never waited and for a second turn in the
- * same slot.
+ * Whether the turn beginning now in conversation `convId` waited behind
+ * another one of it: true once per waiting slot (the provider puts a note on
+ * that prompt), false for a turn that never waited, for a second turn in the
+ * same slot, and for any other conversation's turn started from inside it.
  */
-export function takeQueuedNote() {
+export function takeQueuedNote(convId) {
   const q = turnStore.getStore();
-  if (!q || q.noted) return false;
+  if (!q || q.noted || !convId || q.liveConv !== convId) return false;
   q.noted = true;
   return true;
 }

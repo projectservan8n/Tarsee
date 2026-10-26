@@ -205,12 +205,14 @@ export function getSkillsPromptContext() {
   // which is read before using a skill anyway. At full length 68 skills took
   // 18.5KB on TarseeMacOS, which pushed the end of the list past the 50KB prompt
   // budget (the last skills were cut off) and cost about 4.6k tokens a call.
-  const lines = skills.map((s) => `- **${s.name}**: ${shortSkillDescription(s.description)}`);
+  // A skill's folder is named in the list when it is not the skill's name (a
+  // SKILL.md can name itself), so the cat below finds it.
+  const lines = skills.map((s) => `- **${s.name}**${s.folder && s.folder !== s.name ? ` (folder \`${s.folder}\`)` : ""}: ${shortSkillDescription(s.description)}`);
 
   return `\n\n## Skills
 You have these specialized skills available. Each skill has a SKILL.md file with detailed instructions, credentials, tokens, and configuration. **IMPORTANT: When a task matches a skill, ALWAYS read its SKILL.md first** — skills often contain API keys, tokens, CLI configs, and setup instructions you need.
 
-Read a skill with: \`cat "${getCustomSkillsDir()}/{name}/SKILL.md" 2>/dev/null || cat "${getBuiltInSkillsDir()}/{name}/SKILL.md"\`
+Read a skill with: \`cat "${getCustomSkillsDir()}/{folder}/SKILL.md" 2>/dev/null || cat "${getBuiltInSkillsDir()}/{folder}/SKILL.md"\` ({folder} is the skill's name unless the list gives its folder)
 
 Available skills:
 ${lines.join("\n")}`;

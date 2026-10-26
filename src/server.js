@@ -12,6 +12,7 @@ import { sessionAuth, requireAuth, initSessionStore } from "./middleware/auth.js
 import { errorHandler } from "./middleware/error-handler.js";
 import { initDb } from "./db/sqlite.js";
 import { initLiveBus } from "./lib/live-bus.js";
+import { upgradeDefaultWorkspaceFiles } from "./lib/workspace-files.js";
 import { initModelCatalog } from "./lib/model-catalog.js";
 import { healthRouter } from "./routes/health.js";
 import { authRouter } from "./routes/auth-routes.js";
@@ -109,6 +110,9 @@ if (process.env.ANTHROPIC_API_KEY) {
 }
 
 const db = initDb(config.DB_PATH);
+// A workspace seeded with the old default SOUL.md / CLAUDE.md gets their new
+// memory instructions (grep MEMORY.md, never read it whole); edited lines stay.
+try { upgradeDefaultWorkspaceFiles(); } catch (err) { console.warn("[workspace] default file update failed:", err.message); }
 // Live dashboard timeline (conversation_events). Must start before any channel
 // can persist a message or run a turn.
 initLiveBus(db);

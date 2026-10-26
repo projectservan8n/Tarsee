@@ -196,8 +196,12 @@ export function withQueuedNote(prompt) {
 export async function* chat(opts) {
   opts = withChatModel(opts);
   if (opts.thinkingSummaries == null) opts = { ...opts, thinkingSummaries: opts.liveSource === "web" };
-  // (A turn that waited behind another in its conversation says so to the agent, once: QUEUED_NOTE.)
-  if (opts.queuedNote == null) opts = { ...opts, queuedNote: takeQueuedNote() };
+  // (A turn that waited behind another in its conversation says so to the agent, once: QUEUED_NOTE. Not a
+  // subagent's turn, which runs off the timeline: its task is not the message that waited.)
+  if (opts.queuedNote == null) {
+    const convId = opts.liveDisabled ? null : (opts.liveConversationId || opts.toolCtx?.conversationId || null);
+    opts = { ...opts, queuedNote: takeQueuedNote(convId) };
+  }
   const liveConv = opts?.liveDisabled ? null : (opts?.liveConversationId || opts?.toolCtx?.conversationId || null);
   if (!liveConv) { yield* chatEngine(opts); return; }
   let live = null;
@@ -361,8 +365,8 @@ async function* chatEngine({
   const queryOptions = {
     cwd,
     // The server's environment plus the context cost savers (ai/context-limits.js): compact at 180k tokens, and a
-    // Bash output past 8000 characters goes to a file with a preview. (The SDK takes this as the whole environment,
-    // so process.env comes first.)
+    // Bash output past 8000 characters or a tool result past 12000 goes to a file the agent can read. (The SDK takes
+    // this as the whole environment, so process.env comes first.)
     env: { ...process.env, ...costSaverEnv() },
     // A bare tier word becomes the newest model of that tier (see fallbackLadderFor).
     model: resolveModel(model || config.CLAUDE_DEFAULT_MODEL),
