@@ -22,6 +22,8 @@ import { isTranscriptOverCap, transcriptSizeMB, SESSION_JSONL_MAX_MB } from "../
 import { stepsFromSdkMessage, toolResultsFromSdkMessage, createStreamWatcher } from "../../lib/tool-steps.js";
 import { claimQueuedTurn, takeQueuedNote } from "../../lib/conversation-lock.js";
 import { costSaverEnv } from "../context-limits.js";
+import { agentVaultEnv } from "../agent-env.js";
+import { getSecurityManager } from "../../lib/security-manager.js";
 /**
  * Extract image blocks from content array.
  * Returns { images: ImageBlockParam[], text: string }
@@ -372,7 +374,8 @@ async function* chatEngine({
     // The server's environment plus the context cost savers (ai/context-limits.js): compact at 180k tokens, and a
     // Bash output past 8000 characters or a tool result past 12000 goes to a file the agent can read. (The SDK takes
     // this as the whole environment, so process.env comes first.)
-    env: { ...process.env, ...costSaverEnv() },
+    // The vault's keys too, so scripts read them by name and no key is pasted into a command (ai/agent-env.js).
+    env: { ...process.env, ...agentVaultEnv({ denied: () => getSecurityManager(toolCtx?.settingsStore).getToolPermission("get_key") === "always_deny" }), ...costSaverEnv() },
     // A bare tier word becomes the newest model of that tier (see fallbackLadderFor).
     model: resolveModel(model || config.CLAUDE_DEFAULT_MODEL),
     tools: allTools,
