@@ -12,6 +12,7 @@ import { sessionAuth, requireAuth, initSessionStore } from "./middleware/auth.js
 import { errorHandler } from "./middleware/error-handler.js";
 import { initDb } from "./db/sqlite.js";
 import { initLiveBus } from "./lib/live-bus.js";
+import { initChatFiles } from "./lib/chat-files.js";
 import { upgradeDefaultWorkspaceFiles } from "./lib/workspace-files.js";
 import { setToolsChannelManager } from "./lib/tools.js";
 import { initModelCatalog } from "./lib/model-catalog.js";
@@ -117,6 +118,7 @@ try { upgradeDefaultWorkspaceFiles(); } catch (err) { console.warn("[workspace] 
 // Live dashboard timeline (conversation_events). Must start before any channel
 // can persist a message or run a turn.
 initLiveBus(db);
+initChatFiles(db);   // the files of each chat, kept with it (lib/chat-files.js)
 // Which Claude models exist (the composer's picker, and "sonnet" -> the newest
 // Sonnet before each turn): read from the installed Claude Code, off the request path.
 initModelCatalog();

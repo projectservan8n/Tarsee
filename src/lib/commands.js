@@ -5,6 +5,7 @@ import { getSkillContent, installSkill, scanSkills } from "./skills-engine.js";
 import { hasCheckpoint, peekCheckpoint, listRecentCheckpoints, CHECKPOINT_FILE_PATH } from "./checkpoint.js";
 import { preview as previewRetention, runNow as runRetentionNow } from "./retention.js";
 import { forgetConversation } from "./live-bus.js";
+import { forgetChatFiles } from "./chat-files.js";
 import path from "node:path";
 import config from "../config/env.js";
 
@@ -64,6 +65,8 @@ const COMMANDS = {
           clearedCount = r1?.changes || 0;
           // The live timeline keeps each message's text too: it goes as well.
           forgetConversation(ctx.conversationId);
+          // The chat's files go with its messages (lib/chat-files.js), so the fresh chat does not open on old ones.
+          forgetChatFiles(ctx.conversationId);
           ctx.db.prepare("UPDATE conversations SET claude_session_id = NULL, updated_at = datetime('now') WHERE id = ?").run(ctx.conversationId);
         } catch (err) {
           console.warn("[commands] /clear DB cleanup failed:", err?.message);

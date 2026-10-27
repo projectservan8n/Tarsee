@@ -1,0 +1,128 @@
+/* ==========================================================================
+   The chat's file viewer and the waveform player (js/file-viewer.js).
+   Ported from TarseeMacOS; the --of-* tokens fall back to the values
+   written next to them.
+   ========================================================================== */
+
+/* The buttons the viewer is made of. (:where: no weight, so a page's own rules win.) */
+:where(.of-viewer) :where(.of-btn) {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: var(--of-ctl, 36px); box-sizing: border-box; padding: 0 12px;
+  font: inherit; font-size: var(--of-t3, 13px); color: var(--text); text-decoration: none; white-space: nowrap;
+  background: rgba(36, 35, 32, 0.92); border: 1px solid var(--border);
+  border-radius: var(--of-r-ctl, 10px); cursor: pointer;
+}
+:where(.of-viewer) :where(.of-btn):hover { background: rgba(48, 46, 43, 0.92); border-color: var(--border-hover); }
+:where(.of-viewer) :where(.of-btn) i { font-size: 16px; line-height: 1; }
+:where(.of-viewer) :where(.of-btn[hidden]) { display: none; }
+:where(.of-viewer) :where(.of-btn.is-main) { color: #fff; background: var(--accent); border-color: var(--accent); }
+:where(.of-viewer) :where(.of-btn.is-main):hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+:where(.of-viewer, .of-wave) :where(.of-icon-btn) {
+  display: inline-flex; align-items: center; justify-content: center; flex: none; padding: 0;
+  width: 36px; height: 36px; font-size: 18px; color: var(--text-secondary); background: none; border: 0;
+  border-radius: var(--of-r-ctl, 10px); cursor: pointer;
+}
+:where(.of-viewer) :where(.of-icon-btn):hover { color: var(--text); background: rgba(255, 255, 255, 0.09); }
+:where(.of-viewer) :where(.of-muted) { color: var(--text-muted); font-size: var(--of-t2, 12px); margin: 0; }
+
+/* ======================================================== the attachment viewer */
+
+.of-viewer {
+  /* Always the dark look, whatever the page's theme: it lies over the page like a darkroom. */
+  --text: #ececec; --text-secondary: #a8a8a0; --text-muted: #9a9a92; --border: #3a3935; --border-hover: #4a4945;
+  position: fixed; inset: 0; z-index: var(--of-z-modal, 300);
+  display: flex; flex-direction: column;
+  color: var(--text);
+  background: rgba(10, 10, 9, 0.92);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  transition: opacity var(--of-dur, 180ms) var(--of-ease, ease), display var(--of-dur, 180ms) allow-discrete;
+}
+.of-viewer[hidden] { display: none; opacity: 0; }
+@starting-style { .of-viewer { opacity: 0; } }
+.of-viewer-bar { display: flex; align-items: center; gap: 12px; padding: calc(10px + env(safe-area-inset-top)) 16px 10px; }
+.of-viewer-name { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+.of-viewer-name strong { font-size: var(--of-t4, 14px); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.of-viewer-name .of-muted { white-space: nowrap; }
+.of-viewer-tools { display: flex; align-items: center; gap: 8px; }
+.of-viewer-bar .of-btn[disabled] { opacity: 0.4; cursor: default; }
+.of-viewer-bar .of-icon-btn { width: var(--of-ctl, 36px); height: var(--of-ctl, 36px); color: var(--text); background: var(--of-well-hover, rgba(255, 255, 255, 0.09)); }
+.of-viewer-body { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 16px 16px; cursor: zoom-out; touch-action: pan-y pinch-zoom; }
+.of-viewer-body > * { cursor: default; }
+.of-viewer-body img, .of-viewer-body video { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; }
+.of-viewer-body audio { width: min(520px, 100%); }
+.of-viewer-body iframe { width: min(1100px, 100%); height: 100%; border: 0; border-radius: 8px; background: #fff; }
+.of-viewer-body pre {
+  width: min(1100px, 100%); max-height: 100%; margin: 0; overflow: auto; box-sizing: border-box;
+  padding: 16px; font-family: var(--font-mono); font-size: var(--of-t2, 12px); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
+  color: var(--text); background: rgba(30, 29, 27, 0.9); border: 1px solid var(--border); border-radius: 8px;
+}
+.of-viewer-note { color: var(--text-secondary); font-size: var(--of-t4, 14px); margin: 0; }
+.of-viewer-body video { width: 100%; height: 100%; background: #000; }
+/* A picture that zooms. */
+.of-viewer-stage { position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: none; cursor: zoom-out; }
+.of-viewer-stage img { cursor: zoom-in; user-select: none; -webkit-user-select: none; transform-origin: center; will-change: transform; touch-action: none; }
+.of-viewer-stage.is-zoomed img { cursor: grab; }
+.of-viewer-stage.is-zoomed img:active { cursor: grabbing; }
+.of-viewer-zoom { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: var(--of-r-pill, 999px); background: rgba(20, 19, 18, 0.82); border: 1px solid var(--border); cursor: default; }
+.of-viewer-zoom .of-icon-btn { width: 34px; height: 34px; color: var(--text); }
+.of-zoom-pct { min-width: 56px; height: 34px; font: inherit; font-size: var(--of-t2, 12px); color: var(--text); background: none; border: 0; border-radius: var(--of-r-pill, 999px); cursor: pointer; }
+.of-zoom-pct:hover, .of-viewer-zoom .of-icon-btn:hover { background: var(--of-well-hover, rgba(255, 255, 255, 0.09)); }
+/* A PDF's pages, one under another. */
+.of-viewer-pdf { width: 100%; height: 100%; overflow: auto; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 4px 0 24px; box-sizing: border-box; -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y pinch-zoom; }
+.of-viewer-page { width: min(980px, 100%); height: auto; flex: none; background: #fff; border-radius: 4px; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4); }
+/* Text: prose wraps in the page's own letters, code and JSON in monospace; a CSV as a table. */
+.of-viewer-body pre.is-prose { font-family: var(--font-sans, inherit); font-size: var(--of-t4, 14px); line-height: 1.6; }
+.of-viewer-text { width: min(1100px, 100%); max-height: 100%; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.of-viewer-text pre { flex: 1; min-height: 0; }
+.of-viewer-more { margin: 0; color: var(--text-muted); font-size: var(--of-t2, 12px); }
+.of-viewer-table { width: min(1100px, 100%); max-height: 100%; overflow: auto; background: rgba(30, 29, 27, 0.9); border: 1px solid var(--border); border-radius: 8px; }
+.of-viewer-table table { border-collapse: collapse; font-size: var(--of-t2, 12px); color: var(--text); }
+.of-viewer-table th, .of-viewer-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; max-width: 40ch; overflow: hidden; text-overflow: ellipsis; }
+.of-viewer-table th { position: sticky; top: 0; background: #2a2926; font-weight: 600; }
+.of-viewer-table .of-viewer-more { padding: 8px 10px; }
+/* Anything else: its name and size, and Download. */
+.of-viewer-card { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; max-width: 420px; padding: 28px 24px; border-radius: 12px; background: rgba(30, 29, 27, 0.9); border: 1px solid var(--border); }
+.of-viewer-card strong { font-size: var(--of-t4, 14px); overflow-wrap: anywhere; }
+.of-viewer-file-icon { font-size: 48px; color: var(--text-secondary); }
+.of-viewer-sound { width: min(640px, 100%); display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 28px 20px; box-sizing: border-box; border-radius: 12px; background: rgba(30, 29, 27, 0.9); border: 1px solid var(--border); }
+.of-viewer-sound strong { font-size: var(--of-t4, 14px); overflow-wrap: anywhere; text-align: center; }
+.of-viewer-sound-icon { font-size: 40px; color: var(--accent); }
+
+/* The viewer on a phone: the name and the X on top; Previous, Next and Download along the bottom, under the thumb. */
+@media (max-width: 720px) {
+  .of-viewer.is-dash .of-viewer-bar { padding: calc(8px + env(safe-area-inset-top)) 12px 8px 16px; }
+  .of-viewer.is-dash .of-viewer-bar .of-icon-btn { width: 44px; height: 44px; }
+  .of-viewer.is-dash .of-viewer-name { flex-direction: column; gap: 2px; }
+  .of-viewer.is-dash .of-viewer-tools {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 1; justify-content: center; gap: 10px;
+    padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+    background: linear-gradient(to top, rgba(10, 10, 9, 0.96) 60%, rgba(10, 10, 9, 0));
+  }
+  .of-viewer.is-dash .of-viewer-tools .of-btn { flex: 1 1 0; max-width: 140px; min-height: 44px; font-size: 14px; border-radius: 12px; }
+  .of-viewer.is-dash .of-viewer-body { padding: 0 12px calc(80px + env(safe-area-inset-bottom)); }
+}
+
+/* ======================================================== the waveform player (a sound, in the viewer and in a chat) */
+
+.of-wave { display: flex; align-items: center; gap: 12px; width: 100%; box-sizing: border-box; border-radius: 10px; outline: none; }
+.of-wave:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.of-wave-play { flex: none; width: 44px; height: 44px; display: grid; place-items: center; font-size: 20px; color: #fff; background: var(--accent); border: 0; border-radius: 50%; cursor: pointer; }
+.of-wave-play:hover { background: var(--accent-hover, #d4663d); }
+.of-wave-bars { flex: 1; min-width: 0; height: 56px; cursor: pointer; touch-action: none; }
+.of-wave-time { flex: none; font-family: var(--font-mono); font-size: var(--of-t2, 12px); color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.of-wave-speed { flex: none; min-width: 44px; height: 32px; font: inherit; font-size: var(--of-t2, 12px); font-weight: 600; color: var(--text); background: var(--of-well-hover, rgba(255, 255, 255, 0.08)); border: 1px solid var(--border); border-radius: var(--of-r-pill, 999px); cursor: pointer; }
+.of-wave.is-broken .of-wave-bars { opacity: 0.35; }
+/* In a chat message: a play button, a small waveform, its name and length. */
+.of-wave.is-compact { width: 260px; max-width: 100%; gap: 8px; padding: 6px 8px; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border); }
+.of-wave.is-compact .of-wave-play { width: 34px; height: 34px; font-size: 15px; }
+.of-wave-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.of-wave.is-compact .of-wave-bars { flex: none; width: 100%; height: 26px; }
+.of-wave-top { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; min-width: 0; }
+.of-wave-name { min-width: 0; padding: 0; font: inherit; font-size: 10px; color: var(--text-secondary); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: none; border: 0; }
+button.of-wave-name { cursor: zoom-in; }
+button.of-wave-name:hover { color: var(--text); text-decoration: underline; }
+.of-wave.is-compact .of-wave-time { font-size: 10px; }
+@media (max-width: 600px) {
+  .of-wave-speed { min-width: 40px; }
+  .of-wave { gap: 8px; }
+}

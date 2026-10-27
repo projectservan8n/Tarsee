@@ -12,7 +12,9 @@ import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { toolStatusLabel, toolDoneLabel } from "../lib/tool-status.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
+import { formatForDiscord, splitMessageFenceSafe } from "../lib/discord-format.js";
 import envConfig from "../config/env.js";
+import { discordAdmin } from "../lib/discord-admin.js";
 
 /**
  * Creates and starts a Discord bot.
@@ -239,7 +241,7 @@ export async function createDiscordBot(config, db) {
         if (playbook) {
           aiPromptOverride = playbook;
         } else {
-          const chunks = splitMessage(cmdResult.response, 2000);
+          const chunks = splitMessage(formatForDiscord(cmdResult.response), 2000);
           for (const chunk of chunks) {
             await message.reply(chunk);
           }
@@ -269,7 +271,7 @@ export async function createDiscordBot(config, db) {
       mediaCount ? `[+${mediaCount} media]` : null,
       fileCount ? `[+${fileCount} file${fileCount > 1 ? "s" : ""}]` : null,
     ].filter(Boolean).join(" ");
-    convStore.addMessage(convId, {
+    const savedUser = convStore.addMessage(convId, {
       role: "user",
       content: `[${message.author.username}]: ${displayText}${mediaSuffix ? ` ${mediaSuffix}` : ""}`,
     });
@@ -343,21 +345,19 @@ ${sendFileHint("discord")}`,
     const toolMsgById = new Map(); // tool_use_id → discord.js Message
     const sentSegments = [];
 
-    const renderSegmentDisplay = (raw) => {
-      const { cleanText } = parseReactions(raw);
-      return cleanText
-        .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
-        .replace(/<tool_response>[\s\S]*?<\/tool_response>/g, "")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim();
-    };
+    const renderSegmentDisplay = displayForDiscord;
+
+    // The segment as Discord shows it, in fence-safe pieces of up to 2000 characters. Drawn whole, then split: a table
+    // drawn as a grid or as lines can come out longer than the text it came from, and cutting the raw text at 2000
+    // first lost whatever the drawing pushed past the first piece (and cut tables in half).
+    const segmentPieces = () => splitMessage(renderSegmentDisplay(segmentText), 2000).filter(Boolean);
 
     const flushSegmentEdit = async (final = false) => {
       if (!segmentMsg || !segmentText) return;
       const now = Date.now();
       if (!final && now - lastSegmentEditAt < SEGMENT_EDIT_DEBOUNCE_MS) return;
       lastSegmentEditAt = now;
-      const text = renderSegmentDisplay(segmentText.slice(0, 2000));
+      const text = segmentPieces()[0];   // the message edited in place: the first piece
       if (!text) return;
       try {
         await retryOnRateLimit(() => segmentMsg.edit(text));
@@ -367,16 +367,9 @@ ${sendFileHint("discord")}`,
     const closeSegment = async () => {
       if (!segmentMsg) { segmentText = ""; return; }
       await flushSegmentEdit(true);
-      // If segment overflowed Discord's 2000-char cap, send remainder as
-      // new replies so the user sees the full thing.
-      if (segmentText.length > 2000) {
-        for (let i = 2000; i < segmentText.length; i += 2000) {
-          const chunkText = renderSegmentDisplay(segmentText.slice(i, i + 2000));
-          if (!chunkText) continue;
-          for (const piece of splitMessage(chunkText, 2000)) {
-            await retryOnRateLimit(() => message.reply(piece));
-          }
-        }
+      // The rest of the segment past the first piece, as new replies, so the whole of it reaches the channel.
+      for (const piece of segmentPieces().slice(1)) {
+        await retryOnRateLimit(() => message.reply(piece));
       }
       sentSegments.push(segmentText);
       segmentMsg = null;
@@ -408,7 +401,8 @@ ${sendFileHint("discord")}`,
     await withConversationTurn(convId, async () => {
     try {
       const tools = getToolDefinitions();
-      const toolCtx = { db, settingsStore, conversationId: convId };
+      // messageId: the message this turn answers (its pictures are kept on it, not on whatever came in later)
+      const toolCtx = { db, settingsStore, conversationId: convId, messageId: savedUser?.id || null };
       const MAX_TOOL_ROUNDS = 15;
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
@@ -646,12 +640,18 @@ ${sendFileHint("discord")}`,
     sendMessage: async (channelId, text) => {
       const channel = await client.channels.fetch(channelId);
       if (channel?.isTextBased()) {
-        const chunks = splitMessage(text, 2000);
+        // Outbound tool sends (tarsee_send_message) get the same tables and quotes as streamed replies.
+        const chunks = splitMessage(formatForDiscord(text), 2000);
         for (const chunk of chunks) {
           await channel.send(chunk);
         }
       }
     },
+    /**
+     * tarsee_discord_admin (lib/discord-admin.js): list, make and edit channels, and make webhooks (the URL goes to the
+     * vault), done by this logged-in client so the agent never handles the bot token. No deletes.
+     */
+    admin: (args) => discordAdmin(args, { client }),
     /** Send a file as a real Discord attachment (the send_file tool). Bots upload up to 25 MB on a server without boosts. */
     sendFile: async (channelId, filePath, caption) => {
       if (!fs.existsSync(filePath)) throw new Error(`sendFile: file not found at ${filePath}`);
@@ -660,7 +660,7 @@ ${sendFileHint("discord")}`,
       const channel = await client.channels.fetch(channelId);
       if (!channel?.isTextBased()) throw new Error(`sendFile: channel ${channelId} is not a text channel`);
       await channel.send({
-        content: caption ? splitMessage(String(caption), 2000)[0] : undefined,
+        content: caption ? splitMessage(formatForDiscord(String(caption)), 2000)[0] : undefined,
         files: [{ attachment: filePath, name: path.basename(filePath) }],
       });
     },
@@ -680,19 +680,25 @@ async function retryOnRateLimit(fn, maxRetries = 3) {
   }
 }
 
+/**
+ * An answer as Discord shows it: [react: ...] markers and tool-call records out, no runs of blank lines, tables and
+ * quotes as Discord can draw them (lib/discord-format.js).
+ */
+export function displayForDiscord(raw) {
+  const { cleanText } = parseReactions(raw);
+  return formatForDiscord(
+    String(cleanText ?? "")
+      .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+      .replace(/<tool_response>[\s\S]*?<\/tool_response>/g, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim(),
+  );
+}
+
+// Fence-aware splitter. The old one split on the last "\n" before maxLen, which could cleave a ``` code fence across
+// two messages: chunk 1 with an unterminated fence (everything after it renders as code), chunk 2 starting with a
+// stray ```. Tables drawn as fenced grids made that likely. splitMessageFenceSafe closes and reopens fences across
+// the boundary (keeping the language tag) and never cuts an emoji in half.
 function splitMessage(text, maxLen) {
-  if (text.length <= maxLen) return [text];
-  const chunks = [];
-  let remaining = text;
-  while (remaining.length > 0) {
-    if (remaining.length <= maxLen) {
-      chunks.push(remaining);
-      break;
-    }
-    let splitIdx = remaining.lastIndexOf("\n", maxLen);
-    if (splitIdx < maxLen * 0.5) splitIdx = maxLen;
-    chunks.push(remaining.slice(0, splitIdx));
-    remaining = remaining.slice(splitIdx);
-  }
-  return chunks;
+  return splitMessageFenceSafe(text, maxLen);
 }

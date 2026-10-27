@@ -66,6 +66,15 @@ Be concise, direct, and helpful. Adapt your communication style to match the use
 
 <!-- Define rules, workspace conventions, and how the agent should behave -->
 <!-- This is always injected into the system prompt -->
+
+## Approvals
+- Anything hard to undo outside this chat needs the owner's go first: a new Discord channel or webhook, a credential, money, DNS, anything about Tarsee itself. Ask in one line and wait.
+- When a tool asks who approved (approved_by), give who said go, in their words.
+
+## Keys: check the vault every time
+- Before any task that needs a key, token, password or login, check the vault yourself (the key list in your prompt, or tarsee_list_keys). Never ask the owner for a key, or say you don't have one, before checking.
+- Only when the key isn't in the vault, ask the owner for it in one line.
+- Every vault key named in capitals is already in your environment: a script reads it by name (os.environ["OPENAI_API_KEY"], process.env.OPENAI_API_KEY). Never paste a key's value into a command, a file or a chat.
 `,
   "IDENTITY.md": `# Identity
 
@@ -80,6 +89,18 @@ Be concise, direct, and helpful. Adapt your communication style to match the use
 
 <!-- Available tools, local setup notes, capabilities -->
 <!-- This is injected into the system prompt so the bot knows what it can do -->
+
+## Discord admin (channels, webhooks)
+- Make, edit or list Discord channels and webhooks with tarsee_discord_admin. Never call Discord's API from Bash and never pull DISCORD_BOT_TOKEN from the vault for it: Tarsee's own bot does the work.
+- Get the go first and pass who said it, in their words, as approved_by. A new webhook is a credential, so it needs the owner's go.
+- create_webhook saves the URL in the vault (save_as_key) and shows only a masked URL. Never paste the full URL into a chat, a commit or a command.
+- Nothing in the tool deletes. Deleting a channel or a webhook is for the owner to do by hand in Discord.
+
+## Railway (projects, variables, redeploys)
+- List projects, services and variable names, set a variable or redeploy with tarsee_railway. Never call Railway's API from Bash and never put a Railway token or a secret value in a command: Tarsee reads the token from the vault itself (RAILWAY_API_TOKEN, an account or workspace token).
+- For anything secret, pass set_variable from_key (the vault key name), never value. The value is never shown, only a masked form.
+- Get the go first and pass who said it, in their words, as approved_by. Putting a secret into a service is handing out a credential, so it needs the owner's go.
+- On Railway, leaving out project means Tarsee's own project and service. Redeploying Tarsee's own service restarts it and ends the turn. Nothing in the tool deletes: deleting a variable or a service is for the owner to do by hand in Railway.
 `,
   "HEARTBEAT.md": `# Heartbeat Tasks
 

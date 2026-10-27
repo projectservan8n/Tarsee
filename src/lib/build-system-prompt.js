@@ -12,6 +12,7 @@ const MAX_TOTAL_BYTES = 50 * 1024; // 50KB total prompt budget (trimmed from 150
  * "the html file" on Telegram answered with folder paths and "I can't attach files to Telegram from here".
  */
 export function sendFileHint(channel) {
+  if (channel === "web") return `- To give the person a file (a report, an export, an image, anything on disk), call tarsee_send_file with channel="web" and the file's path: it shows in this chat as a card they can open and download. Never answer with a folder path instead.`;
   return `- To send a file (a report, an export, an image, anything on disk), call tarsee_send_file with channel="${channel}" and the file's path: it arrives here as a real attachment. Never answer with a folder path instead, and never say you can't attach files here.`;
 }
 

@@ -32,9 +32,9 @@ export function createTarseeMcp(ctx) {
 
       tool(
         "tarsee_send_file",
-        "Send a file as a real attachment (PDF, HTML report, image, audio, video, zip, spreadsheet, anything) to a Telegram, Discord or WhatsApp chat. Use it whenever someone asks for a file or you made one for them: never answer with a folder path or a download link instead, and never say a channel can't take attachments. With no channel_id it goes to the chat you are talking in (else that channel's most recent chat). The file must already exist; a relative path is read from the workspace. Size caps: Telegram 50 MB, Discord 25 MB, WhatsApp 16 MB. For email, use tarsee_send_email_thread with attachments.",
+        "Send a file as a real attachment (PDF, HTML report, image, audio, video, zip, spreadsheet, anything) to a Telegram, Discord or WhatsApp chat, or to one of the dashboard's own chats (web: a card there that opens in the viewer). Use it whenever someone asks for a file or you made one for them: never answer with a folder path or a download link instead, and never say a channel can't take attachments. With no channel_id it goes to the chat you are talking in (else that channel's most recent chat). The file must already exist; a relative path is read from the workspace. Size caps: Telegram 50 MB, Discord 25 MB, WhatsApp 16 MB, web 50 MB. For email, use tarsee_send_email_thread with attachments.",
         {
-          channel: z.enum(["telegram", "discord", "whatsapp"]).describe("Channel to send to: the one you are talking in, unless asked otherwise"),
+          channel: z.enum(["telegram", "discord", "whatsapp", "web"]).describe("Channel to send to: the one you are talking in, unless asked otherwise (web: one of the dashboard's own chats; channel_id is its conversation id, the one you are in by default)"),
           file_path: z.string().describe("Absolute path, or a path relative to the workspace"),
           caption: z.string().optional().describe("Optional words sent with the file (Telegram shows up to 1024 characters)"),
           channel_id: z.string().optional().describe("Specific chat/channel ID; leave it out to send to the chat you are in"),
@@ -254,6 +254,71 @@ export function createTarseeMcp(ctx) {
         },
         async (args) => {
           const result = await executeTool("calculator", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      // Without this the agent made channels and webhooks by pulling DISCORD_BOT_TOKEN from the vault and calling
+      // Discord's REST API from Bash: auto mode blocks that as a credential leak, rightly. Tarsee's own logged-in bot
+      // does it now (src/lib/discord-admin.js). No delete actions.
+      tool(
+        "tarsee_discord_admin",
+        "Admin jobs in a Discord server the bot is in, done by Tarsee's own logged-in bot: list_channels, create_channel (text, voice or category; public, private for listed people and roles, or with another channel's access), edit_channel (name, topic, category, who can see or do what), create_webhook, list_webhooks. Use it whenever someone asks for a new channel, a private channel, a webhook or a permission change. It replaces any Discord REST call from Bash: never pull DISCORD_BOT_TOKEN from the vault for this, and never put a bot token or a webhook URL in a command.\n\nGET THE GO FIRST for anything that changes a server, following the approval rules in your instructions (AGENTS.md). A new webhook counts as a credential (its URL lets anyone post), so create_webhook needs the owner's go. Put who said go, in their words, in approved_by (it is logged and shows in the server's audit log). If nobody has said go for this exact change, ask instead. list_channels and list_webhooks need no go.\n\nTHE SERVER: guild_id, or channel_id of any channel in it (the one you are answering in works), or nothing when the bot is in one server only.\n\nWEBHOOK URLS ARE SECRETS: create_webhook saves the URL in the vault under save_as_key (e.g. ALERTS_WATCHDOG_WEBHOOK; say what it is for in purpose) and returns only the webhook id, the key name and a masked URL. Scripts and services read it from the vault by that key name. reveal: true puts the full URL in the result: only when the owner asks to see it themselves, never for anything that goes into a chat.\n\nNOTHING HERE DELETES: deleting a channel or a webhook is for the owner to do by hand; say so if asked. If Discord refuses for a missing permission, the error says which one and where: tell the person, do not try another way around it.",
+        {
+          action: z.enum(["list_channels", "create_channel", "edit_channel", "create_webhook", "list_webhooks"]).describe("What to do"),
+          guild_id: z.string().optional().describe("The server's id. Optional: channel_id of any channel in it works too, and with one server neither is needed"),
+          channel_id: z.string().optional().describe("edit_channel, create_webhook, list_webhooks: the channel to act on. list_channels, create_channel: any channel in the server (e.g. the one you are answering in), only to find the server"),
+          approved_by: z.string().optional().describe("Required for create_channel, edit_channel and create_webhook: who said go and for what, e.g. \"the owner in #general: make #alerts and a webhook for the watchdog\""),
+          name: z.string().optional().describe("create_channel: the new channel's name. edit_channel: its new name. create_webhook: the webhook's name, shown on its posts"),
+          type: z.enum(["text", "voice", "category"]).optional().describe("create_channel: the kind of channel (default text)"),
+          parent_id: z.string().optional().describe("create_channel: the category to put it in. edit_channel: the category to move it to, or \"none\" to take it out of its category"),
+          topic: z.string().optional().describe("Text channels: the topic line (an empty string clears it in edit_channel)"),
+          near_channel_id: z.string().optional().describe("create_channel: put the new channel next to this one (it goes in the same category unless parent_id says otherwise)"),
+          place: z.enum(["before", "after"]).optional().describe("create_channel with near_channel_id: before or after it (default after)"),
+          private: z.boolean().optional().describe("create_channel, edit_channel: true hides it from @everyone and lets in only the bot, allow_user_ids and allow_role_ids (and server admins). edit_channel false: @everyone's view goes back to the default"),
+          allow_user_ids: z.array(z.string()).optional().describe("With private: true, the Discord user ids who may see and use it"),
+          allow_role_ids: z.array(z.string()).optional().describe("With private: true, the role ids whose members may see and use it"),
+          copy_permissions_from: z.string().optional().describe("create_channel: give the new channel the same access as this channel (instead of private). Without either, a channel in a category gets the category's access, and one outside any category is public"),
+          sync_with_category: z.boolean().optional().describe("edit_channel: replace its access with its category's (the new one when parent_id is given)"),
+          permissions: z.array(z.object({
+            target: z.string().describe("A user id, a role id, or \"everyone\""),
+            target_type: z.enum(["user", "role"]).optional().describe("Only if the id could be either"),
+            allow: z.array(z.string()).optional().describe("Permissions to allow, e.g. ViewChannel, SendMessages, ReadMessageHistory, Connect, Speak (or view, send, history)"),
+            deny: z.array(z.string()).optional().describe("Permissions to deny"),
+            reset: z.array(z.string()).optional().describe("Permissions to set back to the default (neither allowed nor denied here)"),
+            clear: z.boolean().optional().describe("true removes this target's whole overwrite on the channel"),
+          })).optional().describe("edit_channel: who may see or do what in the channel"),
+          save_as_key: z.string().optional().describe("create_webhook: the vault key name for the URL, capitals and underscores, e.g. ALERTS_WATCHDOG_WEBHOOK (default DISCORD_WEBHOOK_<CHANNEL>). An existing key is never replaced unless overwrite_key is true"),
+          purpose: z.string().optional().describe("create_webhook: what the webhook is for, saved with the vault key, e.g. \"uptime watchdog alerts\""),
+          overwrite_key: z.boolean().optional().describe("create_webhook: replace a vault key of that name that is already there"),
+          use_bot_avatar: z.boolean().optional().describe("create_webhook: give the webhook the bot's own picture"),
+          reveal: z.boolean().optional().describe("create_webhook: also return the full URL. Only when the owner asks to see it themselves; never for anything that goes into a chat"),
+        },
+        async (args) => {
+          const result = await executeTool("discord_admin", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      // Setting a Railway variable otherwise means a command with the value in it (`railway variables --set`, or
+      // GraphQL with the token), a secret in a command line and a transcript. Tarsee does it with a token from the
+      // vault (lib/railway-admin.js). No delete actions.
+      tool(
+        "tarsee_railway",
+        "Railway jobs done by Tarsee itself with a Railway token it reads from the vault (RAILWAY_API_TOKEN): list_projects (projects; with project, its environments and services), list_variables (variable NAMES on a service, never values), set_variable (set one variable on a service, then Railway redeploys it as it does on any variable change), redeploy (redeploy a service's latest deployment). Use it whenever someone asks to set a Railway variable or redeploy. It replaces any Railway call from Bash: never put a Railway token or a secret value in a command (no `railway variables --set` with a secret, no GraphQL with a token).\n\nSECRETS GO THROUGH from_key: for anything secret (a token, a password, a webhook URL, a database URL) pass from_key, the vault key name that holds it (e.g. from_key: \"ALERTS_WEBHOOK\"). Tarsee reads the value itself; it never shows up in the result, the logs or your context, only a masked form. value is for plain, non-secret text only (a port, a flag, a public URL); a value that looks like a secret or is a vault key's value is refused.\n\nGET THE GO FIRST for set_variable and redeploy: from the owner, or from whoever your instructions (AGENTS.md, USER.md) say may give it. Putting a secret into a service (from_key) counts as handing out a credential, so it needs the owner's go. Put who said go, in their words, in approved_by (it is logged). If nobody has said go for this exact change, ask instead. list_projects and list_variables need no go.\n\nTARSEE'S OWN SERVICE: when Tarsee runs on Railway, leaving out project works on the project Tarsee runs in, in its environment, on its own service. Redeploying it, or setting a variable on it with a deploy, restarts Tarsee and ends the turn doing it: say so before you do it, and finish anything else first.\n\nNAMES OR IDS: project, environment (default: the one Tarsee runs in, else production) and service each take a name (any case) or an id. A name that matches nothing, or more than one, is refused with the choices listed.\n\nNOTHING HERE DELETES: deleting a variable, a service or a project is for the owner to do by hand in Railway; say so if asked. If Railway refuses, the error says why in plain words: tell the person, do not try another way around it.",
+        {
+          action: z.enum(["list_projects", "list_variables", "set_variable", "redeploy"]).describe("What to do"),
+          project: z.string().optional().describe("The project's name (any case) or id. Leave it out for the project Tarsee runs in (on Railway); list_projects without it lists them all"),
+          environment: z.string().optional().describe("The environment's name or id (default: the one Tarsee runs in, else production)"),
+          service: z.string().optional().describe("list_variables, set_variable, redeploy: the service's name or id (default in Tarsee's own project: Tarsee's own service)"),
+          name: z.string().optional().describe("set_variable: the variable's name, e.g. ALERTS_WEBHOOK_URL"),
+          from_key: z.string().optional().describe("set_variable: the vault key whose value to set, for anything secret. The value is read by Tarsee and never shown"),
+          value: z.string().optional().describe("set_variable: a plain, NON-SECRET value. Anything secret goes in the vault and through from_key instead. Pass from_key or value, not both"),
+          deploy: z.boolean().optional().describe("set_variable: true (default) lets Railway redeploy the service as it normally does on a variable change; false sets it without a deploy (it takes effect on the next one)"),
+          approved_by: z.string().optional().describe("Required for set_variable and redeploy: who said go and for what, e.g. \"the owner in chat: put the alerts webhook on the worker service\""),
+        },
+        async (args) => {
+          const result = await executeTool("railway", args, ctx);
           return { content: [{ type: "text", text: result }] };
         }
       ),

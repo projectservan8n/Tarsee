@@ -8,7 +8,7 @@ import { getModelPicker } from "../lib/model-catalog.js";
 import { EFFORT_IDS, TARSEE_DEFAULT_EFFORT } from "../lib/model-picker.js";
 import { snapshotForContextOverflow } from "../lib/auto-checkpoint.js";
 import { processCommand, getCommandList, extractPlaybookPrompt } from "../lib/commands.js";
-import { buildSystemPrompt } from "../lib/build-system-prompt.js";
+import { buildSystemPrompt, sendFileHint } from "../lib/build-system-prompt.js";
 import { trackActivity } from "../lib/session-reset.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
@@ -20,6 +20,8 @@ import { latestSeq, activeTurnFor, recentClientMsgIds, hasClientMsgId, publish }
 import { withConversationTurn, queueDepth, currentQueuedTurn, removeQueuedTurn, QUEUE_REMOVED } from "../lib/conversation-lock.js";
 import { createLoopGuard } from "../lib/loop-guard.js";
 import { effectiveContextWindow } from "../ai/context-limits.js";
+import { placeFilesOnPage, forgetChatFiles } from "../lib/chat-files.js";   // the chat's files, kept with it
+import { keepUploadedFiles, noteReceivedFiles, viewablePath, sendViewable } from "../lib/sent-files.js";
 
 /**
  * Broadcast an SSE-like event to all connected WebSocket clients and record
@@ -107,6 +109,17 @@ chatRouter.use((req, _res, next) => {
     auditLog = req.app.get("auditLog");
   }
   next();
+});
+
+/**
+ * GET /api/chat/file?p=<path>[&dl=1]
+ * A chat's file, to look at in the page or (dl=1) to save. Only files inside the workspace's uploads folder: what
+ * the channels saved, the dashboard's uploads, and the copies kept of what the agent sent (lib/sent-files.js).
+ */
+chatRouter.get("/file", (req, res) => {
+  const file = viewablePath(req.query.p);
+  if (!file) return res.status(404).json({ error: "File not found" });
+  sendViewable(res, file, { save: req.query.dl === "1" });
 });
 
 /**
@@ -277,10 +290,14 @@ chatRouter.get("/conversations/:id", async (req, res) => {
   // timeline's position comes too, so the page follows on from exactly here.
   // ?raw=true returns the stored messages as they are.
   const out = req.query.raw === "true" ? messages : messages.map(slimMessage);
+  // The chat's files, each in its place (lib/chat-files.js placeFiles): on the message it came with, on the agent's
+  // reply for the files its turn sent, or as a row of its own after a message (filesAfter; leadFiles before them all).
+  const { leadFiles } = placeFilesOnPage(req.params.id, out, { complete: out.length >= totalMessages });
   res.json({
     ...conv,
     messages: out,
     totalMessages,
+    leadFiles,
     recap,
     liveSeq: latestSeq(req.params.id),
     activeTurn: activeTurnFor(req.params.id),
@@ -309,6 +326,7 @@ chatRouter.delete("/conversations/:id", (req, res) => {
   const convId = req.params.id;
   const deleted = convStore.delete(convId);
   if (!deleted) return res.status(404).json({ error: "Conversation not found" });
+  forgetChatFiles(convId);   // (its files' rows; the copies are tidied with the uploads folder)
 
   // Clean up channel_conv mappings that pointed to this conversation
   try {
@@ -533,7 +551,7 @@ chatRouter.post("/send", async (req, res) => {
   }
 
   // Save user message (text only — no base64 blobs in DB)
-  convStore.addMessage(convId, { role: "user", content: cleanMessage, clientMsgId: clientMsgId || undefined });
+  const savedUser = convStore.addMessage(convId, { role: "user", content: cleanMessage, clientMsgId: clientMsgId || undefined });
   // A new web chat ("New chat", created under its channel key) is named after
   // its first message as soon as it is sent. Waiting for the reply was not
   // enough: a second message queued meanwhile pushed the count past the
@@ -550,8 +568,25 @@ chatRouter.post("/send", async (req, res) => {
   // history UI stays readable, but the AI sees the playbook body.
   let userContentForAI = aiPromptOverride || cleanMessage;
   if (Array.isArray(attachments) && attachments.length > 0) {
+    // A copy of each file, kept with the chat on this message (lib/chat-files.js), so the dashboard's chat shows them
+    // after a reload and on every device. The agent gets them as before (pictures, PDFs and sounds as themselves; any
+    // other file from that copy on disk).
+    let kept = [];
+    try {
+      const files = attachments
+        .filter((a) => typeof a?.data === "string" && a.data)
+        .map((a) => ({ name: a.name || a.type || "file", buffer: Buffer.from(a.data, "base64") }))
+        .filter((f) => f.buffer.length);
+      if (files.length === attachments.length) {
+        kept = keepUploadedFiles(files);
+        noteReceivedFiles({ conversationId: convId, messageId: savedUser?.id, files: kept, via: "web" });
+      }
+    } catch (err) {
+      console.warn(`[chat] the files sent could not be kept with the chat: ${err.message}`);
+      kept = [];
+    }
     const contentBlocks = [];
-    for (const att of attachments) {
+    for (const [i, att] of attachments.entries()) {
       if (att.type === "image") {
         contentBlocks.push({
           type: "image",
@@ -570,16 +605,19 @@ chatRouter.post("/send", async (req, res) => {
           source: { type: "base64", media_type: "application/pdf", data: att.data },
         });
       } else {
-        // Generic file — save to disk so Claude can Read it
+        // Generic file — on disk so Claude can Read it (the copy kept with the chat, or one written now)
         try {
-          const fs = await import("node:fs");
-          const path = await import("node:path");
-          const config = (await import("../config/env.js")).default;
-          const uploadsDir = path.default.join(config.WORKSPACE_DIR, "uploads");
-          fs.default.mkdirSync(uploadsDir, { recursive: true });
-          const safeName = (att.name || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
-          const filePath = path.default.join(uploadsDir, `${Date.now()}-${safeName}`);
-          fs.default.writeFileSync(filePath, Buffer.from(att.data, "base64"));
+          let filePath = kept[i]?.path;
+          if (!filePath) {
+            const fs = await import("node:fs");
+            const path = await import("node:path");
+            const config = (await import("../config/env.js")).default;
+            const uploadsDir = path.default.join(config.WORKSPACE_DIR, "uploads");
+            fs.default.mkdirSync(uploadsDir, { recursive: true });
+            const safeName = (att.name || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
+            filePath = path.default.join(uploadsDir, `${Date.now()}-${safeName}`);
+            fs.default.writeFileSync(filePath, Buffer.from(att.data, "base64"));
+          }
           contentBlocks.push({
             type: "text",
             text: `[Attached file saved: ${att.name || "file"} → ${filePath}]\nYou can read this file with the Read tool at: ${filePath}`,
@@ -630,6 +668,7 @@ chatRouter.post("/send", async (req, res) => {
     conversationId: convId,
     messageCount: history.length,
     conversationPrompt: conv?.system_prompt,
+    channelHint: sendFileHint("web"),
   }) + voiceHint;
 
   let fullResponse = "";
@@ -638,7 +677,8 @@ chatRouter.post("/send", async (req, res) => {
   let lastToolIdx = -1;
   let usage = {};
   const tools = getToolDefinitions();
-  const toolCtx = { db: req.app.get("db"), settingsStore, conversationId: convId, channelManager: req.app.get("channelManager") };
+  // dashboard: a file the agent hands over goes to this chat, whatever channel it is; messageId: the message answered
+  const toolCtx = { db: req.app.get("db"), settingsStore, conversationId: convId, channelManager: req.app.get("channelManager"), dashboard: true, messageId: savedUser?.id || null };
   const MAX_TOOL_ROUNDS = 15;
   // Snapshot of `req.ip` — read once now, because once the socket closes
   // the `req.ip` getter pulls from a destroyed socket and may return

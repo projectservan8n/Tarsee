@@ -178,7 +178,7 @@ export async function createTelegramBot(config, db, opts = {}) {
     }
 
     // Save user message (text only — no base64 in DB)
-    convStore.addMessage(convId, {
+    const savedUser = convStore.addMessage(convId, {
       role: "user",
       content: `[${username}]: ${text}${attachments.length ? ` [+${attachments.length} image(s)]` : ""}`,
     });
@@ -223,7 +223,8 @@ ${sendFileHint("telegram")}`,
 
     let fullResponse = "";
     const tools = getToolDefinitions();
-    const toolCtx = { db, settingsStore, conversationId: convId };
+    // messageId: the message this turn answers (its pictures are kept on it, not on whatever came in later)
+    const toolCtx = { db, settingsStore, conversationId: convId, messageId: savedUser?.id || null };
     const MAX_TOOL_ROUNDS = 15;
 
     // Idle watchdog: if the SDK goes 3 min without emitting an event we abort

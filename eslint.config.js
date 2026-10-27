@@ -22,6 +22,7 @@ const appGlobals = {
   App: "readonly",          // js/app.js
   Chat: "readonly",         // js/chat.js
   ChatCore: "readonly",     // js/chat-core.js
+  ChatFiles: "readonly",    // js/chat-files.js (a module that puts it on window)
   Live: "readonly",         // js/live.js
   ModelPickerCore: "readonly", // js/model-picker-core.js
   Console: "readonly",      // js/console.js
@@ -111,6 +112,17 @@ export default [
       globals: { ...globals.browser, ...appGlobals, ...vendorGlobals },
     },
     rules: { ...baseRules, "no-redeclare": ["error", { builtinGlobals: false }] },
+  },
+
+  // The chat's files: ES modules (index.html loads chat-files.js with type="module"; it imports the viewer).
+  {
+    files: ["src/public/js/chat-files.js", "src/public/js/file-viewer.js", "src/public/js/file-viewer-core.js"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      globals: { ...globals.browser, ...appGlobals, ...vendorGlobals },
+    },
+    rules: baseRules,
   },
 
   // The service worker has its own global scope.

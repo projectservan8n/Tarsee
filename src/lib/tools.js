@@ -381,14 +381,14 @@ export const TOOLS = [
 
   {
     name: "send_file",
-    description: "Send a file as a real attachment (PDF, HTML report, image, audio, video, zip, spreadsheet, anything) to a Telegram, Discord or WhatsApp chat. Use it whenever someone asks for a file: never answer with a folder path instead, and never say a channel can't take files. With no channel_id it goes to the chat you are talking in. The file must already exist on disk; a relative path is read from the workspace. Size caps: Telegram 50 MB, Discord 25 MB, WhatsApp 16 MB. For email, attach files with send_email_thread.",
+    description: "Send a file as a real attachment (PDF, HTML report, image, audio, video, zip, spreadsheet, anything) to a Telegram, Discord or WhatsApp chat, or to one of the dashboard's own chats (web: it shows there as a card that opens in the viewer). Use it whenever someone asks for a file: never answer with a folder path instead, and never say a channel can't take files. With no channel_id it goes to the chat you are talking in. The file must already exist on disk; a relative path is read from the workspace. Size caps: Telegram 50 MB, Discord 25 MB, WhatsApp 16 MB, web 50 MB. For email, attach files with send_email_thread.",
     input_schema: {
       type: "object",
       properties: {
         channel: {
           type: "string",
-          description: "The channel to send to",
-          enum: ["telegram", "discord", "whatsapp"],
+          description: "The channel to send to (web: one of the dashboard's own chats)",
+          enum: ["telegram", "discord", "whatsapp", "web"],
         },
         file_path: {
           type: "string",
@@ -556,7 +556,7 @@ let _channelManager = null;
 export function setToolsChannelManager(channelManager) { _channelManager = channelManager || null; }
 
 // The upload caps of each channel's bot API, in MB.
-const SEND_FILE_CAP_MB = { telegram: 50, discord: 25, whatsapp: 16 };
+const SEND_FILE_CAP_MB = { telegram: 50, discord: 25, whatsapp: 16, web: 50 };
 
 /** The chat to send to for a channel (lib/chat-target.js): the given id, this turn's chat, or the latest one. */
 async function chatTargetFor(channel, channelId, ctx) {
@@ -1249,7 +1249,7 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
             : `send_file error: channel must be one of ${Object.keys(SEND_FILE_CAP_MB).join(", ")}.`;
         }
         const channelManager = ctx.channelManager;
-        if (!channelManager) return "send_file error: channel manager unavailable";
+        if (!channelManager && channel !== "web") return "send_file error: channel manager unavailable";
         if (!file_path) return "send_file error: 'file_path' is required";
         // A relative path is the workspace's: where generated reports and exports live.
         const absPath = path.isAbsolute(file_path) ? file_path : path.resolve(config.WORKSPACE_DIR, file_path);
@@ -1261,15 +1261,48 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
         if (stat.size > capMb * 1024 * 1024) {
           return `send_file error: file is ${(stat.size / 1024 / 1024).toFixed(1)} MB; ${channel} takes up to ${capMb} MB`;
         }
+        const { noteSentFile } = await import("./sent-files.js");
+        const sizeKb = (stat.size / 1024).toFixed(1);
+        // The dashboard's own chats (web): no app to upload to. The file is kept with that chat, and the dashboard
+        // shows it on the reply, as for any other channel (lib/sent-files.js noteSentFile).
+        if (channel === "web") {
+          try {
+            const settings = ctx.settingsStore || (ctx.db ? new (await import("../db/settings.js")).SettingsStore(ctx.db) : null);
+            const webConvs = new Set((settings?.getByPrefix("channel_conv.web:") || []).map((s) => s.value).filter((v) => typeof v === "string" && v));
+            const exists = (id) => { try { return !!ctx.db?.prepare("SELECT 1 FROM conversations WHERE id = ?").get(id); } catch { return false; } };
+            // The chat named; else the chat on screen when the turn came from the dashboard (any channel's chat
+            // can be opened there), or this chat when it is one of the dashboard's own; else the main web chat.
+            const conv = typeof channel_id === "string" && channel_id && exists(channel_id) ? channel_id
+              : ctx.conversationId && (ctx.dashboard || webConvs.has(ctx.conversationId)) ? ctx.conversationId
+                : settings?.get("channel_conv.web:default") || null;
+            if (!conv) return "send_file error: there is no dashboard chat to send it to yet.";
+            if (!noteSentFile({ absPath, caption, conversationId: conv, via: "web" })) return "send_file error: the file could not be kept for the dashboard chat.";
+            return `File sent to the dashboard chat: ${path.basename(absPath)} (${sizeKb} KB)`;
+          } catch (err) {
+            return `send_file error: ${err.message}`;
+          }
+        }
         try {
           const target = await chatTargetFor(channel, channel_id, ctx);
           if (!target) return `send_file error: No chat ID found for ${channel}. The bot needs to have received at least one message from a chat first.`;
           await channelManager.sendFile(channel, target.chatId, absPath, caption, { threadId: target.threadId });
-          const sizeKb = (stat.size / 1024).toFixed(1);
+          // So the dashboard's view of that chat shows it too. Never fails the send.
+          const settings = ctx.settingsStore || (ctx.db ? new (await import("../db/settings.js")).SettingsStore(ctx.db) : null);
+          const { conversationOfChat } = await import("./chat-target.js");
+          const conv = target.how === "this chat" ? ctx.conversationId : conversationOfChat(channel, target, settings) || ctx.conversationId || null;
+          noteSentFile({ absPath, caption, conversationId: conv, via: channel });
           return `File sent to ${channel} (chat ${target.chatId}): ${path.basename(absPath)} (${sizeKb} KB)${caption ? `, caption: ${String(caption).slice(0, 60)}` : ""}`;
         } catch (err) {
           return `send_file error: ${err.message}`;
         }
+      }
+
+      case "discord_admin": {
+        // Channels and webhooks in a Discord server, done by Tarsee's own logged-in bot (lib/discord-admin.js), so the
+        // agent never needs the bot token in a command. Never deletes anything.
+        const bot = ctx.channelManager?.channels?.get?.("discord")?.bot;
+        if (typeof bot?.admin !== "function") return "discord_admin error: the Discord channel is not running, so there is no logged-in bot to do this. Nothing was changed.";
+        return await bot.admin(toolInput || {});
       }
 
       case "schedule_task": {
@@ -1283,6 +1316,13 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
         } catch (err) {
           return `schedule_task error: ${err.message}`;
         }
+      }
+
+      case "railway": {
+        // Railway projects, variables and redeploys, done by Tarsee with a token it reads from the vault
+        // (lib/railway-admin.js), so a secret value never goes through a command or the model's context. Never deletes.
+        const { railwayAdmin } = await import("./railway-admin.js");
+        return await railwayAdmin(toolInput || {});
       }
 
       case "calculator": {
@@ -1700,6 +1740,13 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           const { messageId, attachmentCount } = await emailChannel.bot.sendNew({ to, cc, subject, body, inReplyTo, attachments });
           const toDisplay = Array.isArray(to) ? to.join(", ") : to;
           const withFiles = attachmentCount ? ` with ${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}` : "";
+          // The files it attached, kept with the chat the agent was working in, so the dashboard shows them there.
+          if (attachments.length && ctx.conversationId) {
+            try {
+              const { noteSentFile } = await import("./sent-files.js");
+              for (const file of attachments) noteSentFile({ absPath: file, caption: `Emailed to ${toDisplay}`, conversationId: ctx.conversationId, via: "email" });
+            } catch { /* the dashboard's copy is best-effort */ }
+          }
           return `Email ${inReplyTo ? "reply" : "thread"} sent to ${toDisplay}${withFiles}. Message-ID: ${messageId || "(unknown)"}`;
         } catch (err) {
           return `send_email_thread error: ${err.message}`;

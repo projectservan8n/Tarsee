@@ -136,12 +136,17 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 ### Tools & Automation
 - **20+ MCP tools** — send messages, schedule tasks, remember facts, search the web, create canvases, manage files, encrypted vault, calculator, browser, push notifications, email threads, and more.
 - **Calculator** — precise math tool so Claude never hallucinates numbers. Arithmetic, percentages, Math.* functions.
+- **Sends files** — ask for a report, an export or a picture on Telegram, Discord or WhatsApp and `tarsee_send_file` sends it as a real attachment to that chat (Telegram up to 50 MB, Discord 25 MB, WhatsApp 16 MB). Email files go as attachments through `tarsee_send_email_thread`.
+- **Files in the dashboard chat** — every file the agent sends and every file people send in shows on the message it came with, in any chat: a picture or video as a tile, a PDF with its first page, a sound as a waveform player. A click opens it in the viewer (pictures zoom, PDFs show their pages, CSV as a table, text and code as text), with Download always there. Kept copies live in the workspace's `uploads` folder for 30 days.
+- **Keys by name** — the vault's keys are in the agent's environment, so its scripts read `OPENAI_API_KEY` and the like by name and a key never goes into a command. Not when `get_key` is denied in Tool Permissions; `TARSEE_AGENT_ENV_KEYS` limits or turns it off.
+- **Discord admin** — `tarsee_discord_admin` lists, makes and edits Discord channels (public, private for listed people and roles, or copying another channel's access) and makes webhooks, using Tarsee's own logged-in bot, so the agent never needs the bot token in a command. Every change needs the owner's go, passed as `approved_by` and written to the server's audit log. A new webhook's URL goes straight into the vault under a key name and comes back masked. Nothing in the tool deletes.
 - **Stealth browser** — Playwright with anti-detection (real fingerprints, no webdriver flag). Navigate, fill forms, screenshot, scroll, wait, run JS.
 - **Captcha solver** — auto-detect and solve reCAPTCHA, hCaptcha, Cloudflare Turnstile via 2Captcha or Capsolver API.
 - **Proactive briefings** — `/briefing on` schedules a daily morning summary pushed to all channels.
 - **Auto model routing** — `/auto on` picks haiku/sonnet/opus based on message complexity.
 - **Deep memory search** — AI reads all memories semantically when keyword search fails.
 - **Cron scheduler** — recurring AI tasks or direct tool actions. One-time reminders auto-delete.
+- **Railway tool** — `tarsee_railway` lists your Railway projects, services and variable names, sets a variable and redeploys a service, with an account or workspace token from the vault (`RAILWAY_API_TOKEN`). A secret goes in by vault key name (`from_key`), so it never passes through a chat or a command; values are never read back. Changes need someone's go (`approved_by`), and nothing in it deletes. On Railway, leaving out the project means Tarsee's own service, and redeploying that restarts Tarsee.
 - **Web terminal** — browser-based shell access via xterm.js.
 - **File manager** — browse, edit, and create workspace files from the UI.
 - **REST API** — `/api/v1/message` endpoint for iOS Shortcuts, scripts, and automations.
@@ -203,7 +208,7 @@ Tarsee Server (Railway)
   |
   +-- Claude Code Agent SDK (subscription auth; CLI pinned in the Dockerfile)
   |     +-- Built-in: Read, Write, Edit, Bash, Grep, Glob
-  |     +-- MCP tools: send_message, schedule_task, remember,
+  |     +-- MCP tools: send_message, send_file, schedule_task, remember,
   |         create_canvas, calculator, browser, web_search,
   |         push_notification, send_email_thread, configure_email, etc.
   |
@@ -230,7 +235,7 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | Email | IMAP + SMTP (any provider — see below) | Real-time mail, `@mention` gate, CC/BCC context absorb, threaded replies |
 | WhatsApp | [WHAPI Cloud](https://panel.whapi.cloud) | Text, images, PDFs, voice notes (Whisper-transcribed), documents. DMs only. |
 
-**Discord:** Enable **Message Content Intent** in Bot settings. Invite with Send Messages, Read Messages, Add Reactions permissions.
+**Discord:** Enable **Message Content Intent** in Bot settings. Invite with Send Messages, Read Messages, Add Reactions permissions. For `tarsee_discord_admin`, also give the bot's role Manage Channels, Manage Roles (to set who can see a channel) and Manage Webhooks; without them the tool says which permission is missing and changes nothing.
 
 **WhatsApp:** Tarsee uses [WHAPI Cloud](https://whapi.cloud) as the WhatsApp gateway (free tier is enough for personal use). Setup:
 
@@ -343,6 +348,8 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `CLAUDE_DEFAULT_MODEL` | No | `sonnet` | Default model for new sessions. Defaults to the **`sonnet` alias**, which Tarsee resolves to the newest Sonnet in Claude Code's catalog before each turn. That catalog comes with the Claude Code version the image pins (`CLAUDE_CODE_VERSION` in the Dockerfile), so a model released later arrives when that version is bumped and redeployed, or on every boot with `TARSEE_AUTO_UPDATE_CLI=1`; the list Claude Code saves for your account when you use `claude` in the web terminal counts too, when it is newer. Set `opus` for the most capable default, a pinned id (e.g. `claude-opus-5`) if you need a frozen model, or `haiku` for a cheaper one. |
 | `ELEVENLABS_API_KEY` | No | — | Premium TTS voices. Used when ElevenLabs (or Auto) is picked in Settings > Voice, or when the key is set and no engine was ever saved; otherwise the default engine, Phonon, and its fallback, Edge TTS, are free. |
 | `VAPID_SUBJECT` | No | your Railway `https://` address, else `mailto:admin@example.com` | The contact Web Push services are given for your server's notifications: a `mailto:` or `https:` URL, e.g. `mailto:you@yourdomain.com`. Apple's push service turns away subjects that aren't a real mailto/https address. |
+| `RAILWAY_API_TOKEN` | No | — | A Railway account or workspace token for the `tarsee_railway` tool (Railway: Account Settings > Tokens; a project token will not do). Better kept in the vault: tell Tarsee to save it with `tarsee_set_key` as `RAILWAY_API_TOKEN`, which is read first. Railway does not set this one for you. |
+| `TARSEE_AGENT_ENV_KEYS` | No | every vault key | Which vault keys go into the agent's environment: a comma-separated list of names, or `off` for none. By default every key named in capitals, except Claude's and Anthropic's own (login and billing) and names that change how programs run (`PATH`, `NODE_*`, proxies and the like). None while `get_key` is denied in Tool Permissions. |
 | `TARSEE_AUTO_UPDATE_CLI` | No | off | Set `1` to install the latest Claude Code CLI on every boot (adds up to ~60s to each boot). Off, the image keeps the version pinned in the Dockerfile (`CLAUDE_CODE_VERSION`). |
 | `TARSEE_PHONON_AUTO_INSTALL` | No | on | Set `0` to stop Tarsee downloading Phonon's model in the background on boot when Phonon is the voice engine. The Install Phonon button in Settings > Voice still works. |
 | `TARSEE_PHONON_DIR` | No | `<data dir>/tts/phonon` | Where Phonon's model, voices and (if needed) Python venv live. On Railway that is `/data/tarsee/data/tts/phonon`, on the volume. |
@@ -390,6 +397,7 @@ Requirements: Docker, Claude Max subscription (Pro will work but will hit limits
 ## Security
 
 - AES-256-GCM encrypted credential vault
+- Chat files are served only from the workspace's `uploads` folder (real path checked), and never as a page that can run: HTML and scripts open as plain text
 - Timing-safe authentication
 - CSRF protection on all mutations
 - Content Security Policy headers

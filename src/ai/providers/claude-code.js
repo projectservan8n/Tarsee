@@ -22,6 +22,8 @@ import { isTranscriptOverCap, transcriptSizeMB, SESSION_JSONL_MAX_MB } from "../
 import { stepsFromSdkMessage, toolResultsFromSdkMessage, createStreamWatcher } from "../../lib/tool-steps.js";
 import { claimQueuedTurn, takeQueuedNote } from "../../lib/conversation-lock.js";
 import { costSaverEnv } from "../context-limits.js";
+import { agentVaultEnv } from "../agent-env.js";
+import { getSecurityManager } from "../../lib/security-manager.js";
 /**
  * Extract image blocks from content array.
  * Returns { images: ImageBlockParam[], text: string }
@@ -332,6 +334,11 @@ async function* chatEngine({
   let prompt = extractedText;
   if (queuedNote) prompt = withQueuedNote(prompt);
   const hasMedia = mediaBlocks.length > 0;
+  // The pictures among them are kept with the person's message, so the dashboard's chat shows them: no note in the
+  // message names them (lib/sent-files.js noteMediaBlocks). Best-effort.
+  if (hasMedia && toolCtx?.conversationId) {
+    try { (await import("../../lib/sent-files.js")).noteMediaBlocks(toolCtx.conversationId, mediaBlocks, { messageId: toolCtx.messageId || null }); } catch { /* showing them is best-effort */ }
+  }
 
   const cwd = config.CLAUDE_WORKSPACE_DIR || process.cwd();
 
@@ -367,7 +374,8 @@ async function* chatEngine({
     // The server's environment plus the context cost savers (ai/context-limits.js): compact at 180k tokens, and a
     // Bash output past 8000 characters or a tool result past 12000 goes to a file the agent can read. (The SDK takes
     // this as the whole environment, so process.env comes first.)
-    env: { ...process.env, ...costSaverEnv() },
+    // The vault's keys too, so scripts read them by name and no key is pasted into a command (ai/agent-env.js).
+    env: { ...process.env, ...agentVaultEnv({ denied: () => getSecurityManager(toolCtx?.settingsStore).getToolPermission("get_key") === "always_deny" }), ...costSaverEnv() },
     // A bare tier word becomes the newest model of that tier (see fallbackLadderFor).
     model: resolveModel(model || config.CLAUDE_DEFAULT_MODEL),
     tools: allTools,
@@ -425,7 +433,7 @@ async function* chatEngine({
 
 ## MCP Tools (call as mcp__tarsee__tarsee_<name>)
 - **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/web
-- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp; with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files
+- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files
 - **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs
 - **remember**(content) — append to MEMORY.md
 - **daily_log**(content) — append to today's log
@@ -438,6 +446,8 @@ async function* chatEngine({
 - **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head
 - **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: ${config.TIMEZONE}
 - **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving
+- **discord_admin**(action, ...) — list, make and edit Discord channels and make webhooks with Tarsee's own bot (never the bot token from Bash); changes need approved_by, a webhook URL goes to the vault, nothing deletes
+- **railway**(action, project?, environment?, service?, ...) — list Railway projects and variable names, set a variable (secrets via from_key, a vault key name) or redeploy, with the vault's RAILWAY_API_TOKEN; writes need approved_by. Use it instead of Railway calls from Bash
 
 ## Memory
 Use remember for durable facts. Use daily_log for session notes. Only append, never overwrite.
@@ -446,7 +456,7 @@ Before saying "I don't know" or "I can't remember":
 2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)
 
 ## CLI Tools Installed
-- **railway** — Railway CLI for deploys, logs, environments, services
+- **railway** — Railway CLI for logs and deploys (to set a variable or redeploy, use the railway tool above: never a secret in a command)
 - **gog** — Google Workspace (Gmail, Calendar, Drive, Contacts, Sheets)
 - **himalaya** — Zoho/IMAP email
 - **gh** — GitHub CLI
