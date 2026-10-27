@@ -258,6 +258,48 @@ export function createTarseeMcp(ctx) {
         }
       ),
 
+      // Without this the agent made channels and webhooks by pulling DISCORD_BOT_TOKEN from the vault and calling
+      // Discord's REST API from Bash: auto mode blocks that as a credential leak, rightly. Tarsee's own logged-in bot
+      // does it now (src/lib/discord-admin.js). No delete actions.
+      tool(
+        "tarsee_discord_admin",
+        "Admin jobs in a Discord server the bot is in, done by Tarsee's own logged-in bot: list_channels, create_channel (text, voice or category; public, private for listed people and roles, or with another channel's access), edit_channel (name, topic, category, who can see or do what), create_webhook, list_webhooks. Use it whenever someone asks for a new channel, a private channel, a webhook or a permission change. It replaces any Discord REST call from Bash: never pull DISCORD_BOT_TOKEN from the vault for this, and never put a bot token or a webhook URL in a command.\n\nGET THE GO FIRST for anything that changes a server, following the approval rules in your instructions (AGENTS.md). A new webhook counts as a credential (its URL lets anyone post), so create_webhook needs the owner's go. Put who said go, in their words, in approved_by (it is logged and shows in the server's audit log). If nobody has said go for this exact change, ask instead. list_channels and list_webhooks need no go.\n\nTHE SERVER: guild_id, or channel_id of any channel in it (the one you are answering in works), or nothing when the bot is in one server only.\n\nWEBHOOK URLS ARE SECRETS: create_webhook saves the URL in the vault under save_as_key (e.g. ALERTS_WATCHDOG_WEBHOOK; say what it is for in purpose) and returns only the webhook id, the key name and a masked URL. Scripts and services read it from the vault by that key name. reveal: true puts the full URL in the result: only when the owner asks to see it themselves, never for anything that goes into a chat.\n\nNOTHING HERE DELETES: deleting a channel or a webhook is for the owner to do by hand; say so if asked. If Discord refuses for a missing permission, the error says which one and where: tell the person, do not try another way around it.",
+        {
+          action: z.enum(["list_channels", "create_channel", "edit_channel", "create_webhook", "list_webhooks"]).describe("What to do"),
+          guild_id: z.string().optional().describe("The server's id. Optional: channel_id of any channel in it works too, and with one server neither is needed"),
+          channel_id: z.string().optional().describe("edit_channel, create_webhook, list_webhooks: the channel to act on. list_channels, create_channel: any channel in the server (e.g. the one you are answering in), only to find the server"),
+          approved_by: z.string().optional().describe("Required for create_channel, edit_channel and create_webhook: who said go and for what, e.g. \"the owner in #general: make #alerts and a webhook for the watchdog\""),
+          name: z.string().optional().describe("create_channel: the new channel's name. edit_channel: its new name. create_webhook: the webhook's name, shown on its posts"),
+          type: z.enum(["text", "voice", "category"]).optional().describe("create_channel: the kind of channel (default text)"),
+          parent_id: z.string().optional().describe("create_channel: the category to put it in. edit_channel: the category to move it to, or \"none\" to take it out of its category"),
+          topic: z.string().optional().describe("Text channels: the topic line (an empty string clears it in edit_channel)"),
+          near_channel_id: z.string().optional().describe("create_channel: put the new channel next to this one (it goes in the same category unless parent_id says otherwise)"),
+          place: z.enum(["before", "after"]).optional().describe("create_channel with near_channel_id: before or after it (default after)"),
+          private: z.boolean().optional().describe("create_channel, edit_channel: true hides it from @everyone and lets in only the bot, allow_user_ids and allow_role_ids (and server admins). edit_channel false: @everyone's view goes back to the default"),
+          allow_user_ids: z.array(z.string()).optional().describe("With private: true, the Discord user ids who may see and use it"),
+          allow_role_ids: z.array(z.string()).optional().describe("With private: true, the role ids whose members may see and use it"),
+          copy_permissions_from: z.string().optional().describe("create_channel: give the new channel the same access as this channel (instead of private). Without either, a channel in a category gets the category's access, and one outside any category is public"),
+          sync_with_category: z.boolean().optional().describe("edit_channel: replace its access with its category's (the new one when parent_id is given)"),
+          permissions: z.array(z.object({
+            target: z.string().describe("A user id, a role id, or \"everyone\""),
+            target_type: z.enum(["user", "role"]).optional().describe("Only if the id could be either"),
+            allow: z.array(z.string()).optional().describe("Permissions to allow, e.g. ViewChannel, SendMessages, ReadMessageHistory, Connect, Speak (or view, send, history)"),
+            deny: z.array(z.string()).optional().describe("Permissions to deny"),
+            reset: z.array(z.string()).optional().describe("Permissions to set back to the default (neither allowed nor denied here)"),
+            clear: z.boolean().optional().describe("true removes this target's whole overwrite on the channel"),
+          })).optional().describe("edit_channel: who may see or do what in the channel"),
+          save_as_key: z.string().optional().describe("create_webhook: the vault key name for the URL, capitals and underscores, e.g. ALERTS_WATCHDOG_WEBHOOK (default DISCORD_WEBHOOK_<CHANNEL>). An existing key is never replaced unless overwrite_key is true"),
+          purpose: z.string().optional().describe("create_webhook: what the webhook is for, saved with the vault key, e.g. \"uptime watchdog alerts\""),
+          overwrite_key: z.boolean().optional().describe("create_webhook: replace a vault key of that name that is already there"),
+          use_bot_avatar: z.boolean().optional().describe("create_webhook: give the webhook the bot's own picture"),
+          reveal: z.boolean().optional().describe("create_webhook: also return the full URL. Only when the owner asks to see it themselves; never for anything that goes into a chat"),
+        },
+        async (args) => {
+          const result = await executeTool("discord_admin", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
       tool(
         "tarsee_browser",
         "Control a stealth web browser with captcha solving. Navigate pages, fill forms, click buttons, take screenshots, and auto-solve reCAPTCHA/hCaptcha/Turnstile. Browser persists across calls.",

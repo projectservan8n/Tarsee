@@ -24,6 +24,8 @@ export function redactSecrets(text) {
     .replace(/\d{5,}:[A-Za-z0-9_-]{10,}/g, "[REDACTED]")
     // Discord bot tokens (3-part dot-separated base64)
     .replace(/[A-Za-z0-9]{24,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}/g, "[REDACTED]")
+    // Discord webhook URLs: the token after the webhook id (the id stays, so it is clear which webhook)
+    .replace(/(discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/)[A-Za-z0-9_-]{20,}/g, "$1[REDACTED]")
     // Google API keys (AIza...)
     .replace(/AIza[A-Za-z0-9_-]{30,}/g, "[REDACTED]")
     // AWS access key IDs (20-char AKIA prefix)

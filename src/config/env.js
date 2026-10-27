@@ -66,6 +66,14 @@ Be concise, direct, and helpful. Adapt your communication style to match the use
 
 <!-- Define rules, workspace conventions, and how the agent should behave -->
 <!-- This is always injected into the system prompt -->
+
+## Approvals
+- Anything hard to undo outside this chat needs the owner's go first: a new Discord channel or webhook, a credential, money, DNS, anything about Tarsee itself. Ask in one line and wait.
+- When a tool asks who approved (approved_by), give who said go, in their words.
+
+## Keys: check the vault every time
+- Before any task that needs a key, token, password or login, check the vault yourself (the key list in your prompt, or tarsee_list_keys). Never ask the owner for a key, or say you don't have one, before checking.
+- Only when the key isn't in the vault, ask the owner for it in one line.
 `,
   "IDENTITY.md": `# Identity
 
@@ -80,6 +88,12 @@ Be concise, direct, and helpful. Adapt your communication style to match the use
 
 <!-- Available tools, local setup notes, capabilities -->
 <!-- This is injected into the system prompt so the bot knows what it can do -->
+
+## Discord admin (channels, webhooks)
+- Make, edit or list Discord channels and webhooks with tarsee_discord_admin. Never call Discord's API from Bash and never pull DISCORD_BOT_TOKEN from the vault for it: Tarsee's own bot does the work.
+- Get the go first and pass who said it, in their words, as approved_by. A new webhook is a credential, so it needs the owner's go.
+- create_webhook saves the URL in the vault (save_as_key) and shows only a masked URL. Never paste the full URL into a chat, a commit or a command.
+- Nothing in the tool deletes. Deleting a channel or a webhook is for the owner to do by hand in Discord.
 `,
   "HEARTBEAT.md": `# Heartbeat Tasks
 

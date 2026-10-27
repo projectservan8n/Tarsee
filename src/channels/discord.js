@@ -14,6 +14,7 @@ import { toolStatusLabel, toolDoneLabel } from "../lib/tool-status.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
 import { formatForDiscord, splitMessageFenceSafe } from "../lib/discord-format.js";
 import envConfig from "../config/env.js";
+import { discordAdmin } from "../lib/discord-admin.js";
 
 /**
  * Creates and starts a Discord bot.
@@ -649,6 +650,11 @@ ${sendFileHint("discord")}`,
         }
       }
     },
+    /**
+     * tarsee_discord_admin (lib/discord-admin.js): list, make and edit channels, and make webhooks (the URL goes to the
+     * vault), done by this logged-in client so the agent never handles the bot token. No deletes.
+     */
+    admin: (args) => discordAdmin(args, { client }),
     /** Send a file as a real Discord attachment (the send_file tool). Bots upload up to 25 MB on a server without boosts. */
     sendFile: async (channelId, filePath, caption) => {
       if (!fs.existsSync(filePath)) throw new Error(`sendFile: file not found at ${filePath}`);

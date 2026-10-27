@@ -24,6 +24,13 @@ describe("redactSecrets", () => {
     );
   });
 
+  it("redacts the token of a Discord webhook URL, keeping its id", () => {
+    assert.equal(
+      redactSecrets("hook: https://discord.com/api/webhooks/1431234567890123456/AbCdEfGhIjKlMnOpQrStUvWxYz_0123456789-abcdefgh and https://discordapp.com/api/v10/webhooks/12345678901234567/abcdefghijklmnopqrstuvwxyz"),
+      "hook: https://discord.com/api/webhooks/1431234567890123456/[REDACTED] and https://discordapp.com/api/v10/webhooks/12345678901234567/[REDACTED]"
+    );
+  });
+
   it("redacts GitHub tokens", () => {
     assert.equal(
       redactSecrets("token: ghp_1234567890abcdefghijk"),

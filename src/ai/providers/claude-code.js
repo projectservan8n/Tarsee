@@ -446,6 +446,7 @@ async function* chatEngine({
 - **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head
 - **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: ${config.TIMEZONE}
 - **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving
+- **discord_admin**(action, ...) — list, make and edit Discord channels and make webhooks with Tarsee's own bot (never the bot token from Bash); changes need approved_by, a webhook URL goes to the vault, nothing deletes
 
 ## Memory
 Use remember for durable facts. Use daily_log for session notes. Only append, never overwrite.

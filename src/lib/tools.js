@@ -1294,6 +1294,14 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
         }
       }
 
+      case "discord_admin": {
+        // Channels and webhooks in a Discord server, done by Tarsee's own logged-in bot (lib/discord-admin.js), so the
+        // agent never needs the bot token in a command. Never deletes anything.
+        const bot = ctx.channelManager?.channels?.get?.("discord")?.bot;
+        if (typeof bot?.admin !== "function") return "discord_admin error: the Discord channel is not running, so there is no logged-in bot to do this. Nothing was changed.";
+        return await bot.admin(toolInput || {});
+      }
+
       case "schedule_task": {
         const { schedule, prompt, name, action, once } = toolInput;
         try {
