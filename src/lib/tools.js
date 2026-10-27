@@ -1315,6 +1315,13 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
         }
       }
 
+      case "railway": {
+        // Railway projects, variables and redeploys, done by Tarsee with a token it reads from the vault
+        // (lib/railway-admin.js), so a secret value never goes through a command or the model's context. Never deletes.
+        const { railwayAdmin } = await import("./railway-admin.js");
+        return await railwayAdmin(toolInput || {});
+      }
+
       case "calculator": {
         const { expression } = toolInput;
         if (!expression) return "Error: 'expression' is required.";

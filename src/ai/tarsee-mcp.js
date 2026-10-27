@@ -300,6 +300,29 @@ export function createTarseeMcp(ctx) {
         }
       ),
 
+      // Setting a Railway variable otherwise means a command with the value in it (`railway variables --set`, or
+      // GraphQL with the token), a secret in a command line and a transcript. Tarsee does it with a token from the
+      // vault (lib/railway-admin.js). No delete actions.
+      tool(
+        "tarsee_railway",
+        "Railway jobs done by Tarsee itself with a Railway token it reads from the vault (RAILWAY_API_TOKEN): list_projects (projects; with project, its environments and services), list_variables (variable NAMES on a service, never values), set_variable (set one variable on a service, then Railway redeploys it as it does on any variable change), redeploy (redeploy a service's latest deployment). Use it whenever someone asks to set a Railway variable or redeploy. It replaces any Railway call from Bash: never put a Railway token or a secret value in a command (no `railway variables --set` with a secret, no GraphQL with a token).\n\nSECRETS GO THROUGH from_key: for anything secret (a token, a password, a webhook URL, a database URL) pass from_key, the vault key name that holds it (e.g. from_key: \"ALERTS_WEBHOOK\"). Tarsee reads the value itself; it never shows up in the result, the logs or your context, only a masked form. value is for plain, non-secret text only (a port, a flag, a public URL); a value that looks like a secret or is a vault key's value is refused.\n\nGET THE GO FIRST for set_variable and redeploy: from the owner, or from whoever your instructions (AGENTS.md, USER.md) say may give it. Putting a secret into a service (from_key) counts as handing out a credential, so it needs the owner's go. Put who said go, in their words, in approved_by (it is logged). If nobody has said go for this exact change, ask instead. list_projects and list_variables need no go.\n\nTARSEE'S OWN SERVICE: when Tarsee runs on Railway, leaving out project works on the project Tarsee runs in, in its environment, on its own service. Redeploying it, or setting a variable on it with a deploy, restarts Tarsee and ends the turn doing it: say so before you do it, and finish anything else first.\n\nNAMES OR IDS: project, environment (default: the one Tarsee runs in, else production) and service each take a name (any case) or an id. A name that matches nothing, or more than one, is refused with the choices listed.\n\nNOTHING HERE DELETES: deleting a variable, a service or a project is for the owner to do by hand in Railway; say so if asked. If Railway refuses, the error says why in plain words: tell the person, do not try another way around it.",
+        {
+          action: z.enum(["list_projects", "list_variables", "set_variable", "redeploy"]).describe("What to do"),
+          project: z.string().optional().describe("The project's name (any case) or id. Leave it out for the project Tarsee runs in (on Railway); list_projects without it lists them all"),
+          environment: z.string().optional().describe("The environment's name or id (default: the one Tarsee runs in, else production)"),
+          service: z.string().optional().describe("list_variables, set_variable, redeploy: the service's name or id (default in Tarsee's own project: Tarsee's own service)"),
+          name: z.string().optional().describe("set_variable: the variable's name, e.g. ALERTS_WEBHOOK_URL"),
+          from_key: z.string().optional().describe("set_variable: the vault key whose value to set, for anything secret. The value is read by Tarsee and never shown"),
+          value: z.string().optional().describe("set_variable: a plain, NON-SECRET value. Anything secret goes in the vault and through from_key instead. Pass from_key or value, not both"),
+          deploy: z.boolean().optional().describe("set_variable: true (default) lets Railway redeploy the service as it normally does on a variable change; false sets it without a deploy (it takes effect on the next one)"),
+          approved_by: z.string().optional().describe("Required for set_variable and redeploy: who said go and for what, e.g. \"the owner in chat: put the alerts webhook on the worker service\""),
+        },
+        async (args) => {
+          const result = await executeTool("railway", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
       tool(
         "tarsee_browser",
         "Control a stealth web browser with captcha solving. Navigate pages, fill forms, click buttons, take screenshots, and auto-solve reCAPTCHA/hCaptcha/Turnstile. Browser persists across calls.",

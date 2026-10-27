@@ -447,6 +447,7 @@ async function* chatEngine({
 - **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: ${config.TIMEZONE}
 - **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving
 - **discord_admin**(action, ...) — list, make and edit Discord channels and make webhooks with Tarsee's own bot (never the bot token from Bash); changes need approved_by, a webhook URL goes to the vault, nothing deletes
+- **railway**(action, project?, environment?, service?, ...) — list Railway projects and variable names, set a variable (secrets via from_key, a vault key name) or redeploy, with the vault's RAILWAY_API_TOKEN; writes need approved_by. Use it instead of Railway calls from Bash
 
 ## Memory
 Use remember for durable facts. Use daily_log for session notes. Only append, never overwrite.
@@ -455,7 +456,7 @@ Before saying "I don't know" or "I can't remember":
 2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)
 
 ## CLI Tools Installed
-- **railway** — Railway CLI for deploys, logs, environments, services
+- **railway** — Railway CLI for logs and deploys (to set a variable or redeploy, use the railway tool above: never a secret in a command)
 - **gog** — Google Workspace (Gmail, Calendar, Drive, Contacts, Sheets)
 - **himalaya** — Zoho/IMAP email
 - **gh** — GitHub CLI

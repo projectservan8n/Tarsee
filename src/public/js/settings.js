@@ -1880,7 +1880,7 @@ const Settings = {
       const data = await API.json("/api/admin/tool-permissions");
       const el = document.getElementById("toolPermissionsList");
       if (!el) return;
-      const tools = ["read_file","write_file","edit_file","exec","web_fetch","web_search","browser","spawn_agent","send_message","send_file","discord_admin","generate_image","analyze_image","create_canvas","schedule_task","pdf_read","remember","search_memories"];
+      const tools = ["read_file","write_file","edit_file","exec","web_fetch","web_search","browser","spawn_agent","send_message","send_file","discord_admin","railway","generate_image","analyze_image","create_canvas","schedule_task","pdf_read","remember","search_memories"];
       const perms = data.permissions || {};
       el.innerHTML = tools.map(function(t) {
         var mode = perms[t] || "always_allow";
