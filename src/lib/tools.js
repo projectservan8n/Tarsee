@@ -1683,6 +1683,11 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
 
       case "send_email_thread": {
         const { to, cc, subject, body, inReplyTo } = toolInput || {};
+        // Files to attach: paths on disk, a relative one read from the workspace (the email channel refuses a missing one).
+        const attachments = (Array.isArray(toolInput?.attachments) ? toolInput.attachments : [])
+          .map((a) => (typeof a === "string" ? a : a?.path))
+          .filter((p) => typeof p === "string" && p.trim())
+          .map((p) => (path.isAbsolute(p) ? p : path.resolve(config.WORKSPACE_DIR, p)));
         if (!to) return "send_email_thread error: 'to' is required";
         if (!subject) return "send_email_thread error: 'subject' is required";
         if (!body) return "send_email_thread error: 'body' is required";
@@ -1692,9 +1697,10 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           return "send_email_thread error: email channel not running. Configure it in Settings > Channels > Email or via tarsee_configure_email_channel.";
         }
         try {
-          const { messageId } = await emailChannel.bot.sendNew({ to, cc, subject, body, inReplyTo });
+          const { messageId, attachmentCount } = await emailChannel.bot.sendNew({ to, cc, subject, body, inReplyTo, attachments });
           const toDisplay = Array.isArray(to) ? to.join(", ") : to;
-          return `Email ${inReplyTo ? "reply" : "thread"} sent to ${toDisplay}. Message-ID: ${messageId || "(unknown)"}`;
+          const withFiles = attachmentCount ? ` with ${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}` : "";
+          return `Email ${inReplyTo ? "reply" : "thread"} sent to ${toDisplay}${withFiles}. Message-ID: ${messageId || "(unknown)"}`;
         } catch (err) {
           return `send_email_thread error: ${err.message}`;
         }

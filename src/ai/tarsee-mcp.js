@@ -78,13 +78,14 @@ export function createTarseeMcp(ctx) {
 
       tool(
         "tarsee_send_email_thread",
-        "Start a new email thread or reply to an existing one with proper threading headers (In-Reply-To + References). Use this for proactive outbound email — you don't need to wait for the recipient to email first. Body is plain text; no markdown formatting survives email well. For replies, pass inReplyTo with the Message-ID from the inbound email.",
+        "Start a new email thread or reply to an existing one with proper threading headers (In-Reply-To + References). Use this for proactive outbound email — you don't need to wait for the recipient to email first. Body is plain text; no markdown formatting survives email well. For replies, pass inReplyTo with the Message-ID from the inbound email. Attach files with attachments (paths on disk).",
         {
           to: z.union([z.string(), z.array(z.string())]).describe("Primary recipient(s). Single address string or array."),
           cc: z.union([z.string(), z.array(z.string())]).optional().describe("Optional CC recipients"),
           subject: z.string().describe("Subject line (Tarsee adds 'Re: ' automatically when inReplyTo is set)"),
           body: z.string().describe("Plain text body"),
           inReplyTo: z.string().optional().describe("Message-ID of the email you're replying to (include angle brackets). Omit for new threads."),
+          attachments: z.array(z.string()).optional().describe("Files to attach as real attachments: absolute paths, or paths relative to the workspace. Never paste a file's contents or a folder path into the body instead."),
         },
         async (args) => {
           const result = await executeTool("send_email_thread", args, ctx);

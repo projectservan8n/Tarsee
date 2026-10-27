@@ -126,6 +126,15 @@ describe("send_file", () => {
     assert.equal(mgr.sent.at(-1).type, "email");
   });
 
+  it("send_email_thread attaches files (a relative path is the workspace's) instead of dropping them", async () => {
+    const mails = [];
+    const withEmail = { ...mgr, channels: new Map([["email", { bot: { sendNew: async (opts) => { mails.push(opts); return { messageId: "<m1@x>", attachmentCount: opts.attachments.length }; } } }]]) };
+    const out = await executeTool("send_email_thread", { to: "sam@example.com", subject: "Report", body: "Attached.", attachments: ["reports/October Report.html"] },
+      { db, settingsStore: settings, conversationId: telegramConv, channelManager: withEmail });
+    assert.match(out, /^Email thread sent to sam@example\.com with 1 attachment\./);
+    assert.deepEqual(mails[0].attachments, [path.join(ws, "reports", "October Report.html")]);
+  });
+
   it("WhatsApp documents go with their own kind", () => {
     assert.equal(mimeOfFile("/x/October Report.HTML"), "text/html");
     assert.equal(mimeOfFile("deck.pptx"), "application/vnd.openxmlformats-officedocument.presentationml.presentation");
