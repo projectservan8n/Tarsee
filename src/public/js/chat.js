@@ -401,7 +401,7 @@ const Chat = {
       const msgs = data.messages || [];
       const total = data.totalMessages || msgs.length;
       const older = total - msgs.length;
-      this.renderMessages(msgs, older > 0 ? older : 0, this.currentConversationId);
+      this.renderMessages(msgs, older > 0 ? older : 0, this.currentConversationId, data.leadFiles);
       this._drainQueueIfIdle();
     } catch { /* ignore — silent retry on next wake */ }
   },
@@ -956,7 +956,7 @@ const Chat = {
         if (!channelKey && data?.title) { this._currentName = String(data.title); this._paintHeader(); }
         const total = data.totalMessages || data.messages?.length || 0;
         const older = total - (data.messages?.length || 0);
-        this.renderMessages(data.messages || [], older > 0 ? older : 0, conversationId);
+        this.renderMessages(data.messages || [], older > 0 ? older : 0, conversationId, data.leadFiles);
         if (!(data.messages || []).length) this._showEmptyChat();
         // Session recap — if the server flagged this convo as stale, show
         // a dismissible card above the first message summarizing what was
@@ -1088,7 +1088,7 @@ const Chat = {
   },
 
   // --- Messages ---
-  renderMessages(messages, olderCount = 0, conversationId = null) {
+  renderMessages(messages, olderCount = 0, conversationId = null, leadFiles = null) {
     this.elements.chatArea.innerHTML = "";
     this.lastMessageRole = null;
     this.lastMessageTime = 0;
@@ -1112,7 +1112,8 @@ const Chat = {
           const tempLastTime = this.lastMessageTime;
           this.lastMessageRole = null;
           this.lastMessageTime = 0;
-          for (const msg of olderMsgs) frag.appendChild(this._messageEl(msg, conversationId));
+          if (data.leadFiles?.length) frag.appendChild(this.fileRowEl(this._keptFiles(data.leadFiles)));
+          for (const msg of olderMsgs) this._appendMessage(frag, msg, conversationId);
           this.elements.chatArea.insertBefore(frag, this.elements.chatArea.firstChild);
           this.lastMessageRole = tempLastRole;
           this.lastMessageTime = tempLastTime;
@@ -1125,7 +1126,8 @@ const Chat = {
       this.elements.chatArea.appendChild(loadMoreBtn);
     }
 
-    for (const msg of messages) this.elements.chatArea.appendChild(this._messageEl(msg, conversationId));
+    if (leadFiles?.length && !olderCount) this.elements.chatArea.appendChild(this.fileRowEl(this._keptFiles(leadFiles)));
+    for (const msg of messages) this._appendMessage(this.elements.chatArea, msg, conversationId);
     // Queued-but-unsent messages are not on the server yet: draw them again.
     this._renderQueuedBubbles();
     this.scrollToBottom(true);
@@ -1133,11 +1135,20 @@ const Chat = {
     if (conversationId && typeof Usage !== "undefined") Usage.decorate(conversationId);
   },
 
-  /** A saved message, with its tools (history comes slim: names and summaries; the details are fetched when opened). */
+  /** A saved message, with its tools (history comes slim: names and summaries; the details are fetched when opened), and its files. */
   _messageEl(msg, conversationId) {
-    const el = this._createMessageEl(msg.role, msg.content, { tools: msg.tools, messageId: msg.id, convId: conversationId });
+    const el = this._createMessageEl(msg.role, msg.content, { tools: msg.tools, messageId: msg.id, convId: conversationId, files: this._keptFiles(msg.files) });
     if (msg.id) el.dataset.messageId = msg.id;
     return el;
+  },
+
+  /**
+   * A saved message and the files that come right after it as a row of their own (src/lib/chat-files.js placeFiles:
+   * the agent's, sent here from another chat or with no reply after them), into a fragment or the chat.
+   */
+  _appendMessage(into, msg, conversationId) {
+    into.appendChild(this._messageEl(msg, conversationId));
+    if (msg.filesAfter?.length) into.appendChild(this.fileRowEl(this._keptFiles(msg.filesAfter)));
   },
 
   /**
@@ -1155,17 +1166,25 @@ const Chat = {
     body.className = "message-content";
     msg.appendChild(body);
     if (role === "user") {
-      const { who, body: words } = Core.sender(content);
+      const { who, body: said } = Core.sender(content);
       if (who) {
         const w = document.createElement("div");
         w.className = "message-who";
         w.textContent = who;
         body.appendChild(w);
       }
-      const text = document.createElement("div");
-      text.className = "message-text message-bubble";
-      text.innerHTML = this.renderMarkdown(words);
-      body.appendChild(text);
+      // The files a channel saved with it come as notes in its words ("[Attached file saved: ...]"): cards instead.
+      const noted = typeof ChatFiles !== "undefined" ? ChatFiles.split(said) : { text: said, files: [] };
+      const files = [...noted.files, ...(opts.files || []).filter((f) => !noted.files.some((n) => n.path === f.path))];
+      // "(sent a file: x)", what is saved for a message that was only files, says nothing the card does not.
+      const words = files.length && /^\(sent (?:a file: .*|\d+ files)\)$/.test(noted.text.trim()) ? "" : noted.text;
+      if (words || !files.length) {
+        const text = document.createElement("div");
+        text.className = "message-text message-bubble";
+        text.innerHTML = this.renderMarkdown(words || said);
+        body.appendChild(text);
+      }
+      if (files.length) this.filesIntoMessage(msg, "user", files);
     } else {
       const parts = Core.replyParts(content, opts.tools);
       if (parts.tools.length || parts.notes.length) {
@@ -1181,6 +1200,7 @@ const Chat = {
       text.innerHTML = this.renderMarkdown(parts.answer);
       body.appendChild(text);
       body.appendChild(this._actionsEl(!!opts.streaming));
+      if (opts.files?.length) this.filesIntoMessage(msg, "assistant", opts.files);   // (above its words: "attached above")
     }
     this.lastMessageRole = role;
     this.lastMessageTime = now;
@@ -1602,12 +1622,12 @@ const Chat = {
       </div>`;
     }).join("");
 
-    // Click previews to open lightbox/viewer
+    // Click previews to open them in the viewer
     container.querySelectorAll(".chat-attachment-thumb").forEach((thumb, i) => {
       thumb.style.cursor = "pointer";
       thumb.addEventListener("click", (e) => {
         if (e.target.closest(".chat-attachment-remove")) return; // Don't trigger on X button
-        this.previewFile(this.pendingFiles[i]);
+        this.previewPending(i);
       });
     });
 
@@ -1644,6 +1664,75 @@ const Chat = {
       });
     }
     return attachments;
+  },
+
+  // --- Files in the chat (js/chat-files.js: the cards, and the viewer they open in) ---
+
+  /**
+   * Files into a message: a person's under their bubble, the agent's above its words (under the steps line), as Discord
+   * shows them "attached above". Cards already there are not drawn twice (each kept file has its id).
+   */
+  filesIntoMessage(msgEl, role, files) {
+    if (!msgEl || !files?.length || typeof ChatFiles === "undefined") return null;
+    const body = msgEl.querySelector(".message-content");
+    if (!body) return null;
+    let row = body.querySelector(":scope > .chat-files");
+    if (row) { ChatFiles.addCards(row, files); return row; }
+    row = ChatFiles.cards(files);
+    if (role === "user") {
+      const after = body.querySelector(":scope > .message-text") || body.querySelector(":scope > .message-who");
+      if (after) after.after(row); else body.prepend(row);
+    } else {
+      const words = body.querySelector(":scope > .message-text");
+      if (words) body.insertBefore(row, words); else body.appendChild(row);
+    }
+    msgEl.classList.add("has-files");
+    return row;
+  },
+
+  /** The agent's files as a row of their own (sent here from another chat, or with no reply after them). */
+  fileRowEl(files) {
+    const el = document.createElement("div");
+    el.className = "message assistant files-row";
+    const body = document.createElement("div");
+    body.className = "message-content";
+    el.appendChild(body);
+    if (typeof ChatFiles !== "undefined") body.appendChild(ChatFiles.cards(files));
+    this.lastMessageRole = "assistant";
+    this.lastMessageTime = Date.now();
+    return el;
+  },
+
+  /** Kept files from the history (src/lib/chat-files.js rows) as the cards want them. */
+  _keptFiles(list) {
+    return typeof ChatFiles === "undefined" ? [] : (list || []).map((f) => ChatFiles.fromServer(f));
+  },
+
+  /** A message's files drawn from what this browser sent (the composer's packed files), before the server has them. */
+  showSentFiles(msgEl, attachments) {
+    if (!msgEl || !attachments?.length) return;
+    if (typeof ChatFiles !== "undefined") {
+      const files = attachments.map((a) => ChatFiles.fromPacked(a)).filter(Boolean);
+      if (files.length) {
+        const bubble = msgEl.querySelector(".message-content > .message-text");
+        if (bubble && !bubble.textContent.trim()) bubble.remove();   // (only files: no empty bubble over them)
+        this.filesIntoMessage(msgEl, "user", files);
+        msgEl.dataset.localFiles = "1";
+        return;
+      }
+    }
+    msgEl.querySelector(".message-text")?.insertAdjacentHTML("afterend", this.renderMessageAttachments(attachments));
+  },
+
+  /** A file in the composer, before it is sent: the viewer (a spreadsheet as its table, read here). */
+  previewPending(i) {
+    const file = this.pendingFiles[i];
+    if (!file) return;
+    if (typeof ChatFiles !== "undefined" && !/\.xlsx?$/i.test(file.name || "")) {
+      ChatFiles.open(this.pendingFiles.map((f) => ChatFiles.fromLocal(f)), i);
+      return;
+    }
+    this.previewFile(file);
   },
 
   renderMessageAttachments(attachments) {
@@ -1749,10 +1838,7 @@ const Chat = {
 
     // Append user message (with attachment previews if any)
     const userMsg = this.appendMessage("user", text);
-    if (attachments.length) {
-      const textEl = userMsg.querySelector(".message-text");
-      textEl.insertAdjacentHTML("afterend", this.renderMessageAttachments(attachments));
-    }
+    if (attachments.length) this.showSentFiles(userMsg, attachments);
     await this._streamReply(text, attachments);
   },
 

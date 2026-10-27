@@ -256,4 +256,31 @@ const MIGRATIONS = [
     name: "010_token_usage",
     sql: USAGE_SCHEMA,
   },
+  {
+    // The files of a chat (lib/chat-files.js): what the agent sent into it (send_file, files it emailed) and what
+    // people sent in that the channels kept no note of (the dashboard's own uploads, pictures). Kept with the
+    // conversation, so the dashboard's chat shows them after a reload and on every device, in their place:
+    //   message_id        the message it came with (a person's files)
+    //   after_message_id  the conversation's latest message when it came: it goes just after that one
+    //   turn_id           the turn at work in this conversation when the agent sent it (it shows on that turn's reply)
+    name: "011_chat_files",
+    sql: `
+      CREATE TABLE IF NOT EXISTS chat_files (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id  TEXT NOT NULL,
+        direction        TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+        message_id       TEXT,
+        after_message_id TEXT,
+        turn_id          TEXT,
+        name             TEXT NOT NULL,
+        size             INTEGER NOT NULL DEFAULT 0,
+        path             TEXT NOT NULL,
+        caption          TEXT,
+        via              TEXT,
+        created_at       INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_files_conv ON chat_files (conversation_id, id);
+      CREATE INDEX IF NOT EXISTS idx_chat_files_message ON chat_files (message_id);
+    `,
+  },
 ];

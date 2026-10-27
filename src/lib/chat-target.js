@@ -60,3 +60,11 @@ function chatsOf(channel, settingsStore) {
   }
   return out;
 }
+
+/** The conversation of the chat a message or file went to ({ chatId, threadId }), or null when that chat has none. */
+export function conversationOfChat(channel, target, settingsStore) {
+  if (!settingsStore || !target?.chatId) return null;
+  const want = String(target.chatId);
+  // Exactly that chat: a group's own chat is not one of its forum topics.
+  return chatsOf(channel, settingsStore).find((c) => c.chatId === want && (c.threadId || null) === (target.threadId || null))?.conversationId || null;
+}

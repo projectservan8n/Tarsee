@@ -38,6 +38,8 @@
   <link rel="stylesheet" href="/css/chat.css">
   <link rel="stylesheet" href="/css/chat-ui.css">   <!-- the sidebar, the reading column, the steps, the composer -->
   <link rel="stylesheet" href="/css/usage.css">     <!-- the Usage page and the line under each reply (js/usage.js) -->
+  <link rel="stylesheet" href="/css/chat-files.css">   <!-- the files in a chat: cards (js/chat-files.js) -->
+  <link rel="stylesheet" href="/css/file-viewer.css">  <!-- and the viewer they open in (js/file-viewer.js) -->
 
   <link rel="stylesheet" href="/css/voice.css">
   <link rel="stylesheet" href="/css/console.css">
@@ -1040,6 +1042,20 @@
   </div>
 
   <!-- Toast Container -->
+  <!-- A file opened from the chat (js/chat-files.js), in the viewer (js/file-viewer.js). Esc, the X or a click outside closes it. -->
+  <div class="of-viewer is-dash" id="viewer" role="dialog" aria-modal="true" aria-label="Attachment" hidden>
+    <div class="of-viewer-bar">
+      <div class="of-viewer-name"><strong id="viewerName"></strong><span class="of-muted" id="viewerInfo"></span></div>
+      <div class="of-viewer-tools">
+        <button type="button" class="of-btn" id="viewerPrev" aria-label="Previous attachment"><i class="ph ph-caret-left" aria-hidden="true"></i><span>Previous</span></button>
+        <button type="button" class="of-btn" id="viewerNext" aria-label="Next attachment"><span>Next</span><i class="ph ph-caret-right" aria-hidden="true"></i></button>
+        <a class="of-btn" id="viewerSave"><i class="ph ph-download-simple" aria-hidden="true"></i><span>Download</span></a>
+      </div>
+      <button type="button" class="of-icon-btn" id="viewerClose" aria-label="Close"><i class="ph ph-x" aria-hidden="true"></i></button>
+    </div>
+    <div class="of-viewer-body" id="viewerBody"></div>
+  </div>
+
   <div class="toast-container" id="toastContainer"></div>
 
   <!-- Scripts -->
@@ -1052,6 +1068,7 @@
   <script src="/js/usage-core.js"></script>  <!-- token counts and speeds as people read them -->
   <script src="/js/chat.js"></script>
   <script src="/js/live.js"></script>
+  <script type="module" src="/js/chat-files.js"></script>   <!-- the chat's files: cards, and the viewer (window.ChatFiles) -->
   <script src="/js/usage.js"></script>       <!-- the Usage page (/usage) -->
   <script src="/js/voice.js"></script>
   <script src="/js/console.js"></script>

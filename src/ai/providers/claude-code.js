@@ -332,6 +332,11 @@ async function* chatEngine({
   let prompt = extractedText;
   if (queuedNote) prompt = withQueuedNote(prompt);
   const hasMedia = mediaBlocks.length > 0;
+  // The pictures among them are kept with the person's message, so the dashboard's chat shows them: no note in the
+  // message names them (lib/sent-files.js noteMediaBlocks). Best-effort.
+  if (hasMedia && toolCtx?.conversationId) {
+    try { (await import("../../lib/sent-files.js")).noteMediaBlocks(toolCtx.conversationId, mediaBlocks); } catch { /* showing them is best-effort */ }
+  }
 
   const cwd = config.CLAUDE_WORKSPACE_DIR || process.cwd();
 
@@ -425,7 +430,7 @@ async function* chatEngine({
 
 ## MCP Tools (call as mcp__tarsee__tarsee_<name>)
 - **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/web
-- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp; with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files
+- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files
 - **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs
 - **remember**(content) — append to MEMORY.md
 - **daily_log**(content) — append to today's log

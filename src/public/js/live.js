@@ -189,6 +189,40 @@ const Live = {
       case "step": this.onStep(evt); break;
       case "turn_end": this.onTurnEnd(evt); break;
       case "cleared": this.onCleared(evt); break;
+      case "files": this.onFiles(evt); break;
+    }
+  },
+
+  /**
+   * Files on the live feed (src/lib/sent-files.js, kept with the chat by src/lib/chat-files.js). The agent's go on
+   * the turn that sent them when it is on screen, above the words its reply brings (as the history shows them after a
+   * reload: on that reply), else as a row of their own. Files someone sent in go on their message, unless that is
+   * this browser's own bubble, which shows them already. Each kept file once (the history may have drawn it).
+   */
+  onFiles(evt) {
+    if (typeof ChatFiles === "undefined" || this.pseudo) return;
+    const p = evt.payload || {};
+    if (p.from !== "agent" && p.from !== "in") return;
+    const drawn = (f) => f.id != null && !!this.findMsg("data-file-id", f.id);
+    const files = (p.files || []).filter((f) => f?.path && !drawn(f)).map((f) => ChatFiles.fromServer({ ...f, caption: p.caption || "", from: p.from }));
+    if (!files.length) return;
+    if (p.from === "agent") {
+      const turn = evt.turnId ? this.turns.get(evt.turnId) : null;
+      if (turn?.el?.isConnected) Chat.filesIntoMessage(turn.el, "assistant", files);
+      else {
+        if (Chat.elements.welcomeScreen.style.display !== "none") {
+          Chat.elements.welcomeScreen.style.display = "none";
+          Chat.elements.chatArea.style.display = "flex";
+        }
+        this.area().appendChild(Chat.fileRowEl(files));
+      }
+      Chat.scrollToBottom();
+      return;
+    }
+    const theirs = p.messageId ? this.findMsg("data-message-id", p.messageId) : null;
+    if (theirs && !theirs.dataset.localFiles) {
+      Chat.filesIntoMessage(theirs, "user", files);
+      Chat.scrollToBottom();
     }
   },
 
@@ -399,7 +433,7 @@ const Live = {
     // Nothing to show and no reply came: the turn leaves no trace (a reply that comes later still takes its place).
     if (!turn.answered && state === "done") {
       setTimeout(() => {
-        if (!turn.answered && !turn.steps.count() && !turn.steps.notes && turn.el.isConnected) turn.el.remove();
+        if (!turn.answered && !turn.steps.count() && !turn.steps.notes && !turn.el.querySelector(".chat-files") && turn.el.isConnected) turn.el.remove();
       }, LIVE_REPLY_WINDOW_MS);
     }
     // Sidebar times and order follow the conversation's last activity.
@@ -503,7 +537,7 @@ const Live = {
     const el = Chat._createMessageEl("user", item.text);
     el.dataset.clientMsgId = item.clientMsgId;
     el.classList.add("pending");
-    if (attachments.length) el.querySelector(".message-text")?.insertAdjacentHTML("afterend", Chat.renderMessageAttachments(attachments));
+    if (attachments.length) Chat.showSentFiles(el, attachments);
     const status = document.createElement("div");
     status.className = "msg-status";
     status.textContent = "Sending…";

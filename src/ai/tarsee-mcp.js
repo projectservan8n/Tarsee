@@ -32,9 +32,9 @@ export function createTarseeMcp(ctx) {
 
       tool(
         "tarsee_send_file",
-        "Send a file as a real attachment (PDF, HTML report, image, audio, video, zip, spreadsheet, anything) to a Telegram, Discord or WhatsApp chat. Use it whenever someone asks for a file or you made one for them: never answer with a folder path or a download link instead, and never say a channel can't take attachments. With no channel_id it goes to the chat you are talking in (else that channel's most recent chat). The file must already exist; a relative path is read from the workspace. Size caps: Telegram 50 MB, Discord 25 MB, WhatsApp 16 MB. For email, use tarsee_send_email_thread with attachments.",
+        "Send a file as a real attachment (PDF, HTML report, image, audio, video, zip, spreadsheet, anything) to a Telegram, Discord or WhatsApp chat, or to one of the dashboard's own chats (web: a card there that opens in the viewer). Use it whenever someone asks for a file or you made one for them: never answer with a folder path or a download link instead, and never say a channel can't take attachments. With no channel_id it goes to the chat you are talking in (else that channel's most recent chat). The file must already exist; a relative path is read from the workspace. Size caps: Telegram 50 MB, Discord 25 MB, WhatsApp 16 MB, web 50 MB. For email, use tarsee_send_email_thread with attachments.",
         {
-          channel: z.enum(["telegram", "discord", "whatsapp"]).describe("Channel to send to: the one you are talking in, unless asked otherwise"),
+          channel: z.enum(["telegram", "discord", "whatsapp", "web"]).describe("Channel to send to: the one you are talking in, unless asked otherwise (web: one of the dashboard's own chats; channel_id is its conversation id, the one you are in by default)"),
           file_path: z.string().describe("Absolute path, or a path relative to the workspace"),
           caption: z.string().optional().describe("Optional words sent with the file (Telegram shows up to 1024 characters)"),
           channel_id: z.string().optional().describe("Specific chat/channel ID; leave it out to send to the chat you are in"),
