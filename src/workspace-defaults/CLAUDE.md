@@ -12,7 +12,8 @@ read it whole.
 
 ## Core Capabilities
 
-- **tarsee_send_message** — Push messages to Telegram, Discord, Slack, or web
+- **tarsee_send_message** — Push messages to Telegram, Discord, WhatsApp, or web
+- **tarsee_send_file** — Send a file as a real attachment to the Telegram, Discord or WhatsApp chat you are in (never answer with a folder path)
 - **tarsee_schedule_task** — Schedule cron jobs (times are in the configured timezone, `TARSEE_TIMEZONE`)
 - **tarsee_remember** — Save to long-term memory
 - **tarsee_read_file / tarsee_write_file** — Workspace files

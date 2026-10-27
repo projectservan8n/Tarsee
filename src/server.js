@@ -13,6 +13,7 @@ import { errorHandler } from "./middleware/error-handler.js";
 import { initDb } from "./db/sqlite.js";
 import { initLiveBus } from "./lib/live-bus.js";
 import { upgradeDefaultWorkspaceFiles } from "./lib/workspace-files.js";
+import { setToolsChannelManager } from "./lib/tools.js";
 import { initModelCatalog } from "./lib/model-catalog.js";
 import { healthRouter } from "./routes/health.js";
 import { authRouter } from "./routes/auth-routes.js";
@@ -367,6 +368,7 @@ const stopTokenUsage = startTokenUsage(db, { onEvent: onLiveEvent });
 // --- Channel Manager (lazy start) ---
 const channelManager = new ChannelManager(db);
 app.set("channelManager", channelManager);
+setToolsChannelManager(channelManager);   // channel turns build their tool context without one (lib/tools.js)
 // Wire into cron so scheduled tasks can send to channels
 import { setCronChannelManager } from "./lib/cron.js";
 setCronChannelManager(channelManager);

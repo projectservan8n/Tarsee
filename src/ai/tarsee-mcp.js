@@ -31,6 +31,21 @@ export function createTarseeMcp(ctx) {
       ),
 
       tool(
+        "tarsee_send_file",
+        "Send a file as a real attachment (PDF, HTML report, image, audio, video, zip, spreadsheet, anything) to a Telegram, Discord or WhatsApp chat. Use it whenever someone asks for a file or you made one for them: never answer with a folder path or a download link instead, and never say a channel can't take attachments. With no channel_id it goes to the chat you are talking in (else that channel's most recent chat). The file must already exist; a relative path is read from the workspace. Size caps: Telegram 50 MB, Discord 25 MB, WhatsApp 16 MB. For email, use tarsee_send_email_thread with attachments.",
+        {
+          channel: z.enum(["telegram", "discord", "whatsapp"]).describe("Channel to send to: the one you are talking in, unless asked otherwise"),
+          file_path: z.string().describe("Absolute path, or a path relative to the workspace"),
+          caption: z.string().optional().describe("Optional words sent with the file (Telegram shows up to 1024 characters)"),
+          channel_id: z.string().optional().describe("Specific chat/channel ID; leave it out to send to the chat you are in"),
+        },
+        async (args) => {
+          const result = await executeTool("send_file", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
+      tool(
         "tarsee_configure_email_channel",
         "Configure the email channel when the user tells you their IMAP/SMTP credentials in chat. Partial-update — only the fields you pass get written; existing values stay. Passwords are stored encrypted. Call this instead of asking the user to open Settings. Infer common provider hosts (Gmail: imap.gmail.com:993 / smtp.gmail.com:465; Outlook: outlook.office365.com:993 / smtp.office365.com:587; iCloud: imap.mail.me.com:993 / smtp.mail.me.com:587; Zoho: imap.zoho.com:993 / smtp.zoho.com:465; FastMail: imap.fastmail.com:993 / smtp.fastmail.com:465) from the user's email domain when they don't specify.",
         {
@@ -63,13 +78,14 @@ export function createTarseeMcp(ctx) {
 
       tool(
         "tarsee_send_email_thread",
-        "Start a new email thread or reply to an existing one with proper threading headers (In-Reply-To + References). Use this for proactive outbound email — you don't need to wait for the recipient to email first. Body is plain text; no markdown formatting survives email well. For replies, pass inReplyTo with the Message-ID from the inbound email.",
+        "Start a new email thread or reply to an existing one with proper threading headers (In-Reply-To + References). Use this for proactive outbound email — you don't need to wait for the recipient to email first. Body is plain text; no markdown formatting survives email well. For replies, pass inReplyTo with the Message-ID from the inbound email. Attach files with attachments (paths on disk).",
         {
           to: z.union([z.string(), z.array(z.string())]).describe("Primary recipient(s). Single address string or array."),
           cc: z.union([z.string(), z.array(z.string())]).optional().describe("Optional CC recipients"),
           subject: z.string().describe("Subject line (Tarsee adds 'Re: ' automatically when inReplyTo is set)"),
           body: z.string().describe("Plain text body"),
           inReplyTo: z.string().optional().describe("Message-ID of the email you're replying to (include angle brackets). Omit for new threads."),
+          attachments: z.array(z.string()).optional().describe("Files to attach as real attachments: absolute paths, or paths relative to the workspace. Never paste a file's contents or a folder path into the body instead."),
         },
         async (args) => {
           const result = await executeTool("send_email_thread", args, ctx);

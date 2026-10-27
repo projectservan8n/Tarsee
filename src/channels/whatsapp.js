@@ -6,7 +6,7 @@ import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
-import { buildSystemPrompt } from "../lib/build-system-prompt.js";
+import { buildSystemPrompt, sendFileHint } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
@@ -37,6 +37,18 @@ export function splitMessage(text, maxLen = 4000) {
 }
 
 /** Build a conversation key for the in-DB conversation store. */
+// What a document's bytes are, by its extension, for the data: URL WHAPI takes. Anything else goes as plain bytes.
+const DOC_MIME = {
+  ".pdf": "application/pdf", ".html": "text/html", ".htm": "text/html", ".txt": "text/plain", ".md": "text/markdown",
+  ".csv": "text/csv", ".json": "application/json", ".zip": "application/zip",
+  ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xls": "application/vnd.ms-excel", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".ppt": "application/vnd.ms-powerpoint", ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+  ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".wav": "audio/wav", ".mp4": "video/mp4", ".mov": "video/quicktime",
+};
+export const mimeOfFile = (name) => DOC_MIME[path.extname(String(name || "")).toLowerCase()] || "application/octet-stream";
+
 export function getChannelKey(chatId) {
   return `whatsapp:${chatId}`;
 }
@@ -237,11 +249,11 @@ export async function createWhatsAppBot(config, db) {
     });
   }
 
-  async function sendDocument(chatId, buffer, filename, mime = "application/octet-stream") {
+  async function sendDocument(chatId, buffer, filename, mime = "application/octet-stream", caption = "") {
     const media = `data:${mime};base64,${buffer.toString("base64")}`;
     return whapiFetch("/messages/document", {
       method: "POST",
-      body: { to: chatId, media, filename },
+      body: { to: chatId, media, filename, ...(caption ? { caption } : {}) },
     });
   }
 
@@ -369,7 +381,8 @@ export async function createWhatsAppBot(config, db) {
       channelHint: `You are in a WhatsApp 1-on-1 chat. Keep responses concise and conversational.
 Use plain text — markdown will render as literal characters in WhatsApp.
 You can use these special markers in your response:
-- [react: emoji] — adds a reaction to the user's message (e.g. [react: ✅])`,
+- [react: emoji] — adds a reaction to the user's message (e.g. [react: ✅])
+${sendFileHint("whatsapp")}`,
     });
 
     let fullResponse = "";
@@ -707,6 +720,13 @@ You can use these special markers in your response:
     sendImage,
     sendVoice,
     sendDocument,
+    /** Send a file from disk as a document (the send_file tool), with its own name and kind. */
+    sendFile: async (chatId, filePath, caption) => {
+      if (!fs.existsSync(filePath)) throw new Error(`sendFile: file not found at ${filePath}`);
+      const buffer = fs.readFileSync(filePath);
+      const name = path.basename(filePath);
+      await sendDocument(chatId, buffer, name, mimeOfFile(name), caption ? String(caption).slice(0, 1024) : "");
+    },
     handleInbound,
   };
 }
