@@ -270,7 +270,7 @@
   function stepLabel(step, { running = false } = {}) {
     const raw = String(step?.name || "tool");
     const name = raw.replace(/^mcp__[^_]+(?:_[^_]+)*?__/, "");
-    const key = name.toLowerCase();
+    const key = name.toLowerCase().replace(/^tarsee_/, "");   // (Tarsee's own tools: mcp__tarsee__tarsee_send_file)
     const s = summaryOf(step?.summary);
     const say = (now, past, rest = "") => clip(rest ? `${running ? now : past} ${rest}` : (running ? now : past));
     switch (key) {
@@ -290,6 +290,7 @@
       case "todowrite": return say("Updating the plan", "Updated the plan");
       case "toolsearch": return say("Looking up tools", "Looked up tools");
       case "send_message": return s ? say("Sending a message:", "Sent a message:", s) : say("Sending a message", "Sent a message");
+      case "send_file": return s ? say("Sending", "Sent", baseName(s)) : say("Sending a file", "Sent a file");
       default: {
         const words = name.replace(/^tarsee_/, "").replace(/[_-]+/g, " ").trim();
         const label = words ? words.charAt(0).toUpperCase() + words.slice(1) : "Tool";

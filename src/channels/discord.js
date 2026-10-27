@@ -6,7 +6,7 @@ import { withConversationTurn } from "../lib/conversation-lock.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
-import { buildSystemPrompt } from "../lib/build-system-prompt.js";
+import { buildSystemPrompt, sendFileHint } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
@@ -306,7 +306,8 @@ export async function createDiscordBot(config, db) {
       conversationPrompt: conv?.system_prompt,
       channelHint: `Keep responses concise for chat. You are in a Discord conversation.
 You can use these special markers in your response:
-- [react: emoji] — adds a reaction to the user's message (e.g. [react: ✅] or [react: 👍])`,
+- [react: emoji] — adds a reaction to the user's message (e.g. [react: ✅] or [react: 👍])
+${sendFileHint("discord")}`,
     });
 
     let fullResponse = "";
@@ -650,6 +651,18 @@ You can use these special markers in your response:
           await channel.send(chunk);
         }
       }
+    },
+    /** Send a file as a real Discord attachment (the send_file tool). Bots upload up to 25 MB on a server without boosts. */
+    sendFile: async (channelId, filePath, caption) => {
+      if (!fs.existsSync(filePath)) throw new Error(`sendFile: file not found at ${filePath}`);
+      const sizeMb = fs.statSync(filePath).size / 1024 / 1024;
+      if (sizeMb > 25) throw new Error(`sendFile: file is ${sizeMb.toFixed(1)} MB, over Discord's 25 MB upload cap`);
+      const channel = await client.channels.fetch(channelId);
+      if (!channel?.isTextBased()) throw new Error(`sendFile: channel ${channelId} is not a text channel`);
+      await channel.send({
+        content: caption ? splitMessage(String(caption), 2000)[0] : undefined,
+        files: [{ attachment: filePath, name: path.basename(filePath) }],
+      });
     },
   };
 }

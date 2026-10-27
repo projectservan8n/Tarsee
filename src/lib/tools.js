@@ -380,6 +380,34 @@ export const TOOLS = [
   },
 
   {
+    name: "send_file",
+    description: "Send a file as a real attachment (PDF, HTML report, image, audio, video, zip, spreadsheet, anything) to a Telegram, Discord or WhatsApp chat. Use it whenever someone asks for a file: never answer with a folder path instead, and never say a channel can't take files. With no channel_id it goes to the chat you are talking in. The file must already exist on disk; a relative path is read from the workspace. Size caps: Telegram 50 MB, Discord 25 MB, WhatsApp 16 MB. For email, attach files with send_email_thread.",
+    input_schema: {
+      type: "object",
+      properties: {
+        channel: {
+          type: "string",
+          description: "The channel to send to",
+          enum: ["telegram", "discord", "whatsapp"],
+        },
+        file_path: {
+          type: "string",
+          description: "Path to the file: absolute, or relative to the workspace",
+        },
+        caption: {
+          type: "string",
+          description: "Optional words sent with the file (Telegram shows up to 1024 characters)",
+        },
+        channel_id: {
+          type: "string",
+          description: "Optional chat/channel ID; leave it out to send to the chat you are in",
+        },
+      },
+      required: ["channel", "file_path"],
+    },
+  },
+
+  {
     name: "schedule_task",
     description: "Schedule a task to run at a specific time or interval using cron syntax. The task will be executed as an AI prompt at the scheduled time.",
     input_schema: {
@@ -521,6 +549,22 @@ export const TOOLS = [
  * Get tool definitions for the AI API (Anthropic format).
  * OpenAI format conversion happens in the provider.
  */
+// The app's channel manager, for turns whose tool context has none. Telegram, Discord, WhatsApp and email turns
+// build their context without it, so send_message from a Telegram chat used to fall through to "saved to web chat"
+// and never reach Telegram. server.js sets it once the channels start.
+let _channelManager = null;
+export function setToolsChannelManager(channelManager) { _channelManager = channelManager || null; }
+
+// The upload caps of each channel's bot API, in MB.
+const SEND_FILE_CAP_MB = { telegram: 50, discord: 25, whatsapp: 16 };
+
+/** The chat to send to for a channel (lib/chat-target.js): the given id, this turn's chat, or the latest one. */
+async function chatTargetFor(channel, channelId, ctx) {
+  const settingsStore = ctx.settingsStore || (ctx.db ? new (await import("../db/settings.js")).SettingsStore(ctx.db) : null);
+  const { resolveChatTarget } = await import("./chat-target.js");
+  return resolveChatTarget({ channel, channelId, conversationId: ctx.conversationId || null, settingsStore, db: ctx.db || null });
+}
+
 export function getToolDefinitions() {
   return TOOLS.map((t) => ({
     name: t.name,
@@ -849,6 +893,8 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
   // the one place the policy has to be applied.
   const gate = await checkToolPolicy(toolName, toolInput, ctx);
   if (gate) return gate;
+  // Channel turns (Telegram, Discord, WhatsApp, email) build their context with no channel manager: the app's.
+  if (!ctx.channelManager && _channelManager) ctx = { ...ctx, channelManager: _channelManager };
 
   try {
     switch (toolName) {
@@ -1164,26 +1210,15 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           }
         }
 
-        // For external channels (Telegram, Discord, Slack), push via ChannelManager
-        if (channel !== "web" && ctx.channelManager) {
+        // For external channels (Telegram, Discord, WhatsApp), push via ChannelManager
+        const channelManager = ctx.channelManager;
+        if (channel !== "web" && channelManager) {
           try {
-            // Resolve chat ID: explicit channel_id, or find from stored conversation mapping
-            let chatId = channel_id;
-            if (!chatId) {
-              // Resolve chat ID from stored conversation mappings
-              const store = ctx.settingsStore || (ctx.db ? new (await import("../db/settings.js")).SettingsStore(ctx.db) : null);
-              if (store) {
-                const convMappings = store.getByPrefix(`channel_conv.${channel}:`);
-                for (const s of convMappings) {
-                  // Extract chat ID from key (e.g., "channel_conv.telegram:123456" → "123456")
-                  chatId = s.key.split(`${channel}:`)[1]?.split(":")[0];
-                  if (chatId) break;
-                }
-              }
-            }
-            if (!chatId) return `send_message error: No chat ID found for ${channel}. The bot needs to have received at least one message from a chat first.`;
-            await ctx.channelManager.sendMessage(channel, chatId, message);
-            return `Message sent to ${channel} (chat ${chatId}): ${preview}`;
+            // The chat: the one given, else the one this turn is in, else the channel's latest (lib/chat-target.js)
+            const target = await chatTargetFor(channel, channel_id, ctx);
+            if (!target) return `send_message error: No chat ID found for ${channel}. The bot needs to have received at least one message from a chat first.`;
+            await channelManager.sendMessage(channel, target.chatId, message, { threadId: target.threadId });
+            return `Message sent to ${channel} (chat ${target.chatId}): ${preview}`;
           } catch (err) {
             return `send_message error: ${err.message}`;
           }
@@ -1203,6 +1238,37 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           return `Message saved to web chat: ${preview}`;
         } catch (err) {
           return `send_message error: ${err.message}`;
+        }
+      }
+
+      case "send_file": {
+        const { channel, file_path, caption, channel_id } = toolInput;
+        if (!SEND_FILE_CAP_MB[channel]) {
+          return channel === "email"
+            ? "send_file error: for email, attach the file with send_email_thread (attachments: [path])."
+            : `send_file error: channel must be one of ${Object.keys(SEND_FILE_CAP_MB).join(", ")}.`;
+        }
+        const channelManager = ctx.channelManager;
+        if (!channelManager) return "send_file error: channel manager unavailable";
+        if (!file_path) return "send_file error: 'file_path' is required";
+        // A relative path is the workspace's: where generated reports and exports live.
+        const absPath = path.isAbsolute(file_path) ? file_path : path.resolve(config.WORKSPACE_DIR, file_path);
+        let stat;
+        try { stat = fs.statSync(absPath); } catch { return `send_file error: file not found at ${absPath}`; }
+        if (!stat.isFile()) return `send_file error: ${absPath} is a folder, not a file (zip it first to send a folder)`;
+        if (stat.size === 0) return `send_file error: file at ${absPath} is empty (0 bytes)`;
+        const capMb = SEND_FILE_CAP_MB[channel];
+        if (stat.size > capMb * 1024 * 1024) {
+          return `send_file error: file is ${(stat.size / 1024 / 1024).toFixed(1)} MB; ${channel} takes up to ${capMb} MB`;
+        }
+        try {
+          const target = await chatTargetFor(channel, channel_id, ctx);
+          if (!target) return `send_file error: No chat ID found for ${channel}. The bot needs to have received at least one message from a chat first.`;
+          await channelManager.sendFile(channel, target.chatId, absPath, caption, { threadId: target.threadId });
+          const sizeKb = (stat.size / 1024).toFixed(1);
+          return `File sent to ${channel} (chat ${target.chatId}): ${path.basename(absPath)} (${sizeKb} KB)${caption ? `, caption: ${String(caption).slice(0, 60)}` : ""}`;
+        } catch (err) {
+          return `send_file error: ${err.message}`;
         }
       }
 

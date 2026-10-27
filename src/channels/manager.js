@@ -169,16 +169,33 @@ export class ChannelManager {
 
   /**
    * Send an outbound message to a channel.
-   * @param {string} type - Channel type (telegram, discord, slack)
+   * @param {string} type - Channel type (telegram, discord, whatsapp, email)
    * @param {string} chatId - Platform-specific chat/channel ID
    * @param {string} message - Message text
+   * @param {{threadId?: string|null}} [opts] - threadId: a Telegram forum topic
    */
-  async sendMessage(type, chatId, message) {
+  async sendMessage(type, chatId, message, opts = {}) {
     const channel = this.channels.get(type);
     if (!channel?.bot?.sendMessage) {
       throw new Error(`Channel ${type} is not running or does not support outbound messages`);
     }
-    await channel.bot.sendMessage(chatId, message);
+    await channel.bot.sendMessage(chatId, message, opts);
+  }
+
+  /**
+   * Send a file as a real attachment (the send_file tool).
+   * @param {string} type - Channel type (telegram, discord, whatsapp)
+   * @param {string} chatId - Platform-specific chat/channel ID
+   * @param {string} filePath - Absolute path to the file on disk
+   * @param {string} [caption] - Words sent with the file
+   * @param {{threadId?: string|null}} [opts] - threadId: a Telegram forum topic
+   */
+  async sendFile(type, chatId, filePath, caption, opts = {}) {
+    const channel = this.channels.get(type);
+    if (!channel?.bot?.sendFile) {
+      throw new Error(`Channel ${type} is not running or does not support file attachments`);
+    }
+    await channel.bot.sendFile(chatId, filePath, caption, opts);
   }
 
   /**

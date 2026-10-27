@@ -8,6 +8,14 @@ import { getCredentialInventory, renderInventoryPromptSection } from "./credenti
 const MAX_TOTAL_BYTES = 50 * 1024; // 50KB total prompt budget (trimmed from 150KB)
 
 /**
+ * The channel hint's line on files: the agent sends them as attachments to this chat. Without it a model asked for
+ * "the html file" on Telegram answered with folder paths and "I can't attach files to Telegram from here".
+ */
+export function sendFileHint(channel) {
+  return `- To send a file (a report, an export, an image, anything on disk), call tarsee_send_file with channel="${channel}" and the file's path: it arrives here as a real attachment. Never answer with a folder path instead, and never say you can't attach files here.`;
+}
+
+/**
  * Build the effective system prompt from all sources.
  * Used by HTTP, WebSocket, Discord, Telegram, and Slack handlers.
  *

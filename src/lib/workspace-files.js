@@ -199,8 +199,15 @@ export function getBootstrapContext() {
  * old default lines are replaced with the new ones. A line the owner changed
  * no longer matches and is left alone. Returns the files it updated.
  */
+// The tool lines of the default CLAUDE.md. A new line replaces the old one whole, so the swap runs once.
+const SEND_MESSAGE_LINE_OLD = "- **tarsee_send_message** — Push messages to Telegram, Discord, Slack, or web";
+const SEND_MESSAGE_LINE = "- **tarsee_send_message** — Push messages to Telegram, Discord, WhatsApp, or web";
+const SEND_FILE_LINE = "- **tarsee_send_file** — Send a file as a real attachment to the Telegram, Discord or WhatsApp chat you are in (never answer with a folder path)";
+
 const DEFAULT_UPGRADES = {
   "SOUL.md": [
+    ["- **Platform tools** (mcp__tarsee__*): Send messages to Telegram/Discord/Slack, schedule tasks, manage memory, search the web, use the encrypted vault.",
+      "- **Platform tools** (mcp__tarsee__*): Send messages and files (real attachments) to Telegram/Discord/WhatsApp, schedule tasks, manage memory, search the web, use the encrypted vault."],
     ["- **Persistent memory**: MEMORY.md stores everything you learn. Read it every session.",
       "- **Persistent memory**: MEMORY.md stores everything you learn. Grep it for what a task needs."],
     ["- Always read MEMORY.md at the start of a session to know what you've learned.",
@@ -225,6 +232,7 @@ const DEFAULT_UPGRADES = {
     ].join("\n")],
     ["- **tarsee_schedule_task** — Schedule cron jobs (server is UTC)",
       "- **tarsee_schedule_task** — Schedule cron jobs (times are in the configured timezone, `TARSEE_TIMEZONE`)"],
+    [SEND_MESSAGE_LINE_OLD, `${SEND_MESSAGE_LINE}\n${SEND_FILE_LINE}`],
   ],
 };
 
@@ -245,7 +253,7 @@ export function upgradeDefaultWorkspaceFiles(dir = config.WORKSPACE_DIR) {
       console.warn(`[workspace] could not update ${name}: ${err.message}`);
     }
   }
-  if (updated.length) console.log(`[workspace] updated the default memory instructions in ${updated.join(" and ")}: grep MEMORY.md, never read it whole`);
+  if (updated.length) console.log(`[workspace] updated the default instructions in ${updated.join(" and ")} (grep MEMORY.md, never read it whole; send files as attachments)`);
   return updated;
 }
 

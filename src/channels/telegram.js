@@ -8,7 +8,7 @@ import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand, extractPlaybookPrompt, getCommandList } from "../lib/commands.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
-import { buildSystemPrompt } from "../lib/build-system-prompt.js";
+import { buildSystemPrompt, sendFileHint } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { toolStatusLabel, toolDoneLabel } from "../lib/tool-status.js";
@@ -36,7 +36,8 @@ export async function createTelegramBot(config, db, opts = {}) {
   // there is a regression risk, not a fix. keepAlive alone is the portable win.
   const tgAgent = new https.Agent({ keepAlive: true });
   const bot = new Telegraf(config.token, {
-    telegram: { agent: tgAgent },
+    // opts.apiRoot: another Bot API server (test/send-file.test.js runs one on 127.0.0.1 over plain HTTP).
+    telegram: opts.apiRoot ? { apiRoot: opts.apiRoot } : { agent: tgAgent },
     handlerTimeout: 2_000_000_000,
   });
 
@@ -216,7 +217,8 @@ export async function createTelegramBot(config, db, opts = {}) {
       channelHint: `Keep responses concise for chat. You are in a Telegram conversation.
 You can use these special markers in your response:
 - [react: emoji] — adds a reaction to the user's message (e.g. [react: ✅])
-- [buttons: ["Option A", "Option B"]] — sends inline buttons the user can tap`,
+- [buttons: ["Option A", "Option B"]] — sends inline buttons the user can tap
+${sendFileHint("telegram")}`,
     });
 
     let fullResponse = "";
@@ -804,11 +806,33 @@ You can use these special markers in your response:
       handlerActive: _handlerActive,
       lastUpdateAt: _lastUpdateAt,
     }),
-    /** Send a message to a Telegram chat (outbound push). */
-    sendMessage: async (chatId, text) => {
+    /** Send a message to a Telegram chat (outbound push). threadId: a forum topic. */
+    sendMessage: async (chatId, text, { threadId = null } = {}) => {
       const html = mdToTelegramHtml(text);
-      await bot.telegram.sendMessage(chatId, html, { parse_mode: "HTML" })
-        .catch(() => bot.telegram.sendMessage(chatId, html.replace(/<[^>]+>/g, "")));
+      const where = threadId ? { message_thread_id: Number(threadId) } : {};
+      await bot.telegram.sendMessage(chatId, html, { parse_mode: "HTML", ...where })
+        .catch(() => bot.telegram.sendMessage(chatId, html.replace(/<[^>]+>/g, ""), where));
+    },
+    /**
+     * Send a file as a document (the send_file tool). Streamed from disk; the bot API takes up to 50 MB. The file's
+     * own name is passed, or Telegram calls it document.dat whatever it is. A caption Telegram can't parse as HTML is
+     * sent again as plain text.
+     */
+    sendFile: async (chatId, filePath, caption, { threadId = null } = {}) => {
+      if (!fs.existsSync(filePath)) throw new Error(`sendFile: file not found at ${filePath}`);
+      const file = () => ({ source: fs.createReadStream(filePath), filename: path.basename(filePath) });
+      const where = threadId ? { message_thread_id: Number(threadId) } : {};
+      if (!caption) {
+        await bot.telegram.sendDocument(chatId, file(), where);
+        return;
+      }
+      const text = String(caption);
+      try {
+        await bot.telegram.sendDocument(chatId, file(), { ...where, caption: mdToTelegramHtml(text).slice(0, 1024), parse_mode: "HTML" });
+      } catch (err) {
+        if (!/parse entities|can't parse|caption/i.test(err?.message || "")) throw err;
+        await bot.telegram.sendDocument(chatId, file(), { ...where, caption: text.slice(0, 1024) });
+      }
     },
   };
 }
