@@ -12,6 +12,7 @@ import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { toolStatusLabel, toolDoneLabel } from "../lib/tool-status.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
+import { formatForDiscord, splitMessageFenceSafe } from "../lib/discord-format.js";
 import envConfig from "../config/env.js";
 
 /**
@@ -239,7 +240,7 @@ export async function createDiscordBot(config, db) {
         if (playbook) {
           aiPromptOverride = playbook;
         } else {
-          const chunks = splitMessage(cmdResult.response, 2000);
+          const chunks = splitMessage(formatForDiscord(cmdResult.response), 2000);
           for (const chunk of chunks) {
             await message.reply(chunk);
           }
@@ -343,21 +344,16 @@ ${sendFileHint("discord")}`,
     const toolMsgById = new Map(); // tool_use_id → discord.js Message
     const sentSegments = [];
 
-    const renderSegmentDisplay = (raw) => {
-      const { cleanText } = parseReactions(raw);
-      return cleanText
-        .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
-        .replace(/<tool_response>[\s\S]*?<\/tool_response>/g, "")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim();
-    };
+    const renderSegmentDisplay = displayForDiscord;
 
     const flushSegmentEdit = async (final = false) => {
       if (!segmentMsg || !segmentText) return;
       const now = Date.now();
       if (!final && now - lastSegmentEditAt < SEGMENT_EDIT_DEBOUNCE_MS) return;
       lastSegmentEditAt = now;
-      const text = renderSegmentDisplay(segmentText.slice(0, 2000));
+      // A table drawn as a grid or as lines can come out longer than the text it came from: the message edited
+      // in place keeps to Discord's 2000 characters (its first fence-safe part).
+      const text = splitMessage(renderSegmentDisplay(segmentText.slice(0, 2000)), 2000)[0];
       if (!text) return;
       try {
         await retryOnRateLimit(() => segmentMsg.edit(text));
@@ -646,7 +642,8 @@ ${sendFileHint("discord")}`,
     sendMessage: async (channelId, text) => {
       const channel = await client.channels.fetch(channelId);
       if (channel?.isTextBased()) {
-        const chunks = splitMessage(text, 2000);
+        // Outbound tool sends (tarsee_send_message) get the same tables and quotes as streamed replies.
+        const chunks = splitMessage(formatForDiscord(text), 2000);
         for (const chunk of chunks) {
           await channel.send(chunk);
         }
@@ -660,7 +657,7 @@ ${sendFileHint("discord")}`,
       const channel = await client.channels.fetch(channelId);
       if (!channel?.isTextBased()) throw new Error(`sendFile: channel ${channelId} is not a text channel`);
       await channel.send({
-        content: caption ? splitMessage(String(caption), 2000)[0] : undefined,
+        content: caption ? splitMessage(formatForDiscord(String(caption)), 2000)[0] : undefined,
         files: [{ attachment: filePath, name: path.basename(filePath) }],
       });
     },
@@ -680,19 +677,25 @@ async function retryOnRateLimit(fn, maxRetries = 3) {
   }
 }
 
+/**
+ * An answer as Discord shows it: [react: ...] markers and tool-call records out, no runs of blank lines, tables and
+ * quotes as Discord can draw them (lib/discord-format.js).
+ */
+export function displayForDiscord(raw) {
+  const { cleanText } = parseReactions(raw);
+  return formatForDiscord(
+    String(cleanText ?? "")
+      .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+      .replace(/<tool_response>[\s\S]*?<\/tool_response>/g, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim(),
+  );
+}
+
+// Fence-aware splitter. The old one split on the last "\n" before maxLen, which could cleave a ``` code fence across
+// two messages: chunk 1 with an unterminated fence (everything after it renders as code), chunk 2 starting with a
+// stray ```. Tables drawn as fenced grids made that likely. splitMessageFenceSafe closes and reopens fences across
+// the boundary (keeping the language tag) and never cuts an emoji in half.
 function splitMessage(text, maxLen) {
-  if (text.length <= maxLen) return [text];
-  const chunks = [];
-  let remaining = text;
-  while (remaining.length > 0) {
-    if (remaining.length <= maxLen) {
-      chunks.push(remaining);
-      break;
-    }
-    let splitIdx = remaining.lastIndexOf("\n", maxLen);
-    if (splitIdx < maxLen * 0.5) splitIdx = maxLen;
-    chunks.push(remaining.slice(0, splitIdx));
-    remaining = remaining.slice(splitIdx);
-  }
-  return chunks;
+  return splitMessageFenceSafe(text, maxLen);
 }
