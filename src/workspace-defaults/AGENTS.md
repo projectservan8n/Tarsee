@@ -22,3 +22,4 @@ The main agent you chat with manages your team of 4 specialized sub-agents:
 ## Keys: check the vault every time
 - Before any task that needs a key, token, password or login, check the vault yourself (the key list in your prompt, or tarsee_list_keys). Never ask the owner for a key, or say you don't have one, before checking.
 - Only when the key isn't in the vault, ask the owner for it in one line.
+- Every vault key named in capitals is already in your environment: a script reads it by name (os.environ["OPENAI_API_KEY"], process.env.OPENAI_API_KEY). Never paste a key's value into a command, a file or a chat.
