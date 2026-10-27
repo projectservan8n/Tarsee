@@ -337,7 +337,7 @@ async function* chatEngine({
   // The pictures among them are kept with the person's message, so the dashboard's chat shows them: no note in the
   // message names them (lib/sent-files.js noteMediaBlocks). Best-effort.
   if (hasMedia && toolCtx?.conversationId) {
-    try { (await import("../../lib/sent-files.js")).noteMediaBlocks(toolCtx.conversationId, mediaBlocks); } catch { /* showing them is best-effort */ }
+    try { (await import("../../lib/sent-files.js")).noteMediaBlocks(toolCtx.conversationId, mediaBlocks, { messageId: toolCtx.messageId || null }); } catch { /* showing them is best-effort */ }
   }
 
   const cwd = config.CLAUDE_WORKSPACE_DIR || process.cwd();

@@ -651,7 +651,9 @@ export function splitMessageFenceSafe(text, maxLen = 2000) {
       // +1 for the "\n" that joining will add. Note we never carry the
       // newline INTO the next chunk, which is why continuation chunks don't
       // start with a blank line the way splitMessage's do.
-      if (buf.length && joined().length + 1 + piece.length > maxLen - reserve()) flush();
+      // A line that opens a fence owes its closing fence too, should the next line not fit.
+      const need = openFence ? reserve() : (m ? m[1].length + 1 : 0);
+      if (buf.length && joined().length + 1 + piece.length > maxLen - need) flush();
       buf.push(piece);
     }
 

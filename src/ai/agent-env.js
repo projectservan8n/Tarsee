@@ -13,6 +13,7 @@
  *     the Claude subscription onto pay-per-use billing
  *   - names that change how programs run rather than what they can reach: Tarsee's own settings (TARSEE_*), Node
  *     and the loader (NODE_*, LD_*, DYLD_*), npm's, Python's start-up and paths, the shell's, and the proxies
+ * A value over 32 KB, or one with a NUL in it, stays out too (tarsee_get_key still has it).
  * TARSEE_AGENT_ENV_KEYS: a comma-separated list of names to use instead of every key, or "off" for none.
  * Read from the vault at most once a minute.
  */
@@ -23,6 +24,7 @@ const KEEP_OUT_NAMES = new Set(["PATH", "HOME", "USER", "SHELL", "ENV", "PWD", "
   "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "MAX_MCP_OUTPUT_TOKENS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"]);
 
 let cached = { at: 0, value: {} };
+const VALUE_MAX_CHARS = 32 * 1024;
 
 /**
  * { NAME: value } for the agent's environment. names/get/list/env/now/denied: for tests (and the default, cached).
@@ -32,6 +34,7 @@ export function agentVaultEnv({ names, get = getKey, list = () => listKeys().map
   const fresh = names === undefined && get === getKey;
   if (fresh && now - cached.at < 60_000) return cached.value;
   const out = {};
+  const skipped = [];
   let blocked = false;
   try { blocked = !!denied(); } catch { blocked = false; }
   const setting = String(env.TARSEE_AGENT_ENV_KEYS ?? "").trim();
@@ -44,13 +47,16 @@ export function agentVaultEnv({ names, get = getKey, list = () => listKeys().map
       if (!/^[A-Z][A-Z0-9_]*$/.test(name) || AGENT_ENV_KEEP_OUT.test(name) || KEEP_OUT_NAMES.has(name) || env[name]) continue;
       let value = null;
       try { value = String(get(name) || "").trim() || null; } catch { /* vault unavailable */ }
+      // Linux refuses a single environment string past about 128 KB, and then the agent could not start at all; a
+      // value that big (a certificate bundle, a credentials file) is for tarsee_get_key. A NUL can't be in one either.
+      if (value && (value.length > VALUE_MAX_CHARS || value.includes("\0"))) { skipped.push(name); continue; }
       if (value) out[name] = value;
     }
   }
   if (fresh) {
     const had = Object.keys(cached.value).sort().join(",");
     const has = Object.keys(out).sort().join(",");
-    if (had !== has) console.log(`[claude-code] ${Object.keys(out).length} vault key(s) in the agent's environment${blocked ? " (none: get_key is denied in Tool Permissions)" : ""}`);
+    if (had !== has) console.log(`[claude-code] ${Object.keys(out).length} vault key(s) in the agent's environment${blocked ? " (none: get_key is denied in Tool Permissions)" : ""}${skipped.length ? ` (too big or not text, left to tarsee_get_key: ${skipped.join(", ")})` : ""}`);
     cached = { at: now, value: out };
   }
   return out;

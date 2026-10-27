@@ -271,3 +271,25 @@ test("the real table picks list mode because its grid is wider than 40 cols", ()
   const [tbl] = parseMdTables(REAL);
   assert.ok(toAsciiGrid(tbl.headers, tbl.aligns, tbl.rows).width > MAX_GRID_WIDTH);
 });
+
+test("a fence opened near the end of a piece never pushes that piece past 2000 characters", () => {
+  for (let n = 1985; n <= 2000; n++) {
+    const text = `${"a".repeat(n)}\n\`\`\`js\n${"const x = 1;\n".repeat(40)}\`\`\`\nend`;
+    const pieces = splitMessageFenceSafe(text, 2000);
+    for (const p of pieces) {
+      assert.ok(p.length <= 2000, `prose of ${n}: a piece of ${p.length}`);
+      assert.equal((p.match(/^```/gm) || []).length % 2, 0, `prose of ${n}: every fence closed in its piece`);
+    }
+  }
+});
+
+test("a reply whose table grows when drawn reaches Discord whole: drawn first, then split", async () => {
+  const { displayForDiscord } = await import("../src/channels/discord.js");
+  const rows = Array.from({ length: 20 }, (_, i) => `| Row ${i + 1} | lead ${i} | closed ${i} | ${i * 7} | note ${i} |`);
+  const reply = `Here is the summary.\n\n| Name | Lead | Closed | Score | Note |\n|---|---|---|---|---|\n${rows.join("\n")}\n\nThat is all.`;
+  const pieces = splitMessageFenceSafe(displayForDiscord(reply), 2000);
+  const all = pieces.join("\n");
+  assert.ok(pieces.every((p) => p.length <= 2000));
+  assert.match(all, /Row 20/);
+  assert.match(all, /That is all\./);
+});

@@ -335,7 +335,7 @@ export async function createWhatsAppBot(config, db) {
       settingsStore.set(`channel_conv.${channelKey}`, convId);
     }
 
-    convStore.addMessage(convId, {
+    const savedUser = convStore.addMessage(convId, {
       role: "user",
       content: `[${fromName}]: ${text}${attachments.length ? ` [+${attachments.length} attachment(s)]` : ""}`,
     });
@@ -387,7 +387,8 @@ ${sendFileHint("whatsapp")}`,
 
     let fullResponse = "";
     const tools = getToolDefinitions();
-    const toolCtx = { db, settingsStore, conversationId: convId };
+    // messageId: the message this turn answers (its pictures are kept on it, not on whatever came in later)
+    const toolCtx = { db, settingsStore, conversationId: convId, messageId: savedUser?.id || null };
     const MAX_TOOL_ROUNDS = 15;
 
     // One turn at a time per conversation. Without this, two messages in the

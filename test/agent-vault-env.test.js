@@ -25,6 +25,11 @@ describe("the vault's keys in the agent's environment", () => {
     assert.deepEqual(agentVaultEnv({ get, list, env: { TARSEE_AGENT_ENV_KEYS: "off" } }), {});
   });
 
+  it("a value too big for an environment string, or with a NUL in it, stays out (the agent must still start)", () => {
+    const big = { HUGE_BUNDLE: "x".repeat(140 * 1024), NUL_ONE: "a\0b", OK_ONE: "fine" };
+    assert.deepEqual(agentVaultEnv({ get: (n) => big[n], list: () => Object.keys(big), env: {} }), { OK_ONE: "fine" });
+  });
+
   it("none when the owner denied get_key, or when the vault can't be read", () => {
     assert.deepEqual(agentVaultEnv({ get, list, env: {}, denied: () => true }), {});
     assert.deepEqual(agentVaultEnv({ get: () => { throw new Error("locked"); }, list, env: {} }), {});

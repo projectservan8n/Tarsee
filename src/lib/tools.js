@@ -1269,8 +1269,11 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           try {
             const settings = ctx.settingsStore || (ctx.db ? new (await import("../db/settings.js")).SettingsStore(ctx.db) : null);
             const webConvs = new Set((settings?.getByPrefix("channel_conv.web:") || []).map((s) => s.value).filter((v) => typeof v === "string" && v));
-            const conv = typeof channel_id === "string" && webConvs.has(channel_id) ? channel_id
-              : ctx.conversationId && webConvs.has(ctx.conversationId) ? ctx.conversationId
+            const exists = (id) => { try { return !!ctx.db?.prepare("SELECT 1 FROM conversations WHERE id = ?").get(id); } catch { return false; } };
+            // The chat named; else the chat on screen when the turn came from the dashboard (any channel's chat
+            // can be opened there), or this chat when it is one of the dashboard's own; else the main web chat.
+            const conv = typeof channel_id === "string" && channel_id && exists(channel_id) ? channel_id
+              : ctx.conversationId && (ctx.dashboard || webConvs.has(ctx.conversationId)) ? ctx.conversationId
                 : settings?.get("channel_conv.web:default") || null;
             if (!conv) return "send_file error: there is no dashboard chat to send it to yet.";
             if (!noteSentFile({ absPath, caption, conversationId: conv, via: "web" })) return "send_file error: the file could not be kept for the dashboard chat.";

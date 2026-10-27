@@ -112,10 +112,6 @@ chatRouter.use((req, _res, next) => {
 });
 
 /**
- * GET /api/chat/providers
- * List available AI providers.
- */
-/**
  * GET /api/chat/file?p=<path>[&dl=1]
  * A chat's file, to look at in the page or (dl=1) to save. Only files inside the workspace's uploads folder: what
  * the channels saved, the dashboard's uploads, and the copies kept of what the agent sent (lib/sent-files.js).
@@ -126,6 +122,10 @@ chatRouter.get("/file", (req, res) => {
   sendViewable(res, file, { save: req.query.dl === "1" });
 });
 
+/**
+ * GET /api/chat/providers
+ * List available AI providers.
+ */
 chatRouter.get("/providers", (_req, res) => {
   res.json({ providers: getAvailableProviders() });
 });
@@ -677,7 +677,8 @@ chatRouter.post("/send", async (req, res) => {
   let lastToolIdx = -1;
   let usage = {};
   const tools = getToolDefinitions();
-  const toolCtx = { db: req.app.get("db"), settingsStore, conversationId: convId, channelManager: req.app.get("channelManager") };
+  // dashboard: a file the agent hands over goes to this chat, whatever channel it is; messageId: the message answered
+  const toolCtx = { db: req.app.get("db"), settingsStore, conversationId: convId, channelManager: req.app.get("channelManager"), dashboard: true, messageId: savedUser?.id || null };
   const MAX_TOOL_ROUNDS = 15;
   // Snapshot of `req.ip` — read once now, because once the socket closes
   // the `req.ip` getter pulls from a destroyed socket and may return

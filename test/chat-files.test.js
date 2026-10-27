@@ -143,6 +143,14 @@ describe("what the agent sends into a chat is kept with that chat", () => {
     assert.deepEqual(rowsOf(web).map((r) => [r.name, r.via]), [["summary.csv", "web"]]);
   });
 
+  it("from a dashboard turn in any chat (a Telegram chat opened in the dashboard): on that chat, the one on screen", async () => {
+    const n = rowsOf(telegram).length;
+    const out = await executeTool("send_file", { channel: "web", file_path: write("on-screen.txt", "here") }, { ...ctxFor(telegram), dashboard: true });
+    assert.match(out, /^File sent to the dashboard chat: on-screen\.txt/);
+    assert.equal(rowsOf(telegram).length, n + 1);
+    assert.equal(rowsOf(telegram).at(-1).name, "on-screen.txt");
+  });
+
   it("the files it emails: on the conversation it sent them from, said so", async () => {
     const pdf = write("invoice.pdf", "%PDF-1.4");
     const out = await executeTool("send_email_thread", { to: "sam@example.com", subject: "Invoice", body: "Attached.", attachments: [pdf] }, ctxFor(telegram));
@@ -238,6 +246,12 @@ describe("files people send in show too", () => {
     assert.deepEqual(rows.map((r) => [r.name, r.messageId, r.from]), [["image.png", id, "in"]]);
     assert.equal(fs.readFileSync(rows[0].path, "utf8"), "png-bytes");
     assert.deepEqual(sentFiles.noteMediaBlocks(conv, [png]), [], "that message has its files already");
+    // A turn that waited behind another: its picture goes on the message it answers, not the one that came in since.
+    const withPhoto = say(conv, "user", "[photo]");
+    const later = say(conv, "user", "what's this?");
+    const kept = sentFiles.noteMediaBlocks(conv, [png], { messageId: withPhoto });
+    assert.deepEqual(kept.map((r) => r.messageId), [withPhoto]);
+    assert.notEqual(withPhoto, later);
   });
 
   it("the channels' notes in a message are its files: Telegram's, Discord's, an email's, WhatsApp's", () => {

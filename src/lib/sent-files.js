@@ -119,16 +119,17 @@ const PICTURE_EXT = { "image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".
 
 /**
  * [providers/claude-code.js] The pictures a message handed the agent as bytes (a photo sent on Telegram, Discord or
- * WhatsApp): a copy each in the uploads folder, kept with the person's message they came with (the latest one in
- * the conversation), since no note in that message names them. PDFs always come with a note, so they are left to
+ * WhatsApp): a copy each in the uploads folder, kept with the person's message they came with (messageId: the
+ * message the turn answers, which the channel saved; else the latest one in the conversation), since no note in that
+ * message names them. PDFs always come with a note, so they are left to
  * it. Skipped when that message has files on record already (the dashboard's own upload kept them first).
  * blocks: the turn's media blocks ({ type: "image", source: { media_type, data } }). Returns the kept rows.
  */
-export function noteMediaBlocks(conversationId, blocks, { via = "", dir = uploadsDir(), now = Date.now() } = {}) {
+export function noteMediaBlocks(conversationId, blocks, { messageId: given = null, via = "", dir = uploadsDir(), now = Date.now() } = {}) {
   try {
     const pictures = (blocks || []).filter((b) => b?.type === "image" && typeof b.source?.data === "string" && b.source.data);
     if (!conversationId || !pictures.length) return [];
-    const messageId = latestUserMessageId(conversationId);
+    const messageId = given || latestUserMessageId(conversationId);
     if (!messageId || messageHasFiles(messageId)) return [];
     fs.mkdirSync(dir, { recursive: true });
     tidyKeptFiles(dir, now);

@@ -271,7 +271,7 @@ export async function createDiscordBot(config, db) {
       mediaCount ? `[+${mediaCount} media]` : null,
       fileCount ? `[+${fileCount} file${fileCount > 1 ? "s" : ""}]` : null,
     ].filter(Boolean).join(" ");
-    convStore.addMessage(convId, {
+    const savedUser = convStore.addMessage(convId, {
       role: "user",
       content: `[${message.author.username}]: ${displayText}${mediaSuffix ? ` ${mediaSuffix}` : ""}`,
     });
@@ -347,14 +347,17 @@ ${sendFileHint("discord")}`,
 
     const renderSegmentDisplay = displayForDiscord;
 
+    // The segment as Discord shows it, in fence-safe pieces of up to 2000 characters. Drawn whole, then split: a table
+    // drawn as a grid or as lines can come out longer than the text it came from, and cutting the raw text at 2000
+    // first lost whatever the drawing pushed past the first piece (and cut tables in half).
+    const segmentPieces = () => splitMessage(renderSegmentDisplay(segmentText), 2000).filter(Boolean);
+
     const flushSegmentEdit = async (final = false) => {
       if (!segmentMsg || !segmentText) return;
       const now = Date.now();
       if (!final && now - lastSegmentEditAt < SEGMENT_EDIT_DEBOUNCE_MS) return;
       lastSegmentEditAt = now;
-      // A table drawn as a grid or as lines can come out longer than the text it came from: the message edited
-      // in place keeps to Discord's 2000 characters (its first fence-safe part).
-      const text = splitMessage(renderSegmentDisplay(segmentText.slice(0, 2000)), 2000)[0];
+      const text = segmentPieces()[0];   // the message edited in place: the first piece
       if (!text) return;
       try {
         await retryOnRateLimit(() => segmentMsg.edit(text));
@@ -364,16 +367,9 @@ ${sendFileHint("discord")}`,
     const closeSegment = async () => {
       if (!segmentMsg) { segmentText = ""; return; }
       await flushSegmentEdit(true);
-      // If segment overflowed Discord's 2000-char cap, send remainder as
-      // new replies so the user sees the full thing.
-      if (segmentText.length > 2000) {
-        for (let i = 2000; i < segmentText.length; i += 2000) {
-          const chunkText = renderSegmentDisplay(segmentText.slice(i, i + 2000));
-          if (!chunkText) continue;
-          for (const piece of splitMessage(chunkText, 2000)) {
-            await retryOnRateLimit(() => message.reply(piece));
-          }
-        }
+      // The rest of the segment past the first piece, as new replies, so the whole of it reaches the channel.
+      for (const piece of segmentPieces().slice(1)) {
+        await retryOnRateLimit(() => message.reply(piece));
       }
       sentSegments.push(segmentText);
       segmentMsg = null;
@@ -405,7 +401,8 @@ ${sendFileHint("discord")}`,
     await withConversationTurn(convId, async () => {
     try {
       const tools = getToolDefinitions();
-      const toolCtx = { db, settingsStore, conversationId: convId };
+      // messageId: the message this turn answers (its pictures are kept on it, not on whatever came in later)
+      const toolCtx = { db, settingsStore, conversationId: convId, messageId: savedUser?.id || null };
       const MAX_TOOL_ROUNDS = 15;
       let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
