@@ -51,7 +51,8 @@ export function resolveChatTarget({ channel, channelId = "", conversationId = nu
     try { at = db?.prepare("SELECT MAX(created_at) AS at FROM messages WHERE conversation_id = ?").get(c.conversationId)?.at || ""; } catch { /* no messages table: any chat will do */ }
     if (!best || at > bestAt) { best = c; bestAt = at; }
   }
-  return best ? { chatId: best.chatId, threadId: best.threadId, how: "latest" } : null;
+  // On Slack every chat is a thread: a message from elsewhere goes to the latest one's channel, not into that thread.
+  return best ? { chatId: best.chatId, threadId: channel === "slack" ? null : best.threadId, how: "latest" } : null;
 }
 
 function chatsOf(channel, settingsStore) {

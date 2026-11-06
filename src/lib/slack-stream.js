@@ -15,7 +15,7 @@
  * Every Slack call goes through one queue, so text, tool cards and the rollover clock never race each other.
  * Nothing here throws to the caller: a failed call is logged, and the reply carries on as best it can.
  */
-import { openFence, splitForSlack, SLACK_MAX_MARKDOWN } from "./slack-format.js";
+import { openFence, closeFence, SLACK_MAX_MARKDOWN } from "./slack-format.js";
 
 /** Slack's error code on an error @slack/web-api threw ("ratelimited", "feature_disabled"...), or null. */
 export function slackErrorCode(err) {
@@ -58,6 +58,8 @@ export class SlackReplyStream {
     this._seg = null;                // { ts, shown } the message the current stretch of text is in
     this._segText = "";
     this._toolMsgs = new Map();      // tool id → ts of its status line
+    this._posted = [];               // ts of every message this reply made (for discard)
+    this._flushTimer = null;
   }
 
   // ── public ────────────────────────────────────────────────────────────────
@@ -69,7 +71,11 @@ export class SlackReplyStream {
       if (this.stoppedByUser) return;
       this._pending += delta;
       const interval = this.mode === "native" ? this.flushIntervalMs : this.editIntervalMs;
-      if (this.now() - this._lastFlushAt >= interval) await this._flush();
+      const wait = interval - (this.now() - this._lastFlushAt);
+      if (wait <= 0) await this._flush();
+      // Held text goes out on its own when the interval is up, so the last words before a long pause (the model
+      // writing a big tool call) are not stuck waiting for the next event.
+      else this._armFlush(wait);
     });
   }
 
@@ -123,7 +129,9 @@ export class SlackReplyStream {
 
   /** The turn is over: send what is left and end the message. */
   finish() {
+    this._disarmFlush();
     return this._run(async () => {
+      this._disarmFlush();   // a text() queued just before this one may have set it
       if (this.mode === "native") {
         const ok = await this._native(async () => {
           if (this.stoppedByUser) this._pending = "";
@@ -148,24 +156,27 @@ export class SlackReplyStream {
       }
       this._toolMsgs.clear();
       this._openTasks.clear();
+      // Streamed messages earlier in this reply left the agent session "processing": set it back.
+      if (this._endedMidTurn) await this._sessionActive();
     });
   }
 
   /** Throw away what this reply has shown so far (the turn is being run again from the start). */
   discard() {
+    this._disarmFlush();
     return this._run(async () => {
       this._pending = "";
       this._openTasks.clear();
       this._reopen = "";
       this._carryTasks = false;
-      if (this._stream) {
-        const ts = this._stream.ts;
-        await this._endStream(undefined);
-        await this._call("delete", { channel: this.channel, ts });
-      }
-      if (this._seg?.ts) await this._call("delete", { channel: this.channel, ts: this._seg.ts });
+      if (this._stream) await this._endStream(undefined);
+      // Every message this reply made: rolled-over streams, edited messages and tool lines alike.
+      for (const ts of this._posted) await this._call("delete", { channel: this.channel, ts });
+      this._posted = [];
+      this._toolMsgs.clear();
       this._seg = null;
       this._segText = "";
+      this._endedMidTurn = false;
       this.sentText = false;
     });
   }
@@ -176,6 +187,20 @@ export class SlackReplyStream {
     const p = this._queue.then(fn).catch((err) => this.log?.warn?.("[slack] reply stream:", err?.message || err));
     this._queue = p;
     return p;
+  }
+
+  _armFlush(ms) {
+    if (this._flushTimer) return;
+    this._flushTimer = setTimeout(() => {
+      this._flushTimer = null;
+      this._run(() => (this.stoppedByUser ? null : this._flush()));
+    }, Math.max(0, ms));
+    this._flushTimer.unref?.();
+  }
+
+  _disarmFlush() {
+    if (this._flushTimer) clearTimeout(this._flushTimer);
+    this._flushTimer = null;
   }
 
   async _flush() {
@@ -209,7 +234,11 @@ export class SlackReplyStream {
         try { this.onNativeUnavailable?.(code); } catch { /* the bot's cache is best-effort */ }
       }
       if (this._stream) {
-        // Best-effort: end the half-written stream so it does not sit "processing" until Slack times it out.
+        // Best-effort: end the half-written stream so it does not sit "processing" until Slack times it out. A code
+        // block open in it carries on, opened again, in the first edited message.
+        const fence = openFence(this._stream.text);
+        if (fence) this._reopen = `${fence}
+`;
         try { await this.client.chat.stopStream({ channel: this.channel, ts: this._stream.ts }); } catch { /* already gone */ }
         this._stream = null;
       }
@@ -289,6 +318,7 @@ export class SlackReplyStream {
       if (this.recipientTeamId) args.recipient_team_id = this.recipientTeamId;
       const res = await this.client.chat.startStream(args);
       this._stream = { ts: res.ts, startedAt: this.now(), chars: 0, text: "", tasks: new Set() };
+      if (res.ts) this._posted.push(res.ts);
       this._reopen = "";
       this._carryTasks = false;
       this._endedMidTurn = false;
@@ -339,7 +369,15 @@ export class SlackReplyStream {
     } catch (err) {
       const code = slackErrorCode(err);
       if (code === "stopped_by_user") this._userStopped();
-      else if (code !== "message_not_in_streaming_state") this.log?.warn?.(`[slack] stopStream failed: ${code || err?.message}`);
+      else {
+        if (code !== "message_not_in_streaming_state") this.log?.warn?.(`[slack] stopStream failed: ${code || err?.message}`);
+        // The last words rode on this stop: they would be lost, so they go in a message of their own.
+        if (tail.trim()) {
+          const before = openFence(stream.text);
+          await this._post(closeFence(`${before ? `${before}
+` : ""}${tail}`));
+        }
+      }
     }
     if (sessionStatus === "processing") {
       this._reopen = fence ? `${fence}\n` : "";
@@ -362,20 +400,36 @@ export class SlackReplyStream {
 
   async _flushEdit() {
     if (!this._pending) return;
+    // The first words after switching from native streaming, in the middle of a code block: open it again.
+    if (this._reopen && !this._segText) this._pending = this._reopen + this._pending;
+    this._reopen = "";
     this._segText += this._pending;
     this._pending = "";
-    const pieces = splitForSlack(this._segText, this.maxMessageChars);
-    if (!pieces.length) return;
-    // Every piece but the last is finished: it goes in the current message, the rest in new ones.
-    while (pieces.length > 1) {
-      await this._showSegment(pieces.shift());
+    // A stretch longer than one message: the finished part goes out with its code block closed, and the rest carries
+    // on in a new message with the block opened again. The cut is made on the raw text, so no line is lost, glued to
+    // a fence or left outside its block.
+    const room = this.maxMessageChars - 6;   // room for a closing fence
+    while (this._segText.length > this.maxMessageChars) {
+      const reopened = this._segText.startsWith("```") ? this._segText.indexOf("\n") + 1 : 0;
+      let cut = this._segText.lastIndexOf("\n", room - 1) + 1;
+      if (cut <= reopened) cut = room;       // one line longer than a message: cut it
+      let head = this._segText.slice(0, cut);
+      let rest = this._segText.slice(cut);
+      const fence = openFence(head);
+      if (fence) {
+        head = closeFence(head);
+        rest = `${fence}\n${rest}`;
+      }
+      await this._showSegment(head);
       this._seg = null;
+      this._segText = rest;
     }
-    this._segText = pieces[0];
-    await this._showSegment(pieces[0]);
+    await this._showSegment(this._segText);
   }
 
-  async _showSegment(text) {
+  async _showSegment(raw) {
+    // A block still being written is shown closed, so it does not swallow what follows it in the message.
+    const text = closeFence(raw);
     if (!text?.trim()) return;
     if (!this._seg?.ts) {
       const ts = await this._post(text);
@@ -396,6 +450,7 @@ export class SlackReplyStream {
 
   async _post(markdown) {
     const res = await this._call("postMessage", { channel: this.channel, thread_ts: this.threadTs, markdown_text: markdown });
+    if (res?.ts) this._posted.push(res.ts);
     return res?.ts || null;
   }
 

@@ -44,6 +44,16 @@ describe("slackTextToPlain", () => {
     assert.equal(slackTextToPlain("a &lt;b&gt; &amp; c", {}), "a <b> & c");
   });
 
+  it("never changes the spacing of what people paste: indentation, paths, operators", () => {
+    const py = "fix this:\n```\nif x:\n    if y:\n        z()\n```";
+    assert.equal(slackTextToPlain(`<@UBOT> ${py}`, { botUserId: "UBOT" }), py);
+    assert.equal(slackTextToPlain("run rm -rf ./build && ls -la .", {}), "run rm -rf ./build && ls -la .");
+    assert.equal(slackTextToPlain("a ? b : c", {}), "a ? b : c");
+    assert.equal(slackTextToPlain("key:  value  # two spaces", {}), "key:  value  # two spaces");
+    assert.equal(slackTextToPlain("ask <@UBOT> now", { botUserId: "UBOT" }), "ask now", "one space where the mention was");
+    assert.equal(slackTextToPlain("cc <@UBOTX> please", { botUserId: "UBOT" }), "cc @UBOTX please", "a longer id that starts like the bot's is someone else");
+  });
+
   it("handles empty input", () => {
     assert.equal(slackTextToPlain("", {}), "");
     assert.equal(slackTextToPlain(null, {}), "");

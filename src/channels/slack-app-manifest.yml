@@ -30,8 +30,8 @@ features:
         message: What's on my plate today?
   slash_commands:
     - command: /tarsee
-      description: Run a Tarsee command (help, status, model) or ask it something
-      usage_hint: "[help | status | model | a question]"
+      description: Ask Tarsee something (it answers in a thread), or run a command (help, status, /model opus)
+      usage_hint: "[a question | help | status | /command args]"
       should_escape: false
 oauth_config:
   scopes:

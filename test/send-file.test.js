@@ -130,6 +130,10 @@ describe("send_file", () => {
     fs.truncateSync(big, 101 * 1024 * 1024);   // sparse
     assert.match(await run({ channel: "slack", file_path: big }, { conversationId: slackConv }), /101\.0 MB; slack takes up to 100 MB/);
     assert.match(sendFileHint("slack"), /tarsee_send_file with channel="slack"/);
+    // From somewhere else (a cron, another channel), with no chat named: the latest Slack chat's channel, at the top
+    // level, not inside whatever thread happened to be last.
+    await executeTool("send_message", { channel: "slack", message: "Briefing" }, { db, settingsStore: settings, conversationId: telegramConv });
+    assert.deepEqual(mgr.sent.at(-1), { kind: "message", type: "slack", chatId: "C42", message: "Briefing", opts: { threadId: null } });
     const mcp = createTarseeMcp({ db, settingsStore: settings });
     const schema = mcp.instance._registeredTools.tarsee_send_file.inputSchema;
     assert.ok(JSON.stringify(schema?.def ?? schema?._def ?? schema).includes("slack"), "the MCP tool takes channel slack");

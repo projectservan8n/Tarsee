@@ -284,6 +284,106 @@ describe("SlackReplyStream, editing fallback", () => {
   });
 });
 
+describe("SlackReplyStream, editing fallback with code", () => {
+  /** Each message's last version, in the order they were posted. */
+  const finalMessages = (client) => {
+    const last = new Map();
+    for (const [m, a, result] of client.calls) {
+      if (m === "postMessage") last.set(result.ts, a.markdown_text);
+      if (m === "update") last.set(a.ts, a.markdown_text);
+    }
+    return [...last.values()];
+  };
+
+  it("splits a long code block across messages without losing, gluing or unfencing a line", async () => {
+    const client = fakeClient();
+    const c = clock();
+    const s = new SlackReplyStream(opts(client, c, { native: false, maxMessageChars: 120 }));
+    const lines = Array.from({ length: 20 }, (_, i) => `const v${i} = ${i};\n`);
+    const text = "Here:\n```js\n" + lines.join("") + "```\nAfter.";
+    for (const piece of text.split(/(?<=\n)/)) { c.advance(2000); await s.text(piece); }
+    await s.finish();
+
+    const msgs = finalMessages(client);
+    assert.ok(msgs.length >= 3, `split into several messages: ${msgs.length}`);
+    for (const m of msgs) {
+      assert.ok(m.length <= 120, `too long: ${m.length}`);
+      assert.equal((m.match(/^```/gm) || []).length % 2, 0, `unbalanced fences: ${JSON.stringify(m)}`);
+      assert.ok(!/```[^\s`]/.test(m.replace(/```js\n/g, "")), `a fence glued to code: ${JSON.stringify(m)}`);
+    }
+    for (const m of msgs.slice(1, -1)) assert.ok(m.startsWith("```js\n"), `a continuation reopens the block: ${JSON.stringify(m)}`);
+    const code = msgs.join("\n").match(/^const v\d+ = \d+;$/gm);
+    assert.deepEqual(code, lines.map((l) => l.trim()), "every line once, in order");
+    assert.ok(msgs[0].startsWith("Here:\n```js\n"));
+    assert.ok(msgs.at(-1).endsWith("```\nAfter."));
+  });
+
+  it("shows a block still being written as closed, so the rest of the message is not swallowed", async () => {
+    const client = fakeClient();
+    const c = clock();
+    const s = new SlackReplyStream(opts(client, c, { native: false }));
+    await s.text("```py\nx = 1\n");
+    assert.equal(client.of("postMessage")[0].markdown_text, "```py\nx = 1\n```");
+    c.advance(2000);
+    await s.text("```\nDone.");
+    await s.finish();
+    assert.equal(client.of("update").at(-1).markdown_text, "```py\nx = 1\n```\nDone.");
+  });
+});
+
+describe("SlackReplyStream, when things go wrong part-way", () => {
+  it("falling back after a rollover keeps the code block open and ends the agent session", async () => {
+    const client = fakeClient({ startStream: (_a, n) => (n === 2 ? "internal_error" : null) });
+    const c = clock();
+    const s = new SlackReplyStream(opts(client, c, { maxStreamChars: 40 }));
+    for (const line of ["```js\n", "const a = 1;\n", "const b = 2;\n", "const c = 3;\n", "const d = 4;\n", "```\n"]) {
+      c.advance(1500);
+      await s.text(line);
+    }
+    await s.finish();
+    assert.equal(s.mode, "edit");
+    const posted = client.of("postMessage").map((p) => p.markdown_text);
+    const updated = client.of("update").map((u) => u.markdown_text);
+    const last = updated.at(-1) || posted.at(-1);
+    assert.ok(last.startsWith("```js\n"), `the rest of the block is still code: ${JSON.stringify(last)}`);
+    assert.equal(client.of("sessionStatus").at(-1)?.status, "active", "the session is not left spinning");
+  });
+
+  it("posts the last words when Slack refuses the final stop, instead of dropping them", async () => {
+    const client = fakeClient({ stopStream: "internal_error" });
+    const c = clock();
+    const s = new SlackReplyStream(opts(client, c));
+    await s.text("First part.");
+    await s.text(" Last part.");
+    await s.finish();
+    assert.ok(client.of("postMessage").some((p) => /Last part\./.test(p.markdown_text)), "the tail reaches the thread");
+  });
+
+  it("sends held text on its own once the interval passes, without waiting for more", async () => {
+    const client = fakeClient();
+    const s = new SlackReplyStream(opts(client, { now: Date.now }, { flushIntervalMs: 40 }));
+    await s.text("one ");
+    await s.text("two");
+    assert.equal(streamedText(client), "one ");
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(streamedText(client), "one two");
+    await s.finish();
+  });
+
+  it("takes back every message of the reply when the turn starts over, rolled-over ones included", async () => {
+    const client = fakeClient();
+    const c = clock();
+    const s = new SlackReplyStream(opts(client, c, { maxStreamChars: 10 }));
+    for (const w of ["aaaa\n", "bbbb\n", "cccc\n", "dddd\n", "eeee\n"]) { c.advance(1500); await s.text(w); }
+    const started = client.calls.filter(([m]) => m === "startStream").map(([, , r]) => r.ts);
+    assert.ok(started.length >= 2);
+    await s.discard();
+    const deleted = client.of("delete").map((d) => d.ts);
+    for (const ts of started) assert.ok(deleted.includes(ts), `${ts} deleted`);
+    assert.equal(s.sentText, false);
+  });
+});
+
 describe("slackErrorCode", () => {
   it("reads Slack's error code off a thrown error", () => {
     assert.equal(slackErrorCode(platformError("ratelimited")), "ratelimited");

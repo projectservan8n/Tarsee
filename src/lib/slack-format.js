@@ -17,9 +17,17 @@ export const SLACK_MAX_MARKDOWN = 11_000;
 /** Slack message text → plain words the agent can read. userName(id) gives a person's name, or null. */
 export function slackTextToPlain(text, { botUserId = null, userName = null } = {}) {
   if (!text) return "";
-  return String(text)
+  let s = String(text);
+  // The bot's own mention goes, and only the spacing around it is tidied: everything else keeps its spacing exactly,
+  // since people paste code (indentation, `./path`, `a ? b : c`) and that must reach the agent unchanged.
+  if (botUserId) {
+    s = s.replace(new RegExp(`[ \\t]*<@${botUserId}(?:\\|[^>]*)?>[ \\t]*`, "g"), "\uE000")
+      .replace(/\uE000+(?=[,.!?;:])/g, "")
+      .replace(/^\uE000+|\uE000+$/gm, "")
+      .replace(/\uE000+/g, " ");
+  }
+  return s
     .replace(/<@([UW][A-Z0-9]+)(?:\|[^>]*)?>/g, (_m, id) => {
-      if (id === botUserId) return "";
       const name = typeof userName === "function" ? userName(id) : null;
       return `@${name || id}`;
     })
@@ -34,8 +42,6 @@ export function slackTextToPlain(text, { botUserId = null, userName = null } = {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&amp;/g, "&")
-    .replace(/[ \t]+([,.!?;:])/g, "$1")
-    .replace(/[ \t]{2,}/g, " ")
     .trim();
 }
 
@@ -135,6 +141,14 @@ export class MarkerFilter {
     this.held = "";
     return rest;
   }
+}
+
+/** The text with a code fence still open at its end closed, on a line of its own. */
+export function closeFence(text) {
+  const s = String(text ?? "");
+  const fence = openFence(s);
+  if (!fence) return s;
+  return `${s}${s.endsWith("\n") ? "" : "\n"}${fence.match(/^`+/)[0]}`;
 }
 
 /** A command reply without the web dashboard's sentinels ("__SET_THEME__:dark|Theme set..." → "Theme set..."). */

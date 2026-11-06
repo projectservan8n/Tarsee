@@ -881,7 +881,7 @@ const Settings = {
         const s = (await API.getStatus())?.channels?.slack;
         if (s?.status === "running") { el.textContent = "✓ Connected"; return; }
         if (s?.status === "error") { el.textContent = `✗ ${s.error || "Could not connect"}`; return; }
-        if (!wait) { el.textContent = s?.status === "stopped" ? "Not connected yet" : ""; return; }
+        if (!wait) { el.textContent = s?.status === "starting" ? "Connecting…" : s?.status === "stopped" ? "Not connected yet" : ""; return; }
       } catch { /* status is best-effort */ }
     }
     el.textContent = "Still connecting — check the Console for [slack] lines";

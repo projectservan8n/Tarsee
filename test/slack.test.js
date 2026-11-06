@@ -11,7 +11,7 @@ process.env.TARSEE_WORKSPACE_DIR = path.join(TMP_DIR, "workspace");
 process.env.TARSEE_DATA_DIR = path.join(TMP_DIR, "data");
 process.env.ENCRYPTION_KEY = "test-key-for-unit-tests-only-32chars!";
 
-const { getChannelKey, decideSlackMessage, isSlackFileUrl, slackChatTitle, parseAllowlist } = await import("../src/channels/slack.js");
+const { getChannelKey, decideSlackMessage, isSlackFileUrl, slackChatTitle, parseAllowlist, readSlashText } = await import("../src/channels/slack.js");
 const { chatTargetOf } = await import("../src/lib/chat-target.js");
 
 const BOT = "UBOT";
@@ -137,6 +137,17 @@ describe("the channel manager and Slack", () => {
     await assert.rejects(() => mgr.restart("slack-nope"), /not configured/);
     new SettingsStore(db).set("channel.slack", { enabled: true, token: "xoxb-1" });
     await assert.rejects(() => mgr.restart("slack"), /not configured/);
+
+    // While a channel (re)starts its status says so: Settings polls it right after a save, and must not read the
+    // old bot's "running" as the new one connected.
+    let stopped = 0;
+    mgr.channels.set("slack", { bot: { stop: async () => { stopped++; } }, type: "slack", status: "running" });
+    const starting = mgr.start("slack", { enabled: true, token: "bad", appToken: "bad" });
+    assert.equal(mgr.getStatus().slack.status, "starting");
+    await assert.rejects(starting, /xoxb-/);
+    assert.equal(stopped, 1, "the old bot was stopped");
+    assert.equal(mgr.getStatus().slack.status, "error");
+    assert.match(mgr.getStatus().slack.error, /xoxb-/);
     db.close();
   });
 });
@@ -170,6 +181,19 @@ describe("Slack in the shared commands and labels", () => {
     const core = await import("../src/public/js/file-viewer-core.js");
     assert.equal(shownName("/data/uploads/slack-1712345678901-Q3_report.pdf"), "Q3_report.pdf");
     assert.equal(core.shownName("/data/uploads/slack-1712345678901-Q3_report.pdf"), "Q3_report.pdf");
+  });
+});
+
+describe("readSlashText (what /tarsee <text> asks for)", () => {
+  it("runs a command when it is written with its slash, or is one bare word", () => {
+    assert.deepEqual(readSlashText(""), { command: "/help" });
+    assert.deepEqual(readSlashText("/model opus"), { command: "/model opus" });
+    assert.deepEqual(readSlashText(" status "), { command: "/status", orQuestion: "status" });
+  });
+  it("treats anything else as a question, even when it starts with a command's name", () => {
+    for (const q of ["help me write an email", "status of the release", "clear up my calendar", "think through pricing", "new ideas for the launch"]) {
+      assert.deepEqual(readSlashText(q), { question: q }, q);
+    }
   });
 });
 

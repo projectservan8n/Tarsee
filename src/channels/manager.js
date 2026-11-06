@@ -80,10 +80,12 @@ export class ChannelManager {
    * Starts a specific channel.
    */
   async start(type, channelConfig, opts = {}) {
-    // Stop existing instance if running
-    if (this.channels.has(type)) {
-      await this.stop(type);
-    }
+    // Stop the running instance, if any. Until the new one is up the status says "starting": Settings polls it right
+    // after a save, and must not take the old bot's "running" for the new one having connected.
+    const prev = this.channels.get(type);
+    this.channels.set(type, { bot: prev?.bot || null, type, status: "starting" });
+    if (prev?.bot) await this.stop(type);
+    this.channels.set(type, { bot: null, type, status: "starting" });
 
     console.log(`[channels] starting ${type}...`);
 
