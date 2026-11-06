@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tarsee-prompt-audit-"));
 process.env.TARSEE_STATE_DIR = tmp;
@@ -68,7 +69,7 @@ describe("workspace files in the system prompt", () => {
     assert.doesNotMatch(truncateContent(emoji, 1024), /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/, "no half of an emoji");
   });
   it("the default workspace files say the same: grep MEMORY.md, never read it whole", () => {
-    const defaults = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "src", "workspace-defaults");
+    const defaults = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "workspace-defaults");
     for (const f of ["SOUL.md", "CLAUDE.md"]) {
       const text = fs.readFileSync(path.join(defaults, f), "utf8");
       assert.match(text, /grep/i, f);
@@ -90,8 +91,8 @@ describe("the skills list", () => {
 });
 
 describe("an install seeded with the old default files", () => {
-  const fixtures = path.join(path.dirname(new URL(import.meta.url).pathname), "fixtures");
-  const defaults = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "src", "workspace-defaults");
+  const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
+  const defaults = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "workspace-defaults");
   it("gets the new memory instructions: the old default SOUL.md and CLAUDE.md become the new ones exactly", () => {
     const dir = fs.mkdtempSync(path.join(tmp, "old-ws-"));
     for (const f of ["SOUL.md", "CLAUDE.md"]) fs.copyFileSync(path.join(fixtures, `old-default-${f}`), path.join(dir, f));
