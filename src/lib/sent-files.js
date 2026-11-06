@@ -73,7 +73,7 @@ export function keepSentFile(absPath, { dir = uploadsDir(), now = Date.now() } =
 }
 
 /** A file's name as the bots and the chat keep it on disk, without the time and number they put in front. */
-export const shownName = (p) => path.basename(String(p || "")).replace(/^(chat|sent|discord|telegram|whatsapp|email)-\d+-(\d+-)?/, "") || "file";
+export const shownName = (p) => path.basename(String(p || "")).replace(/^(chat|sent|discord|telegram|whatsapp|slack|email)-\d+-(\d+-)?/, "") || "file";
 
 /**
  * The agent sent a file to a chat: keep a copy, keep it with that chat's conversation (lib/chat-files.js), and tell

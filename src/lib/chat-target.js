@@ -5,6 +5,7 @@
  *   telegram:<chat id>                  telegram:<chat id>:topic:<topic id>   (a forum topic)
  *   discord:<channel id>                discord:<parent id>:thread:<thread id>
  *   whatsapp:<chat id>
+ *   slack:<channel id>:thread:<thread ts>   (every Slack conversation is a thread; slack:<channel id> for none)
  *
  * Order of choice:
  *   1. the chat id the agent gave
@@ -22,6 +23,8 @@ export function chatTargetOf(channel, channelKey) {
   if (channel === "telegram") return { chatId: parts[1], threadId: parts[2] === "topic" && parts[3] ? parts[3] : null };
   // A Discord thread is a channel of its own: messages go to the thread's id.
   if (channel === "discord") return { chatId: parts[2] === "thread" && parts[3] ? parts[3] : parts[1], threadId: null };
+  // A Slack thread is not a channel of its own: messages go to the channel, in the thread named by its ts.
+  if (channel === "slack") return { chatId: parts[1], threadId: parts[2] === "thread" && parts[3] ? parts[3] : null };
   return { chatId: parts.slice(1).join(":"), threadId: null };
 }
 

@@ -2,7 +2,7 @@ import { SettingsStore } from "../db/settings.js";
 import { ConversationStore } from "../db/conversations.js";
 
 /**
- * Manages all messaging channel bots (Discord, Telegram, Slack).
+ * Manages all messaging channel bots (Discord, Telegram, WhatsApp, Slack, email).
  * Starts/stops channels based on stored configuration.
  */
 export class ChannelManager {
@@ -25,12 +25,11 @@ export class ChannelManager {
     //
     // Email has a different "ready" check than token-based channels — it needs
     // imap + smtp config + enabled, not a single token.
-    const tokenChannels = ["discord", "telegram", "whatsapp"];
     const tasks = [];
 
-    for (const type of tokenChannels) {
+    for (const type of TOKEN_CHANNELS) {
       const channelConfig = this.settings.get(`channel.${type}`);
-      if (!channelConfig?.enabled || !channelConfig?.token) continue;
+      if (!isChannelReady(type, channelConfig)) continue;
       tasks.push(this._startWithRetry(type, channelConfig));
     }
 
@@ -114,6 +113,11 @@ export class ChannelManager {
           bot = await createWhatsAppBot(channelConfig, this.db);
           break;
         }
+        case "slack": {
+          const { createSlackBot } = await import("./slack.js");
+          bot = await createSlackBot(channelConfig, this.db);
+          break;
+        }
         default:
           throw new Error(`Unknown channel type: ${type}`);
       }
@@ -161,7 +165,7 @@ export class ChannelManager {
       if (!isEmailReady(channelConfig)) {
         throw new Error("email is not configured or not enabled");
       }
-    } else if (!channelConfig?.enabled || !channelConfig?.token) {
+    } else if (!isChannelReady(type, channelConfig)) {
       throw new Error(`${type} is not configured or not enabled`);
     }
     await this.start(type, channelConfig, opts);
@@ -169,10 +173,10 @@ export class ChannelManager {
 
   /**
    * Send an outbound message to a channel.
-   * @param {string} type - Channel type (telegram, discord, whatsapp, email)
+   * @param {string} type - Channel type (telegram, discord, whatsapp, slack, email)
    * @param {string} chatId - Platform-specific chat/channel ID
    * @param {string} message - Message text
-   * @param {{threadId?: string|null}} [opts] - threadId: a Telegram forum topic
+   * @param {{threadId?: string|null}} [opts] - threadId: a Telegram forum topic, or a Slack thread's ts
    */
   async sendMessage(type, chatId, message, opts = {}) {
     const channel = this.channels.get(type);
@@ -184,11 +188,11 @@ export class ChannelManager {
 
   /**
    * Send a file as a real attachment (the send_file tool).
-   * @param {string} type - Channel type (telegram, discord, whatsapp)
+   * @param {string} type - Channel type (telegram, discord, whatsapp, slack)
    * @param {string} chatId - Platform-specific chat/channel ID
    * @param {string} filePath - Absolute path to the file on disk
    * @param {string} [caption] - Words sent with the file
-   * @param {{threadId?: string|null}} [opts] - threadId: a Telegram forum topic
+   * @param {{threadId?: string|null}} [opts] - threadId: a Telegram forum topic, or a Slack thread's ts
    */
   async sendFile(type, chatId, filePath, caption, opts = {}) {
     const channel = this.channels.get(type);
@@ -210,11 +214,11 @@ export class ChannelManager {
       };
     }
     // Add unconfigured channels
-    for (const type of ["discord", "telegram", "whatsapp"]) {
+    for (const type of TOKEN_CHANNELS) {
       if (!result[type]) {
         const config = this.settings.get(`channel.${type}`);
         result[type] = {
-          status: config?.enabled ? "stopped" : "not_configured",
+          status: isChannelReady(type, config) ? "stopped" : "not_configured",
         };
       }
     }
@@ -227,6 +231,19 @@ export class ChannelManager {
     }
     return result;
   }
+}
+
+/** Channels started from a stored token (email has its own readiness check, below). */
+const TOKEN_CHANNELS = ["discord", "telegram", "whatsapp", "slack"];
+
+/**
+ * Whether a token channel has what it needs to start: enabled and its token. Slack also needs its app-level token
+ * (xapp-) for Socket Mode; without it Bolt can only fail, eight times, on every boot.
+ */
+export function isChannelReady(type, c) {
+  if (!c?.enabled || !c?.token) return false;
+  if (type === "slack") return !!c.appToken;
+  return true;
 }
 
 /**

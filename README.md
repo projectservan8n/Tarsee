@@ -6,7 +6,7 @@
 
 <p align="center"><strong>Your personal Claude Code agent, running 24/7 in the cloud.</strong></p>
 
-<p align="center">Talk to Claude from anywhere — web, Telegram, Discord, WhatsApp, email, or voice. It remembers everything, runs tools, and schedules tasks. Uses your Claude Max subscription. No API keys needed.</p>
+<p align="center">Talk to Claude from anywhere — web, Telegram, Discord, WhatsApp, Slack, email, or voice. It remembers everything, runs tools, and schedules tasks. Uses your Claude Max subscription. No API keys needed.</p>
 
 > **Tarsee is built for Claude Max subscribers.** It runs a persistent Claude Code agent that uses your subscription for every message. Pro subscribers will hit usage limits quickly — Max (especially 5x) is strongly recommended for daily use.
 
@@ -35,7 +35,7 @@ Being honest — some of these projects are massive with huge communities. Tarse
 | **Frontend** | Vanilla HTML/CSS/JS | React + Primer UI | React | Go Web UI + TUI | Python CLI |
 | **Build step** | None | TypeScript + Vite | TypeScript | Go compile | pip install |
 | **RAM** | about 500 MB | Higher (full React stack) | Moderate | <10MB | Low |
-| **Channels** | Web, Telegram, Discord, WhatsApp, Email, Voice | 24+ (WhatsApp, Slack, Signal, etc.) | WhatsApp, Telegram, Discord, Slack | 18+ (Telegram, Discord, WeChat, etc.) | 12+ (Telegram, Discord, WhatsApp, etc.) |
+| **Channels** | Web, Telegram, Discord, WhatsApp, Slack, Email, Voice | 24+ (WhatsApp, Slack, Signal, etc.) | WhatsApp, Telegram, Discord, Slack | 18+ (Telegram, Discord, WeChat, etc.) | 12+ (Telegram, Discord, WhatsApp, etc.) |
 | **Voice** | Yes (faster-whisper + local Phonon TTS) | Yes (wake word, ElevenLabs) | No | No | Telegram/WeChat voice |
 | **Mobile** | PWA + iOS PIN pad | Native iOS/Android apps | Via messaging apps | Android APK | Via messaging apps |
 | **Memory** | Persistent + deep search | Session-based with group isolation | SQLite + per-group files | JSONL memory store | Token-based memory |
@@ -101,7 +101,7 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 ## What You Get
 
 ### Chat Everywhere
-- **Web UI** — A calm chat in the style of claude.ai: every chat has its own address (`/chat/<id>`, `/chat/new`) with Back/Forward and shareable links, a plain sidebar grouped by where each chat lives (Web, Telegram, Discord, WhatsApp, Email, and Background for crons and the heartbeat while they run), search, and a rename / fresh session / delete menu on each chat. Markdown, code blocks, tables, file attachments, image paste, drag-and-drop, multi-file upload. PWA — save to homescreen on iOS/Android.
+- **Web UI** — A calm chat in the style of claude.ai: every chat has its own address (`/chat/<id>`, `/chat/new`) with Back/Forward and shareable links, a plain sidebar grouped by where each chat lives (Web, Telegram, Discord, WhatsApp, Email, Slack, and Background for crons and the heartbeat while they run), search, and a rename / fresh session / delete menu on each chat. Markdown, code blocks, tables, file attachments, image paste, drag-and-drop, multi-file upload. PWA — save to homescreen on iOS/Android.
 - **Tool steps that stay out of the way** — while the agent works, one quiet line in the answer's place ("Working · 3 steps · Reading README.md · 84.2k tokens · 41 tk/s", with Stop); once it answers, the steps fold into "Used 12 tools" above the reply, each opening to its input and output. The line opens even before the first step: to a summary of what the model is thinking (for messages sent from the dashboard; it costs the answer about 3 seconds, so Telegram, Discord, email and voice replies do without), an API error it is retrying, or compacting.
 - **Queued, not cancelled** — a message sent while a reply is running shows as "Queued · after the reply above" (no timer) and becomes the working line when its turn begins. Its own Stop takes just that message out of the queue.
 - **An expired Claude sign-in says so** — instead of a "401 / Failed to authenticate" error arriving as the reply, the chat says the sign-in expired and to run `claude login` in the Terminal (the `>_` button, on phones too).
@@ -109,8 +109,9 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Discord** — Text, images, PDFs, voice messages. Always-online bot with presence status.
 - **Email** — Real-time over IMAP IDLE + SMTP. Mention keyword (default `@tarsee`) gates replies; CC/BCC/forwards are absorbed as context without an outbound. Works with any mailbox you own (Gmail, Outlook, iCloud, Zoho, FastMail, Yahoo, self-hosted).
 - **WhatsApp** — Text, images, PDFs, voice notes (Whisper-transcribed), and documents via [WHAPI Cloud](https://whapi.cloud) (free tier OK). Direct messages only. Per-channel webhook secret in URL, auto-generated on first enable.
-- **Attachment save-to-disk** — every image, PDF, voice note, and document sent via Discord, Telegram, email, WhatsApp, or web lands in `workspace/uploads/` so Claude can read, transform, and reference it across turns (not just in the message it arrived on).
-- **Live on every device** — one durable timeline per conversation (messages, turn start/end and every tool step) that every channel feeds and every device follows over WebSocket. A device that sleeps or reconnects catches up from the last event it saw, even across a restart, and a Telegram, Discord, WhatsApp or email turn can be watched (and stopped) live from the dashboard. Sends are optimistic and never lost; a message sent while a reply is running queues behind it instead of cancelling it.
+- **Slack** — DMs, and channels by @mention. Every reply goes in a thread and each thread is its own conversation; a thread Tarsee is in needs no more mentions, and a mention in someone else's thread reads the thread first. Replies stream with Slack's native AI streaming, a live card for each tool it runs, and Slack's stop button; where a workspace has no native streaming, replies are posted and edited instead. Markdown renders as written (tables and code included). Images, PDFs, voice clips (Whisper-transcribed) and any other file in; files out as real uploads. `/tarsee` for commands. Socket Mode, so no public URL; the app is made from a manifest Settings copies for you.
+- **Attachment save-to-disk** — every image, PDF, voice note, and document sent via Discord, Telegram, email, WhatsApp, Slack, or web lands in `workspace/uploads/` so Claude can read, transform, and reference it across turns (not just in the message it arrived on).
+- **Live on every device** — one durable timeline per conversation (messages, turn start/end and every tool step) that every channel feeds and every device follows over WebSocket. A device that sleeps or reconnects catches up from the last event it saw, even across a restart, and a Telegram, Discord, WhatsApp, Slack or email turn can be watched (and stopped) live from the dashboard. Sends are optimistic and never lost; a message sent while a reply is running queues behind it instead of cancelling it.
 - **Session recap** — resume a conversation idle >30 min and a dismissible "Last time" card summarizes the last few exchanges before the first new message. Zero AI cost (extractive summary).
 - **Web Push notifications** — iOS/Android/desktop push via VAPID when cron jobs finish, webhooks fire, or Claude proactively pings you via the `tarsee_push_notification` MCP tool. Opt-in from Settings > Appearance.
 - **All channels share** the same AI, memory, and tools.
@@ -136,7 +137,7 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 ### Tools & Automation
 - **20+ MCP tools** — send messages, schedule tasks, remember facts, search the web, create canvases, manage files, encrypted vault, calculator, browser, push notifications, email threads, and more.
 - **Calculator** — precise math tool so Claude never hallucinates numbers. Arithmetic, percentages, Math.* functions.
-- **Sends files** — ask for a report, an export or a picture on Telegram, Discord or WhatsApp and `tarsee_send_file` sends it as a real attachment to that chat (Telegram up to 50 MB, Discord 25 MB, WhatsApp 16 MB). Email files go as attachments through `tarsee_send_email_thread`.
+- **Sends files** — ask for a report, an export or a picture on Telegram, Discord, WhatsApp or Slack and `tarsee_send_file` sends it as a real attachment to that chat (Telegram up to 50 MB, Discord 25 MB, WhatsApp 16 MB, Slack 100 MB; on Slack into the same thread). Email files go as attachments through `tarsee_send_email_thread`.
 - **Files in the dashboard chat** — every file the agent sends and every file people send in shows on the message it came with, in any chat: a picture or video as a tile, a PDF with its first page, a sound as a waveform player. A click opens it in the viewer (pictures zoom, PDFs show their pages, CSV as a table, text and code as text), with Download always there. Kept copies live in the workspace's `uploads` folder for 30 days.
 - **Keys by name** — the vault's keys are in the agent's environment, so its scripts read `OPENAI_API_KEY` and the like by name and a key never goes into a command. Not when `get_key` is denied in Tool Permissions; `TARSEE_AGENT_ENV_KEYS` limits or turns it off.
 - **Discord admin** — `tarsee_discord_admin` lists, makes and edits Discord channels (public, private for listed people and roles, or copying another channel's access) and makes webhooks, using Tarsee's own logged-in bot, so the agent never needs the bot token in a command. Every change needs the owner's go, passed as `approved_by` and written to the server's audit log. A new webhook's URL goes straight into the vault under a key name and comes back masked. Nothing in the tool deletes.
@@ -178,7 +179,7 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Context kept lean** — ported from TarseeMacOS, where they were measured on long jobs: the chat's context is summarized at 180k tokens (`TARSEE_COMPACT_WINDOW`), a long Bash output or tool result goes to a file the agent can read (`TARSEE_BASH_OUTPUT_MAX_CHARS`, `TARSEE_TOOL_RESULT_MAX_CHARS`), each quick memory is one line of at most 300 characters and each skill a short description in the system prompt, a workspace file may be 12 KB there (a longer one is cut and the cut is logged), and `MEMORY.md` is never inlined or read whole: the agent greps it for what a task needs.
 - **Live context meter** — the session bar shows a real-time prompt-token fill % against the window Claude Code works in: the auto-compact window (180k by default, `TARSEE_COMPACT_WINDOW`), or the model's own (1M for Opus/Sonnet, 200K for Haiku) when that is smaller or compaction is off. Near the top Claude Code summarizes the older part and the chat carries on. Counts cache reads and cache writes too — that's the actual prompt size hitting the model. Bar turns yellow at 75%, red and pulsing at 90%, with a dismissible banner above the composer. At 95% (reached when compaction is off) Tarsee writes a mechanical snapshot to `CHECKPOINT.md` automatically; if a turn still trips "prompt is too long", the snapshot is written from the catch path and a recovery card is shown in chat with a one-click "Start fresh session" button. The next boot reads that checkpoint as the handoff so you pick up mid-thought.
 - **Usage page** (`/usage`, from the sidebar) — every model call's tokens (input, cache read, cache write, output), read from Claude Code's own session transcripts: today, the last 5 hours and 7 days, a 14-day and 24-hour chart, tokens by model, channel and chat, output and total tokens per second, and each job (a chat's turns until it sits idle 45 minutes; each cron run on its own) with its turns, which you can rename, merge and split. Each reply gets a quiet line with its turn's tokens, speed and time, and a chat's menu shows its running total. Days are counted in `TARSEE_TIMEZONE`.
-- **Token Health** (Settings > Token Health) — a per-conversation view of how full each context window actually is, alongside the Claude session transcript (`.jsonl`) size, which is the real driver of bloat-hangs. Fill is measured point-in-time (the most recent turn's prompt size, counting cache reads and cache writes), not a running total of every token the chat ever spent — the lifetime figure is reported separately so the two can't be confused. Conversations whose transcript passes `TARSEE_SESSION_JSONL_MAX_MB` are flagged `resets next turn`, and the provider enforces that same cap by refusing to resume, so the flag reflects real behaviour rather than predicting it. Conversations with no recorded telemetry are labelled `est.` rather than shown as if measured. All channels (Telegram, Discord, WhatsApp, email, web) now record token usage — previously only web chat did, so channel conversations had no data at all.
+- **Token Health** (Settings > Token Health) — a per-conversation view of how full each context window actually is, alongside the Claude session transcript (`.jsonl`) size, which is the real driver of bloat-hangs. Fill is measured point-in-time (the most recent turn's prompt size, counting cache reads and cache writes), not a running total of every token the chat ever spent — the lifetime figure is reported separately so the two can't be confused. Conversations whose transcript passes `TARSEE_SESSION_JSONL_MAX_MB` are flagged `resets next turn`, and the provider enforces that same cap by refusing to resume, so the flag reflects real behaviour rather than predicting it. Conversations with no recorded telemetry are labelled `est.` rather than shown as if measured. All channels (Telegram, Discord, WhatsApp, Slack, email, web) now record token usage — previously only web chat did, so channel conversations had no data at all.
 - **Audit log** — timestamped log of all tool executions, logins, and settings changes.
 - **QR code** — scan from desktop to instantly open Tarsee on your phone.
 - **Typing indicator** — see when you're typing on another device in real-time.
@@ -201,7 +202,7 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 ## How It Works
 
 ```
-You (web / telegram / discord / email / voice / iOS push)
+You (web / telegram / discord / whatsapp / slack / email / voice / iOS push)
   |
   v
 Tarsee Server (Railway)
@@ -216,7 +217,7 @@ Tarsee Server (Railway)
   +-- Browser:    Playwright (stealth) + captcha solving
   +-- Workspace:  SOUL.md, MEMORY.md, USER.md, CHECKPOINT.md
   +-- SQLite:     conversations, settings, vault, bot_memory, push_subs
-  +-- Channels:   Telegram, Discord, Email (IMAP IDLE + SMTP)
+  +-- Channels:   Telegram, Discord, WhatsApp, Slack (Socket Mode), Email (IMAP IDLE + SMTP)
   +-- Continuity: /checkpoint + 6h auto-checkpoint + session recap card
   +-- Retention:  daily 03:00 sweep (14d convs, 30d/50-file checkpoints)
   +-- Push:       VAPID + service worker — cron/webhook/tool fires
@@ -234,6 +235,7 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | Discord | [Developer Portal](https://discord.com/developers) | Text, images, PDFs, voice messages, reactions, presence |
 | Email | IMAP + SMTP (any provider — see below) | Real-time mail, `@mention` gate, CC/BCC context absorb, threaded replies |
 | WhatsApp | [WHAPI Cloud](https://panel.whapi.cloud) | Text, images, PDFs, voice notes (Whisper-transcribed), documents. DMs only. |
+| Slack | [api.slack.com/apps](https://api.slack.com/apps?new_app=1), from Tarsee's manifest | DMs and @mentions, a thread per conversation, native streaming with tool cards, files both ways, voice clips, `/tarsee` |
 
 **Discord:** Enable **Message Content Intent** in Bot settings. Invite with Send Messages, Read Messages, Add Reactions permissions. For `tarsee_discord_admin`, also give the bot's role Manage Channels, Manage Roles (to set who can see a channel) and Manage Webhooks; without them the tool says which permission is missing and changes nothing.
 
@@ -246,6 +248,17 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 5. Send a WhatsApp message to your bot's number — Tarsee replies via Claude.
 
 Direct messages only; group messages are silently ignored. Voice notes are transcribed locally via faster-whisper. Images and PDFs go to Claude vision. Other documents (DOCX, XLSX, ZIP, TXT, CSV, etc.) are saved to `workspace/uploads/` and Claude can `Read` them with the file tool.
+
+**Slack:** Tarsee connects with Socket Mode (it opens the connection to Slack), so there is no request URL to set up. The app comes from [`src/channels/slack-app-manifest.yml`](src/channels/slack-app-manifest.yml), which has every scope and event the bot uses.
+
+1. In Tarsee → `Settings > Channels > Slack`, click **Copy app manifest**.
+2. At [api.slack.com/apps](https://api.slack.com/apps?new_app=1): **Create New App → From a manifest**, pick your workspace, paste, **Create**.
+3. **Install App → Install to Workspace**, then copy the **Bot User OAuth Token** (`xoxb-…`).
+4. **Basic Information → App-Level Tokens → Generate Token and Scopes**, add the scope `connections:write`, generate, copy the token (`xapp-…`).
+5. Back in Tarsee, paste both tokens, check Enable, click Save. The section says ✓ Connected once the bot is in.
+6. DM the app, or `/invite` it to a channel and @mention it there.
+
+How it behaves: DMs are always answered; in channels and group DMs it answers an @mention (Settings > Bot Behavior can make it answer everything) and follows up without one in a thread it is already in. Each reply goes in a thread, and each thread is its own conversation in the sidebar. Replies stream with Slack's native streaming and a task card per tool; Slack ends one streamed message after 10 minutes or 12,000 characters, so a long reply carries on in the next message of the thread. If the workspace can't stream natively (Slack keeps some AI features for paid plans), replies are posted and edited instead, the way Discord's are. Commands: `/tarsee help`, `/tarsee status`, `/tarsee model …`; a command about one conversation (`/clear`, `/export`, `/think`) goes in its thread as `@Tarsee /clear`. Allowlist (Settings > Channels > Allowlist) takes member IDs (`U…`) and channel IDs (`C…`); people from another workspace (Slack Connect) are only answered when their own member ID is listed. Files up to 100 MB each way.
 
 ---
 
@@ -299,7 +312,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `/theme [name]` | List or switch themes: warm-charcoal, noir, solarized-light, jarvis-blue |
 | `/auto [on\|off]` | Toggle auto model routing (haiku/sonnet/opus by complexity) |
 | `/briefing [on\|off\|time]` | Morning briefing — run now, schedule daily, or set time |
-| `/send telegram\|discord\|email\|web` | Forward conversation context to another channel |
+| `/send telegram\|discord\|whatsapp\|slack\|web` | Forward conversation context to another channel |
 | `/fork [from #N]` | Branch conversation — copy history into new session |
 | `/play [name\|list\|save\|delete]` | Run or manage playbooks (multi-step AI workflows) |
 | `/email [check\|summary\|draft]` | Check inbox, summarize, or draft emails (CLI helpers — see also the email channel for real-time chat) |
@@ -325,7 +338,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | **Identity** | Bot name (set via IDENTITY.md) |
 | **Workspace** | SOUL.md, USER.md, MEMORY.md editors |
 | **AI Provider** | Model selection, API config |
-| **Channels** | Telegram, Discord, WhatsApp (WHAPI), Email (IMAP + SMTP with provider presets, mention keyword, reply-all marker, allowlist) |
+| **Channels** | Telegram, Discord, WhatsApp (WHAPI), Slack (Socket Mode, native streaming), Email (IMAP + SMTP with provider presets, mention keyword, reply-all marker, allowlist) |
 | **Appearance** | Theme switcher (4 built-in + plugin themes) + Web Push enable/disable/test |
 | **Automation** | Cron jobs, webhooks, retention settings |
 | **Voice** | TTS engine (Phonon by default, Edge TTS, ElevenLabs, Piper, Auto), Install Phonon button with download progress, Phonon voice, speed and bare-"P" peso option, STT model, voice selection. Pick `tiny.en`/`base.en`/`small.en` for English-only, or `tiny`/`base`/`small` for **multilingual** transcription with language auto-detect (needed for Tagalog, Taglish and other non-English voice notes — the `.en` checkpoints cannot transcribe them at all). |
@@ -426,6 +439,7 @@ src/
     security-audit.js          # Security checks
   channels/
     telegram.js, discord.js    # Bot integrations
+    whatsapp.js, slack.js      # (slack-app-manifest.yml: the Slack app)
     websocket.js               # Web UI real-time + cross-device sync
   voice/
     stt-handler.js             # faster-whisper STT

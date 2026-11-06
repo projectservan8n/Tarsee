@@ -202,11 +202,11 @@ const COMMANDS = {
 
   send: {
     description: "Forward conversation context to another channel",
-    usage: "/send [telegram|discord|whatsapp|web]",
+    usage: "/send [telegram|discord|whatsapp|slack|web]",
     handler: async (args, ctx) => {
-      if (!args) return "Usage: `/send telegram`, `/send discord`, `/send whatsapp`, `/send web`";
+      if (!args) return "Usage: `/send telegram`, `/send discord`, `/send whatsapp`, `/send slack`, `/send web`";
       const target = args.toLowerCase().trim();
-      const validChannels = ["telegram", "discord", "whatsapp", "web"];
+      const validChannels = ["telegram", "discord", "whatsapp", "slack", "web"];
       if (!validChannels.includes(target)) return `Unknown channel. Use: ${validChannels.join(", ")}`;
 
       if (!ctx.conversationId || !ctx.convStore) return "No active conversation.";
@@ -262,13 +262,13 @@ const COMMANDS = {
   },
 
   mention: {
-    description: "Show or set whether the bot requires @mention to respond (Discord/Telegram)",
-    usage: "/mention [required|off|status] [discord|telegram]",
+    description: "Show or set whether the bot requires @mention to respond (Discord/Telegram/Slack)",
+    usage: "/mention [required|off|status] [discord|telegram|slack]",
     handler: (args, ctx) => {
       const settingsStore = ctx.settingsStore;
       if (!settingsStore) return "Settings not available.";
 
-      const PLATFORMS = ["discord", "telegram"];
+      const PLATFORMS = ["discord", "telegram", "slack"];
       const valueAlias = {
         required: "required", on: "required", always: "required", strict: "required",
         off: "off", lazy: "off", any: "off", none: "off",
@@ -285,7 +285,7 @@ const COMMANDS = {
       if (tokens.length === 0 || tokens[0].toLowerCase() === "status") {
         const lines = ["**Mention mode**", ""];
         for (const p of PLATFORMS) lines.push(`- ${p}: ${labelFor(readMode(p))}`);
-        lines.push("", "Set with `/mention required` or `/mention off`. Add `discord` or `telegram` to target a specific platform.");
+        lines.push("", "Set with `/mention required` or `/mention off`. Add `discord`, `telegram` or `slack` to target a specific platform.");
         return lines.join("\n");
       }
 
@@ -300,13 +300,13 @@ const COMMANDS = {
         } else if (ctx.platform && PLATFORMS.includes(ctx.platform)) {
           platform = ctx.platform;
         } else {
-          return `Pick a platform: \`/mention ${t0} discord\` or \`/mention ${t0} telegram\`.`;
+          return `Pick a platform: \`/mention ${t0} discord\`, \`/mention ${t0} telegram\` or \`/mention ${t0} slack\`.`;
         }
       } else if (PLATFORMS.includes(t0)) {
         // Reversed order: /mention discord off
         platform = t0;
         const v = t1 ? valueAlias[t1] : null;
-        if (!v) return "Usage: `/mention required|off [discord|telegram]`";
+        if (!v) return "Usage: `/mention required|off [discord|telegram|slack]`";
         value = v;
       } else {
         return "Unknown value. Use `required` (must @mention) or `off` (any allowed message). Example: `/mention off telegram`.";

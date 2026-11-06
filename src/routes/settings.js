@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import { Router } from "express";
 import { SettingsStore } from "../db/settings.js";
 import { AI_PROVIDERS } from "../config/constants.js";
@@ -178,7 +179,39 @@ settingsRouter.post("/channel", (req, res) => {
     });
   }
 
-  // Token-based channels (Discord, Telegram, Slack).
+  if (type === "slack") {
+    // Two tokens: the bot token (xoxb-) for the Web API and the app-level token (xapp-) for the Socket Mode
+    // connection. Either one left out keeps the stored one, so a save from the page (which never gets the tokens
+    // back) changes only what was typed. They are easy to paste the wrong way round, so say which is which.
+    const prev = settingsStore.get("channel.slack") || {};
+    const token = String(body.token || "").trim();
+    const appToken = String(body.appToken || "").trim();
+    if (token && !token.startsWith("xoxb-")) {
+      return res.status(400).json({ error: "The bot token starts with xoxb- (Slack app → OAuth & Permissions → Bot User OAuth Token). An xapp- token goes in the app-level token box." });
+    }
+    if (appToken && !appToken.startsWith("xapp-")) {
+      return res.status(400).json({ error: "The app-level token starts with xapp- (Slack app → Basic Information → App-Level Tokens, scope connections:write)." });
+    }
+    const effectiveToken = token || prev.token || null;
+    const effectiveAppToken = appToken || prev.appToken || null;
+    if (enabled && !effectiveToken) return res.status(400).json({ error: "The bot token (xoxb-) is required to turn Slack on" });
+    if (enabled && !effectiveAppToken) return res.status(400).json({ error: "The app-level token (xapp-) is required to turn Slack on: Socket Mode connects with it" });
+
+    const { type: _t, enabled: _e, token: _tk, appToken: _at, ...opts } = body;
+    settingsStore.set("channel.slack", { ...prev, ...opts, enabled: !!enabled, token: effectiveToken, appToken: effectiveAppToken });
+
+    const channelManager = req.app.get("channelManager");
+    if (channelManager && enabled) {
+      channelManager.restart("slack").catch((err) => {
+        console.warn("[channels] auto-start slack failed:", err.message);
+      });
+    } else if (channelManager) {
+      channelManager.stop("slack").catch(() => {});
+    }
+    return res.json({ ok: true, type: "slack", enabled: !!enabled });
+  }
+
+  // Token-based channels (Discord, Telegram).
   //
   // Preserve the stored token when the client does not send one, the way the
   // email and WhatsApp branches already do. GET /api/settings no longer hands
@@ -212,6 +245,20 @@ settingsRouter.post("/channel", (req, res) => {
   }
 
   res.json({ ok: true, type, enabled: !!enabled });
+});
+
+/**
+ * GET /api/settings/channel/slack/manifest
+ * The Slack app manifest (src/channels/slack-app-manifest.yml), for the "Copy manifest" button: pasted into
+ * api.slack.com/apps → Create New App → From a manifest, it sets up every scope and event the bot uses.
+ */
+settingsRouter.get("/channel/slack/manifest", (_req, res) => {
+  try {
+    const yml = fs.readFileSync(new URL("../channels/slack-app-manifest.yml", import.meta.url), "utf8");
+    res.type("text/yaml").send(yml);
+  } catch (err) {
+    res.status(500).json({ error: `Could not read the Slack app manifest: ${err.message}` });
+  }
 });
 
 /**

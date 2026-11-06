@@ -231,7 +231,7 @@ const Setup = {
       <div style="background:var(--bg-elevated);border-radius:12px;padding:24px;max-width:420px;width:100%;border:1px solid var(--border)">
         ${this._progressBar(4)}
         <h2 style="font-size:18px;margin-bottom:4px">Connect Channels</h2>
-        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">Optional: talk to your agent from Telegram or Discord too.</p>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">Optional: talk to your agent from Telegram, Discord or Slack too.</p>
 
         <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">
           <a href="https://t.me/BotFather" target="_blank" style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--bg-input);border-radius:8px;text-decoration:none;color:var(--text);border:1px solid var(--border)">
@@ -244,6 +244,12 @@ const Setup = {
             <div>
               <strong>Discord</strong>
               <div style="font-size:11px;color:var(--text-muted)">Create a bot in Developer Portal, enable Message Content Intent</div>
+            </div>
+          </a>
+          <a href="https://api.slack.com/apps?new_app=1" target="_blank" style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--bg-input);border-radius:8px;text-decoration:none;color:var(--text);border:1px solid var(--border)">
+            <div>
+              <strong>Slack</strong>
+              <div style="font-size:11px;color:var(--text-muted)">Create an app from Tarsee's manifest (Settings > Channels > Copy app manifest), paste its two tokens</div>
             </div>
           </a>
         </div>
@@ -274,7 +280,7 @@ const Setup = {
       { selector: "#voiceModeBtn", text: "Hold to talk: voice mode with speech-to-text", pos: "below" },
       { selector: "#consoleToggleBtn", text: "Server console: see what your agent is doing", pos: "below" },
       { selector: "#settingsBtn", text: "Settings: configure everything", pos: "above" },
-      { selector: ".channel-list", text: "Your channels: web, Telegram, Discord", pos: "right" },
+      { selector: ".channel-list", text: "Your channels: web, Telegram, Discord, WhatsApp, Slack, email", pos: "right" },
     ];
 
     let currentTip = 0;

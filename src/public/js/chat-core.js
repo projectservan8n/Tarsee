@@ -8,7 +8,7 @@
  * was said. So:
  *
  *   groupChats    the sidebar: the chats grouped by where they live (Web,
- *                 Telegram, Discord, WhatsApp, Email), plain rows,
+ *                 Telegram, Discord, WhatsApp, Email, Slack), plain rows,
  *                 newest first, a group longer than a few rows folded to "Show
  *                 n more", the search box's words, collapsed groups
  *   chatName      a chat's name as the sidebar and the title show it
@@ -54,6 +54,7 @@
     { id: "discord", label: "Discord", platforms: ["discord"] },
     { id: "whatsapp", label: "WhatsApp", platforms: ["whatsapp"] },
     { id: "email", label: "Email", platforms: ["email"] },
+    { id: "slack", label: "Slack", platforms: ["slack"] },
   ];
   const BACKGROUND = { id: "background", label: "Background" };
   /** A group shows this many rows, then "Show n more" (the open chat and a working one always show). */

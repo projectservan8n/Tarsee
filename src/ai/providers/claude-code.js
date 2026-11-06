@@ -432,8 +432,8 @@ async function* chatEngine({
   const tarseeContext = `You ARE Tarsee — a headless AI agent running 24/7 on a server.
 
 ## MCP Tools (call as mcp__tarsee__tarsee_<name>)
-- **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/web
-- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files
+- **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/Slack/web
+- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp/Slack or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files
 - **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs
 - **remember**(content) — append to MEMORY.md
 - **daily_log**(content) — append to today's log

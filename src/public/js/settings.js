@@ -32,6 +32,13 @@ const Settings = {
       whatsappWebhookCopy: document.getElementById("settingsWhatsappWebhookCopy"),
       whatsappWebhookRegenerate: document.getElementById("settingsWhatsappWebhookRegenerate"),
       saveWhatsappBtn: document.getElementById("saveWhatsappBtn"),
+      // Slack channel (Socket Mode: a bot token and an app-level token)
+      slackEnabled: document.getElementById("settingsSlackEnabled"),
+      slackToken: document.getElementById("settingsSlackToken"),
+      slackAppToken: document.getElementById("settingsSlackAppToken"),
+      slackManifestCopy: document.getElementById("settingsSlackManifestCopy"),
+      slackStatus: document.getElementById("slackChannelStatus"),
+      saveSlackBtn: document.getElementById("saveSlackBtn"),
       // Privacy / redaction toggle (security tab)
       redactSecrets: document.getElementById("settingsRedactSecrets"),
       // Email channel
@@ -58,6 +65,7 @@ const Settings = {
       // Mention mode (per-platform toggle for guild/group bots)
       discordMentionMode: document.getElementById("settingsDiscordMentionMode"),
       telegramMentionMode: document.getElementById("settingsTelegramMentionMode"),
+      slackMentionMode: document.getElementById("settingsSlackMentionMode"),
       saveMentionModeBtn: document.getElementById("saveMentionModeBtn"),
       // Identity
       botName: document.getElementById("settingsBotName"),
@@ -233,6 +241,8 @@ const Settings = {
     this.elements.saveWhatsappBtn?.addEventListener("click", () => this.saveWhatsappChannel());
     this.elements.whatsappWebhookCopy?.addEventListener("click", () => this.copyWhatsappWebhook());
     this.elements.whatsappWebhookRegenerate?.addEventListener("click", () => this.regenerateWhatsappSecret());
+    this.elements.saveSlackBtn?.addEventListener("click", () => this.saveSlackChannel());
+    this.elements.slackManifestCopy?.addEventListener("click", () => this.copySlackManifest());
 
     // API Token mask + reveal + copy. The token sits in API.token already
     // (loaded at login for WebSocket auth), so the reveal toggle is purely
@@ -664,7 +674,8 @@ const Settings = {
       const whatsappAllow = settings.find((s) => s.key === "allowlist.whatsapp")?.value;
       if (telegramAllow) document.getElementById("settingsTelegramAllowlist").value = Array.isArray(telegramAllow) ? telegramAllow.join("\n") : telegramAllow;
       if (discordAllow) document.getElementById("settingsDiscordAllowlist").value = Array.isArray(discordAllow) ? discordAllow.join("\n") : discordAllow;
-      if (slackAllow) document.getElementById("settingsSlackAllowlist").value = Array.isArray(slackAllow) ? slackAllow.join("\n") : slackAllow;
+      const slackAllowEl = document.getElementById("settingsSlackAllowlist");
+      if (slackAllow && slackAllowEl) slackAllowEl.value = Array.isArray(slackAllow) ? slackAllow.join("\n") : slackAllow;
       if (whatsappAllow) document.getElementById("settingsWhatsappAllowlist").value = Array.isArray(whatsappAllow) ? whatsappAllow.join("\n") : whatsappAllow;
 
       // Email channel
@@ -672,6 +683,9 @@ const Settings = {
 
       // WhatsApp channel (via WHAPI)
       this.loadWhatsappChannel(settings);
+
+      // Slack channel
+      this.loadSlackChannel(settings);
 
       // Privacy: redact-secrets toggle (default on if unset)
       if (this.elements.redactSecrets) {
@@ -707,6 +721,10 @@ const Settings = {
       // Mention mode (Discord/Telegram per-platform toggle)
       const discordMode = settings.find((s) => s.key === "discord.mention_mode")?.value;
       const telegramMode = settings.find((s) => s.key === "telegram.mention_mode")?.value;
+      const slackMode = settings.find((s) => s.key === "slack.mention_mode")?.value;
+      if (this.elements.slackMentionMode) {
+        this.elements.slackMentionMode.value = slackMode === "off" ? "off" : "required";
+      }
       if (this.elements.discordMentionMode) {
         this.elements.discordMentionMode.value = discordMode === "off" ? "off" : "required";
       }
@@ -815,6 +833,85 @@ const Settings = {
     }
   },
 
+  loadSlackChannel(settings) {
+    const cfg = settings.find((s) => s.key === "channel.slack")?.value || {};
+    const e = this.elements;
+    if (!e.slackEnabled) return; // UI not present
+    e.slackEnabled.checked = !!cfg.enabled;
+    // Tokens never come back to the browser: the server says whether each one is stored.
+    if (e.slackToken) {
+      e.slackToken.value = "";
+      e.slackToken.placeholder = cfg.hasToken ? "Stored — type a new xoxb- token to replace it" : "xoxb-… (Install App → Bot User OAuth Token)";
+    }
+    if (e.slackAppToken) {
+      e.slackAppToken.value = "";
+      e.slackAppToken.placeholder = cfg.hasAppToken ? "Stored — type a new xapp- token to replace it" : "xapp-… (Basic Information → App-Level Tokens → Generate, scope connections:write)";
+    }
+    if (cfg.enabled) this.showSlackStatus();
+  },
+
+  async saveSlackChannel() {
+    const e = this.elements;
+    try {
+      const token = e.slackToken.value.trim();
+      const appToken = e.slackAppToken.value.trim();
+      const enabled = e.slackEnabled.checked;
+      await API.saveChannel({ type: "slack", token, appToken, enabled });
+      e.slackToken.value = "";
+      e.slackAppToken.value = "";
+      if (token) e.slackToken.placeholder = "Stored — type a new xoxb- token to replace it";
+      if (appToken) e.slackAppToken.placeholder = "Stored — type a new xapp- token to replace it";
+      App.showToast(enabled ? "Slack channel saved + connecting" : "Slack channel saved (off)", "success");
+      if (enabled) this.showSlackStatus({ wait: true });
+      else if (e.slackStatus) e.slackStatus.textContent = "Off";
+    } catch (err) {
+      App.showToast(err.message || "Failed to save Slack channel", "error");
+    }
+  },
+
+  /** Whether the Slack bot is connected, or why not. wait: it was just saved, so give it a few seconds to connect. */
+  async showSlackStatus({ wait = false } = {}) {
+    const el = this.elements.slackStatus;
+    if (!el) return;
+    el.textContent = wait ? "Connecting…" : "";
+    const tries = wait ? 10 : 1;
+    for (let i = 0; i < tries; i++) {
+      if (i) await new Promise((r) => setTimeout(r, 1500));
+      try {
+        const s = (await API.getStatus())?.channels?.slack;
+        if (s?.status === "running") { el.textContent = "✓ Connected"; return; }
+        if (s?.status === "error") { el.textContent = `✗ ${s.error || "Could not connect"}`; return; }
+        if (!wait) { el.textContent = s?.status === "stopped" ? "Not connected yet" : ""; return; }
+      } catch { /* status is best-effort */ }
+    }
+    el.textContent = "Still connecting — check the Console for [slack] lines";
+  },
+
+  async copySlackManifest() {
+    try {
+      const res = await API.request("/api/settings/channel/slack/manifest");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const yml = await res.text();
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(yml);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = yml;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "absolute";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        if (!ok) throw new Error("the browser would not copy");
+      }
+      App.showToast("Manifest copied: paste it at api.slack.com/apps → Create New App → From a manifest", "success");
+    } catch (err) {
+      App.showToast("Copy failed: " + (err?.message || "unknown"), "error");
+    }
+  },
+
   async saveWhatsappChannel() {
     try {
       const token = this.elements.whatsappToken.value.trim();
@@ -894,6 +991,7 @@ const Settings = {
       await API.json("/api/settings/general", { method: "POST", body: { key: "allowlist.telegram", value: JSON.stringify(parse("settingsTelegramAllowlist")) } });
       await API.json("/api/settings/general", { method: "POST", body: { key: "allowlist.discord", value: JSON.stringify(parse("settingsDiscordAllowlist")) } });
       await API.json("/api/settings/general", { method: "POST", body: { key: "allowlist.whatsapp", value: JSON.stringify(parse("settingsWhatsappAllowlist")) } });
+      await API.json("/api/settings/general", { method: "POST", body: { key: "allowlist.slack", value: JSON.stringify(parse("settingsSlackAllowlist")) } });
       App.showToast("Allowlist saved", "success");
     } catch (err) {
       App.showToast(err.message, "error");
@@ -904,19 +1002,22 @@ const Settings = {
     try {
       const discordMode = this.elements.discordMentionMode?.value === "off" ? "off" : "required";
       const telegramMode = this.elements.telegramMentionMode?.value === "off" ? "off" : "required";
+      const slackMode = this.elements.slackMentionMode?.value === "off" ? "off" : "required";
 
       // Footgun guard: warn if switching to "off" while the matching allowlist
       // is empty. Empty allowlist + mode=off means the bot will respond to
       // anyone in any channel/chat it can see. Confirm before saving.
       const discordAllow = (document.getElementById("settingsDiscordAllowlist")?.value || "").split("\n").map(s => s.trim()).filter(Boolean);
       const telegramAllow = (document.getElementById("settingsTelegramAllowlist")?.value || "").split("\n").map(s => s.trim()).filter(Boolean);
+      const slackAllow = (document.getElementById("settingsSlackAllowlist")?.value || "").split("\n").map(s => s.trim()).filter(Boolean);
       const dangers = [];
       if (discordMode === "off" && discordAllow.length === 0) dangers.push("Discord");
       if (telegramMode === "off" && telegramAllow.length === 0) dangers.push("Telegram");
+      if (slackMode === "off" && slackAllow.length === 0) dangers.push("Slack");
       if (dangers.length > 0) {
         const ok = await TarseeDialog.ask({
           title: `${dangers.join(" and ")}: mention mode is OFF and the allowlist is empty.`,
-          text: `The bot will respond to EVERY message in EVERY ${dangers.length > 1 ? "channel/chat" : (dangers[0] === "Discord" ? "channel" : "chat")} it can see.\n\n` +
+          text: `The bot will respond to EVERY message in EVERY ${dangers.length > 1 ? "channel/chat" : (dangers[0] === "Telegram" ? "chat" : "channel")} it can see.\n\n` +
             `Continue?`,
           yes: "Continue", no: "Cancel", danger: true,
         });
@@ -925,6 +1026,7 @@ const Settings = {
 
       await API.json("/api/settings/general", { method: "POST", body: { key: "discord.mention_mode", value: discordMode } });
       await API.json("/api/settings/general", { method: "POST", body: { key: "telegram.mention_mode", value: telegramMode } });
+      await API.json("/api/settings/general", { method: "POST", body: { key: "slack.mention_mode", value: slackMode } });
       App.showToast("Bot behavior saved", "success");
     } catch (err) {
       App.showToast(err.message || "Failed to save bot behavior", "error");

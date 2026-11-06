@@ -381,14 +381,14 @@ export const TOOLS = [
 
   {
     name: "send_file",
-    description: "Send a file as a real attachment (PDF, HTML report, image, audio, video, zip, spreadsheet, anything) to a Telegram, Discord or WhatsApp chat, or to one of the dashboard's own chats (web: it shows there as a card that opens in the viewer). Use it whenever someone asks for a file: never answer with a folder path instead, and never say a channel can't take files. With no channel_id it goes to the chat you are talking in. The file must already exist on disk; a relative path is read from the workspace. Size caps: Telegram 50 MB, Discord 25 MB, WhatsApp 16 MB, web 50 MB. For email, attach files with send_email_thread.",
+    description: "Send a file as a real attachment (PDF, HTML report, image, audio, video, zip, spreadsheet, anything) to a Telegram, Discord, WhatsApp or Slack chat, or to one of the dashboard's own chats (web: it shows there as a card that opens in the viewer). Use it whenever someone asks for a file: never answer with a folder path instead, and never say a channel can't take files. With no channel_id it goes to the chat you are talking in (on Slack, the same thread). The file must already exist on disk; a relative path is read from the workspace. Size caps: Telegram 50 MB, Discord 25 MB, WhatsApp 16 MB, Slack 100 MB, web 50 MB. For email, attach files with send_email_thread.",
     input_schema: {
       type: "object",
       properties: {
         channel: {
           type: "string",
           description: "The channel to send to (web: one of the dashboard's own chats)",
-          enum: ["telegram", "discord", "whatsapp", "web"],
+          enum: ["telegram", "discord", "whatsapp", "slack", "web"],
         },
         file_path: {
           type: "string",
@@ -549,14 +549,15 @@ export const TOOLS = [
  * Get tool definitions for the AI API (Anthropic format).
  * OpenAI format conversion happens in the provider.
  */
-// The app's channel manager, for turns whose tool context has none. Telegram, Discord, WhatsApp and email turns
+// The app's channel manager, for turns whose tool context has none. Telegram, Discord, WhatsApp, Slack and email turns
 // build their context without it, so send_message from a Telegram chat used to fall through to "saved to web chat"
 // and never reach Telegram. server.js sets it once the channels start.
 let _channelManager = null;
 export function setToolsChannelManager(channelManager) { _channelManager = channelManager || null; }
 
 // The upload caps of each channel's bot API, in MB.
-const SEND_FILE_CAP_MB = { telegram: 50, discord: 25, whatsapp: 16, web: 50 };
+// Slack takes up to 1 GB; 100 MB is Tarsee's own cap (the upload is read into memory).
+const SEND_FILE_CAP_MB = { telegram: 50, discord: 25, whatsapp: 16, slack: 100, web: 50 };
 
 /** The chat to send to for a channel (lib/chat-target.js): the given id, this turn's chat, or the latest one. */
 async function chatTargetFor(channel, channelId, ctx) {
@@ -893,7 +894,7 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
   // the one place the policy has to be applied.
   const gate = await checkToolPolicy(toolName, toolInput, ctx);
   if (gate) return gate;
-  // Channel turns (Telegram, Discord, WhatsApp, email) build their context with no channel manager: the app's.
+  // Channel turns (Telegram, Discord, WhatsApp, Slack, email) build their context with no channel manager: the app's.
   if (!ctx.channelManager && _channelManager) ctx = { ...ctx, channelManager: _channelManager };
 
   try {
@@ -1210,7 +1211,7 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           }
         }
 
-        // For external channels (Telegram, Discord, WhatsApp), push via ChannelManager
+        // For external channels (Telegram, Discord, WhatsApp, Slack), push via ChannelManager
         const channelManager = ctx.channelManager;
         if (channel !== "web" && channelManager) {
           try {

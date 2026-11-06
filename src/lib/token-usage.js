@@ -330,7 +330,7 @@ export function modelLabel(id) {
 
 /** The channels a turn can come from (the providers' liveSource), as the page names them. */
 const CHANNEL_LABELS = {
-  web: "Web", telegram: "Telegram", discord: "Discord", whatsapp: "WhatsApp", email: "Email",
+  web: "Web", telegram: "Telegram", discord: "Discord", whatsapp: "WhatsApp", slack: "Slack", email: "Email",
   cron: "Crons", heartbeat: "Heartbeat", boot: "Boot checklist", api: "API",
 };
 

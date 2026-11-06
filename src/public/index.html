@@ -113,7 +113,7 @@
 
     <!-- Sidebar -->
     <!-- Sidebar: the main menu, as on claude.ai. New chat and search at the top, then every chat grouped by where it
-         lives (Web, Telegram, Discord, WhatsApp, Email), plain rows with a quiet time (js/chat.js
+         lives (Web, Telegram, Discord, WhatsApp, Email, Slack), plain rows with a quiet time (js/chat.js
          renderChannelList, rules in js/chat-core.js), Usage, Settings and Sign out at the bottom. A drawer on a phone. -->
     <aside class="sidebar" id="sidebar" aria-label="Chats">
       <div class="sidebar-header">
@@ -465,6 +465,49 @@
               <button class="btn btn-primary" id="saveWhatsappBtn">Save WhatsApp Channel</button>
             </div>
 
+            <div class="settings-section" id="slackChannelSection">
+              <h3>Slack</h3>
+              <div class="hint mb-3">
+                DM Tarsee in Slack, or @mention it in a channel it's in. Every reply goes in a thread, and each thread is
+                its own conversation; a thread Tarsee is in needs no more mentions. Replies stream live with a card for
+                each tool it runs. It connects out to Slack (Socket Mode), so there is no URL to set up.
+              </div>
+
+              <div class="form-group">
+                <label>1. Create the Slack app</label>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                  <button type="button" class="btn btn-sm btn-secondary" id="settingsSlackManifestCopy">Copy app manifest</button>
+                  <a class="btn btn-sm btn-secondary" href="https://api.slack.com/apps?new_app=1" target="_blank" rel="noopener">Open api.slack.com/apps</a>
+                </div>
+                <div class="hint">Create New App → From a manifest → pick your workspace → paste → Create. Then Install App → Install to Workspace.</div>
+              </div>
+
+              <div class="form-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="settingsSlackEnabled">
+                  <span>Enable Slack channel</span>
+                </label>
+              </div>
+
+              <div class="form-group">
+                <label>2. Bot token</label>
+                <form style="display:contents" autocomplete="off" data-no-submit>
+                  <input type="password" id="settingsSlackToken" placeholder="xoxb-… (Install App → Bot User OAuth Token)" autocomplete="off">
+                </form>
+              </div>
+
+              <div class="form-group">
+                <label>3. App-level token</label>
+                <form style="display:contents" autocomplete="off" data-no-submit>
+                  <input type="password" id="settingsSlackAppToken" placeholder="xapp-… (Basic Information → App-Level Tokens → Generate, scope connections:write)" autocomplete="off">
+                </form>
+                <div class="hint">Both are stored encrypted in your Tarsee database. Leave a box empty to keep the token already saved.</div>
+              </div>
+
+              <button class="btn btn-primary" id="saveSlackBtn">Save Slack Channel</button>
+              <span id="slackChannelStatus" class="hint" style="margin-left:12px;"></span>
+            </div>
+
             <div class="settings-section" id="emailChannelSection">
               <h3>Email</h3>
               <div class="hint mb-3">
@@ -591,6 +634,12 @@
                 <textarea id="settingsWhatsappAllowlist" rows="3" placeholder="One per line. Phone number in international format.&#10;e.g. 447700900000 or +44 770 090 0000&#10;Plus sign, spaces, and dashes are ignored." spellcheck="false" class="textarea-mono"></textarea>
               </div>
 
+              <div class="form-group">
+                <label>Slack: Allowed Channels / Users</label>
+                <textarea id="settingsSlackAllowlist" rows="3" placeholder="One per line. Member ID (U…) or channel ID (C…).&#10;Profile → ⋮ → Copy member ID. Channel name → About → Channel ID.&#10;Listed people are answered anywhere, and anyone in listed channels." spellcheck="false" class="textarea-mono"></textarea>
+                <div class="hint">People from another workspace (Slack Connect) are only answered when their own member ID is listed.</div>
+              </div>
+
               <button class="btn btn-sm btn-primary" id="saveAllowlistBtn">Save Allowlist</button>
             </div>
 
@@ -614,6 +663,15 @@
                   <option value="off">Respond to every message from allowed chats (lazy)</option>
                 </select>
                 <div class="hint">Private chats always respond regardless of this setting.</div>
+              </div>
+
+              <div class="form-group">
+                <label>Slack: Mention mode</label>
+                <select id="settingsSlackMentionMode">
+                  <option value="required">Require @mention (default)</option>
+                  <option value="off">Respond to every message in channels it's in (lazy)</option>
+                </select>
+                <div class="hint">DMs, and threads Tarsee is already in, always respond regardless of this setting.</div>
               </div>
 
               <button class="btn btn-sm btn-primary" id="saveMentionModeBtn">Save Bot Behavior</button>
