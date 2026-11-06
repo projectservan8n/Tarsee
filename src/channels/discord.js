@@ -478,6 +478,11 @@ ${sendFileHint("discord")}`,
               .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
             fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
             await postToolStatus(event);
+          } else if (event.type === "tool_result") {
+            // Claude Code runs the tools itself and reports each result here, then ends the turn with "end_turn", so
+            // the tool loop below never runs for it. Without this every status line stayed "⚙️ Running…" for good.
+            const tc = toolCalls.find((t) => t.id === event.id);
+            await markToolDone(event.id, tc?.name || "tool", tc?.input || {}, event.ok === false ? "error" : "");
           } else if (event.type === "error") {
             if (event.recoverable && !sessionRetried) {
               sessionRetried = true;

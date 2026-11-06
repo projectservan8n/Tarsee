@@ -20,6 +20,8 @@ import envConfig from "../config/env.js";
  *
  * @param {object} config - { token, enabled, allowedChats?, ackReaction?, streaming? }
  * @param {import('better-sqlite3').Database} db
+ * @param {object} [opts] - apiRoot: the Bot API base; chatStream: the model stream (ai/router.js chatStream when left
+ *   out); deliverPending (see manager.js). Tests point the first two at 127.0.0.1 and a scripted model.
  * @returns {Promise<{stop: Function}>}
  */
 export async function createTelegramBot(config, db, opts = {}) {
@@ -391,7 +393,7 @@ ${sendFileHint("telegram")}`,
         let recoverRound = false;
 
         const existingSessionId = convStore.getClaudeSessionId(convId);
-        const stream = chatStream({
+        const stream = (opts.chatStream || chatStream)({
           liveSource: "telegram",
           provider: activeProvider.provider,
           model: activeProvider.model,
@@ -432,6 +434,11 @@ ${sendFileHint("telegram")}`,
               .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
             fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
             await postToolStatus(event);
+          } else if (event.type === "tool_result") {
+            // Claude Code runs the tools itself and reports each result here, then ends the turn with "end_turn", so
+            // the tool loop below never runs for it. Without this every status line stayed "⚙️ Running…" for good.
+            const tc = toolCalls.find((t) => t.id === event.id);
+            await markToolDone(event.id, tc?.name || "tool", tc?.input || {}, event.ok === false ? "error" : "");
           } else if (event.type === "error") {
             if (event.recoverable && !sessionRetried) {
               sessionRetried = true;
