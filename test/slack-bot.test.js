@@ -43,7 +43,11 @@ const of = (method) => calls.filter(([m]) => m === method).map(([, a]) => a);
 
 const handlers = {
   "auth.test": () => ({ ok: true, user_id: "UBOT", team_id: "T1", bot_id: "BBOT", user: "tarsee", team: "Test Team" }),
-  "apps.connections.open": () => (connectError ? { ok: false, error: connectError } : { ok: true, url: `ws://127.0.0.1:${port}${connectPath}` }),
+  // As real Slack does: the app-level token only in the Authorization header. Sent in the body as well, it is refused.
+  "apps.connections.open": (args, headers) => {
+    if (args.token || headers.authorization !== "Bearer xapp-test") return { ok: false, error: "invalid_auth" };
+    return connectError ? { ok: false, error: connectError } : { ok: true, url: `ws://127.0.0.1:${port}${connectPath}` };
+  },
   "users.info": ({ user }) => ({ ok: true, user: { id: user, name: user.toLowerCase(), profile: { display_name: user === "U1" ? "Alice" : "", real_name: `Real ${user}` } } }),
   "conversations.info": ({ channel }) => ({ ok: true, channel: { id: channel, name: "ops" } }),
   "conversations.open": () => ({ ok: true, channel: { id: "DNEW" } }),
@@ -89,7 +93,7 @@ const server = http.createServer((req, res) => {
       const method = req.url.slice("/api/".length).split("?")[0];
       const args = parseArgs(req.headers["content-type"], body.toString("utf8"));
       calls.push([method, args]);
-      const out = handlers[method] ? handlers[method](args) : { ok: true };
+      const out = handlers[method] ? handlers[method](args, req.headers) : { ok: true };
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify(out));
     } else if (req.url.startsWith("/files-pri/")) {

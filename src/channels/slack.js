@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { App, LogLevel } from "@slack/bolt";
+import { App, LogLevel, webApi } from "@slack/bolt";
 import { chatStream } from "../ai/router.js";
 import { withConversationTurn } from "../lib/conversation-lock.js";
 import { ConversationStore } from "../db/conversations.js";
@@ -190,9 +190,11 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
       const code = slackErrorCode(err);
       throw new Error(code ? `Slack refused the bot token (xoxb-) (${code})` : `Slack auth check failed: ${err.message}`);
     }
-    // The app-level token, checked once before Bolt gets it, so a wrong one fails with a reason.
+    // The app-level token, checked once before Bolt gets it, so a wrong one fails with a reason. Its own client, as
+    // Bolt's Socket Mode uses: passed as an argument, the token is sent in the request body too, and Slack refuses an
+    // app-level token there (invalid_auth) even when the Authorization header is right.
     try {
-      await app.client.apps.connections.open({ token: config.appToken });
+      await new webApi.WebClient(config.appToken, { logLevel: LogLevel.WARN, ...clientOptions }).apps.connections.open();
     } catch (err) {
       const code = slackErrorCode(err);
       if (code === "missing_scope" || code === "not_allowed_token_type") {
