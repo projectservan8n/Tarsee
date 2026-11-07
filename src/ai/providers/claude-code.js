@@ -13,6 +13,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import config from "../../config/env.js";
 import { MODEL_TIERS, tierOf, getRecommendedModel } from "../../config/constants.js";
 import { SettingsStore } from "../../db/settings.js";
@@ -24,6 +25,10 @@ import { claimQueuedTurn, takeQueuedNote } from "../../lib/conversation-lock.js"
 import { costSaverEnv } from "../context-limits.js";
 import { agentVaultEnv } from "../agent-env.js";
 import { getSecurityManager } from "../../lib/security-manager.js";
+
+/** Tarsee's bundled skills (src/skills), handed to Claude Code as an additional directory. */
+export const BUNDLED_SKILLS_DIR = fileURLToPath(new URL("../../skills", import.meta.url));
+
 /**
  * Extract image blocks from content array.
  * Returns { images: ImageBlockParam[], text: string }
@@ -347,7 +352,7 @@ async function* chatEngine({
   const tarseeMcp = createTarseeMcp(toolCtx || {});
 
   // Skills directory — Claude Code discovers SKILL.md files here
-  const skillsDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "skills");
+  const skillsDir = BUNDLED_SKILLS_DIR;
 
   const builtinTools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"];
   // Without the mcp__tarsee__* entry, allowedTools silently filters out every

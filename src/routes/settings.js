@@ -498,7 +498,9 @@ settingsRouter.get("/skills-status", async (_req, res) => {
   const fs = await import("node:fs");
   const nodePath = await import("node:path");
   const { execSync } = await import("node:child_process");
-  const skillsDir = nodePath.default.join(nodePath.default.dirname(new URL(import.meta.url).pathname), "..", "skills");
+  // fileURLToPath, not .pathname: on Windows that is "/E:/AGENTIC%20SCALE%20AI/...", which no folder matches.
+  const { fileURLToPath } = await import("node:url");
+  const skillsDir = fileURLToPath(new URL("../skills", import.meta.url));
   try {
     const results = [];
     const dirs = fs.default.readdirSync(skillsDir, { withFileTypes: true }).filter(d => d.isDirectory());
