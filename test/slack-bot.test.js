@@ -240,10 +240,11 @@ describe("the Slack bot against a fake Slack", () => {
     assert.equal(text, "Let me check. Found **2** files ");
     assert.ok(!text.includes("[react"), "the reaction marker never reaches Slack");
 
-    const sends = calls.slice(from).map(([m, a]) => `${m}${a.name ? `:${a.name}` : ""}`);
-    assert.ok(sends.includes("reactions.add:eyes"), "👀 while it works");
-    assert.ok(sends.includes("reactions.remove:eyes"), "and off again after");
-    assert.ok(sends.includes("assistant.threads.setStatus"), "the 'is thinking' line");
+    const sends = () => calls.slice(from).map(([m, a]) => `${m}${a.name ? `:${a.name}` : ""}`);
+    assert.ok(sends().includes("reactions.add:eyes"), "👀 while it works");
+    // Taken off once the stream has stopped, so it can arrive a moment after chat.stopStream.
+    await until(() => sends().includes("reactions.remove:eyes"), "the 👀 to come off again after");
+    assert.ok(sends().includes("assistant.threads.setStatus"), "the 'is thinking' line");
 
     const opts = streamCalls.at(-1);
     assert.equal(opts.liveSource, "slack");
