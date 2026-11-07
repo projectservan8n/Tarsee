@@ -208,6 +208,7 @@ describe("the Slack bot against a fake Slack", () => {
   it("connects over Socket Mode with the app token, after checking the bot token", () => {
     assert.ok(of("auth.test").length >= 1);
     assert.equal(of("apps.connections.open").length >= 1, true);
+    assert.equal(bot.identity, "@tarsee in Test Team", "who it connected as, for Settings → Channels");
   });
 
   it("acknowledges events and says so when no AI provider is set up", async () => {
@@ -512,12 +513,12 @@ describe("the Slack bot against a fake Slack", () => {
     const t0 = Date.now();
     await assert.rejects(
       () => createSlackBot({ enabled: true, token: "xoxb-test", appToken: "xapp-test" }, db, { slackApiUrl: `http://127.0.0.1:${port}/api/`, chatStream: scripted }),
-      /connections:write/,
+      (err) => /connections:write/.test(err.message) && err.refused === true,
     );
     connectError = "invalid_auth";
     await assert.rejects(
       () => createSlackBot({ enabled: true, token: "xoxb-test", appToken: "xapp-test" }, db, { slackApiUrl: `http://127.0.0.1:${port}/api/`, chatStream: scripted }),
-      /app-level token \(xapp-\)/,
+      (err) => /app-level token \(xapp-\)/.test(err.message) && err.refused === true,
     );
     connectError = null;
     assert.ok(Date.now() - t0 < 5000, "no retry loop");

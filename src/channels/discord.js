@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Client, GatewayIntentBits, Events, ActivityType, ChannelType } from "discord.js";
+import { Client, GatewayIntentBits, Events, ActivityType, ChannelType, OAuth2Scopes, PermissionFlagsBits } from "discord.js";
 import { chatStream } from "../ai/router.js";
 import { withConversationTurn } from "../lib/conversation-lock.js";
 import { ConversationStore } from "../db/conversations.js";
@@ -15,6 +15,7 @@ import { transcribeAudio } from "../voice/stt-handler.js";
 import { formatForDiscord, splitMessageFenceSafe } from "../lib/discord-format.js";
 import envConfig from "../config/env.js";
 import { discordAdmin } from "../lib/discord-admin.js";
+import { refused } from "../lib/channel-errors.js";
 
 /**
  * Creates and starts a Discord bot.
@@ -635,11 +636,28 @@ ${sendFileHint("discord")}`,
     console.error("[discord] client error:", err.message);
   });
 
-  await client.login(config.token);
+  try {
+    await client.login(config.token);
+  } catch (err) {
+    const why = discordLoginError(err);
+    if (why) throw refused(why);
+    throw err;
+  }
 
+  // Read when asked: login can return a moment before discord.js has handled READY, which sets the user and app.
+  let inviteUrl = null;
   return {
     stop: async () => {
       await client.destroy();
+    },
+    /** Who it logged in as, for Settings → Channels: the bot's tag (its username), or null until Discord has said. */
+    get identity() {
+      return client.user ? client.user.tag || client.user.username : null;
+    },
+    /** The link that adds this bot to a server (Settings → Channels), or null until Discord has said who it is. */
+    get inviteUrl() {
+      inviteUrl ??= discordInviteUrl(client);
+      return inviteUrl;
     },
     /** Send a message to a Discord channel (outbound push). */
     sendMessage: async (channelId, text) => {
@@ -670,6 +688,43 @@ ${sendFileHint("discord")}`,
       });
     },
   };
+}
+
+/**
+ * What to do when Discord refuses the login, in place of discord.js's own words, or null for anything else (a network
+ * error, an outage), which keeps them. A refused token is TokenInvalid (or gateway close 4004 "Authentication
+ * failed"); Message Content left off in the Developer Portal is gateway close 4014 "Used disallowed intents".
+ */
+export function discordLoginError(err) {
+  const code = err?.code;
+  const message = String(err?.message || "");
+  if (code === "TokenInvalid" || code === 4004 || err?.status === 401 || /invalid token was provided|^authentication failed$/i.test(message)) {
+    return "Discord refused the bot token. In the Developer Portal: your app → Bot → Reset Token, then paste the new one.";
+  }
+  if (code === "DisallowedIntents" || code === 4014 || /disallowed intents/i.test(message)) {
+    return "Turn on Message Content Intent: Developer Portal → your app → Bot → Privileged Gateway Intents, save, then save here again.";
+  }
+  return null;
+}
+
+/**
+ * What the invite link asks for: what the bot needs to read a channel and answer in it, with files, reactions and
+ * threads. Tarsee registers no slash commands, so the link has the bot scope only.
+ */
+export const DISCORD_INVITE_PERMISSIONS = [
+  PermissionFlagsBits.ViewChannel,
+  PermissionFlagsBits.SendMessages,
+  PermissionFlagsBits.SendMessagesInThreads,
+  PermissionFlagsBits.ReadMessageHistory,
+  PermissionFlagsBits.AttachFiles,
+  PermissionFlagsBits.EmbedLinks,
+  PermissionFlagsBits.AddReactions,
+];
+
+/** The OAuth2 link that adds a logged-in client's bot to a server, or null before Discord has said which app it is. */
+export function discordInviteUrl(client) {
+  if (!client?.application) return null;
+  return client.generateInvite({ scopes: [OAuth2Scopes.Bot], permissions: DISCORD_INVITE_PERMISSIONS });
 }
 
 async function retryOnRateLimit(fn, maxRetries = 3) {

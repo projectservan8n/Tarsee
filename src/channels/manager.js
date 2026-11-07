@@ -68,6 +68,12 @@ export class ChannelManager {
           "| errno=" + (err.errno || "?"),
           "| cause=" + (err.cause?.code || err.cause?.message || "?"),
         );
+        // The platform refused the credential (lib/channel-errors.js): only a change in Settings can fix that, and
+        // trying again would only flip the status between "connecting" and the error for minutes.
+        if (err.refused) {
+          console.warn(`[channels] ${type}: not retrying a refused credential; fix it in Settings → Channels`);
+          return;
+        }
         if (last) return;
         const delay = Math.min(2_000 * Math.pow(2, attempt - 1), 45_000); // 2,4,8,16,32,45,45s
         console.warn(`[channels] retrying ${type} in ${delay}ms...`);
@@ -137,7 +143,11 @@ export class ChannelManager {
    */
   async stop(type) {
     const channel = this.channels.get(type);
-    if (!channel?.bot) return;
+    if (!channel?.bot) {
+      // One that failed to start has no bot to stop, but switched off it must not go on showing that failure.
+      if (channel?.status === "error") this.channels.delete(type);
+      return;
+    }
 
     console.log(`[channels] stopping ${type}...`);
     try {
@@ -210,9 +220,15 @@ export class ChannelManager {
   getStatus() {
     const result = {};
     for (const [type, channel] of this.channels) {
+      // Who it connected as (Settings shows "Connected as …"), and Discord's link to add the bot to a server. Only
+      // while running: during a restart the entry still holds the old bot, which is not the one connecting.
+      const bot = channel.status === "running" ? channel.bot : null;
       result[type] = {
         status: channel.status,
         error: channel.error || null,
+        identity: bot?.identity || null,
+        inviteUrl: bot?.inviteUrl || null,
+        warning: bot?.warning || null,   // running, but something could not be checked (WhatsApp: the token)
       };
     }
     // Add unconfigured channels

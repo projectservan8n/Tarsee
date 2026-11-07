@@ -37,6 +37,7 @@ import { SettingsStore } from "../db/settings.js";
 import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
 import { buildSystemPrompt } from "../lib/build-system-prompt.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
+import { refused } from "../lib/channel-errors.js";
 import {
   stripQuotedReply,
   hasMention,
@@ -480,11 +481,39 @@ export async function createEmailBot(rawConfig, db) {
     return notes.join("\n");
   }
 
+  // Check the SMTP login first: refused, no reply could ever be sent, so the channel fails with what to do about it.
+  // A server that can't be reached only warns (inbound still works, and some hosts block outbound SMTP), unless its
+  // name doesn't exist at all. Bounded, as nodemailer would wait up to two minutes on a server that never answers.
+  const smtpServer = { host: cfg.smtp.host, port: smtpTransportOptions(cfg.smtp).port, user: cfg.smtp.user };
+  try {
+    await withDeadline(smtp.verify(), 15_000, Object.assign(new Error("SMTP check timed out"), { code: "ETIMEDOUT" }));
+  } catch (err) {
+    const why = mailServerError(err, "SMTP", smtpServer);
+    if (why && (why.kind !== "unreachable" || why.notFound)) {
+      smtp.close();
+      throw why.kind === "unreachable" ? new Error(why.message) : refused(why.message);
+    }
+    console.warn(`[email] SMTP check failed (continuing anyway): ${why?.message || err.message}`);
+  }
+
   // Kick off connection. Errors surface to the caller so the ChannelManager
-  // records a proper "error" status.
-  await connect();
+  // records a proper "error" status, put as what to fix where we can. A failed
+  // first connect must not leave the reconnect loop running behind it.
+  try {
+    await connect();
+  } catch (err) {
+    shuttingDown = true;
+    if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    try { client?.close(); } catch {}
+    try { smtp.close(); } catch {}
+    const why = mailServerError(err, "IMAP", { host: cfg.imap.host, port: cfg.imap.port || 993, user: cfg.imap.user });
+    if (why) throw why.kind === "unreachable" ? new Error(why.message) : refused(why.message);
+    throw err;
+  }
 
   return {
+    /** The mailbox it listens on, for Settings → Channels. */
+    identity: selfAddress,
     /**
      * Stop the IMAP listener + close SMTP. Idempotent.
      */
@@ -541,6 +570,49 @@ export function smtpTransportOptions(smtpCfg = {}) {
     secure: smtpCfg.secure !== false && port === 465,
     auth: { user: smtpCfg.user, pass: smtpCfg.password },
   };
+}
+
+const UNREACHABLE_CODES = new Set([
+  "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ECONNRESET", "EHOSTUNREACH", "ENETUNREACH", "ETIMEDOUT", "EPIPE",
+  "CONNECT_TIMEOUT", "GREETING_TIMEOUT", "UPGRADE_TIMEOUT", // imapflow
+  "EDNS", "ESOCKET", "ECONNECTION", "ETLS", // nodemailer (the system code is kept as originalCode)
+]);
+
+/**
+ * A mail server's refusal or silence, put as what to fix: { kind, message } with kind "login" (the server refused the
+ * login: usually a normal password where the provider wants an app password), "password" (none saved) or
+ * "unreachable" (notFound: the host name doesn't exist). null for anything else, which keeps its own words.
+ * Reads imapflow's errors (authenticationFailed, responseText) and nodemailer's (code EAUTH, response).
+ *
+ * @param {Error} err
+ * @param {"IMAP"|"SMTP"} protocol
+ * @param {{host: string, port: number, user: string}} server
+ */
+export function mailServerError(err, protocol, { host, port, user } = {}) {
+  if (!err) return null;
+  const text = String(err.message || "");
+  if (text === "No password configured" || /^Missing credentials/.test(text) || err.code === "ENOAUTH") {
+    return { kind: "password", message: `No ${protocol} password is saved for ${user}. Enter its app password and save again.` };
+  }
+  if (err.authenticationFailed || err.code === "EAUTH") {
+    const said = String(err.responseText || (typeof err.response === "string" ? err.response : "")).replace(/\s+/g, " ").trim().slice(0, 200);
+    return {
+      kind: "login",
+      message: `The mail server refused the ${protocol} login for ${user}. Use an app password, not your normal password (see the steps for your provider).${said ? ` The server said: ${said}` : ""}`,
+    };
+  }
+  const codes = [err.code, err.originalCode, err.cause?.code];
+  if (codes.some((c) => UNREACHABLE_CODES.has(c))) {
+    return { kind: "unreachable", notFound: codes.includes("ENOTFOUND"), message: `Could not reach ${host}:${port}. Check the ${protocol} host and port.` };
+  }
+  return null;
+}
+
+/** The promise, or a rejection with `error` once `ms` have passed. */
+function withDeadline(promise, ms, error) {
+  let timer;
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(error), ms); });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
 
 function fromHeader({ cfg, selfAddress }) {

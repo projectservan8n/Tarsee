@@ -17,6 +17,7 @@ import {
 } from "../lib/slack-format.js";
 import { SlackReplyStream, slackErrorCode } from "../lib/slack-stream.js";
 import envConfig from "../config/env.js";
+import { refused } from "../lib/channel-errors.js";
 
 /**
  * Slack channel, over Socket Mode: Tarsee opens the connection to Slack, so there is no public URL to set up.
@@ -162,10 +163,10 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
   const settingsStore = new SettingsStore(db);
 
   if (!String(config.token || "").startsWith("xoxb-")) {
-    throw new Error("Slack bot token must start with xoxb- (OAuth & Permissions → Bot User OAuth Token)");
+    throw refused("Slack bot token must start with xoxb- (OAuth & Permissions → Bot User OAuth Token)");
   }
   if (!String(config.appToken || "").startsWith("xapp-")) {
-    throw new Error("Slack app token must start with xapp- (Basic Information → App-Level Tokens, scope connections:write)");
+    throw refused("Slack app token must start with xapp- (Basic Information → App-Level Tokens, scope connections:write)");
   }
 
   const clientOptions = slackApiUrl ? { slackApiUrl } : undefined;
@@ -195,7 +196,7 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
       who = await app.client.auth.test();
     } catch (err) {
       const code = slackErrorCode(err);
-      throw new Error(code ? `Slack refused the bot token (xoxb-) (${code})` : `Slack auth check failed: ${err.message}`);
+      throw code ? refused(`Slack refused the bot token (xoxb-) (${code})`) : new Error(`Slack auth check failed: ${err.message}`);
     }
     // The app-level token, checked once before Bolt gets it, so a wrong one fails with a reason. Its own client, as
     // Bolt's Socket Mode uses: passed as an argument, the token is sent in the request body too, and Slack refuses an
@@ -205,10 +206,10 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
     } catch (err) {
       const code = slackErrorCode(err);
       if (code === "missing_scope" || code === "not_allowed_token_type") {
-        throw new Error("The app-level token (xapp-) needs the connections:write scope: Slack app → Basic Information → App-Level Tokens → generate a token with connections:write");
+        throw refused("The app-level token (xapp-) needs the connections:write scope: Slack app → Basic Information → App-Level Tokens → generate a token with connections:write");
       }
       if (["invalid_auth", "not_authed", "account_inactive", "token_revoked", "token_expired"].includes(code)) {
-        throw new Error(`Slack refused the app-level token (xapp-) (${code})`);
+        throw refused(`Slack refused the app-level token (xapp-) (${code})`);
       }
       throw new Error(code ? `Slack would not open a Socket Mode connection (${code})` : `Could not reach Slack: ${err.message}`);
     }
@@ -909,6 +910,8 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
       for (const t of activeTurns.values()) t.stop();
       await app.stop();
     },
+    /** Who it connected as, for Settings → Channels. */
+    identity: `@${botHandle} in ${auth.team || botTeamId}`,
     /** { connected, downForMs }: how long the Socket Mode connection has been down (0 while it is up). */
     health: () => ({ connected: link.connected, downForMs: link.connected ? 0 : Date.now() - (link.downSince || Date.now()) }),
     /** Send a message to a Slack channel, DM or user (outbound push). threadId: a thread's ts. */
