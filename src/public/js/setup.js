@@ -3,7 +3,7 @@
  * Step 1: Connect Claude (terminal + claude login)
  * Step 2: Choose skills to install
  * Step 3: Personality interview OR skip
- * Step 4: Channel setup (Telegram/Discord)
+ * Step 4: Channel setup (Telegram, Discord, Slack, WhatsApp, email: js/channel-guides-core.js)
  *
  * Progress bar shows current step throughout.
  */
@@ -223,50 +223,48 @@ const Setup = {
   showChannelSetup() {
     this.currentStep = 4;
 
-    // Show a toast-like overlay on the main UI
+    // A card per platform (js/channel-guides-core.js): its name and what it takes. Clicking one opens Settings on
+    // that platform's section with its steps unfolded.
+    const platforms = window.ChannelGuides?.PLATFORMS || [];
+    const cards = platforms.map((p) => `
+          <button type="button" class="setup-channel-card" data-channel="${p.id}" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;background:var(--bg-input);border-radius:8px;color:var(--text);border:1px solid var(--border);text-align:left;cursor:pointer;width:100%;font:inherit">
+            <div>
+              <strong>${p.name}</strong>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${p.needs}</div>
+            </div>
+            <span style="font-size:12px;color:var(--accent);white-space:nowrap">Set up →</span>
+          </button>`).join("");
+
     const overlay = document.createElement("div");
     overlay.id = "setupChannelOverlay";
-    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:300;display:flex;align-items:center;justify-content:center;padding:20px";
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:300;display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto";
     overlay.innerHTML = `
-      <div style="background:var(--bg-elevated);border-radius:12px;padding:24px;max-width:420px;width:100%;border:1px solid var(--border)">
+      <div style="background:var(--bg-elevated);border-radius:12px;padding:24px;max-width:460px;width:100%;border:1px solid var(--border);margin:auto">
         ${this._progressBar(4)}
         <h2 style="font-size:18px;margin-bottom:4px">Connect Channels</h2>
-        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">Optional: talk to your agent from Telegram, Discord or Slack too.</p>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">Optional: talk to Tarsee from the apps you already use. Pick one and Settings shows you each step; you can add more any time in Settings → Channels.</p>
 
-        <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">
-          <a href="https://t.me/BotFather" target="_blank" style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--bg-input);border-radius:8px;text-decoration:none;color:var(--text);border:1px solid var(--border)">
-            <div>
-              <strong>Telegram</strong>
-              <div style="font-size:11px;color:var(--text-muted)">Create a bot with @BotFather, paste the token in Settings > Channels</div>
-            </div>
-          </a>
-          <a href="https://discord.com/developers/applications" target="_blank" style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--bg-input);border-radius:8px;text-decoration:none;color:var(--text);border:1px solid var(--border)">
-            <div>
-              <strong>Discord</strong>
-              <div style="font-size:11px;color:var(--text-muted)">Create a bot in Developer Portal, enable Message Content Intent</div>
-            </div>
-          </a>
-          <a href="https://api.slack.com/apps?new_app=1" target="_blank" style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--bg-input);border-radius:8px;text-decoration:none;color:var(--text);border:1px solid var(--border)">
-            <div>
-              <strong>Slack</strong>
-              <div style="font-size:11px;color:var(--text-muted)">Create an app from Tarsee's manifest (Settings > Channels > Copy app manifest), paste its two tokens</div>
-            </div>
-          </a>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px">${cards}
         </div>
 
         <div style="display:flex;gap:8px">
           <button class="btn btn-ghost" id="setupChannelSettings" style="flex:1;padding:10px">Open Settings</button>
-          <button class="btn btn-primary" id="setupChannelDone" style="flex:1;padding:10px">Done, start chatting</button>
+          <button class="btn btn-primary" id="setupChannelDone" style="flex:1;padding:10px">Skip, start chatting</button>
         </div>
       </div>
     `;
     document.body.appendChild(overlay);
 
-    document.getElementById("setupChannelSettings").addEventListener("click", () => {
+    const openChannels = (id) => {
       overlay.remove();
       Settings.open();
       Settings.switchTab("channels");
+      if (id) setTimeout(() => Settings.focusChannel(id), 150);
+    };
+    overlay.querySelectorAll(".setup-channel-card").forEach((card) => {
+      card.addEventListener("click", () => openChannels(card.dataset.channel));
     });
+    document.getElementById("setupChannelSettings").addEventListener("click", () => openChannels(null));
 
     document.getElementById("setupChannelDone").addEventListener("click", () => {
       overlay.remove();

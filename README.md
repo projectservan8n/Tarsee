@@ -107,7 +107,7 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **An expired Claude sign-in says so** — instead of a "401 / Failed to authenticate" error arriving as the reply, the chat says the sign-in expired and to run `claude login` in the Terminal (the `>_` button, on phones too).
 - **Telegram** — Text, photos, PDFs, voice messages, video notes. Group @mention support, inline buttons, forwarded message detection.
 - **Discord** — Text, images, PDFs, voice messages. Always-online bot with presence status.
-- **Email** — Real-time over IMAP IDLE + SMTP. Mention keyword (default `@tarsee`) gates replies; CC/BCC/forwards are absorbed as context without an outbound. Works with any mailbox you own (Gmail, Outlook, iCloud, Zoho, FastMail, Yahoo, self-hosted).
+- **Email** — Real-time over IMAP IDLE + SMTP. Mention keyword (default `@tarsee`) gates replies; CC/BCC/forwards are absorbed as context without an outbound. Works with any mailbox that allows IMAP + SMTP with an app password (Gmail, iCloud, Zoho, FastMail, Yahoo, self-hosted; not Outlook.com or Microsoft 365).
 - **WhatsApp** — Text, images, PDFs, voice notes (Whisper-transcribed), and documents via [WHAPI Cloud](https://whapi.cloud) (free tier OK). Direct messages only. Per-channel webhook secret in URL, auto-generated on first enable.
 - **Slack** — DMs, and channels by @mention. Every reply goes in a thread and each thread is its own conversation; a thread Tarsee is in needs no more mentions, and a mention in someone else's thread reads the thread first. Replies stream with Slack's native AI streaming, a live card for each tool it runs, and Slack's stop button; where a workspace has no native streaming, replies are posted and edited instead. Markdown renders as written (tables and code included). Images, PDFs, voice clips (Whisper-transcribed) and any other file in; files out as real uploads. `/tarsee` for questions and commands. Socket Mode, so no public URL; the app is made from a manifest Settings copies for you.
 - **Attachment save-to-disk** — every image, PDF, voice note, and document sent via Discord, Telegram, email, WhatsApp, Slack, or web lands in `workspace/uploads/` so Claude can read, transform, and reference it across turns (not just in the message it arrived on).
@@ -227,7 +227,7 @@ Tarsee Server (Railway)
 
 ## Channel Setup
 
-Configure in **Settings > Channels** after deploying. Channels auto-start when you save the token.
+Configure in **Settings > Channels** after deploying (the setup wizard's last step takes you there too). Each platform has its own section with step-by-step instructions and a status line: save a token and it connects at once, then says *Connected as …* or, if something's wrong, what to fix.
 
 | Channel | How to get token | Features |
 |---------|-----------------|----------|
@@ -237,26 +237,30 @@ Configure in **Settings > Channels** after deploying. Channels auto-start when y
 | WhatsApp | [WHAPI Cloud](https://panel.whapi.cloud) | Text, images, PDFs, voice notes (Whisper-transcribed), documents. DMs only. |
 | Slack | [api.slack.com/apps](https://api.slack.com/apps?new_app=1), from Tarsee's manifest | DMs and @mentions, a thread per conversation, native streaming with tool cards, files both ways, voice clips, `/tarsee` |
 
-**Discord:** Enable **Message Content Intent** in Bot settings. Invite with Send Messages, Read Messages, Add Reactions permissions. For `tarsee_discord_admin`, also give the bot's role Manage Channels, Manage Roles (to set who can see a channel) and Manage Webhooks; without them the tool says which permission is missing and changes nothing.
+**Telegram:** send [@BotFather](https://t.me/BotFather) `/newbot`, pick a name and a username ending in `bot`, and paste the token it gives you. In groups the bot answers @mentions and replies to it; to have it read every group message (mention mode off), also send BotFather `/setprivacy` → Disable, then remove and re-add the bot to the group. A chat ID for the allowlist shows in the Console (`[telegram] … chat <id>`) when someone messages the bot.
+
+**Discord:** In the [Developer Portal](https://discord.com/developers/applications): **New Application** → **Bot** → **Reset Token** and copy it; on the same page turn on **Message Content Intent** and save. Paste the token in Tarsee; once it says *Connected*, an **Add the bot to a server** button appears with the permissions it needs (View Channels, Send Messages, Send Messages in Threads, Read Message History, Attach Files, Embed Links, Add Reactions). For `tarsee_discord_admin`, also give the bot's role Manage Channels, Manage Roles (to set who can see a channel) and Manage Webhooks; without them the tool says which permission is missing and changes nothing.
 
 **WhatsApp:** Tarsee uses [WHAPI Cloud](https://whapi.cloud) as the WhatsApp gateway (free tier is enough for personal use). Setup:
 
-1. Sign up at [panel.whapi.cloud](https://panel.whapi.cloud), create a channel, scan the QR code with the WhatsApp account you want Tarsee to use.
-2. Copy the **Bearer token** from the channel's Token tab.
-3. In Tarsee → `Settings > Channels > WhatsApp`, paste the token, check Enable, click Save. A **webhook URL** appears.
-4. Copy that URL into WHAPI dashboard → `Settings > Webhooks`, select event `messages`, save.
-5. Send a WhatsApp message to your bot's number — Tarsee replies via Claude.
+1. Sign up at [panel.whapi.cloud](https://panel.whapi.cloud/register); a free trial channel is made for you. Scan its QR code from the WhatsApp account you want Tarsee to use (WhatsApp → Linked devices → Link a device).
+2. Once it's connected, copy the channel's **API token**.
+3. In Tarsee → `Settings > Channels > WhatsApp`, paste the token and click Save. A **webhook URL** appears.
+4. In WHAPI, open the channel's **Settings** (top right): paste that URL in the webhooks block, set **Mode** to **Body** (the other modes change the URL), turn on the `messages` event with `POST`, and save. **Check webhook** tests it.
+5. From another phone, send a WhatsApp message to the linked number — Tarsee replies via Claude.
+
+The webhook URL has to be public (a Railway domain works; `localhost` needs a tunnel). WHAPI's free sandbox covers 5 different people a month and 150 messages a day, and WhatsApp unlinks the device if the phone doesn't open WhatsApp for 14 days.
 
 Direct messages only; group messages are silently ignored. Voice notes are transcribed locally via faster-whisper. Images and PDFs go to Claude vision. Other documents (DOCX, XLSX, ZIP, TXT, CSV, etc.) are saved to `workspace/uploads/` and Claude can `Read` them with the file tool.
 
 **Slack:** Tarsee connects with Socket Mode (it opens the connection to Slack), so there is no request URL to set up. The app comes from [`src/channels/slack-app-manifest.yml`](src/channels/slack-app-manifest.yml), which has every scope and event the bot uses.
 
 1. In Tarsee → `Settings > Channels > Slack`, click **Copy app manifest**.
-2. At [api.slack.com/apps](https://api.slack.com/apps?new_app=1): **Create New App → From a manifest**, pick your workspace, paste, **Create**.
-3. **Install App → Install to Workspace**, then copy the **Bot User OAuth Token** (`xoxb-…`).
-4. **Basic Information → App-Level Tokens → Generate Token and Scopes**, add the scope `connections:write`, generate, copy the token (`xapp-…`).
-5. Back in Tarsee, paste both tokens, check Enable, click Save. The section says ✓ Connected once the bot is in.
-6. DM the app, or `/invite` it to a channel and @mention it there.
+2. At [api.slack.com/apps](https://api.slack.com/apps?new_app=1): **Create an App → Paste a manifest → Continue**, open the **YAML** tab, replace what's there with the manifest, pick your workspace, **Next → Create**.
+3. **Install App → Install to *your workspace* → Allow**, then copy the **Bot User OAuth Token** (`xoxb-…`). (Some workspaces need an admin to approve new apps first.)
+4. **Basic Information → App-Level Tokens → Generate Token and Scopes**: any name, **Add Scope** `connections:write`, **Generate**, copy the token (`xapp-…`).
+5. Back in Tarsee, paste both tokens and click Save. The section says ✓ *Connected as @tarsee in your workspace* once the bot is in.
+6. DM the app (Apps → Tarsee), or add it to a channel (**Add people or agents**, or `/invite @Tarsee`) and @mention it there.
 
 How it behaves: DMs are always answered; in channels and group DMs it answers an @mention (Settings > Bot Behavior can make it answer everything) and follows up without one in a thread it is already in. Mentioned in a thread it wasn't part of, it reads the thread's first message and latest 40 first, with anyone from another workspace, other bots and people not on the allowlist marked as such. `@Tarsee /stop` in a thread stops the reply running there. Each reply goes in a thread, and each thread is its own conversation in the sidebar. Replies stream with Slack's native streaming and a task card per tool; Slack ends one streamed message after 10 minutes or 12,000 characters, so a long reply carries on in the next message of the thread. If the workspace can't stream natively (Slack keeps some AI features for paid plans), replies are posted and edited instead, the way Discord's are. `/tarsee <a question>` starts a thread of its own and answers there; `/tarsee help` and `/tarsee status` (one word) or `/tarsee /model opus` (written with its slash) run a command privately; a command about one conversation (`/clear`, `/export`, `/think`) goes in its thread as `@Tarsee /clear`. Allowlist (Settings > Channels > Allowlist) takes member IDs (`U…`) and channel IDs (`C…`); people from another workspace (Slack Connect) are only answered when their own member ID is listed. Files up to 100 MB each way.
 
@@ -268,7 +272,7 @@ Tarsee can live in any mailbox you own and reply in real-time. Inbound mail wher
 
 **Setup (two paths — pick one):**
 
-1. **Settings UI** — open `Settings > Channels > Email`, click a provider preset (Gmail / Outlook / iCloud / Zoho / FastMail / Yahoo), paste your email + app password, save.
+1. **Settings UI** — open `Settings > Channels > Email`, click your provider (it fills in the servers and says where to make the app password), paste your email + app password, save.
 2. **Chat** — tell Tarsee in conversation: *"Set up email. Mailbox `tarsee@example.com`, Gmail app password `xxxx-xxxx-xxxx-xxxx`, only allow `you@example.com`."* Tarsee calls the `tarsee_configure_email_channel` MCP tool and the channel starts immediately.
 
 Both paths write to the same `channel.email` record. The Settings UI renders whatever's configured regardless of which path set it.
@@ -278,11 +282,12 @@ Both paths write to the same `channel.email` record. The Settings UI renders wha
 | Provider | App-password page | IMAP / SMTP |
 |---|---|---|
 | Gmail | [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) | `imap.gmail.com:993` / `smtp.gmail.com:465` |
-| Outlook / 365 | [account.microsoft.com/security](https://account.microsoft.com/security) → App passwords | `outlook.office365.com:993` / `smtp.office365.com:587` |
 | iCloud | [account.apple.com](https://account.apple.com) → Sign-In and Security → App-Specific Passwords | `imap.mail.me.com:993` / `smtp.mail.me.com:587` |
-| Zoho | Zoho Mail → Settings → Mail Accounts → IMAP Access | `imap.zoho.com:993` / `smtp.zoho.com:465` |
-| FastMail | [fastmail.com](https://fastmail.com) → Settings → Passwords & Security | `imap.fastmail.com:993` / `smtp.fastmail.com:465` |
-| Yahoo | [login.yahoo.com/account/security](https://login.yahoo.com/account/security) → Generate app password | `imap.mail.yahoo.com:993` / `smtp.mail.yahoo.com:465` |
+| Zoho | Zoho Mail → Settings → Mail Accounts → IMAP Access; with two-factor on, [accounts.zoho.com](https://accounts.zoho.com) → Security → App Passwords. New free accounts get no IMAP. | `imap.zoho.com:993` / `smtp.zoho.com:465` (paid, own domain: `imappro` / `smtppro`) |
+| FastMail | Settings → Privacy & Security → Manage app passwords and access → New app password (not on the Basic plan) | `imap.fastmail.com:993` / `smtp.fastmail.com:465` |
+| Yahoo | [login.yahoo.com/account/security](https://login.yahoo.com/account/security) → Create app password | `imap.mail.yahoo.com:993` / `smtp.mail.yahoo.com:465` |
+
+**Outlook.com, Hotmail and Microsoft 365 don't work:** Microsoft turned off app-password logins for IMAP (Outlook.com in September 2024, every Microsoft 365 tenant since), and requires its own OAuth sign-in instead. Use a mailbox from another provider for Tarsee.
 
 Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 
@@ -296,7 +301,6 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 - **"Authentication failed"** — you probably pasted your login password. Most providers require an app-specific password (usually 16 characters with hyphens). See the table above.
 - **"IDLE disconnected"** — harmless. IMAP servers close IDLE after ~29 minutes; Tarsee reconnects automatically.
 - **Gmail "less secure apps"** — not relevant anymore. Use an app password and keep 2FA on.
-- **Outlook modern auth** — enterprise tenants may require OAuth instead of app passwords. If your admin disabled basic auth, ask them to allow it for this mailbox or use a different provider.
 - **Reply arrived but wasn't threaded** — verify your mail client shows `In-Reply-To` and `References` headers. Some bespoke clients strip them.
 
 ---

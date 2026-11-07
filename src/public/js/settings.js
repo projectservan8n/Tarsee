@@ -22,9 +22,17 @@ const Settings = {
       baseUrl: document.getElementById("settingsBaseUrl"),
       baseUrlGroup: document.getElementById("customBaseUrlGroup"),
       saveProviderBtn: document.getElementById("saveProviderBtn"),
-      discordToken: document.getElementById("settingsDiscordToken"),
+      // Telegram and Discord: one bot token each
+      telegramEnabled: document.getElementById("settingsTelegramEnabled"),
       telegramToken: document.getElementById("settingsTelegramToken"),
-      saveChannelsBtn: document.getElementById("saveChannelsBtn"),
+      saveTelegramBtn: document.getElementById("saveTelegramBtn"),
+      discordEnabled: document.getElementById("settingsDiscordEnabled"),
+      discordToken: document.getElementById("settingsDiscordToken"),
+      discordInviteGroup: document.getElementById("discordInviteGroup"),
+      discordInviteLink: document.getElementById("discordInviteLink"),
+      saveDiscordBtn: document.getElementById("saveDiscordBtn"),
+      channelJump: document.getElementById("channelJump"),
+      emailPresetHint: document.getElementById("emailPresetHint"),
       // WhatsApp channel (via WHAPI)
       whatsappEnabled: document.getElementById("settingsWhatsappEnabled"),
       whatsappToken: document.getElementById("settingsWhatsappToken"),
@@ -37,7 +45,6 @@ const Settings = {
       slackToken: document.getElementById("settingsSlackToken"),
       slackAppToken: document.getElementById("settingsSlackAppToken"),
       slackManifestCopy: document.getElementById("settingsSlackManifestCopy"),
-      slackStatus: document.getElementById("slackChannelStatus"),
       saveSlackBtn: document.getElementById("saveSlackBtn"),
       // Privacy / redaction toggle (security tab)
       redactSecrets: document.getElementById("settingsRedactSecrets"),
@@ -57,7 +64,6 @@ const Settings = {
       emailFromName: document.getElementById("settingsEmailFromName"),
       emailAllowlist: document.getElementById("settingsEmailAllowlist"),
       emailMentionHint: document.getElementById("emailMentionHint"),
-      emailChannelStatus: document.getElementById("emailChannelStatus"),
       saveEmailChannelBtn: document.getElementById("saveEmailChannelBtn"),
       apiToken: document.getElementById("settingsApiToken"),
       apiTokenReveal: document.getElementById("settingsApiTokenReveal"),
@@ -234,7 +240,9 @@ const Settings = {
     this.elements.provider.value = "claude-code";
 
     this.elements.saveProviderBtn.addEventListener("click", () => this.saveProvider());
-    this.elements.saveChannelsBtn.addEventListener("click", () => this.saveChannels());
+    this.elements.saveTelegramBtn?.addEventListener("click", () => this.saveTokenChannel("telegram"));
+    this.elements.saveDiscordBtn?.addEventListener("click", () => this.saveTokenChannel("discord"));
+    this.drawChannelGuides();
     document.getElementById("saveAllowlistBtn")?.addEventListener("click", () => this.saveAllowlist());
     this.elements.saveMentionModeBtn?.addEventListener("click", () => this.saveMentionMode());
     this.elements.saveEmailChannelBtn?.addEventListener("click", () => this.saveEmailChannel());
@@ -659,12 +667,12 @@ const Settings = {
       // and typing a new one rotates it.
       for (const type of ["discord", "telegram"]) {
         const config = settings.find((s) => s.key === `channel.${type}`)?.value;
-        const el = type === "discord" ? this.elements.discordToken : this.elements.telegramToken;
+        const el = this.elements[`${type}Token`];
         if (!el) continue;
         el.value = "";
-        el.placeholder = config?.hasToken
-          ? "Stored — type a new token to replace it"
-          : "Paste the bot token";
+        if (config?.hasToken) el.placeholder = "Stored — type a new token to replace it";
+        const enabled = this.elements[`${type}Enabled`];
+        if (enabled) enabled.checked = !!config?.enabled;
       }
 
       // Allowlists
@@ -686,6 +694,19 @@ const Settings = {
 
       // Slack channel
       this.loadSlackChannel(settings);
+
+      // Which channels have a token (or mail server) saved: one switched off then says "Off", not "Not set up".
+      const cfgOf = (type) => settings.find((s) => s.key === `channel.${type}`)?.value || {};
+      this._channelConfigured = {
+        telegram: !!cfgOf("telegram").hasToken,
+        discord: !!cfgOf("discord").hasToken,
+        slack: !!(cfgOf("slack").hasToken || cfgOf("slack").hasAppToken),
+        whatsapp: !!cfgOf("whatsapp").hasToken,
+        email: !!cfgOf("email").imap?.host,
+      };
+
+      // Whether each channel is connected, and as whom
+      this.refreshChannelStatuses();
 
       // Privacy: redact-secrets toggle (default on if unset)
       if (this.elements.redactSecrets) {
@@ -816,13 +837,13 @@ const Settings = {
       e.whatsappToken.value = "";
       e.whatsappToken.placeholder = cfg.hasToken
         ? "Stored — replace to rotate"
-        : "Get it from panel.whapi.cloud → Channel → Token";
+        : "panel.whapi.cloud → your channel → API token";
     }
     if (e.whatsappWebhookUrl) {
       // The secret no longer rides along in the bulk settings payload, so ask
       // the dedicated endpoint for it only while this panel is on screen.
       e.whatsappWebhookUrl.value = "";
-      e.whatsappWebhookUrl.placeholder = "Save the channel first to generate this URL";
+      e.whatsappWebhookUrl.placeholder = "Save the channel first to make this URL";
       API.json("/api/settings/channel/whatsapp/webhook-url")
         .then(({ configured, webhook_url }) => {
           if (configured && webhook_url) {
@@ -845,9 +866,8 @@ const Settings = {
     }
     if (e.slackAppToken) {
       e.slackAppToken.value = "";
-      e.slackAppToken.placeholder = cfg.hasAppToken ? "Stored — type a new xapp- token to replace it" : "xapp-… (Basic Information → App-Level Tokens → Generate, scope connections:write)";
+      e.slackAppToken.placeholder = cfg.hasAppToken ? "Stored — type a new xapp- token to replace it" : "xapp-… (Basic Information → App-Level Tokens, scope connections:write)";
     }
-    if (cfg.enabled) this.showSlackStatus();
   },
 
   async saveSlackChannel() {
@@ -861,30 +881,110 @@ const Settings = {
       e.slackAppToken.value = "";
       if (token) e.slackToken.placeholder = "Stored — type a new xoxb- token to replace it";
       if (appToken) e.slackAppToken.placeholder = "Stored — type a new xapp- token to replace it";
-      App.showToast(enabled ? "Slack channel saved + connecting" : "Slack channel saved (off)", "success");
-      if (enabled) this.showSlackStatus({ wait: true });
-      else if (e.slackStatus) e.slackStatus.textContent = "Off";
+      if (token || appToken) this._markConfigured("slack");
+      App.showToast(enabled ? "Slack saved, connecting…" : "Slack saved (off)", "success");
+      this.showChannelStatus("slack", { wait: enabled });
     } catch (err) {
       App.showToast(err.message || "Failed to save Slack channel", "error");
     }
   },
 
-  /** Whether the Slack bot is connected, or why not. wait: it was just saved, so give it a few seconds to connect. */
-  async showSlackStatus({ wait = false } = {}) {
-    const el = this.elements.slackStatus;
-    if (!el) return;
-    el.textContent = wait ? "Connecting…" : "";
-    const tries = wait ? 10 : 1;
+  // --- Channels: guides and status ---
+
+  /** Each platform's steps (js/channel-guides-core.js) into its section, and the row of links at the top. */
+  drawChannelGuides() {
+    const G = window.ChannelGuides;
+    if (!G) return;
+    for (const p of G.PLATFORMS) {
+      const slot = document.querySelector(`[data-guide-slot="${p.id}"]`);
+      if (slot) slot.innerHTML = G.guideHtml(p.id);
+    }
+    const jump = this.elements.channelJump;
+    if (jump) {
+      jump.innerHTML = G.PLATFORMS.map((p) =>
+        `<button type="button" class="channel-chip" data-channel="${p.id}"><span class="channel-dot" data-tone="off"></span>${p.name}</button>`).join("");
+      jump.addEventListener("click", (ev) => {
+        const chip = ev.target.closest(".channel-chip");
+        if (chip) this.focusChannel(chip.dataset.channel);
+      });
+    }
+    // Typing a token ticks its Enable box: a token pasted and saved should connect, not sit there switched off.
+    document.querySelectorAll("[data-enables]").forEach((input) => {
+      input.addEventListener("input", () => {
+        const box = document.getElementById(input.dataset.enables);
+        if (box && input.value.trim()) box.checked = true;
+      });
+    });
+  },
+
+  /** Scroll to a platform's section and unfold its steps (the setup wizard and the row of links use this). */
+  focusChannel(id) {
+    const p = window.ChannelGuides?.get(id);
+    const section = p && document.getElementById(p.section);
+    if (!section) return;
+    const guide = section.querySelector(".channel-guide");
+    if (guide) guide.open = true;
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
+    section.classList.remove("channel-flash");
+    void section.offsetWidth;   // restart the highlight
+    section.classList.add("channel-flash");
+  },
+
+  /** Every channel's status line, once (opening Settings). A channel not set up yet gets its steps unfolded. */
+  async refreshChannelStatuses() {
+    let channels = {};
+    try { channels = (await API.getStatus())?.channels || {}; } catch { return; }
+    for (const p of window.ChannelGuides?.PLATFORMS || []) {
+      const s = channels[p.id];
+      this.setChannelStatus(p.id, s);
+      const guide = document.querySelector(`[data-guide-slot="${p.id}"] .channel-guide`);
+      if (guide && (!s || s.status === "not_configured" || s.status === "error")) guide.open = true;
+    }
+  },
+
+  /**
+   * One channel's status line (and its dot in the row at the top). wait: it was just saved, so poll for a while
+   * until it connects or says why not.
+   */
+  async showChannelStatus(type, { wait = false } = {}) {
+    if (wait) this.setChannelStatus(type, { status: "starting" });
+    const tries = wait ? 24 : 1;   // ~35 s: WHAPI takes ~16 s to refuse a token, a mail server can be slow too
     for (let i = 0; i < tries; i++) {
       if (i) await new Promise((r) => setTimeout(r, 1500));
-      try {
-        const s = (await API.getStatus())?.channels?.slack;
-        if (s?.status === "running") { el.textContent = "✓ Connected"; return; }
-        if (s?.status === "error") { el.textContent = `✗ ${s.error || "Could not connect"}`; return; }
-        if (!wait) { el.textContent = s?.status === "starting" ? "Connecting…" : s?.status === "stopped" ? "Not connected yet" : ""; return; }
-      } catch { /* status is best-effort */ }
+      let s;
+      try { s = (await API.getStatus())?.channels?.[type]; } catch { continue; }
+      if (!wait || s?.status === "running" || s?.status === "error") {
+        this.setChannelStatus(type, s);
+        return;
+      }
     }
-    el.textContent = "Still connecting — check the Console for [slack] lines";
+    this.setChannelStatus(type, { status: "error", error: `Still connecting. The Console's [${type}] lines say what it's waiting for.` });
+  },
+
+  _markConfigured(type) {
+    this._channelConfigured = { ...(this._channelConfigured || {}), [type]: true };
+  },
+
+  setChannelStatus(type, s) {
+    const G = window.ChannelGuides;
+    if (!G) return;
+    const enabledBox = document.getElementById(`settings${type[0].toUpperCase()}${type.slice(1)}Enabled`);
+    const { text, tone } = G.statusLine(s, {
+      enabled: enabledBox ? enabledBox.checked : undefined,
+      configured: this._channelConfigured?.[type],
+    });
+    const el = document.getElementById(`${type}ChannelStatus`);
+    if (el) {
+      el.textContent = tone === "ok" ? `✓ ${text}` : tone === "bad" ? `✗ ${text}` : text;
+      el.dataset.tone = tone;
+    }
+    const dot = this.elements.channelJump?.querySelector(`.channel-chip[data-channel="${type}"] .channel-dot`);
+    if (dot) { dot.dataset.tone = tone; dot.title = text; }
+    if (type === "discord" && this.elements.discordInviteGroup) {
+      const url = s?.status === "running" ? s.inviteUrl : null;
+      this.elements.discordInviteGroup.hidden = !url;
+      if (url) this.elements.discordInviteLink.href = url;
+    }
   },
 
   async copySlackManifest() {
@@ -917,10 +1017,16 @@ const Settings = {
       const token = this.elements.whatsappToken.value.trim();
       const enabled = this.elements.whatsappEnabled.checked;
       const result = await API.saveChannel({ type: "whatsapp", token, enabled });
+      if (token) {
+        this.elements.whatsappToken.value = "";
+        this.elements.whatsappToken.placeholder = "Stored — replace to rotate";
+        this._markConfigured("whatsapp");
+      }
       if (result?.webhook_url && this.elements.whatsappWebhookUrl) {
         this.elements.whatsappWebhookUrl.value = `${location.origin}${result.webhook_url}`;
       }
-      App.showToast(enabled ? "WhatsApp channel saved + starting" : "WhatsApp channel saved", "success");
+      App.showToast(enabled ? "WhatsApp saved, connecting… Now paste the webhook URL into WHAPI." : "WhatsApp saved (off)", "success");
+      this.showChannelStatus("whatsapp", { wait: enabled });
     } catch (err) {
       App.showToast(err.message || "Failed to save WhatsApp channel", "error");
     }
@@ -972,16 +1078,24 @@ const Settings = {
     }
   },
 
-  async saveChannels() {
+  /** Telegram or Discord: one bot token. Saving connects at once (or disconnects, with Enable off). */
+  async saveTokenChannel(type) {
+    const name = window.ChannelGuides?.get(type)?.name || type;
+    const tokenEl = this.elements[`${type}Token`];
+    const enabledEl = this.elements[`${type}Enabled`];
     try {
-      const discord = this.elements.discordToken.value.trim();
-      const telegram = this.elements.telegramToken.value.trim();
-      if (telegram) await API.saveChannel({ type: "telegram", token: telegram, enabled: true });
-      if (discord) await API.saveChannel({ type: "discord", token: discord, enabled: true });
-
-      App.showToast("Channels saved. Restart to apply.", "success");
+      const token = tokenEl.value.trim();
+      const enabled = !!enabledEl?.checked;
+      await API.saveChannel({ type, token, enabled });
+      tokenEl.value = "";
+      if (token) {
+        tokenEl.placeholder = "Stored — type a new token to replace it";
+        this._markConfigured(type);
+      }
+      App.showToast(enabled ? `${name} saved, connecting…` : `${name} saved (off)`, "success");
+      this.showChannelStatus(type, { wait: enabled });
     } catch (err) {
-      App.showToast(err.message, "error");
+      App.showToast(err.message || `Failed to save ${name}`, "error");
     }
   },
 
@@ -1117,9 +1231,13 @@ const Settings = {
   },
 
   applyEmailPreset(name) {
+    const note = window.ChannelGuides?.EMAIL_PROVIDERS?.[name];
+    if (this.elements.emailPresetHint) {
+      this.elements.emailPresetHint.innerHTML = note || "";
+      this.elements.emailPresetHint.hidden = !note;
+    }
     const presets = {
       gmail:    { imapHost: "imap.gmail.com",        imapPort: 993, smtpHost: "smtp.gmail.com",        smtpPort: 465 },
-      outlook:  { imapHost: "outlook.office365.com", imapPort: 993, smtpHost: "smtp.office365.com",    smtpPort: 587 },
       icloud:   { imapHost: "imap.mail.me.com",      imapPort: 993, smtpHost: "smtp.mail.me.com",      smtpPort: 587 },
       zoho:     { imapHost: "imap.zoho.com",         imapPort: 993, smtpHost: "smtp.zoho.com",         smtpPort: 465 },
       fastmail: { imapHost: "imap.fastmail.com",     imapPort: 993, smtpHost: "smtp.fastmail.com",     smtpPort: 465 },
@@ -1173,20 +1291,19 @@ const Settings = {
       if (imapPw) payload.imap.password = imapPw;
       if (smtpPw) payload.smtp.password = smtpPw;
 
-      if (e.emailChannelStatus) e.emailChannelStatus.textContent = "Saving...";
       await API.saveChannel(payload);
+      if (payload.imap.host) this._markConfigured("email");
 
       // Clear password fields after save so they don't show plaintext in the DOM
       e.emailImapPassword.value = "";
       e.emailSmtpPassword.value = "";
 
-      if (e.emailChannelStatus) e.emailChannelStatus.textContent = payload.enabled ? "Saved — channel starting." : "Saved — channel disabled.";
-      App.showToast("Email channel saved", "success");
+      App.showToast(payload.enabled ? "Email saved, connecting…" : "Email saved (off)", "success");
+      this.showChannelStatus("email", { wait: payload.enabled });
 
-      // Refresh to pick up hasPassword flags
-      setTimeout(() => this.loadSettings(), 500);
+      // The saved-password placeholders ("leave blank to keep existing") come from the server's hasPassword flags.
+      try { this.loadEmailChannel((await API.getSettings()).settings); } catch { /* keeps what is on screen */ }
     } catch (err) {
-      if (this.elements.emailChannelStatus) this.elements.emailChannelStatus.textContent = "";
       App.showToast(err.message || "Failed to save email channel", "error");
     }
   },

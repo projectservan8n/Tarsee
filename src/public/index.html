@@ -411,108 +411,139 @@
           <!-- Channels Tab -->
           <div class="settings-tab-panel" data-tab="channels">
             <h2>Channels</h2>
-            <div class="settings-section">
-              <div>
-              <div class="form-group">
-                <label>Telegram Bot Token</label>
-                <form style="display:contents" autocomplete="off" data-no-submit>
-                  <input type="password" id="settingsTelegramToken" placeholder="123456:ABC... (from @BotFather)" autocomplete="off">
-                </form>
-              </div>
-              <div class="form-group">
-                <label>Discord Bot Token</label>
-                <form style="display:contents" autocomplete="off" data-no-submit>
-                  <input type="password" id="settingsDiscordToken" placeholder="Bot token (from Discord Developer Portal)" autocomplete="off">
-                </form>
-              </div>
-              </div>
-              <button class="btn btn-primary" id="saveChannelsBtn">Save Channels</button>
+            <div class="hint mb-3">
+              Talk to Tarsee from the apps you already use. Pick one below, follow its steps, paste what it gives you,
+              and save: the line next to its name says when it's connected. Tokens and passwords are stored encrypted
+              in your Tarsee database and never shown again.
             </div>
+            <nav class="channel-jump" id="channelJump" aria-label="Channels"></nav>
 
-            <div class="settings-section" id="whatsappChannelSection">
-              <h3>WhatsApp (via WHAPI)</h3>
-              <div class="hint mb-3">
-                Connect a WhatsApp number through <a href="https://panel.whapi.cloud" target="_blank" rel="noopener">WHAPI Cloud</a>.
-                Free tier is enough for personal use. Direct messages only — group messages are ignored.
-                Voice notes are transcribed locally; images and PDFs are sent to Claude vision.
-              </div>
+            <div class="settings-section channel-section" id="telegramChannelSection" data-channel="telegram">
+              <div class="channel-head"><h3>Telegram</h3><span class="channel-status" id="telegramChannelStatus"></span></div>
+              <div class="hint mb-3">Chat with Tarsee in Telegram, one to one or in groups. Voice notes, pictures and files work too.</div>
+              <div data-guide-slot="telegram"></div>
 
               <div class="form-group">
                 <label class="checkbox-label">
-                  <input type="checkbox" id="settingsWhatsappEnabled">
-                  <span>Enable WhatsApp channel</span>
+                  <input type="checkbox" id="settingsTelegramEnabled">
+                  <span>Enable Telegram</span>
                 </label>
               </div>
-
               <div class="form-group">
-                <label>WHAPI Bearer Token</label>
-                <form style="display:contents" autocomplete="off" onsubmit="event.preventDefault()">
-                  <input type="password" id="settingsWhatsappToken" placeholder="Get it from panel.whapi.cloud → Channel → Token" autocomplete="off">
+                <label>Bot token</label>
+                <form style="display:contents" autocomplete="off" data-no-submit>
+                  <input type="password" id="settingsTelegramToken" placeholder="123456789:AAH… (from @BotFather)" autocomplete="off" data-enables="settingsTelegramEnabled">
                 </form>
-                <div class="hint">Stored in your Tarsee database. Each WhatsApp number = one WHAPI channel = one token.</div>
               </div>
-
-              <div class="form-group">
-                <label>Webhook URL <span class="hint" style="font-weight:normal">(paste this into WHAPI dashboard)</span></label>
-                <div style="display:flex; gap:8px;">
-                  <input type="text" id="settingsWhatsappWebhookUrl" readonly placeholder="Save the channel first to generate this URL" style="flex:1;">
-                  <button type="button" class="btn btn-sm btn-secondary" id="settingsWhatsappWebhookCopy">Copy</button>
-                  <button type="button" class="btn btn-sm btn-secondary" id="settingsWhatsappWebhookRegenerate" title="Generate a new secret (invalidates the current URL)">Regenerate</button>
-                </div>
-                <div class="hint">In the WHAPI dashboard: Settings → Webhooks → paste this URL, select event <code>messages</code>, save.</div>
-              </div>
-
-              <button class="btn btn-primary" id="saveWhatsappBtn">Save WhatsApp Channel</button>
+              <button class="btn btn-primary" id="saveTelegramBtn">Save Telegram</button>
             </div>
 
-            <div class="settings-section" id="slackChannelSection">
-              <h3>Slack</h3>
-              <div class="hint mb-3">
-                DM Tarsee in Slack, or @mention it in a channel it's in. Every reply goes in a thread, and each thread is
-                its own conversation; a thread Tarsee is in needs no more mentions. Replies stream live with a card for
-                each tool it runs. It connects out to Slack (Socket Mode), so there is no URL to set up.
-              </div>
+            <div class="settings-section channel-section" id="discordChannelSection" data-channel="discord">
+              <div class="channel-head"><h3>Discord</h3><span class="channel-status" id="discordChannelStatus"></span></div>
+              <div class="hint mb-3">Chat with Tarsee in your Discord server or in DMs. It can also make channels and webhooks for you.</div>
+              <div data-guide-slot="discord"></div>
 
               <div class="form-group">
-                <label>1. Create the Slack app</label>
+                <label class="checkbox-label">
+                  <input type="checkbox" id="settingsDiscordEnabled">
+                  <span>Enable Discord</span>
+                </label>
+              </div>
+              <div class="form-group">
+                <label>Bot token</label>
+                <form style="display:contents" autocomplete="off" data-no-submit>
+                  <input type="password" id="settingsDiscordToken" placeholder="From the Developer Portal → your app → Bot → Reset Token" autocomplete="off" data-enables="settingsDiscordEnabled">
+                </form>
+              </div>
+              <div class="form-group" id="discordInviteGroup" hidden>
+                <a class="btn btn-sm btn-secondary" id="discordInviteLink" href="#" target="_blank" rel="noopener noreferrer">Add the bot to a server</a>
+                <div class="hint">Opens Discord: pick your server and click Authorize. The link already asks for the permissions Tarsee needs.</div>
+              </div>
+              <button class="btn btn-primary" id="saveDiscordBtn">Save Discord</button>
+            </div>
+
+            <div class="settings-section channel-section" id="slackChannelSection" data-channel="slack">
+              <div class="channel-head"><h3>Slack</h3><span class="channel-status" id="slackChannelStatus"></span></div>
+              <div class="hint mb-3">
+                DM Tarsee in Slack, or @mention it in a channel it's in. Every reply goes in a thread, and replies stream
+                live with a card for each tool it runs. It connects out to Slack, so there is no URL to set up.
+              </div>
+              <div data-guide-slot="slack"></div>
+
+              <div class="form-group">
                 <div style="display:flex; gap:8px; flex-wrap:wrap;">
                   <button type="button" class="btn btn-sm btn-secondary" id="settingsSlackManifestCopy">Copy app manifest</button>
-                  <a class="btn btn-sm btn-secondary" href="https://api.slack.com/apps?new_app=1" target="_blank" rel="noopener">Open api.slack.com/apps</a>
+                  <a class="btn btn-sm btn-secondary" href="https://api.slack.com/apps?new_app=1" target="_blank" rel="noopener noreferrer">Open api.slack.com/apps</a>
                 </div>
-                <div class="hint">Create New App → From a manifest → pick your workspace → paste → Create. Then Install App → Install to Workspace.</div>
               </div>
 
               <div class="form-group">
                 <label class="checkbox-label">
                   <input type="checkbox" id="settingsSlackEnabled">
-                  <span>Enable Slack channel</span>
+                  <span>Enable Slack</span>
                 </label>
               </div>
 
               <div class="form-group">
-                <label>2. Bot token</label>
+                <label>1. Bot token</label>
                 <form style="display:contents" autocomplete="off" data-no-submit>
-                  <input type="password" id="settingsSlackToken" placeholder="xoxb-… (Install App → Bot User OAuth Token)" autocomplete="off">
+                  <input type="password" id="settingsSlackToken" placeholder="xoxb-… (Install App → Bot User OAuth Token)" autocomplete="off" data-enables="settingsSlackEnabled">
                 </form>
               </div>
 
               <div class="form-group">
-                <label>3. App-level token</label>
+                <label>2. App-level token</label>
                 <form style="display:contents" autocomplete="off" data-no-submit>
-                  <input type="password" id="settingsSlackAppToken" placeholder="xapp-… (Basic Information → App-Level Tokens → Generate, scope connections:write)" autocomplete="off">
+                  <input type="password" id="settingsSlackAppToken" placeholder="xapp-… (Basic Information → App-Level Tokens, scope connections:write)" autocomplete="off" data-enables="settingsSlackEnabled">
                 </form>
-                <div class="hint">Both are stored encrypted in your Tarsee database. Leave a box empty to keep the token already saved.</div>
+                <div class="hint">Leave a box empty to keep the token already saved.</div>
               </div>
 
-              <button class="btn btn-primary" id="saveSlackBtn">Save Slack Channel</button>
-              <span id="slackChannelStatus" class="hint" style="margin-left:12px;"></span>
+              <button class="btn btn-primary" id="saveSlackBtn">Save Slack</button>
             </div>
 
-            <div class="settings-section" id="emailChannelSection">
-              <h3>Email</h3>
+            <div class="settings-section channel-section" id="whatsappChannelSection" data-channel="whatsapp">
+              <div class="channel-head"><h3>WhatsApp</h3><span class="channel-status" id="whatsappChannelStatus"></span></div>
               <div class="hint mb-3">
-                Chat with Tarsee over email, real-time. Inbound emails with <code id="emailMentionHint">@tarsee</code> in the body trigger a reply; everything else is absorbed as context so future questions can draw from it. Works with any mailbox you own (Gmail, Outlook, iCloud, Zoho, FastMail, ProtonMail Bridge, self-hosted) via IMAP + SMTP.
+                Chat with Tarsee on WhatsApp through <a href="https://panel.whapi.cloud" target="_blank" rel="noopener noreferrer">WHAPI.Cloud</a>.
+                Direct messages only: group messages are ignored. Voice notes are transcribed; pictures and PDFs are read.
               </div>
+              <div data-guide-slot="whatsapp"></div>
+
+              <div class="form-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="settingsWhatsappEnabled">
+                  <span>Enable WhatsApp</span>
+                </label>
+              </div>
+
+              <div class="form-group">
+                <label>WHAPI token</label>
+                <form style="display:contents" autocomplete="off" data-no-submit>
+                  <input type="password" id="settingsWhatsappToken" placeholder="panel.whapi.cloud → your channel → API token" autocomplete="off" data-enables="settingsWhatsappEnabled">
+                </form>
+                <div class="hint">One WhatsApp number = one WHAPI channel = one token.</div>
+              </div>
+
+              <div class="form-group">
+                <label>Webhook URL <span class="hint" style="font-weight:normal">(paste this into WHAPI)</span></label>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                  <input type="text" id="settingsWhatsappWebhookUrl" readonly placeholder="Save the channel first to make this URL" style="flex:1; min-width:12em;">
+                  <button type="button" class="btn btn-sm btn-secondary" id="settingsWhatsappWebhookCopy">Copy</button>
+                  <button type="button" class="btn btn-sm btn-secondary" id="settingsWhatsappWebhookRegenerate" title="Make a new secret (the current URL stops working)">Regenerate</button>
+                </div>
+                <div class="hint">In WHAPI: your channel → Settings → Webhooks → paste this URL, tick the <code>messages</code> event, save.</div>
+              </div>
+
+              <button class="btn btn-primary" id="saveWhatsappBtn">Save WhatsApp</button>
+            </div>
+
+            <div class="settings-section channel-section" id="emailChannelSection" data-channel="email">
+              <div class="channel-head"><h3>Email</h3><span class="channel-status" id="emailChannelStatus"></span></div>
+              <div class="hint mb-3">
+                Email Tarsee with <code id="emailMentionHint">@tarsee</code> in the message and it answers. Other mail is read and remembered, so later questions can draw on it. Works with any mailbox that offers IMAP and SMTP with an app password.
+              </div>
+              <div data-guide-slot="email"></div>
 
               <div class="form-group">
                 <label class="checkbox-label">
@@ -531,14 +562,14 @@
                 <label>Provider presets</label>
                 <div style="display:flex; flex-wrap:wrap; gap:6px;">
                   <button type="button" class="btn btn-sm btn-secondary email-preset-btn" data-preset="gmail">Gmail</button>
-                  <button type="button" class="btn btn-sm btn-secondary email-preset-btn" data-preset="outlook">Outlook</button>
                   <button type="button" class="btn btn-sm btn-secondary email-preset-btn" data-preset="icloud">iCloud</button>
                   <button type="button" class="btn btn-sm btn-secondary email-preset-btn" data-preset="zoho">Zoho</button>
                   <button type="button" class="btn btn-sm btn-secondary email-preset-btn" data-preset="fastmail">FastMail</button>
                   <button type="button" class="btn btn-sm btn-secondary email-preset-btn" data-preset="yahoo">Yahoo</button>
                   <button type="button" class="btn btn-sm btn-secondary email-preset-btn" data-preset="custom">Custom</button>
                 </div>
-                <div class="hint">Click a provider to auto-fill IMAP + SMTP host and port.</div>
+                <div class="hint">Click your provider to fill in the server addresses and see where to make its app password.</div>
+                <div class="hint channel-provider-note" id="emailPresetHint" hidden></div>
               </div>
 
               <h4 style="margin-top:18px; margin-bottom:8px;">IMAP (inbound: Tarsee reads mail)</h4>
@@ -561,7 +592,7 @@
                 <form style="display:contents" autocomplete="off" data-no-submit>
                   <input type="password" id="settingsEmailImapPassword" placeholder="16-character app password (not your login password)" autocomplete="new-password">
                 </form>
-                <div class="hint">Most providers require an <strong>app-specific password</strong>, not your regular login password. See the README for per-provider setup links.</div>
+                <div class="hint">An <strong>app password</strong>, not the account's normal password: most providers refuse the normal one. Click your provider above to see where to make one.</div>
               </div>
 
               <h4 style="margin-top:18px; margin-bottom:8px;">SMTP (outbound: Tarsee replies)</h4>
@@ -611,8 +642,7 @@
                 <div class="hint"><strong>Strongly recommended.</strong> Leave empty to allow all senders (dev mode only: not safe for production mailboxes). Tarsee will still drop newsletters and auto-reply loops regardless.</div>
               </div>
 
-              <button class="btn btn-primary" id="saveEmailChannelBtn">Save Email Channel</button>
-              <span id="emailChannelStatus" class="hint" style="margin-left:12px;"></span>
+              <button class="btn btn-primary" id="saveEmailChannelBtn">Save Email</button>
             </div>
 
             <div class="settings-section">
@@ -621,7 +651,7 @@
 
               <div class="form-group">
                 <label>Telegram: Allowed Chat IDs</label>
-                <textarea id="settingsTelegramAllowlist" rows="3" placeholder="One per line. Chat ID (number).&#10;Message the bot, check Console logs for the chat ID.&#10;Groups: negative number e.g. -1001234567890" spellcheck="false" class="textarea-mono"></textarea>
+                <textarea id="settingsTelegramAllowlist" rows="3" placeholder="One per line. Chat ID (a number).&#10;Message the bot, then look in the Console for a [telegram] line with the chat ID.&#10;Groups: a negative number, e.g. -1001234567890" spellcheck="false" class="textarea-mono"></textarea>
               </div>
 
               <div class="form-group">
@@ -1130,6 +1160,7 @@
   <script src="/js/usage.js"></script>       <!-- the Usage page (/usage) -->
   <script src="/js/voice.js"></script>
   <script src="/js/console.js"></script>
+  <script src="/js/channel-guides-core.js"></script>   <!-- how to connect each chat platform (Settings and the setup wizard) -->
   <script src="/js/settings.js"></script>
   <script src="/js/brand-icon.js"></script>
   <script src="/js/setup.js"></script>

@@ -1452,6 +1452,99 @@ label.checkbox-label {
   margin-bottom: var(--space-3);
 }
 
+/* Settings → Channels: a row of links with a status dot each, then a section per platform with its steps. */
+.channel-jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.channel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: var(--space-1) var(--space-3);
+  border: var(--space-px) solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.channel-chip:hover { border-color: var(--border-hover); }
+.channel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border-hover);
+  flex-shrink: 0;
+}
+.channel-dot[data-tone="ok"]   { background: var(--success); }
+.channel-dot[data-tone="bad"]  { background: var(--danger); }
+.channel-dot[data-tone="wait"] { background: var(--warning); }
+
+.channel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.channel-head h3 { margin-bottom: 0; }
+.channel-status {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.channel-status[data-tone="ok"]   { color: var(--success); }
+.channel-status[data-tone="bad"]  { color: var(--danger); }
+.channel-status[data-tone="wait"] { color: var(--warning); }
+
+.channel-guide {
+  margin-bottom: var(--space-4);
+  border: var(--space-px) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+}
+.channel-guide > summary {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+}
+.channel-guide-steps,
+.channel-guide-tips {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + 1.4em);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+}
+.channel-guide-steps li { margin-bottom: var(--space-1-5); }
+.channel-guide-tips { padding-left: var(--space-3); color: var(--text-muted); }
+.channel-guide-tips ul { margin: var(--space-1) 0 0; padding-left: 1.4em; }
+.channel-guide-tips li { margin-bottom: var(--space-1); }
+.channel-guide a,
+.channel-provider-note a { color: var(--accent); }
+.channel-provider-note {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--accent);
+  background: var(--accent-subtle);
+  border-radius: var(--radius-sm);
+}
+.channel-section { scroll-margin-top: var(--space-4); }
+.channel-section.channel-flash { animation: channel-flash 1.6s ease-out; }
+@keyframes channel-flash {
+  from { box-shadow: 0 0 0 3px var(--accent-glow); }
+  to   { box-shadow: 0 0 0 3px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .channel-section.channel-flash { animation: none; }
+}
+
 
 /* ==========================================================================
    15. Delete Modal
