@@ -446,6 +446,20 @@ describe("the Slack bot against a fake Slack", () => {
     assert.match(post[1].markdown_text, /slack/);
   });
 
+  it("help says how to type a command in Slack, where /clear on its own is Slack's", async () => {
+    sendCommand("help");
+    const r = await until(() => responses.find((x) => /Tarsee Commands/.test(x.blocks?.[0]?.text || "")), "the /tarsee help answer");
+    const top = r.blocks[0].text.split("**Tarsee Commands**")[0];
+    assert.match(top, /`\/tarsee \/model opus`/, "first: a command from anywhere");
+    assert.match(top, /`@tarsee \/clear`/, "and a thread's command, in its thread");
+    assert.match(r.text, /`\/tarsee \/model opus`/, "the notification text starts with it too");
+
+    const from = calls.length;
+    sendEvent({ type: "message", channel: "C1", channel_type: "channel", user: "U1", user_team: "T1", text: "<@UBOT> /help", ts: "710.000100" });
+    const post = await until(() => calls.slice(from).find(([m, a]) => m === "chat.postMessage" && /Tarsee Commands/.test(a.markdown_text || "")), "the help in a thread");
+    assert.match(post[1].markdown_text, /`@tarsee \/clear`/);
+  });
+
   it("/tarsee: global commands answer privately, thread commands say where they work, a question gets a thread", async () => {
     sendCommand("mention");
     let r = await until(() => responses.find((x) => /Mention mode/.test(x.text || "")), "the /tarsee mention answer");

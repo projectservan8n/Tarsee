@@ -37,6 +37,13 @@ export const SLACK_FILE_CAP_MB = 100;
 /** Commands that act on the conversation they are sent in: in Slack that is a thread, which /tarsee cannot see. */
 const THREAD_COMMANDS = new Set(["clear", "new", "export", "send", "think"]);
 
+/** /help lists commands as the web app takes them; in Slack a "/clear" typed on its own goes to Slack, not to Tarsee. */
+function withSlackHowTo(helpText, handle) {
+  const threadOnes = [...THREAD_COMMANDS].map((c) => `\`/${c}\``).join(", ");
+  return `**In Slack**, start a command with /tarsee: \`/tarsee /model opus\` works anywhere, and only you see the answer. ` +
+    `${threadOnes} act on one conversation, which here is a thread: reply in it with \`@${handle} /clear\`.\n\n${helpText}`;
+}
+
 /** Message subtypes that are a person saying something. Everything else (edits, joins, topic changes) is ignored. */
 const HANDLED_SUBTYPES = new Set([undefined, "file_share", "thread_broadcast"]);
 
@@ -747,7 +754,8 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
         const playbook = extractPlaybookPrompt(cmdResult);
         if (playbook) aiPromptOverride = playbook;
         else {
-          await postInThread(event.channel, threadTs, stripCommandSentinel(cmdResult.response));
+          const answer = stripCommandSentinel(cmdResult.response);
+          await postInThread(event.channel, threadTs, /^\/help\b/i.test(content) ? withSlackHowTo(answer, botHandle) : answer);
           return;
         }
       }
@@ -833,7 +841,8 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
         cmdResult = await processCommand(line, { settingsStore, convStore, conversationId: null, platform: "slack", db });
         playbook = extractPlaybookPrompt(cmdResult);
         if (cmdResult.handled && !playbook) {
-          await tell(stripCommandSentinel(cmdResult.response));
+          const answer = stripCommandSentinel(cmdResult.response);
+          await tell(name === "help" ? withSlackHowTo(answer, botHandle) : answer);
           return;
         }
         if (!cmdResult.handled && !asked.orQuestion) {
