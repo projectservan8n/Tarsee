@@ -1,0 +1,67 @@
+# Tarsee's Slack app. Settings → Channels → Slack has a "Copy manifest" button for this file.
+#
+# 1. https://api.slack.com/apps → Create New App → From a manifest → pick your workspace → paste this → Create.
+# 2. Install App → Install to Workspace. Copy the Bot User OAuth Token (xoxb-…).
+# 3. Basic Information → App-Level Tokens → Generate Token and Scopes: add the scope connections:write,
+#    generate, copy the token (xapp-…).
+# 4. In Tarsee: Settings → Channels → Slack: paste both tokens, tick Enable, Save.
+# 5. DM the app, or /invite it to a channel and @mention it there.
+#
+# Socket Mode: Tarsee connects out to Slack, so there is no request URL to set up anywhere.
+# Rename the app and the bot as you like; nothing in Tarsee depends on the names.
+display_information:
+  name: Tarsee
+  description: Your self-hosted AI agent
+  background_color: "#c45a35"
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: Tarsee
+    always_online: true
+  agent_view:
+    agent_description: Your self-hosted AI agent. It chats, runs tools, reads the files you send and sends files back.
+    suggested_prompts:
+      - title: What can you do?
+        message: What can you do for me from Slack?
+      - title: Plan my day
+        message: What's on my plate today?
+  slash_commands:
+    - command: /tarsee
+      description: Ask Tarsee something (it answers in a thread), or run a command (help, status, /model opus)
+      usage_hint: "[a question | help | status | /command args]"
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - assistant:write
+      - channels:history
+      - channels:read
+      - chat:write
+      - commands
+      - files:read
+      - files:write
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - im:write
+      - mpim:history
+      - mpim:read
+      - reactions:write
+      - users:read
+settings:
+  event_subscriptions:
+    bot_events:
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+      - agent_session_stopped
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

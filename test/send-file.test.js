@@ -117,6 +117,28 @@ describe("send_file", () => {
     assert.equal(mgr.sent.length, before);
   });
 
+  it("sends a file and a message from a Slack thread back into that same thread", async () => {
+    const slackConv = chat("slack:C42:thread:1712.5", "2026-10-27 12:00:00");
+    const out = await run({ channel: "slack", file_path: "reports/October Report.html", caption: "Report" }, { conversationId: slackConv });
+    assert.match(out, /^File sent to slack \(chat C42\)/);
+    assert.deepEqual(mgr.sent.at(-1).opts, { threadId: "1712.5" });
+    assert.equal(mgr.sent.at(-1).chatId, "C42");
+    await executeTool("send_message", { channel: "slack", message: "Done" }, { db, settingsStore: settings, conversationId: slackConv });
+    assert.deepEqual(mgr.sent.at(-1), { kind: "message", type: "slack", chatId: "C42", message: "Done", opts: { threadId: "1712.5" } });
+    const big = path.join(ws, "huge.bin");
+    fs.writeFileSync(big, "");
+    fs.truncateSync(big, 101 * 1024 * 1024);   // sparse
+    assert.match(await run({ channel: "slack", file_path: big }, { conversationId: slackConv }), /101\.0 MB; slack takes up to 100 MB/);
+    assert.match(sendFileHint("slack"), /tarsee_send_file with channel="slack"/);
+    // From somewhere else (a cron, another channel), with no chat named: the latest Slack chat's channel, at the top
+    // level, not inside whatever thread happened to be last.
+    await executeTool("send_message", { channel: "slack", message: "Briefing" }, { db, settingsStore: settings, conversationId: telegramConv });
+    assert.deepEqual(mgr.sent.at(-1), { kind: "message", type: "slack", chatId: "C42", message: "Briefing", opts: { threadId: null } });
+    const mcp = createTarseeMcp({ db, settingsStore: settings });
+    const schema = mcp.instance._registeredTools.tarsee_send_file.inputSchema;
+    assert.ok(JSON.stringify(schema?.def ?? schema?._def ?? schema).includes("slack"), "the MCP tool takes channel slack");
+  });
+
   it("send_message from a Telegram turn reaches Telegram, and email (its tool context has no channel manager)", async () => {
     const out = await executeTool("send_message", { channel: "telegram", message: "Done" }, { db, settingsStore: settings, conversationId: telegramConv });
     assert.match(out, /^Message sent to telegram \(chat 777\)/);

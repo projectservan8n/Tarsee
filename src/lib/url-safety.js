@@ -22,7 +22,7 @@ const TRUSTED_DOMAINS = new Set([
   "npmjs.com", "pypi.org", "hub.docker.com",
   "youtube.com", "twitter.com", "x.com", "reddit.com",
   "linkedin.com", "facebook.com", "instagram.com",
-  "discord.com", "discord.gg", "telegram.org", "t.me",
+  "discord.com", "discord.gg", "telegram.org", "t.me", "slack.com",
   "notion.so", "figma.com", "canva.com",
   "aws.amazon.com", "azure.microsoft.com", "cloud.google.com",
   "huggingface.co", "kaggle.com",

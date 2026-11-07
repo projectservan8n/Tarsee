@@ -37,7 +37,7 @@ export function textShape(name) {
 }
 
 /** A file's name as the bots and the chat keep it on disk, without the time and number they put in front (lib/sent-files.js shownName). */
-export const shownName = (p) => String(p || "").split("/").pop().replace(/^(chat|sent|discord|telegram|whatsapp|email)-\d+-(\d+-)?/, "") || "file";
+export const shownName = (p) => String(p || "").split("/").pop().replace(/^(chat|sent|discord|telegram|whatsapp|slack|email)-\d+-(\d+-)?/, "") || "file";
 
 /** A file kept on the server (in the uploads folder), as the viewer wants it: opened at GET /api/chat/file. */
 export const serverFile = (f) => ({ name: f.name || shownName(f.path), size: f.size || 0, path: f.path, url: `/api/chat/file?p=${encodeURIComponent(f.path)}` });

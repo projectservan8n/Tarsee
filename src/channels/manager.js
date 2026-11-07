@@ -2,7 +2,7 @@ import { SettingsStore } from "../db/settings.js";
 import { ConversationStore } from "../db/conversations.js";
 
 /**
- * Manages all messaging channel bots (Discord, Telegram, Slack).
+ * Manages all messaging channel bots (Discord, Telegram, WhatsApp, Slack, email).
  * Starts/stops channels based on stored configuration.
  */
 export class ChannelManager {
@@ -25,12 +25,11 @@ export class ChannelManager {
     //
     // Email has a different "ready" check than token-based channels — it needs
     // imap + smtp config + enabled, not a single token.
-    const tokenChannels = ["discord", "telegram", "whatsapp"];
     const tasks = [];
 
-    for (const type of tokenChannels) {
+    for (const type of TOKEN_CHANNELS) {
       const channelConfig = this.settings.get(`channel.${type}`);
-      if (!channelConfig?.enabled || !channelConfig?.token) continue;
+      if (!isChannelReady(type, channelConfig)) continue;
       tasks.push(this._startWithRetry(type, channelConfig));
     }
 
@@ -69,6 +68,12 @@ export class ChannelManager {
           "| errno=" + (err.errno || "?"),
           "| cause=" + (err.cause?.code || err.cause?.message || "?"),
         );
+        // The platform refused the credential (lib/channel-errors.js): only a change in Settings can fix that, and
+        // trying again would only flip the status between "connecting" and the error for minutes.
+        if (err.refused) {
+          console.warn(`[channels] ${type}: not retrying a refused credential; fix it in Settings → Channels`);
+          return;
+        }
         if (last) return;
         const delay = Math.min(2_000 * Math.pow(2, attempt - 1), 45_000); // 2,4,8,16,32,45,45s
         console.warn(`[channels] retrying ${type} in ${delay}ms...`);
@@ -81,10 +86,12 @@ export class ChannelManager {
    * Starts a specific channel.
    */
   async start(type, channelConfig, opts = {}) {
-    // Stop existing instance if running
-    if (this.channels.has(type)) {
-      await this.stop(type);
-    }
+    // Stop the running instance, if any. Until the new one is up the status says "starting": Settings polls it right
+    // after a save, and must not take the old bot's "running" for the new one having connected.
+    const prev = this.channels.get(type);
+    this.channels.set(type, { bot: prev?.bot || null, type, status: "starting" });
+    if (prev?.bot) await this.stop(type);
+    this.channels.set(type, { bot: null, type, status: "starting" });
 
     console.log(`[channels] starting ${type}...`);
 
@@ -114,6 +121,11 @@ export class ChannelManager {
           bot = await createWhatsAppBot(channelConfig, this.db);
           break;
         }
+        case "slack": {
+          const { createSlackBot } = await import("./slack.js");
+          bot = await createSlackBot(channelConfig, this.db);
+          break;
+        }
         default:
           throw new Error(`Unknown channel type: ${type}`);
       }
@@ -131,7 +143,11 @@ export class ChannelManager {
    */
   async stop(type) {
     const channel = this.channels.get(type);
-    if (!channel?.bot) return;
+    if (!channel?.bot) {
+      // One that failed to start has no bot to stop, but switched off it must not go on showing that failure.
+      if (channel?.status === "error") this.channels.delete(type);
+      return;
+    }
 
     console.log(`[channels] stopping ${type}...`);
     try {
@@ -161,7 +177,7 @@ export class ChannelManager {
       if (!isEmailReady(channelConfig)) {
         throw new Error("email is not configured or not enabled");
       }
-    } else if (!channelConfig?.enabled || !channelConfig?.token) {
+    } else if (!isChannelReady(type, channelConfig)) {
       throw new Error(`${type} is not configured or not enabled`);
     }
     await this.start(type, channelConfig, opts);
@@ -169,10 +185,10 @@ export class ChannelManager {
 
   /**
    * Send an outbound message to a channel.
-   * @param {string} type - Channel type (telegram, discord, whatsapp, email)
+   * @param {string} type - Channel type (telegram, discord, whatsapp, slack, email)
    * @param {string} chatId - Platform-specific chat/channel ID
    * @param {string} message - Message text
-   * @param {{threadId?: string|null}} [opts] - threadId: a Telegram forum topic
+   * @param {{threadId?: string|null}} [opts] - threadId: a Telegram forum topic, or a Slack thread's ts
    */
   async sendMessage(type, chatId, message, opts = {}) {
     const channel = this.channels.get(type);
@@ -184,11 +200,11 @@ export class ChannelManager {
 
   /**
    * Send a file as a real attachment (the send_file tool).
-   * @param {string} type - Channel type (telegram, discord, whatsapp)
+   * @param {string} type - Channel type (telegram, discord, whatsapp, slack)
    * @param {string} chatId - Platform-specific chat/channel ID
    * @param {string} filePath - Absolute path to the file on disk
    * @param {string} [caption] - Words sent with the file
-   * @param {{threadId?: string|null}} [opts] - threadId: a Telegram forum topic
+   * @param {{threadId?: string|null}} [opts] - threadId: a Telegram forum topic, or a Slack thread's ts
    */
   async sendFile(type, chatId, filePath, caption, opts = {}) {
     const channel = this.channels.get(type);
@@ -204,17 +220,23 @@ export class ChannelManager {
   getStatus() {
     const result = {};
     for (const [type, channel] of this.channels) {
+      // Who it connected as (Settings shows "Connected as …"), and Discord's link to add the bot to a server. Only
+      // while running: during a restart the entry still holds the old bot, which is not the one connecting.
+      const bot = channel.status === "running" ? channel.bot : null;
       result[type] = {
         status: channel.status,
         error: channel.error || null,
+        identity: bot?.identity || null,
+        inviteUrl: bot?.inviteUrl || null,
+        warning: bot?.warning || null,   // running, but something could not be checked (WhatsApp: the token)
       };
     }
     // Add unconfigured channels
-    for (const type of ["discord", "telegram", "whatsapp"]) {
+    for (const type of TOKEN_CHANNELS) {
       if (!result[type]) {
         const config = this.settings.get(`channel.${type}`);
         result[type] = {
-          status: config?.enabled ? "stopped" : "not_configured",
+          status: isChannelReady(type, config) ? "stopped" : "not_configured",
         };
       }
     }
@@ -227,6 +249,19 @@ export class ChannelManager {
     }
     return result;
   }
+}
+
+/** Channels started from a stored token (email has its own readiness check, below). */
+const TOKEN_CHANNELS = ["discord", "telegram", "whatsapp", "slack"];
+
+/**
+ * Whether a token channel has what it needs to start: enabled and its token. Slack also needs its app-level token
+ * (xapp-) for Socket Mode; without it Bolt can only fail, eight times, on every boot.
+ */
+export function isChannelReady(type, c) {
+  if (!c?.enabled || !c?.token) return false;
+  if (type === "slack") return !!c.appToken;
+  return true;
 }
 
 /**

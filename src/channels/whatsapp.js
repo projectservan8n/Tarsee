@@ -11,6 +11,7 @@ import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
 import envConfig from "../config/env.js";
+import { refused } from "../lib/channel-errors.js";
 
 /**
  * Split a long message at line or word boundaries.
@@ -102,6 +103,19 @@ export function isDirectMessage(chatId) {
 }
 
 /**
+ * The WhatsApp account a WHAPI channel is linked to, from its /health answer: "+<number> (<name>)", either alone, or
+ * null when no account is linked yet (the QR code not scanned) or /health didn't say.
+ */
+export function whapiIdentity(health) {
+  const user = health?.user;
+  if (!user || typeof user !== "object") return null;
+  const digits = String(user.phone || user.id || "").split("@")[0].replace(/\D/g, "");
+  const number = digits ? `+${digits}` : null;
+  const name = String(user.pushname || user.name || "").trim() || null;
+  return number && name ? `${number} (${name})` : number || name;
+}
+
+/**
  * WhatsApp channel via WHAPI Cloud (whapi.cloud).
  *
  * WHAPI is push-only: inbound messages arrive as webhook POSTs to a URL
@@ -114,8 +128,10 @@ export function isDirectMessage(chatId) {
  *
  * @param {object} config - { token, enabled, webhook_secret, baseUrl?, allowedChats? }
  * @param {import('better-sqlite3').Database} db
+ * @param {object} [opts] - healthTimeoutMs: how long the startup token check waits for WHAPI (30 s; it takes ~16 s to
+ *   refuse a token). Tests make it short.
  */
-export async function createWhatsAppBot(config, db) {
+export async function createWhatsAppBot(config, db, { healthTimeoutMs = 30_000 } = {}) {
   const convStore = new ConversationStore(db);
   const settingsStore = new SettingsStore(db);
   const token = config.token;
@@ -701,12 +717,21 @@ ${sendFileHint("whatsapp")}`,
     }
   }
 
-  // Sanity check the token at startup — log a warning if WHAPI rejects it,
-  // but don't throw (operator may have restricted the /health endpoint).
+  // Check the token at startup. WHAPI refusing it fails the channel with what to do about it (Settings shows it): a
+  // 401/403, or the 404 "Channel not found" it answers a token that matches no channel with (after ~16 s, so the wait
+  // is long). Anything else (a timeout, a /health this gateway lacks, a WHAPI outage) starts the channel, with a
+  // warning Settings shows in place of "Connected".
+  let identity = null;
+  let warning = null;
   try {
-    await whapiFetch("/health", { method: "GET", timeout: 5000 });
-    console.log("[whatsapp] WHAPI health check OK");
+    identity = whapiIdentity(await whapiFetch("/health", { method: "GET", timeout: healthTimeoutMs }));
+    console.log(`[whatsapp] WHAPI health check OK${identity ? ` (${identity})` : ""}`);
   } catch (err) {
+    if (err.status === 401 || err.status === 403 || (err.status === 404 && /channel not found/i.test(err.message))) {
+      throw refused("WHAPI refused the token. Copy it again from panel.whapi.cloud → your channel → API token.");
+    }
+    const why = err.name === "TimeoutError" || /aborted|timeout/i.test(err.message) ? "no answer in time" : err.message;
+    warning = `Saved, but couldn't check the token with WHAPI (${why}). Messages arrive once WHAPI reaches the webhook; save again to recheck.`;
     console.warn(`[whatsapp] WHAPI health check failed (continuing anyway): ${err.message}`);
   }
 
@@ -717,6 +742,10 @@ ${sendFileHint("whatsapp")}`,
       for (const t of typingIntervals) clearInterval(t);
       typingIntervals.clear();
     },
+    /** The linked WhatsApp account, as /health reported it, for Settings → Channels; null if it didn't say. */
+    identity,
+    /** Why the token could not be checked at startup (Settings shows it in place of "Connected"), or null. */
+    warning,
     sendMessage,
     sendImage,
     sendVoice,

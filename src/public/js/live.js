@@ -28,7 +28,7 @@ const LIVE_UNSENT_AFTER_MS = 15_000; // after a reload, a send this old that nev
 const LIVE_REPLY_WINDOW_MS = 90_000;
 
 const SOURCE_LABELS = {
-  web: "Dashboard", telegram: "Telegram", discord: "Discord", whatsapp: "WhatsApp",
+  web: "Dashboard", telegram: "Telegram", discord: "Discord", whatsapp: "WhatsApp", slack: "Slack",
   email: "Email", cron: "Cron", heartbeat: "Heartbeat", boot: "Boot checklist", api: "API",
 };
 

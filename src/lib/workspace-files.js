@@ -200,14 +200,20 @@ export function getBootstrapContext() {
  * no longer matches and is left alone. Returns the files it updated.
  */
 // The tool lines of the default CLAUDE.md. A new line replaces the old one whole, so the swap runs once.
+// Three generations: the first defaults (Slack, no files), the WhatsApp ones (Slack gone), and today's (Slack back).
 const SEND_MESSAGE_LINE_OLD = "- **tarsee_send_message** — Push messages to Telegram, Discord, Slack, or web";
-const SEND_MESSAGE_LINE = "- **tarsee_send_message** — Push messages to Telegram, Discord, WhatsApp, or web";
-const SEND_FILE_LINE = "- **tarsee_send_file** — Send a file as a real attachment to the Telegram, Discord or WhatsApp chat you are in (never answer with a folder path)";
+const SEND_MESSAGE_LINE_WHATSAPP = "- **tarsee_send_message** — Push messages to Telegram, Discord, WhatsApp, or web";
+const SEND_FILE_LINE_WHATSAPP = "- **tarsee_send_file** — Send a file as a real attachment to the Telegram, Discord or WhatsApp chat you are in (never answer with a folder path)";
+const SEND_MESSAGE_LINE = "- **tarsee_send_message** — Push messages to Telegram, Discord, WhatsApp, Slack, or web";
+const SEND_FILE_LINE = "- **tarsee_send_file** — Send a file as a real attachment to the Telegram, Discord, WhatsApp or Slack chat you are in (never answer with a folder path)";
+const SOUL_TOOLS_LINE = "- **Platform tools** (mcp__tarsee__*): Send messages and files (real attachments) to Telegram/Discord/WhatsApp/Slack, schedule tasks, manage memory, search the web, use the encrypted vault.";
 
 const DEFAULT_UPGRADES = {
   "SOUL.md": [
     ["- **Platform tools** (mcp__tarsee__*): Send messages to Telegram/Discord/Slack, schedule tasks, manage memory, search the web, use the encrypted vault.",
-      "- **Platform tools** (mcp__tarsee__*): Send messages and files (real attachments) to Telegram/Discord/WhatsApp, schedule tasks, manage memory, search the web, use the encrypted vault."],
+      SOUL_TOOLS_LINE],
+    ["- **Platform tools** (mcp__tarsee__*): Send messages and files (real attachments) to Telegram/Discord/WhatsApp, schedule tasks, manage memory, search the web, use the encrypted vault.",
+      SOUL_TOOLS_LINE],
     ["- **Persistent memory**: MEMORY.md stores everything you learn. Read it every session.",
       "- **Persistent memory**: MEMORY.md stores everything you learn. Grep it for what a task needs."],
     ["- Always read MEMORY.md at the start of a session to know what you've learned.",
@@ -233,6 +239,8 @@ const DEFAULT_UPGRADES = {
     ["- **tarsee_schedule_task** — Schedule cron jobs (server is UTC)",
       "- **tarsee_schedule_task** — Schedule cron jobs (times are in the configured timezone, `TARSEE_TIMEZONE`)"],
     [SEND_MESSAGE_LINE_OLD, `${SEND_MESSAGE_LINE}\n${SEND_FILE_LINE}`],
+    [SEND_MESSAGE_LINE_WHATSAPP, SEND_MESSAGE_LINE],
+    [SEND_FILE_LINE_WHATSAPP, SEND_FILE_LINE],
   ],
 };
 
@@ -253,7 +261,7 @@ export function upgradeDefaultWorkspaceFiles(dir = config.WORKSPACE_DIR) {
       console.warn(`[workspace] could not update ${name}: ${err.message}`);
     }
   }
-  if (updated.length) console.log(`[workspace] updated the default instructions in ${updated.join(" and ")} (grep MEMORY.md, never read it whole; send files as attachments)`);
+  if (updated.length) console.log(`[workspace] updated the default instructions in ${updated.join(" and ")} (grep MEMORY.md, never read it whole; send files as attachments; Slack)`);
   return updated;
 }
 

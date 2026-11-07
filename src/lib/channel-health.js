@@ -1,5 +1,5 @@
 /**
- * Channel health monitor — auto-recovers a stuck Telegram poller.
+ * Channel health monitor — auto-recovers a stuck Telegram poller, and a Slack connection that stays down.
  *
  * The failure it fixes: on boot (or after a network blip) the process starts
  * before DNS/egress is ready, so Telegram's getUpdates long-poll launches into
@@ -43,6 +43,40 @@ export function stopChannelHealth() {
 
 async function check() {
   await checkTelegram();
+  await checkSlack(_deps?.channelManager, { db: _deps?.db });
+}
+
+/** How long a Slack connection may stay down (Bolt reconnecting) before the channel is restarted. */
+export const SLACK_DOWN_MS = Number(process.env.TARSEE_SLACK_DOWN_MS) || 3 * 60_000;
+let _slackLastRetry = 0;
+
+/**
+ * Slack: Bolt keeps the Socket Mode connection up by itself, but if it gives up (a request error after the Web
+ * API client's own retries) the bot is silently gone while the channel still says "running". A connection down
+ * for SLACK_DOWN_MS is restarted, and a Slack channel whose start failed (every boot attempt, or a restart) is
+ * tried again every SLACK_DOWN_MS while it is enabled. Returns whether it restarted.
+ */
+export async function checkSlack(channelManager, { now = Date.now(), enabled = null, db = null } = {}) {
+  const ch = channelManager?.channels?.get?.("slack");
+  if (!ch || ch.status === "starting") return false;
+  let reason;
+  if (ch.status === "error" || !ch.bot) {
+    const on = enabled ?? (() => { try { return !!new SettingsStore(db).get("channel.slack")?.enabled; } catch { return false; } })();
+    if (!on || now - _slackLastRetry < SLACK_DOWN_MS) return false;
+    _slackLastRetry = now;
+    reason = `its last start failed (${ch.error || "unknown error"})`;
+  } else {
+    const h = typeof ch.bot.health === "function" ? ch.bot.health() : null;
+    if (!h || h.connected || h.downForMs < SLACK_DOWN_MS) return false;
+    reason = `its connection has been down for ${Math.round(h.downForMs / 1000)} s`;
+  }
+  console.warn(`[channel-health] slack: ${reason}; restarting it`);
+  try {
+    await channelManager.restart("slack");
+  } catch (e) {
+    console.error("[channel-health] slack restart failed:", e?.message);
+  }
+  return true;
 }
 
 async function checkTelegram() {

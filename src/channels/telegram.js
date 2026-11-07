@@ -14,13 +14,17 @@ import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { toolStatusLabel, toolDoneLabel } from "../lib/tool-status.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
 import envConfig from "../config/env.js";
+import { refused } from "../lib/channel-errors.js";
 
 /**
  * Creates and starts a Telegram bot.
  *
  * @param {object} config - { token, enabled, allowedChats?, ackReaction?, streaming? }
  * @param {import('better-sqlite3').Database} db
- * @returns {Promise<{stop: Function}>}
+ * @param {object} [opts] - apiRoot: the Bot API base; chatStream: the model stream (ai/router.js chatStream when left
+ *   out); deliverPending (see manager.js); getMeTimeoutMs: how long the startup token check waits (15 s). Tests point
+ *   the first two at 127.0.0.1 and a scripted model.
+ * @returns {Promise<{stop: Function, identity: string|null}>}
  */
 export async function createTelegramBot(config, db, opts = {}) {
   const convStore = new ConversationStore(db);
@@ -48,6 +52,7 @@ export async function createTelegramBot(config, db, opts = {}) {
   // message processed twice. Drop repeats by update_id, bounded to 1000.
   const _seenUpdates = new Set();
   const _seenOrder = [];
+  const chatsSeen = new Set(); // chats whose ID has been logged (no allowlist yet), once each
   let _updatesReceived = 0;
   let _handlerActive = 0;
   let _lastUpdateAt = 0;
@@ -122,8 +127,16 @@ export async function createTelegramBot(config, db, opts = {}) {
     // Check allowed chats (from config or settings DB allowlist)
     const dbAllowlist = settingsStore.get("allowlist.telegram");
     const allowedChats = config.allowedChats?.length > 0 ? config.allowedChats : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
+    // Settings says to message the bot and read the chat ID in the Console, so a dropped chat says its ID, and with no
+    // allowlist yet each chat says it once (to start one with) without filling the Console.
     if (allowedChats.length > 0) {
-      if (!allowedChats.includes(String(chatId))) return;
+      if (!allowedChats.includes(String(chatId))) {
+        console.warn(`[telegram] ignoring message from chat ${chatId} (${chatLabel(ctx.chat, ctx.from)}): not on the Telegram allowlist`);
+        return;
+      }
+    } else if (!chatsSeen.has(chatId)) {
+      chatsSeen.add(chatId);
+      console.log(`[telegram] message from chat ${chatId} (${chatLabel(ctx.chat, ctx.from)})`);
     }
 
     if (!text?.trim()) return;
@@ -391,7 +404,7 @@ ${sendFileHint("telegram")}`,
         let recoverRound = false;
 
         const existingSessionId = convStore.getClaudeSessionId(convId);
-        const stream = chatStream({
+        const stream = (opts.chatStream || chatStream)({
           liveSource: "telegram",
           provider: activeProvider.provider,
           model: activeProvider.model,
@@ -432,6 +445,11 @@ ${sendFileHint("telegram")}`,
               .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
             fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
             await postToolStatus(event);
+          } else if (event.type === "tool_result") {
+            // Claude Code runs the tools itself and reports each result here, then ends the turn with "end_turn", so
+            // the tool loop below never runs for it. Without this every status line stayed "⚙️ Running…" for good.
+            const tc = toolCalls.find((t) => t.id === event.id);
+            await markToolDone(event.id, tc?.name || "tool", tc?.input || {}, event.ok === false ? "error" : "");
           } else if (event.type === "error") {
             if (event.recoverable && !sessionRetried) {
               sessionRetried = true;
@@ -750,6 +768,16 @@ ${sendFileHint("telegram")}`,
     console.error("[telegram] bot error:", err.message);
   });
 
+  // Check the token before polling starts, so a wrong one fails the channel with what to do about it (Settings shows
+  // it). Only Telegram refusing it fails the channel: a timeout or network error must not hold startup up (see the
+  // launch note below), so polling starts anyway and Telegraf asks again. The answer is kept for launch to use.
+  try {
+    bot.botInfo = await bot.telegram.callApi("getMe", {}, { signal: AbortSignal.timeout(opts.getMeTimeoutMs ?? 15_000) });
+  } catch (err) {
+    if ([401, 404].includes(err?.response?.error_code)) throw refused(TELEGRAM_TOKEN_REFUSED);
+    console.warn(`[telegram] could not check the bot token (${err.message}); starting anyway`);
+  }
+
   // Use polling (no webhook needed).
   //
   // NOTE: bot.launch() must NOT be awaited. Telegraf's promise resolves only
@@ -795,6 +823,10 @@ ${sendFileHint("telegram")}`,
     stop: async () => {
       bot.stop("Tarsee shutdown");
     },
+    /** Who it connected as, for Settings → Channels: @username, or null until Telegram has said. */
+    get identity() {
+      return bot.botInfo?.username ? `@${bot.botInfo.username}` : null;
+    },
     /**
      * Poller health for the channel-health monitor.
      *  - updatesReceived: 0 means the poller has pulled NOTHING since launch
@@ -836,6 +868,16 @@ ${sendFileHint("telegram")}`,
       }
     },
   };
+}
+
+const TELEGRAM_TOKEN_REFUSED = "Telegram refused the bot token. Copy it again from @BotFather: /mybots → your bot → API Token.";
+
+/** A chat as people know it, for the Console: a group's title, else the person's @username or name. */
+function chatLabel(chat = {}, from = {}) {
+  if (chat.title) return chat.title;
+  if (chat.username) return `@${chat.username}`;
+  const name = [chat.first_name, chat.last_name].filter(Boolean).join(" ");
+  return name || (from?.username ? `@${from.username}` : from?.first_name) || "unknown";
 }
 
 /**
