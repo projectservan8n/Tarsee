@@ -634,7 +634,7 @@ describe("the AI cards drawn again (a read of the AIs comes in) while someone is
     try {
       await page.locator("#aiHeaderChip:not([hidden])").click();
       for (const id of ["aiModel-deepseek", "aiBgModel-deepseek"]) {
-        await page.locator(`#${id} option`).first().waitFor({ state: "attached" });
+        await page.waitForFunction((sel) => document.querySelectorAll(`${sel} option`).length >= 2, `#${id}`);
         const before = await page.locator(`#${id} option`).count();
         assert.ok(before >= 2, `${id} lists the models to begin with`);
         // Clicking the label focuses the list itself (custom-select.js keeps it focusable, out of sight).
@@ -647,6 +647,24 @@ describe("the AI cards drawn again (a read of the AIs comes in) while someone is
         const shown = await page.locator(`#${id}`).evaluate((sel) => sel.closest(".cs-wrap")?.querySelector(".cs-trigger-label")?.textContent?.trim());
         assert.ok(shown, `${id} shows the model chosen`);
       }
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("focus goes back to the very button it was on, not to the first of its kind (a preset, a model's Choose)", async () => {
+    const { page, errors, context } = await openPage({ needsSetup: false });
+    try {
+      await page.locator("#aiHeaderChip:not([hidden])").click();
+      const presets = page.locator('#localAiCard [data-ai-action="preset"]');
+      await presets.nth(1).waitFor();
+      assert.ok((await presets.count()) >= 2, "Local AI offers more than one preset");
+      const second = await presets.nth(1).getAttribute("data-url");
+      await presets.nth(1).focus();
+      await page.evaluate(() => { Settings._aiSetTest("local", { text: `A line at ${Date.now()}`, tone: "bad" }); return Settings.loadAi(); });
+      const now = await page.evaluate(() => ({ action: document.activeElement?.dataset?.aiAction || null, url: document.activeElement?.dataset?.url || null }));
+      assert.deepEqual(now, { action: "preset", url: second }, "the same preset has the focus, so Enter fills in the address chosen");
       assert.deepEqual(errors, []);
     } finally {
       await context.close();

@@ -1080,11 +1080,15 @@ const Settings = {
     // on the next frame: focus on it can't be kept, and a focused list isn't filled with its models.
     if (el.tagName === "SELECT") return null;
     const esc = (s) => (window.CSS?.escape ? CSS.escape(s) : String(s).replace(/["\\]/g, "\\$&"));
+    // A button is found again by all its data- attributes: several share an action (each model's Choose and Verify,
+    // Local AI's presets) and only their data-model or data-url tells them apart.
+    const dataSel = () => [...el.attributes].filter((a) => a.name.startsWith("data-")).map((a) => `[${a.name}="${esc(a.value)}"]`).join("");
     const sel = el.id ? `#${esc(el.id)}`
       : el.dataset?.keep ? `[data-keep="${esc(el.dataset.keep)}"]`
-      : el.dataset?.aiAction ? `[data-ai-action="${esc(el.dataset.aiAction)}"]`
+      : el.dataset?.aiAction ? dataSel()
       : null;
-    if (!sel) return null;
+    // Only what is found again for sure: focus put on another button (another model's Choose) would act on that one.
+    if (!sel || root.querySelectorAll(sel).length !== 1) return null;
     let range = null;
     try {
       if (typeof el.selectionStart === "number") range = [el.selectionStart, el.selectionEnd, el.selectionDirection || "none"];

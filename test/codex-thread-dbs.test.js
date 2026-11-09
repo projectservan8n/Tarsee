@@ -222,31 +222,36 @@ describe("Codex's thread databases in the daily sweep", () => {
     }
   });
 
-  it("a sweep stopped dead in the middle of a rebuild (the server killed) leaves it noted, and the next sweep does it", () => {
+  /** Run a sweep in a child process that dies (process.exit runs no finally) the moment `dbName`'s rebuild starts. */
+  const killedSweep = (home, dbName) => {
+    const script = path.join(tmp, `killed-sweep-${++n}.mjs`);
+    const mod = new URL("../src/lib/codex-thread-dbs.js", import.meta.url).href;
+    const sqliteMod = import.meta.resolve("better-sqlite3");
+    fs.writeFileSync(script, [
+      `import Database from ${JSON.stringify(sqliteMod)};`,
+      `import { pruneCodexThreadDbs } from ${JSON.stringify(mod)};`,
+      "const exec = Database.prototype.exec;",
+      "Database.prototype.exec = function (sql) {",
+      `  if (/VACUUM/i.test(sql) && this.name.endsWith(${JSON.stringify(dbName)})) process.exit(137);`,
+      "  return exec.call(this, sql);",
+      "};",
+      `pruneCodexThreadDbs({ homes: [${JSON.stringify(home)}], maxAgeDays: 30, now: ${NOW} });`,
+    ].join("\n"));
+    return spawnSync(process.execPath, [script], { encoding: "utf8" });
+  };
+  /** A Codex that keeps its databases open (one read each, so it holds the log): nothing but a rebuild clears words. */
+  const runningCodex = (home) => ["state_5.sqlite", "thread_history_1.sqlite"].map((f) => {
+    const db = new Database(path.join(home, f));
+    db.prepare("SELECT COUNT(*) AS c FROM sqlite_master").get();
+    return db;
+  });
+
+  it("a sweep stopped dead in the middle of the history's rebuild (the server killed) leaves it noted, and the next sweep does it", () => {
     const home = makeHome(STANDARD);
     grow(home);
-    // A Codex that keeps its databases open, so nothing but a rebuild clears the words.
-    const codex = ["state_5.sqlite", "thread_history_1.sqlite"].map((f) => {
-      const db = new Database(path.join(home, f));
-      db.prepare("SELECT COUNT(*) AS c FROM sqlite_master").get();
-      return db;
-    });
+    const codex = runningCodex(home);
     try {
-      // A child process runs the sweep and dies (process.exit runs no finally) the moment the history's rebuild starts.
-      const script = path.join(tmp, `killed-sweep-${n}.mjs`);
-      const mod = new URL("../src/lib/codex-thread-dbs.js", import.meta.url).href;
-      const sqliteMod = import.meta.resolve("better-sqlite3");
-      fs.writeFileSync(script, [
-        `import Database from ${JSON.stringify(sqliteMod)};`,
-        `import { pruneCodexThreadDbs } from ${JSON.stringify(mod)};`,
-        "const exec = Database.prototype.exec;",
-        "Database.prototype.exec = function (sql) {",
-        "  if (/VACUUM/i.test(sql) && /thread_history_1/.test(this.name)) process.exit(137);",
-        "  return exec.call(this, sql);",
-        "};",
-        `pruneCodexThreadDbs({ homes: [${JSON.stringify(home)}], maxAgeDays: 30, now: ${NOW} });`,
-      ].join("\n"));
-      const r = spawnSync(process.execPath, [script], { encoding: "utf8" });
+      const r = killedSweep(home, "thread_history_1.sqlite");
       assert.equal(r.status, 137, `the sweep was stopped dead: ${r.stderr}`);
       assert.equal(threadIds(home).includes(ID.gone), true, "state_5 goes last, so its rows wait for the next sweep");
       const pending = JSON.parse(fs.readFileSync(path.join(home, ".tarsee-vacuum-pending"), "utf8"));
@@ -256,6 +261,27 @@ describe("Codex's thread databases in the daily sweep", () => {
       assert.equal(pruneCodexThreadDbs({ homes: [home], maxAgeDays: 30, now: NOW }), 1);
       assert.deepEqual(leftIn(home, "GONE-WORDS"), [], "the next sweep removes what is left and rebuilds the file");
       assert.equal(fs.existsSync(path.join(home, ".tarsee-vacuum-pending")), false);
+    } finally {
+      for (const db of codex) db.close();
+    }
+  });
+
+  it("stopped dead in state_5's rebuild, after its rows went: the next sweep, with no chat due, still rebuilds it", () => {
+    const home = makeHome(STANDARD);
+    grow(home);
+    const codex = runningCodex(home);
+    try {
+      const r = killedSweep(home, "state_5.sqlite");
+      assert.equal(r.status, 137, `the sweep was stopped dead: ${r.stderr}`);
+      assert.equal(threadIds(home).includes(ID.gone), false, "state_5's rows went before its rebuild started");
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, ".tarsee-vacuum-pending"), "utf8")), ["state_5.sqlite"],
+        "the history was rebuilt; state_5's rebuild is the one noted");
+      assert.ok(leftIn(home, "GONE-WORDS").includes("state_5.sqlite"), "the person's first words are still in state_5");
+
+      assert.equal(pruneCodexThreadDbs({ homes: [home], maxAgeDays: 30, now: NOW }), 0, "no chat is due any more");
+      assert.deepEqual(leftIn(home, "GONE-WORDS"), [], "yet state_5 is rebuilt, and the words are gone");
+      assert.equal(fs.existsSync(path.join(home, ".tarsee-vacuum-pending")), false);
+      assert.equal(codex[0].prepare("SELECT first_user_message AS m FROM threads WHERE id = ?").get(ID.kept).m, `the person's words in ${ID.kept}`);
     } finally {
       for (const db of codex) db.close();
     }
