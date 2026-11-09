@@ -116,12 +116,36 @@ describe("Codex's thread databases in the daily sweep", () => {
     assert.deepEqual(rows(home, "state_5.sqlite", "SELECT child_thread_id FROM thread_spawn_edges").map((r) => r.child_thread_id), ["01a1c080-0000-7000-8000-000000000010"], "an edge from the removed thread goes; a kept thread's stays");
     assert.equal(rows(home, "state_5.sqlite", "SELECT COUNT(*) AS c FROM thread_sections")[0].c, 1, "a table with no thread column is untouched");
     assert.equal(rows(home, "state_5.sqlite", "SELECT COUNT(*) AS c FROM _sqlx_migrations")[0].c, 0);
-    for (const file of ["state_5.sqlite", "thread_history_1.sqlite", "logs_2.sqlite"]) {
-      const wal = path.join(home, `${file}-wal`);
-      assert.ok(!fs.existsSync(wal) || fs.statSync(wal).size === 0, `${file}: the write-ahead log is emptied`);
-    }
 
     assert.equal(pruneCodexThreadDbs({ homes: [home], maxAgeDays: 30, now: NOW }), 0, "nothing more the second time");
+  });
+
+  it("the removed thread's words leave the disk, even while Codex has its databases open", () => {
+    const home = makeHome(STANDARD);
+    // A running Codex keeps its databases open between turns. Then closing the sweep's own connection doesn't
+    // checkpoint and remove the write-ahead log (only the last connection's close does), so the sweep has to empty it
+    // itself; and a deleted row's bytes stay in the file's free space unless they are overwritten.
+    const codex = ["state_5.sqlite", "thread_history_1.sqlite"].map((file) => {
+      const db = new Database(path.join(home, file));
+      db.prepare("SELECT COUNT(*) AS c FROM sqlite_master").get();
+      return db;
+    });
+    try {
+      assert.equal(pruneCodexThreadDbs({ homes: [home], maxAgeDays: 30, now: NOW }), 1);
+      const words = [`the person's words in ${ID.gone}`, `user in ${ID.gone}`, `agent in ${ID.gone}`, `command in ${ID.gone}`];
+      for (const file of ["state_5.sqlite", "thread_history_1.sqlite"]) {
+        const wal = path.join(home, `${file}-wal`);
+        assert.ok(fs.existsSync(wal), `${file}: the log is still there while Codex has the database open`);
+        assert.equal(fs.statSync(wal).size, 0, `${file}: the write-ahead log is emptied`);
+        const bytes = fs.readFileSync(path.join(home, file)).toString("latin1");
+        for (const w of words) assert.ok(!bytes.includes(w), `${file}: "${w}" is still in the database file`);
+      }
+      // What stays is still there, and Codex still reads it.
+      assert.equal(codex[0].prepare("SELECT first_user_message AS m FROM threads WHERE id = ?").get(ID.kept).m, `the person's words in ${ID.kept}`);
+      assert.equal(codex[0].prepare("SELECT COUNT(*) AS c FROM threads WHERE id = ?").get(ID.gone).c, 0);
+    } finally {
+      for (const db of codex) db.close();
+    }
   });
 
   it("removes nothing at a cutoff the threads haven't reached", () => {
@@ -164,6 +188,42 @@ describe("Codex's thread databases in the daily sweep", () => {
     assert.equal(pruneCodexThreadDbs({ homes: [home], maxAgeDays: 30, now: NOW }), 0);
     assert.deepEqual(threadIds(home), [ID.gone]);
     assert.ok(warn.mock.calls.some((c) => String(c.arguments[0]).includes("[retention] Codex state_5 schema changed; thread rows not pruned")));
+  });
+
+  // A sessions folder that can't be read would make every old thread look as if its rollout were gone (and an
+  // unreadable parent folder makes fs.existsSync say false for a rollout that is there), so the sweep removes nothing.
+  it("a sessions folder that can't be read: nothing is taken for gone, and it says why", (t) => {
+    const warn = t.mock.method(console, "warn", () => {});
+    const home = makeHome(STANDARD);
+    const sessions = path.join(home, "sessions");
+    const readdirSync = fs.readdirSync.bind(fs);
+    t.mock.method(fs, "readdirSync", (dir, ...rest) => {
+      const p = path.resolve(String(dir));
+      if (p === sessions || p.startsWith(sessions + path.sep)) {
+        throw Object.assign(new Error(`EACCES: permission denied, scandir '${p}'`), { code: "EACCES" });
+      }
+      return readdirSync(dir, ...rest);
+    });
+    assert.equal(pruneCodexThreadDbs({ homes: [home], maxAgeDays: 30, now: NOW }), 0);
+    assert.deepEqual(threadIds(home), STANDARD.map((s) => s.id).sort(), "every thread stays");
+    assert.deepEqual(itemThreads(home), STANDARD.map((s) => s.id).sort(), "and every message");
+    assert.ok(warn.mock.calls.some((c) => /\[retention\].*EACCES/.test(String(c.arguments[0]))), "the reason is logged");
+  });
+
+  it("the same with the folder's permissions really taken away (Linux and macOS, not as root)", {
+    skip: process.platform === "win32" || process.getuid?.() === 0 ? "needs a system where a folder can be made unreadable" : false,
+  }, (t) => {
+    const warn = t.mock.method(console, "warn", () => {});
+    const home = makeHome(STANDARD);
+    const sessions = path.join(home, "sessions");
+    fs.chmodSync(sessions, 0o000);
+    try {
+      assert.equal(pruneCodexThreadDbs({ homes: [home], maxAgeDays: 30, now: NOW }), 0);
+    } finally {
+      fs.chmodSync(sessions, 0o755);
+    }
+    assert.deepEqual(threadIds(home), STANDARD.map((s) => s.id).sort(), "every thread stays, the one whose rollout is there too");
+    assert.ok(warn.mock.calls.some((c) => /\[retention\].*EACCES/.test(String(c.arguments[0]))), "the reason is logged");
   });
 
   it("a home with no databases, or none at all, is fine", () => {

@@ -210,9 +210,12 @@ export function createAiRouter(deps = {}) {
   /**
    * Ask Codex for the signed-in ChatGPT account's own models and make them the ChatGPT plan's catalog: {models,
    * reason?}. An empty list (it couldn't be read as the account's own) empties the catalog, so no model is named
-   * and Codex uses the account's default; nothing is ever hard-coded for ChatGPT.
+   * and Codex uses the account's default; nothing is ever hard-coded for ChatGPT. While "API keys only" is on it
+   * reads nothing and leaves the catalog as it is ({models: [], reason: "keys-only"}): reading the list starts Codex
+   * in the plan's home, which sends the plan's sign-in to ChatGPT's backend (lib/model-catalog.js has the same rule).
    */
-  async function fillChatgptModels() {
+  async function fillChatgptModels(store) {
+    if (keysOnly(store, { env: envOf() })) return { models: [], reason: "keys-only" };
     const opts = { codexHome: codexHome(), env: codexChildEnv() };
     let models;
     let reason = null;
@@ -251,8 +254,15 @@ export function createAiRouter(deps = {}) {
       if (/^claude-/i.test(m)) return { ok: false, status: 400, error: "Local AI runs your own server's models, not Claude." };
       return { ok: true, model: m };
     }
-    if (p.id === "chatgpt" && !modelsFor("chatgpt").length) {
-      try { await fillChatgptModels(); } catch { /* the check below says it isn't listed */ }
+    if (p.id === "chatgpt") {
+      // Its models are only known from the account's own list, which "API keys only" never reads (fillChatgptModels),
+      // and the plan isn't used then anyway: said plainly, as PUT /active does, not as "isn't on your list".
+      if (keysOnly(store, { env: envOf() })) {
+        return { ok: false, status: 409, state: "blocked-keys-only", error: "\"API keys only\" is on, so the ChatGPT plan isn't used. Turn it off in Settings > AI first." };
+      }
+      if (!modelsFor("chatgpt").length) {
+        try { await fillChatgptModels(store); } catch { /* the check below says it isn't listed */ }
+      }
     }
     const resolved = resolveModelFor(p.id, m, store);
     if (!resolved || (!TIER_WORD_RE.test(m) && bare(resolved) !== bare(m))) {
@@ -548,7 +558,7 @@ export function createAiRouter(deps = {}) {
       const s = await providerStatus("chatgpt", statusDeps(store));
       if (!s.ready) return res.status(409).json({ error: s.detail, state: s.state, fix: s.fix });
       try {
-        const r = await fillChatgptModels();
+        const r = await fillChatgptModels(store);
         if (!r.models.length) note = "Your ChatGPT account's model list couldn't be read, so Tarsee names no model and Codex uses your account's default model.";
       } catch (err) {
         return res.status(502).json({ error: `Tarsee couldn't read your ChatGPT account's models: ${redactSecrets(err?.message || String(err))}` });
@@ -807,7 +817,8 @@ export function createAiRouter(deps = {}) {
         store.set("ai.chatgpt.method", "device");
         clearFailureFlag(store, "chatgpt");
         audit(req, { action: "credential.write", target: "chatgpt.signin", detail: "Signed in with ChatGPT (device code)" });
-        try { await fillChatgptModels(); } catch (err) { console.warn("[ai] reading the ChatGPT account's models failed:", redactSecrets(err?.message || String(err))); }
+        // Not read if "API keys only" was switched on while the code waited (fillChatgptModels checks it again now).
+        try { await fillChatgptModels(store); } catch (err) { console.warn("[ai] reading the ChatGPT account's models failed:", redactSecrets(err?.message || String(err))); }
       } else {
         const why = String(r?.error || "Sign-in didn't finish.");
         entry.state = r?.code === "timeout" || /expired|timed? ?out/i.test(why) ? "expired" : "failed";

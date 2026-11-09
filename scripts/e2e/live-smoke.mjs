@@ -13,7 +13,10 @@
  *            (POST /api/chat/send, read to the end), asking for a product only Tarsee's calculator tool should work out
  *   tool     tarsee_calculator ran, returned the right number, and the reply carries it
  *   usage    the chat's usage row (GET /api/analytics/usage/chat/:id): provider, model, engine, tokens, cost
- *   cleanup  the test chat is deleted (--keep keeps it)
+ *   cleanup  a turn that wasn't seen to end (the time ran out, the connection broke, the stream ended with no "done")
+ *            is stopped first (POST /api/chat/stop, the chat's Stop) and waited for until the chat shows no turn at
+ *            work; then the test chat is deleted (--keep keeps it). Tarsee keeps a turn running when the page that
+ *            sent it goes away, so a chat deleted under it would leave it running on the key with no Stop to press.
  * OpenRouter gets two chats, one on each engine (a Claude model on Claude Code, an OpenAI model on Codex), unless
  * --model names its own. ChatGPT's chat names no model: the account's default runs, as a new chat would.
  *
@@ -27,7 +30,9 @@
  *
  * The address and password come only from the environment, never from arguments, and are never printed. Nothing it
  * prints carries a key, a token, a cookie or the password: every line goes through redact() (key-shaped text, Bearer
- * and cookie values, the password and every cookie value it was given). Exit code 0 when every step passed, else 1.
+ * and cookie values, every cookie value it was given, and the password when it is long enough to blank out safely: a
+ * short one, like a 4-digit PIN, is never in a line, and a gap in a date or a number would give it away). Exit code
+ * 0 when every step passed, else 1.
  */
 import crypto from "node:crypto";
 import http from "node:http";
@@ -39,13 +44,21 @@ import { pathToFileURL } from "node:url";
 
 const SECRETS = new Set();
 
+/**
+ * The shortest value redact() blanks out wherever it appears. Tarsee's cookie values are 40 characters and more. A
+ * shorter secret, like a 4-digit SETUP_PASSWORD, is left out: the script never puts the password in a line, and a
+ * short value blanked out of the dates, sums and model ids it prints shows exactly what it was ("[redacted]-11-10" is
+ * the year; "worked out [redacted]7 * 3917 = 180796969" gives it to anyone who divides).
+ */
+const MIN_SECRET_LENGTH = 16;
+
 /** A value that must never be printed (the password, a cookie's value), as it is and as it is URL-encoded. */
 export function addSecret(value) {
+  const add = (s) => { if (s.length >= MIN_SECRET_LENGTH) SECRETS.add(s); };
   const s = String(value ?? "");
-  if (s.length < 4) return;
-  SECRETS.add(s);
-  try { SECRETS.add(encodeURIComponent(s)); } catch { /* not encodable: the raw value is enough */ }
-  try { SECRETS.add(decodeURIComponent(s)); } catch { /* not encoded */ }
+  add(s);
+  try { add(encodeURIComponent(s)); } catch { /* not encodable: the raw value is enough */ }
+  try { add(decodeURIComponent(s)); } catch { /* not encoded */ }
 }
 
 /** Key-shaped text, whatever key it is: [pattern, replacement]. */
@@ -324,6 +337,7 @@ function whyNot(r) {
 /** The engine each AI's turns run on (OpenRouter's depends on the model's maker). */
 const ENGINE = { claude: "claude-code", anthropic: "claude-code", deepseek: "claude-code", chatgpt: "codex", openai: "codex", local: "codex" };
 const PLANS = new Set(["claude", "chatgpt"]);
+const TEST_CHAT_TITLE = "Live test (live-smoke)";
 
 /** OpenRouter's engine for a model: Claude Code for anthropic/*, Codex for openai/*, null for any other maker. */
 export function openRouterEngine(model) {
@@ -400,9 +414,9 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   // Test chats still open, deleted if the run is stopped with Ctrl+C.
   const openChats = new Set();
   const onSigint = async () => {
-    say("INFO", "tarsee", "stopped", o.keep ? "leaving the test chats" : "deleting the test chats first");
+    say("INFO", "tarsee", "stopped", o.keep ? "stopping their turns and leaving the test chats" : "stopping their turns and deleting the test chats first");
     for (const id of openChats) {
-      await api("POST", "/api/chat/stop", { conversationId: id }, { timeoutMs: 5000 });
+      await stopTurn(id, 5000);
       if (!o.keep) await api("DELETE", `/api/chat/conversations/${encodeURIComponent(id)}`, undefined, { timeoutMs: 5000 });
     }
     process.exit(130);
@@ -511,6 +525,28 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     return { provider, title, test: "-", turn: "-", tool: "-", cost: "-", notes: [], model: m?.model ?? null };
   }
 
+  /**
+   * Stop the chat's turn, as its Stop button does (POST /api/chat/stop), and wait up to waitMs for it to be over (the
+   * chat shows no turn at work), so nothing it still writes lands after the chat is deleted. (A stopped Claude Code
+   * turn can take about 7 s to end: the Agent SDK gives its CLI 2 s, then up to 5 s more before it kills it.)
+   * {ended, stopped (there was a turn to stop), secs} or {ended: false, error}.
+   */
+  async function stopTurn(conv, waitMs = 15_000) {
+    const started = Date.now();
+    const s = await api("POST", "/api/chat/stop", { conversationId: conv }, { timeoutMs: 10_000 });
+    if (s.status !== 200) return { ended: false, error: `POST /api/chat/stop: ${whyNot(s)}` };
+    const stopped = s.json?.stopped === true;
+    const end = started + waitMs;
+    for (;;) {
+      const c = await api("GET", `/api/chat/conversations/${encodeURIComponent(conv)}`, undefined, { timeoutMs: 10_000 });
+      if (c.status === 404 || (c.status === 200 && !c.json?.activeTurn)) return { ended: true, stopped, secs: (Date.now() - started) / 1000 };
+      if (Date.now() > end) {
+        return { ended: false, stopped, error: c.status === 200 ? `it was still at work ${Math.round(waitMs / 1000)} s after Stop` : `the chat couldn't be read: ${whyNot(c)}` };
+      }
+      await sleep(500);
+    }
+  }
+
   /** Verify (when asked), then one chat on this AI and model, its usage row, and the chat deleted. */
   async function chatOnce(r, m, card) {
     const who = r.title;
@@ -542,7 +578,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     const b = crypto.randomInt(100, 9999);
     const product = a * b;
     const message = `Live test: use Tarsee's tarsee_calculator tool to work out ${a} * ${b}, then reply with just the number the tool gives you.`;
-    const created = await api("POST", "/api/chat/conversations", { title: "Live test (live-smoke)" });
+    const created = await api("POST", "/api/chat/conversations", { title: TEST_CHAT_TITLE });
     const conv = created.json?.id;
     if (!(created.status === 200 || created.status === 201) || !conv) {
       say("FAIL", who, "turn", `couldn't start a chat: ${whyNot(created)}`);
@@ -550,6 +586,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       return;
     }
     openChats.add(conv);
+    // A turn this chat sent that wasn't seen to end: it is stopped before the chat is deleted (or kept).
+    let unfinished = false;
     try {
       const pick = { conversationId: conv, provider: r.provider };
       if (m.model) pick.model = m.model;
@@ -564,19 +602,23 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 
       // --- The turn ---
       const started = Date.now();
+      unfinished = true;
       const s = await tarsee.stream("/api/chat/send", { conversationId: conv, message }, { timeoutMs });
       const secs = ((Date.now() - started) / 1000).toFixed(1);
-      if (s.timedOut) await api("POST", "/api/chat/stop", { conversationId: conv }, { timeoutMs: 10_000 });
       const ev = s.events;
       const sel = all(ev, "model_selected")[0]?.data || null;
       // (Tarsee's error words carry the chat's Markdown bold, which a terminal shows as asterisks.)
       const errors = all(ev, "error").map((e) => String(e.data?.message || e.data || "").replace(/\*\*/g, ""));
       const dones = all(ev, "done");
+      // Seen to end: Tarsee sent its "done" (it comes once the turn is over), or turned the message down with a 4xx
+      // before any turn began. Anything else (the time running out, the connection cut, a stream that ended with no
+      // "done", a proxy's 5xx, no answer at all) may have left the turn running on Tarsee.
+      unfinished = !dones.length && !(s.status >= 400 && s.status < 500);
       const text = all(ev, "text").map((e) => e.data?.content ?? "").join("");
       const problems = [];
       if (s.status !== 200) problems.push(`HTTP ${s.status || "no answer"}${s.json?.error ? `: ${s.json.error}` : s.error ? `: ${s.error}` : ""}`);
       else {
-        if (s.timedOut) problems.push(`no full reply in ${o.timeoutSec} s (stopped it)`);
+        if (s.timedOut) problems.push(`no full reply in ${o.timeoutSec} s`);
         if (s.error) problems.push(`the reply broke off: ${s.error}`);
         if (!sel) problems.push("Tarsee never said which AI answered");
         else if (sel.provider !== r.provider) problems.push(`${sel.label || sel.provider} answered, not ${r.provider}${sel.backup ? " (the backup model)" : ""}`);
@@ -617,8 +659,9 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         say("PASS", who, "turn", `${sel.label || sel.provider}${ran ? ` · ${ran}` : ""} answered "${clip(text, 80)}" in ${secs} s`);
       }
 
-      // --- The usage row (for a turn that got a reply: one that failed with an error used nothing to count) ---
-      if (s.status === 200 && sel && !errors.length && !s.timedOut && !s.error) {
+      // --- The usage row (for a turn that got a reply and ended: one that failed with an error used nothing to count,
+      // and one that didn't finish is stopped below, not waited on here) ---
+      if (!unfinished && s.status === 200 && sel && !errors.length && !s.timedOut && !s.error) {
         const u = await usageRow(conv, r.provider);
         if (!u.row) {
           r.cost = "FAIL";
@@ -643,9 +686,22 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         }
       }
     } finally {
+      // Stopped first, --keep or not: Tarsee keeps a turn running when the page that sent it goes away (a cut
+      // connection is one), and a deleted chat leaves no Stop to press while it runs on, on the owner's key.
+      let leftRunning = false;
+      if (unfinished) {
+        const st = await stopTurn(conv);
+        if (st.ended) {
+          say("INFO", who, "cleanup", st.stopped ? `the reply didn't finish, so its turn was stopped first; it was over in ${st.secs.toFixed(1)} s` : "the reply didn't finish; its turn had already ended");
+        } else {
+          leftRunning = true;
+          say("FAIL", who, "cleanup", `the unfinished turn couldn't be stopped (${st.error})${o.keep ? "" : ", so the test chat is kept"}: open "${TEST_CHAT_TITLE}" in Tarsee and press Stop`);
+          r.notes.push("a turn left running in the test chat");
+        }
+      }
       if (o.keep) {
         say("INFO", who, "cleanup", "kept the test chat (--keep)");
-      } else {
+      } else if (!leftRunning) {
         const d = await api("DELETE", `/api/chat/conversations/${encodeURIComponent(conv)}`, undefined, { timeoutMs: 30_000 });
         if (d.status === 200) say("PASS", who, "cleanup", "the test chat is deleted");
         else { say("FAIL", who, "cleanup", `the test chat couldn't be deleted: ${whyNot(d)}`); r.notes.push("test chat left behind"); }

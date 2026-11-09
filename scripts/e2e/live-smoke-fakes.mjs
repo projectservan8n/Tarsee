@@ -23,6 +23,14 @@
  *   rejected-key     DeepSeek's address turns the key down: exit 1, Test FAIL and the chat refused, the key nowhere
  *   rejected-turn    OpenAI's Test passes, then its model turns the key down mid-chat quoting it: exit 1, turn FAIL
  *   not-ready        --only claude (no Claude sign-in here): exit 1, the chat refused
+ *   cut-stream       --only deepseek through a proxy in front of Tarsee: DeepSeek's model starts its answer and goes
+ *                    quiet, and the proxy resets the chat's connection. Exit 1, the turn FAIL; POST /api/chat/stop
+ *                    comes before the DELETE, the turn is over on Tarsee when the DELETE comes, and the engine's own
+ *                    call to the model is ended by the stop (its signal fired)
+ *   cut-stream-clean the same, with the proxy closing the connection cleanly and no "done"
+ *   pin-password     Tarsee started again with a 4-digit SETUP_PASSWORD (this year), the six AIs set up here named
+ *                    with --only, every chat's factors carrying the password: exit 0, and the header's date, every
+ *                    sum and every other number print whole
  * plus redact() on its own, and scans: nothing live-smoke printed carries a key, token, cookie value, password or
  * canary; every test chat was deleted; nothing reached a stripped host variable.
  *
@@ -126,10 +134,13 @@ async function until(fn, { timeoutMs = 20_000, everyMs = 250 } = {}) {
 
 /**
  * What each provider's fake does: "ok" (do as asked), "401" (its address turns the key down: Test and the model
- * alike) or "401-turn" (Test passes, then the model itself turns the key down mid-chat, quoting it).
+ * alike), "401-turn" (Test passes, then the model itself turns the key down mid-chat, quoting it) or "hang" (Claude
+ * Code's model starts its answer to live-smoke's sum, then goes quiet with the line held open, as a stuck model does).
  */
 const MODES = {};
 const modelRejects = (prov) => MODES[prov] === "401" || MODES[prov] === "401-turn";
+/** The model calls left hanging ("hang"), oldest first: what the cut-stream scenarios wait for before cutting. */
+const HANGS = [];
 
 const CRED_OWNERS = () => ({
   [`Bearer ${KEYS.anthropic}`]: "anthropic",
@@ -201,6 +212,10 @@ function anthropicScript(entry) {
   if (!names.some((n) => /tarsee/i.test(n))) return { text: "ok", cost }; // the CLI's own side calls
   if (fa.hasToolResult(entry.body)) return { text: fromToolOutput(toolResultText(entry.body)), cost };
   const ask = latestAsk(anthropicUserTexts(entry.body));
+  if (MODES[prov] === "hang" && ask?.kind === "calc") {
+    HANGS.push({ at: Date.now(), owner: prov });
+    return { hang: true, text: "Let me work that out" };
+  }
   const tool = (suffix) => names.find((n) => n.endsWith(suffix));
   switch (ask?.kind) {
     case "calc": return tool("tarsee_calculator") ? { toolUse: { name: tool("tarsee_calculator"), input: { expression: `${ask.m[1]} * ${ask.m[2]}` } }, cost } : { text: `No calculator was offered (${names.join(",")}).`, cost };
@@ -279,13 +294,18 @@ function startMux(aPort, rPort, { answer, tls } = {}) {
       return;
     }
     const toR = /\/responses$/.test(p) || (/\/models$/.test(p) && !/\/v1\/models$/.test(p));
-    requests.push({ method: req.method, path: p, to: toR ? "responses" : "anthropic" });
+    const rec = { method: req.method, path: p, to: toR ? "responses" : "anthropic", at: Date.now() };
+    requests.push(rec);
     const up = http.request({ host: "127.0.0.1", port: toR ? rPort : aPort, method: req.method, path: req.url, headers: req.headers }, (ur) => {
       res.writeHead(ur.statusCode, ur.headers);
       ur.pipe(res);
     });
     up.on("error", () => { try { res.destroy(); } catch { /* gone */ } });
-    res.on("close", () => { try { up.destroy(); } catch { /* gone */ } });
+    res.on("close", () => {
+      // The caller hung up before the answer was over (an engine stopping mid-call): when, for the cut scenarios.
+      if (!res.writableFinished) rec.cutAt = Date.now();
+      try { up.destroy(); } catch { /* gone */ }
+    });
     req.pipe(up);
   };
   const server = tls ? https.createServer({ key: tls.key, cert: tls.cert }, onRequest) : http.createServer(onRequest);
@@ -332,6 +352,64 @@ function localFront(req, p) {
   return { body: { object: "list", data: LOCAL_MODELS.map((id) => ({ id, object: "model", owned_by: "library" })) } };
 }
 
+/**
+ * A proxy in front of Tarsee, standing where a Railway edge would: live-smoke talks to it, and it notes every request
+ * in order (with the conversation a POST names). With cut ("destroy" or "end") it gives up on the chat's reply (POST
+ * /api/chat/send) once Tarsee has said which AI answers and ready() says the model's call is under way: "destroy"
+ * resets the connection, "end" closes it cleanly with no "done". Either way it hangs up on Tarsee too, as a proxy
+ * that gives up does. beforeDelete(conversationId) runs before a chat's DELETE is passed on, and what it returns is
+ * kept on that request's note.
+ */
+async function startTarseeFront(target, { cut = null, ready = () => true, beforeDelete = null } = {}) {
+  const to = new URL(target);
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", async () => {
+      const body = Buffer.concat(chunks);
+      const p = (req.url || "").split("?")[0];
+      const rec = { method: req.method, path: p, at: Date.now() };
+      requests.push(rec);
+      try { rec.conversationId = JSON.parse(body.toString("utf8") || "null")?.conversationId ?? null; } catch { /* not JSON */ }
+      const deleting = req.method === "DELETE" && /^\/api\/chat\/conversations\/[^/]+$/.test(p);
+      if (deleting && beforeDelete) {
+        try { rec.before = await beforeDelete(decodeURIComponent(p.split("/").pop())); } catch (err) { rec.before = { error: err?.message || String(err) }; }
+      }
+      const cutThis = cut && req.method === "POST" && p === "/api/chat/send";
+      const up = http.request({ host: to.hostname, port: to.port, method: req.method, path: req.url, headers: req.headers }, (ur) => {
+        res.writeHead(ur.statusCode, ur.headers);
+        if (!cutThis) { ur.pipe(res); return; }
+        let seen = "";
+        let cutting = false;
+        ur.on("error", () => { /* hung up on below */ });
+        ur.on("data", (c) => {
+          if (cutting) return;
+          res.write(c);
+          seen += c.toString("utf8");
+          if (!seen.includes("event: model_selected")) return;
+          cutting = true;
+          until(ready, { timeoutMs: 60_000, everyMs: 100 }).then(() => {
+            rec.cutAt = Date.now();
+            if (cut === "destroy") { res.destroy(); up.destroy(); } else res.end(() => up.destroy());
+          });
+        });
+        ur.on("end", () => { if (!cutting) res.end(); });
+      });
+      up.on("error", () => { if (!res.writableEnded) { try { res.destroy(); } catch { /* gone */ } } });
+      up.end(body);
+    });
+  });
+  const sockets = new Set();
+  server.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.delete(s)); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    origin: `http://127.0.0.1:${server.address().port}`,
+    requests,
+    close: () => { for (const s of sockets) s.destroy(); return new Promise((r) => server.close(() => r())); },
+  };
+}
+
 function startTrap() {
   const hits = [];
   const server = http.createServer((req, res) => { hits.push(`${req.method} ${req.url}`); res.writeHead(418); res.end(); });
@@ -355,7 +433,7 @@ function hostEnv() {
   return Object.fromEntries(keep.filter((k) => process.env[k] != null).map((k) => [k, process.env[k]]));
 }
 
-async function bootServer({ tmp, fakeA, dsMux, orMux, fakeR, chatgptMux, caFile, trap }) {
+async function bootServer({ tmp, fakeA, dsMux, orMux, fakeR, chatgptMux, caFile, trap, password = SETUP_PASSWORD }) {
   const port = await freePort();
   const home = path.join(tmp, "home");
   for (const d of [home, path.join(home, "AppData", "Roaming"), path.join(home, "AppData", "Local")]) fs.mkdirSync(d, { recursive: true });
@@ -364,7 +442,7 @@ async function bootServer({ tmp, fakeA, dsMux, orMux, fakeR, chatgptMux, caFile,
     HOME: home, USERPROFILE: home, APPDATA: path.join(home, "AppData", "Roaming"), LOCALAPPDATA: path.join(home, "AppData", "Local"),
     PORT: String(port),
     TARSEE_STATE_DIR: path.join(tmp, "state"),
-    SETUP_PASSWORD, ENCRYPTION_KEY,
+    SETUP_PASSWORD: password, ENCRYPTION_KEY,
     NODE_ENV: "test",
     TARSEE_PHONON_AUTO_INSTALL: "0",
     TARSEE_TEST_BASE_URL_ANTHROPIC: fakeA.url,
@@ -419,17 +497,41 @@ async function api(method, p, body) {
   try { json = JSON.parse(text); } catch { /* not JSON */ }
   return { status: res.status, json, text };
 }
+/** Sign the harness in afresh, as the page does: {login, csrf} statuses. */
+async function signIn(password) {
+  jar.clear();
+  const r = await fetch(`${BASE}/api/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) });
+  takeCookies(r);
+  return { login: r.status, csrf: r.status === 200 ? (await api("GET", "/api/auth/csrf")).status : 0 };
+}
 
 // --- Running live-smoke as the owner would --------------------------------------------------------------------------
 
 const runs = {};
 
-/** live-smoke.mjs in a child process with only TARSEE_URL and TARSEE_PASSWORD (and the shell's basics) set. */
-async function runSmoke(name, args, { password = SETUP_PASSWORD, timeoutMs = 25 * 60_000 } = {}) {
+/**
+ * live-smoke.mjs in a child process with only TARSEE_URL and TARSEE_PASSWORD (and the shell's basics) set. url: an
+ * address other than the server's own (a proxy in front of it). factors: the numbers live-smoke's crypto.randomInt
+ * gives, in turn (each chat's "work out A * B" takes two), set by a module node loads before the script.
+ */
+async function runSmoke(name, args, { password = SETUP_PASSWORD, url = BASE, factors = null, timeoutMs = 25 * 60_000 } = {}) {
   log(`--- live-smoke ${name}: ${args.join(" ") || "(no options)"} ---`);
-  const env = { ...hostEnv(), TARSEE_URL: BASE, TARSEE_PASSWORD: password };
+  const env = { ...hostEnv(), TARSEE_URL: url, TARSEE_PASSWORD: password };
+  const preload = [];
+  if (factors) {
+    const file = path.join(tmp, `live-smoke-factors-${name}.mjs`);
+    fs.writeFileSync(file, [
+      "// live-smoke-fakes: the factors of live-smoke's \"work out A * B\", chosen by the harness instead of at random.",
+      "import crypto from \"node:crypto\";",
+      `const factors = ${JSON.stringify(factors)};`,
+      "let next = 0;",
+      "crypto.randomInt = () => factors[next++ % factors.length];",
+      "",
+    ].join("\n"));
+    preload.push("--import", pathToFileURL(file).href);
+  }
   const started = Date.now();
-  const child = spawn(process.execPath, [SCRIPT, ...args], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  const child = spawn(process.execPath, [...preload, SCRIPT, ...args], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   let stdout = "";
   let stderr = "";
   let pending = "";
@@ -448,7 +550,8 @@ async function runSmoke(name, args, { password = SETUP_PASSWORD, timeoutMs = 25 
   clearTimeout(timer);
   const run = { name, args, code, stdout, stderr, secs: Math.round((Date.now() - started) / 1000), rows: parseTable(stdout) };
   runs[name] = run;
-  fs.writeFileSync(path.join(OUT, `live-smoke-${name}.txt`), scrub(`$ node scripts/e2e/live-smoke.mjs ${args.join(" ")}\n(exit ${code}, ${run.secs} s)\n\n${stdout}${stderr ? `\n--- stderr ---\n${stderr}` : ""}`));
+  const how = [url !== BASE && "through a proxy in front of Tarsee", factors && `the factors set to ${factors.join(", ")}`].filter(Boolean).join("; ");
+  fs.writeFileSync(path.join(OUT, `live-smoke-${name}.txt`), scrub(`$ node scripts/e2e/live-smoke.mjs ${args.join(" ")}\n(exit ${code}, ${run.secs} s${how ? `; ${how}` : ""})\n\n${stdout}${stderr ? `\n--- stderr ---\n${stderr}` : ""}`));
   return run;
 }
 
@@ -527,10 +630,9 @@ try {
 
   // --- The owner's setup in Settings > AI ---
   await check("setup: sign in, save the five fake keys, Local AI's address and model, a ChatGPT sign-in, DeepSeek as the default", async () => {
-    const r = await fetch(`${BASE}/api/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: SETUP_PASSWORD }) });
-    takeCookies(r);
-    expect(r.status === 200, `login answered ${r.status}`);
-    expect((await api("GET", "/api/auth/csrf")).status === 200, "no CSRF cookie");
+    const signed = await signIn(SETUP_PASSWORD);
+    expect(signed.login === 200, `login answered ${signed.login}`);
+    expect(signed.csrf === 200, "no CSRF cookie");
     const local = await api("PUT", "/api/ai/providers/local", { baseUrl: `${localMux.origin}/v1`, model: LOCAL_MODELS[0] });
     expect(local.status === 200, `PUT /api/ai/providers/local answered ${local.status}`, local.text);
     for (const [id, key] of Object.entries(KEYS)) {
@@ -571,6 +673,15 @@ try {
     const plain = ["openrouter · anthropic/claude-sonnet-4.5", "189077507", "0b0c1d2e-3f40-4152-8364-758697a8b9c0", "llama3.1:8b", "1,234 tokens (in 1,000, out 234)", "~anthropic/claude-sonnet-latest", "Balance $4.20"];
     const changed = plain.filter((s) => smoke.redact(s) !== s);
     expect(changed.length === 0, "redact() changed ordinary text", changed);
+  });
+  // A 4-digit SETUP_PASSWORD blanked out wherever it appears would show in the gap: "[redacted]-11-10" is the year,
+  // and "worked out [redacted]7 * 3917 = 180796969" gives it away to anyone who divides.
+  await check("redact(): a short secret (a 4-digit password) is never blanked out of the dates, sums and model ids around it", async () => {
+    const pin = String(new Date().getUTCFullYear());
+    smoke.addSecret(pin);
+    const a = Number(`${pin}7`);
+    const text = `[   0.0s] INFO tarsee: http://127.0.0.1:3000 (live test, ${pin}-11-10 08:00 UTC) · worked out ${a} * ${pin} = ${a * Number(pin)} · claude-haiku-4-5-${pin}1001 · $0.${pin}`;
+    expect(smoke.redact(text) === text, "redact() changed the text around a short secret", smoke.redact(text));
   });
 
   // --- Scenarios ---
@@ -680,6 +791,86 @@ try {
     expect(/isn't an option/.test(run.stdout) && /isn't an AI Tarsee knows/.test(run.stdout), "no words for the bad options", run.stdout);
   });
 
+  // --- A reply that never finishes: Tarsee keeps a turn running when the page that sent it goes away, so the test
+  // must stop it (as the chat's Stop does) and see it over before it deletes the chat, or the turn runs on, on the
+  // owner's key, in a chat nobody can see.
+  for (const [name, how, words] of [
+    ["cut-stream", "destroy", "resets the chat's connection"],
+    ["cut-stream-clean", "end", "closes the chat's connection cleanly, with no \"done\""],
+  ]) {
+    const before = await chats();
+    const hangsBefore = HANGS.length;
+    const callsBefore = dsMux.requests.length;
+    const front = await startTarseeFront(BASE, {
+      cut: how,
+      ready: () => HANGS.length > hangsBefore,
+      beforeDelete: async (conv) => ({ activeTurn: (await api("GET", `/api/chat/conversations/${encodeURIComponent(conv)}`)).json?.activeTurn || null }),
+    });
+    MODES.deepseek = "hang";
+    await check(`${name}: DeepSeek's model goes quiet mid-reply and a proxy ${words}: exit 1, the turn FAIL, then POST /api/chat/stop, the turn over, the engine's call ended, and only then the DELETE`, async () => {
+      const run = await runSmoke(name, ["--only", "deepseek"], { url: front.origin });
+      const order = front.requests.map((x) => `${x.method} ${x.path}`);
+      expect(HANGS.length > hangsBefore, "the model was never left hanging, so the scenario didn't happen", run.stdout);
+      const send = front.requests.findIndex((x) => x.method === "POST" && x.path === "/api/chat/send");
+      expect(send >= 0 && front.requests[send].cutAt, "the proxy never cut the chat's connection", order);
+      expect(run.code === 1, `exit ${run.code}`, run.stdout);
+      expect(/FAIL deepseek · .* · turn: /.test(run.stdout), "no FAIL line for the turn", run.stdout);
+      const conv = front.requests[send].conversationId;
+      const stop = front.requests.findIndex((x, i) => i > send && x.method === "POST" && x.path === "/api/chat/stop" && x.conversationId === conv);
+      const del = front.requests.findIndex((x) => x.method === "DELETE" && x.path === `/api/chat/conversations/${encodeURIComponent(conv)}`);
+      expect(stop > send, "no POST /api/chat/stop for the chat after its reply was cut", order.slice(send));
+      expect(del > stop, "the chat wasn't deleted after the stop", order.slice(send));
+      expect(front.requests[del].before && !front.requests[del].before.error && !front.requests[del].before.activeTurn, "the chat's turn was still at work on Tarsee when its DELETE came", front.requests[del].before);
+      // The engine's own call to the model, held open until then, ended once the stop came: the engine's signal fired.
+      const call = await until(() => dsMux.requests.slice(callsBefore).find((x) => x.cutAt), { timeoutMs: 10_000 });
+      expect(call && call.cutAt >= front.requests[stop].at, "the engine's call to the model wasn't ended by the stop", { call: call || null, stopAt: front.requests[stop].at });
+      expect(/INFO deepseek · .* · cleanup: the reply didn't finish, so its turn was stopped first/.test(run.stdout), "no line saying the turn was stopped first", run.stdout);
+      expect(/PASS deepseek · .* · cleanup: the test chat is deleted/.test(run.stdout), "no line saying the chat was deleted", run.stdout);
+      // (From the turn's line, not the whole run: live-smoke may first wait out Tarsee's limit of five sign-ins a minute.)
+      const at = (re) => Number(/^\[\s*([\d.]+)s\]/.exec(run.stdout.split(/\r?\n/).find((l) => re.test(l)) || "")?.[1]);
+      const tookSecs = at(/ · cleanup: the test chat is deleted/) - at(/FAIL deepseek · .* · turn: /);
+      expect(!/· usage:/.test(run.stdout) && tookSecs < 20, `an unfinished turn's usage was waited for (${tookSecs} s from the turn to the delete)`, run.stdout);
+      const after = await chats();
+      expect(after === before, `chats before ${before}, after ${after}`);
+      return { order: order.slice(send), stopToCallEnded: call.cutAt - front.requests[stop].at, turnToDeleteSecs: tookSecs };
+    });
+    MODES.deepseek = "ok";
+    await front.close();
+  }
+
+  // --- A 4-digit password (SETUP_PASSWORD is often a PIN): Tarsee started again with this year as its password, and
+  // every chat's factors carrying it. Nothing is blanked out of the date, the sums or anything else live-smoke prints.
+  const PIN = String(new Date().getUTCFullYear());
+  await killServer();
+  await bootServer({ tmp, fakeA, dsMux, orMux, fakeR, chatgptMux, caFile, trap, password: PIN });
+  await check(`pin-password: Tarsee with a 4-digit SETUP_PASSWORD (this year), every chat's factors carrying it: exit 0, and the header's date, every sum and every other number print whole`, async () => {
+    const signed = await signIn(PIN);
+    expect(signed.login === 200 && signed.csrf === 200, `the harness couldn't sign in with the 4-digit password (${signed.login}, ${signed.csrf})`);
+    const before = await chats();
+    const factors = [10001, Number(PIN), Number(`${PIN}7`), 3917, Number(`4${PIN}`), Number(PIN.slice(0, 3))];
+    // Every AI by name: rejected-turn left OpenAI's card flagged, and naming it has its Test (which now passes) clear it.
+    const run = await runSmoke("pin-password", ["--only", "anthropic,chatgpt,openai,openrouter,deepseek,local"], { password: PIN, factors });
+    const lines = run.stdout.split(/\r?\n/);
+    expect(new RegExp(`\\(live test, ${PIN}-\\d\\d-\\d\\d \\d\\d:\\d\\d UTC\\)`).test(lines[0]), "the header's date isn't whole", lines[0]);
+    // Nothing in a run where every step passes is secret, so nothing in it is blanked out: a "[redacted]" here is the
+    // password matched inside a date, a number or a model id, and the gap gives it away.
+    const blanked = lines.filter((l) => l.includes("[redacted]"));
+    expect(blanked.length === 0, `${blanked.length} lines with something blanked out`, blanked);
+    expect(run.code === 0, `exit ${run.code}`, lines.filter((l) => /FAIL|WARN/.test(l)));
+    const sums = lines.map((l) => /worked out (\d+) \* (\d+) = (\d+)/.exec(l)).filter(Boolean);
+    expect(run.rows.length === 7 && sums.length === run.rows.length, `${sums.length} sums for ${run.rows.length} rows`, run.stdout);
+    expect(sums.every(([, a, b]) => a.includes(PIN) || b.includes(PIN)), "a chat's factors didn't carry the password, so the scenario didn't happen", sums.map(([s]) => s));
+    const wrong = sums.filter(([, a, b, p]) => Number(a) * Number(b) !== Number(p));
+    expect(wrong.length === 0, "a printed sum doesn't add up", wrong.map(([s]) => s));
+    // Never printed as itself: with the header's date and the sums taken out, the password stands alone nowhere.
+    const rest = run.stdout.replace(/\(live test, [^)]*\)/, "").replace(/worked out \d+ \* \d+ = \d+/g, "");
+    const alone = new RegExp(`(?<![\\d.,])${PIN}(?![\\d.,])`).exec(rest);
+    expect(!alone, "the password stands alone in what live-smoke printed", alone && clip(rest.slice(Math.max(0, alone.index - 80), alone.index + 20), 120));
+    const after = await chats();
+    expect(after === before, `chats before ${before}, after ${after}`);
+    return { secs: run.secs, sums: sums.map(([s]) => s) };
+  });
+
   // --- Scans ---
   await check("nothing live-smoke printed carries a key, token, cookie, password or canary", async () => {
     const found = Object.values(runs).flatMap((run) => leaksIn(`${run.stdout}\n${run.stderr}`).map((f) => `${run.name}: ${f}`));
@@ -706,7 +897,7 @@ try {
   const passed = results.filter((r) => r.ok).length;
   const failed = results.filter((r) => !r.ok);
   fs.writeFileSync(path.join(OUT, "live-smoke-fakes.json"), JSON.stringify(JSON.parse(scrub(JSON.stringify({ passed, failed: failed.length, results, tmp }))), null, 2));
-  for (const name of ["all-ready", "verify-local", "verify-openrouter", "rejected-key", "rejected-turn"]) {
+  for (const name of ["all-ready", "verify-local", "verify-openrouter", "rejected-key", "rejected-turn", "cut-stream", "cut-stream-clean", "pin-password"]) {
     if (runs[name]) console.log(`\n=== live-smoke ${name} (exit ${runs[name].code}, ${runs[name].secs} s): node scripts/e2e/live-smoke.mjs ${runs[name].args.join(" ")}\n${tableOf(runs[name])}`);
   }
   log(`done: ${passed} passed, ${failed.length} failed. Results: ${path.join(OUT, "live-smoke-fakes.json")}; each run's output: ${path.join(OUT, "live-smoke-<scenario>.txt")}`);

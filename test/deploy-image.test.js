@@ -6,8 +6,9 @@
 // - entrypoint.sh: every AI provider's sign-in folder exists on the volume, owner-only; /home/node/.claude and
 //   /home/node/.codex link to the plan homes; each Codex home has a config.toml with Tarsee's three settings and never a
 //   key, that Codex's guard accepts; CODEX_HOME and TARSEE_STATE_DIR are exported before the server starts; one
-//   sign-in line per engine; an install with its own TARSEE_STATE_DIR keeps the Claude plan sign-in (and chat
-//   transcripts) that earlier versions kept in /data/tarsee/.claude-code-home.
+//   sign-in line per engine; an install upgraded from main with its own TARSEE_STATE_DIR keeps the Claude plan sign-in
+//   (and chat transcripts) main kept in /data/tarsee/.claude-code-home, once (an older sign-in that a newer one there
+//   supersedes is renamed, so a sign-out can't bring it back); changing TARSEE_STATE_DIR on this version moves nothing.
 // The entrypoint's functions are sourced in sh (sourcing skips its main part). Needs a POSIX sh: on Windows, Git's.
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
@@ -333,11 +334,39 @@ describe("entrypoint.sh: the AI providers' sign-in folders", { skip: NO_SH }, ()
   });
 });
 
-// main (7e5563d) kept the Claude plan's sign-in in /data/tarsee/.claude-code-home whatever TARSEE_STATE_DIR said; this
-// version keeps it in $TARSEE_STATE_DIR/.claude-code-home. carry_plan_home <volume> <state dir> moves it there once.
-describe("entrypoint.sh: an install with its own TARSEE_STATE_DIR keeps its Claude plan sign-in", { skip: NO_SH }, () => {
-  const NO_TOKEN = { CLAUDE_CODE_OAUTH_TOKEN: "", CLAUDE_CODE_OAUTH_REFRESH_TOKEN: "" };
-  /** main's volume: <volume>/tarsee/.claude-code-home holding a sign-in and a chat's transcript. */
+// The Claude plan home across boots and versions (carry_plan_home <volume> <state dir>, then setup_provider_homes).
+const NO_TOKEN = { CLAUDE_CODE_OAUTH_TOKEN: "", CLAUDE_CODE_OAUTH_REFRESH_TOKEN: "" };
+/** One boot's part of main(): the state folder exists (main makes it), then carry_plan_home, then setup_provider_homes. */
+function boot(vol, state, home) {
+  fs.mkdirSync(state, { recursive: true });
+  const carry = callEntrypoint("carry_plan_home", [posix(vol), posix(state)]);
+  assert.equal(carry.status, 0, carry.stderr + carry.stdout);
+  const setup = callEntrypoint("setup_provider_homes", [posix(state), posix(home), ""]);
+  assert.equal(setup.status, 0, setup.stderr + setup.stdout);
+  return carry.stdout;
+}
+/** Every file and folder under a folder, with each file's text: what a boot changed. */
+function snapshot(dir) {
+  const out = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const p = path.join(d, e.name);
+      const rel = path.relative(dir, p);
+      if (e.isSymbolicLink()) out.push(`${rel} -> ${fs.readlinkSync(p)}`);
+      else if (e.isDirectory()) { out.push(`${rel}/`); walk(p); }
+      else out.push(`${rel}: ${fs.readFileSync(p, "utf8")}`);
+    }
+  };
+  walk(dir);
+  return out;
+}
+const readIn = (dir, ...rel) => fs.readFileSync(path.join(dir, ...rel), "utf8");
+
+// Versions before multi-provider support (main, 7e5563d) kept the Claude plan's sign-in in
+// /data/tarsee/.claude-code-home whatever TARSEE_STATE_DIR said; this version keeps it in
+// $TARSEE_STATE_DIR/.claude-code-home. On the first boot after that upgrade, carry_plan_home moves it there once.
+describe("entrypoint.sh: an install upgraded from main with its own TARSEE_STATE_DIR keeps its Claude plan sign-in", { skip: NO_SH }, () => {
+  /** main's volume: <volume>/tarsee/.claude-code-home holding a sign-in and a chat's transcript, and no .codex-home. */
   function mainVolume(name) {
     const vol = path.join(tmp, `vol-${name}`);
     const old = path.join(vol, "tarsee", ".claude-code-home");
@@ -348,31 +377,6 @@ describe("entrypoint.sh: an install with its own TARSEE_STATE_DIR keeps its Clau
     fs.mkdirSync(home, { recursive: true });
     return { vol, old, home };
   }
-  /** One boot's part of main(): the state folder exists (main makes it), then carry_plan_home, then setup_provider_homes. */
-  function boot(vol, state, home) {
-    fs.mkdirSync(state, { recursive: true });
-    const carry = callEntrypoint("carry_plan_home", [posix(vol), posix(state)]);
-    assert.equal(carry.status, 0, carry.stderr + carry.stdout);
-    const setup = callEntrypoint("setup_provider_homes", [posix(state), posix(home), ""]);
-    assert.equal(setup.status, 0, setup.stderr + setup.stdout);
-    return carry.stdout;
-  }
-  /** Every file and folder under a folder, with each file's text: what a boot changed. */
-  function snapshot(dir) {
-    const out = [];
-    const walk = (d) => {
-      for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-        const p = path.join(d, e.name);
-        const rel = path.relative(dir, p);
-        if (e.isSymbolicLink()) out.push(`${rel} -> ${fs.readlinkSync(p)}`);
-        else if (e.isDirectory()) { out.push(`${rel}/`); walk(p); }
-        else out.push(`${rel}: ${fs.readFileSync(p, "utf8")}`);
-      }
-    };
-    walk(dir);
-    return out;
-  }
-  const readIn = (dir, ...rel) => fs.readFileSync(path.join(dir, ...rel), "utf8");
 
   it("moves main's sign-in and chat transcripts into the state folder's plan home, where ~/.claude points, once", () => {
     const { vol, old, home } = mainVolume("move");
@@ -422,23 +426,51 @@ describe("entrypoint.sh: an install with its own TARSEE_STATE_DIR keeps its Clau
     assert.deepEqual(snapshot(vol), before, "and changes nothing");
   });
 
-  it("leaves a plan home that is already signed in alone", () => {
+  it("keeps a plan home that is already signed in, and takes main's sign-in out of use so a sign-out there can't bring it back", () => {
     const { vol, old, home } = mainVolume("signed");
+    const state = path.join(vol, "state");
+    const plan = path.join(state, ".claude-code-home");
+    fs.mkdirSync(plan, { recursive: true });
+    fs.writeFileSync(path.join(plan, ".credentials.json"), '{"note":"a newer sign-in"}');
+    const said = boot(vol, state, home);
+    assert.match(readIn(plan, ".credentials.json"), /a newer sign-in/, "the plan home keeps its own sign-in");
+    assert.equal(fs.existsSync(path.join(old, ".credentials.json")), false, "main's sign-in is no longer named .credentials.json");
+    assert.match(readIn(old, ".credentials.json.superseded"), /main's sign-in/, "renamed, not deleted");
+    assert.match(readIn(old, "projects", "x", "s.jsonl"), /from main/, "nothing else in the old folder changes");
+    assert.ok(said.includes(posix(path.join(old, ".credentials.json.superseded"))), `says where it is now: ${said}`);
+    assert.doesNotMatch(said, /moved the Claude plan sign-in/);
+
+    // The owner signs out in the Terminal (claude auth logout deletes .credentials.json), then Tarsee restarts.
+    fs.rmSync(path.join(plan, ".credentials.json"));
+    const before = snapshot(vol);
+    assert.equal(boot(vol, state, home), "", "the next boot says nothing");
+    assert.deepEqual(snapshot(vol), before, "and brings no sign-in back");
+    const report = callEntrypoint("report_sign_ins", [posix(state)], NO_TOKEN);
+    assert.match(report.stdout, /Claude Code: no Claude plan sign-in/, "the sign-out holds");
+  });
+
+  it("never replaces a sign-in an earlier boot renamed", () => {
+    const { vol, old, home } = mainVolume("superseded-twice");
+    fs.writeFileSync(path.join(old, ".credentials.json.superseded"), '{"note":"renamed on an earlier boot"}');
     const state = path.join(vol, "state");
     fs.mkdirSync(path.join(state, ".claude-code-home"), { recursive: true });
     fs.writeFileSync(path.join(state, ".claude-code-home", ".credentials.json"), '{"note":"a newer sign-in"}');
-    const before = snapshot(old);
-    assert.equal(boot(vol, state, home), "");
-    assert.match(readIn(state, ".claude-code-home", ".credentials.json"), /a newer sign-in/);
-    assert.deepEqual(snapshot(old), before, "the old folder is untouched");
+    const said = boot(vol, state, home);
+    assert.equal(readIn(old, ".credentials.json.superseded"), '{"note":"renamed on an earlier boot"}', "the earlier one stays as it was");
+    assert.match(readIn(old, ".credentials.json.superseded.2"), /main's sign-in/, "this one takes the next free name");
+    assert.equal(fs.existsSync(path.join(old, ".credentials.json")), false);
+    assert.ok(said.includes(posix(path.join(old, ".credentials.json.superseded.2"))), `says where it is now: ${said}`);
   });
 
-  it("does nothing on the default layout (TARSEE_STATE_DIR is <volume>/tarsee) or on a new install", () => {
+  it("does nothing on the default layout (TARSEE_STATE_DIR is <volume>/tarsee), boot after boot, or on a new install", () => {
     const { vol, old, home } = mainVolume("default");
     const before = snapshot(old);
     assert.equal(boot(vol, path.join(vol, "tarsee"), home), "");
     assert.deepEqual(snapshot(old), before, "the plan home is as it was");
     assert.match(readIn(home, ".claude", ".credentials.json"), /main's sign-in/);
+    const after1 = snapshot(vol);
+    assert.equal(boot(vol, path.join(vol, "tarsee"), home), "", "the next boot (now this version's own layout) says nothing either");
+    assert.deepEqual(snapshot(vol), after1);
 
     const fresh = path.join(tmp, "vol-fresh");
     fs.mkdirSync(fresh, { recursive: true });
@@ -453,6 +485,69 @@ describe("entrypoint.sh: an install with its own TARSEE_STATE_DIR keeps its Clau
     assert.deepEqual(snapshot(old), before, "the only copy of the sign-in stays on the volume");
     assert.equal(fs.existsSync(path.join(state, ".claude-code-home", ".credentials.json")), false);
     assert.ok(said.includes(posix(old)) && /TARSEE_STATE_DIR/.test(said), `says where the sign-in is: ${said}`);
+  });
+
+  it("leaves main's sign-in exactly as it is when a state folder off the volume is already signed in", () => {
+    const { vol, old, home } = mainVolume("offvol-signed");
+    const state = path.join(tmp, "not-the-volume", "state-signed");
+    fs.mkdirSync(path.join(state, ".claude-code-home"), { recursive: true });
+    fs.writeFileSync(path.join(state, ".claude-code-home", ".credentials.json"), '{"note":"a sign-in off the volume"}');
+    const before = snapshot(old);
+    assert.equal(boot(vol, state, home), "");
+    assert.deepEqual(snapshot(old), before, "not renamed: it is still the only sign-in a redeploy keeps");
+    assert.match(readIn(state, ".claude-code-home", ".credentials.json"), /off the volume/);
+  });
+});
+
+// This version keeps everything, the Claude plan sign-in included, in $TARSEE_STATE_DIR. So once it has used
+// <volume>/tarsee as its state folder (every boot of it makes a .codex-home there; main never did), the plan home there
+// is that install's own, and a later change of TARSEE_STATE_DIR moves nothing out of it.
+describe("entrypoint.sh: changing TARSEE_STATE_DIR on this version moves no sign-in", { skip: NO_SH }, () => {
+  /** This version's default install: booted with <volume>/tarsee, then signed in to the Claude plan with one chat. */
+  function ownVolume(name) {
+    const vol = path.join(tmp, `own-${name}`);
+    const own = path.join(vol, "tarsee");
+    const home = path.join(tmp, `home-own-${name}`);
+    fs.mkdirSync(home, { recursive: true });
+    assert.equal(boot(vol, own, home), "", "the first boot");
+    const plan = path.join(own, ".claude-code-home");
+    fs.mkdirSync(path.join(plan, "projects", "x"), { recursive: true });
+    fs.writeFileSync(path.join(plan, ".credentials.json"), '{"claudeAiOauth":{"note":"this install\'s sign-in"}}');
+    fs.writeFileSync(path.join(plan, "projects", "x", "s.jsonl"), '{"type":"user","message":"a chat"}\n');
+    return { vol, own, plan, home };
+  }
+
+  it("leaves the default folder's sign-in and chats where they are, so setting the variable back finds them", () => {
+    const { vol, own, plan, home } = ownVolume("revert");
+    const before = snapshot(plan);
+    const other = path.join(vol, "other");
+    const said = boot(vol, other, home);
+    assert.deepEqual(snapshot(plan), before, "nothing moves out of it");
+    assert.equal(fs.existsSync(path.join(other, ".claude-code-home", ".credentials.json")), false);
+    assert.doesNotMatch(said, /moved the Claude plan sign-in/);
+    assert.ok(said.includes(posix(plan)) && said.includes(`TARSEE_STATE_DIR back to ${posix(own)}`), `says where the sign-in is and how to use it: ${said}`);
+
+    assert.equal(boot(vol, own, home), "", "set back: nothing to say");
+    assert.deepEqual(snapshot(plan), before);
+    const report = callEntrypoint("report_sign_ins", [posix(own)], NO_TOKEN);
+    assert.match(report.stdout, /Claude Code: Claude plan signed in/);
+    assert.match(readIn(home, ".claude", "projects", "x", "s.jsonl"), /a chat/, "the chat is where ~/.claude points");
+  });
+
+  it("renames nothing and moves nothing between two folders this version signed in, before or after a sign-out", () => {
+    const { vol, plan, home } = ownVolume("both");
+    const other = path.join(vol, "other");
+    boot(vol, other, home);
+    const otherPlan = path.join(other, ".claude-code-home");
+    fs.writeFileSync(path.join(otherPlan, ".credentials.json"), '{"note":"signed in with the other folder"}');
+    const before = snapshot(plan);
+    assert.equal(boot(vol, other, home), "", "both signed in: nothing to say");
+    assert.deepEqual(snapshot(plan), before, "the default folder's sign-in keeps its name");
+
+    fs.rmSync(path.join(otherPlan, ".credentials.json"));
+    boot(vol, other, home);
+    assert.equal(fs.existsSync(path.join(otherPlan, ".credentials.json")), false, "a sign-out in the other folder holds");
+    assert.deepEqual(snapshot(plan), before);
   });
 });
 

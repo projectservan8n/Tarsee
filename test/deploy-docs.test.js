@@ -162,7 +162,13 @@ describe("README", () => {
     assert.ok(row, "a TARSEE_STATE_DIR row");
     assert.match(row, /\/data\/tarsee/, "its default with a volume");
     assert.match(row, /inside `\/data`/, "keep it on the volume");
-    assert.match(row, /Claude plan sign-in/, "an earlier version's sign-in moves there");
+    // entrypoint.sh carry_plan_home: only main's layout is moved, once, and only the Claude plan's sign-in and chats.
+    assert.match(row, /changing it later moves nothing/i, "a change on this version leaves everything in the folder it was in");
+    assert.match(row, /before multi-provider support/, "the move is only for an upgrade from a version before multi-provider");
+    assert.match(row, /Claude plan sign-in and its chat history/, "what that upgrade moves");
+    assert.match(row, /one way/, "and that it is not undone");
+    assert.match(row, /nothing else/, "and nothing else moves");
+    assert.match(row, /`\.credentials\.json\.superseded`/, "what happens to the old sign-in when the folder is already signed in");
   });
   it("lists every AI variable in the environment table", () => {
     const env = section("Environment Variables");

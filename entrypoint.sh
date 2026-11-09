@@ -41,13 +41,19 @@ setup_provider_homes() {
   fi
 }
 
-# carry_plan_home <volume> <state dir>: earlier versions kept the Claude plan's sign-in in
-# <volume>/tarsee/.claude-code-home whatever TARSEE_STATE_DIR said; this one keeps it in <state dir>/.claude-code-home
-# (where ~/.claude now points). When those are two folders, move the old one's sign-in and chat history into the new
-# one, so an install with its own TARSEE_STATE_DIR stays signed in and its chats still resume. A plan home that is
-# already signed in is left alone, and nothing in it is replaced: a file both have stays in the old folder. A state
-# folder off the volume gets nothing (the sign-in would be lost on the next redeploy), only a line saying where the
-# sign-in is. Once moved there is nothing left to move, so later boots do nothing.
+# carry_plan_home <volume> <state dir>: the upgrade from a version before multi-provider support (main), which kept the
+# Claude plan's sign-in in <volume>/tarsee/.claude-code-home whatever TARSEE_STATE_DIR said; this one keeps it in
+# <state dir>/.claude-code-home (where ~/.claude now points). When those are two folders, move the old one's sign-in
+# and chat history into the new one, so an install with its own TARSEE_STATE_DIR stays signed in and its chats still
+# resume. Nothing in the new one is replaced: a file both have stays in the old folder.
+# - Only main's layout is moved. Every boot of this version makes a .codex-home in its state folder and main never
+#   made one, so a <volume>/tarsee with a .codex-home has been this version's own state folder: its sign-in belongs to
+#   that folder and stays there when TARSEE_STATE_DIR changes (only a line says where it is).
+# - A plan home that is already signed in keeps its sign-in, and the old one is renamed .credentials.json.superseded
+#   (.2, .3, ... when that name is taken), so a later sign-out there can't bring it back.
+# - A state folder off the volume gets nothing (the sign-in would be lost on the next redeploy) and the old sign-in
+#   stays as it is, only a line saying where it is.
+# After a move or a rename the old folder has no .credentials.json, so later boots do nothing.
 carry_plan_home() {
   _vol=$1
   _state=$2
@@ -55,17 +61,36 @@ carry_plan_home() {
   _new="$_state/.claude-code-home"
   [ -f "$_old/.credentials.json" ] || return 0
   [ "$_old" -ef "$_new" ] && return 0
-  [ -f "$_new/.credentials.json" ] && return 0
+  if [ -d "$_vol/tarsee/.codex-home" ]; then
+    [ -f "$_new/.credentials.json" ] ||
+      echo "[entrypoint] Claude Code: the Claude plan sign-in in $_old belongs to the state folder $_vol/tarsee, so it was not moved to $_state; set TARSEE_STATE_DIR back to $_vol/tarsee to use it."
+    return 0
+  fi
   mkdir -p "$_new" || return 1
   _vol_real=$(cd "$_vol" && pwd -P) || return 1
   _state_real=$(cd "$_state" && pwd -P) || return 1
   case "$_state_real/" in
     "$_vol_real"/*) ;;
     *)
-      echo "[entrypoint] Claude Code: the Claude plan sign-in is in $_old. TARSEE_STATE_DIR ($_state) is not on the volume, so it was not moved there; set TARSEE_STATE_DIR to a folder in $_vol to use it."
+      [ -f "$_new/.credentials.json" ] ||
+        echo "[entrypoint] Claude Code: the Claude plan sign-in is in $_old. TARSEE_STATE_DIR ($_state) is not on the volume, so it was not moved there; set TARSEE_STATE_DIR to a folder in $_vol to use it."
       return 0
       ;;
   esac
+  if [ -f "$_new/.credentials.json" ]; then
+    _to="$_old/.credentials.json.superseded"
+    _n=1
+    while [ -e "$_to" ] || [ -L "$_to" ]; do
+      _n=$((_n + 1))
+      _to="$_old/.credentials.json.superseded.$_n"
+    done
+    if ! mv "$_old/.credentials.json" "$_to"; then
+      echo "[entrypoint] warning: could not rename the older Claude plan sign-in $_old/.credentials.json; remove it, or a sign-out in $_new brings it back on the next boot"
+      return 1
+    fi
+    echo "[entrypoint] Claude Code: $_new is already signed in, so the older Claude plan sign-in in $_old was not moved; it is now $_to and is not used"
+    return 0
+  fi
   move_missing "$_old" "$_new"
   if [ ! -f "$_new/.credentials.json" ]; then
     echo "[entrypoint] warning: could not move the Claude plan sign-in from $_old to $_new"
@@ -180,8 +205,9 @@ main() {
     chown -R node:node /data/tarsee
     chown node:node "$STATE_DIR"
 
-    # Each AI's sign-in folder on the volume, so sign-ins persist across restarts and redeploys. An install whose
-    # TARSEE_STATE_DIR isn't /data/tarsee first gets its Claude plan sign-in from where earlier versions kept it.
+    # Each AI's sign-in folder on the volume, so sign-ins persist across restarts and redeploys. An install upgraded
+    # from a version before multi-provider support, whose TARSEE_STATE_DIR isn't /data/tarsee, first gets its Claude
+    # plan sign-in from where that version kept it.
     carry_plan_home /data "$STATE_DIR"
     setup_provider_homes "$STATE_DIR" /home/node node:node
     report_sign_ins "$STATE_DIR"

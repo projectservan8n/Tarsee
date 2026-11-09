@@ -133,8 +133,14 @@ describe("boot fixup: what the old Voice tab left in the key slots", () => {
     assert.equal(raw("ai.deepseek.apiKey"), unreadable);
   });
 
-  it("the server runs it at boot", () => {
-    const server = fs.readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-    assert.match(server, /removeVoiceKeyLeftovers\(\)/);
+  it("the server runs it at boot: the boot fixups remove the mask (src/server.js calls them, test/server-boot.test.js)", async () => {
+    const { runBootFixups } = await import("../src/lib/boot-fixups.js");
+    const { store, raw } = fresh();
+    store.set("ai.openai.apiKey", "sk-p...wxyz");
+    store.set("voice.openai_api_key", "sk-p...wxyz");
+    const result = quiet(() => runBootFixups({ settingsStore: store, stateDir: path.join(tmp, "boot-state"), tmpDir: path.join(tmp, "boot-temp") }));
+    assert.deepEqual(result.settings.voiceKeys.removed.sort(), ["ai.openai.apiKey", "voice.openai_api_key"]);
+    assert.equal(raw("ai.openai.apiKey"), null);
+    assert.equal(raw("voice.openai_api_key"), null);
   });
 });

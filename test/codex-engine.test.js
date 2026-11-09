@@ -7,10 +7,12 @@
 //    refused key. Every key and token is an obvious fake; canaries sit wherever a credential must never come from.
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import zlib from "node:zlib";
 import {
   run, acquireDeviceGate, refreshStale, sweepTurnProcesses, findRollout, rolloutUsageTotal, pruneCodexRollouts,
   withTurnContext, instructionsHash, REFRESH_STALE_MS,
@@ -63,6 +65,22 @@ async function collect(iter) {
   return out;
 }
 const of = (out, type) => out.filter((e) => e.type === type);
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+/** An RGB PNG of random pixels, stored uncompressed: about w*h*3 bytes, the size of a photo sent as it is. */
+function noisyPng(w, h) {
+  const crc = (b) => { let c = 0xffffffff; for (const x of b) c = CRC_TABLE[(c ^ x) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const sum = Buffer.alloc(4); sum.writeUInt32BE(crc(body));
+    return Buffer.concat([len, body, sum]);
+  };
+  const header = Buffer.alloc(13); header.writeUInt32BE(w, 0); header.writeUInt32BE(h, 4); header[8] = 8; header[9] = 2;
+  const rows = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) crypto.randomFillSync(rows, y * (w * 3 + 1) + 1, w * 3);
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", header), chunk("IDAT", zlib.deflateSync(rows, { level: 0 })), chunk("IEND", Buffer.alloc(0))]);
+}
 
 // --- A scripted Codex class in place of the SDK's ------------------------------------------------------------------
 
@@ -497,6 +515,122 @@ describe("usage of a turn that ends without turn.completed (scripted Codex)", ()
     const unknown = await collect(run({ ...unitOpts(other, { Codex: late, extra: { sessionId: thread } }), toolCtx: { settingsStore: makeStore(), conversationId: null }, maxTurns: 2 }));
     assert.equal(of(unknown, "usage").length, 0);
     assert.deepEqual(unknown.at(-1), { type: "done", stopReason: "max_turns" });
+    // The same when it ends with turn.completed: Codex's total is the whole thread's, so none of it is this turn's.
+    const elsewhere = freshDirs();
+    const completes = fakeCodex(async function* () {
+      yield { type: "thread.started", thread_id: thread };
+      yield { type: "turn.started" };
+      yield { type: "turn.completed", usage: { ...T, input_tokens: 9000, output_tokens: 90 } };
+    }).Codex;
+    const whole = await collect(run({ ...unitOpts(elsewhere, { Codex: completes, extra: { sessionId: thread } }), toolCtx: { settingsStore: makeStore(), conversationId: null } }));
+    assert.equal(of(whole, "usage").length, 0, JSON.stringify(of(whole, "usage")));
+    assert.equal(of(whole, "step").filter((s) => s.kind === "usage").length, 0);
+    assert.deepEqual(whole.at(-1), { type: "done", stopReason: "end_turn" });
+  });
+
+  // Codex keeps a picture in the rollout inline (base64, one line, as big as the picture), so a thread's last total can
+  // sit far back from the end: a picture turn stopped, or failed, before any answer leaves nothing after it.
+  const pictureLine = (kb) => JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "what is in this picture?" }, { type: "input_image", image_url: `data:image/png;base64,${"iVBORw0K".repeat(kb * 128)}` }] } });
+  const metaLine = (thread) => JSON.stringify({ type: "session_meta", payload: { id: thread } });
+
+  it("rolloutUsageTotal: the last total however far back it is, \"none\" only when the whole file has none, null when it can't tell", () => {
+    const dirs = freshDirs();
+    const file = path.join(dirs.root, "rollout.jsonl");
+    fs.writeFileSync(file, [metaLine("t"), tokenLine({ input_tokens: 400_000 }), tokenLine({ input_tokens: 500_000, output_tokens: 5000 }), pictureLine(700), JSON.stringify({ type: "event_msg", payload: { type: "item_completed" } })].join("\n") + "\n");
+    assert.deepEqual(rolloutUsageTotal(file), { ...T, input_tokens: 500_000, output_tokens: 5000 });
+    // Read back a piece at a time: a line cut by a piece's edge is put back together, wherever the edge falls. A last
+    // line still being written (no newline yet) is skipped.
+    const small = path.join(dirs.root, "small.jsonl");
+    fs.writeFileSync(small, [metaLine("t"), tokenLine({ input_tokens: 1 }), tokenLine({ input_tokens: 2 }), "x".repeat(300), "{\"type\":\"event_msg\",\"payload\":{\"info\":{\"total_token_usage\":{\"input_to"].join("\n"));
+    for (let chunkBytes = 1; chunkBytes <= 800; chunkBytes += 7) assert.equal(rolloutUsageTotal(small, { chunkBytes })?.input_tokens, 2, `chunkBytes ${chunkBytes}`);
+    // None anywhere (a thread that hasn't spent anything yet, or an empty file): "none", a nothing that is known.
+    fs.writeFileSync(small, [metaLine("t"), pictureLine(700)].join("\n") + "\n");
+    assert.equal(rolloutUsageTotal(small), "none");
+    assert.equal(rolloutUsageTotal(small, { chunkBytes: 4096 }), "none");
+    fs.writeFileSync(small, "");
+    assert.equal(rolloutUsageTotal(small), "none");
+    // Not known: no file, a read that fails, or a total further back than the read may go (the rollout size cap).
+    assert.equal(rolloutUsageTotal(path.join(dirs.root, "missing.jsonl")), null);
+    assert.equal(rolloutUsageTotal(file, { fsImpl: { ...fs, readSync: () => { throw new Error("EIO: i/o error"); } } }), null);
+    assert.equal(rolloutUsageTotal(file, { maxBytes: 600 * 1024 }), null);
+    assert.equal(rolloutUsageTotal(file, { maxBytes: 800 * 1024 })?.input_tokens, 500_000);
+  });
+
+  it("after a picture turn that left no total behind it, a resumed turn counts only its own share, stopped or completed", async () => {
+    const dirs = freshDirs();
+    const store = makeStore();
+    const thread = "01a1c000-0000-7000-8000-0000000000c4";
+    const file = rolloutFile(keysHome(dirs), thread);
+    // Earlier turns spent 500k; then a turn sent a 700 KB picture and was stopped before any answer.
+    const earlier = [metaLine(thread), tokenLine({ input_tokens: 500_000, output_tokens: 5000 }), pictureLine(700)].join("\n") + "\n";
+    await collect(run(unitOpts(dirs, { Codex: fakeCodex(simpleTurn).Codex, store })));
+    const resumed = { sessionHandle: `openai/cx/openai:${thread}` };
+    const stoppedTurn = (after) => {
+      const ac = new AbortController();
+      const { Codex } = fakeCodex(async function* ({ signal }) {
+        yield { type: "thread.started", thread_id: thread };
+        yield { type: "turn.started" };
+        fs.appendFileSync(file, [tokenLine({ input_tokens: 503_000, output_tokens: 5100 }), ...after].join("\n") + "\n");
+        yield { type: "item.completed", item: { id: "c1", type: "command_execution", command: "ls", aggregated_output: "", exit_code: 0, status: "completed" } };
+        setTimeout(() => ac.abort(), 20);
+        await new Promise((r) => signal.addEventListener("abort", r, { once: true }));
+        throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+      });
+      return collect(run({ ...unitOpts(dirs, { Codex, store, extra: resumed }), signal: ac.signal }));
+    };
+    const own = (input, output) => [{ input_tokens: input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: output }];
+
+    // Stopped after one model call: 503k less the 500k before it.
+    fs.writeFileSync(file, earlier);
+    const stopped = await stoppedTurn([]);
+    assert.deepEqual(of(stopped, "usage").map((u) => u.usage), own(3000, 100));
+    assert.deepEqual(stopped.at(-1), { type: "done", stopReason: "aborted" });
+    // Its own total behind a big line too (a picture a tool showed it, then Stop): still found, still only its share.
+    fs.writeFileSync(file, earlier);
+    const behind = await stoppedTurn([pictureLine(700)]);
+    assert.deepEqual(of(behind, "usage").map((u) => u.usage), own(3000, 100));
+    // Ended by turn.completed: Codex's running total less the same baseline.
+    fs.writeFileSync(file, earlier);
+    const { Codex: completing } = fakeCodex(async function* () {
+      yield { type: "thread.started", thread_id: thread };
+      yield { type: "turn.started" };
+      fs.appendFileSync(file, tokenLine({ input_tokens: 506_000, output_tokens: 5200 }) + "\n");
+      yield { type: "turn.completed", usage: { ...T, input_tokens: 506_000, output_tokens: 5200 } };
+    });
+    const completed = await collect(run(unitOpts(dirs, { Codex: completing, store, extra: resumed })));
+    assert.deepEqual(of(completed, "usage").map((u) => u.usage), own(6000, 200));
+  });
+
+  it("a resumed thread whose rollout has no total anywhere hadn't spent anything: the turn's total is all its own", async () => {
+    const dirs = freshDirs();
+    const store = makeStore();
+    const thread = "01a1c000-0000-7000-8000-0000000000c5";
+    const file = rolloutFile(keysHome(dirs), thread);
+    // Its only turn so far sent a picture and was stopped before any answer.
+    const earlier = [metaLine(thread), pictureLine(700)].join("\n") + "\n";
+    await collect(run(unitOpts(dirs, { Codex: fakeCodex(simpleTurn).Codex, store })));
+    const resumed = { sessionHandle: `openai/cx/openai:${thread}` };
+    const all = [{ input_tokens: 7000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 70 }];
+    fs.writeFileSync(file, earlier);
+    const ac = new AbortController();
+    const { Codex: stopping } = fakeCodex(async function* ({ signal }) {
+      yield { type: "thread.started", thread_id: thread };
+      yield { type: "turn.started" };
+      fs.appendFileSync(file, tokenLine({ input_tokens: 7000, output_tokens: 70 }) + "\n");
+      setTimeout(() => ac.abort(), 20);
+      await new Promise((r) => signal.addEventListener("abort", r, { once: true }));
+      throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+    });
+    const stopped = await collect(run({ ...unitOpts(dirs, { Codex: stopping, store, extra: resumed }), signal: ac.signal }));
+    assert.deepEqual(of(stopped, "usage").map((u) => u.usage), all);
+    fs.writeFileSync(file, earlier);
+    const { Codex: completing } = fakeCodex(async function* () {
+      yield { type: "thread.started", thread_id: thread };
+      yield { type: "turn.started" };
+      yield { type: "turn.completed", usage: { ...T, input_tokens: 7000, output_tokens: 70 } };
+    });
+    const completed = await collect(run(unitOpts(dirs, { Codex: completing, store, extra: resumed })));
+    assert.deepEqual(of(completed, "usage").map((u) => u.usage), all);
   });
 });
 
@@ -1141,6 +1275,54 @@ describe("the real codex binary against the fake server", { skip: CODEX_THERE ? 
     assert.equal(lost[0].recoverable, true);
     assert.equal(lost[0].code, "session");
     assert.deepEqual(of(lost, "done"), [{ type: "done", stopReason: "error" }]);
+  });
+
+  it("a picture turn stopped before any answer leaves its picture last in the rollout: the turns after it count only their own usage", async () => {
+    fake.reset();
+    const store = makeStore();
+    const conv = "conv-picture-stop";
+    /** A handler that gives `first` to the turn's first request and never answers the ones after it. */
+    const once = (first) => { let n = 0; return () => (n++ === 0 ? first : { hang: true }); };
+    /** Stop the turn 300 ms after its nth request reaches the server. */
+    const stopAt = (nth) => {
+      const ac = new AbortController();
+      const at = fake.responses().length + nth;
+      const timer = setInterval(() => { if (fake.responses().length >= at) { clearInterval(timer); setTimeout(() => ac.abort(), 300); } }, 50);
+      return { signal: ac.signal, clear: () => clearInterval(timer) };
+    };
+    // A noisy 640x640 PNG (1.2 MB that doesn't compress): Codex keeps it in the rollout as one base64 line of 1.6 MB.
+    const picture = [{ type: "text", text: "What is in this picture?" }, { type: "image", source: { type: "base64", media_type: "image/png", data: noisyPng(640, 640).toString("base64") } }];
+    const pictureStopped = async (sessionHandle) => {
+      handler = () => ({ hang: true });
+      const stop = stopAt(1);
+      const out = await collect(turn("openrouter", { store, conv, prompt: picture, sessionHandle, signal: stop.signal }).iter);
+      stop.clear();
+      assert.deepEqual(of(out, "done"), [{ type: "done", stopReason: "aborted" }]);
+      assert.equal(of(out, "usage").length, 0, "nothing was answered");
+      const lines = fs.readFileSync(findRollout(path.join(dirs.state, ".codex-home-keys"), sessionHandle.split(":").pop()), "utf8").split("\n");
+      const after = lines.slice(lines.findLastIndex((l) => l.includes("total_token_usage")) + 1).join("\n");
+      assert.ok(Buffer.byteLength(after) > 1024 * 1024, `${Buffer.byteLength(after)} bytes after the last total`);
+    };
+    const own = (input, output) => [{ input_tokens: input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: output }];
+
+    handler = once({ text: "First answer.", usage: { input_tokens: 10_000, cached_input_tokens: 0, output_tokens: 100 } });
+    const one = turn("openrouter", { store, conv });
+    assert.deepEqual(of(await collect(one.iter), "usage").map((u) => u.usage), own(10_000, 100));
+    const thread = one.handles[0];
+    await pictureStopped(thread);
+    // Completed: Codex's turn.completed total less the thread's total before it, the 10k of the first turn.
+    handler = once({ text: "Second answer.", usage: { input_tokens: 20_000, cached_input_tokens: 0, output_tokens: 200 } });
+    const three = await collect(turn("openrouter", { store, conv, sessionHandle: thread }).iter);
+    assert.deepEqual(of(three, "done"), [{ type: "done", stopReason: "end_turn" }]);
+    assert.deepEqual(of(three, "usage").map((u) => u.usage), own(20_000, 200));
+    await pictureStopped(thread);
+    // Stopped after one call: the rollout's total at the end less the 30k before it.
+    handler = once({ calls: [{ name: "exec_command", arguments: { cmd: "node -e \"console.log(1)\"" } }], usage: { input_tokens: 40_000, cached_input_tokens: 0, output_tokens: 400 } });
+    const stop = stopAt(2);
+    const five = await collect(turn("openrouter", { store, conv, sessionHandle: thread, signal: stop.signal }).iter);
+    stop.clear();
+    assert.deepEqual(of(five, "done"), [{ type: "done", stopReason: "aborted" }]);
+    assert.deepEqual(of(five, "usage").map((u) => u.usage), own(40_000, 400));
   });
 
   it("Stop during a long command kills codex and what it started within 3 s, and yields done aborted once", async () => {

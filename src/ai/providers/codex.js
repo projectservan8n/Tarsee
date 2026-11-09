@@ -24,8 +24,9 @@
  *     instructions changed (session.<conv>.instrHash: Codex keeps a resumed thread's first instructions, checked
  *     against the pinned binary) or whose rollout grew past TARSEE_SESSION_JSONL_MAX_MB is not resumed: the turn
  *     reports a recoverable session failure before starting anything, and the turn layer starts it fresh with the
- *     chat handed over. The thread's usage total so far is read from its rollout, because Codex reports a resumed
- *     thread's running total (codex-events.js).
+ *     chat handed over. The thread's usage total so far is read from its rollout (however far back its last one is),
+ *     because Codex reports a resumed thread's running total (codex-events.js); when it can't be read, the turn's usage
+ *     isn't counted rather than the earlier turns' counted again.
  *   - ChatGPT plan only: while $CODEX_HOME/auth.json's last_refresh is 7 days old or more (Codex refreshes the sign-in
  *     at about 8), turns start one at a time, each holding the gate until the model first answers (30 s at most), so
  *     two turns never refresh the same sign-in at once.
@@ -76,8 +77,10 @@ export const DEVICE_GATE_MAX_MS = 30_000;
 const IMAGE_DIR = CODEX_IMAGE_DIR;
 /** A key provider's answers that retrying won't change. */
 const FAIL_FAST_STATUSES = new Set([401, 402, 403, 404]);
-/** How much of a rollout's end is read for its usage total. */
-const ROLLOUT_TAIL_BYTES = 512 * 1024;
+/** How much of a rollout is read at a time, back from its end, for its usage total. */
+const ROLLOUT_CHUNK_BYTES = 512 * 1024;
+/** A rollout bigger than this many MB (TARSEE_SESSION_JSONL_MAX_MB) isn't resumed, and no read of one goes further back. */
+const ROLLOUT_CAP_MB = 8;
 const DEFAULT_MAX_TURNS = 50;
 const TURN_MARK = "TARSEE_CODEX_TURN";
 /** How long a finished turn waits for codex to exit by itself before it is stopped. */
@@ -264,24 +267,59 @@ export function findRollout(home, threadId, { fsImpl = fs } = {}) {
   return null;
 }
 
-/** The thread's running usage total as its rollout last recorded it (a token_count event), or null. */
-export function rolloutUsageTotal(file, { fsImpl = fs } = {}) {
+const TOTAL_KEY = Buffer.from("total_token_usage");
+
+/** The usage total on one rollout line (a token_count event's), or null. */
+function lineTotal(line) {
+  if (!line.length || line.indexOf(TOTAL_KEY) < 0) return null;
+  try {
+    const total = JSON.parse(line.toString("utf8"))?.payload?.info?.total_token_usage;
+    return total && typeof total === "object" ? total : null;
+  } catch {
+    return null; // a line still being written
+  }
+}
+
+/**
+ * The thread's running usage total as its rollout last recorded it (its last token_count event). The file is read back
+ * from its end a piece at a time (chunkBytes) until a line with a total turns up, so a long line after it can't hide
+ * it: Codex keeps a picture inline as one base64 line, and a picture turn stopped (or failed) before any answer leaves
+ * nothing after that line. The answer is
+ *   the total  the last one recorded
+ *   "none"     the whole file was read and no line has one: the thread hasn't spent anything yet
+ *   null       it can't tell: the file couldn't be read, or any total is further back than maxBytes from the end (the
+ *              rollout size cap, so the read stays bounded)
+ */
+export function rolloutUsageTotal(file, { fsImpl = fs, maxBytes = ROLLOUT_CAP_MB * 1024 * 1024, chunkBytes = ROLLOUT_CHUNK_BYTES } = {}) {
   let fd;
   try {
     fd = fsImpl.openSync(file, "r");
     const size = fsImpl.fstatSync(fd).size;
-    const len = Math.min(size, ROLLOUT_TAIL_BYTES);
-    const buf = Buffer.alloc(len);
-    fsImpl.readSync(fd, buf, 0, len, size - len);
-    const lines = buf.toString("utf8").split("\n");
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (!lines[i].includes("total_token_usage")) continue;
-      try {
-        const total = JSON.parse(lines[i])?.payload?.info?.total_token_usage;
-        if (total && typeof total === "object") return total;
-      } catch { /* a line cut by the tail window */ }
+    const floor = Math.max(0, size - Math.max(0, Number(maxBytes) || 0));
+    const step = Math.max(1, Math.floor(Number(chunkBytes)) || ROLLOUT_CHUNK_BYTES);
+    // The pieces of the line the read is in the middle of, in order: its start is in a piece not read yet.
+    let rest = [];
+    for (let end = size; end > floor;) {
+      const start = Math.max(floor, end - step);
+      const buf = Buffer.alloc(end - start);
+      for (let got = 0; got < buf.length;) {
+        const n = fsImpl.readSync(fd, buf, got, buf.length - got, start + got);
+        if (!(n > 0)) return null; // the file got shorter while it was read
+        got += n;
+      }
+      let stop = buf.length;
+      for (let nl = buf.lastIndexOf(0x0a, stop - 1); nl >= 0; nl = nl > 0 ? buf.lastIndexOf(0x0a, nl - 1) : -1) {
+        const total = lineTotal(rest.length ? Buffer.concat([buf.subarray(nl + 1, stop), ...rest]) : buf.subarray(nl + 1, stop));
+        if (total) return total;
+        rest = [];
+        stop = nl;
+      }
+      rest.unshift(buf.subarray(0, stop));
+      end = start;
     }
-    return null;
+    // Short of the file's start, the line the read stopped in is cut, and a total may be further back still.
+    if (floor > 0) return null;
+    return lineTotal(Buffer.concat(rest)) || "none";
   } catch {
     return null;
   } finally {
@@ -292,12 +330,15 @@ export function rolloutUsageTotal(file, { fsImpl = fs } = {}) {
 /**
  * What a turn that ended without turn.completed spent (Stop, the idle watchdog, a timeout, the turn limit, a failure
  * after some model calls): Codex reports no usage then, but every response it got was billed and is in the thread's
- * running total in its rollout. The usage event and step for this turn's share, or none when nothing new was spent.
+ * running total in its rollout. The usage event and step for this turn's share, or none when nothing new was spent,
+ * or when the thread's total before this turn isn't known (state.baselineKnown: the whole running total would count
+ * the earlier turns as this one).
  */
-function rolloutUsageEvents(state, home, threadId) {
+function rolloutUsageEvents(state, home, threadId, { maxBytes } = {}) {
+  if (!state.baselineKnown) return [];
   const file = threadId ? findRollout(home, threadId) : null;
-  const total = file ? rolloutUsageTotal(file) : null;
-  if (!total) return [];
+  const total = file ? rolloutUsageTotal(file, { maxBytes }) : null;
+  if (!total || total === "none") return [];
   const events = usageEvents(state, total);
   const u = events[0].usage;
   return u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens + u.output_tokens > 0 ? events : [];
@@ -529,9 +570,12 @@ export async function* run(opts = {}) {
     const raw = threadToResume(opts, where);
     const hash = instructionsHash(o.config.developer_instructions);
     const hashKey = conv ? `session.${conv}.instrHash` : null;
+    const capMb = Number(env.TARSEE_SESSION_JSONL_MAX_MB) || ROLLOUT_CAP_MB;
+    const capBytes = capMb * 1024 * 1024;
     let baseline = null;
-    // Whether the thread's total before this turn is known: a new thread's is nothing; a resumed one's is its
-    // rollout's, when that was found (without it, a total read at the end would count earlier turns as this one).
+    // Whether the thread's total before this turn is known: a new thread's is nothing; a resumed one's is its rollout's
+    // last total, or nothing when the whole rollout has none. Without it, no usage is given for the turn: the total
+    // read at its end, and Codex's own at turn.completed, are the whole thread's, and would count earlier turns again.
     let baselineKnown = !raw;
     if (raw) {
       if (hashKey && store && readSetting(store, hashKey) !== hash) {
@@ -540,7 +584,6 @@ export async function* run(opts = {}) {
       }
       const rollout = findRollout(o.home, raw);
       if (rollout) {
-        const capMb = Number(env.TARSEE_SESSION_JSONL_MAX_MB) || 8;
         let mb = 0;
         try { mb = fs.statSync(rollout).size / (1024 * 1024); } catch { /* gone: Codex says so */ }
         if (mb > capMb) {
@@ -548,9 +591,11 @@ export async function* run(opts = {}) {
           yield* startFresh(`This chat's Codex session grew past ${capMb} MB, so a fresh one starts with the conversation handed over.`);
           return;
         }
-        baseline = rolloutUsageTotal(rollout);
-        baselineKnown = true;
+        const before = rolloutUsageTotal(rollout, { maxBytes: capBytes });
+        baseline = before && before !== "none" ? before : null;
+        baselineKnown = before !== null;
       }
+      if (!baselineKnown) console.warn(`[codex] thread ${raw}: its usage so far couldn't be read from its rollout, so this turn's usage isn't counted (Codex's total would count the thread's earlier turns again)`);
     }
 
     // The prompt: the turn's context, then the person's words (the turn layer already put the handoff and the queued
@@ -582,7 +627,7 @@ export async function* run(opts = {}) {
       else opts.signal.addEventListener("abort", onAbort, { once: true });
     }
     const maxTurns = Number(opts.maxTurns) > 0 ? Math.floor(Number(opts.maxTurns)) : DEFAULT_MAX_TURNS;
-    const state = createCodexEventState({ providerId, model, baseline, localUrl });
+    const state = createCodexEventState({ providerId, model, baseline, baselineKnown, localUrl });
     console.log(`[codex] turn ${turnId}: ${providerId}${o.threadOptions.model ? ` ${o.threadOptions.model}` : " (Codex's default model)"}, ${raw ? `resuming ${raw}` : "new thread"}, ${pictures.length} picture(s)`);
 
     let thrown = null;
@@ -632,7 +677,7 @@ export async function* run(opts = {}) {
     releaseGate();
     // A turn that ended any way but turn.completed: what it spent comes from the rollout, before the done (the turn
     // layer stops reading at the done). A held done has waited for codex to finish writing it.
-    const spent = () => (baselineKnown ? rolloutUsageEvents(state, o.home, state.threadId || raw) : []);
+    const spent = () => rolloutUsageEvents(state, o.home, state.threadId || raw, { maxBytes: capBytes });
     if (held) {
       if (held.stopReason !== "end_turn") yield* spent();
       yield held;

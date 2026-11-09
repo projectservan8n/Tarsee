@@ -1282,21 +1282,71 @@ describe("the external API, ACP and subagents through the router", () => {
     }
   });
 
-  it("a client that leaves stops its turn (the external API and ACP)", async () => {
+  /** Send a request, and go away (the socket closed, no answer read) once `when()` holds. */
+  const leave = (url, body, when) => new Promise((resolve) => {
+    const req = http.request(`${base}${url}`, { method: "POST", headers: { "content-type": "application/json" } });
+    req.on("error", () => resolve());
+    req.end(JSON.stringify(body));
+    until(when).then(() => { req.destroy(); resolve(); });
+  });
+  const reply = (conv) => convs.getMessages(conv).find((m) => m.role === "assistant") || null;
+
+  it("a client that leaves the external API: the turn runs on and its whole reply is saved in the conversation", async () => {
+    settings.set("ai.deepseek.apiKey", DEEPSEEK_KEY);
+    const conv = newChat("api");
+    useEngines({ claude: [[{ type: "text", content: "Part one." }, { type: "sleep", ms: 300 }, { type: "text", content: " Part two." }, { type: "done", stopReason: "end_turn" }]] });
+    await leave("/v1/message", { message: "a long job", provider: "deepseek", conversationId: conv }, () => engines.claude.calls.length === 1);
+    assert.ok(await until(() => reply(conv)), "the reply was saved");
+    assert.equal(reply(conv).content, "Part one. Part two.", "the whole reply, not what had come before the client left");
+    assert.equal(reply(conv).provider, "deepseek");
+    assert.equal(engines.claude.calls[0].signal.aborted, false, "the engine was not stopped");
+  });
+
+  it("a message queued behind another turn isn't given up for the time it waits: its idle clock starts with its turn", async () => {
+    process.env.TARSEE_CHANNEL_IDLE_ABORT_MS = "150";
+    try {
+      settings.set("ai.deepseek.apiKey", DEEPSEEK_KEY);
+      useEngines({ claude: [ok("Your turn now.")] });
+      const conv = newChat("api");
+      let release;
+      const busy = withConversationTurn(conv, () => new Promise((r) => { release = r; }));
+      const pending = post("/v1/message", { message: "queued", provider: "deepseek", conversationId: conv });
+      await new Promise((r) => setTimeout(r, 500));
+      assert.equal(engines.claude.calls.length, 0, "it waits for the turn ahead of it");
+      release();
+      await busy;
+      const r = await pending;
+      assert.equal(r.status, 200);
+      assert.equal((await r.json()).response, "Your turn now.");
+      assert.equal(engines.claude.calls[0].signal.aborted, false);
+    } finally {
+      delete process.env.TARSEE_CHANNEL_IDLE_ABORT_MS;
+    }
+  });
+
+  it("a message whose client left while it waited in the queue still runs when its turn comes, and its reply is saved", async () => {
+    settings.set("ai.deepseek.apiKey", DEEPSEEK_KEY);
+    useEngines({ claude: [ok("Answered anyway.")] });
+    const conv = newChat("api");
+    let release;
+    const busy = withConversationTurn(conv, () => new Promise((r) => { release = r; }));
+    await leave("/v1/message", { message: "queued", provider: "deepseek", conversationId: conv }, () => live.eventsSince(conv, 0).some((e) => e.type === "turn_queued"));
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(engines.claude.calls.length, 0, "still waiting");
+    release();
+    await busy;
+    assert.ok(await until(() => reply(conv)), "the reply was saved");
+    assert.equal(engines.claude.calls.length, 1, "the engine ran it");
+    assert.equal(engines.claude.calls[0].prompt, QUEUED_NOTE + "queued", "as a queued message (turn.js's note)");
+    assert.equal(reply(conv).content, "Answered anyway.");
+  });
+
+  it("a client that leaves an ACP turn stops it: the session lives in memory and nothing else can reach the turn", async () => {
     settings.set("ai.activeProvider", "deepseek");
     settings.set("ai.deepseek.apiKey", DEEPSEEK_KEY);
-    const leave = (url, body) => new Promise((resolve) => {
-      const req = http.request(`${base}${url}`, { method: "POST", headers: { "content-type": "application/json" } });
-      req.on("error", () => resolve());
-      req.end(JSON.stringify(body));
-      until(() => engines.claude.calls.length === 1).then(() => { req.destroy(); resolve(); });
-    });
-    useEngines({ claude: [[{ type: "text", content: "Thinking" }, { type: "wait" }]] });
-    await leave("/v1/message", { message: "a long job" });
-    assert.ok(await until(() => engines.claude.calls[0].signal.aborted), "the external API's turn was stopped");
     useEngines({ claude: [[{ type: "wait" }]] });
     const session = await (await post("/acp/session", {})).json();
-    await leave(`/acp/session/${session.id}/turn`, { message: "a long job" });
+    await leave(`/acp/session/${session.id}/turn`, { message: "a long job" }, () => engines.claude.calls.length === 1);
     assert.ok(await until(() => engines.claude.calls[0].signal.aborted), "the ACP turn was stopped");
   });
 

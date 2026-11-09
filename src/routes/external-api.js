@@ -101,11 +101,13 @@ externalApiRouter.post("/message", async (req, res) => {
     let stopReason = null;
     let ran = { provider: null, model: null };
     let route = null;
-    // A turn that goes quiet, or whose caller left, is stopped (lib/turn-watchdog.js), so the conversation's lock is
-    // let go. The idle clock starts when the turn does, not while it waits behind another turn in this conversation.
-    const watch = watchTurn(res, { armed: false });
+    // A turn that goes quiet is stopped (lib/turn-watchdog.js), so the conversation's lock is let go. The idle clock
+    // starts when the turn does, not while it waits behind another turn in this conversation. A caller that goes away
+    // (a client or proxy timeout, a Shortcut sent to the background) doesn't stop it: like a web chat turn it runs to
+    // the end, waiting its turn first if it was queued, and its whole reply is saved in the conversation, where
+    // GET /api/v1/conversations/:id/messages and the dashboard read it. The dashboard's Stop still reaches it.
+    const watch = watchTurn(res, { armed: false, stopOnLeave: false });
     const result = await withConversationTurn(convId, async () => {
-      if (watch.left) return;
       watch.touch();
       for await (const event of chatStream({
         provider,
@@ -133,7 +135,7 @@ externalApiRouter.post("/message", async (req, res) => {
     // Save assistant message
     if (fullText) convStore.addMessage(convId, { role: "assistant", content: fullText, provider: ran.provider, model: ran.model });
 
-    // Nobody is left to read the answer.
+    // The caller went away: the reply is saved above, and there is nobody to send it to.
     if (watch.left) return;
     if (watch.idled) {
       return res.status(504).json({

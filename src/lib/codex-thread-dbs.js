@@ -103,11 +103,17 @@ function rolloutsIn(home) {
 /**
  * Delete the threads' rows from every table with a thread column, in one transaction (and the threads rows
  * themselves, in state_5), then empty the write-ahead log. Returns how many threads rows went.
+ *
+ * The person's words must leave the disk, not just the tables: secure_delete overwrites a deleted row's bytes (SQLite
+ * otherwise leaves them in the file's free space), and the TRUNCATE checkpoint writes the change into the database
+ * file and empties the log, which a running Codex holding the database open would otherwise keep, older frames with
+ * the rows in them included.
  */
 function deleteRows(db, ids, { threads = false } = {}) {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()
     .map((r) => r.name)
     .filter((t) => !t.startsWith("sqlite_") && !t.startsWith("_sqlx_"));
+  db.pragma("secure_delete = ON");
   let gone = 0;
   db.transaction(() => {
     db.exec("CREATE TEMP TABLE IF NOT EXISTS tarsee_gone_threads (id TEXT PRIMARY KEY)");

@@ -91,6 +91,14 @@ describe("captured turns", () => {
     assert.equal(second.state.totals.input_tokens, 2500, "the new running total, for the next turn");
     // Without the baseline the whole total would be charged again.
     assert.equal(of(replay("resume-2").out, "usage")[0].usage.input_tokens, 1500);
+    // So when the engine couldn't learn it (baselineKnown false: a resumed thread whose rollout couldn't be read), no
+    // usage is given at all rather than the earlier turns' again; the turn still ends as it did.
+    const unknown = replay("resume-2", { baselineKnown: false });
+    assert.equal(of(unknown.out, "usage").length, 0);
+    assert.equal(steps(unknown.out, "usage").length, 0);
+    assert.deepEqual(of(unknown.out, "done"), [{ type: "done", stopReason: "end_turn" }]);
+    assert.deepEqual(of(unknown.out, "text"), of(second.out, "text"));
+    assert.equal(unknown.state.totals.input_tokens, 2500, "the running total is still kept");
   });
 
   it("a refused key: the provider's own fix, an error, done auth-expired; the retries are status lines", () => {

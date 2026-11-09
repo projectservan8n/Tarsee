@@ -2,7 +2,7 @@
 
 `scripts/e2e/live-smoke.mjs` checks every AI you have connected, for real, on a Tarsee that is running. For each one it does what you would do by hand: presses **Test** on the AI's card in Settings > AI, opens a new chat set to that AI, asks a question that needs Tarsee's calculator tool, waits for the answer, checks that the tool really ran, reads what the reply cost on the Usage page, and deletes the test chat. At the end it prints one table with a row per chat.
 
-It only talks to Tarsee over the web address, like your browser does. It never reads Tarsee's files or database, and it never prints a key, a token, a cookie or your password.
+It only talks to Tarsee over the web address, like your browser does. It never reads Tarsee's files or database, and it never prints a key, a token, a cookie or your password. A short password, such as a 4-digit PIN, is never blanked out of the dates and numbers it prints either: the script never prints the password in the first place, and a gap where those digits were would give them away.
 
 ## 1. Start a local Tarsee for the test
 
@@ -106,6 +106,14 @@ When the last line says *Every step passed*, everything worked. If anything fail
 
 What the test costs: one short chat per row, usually well under a cent each with a key. `--verify` adds about four to eight short turns per model it checks; the cost is shown before it starts. The plans cost nothing per message.
 
+If a reply doesn't finish (it runs out of time, or the connection breaks), the test stops that chat's turn first, as the chat's **Stop** button would, and waits for it to end before deleting the chat. Tarsee keeps a reply going when the page that asked for it goes away, so without this the turn would keep running on your key in a chat you can no longer see. It says so in a line of its own:
+
+```
+[ 41.2s] FAIL deepseek · deepseek-flash · turn: the reply broke off: aborted (38.4 s)
+[ 43.5s] INFO deepseek · deepseek-flash · cleanup: the reply didn't finish, so its turn was stopped first; it was over in 2.3 s
+[ 43.6s] PASS deepseek · deepseek-flash · cleanup: the test chat is deleted
+```
+
 ## 5. Afterwards
 
 - The test chats are already deleted (unless you used `--keep`). Their cost stays on the test Tarsee's Usage page.
@@ -134,8 +142,10 @@ The same script works against your Railway Tarsee: set `TARSEE_URL` to its addre
 | `turn: ... hasn't been verified yet` | That model needs **Verify** first: add `--verify`. |
 | `tool: the AI didn't use Tarsee's calculator` | The model answered from memory. Small Local AI models often do this; a larger model usually won't. |
 | `usage: no usage row` | The reply finished but the Usage page didn't record it within a minute. Run again; if it keeps happening, it is worth reporting. |
+| `turn: the reply broke off` or `no full reply in 300 s` | The connection to Tarsee broke, or the AI took too long (try `--timeout 600`). The test stopped that turn before deleting its chat. |
+| `cleanup: the unfinished turn couldn't be stopped` | That turn may still be running on your key. The test chat is kept: open **Live test (live-smoke)** in Tarsee and press **Stop**, then delete the chat. |
 | `Tarsee allows only a few of these a minute; waiting` | Not a failure: Tarsee limits how often **Test**, **Verify** and sign-in can run, and the script waits its turn. |
 
 ## For developers
 
-`node scripts/e2e/live-smoke-fakes.mjs` proves this script without any real key: it starts a real Tarsee whose AIs are local fakes (the same ones `scripts/e2e/ai-api-e2e.mjs` uses), connects them as above, and runs `live-smoke.mjs` in every case it has to handle: all AIs passing, Verify, a key turned down at Test or mid-chat, an AI that isn't ready, a wrong password and a stray argument. It also checks that nothing the script printed carries a key, a token, a cookie or the password.
+`node scripts/e2e/live-smoke-fakes.mjs` proves this script without any real key: it starts a real Tarsee whose AIs are local fakes (the same ones `scripts/e2e/ai-api-e2e.mjs` uses), connects them as above, and runs `live-smoke.mjs` in every case it has to handle: all AIs passing, Verify, a key turned down at Test or mid-chat, an AI that isn't ready, a wrong password, a stray argument, a model that goes quiet while a proxy cuts the chat's connection (the turn must be stopped, and over, before its chat is deleted), and a 4-digit password (this year, with every chat's sum made to carry it: every date and number must print whole). It also checks that nothing the script printed carries a key, a token, a cookie or the password.

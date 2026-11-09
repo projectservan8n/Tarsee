@@ -20,7 +20,9 @@
  *
  * The end of a turn: turn.completed gives a usage event (and a usage step) and done{end_turn}. Codex reports a
  * thread's RUNNING total there (settled against the pinned binary: a resumed thread's second turn reports both turns'
- * tokens), so the state carries the thread's total before this turn (baseline) and the usage is the difference.
+ * tokens), so the state carries the thread's total before this turn (baseline) and the usage is the difference. When
+ * the engine couldn't learn that total (baselineKnown false), no usage is given: all of the running total would count
+ * the thread's earlier turns as this one.
  * turn.failed (or an error the stream ends on) is classified by engine-errors.js: a key or sign-in that was turned
  * down gives the provider's own fix as text, an error and done{auth-expired}; anything else an error and
  * done{error}; a thread that can't be resumed is recoverable (the turn layer starts fresh and hands the chat over).
@@ -53,9 +55,10 @@ const MISSING_BINARY_RE = /(Unable to locate Codex CLI binaries|spawn \S*codex\S
 
 /**
  * A turn's mapping state. opts: providerId, model, baseline (the thread's usage total before this turn, for a resumed
- * thread), localUrl (Local AI's address, for "can't reach it" words).
+ * thread), baselineKnown (false when a resumed thread's total before this turn couldn't be read: no usage is given),
+ * localUrl (Local AI's address, for "can't reach it" words).
  */
-export function createCodexEventState({ providerId, model = null, baseline = null, localUrl = null } = {}) {
+export function createCodexEventState({ providerId, model = null, baseline = null, baselineKnown = true, localUrl = null } = {}) {
   const id = normalizeProviderId(providerId) || String(providerId || "");
   return {
     providerId: id,
@@ -63,6 +66,7 @@ export function createCodexEventState({ providerId, model = null, baseline = nul
     model: model || null,
     localUrl: localUrl || null,
     baseline: baseline ? normalizeUsage(baseline) : null,
+    baselineKnown: baselineKnown !== false,
     threadId: null,
     totals: null,
     done: false,
@@ -306,7 +310,7 @@ export function mapCodexEvent(ev, state) {
       const totals = normalizeUsage(ev.usage);
       state.totals = totals;
       state.done = true;
-      return [...closeOpen(state, "Ended without a result."), ...usageEvents(state, totals), { type: "done", stopReason: "end_turn" }];
+      return [...closeOpen(state, "Ended without a result."), ...(state.baselineKnown ? usageEvents(state, totals) : []), { type: "done", stopReason: "end_turn" }];
     }
     case "turn.failed":
       return [...closeOpen(state, "The turn failed before it finished."), ...failureEvents(state, ev.error?.message || state.lastError || "The turn failed.")];

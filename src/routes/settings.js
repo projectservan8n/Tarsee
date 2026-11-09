@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { Router } from "express";
-import { SettingsStore, isAiKeySlot, OLD_VOICE_KEY } from "../db/settings.js";
+import { SettingsStore, isAiKeySlot, isEmptySetting, OLD_VOICE_KEY } from "../db/settings.js";
 import { getProvider, isShipped, shippedProviders, checkKeySlot } from "../ai/provider-registry.js";
 import { providerStatus, activeTarget, credentialPresence } from "../ai/provider-status.js";
 import { ensureLocalModels } from "../ai/provider-models.js";
 import { readWorkspaceFile, writeWorkspaceFile, hasBootstrapFile, deleteBootstrapFile } from "../lib/workspace-files.js";
 import { initTTSEngine } from "../voice/engine-registry.js";
-import { redactSecretFields } from "../lib/vault.js";
+import { redactSecretFields, isSecretKey } from "../lib/vault.js";
 import { brandStatus, saveBrandIcon, resetBrandIcon, decodeBase64 } from "../lib/brand-icon.js";
 
 export const settingsRouter = Router();
@@ -403,7 +403,8 @@ settingsRouter.put("/workspace-file", (req, res) => {
 /**
  * POST /api/settings/general
  * Update general settings.
- * Body: { key, value }
+ * Body: { key, value }. For a secret (a key, token or password) an empty value (none, null, "" or only spaces)
+ * deletes it: { ok, removed } says whether there was one.
  */
 settingsRouter.post("/general", (req, res) => {
   const { key, value } = req.body || {};
@@ -430,7 +431,15 @@ settingsRouter.post("/general", (req, res) => {
     return res.status(400).json({ error: "mention_mode must be 'required' or 'off'" });
   }
 
-  settingsStore.set(key, value);
+  // A secret sent with nothing in it (Settings > Security's Remove sends "" for the captcha key) is a removal: the row
+  // is deleted and audited as credential.delete. Saved, it would sit in the table as an encrypted empty string that
+  // read back as a saved key.
+  let removed;
+  if (isSecretKey(key) && isEmptySetting(value)) {
+    removed = settingsStore.delete(key, { actor: "user", ip: req.ip, detail: "Removed in Settings" });
+  } else {
+    settingsStore.set(key, value, { actor: "user", ip: req.ip });
+  }
 
   // Hot-reload: re-init TTS engine when voice settings change (no restart needed)
   if (key.startsWith("voice.")) {
@@ -439,7 +448,7 @@ settingsRouter.post("/general", (req, res) => {
     });
   }
 
-  res.json({ ok: true });
+  res.json(removed === undefined ? { ok: true } : { ok: true, removed });
 });
 
 /**

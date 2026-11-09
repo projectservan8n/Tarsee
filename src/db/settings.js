@@ -25,6 +25,15 @@ export const OLD_VOICE_KEY = "voice.openai_api_key";
  */
 const DISPLAY_MASK_RE = /^(?:.{4}\.\.\..{4}|\*{3,}.{0,4}|\u2026.{0,4})$/;
 
+/**
+ * Whether a value holds nothing: missing, null, or a string of nothing but spaces. A secret with such a value is no
+ * key at all, so it is deleted rather than saved (POST /api/settings/general, the boot fixup removeEmptySecrets) and
+ * never shown as a saved one (all()). false and 0 are values.
+ */
+export function isEmptySetting(value) {
+  return value === undefined || value === null || (typeof value === "string" && !value.trim());
+}
+
 /** Whether a settings key is an AI's key slot (ai.<id>.apiKey, a storage id like claude-code included). */
 export function isAiKeySlot(key) {
   const m = /^ai\.([^.]+)\.apiKey$/.exec(String(key || ""));
@@ -147,7 +156,8 @@ export class SettingsStore {
   }
 
   /**
-   * Get all settings. Secrets are masked for display.
+   * Get all settings. Secrets are masked for display; an empty one (a row an older build saved for an empty box) is
+   * shown as "", never as the "****" of a saved key.
    */
   all() {
     return this._all.all().map((row) => {
@@ -170,7 +180,7 @@ export class SettingsStore {
           }
           return {
             key: row.key,
-            value: maskSecret(typeof parsed === "string" ? parsed : decrypted),
+            value: isEmptySetting(parsed) ? "" : maskSecret(typeof parsed === "string" ? parsed : decrypted),
             updatedAt: row.updated_at,
             encrypted: isEncrypted(value),
           };
@@ -179,9 +189,13 @@ export class SettingsStore {
         }
       }
 
+      // Not a secret. A row an older version saved encrypted (ui.redactSecrets was once classed as one) reads back
+      // as what it holds, as get() already does.
+      let plain = value;
+      try { plain = decryptIfEncrypted(value); } catch { /* can't be decrypted: shown as stored */ }
       return {
         key: row.key,
-        value: tryParse(value),
+        value: tryParse(plain),
         updatedAt: row.updated_at,
       };
     });
@@ -340,6 +354,34 @@ export class SettingsStore {
   }
 
   /**
+   * Boot fixup: delete every secret setting that holds nothing (isEmptySetting once decrypted). An older Security tab
+   * posted its captcha key box even when it was empty, and an older Remove saved "" rather than deleting the key; such
+   * a row is no key, but it sat in the table encrypted, counted as a stored credential. Audited as credential.delete
+   * (actor system), idempotent; a value it cannot decrypt is left where it is, and a setting that isn't a secret is
+   * never touched (an empty value can mean something there).
+   * @returns {{removed: string[]}} the settings keys deleted
+   */
+  removeEmptySecrets() {
+    const removed = [];
+    let unreadable = 0;
+    for (const { key, value: stored } of this._all.all()) {
+      if (!isSecretKey(key)) continue;
+      let value;
+      try {
+        value = decryptIfEncrypted(stored);
+      } catch {
+        unreadable++;
+        continue;
+      }
+      if (!isEmptySetting(tryParse(value))) continue;
+      if (this.delete(key, { actor: "system", detail: "Removed an empty value saved in place of a key" })) removed.push(key);
+    }
+    if (unreadable) console.warn(`[settings] ${unreadable} secret setting(s) could not be decrypted (was ENCRYPTION_KEY changed?); left as they are`);
+    if (removed.length) console.log(`[settings] removed empty values saved in place of a key: ${removed.join(", ")}`);
+    return { removed };
+  }
+
+  /**
    * Boot fixup: delete every per-provider base URL (`ai.<id>.baseUrl`) an older
    * version saved, except Local AI's own server address. A provider's host is a
    * code constant (design 4.5 R3), so no later code may pick a stale one up.
@@ -491,7 +533,8 @@ function maskObjectSecrets(obj) {
   const masked = { ...obj };
   for (const key of Object.keys(masked)) {
     if (/token|key|secret|password/i.test(key) && typeof masked[key] === "string") {
-      masked[key] = maskSecret(masked[key]);
+      // An empty field is no secret: "", never the "****" of a saved one.
+      masked[key] = isEmptySetting(masked[key]) ? "" : maskSecret(masked[key]);
     }
   }
   return masked;

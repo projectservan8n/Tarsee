@@ -121,11 +121,18 @@ const SECRET_KEY_PATTERNS = [
 ];
 
 /**
+ * Settings whose names match a pattern above but hold no secret. `ui.redactSecrets` is the on/off switch for hiding
+ * secrets in tool output: stored encrypted and shown as "****", the Settings page could never read it back as off.
+ */
+const NOT_SECRET_KEYS = new Set(["ui.redactSecrets"]);
+
+/**
  * Check if a settings key should be treated as a secret.
  * @param {string} key - The settings key
  * @returns {boolean}
  */
 export function isSecretKey(key) {
+  if (NOT_SECRET_KEYS.has(key)) return false;
   return SECRET_KEY_PATTERNS.some((pattern) => pattern.test(key));
 }
 

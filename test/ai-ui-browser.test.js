@@ -13,6 +13,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isSecretKey, maskSecret } from "../src/lib/vault.js";
 
 const PUBLIC = fileURLToPath(new URL("../src/public/", import.meta.url));
 const FAKE_KEY = "sk-test-canary-0000000000000000ry42";
@@ -156,7 +157,15 @@ function fakeApi({ needsSetup = true, active = "claude", onlyClaude = false, gua
     if (p === "/api/settings/setup-status") return json(200, { needsSetup, needsPersonality: false, botName: "Tarsee", provider: needsSetup ? null : "claude-code", hasKey: !needsSetup });
     if (p === "/api/settings" && method === "GET") return json(200, { settings: state.settings });
     if (p === "/api/settings/general" && method === "POST") {
-      state.settings = [...state.settings.filter((s) => s.key !== body.key), { key: body.key, value: body.value }];
+      // As routes/settings.js and db/settings.js do: a secret sent empty is deleted, and a secret is read back only as
+      // its masked display (vault.js maskSecret). test/settings-captcha-key.test.js runs the real routes.
+      const others = state.settings.filter((s) => s.key !== body.key);
+      if (isSecretKey(body.key) && (body.value == null || (typeof body.value === "string" && !body.value.trim()))) {
+        const removed = others.length < state.settings.length;
+        state.settings = others;
+        return json(200, { ok: true, removed });
+      }
+      state.settings = [...others, { key: body.key, value: isSecretKey(body.key) && typeof body.value === "string" ? maskSecret(body.value) : body.value }];
       return json(200, { ok: true });
     }
     if (p === "/api/skills") return json(200, { skills: [{ name: "weather", description: "Weather" }] });
@@ -932,6 +941,7 @@ describe("the pages in a browser: what they show and save", { skip }, () => {
       await page.waitForFunction(() => document.getElementById("settingsOpenaiKey").value === "");
       assert.deepEqual(keyWrites().map((c) => `${c.method} ${c.path} ${JSON.stringify(c.body)}`), [`PUT /api/ai/keys/openai ${JSON.stringify({ apiKey: FAKE_KEY })}`]);
       assert.ok(!(await page.content()).includes(FAKE_KEY), "the key is never on the page after saving");
+      await page.locator("#openaiKeyStatus", { hasText: "…ry42" }).waitFor();
 
       // One the route refuses: what it said, and the box keeps what was pasted so it can be fixed.
       await keyBox.fill("not-a-key");
@@ -1011,11 +1021,26 @@ describe("the pages in a browser: what they show and save", { skip }, () => {
       assert.match(await page.locator("#captchaKeyStatus").textContent(), /…0001/);
       assert.ok(!(await page.content()).includes(CAPTCHA_KEY), "the key is never on the page after saving");
 
-      // Remove: the saved key goes.
+      // What GET /api/settings sends back after a reload: still a saved key, shown only by its last 4.
+      const reopenSecurity = async () => {
+        await page.reload();
+        await page.locator("#aiHeaderChip:not([hidden])").waitFor();
+        await page.evaluate(() => Settings.open());
+        await page.locator('.settings-tab[data-tab="security"]').click();
+        await page.waitForFunction(() => document.getElementById("captchaService")?.value === "capsolver");
+      };
+      await reopenSecurity();
+      await page.locator("#captchaKeyStatus", { hasText: "…0001" }).waitFor();
+      assert.equal(await box.inputValue(), "");
+
+      // Remove: the saved key goes, and after a reload the page still says no key is saved.
       await page.locator("#removeCaptchaKeyBtn").click();
       await page.locator("#captchaKeyStatus").waitFor({ state: "hidden" });
       assert.deepEqual(keyWrites().map((c) => c.body.value), [CAPTCHA_KEY, ""]);
       assert.equal(await page.locator("#removeCaptchaKeyBtn").isVisible(), false);
+      await reopenSecurity();
+      assert.equal(await page.locator("#captchaKeyStatus").isHidden(), true, "no key is said to be saved after a reload");
+      assert.equal(await page.locator("#removeCaptchaKeyBtn").isHidden(), true);
       assert.deepEqual(errors, []);
     } finally {
       await context.close();
