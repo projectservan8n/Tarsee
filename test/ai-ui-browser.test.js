@@ -6,7 +6,7 @@
 //   - nothing scrolls sideways at phone width
 // Runs on Playwright's own Chromium, else an installed Chrome or Edge; skipped where there is none
 // (npx playwright install chromium).
-/* global document, window, getComputedStyle, Settings, Chat -- the page.evaluate() bodies run in the browser */
+/* global document, window, getComputedStyle, Settings, Chat, Live -- the page.evaluate() bodies run in the browser */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -61,10 +61,12 @@ const GUARD_FILE = "/data/tarsee/workspace/.claude/settings.json";
 
 /**
  * ready: provider ids that start Ready. env: provider id → the Railway variable its key comes from (Ready too).
+ * settings: GET /api/settings' rows from the start (what the page reads as it loads).
  * The rest of what a test changes is on the returned state: costNote, notes (GET /api/ai/models' note), loginFail
- * (POST /api/ai/chatgpt/login's answer: { status, body }), pollFail (the poll's), settings (GET /api/settings).
+ * (POST /api/ai/chatgpt/login's answer: { status, body }), pollFail (the poll's), settings (GET /api/settings),
+ * audit (GET /api/admin/audit's entries).
  */
-function fakeApi({ needsSetup = true, active = "claude", onlyClaude = false, guard = false, ready: readyIds = [], env = {} } = {}) {
+function fakeApi({ needsSetup = true, active = "claude", onlyClaude = false, guard = false, ready: readyIds = [], env = {}, settings = null } = {}) {
   const calls = [];
   const state = {
     guard,
@@ -74,7 +76,8 @@ function fakeApi({ needsSetup = true, active = "claude", onlyClaude = false, gua
     loginFail: null,
     pollFail: null,
     notes: {},
-    settings: [{ key: "ai.backupModel", value: "" }],
+    settings: settings || [{ key: "ai.backupModel", value: "" }],
+    audit: [],
     cards: {
       claude: card("claude", "Claude plan", "subscription", { state: "needs-sign-in", detail: "Nobody has signed in to the Claude plan yet.", fix: "Run claude auth login in the Terminal.", model: "sonnet" }),
       chatgpt: card("chatgpt", "ChatGPT plan", "subscription", { state: "needs-sign-in", detail: "Nobody has signed in to ChatGPT yet.", fix: "Sign in in Settings > AI." }),
@@ -161,7 +164,13 @@ function fakeApi({ needsSetup = true, active = "claude", onlyClaude = false, gua
     if (p === "/api/chat/models") return json(200, chatModels());
     if (p.startsWith("/api/ai/models/")) return json(200, { provider: id, models: MODELS[id] || [], defaultModel: state.cards[id]?.model, note: state.notes[id] ?? null });
     if (p.startsWith("/api/ai/verify/") && method === "POST") {
-      const m = (MODELS[id] || []).find((x) => x.id === body?.model);
+      let m = (MODELS[id] || []).find((x) => x.id === body?.model);
+      // The OpenAI key: a model id its list lacks is checked as it is, and joins the card's list once it passes
+      // (routes/ai.js GET /models/openai lists the owner's verified ids).
+      if (!m && id === "openai" && body?.model) {
+        m = { id: body.model, label: body.model };
+        (MODELS.openai ||= []).push(m);
+      }
       if (!m) return json(400, { error: "Say which model to verify." });
       Object.assign(m, { verified: true, needsVerification: false, inMenu: true });
       return json(200, { ok: true, engine: "codex", efforts: [], checks: { reply: true, tool: true }, error: null, message: `${m.id} passed. You can choose it now.` });
@@ -225,6 +234,13 @@ function fakeApi({ needsSetup = true, active = "claude", onlyClaude = false, gua
       ready(state.cards.chatgpt, { keySource: "sign-in", account: "you@example.com (Free)", model: null });
       return json(200, { state: "done", account: "you@example.com (Free)" });
     }
+    if (p === "/api/ai/chatgpt/logout" && method === "POST") {
+      // The server's sign-out ends a sign-in that is waiting: its poll answers idle from then on.
+      state.pollFail = { state: "idle" };
+      Object.assign(state.cards.chatgpt, { state: "needs-sign-in", ready: false, keySource: null, account: null, detail: "Nobody has signed in to ChatGPT yet." });
+      return json(200, { ok: true });
+    }
+    if (p === "/api/admin/audit") return json(200, { entries: state.audit });
     if (p === "/api/admin/tool-registry") {
       return json(200, [
         { name: "web_fetch", label: "Open a web address", description: "Fetches a page.", group: "Web", policyCovered: true, mcpName: "tarsee_web_fetch", mode: "check_ssrf" },
@@ -791,6 +807,266 @@ describe("the AI pages in a browser: what a change reaches", { skip }, () => {
         await page.locator(`[data-setup="provider"][data-provider="${id}"]`).click();
         await check(id);
       }
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+describe("the pages in a browser: what they show and save", { skip }, () => {
+  const STOPPED = /The sign-in stopped/;
+
+  it("ChatGPT sign-in that Tarsee no longer follows (a restart, another window): the card says so and how to start again", async () => {
+    const { page, api, errors, context } = await openPage({ needsSetup: false });
+    try {
+      await page.locator("#aiHeaderChip:not([hidden])").click();
+      // After a restart the server has no sign-in at all: its poll answers idle.
+      api.state.pollFail = { state: "idle" };
+      await page.locator('#chatgptAiCard [data-ai-action="chatgpt-login"]').click();
+      const box = page.locator("#chatgptAiCard [data-ai-device]");
+      await box.getByText("ABCD-1234").waitFor();
+      await box.getByText(STOPPED).waitFor({ timeout: 10000 });
+      assert.equal(await box.isHidden(), false, "the box stays, with the reason");
+      const text = await box.innerText();
+      assert.match(text, /Click Sign in with ChatGPT for a new code/);
+      assert.doesNotMatch(text, /ABCD-1234/, "the old code is gone");
+      assert.doesNotMatch(text, /step 1/, "not about the device code switch");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("ChatGPT: Sign out while a sign-in waits ends it quietly, with no \"stopped\" message after", async () => {
+    const { page, api, errors, context } = await openPage({ needsSetup: false });
+    try {
+      // Signed in, but not ready (a failed check): the card offers both Sign in and Sign out.
+      Object.assign(api.state.cards.chatgpt, { state: "error", keySource: "sign-in", detail: "ChatGPT didn't answer the last check." });
+      await page.locator("#aiHeaderChip:not([hidden])").click();
+      const waiting = { state: "waiting", url: "https://auth.openai.com/codex/device", code: "ABCD-1234", expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString() };
+      api.state.pollFail = waiting;
+      await page.locator('#chatgptAiCard [data-ai-action="chatgpt-login"]').click();
+      const box = page.locator("#chatgptAiCard [data-ai-device]");
+      await box.getByText("ABCD-1234").waitFor();
+      await page.locator('#chatgptAiCard [data-ai-action="chatgpt-logout"]').click();
+      await answerDialog(page, "Sign out");
+      await page.getByText("Signed out of ChatGPT").waitFor();
+      // Longer than a poll: had it gone on, its idle answer would show now.
+      await page.waitForTimeout(4000);
+      assert.equal(await page.locator("#chatgptAiCard").getByText(STOPPED).count(), 0);
+      assert.equal(await page.locator("#chatgptAiCard [data-ai-device]").isHidden(), true);
+      const out = api.calls.findIndex((c) => c.path === "/api/ai/chatgpt/logout");
+      assert.deepEqual(api.calls.slice(out).filter((c) => c.path === "/api/ai/chatgpt/login"), [], "and it isn't asked about again");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("Settings → Audit: every entry is shown as the text it is, never as page markup", async () => {
+    const { page, api, errors, context } = await openPage({ needsSetup: false });
+    try {
+      const detail = `model <img src=x onerror="window.__auditRan=1"> "quoted" & <b>bold</b>`;
+      const ip = `<img src=y onerror="window.__auditRan=2">`;
+      api.state.audit = [
+        { id: 2, created_at: "2026-11-09 08:01:00", action: "settings.write <b>x</b>", target: `ai.active "<b>y</b>"`, detail, ip: "127.0.0.1" },
+        { id: 1, created_at: "2026-11-09 08:00:00", action: "auth.login_failed", target: null, detail: null, ip },
+      ];
+      await page.locator("#aiHeaderChip:not([hidden])").waitFor();
+      await page.evaluate(() => Settings.open());
+      await page.locator('.settings-tab[data-tab="audit"]').click();
+      const rows = page.locator("#auditLogEntries .audit-entry");
+      await rows.nth(1).waitFor();
+      await page.waitForTimeout(200);
+      assert.equal(await page.locator("#auditLogEntries img, #auditLogEntries b").count(), 0, "no element made from an entry");
+      assert.equal(await page.evaluate(() => window.__auditRan ?? null), null, "nothing in an entry ran");
+      const first = rows.nth(0);
+      assert.equal(await first.locator(".audit-entry-action").textContent(), `settings.write <b>x</b> → ai.active "<b>y</b>"`);
+      assert.equal(await first.locator(".audit-entry-detail").textContent(), detail);
+      assert.equal(await first.locator(".audit-entry-detail").getAttribute("title"), detail, "the whole detail on hover, quotes and all");
+      assert.match(await first.locator(".audit-entry-action").getAttribute("class"), /\bsetting\b/);
+      const second = rows.nth(1);
+      assert.equal(await second.locator(".audit-entry-detail").textContent(), ip, "no detail: the address it came from, as text");
+      assert.match(await second.locator(".audit-entry-action").getAttribute("class"), /\bauth\b/);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("Settings → Voice: the OpenAI key is the one Settings → AI keeps; Save never writes its masked display back", async () => {
+    // GET /api/settings sends a saved key as its masked display, the way main's Voice page saved one.
+    const { page, api, errors, context } = await openPage({
+      needsSetup: false,
+      settings: [
+        { key: "ai.backupModel", value: "" },
+        { key: "voice.stt_provider", value: "whisper-api" },
+        { key: "voice.openai_api_key", value: "sk-p...wxyz" },
+      ],
+    });
+    try {
+      Object.assign(api.state.cards.openai, { shipped: true, state: "ready", ready: true, detail: "Ready.", fix: null, keySource: "settings", keyHint: "…wxyz", keySourceText: "Saved in Tarsee (encrypted)" });
+      await page.locator("#aiHeaderChip:not([hidden])").waitFor();
+      await page.evaluate(() => Settings.open());
+      await page.locator('.settings-tab[data-tab="voice"]').click();
+      const keyBox = page.locator("#settingsOpenaiKey");
+      await page.waitForFunction(() => document.getElementById("settingsSTTProvider")?.value === "whisper-api");
+      await page.waitForTimeout(300);
+      assert.equal(await keyBox.inputValue(), "", "a saved key is never put back in the box");
+      await page.locator("#openaiKeyStatus", { hasText: "…wxyz" }).waitFor();
+      assert.match(await page.locator("#openaiKeyStatus").textContent(), /Settings > AI/);
+      await page.locator("#openaiKeyGroup").scrollIntoViewIfNeeded();
+      await shot(page, "voice-openai-key");
+
+      // Save with the box left empty: the provider and model only; the key is left as it is.
+      await page.locator("#saveSTTBtn").click();
+      await page.getByText(/STT: whisper-api/).waitFor();
+      const keyWrites = () => api.calls.filter((c) => (c.path === "/api/settings/general" && /api_key|apiKey/i.test(String(c.body?.key))) || c.path.startsWith("/api/ai/keys/"));
+      assert.deepEqual(keyWrites(), [], "no key written");
+      assert.deepEqual(api.calls.filter((c) => c.path === "/api/settings/general").map((c) => c.body), [{ key: "voice.stt_provider", value: "whisper-api" }]);
+
+      // A key pasted here goes through Settings → AI's own route (its checks), and leaves the box empty.
+      await keyBox.fill(FAKE_KEY);
+      await page.locator("#saveSTTBtn").click();
+      await page.waitForFunction(() => document.getElementById("settingsOpenaiKey").value === "");
+      assert.deepEqual(keyWrites().map((c) => `${c.method} ${c.path} ${JSON.stringify(c.body)}`), [`PUT /api/ai/keys/openai ${JSON.stringify({ apiKey: FAKE_KEY })}`]);
+      assert.ok(!(await page.content()).includes(FAKE_KEY), "the key is never on the page after saving");
+
+      // One the route refuses: what it said, and the box keeps what was pasted so it can be fixed.
+      await keyBox.fill("not-a-key");
+      await page.locator("#saveSTTBtn").click();
+      await page.getByText("That isn't a DeepSeek key.").waitFor();
+      assert.equal(await keyBox.inputValue(), "not-a-key");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("Settings → AI → OpenAI: a model id the list lacks is verified from the card, and can then be chosen", async () => {
+    const { page, api, errors, context } = await openPage({ needsSetup: false });
+    try {
+      Object.assign(api.state.cards.openai, { shipped: true, state: "ready", ready: true, detail: "Ready.", fix: null, keySource: "settings", keyHint: "…wxyz", keySourceText: "Saved in Tarsee (encrypted)", model: "gpt-6.1-sol" });
+      await page.locator("#aiHeaderChip:not([hidden])").waitFor();
+      await page.locator("#aiHeaderChip").click();
+      await page.locator('.settings-tab-panel[data-tab="ai"].active').waitFor();
+      const openai = page.locator("#openaiAiCard");
+      await openai.locator("details.ai-custom-model > summary").click();
+      const box = openai.locator("[data-ai-custom-model]");
+      await box.waitFor();
+
+      // Nothing typed: it says so, and nothing runs.
+      await openai.locator('[data-ai-action="verify-custom"]').click();
+      await openai.locator("[data-ai-test]", { hasText: "Type a model id first." }).waitFor();
+      assert.ok(!api.calls.some((c) => c.path === "/api/ai/verify/openai"));
+
+      // An id: Verify asks first (it spends a little on the key), then runs on that exact id.
+      await box.fill("gpt-7-mini");
+      await openai.locator('[data-ai-action="verify-custom"]').click();
+      await answerDialog(page, "Verify");
+      await openai.locator("[data-ai-test]", { hasText: "passed. You can choose it now." }).waitFor();
+      assert.deepEqual(api.calls.find((c) => c.path === "/api/ai/verify/openai").body, { model: "gpt-7-mini" });
+      await page.locator('#aiModel-openai option[value="gpt-7-mini"]').waitFor({ state: "attached" });
+      await page.locator("#aiModel-openai").selectOption("gpt-7-mini");
+      await page.waitForFunction(() => document.getElementById("openaiAiStatus")?.textContent.includes("gpt-7-mini"));
+      assert.deepEqual(api.calls.filter((c) => c.path === "/api/ai/providers/openai").map((c) => c.body), [{ model: "gpt-7-mini" }]);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("Settings → Security: the captcha key is never put back in its box, so Save can't write its masked display over it", async () => {
+    const CAPTCHA_KEY = "test-canary-captcha-key-0001";
+    const { page, api, errors, context } = await openPage({
+      needsSetup: false,
+      settings: [
+        { key: "ai.backupModel", value: "" },
+        { key: "captcha.service", value: "capsolver" },
+        { key: "captcha.api_key", value: "abcd...wxyz" },
+      ],
+    });
+    try {
+      await page.locator("#aiHeaderChip:not([hidden])").waitFor();
+      await page.evaluate(() => Settings.open());
+      await page.locator('.settings-tab[data-tab="security"]').click();
+      const box = page.locator("#captchaApiKey");
+      await page.waitForFunction(() => document.getElementById("captchaService")?.value === "capsolver");
+      await page.locator("#captchaKeyStatus", { hasText: "…wxyz" }).waitFor();
+      assert.equal(await box.inputValue(), "", "a saved key is never put back in the box");
+      const keyWrites = () => api.calls.filter((c) => c.path === "/api/settings/general" && c.body?.key === "captcha.api_key");
+
+      // Save with the box left empty: the service only; the key stays as it is.
+      await page.locator("#saveCaptchaBtn").click();
+      await page.getByText("Captcha settings saved").waitFor();
+      assert.deepEqual(keyWrites(), [], "no key written");
+      assert.deepEqual(api.calls.filter((c) => c.path === "/api/settings/general").map((c) => c.body), [{ key: "captcha.service", value: "capsolver" }]);
+
+      // A key typed in is saved, and the box is emptied again.
+      await box.fill(CAPTCHA_KEY);
+      await page.locator("#saveCaptchaBtn").click();
+      await page.waitForFunction(() => document.getElementById("captchaApiKey").value === "");
+      assert.deepEqual(keyWrites().map((c) => c.body.value), [CAPTCHA_KEY]);
+      assert.match(await page.locator("#captchaKeyStatus").textContent(), /…0001/);
+      assert.ok(!(await page.content()).includes(CAPTCHA_KEY), "the key is never on the page after saving");
+
+      // Remove: the saved key goes.
+      await page.locator("#removeCaptchaKeyBtn").click();
+      await page.locator("#captchaKeyStatus").waitFor({ state: "hidden" });
+      assert.deepEqual(keyWrites().map((c) => c.body.value), [CAPTCHA_KEY, ""]);
+      assert.equal(await page.locator("#removeCaptchaKeyBtn").isVisible(), false);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("the working line names the AI that answers; on a Codex model it says the reply comes when each step finishes", async () => {
+    const { page, errors, context } = await openPage({ needsSetup: false });
+    try {
+      await page.locator("#aiHeaderChip:not([hidden])").waitFor();
+      const turnOf = (id) => page.locator(`[data-turn-id="${id}"] .steps`);
+      const detail = (id) => turnOf(id).locator(".steps-detail").textContent();
+      const hint = (id) => turnOf(id).locator(".steps-hint");
+      const HINT = "This AI sends its reply when each step finishes; tools still appear as they start.";
+
+      await page.evaluate(() => Live.onTurnStart({ turnId: "t-codex", createdAt: Date.now(), payload: { source: "web", provider: "openai", engine: "codex", label: "GPT-5.4 Mini" } }));
+      assert.equal(await detail("t-codex"), "Thinking with GPT-5.4 Mini");
+      assert.equal(await hint("t-codex").isVisible(), true, "seen without opening the steps");
+      assert.equal(await hint("t-codex").textContent(), HINT);
+      await turnOf("t-codex").scrollIntoViewIfNeeded();
+      await shot(page, "working-line-codex");
+      await page.evaluate(() => Live.onStep({ turnId: "t-codex", createdAt: Date.now(), payload: { kind: "tool_start", id: "a1", name: "Bash", summary: "ls" } }));
+      assert.match(await detail("t-codex"), /^1 step · /);
+      await page.evaluate(() => Live.onStep({ turnId: "t-codex", createdAt: Date.now(), payload: { kind: "tool_end", id: "a1", ok: true } }));
+      assert.equal(await detail("t-codex"), "1 step · Thinking with GPT-5.4 Mini");
+      // The backup answered: the line names it from then on.
+      await page.evaluate(() => Live.onStep({ turnId: "t-codex", createdAt: Date.now(), payload: { kind: "route", label: "DeepSeek Flash", streaming: true } }));
+      assert.equal(await detail("t-codex"), "1 step · Thinking with DeepSeek Flash");
+      assert.equal(await hint("t-codex").isVisible(), false, "the backup sends its words as they come");
+      assert.equal(await turnOf("t-codex").locator(".step").count(), 1, "the route is no step");
+      await page.evaluate(() => Live.onTurnEnd({ turnId: "t-codex", createdAt: Date.now(), payload: { stopReason: "end_turn" } }));
+      assert.equal(await hint("t-codex").isVisible(), false, "done: no note");
+
+      // Claude Code sends words as they come: the AI's name, no note.
+      await page.evaluate(() => Live.onTurnStart({ turnId: "t-cc", createdAt: Date.now(), payload: { source: "web", provider: "deepseek", engine: "claude-code", label: "DeepSeek Flash", streaming: true } }));
+      assert.equal(await detail("t-cc"), "Thinking with DeepSeek Flash");
+      assert.equal(await hint("t-cc").isVisible(), false);
+      await page.evaluate(() => Live.onTurnEnd({ turnId: "t-cc", createdAt: Date.now(), payload: { stopReason: "end_turn" } }));
+
+      // Queued behind another turn, then begun: the AI is named once it begins.
+      await page.evaluate(() => Live.onTurnQueued({ turnId: "t-q", createdAt: Date.now(), payload: { source: "web" } }));
+      assert.equal(await detail("t-q"), "after the reply above");
+      assert.equal(await hint("t-q").isVisible(), false);
+      await page.evaluate(() => Live.onTurnStart({ turnId: "t-q", createdAt: Date.now(), payload: { source: "web", provider: "chatgpt", engine: "codex", label: "GPT-6 Luna" } }));
+      assert.equal(await detail("t-q"), "Thinking with GPT-6 Luna");
+      assert.equal(await hint("t-q").isVisible(), true);
+
+      // A turn that names no AI (an older server): "Thinking", as before.
+      await page.evaluate(() => Live.onTurnStart({ turnId: "t-old", createdAt: Date.now(), payload: { source: "web" } }));
+      assert.equal(await detail("t-old"), "Thinking");
+      assert.equal(await hint("t-old").isVisible(), false);
       assert.deepEqual(errors, []);
     } finally {
       await context.close();

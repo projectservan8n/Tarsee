@@ -5,7 +5,9 @@
 //   checks are run for real in sh against stand-in `claude`, `codex` and `pdftotext` commands.
 // - entrypoint.sh: every AI provider's sign-in folder exists on the volume, owner-only; /home/node/.claude and
 //   /home/node/.codex link to the plan homes; each Codex home has a config.toml with Tarsee's three settings and never a
-//   key, that Codex's guard accepts; CODEX_HOME is exported before the server starts; one sign-in line per engine.
+//   key, that Codex's guard accepts; CODEX_HOME and TARSEE_STATE_DIR are exported before the server starts; one
+//   sign-in line per engine; an install with its own TARSEE_STATE_DIR keeps the Claude plan sign-in (and chat
+//   transcripts) that earlier versions kept in /data/tarsee/.claude-code-home.
 // The entrypoint's functions are sourced in sh (sourcing skips its main part). Needs a POSIX sh: on Windows, Git's.
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
@@ -331,13 +333,160 @@ describe("entrypoint.sh: the AI providers' sign-in folders", { skip: NO_SH }, ()
   });
 });
 
+// main (7e5563d) kept the Claude plan's sign-in in /data/tarsee/.claude-code-home whatever TARSEE_STATE_DIR said; this
+// version keeps it in $TARSEE_STATE_DIR/.claude-code-home. carry_plan_home <volume> <state dir> moves it there once.
+describe("entrypoint.sh: an install with its own TARSEE_STATE_DIR keeps its Claude plan sign-in", { skip: NO_SH }, () => {
+  const NO_TOKEN = { CLAUDE_CODE_OAUTH_TOKEN: "", CLAUDE_CODE_OAUTH_REFRESH_TOKEN: "" };
+  /** main's volume: <volume>/tarsee/.claude-code-home holding a sign-in and a chat's transcript. */
+  function mainVolume(name) {
+    const vol = path.join(tmp, `vol-${name}`);
+    const old = path.join(vol, "tarsee", ".claude-code-home");
+    fs.mkdirSync(path.join(old, "projects", "x"), { recursive: true });
+    fs.writeFileSync(path.join(old, ".credentials.json"), '{"claudeAiOauth":{"note":"main\'s sign-in"}}');
+    fs.writeFileSync(path.join(old, "projects", "x", "s.jsonl"), '{"type":"user","message":"from main"}\n');
+    const home = path.join(tmp, `home-vol-${name}`);
+    fs.mkdirSync(home, { recursive: true });
+    return { vol, old, home };
+  }
+  /** One boot's part of main(): the state folder exists (main makes it), then carry_plan_home, then setup_provider_homes. */
+  function boot(vol, state, home) {
+    fs.mkdirSync(state, { recursive: true });
+    const carry = callEntrypoint("carry_plan_home", [posix(vol), posix(state)]);
+    assert.equal(carry.status, 0, carry.stderr + carry.stdout);
+    const setup = callEntrypoint("setup_provider_homes", [posix(state), posix(home), ""]);
+    assert.equal(setup.status, 0, setup.stderr + setup.stdout);
+    return carry.stdout;
+  }
+  /** Every file and folder under a folder, with each file's text: what a boot changed. */
+  function snapshot(dir) {
+    const out = [];
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        const p = path.join(d, e.name);
+        const rel = path.relative(dir, p);
+        if (e.isSymbolicLink()) out.push(`${rel} -> ${fs.readlinkSync(p)}`);
+        else if (e.isDirectory()) { out.push(`${rel}/`); walk(p); }
+        else out.push(`${rel}: ${fs.readFileSync(p, "utf8")}`);
+      }
+    };
+    walk(dir);
+    return out;
+  }
+  const readIn = (dir, ...rel) => fs.readFileSync(path.join(dir, ...rel), "utf8");
+
+  it("moves main's sign-in and chat transcripts into the state folder's plan home, where ~/.claude points, once", () => {
+    const { vol, old, home } = mainVolume("move");
+    const state = path.join(vol, "state");
+    const said = boot(vol, state, home);
+    assert.match(said, /^\[entrypoint\] Claude Code: moved the Claude plan sign-in/m);
+    assert.match(readIn(home, ".claude", ".credentials.json"), /main's sign-in/, "~/.claude holds main's sign-in");
+    assert.match(readIn(home, ".claude", "projects", "x", "s.jsonl"), /from main/, "and main's chat transcript");
+    if (!WIN) assert.equal(fs.readlinkSync(path.join(home, ".claude")), posix(path.join(state, ".claude-code-home")));
+    assert.equal(fs.existsSync(old), false, "moved, not copied: no second copy of the sign-in is left behind");
+    const report = callEntrypoint("report_sign_ins", [posix(state)], NO_TOKEN);
+    assert.match(report.stdout, /Claude Code: Claude plan signed in/);
+
+    const before = snapshot(vol);
+    assert.equal(boot(vol, state, home), "", "a second boot says nothing");
+    assert.deepEqual(snapshot(vol), before, "and changes nothing");
+  });
+
+  it("still moves it when an earlier boot of this version already made an empty plan home there", () => {
+    const { vol, home } = mainVolume("rebooted");
+    const state = path.join(vol, "state");
+    fs.mkdirSync(state, { recursive: true });
+    assert.equal(callEntrypoint("setup_provider_homes", [posix(state), posix(home), ""]).status, 0, "the earlier boot");
+    boot(vol, state, home);
+    assert.match(readIn(state, ".claude-code-home", ".credentials.json"), /main's sign-in/);
+    assert.match(readIn(state, ".claude-code-home", "projects", "x", "s.jsonl"), /from main/);
+  });
+
+  it("never replaces what the plan home already has: files both have stay where they are", () => {
+    const { vol, old, home } = mainVolume("merge");
+    const state = path.join(vol, "state");
+    const plan = path.join(state, ".claude-code-home");
+    fs.mkdirSync(path.join(plan, "projects", "x"), { recursive: true });
+    fs.writeFileSync(path.join(plan, "projects", "x", "s.jsonl"), "made after the upgrade\n");
+    fs.writeFileSync(path.join(plan, "projects", "x", "t.jsonl"), "another chat\n");
+    fs.writeFileSync(path.join(old, "projects", "x", "u.jsonl"), "one more of main's chats\n");
+    const said = boot(vol, state, home);
+    assert.match(readIn(plan, ".credentials.json"), /main's sign-in/, "the sign-in moves");
+    assert.equal(readIn(plan, "projects", "x", "s.jsonl"), "made after the upgrade\n", "a file the plan home has is kept");
+    assert.equal(readIn(plan, "projects", "x", "t.jsonl"), "another chat\n");
+    assert.equal(readIn(plan, "projects", "x", "u.jsonl"), "one more of main's chats\n", "a file it lacks moves in, folders merged");
+    assert.match(readIn(old, "projects", "x", "s.jsonl"), /from main/, "the other copy stays in the old folder");
+    assert.equal(fs.existsSync(path.join(old, ".credentials.json")), false);
+    assert.ok(said.includes(posix(old)), `says what stayed where: ${said}`);
+    const before = snapshot(vol);
+    assert.equal(boot(vol, state, home), "", "a second boot says nothing");
+    assert.deepEqual(snapshot(vol), before, "and changes nothing");
+  });
+
+  it("leaves a plan home that is already signed in alone", () => {
+    const { vol, old, home } = mainVolume("signed");
+    const state = path.join(vol, "state");
+    fs.mkdirSync(path.join(state, ".claude-code-home"), { recursive: true });
+    fs.writeFileSync(path.join(state, ".claude-code-home", ".credentials.json"), '{"note":"a newer sign-in"}');
+    const before = snapshot(old);
+    assert.equal(boot(vol, state, home), "");
+    assert.match(readIn(state, ".claude-code-home", ".credentials.json"), /a newer sign-in/);
+    assert.deepEqual(snapshot(old), before, "the old folder is untouched");
+  });
+
+  it("does nothing on the default layout (TARSEE_STATE_DIR is <volume>/tarsee) or on a new install", () => {
+    const { vol, old, home } = mainVolume("default");
+    const before = snapshot(old);
+    assert.equal(boot(vol, path.join(vol, "tarsee"), home), "");
+    assert.deepEqual(snapshot(old), before, "the plan home is as it was");
+    assert.match(readIn(home, ".claude", ".credentials.json"), /main's sign-in/);
+
+    const fresh = path.join(tmp, "vol-fresh");
+    fs.mkdirSync(fresh, { recursive: true });
+    assert.equal(boot(fresh, path.join(fresh, "state"), path.join(tmp, "home-vol-fresh")), "");
+  });
+
+  it("keeps the sign-in on the volume when the state folder is off it, and says where it is", () => {
+    const { vol, old, home } = mainVolume("offvol");
+    const state = path.join(tmp, "not-the-volume", "state");
+    const before = snapshot(old);
+    const said = boot(vol, state, home);
+    assert.deepEqual(snapshot(old), before, "the only copy of the sign-in stays on the volume");
+    assert.equal(fs.existsSync(path.join(state, ".claude-code-home", ".credentials.json")), false);
+    assert.ok(said.includes(posix(old)) && /TARSEE_STATE_DIR/.test(said), `says where the sign-in is: ${said}`);
+  });
+});
+
 describe("entrypoint.sh: start-up", () => {
   const text = fs.readFileSync(ENTRYPOINT, "utf8");
   const lines = text.split(/\r?\n/);
   const at = (re) => lines.findIndex((l) => re.test(l));
+  /** main()'s `if [ -d /data ]; then` block (the volume is there): its first and last line. */
+  const volumeBlock = () => {
+    const start = at(/^\s*if \[ -d \/data \]; then\s*$/);
+    assert.ok(start >= 0, "main() has an if [ -d /data ]; then block");
+    const indent = /^\s*/.exec(lines[start])[0];
+    const end = lines.findIndex((l, i) => i > start && l === `${indent}fi`);
+    assert.ok(end > start, "and it ends");
+    return { start, end };
+  };
   it("sets up the homes and reports the sign-ins on the volume", () => {
     assert.ok(at(/^\s*setup_provider_homes\s+"?\$STATE_DIR"?\s+\/home\/node\s+node:node/) >= 0, "setup_provider_homes \"$STATE_DIR\" /home/node node:node");
     assert.ok(at(/^\s*report_sign_ins\s+"?\$STATE_DIR"?/) >= 0);
+  });
+  it("moves main's Claude plan sign-in to the state folder before it links ~/.claude there", () => {
+    const { start, end } = volumeBlock();
+    const carry = at(/^\s*carry_plan_home\s+\/data\s+"\$STATE_DIR"\s*$/);
+    const setup = at(/^\s*setup_provider_homes\s+"?\$STATE_DIR"?\s/);
+    assert.ok(carry > start && carry < end, "carry_plan_home /data \"$STATE_DIR\", on the volume");
+    assert.ok(carry < setup, "before setup_provider_homes");
+  });
+  it("tells the server the state folder it set up, so the server reads the same sign-ins, keys and workspace", () => {
+    // Without it, a docker run with a volume (no TARSEE_STATE_DIR, no Railway) has the server in ~/.tarsee, off the
+    // volume, while CODEX_HOME and ~/.codex point at the volume (src/config/env.js resolveStateDir).
+    const { start, end } = volumeBlock();
+    const exp = at(/^\s*export TARSEE_STATE_DIR="\$STATE_DIR"\s*$/);
+    assert.ok(exp > start && exp < end, "export TARSEE_STATE_DIR=\"$STATE_DIR\" when the volume is there (else the server keeps ~/.tarsee)");
+    assert.ok(at(/^\s*exec gosu node node src\/server\.js\s*$/) > exp, "before the server starts");
   });
   it("exports CODEX_HOME (the ChatGPT plan home) before it drops to the node user", () => {
     const exp = at(/^\s*export CODEX_HOME="?\$STATE_DIR\/\.codex-home"?\s*$/);

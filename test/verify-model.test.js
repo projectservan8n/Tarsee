@@ -48,6 +48,7 @@ function freshStore() {
  *   efforts                       the effort levels the provider accepts (others get a 400)
  *   fatal                         { subtype, message, stopReason }: every turn fails this way
  *   routeEngine                   the engine the route event claims (a turn layer that ignores the asked engine)
+ *   routeModel                    the model the route event claims (a turn layer that runs another model than asked)
  *   hang                          never answer (and ignore the stop signal)
  * Sessions remember the code word they were told; a handle from another engine never resumes.
  */
@@ -60,7 +61,7 @@ function fakeEngines(behaviors = {}) {
     const engine = opts.engine;
     const b = { reply: true, tools: true, shell: true, resume: true, efforts: [], ...(behaviors[engine] || {}) };
     if (b.hang) { await new Promise(() => {}); return; }
-    yield { type: "route", provider: opts.provider, engine: b.routeEngine ?? engine, model: opts.model, label: "Fake", effort: opts.effort ?? null };
+    yield { type: "route", provider: opts.provider, engine: b.routeEngine ?? engine, model: b.routeModel ?? opts.model, label: "Fake", effort: opts.effort ?? null };
     if (b.backup) yield { type: "route", provider: "anthropic", engine: "claude-code", model: "claude-haiku-5", label: "Claude Haiku", backup: true };
     if (b.fatal) {
       yield { type: "text", content: b.fatal.message };
@@ -269,6 +270,17 @@ describe("verifyModel: the four checks", () => {
     assert.equal(b.ok, false);
     assert.equal(b.code, "engine-not-forced");
     assert.equal(wrong.calls.length, 1);
+
+    // A pass on another model than the one being checked (the registry's default in its place) is no pass either.
+    const other = fakeEngines({ codex: { routeModel: "gpt-6.1-sol" } });
+    const store = freshStore();
+    const d = await verifyModel("openai", "gpt-6.2-sol", baseDeps({ runner: other.runner, store }));
+    assert.equal(d.ok, false);
+    assert.equal(d.code, "engine-not-forced");
+    assert.match(d.error, /another model \(gpt-6\.1-sol\)/);
+    assert.equal(store.get("ai.openai.verified"), null, "nothing recorded");
+    const suffixed = fakeEngines({ "claude-code": { routeModel: "deepseek-flash[1m]" } });
+    assert.equal((await verifyModel("deepseek", "deepseek-flash", baseDeps({ runner: suffixed.runner, store: freshStore() }))).ok, true, "Claude Code's [1m] is the same model");
   });
 
   it("keeps an earlier result when a re-check fails", async () => {

@@ -589,7 +589,12 @@ export function createAiRouter(deps = {}) {
     // model and its verified ones, OpenRouter's once verified or by a maker Tarsee runs as it is. The card's own list
     // (needsVerification) keeps every model the provider has, so a new default can still be chosen there.
     const menu = new Map(modelChoices(p.id, store, { env }).map((c) => [c.id, c.selectable]));
-    const models = modelsFor(p.id).map((m) => ({
+    // The OpenAI key: a newer model its table lacks, once the owner verified it (the card's model id box), is one of
+    // its models too, so it can be the card's default.
+    const own = p.id === "openai"
+      ? Object.keys(verified).filter((id) => !p.models.some((m) => m.id === id)).map((id) => ({ id, label: id }))
+      : [];
+    const models = [...modelsFor(p.id), ...own].map((m) => ({
       id: m.id,
       label: m.label || m.id,
       context: m.context ?? null,

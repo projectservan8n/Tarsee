@@ -42,15 +42,19 @@
  * it (checked against the pinned binary). Elsewhere a command Codex started in its own session can outlive it, so
  * every turn's environment carries TARSEE_CODEX_TURN=<random>, inherited by everything it starts, and Stop also kills
  * every process that carries this turn's mark (sweepTurnProcesses). Stop yields done{aborted}, once, and no error.
+ *
+ * Usage: Codex reports it only at turn.completed. A turn that ends any other way (Stop, the turn limit, a failure
+ * after some model calls) still paid for every response it got, so its share of the thread's running total is read
+ * from the rollout and given before its done.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import config from "../../config/env.js";
 import { WORKSPACE_FILE_MAX_BYTES, truncateContent } from "../../lib/workspace-files.js";
+import { CODEX_IMAGE_DIR } from "../../lib/turn-leftovers.js";
 import { catalogModels, contextTokensFor, getProvider, normalizeProviderId } from "../provider-registry.js";
 import {
   CODEX, CredentialError, baseEnv, codexConfigFilesFor, codexConfigGuard, ensureHome, homeIsolationRefusal,
@@ -59,7 +63,7 @@ import { classifyEngineError } from "../engine-errors.js";
 import { format as formatHandle, parse as parseHandle, sessionFor } from "../session-handle.js";
 import { resolveCodexBin } from "../codex-cli.js";
 import { buildCodexOptions } from "./codex-options.js";
-import { createCodexEventState, finishCodexEvents, mapCodexEvent } from "./codex-events.js";
+import { createCodexEventState, finishCodexEvents, mapCodexEvent, usageEvents } from "./codex-events.js";
 
 /** Tarsee's bundled skills, the same folder Claude Code's turns get. */
 const SKILLS_DIR = fileURLToPath(new URL("../../skills", import.meta.url));
@@ -68,8 +72,8 @@ const SKILLS_DIR = fileURLToPath(new URL("../../skills", import.meta.url));
 export const REFRESH_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 /** How long one turn may hold the ChatGPT start gate. */
 export const DEVICE_GATE_MAX_MS = 30_000;
-/** Where a turn's pictures go (one private folder per turn inside it). */
-const IMAGE_DIR = path.join(os.tmpdir(), "tarsee-codex");
+/** Where a turn's pictures go (one private folder per turn inside it; the boot sweep knows it too). */
+const IMAGE_DIR = CODEX_IMAGE_DIR;
 /** A key provider's answers that retrying won't change. */
 const FAIL_FAST_STATUSES = new Set([401, 402, 403, 404]);
 /** How much of a rollout's end is read for its usage total. */
@@ -285,6 +289,20 @@ export function rolloutUsageTotal(file, { fsImpl = fs } = {}) {
   }
 }
 
+/**
+ * What a turn that ended without turn.completed spent (Stop, the idle watchdog, a timeout, the turn limit, a failure
+ * after some model calls): Codex reports no usage then, but every response it got was billed and is in the thread's
+ * running total in its rollout. The usage event and step for this turn's share, or none when nothing new was spent.
+ */
+function rolloutUsageEvents(state, home, threadId) {
+  const file = threadId ? findRollout(home, threadId) : null;
+  const total = file ? rolloutUsageTotal(file) : null;
+  if (!total) return [];
+  const events = usageEvents(state, total);
+  const u = events[0].usage;
+  return u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens + u.output_tokens > 0 ? events : [];
+}
+
 // (Pruning old rollouts lives in ../codex-rollouts.js, so lib/retention.js needn't load this engine.)
 export { pruneCodexRollouts } from "../codex-rollouts.js";
 
@@ -302,9 +320,10 @@ export function refreshStale(home, { now = Date.now(), readFile = (p) => fs.read
 
 /**
  * Wait for this home's start gate when its sign-in is due a refresh; resolves to release(). Fresh sign-ins pass
- * straight through. A turn that waited checks again: the turn before it may have refreshed the sign-in.
+ * straight through. A turn that waited checks again: the turn before it may have refreshed the sign-in. A turn
+ * stopped while it waits (signal) leaves the queue at once; the turns behind it still wait for the ones ahead.
  */
-export async function acquireDeviceGate(home, { maxMs = DEVICE_GATE_MAX_MS, stale = (h) => refreshStale(h) } = {}) {
+export async function acquireDeviceGate(home, { maxMs = DEVICE_GATE_MAX_MS, stale = (h) => refreshStale(h), signal = null } = {}) {
   if (!stale(home)) return () => {};
   const before = gates.get(home) || Promise.resolve();
   let free;
@@ -320,7 +339,18 @@ export async function acquireDeviceGate(home, { maxMs = DEVICE_GATE_MAX_MS, stal
     tail.then(() => { if (gates.get(home) === tail) gates.delete(home); });
   };
   let timer = null;
-  await before;
+  if (signal) {
+    let onAbort;
+    const stopped = new Promise((r) => { onAbort = () => r(true); });
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+    const gaveUp = await Promise.race([before.then(() => false), stopped]);
+    signal.removeEventListener("abort", onAbort);
+    // Its own place is let go now; the next one's wait still chains on `before` (tail), so the order holds.
+    if (gaveUp) { release(); return () => {}; }
+  } else {
+    await before;
+  }
   if (!stale(home)) { release(); return () => {}; }
   timer = setTimeout(release, maxMs);
   timer.unref?.();
@@ -437,6 +467,8 @@ export async function* run(opts = {}) {
   let stopWhy = null;
   let failFast = null;
   const onAbort = () => { stopWhy ||= "user"; ac?.abort(); };
+  const live = { ac: null, mark, images: null, sweep: deps.sweep };
+  trackLive(live);
 
   try {
     // The tools' grant: the turn layer's, else one of our own (revoked in finally).
@@ -498,6 +530,9 @@ export async function* run(opts = {}) {
     const hash = instructionsHash(o.config.developer_instructions);
     const hashKey = conv ? `session.${conv}.instrHash` : null;
     let baseline = null;
+    // Whether the thread's total before this turn is known: a new thread's is nothing; a resumed one's is its
+    // rollout's, when that was found (without it, a total read at the end would count earlier turns as this one).
+    let baselineKnown = !raw;
     if (raw) {
       if (hashKey && store && readSetting(store, hashKey) !== hash) {
         yield* startFresh("This chat's Codex session was started with other instructions, so a fresh one starts with the conversation handed over.");
@@ -514,6 +549,7 @@ export async function* run(opts = {}) {
           return;
         }
         baseline = rolloutUsageTotal(rollout);
+        baselineKnown = true;
       }
     }
 
@@ -524,10 +560,11 @@ export async function* run(opts = {}) {
     if (pictures.length) {
       const { writeLocalImages } = await import("../media.js");
       images = writeLocalImages(pictures, { dir: IMAGE_DIR });
+      live.images = images;
     }
     const input = images?.inputs?.length ? [{ type: "text", text }, ...images.inputs] : text;
 
-    if (providerId === "chatgpt") releaseGate = await (deps.acquireGate || acquireDeviceGate)(o.home);
+    if (providerId === "chatgpt") releaseGate = await (deps.acquireGate || acquireDeviceGate)(o.home, { signal: opts.signal });
     if (opts.signal?.aborted) { yield { type: "done", stopReason: "aborted" }; return; }
     // Again, now that nothing more waits: the ChatGPT gate can wait for another chat's turn, long enough for that
     // turn's agent to plant a .env or a config entry in the home both turns share.
@@ -539,6 +576,7 @@ export async function* run(opts = {}) {
     const thread = raw ? codex.resumeThread(raw, o.threadOptions) : codex.startThread(o.threadOptions);
 
     ac = new AbortController();
+    live.ac = ac;
     if (opts.signal) {
       if (opts.signal.aborted) onAbort();
       else opts.signal.addEventListener("abort", onAbort, { once: true });
@@ -592,15 +630,27 @@ export async function* run(opts = {}) {
       streamEnded = true;
     }
     releaseGate();
-    if (held) { yield held; return; }
+    // A turn that ended any way but turn.completed: what it spent comes from the rollout, before the done (the turn
+    // layer stops reading at the done). A held done has waited for codex to finish writing it.
+    const spent = () => (baselineKnown ? rolloutUsageEvents(state, o.home, state.threadId || raw) : []);
+    if (held) {
+      if (held.stopReason !== "end_turn") yield* spent();
+      yield held;
+      return;
+    }
 
     if (!state.done) {
-      if (stopWhy === "max_turns") yield* finishCodexEvents(state, { maxTurns });
-      else if (stopWhy === "fail-fast") yield* finishCodexEvents(state, { error: new Error(failFast) });
-      else if (stopWhy === "user" || opts.signal?.aborted) yield* finishCodexEvents(state, { aborted: true });
-      else yield* finishCodexEvents(state, { error: thrown });
+      const end = stopWhy === "max_turns" ? finishCodexEvents(state, { maxTurns })
+        : stopWhy === "fail-fast" ? finishCodexEvents(state, { error: new Error(failFast) })
+          : stopWhy === "user" || opts.signal?.aborted ? finishCodexEvents(state, { aborted: true })
+            : finishCodexEvents(state, { error: thrown });
+      const done = end.pop();
+      yield* end;
+      yield* spent();
+      if (done) yield done;
     }
   } finally {
+    LIVE_TURNS.delete(live);
     opts.signal?.removeEventListener?.("abort", onAbort);
     releaseGate();
     const stopped = !!stopWhy || (ac && !streamEnded);
@@ -618,6 +668,28 @@ export async function* run(opts = {}) {
     images?.cleanup?.();
     if (ownGrant) { try { await grant?.revoke?.(); } catch { /* the grant expires on its own */ } }
   }
+}
+
+/**
+ * The turns running now, for the process's exit: a server that exits mid-turn (the SIGTERM handler of a redeploy, or
+ * Ctrl+C, calls process.exit) runs no finally block, so codex and what it started would outlive it and the turn's
+ * pictures would stay in the system's temp folder. On exit each turn's codex is stopped (the SDK kills it on abort),
+ * the processes carrying its mark are swept, and its pictures are removed. All of it is synchronous, as an exit
+ * handler must be. (lib/turn-leftovers.js sweeps at boot what a crash left.)
+ */
+const LIVE_TURNS = new Set();
+let exitHooked = false;
+function trackLive(turn) {
+  LIVE_TURNS.add(turn);
+  if (exitHooked) return;
+  exitHooked = true;
+  process.once("exit", () => {
+    for (const t of LIVE_TURNS) {
+      try { t.ac?.abort(); } catch { /* exiting */ }
+      try { t.sweep?.(t.mark); } catch { /* exiting */ }
+      try { t.images?.cleanup?.(); } catch { /* exiting */ }
+    }
+  });
 }
 
 /** Store the thread's handle: onSessionHandle (the turn layer's), else onSessionId, each called once. */

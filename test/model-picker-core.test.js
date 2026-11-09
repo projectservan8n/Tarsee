@@ -233,3 +233,71 @@ describe("model picker on the page: every ready AI in its own group", () => {
     assert.equal(P.topRows(G).every((e) => e.selectable !== false), true);
   });
 });
+
+// A chat given a model before Tarsee had other AIs kept it as a bare model ("haiku", "claude-sonnet-4-6") with no AI.
+// A chat with no AI of its own runs on the default AI, and the turn layer (ai/turn.js resolveTarget) runs such a
+// model there when that AI has Claude's models (the Claude plan, an Anthropic key); any other AI runs its default
+// model instead. The button says what runs.
+describe("model picker on the page: a model chosen before Tarsee had other AIs", async () => {
+  const STATES_KEY = { ...STATES, claude: "needs-sign-in", anthropic: "ready" };
+  const keyStore = { get: (k) => (k === "ai.activeProvider" ? "anthropic" : store.get(k)) };
+  const KEY = await getModelGroups({ store: keyStore, isShipped: () => true, statusFor: (id) => ({ state: STATES_KEY[id], detail: "", fix: "" }), env: {}, listChatgptModels: async () => [] });
+  const DEEPSEEK_DEFAULT = { provider: "deepseek", model: "deepseek-flash", ref: "deepseek:deepseek-flash", effort: "high" };
+  const PLAN_OFF = {
+    ...G,
+    groups: G.groups.filter((g) => g.provider !== "claude"),
+    unavailable: [...(G.unavailable || []), { provider: "claude", label: "Claude plan", state: "needs-sign-in" }],
+  };
+  const flash = () => P.entryFor(G, "deepseek:deepseek-flash");
+
+  it("the Claude plan is the default: the chat's own model and level, as before", () => {
+    const b = P.buttonLabel(G, { provider: null, model: "haiku", effort: "low" }, GD);
+    assert.equal(`${b.model} · ${b.effort}`, "Haiku 5.5 · Low");
+    assert.equal(b.entry.provider, "claude");
+    assert.equal(b.warning, null);
+  });
+
+  it("an Anthropic key is the default (the plan not signed in): the same model, on the key", () => {
+    assert.equal(KEY.defaults.provider, "anthropic");
+    const b = P.buttonLabel(KEY.picker, { provider: null, model: "haiku", effort: "low" }, KEY.defaults);
+    assert.equal(`${b.model} · ${b.effort}`, "Haiku 5.5 · Low");
+    assert.equal(b.entry.provider, "anthropic", "the menu's check goes on the key's row, not the plan's");
+    assert.equal(b.warning, null);
+    const pinned = P.buttonLabel(KEY.picker, { provider: null, model: "claude-sonnet-4-6", effort: null }, KEY.defaults);
+    assert.equal(pinned.model, "Sonnet 4.6", "an exact model is itself, never its family's newest");
+    assert.equal(pinned.warning, null);
+  });
+
+  it("another AI is the default: its default model runs, and the button says why", () => {
+    const b = P.buttonLabel(G, { provider: null, model: "haiku", effort: "low" }, DEEPSEEK_DEFAULT);
+    assert.equal(b.warning, "DeepSeek doesn't have Haiku 5.5, using default");
+    assert.equal(b.model, "DeepSeek Flash");
+    assert.equal(b.entry.provider, "deepseek", "the menu's check goes on the model that runs");
+    assert.match(b.title, /^DeepSeek doesn't have Haiku 5.5, using default. DeepSeek Flash/);
+    assert.equal(b.level, P.effortFor(flash(), "low"), "the chat's own level still applies (the turn layer keeps it), as one the model has");
+    const off = P.buttonLabel(PLAN_OFF, { provider: null, model: "claude-sonnet-4-6", effort: null }, DEEPSEEK_DEFAULT);
+    assert.equal(off.warning, "DeepSeek doesn't have Sonnet 4.6, using default");
+    assert.equal(off.model, "DeepSeek Flash");
+    assert.equal(off.level, P.effortFor(flash(), "high"), "no level of its own: the default's");
+  });
+
+  it("a pick that names its AI is the chat's own, whatever the default", () => {
+    const b = P.buttonLabel(G, { provider: "claude", model: "claude:haiku", effort: "low" }, DEEPSEEK_DEFAULT);
+    assert.equal(b.model, "Haiku 5.5");
+    assert.equal(b.warning, null);
+    assert.equal(P.warningFor(G, { provider: null, model: null, effort: "low" }, DEEPSEEK_DEFAULT), null, "a level alone is no model");
+  });
+
+  it("the Claude-only list knows no other AI: a bare model is the chat's own, as always", () => {
+    const b = P.buttonLabel(PICKER, { provider: null, model: "claude-opus-4-6", effort: "high" }, { model: "sonnet", effort: "medium" });
+    assert.equal(`${b.model} · ${b.effort}`, "Opus 4.6 · High");
+    assert.equal(b.warning, null);
+  });
+
+  it("a chat whose AI is gone runs the default model at its own level, and the button says so", () => {
+    const b = P.buttonLabel(G, { provider: "anthropic", model: "anthropic:claude-opus-5-5", effort: "max" }, GD);
+    assert.equal(b.model, "Sonnet 5.5");
+    assert.equal(b.level, P.effortFor(b.entry, "max"));
+    assert.notEqual(b.level, P.effortFor(b.entry, GD.effort), "not the default's level");
+  });
+});

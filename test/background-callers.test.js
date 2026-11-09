@@ -32,7 +32,7 @@ const cron = await import("../src/lib/cron.js");
 const heartbeat = await import("../src/lib/heartbeat.js");
 const { runBootChecklist } = await import("../src/lib/boot-runner.js");
 const { writeWorkspaceFile } = await import("../src/lib/workspace-files.js");
-const { defaultAiReadiness } = await import("../src/lib/background-turn.js");
+const { defaultAiReadiness, runBackgroundTurn } = await import("../src/lib/background-turn.js");
 const { setCatalogModels } = await import("../src/ai/provider-registry.js");
 const { forgetLocalModelsRead } = await import("../src/ai/provider-models.js");
 
@@ -41,6 +41,7 @@ initLiveBus(db);
 const settings = new SettingsStore(db);
 const convs = new ConversationStore(db);
 const DEEPSEEK_KEY = "sk-testcanarydeepseek0000000000";
+const OPENAI_KEY = "sk-proj-testcanaryopenai00000000000";
 
 let engine;
 let restore;
@@ -194,5 +195,68 @@ describe("the heartbeat and the boot checklist", () => {
     assert.equal(boot.skipped, true);
     assert.match(boot.reason, /DeepSeek/);
     assert.equal(engine.calls.length, 0, "no turn was started");
+  });
+});
+
+describe("a job that finished over its spending limit (a Codex AI's cost is known only at the end)", () => {
+  // The turn layer's check after a finished turn trips: the reply stands, and the done says the limit was passed.
+  function overBudget() {
+    settings.set("ai.openai.apiKey", OPENAI_KEY);
+    settings.set("ai.activeProvider", "openai");
+    restore?.();
+    restore = configureTurns({
+      recordUsage: () => {},
+      grantMcp: async () => ({ url: "http://127.0.0.1:1/mcp", token: "t", revoke() {} }),
+      checkTurnBudget: () => ({ tripped: true, spentUsd: 0.73 }),
+    });
+  }
+  const WARNING = /^Finished over its spending limit of \$0\.50 \(about \$0\.73\)\.$/;
+
+  it("runBackgroundTurn: no error, so it isn't run again, and the limit it went over", async () => {
+    overBudget();
+    const r = await runBackgroundTurn({ label: "cron:report", messages: [{ role: "user", content: "send the report" }], systemPrompt: "", toolCtx: { db, settingsStore: settings, conversationId: null } });
+    assert.equal(r.error, null);
+    assert.equal(r.text, "All good.");
+    assert.equal(engine.calls[0].target.engine, "codex");
+    assert.deepEqual(r.overBudget, { ceilingUsd: 0.5, spentUsd: 0.73 });
+  });
+
+  it("a cron job: its post and its status say so, and it is neither retried nor counted as failing", async () => {
+    overBudget();
+    const conv = convs.create({ title: "spend" }).id;
+    settings.set("channel_conv.web:spend", conv);
+    const job = cron.addCronJob({ schedule: "0 9 * * *", prompt: "send the report", channel: "web:spend", enabled: false, name: "Report" });
+    try {
+      const out = await cron.runCronJob(job);
+      assert.equal(out.error, undefined, JSON.stringify(out));
+      assert.match(out.warning, WARNING);
+      const saved = db.prepare("SELECT content FROM messages WHERE conversation_id = ? ORDER BY rowid DESC LIMIT 1").get(conv);
+      assert.match(saved.content, /All good\.\n\n_Finished over its spending limit of \$0\.50 \(about \$0\.73\)\._$/);
+
+      await cron.runCronJobWithRetry(job);
+      assert.equal(engine.calls.length, 2, "run once more, not retried");
+      const status = cron.getCronStatus().jobs.find((j) => j.id === job.id);
+      assert.equal(status.lastStatus, "over-budget");
+      assert.match(status.lastError, WARNING);
+      assert.equal(status.consecutiveErrors, 0);
+    } finally {
+      cron.removeCronJob(job.id);
+    }
+  });
+
+  it("the heartbeat's last result and the boot checklist say so too", async () => {
+    overBudget();
+    writeWorkspaceFile("HEARTBEAT.md", "# Heartbeat\n\n- Check the inbox and tell me about anything urgent.\n");
+    const r = await heartbeat.runHeartbeat("test");
+    assert.equal(r.error, undefined, JSON.stringify(r));
+    assert.match(r.warning, WARNING);
+    assert.match(heartbeat.getHeartbeatStatus().lastResult, /All good\.\s+\(Finished over its spending limit of \$0\.50 \(about \$0\.73\)\.\)$/);
+
+    // (Its own checklist: one this build already ran is skipped.)
+    writeWorkspaceFile("BOOT.md", "# Boot\n\n- Post the day's plan.\n");
+    const boot = await runBootChecklist({ db, settingsStore: settings });
+    assert.equal(boot.skipped, false, JSON.stringify(boot));
+    assert.equal(boot.error, undefined, JSON.stringify(boot));
+    assert.match(boot.warning, WARNING);
   });
 });

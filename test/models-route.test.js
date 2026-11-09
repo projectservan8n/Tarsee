@@ -275,6 +275,38 @@ describe("GET /api/models: ChatGPT and OpenRouter", () => {
   });
 });
 
+describe("GET /api/models: the OpenAI key", () => {
+  it("the table's models the key can use, the owner's verified ids, and the key's other chat models under All models (Verify first)", async () => {
+    STATES.openai = "ready";
+    setCatalogModels("openai-models", ["gpt-6.1-sol", "gpt-6-luna", "gpt-7-mini", "o9-pro", "gpt-7-nano", "gpt-7-realtime", "gpt-7-image", "text-embedding-4", "gpt-7-transcribe", "dall-e-4"].map((id) => ({ id })));
+    settings.set("ai.openai.verified", { "gpt-7-mini": { engine: "codex", at: "2026-11-08T00:00:00Z", engineVersion: "0.167.0", efforts: ["low", "medium"] } });
+    try {
+      const oa = group(await getJson("/api/models"), "openai");
+      const main = section(oa, "main").entries;
+      assert.deepEqual(main.map((e) => e.id), ["gpt-6.1-sol", "gpt-6-luna", "gpt-7-mini"]);
+      assert.ok(main.every((e) => e.selectable));
+      const mine = main.at(-1);
+      assert.ok(mine.badges.some((b) => b.text === "Verified"));
+      assert.deepEqual(mine.efforts.map((e) => e.id), ["low", "medium"], "the levels that worked when it was verified");
+      const all = section(oa, "all");
+      assert.equal(all.collapsed, true);
+      assert.deepEqual(all.entries.map((e) => e.id), ["gpt-7-nano", "o9-pro"], "only chat models: no audio, realtime, image, search, embedding or transcription model");
+      assert.ok(all.entries.every((e) => !e.selectable && e.verify && e.note?.text === VERIFY_FIRST));
+
+      // /model and the background jobs take the verified one, and send the others to Verify.
+      assert.deepEqual(catalog.checkModel("openai", "gpt-7-mini", settings), { ok: true, model: "gpt-7-mini" });
+      const nano = catalog.checkModel("openai", "gpt-7-nano", settings);
+      assert.equal(nano.ok, false);
+      assert.equal(nano.verify, true);
+      assert.ok(catalog.modelChoices("openai", settings).some((c) => c.id === "gpt-7-mini" && c.selectable));
+    } finally {
+      STATES.openai = "needs-key";
+      setCatalogModels("openai-models", []);
+      settings.delete("ai.openai.verified");
+    }
+  });
+});
+
 describe("PUT /api/models/picker: a chat's own AI, model and effort", () => {
   const stored = () => ({
     provider: settings.get(`session.${convId}.provider`),

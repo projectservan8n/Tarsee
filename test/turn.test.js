@@ -196,6 +196,7 @@ describe("the live timeline", () => {
     assert.equal(start.payload.engine, "claude-code");
     assert.ok(start.payload.label);
     assert.equal(start.payload.source, "telegram");
+    assert.equal(start.payload.streaming, true, "the live view's Codex note is off for an engine that streams");
     assert.equal(end.payload.provider, "claude");
     assert.equal(end.payload.engine, "claude-code");
     assert.equal(end.payload.stopReason, "end_turn");
@@ -401,6 +402,35 @@ describe("which provider, model and effort", () => {
     assert.doesNotMatch(events[0].model, /deepseek/, "its model belongs to DeepSeek, so it is not used");
   });
 
+  it("a pick stored before providers existed (a bare Claude model) still runs once the Anthropic key is the default, which has the same models", async () => {
+    settings.set("ai.anthropic.apiKey", "sk-ant-api03-test-canary-turn-legacy-0000");
+    settings.set("ai.activeProvider", "anthropic");
+    const conv = newChat();
+    settings.set(`session.${conv}.model`, "haiku");
+    settings.set(`session.${conv}.effort`, "low");
+    const tier = await collect(runTurn({ messages: [user("hi")], toolCtx: ctxFor(conv) }));
+    assert.equal(tier[0].provider, "anthropic");
+    assert.match(tier[0].model, /haiku/, "the composer shows Haiku for this chat, so Haiku runs");
+    assert.equal(tier[0].effort, "low");
+    settings.set(`session.${conv}.model`, "claude-sonnet-4-6");
+    const pinned = await collect(runTurn({ messages: [user("hi")], toolCtx: ctxFor(conv) }));
+    assert.equal(pinned[0].model, "claude-sonnet-4-6");
+    // An AI without Claude's models doesn't take it: its tier would be another model than the one picked.
+    settings.set("ai.deepseek.apiKey", DEEPSEEK_KEY);
+    settings.set("ai.activeProvider", "deepseek");
+    settings.set(`session.${conv}.model`, "haiku");
+    const other = await collect(runTurn({ messages: [user("hi")], toolCtx: ctxFor(conv) }));
+    assert.equal(other[0].provider, "deepseek");
+    assert.equal(other[0].model, (await turn.resolveTarget({}, settings)).target.model, "DeepSeek's default, not its haiku tier");
+    // A pick made for the Claude plan on purpose (its provider stored) stays the plan's.
+    settings.set("ai.activeProvider", "anthropic");
+    settings.set(`session.${conv}.provider`, "claude");
+    settings.set(`session.${conv}.model`, "haiku");
+    const plan = await collect(runTurn({ messages: [user("hi")], toolCtx: ctxFor(conv) }));
+    assert.equal(plan[0].provider, "claude", "the plan is signed in here, so the chat's own AI runs");
+    assert.match(plan[0].model, /haiku/);
+  });
+
   it("a claude-* or tier model on another provider maps through its tiers; background work uses the background model", async () => {
     settings.set("ai.activeProvider", "deepseek");
     settings.set("ai.deepseek.apiKey", DEEPSEEK_KEY);
@@ -439,6 +469,25 @@ describe("verification mode (verify-model.js's probe turns)", () => {
     assert.equal(engines.claude.calls[0].target.engine, "claude-code");
     assert.equal(engines.claude.calls[0].target.homeKey, "cc");
     assert.equal(engines.claude.calls[0].target.caps.streaming, true);
+  });
+
+  it("runs the very model being checked, even one the registry doesn't list (it would put its default in its place)", async () => {
+    settings.set("ai.openai.apiKey", OPENAI_KEY);
+    const bg = { db, settingsStore: settings, conversationId: null };
+    const events = await collect(runTurn({ verify: true, engine: "codex", provider: "openai", model: "gpt-6.2-sol", messages: [user("hi")], toolCtx: bg }));
+    assert.equal(events[0].model, "gpt-6.2-sol", "the route names the model checked");
+    assert.equal(engines.codex.calls[0].target.model, "gpt-6.2-sol");
+    assert.equal(engines.codex.calls[0].target.label, "gpt-6.2-sol");
+    // Local AI: a model its server doesn't list (yet), not the card's model.
+    settings.set("ai.local.baseUrl", "http://127.0.0.1:11434/v1");
+    settings.set("ai.local.model", "qwen3:8b");
+    await collect(runTurn({ verify: true, engine: "codex", provider: "local", model: "llama3.1:8b", messages: [user("hi")], toolCtx: bg }));
+    assert.equal(engines.codex.calls[1].target.model, "llama3.1:8b");
+    // A tier word still means the provider's own model for that tier; outside verification nothing changes.
+    await collect(runTurn({ verify: true, engine: "codex", provider: "openai", model: "haiku", messages: [user("hi")], toolCtx: bg }));
+    assert.equal(engines.codex.calls[2].target.model, "gpt-6-luna");
+    await collect(runTurn({ provider: "openai", model: "gpt-6.2-sol", messages: [user("hi")], toolCtx: bg }));
+    assert.equal(engines.codex.calls[3].target.model, "gpt-6.1-sol", "an unverified id outside the list runs the default, as before");
   });
 
   it("an engine the provider doesn't run on is not taken; outside verification the engine can't be chosen", async () => {
@@ -661,6 +710,12 @@ describe("the backup model (opt-in)", () => {
     assert.equal(stored, "deepseek/cc/deepseek:ds-backup");
     const status = live.eventsSince(conv, 0).find((e) => e.type === "step" && e.payload.kind === "status");
     assert.match(status.payload.text, /Claude plan unavailable \(out of credit\); answering with DeepSeek Flash/);
+    // The live view's working line names the AI answering now, not the one that failed.
+    const route = live.eventsSince(conv, 0).find((e) => e.type === "step" && e.payload.kind === "route");
+    assert.ok(route, "the backup taking over is on the live timeline");
+    assert.equal(route.payload.label, "DeepSeek Flash");
+    assert.equal(route.payload.provider, "deepseek");
+    assert.equal(route.payload.streaming, true, "DeepSeek runs on Claude Code, which streams");
     assert.equal(settings.get(failureFlagKey("claude")).state, "out-of-credit");
   });
 
@@ -1206,6 +1261,60 @@ describe("the external API, ACP and subagents through the router", () => {
     const r = await post(`/acp/session/${session.id}/turn`, { message: "hello" });
     assert.equal(r.status, 503);
     assert.match((await r.json()).error, /DEEPSEEK_API_KEY/);
+  });
+
+  it("a turn that goes quiet is given up: the external API answers 504 and the chat takes the next message", async () => {
+    process.env.TARSEE_CHANNEL_IDLE_ABORT_MS = "150";
+    try {
+      settings.set("ai.deepseek.apiKey", DEEPSEEK_KEY);
+      useEngines({ claude: [[{ type: "wait" }], ok("Back again.")] });
+      let r = await post("/v1/message", { message: "hi", provider: "deepseek" });
+      assert.equal(r.status, 504);
+      const body = await r.json();
+      assert.match(body.error, /^DeepSeek Flash stopped responding \(1 min idle\)\. Try again/);
+      assert.ok(body.conversationId);
+      assert.ok(engines.claude.calls[0].signal.aborted, "the engine was stopped");
+      r = await post("/v1/message", { message: "again", provider: "deepseek", conversationId: body.conversationId });
+      assert.equal(r.status, 200, "the conversation's lock was let go");
+      assert.equal((await r.json()).response, "Back again.");
+    } finally {
+      delete process.env.TARSEE_CHANNEL_IDLE_ABORT_MS;
+    }
+  });
+
+  it("a client that leaves stops its turn (the external API and ACP)", async () => {
+    settings.set("ai.activeProvider", "deepseek");
+    settings.set("ai.deepseek.apiKey", DEEPSEEK_KEY);
+    const leave = (url, body) => new Promise((resolve) => {
+      const req = http.request(`${base}${url}`, { method: "POST", headers: { "content-type": "application/json" } });
+      req.on("error", () => resolve());
+      req.end(JSON.stringify(body));
+      until(() => engines.claude.calls.length === 1).then(() => { req.destroy(); resolve(); });
+    });
+    useEngines({ claude: [[{ type: "text", content: "Thinking" }, { type: "wait" }]] });
+    await leave("/v1/message", { message: "a long job" });
+    assert.ok(await until(() => engines.claude.calls[0].signal.aborted), "the external API's turn was stopped");
+    useEngines({ claude: [[{ type: "wait" }]] });
+    const session = await (await post("/acp/session", {})).json();
+    await leave(`/acp/session/${session.id}/turn`, { message: "a long job" });
+    assert.ok(await until(() => engines.claude.calls[0].signal.aborted), "the ACP turn was stopped");
+  });
+
+  it("an ACP turn that goes quiet is given up with 504", async () => {
+    process.env.TARSEE_CHANNEL_IDLE_ABORT_MS = "150";
+    try {
+      settings.set("ai.activeProvider", "deepseek");
+      settings.set("ai.deepseek.apiKey", DEEPSEEK_KEY);
+      useEngines({ claude: [[{ type: "wait" }]] });
+      const session = await (await post("/acp/session", {})).json();
+      const r = await post(`/acp/session/${session.id}/turn`, { message: "hello" });
+      assert.equal(r.status, 504);
+      const body = await r.json();
+      assert.match(body.error, /^DeepSeek Flash stopped responding \(1 min idle\)/);
+      assert.equal(body.session.turnCount, 1);
+    } finally {
+      delete process.env.TARSEE_CHANNEL_IDLE_ABORT_MS;
+    }
   });
 
   it("a subagent runs on the default AI and records the model that ran", async () => {

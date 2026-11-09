@@ -13,6 +13,8 @@
  *   monthlyCapStatus(providerId, {...})               the same, with the figures and the owner-facing message
  *   recordReportedCost(row, db)                       files an Anthropic key's exact cost for a turn nothing else
  *                                                     records (no live conversation: a subagent, ACP, a Verify probe)
+ *   anthropicListCost(model, usage)                   an Anthropic key's turn stopped before its exact cost came: its
+ *                                                     tokens so far at the list price, as an estimate
  *
  * Where costs come from: an Anthropic key's are exact (the engine's total_cost_usd); OpenRouter's are exact when
  * its own usage.cost is reported, else the catalog price; DeepSeek, OpenAI and Local AI come from the price table
@@ -25,7 +27,7 @@
  * output, cacheRead, cacheWrite) are accepted too. A reported cost rides along as usage.cost or usage.costUsd.
  */
 import { BACKGROUND_DEFAULTS } from "../config/constants.js";
-import { capsFor, getProvider, normalizeProviderId, priceFor } from "./provider-registry.js";
+import { capsFor, claudeListPrice, getProvider, normalizeProviderId, priceFor } from "./provider-registry.js";
 import config from "../config/env.js";
 import { monthStart } from "../lib/local-time.js";
 
@@ -116,6 +118,18 @@ export function priceUsageDetail(providerId, model, usage, at = null, store = nu
 /** What a usage costs in USD, or null (plans, the Anthropic key's engine-reported cost, an unpriced model). */
 export function priceUsage(providerId, model, usage, at = null, store = null) {
   return priceUsageDetail(providerId, model, usage, at, store)?.usd ?? null;
+}
+
+/**
+ * An Anthropic key's turn that ended before its engine reported the exact cost (a Stop, a timeout, a crash): its
+ * tokens so far at Anthropic's list price (provider-registry.js claudeListPrice), an estimate; null when no price is
+ * known. Only ever the turn's own figure: the key's calls stay unpriced, so nothing is counted twice.
+ */
+export function anthropicListCost(model, usage) {
+  const rates = claudeListPrice(model);
+  if (!rates) return null;
+  const t = tokensOf(usage);
+  return round((t.input * rates.in + t.output * rates.out + t.cacheRead * rates.cacheRead + t.cacheWrite * rates.cacheWrite) / MILLION);
 }
 
 // --- The per-turn ceiling ---
@@ -218,9 +232,10 @@ export function spendBetween(db, from, to = Number.MAX_SAFE_INTEGER, { provider 
  * live conversation (a subagent, ACP, a Verify probe). Its transcript's calls are never priced (the key's figure is
  * exact, priceUsage gives null), and with no turn_end the usage index never reads the figure either, so without this
  * the turn would add nothing to spendBetween, the monthly cap and the Usage page. It becomes that turn's row in
- * usage_turns (cost_exact 1, which the index never overwrites); its calls stay unpriced and in no turn, so nothing is
- * counted twice. Recording the same turn again replaces its figure.
- * row: { turnId, conversationId, source?, provider, engine, model?, effort?, startedAt, endedAt?, stopReason?, costUsd }
+ * usage_turns (cost_exact 1, which the index never overwrites, unless row.exact is false: a turn stopped before the
+ * engine's figure came, priced at the list price); its calls stay unpriced and in no turn, so nothing is counted
+ * twice. Recording the same turn again replaces its figure.
+ * row: { turnId, conversationId, source?, provider, engine, model?, effort?, startedAt, endedAt?, stopReason?, costUsd, exact? }
  * Returns { recorded: true } or { recorded: false, reason }. Never throws: usage is bookkeeping.
  */
 export function recordReportedCost(row = {}, db = null) {
@@ -237,10 +252,10 @@ export function recordReportedCost(row = {}, db = null) {
   const text = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
   try {
     db.prepare(`INSERT INTO usage_turns (turn_id, conversation_id, source, model, effort, started_at, ended_at, stop_reason, provider, engine, cost_usd, cost_exact)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-      ON CONFLICT(turn_id) DO UPDATE SET cost_usd = excluded.cost_usd, cost_exact = 1, ended_at = excluded.ended_at,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(turn_id) DO UPDATE SET cost_usd = excluded.cost_usd, cost_exact = excluded.cost_exact, ended_at = excluded.ended_at,
         stop_reason = COALESCE(excluded.stop_reason, usage_turns.stop_reason)`)
-      .run(turnId, conversationId, text(row.source), text(row.model), text(row.effort), startedAt, endedAt, text(row.stopReason), id, text(row.engine), round(cost));
+      .run(turnId, conversationId, text(row.source), text(row.model), text(row.effort), startedAt, endedAt, text(row.stopReason), id, text(row.engine), round(cost), row.exact === false ? 0 : 1);
     return { recorded: true };
   } catch (err) {
     console.warn(`[spend] a turn's cost couldn't be recorded: ${err?.message || err}`);

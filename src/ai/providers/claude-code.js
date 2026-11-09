@@ -33,7 +33,7 @@ import { isTranscriptOverCap, transcriptSizeMB, SESSION_JSONL_MAX_MB } from "../
 import { stepsFromSdkMessage, toolResultsFromSdkMessage, createStreamWatcher } from "../../lib/tool-steps.js";
 import { agentVaultEnv } from "../agent-env.js";
 import { getSecurityManager } from "../../lib/security-manager.js";
-import { getProvider, normalizeProviderId, contextTokensFor, effortsFor, capsFor } from "../provider-registry.js";
+import { getProvider, normalizeProviderId, contextTokensFor, effortsFor, capsFor, engineFor, resolveModelFor } from "../provider-registry.js";
 import {
   CLAUDE_CODE, CredentialError, HOST_MANAGED, baseEnv, claudeEnvFor, ensureHome, homeFor, homeIsolationRefusal,
   settingSourcesFor, settingsFilesFor, settingsFileGuard,
@@ -206,8 +206,10 @@ export function buildQueryOptions(provider, opts = {}, deps = {}) {
     maxTurns: opts.maxTurns ?? 50,
     includePartialMessages: true,
     settingSources,
-    // Only the servers Tarsee hands over: never MCP servers from a settings file or a plugin the host has.
-    strictMcpConfig: true,
+    // Key and gateway turns use only the servers Tarsee hands over, never MCP servers from .mcp.json, a settings file
+    // or a plugin, because those would start with the CLI's environment, key included. The plan keeps today's
+    // behaviour: the owner's project (.mcp.json), user, local and plugin servers load alongside tarsee.
+    strictMcpConfig: id !== "claude",
     additionalDirectories: [BUNDLED_SKILLS_DIR],
     systemPrompt: systemPromptFor({
       preamble: buildPreamble({ engine: CLAUDE_CODE, cwd, ...(deps.timezone ? { timezone: deps.timezone } : {}) }),
@@ -324,6 +326,21 @@ function usageOfModel(u) {
 }
 
 /** A provider's settings store: the turn's, or one over its database. */
+/**
+ * OpenRouter's tier pins for Claude Code (its subagents, its small fast model): each tier as the registry resolves it
+ * (the owner's map, the default model's maker, else the ~anthropic slugs), when that model runs on Claude Code; any
+ * other tier is pinned to the turn's own model, since Claude Code can't be handed a model it wasn't verified on.
+ */
+function openRouterPinTiers(model, store) {
+  const main = String(model ?? "").trim().replace(/\[1m\]$/i, "") || undefined;
+  const out = {};
+  for (const t of MODEL_TIERS) {
+    const id = resolveModelFor("openrouter", t, store);
+    out[t] = id && engineFor("openrouter", id, store) === CLAUDE_CODE ? id : main;
+  }
+  return out;
+}
+
 function storeOf(toolCtx, deps) {
   if (deps.store) return deps.store;
   if (toolCtx?.settingsStore) return toolCtx.settingsStore;
@@ -456,7 +473,7 @@ export async function* run(opts = {}) {
       env: baseEnv(env),
       denied: () => { try { return getSecurityManager(toolCtx.settingsStore).getToolPermission("get_key") === "always_deny"; } catch { return false; } },
     });
-    const tiers = entry.id === "openrouter" ? parseJson(readSetting(store, "ai.openrouter.tiers")) : undefined;
+    const tiers = entry.id === "openrouter" ? openRouterPinTiers(model, store) : undefined;
     built = buildQueryOptions(entry, {
       model,
       effort,
@@ -469,7 +486,7 @@ export async function* run(opts = {}) {
       key,
       cwd: opts.cwd || deps.cwd,
       abortController,
-      tiers: tiers && typeof tiers === "object" ? tiers : undefined,
+      tiers,
       appTitle: entry.id === "openrouter" ? (readSetting(store, "ai.openrouter.appTitle") || entry.defaultAppTitle) : undefined,
       referer: entry.id === "openrouter" ? readSetting(store, "ai.openrouter.referer") : undefined,
     }, { env, vaultEnv, stateDir: deps.stateDir, homeDir: deps.homeDir, store, resolveModel: deps.resolveModel });
@@ -730,11 +747,6 @@ export async function* run(opts = {}) {
     if (signal) signal.removeEventListener("abort", onAbort);
     if (!doneSent) abortController.abort();
   }
-}
-
-function parseJson(v) {
-  if (v == null || typeof v === "object") return v;
-  try { return JSON.parse(String(v)); } catch { return null; }
 }
 
 /**

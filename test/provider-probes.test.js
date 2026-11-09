@@ -13,7 +13,7 @@ process.env.TARSEE_STATE_DIR = tmp;
 process.env.TARSEE_WORKSPACE_DIR = path.join(tmp, "workspace");
 process.env.TARSEE_DATA_DIR = path.join(tmp, "data");
 
-const { refreshBalance } = await import("../src/ai/provider-probes.js");
+const { refreshBalance, probeProvider } = await import("../src/ai/provider-probes.js");
 const { providerStatus, failureFlag, setFailureFlag } = await import("../src/ai/provider-status.js");
 
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -108,5 +108,59 @@ describe("refreshBalance: the card's balance read", () => {
     setFailureFlag(store, "openrouter", "out-of-credit", "used up");
     assert.ok(await refreshBalance("openrouter", { store, fetch: stubFetch(200).fetch, force: true }));
     assert.equal(failureFlag(store, "openrouter")?.state, "out-of-credit");
+  });
+});
+
+describe("Test on Local AI: a server with no Responses API", () => {
+  const ADDRESS = "http://192.168.1.20:11434/v1";
+  /** A Local AI server: GET /models lists one model; POST /responses answers as `responses` says. */
+  function localServer(responses) {
+    const calls = [];
+    const fetch = async (url, init = {}) => {
+      calls.push({ url: String(url), method: init.method || "GET", body: init.body ?? null, auth: init.headers?.Authorization || null });
+      if (String(url) === `${ADDRESS}/models`) return new Response(JSON.stringify({ object: "list", data: [{ id: "llama3.1:8b" }] }), { status: 200 });
+      if (String(url) === `${ADDRESS}/responses`) {
+        if (responses instanceof Error) throw responses;
+        return new Response(responses.text ?? JSON.stringify(responses.json ?? {}), { status: responses.status, headers: { "content-type": responses.text ? "text/plain" : "application/json" } });
+      }
+      throw new TypeError(`fetch failed: no stub for ${url}`);
+    };
+    return { fetch, calls };
+  }
+  const localStore = () => {
+    const store = railwayStore({});
+    store.set("ai.local.baseUrl", `${ADDRESS}/`);
+    return store;
+  };
+
+  it("says so, with what to update, when /responses isn't there (old Ollama, old LM Studio, a chat-completions-only server)", async () => {
+    for (const answer of [
+      { status: 404, text: "404 page not found" },
+      { status: 404, json: { detail: "Not Found" } },
+      { status: 200, json: { error: "Unexpected endpoint or method. (POST /v1/responses)" } },
+    ]) {
+      const net = localServer(answer);
+      const r = await probeProvider("local", { store: localStore(), fetch: net.fetch, env: {} });
+      assert.equal(r.ok, false, JSON.stringify(answer));
+      assert.equal(r.state, "needs-setup");
+      assert.match(r.message, /no Responses API/);
+      assert.match(r.message, /Ollama to 0\.13\.3 or newer/);
+      const post = net.calls.find((c) => c.method === "POST");
+      assert.equal(post.url, `${ADDRESS}/responses`);
+      assert.equal(post.body, "{}", "no model named, so nothing loads on the server");
+    }
+  });
+
+  it("anything else means the route is there: Test passes as before", async () => {
+    for (const answer of [
+      { status: 400, json: { error: { message: "model is required" } } },
+      { status: 404, json: { error: { message: "model \"\" not found, try pulling it first" } } },
+      { status: 422, json: { detail: [{ msg: "Field required", loc: ["body", "model"] }] } },
+      Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } }),
+    ]) {
+      const r = await probeProvider("local", { store: localStore(), fetch: localServer(answer).fetch, env: {} });
+      assert.equal(r.ok, true, answer instanceof Error ? "network" : JSON.stringify(answer));
+      assert.equal(r.message, "Reached your Local AI · 1 model");
+    }
   });
 });

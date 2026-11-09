@@ -106,6 +106,11 @@ describe("buildCodexOptions: per provider", () => {
     assert.equal(p.env_key, "TARSEE_PROVIDER_KEY");
     assert.equal(o.env.TARSEE_PROVIDER_KEY, KEYS.local);
     assert.equal(o.config.model_context_window, 32_000);
+    // A server that sends its headers and then nothing (a wedged GPU, a model too big for its memory): Codex waits 5
+    // minutes per try, so one retry, not five, gives up in about 10 minutes and lets the backup model answer.
+    assert.equal(p.stream_max_retries, 1);
+    assert.equal(p.stream_idle_timeout_ms, undefined, "Codex's own 5 minutes: a slow local model still answers");
+    for (const id of ["openrouter", "deepseek"]) assert.equal(build(id, { model: id === "openrouter" ? "openai/x" : "deepseek-flash" }).config.model_providers[`tarsee_${id}`].stream_max_retries, undefined, id);
     const keyless = build("local", { model: "llama3.1:8b" }, { key: null });
     assert.equal(keyless.config.model_providers.tarsee_local.env_key, undefined);
     assert.equal(keyless.env.TARSEE_PROVIDER_KEY, undefined);

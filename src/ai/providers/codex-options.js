@@ -296,6 +296,10 @@ export function buildCodexOptions(target, ctx = {}) {
       ...(childEnv.TARSEE_PROVIDER_KEY ? { env_key: "TARSEE_PROVIDER_KEY" } : {}),
       wire_api: "responses",
     };
+    // A Local AI server that sends its headers and then nothing (a wedged GPU, a model too big for its memory) costs
+    // Codex 5 minutes per try: one retry instead of five gives up in about 10 minutes, so the backup model can answer.
+    // The 5 minutes themselves stay: a slow local model still streams within them.
+    if (id === "local") provider.stream_max_retries = 1;
     if (id === "openrouter") {
       const headers = { "X-OpenRouter-Title": oneLine(ctx.appTitle) || entry.defaultAppTitle || "Tarsee" };
       const referer = oneLine(ctx.referer);

@@ -122,12 +122,28 @@ export class ConversationStore {
   }
 
   /**
-   * Delete a conversation and all its messages (cascade).
+   * Delete a conversation and all its messages (cascade), and the chat's own settings
+   * (session.<id>.provider, .model, .effort, .clearedAt, .instrHash): nothing reads them once the chat is gone.
    */
   delete(id) {
     const gone = this._deleteConversation.run(id).changes > 0;
-    if (gone) forgetConversation(id);   // its live timeline too (lib/live-bus.js)
+    if (gone) {
+      forgetConversation(id);   // its live timeline too (lib/live-bus.js)
+      this._forgetChatSettings(id);
+    }
     return gone;
+  }
+
+  /** Remove session.<id>.* (an exact prefix, so session.reset.* is never touched). Never throws. */
+  _forgetChatSettings(id) {
+    const prefix = `session.${id}.`;
+    try {
+      this._deleteChatSettings ||= this.db.prepare("DELETE FROM settings WHERE substr(key, 1, ?) = ?");
+      this._deleteChatSettings.run(prefix.length, prefix);
+    } catch (err) {
+      // A database with no settings table (a bare test one) has none to remove.
+      if (!/no such table/i.test(err?.message || "")) console.warn(`[conv] removing chat ${id}'s settings failed: ${err?.message || err}`);
+    }
   }
 
   /**

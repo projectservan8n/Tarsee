@@ -284,17 +284,42 @@ const Settings = {
       this.elements.runAuditBtn.addEventListener("click", () => this.loadSecurityAudit());
     }
 
-    // Captcha solver settings
+    // Captcha solver settings. GET /api/settings sends a saved key as its masked display ("abcd...wxyz"): it is never
+    // put in the box (Save would write the mask over the key). The line under the box says a key is saved, Save writes
+    // only a key typed in, and Remove deletes the saved one.
     const saveCaptchaBtn = document.getElementById("saveCaptchaBtn");
     if (saveCaptchaBtn) {
+      const keyBox = document.getElementById("captchaApiKey");
+      const removeBtn = document.getElementById("removeCaptchaKeyBtn");
+      const showSavedKey = (masked) => {
+        const status = document.getElementById("captchaKeyStatus");
+        const last4 = typeof masked === "string" && /^.{4}\.\.\..{4}$/.test(masked) ? ` …${masked.slice(-4)}` : "";
+        keyBox.placeholder = masked ? `Saved${last4}` : "Your API key";
+        if (status) {
+          status.textContent = masked ? `A key is saved${last4}. Type a new one to replace it.` : "";
+          status.hidden = !masked;
+        }
+        if (removeBtn) removeBtn.hidden = !masked;
+      };
       saveCaptchaBtn.addEventListener("click", async () => {
         const service = document.getElementById("captchaService").value;
-        const apiKey = document.getElementById("captchaApiKey").value.trim();
+        const apiKey = keyBox.value.trim();
         try {
           await API.json("/api/settings/general", { method: "POST", body: { key: "captcha.service", value: service } });
-          await API.json("/api/settings/general", { method: "POST", body: { key: "captcha.api_key", value: apiKey } });
+          if (apiKey) {
+            await API.json("/api/settings/general", { method: "POST", body: { key: "captcha.api_key", value: apiKey } });
+            keyBox.value = "";
+            showSavedKey(apiKey.length >= 12 ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}` : "****");
+          }
           App.showToast("Captcha settings saved", "success");
         } catch { App.showToast("Failed to save", "error"); }
+      });
+      removeBtn?.addEventListener("click", async () => {
+        try {
+          await API.json("/api/settings/general", { method: "POST", body: { key: "captcha.api_key", value: "" } });
+          showSavedKey(null);
+          App.showToast("Captcha key removed", "success");
+        } catch { App.showToast("Failed to remove the key", "error"); }
       });
       // Load existing values
       API.json("/api/settings").then(data => {
@@ -302,7 +327,7 @@ const Settings = {
         const svc = settings.find(s => s.key === "captcha.service")?.value;
         const key = settings.find(s => s.key === "captcha.api_key")?.value;
         if (svc) document.getElementById("captchaService").value = svc;
-        if (key) document.getElementById("captchaApiKey").value = key;
+        showSavedKey(typeof key === "string" && key ? key : null);
       }).catch(() => {});
     }
 
@@ -477,34 +502,35 @@ const Settings = {
       this.loadPiperVoices();
     }
 
-    // STT save (provider + model + OpenAI key)
+    // STT save (provider + model; an OpenAI key pasted here is the one Settings → AI keeps)
     const saveSTTBtn = document.getElementById("saveSTTBtn");
     if (saveSTTBtn) {
       saveSTTBtn.addEventListener("click", async () => {
         const model = document.getElementById("settingsSTTModel").value;
         const provider = document.getElementById("settingsSTTProvider")?.value || "local";
-        const openaiKey = document.getElementById("settingsOpenaiKey")?.value?.trim();
+        const keyBox = document.getElementById("settingsOpenaiKey");
+        const openaiKey = keyBox?.value?.trim();
         try {
+          // The OpenAI key is one slot, shared with the OpenAI API key card: saved through Settings → AI's own route,
+          // with its checks, and never put back in the box.
+          if (openaiKey) {
+            await API.json("/api/ai/keys/openai", { method: "PUT", body: { apiKey: openaiKey } });
+            keyBox.value = "";
+          }
           await API.json("/api/voice/stt-model", { method: "POST", body: { model } });
           await API.json("/api/settings/general", { method: "POST", body: { key: "voice.stt_provider", value: provider } });
-          if (openaiKey) {
-            // Save in both formats — voice-specific and provider-generic (for getApiKey)
-            await API.json("/api/settings/general", { method: "POST", body: { key: "voice.openai_api_key", value: openaiKey } });
-            await API.json("/api/settings/general", { method: "POST", body: { key: "ai.openai.apiKey", value: openaiKey } });
-          }
-          App.showToast(`STT: ${provider}${provider === "local" ? ` (${model})` : ""}`, "success");
+          App.showToast(`STT: ${provider}${provider === "local" ? ` (${model})` : ""}${openaiKey ? ", OpenAI key saved" : ""}`, "success");
           this.loadSTTModelStatus();
         } catch (e) { App.showToast(e.message, "error"); }
+        // (The header's read draws the key's line again, and the header chip and the composer hear of a new key.)
+        if (openaiKey) this.refreshAiHeader();
       });
       this.loadSTTModelStatus();
 
-      // Load saved values
+      // The speech-to-text choice saved
       API.json("/api/settings").then(data => {
-        const settings = data.settings || [];
-        const provider = settings.find(s => s.key === "voice.stt_provider")?.value;
-        const key = settings.find(s => s.key === "voice.openai_api_key")?.value;
+        const provider = (data.settings || []).find(s => s.key === "voice.stt_provider")?.value;
         if (provider) document.getElementById("settingsSTTProvider").value = provider;
-        if (key) document.getElementById("settingsOpenaiKey").value = key;
       }).catch(() => {});
     }
 
@@ -548,6 +574,7 @@ const Settings = {
     });
     // Load data for new tabs
     if (tabName === "ai") { this.loadAi(); }
+    if (tabName === "voice") { this.refreshAiHeader(); }   // (draws the OpenAI key's line, drawSttKey)
     if (tabName === "security") { this.loadToolPermissions(); }
     if (tabName === "canvas") { this.loadCanvasGallery(); }
     if (tabName === "audit") { this.loadAuditLog(); }
@@ -945,6 +972,7 @@ const Settings = {
     this._aiSettings = settings || [];
     this.drawAi();
     this.drawAiHeader();
+    this.drawSttKey();
     for (const c of this._aiShipped()) {
       // ChatGPT's list is the signed-in account's own; Local AI's comes from its server once it has an address.
       if (c.id === "chatgpt" && !c.ready) continue;
@@ -1264,6 +1292,14 @@ const Settings = {
     // Local AI: each of the server's models gets its own row (with its own Verify), so verifying one never changes
     // the card's model (_aiDrawLocalModels).
     const localList = c.id === "local" ? `<div class="ai-local-models" data-ai-local-list hidden></div>` : "";
+    // The OpenAI key: a newer model its list lacks is checked by its id (Verify runs that exact model), and once it
+    // passes it is in the list above and in a chat's model menu.
+    const custom = c.id === "openai" && c.ready
+      ? `<details class="ai-custom-model"><summary>A model that isn't in this list</summary>` +
+        `<div class="hint">A newer OpenAI model your key can use: type its id as OpenAI names it, then Verify. That's a short check that it can use Tarsee's tools, and it costs a few cents on your key. Once it passes, you can choose it here and in a chat's model menu.</div>` +
+        `<div class="ai-inline"><input type="text" class="ai-input" data-ai-custom-model data-keep="custom-model" placeholder="The model's id" aria-label="OpenAI model id" autocomplete="off" spellcheck="false" autocapitalize="off">` +
+        `<button type="button" class="btn btn-sm" data-ai-action="verify-custom">Verify</button></div></details>`
+      : "";
     const why = !c.ready && !active ? `<div class="hint">Once its line says Ready, you can make it your default.</div>` : "";
     // Background jobs (scheduled tasks, summaries) run on ai.<id>.backgroundModel, else the cheapest (turn.js).
     const bg = c.ready
@@ -1274,7 +1310,7 @@ const Settings = {
     return `<div class="ai-model-row">` +
       `<label class="ai-label" for="aiModel-${c.id}">Model</label>` +
       `<div class="ai-inline"><select id="aiModel-${c.id}" class="ai-input" data-ai-model></select>${use}</div>` +
-      `<div class="hint" id="aiModelNote-${c.id}" hidden></div>${localList}${why}${bg}` +
+      `<div class="hint" id="aiModelNote-${c.id}" hidden></div>${localList}${custom}${why}${bg}` +
       `</div>`;
   },
 
@@ -1469,6 +1505,13 @@ const Settings = {
       case "test": this.testAi(id, btn); break;
       case "use": this.useAi(id, btn); break;
       case "verify": this.verifyAiModel(id, btn.dataset.model || card?.querySelector("[data-ai-model]")?.value, btn); break;
+      case "verify-custom": {
+        const model = card?.querySelector("[data-ai-custom-model]")?.value.trim() || "";
+        if (!model) this._aiSetTest(id, { text: "Type a model id first.", tone: "bad" });
+        else if (/\s/.test(model)) this._aiSetTest(id, { text: "A model id has no spaces in it.", tone: "bad" });
+        else this.verifyAiModel(id, model, btn);
+        break;
+      }
       case "choose": this.saveAiModel(id, btn.dataset.model); break;
       case "chatgpt-login": this.chatgptLoginInCard(); break;
       case "chatgpt-cancel": this.cancelChatgptLogin(); break;
@@ -1737,7 +1780,9 @@ const Settings = {
   /**
    * Start ChatGPT's sign-in (POST /api/ai/chatgpt/login) and follow it (GET every 3 seconds). render(view) gets
    * { state: "starting" | "waiting" | "done" | "failed" | "expired" | "cancelled", url, code, expiresAt, error, account }
-   * at once, every second while it waits (for the countdown) and on every change. Returns { cancel() }.
+   * at once, every second while it waits (for the countdown) and on every change. A sign-in the server no longer has
+   * (Tarsee restarted, or another window cancelled it or signed out) is a failed one that says to start again.
+   * Returns { cancel() (ends it, on the server too), stop() (stops following it here, and draws nothing more) }.
    */
   startChatgptLogin(render) {
     let stopped = false;
@@ -1752,7 +1797,11 @@ const Settings = {
       if (stopped) return;
       if (r?.state === "waiting") { last = r; render(r); }
       else if (r?.state === "done" || r?.state === "failed" || r?.state === "expired") { stop(); render(r); return; }
-      else if (r?.state === "idle") { stop(); render({ state: "cancelled" }); return; }
+      else if (r?.state === "idle") {
+        stop();
+        render({ state: "failed", error: "The sign-in stopped: Tarsee restarted, or it was cancelled or signed out in another window. Click Sign in with ChatGPT for a new code." });
+        return;
+      }
       timer = setTimeout(poll, 3000);
     };
     render({ state: "starting" });
@@ -1774,6 +1823,7 @@ const Settings = {
         try { await API.json("/api/ai/chatgpt/login", { method: "DELETE" }); } catch { /* it ends by itself */ }
         render({ state: "cancelled" });
       },
+      stop,
     };
   },
 
@@ -1848,10 +1898,13 @@ const Settings = {
   async chatgptLogout(btn) {
     const ok = await TarseeDialog.ask({ title: "Sign out of ChatGPT?", text: "Tarsee stops using your ChatGPT plan until you sign in again.", yes: "Sign out", no: "Cancel", danger: true });
     if (!ok) return;
+    // Signing out ends a sign-in still waiting here too: stop following it first, or its end would read as a failure.
+    this._aiLoginCtl?.stop();
+    this._aiLoginCtl = null;
+    this._aiLoginView = null;
     const done = this._aiBusy(btn, "Signing out…");
     try {
       await this._aiCall("/api/ai/chatgpt/logout", { method: "POST" });
-      this._aiLoginView = null;
       delete this._aiModels.chatgpt;
       App.showToast("Signed out of ChatGPT", "success");
     } catch (err) {
@@ -1871,6 +1924,7 @@ const Settings = {
     }
     this._aiNoticeChange();
     this.drawAiHeader();
+    this.drawSttKey();
     const a = this._ai.active;
     if (a?.model && !this._aiModels[a.provider] && !(a.provider === "chatgpt" && !a.ready)) this.loadAiModels(a.provider);
   },
@@ -2705,6 +2759,30 @@ const Settings = {
     } catch { App.showToast("Failed to delete", "error"); }
   },
 
+  /**
+   * Settings → Voice: where the OpenAI key Whisper uses comes from, from the last read of the AIs (drawn after every
+   * one). It is the OpenAI API key card's (one slot, shared with Settings → AI), so the box stays empty and only says
+   * which key it is: "Saved in Tarsee (encrypted) …wxyz".
+   */
+  drawSttKey() {
+    const box = document.getElementById("settingsOpenaiKey");
+    const status = document.getElementById("openaiKeyStatus");
+    if (!box || !status) return;
+    const card = (this._ai?.providers || []).find((p) => p.id === "openai") || null;
+    const hint = card?.keyHint ? ` ${card.keyHint}` : "";
+    if (card?.keySource === "settings") {
+      box.placeholder = `Saved${hint}`;
+      status.textContent = `${card.keySourceText || "Saved in Tarsee"}${hint}. It's the key on the OpenAI API key card in Settings > AI; paste a new one here to replace it.`;
+    } else if (card?.keySource?.startsWith("env:")) {
+      box.placeholder = `From Railway${hint}`;
+      status.textContent = `${card.keySourceText || "A Railway variable"}${hint}. It's the key on the OpenAI API key card in Settings > AI; a key pasted here is saved in Tarsee and used instead.`;
+    } else {
+      box.placeholder = "sk-...";
+      status.textContent = card ? "No OpenAI key yet. One pasted here is also the OpenAI API key card's in Settings > AI." : "";
+    }
+    status.hidden = !status.textContent;
+  },
+
   async loadSTTModelStatus() {
     const status = document.getElementById("sttModelStatus");
     const select = document.getElementById("settingsSTTModel");
@@ -3264,16 +3342,26 @@ const Settings = {
         return;
       }
 
+      // Every value is set as text: entries carry model names, file entries and the agent's shell commands as they were.
+      const span = (className, text) => {
+        const el = document.createElement("span");
+        el.className = className;
+        el.textContent = text;
+        return el;
+      };
       for (const e of entries) {
         const div = document.createElement("div");
         div.className = "audit-entry";
-        const actionClass = e.action?.startsWith("auth") ? "auth" : e.action?.startsWith("tool") ? "tool" : "setting";
+        const action = String(e.action ?? "");
+        const actionClass = action.startsWith("auth") ? "auth" : action.startsWith("tool") ? "tool" : "setting";
         const time = e.created_at ? new Date(e.created_at + "Z").toLocaleString() : "";
-        div.innerHTML = `
-          <span class="audit-entry-time">${time}</span>
-          <span class="audit-entry-action ${actionClass}">${e.action}${e.target ? ` → ${e.target}` : ""}</span>
-          <span class="audit-entry-detail" title="${e.detail || ""}">${e.detail || e.ip || ""}</span>
-        `;
+        const detail = span("audit-entry-detail", String(e.detail || e.ip || ""));
+        detail.title = String(e.detail || "");
+        div.append(
+          span("audit-entry-time", time),
+          span(`audit-entry-action ${actionClass}`, `${action}${e.target ? ` → ${e.target}` : ""}`),
+          detail,
+        );
         container.appendChild(div);
       }
 

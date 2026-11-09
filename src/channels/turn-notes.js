@@ -22,10 +22,13 @@ export function turnErrorNote(route, message, { clearHint = "/clear", plain = fa
   return `${plain ? "" : "⚠️ "}${aiName(route)} ran into a problem: ${said}\n\nTry again — if it keeps happening, ${clearHint} and try fresh.`;
 }
 
-/** A turn that went quiet for too long and was given up (the channels' idle watchdog). */
-export function idleNote(route, idleMs) {
+/**
+ * A turn that went quiet for too long and was given up (the channels' idle watchdog, lib/turn-watchdog.js for the
+ * external API and ACP). plain: no emoji (an API's answer).
+ */
+export function idleNote(route, idleMs, { plain = false } = {}) {
   const minutes = Math.max(1, Math.round(Number(idleMs) / 60_000) || 1);
-  return `⚠️ ${aiName(route)} stopped responding (${minutes} min idle). Try again — maybe with a smaller ask.`;
+  return `${plain ? "" : "⚠️ "}${aiName(route)} stopped responding (${minutes} min idle). Try again — maybe with a smaller ask.`;
 }
 
 /**

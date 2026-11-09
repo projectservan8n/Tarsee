@@ -121,6 +121,15 @@ describe("the ChatGPT account's models after a restart", () => {
     assert.equal(events.at(-1).stopReason, "end_turn");
   });
 
+  it("with \"API keys only\" on, the turn is refused without starting Codex to read the account's list", async () => {
+    settings.set("ai.keysOnly", true);
+    settings.set("ai.chatgpt.model", "gpt-6.1-sol");
+    const events = await collect(runTurn({ provider: "chatgpt", messages: [user("hi")], toolCtx: ctx() }));
+    assert.equal(listReads, 0, "the ChatGPT sign-in is never used, not even to list its models");
+    assert.equal(events.at(-1).stopReason, "blocked-keys-only");
+    assert.equal(engines.codex.calls.length, 0);
+  });
+
   it("other providers never read it", async () => {
     settings.set("ai.deepseek.apiKey", DEEPSEEK_KEY);
     await collect(runTurn({ provider: "deepseek", messages: [user("hi")], toolCtx: ctx() }));

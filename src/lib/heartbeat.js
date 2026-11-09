@@ -3,7 +3,7 @@ import path from "node:path";
 import config from "../config/env.js";
 import { getHeartbeatContext, appendDailyLog } from "./workspace-files.js";
 import { buildSystemPromptParts } from "./build-system-prompt.js";
-import { runBackgroundTurn, resolveBackgroundModel, defaultAiReadiness } from "./background-turn.js";
+import { runBackgroundTurn, resolveBackgroundModel, defaultAiReadiness, overBudgetWarning } from "./background-turn.js";
 
 /**
  * Heartbeat system — periodically runs HEARTBEAT.md tasks through the AI.
@@ -110,7 +110,7 @@ export async function runHeartbeat(reason = "scheduled") {
     // the overwhelming majority of the time, and it fires every 30 minutes
     // forever — running it on the interactive top-tier default was the most
     // expensive idle loop in the product. `heartbeat.model` raises it.
-    const { text: fullResponse, error } = await runBackgroundTurn({
+    const { text: fullResponse, error, overBudget } = await runBackgroundTurn({
       label: "heartbeat",
       liveId: "heartbeat",
       liveSource: "heartbeat",
@@ -129,12 +129,14 @@ export async function runHeartbeat(reason = "scheduled") {
     }
 
     const isSuppressed = fullResponse.trim() === "HEARTBEAT_OK";
+    // Finished, but over its spending limit (a Codex AI's cost is known only at the end).
+    const warning = overBudgetWarning(overBudget);
 
     // Update state
     const state = loadState();
     state.lastRun = now;
     state.runCount = (state.runCount || 0) + 1;
-    state.lastResult = isSuppressed ? "OK (suppressed)" : fullResponse.slice(0, 500);
+    state.lastResult = (isSuppressed ? "OK (suppressed)" : fullResponse.slice(0, 500)) + (warning ? ` (${warning})` : "");
     saveState(state);
 
     // Log to daily log
@@ -145,7 +147,7 @@ export async function runHeartbeat(reason = "scheduled") {
       console.log("[heartbeat] OK (suppressed)");
     }
 
-    return { skipped: false, suppressed: isSuppressed, response: fullResponse };
+    return { skipped: false, suppressed: isSuppressed, response: fullResponse, ...(warning ? { warning } : {}) };
   } catch (err) {
     console.error("[heartbeat] Error:", err.message);
     const state = loadState();

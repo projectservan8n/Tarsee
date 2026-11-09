@@ -12,7 +12,7 @@
  *   effortFor     the level a chat runs at on that model (its own, or the default; one the model has)
  *   effortName    "Extra" for xhigh, "Max", ...
  *   buttonLabel   { model: "Sonnet 5.5", effort: "High", warning, title } for the composer's button
- *   warningFor    "DeepSeek not connected, using default" when a chat's AI is no longer ready
+ *   warningFor    "DeepSeek not connected, using default" when a chat's own model isn't what runs
  *   pickValue     what picking an entry saves: its ref (its AI and id), or on the Claude-only list its exact id
  *   isPicked      whether an entry is the chat's model (for the check)
  *   search        the models whose name, id or AI hold every word typed, the pickable ones first
@@ -36,6 +36,8 @@
     openrouter: "OpenRouter", deepseek: "DeepSeek", local: "Local AI",
   };
   const PROVIDER_ALIASES = { "claude-code": "claude" };
+  /** The AIs with Claude's own models (provider-registry.js: catalog "claude"): the Claude plan and an Anthropic key. */
+  const CLAUDE_MODEL_AIS = new Set(["claude", "anthropic"]);
   const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
 
   const bare = (v) => String(v || "").toLowerCase().trim().replace(/\[1m\]$/, "");
@@ -162,34 +164,64 @@
     return have[0];
   }
 
-  /** The AI a chat's pick is on: its own provider, or the one its model's ref names. */
-  function pickProvider(pick) {
-    return providerId(pick?.provider) || splitRef(pick?.model).provider;
+  /**
+   * A model chosen before Tarsee had other AIs: kept bare ("haiku", "claude-sonnet-4-6"), with no AI of its own.
+   * Only a list of AIs tells it apart; on the Claude-only list every model is bare.
+   */
+  function isLegacyPick(picker, pick) {
+    return Array.isArray(picker?.groups) && !!String(pick?.model || "").trim()
+      && !providerId(pick?.provider) && !splitRef(pick?.model).provider;
   }
 
   /**
-   * The warning a chat shows when its AI is no longer ready: "DeepSeek not connected, using default", or, with only
-   * API keys allowed, "ChatGPT plan is off (API keys only), using default". null when all is well, and always on
-   * the Claude-only list (it knows no AIs).
+   * The AI a chat's pick is on: its own provider, or the one its model's ref names. A model chosen before Tarsee had
+   * other AIs goes with its chat to the default AI (ai/turn.js resolveTarget runs it there).
    */
-  function warningFor(picker, pick) {
+  function pickProvider(pick, picker = null, defaults = null) {
+    return providerId(pick?.provider) || splitRef(pick?.model).provider
+      || (isLegacyPick(picker, pick) ? providerId(defaults?.provider) : null);
+  }
+
+  /** An AI's name, as the list gives it. */
+  function providerLabel(picker, id) {
+    return groupsOf(picker).find((g) => g.provider === id)?.label
+      || (picker?.unavailable || []).find((u) => u.provider === id)?.label || PROVIDER_LABELS[id] || id;
+  }
+
+  /**
+   * The warning a chat shows when its own model isn't what runs: its AI is no longer ready ("DeepSeek not connected,
+   * using default", or, with only API keys allowed, "ChatGPT plan is off (API keys only), using default"), or its
+   * model was chosen before Tarsee had other AIs and the default AI hasn't Claude's models ("DeepSeek doesn't have
+   * Haiku 4.5, using default": the turn layer runs that AI's default model). null when all is well, and always on the
+   * Claude-only list (it knows no AIs).
+   */
+  function warningFor(picker, pick, defaults = null) {
     if (!Array.isArray(picker?.groups)) return null;
+    if (isLegacyPick(picker, pick)) {
+      const def = providerId(defaults?.provider);
+      if (!def || CLAUDE_MODEL_AIS.has(def)) return null;
+      const name = [...CLAUDE_MODEL_AIS].map((id) => entryFor(picker, pick.model, id)?.name).find(Boolean) || nameFromId(pick.model);
+      return `${providerLabel(picker, def)} doesn't have ${name}, using default`;
+    }
     const p = pickProvider(pick);
     if (!p || picker.groups.some((g) => g.provider === p)) return null;
     const u = (picker.unavailable || []).find((x) => x.provider === p);
-    const label = u?.label || PROVIDER_LABELS[p] || p;
+    const label = providerLabel(picker, p);
     return u?.state === "blocked-keys-only" ? `${label} is off (API keys only), using default` : `${label} not connected, using default`;
   }
 
-  /** The composer's button: "Sonnet 5.5" and "High", from the chat's own pick or the defaults. */
+  /**
+   * The composer's button: "Sonnet 5.5" and "High", from the chat's own pick or the defaults. With a warning the
+   * default model runs, at the chat's own level when it has one (the turn layer keeps it), as one that model has.
+   */
   function buttonLabel(picker, pick, defaults) {
-    const warning = warningFor(picker, pick);
-    const own = !warning && (pick?.model || pickProvider(pick));
+    const warning = warningFor(picker, pick, defaults);
+    const own = !warning && (pick?.model || pickProvider(pick, picker, defaults));
     const value = own ? (pick.model || "") : (defaults?.ref || defaults?.model || "sonnet");
-    const provider = own ? pickProvider(pick) : providerId(defaults?.provider);
+    const provider = own ? pickProvider(pick, picker, defaults) : providerId(defaults?.provider);
     const entry = entryFor(picker, value, provider);
     const model = entry?.name || nameFromId(splitRef(value).model) || PROVIDER_LABELS[provider] || "Claude";
-    const level = effortFor(entry, warning ? null : pick?.effort, defaults?.effort);
+    const level = effortFor(entry, pick?.effort, defaults?.effort);
     const effort = level ? effortName(entry, level) : "";
     const base = effort ? `${model}, ${effort} effort. Change the model or the effort` : `${model}. Change the model`;
     return { model, effort, entry, level, provider, warning, title: warning ? `${warning}. ${base}` : base };

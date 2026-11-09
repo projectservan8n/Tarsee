@@ -10,13 +10,15 @@
  *
  *   kind        one of ERROR_KINDS:
  *                 expired      a plan's sign-in ran out (Claude plan, ChatGPT plan)
- *                 auth         a key was turned down (401/403)
+ *                 auth         a key was turned down (401, or a 403 that isn't one of the two below)
  *                 wrong-key    a key pasted in another provider's slot
- *                 billing      out of credit or over a spending limit (402)
+ *                 billing      out of credit or over a spending limit (402, or OpenRouter's 403 for a key over its limit)
  *                 rate         busy, or a plan's usage limit (429)
  *                 unavailable  the provider is down or overloaded (5xx, 529)
  *                 model        the model doesn't exist there, or the account can't use it (404, 400 about a model)
  *                 session      resuming the stored session failed (start fresh and carry the chat over)
+ *                 moderated    the provider's moderation turned the message down (OpenRouter's 403 "requires
+ *                              moderation ... flagged for ..."): the key is fine, no flag, no retry, no backup
  *                 credential-isolation, needs-key, needs-setup, bad-model, wrong-engine, needs-mcp-token
  *                              Tarsee's own refusals before a turn starts (engine-env.js CredentialError codes)
  *                 unknown      anything else
@@ -29,7 +31,7 @@
 import { getProvider, normalizeProviderId } from "./provider-registry.js";
 
 export const ERROR_KINDS = Object.freeze([
-  "expired", "auth", "wrong-key", "billing", "rate", "unavailable", "model", "session",
+  "expired", "auth", "wrong-key", "billing", "rate", "unavailable", "model", "session", "moderated",
   "credential-isolation", "needs-key", "needs-setup", "bad-model", "wrong-engine", "needs-mcp-token", "unknown",
 ]);
 
@@ -48,12 +50,16 @@ const AUTH_WORDS_RE = /(Failed to authenticate|OAuth (?:access )?token (?:has )?
 // codex 0.167 says "Your access token could not be refreshed ..." or "Your authentication session could not be
 // refreshed ..." for every ChatGPT sign-in it can't renew (expired, reused, revoked or replaced refresh token).
 const EXPIRED_WORDS_RE = /(OAuth (?:access )?token (?:has )?expired|Re-authenticate to continue|refresh token (?:was )?(?:revoked|expired|invalid)|(?:access token|authentication session) could not be refreshed|sign-?in (?:has )?expired|token_expired)/i;
-const BILLING_WORDS_RE = /(insufficient (?:balance|credits?|funds|quota)|credit balance is too low|out of credits?|payment required|billing|spend(?:ing)? limit|key limit|exceeded your current quota)/i;
+const BILLING_WORDS_RE = /(insufficient (?:balance|credits?|funds|quota)|credit balance is too low|out of credits?|payment required|billing|spend(?:ing)? limit|key limit|budget limit|exceeded your current quota)/i;
 const RATE_WORDS_RE = /(rate[_ ]?limit|too many requests|request rejected \(429\)|usage limit|slow down)/i;
 const UNAVAILABLE_WORDS_RE = /(overloaded|service unavailable|bad gateway|gateway timeout|internal server error|server_error|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up|couldn't connect|could not reach)/i;
 const MODEL_WORDS_RE = /(issue with the selected model|model[_ ]not[_ ]found|not a valid model|invalid model|unknown model|no such model|model .*(?:does not exist|not found|not available|unavailable)|does not exist or you do not have access)/i;
 const SESSION_WORDS_RE = /(previous_message_id|must be the id from a prior|No conversation found with session ID|session.*(?:expired|invalid|not found|corrupt))/i;
 const WORKSPACE_WORDS_RE = /workspace/i;
+/** OpenRouter's 403 for a prompt its moderation flagged ("<model> requires moderation on <maker>. Your input was flagged for ..."). */
+const MODERATION_WORDS_RE = /requires moderation|input was flagged/i;
+/** OpenRouter's 403 for a key over the limit set on it ("Key limit exceeded (total limit)", "Budget limit exceeded (weekly limit)"). */
+const KEY_LIMIT_WORDS_RE = /\b(?:key|budget|spend(?:ing)?) limit\b/i;
 
 const ANTHROPIC_WORKSPACE_MESSAGE = "**Your Anthropic key isn't in a workspace**, so Anthropic turns it down for Tarsee. "
   + "In the Claude Console, create a new key and choose a workspace for it (Default is fine), then paste it in Settings > AI (the Anthropic guide's step 3).";
@@ -145,6 +151,16 @@ export function authMessage(providerId) {
   return `**${labelOf(p, id)} turned down the key.** Check it in Settings > AI.`;
 }
 
+/**
+ * A Local AI server with no Responses API, the one Tarsee talks to it through (Ollama before 0.13.3, LM Studio before
+ * 0.3.29, a chat-completions-only server): what to do. localUrl is the address the owner set (…/v1).
+ */
+export function localNoResponsesMessage(localUrl) {
+  const where = localUrl ? String(localUrl).trim().replace(/\/+$/, "") : "";
+  return `**Your Local AI${where ? ` at ${where}` : ""} has no Responses API**: ${where ? `${where}/responses` : "its /responses address"} answered "not found". `
+    + "Tarsee talks to Local AI through that API. Update Ollama to 0.13.3 or newer or LM Studio to 0.3.29 or newer, or use a server that has it.";
+}
+
 /** The provider's own words for being out of credit, with its top-up link. */
 function billingMessage(p, id) {
   const hints = p?.errorHints || {};
@@ -183,6 +199,11 @@ export function friendly(providerId, kind, { detail = null, model = null } = {})
       return `**${label} can't run ${model ? `the model ${model}` : "the chosen model"}**: it doesn't exist there, or this account can't use it. Pick another model in the chat's model menu or in Settings > AI.`;
     case "session":
       return "**The earlier conversation couldn't be picked up again**, so I'm starting a fresh one.";
+    case "moderated": {
+      const why = /flagged for ([^.\n]+)/i.exec(words);
+      const reason = why ? why[1].replace(/[\\"]/g, "").trim().slice(0, 80) : "";
+      return `**${label}'s moderation turned this message down**${reason ? ` (flagged for ${reason})` : ""}. Nothing is wrong with the key. Rephrase the message, or pick a model ${label} doesn't moderate (another maker's) in the chat's model menu.`;
+    }
     case "credential-isolation":
     case "needs-key":
     case "needs-setup":
@@ -197,8 +218,8 @@ export function friendly(providerId, kind, { detail = null, model = null } = {})
 
 /**
  * What an engine failure means on a provider. input: {status, code, message, model}. The first clear signal wins, in
- * this order: Tarsee's refusal codes, a failed session resume, an expired plan sign-in in the words, the HTTP status
- * (given or read from the words), the SDK's error code, the words.
+ * this order: Tarsee's refusal codes, a moderation refusal, a failed session resume, an expired plan sign-in in the
+ * words, the HTTP status (given or read from the words), the SDK's error code, the words.
  */
 export function classifyEngineError(providerId, engine, { status = null, code = null, message = null, model = null } = {}) {
   const id = normalizeProviderId(providerId) || (providerId == null ? null : String(providerId));
@@ -208,6 +229,9 @@ export function classifyEngineError(providerId, engine, { status = null, code = 
 
   let kind = null;
   if (c && REFUSAL_CODES.has(c)) kind = c;
+  // A 403 is not always the key: OpenRouter answers 403 for a prompt its moderation flagged. Its body quotes the
+  // person's own words (metadata.flagged_input), so this comes before anything else reads them.
+  else if (st === 403 && MODERATION_WORDS_RE.test(text)) kind = "moderated";
   else if (SESSION_WORDS_RE.test(text)) kind = "session";
   else if (EXPIRED_WORDS_RE.test(text)) kind = "expired";
   if (!kind && c && CODE_KINDS[c]) kind = CODE_KINDS[c];
@@ -217,6 +241,8 @@ export function classifyEngineError(providerId, engine, { status = null, code = 
     if (byStatus && !(kind && !st)) kind = byStatus;
   }
   if (!kind) kind = kindFromWords(text) || "unknown";
+  // OpenRouter's 403 for a key over the limit set on it: raise the limit, the key itself is fine.
+  if (kind === "auth" && st === 403 && KEY_LIMIT_WORDS_RE.test(text)) kind = "billing";
 
   // On a plan, a turned-down sign-in is the sign-in running out; on a key provider an "expired" is its key failing.
   if (kind === "auth" && PLAN_IDS.has(id)) kind = "expired";
@@ -227,7 +253,7 @@ export function classifyEngineError(providerId, engine, { status = null, code = 
   const noWorkspace = id === "anthropic" && (st === 400 || st === 401 || st === 403 || kind === "auth") && WORKSPACE_WORDS_RE.test(text);
   if (noWorkspace) kind = "auth";
 
-  const detail = REFUSAL_CODES.has(kind) || kind === "unknown" || kind === "wrong-key" ? text : null;
+  const detail = REFUSAL_CODES.has(kind) || kind === "unknown" || kind === "wrong-key" || kind === "moderated" ? text : null;
   return {
     kind,
     provider: id,

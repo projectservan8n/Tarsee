@@ -560,6 +560,11 @@ export function resolveModelFor(idOrAlias, modelOrTier, store = null) {
   return out || null;
 }
 
+/** Whether a model name is a tier word (fable, opus, sonnet, haiku, top, mid, small; "[1m]" or not), not a model id. */
+export function isTierWord(raw) {
+  return !!tierWord(stripContextSuffix(typeof raw === "string" ? raw.trim() : ""));
+}
+
 /**
  * The engine that runs a model on a provider:
  *  - claude, anthropic: Claude Code.
@@ -698,6 +703,35 @@ export function priceFor(idOrAlias, model, at = new Date(), store = null) {
 }
 
 /**
+ * Anthropic's list price for a Claude model, in USD per million tokens ({ in, out, cacheRead, cacheWrite }), read
+ * from OpenRouter's public catalog (loaded at boot and every few hours, no key needed), which lists Anthropic's
+ * models at Anthropic's prices: "claude-opus-4-7" is "anthropic/claude-opus-4.7" there. A tier word ("sonnet"), or a
+ * pinned id the catalog doesn't list, takes its family's newest there. null while the catalog isn't in.
+ * For an Anthropic key's turn that ended before its engine reported the exact cost (spend.js anthropicListCost).
+ */
+export function claudeListPrice(model) {
+  const id = stripContextSuffix(typeof model === "string" ? model.trim().toLowerCase() : "");
+  if (!id) return null;
+  const list = catalogModels("openrouter");
+  const priced = (slug) => list.find((m) => m.id === slug && m.price)?.price || null;
+  if (CLAUDE_ID_RE.test(id)) {
+    const exact = priced(`anthropic/${id.replace(/-(\d+)-(\d+)$/, "-$1.$2")}`);
+    if (exact) return { ...exact };
+  }
+  const family = tierWord(id) || tierOf(id);
+  if (!family) return null;
+  const re = new RegExp(`^anthropic/claude-${family}-(\\d+)(?:\\.(\\d+))?$`);
+  let best = null;
+  for (const m of list) {
+    const v = re.exec(m.id);
+    if (!v || !m.price) continue;
+    const version = Number(v[1]) * 1000 + Number(v[2] || 0);
+    if (!best || version > best.version) best = { version, price: m.price };
+  }
+  return best ? { ...best.price } : null;
+}
+
+/**
  * Whether a pasted key fits a provider's slot: { ok, message }. Catches a
  * Claude sign-in token pasted as an API key and keys pasted into another
  * provider's card.
@@ -750,14 +784,36 @@ function resolveTier(p, tier, store) {
 function pickTier(p, tier, store) {
   const own = ownerTiers(p, store);
   const list = modelList(p);
+  const fixed = makerTiers(p, store) || p.tiers;
   for (const t of stepOrder(tier)) {
     if (own[t]) return own[t];
-    const shipped = p.tiers[t];
+    const shipped = fixed[t];
     if (shipped && isAvailable(p, shipped, store)) return shipped;
     const listed = list.find((m) => m.tier === t);
     if (listed) return listed.id;
   }
   return null;
+}
+
+/**
+ * OpenRouter's tiers when the owner's default model there (ai.openrouter.model) is another maker's than Anthropic's
+ * (design 4.11: the defaults follow the default model's maker): background work, crons, /auto and the built-in agents
+ * then stay with that maker instead of moving to Claude. The models are the default and the ones verified from its
+ * maker; the default is sonnet, the dearest of them (by the catalog's output price) opus and fable, the cheapest haiku.
+ * null keeps the shipped ~anthropic slugs: an Anthropic default, none, or one that can't run until it is verified.
+ */
+function makerTiers(p, store) {
+  if (p.id !== "openrouter") return null;
+  const def = stripContextSuffix(nonEmpty(readSetting(store, "ai.openrouter.model")) || "");
+  const maker = openRouterMaker(def);
+  if (!maker || maker === "anthropic" || !engineFor(p.id, def, store)) return null;
+  const same = Object.keys(verifiedModels(p.id, store)).filter((id) => id !== def && openRouterMaker(id) === maker);
+  const out = (id) => findModel(p, id)?.price?.out;
+  const d = out(def);
+  const priced = Number.isFinite(d) ? same.filter((id) => Number.isFinite(out(id))) : [];
+  const dearest = priced.filter((id) => out(id) > d).sort((a, b) => out(b) - out(a))[0] || def;
+  const cheapest = priced.filter((id) => out(id) < d).sort((a, b) => out(a) - out(b))[0] || def;
+  return { fable: dearest, opus: dearest, sonnet: def, haiku: cheapest };
 }
 
 /** The owner's own tier map (ai.<id>.tiers): OpenRouter and Local AI only. */

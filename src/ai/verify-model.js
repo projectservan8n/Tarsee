@@ -38,6 +38,23 @@ import { EFFORT_IDS } from "../lib/model-picker.js";
 
 export const VERIFY_STEPS = Object.freeze(["reply", "tool", "shell", "resume"]);
 
+/**
+ * The Verify workspaces in use, removed on the process's exit: a server that exits mid-check (a redeploy's SIGTERM
+ * handler calls process.exit) runs no finally block. (lib/turn-leftovers.js sweeps at boot what a crash left.)
+ */
+const LIVE_WORKSPACES = new Set();
+let workspaceExitHooked = false;
+function trackWorkspace(dir) {
+  LIVE_WORKSPACES.add(dir);
+  if (workspaceExitHooked) return;
+  workspaceExitHooked = true;
+  process.once("exit", () => {
+    for (const d of LIVE_WORKSPACES) {
+      try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* exiting */ }
+    }
+  });
+}
+
 const CLAUDE_CODE = "claude-code";
 const CODEX = "codex";
 
@@ -278,6 +295,7 @@ export async function verifyModel(providerId, model, deps = {}) {
     const root = path.join(stateDir, "verify");
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
     workspace = fs.mkdtempSync(path.join(root, `${p.id}-`));
+    if (!deps.keepWorkspace) trackWorkspace(workspace);
 
     const ctx = {
       p, id, runner, deps, workspace,
@@ -302,6 +320,7 @@ export async function verifyModel(providerId, model, deps = {}) {
     return finish(ctx, attempts, { code: "failed", error: `${ctx.label} didn't pass the check. ${why}` });
   } finally {
     slot.release();
+    if (workspace) LIVE_WORKSPACES.delete(workspace);
     if (workspace && !deps.keepWorkspace) {
       try { fs.rmSync(workspace, { recursive: true, force: true }); } catch { /* best effort */ }
     }
@@ -332,7 +351,7 @@ async function runEngine(ctx, engine) {
     const prompt = promptFor(step, { word, marker });
     const res = await runTurnOnce(ctx, engine, { prompt, sessionId: step === "reply" ? null : handle, cwd });
     if (res.handle) handle = res.handle;
-    const verdict = judge(step, res, { word, marker, engine, provider: ctx.p.id });
+    const verdict = judge(step, res, { word, marker, engine, provider: ctx.p.id, model: ctx.id });
     steps.push({ step, ok: verdict.ok, ms: res.ms, ...(verdict.ok ? {} : { detail: verdict.detail }) });
     ctx.progress({ engine, step, state: verdict.ok ? "passed" : "failed", ...(verdict.ok ? {} : { detail: verdict.detail }) });
     if (verdict.stop) {
@@ -357,7 +376,7 @@ async function probeEfforts(ctx, engine, attempt) {
     ctx.progress({ engine, step: "effort", effort, state: "running" });
     const word = codeWord("CODE");
     const res = await runTurnOnce(ctx, engine, { prompt: `Reply with this code word and nothing else: ${word}`, sessionId: null, cwd, effort });
-    const verdict = judge("reply", res, { word, engine, provider: ctx.p.id });
+    const verdict = judge("reply", res, { word, engine, provider: ctx.p.id, model: ctx.id });
     ctx.progress({ engine, step: "effort", effort, state: verdict.ok ? "passed" : "failed", ...(verdict.ok ? {} : { detail: verdict.detail }) });
     if (verdict.ok) passed.push(effort);
     else if (verdict.stop) break;
@@ -381,16 +400,19 @@ function promptFor(step, { word, marker }) {
 }
 
 /** Whether a turn passed its check: { ok, detail?, stop?, code? }. stop means trying another engine is pointless. */
-function judge(step, res, { word, marker, engine, provider }) {
+function judge(step, res, { word, marker, engine, provider, model = null }) {
   if (res.aborted) return { ok: false, stop: true, code: "aborted", detail: "The check was stopped." };
   if (res.timedOut) return { ok: false, detail: res.timeoutDetail };
-  // The turn must run where it was asked to: this provider, this engine. A backup model answering, or the turn layer
-  // picking its own engine, would make a pass meaningless.
-  const elsewhere = res.routes.find((r) => r.backup || (r.provider && r.provider !== provider) || (r.engine && r.engine !== engine));
+  // The turn must run where it was asked to: this provider, this engine, this model. A backup model answering, the
+  // turn layer picking its own engine, or another model run in its place would make a pass meaningless.
+  const otherModel = (r) => !!model && !!r.model && bareModel(r.model) !== model;
+  const elsewhere = res.routes.find((r) => r.backup || (r.provider && r.provider !== provider) || (r.engine && r.engine !== engine) || otherModel(r));
   if (elsewhere) {
     const detail = elsewhere.backup || (elsewhere.provider && elsewhere.provider !== provider)
       ? "The backup model answered instead of the model being checked, so the result couldn't be trusted. Try again, or switch the backup model off while you verify."
-      : `Tarsee ran the check on another engine than the one being tested (${elsewhere.engine}, not ${engine}), so the result couldn't be trusted.`;
+      : elsewhere.engine && elsewhere.engine !== engine
+        ? `Tarsee ran the check on another engine than the one being tested (${elsewhere.engine}, not ${engine}), so the result couldn't be trusted.`
+        : `Tarsee ran another model (${bareModel(elsewhere.model)}) than the one being checked, so the result couldn't be trusted.`;
     return { ok: false, stop: true, code: "engine-not-forced", detail };
   }
   const stopCode = (e) => [e.subtype, e.code].find((c) => STOP_CODES.has(c)) || null;

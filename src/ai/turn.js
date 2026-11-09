@@ -21,14 +21,15 @@
  *   f. the live timeline (lib/live-bus.js): turn_start, the steps (usage at most every 3s), turn_end
  *   g. the engine, with the turn's ceilings (and Tarsee's tools over loopback MCP for Codex)
  *   h. the spend ceiling, for AIs whose engine has none of its own: running totals stop the work in progress; a cost
- *      that only arrives with the finished reply (Codex's, a Claude Code result's) marks the turn over budget and
- *      warns, and never fails what already happened
+ *      that only arrives with the finished reply (Codex's, a Claude Code result's) marks the turn over budget (its
+ *      done carries overBudget, ceilingUsd and spentUsd) and warns, and never fails what already happened
  *   i. one retry, fresh, for a session the engine couldn't resume, before anything was said
  *   j. the backup model (ai.backupModel, opt-in) when the AI can't answer (sign-in, credit, busy, unavailable, model)
  *   k. failure flags (ai.<id>.status) on a sign-in or credit failure, cleared by a success
  *   l. exactly one done, an error before every done that isn't a success or a stop, never stopReason "tool_use"
- *   m. Codex usage recorded directly (it writes no Claude transcript), and an Anthropic key's exact cost for a turn
- *      with no live conversation (no turn_end carries it to the usage index)
+ *   m. Codex usage recorded directly (it writes no Claude transcript), and an Anthropic key's cost for a turn with no
+ *      live conversation (no turn_end carries it to the usage index): the engine's exact total, or for a turn stopped
+ *      before that came, its tokens so far at the list price (an estimate)
  *   n. the turn's MCP grant revoked and the turn unregistered, however it ends
  */
 import { BACKGROUND_DEFAULTS } from "../config/constants.js";
@@ -38,11 +39,11 @@ import { claimQueuedTurn, takeQueuedNote } from "../lib/conversation-lock.js";
 import { publish, newTurnId } from "../lib/live-bus.js";
 import { redactSecrets } from "../lib/redact.js";
 import {
-  activeProviderId, capsFor, catalogModels, effortsFor, engineFor, getProvider, isShipped, keysOnly, keysOnlyLocked,
+  activeProviderId, capsFor, catalogModels, effortsFor, engineFor, getProvider, isShipped, isTierWord, keysOnly, keysOnlyLocked,
   modelsFor, normalizeProviderId, resolveModelFor, vendorFor, verifiedModels,
 } from "./provider-registry.js";
 import { clearFailureFlag, failureFlag, providerStatus } from "./provider-status.js";
-import { checkTurnBudget, costSource, monthlyCapStatus, priceUsage, recordReportedCost } from "./spend.js";
+import { anthropicListCost, checkTurnBudget, costSource, monthlyCapStatus, priceUsage, recordReportedCost } from "./spend.js";
 import { adaptMedia } from "./media.js";
 import { isTranscriptOverCap, SESSION_JSONL_MAX_MB } from "../lib/claude-transcript.js";
 import { parseModelRef } from "./model-ref.js";
@@ -137,7 +138,7 @@ export async function loadEngine(name) {
  *   recordUsage(row, db)             token-usage.js recordDirect: a turn with no Claude transcript (Codex)
  *   recordReported(row, db)          spend.js recordReportedCost: an Anthropic key's exact cost for a turn with no
  *                                    live conversation (no turn_end will carry it to the usage index)
- *   chatgptModels()                  lib/model-catalog.js refreshChatgptModels: fill the ChatGPT account's model list
+ *   chatgptModels(store)             lib/model-catalog.js refreshChatgptModels: fill the ChatGPT account's model list
  *                                    (empty after a restart) before a turn names one of its models
  *   localModels(store)               provider-models.js ensureLocalModels: Local AI's model list, read from its
  *                                    server when nothing has read it since the restart
@@ -153,7 +154,7 @@ const DEFAULT_DEPS = Object.freeze({
   grantMcp: async (ctx, opts) => (await import("./mcp-http.js")).grantTurn(ctx, opts),
   recordUsage: async (row, db) => (await import("../lib/token-usage.js")).recordDirect(row, db),
   recordReported: async (row, db) => recordReportedCost(row, db || (await import("../lib/token-usage.js")).usageIndex()?.db || null),
-  chatgptModels: async () => (await import("../lib/model-catalog.js")).refreshChatgptModels({}),
+  chatgptModels: async (store) => (await import("../lib/model-catalog.js")).refreshChatgptModels({ store }),
   localModels: async (store) => (await import("./provider-models.js")).ensureLocalModels(store),
   adaptMedia: (content, caps, ctx) => adaptMedia(content, caps, ctx),
   transcriptOverCap: (rawId, provider) => isTranscriptOverCap(rawId, SESSION_JSONL_MAX_MB, { provider }),
@@ -184,9 +185,9 @@ async function fileLoginStatus(opts) {
  *    (session.<conv>.provider, when that AI is switched on and set up), then the default (activeProviderId).
  *    A caller that passes the default provider (what the channels do) has not chosen one.
  *  Model: the caller's own, then the chat's (session.<conv>.model, only when it belongs to that provider: a pick
- *    stored before providers existed is the Claude plan's), then for background work ai.<sid>.backgroundModel and
- *    the provider's haiku tier, then ai.<sid>.model (and TARSEE_AI_MODEL for the default provider), then the
- *    provider's default; all through the registry's resolveModelFor. A caller that passes the default provider's
+ *    stored before providers existed is a Claude model, for the Claude plan or the Anthropic key), then for
+ *    background work ai.<sid>.backgroundModel and the provider's haiku tier, then ai.<sid>.model (and
+ *    TARSEE_AI_MODEL for the default provider), then the provider's default; all through the registry's resolveModelFor. A caller that passes the default provider's
  *    default model (what the channels do) has not chosen one either.
  *  Effort: the caller's own, then the chat's, then ai.defaultEffort, then Medium (background work without a chat
  *    sends none), stepped down to a level the model takes.
@@ -226,7 +227,11 @@ export async function resolveTarget(opts = {}, store = storeOf(opts)) {
     if (chosen) {
       const own = parseModelRef(chosen);
       const owner = own.provider || chatProvider || "claude";
-      if (owner === providerId && own.model) pick = own.model;
+      // A pick stored before providers existed (a bare model, no AI with it) is a Claude model: it runs on the Claude
+      // plan and on the Anthropic key alike, which have the same models (the composer shows it on either). Any other
+      // AI would read it as one of its own tiers, another model than the one picked, so there the default runs.
+      const legacy = !own.provider && !chatProvider && getProvider(providerId)?.catalog === "claude";
+      if (own.model && (owner === providerId || legacy)) pick = own.model;
     }
   }
   const p = getProvider(providerId);
@@ -248,6 +253,16 @@ export async function resolveTarget(opts = {}, store = storeOf(opts)) {
   // Verification (verify-model.js): the probe runs the model on the engine it is checking, one the provider runs on,
   // and tries the effort level as given; the registry's choice would refuse an unverified model or pick another engine.
   if (opts.verify === true && typeof opts.engine === "string" && p.engines.includes(opts.engine)) {
+    // The model being checked runs as it is: the registry puts its default in place of an id it doesn't list (a
+    // model the OpenAI key's table lacks, one Local AI's server didn't list yet), and the check would then pass on a
+    // model that never ran. A tier word (or a Claude id, which other AIs read as a tier) is still the AI's own.
+    const asked = ref.model ? ref.model.replace(/\[1m\]$/i, "") : "";
+    if (asked && p.catalog !== "claude" && !isTierWord(asked) && !/^claude-/i.test(asked) && asked !== target.model) {
+      target.model = asked;
+      target.vendor = vendorFor(p.id, asked);
+      target.caps = capsFor(p.id, asked, store) || {};
+      target.label = modelLabel(p, asked);
+    }
     target.engine = opts.engine;
     target.homeKey = homeKeyFor(target.provider, opts.engine);
     target.caps = {
@@ -271,7 +286,10 @@ export async function resolveTarget(opts = {}, store = storeOf(opts)) {
 async function ensureModelList(providerId, pick, store) {
   try {
     if (providerId === "chatgpt") {
-      if (!catalogModels("chatgpt-models").length) await deps.chatgptModels();
+      // "API keys only" refuses the ChatGPT sign-in (refusalFor), so its list isn't read either: that would start Codex
+      // on the account the owner switched off.
+      if (keysOnly(store)) return;
+      if (!catalogModels("chatgpt-models").length) await deps.chatgptModels(store);
     } else if (providerId === "local") {
       if (!catalogModels("local-models").length && !resolveModelFor("local", pick ?? null, store)) await deps.localModels(store);
     }
@@ -463,9 +481,9 @@ export async function* runTurn(opts = {}) {
   // (A turn that waited in its chat's queue keeps the id of its "Queued" line: the same line begins.)
   const turnId = (liveConv && (opts.liveTurnId || claimQueuedTurn(liveConv))) || opts.liveTurnId || newTurnId();
   const turnStartedAt = Date.now();
-  // exactUnlogged: the provider's own exact cost of the attempts no transcript prices (an Anthropic key's), for a
-  // turn with no turn_end to carry it (exactTarget: the attempt it came from).
-  const state = { stopReason: null, error: null, sessionRaw: null, target: null, costUsd: null, costExact: null, overBudget: false, exactUnlogged: 0, exactTarget: null };
+  // unloggedCost: the cost of the attempts no transcript prices (an Anthropic key's), for a turn with no turn_end to
+  // carry it (unloggedExact: every figure in it is the provider's own; unloggedTarget: the attempt it came from).
+  const state = { stopReason: null, error: null, sessionRaw: null, target: null, costUsd: null, costExact: null, overBudget: false, unloggedCost: 0, unloggedExact: null, unloggedTarget: null };
   const ctx = { opts, store, db, stopper, turnId, liveConv, state };
 
   let resolved;
@@ -487,6 +505,7 @@ export async function* runTurn(opts = {}) {
       provider: resolved.target?.provider || null,
       engine: resolved.target?.engine || null,
       label: resolved.target?.label || null,
+      streaming: resolved.target ? !!resolved.target.caps?.streaming : null,
     }, { turnId });
   }
 
@@ -537,21 +556,22 @@ export async function* runTurn(opts = {}) {
         ...(state.costUsd != null ? { costUsd: round6(state.costUsd), ...(state.costExact ? { costExact: true } : {}) } : {}),
         ...(state.overBudget ? { overBudget: true } : {}),
       }, { turnId });
-    } else if (state.exactUnlogged > 0) {
-      // No turn_end will carry this turn's exact cost to the usage index (a subagent, ACP, a Verify probe): an
-      // Anthropic key's calls are never priced, so without this its spend would slip past this month's cap.
+    } else if (state.unloggedCost > 0) {
+      // No turn_end will carry this turn's cost to the usage index (a subagent, ACP, a Verify probe): an Anthropic
+      // key's calls are never priced, so without this its spend would slip past this month's cap.
       const row = {
         turnId,
         conversationId: opts.toolCtx?.conversationId || `${opts.liveSource || (opts.verify === true ? "verify" : "turn")}:${turnId}`,
         source: opts.liveSource || (opts.verify === true ? "verify" : null),
         stopReason: state.stopReason || null,
-        provider: state.exactTarget?.provider || "anthropic",
+        provider: state.unloggedTarget?.provider || "anthropic",
         engine: "claude-code",
-        model: state.exactTarget?.model || null,
-        effort: state.exactTarget?.effort || null,
+        model: state.unloggedTarget?.model || null,
+        effort: state.unloggedTarget?.effort || null,
         startedAt: turnStartedAt,
         endedAt: Date.now(),
-        costUsd: round6(state.exactUnlogged),
+        costUsd: round6(state.unloggedCost),
+        exact: state.unloggedExact !== false,
       };
       Promise.resolve()
         .then(() => deps.recordReported(row, db))
@@ -619,11 +639,13 @@ async function* turnBody(ctx, resolved) {
       ctx.state.costUsd = (ctx.state.costUsd || 0) + res.costUsd;
       // Exact only while every figure added up is the provider's own (a backup's estimate makes the sum one).
       ctx.state.costExact = (ctx.state.costExact ?? true) && res.costExact;
-      // An Anthropic key's exact figure is the only record of what its attempt cost (its calls are never priced);
-      // OpenRouter's exact figure is not counted here, since its calls are priced and counted already.
-      if (res.costExact && target.engine === "claude-code" && costSource(target.provider, ctx.store) === "exact") {
-        ctx.state.exactUnlogged += res.costUsd;
-        ctx.state.exactTarget = target;
+      // An Anthropic key's figure (its engine's exact total, or the list-price estimate of an attempt stopped before
+      // that came) is the only record of what its attempt cost: its calls are never priced. OpenRouter's exact
+      // figure is not counted here, since its calls are priced and counted already.
+      if (target.engine === "claude-code" && costSource(target.provider, ctx.store) === "exact") {
+        ctx.state.unloggedCost += res.costUsd;
+        ctx.state.unloggedExact = (ctx.state.unloggedExact ?? true) && res.costExact;
+        ctx.state.unloggedTarget = target;
       }
     }
     writeFailureFlag(ctx.store, target, res);
@@ -644,6 +666,8 @@ async function* turnBody(ctx, resolved) {
         console.warn(`[turn] ${target.provider} can't answer (${why}): answering with the backup, ${backup.provider}:${backup.model}`);
         yield { type: "step", kind: "status", text: `${target.providerLabel} unavailable (${why}); answering with ${backup.label}` };
         yield routeEvent(backup, { backup: true });
+        // The live view's working line names the AI answering from here on (runTurn publishes steps, never yields them).
+        yield { type: "step", kind: "route", provider: backup.provider, engine: backup.engine, model: backup.model, label: backup.label, streaming: !!backup.caps?.streaming };
         yield { type: "text", content: `_${backup.label} answered: the ${target.providerLabel} is unavailable (${why})._\n\n` };
         target = backup;
         fresh = true;
@@ -833,6 +857,9 @@ async function* runAttempt(ctx, a) {
 
   res.costUsd = meter.reported ?? (meter.totals ? costOf(target, meter.totals, store) : null);
   res.costExact = meter.reported != null && meter.exact;
+  // An Anthropic key's cost comes only with the engine's result. A turn stopped, timed out or crashed before that was
+  // still billed for every call so far: its running totals at the list price, an estimate (never labelled exact).
+  if (res.costUsd == null && meter.totals && costSource(target.provider, store) === "exact") res.costUsd = anthropicListCost(target.model, meter.totals);
 
   if (budget?.tripped) {
     res.kind = "budget";
@@ -890,6 +917,8 @@ async function* runAttempt(ctx, a) {
         console.warn(`[turn] ${target.provider}:${target.model || "default"} finished over its spending limit: ${text}`);
         res.tail.push({ type: "step", kind: "status", text });
         ctx.state.overBudget = true;
+        // Steps reach only the live timeline: the done tells the caller (a cron's run, its push, its chat post).
+        res.done = { ...res.done, overBudget: true, ceilingUsd: ceiling, ...(after.spentUsd != null ? { spentUsd: after.spentUsd } : {}) };
       }
     }
   }

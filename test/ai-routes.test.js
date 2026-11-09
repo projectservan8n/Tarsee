@@ -645,6 +645,25 @@ describe("PUT /providers/:id and GET /models/:id", () => {
     __resetForTests();
   });
 
+  it("GET /models/openai: the table's models, and one the owner verified on the card, which can then be the default", async () => {
+    store.set("ai.openai.apiKey", KEYS.openai);
+    store.set("ai.openai.verified", { "gpt-7-mini": { engine: "codex", at: "2026-11-08T00:00:00Z", engineVersion: "0.167.0", efforts: ["low", "medium"] } });
+    respond("https://api.openai.com/", { json: { object: "list", data: [{ id: "gpt-6.1-sol" }, { id: "gpt-7-mini" }, { id: "gpt-7-nano" }] } });
+    const { status, body } = await api("GET", "/models/openai");
+    assert.equal(status, 200);
+    const mini = body.models.find((m) => m.id === "gpt-7-mini");
+    assert.ok(mini, JSON.stringify(body.models.map((m) => m.id)));
+    assert.equal(mini.verified, true);
+    assert.equal(mini.needsVerification, false);
+    assert.equal(mini.inMenu, true);
+    assert.deepEqual(mini.efforts, ["low", "medium"]);
+    assert.ok(!body.models.some((m) => m.id === "gpt-7-nano"), "an unverified id the key lists stays off the card (Verify a model id first)");
+    const r = await api("PUT", "/providers/openai", { model: "gpt-7-mini" });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(store.get("ai.openai.model"), "gpt-7-mini");
+    assert.equal((await api("PUT", "/providers/openai", { model: "gpt-7-nano" })).status, 400, "not before it is verified");
+  });
+
   it("GET /models/deepseek checks the table against DeepSeek's own list with the key, and names a model Tarsee doesn't know yet", async () => {
     store.set("ai.deepseek.apiKey", KEYS.deepseek);
     respond("https://api.deepseek.com/models", { json: { object: "list", data: [{ id: "deepseek-flash" }, { id: "deepseek-v5-preview" }] } });

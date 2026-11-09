@@ -926,6 +926,7 @@
                 <form style="display:contents" autocomplete="off" data-no-submit>
                   <input type="password" id="settingsOpenaiKey" class="form-input" placeholder="sk-..." style="max-width:400px" autocomplete="off">
                 </form>
+                <div class="hint" id="openaiKeyStatus" hidden></div>
                 <div class="hint">Required for Whisper API and GPT-4o Transcribe. Get yours at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">platform.openai.com</a>.</div>
               </div>
               <div class="form-group">
@@ -1042,8 +1043,10 @@
                 <form style="display:contents" autocomplete="off" data-no-submit>
                   <input type="password" class="form-input" id="captchaApiKey" placeholder="Your API key" style="max-width:400px" autocomplete="off">
                 </form>
+                <div class="hint" id="captchaKeyStatus" hidden></div>
               </div>
               <button class="btn btn-sm" id="saveCaptchaBtn">Save</button>
+              <button class="btn btn-sm btn-ghost" id="removeCaptchaKeyBtn" hidden>Remove key</button>
             </div>
           </div>
 

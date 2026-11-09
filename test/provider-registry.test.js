@@ -294,6 +294,65 @@ describe("resolveModelFor", () => {
     assert.equal(resolveModelFor("openrouter", "small"), "~anthropic/claude-haiku-latest");
   });
 
+  it("OpenRouter's tiers follow the default model's maker once that isn't Anthropic (design 4.11)", () => {
+    setCatalogModels("openrouter", [
+      { id: "google/gemini-3-pro", price: { in: 2, out: 12 } },
+      { id: "google/gemini-3-flash", price: { in: 0.3, out: 2.5 } },
+      { id: "google/gemini-3-ultra", price: { in: 10, out: 40 } },
+      { id: "openai/gpt-5.5", price: { in: 1.25, out: 10 } },
+      { id: "anthropic/claude-sonnet-4.6", price: { in: 3, out: 15 } },
+    ]);
+    try {
+      const at = (verified, extra = {}) => store({ "ai.openrouter.verified": JSON.stringify(verified), "ai.openrouter.model": "google/gemini-3-pro", ...extra });
+      const pro = { engine: "claude-code" };
+      // The default and a cheaper model of its maker: the cheaper one is haiku, the default every tier above.
+      const two = at({ "google/gemini-3-pro": pro, "google/gemini-3-flash": { engine: "codex" } });
+      const want = { fable: "google/gemini-3-pro", opus: "google/gemini-3-pro", sonnet: "google/gemini-3-pro", haiku: "google/gemini-3-flash", small: "google/gemini-3-flash" };
+      for (const [t, m] of Object.entries(want)) assert.equal(resolveModelFor("openrouter", t, two), m, t);
+      assert.equal(resolveModelFor("openrouter", "claude-opus-4-8", two), "google/gemini-3-pro", "a built-in agent's Claude id maps by tier too");
+      // A dearer one verified too: it is opus and fable.
+      const three = at({ "google/gemini-3-pro": pro, "google/gemini-3-flash": pro, "google/gemini-3-ultra": pro });
+      assert.equal(resolveModelFor("openrouter", "opus", three), "google/gemini-3-ultra");
+      assert.equal(resolveModelFor("openrouter", "fable", three), "google/gemini-3-ultra");
+      assert.equal(resolveModelFor("openrouter", "sonnet", three), "google/gemini-3-pro");
+      assert.equal(resolveModelFor("openrouter", "haiku", three), "google/gemini-3-flash");
+      // Only the default of that maker: every tier is the default.
+      const one = at({ "google/gemini-3-pro": pro, "openai/gpt-5.5": { engine: "codex" } });
+      for (const t of TIER_WORDS) assert.equal(resolveModelFor("openrouter", t, one), "google/gemini-3-pro", t);
+      // An openai/* default runs unverified (on Codex): its maker's tiers too.
+      for (const t of TIER_WORDS) assert.equal(resolveModelFor("openrouter", t, at({}, { "ai.openrouter.model": "openai/gpt-5.5" })), "openai/gpt-5.5", t);
+      // The owner's own map still wins; an Anthropic default, no default, or a default that can't run yet: today's slugs.
+      assert.equal(resolveModelFor("openrouter", "haiku", at({ "google/gemini-3-pro": pro }, { "ai.openrouter.tiers": { haiku: "deepseek/deepseek-chat:free" } })), "deepseek/deepseek-chat:free");
+      for (const s of [at({ "google/gemini-3-pro": pro }, { "ai.openrouter.model": "anthropic/claude-sonnet-4.6" }), at({ "google/gemini-3-pro": pro }, { "ai.openrouter.model": null }), at({})]) {
+        assert.equal(resolveModelFor("openrouter", "haiku", s), "~anthropic/claude-haiku-latest");
+        assert.equal(resolveModelFor("openrouter", "opus", s), "~anthropic/claude-opus-latest");
+      }
+    } finally {
+      setCatalogModels("openrouter", []);
+    }
+  });
+
+  it("claudeListPrice: a Claude model's list price from OpenRouter's public list; a tier word is its family's newest", () => {
+    assert.equal(registry.claudeListPrice("claude-sonnet-5"), null, "nothing until the list is in");
+    setCatalogModels("openrouter", [
+      { id: "anthropic/claude-sonnet-4.6", price: { in: 2, out: 10, cacheRead: 0.2, cacheWrite: 2.5 } },
+      { id: "anthropic/claude-sonnet-5", price: { in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75 } },
+      { id: "anthropic/claude-opus-4.7", price: { in: 5, out: 25 } },
+      { id: "anthropic/claude-haiku-4.5", price: { in: 1, out: 5, cacheRead: 0.1, cacheWrite: 1.25 } },
+    ]);
+    try {
+      assert.deepEqual(registry.claudeListPrice("claude-sonnet-4-6"), { in: 2, out: 10, cacheRead: 0.2, cacheWrite: 2.5 });
+      assert.deepEqual(registry.claudeListPrice("claude-opus-4-7[1m]"), { in: 5, out: 25, cacheRead: 5, cacheWrite: 5 });
+      assert.deepEqual(registry.claudeListPrice("sonnet"), { in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75 }, "the family's newest");
+      assert.deepEqual(registry.claudeListPrice("opus[1m]"), { in: 5, out: 25, cacheRead: 5, cacheWrite: 5 });
+      assert.deepEqual(registry.claudeListPrice("claude-haiku-4-6"), { in: 1, out: 5, cacheRead: 0.1, cacheWrite: 1.25 }, "a pin the list lacks: its family's newest");
+      assert.equal(registry.claudeListPrice("fable"), null, "no Fable on the list");
+      assert.equal(registry.claudeListPrice(""), null);
+    } finally {
+      setCatalogModels("openrouter", []);
+    }
+  });
+
   it("lets the owner's OpenRouter and Local tier maps win", () => {
     const s = store({ "ai.openrouter.tiers": { haiku: "deepseek/deepseek-chat:free" } });
     assert.equal(resolveModelFor("openrouter", "haiku", s), "deepseek/deepseek-chat:free");

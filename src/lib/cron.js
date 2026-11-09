@@ -3,7 +3,7 @@ import { buildSystemPromptParts } from "./build-system-prompt.js";
 import { chatStream } from "../ai/router.js";
 import { appendDailyLog } from "./workspace-files.js";
 import { resolveModelAlias, isKnownModel, BACKGROUND_DEFAULTS } from "../config/constants.js";
-import { runBackgroundTurn, resolveBackgroundModel } from "./background-turn.js";
+import { runBackgroundTurn, resolveBackgroundModel, overBudgetWarning } from "./background-turn.js";
 import config from "../config/env.js";
 
 /**
@@ -152,7 +152,7 @@ function scheduleJob(job) {
 /**
  * Run a cron job with retry and timeout.
  */
-async function runCronJobWithRetry(job) {
+export async function runCronJobWithRetry(job) {
   // Check if auto-disabled from too many errors
   const state = jobState.get(job.id) || { consecutiveErrors: 0 };
   if (state.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
@@ -164,12 +164,14 @@ async function runCronJobWithRetry(job) {
     const result = await runCronJob(job);
 
     if (!result.error) {
-      // Success — reset error counter
-      jobState.set(job.id, { lastRun: Date.now(), lastStatus: "ok", lastError: null, consecutiveErrors: 0 });
+      // Success — reset error counter. A job that finished over its spending limit is still a success (its work is
+      // done, and running it again would spend more), but its status and push say so.
+      const status = result.warning ? "over-budget" : "ok";
+      jobState.set(job.id, { lastRun: Date.now(), lastStatus: status, lastError: result.warning || null, consecutiveErrors: 0 });
       // Fire a push notification so the user knows the job finished even
       // if they're not watching the app. Best-effort — failures don't
       // affect the job result.
-      notifyJobComplete(job, "ok").catch(() => {});
+      notifyJobComplete(job, status, result.warning || null).catch(() => {});
       return result;
     }
 
@@ -206,6 +208,13 @@ async function notifyJobComplete(job, status, errMsg = null) {
       await sendPush({
         title: `Tarsee · ${name}`,
         body: "Job finished.",
+        tag: `cron-${job.id}`,
+        url: "/",
+      });
+    } else if (status === "over-budget") {
+      await sendPush({
+        title: `Tarsee · ${name} went over its spending limit`,
+        body: (errMsg || "").slice(0, 140),
         tag: `cron-${job.id}`,
         url: "/",
       });
@@ -278,7 +287,7 @@ export async function runCronJob(job) {
   console.log(`[cron] Job "${job.id}" model → ${jobModel}`);
 
   const toolCtx = { db: _db, settingsStore: _settingsStore, conversationId: null, channelManager: _channelManager };
-  const { text: fullResponse, error, provider: ranProvider, model: ranModel } = await runBackgroundTurn({
+  const { text: fullResponse, error, provider: ranProvider, model: ranModel, overBudget } = await runBackgroundTurn({
     label: `cron:${job.id}`,
     liveId: `cron:${job.id}`,
     liveSource: "cron",
@@ -297,6 +306,9 @@ export async function runCronJob(job) {
     return { error };
   }
 
+  // Finished, but over its spending limit (a Codex AI's cost is known only at the end): the reply stands, and says so.
+  const warning = overBudgetWarning(overBudget);
+
   // Deliver to channel conversation
   const channelKey = job.channel || "web:default";
   const convId = _settingsStore.get(`channel_conv.${channelKey}`);
@@ -304,14 +316,14 @@ export async function runCronJob(job) {
   if (convId && _convStore) {
     _convStore.addMessage(convId, {
       role: "assistant",
-      content: `**[Cron: ${job.id}]**\n\n${fullResponse}`,
+      content: `**[Cron: ${job.id}]**\n\n${fullResponse}${warning ? `\n\n_${warning}_` : ""}`,
       provider: ranProvider,
       model: ranModel || jobModel,
     });
   }
 
-  appendDailyLog(`[cron:${job.id}] ${fullResponse.slice(0, 200)}`);
-  return { response: fullResponse };
+  appendDailyLog(`[cron:${job.id}] ${fullResponse.slice(0, 200)}${warning ? ` (${warning})` : ""}`);
+  return warning ? { response: fullResponse, warning } : { response: fullResponse };
 }
 
 /**

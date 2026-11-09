@@ -6,6 +6,8 @@ import { SettingsStore } from "../db/settings.js";
 import { withConversationTurn, QUEUE_REMOVED } from "../lib/conversation-lock.js";
 import { getProvider, isShipped, normalizeProviderId } from "../ai/provider-registry.js";
 import { parseModelRef } from "../ai/model-ref.js";
+import { watchTurn } from "../lib/turn-watchdog.js";
+import { idleNote } from "../channels/turn-notes.js";
 
 export const externalApiRouter = Router();
 
@@ -98,7 +100,13 @@ externalApiRouter.post("/message", async (req, res) => {
     let error = null;
     let stopReason = null;
     let ran = { provider: null, model: null };
+    let route = null;
+    // A turn that goes quiet, or whose caller left, is stopped (lib/turn-watchdog.js), so the conversation's lock is
+    // let go. The idle clock starts when the turn does, not while it waits behind another turn in this conversation.
+    const watch = watchTurn(res, { armed: false });
     const result = await withConversationTurn(convId, async () => {
+      if (watch.left) return;
+      watch.touch();
       for await (const event of chatStream({
         provider,
         model,
@@ -108,21 +116,35 @@ externalApiRouter.post("/message", async (req, res) => {
         // channels) and the turn shows on the dashboard's live timeline.
         toolCtx,
         liveSource: "api",
+        signal: watch.signal,
         sessionId: convStore.getSessionHandle(convId),
         onSessionId: (handle) => convStore.setSessionHandle(convId, handle),
       })) {
-        if (event.type === "route") ran = { provider: event.provider || null, model: event.model || null };
+        watch.touch();
+        if (event.type === "route") { route = event; ran = { provider: event.provider || null, model: event.model || null }; }
         else if (event.type === "text") fullText += event.content;
         else if (event.type === "error") error = event.message || "The AI stopped with an error";
         else if (event.type === "done") { stopReason = event.stopReason || "end_turn"; break; }
       }
-    }, { live: { source: "api", prompt: message, model: model || null } });
+    }, { live: { source: "api", prompt: message, model: model || null } }).finally(() => watch.stop());
     // Taken out of the queue from the dashboard before it began: no reply.
     if (result === QUEUE_REMOVED) return res.status(409).json({ error: "Removed from the queue before it began", conversationId: convId });
 
     // Save assistant message
     if (fullText) convStore.addMessage(convId, { role: "assistant", content: fullText, provider: ran.provider, model: ran.model });
 
+    // Nobody is left to read the answer.
+    if (watch.left) return;
+    if (watch.idled) {
+      return res.status(504).json({
+        error: idleNote(route, watch.idleMs, { plain: true }),
+        stopReason: "idle",
+        conversationId: convId,
+        provider: ran.provider,
+        model: ran.model,
+        response: fullText,
+      });
+    }
     if (stopReason !== "end_turn") {
       return res.status(502).json({
         error: error || `The AI stopped (${stopReason || "no reply"})`,

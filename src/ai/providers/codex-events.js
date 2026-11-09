@@ -25,9 +25,10 @@
  * down gives the provider's own fix as text, an error and done{auth-expired}; anything else an error and
  * done{error}; a thread that can't be resumed is recoverable (the turn layer starts fresh and hands the chat over).
  * "Reconnecting... n/5" errors while Codex retries are status steps. finishCodexEvents() closes a turn that ended
- * any other way (Stop, the turn limit, the binary exiting) with exactly one done.
+ * any other way (Stop, the turn limit, the binary exiting) with exactly one done; the engine (codex.js) puts that
+ * turn's usage, read from the thread's rollout (usageEvents), in front of the done.
  */
-import { classifyEngineError, friendly } from "../engine-errors.js";
+import { classifyEngineError, friendly, localNoResponsesMessage } from "../engine-errors.js";
 import { getProvider, normalizeProviderId } from "../provider-registry.js";
 import { displayToolName, resultPreview, summarizeToolInput, toolInputPreview } from "../../lib/tool-steps.js";
 import { redactSecrets } from "../../lib/redact.js";
@@ -208,7 +209,8 @@ function cleanCodexError(message) {
 
 /**
  * What a Codex failure means (engine-errors.js classifyEngineError, with Codex's own words for a thread it can't resume,
- * a server it can't reach and a missing binary). Returns {kind, message, recoverable}.
+ * a server it can't reach, a Local AI server with no Responses API and a missing binary). Returns {kind, message,
+ * recoverable}.
  */
 export function classifyCodexFailure(providerId, rawMessage, { model = null, localUrl = null, status = null, code = null } = {}) {
   const id = normalizeProviderId(providerId) || String(providerId || "");
@@ -221,6 +223,11 @@ export function classifyCodexFailure(providerId, rawMessage, { model = null, loc
     return { kind: "unavailable", recoverable: false, message: "**The ChatGPT plan's usage isn't available to Codex right now.** Check the plan at chatgpt.com/codex/settings/usage, or switch to another AI in Settings > AI meanwhile." };
   }
   const c = classifyEngineError(id, "codex", { status, code, message, model });
+  // A Local AI server that lists models but has no /responses route (Ollama before 0.13.3, LM Studio before 0.3.29, a
+  // chat-completions-only server) answers 404 without a word about a model; a real unknown model's 404 names it.
+  if (id === "local" && c.kind === "model" && c.status === 404 && !/model/i.test(message.replace(/,?\s*url:\s*\S+/gi, ""))) {
+    return { kind: "unavailable", recoverable: false, message: redactSecrets(localNoResponsesMessage(localUrl)) };
+  }
   let kind = c.kind;
   let words = c.message;
   if ((kind === "unknown" || kind === "unavailable") && UNREACHABLE_RE.test(message) && !c.status) kind = "unavailable";
@@ -254,6 +261,23 @@ function failureEvents(state, rawMessage) {
   ];
 }
 
+/**
+ * The usage event and usage step for a thread's running total (Codex's turn.completed usage, or the last total its
+ * rollout recorded for a turn that ended any other way): this turn's share, the total less the baseline.
+ */
+export function usageEvents(state, totals) {
+  const usage = tarseeUsage(usageDelta(totals, state.baseline));
+  return [
+    { type: "usage", usage },
+    {
+      type: "step", kind: "usage",
+      input: usage.input_tokens, cacheRead: usage.cache_read_input_tokens, cacheWrite: usage.cache_creation_input_tokens, output: usage.output_tokens,
+      total: usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens + usage.output_tokens,
+      calls: null, outTps: null, nowTps: null,
+    },
+  ];
+}
+
 /** Every tool still waiting for its result, closed as not finished. */
 function closeOpen(state, why) {
   const out = [];
@@ -281,19 +305,8 @@ export function mapCodexEvent(ev, state) {
     case "turn.completed": {
       const totals = normalizeUsage(ev.usage);
       state.totals = totals;
-      const usage = tarseeUsage(usageDelta(totals, state.baseline));
       state.done = true;
-      return [
-        ...closeOpen(state, "Ended without a result."),
-        { type: "usage", usage },
-        {
-          type: "step", kind: "usage",
-          input: usage.input_tokens, cacheRead: usage.cache_read_input_tokens, cacheWrite: usage.cache_creation_input_tokens, output: usage.output_tokens,
-          total: usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens + usage.output_tokens,
-          calls: null, outTps: null, nowTps: null,
-        },
-        { type: "done", stopReason: "end_turn" },
-      ];
+      return [...closeOpen(state, "Ended without a result."), ...usageEvents(state, totals), { type: "done", stopReason: "end_turn" }];
     }
     case "turn.failed":
       return [...closeOpen(state, "The turn failed before it finished."), ...failureEvents(state, ev.error?.message || state.lastError || "The turn failed.")];

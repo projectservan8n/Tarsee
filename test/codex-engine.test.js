@@ -408,6 +408,98 @@ describe("a turn's set-up (scripted Codex)", () => {
   });
 });
 
+describe("usage of a turn that ends without turn.completed (scripted Codex)", () => {
+  // Codex reports usage only at turn.completed, yet every model call before a Stop, a timeout, the turn limit or a
+  // failure was billed: the thread's rollout has the running total, and the next turn counts from there.
+  const T = { input_tokens: 0, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
+  function rolloutFile(home, thread) {
+    const day = new Date(parseInt(thread.replace(/-/g, "").slice(0, 12), 16));
+    const dir = path.join(home, "sessions", String(day.getFullYear()), String(day.getMonth() + 1).padStart(2, "0"), String(day.getDate()).padStart(2, "0"));
+    fs.mkdirSync(dir, { recursive: true });
+    return path.join(dir, `rollout-2026-11-09T10-00-00-${thread}.jsonl`);
+  }
+  const tokenLine = (total) => JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { ...T, ...total } } } });
+  const keysHome = (dirs) => path.join(dirs.state, ".codex-home-keys");
+
+  it("Stop after some model calls: their usage comes before done{aborted}", async () => {
+    const dirs = freshDirs();
+    const thread = "01a1c000-0000-7000-8000-0000000000c1";
+    const ac = new AbortController();
+    const { Codex } = fakeCodex(async function* ({ signal }) {
+      yield { type: "thread.started", thread_id: thread };
+      yield { type: "turn.started" };
+      // What codex writes as each response completes (three calls so far), then a request that never answers.
+      fs.writeFileSync(rolloutFile(keysHome(dirs), thread), [JSON.stringify({ type: "session_meta", payload: { id: thread } }), tokenLine({ input_tokens: 20000, output_tokens: 1000 }), tokenLine({ input_tokens: 30000, cached_input_tokens: 4000, output_tokens: 1500 })].join("\n") + "\n");
+      yield { type: "item.completed", item: { id: "c1", type: "command_execution", command: "ls", aggregated_output: "", exit_code: 0, status: "completed" } };
+      setTimeout(() => ac.abort(), 20);
+      await new Promise((r) => signal.addEventListener("abort", r, { once: true }));
+      throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+    });
+    const out = await collect(run({ ...unitOpts(dirs, { Codex }), signal: ac.signal }));
+    assert.deepEqual(of(out, "usage").map((u) => u.usage), [{ input_tokens: 26000, cache_read_input_tokens: 4000, cache_creation_input_tokens: 0, output_tokens: 1500 }]);
+    assert.equal(of(out, "step").filter((s) => s.kind === "usage").length, 1);
+    assert.deepEqual(out.at(-1), { type: "done", stopReason: "aborted" });
+    assert.ok(out.findIndex((e) => e.type === "usage") < out.length - 1, "before the done, where the turn layer still reads it");
+    assert.equal(of(out, "error").length, 0);
+  });
+
+  it("turn.failed after some calls on a resumed thread: only this turn's share, before done{error}; nothing when nothing new was spent", async () => {
+    const dirs = freshDirs();
+    const store = makeStore();
+    const thread = "01a1c000-0000-7000-8000-0000000000c2";
+    const file = rolloutFile(keysHome(dirs), thread);
+    fs.writeFileSync(file, [JSON.stringify({ type: "session_meta", payload: { id: thread } }), tokenLine({ input_tokens: 1000, output_tokens: 10 })].join("\n") + "\n");
+    // The first turn on the chat stores the instructions' hash, so the next ones resume.
+    await collect(run(unitOpts(dirs, { Codex: fakeCodex(simpleTurn).Codex, store })));
+    const failing = (spend) => fakeCodex(async function* () {
+      yield { type: "thread.started", thread_id: thread };
+      yield { type: "turn.started" };
+      if (spend) fs.appendFileSync(file, tokenLine({ input_tokens: 4000, cached_input_tokens: 500, output_tokens: 60 }) + "\n");
+      yield { type: "error", message: "unexpected status 500 Internal Server Error: boom" };
+      yield { type: "turn.failed", error: { message: "unexpected status 500 Internal Server Error: boom" } };
+    }).Codex;
+    const resumed = { sessionHandle: `openai/cx/openai:${thread}` };
+    const out = await collect(run(unitOpts(dirs, { Codex: failing(true), store, extra: resumed })));
+    assert.deepEqual(out.map((e) => e.type).filter((t) => t !== "step"), ["error", "usage", "done"]);
+    assert.deepEqual(of(out, "usage")[0].usage, { input_tokens: 2500, cache_read_input_tokens: 500, cache_creation_input_tokens: 0, output_tokens: 50 });
+    assert.deepEqual(out.at(-1), { type: "done", stopReason: "error" });
+    const none = await collect(run(unitOpts(dirs, { Codex: failing(false), store, extra: resumed })));
+    assert.equal(of(none, "usage").length, 0, "the rollout's total is the baseline: nothing new");
+    assert.deepEqual(none.at(-1), { type: "done", stopReason: "error" });
+  });
+
+  it("the turn limit counts what was spent; a resumed thread whose rollout wasn't there at the start counts nothing", async () => {
+    const dirs = freshDirs();
+    const thread = "01a1c000-0000-7000-8000-0000000000c3";
+    const looping = (write) => fakeCodex(async function* ({ signal }) {
+      yield { type: "thread.started", thread_id: thread };
+      yield { type: "turn.started" };
+      if (write) fs.writeFileSync(rolloutFile(keysHome(dirs), thread), tokenLine({ input_tokens: 9000, output_tokens: 90 }) + "\n");
+      for (let i = 0; ; i++) {
+        if (signal?.aborted) throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+        yield { type: "item.completed", item: { id: `c${i}`, type: "command_execution", command: "echo hi", aggregated_output: "hi", exit_code: 0, status: "completed" } };
+      }
+    }).Codex;
+    const limited = await collect(run({ ...unitOpts(dirs, { Codex: looping(true) }), maxTurns: 2 }));
+    assert.deepEqual(of(limited, "usage").map((u) => u.usage), [{ input_tokens: 9000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 90 }]);
+    assert.deepEqual(limited.at(-1), { type: "done", stopReason: "max_turns" });
+    // Resumed by its raw id with no rollout found first: the whole thread's total isn't this turn's, so none is given.
+    const other = freshDirs();
+    const late = fakeCodex(async function* ({ signal }) {
+      yield { type: "thread.started", thread_id: thread };
+      yield { type: "turn.started" };
+      fs.writeFileSync(rolloutFile(keysHome(other), thread), tokenLine({ input_tokens: 9000, output_tokens: 90 }) + "\n");
+      for (let i = 0; ; i++) {
+        if (signal?.aborted) throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+        yield { type: "item.completed", item: { id: `c${i}`, type: "command_execution", command: "echo hi", aggregated_output: "hi", exit_code: 0, status: "completed" } };
+      }
+    }).Codex;
+    const unknown = await collect(run({ ...unitOpts(other, { Codex: late, extra: { sessionId: thread } }), toolCtx: { settingsStore: makeStore(), conversationId: null }, maxTurns: 2 }));
+    assert.equal(of(unknown, "usage").length, 0);
+    assert.deepEqual(unknown.at(-1), { type: "done", stopReason: "max_turns" });
+  });
+});
+
 describe("the ChatGPT plan's start gate", () => {
   const authAt = (home, ms) => {
     fs.mkdirSync(home, { recursive: true });
@@ -447,6 +539,36 @@ describe("the ChatGPT plan's start gate", () => {
     assert.deepEqual(await timeline(true), ["A:start", "A:answered", "B:start", "B:answered"]);
     const together = await timeline(false);
     assert.deepEqual(together.slice(0, 2).sort(), ["A:start", "B:start"]);
+  });
+
+  it("Stop while a turn waits at the gate ends it at once; the turns behind it still wait for the one ahead", async () => {
+    const dirs = freshDirs();
+    const home = path.join(dirs.state, ".codex-home");
+    authAt(home, Date.now() - REFRESH_STALE_MS - 60_000);
+    const marks = [];
+    const make = (name, ms) => fakeCodex(async function* () {
+      marks.push(`${name}:start`);
+      yield { type: "thread.started", thread_id: `01a1c000-0000-7000-8000-0000000000${name === "A" ? "d1" : name === "B" ? "d2" : "d3"}` };
+      yield { type: "turn.started" };
+      await sleep(ms);
+      marks.push(`${name}:answered`);
+      yield { type: "item.completed", item: { id: "m", type: "agent_message", text: name } };
+      yield { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } };
+    }).Codex;
+    const t0 = Date.now();
+    const a = collect(run(unitOpts(dirs, { provider: "chatgpt", Codex: make("A", 1500) })));
+    await sleep(50);
+    const ac = new AbortController();
+    const b = collect(run({ ...unitOpts(dirs, { provider: "chatgpt", Codex: make("B", 10) }), signal: ac.signal }));
+    await sleep(50);
+    const c = collect(run(unitOpts(dirs, { provider: "chatgpt", Codex: make("C", 10) })));
+    setTimeout(() => ac.abort(), 100);
+    const outB = await b;
+    const stoppedAfter = Date.now() - t0;
+    assert.deepEqual(outB, [{ type: "done", stopReason: "aborted" }]);
+    assert.ok(stoppedAfter < 1000, `Stop took ${stoppedAfter} ms: it waited for the turn ahead`);
+    await Promise.all([a, c]);
+    assert.deepEqual(marks, ["A:start", "A:answered", "C:start", "C:answered"], "C still waited for A");
   });
 
   it("the gate lets go after 30 s at most, and a waiting turn passes at once if the sign-in was refreshed meanwhile", async () => {
@@ -973,6 +1095,25 @@ describe("the real codex binary against the fake server", { skip: CODEX_THERE ? 
     assert.ok(messageTexts(second, "assistant").some((t) => t.includes("First answer.")) || JSON.stringify(second.input).includes("First answer."));
     assert.deepEqual(of(out1, "usage")[0].usage, { input_tokens: 900, cache_read_input_tokens: 100, cache_creation_input_tokens: 0, output_tokens: 10 });
     assert.deepEqual(of(out2, "usage")[0].usage, { input_tokens: 600, cache_read_input_tokens: 900, cache_creation_input_tokens: 0, output_tokens: 20 });
+  });
+
+  it("Stop after three model calls: their usage is counted (from the rollout), and the next turn counts only its own", async () => {
+    fake.reset();
+    const store = makeStore();
+    handler = (body, { index }) => (index < 3
+      ? { calls: [{ name: "exec_command", arguments: { cmd: "node -e \"console.log(1)\"" } }], usage: { input_tokens: 10_000, cached_input_tokens: 0, output_tokens: 500 } }
+      : { hang: true });
+    const ac = new AbortController();
+    const one = turn("openrouter", { store, conv: "conv-stop-usage", signal: ac.signal });
+    const watcher = setInterval(() => { if (fake.responses().length >= 4) ac.abort(); }, 50);
+    const out1 = await collect(one.iter);
+    clearInterval(watcher);
+    assert.deepEqual(of(out1, "done"), [{ type: "done", stopReason: "aborted" }]);
+    assert.deepEqual(of(out1, "usage").map((u) => u.usage), [{ input_tokens: 30_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1500 }]);
+    handler = () => ({ text: "Carried on.", usage: { input_tokens: 40_000, cached_input_tokens: 0, output_tokens: 1600 } });
+    const out2 = await collect(turn("openrouter", { store, conv: "conv-stop-usage", sessionHandle: one.handles[0] }).iter);
+    assert.deepEqual(of(out2, "done"), [{ type: "done", stopReason: "end_turn" }]);
+    assert.deepEqual(of(out2, "usage").map((u) => u.usage), [{ input_tokens: 40_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1600 }], "nothing counted twice");
   });
 
   it("a resumed thread keeps the instructions it started with, so changed ones start fresh; a thread Codex can't find is recoverable", async () => {

@@ -1254,6 +1254,8 @@ const Chat = {
    * tokens; begin(at) makes it the working line when the turn really begins.
    * The line always opens, even before the first step: to what it thought (a summary, for a turn sent from the
    * dashboard), why it waits (an API retry, compacting), or a word that nothing has happened yet.
+   * setModel(name, streaming) names the AI answering ("Thinking with DeepSeek Flash"); one that sends its reply only
+   * when each step finishes (a Codex model: streaming false) gets a note under the line while it works.
    */
   createSteps({ state = "running", startedAt = Date.now(), tools = [], notes = [], items = null, lazy = null, onStop = null } = {}) {
     const el = document.createElement("div");
@@ -1262,15 +1264,18 @@ const Chat = {
       + '<span class="steps-dot" aria-hidden="true"></span><span class="steps-title"></span><span class="steps-detail"></span>'
       + '<span class="steps-usage"></span><span class="steps-time"></span>'
       + '<svg class="steps-caret" width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-      + '</button></div><div class="steps-list" hidden></div>';
+      + '</button></div><p class="steps-hint" hidden></p><div class="steps-list" hidden></div>';
     const line = el.querySelector(".steps-line");
     const list = el.querySelector(".steps-list");
+    const hint = el.querySelector(".steps-hint");
+    hint.textContent = "This AI sends its reply when each step finishes; tools still appear as they start.";
     // What the list says while it has nothing in it yet (it opens all the same).
     const empty = document.createElement("p");
     empty.className = "steps-empty";
     list.appendChild(empty);
     const s = {
       el, state, startedAt, endedAt: null, error: null, rows: new Map(), order: [], notes: 0, last: "", lazy, loaded: null,
+      model: null, streaming: true,
     };
     const setOpen = (open) => {
       list.hidden = !open;
@@ -1301,7 +1306,7 @@ const Chat = {
       const now = Date.now();
       const ms = (s.endedAt || now) - (s.startedAt || now);
       const n = toolCount();
-      const tl = Core.turnLine({ state: s.state, tools: n, failed: failedCount(), ms: s.state === "running" || s.startedAt ? ms : null, last: s.last, error: s.error });
+      const tl = Core.turnLine({ state: s.state, tools: n, failed: failedCount(), ms: s.state === "running" || s.startedAt ? ms : null, last: s.last, error: s.error, model: s.model });
       let title = tl.title;
       let detail = tl.detail;
       if (s.state === "done" && !n && s.notes) { title = "Thought process"; detail = ""; }
@@ -1313,6 +1318,7 @@ const Chat = {
       el.dataset.state = s.state;
       el.dataset.tone = tl.tone;
       el.hidden = s.state === "done" && !n && !s.notes;
+      hint.hidden = !(s.state === "running" && s.streaming === false);
       empty.hidden = s.order.length > 0;
       empty.textContent = s.state === "queued"
         ? "Waiting for the reply above to finish. It starts right after."
@@ -1423,8 +1429,8 @@ const Chat = {
       r.el.querySelector(".step-label").textContent = Core.stepLabel({ name: r.name, summary: r.summary, input: r.input }, { running: false });
       if (r.startedAt) r.time.textContent = Core.fmtDur(endedAt - r.startedAt);
       if (!r.body.hidden) fillBody(r);
-      // Nothing running now: back to "Thinking" until the next step.
-      if (s.order.every((k) => s.rows.get(k).kind !== "tool" || s.rows.get(k).endedAt)) s.last = "Thinking";
+      // Nothing running now: back to "Thinking with …" until the next step.
+      if (s.order.every((k) => s.rows.get(k).kind !== "tool" || s.rows.get(k).endedAt)) s.last = "";
       s.paint();
     };
 
@@ -1461,7 +1467,7 @@ const Chat = {
       s.order.push(k);
       list.appendChild(n);
       s.notes += 1;
-      if (s.state === "running") s.last = "Thinking";
+      if (s.state === "running") s.last = "";
       s.paint();
       return n;
     };
@@ -1484,9 +1490,19 @@ const Chat = {
     /** The turn's tokens so far ({ total, nowTps, outTps, ... } from a usage step), for the working line. */
     s.setUsage = (u) => {
       s.usage = u || null;
-      // A model call going again after a retry: the line goes back from the retry's words to "Thinking".
-      if (s.statusLast && s.last === s.statusLast) s.last = "Thinking";
+      // A model call going again after a retry: the line goes back from the retry's words to "Thinking with …".
+      if (s.statusLast && s.last === s.statusLast) s.last = "";
       s.statusLast = null;
+      s.paint();
+    };
+
+    /**
+     * The AI answering: its model's name for the line, and whether its words come as they are written (false: a
+     * Codex model, whose reply comes when each step finishes). Called again when a backup takes over.
+     */
+    s.setModel = (name, streaming) => {
+      s.model = String(name || "").trim() || null;
+      s.streaming = streaming !== false;
       s.paint();
     };
 
@@ -1884,6 +1900,8 @@ const Chat = {
         // onText (content for text, null + event for tool/thinking events)
         (content, event) => {
           if (event?.type === "usage" || event?.type === "context_overflow" || event?.type === "model_selected") {
+            // The AI answering (a backup that takes over sends it again): named on the working line.
+            if (event.type === "model_selected") steps.setModel(event.label, event.streaming);
             this.handleTurnMeta(event);
             return;
           }

@@ -264,8 +264,11 @@ export async function providerReadiness(idOrAlias, { store = null, env = process
  * Read the signed-in ChatGPT account's models again (ai/codex-models.js listAccountModels) into the registry's
  * "chatgpt-models" catalog. An empty catalog is filled now (asked again two minutes after a failed try); a full one
  * is refreshed in the background once an hour. `list` is a test's (or a caller's) own lister.
+ * Never while "API keys only" is on (`store`'s ai.keysOnly, or TARSEE_KEYS_ONLY=1): the read starts Codex with the
+ * plan's sign-in, which sends it to ChatGPT's backend, and keys-only promises no plan sign-in is ever used.
  */
-export async function refreshChatgptModels({ list = null, env = process.env, stateDir, force = false } = {}) {
+export async function refreshChatgptModels({ list = null, env = process.env, stateDir, force = false, store = null } = {}) {
+  if (keysOnly(store, { env })) return catalogModels("chatgpt-models");
   const have = catalogModels("chatgpt-models").length > 0;
   const age = Date.now() - _chatgptListAt;
   if (!force && age < (have ? CHATGPT_REFRESH_MS : CHATGPT_RETRY_MS)) return catalogModels("chatgpt-models");
@@ -434,7 +437,7 @@ export async function getModelGroups({ store = null, env = process.env, isShippe
   const ids = PROVIDER_IDS.filter((id) => shipped(id));
   const statuses = await Promise.all(ids.map((id) => providerReadiness(id, { store, env, statusFor, isShipped: shipped, stateDir })));
   const ready = statuses.filter((s) => s.ready).map((s) => s.provider);
-  if (ready.includes("chatgpt")) await refreshChatgptModels({ list: listChatgptModels, env, stateDir });
+  if (ready.includes("chatgpt")) await refreshChatgptModels({ list: listChatgptModels, env, stateDir, store });
   const defaults = defaultPick(store, { env, isShipped: shipped });
   const order = [...ready.filter((id) => id === defaults.provider), ...ready.filter((id) => id !== defaults.provider)];
   const groups = order.map((id) => buildGroup(PROVIDERS[id], { store, env, now, defaultEffort: defaults.effort, isDefault: id === defaults.provider }));
@@ -551,6 +554,19 @@ function registrySections(p, store, now, effort, env = null) {
     return sections;
   }
 
+  if (p.id === "openai") {
+    // The table's models the key can use; the owner's own verified ids (a newer model the table lacks, checked with
+    // Verify on the OpenAI card); and, collapsed, the key's other chat models, which need Verify first (design 4.11):
+    // the turn layer runs a model it doesn't know only once it is verified.
+    const mine = Object.keys(verified).filter((id) => !p.models.some((m) => m.id === id));
+    const others = unique(catalogModels("openai-models").map((m) => m.id))
+      .filter((id) => !p.models.some((m) => m.id === id) && !mine.includes(id) && isOpenAiChatModel(id))
+      .sort();
+    const sections = [{ id: "main", label: null, entries: [...list.map((m) => make(m, { selectable: true })), ...mine.map((id) => make(row(id), { selectable: true, verifiedRow: true }))] }];
+    if (others.length) sections.push({ id: "all", label: "All models", collapsed: true, entries: others.map((id) => make(row(id), { selectable: false })) });
+    return sections;
+  }
+
   if (p.id === "chatgpt" && !list.length) {
     // The account's list could not be read: name no model and let Codex use the plan's own default.
     const e = make({ id: "", label: "ChatGPT's default model" }, { selectable: true });
@@ -559,6 +575,15 @@ function registrySections(p, store, now, effort, env = null) {
   }
 
   return [{ id: "main", label: null, entries: list.map((m) => make(m, { selectable: true })) }];
+}
+
+/**
+ * Whether an id the OpenAI key lists is a chat model Tarsee could run on Codex: GPT, o-series and codex- models, not
+ * the audio, realtime, transcription, speech, image, search, embedding, moderation or instruct ones.
+ */
+export function isOpenAiChatModel(id) {
+  const v = String(id || "");
+  return /^(gpt-\d|o\d|codex-)/i.test(v) && !/(audio|realtime|transcribe|tts|image|search|embed|moderation|instruct)/i.test(v);
 }
 
 /** A registry model as a picker entry. */

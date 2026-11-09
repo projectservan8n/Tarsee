@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import config from "../config/env.js";
 import { getBootContext, hasBootstrapFile, appendDailyLog } from "./workspace-files.js";
 import { buildSystemPromptParts } from "./build-system-prompt.js";
-import { runBackgroundTurn, resolveBackgroundModel, defaultAiReadiness } from "./background-turn.js";
+import { runBackgroundTurn, resolveBackgroundModel, defaultAiReadiness, overBudgetWarning } from "./background-turn.js";
 import { BACKGROUND_DEFAULTS } from "../config/constants.js";
 
 /**
@@ -94,7 +94,7 @@ export async function runBootChecklist({ db, settingsStore, channelManager = nul
   ];
 
   const toolCtx = { db, settingsStore, conversationId: null, channelManager };
-  const { text: fullResponse, error } = await runBackgroundTurn({
+  const { text: fullResponse, error, overBudget } = await runBackgroundTurn({
     label: "boot",
     liveId: "boot",
     liveSource: "boot",
@@ -111,8 +111,11 @@ export async function runBootChecklist({ db, settingsStore, channelManager = nul
     return { skipped: false, error };
   }
 
-  appendDailyLog(`[boot] ${fullResponse.slice(0, 200)}`);
-  return { skipped: false, response: fullResponse };
+  // Finished, but over its spending limit (a Codex AI's cost is known only at the end).
+  const warning = overBudgetWarning(overBudget);
+  if (warning) console.warn(`[boot] the checklist ${warning.charAt(0).toLowerCase()}${warning.slice(1)}`);
+  appendDailyLog(`[boot] ${fullResponse.slice(0, 200)}${warning ? ` (${warning})` : ""}`);
+  return { skipped: false, response: fullResponse, ...(warning ? { warning } : {}) };
 }
 
 /**

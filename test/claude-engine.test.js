@@ -79,7 +79,7 @@ describe("buildQueryOptions: the Claude plan", () => {
       assert.deepEqual(b.options.allowedTools, b.options.tools, id);
       assert.equal(b.options.permissionMode, "bypassPermissions", id);
       assert.equal(b.options.allowDangerouslySkipPermissions, true, id);
-      assert.equal(b.options.strictMcpConfig, true, `${id}: only Tarsee's own MCP servers`);
+      assert.equal(b.options.strictMcpConfig, id !== "claude", id === "claude" ? "the plan keeps the owner's own MCP servers (.mcp.json, plugins), as before" : `${id}: only Tarsee's own MCP servers`);
       assert.deepEqual(b.options.mcpServers, { tarsee: { name: "tarsee-stub" } }, id);
       assert.deepEqual(b.options.additionalDirectories, [BUNDLED_SKILLS_DIR], id);
       assert.equal(b.options.includePartialMessages, true, id);
@@ -564,6 +564,40 @@ describe("run(): cost and the turn budget", () => {
     const events = await collect(runOpts("openrouter", q));
     assert.equal(events.find((e) => e.type === "usage").costUsd, 0.0055);
     assert.equal(events.find((e) => e.type === "usage").costExact, true, "OpenRouter's own figure");
+  });
+
+  it("OpenRouter's tier pins follow the registry's tiers, and only name models that run on Claude Code", async () => {
+    const { setCatalogModels } = await import("../src/ai/provider-registry.js");
+    setCatalogModels("openrouter", [
+      { id: "google/gemini-3-pro", price: { in: 2, out: 12 } },
+      { id: "google/gemini-3-flash", price: { in: 0.3, out: 2.5 } },
+      { id: "google/gemini-3-ultra", price: { in: 10, out: 40 } },
+    ]);
+    try {
+      const values = {
+        "ai.openrouter.model": "google/gemini-3-pro",
+        // Ultra runs on Claude Code; Flash passed Verify on Codex only, so Claude Code can't be handed it.
+        "ai.openrouter.verified": JSON.stringify({ "google/gemini-3-pro": { engine: "claude-code" }, "google/gemini-3-ultra": { engine: "claude-code" }, "google/gemini-3-flash": { engine: "codex" } }),
+      };
+      const store = { get: (k) => values[k] ?? null };
+      const q = fakeQuery([init(), result()]);
+      await collect(runOpts("openrouter", q, { model: "google/gemini-3-pro", deps: { store } }));
+      const e = q.calls[0].options.env;
+      assert.equal(e.ANTHROPIC_MODEL, "google/gemini-3-pro");
+      assert.equal(e.ANTHROPIC_DEFAULT_OPUS_MODEL, "google/gemini-3-ultra", "the maker's dearest verified model");
+      assert.equal(e.ANTHROPIC_DEFAULT_FABLE_MODEL, "google/gemini-3-ultra");
+      assert.equal(e.ANTHROPIC_DEFAULT_SONNET_MODEL, "google/gemini-3-pro");
+      assert.equal(e.ANTHROPIC_DEFAULT_HAIKU_MODEL, "google/gemini-3-pro", "Flash runs on Codex only: the turn's own model instead");
+      assert.equal(e.ANTHROPIC_SMALL_FAST_MODEL, "google/gemini-3-pro");
+      for (const v of Object.values(e)) assert.doesNotMatch(String(v), /~anthropic\//, "no Claude behind the owner's back");
+      // With no default of another maker, today's pins.
+      const plain = fakeQuery([init(), result()]);
+      await collect(runOpts("openrouter", plain, { model: "~anthropic/claude-sonnet-latest", deps: { store: { get: () => null } } }));
+      assert.equal(plain.calls[0].options.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, "~anthropic/claude-haiku-latest");
+      assert.equal(plain.calls[0].options.env.ANTHROPIC_DEFAULT_OPUS_MODEL, "~anthropic/claude-opus-latest");
+    } finally {
+      setCatalogModels("openrouter", []);
+    }
   });
 
   it("a gateway turn over its ceiling is stopped by Tarsee's own guard", async () => {

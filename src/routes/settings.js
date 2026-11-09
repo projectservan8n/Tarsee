@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { Router } from "express";
-import { SettingsStore } from "../db/settings.js";
+import { SettingsStore, isAiKeySlot, OLD_VOICE_KEY } from "../db/settings.js";
 import { getProvider, isShipped, shippedProviders, checkKeySlot } from "../ai/provider-registry.js";
 import { providerStatus, activeTarget, credentialPresence } from "../ai/provider-status.js";
 import { ensureLocalModels } from "../ai/provider-models.js";
@@ -416,6 +416,12 @@ settingsRouter.post("/general", (req, res) => {
   const protectedPrefixes = ["channel."];
   if (protectedPrefixes.some((p) => key.startsWith(p))) {
     return res.status(400).json({ error: "Use the dedicated endpoint for channel settings" });
+  }
+
+  // An AI's key goes through Settings > AI (PUT /api/ai/keys/<id>), which checks it is that AI's key and never a
+  // masked display ("sk-p...wxyz") posted back. The old Voice tab's copy of the OpenAI key is read by nothing.
+  if (isAiKeySlot(key) || key === OLD_VOICE_KEY) {
+    return res.status(400).json({ error: "Save AI keys in Settings > AI." });
   }
 
   // Enum-shaped settings — defend the API even though the UI dropdown

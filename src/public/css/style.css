@@ -1100,6 +1100,7 @@ html, body {
   letter-spacing: var(--tracking-normal);
   min-height: var(--space-10);
 }
+.btn[hidden] { display: none; }
 
 .btn:hover {
   background: var(--bg-surface-hover);
@@ -1688,6 +1689,7 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
 .ai-badge[data-kind="ok"]   { background: var(--success-subtle); color: var(--success); }
 .ai-badge[data-kind="warn"] { background: var(--warning-subtle); color: var(--warning); }
 .ai-local-key,
+.ai-custom-model,
 .ai-or {
   padding: 0 var(--space-3);
   border: var(--space-px) solid var(--border);
@@ -1695,8 +1697,10 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
   background: var(--bg-input);
 }
 .ai-local-key[open],
+.ai-custom-model[open],
 .ai-or[open] { display: flex; flex-direction: column; gap: var(--space-2); padding-bottom: var(--space-3); }
 .ai-local-key > summary,
+.ai-custom-model > summary,
 .ai-or > summary {
   padding: var(--space-2) 0;
   font-size: var(--text-sm);
@@ -1704,7 +1708,9 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
   color: var(--accent);
   cursor: pointer;
 }
-.ai-or .hint { font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading-normal); }
+.ai-or .hint,
+.ai-custom-model .hint { font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading-normal); }
+.ai-custom-model { margin-top: var(--space-2); }
 .ai-or-list { max-height: 420px; overflow-y: auto; overscroll-behavior: contain; }
 .ai-local-models { margin-top: var(--space-2); max-height: 320px; overflow-y: auto; overscroll-behavior: contain; }
 .ai-local-models .hint { font-size: var(--text-sm); color: var(--text-muted); }

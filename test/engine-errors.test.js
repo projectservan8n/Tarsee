@@ -41,6 +41,40 @@ describe("classifyEngineError: HTTP statuses", () => {
     assert.equal(classifyEngineError("anthropic", CC, { status: 403 }).kind, "auth");
   });
 
+  // OpenRouter's documented 403 for a prompt its moderation flagged: the body carries metadata.flagged_input, the
+  // person's own words, which must not be read as Tarsee's other signals (a "session expired" in them included).
+  const moderated = (flagged = "a flagged sentence") => JSON.stringify({ error: { code: 403, message: "openai/gpt-5.5 requires moderation on OpenAI. Your input was flagged for \"violence\". No credits were charged.", metadata: { reasons: ["violence"], flagged_input: flagged, provider_name: "OpenAI", model_slug: "openai/gpt-5.5" } } });
+
+  it("OpenRouter's moderation refusal (403) is not a rejected key: no flag, no retry, its own words", () => {
+    const cases = [
+      ["codex", { message: `unexpected status 403 Forbidden: ${moderated()}, url: https://openrouter.ai/api/v1/responses` }],
+      ["claude-code", { message: `API Error: 403 ${moderated()}` }],
+      ["claude-code", { code: "authentication_failed", message: `API Error: 403 ${moderated()}` }],
+      ["claude-code", { status: 403, message: moderated("my session expired so now I will hurt them") }],
+    ];
+    for (const [engine, input] of cases) {
+      const e = classifyEngineError("openrouter", engine, input);
+      assert.equal(e.kind, "moderated", JSON.stringify(input).slice(0, 80));
+      assert.equal(e.state, null, "the card isn't flagged: the key works");
+      assert.equal(e.recoverable, false, "the same prompt would be flagged again");
+      assert.doesNotMatch(e.message, /key was rejected/);
+      assert.match(e.message, /OpenRouter's moderation turned this message down/);
+      assert.match(e.message, /flagged for violence/);
+      assert.match(e.message, /Nothing is wrong with the key/);
+    }
+    assert.equal(classifyEngineError("anthropic", CC, { status: 403, message: "API Error: 403 {\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"Your API key does not have permission\"}}" }).kind, "auth", "any other 403 is still the key");
+    assert.equal(classifyEngineError("openrouter", CX, { message: "unexpected status 403 Forbidden: {\"error\":{\"message\":\"Invalid key\"}}" }).kind, "auth");
+  });
+
+  it("OpenRouter's 403 for a key over its spending limit is out of credit, not a rejected key", () => {
+    for (const words of ["Key limit exceeded (total limit). Manage it using https://openrouter.ai/settings/keys", "Budget limit exceeded (weekly limit)."]) {
+      const e = classifyEngineError("openrouter", CX, { message: `unexpected status 403 Forbidden: {"error":{"code":403,"message":"${words}"}}` });
+      assert.equal(e.kind, "billing", words);
+      assert.equal(e.state, "out-of-credit");
+      assert.match(e.message, /spending limit/);
+    }
+  });
+
   it("402 is out of credit, with the provider's top-up link", () => {
     const ds = classifyEngineError("deepseek", CC, { message: "API Error: 402 Insufficient Balance" });
     assert.equal(ds.kind, "billing");

@@ -85,17 +85,30 @@ async function freePort() {
   });
 }
 
-// The owner's "Local AI": answers GET /v1/models; anything else is recorded (no turn should reach it here).
+// The owner's "Local AI": answers GET /v1/models, and Test's check that it has the Responses API (POST /v1/responses
+// with no model in it) as a current Ollama does, 400 "model is required"; anything else is recorded (no turn should
+// reach it here: a turn's POST /v1/responses names its model, and is recorded with it).
 const localHits = [];
 const localAi = http.createServer((req, res) => {
-  localHits.push(`${req.method} ${req.url}`);
-  if (req.method === "GET" && /\/v1\/models\/?$/.test(req.url)) {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ object: "list", data: [{ id: "e2e-local-model", object: "model", owned_by: "e2e" }] }));
-    return;
-  }
-  res.writeHead(404, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ error: { message: "not here" } }));
+  const chunks = [];
+  req.on("data", (c) => chunks.push(c));
+  req.on("end", () => {
+    let model = null;
+    try { model = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")?.model ?? null; } catch { model = "(not JSON)"; }
+    localHits.push(`${req.method} ${req.url}${model ? ` (model ${model})` : ""}`);
+    if (req.method === "GET" && /\/v1\/models\/?$/.test(req.url)) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ object: "list", data: [{ id: "e2e-local-model", object: "model", owned_by: "e2e" }] }));
+      return;
+    }
+    if (req.method === "POST" && /\/v1\/responses\/?$/.test(req.url) && !model) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "model is required" } }));
+      return;
+    }
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "not here" } }));
+  });
 });
 await new Promise((r) => localAi.listen(0, "127.0.0.1", r));
 const LOCAL_URL = `http://127.0.0.1:${localAi.address().port}/v1`;
@@ -263,7 +276,8 @@ browser = null;
 for (const { child } of started) killTree(child);
 await new Promise((r) => localAi.close(() => r()));
 await new Promise((r) => setTimeout(r, 800));
-check(!localHits.some((h) => !/\/v1\/models/.test(h)), "railway: the Local AI server only saw model-list reads (no turn ran)", { evidence: localHits.join(", ") });
+const localProbe = (h) => /^GET \/v1\/models\b/.test(h) || /^POST \/v1\/responses\/?$/.test(h);
+check(!localHits.some((h) => !localProbe(h)), "railway: the Local AI server only saw model-list reads and Test's Responses API check (no turn ran)", { evidence: localHits.join(", ") });
 
 check(!consoleErrors.length, "railway: no console errors or page errors", { evidence: consoleErrors.join("\n") });
 check(!leakHits.length, "railway: no Railway key in any HTTP response", { file: "src/routes/ai.js", evidence: JSON.stringify(leakHits) });

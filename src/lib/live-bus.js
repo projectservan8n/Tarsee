@@ -140,6 +140,7 @@ function trackTurn(evt) {
     // (A step of another turn, one that overlapped this one, is not this turn's.)
     if (!t || (evt.turnId && t.turnId !== evt.turnId)) return;
     if (evt.payload?.kind === "usage") { t.usage = evt.payload; return; }   // tokens so far, not a step
+    if (evt.payload?.kind === "route") return;   // another AI answering from here on (the backup), not a step
     t.steps += 1;
     t.lastStepAt = evt.createdAt;
     const p = evt.payload || {};

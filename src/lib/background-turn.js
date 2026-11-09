@@ -41,7 +41,21 @@ import { checkModel } from "./model-catalog.js";
  * @property {string|null} stopReason - how the turn ended (end_turn, auth-expired, spend-cap, error_max_budget_usd, ...)
  * @property {object|null} usage - token usage as reported by the engine
  * @property {number|null} costUsd - what the turn cost, when the engine reported it
+ * @property {{ceilingUsd: number, spentUsd: number|null}|null} overBudget - a finished turn whose cost, known only at
+ *   its end (a Codex AI's), went over its spending limit: the reply stands (no error, so it isn't run again), and
+ *   the caller says so (overBudgetWarning)
  */
+
+/**
+ * The words for a job that finished over its spending limit ({ceilingUsd, spentUsd} from runBackgroundTurn), or null.
+ * A cron job's post, push and status, the heartbeat's last result and the boot log all say it the same way.
+ */
+export function overBudgetWarning(overBudget) {
+  if (!overBudget) return null;
+  const usd = (n) => `$${Number(n).toFixed(2)}`;
+  const spent = Number.isFinite(overBudget.spentUsd) ? ` (about ${usd(overBudget.spentUsd)})` : "";
+  return `Finished over its spending limit of ${usd(overBudget.ceilingUsd)}${spent}.`;
+}
 
 /**
  * How a turn that ended without a success reads in the job's history, when the
@@ -199,6 +213,7 @@ export async function runBackgroundTurn({
   let usage = null;
   let costUsd = null;
   let stopReason = null;
+  let overBudget = null;
   let ran = { provider: null, model: chosen || null };
 
   try {
@@ -230,6 +245,13 @@ export async function runBackgroundTurn({
         error = event.message || "Unknown error";
       } else if (event.type === "done") {
         stopReason = event.stopReason || "end_turn";
+        // A finished turn whose cost (known only at its end) passed the ceiling: the turn layer says so on the done.
+        if (event.overBudget) {
+          overBudget = {
+            ceilingUsd: Number.isFinite(event.ceilingUsd) ? event.ceilingUsd : maxBudgetUsd,
+            spentUsd: Number.isFinite(event.spentUsd) ? event.spentUsd : null,
+          };
+        }
         // Anything but a finished reply is a failed run: a stop (the partial
         // text is not a finished run, and must not be posted as one), an
         // expired sign-in, a refusal (not set up, API keys only, the monthly
@@ -251,9 +273,11 @@ export async function runBackgroundTurn({
   const on = [ran.provider, ran.model].filter(Boolean).join(":") || "the default AI";
   if (error) {
     console.error(`[${label}] failed on ${on}: ${error}`);
+    overBudget = null;
   } else {
     console.log(`[${label}] completed on ${on} (${text.length} chars)`);
+    if (overBudget) console.warn(`[${label}] ${overBudgetWarning(overBudget)}`);
   }
 
-  return { text, error, timedOut, model: ran.model, provider: ran.provider, stopReason, usage, costUsd };
+  return { text, error, timedOut, model: ran.model, provider: ran.provider, stopReason, usage, costUsd, overBudget };
 }

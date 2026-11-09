@@ -41,6 +41,58 @@ setup_provider_homes() {
   fi
 }
 
+# carry_plan_home <volume> <state dir>: earlier versions kept the Claude plan's sign-in in
+# <volume>/tarsee/.claude-code-home whatever TARSEE_STATE_DIR said; this one keeps it in <state dir>/.claude-code-home
+# (where ~/.claude now points). When those are two folders, move the old one's sign-in and chat history into the new
+# one, so an install with its own TARSEE_STATE_DIR stays signed in and its chats still resume. A plan home that is
+# already signed in is left alone, and nothing in it is replaced: a file both have stays in the old folder. A state
+# folder off the volume gets nothing (the sign-in would be lost on the next redeploy), only a line saying where the
+# sign-in is. Once moved there is nothing left to move, so later boots do nothing.
+carry_plan_home() {
+  _vol=$1
+  _state=$2
+  _old="$_vol/tarsee/.claude-code-home"
+  _new="$_state/.claude-code-home"
+  [ -f "$_old/.credentials.json" ] || return 0
+  [ "$_old" -ef "$_new" ] && return 0
+  [ -f "$_new/.credentials.json" ] && return 0
+  mkdir -p "$_new" || return 1
+  _vol_real=$(cd "$_vol" && pwd -P) || return 1
+  _state_real=$(cd "$_state" && pwd -P) || return 1
+  case "$_state_real/" in
+    "$_vol_real"/*) ;;
+    *)
+      echo "[entrypoint] Claude Code: the Claude plan sign-in is in $_old. TARSEE_STATE_DIR ($_state) is not on the volume, so it was not moved there; set TARSEE_STATE_DIR to a folder in $_vol to use it."
+      return 0
+      ;;
+  esac
+  move_missing "$_old" "$_new"
+  if [ ! -f "$_new/.credentials.json" ]; then
+    echo "[entrypoint] warning: could not move the Claude plan sign-in from $_old to $_new"
+    return 1
+  fi
+  echo "[entrypoint] Claude Code: moved the Claude plan sign-in and chat history from $_old to $_new"
+  if [ -e "$_old" ]; then
+    echo "[entrypoint] Claude Code: files $_new already had are kept, and the old copies of them stay in $_old"
+  fi
+}
+
+# move_missing <from> <to>: move into <to> everything in <from> that <to> doesn't have, going into the folders both have.
+# What both have stays in <from>, and a folder left empty is removed. A subshell, so each level keeps its own names.
+move_missing() (
+  for _e in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+    [ -e "$_e" ] || [ -L "$_e" ] || continue
+    _t="$2/${_e##*/}"
+    if [ ! -e "$_t" ] && [ ! -L "$_t" ]; then
+      mv "$_e" "$_t"
+    elif [ -d "$_e" ] && [ ! -L "$_e" ] && [ -d "$_t" ] && [ ! -L "$_t" ]; then
+      move_missing "$_e" "$_t"
+    fi
+  done
+  rmdir "$1" 2>/dev/null
+  return 0
+)
+
 # seed_codex_config <config.toml> <chatgpt|api>: the settings Tarsee wants in a Codex home's config.toml, and nothing
 # secret: keep the sign-in in this folder's auth.json (never an OS keyring), don't check for updates, and take only
 # this home's kind of sign-in (the plan home a ChatGPT sign-in, the keys home an API key). What Codex wrote there
@@ -115,6 +167,9 @@ main() {
 
   # If /data exists (Railway volume), ensure node user can write to it
   if [ -d /data ]; then
+    # The server (src/config/env.js) uses this same folder, so the sign-in folders, CODEX_HOME and the workspace set up
+    # here are the ones it reads. Without a volume it keeps its own ~/.tarsee. gosu keeps the environment.
+    export TARSEE_STATE_DIR="$STATE_DIR"
     mkdir -p /data/tarsee/data /data/tarsee/workspace/skills /data/tarsee/workspace/memory "$STATE_DIR"
     # Seed default workspace files if they don't exist
     for f in CLAUDE.md SOUL.md MEMORY.md IDENTITY.md USER.md TOOLS.md AGENTS.md; do
@@ -125,7 +180,9 @@ main() {
     chown -R node:node /data/tarsee
     chown node:node "$STATE_DIR"
 
-    # Each AI's sign-in folder on the volume, so sign-ins persist across restarts and redeploys.
+    # Each AI's sign-in folder on the volume, so sign-ins persist across restarts and redeploys. An install whose
+    # TARSEE_STATE_DIR isn't /data/tarsee first gets its Claude plan sign-in from where earlier versions kept it.
+    carry_plan_home /data "$STATE_DIR"
     setup_provider_homes "$STATE_DIR" /home/node node:node
     report_sign_ins "$STATE_DIR"
   fi

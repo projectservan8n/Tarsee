@@ -119,7 +119,7 @@ It runs the same Claude models as the Claude plan, with the cost of each reply s
 - Replies appear a message at a time, not word by word.
 - Instead of saving the key in Settings, you can set it as the Railway variable `OPENAI_API_KEY`.
 
-The picker lists the models your key can use. Costs are worked out from OpenAI's prices and marked "est." on the Usage page.
+The picker lists the models your key can use. Costs are worked out from OpenAI's prices and marked "est." on the Usage page. For a newer OpenAI model that isn't in the list yet, open **A model that isn't in this list** on the card, type the model's id as OpenAI names it, and click **Verify**. Once it passes, you can choose it on the card and in the model menu.
 
 ### OpenRouter
 
@@ -204,7 +204,7 @@ Settings > AI has an optional **Monthly spending cap**, in US dollars. Tarsee ad
 
 ### Background work
 
-Scheduled jobs, the heartbeat and the boot checklist run on the AI's background model (its smaller one, where it has one; you can change it on the card), with a time limit, a turn limit and a spend ceiling per job. A job that hits one is reported as failed.
+Scheduled jobs, the heartbeat and the boot checklist run on the AI's background model (its smaller one, where it has one; you can change it on the card), with a time limit, a turn limit and a spend ceiling per job. A job stopped by one is reported as failed. An OpenAI key, and OpenRouter's GPT models, only report what a job cost once it has finished, so a job there can't be stopped at its ceiling: a finished job that went over keeps its reply, is marked "over its spending limit" in its post, its status and its notification, and is not run again.
 
 ### What the Usage page shows
 
@@ -218,7 +218,7 @@ To lock it on so it can't be switched off from the dashboard, set the Railway va
 
 ## Verify
 
-Some models have no tested path yet: most OpenRouter models from makers other than Anthropic and OpenAI, and every Local AI model except the one chosen on its card. Before you can use one, click **Verify** next to it in Settings > AI (the model menu under the message box points you there). Tarsee runs a few short test turns: a plain reply, one of Tarsee's tools, the shell, and picking a conversation back up. It takes up to a minute and costs a few cents on a paid AI, nothing on Local AI. When the model passes, it shows under **Verified by you** and the model menu lists it. If it doesn't pass, Tarsee says why, and the model stays out of the menu. A few checks an hour are allowed per AI, so a mistaken click can't run up a bill.
+Some models have no tested path yet: most OpenRouter models from makers other than Anthropic and OpenAI, every Local AI model except the one chosen on its card, and an OpenAI model your key can use that Tarsee doesn't list yet. Before you can use one, click **Verify** next to it in Settings > AI (the model menu under the message box points you there). Tarsee runs a few short test turns: a plain reply, one of Tarsee's tools, the shell, and picking a conversation back up. It takes up to a minute and costs a few cents on a paid AI, nothing on Local AI. When the model passes, it shows under **Verified by you** and the model menu lists it. If it doesn't pass, Tarsee says why, and the model stays out of the menu. A few checks an hour are allowed per AI, so a mistaken click can't run up a bill.
 
 ## Backup
 

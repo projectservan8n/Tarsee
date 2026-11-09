@@ -6,6 +6,8 @@ import { getACPServer } from "../lib/acp.js";
 import { chatStream } from "../ai/router.js";
 import { buildSystemPromptParts } from "../lib/build-system-prompt.js";
 import { SettingsStore } from "../db/settings.js";
+import { watchTurn } from "../lib/turn-watchdog.js";
+import { idleNote } from "../channels/turn-notes.js";
 
 export const acpRouter = Router();
 
@@ -71,6 +73,10 @@ acpRouter.post("/session/:id/turn", async (req, res) => {
   let error = null;
   let stopReason = null;
   let ran = { provider: null, model: null };
+  let route = null;
+  // A turn that goes quiet, or whose caller left, is stopped (lib/turn-watchdog.js): an ACP turn has no conversation,
+  // so nothing else (the dashboard's Stop) can reach it.
+  const watch = watchTurn(res);
   try {
     // One turn on the default AI: the engine runs its tools itself.
     for await (const event of chatStream({
@@ -78,10 +84,12 @@ acpRouter.post("/session/:id/turn", async (req, res) => {
       systemParts,
       toolCtx,
       liveSource: "acp",
+      signal: watch.signal,
       sessionId: session.engineSession || null,
       onSessionId: (handle) => { session.engineSession = handle; },
     })) {
-      if (event.type === "route") ran = { provider: event.provider || null, model: event.model || null };
+      watch.touch();
+      if (event.type === "route") { route = event; ran = { provider: event.provider || null, model: event.model || null }; }
       else if (event.type === "text") fullResponse += event.content;
       else if (event.type === "error") error = event.message || "The AI stopped with an error";
       else if (event.type === "done") { stopReason = event.stopReason || "end_turn"; break; }
@@ -89,8 +97,19 @@ acpRouter.post("/session/:id/turn", async (req, res) => {
   } catch (err) {
     session.endTurn(null);
     return res.status(500).json({ error: err.message });
+  } finally {
+    watch.stop();
   }
 
+  if (watch.left) {
+    // Nobody is left to read the answer.
+    session.endTurn(null);
+    return;
+  }
+  if (watch.idled) {
+    session.endTurn(null);
+    return res.status(504).json({ error: idleNote(route, watch.idleMs, { plain: true }), stopReason: "idle", provider: ran.provider, model: ran.model, session: session.toJSON() });
+  }
   if (stopReason !== "end_turn") {
     // Not answered (the AI isn't set up, a sign-in ran out, a spending limit): the turn ends without a result.
     session.endTurn(null);

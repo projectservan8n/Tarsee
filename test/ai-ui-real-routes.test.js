@@ -71,6 +71,12 @@ const localAi = http.createServer((req, res) => {
     res.end(JSON.stringify({ object: "list", data: [{ id: "qwen3:8b", object: "model" }] }));
     return;
   }
+  if (req.method === "POST" && req.url === "/v1/responses") {
+    // A current Ollama has the Responses API: Test's empty request names no model, so it is turned down.
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "model is required", type: "invalid_request_error" } }));
+    return;
+  }
   res.writeHead(404);
   res.end();
 });

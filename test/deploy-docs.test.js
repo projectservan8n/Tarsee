@@ -151,6 +151,19 @@ describe("README", () => {
     assert.match(docker, /-p 3000:3000/);
     assert.doesNotMatch(docker, /8080/);
   });
+  it("says what the Docker volume keeps, and where (entrypoint.sh hands the server /data/tarsee)", () => {
+    const docker = unfenced(section("Self-Hosting with Docker"));
+    assert.match(docker, /`?tarsee-data`? volume/, "names the volume");
+    assert.match(docker, /\/data\/tarsee/);
+    for (const what of [/database/i, /sign-ins?/i, /workspace/i]) assert.match(docker, what);
+  });
+  it("lists TARSEE_STATE_DIR, and says to keep it on the volume", () => {
+    const row = lines(section("Environment Variables")).find((l) => /^\|\s*`TARSEE_STATE_DIR`\s*\|/.test(l));
+    assert.ok(row, "a TARSEE_STATE_DIR row");
+    assert.match(row, /\/data\/tarsee/, "its default with a volume");
+    assert.match(row, /inside `\/data`/, "keep it on the volume");
+    assert.match(row, /Claude plan sign-in/, "an earlier version's sign-in moves there");
+  });
   it("lists every AI variable in the environment table", () => {
     const env = section("Environment Variables");
     for (const name of AI_VARS) assert.match(env, new RegExp(`\\|\\s*\`${name}\`\\s*\\|`), name);

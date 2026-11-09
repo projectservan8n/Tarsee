@@ -3,7 +3,8 @@
 //    usage at turn.completed, a Claude Code result's cost) never turns that reply into a failure; the turn is marked
 //    over budget and says so instead;
 //  - an Anthropic key's exact cost is recorded for a turn with no live conversation (a subagent, ACP, a Verify probe),
-//    so the monthly cap sees it.
+//    so the monthly cap sees it;
+//  - an Anthropic key's turn stopped before that cost came is priced at the list price, as an estimate.
 // Every key here is an obvious fake.
 import { describe, it, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -29,6 +30,7 @@ const { runBackgroundTurn } = await import("../src/lib/background-turn.js");
 const { spendBetween } = await import("../src/ai/spend.js");
 const { usageIndex } = await import("../src/lib/token-usage.js");
 const { createFakeEngine } = await import("./fakes/fake-engine.js");
+const { setCatalogModels } = await import("../src/ai/provider-registry.js");
 
 const db = initDb(path.join(tmp, "tarsee.db"));
 live.initLiveBus(db);
@@ -104,7 +106,12 @@ describe("the spend ceiling never fails a turn that had already finished", () =>
     const liveId = "cron:spend-codex";
     const events = await collect(runTurn({ provider: "openai", model: "gpt-6-luna", background: true, messages: [user("send the report")], toolCtx: bg(), liveConversationId: liveId }));
     assert.equal(events.filter((e) => e.type === "error").length, 0, JSON.stringify(events.filter((e) => e.type === "error")));
-    assert.deepEqual(events.filter((e) => e.type === "done"), [{ type: "done", stopReason: "end_turn" }]);
+    const dones = events.filter((e) => e.type === "done");
+    assert.equal(dones.length, 1);
+    // The caller hears it too (a cron's run, its push and its chat post): the done carries the mark and the figures.
+    const { spentUsd, ...rest } = dones[0];
+    assert.deepEqual(rest, { type: "done", stopReason: "end_turn", overBudget: true, ceilingUsd: 0.5 });
+    assert.ok(spentUsd > 0.5, `spentUsd ${spentUsd}`);
     assert.equal(signals[0].aborted, false, "codex was left to finish writing its thread");
     const timeline = live.eventsSince(liveId, 0);
     const end = timeline.find((e) => e.type === "turn_end");
@@ -175,7 +182,7 @@ describe("an Anthropic key's exact cost off the live timeline", () => {
     assert.equal(spendBetween(db, 0).byProvider.anthropic, 0.5);
   });
 
-  it("only there: a turn on the live timeline is counted from its turn_end, an estimate or OpenRouter's figure never here", async () => {
+  it("only there: a turn on the live timeline is counted from its turn_end, OpenRouter's figure never here, an estimate as one", async () => {
     const rows = [];
     restore();
     restore = configureTurns({
@@ -195,14 +202,85 @@ describe("an Anthropic key's exact cost off the live timeline", () => {
     assert.equal(rows.length, 0, "OpenRouter's calls are priced in its transcript already; the timeline's turn has its turn_end");
     useEngines({ claude: [[{ type: "text", content: "Done." }, { type: "usage", usage: SMALL, costUsd: 0.2 }, { type: "done", stopReason: "end_turn" }]] });
     await collect(runTurn({ provider: "anthropic", messages: [user("hi")], toolCtx: bg(), liveDisabled: true }));
-    assert.equal(rows.length, 0, "a figure the engine didn't call exact is never recorded as exact");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].costUsd, 0.2);
+    assert.equal(rows[0].exact, false, "a figure the engine didn't call exact is filed as an estimate, never as exact");
     useEngines({ claude: exactTurn(0.3) });
     await collect(runTurn({ provider: "anthropic", messages: [user("hi")], toolCtx: bg(), liveDisabled: true, liveSource: "acp" }));
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].costUsd, 0.3);
-    assert.equal(rows[0].provider, "anthropic");
-    assert.equal(rows[0].engine, "claude-code");
-    assert.match(rows[0].conversationId, /^acp:/);
-    assert.ok(rows[0].turnId && rows[0].startedAt <= rows[0].endedAt);
+    assert.equal(rows.length, 2);
+    const acp = rows[1];
+    assert.equal(acp.costUsd, 0.3);
+    assert.equal(acp.exact, true);
+    assert.equal(acp.provider, "anthropic");
+    assert.equal(acp.engine, "claude-code");
+    assert.match(acp.conversationId, /^acp:/);
+    assert.ok(acp.turnId && acp.startedAt <= acp.endedAt);
+  });
+});
+
+describe("an Anthropic key's turn that ends before the engine reports its cost", () => {
+  // Stop, the channels' idle abort, a background timeout or a crash: the SDK's exact total never comes, but every call
+  // before it was billed. Its tokens so far are priced at Anthropic's list price (OpenRouter's public catalog carries
+  // it, keyless) and recorded as an estimate.
+  const LIST = [
+    { id: "anthropic/claude-sonnet-4.6", price: { in: 2, out: 10, cacheRead: 0.2, cacheWrite: 2.5 } },
+    { id: "anthropic/claude-sonnet-5", price: { in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75 } },
+    { id: "anthropic/claude-haiku-4.5", price: { in: 1, out: 5, cacheRead: 0.1, cacheWrite: 1.25 } },
+  ];
+  // 200k new input, 100k cache reads, 10k cache writes and 5k output so far, then the engine is stopped.
+  const stopped = [[{ type: "step", kind: "usage", input: 200_000, cacheRead: 100_000, cacheWrite: 10_000, output: 5000, total: 315_000 }, { type: "wait" }]];
+  const sonnet5 = (200_000 * 3 + 100_000 * 0.3 + 10_000 * 3.75 + 5000 * 15) / 1e6;
+  const stopAfterUsage = () => {
+    const ac = new AbortController();
+    const t = setInterval(() => { if (engines.claude.calls.length) { clearInterval(t); setTimeout(() => ac.abort(), 30); } }, 5);
+    return { signal: ac.signal, done: () => clearInterval(t) };
+  };
+  after(() => setCatalogModels("openrouter", []));
+
+  it("on a live conversation: turn_end carries the estimate (not exact), so the Usage page and the cap count it", async () => {
+    settings.set("ai.anthropic.apiKey", ANTHROPIC_KEY);
+    setCatalogModels("openrouter", LIST);
+    useEngines({ claude: stopped });
+    const stop = stopAfterUsage();
+    const liveId = "cron:anthropic-stopped";
+    const events = await collect(runTurn({ provider: "anthropic", messages: [user("do the work")], toolCtx: bg(), liveConversationId: liveId, signal: stop.signal }));
+    stop.done();
+    assert.equal(events.at(-1).stopReason, "aborted");
+    const end = live.eventsSince(liveId, 0).find((e) => e.type === "turn_end");
+    assert.ok(Math.abs(end.payload.costUsd - sonnet5) < 1e-6, `turn_end costUsd ${end.payload.costUsd}, want ${sonnet5} (the default, Sonnet, at Sonnet 5's list price)`);
+    assert.equal(end.payload.costExact, undefined, "an estimate, never labelled exact");
+  });
+
+  it("with no live conversation: recorded as an estimate, which this month's spend counts", async () => {
+    settings.set("ai.anthropic.apiKey", ANTHROPIC_KEY);
+    setCatalogModels("openrouter", LIST);
+    useEngines({ claude: stopped });
+    const stop = stopAfterUsage();
+    await collect(runTurn({ provider: "anthropic", model: "claude-haiku-4-5", messages: [user("look into it")], toolCtx: bg(), liveDisabled: true, liveSource: "agent", signal: stop.signal }));
+    stop.done();
+    const haiku = (200_000 * 1 + 100_000 * 0.1 + 10_000 * 1.25 + 5000 * 5) / 1e6;
+    assert.ok(await until(() => Math.abs((spendBetween(db, 0).byProvider.anthropic || 0) - haiku) < 1e-6), JSON.stringify(spendBetween(db, 0)));
+    assert.equal(spendBetween(db, 0).estimated, true);
+    const row = db.prepare("SELECT cost_exact AS exact, stop_reason AS stop FROM usage_turns WHERE provider = 'anthropic'").get();
+    assert.equal(row.exact, 0);
+    assert.equal(row.stop, "aborted");
+  });
+
+  it("the engine's own exact total still wins when it comes; without a list price nothing is made up", async () => {
+    settings.set("ai.anthropic.apiKey", ANTHROPIC_KEY);
+    setCatalogModels("openrouter", LIST);
+    useEngines({ claude: [[{ type: "step", kind: "usage", input: 200_000, cacheRead: 0, cacheWrite: 0, output: 5000, total: 205_000 }, { type: "text", content: "Done." }, { type: "usage", usage: SMALL, costUsd: 0.91, costExact: true }, { type: "done", stopReason: "end_turn" }]] });
+    const liveId = "agent:exact-wins";
+    await collect(runTurn({ provider: "anthropic", messages: [user("hi")], toolCtx: bg(), liveConversationId: liveId }));
+    const end = live.eventsSince(liveId, 0).find((e) => e.type === "turn_end");
+    assert.equal(end.payload.costUsd, 0.91);
+    assert.equal(end.payload.costExact, true);
+    setCatalogModels("openrouter", []);
+    useEngines({ claude: stopped });
+    const stop = stopAfterUsage();
+    const noList = "agent:no-list-price";
+    await collect(runTurn({ provider: "anthropic", messages: [user("hi")], toolCtx: bg(), liveConversationId: noList, signal: stop.signal }));
+    stop.done();
+    assert.equal(live.eventsSince(noList, 0).find((e) => e.type === "turn_end").payload.costUsd, undefined);
   });
 });

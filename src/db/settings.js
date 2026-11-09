@@ -17,6 +17,19 @@ import { getProvider } from "../ai/provider-registry.js";
 const FAKE_SUBSCRIPTION_KEY = "subscription";
 const FAKE_SUBSCRIPTION_SLOT = "ai.claude-code.apiKey";
 const FAKE_SUBSCRIPTION_FIXUP_KEY = "fixups.fakeSubscriptionKeyRemovedAt";
+/** The old Voice tab's copy of the OpenAI key; nothing reads it (the key is the OpenAI card's, ai.openai.apiKey). */
+export const OLD_VOICE_KEY = "voice.openai_api_key";
+/**
+ * A key as a page shows it, never a key: vault.js maskSecret ("sk-p...wxyz", "****"), GET /api/settings's "***wxyz"
+ * and the "…wxyz" hint.
+ */
+const DISPLAY_MASK_RE = /^(?:.{4}\.\.\..{4}|\*{3,}.{0,4}|\u2026.{0,4})$/;
+
+/** Whether a settings key is an AI's key slot (ai.<id>.apiKey, a storage id like claude-code included). */
+export function isAiKeySlot(key) {
+  const m = /^ai\.([^.]+)\.apiKey$/.exec(String(key || ""));
+  return !!(m && getProvider(m[1]));
+}
 
 /** Local AI: the one provider whose host the owner sets (ai.local.baseUrl). */
 const LOCAL_AI_ID = "local";
@@ -289,6 +302,41 @@ export class SettingsStore {
     this.set(FAKE_SUBSCRIPTION_FIXUP_KEY, new Date().toISOString());
     console.log("[settings] removed the placeholder Claude plan key the old setup wizard saved (it was never a key)");
     return { removed: true };
+  }
+
+  /**
+   * Boot fixup: what an older Voice tab left in the key slots. It filled its OpenAI key box from GET /api/settings,
+   * which shows a key masked ("sk-p...wxyz"), and its Save posted the box back to voice.openai_api_key and
+   * ai.openai.apiKey, so opening Voice and clicking Save replaced the real key with its masked display (which also
+   * hid a Railway OPENAI_API_KEY). A display mask is never a key, so it is deleted from every AI's key slot and the
+   * environment's key, if any, applies again. voice.openai_api_key goes too: nothing reads it, and the same Save
+   * always wrote the OpenAI card's slot beside it. Decrypt-aware, audited, idempotent; a value it cannot decrypt is
+   * left where it is.
+   * @returns {{removed: string[]}} the settings keys deleted
+   */
+  removeVoiceKeyLeftovers() {
+    const removed = [];
+    const rows = this.db.prepare("SELECT key, value FROM settings WHERE key LIKE 'ai.%.apiKey' OR key = ?").all(OLD_VOICE_KEY);
+    for (const { key, value: stored } of rows) {
+      if (key !== OLD_VOICE_KEY) {
+        if (!isAiKeySlot(key)) continue;
+        let value;
+        try {
+          value = decryptIfEncrypted(stored);
+        } catch {
+          console.warn(`[settings] ${key} could not be decrypted (was ENCRYPTION_KEY changed?); left as it is`);
+          continue;
+        }
+        const plain = tryParse(value);
+        if (typeof plain !== "string" || !DISPLAY_MASK_RE.test(plain.trim())) continue;
+      }
+      const detail = key === OLD_VOICE_KEY
+        ? "Removed the old Voice tab's copy of the OpenAI key (the OpenAI card's key is the one used)"
+        : "Removed a masked display saved in place of a key";
+      if (this.delete(key, { actor: "system", detail })) removed.push(key);
+    }
+    if (removed.length) console.log(`[settings] removed what the old Voice tab saved in place of a key: ${removed.join(", ")}`);
+    return { removed };
   }
 
   /**

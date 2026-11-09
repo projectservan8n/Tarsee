@@ -8,7 +8,8 @@
  *   OpenAI      GET https://api.openai.com/v1/models         (Bearer)
  *   OpenRouter  GET https://openrouter.ai/api/v1/key         (Bearer; the key's spending limit and usage)
  *   DeepSeek    GET https://api.deepseek.com/user/balance    (Bearer; the prepaid balance)
- *   Local AI    GET {address}/models                         (Bearer only when a key is set)
+ *   Local AI    GET {address}/models                         (Bearer only when a key is set), and POST
+ *               {address}/responses with an empty body: a server without that API can't run a turn
  *   The plans   no network: the Claude sign-in, or Codex's own ChatGPT sign-in (provider-status.js)
  *
  * Every probe answers { ok, state, message, httpStatus?, balance?, account?, models? }: a plain sentence for the
@@ -34,6 +35,7 @@ import {
   BALANCE_PROVIDERS,
 } from "./provider-status.js";
 import { testBaseUrl } from "./engine-env.js";
+import { localNoResponsesMessage } from "./engine-errors.js";
 
 /** How long a Test waits for an answer. */
 export const PROBE_TIMEOUT_MS = 10_000;
@@ -208,6 +210,36 @@ export async function listLocalModels({ url, key = null, fetch: doFetch, timeout
 }
 
 /**
+ * Whether Local AI's server has the Responses API Tarsee talks to it through: POST {address}/responses with an empty
+ * body, which names no model, so nothing loads on the server. Only a clear "no such address" says no: a 404 that names
+ * no model (Ollama before 0.13.3, a chat-completions-only server) or old LM Studio's "Unexpected endpoint" answer.
+ * Anything else (a 400 or 422 for the missing model, no answer at all) says nothing against it: true. Never throws.
+ */
+export async function localHasResponses({ url, key = null, fetch: doFetch = globalThis.fetch, timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+  let res;
+  try {
+    res = await doFetch(`${String(url).trim().replace(/\/+$/, "")}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(key ? { Authorization: `Bearer ${key}` } : {}) },
+      body: "{}",
+      redirect: "error",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch {
+    return true;
+  }
+  let words = "";
+  try {
+    words = await res.text();
+    const j = JSON.parse(words);
+    const said = typeof j?.error === "string" ? j.error : j?.error?.message ?? j?.detail ?? j?.message;
+    if (typeof said === "string") words = said;
+  } catch { /* plain text, or nothing */ }
+  if (res.status === 404 && !/model/i.test(words)) return false;
+  return !/Unexpected endpoint or method/i.test(words);
+}
+
+/**
  * Where a probe of a provider's own host goes: its code constant, or, in a test server only (engine-env testBaseUrl:
  * NODE_ENV exactly "test" and a loopback TARSEE_TEST_BASE_URL_<ID>), the same path on the fake standing in for that
  * provider, so a test's made-up key never goes to the real provider.
@@ -325,10 +357,16 @@ export async function probeProvider(idOrAlias, deps = {}) {
       const s = await providerStatus("local", deps);
       return { ok: false, state: "needs-setup", message: `${s.detail} ${s.fix || ""}`.trim() };
     }
+    // Both asked at once, so a server that doesn't answer keeps Test waiting no longer than before.
+    const responses = localHasResponses({ url, key, fetch: doFetch, timeoutMs });
     const r = await listLocalModels({ url, key, fetch: doFetch, timeoutMs });
+    const hasResponses = await responses;
     if (!r.ok) out = r;
     else if (!r.models.length) {
       out = { ok: false, state: "needs-setup", message: "Reached your Local AI, but it lists no models. Download one on that machine first (for example: ollama pull qwen3)." };
+    } else if (!hasResponses) {
+      // It lists models but can't run a turn: every model would fail the same way, so none goes in the picker.
+      out = { ok: false, state: "needs-setup", reason: "no-responses", message: localNoResponsesMessage(url).replace(/\*\*/g, "") };
     } else {
       setCatalogModels("local-models", r.models.map((id) => ({ id })));
       out = { ok: true, state: "ready", message: `Reached your Local AI · ${r.models.length} model${r.models.length === 1 ? "" : "s"}`, models: r.models };

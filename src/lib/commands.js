@@ -56,7 +56,7 @@ function aiDeps(ctx) {
  */
 function chatgptModels(ctx) {
   const d = aiDeps(ctx);
-  return refreshChatgptModels({ list: d.listChatgptModels, env: d.env, stateDir: d.stateDir });
+  return refreshChatgptModels({ list: d.listChatgptModels, env: d.env, stateDir: d.stateDir, store: ctx.settingsStore });
 }
 
 function readiness(id, ctx) {
@@ -1111,7 +1111,7 @@ artifact. Just confirm.`;
           if (!job) return `Job not found: ${id}`;
           const result = await runCronJob(job);
           if (result.error) return `Cron error: ${result.error}`;
-          return `**Cron result:**\n\n${result.response?.slice(0, 2000) || "(empty)"}`;
+          return `**Cron result:**\n\n${result.response?.slice(0, 2000) || "(empty)"}${result.warning ? `\n\n_${result.warning}_` : ""}`;
         }
 
         return 'Usage: `/cron list|add|remove|run|status`';

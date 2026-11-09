@@ -187,7 +187,7 @@ Set `TARSEE_AI_PROVIDER` to `claude`, `anthropic`, `chatgpt`, `openai`, `openrou
 
 ### Cost Controls
 - **Cheap floor for unattended work** — cron jobs, the 30-minute heartbeat and the boot checklist run on the AI's small model by default (the Haiku alias on Claude), not the interactive model. Raise a specific one with the `cron.defaultModel`, `heartbeat.model` or `boot.model` setting, or per job with `job.model`: each takes a tier word (haiku, sonnet, opus), a model of the default AI (for example `deepseek-v4-pro` on the DeepSeek key) or a `provider:model` ref. A name the default AI doesn't offer, or a Local AI or OpenRouter model that hasn't been verified, is logged and the small model runs instead. A zero-token keyword heuristic escalates a cron job to Sonnet or Opus when its prompt clearly warrants it.
-- **Hard ceilings** — every background turn carries a wall-clock timeout, a turn cap well below the interactive limit, and a spend ceiling (enforced by the engine where it can, otherwise by Tarsee from the live usage). A job that hits one is reported as failed, not as a successful empty run.
+- **Hard ceilings** — every background turn carries a wall-clock timeout, a turn cap well below the interactive limit, and a spend ceiling (enforced by the engine where it can, otherwise by Tarsee from the live usage). A job stopped by one is reported as failed, not as a successful empty run. On an AI whose cost is only known once the job has finished (an OpenAI key, or OpenRouter's GPT models), a finished job that went over its spend ceiling keeps its reply and is marked "over its spending limit" in its post, its status and its notification; it is not run again.
 - **No duplicate boot spend** — BOOT.md runs once per build, keyed to the commit and a hash of the file. A crash-looping container no longer pays for a model turn on every restart.
 - **One turn at a time per conversation** — a second message queues instead of starting a concurrent turn against the same session.
 - **Automatic fallback** — an overloaded Claude model steps down a tier rather than failing the turn, and an optional **Backup** AI (Settings > AI) answers when the default one is out of credit, signed out or down.
@@ -407,6 +407,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `SETUP_PASSWORD` | Yes | — | 4-digit PIN for the web UI. **Required in production** — the server refuses to boot without it, because nobody could log in and the web terminal would be exposed. |
 | `ENCRYPTION_KEY` | Yes | made on the volume | AES-256 key for everything Tarsee stores encrypted: keys saved in Settings > AI, channel tokens, the vault. Make one with `openssl rand -hex 32` and set it before you save any key in Settings; keep the same one for good. Without it, one is made and kept on the volume next to the data it protects. |
 | `NODE_ENV` | Yes | — | Set to `production` |
+| `TARSEE_STATE_DIR` | No | `/data/tarsee` with a volume at `/data`, else `~/.tarsee` | The folder Tarsee keeps everything in: each AI's sign-in, and its database (with the keys saved in Settings > AI) and workspace unless `TARSEE_DATA_DIR` or `TARSEE_WORKSPACE_DIR` name other folders. With a volume, keep it inside `/data`, or it is lost on the next redeploy. If you set it to another folder in `/data`, the next boot moves the Claude plan sign-in (and chat history) that earlier versions kept in `/data/tarsee` into it. |
 | `TARSEE_AI_PROVIDER` | No | `claude` | The default AI when Settings > AI hasn't chosen one: `claude`, `anthropic`, `chatgpt`, `openai`, `openrouter`, `deepseek` or `local`. With that AI's key it skips the setup wizard. See [Choose your AI](#choose-your-ai). |
 | `TARSEE_AI_MODEL` | No | that AI's default | The default AI's model when Settings hasn't chosen one (for example `sonnet`, or `deepseek-flash`). Empty means that AI's default; for Local AI, the first model its server lists (set it to pin one). |
 | `TARSEE_KEYS_ONLY` | No | off | Set `1` to lock **Only use API keys** on: no Claude or ChatGPT plan sign-in is ever used. For a Tarsee other people talk to. |
@@ -465,6 +466,8 @@ docker run -d \
 ```
 
 Tarsee listens on port 3000 (`PORT`). Open http://localhost:3000, log in with your PIN, and the setup wizard asks you to [choose your AI](#choose-your-ai). A plan signs in from the wizard (the Claude plan through Tarsee's Terminal), and a key is pasted into Settings > AI.
+
+Everything Tarsee keeps (its database with the keys saved in Settings > AI, each AI's sign-in, and the workspace) is in the `tarsee-data` volume, in `/data/tarsee` inside the container, so a rebuild or a new container still has it.
 
 To give Tarsee a key as a variable instead, put it in a `.env` file that you never commit (`.env.example` lists every name, with what each one is for) and add `--env-file .env` to `docker run`, so the key never appears in a command. `docker-compose.yml` reads the same `.env` file.
 

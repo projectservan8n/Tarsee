@@ -52,6 +52,7 @@ import { modelsRouter } from "./routes/models.js";
 import { aiBootLine } from "./ai/provider-status.js";
 import { initOpenRouterCatalog } from "./lib/openrouter-catalog.js";
 import { startMcpHttp, stopMcpHttp } from "./ai/mcp-http.js";
+import { sweepTurnLeftovers } from "./lib/turn-leftovers.js";
 
 import { writePid, removePid } from "./daemon/pid.js";
 
@@ -229,6 +230,8 @@ app.set("settingsStore", settingsStore);
 try { settingsStore.removeFakeSubscriptionKey(); } catch (err) { console.warn("[settings] placeholder key fixup failed:", err.message); }
 // Older versions saved a base URL per provider; hosts are fixed in code now (Local AI's own address stays).
 try { settingsStore.removeProviderBaseUrls(); } catch (err) { console.warn("[settings] base URL fixup failed:", err.message); }
+// An older Voice tab saved a key's masked display ("sk-p...wxyz") over the OpenAI key, and a copy nothing reads.
+try { settingsStore.removeVoiceKeyLeftovers(); } catch (err) { console.warn("[settings] Voice key fixup failed:", err.message); }
 settingsStore.logKeyStatus();
 // One line: which AI answers by default, on which engine, where its key comes from (last 4 only) and whether it's ready.
 // Local AI's models are read first (they live only in memory, and with no model named Local AI counts as not set up
@@ -241,11 +244,18 @@ ensureLocalModels(settingsStore)
 // the background and every 6 hours. Never throws; without it the picker's OpenRouter list would be empty.
 const openRouterCatalog = initOpenRouterCatalog(settingsStore);
 // The signed-in ChatGPT account's models (A2: never a hard-coded one), so the first ChatGPT turn, its backup and /model
-// don't wait for them. Returns at once, without starting Codex, when ChatGPT isn't signed in.
-refreshChatgptModels({ stateDir: config.STATE_DIR }).catch((err) => console.warn("[ai] reading the ChatGPT account's models failed:", err?.message || err));
+// don't wait for them. Returns at once, without starting Codex, when ChatGPT isn't signed in, and while "API keys only"
+// is on (reading the list sends the plan's sign-in to ChatGPT's backend; the settings store says whether it's on).
+refreshChatgptModels({ stateDir: config.STATE_DIR, store: settingsStore }).catch((err) => console.warn("[ai] reading the ChatGPT account's models failed:", err?.message || err));
 // Tarsee's own tools for Codex turns (ai/mcp-http.js): a loopback-only endpoint on 127.0.0.1, never on Express.
 // Started now so the first Codex turn doesn't wait for the port; it would start itself on first use anyway.
 startMcpHttp().catch((err) => console.warn("[mcp-http] could not start:", err.message));
+// What a turn stopped mid-way by the last shutdown (a redeploy, Ctrl+C, a crash) left behind: a Codex turn's copies of
+// the person's pictures in the system's temp folder, a Verify's workspace in the state folder. Over an hour old only.
+{
+  const left = sweepTurnLeftovers({ stateDir: config.STATE_DIR });
+  if (left.pictures || left.verify) console.log(`[boot] removed what stopped turns left behind: ${left.pictures} picture folder(s), ${left.verify} Verify workspace(s)`);
+}
 initTTSEngine(settingsStore).catch((err) => {
   console.warn("[tarsee] TTS engine init error:", err.message);
 });

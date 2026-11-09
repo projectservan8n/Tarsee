@@ -259,6 +259,42 @@ describe("helpers", () => {
     assert.equal(classifyCodexFailure("chatgpt", "You've hit your usage limit. subscription_sharing_usage_limit_exceeded").kind, "rate");
   });
 
+  it("OpenRouter's moderation refusal (403) ends the turn as an error in its own words, not a rejected key", () => {
+    const body = JSON.stringify({ error: { code: 403, message: "openai/gpt-5.5 requires moderation on OpenAI. Your input was flagged for \"violence\". No credits were charged.", metadata: { reasons: ["violence"], flagged_input: "words", provider_name: "OpenAI", model_slug: "openai/gpt-5.5" } } });
+    const words = `unexpected status 403 Forbidden: ${body}, url: https://openrouter.ai/api/v1/responses`;
+    const st = createCodexEventState({ providerId: "openrouter", model: "openai/gpt-5.5" });
+    const failed = [{ type: "thread.started", thread_id: "th-m" }, { type: "turn.started" }, { type: "turn.failed", error: { message: words } }].flatMap((ev) => mapCodexEvent(ev, st));
+    const stopped = finishCodexEvents(createCodexEventState({ providerId: "openrouter", model: "openai/gpt-5.5" }), { error: new Error(words) });
+    for (const out of [failed, stopped]) {
+      assert.equal(of(out, "text").length, 0, "no auth text");
+      const [err] = of(out, "error");
+      assert.equal(err.code, "moderated");
+      assert.equal(err.recoverable, false);
+      assert.match(err.message, /moderation turned this message down\*\* \(flagged for violence\)/);
+      assert.doesNotMatch(err.message, /key was rejected/);
+      assert.deepEqual(of(out, "done"), [{ type: "done", stopReason: "error" }]);
+    }
+  });
+
+  it("a Local AI server with no Responses API (404 that names no model) says so, not that the model is missing", () => {
+    const url = "http://127.0.0.1:11434/v1";
+    const noRoute = classifyCodexFailure("local", `unexpected status 404 Not Found: 404 page not found, url: ${url}/responses`, { model: "llama3.1:8b", localUrl: url });
+    assert.equal(noRoute.kind, "unavailable");
+    assert.equal(noRoute.recoverable, false);
+    assert.match(noRoute.message, /no Responses API/);
+    assert.match(noRoute.message, /http:\/\/127\.0\.0\.1:11434\/v1\/responses/);
+    assert.match(noRoute.message, /Ollama to 0\.13\.3 or newer/);
+    assert.doesNotMatch(noRoute.message, /can't run the model|Pick another model|Check that the server is running/);
+    const fastapi = classifyCodexFailure("local", `unexpected status 404 Not Found: {"detail":"Not Found"}, url: ${url}/responses`, { model: "qwen3:4b", localUrl: url });
+    assert.equal(fastapi.kind, "unavailable");
+    // A real unknown model on Ollama names the model: that one is still the model's.
+    const unknown = classifyCodexFailure("local", `unexpected status 404 Not Found: model "llama3.1:8b" not found, try pulling it first, url: ${url}/responses`, { model: "llama3.1:8b", localUrl: url });
+    assert.equal(unknown.kind, "model");
+    assert.match(unknown.message, /can't run the model llama3\.1:8b/);
+    // Other providers' 404s are unchanged.
+    assert.equal(classifyCodexFailure("openai", "unexpected status 404 Not Found: 404 page not found").kind, "model");
+  });
+
   it("every way codex 0.167 says the ChatGPT sign-in couldn't be renewed is the sign-in running out", () => {
     // codex-rs/login/src/auth/manager.rs and cloud-config/src/chatgpt.rs: what the pinned codex writes when it can't
     // renew the ChatGPT sign-in. Each must give the plan's own "sign in again" words and turn the card sign-in-expired,

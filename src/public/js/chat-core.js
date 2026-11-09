@@ -313,8 +313,9 @@
   /**
    * The line in the answer's place, while it works and after: { title, detail, tone }.
    *   turn { state: "queued" | "running" | "done" | "stopped" | "failed" | "interrupted" | "removed", tools (how many),
-   *          failed, ms, last (the step on now, stepLabel's words), error }
-   * Queued: "Queued", "after the reply above". Running: "Working", "3 steps · Reading README.md". Done: "Used 12 tools", "16s" (and how many failed). A turn with
+   *          failed, ms, last (the step on now, stepLabel's words), error, model (the AI's name for the model answering) }
+   * Queued: "Queued", "after the reply above". Running: "Working", "3 steps · Reading README.md", or with no step on
+   * now "Thinking with DeepSeek Flash". Done: "Used 12 tools", "16s" (and how many failed). A turn with
    * no tools at all says nothing once it is done (title ""): the answer is all there is.
    */
   function turnLine(turn) {
@@ -330,7 +331,7 @@
       case "removed":
         return { title: "Removed from the queue", detail: "", tone: "muted" };
       case "running":
-        return { title: "Working", detail: [n ? plural(n, "step") : "", t.last || "Thinking"].filter(Boolean).join(" · "), tone: "running" };
+        return { title: "Working", detail: [n ? plural(n, "step") : "", t.last || (t.model ? `Thinking with ${t.model}` : "Thinking")].filter(Boolean).join(" · "), tone: "running" };
       case "stopped":
         return { title: dur ? `Stopped after ${dur}` : "Stopped", detail: n ? plural(n, "tool") : "", tone: "muted" };
       case "failed":
