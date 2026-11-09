@@ -195,9 +195,13 @@ export function getBootstrapContext() {
  * The default SOUL.md and CLAUDE.md an install was seeded with used to say
  * "read MEMORY.md at the start of every session", which now contradicts the
  * system prompt's "grep it, never read it whole" (and CLAUDE.md said cron runs
- * in UTC). Existing workspaces keep their seeded files, so on boot the exact
+ * in UTC). Later the defaults stopped naming one AI: they said "powered by
+ * Claude", named Claude Code's own tools (Bash, Read/Write/Edit/Grep/Glob,
+ * mcp__tarsee__*) and the agent team's Claude models, none of which hold on
+ * another AI. Existing workspaces keep their seeded files, so on boot the exact
  * old default lines are replaced with the new ones. A line the owner changed
  * no longer matches and is left alone. Returns the files it updated.
+ * test/workspace-defaults.test.js keeps each old default as a fixture.
  */
 // The tool lines of the default CLAUDE.md. A new line replaces the old one whole, so the swap runs once.
 // Three generations: the first defaults (Slack, no files), the WhatsApp ones (Slack gone), and today's (Slack back).
@@ -206,19 +210,53 @@ const SEND_MESSAGE_LINE_WHATSAPP = "- **tarsee_send_message** — Push messages 
 const SEND_FILE_LINE_WHATSAPP = "- **tarsee_send_file** — Send a file as a real attachment to the Telegram, Discord or WhatsApp chat you are in (never answer with a folder path)";
 const SEND_MESSAGE_LINE = "- **tarsee_send_message** — Push messages to Telegram, Discord, WhatsApp, Slack, or web";
 const SEND_FILE_LINE = "- **tarsee_send_file** — Send a file as a real attachment to the Telegram, Discord, WhatsApp or Slack chat you are in (never answer with a folder path)";
-const SOUL_TOOLS_LINE = "- **Platform tools** (mcp__tarsee__*): Send messages and files (real attachments) to Telegram/Discord/WhatsApp/Slack, schedule tasks, manage memory, search the web, use the encrypted vault.";
+// SOUL.md's tool line, through four generations: Slack, WhatsApp, files, then Slack back (all naming mcp__tarsee__*,
+// which only Claude Code calls them), and today's, which names them as every AI sees them.
+const SOUL_TOOLS_LINE = "- **Platform tools** (the tarsee_* tools): Send messages and files (real attachments) to Telegram/Discord/WhatsApp/Slack, schedule tasks, manage memory, search the web, use the encrypted vault.";
+// The lines of TOOLS.md (both the image's and config/env.js's) that told the agent to stay out of Bash.
+const TOOLS_SHELL_LINES = [
+  ["- Make, edit or list Discord channels and webhooks with tarsee_discord_admin. Never call Discord's API from Bash and never pull DISCORD_BOT_TOKEN from the vault for it: Tarsee's own bot does the work.",
+    "- Make, edit or list Discord channels and webhooks with tarsee_discord_admin. Never call Discord's API from the shell and never pull DISCORD_BOT_TOKEN from the vault for it: Tarsee's own bot does the work."],
+  ["- List projects, services and variable names, set a variable or redeploy with tarsee_railway. Never call Railway's API from Bash and never put a Railway token or a secret value in a command: Tarsee reads the token from the vault itself (RAILWAY_API_TOKEN, an account or workspace token).",
+    "- List projects, services and variable names, set a variable or redeploy with tarsee_railway. Never call Railway's API from the shell and never put a Railway token or a secret value in a command: Tarsee reads the token from the vault itself (RAILWAY_API_TOKEN, an account or workspace token)."],
+];
 
 const DEFAULT_UPGRADES = {
   "SOUL.md": [
+    ["You are **Tarsee** — a 24/7 autonomous AI agent powered by Claude.",
+      "You are **Tarsee** — a 24/7 autonomous AI agent."],
+    ["- **Full tool access**: Read, Write, Edit, Bash, Grep, Glob — you can work with any file or run any command.",
+      "- **Full tool access**: you can read, write, edit and search any file, and run any command in the shell."],
     ["- **Platform tools** (mcp__tarsee__*): Send messages to Telegram/Discord/Slack, schedule tasks, manage memory, search the web, use the encrypted vault.",
       SOUL_TOOLS_LINE],
     ["- **Platform tools** (mcp__tarsee__*): Send messages and files (real attachments) to Telegram/Discord/WhatsApp, schedule tasks, manage memory, search the web, use the encrypted vault.",
       SOUL_TOOLS_LINE],
+    ["- **Platform tools** (mcp__tarsee__*): Send messages and files (real attachments) to Telegram/Discord/WhatsApp/Slack, schedule tasks, manage memory, search the web, use the encrypted vault.",
+      SOUL_TOOLS_LINE],
     ["- **Persistent memory**: MEMORY.md stores everything you learn. Read it every session.",
       "- **Persistent memory**: MEMORY.md stores everything you learn. Grep it for what a task needs."],
+    ["- **Image analysis**: Users can send images and you can read them.",
+      "- **Images and files**: Users can send pictures, PDFs and other files. Each one is saved in the workspace for you to open, and you see a picture yourself when your model can."],
     ["- Always read MEMORY.md at the start of a session to know what you've learned.",
       "- MEMORY.md grows long: grep it for the topic at hand (`grep -n -i \"term\" MEMORY.md`) or use search_memories. Never read it whole."],
+    ["- Use mcp__tarsee__* tools for platform actions. Never use Bash for scheduling or messaging.",
+      "- Use the tarsee_* tools for platform actions. Never use the shell for scheduling or messaging."],
   ],
+  "AGENTS.md": [
+    ["- **Coder** (Opus) — Code, debugging, architecture, scripts.",
+      "- **Coder** (your AI's most capable model) — Code, debugging, architecture, scripts."],
+    ["- **Researcher** (Sonnet) — Web research, documentation, analysis.",
+      "- **Researcher** (its everyday model) — Web research, documentation, analysis."],
+    ["- **Writer** (Sonnet) — Content, emails, documents, copywriting.",
+      "- **Writer** (its everyday model) — Content, emails, documents, copywriting."],
+    ["- **Quick** (Haiku) — Fast lookups, formatting, simple tasks.",
+      "- **Quick** (its fastest model) — Fast lookups, formatting, simple tasks."],
+  ],
+  "MEMORY.md": [
+    ["This file stores everything Tarsee learns across sessions. Read this at the start of every conversation.",
+      "This file stores everything Tarsee learns across sessions. It grows long: grep it for what a task needs, and never read it whole."],
+  ],
+  "TOOLS.md": TOOLS_SHELL_LINES,
   "CLAUDE.md": [
     [[
       "## On Every Session Start",
@@ -241,6 +279,10 @@ const DEFAULT_UPGRADES = {
     [SEND_MESSAGE_LINE_OLD, `${SEND_MESSAGE_LINE}\n${SEND_FILE_LINE}`],
     [SEND_MESSAGE_LINE_WHATSAPP, SEND_MESSAGE_LINE],
     [SEND_FILE_LINE_WHATSAPP, SEND_FILE_LINE],
+    ["- **Bash** — Write and run scripts for complex tasks",
+      "- **The shell** — Write and run scripts for complex tasks"],
+    ["- You can install npm/pip packages via Bash if needed for tasks",
+      "- You can install npm/pip packages from the shell when a task needs them"],
   ],
 };
 
@@ -261,7 +303,7 @@ export function upgradeDefaultWorkspaceFiles(dir = config.WORKSPACE_DIR) {
       console.warn(`[workspace] could not update ${name}: ${err.message}`);
     }
   }
-  if (updated.length) console.log(`[workspace] updated the default instructions in ${updated.join(" and ")} (grep MEMORY.md, never read it whole; send files as attachments; Slack)`);
+  if (updated.length) console.log(`[workspace] updated the default instructions in ${updated.join(", ")} (grep MEMORY.md, never read it whole; send files as attachments; Slack; wording that fits any AI)`);
   return updated;
 }
 

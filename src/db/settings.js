@@ -325,7 +325,8 @@ export class SettingsStore {
     for (const [id, def] of Object.entries(AI_PROVIDERS)) {
       const { source, hint } = def.noKeyRequired ? {} : this.getKeyWithSource(id);
       if (def.noKeyRequired) {
-        lines.push(`    ${id}: implicit (no key required)`);
+        // A plan signs in (the [ai] boot line says whether it is); Local AI needs an address, and a key only if its server asks.
+        lines.push(`    ${id}: ${getProvider(id)?.kind === "subscription" ? "signs in (no key)" : "its own server (key optional)"}`);
       } else if (source) {
         lines.push(`    ${id}: ${hint} (${source})`);
       } else {

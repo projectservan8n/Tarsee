@@ -5,7 +5,8 @@
  *
  * Covers:
  *   - Vault keys (names + descriptions, never values)
- *   - AI provider readiness (configured via DB or env)
+ *   - AI provider readiness: the same answer Settings > AI gives (ai/provider-status.js credentialPresence), by
+ *     public id (claude, deepseek, ...), never a key
  *   - Channels that are actually running vs configured but stopped
  *   - Opt-in integrations with their own config shape (captcha, push)
  *
@@ -20,7 +21,8 @@ import fs from "node:fs";
 import path from "node:path";
 import config from "../config/env.js";
 import { isEncrypted, decrypt, maskSecret } from "./vault.js";
-import { AI_PROVIDERS } from "../config/constants.js";
+import { PROVIDER_IDS, PROVIDERS, isShipped } from "../ai/provider-registry.js";
+import { credentialPresence } from "../ai/provider-status.js";
 
 const VAULT_FILE = path.join(config.DATA_DIR, "vault.json");
 
@@ -44,7 +46,7 @@ const ENV_INTEGRATIONS = [
  * @returns {{
  *   vault: Array<{name: string, description: string, masked: string, updatedAt: string}>,
  *   broken: Array<{name: string, reason: string}>,
- *   providers: Array<{id: string, configured: boolean, source: 'env'|'db'|'implicit', model: string|null}>,
+ *   providers: Array<{id: string, configured: boolean, source: 'env'|'db'|'sign-in'|'server'|null, model: string|null}>,
  *   integrations: Array<{label: string, configured: boolean, source: 'env'|'db'|null}>,
  *   channels: Record<string, {status: string, error?: string}>,
  * }}
@@ -66,15 +68,19 @@ export function getCredentialInventory({ settingsStore, channelManager = null })
   }
 
   const providers = [];
-  for (const [id, def] of Object.entries(AI_PROVIDERS)) {
-    const dbKey = settingsStore.get(`ai.${id}.apiKey`);
-    const envKey = def.envKey ? process.env[def.envKey] : null;
-    const model = settingsStore.get(`ai.${id}.model`) || def.defaultModel || null;
+  for (const id of PROVIDER_IDS) {
+    if (!isShipped(id)) continue;
+    const p = PROVIDERS[id];
+    let presence = null;
+    try { presence = credentialPresence(id, { store: settingsStore }); } catch { presence = null; }
+    const configured = presence?.state === "ready";
     let source = null;
-    let configured = false;
-    if (def.noKeyRequired) { configured = true; source = "implicit"; }
-    else if (dbKey)        { configured = true; source = "db"; }
-    else if (envKey)       { configured = true; source = "env"; }
+    if (configured) {
+      if (p.kind === "subscription") source = "sign-in";
+      else if (p.kind === "local") source = "server";
+      else source = String(presence.keySource || "").startsWith("env") ? "env" : "db";
+    }
+    const model = settingsStore.get(`ai.${p.storageId}.model`) || p.defaultModel || null;
     providers.push({ id, configured, source, model });
   }
 
@@ -121,7 +127,7 @@ export function renderInventoryPromptSection(inv) {
   if (readyProviders.length) {
     lines.push("\n**AI providers ready:**");
     for (const p of readyProviders) {
-      const via = p.source === "implicit" ? "no key required" : `configured via ${p.source}`;
+      const via = p.source === "sign-in" ? "signed in" : p.source === "server" ? "its own server" : `configured via ${p.source}`;
       lines.push(`- ${p.id}${p.model ? ` (${p.model})` : ""} — ${via}`);
     }
   }

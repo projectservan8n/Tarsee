@@ -12,6 +12,8 @@
 
 /** The file name at the end of a path, either slash. */
 const fileBase = (p) => String(p || "").split(/[\\/]/).pop() || "file";
+/** A PDF's file name, from a path or a web address (never its query string or fragment, which can hold a token). */
+const pdfBase = (i) => fileBase(String(i?.path || i?.source || "").split(/[?#]/)[0]);
 
 /** mcp__tarsee__tarsee_send_file → tarsee_send_file; a built-in tool's name stays as it is. */
 const bareName = (name) => String(name || "tool").replace(/^mcp__[^_]+(?:_[^_]+)*?__/, "");
@@ -31,6 +33,7 @@ const TARSEE = {
   tarsee_search_memories_deep: ["Searching memories…", "Memory search done", "Memory search failed"],
   tarsee_daily_log: ["Writing the daily log…", "Daily log written", "Writing the daily log failed"],
   tarsee_read_file: [(i) => `Reading ${fileBase(i.filename)}…`, (i) => `Read ${fileBase(i.filename)}`, (i) => `Reading ${fileBase(i.filename)} failed`],
+  tarsee_pdf_read: [(i) => `Reading ${pdfBase(i)}…`, (i) => `Read ${pdfBase(i)}`, (i) => `Reading ${pdfBase(i)} failed`],
   tarsee_write_file: [(i) => `Writing ${fileBase(i.filename)}…`, (i) => `Wrote ${fileBase(i.filename)}`, (i) => `Writing ${fileBase(i.filename)} failed`],
   tarsee_list_files: ["Listing files…", "Files listed", "Listing files failed"],
   tarsee_schedule_task: ["Scheduling a task…", "Task scheduled", "Scheduling the task failed"],

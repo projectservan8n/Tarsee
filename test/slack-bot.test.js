@@ -20,6 +20,7 @@ const { initDb } = await import("../src/db/sqlite.js");
 const { SettingsStore } = await import("../src/db/settings.js");
 const { ConversationStore } = await import("../src/db/conversations.js");
 const { createSlackBot } = await import("../src/channels/slack.js");
+const { transcribeAudio, __setForTests: setStt } = await import("../src/voice/stt-handler.js");
 
 const db = initDb(path.join(tmp, "tarsee.db"));
 const settings = new SettingsStore(db);
@@ -177,6 +178,13 @@ const toolTurn = () => [
   { type: "done", stopReason: "end_turn" },
 ];
 
+/** The turn layer's first event: which AI this turn runs on. */
+const ROUTE = { type: "route", provider: "deepseek", engine: "claude-code", model: "deepseek-v4-flash", label: "DeepSeek Flash", providerLabel: "DeepSeek API key", effort: null };
+
+/** What transcription says when nothing can transcribe (local faster-whisper not installed, the paid API off). */
+const NO_STT = { available: () => false, transcribe: async () => { throw new Error("local transcriber was called"); } };
+let sttMessage = null;
+
 let bot;
 const streamText = (sinceIndex = 0) => calls.slice(sinceIndex)
   .filter(([m]) => m === "chat.startStream" || m === "chat.appendStream" || m === "chat.stopStream")
@@ -184,6 +192,14 @@ const streamText = (sinceIndex = 0) => calls.slice(sinceIndex)
   .filter((c) => c.type === "markdown_text").map((c) => c.text).join("");
 
 before(async () => {
+  setStt({ local: NO_STT });
+  try {
+    await transcribeAudio(Buffer.from("x"), "en", { settingsStore: settings });
+  } catch (err) {
+    sttMessage = err.message;
+  }
+  setStt();
+  assert.match(String(sttMessage), /Speech-to-text is unavailable/, "the message a voice clip gets when nothing can transcribe");
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   port = server.address().port;
   bot = await createSlackBot(
@@ -211,12 +227,23 @@ describe("the Slack bot against a fake Slack", () => {
     assert.equal(bot.identity, "@tarsee in Test Team", "who it connected as, for Settings → Channels");
   });
 
-  it("acknowledges events and says so when no AI provider is set up", async () => {
+  it("acknowledges events and, with no AI set up, hands the message on anyway: the turn layer's answer says what to set up", async () => {
+    // Which AI answers (and saying what to set up when none can) is the turn layer's call (ai/turn.js), not the channel's.
+    const NOT_READY = "Tarsee isn't connected to an AI yet: open Settings > AI.";
+    script = () => [{ type: "text", content: NOT_READY }, { type: "error", message: NOT_READY, subtype: "not-ready" }, { type: "done", stopReason: "not-ready" }];
+    const from = calls.length;
+    const called = streamCalls.length;
     const id = sendEvent({ type: "message", channel: "D1", channel_type: "im", user: "U1", user_team: "T1", text: "hello", ts: "100.000100" });
     await until(() => acks.some((a) => a.envelope_id === id), "the ack");
-    const post = await until(() => of("chat.postMessage").find((p) => /No AI provider/.test(p.markdown_text || "")), "the no-provider reply");
-    assert.equal(post.channel, "D1");
-    assert.equal(post.thread_ts, "100.000100", "the reply goes in the message's thread");
+    await until(() => calls.slice(from).some(([m]) => m === "chat.stopStream"), "the answer");
+    assert.equal(streamCalls.length, called + 1, "the turn layer was asked, once");
+    assert.equal(streamText(from), NOT_READY);
+    const start = calls.slice(from).find(([m]) => m === "chat.startStream")[1];
+    assert.equal(start.channel, "D1");
+    assert.equal(start.thread_ts, "100.000100", "the reply goes in the message's thread");
+    await new Promise((r) => setTimeout(r, 200));
+    const posts = calls.slice(from).filter(([m]) => m === "chat.postMessage").map(([, a]) => a.markdown_text || "");
+    assert.ok(!posts.some((t) => /No AI provider|⚠️/.test(t)), `the answer is said once, not again as an error: ${posts.join(" | ")}`);
     const convId = settings.get("channel_conv.slack:D1:thread:100.000100");
     assert.ok(convId, "the thread got a conversation");
     assert.equal(convs.get(convId).title, "DM with Alice > hello");
@@ -249,6 +276,9 @@ describe("the Slack bot against a fake Slack", () => {
 
     const opts = streamCalls.at(-1);
     assert.equal(opts.liveSource, "slack");
+    assert.equal(opts.systemPrompt, undefined, "the prompt goes in its two parts (design 4.6 g), so a Codex thread resumes");
+    assert.equal(typeof opts.systemParts?.stable, "string");
+    assert.equal(typeof opts.systemParts?.volatile, "string");
     const convId = settings.get("channel_conv.slack:D1:thread:200.000100");
     assert.equal(opts.toolCtx.conversationId, convId);
     const saved = convs.getRecentMessages(convId, 10);
@@ -403,31 +433,93 @@ describe("the Slack bot against a fake Slack", () => {
     }
   });
 
-  it("starts over cleanly when the session has to be reset: the first attempt's words are taken back, not saved", async () => {
-    let attempt = 0;
-    currentStream = async function* () {
-      attempt++;
-      if (attempt === 1) {
-        yield { type: "text", content: "Half an answ" };
-        yield { type: "error", message: "previous_message_id mismatch", recoverable: true };
-        yield { type: "done", stopReason: "error" };
-        return;
-      }
-      yield { type: "text", content: "The real answer." };
-      yield { type: "done", stopReason: "end_turn" };
-    };
+  // The engines run their own tool loops, and the turn layer (ai/turn.js) retries, once and fresh, a session the engine
+  // couldn't resume, holding back the first words until it knows. So the channel asks once per message and shows what
+  // the turn says: no tool loop, no retry of its own.
+  it("never calls the AI again on its own: an error still marked recoverable is shown once, naming the AI", async () => {
+    const SESSION_LOST = "The session could not be resumed.";
+    script = () => [ROUTE, { type: "error", message: SESSION_LOST, recoverable: true }, { type: "done", stopReason: "error" }];
+    const from = calls.length;
+    const called = streamCalls.length;
+    sendEvent({ type: "message", channel: "D1", channel_type: "im", user: "U1", user_team: "T1", text: "try", ts: "980.000100" });
+    const [, post] = await until(() => calls.slice(from).find(([m, a]) => m === "chat.postMessage" && (a.markdown_text || "").includes(SESSION_LOST)), "the error");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(streamCalls.length, called + 1, "one call: the turn layer already retried");
+    assert.equal(post.thread_ts, "980.000100");
+    assert.match(post.markdown_text, /DeepSeek Flash/, "the AI's name, from the route event");
+    assert.match(post.markdown_text, /@tarsee \/clear/, "how /clear is typed in Slack");
+    assert.doesNotMatch(post.markdown_text, /Claude Code/);
+    assert.equal(calls.slice(from).filter(([m]) => m === "chat.delete").length, 0, "nothing shown to take back");
+  });
+
+  it("calls the AI once for a turn that ends on a tool, never runs the tool itself, and saves the AI it ran on", async () => {
+    script = () => [
+      ROUTE,
+      { type: "text", content: "Let me look. " },
+      { type: "tool_use", id: "toolu_9", name: "Bash", input: { command: "ls" } },
+      { type: "done", stopReason: "tool_use" },
+    ];
+    const from = calls.length;
+    const called = streamCalls.length;
+    sendEvent({ type: "message", channel: "D1", channel_type: "im", user: "U1", user_team: "T1", text: "list my files", ts: "981.000100" });
+    await until(() => calls.slice(from).some(([m]) => m === "chat.stopStream"), "the answer");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(streamCalls.length, called + 1);
+    const opts = streamCalls.at(-1);
+    assert.equal("tools" in opts, false, "no tool definitions: the engines bring their own tools");
+    assert.equal("executeTool" in opts, false);
+    assert.equal(opts.provider, undefined, "the turn layer picks the AI (the chat's own pick, else the default)");
+    assert.equal(opts.model, undefined);
+    assert.equal(opts.signal instanceof AbortSignal, true, "Stop still reaches the turn");
+    const tasks = calls.slice(from).flatMap(([, a]) => a.chunks || []).filter((c) => c.type === "task_update");
+    assert.deepEqual(tasks.map((t) => [t.id, t.status, t.title]).slice(0, 1), [["toolu_9", "in_progress", "Running command…"]]);
+    assert.equal(streamText(from), "Let me look. ");
+    const convId = settings.get("channel_conv.slack:D1:thread:981.000100");
+    const saved = convs.getRecentMessages(convId, 5).find((m) => m.role === "assistant");
+    assert.equal(saved.content.split("\n")[0], "Let me look. ");
+    assert.deepEqual([saved.provider, saved.model], ["deepseek", "deepseek-v4-flash"]);
+  });
+
+  it("a voice clip that can't be transcribed gets what to set up, and the AI is not called", async () => {
+    const base = `http://127.0.0.1:${port}`;
+    fileBodies["/files-pri/T1-F7/download/clip.webm"] = { type: "audio/webm", body: Buffer.from("not really audio") };
+    setStt({ local: NO_STT });
     try {
       const from = calls.length;
-      sendEvent({ type: "message", channel: "D1", channel_type: "im", user: "U1", user_team: "T1", text: "try", ts: "980.000100" });
-      await until(() => calls.slice(from).filter(([m]) => m === "chat.stopStream").length >= 2, "both attempts");
-      assert.equal(calls.slice(from).filter(([m]) => m === "chat.startStream").length, 2, "one streamed message per attempt");
-      assert.ok(calls.slice(from).some(([m]) => m === "chat.delete"), "the half answer is deleted");
-      const convId = settings.get("channel_conv.slack:D1:thread:980.000100");
-      const saved = convs.getRecentMessages(convId, 5).at(-1);
-      assert.equal(saved.role, "assistant");
-      assert.equal(saved.content, "The real answer.");
+      const called = streamCalls.length;
+      sendEvent({
+        type: "message", subtype: "file_share", channel: "D1", channel_type: "im", user: "U1", user_team: "T1", text: "", ts: "990.000100",
+        files: [{ id: "F7", name: "clip.webm", mimetype: "audio/webm", subtype: "slack_audio", size: 16, url_private_download: `${base}/files-pri/T1-F7/download/clip.webm` }],
+      });
+      const [, post] = await until(() => calls.slice(from).find(([m]) => m === "chat.postMessage"), "the reply");
+      assert.equal(post.markdown_text, sttMessage);
+      assert.equal(post.thread_ts, "990.000100");
+      await new Promise((r) => setTimeout(r, 300));
+      assert.equal(streamCalls.length, called, "nothing to answer");
     } finally {
-      currentStream = scripted;
+      setStt();
+    }
+  });
+
+  it("answers a voice clip from Slack's own transcript when the transcriber here can't run", async () => {
+    const base = `http://127.0.0.1:${port}`;
+    fileBodies["/files-pri/T1-F8/download/clip.webm"] = { type: "audio/webm", body: Buffer.from("not really audio") };
+    setStt({ local: NO_STT });
+    script = () => [{ type: "text", content: "Two meetings." }, { type: "done", stopReason: "end_turn" }];
+    try {
+      const from = calls.length;
+      sendEvent({
+        type: "message", subtype: "file_share", channel: "D1", channel_type: "im", user: "U1", user_team: "T1", text: "", ts: "991.000100",
+        files: [{
+          id: "F8", name: "clip.webm", mimetype: "audio/webm", subtype: "slack_audio", size: 16, url_private_download: `${base}/files-pri/T1-F8/download/clip.webm`,
+          transcription: { status: "complete", preview: { content: "what's on today?" } },
+        }],
+      });
+      await until(() => calls.slice(from).some(([m]) => m === "chat.stopStream"), "the answer");
+      assert.match(String(streamCalls.at(-1).messages.at(-1).content), /what's on today\?/);
+      assert.ok(!calls.slice(from).some(([m, a]) => m === "chat.postMessage" && a.markdown_text === sttMessage), "no 'set up' note");
+    } finally {
+      setStt();
     }
   });
 

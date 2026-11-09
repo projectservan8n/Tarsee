@@ -19,9 +19,9 @@ describe("an expired Claude sign-in is not a reply", () => {
     assert.equal(isAuthFailure(null), false);
   });
 
-  it("says what to do, where: the dashboard's terminal and claude login", () => {
+  it("says what to do, where: the dashboard's terminal and claude auth login", () => {
     assert.match(AUTH_EXPIRED_MESSAGE, /sign-in has expired/);
-    assert.match(AUTH_EXPIRED_MESSAGE, /`claude login`/);
+    assert.match(AUTH_EXPIRED_MESSAGE, /`claude auth login`/);
     assert.match(AUTH_EXPIRED_MESSAGE, />_/);
   });
 });

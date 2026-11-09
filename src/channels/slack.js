@@ -6,10 +6,9 @@ import { withConversationTurn } from "../lib/conversation-lock.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
-import { buildSystemPrompt, sendFileHint } from "../lib/build-system-prompt.js";
+import { buildSystemPromptParts, sendFileHint } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
-import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { toolStatusLabel, toolDoneLabel } from "../lib/tool-status.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
 import {
@@ -18,6 +17,7 @@ import {
 import { SlackReplyStream, slackErrorCode } from "../lib/slack-stream.js";
 import envConfig from "../config/env.js";
 import { refused } from "../lib/channel-errors.js";
+import { turnErrorNote, idleNote, errorStillToSay, sttProblem } from "./turn-notes.js";
 
 /**
  * Slack channel, over Socket Mode: Tarsee opens the connection to Slack, so there is no public URL to set up.
@@ -342,10 +342,12 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
   /**
    * The files on a message, as the Discord channel takes them: pictures and PDFs to the model, PDFs and everything
    * else saved to the uploads folder with a note saying where, voice clips transcribed.
+   * problems: what to tell the person about a clip that couldn't be transcribed (said in the thread, not to the model).
    */
   async function readFiles(files) {
     const media = [];
     const notes = [];
+    const problems = [];
     let transcript = "";
     for (let file of files || []) {
       try {
@@ -387,10 +389,20 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
           if (saved) notes.push(`[Attached file saved: ${name} (${type || "application/pdf"}, ${Math.round(buffer.length / 1024)}KB) → ${saved}] — too big to show the model directly; work with it from the file.\nYou can read this file with the Read tool at: ${saved}`);
         } else if (isAudio) {
           console.log(`[slack] voice clip: ${name} (${type})`);
-          const result = await transcribeAudio(buffer, "en", { settingsStore });
-          // Slack transcribes clips too; its text is the fallback when the local transcriber hears nothing.
-          const text = result?.transcript?.trim() || file.transcription?.preview?.content?.trim() || "";
+          let heard = "";
+          let problem = null;
+          try {
+            const result = await transcribeAudio(buffer, "en", { settingsStore });
+            heard = result?.transcript?.trim() || "";
+          } catch (err) {
+            console.error(`[slack] voice transcription failed: ${err.message}`);
+            // Transcription that can't run says what to set up (Settings > Voice); anything else, a short note.
+            problem = sttProblem(err) || `Couldn't transcribe the voice clip ${name}. Try again, or type it.`;
+          }
+          // Slack transcribes clips too; its text is the fallback when the transcriber here hears nothing or can't run.
+          const text = heard || file.transcription?.preview?.content?.trim() || "";
           if (text) transcript = transcript ? `${transcript}\n${text}` : text;
+          else if (problem) problems.push(problem);
         } else if (type.startsWith("video/")) {
           const saved = saveToDisk(buffer, name);
           if (saved) notes.push(`[Video attached: ${name} (${type}, ${Math.round(buffer.length / 1024)}KB) → ${saved}]`);
@@ -406,7 +418,7 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
         notes.push(`[File not downloaded: ${file?.name || "file"} (${err.message})]`);
       }
     }
-    return { media, notes, transcript };
+    return { media, notes, transcript, problems };
   }
 
   /** The thread so far, for a mention in a thread Tarsee has not been part of. */
@@ -461,16 +473,12 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
   const activeTurns = new Map(); // `${channel}:${threadTs}` → { stop }
 
   /**
-   * Answer in a thread: stream the model's reply there, run its tools, save it.
+   * Answer in a thread: stream the model's reply there, with a card per tool it runs, and save it.
    *   ackTs: the person's message, for the 👀 reaction and the agent's own reactions (null for /tarsee)
+   * Which AI answers is the turn layer's to decide (ai/turn.js: this thread's own pick, else the default), and so is
+   * saying what to set up when that AI isn't ready: its answer is the reply.
    */
   async function runTurn({ channel, threadTs, userId, teamId, convId, displayText, media = [], aiPromptOverride = null, ackTs = null, savedUserId = null }) {
-    const activeProvider = settingsStore.getActiveProvider();
-    if (!activeProvider?.provider || !activeProvider?.ready) {
-      await postInThread(channel, threadTs, "No AI provider configured. Set one up in the Tarsee web panel.");
-      return;
-    }
-
     if (ackTs) react(channel, ackTs, ackEmoji);
     // "is thinking…" under the thread until the first words arrive (works in channel threads too since 2026-03).
     app.client.assistant.threads.setStatus({
@@ -492,9 +500,11 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
         client: app.client, channel, threadTs, recipientUserId: userId, recipientTeamId: teamId,
         native: nativeStreaming, onNativeUnavailable: nativeUnavailable, onStoppedByUser: stop,
       });
-      let markers = new MarkerFilter();
+      const markers = new MarkerFilter();
       const tick = setInterval(() => { reply.tick(); }, 30_000);
 
+      // The AI this turn runs on, from the turn layer's route event (the backup model's, if it answered instead).
+      let routed = null;
       let fullResponse = "";
       let lastEventAt = Date.now();
       let idleAborted = false;
@@ -511,14 +521,12 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
       try {
         const history = convStore.getRecentMessages(convId, 15);
         const conv = convStore.get(convId);
-        const systemPrompt = buildSystemPrompt({
+        const systemParts = buildSystemPromptParts({
           settingsStore, db, conversationId: convId, messageCount: history.length,
           conversationPrompt: conv?.system_prompt, channelHint: SLACK_HINT,
         });
-        const tools = getToolDefinitions();
         // messageId: the message this turn answers (its pictures are kept on it)
         const toolCtx = { db, settingsStore, conversationId: convId, messageId: savedUserId };
-        const MAX_TOOL_ROUNDS = 15;
         const workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
         if (aiPromptOverride && workingMessages.length > 0) {
@@ -530,100 +538,52 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
           if (last.role === "user") last.content = [...media, { type: "text", text: typeof last.content === "string" ? last.content : displayText }];
         }
 
-        let sessionRetried = false;
         let surfacedError = null;
         let tokenUsage = {};
         const toolsSeen = new Map();   // tool id → { name, input }, for its "done" label
-        const toolsDone = new Set();
 
-        for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-          const toolCalls = [];
-          let roundText = "";
-          const roundStart = fullResponse.length;   // a retried round takes back what it wrote from here
-          let stopReason = "end_turn";
-          let recoverRound = false;
+        // One call per message. The engine runs its own tools and ends the turn itself, and the turn layer
+        // (ai/turn.js) retries, once and fresh, a session the engine couldn't resume (holding back the first words
+        // until it knows, so nothing shown has to be taken back). The channel never calls the AI again on its own.
+        const stream = streamChat({
+          liveSource: "slack",
+          messages: workingMessages,
+          systemParts,
+          toolCtx,
+          sessionId: convStore.getSessionHandle(convId),
+          onSessionId: (handle) => convStore.setSessionHandle(convId, handle),
+          signal: controller.signal,
+        });
 
-          const stream = streamChat({
-            liveSource: "slack",
-            provider: activeProvider.provider,
-            model: activeProvider.model,
-            messages: workingMessages,
-            systemPrompt,
-            tools,
-            toolCtx,
-            sessionId: convStore.getClaudeSessionId(convId),
-            onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
-            effort: settingsStore.get(`session.${convId}.effort`) || undefined,
-            signal: controller.signal,
-          });
-
-          for await (const event of stream) {
-            lastEventAt = Date.now();
-            if (stoppedByUser) break;
-            if (event.type === "text") {
-              roundText += event.content;
-              fullResponse += event.content;
-              const shown = markers.push(event.content);
-              if (shown) await reply.text(shown);
-            } else if (event.type === "tool_use") {
-              const held = markers.end();
-              if (held) await reply.text(held);
-              toolCalls.push({ id: event.id, name: event.name, input: event.input });
-              toolsSeen.set(event.id, { name: event.name, input: event.input });
-              const callJson = JSON.stringify({ name: event.name, arguments: event.input }).replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
-              fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
-              await reply.toolStart(event.id, toolStatusLabel(event.name, event.input));
-            } else if (event.type === "tool_result") {
-              // Claude Code runs the tools itself and reports each result as it lands: that is when the card turns
-              // complete (or error). The channel-side tool loop below only runs for a provider that hands tools back.
-              const tc = toolsSeen.get(event.id) || { name: "tool", input: {} };
-              const ok = event.ok !== false;
-              toolsDone.add(event.id);
-              await reply.toolDone(event.id, toolDoneLabel(tc.name, tc.input || {}, !ok), ok);
-            } else if (event.type === "error") {
-              if (event.recoverable && !sessionRetried) {
-                sessionRetried = true;
-                recoverRound = true;
-                convStore.setClaudeSessionId(convId, null);
-                console.warn(`[slack] session corrupt, clearing and retrying: ${String(event.message || "").slice(0, 200)}`);
-                // The round runs again from the start: what it showed and what it wrote both go.
-                await reply.discard();
-                fullResponse = fullResponse.slice(0, roundStart);
-                markers = new MarkerFilter();
-                break;
-              } else {
-                surfacedError = event.message;
-              }
-            } else if (event.type === "usage") {
-              tokenUsage = { ...tokenUsage, ...event.usage };
-            } else if (event.type === "done") {
-              stopReason = event.stopReason || "end_turn";
-              break;
-            }
-          }
-
+        for await (const event of stream) {
+          lastEventAt = Date.now();
           if (stoppedByUser) break;
-          if (recoverRound) { round--; continue; }
-          if (surfacedError) break;
-          if (toolCalls.length === 0 || stopReason !== "tool_use") break;
-
-          const assistantContent = [];
-          if (roundText) assistantContent.push({ type: "text", text: roundText });
-          for (const tc of toolCalls) assistantContent.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
-          workingMessages.push({ role: "assistant", content: assistantContent });
-
-          const toolResults = [];
-          for (const tc of toolCalls) {
-            console.log(`[slack] tool: ${tc.name}`);
-            const result = await executeTool(tc.name, tc.input, toolCtx);
-            toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
-            const resultText = (typeof result === "string" ? result : JSON.stringify(result)).replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
-            fullResponse += `\n<tool_response>${resultText}</tool_response>\n`;
-            const isErr = /error|forbidden|not found|enotfound|command not found/i.test(resultText);
-            if (!toolsDone.has(tc.id)) await reply.toolDone(tc.id, toolDoneLabel(tc.name, tc.input || {}, isErr), !isErr);
-            toolsDone.add(tc.id);
+          if (event.type === "route") {
+            routed = event;
+          } else if (event.type === "text") {
+            fullResponse += event.content;
+            const shown = markers.push(event.content);
+            if (shown) await reply.text(shown);
+          } else if (event.type === "tool_use") {
+            const held = markers.end();
+            if (held) await reply.text(held);
+            toolsSeen.set(event.id, { name: event.name, input: event.input });
+            const callJson = JSON.stringify({ name: event.name, arguments: event.input }).replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
+            fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
+            await reply.toolStart(event.id, toolStatusLabel(event.name, event.input));
+          } else if (event.type === "tool_result") {
+            // The engine runs the tool and reports its result as it lands: that is when the card turns complete
+            // (or error).
+            const tc = toolsSeen.get(event.id) || { name: "tool", input: {} };
+            const ok = event.ok !== false;
+            await reply.toolDone(event.id, toolDoneLabel(tc.name, tc.input || {}, !ok), ok);
+          } else if (event.type === "error") {
+            surfacedError = event.message || "something went wrong";
+          } else if (event.type === "usage") {
+            tokenUsage = { ...tokenUsage, ...event.usage };
+          } else if (event.type === "done") {
+            break;
           }
-          workingMessages.push({ role: "user", content: toolResults });
         }
 
         const held = markers.end();
@@ -635,8 +595,8 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
           convStore.addMessage(convId, {
             role: "assistant",
             content: stoppedByUser ? `${cleanText}\n\n(stopped)` : cleanText,
-            provider: activeProvider.provider,
-            model: activeProvider.model,
+            provider: routed?.provider || null,
+            model: routed?.model || null,
             tokensIn: (tokenUsage.input_tokens || 0)
               + (tokenUsage.cache_read_input_tokens || 0)
               + (tokenUsage.cache_creation_input_tokens || 0) || null,
@@ -650,14 +610,14 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
         await reply.finish();
         if (stoppedByUser) {
           await postInThread(channel, threadTs, "⏹️ Stopped.").catch(() => {});
-        } else if (surfacedError && !reply.sentText) {
-          const isSessionErr = /previous_message_id|session/i.test(String(surfacedError));
-          await postInThread(channel, threadTs, isSessionErr
-            ? "⚠️ Session reset due to a transient API hiccup. Just send your message again — your history is preserved."
-            : `⚠️ Upstream error: ${String(surfacedError).slice(0, 200)}\n\nTry again — if it keeps happening, reply \`@${botHandle} /clear\` and try fresh.`).catch(() => {});
+        } else if (surfacedError && errorStillToSay(fullResponse, surfacedError)) {
+          // An error the turn reported (already in plain words: what went wrong, what to do), after whatever it said
+          // before it: a spending limit or the turn ceiling can stop a reply halfway. Not again when the reply is the
+          // error itself (the turn layer's "set this up first" answers).
+          await postInThread(channel, threadTs, turnErrorNote(routed, surfacedError, { clearHint: `reply \`@${botHandle} /clear\`` })).catch(() => {});
         } else if (idleAborted) {
-          await postInThread(channel, threadTs, `⚠️ Claude Code stopped responding (${Math.round(IDLE_ABORT_MS / 60_000)} min idle). Try again — maybe with a smaller ask.`).catch(() => {});
-        } else if (!reply.sentText) {
+          await postInThread(channel, threadTs, idleNote(routed, IDLE_ABORT_MS)).catch(() => {});
+        } else if (!reply.sentText && !surfacedError) {
           await postInThread(channel, threadTs, fullResponse ? "⚠️ Done — no message body." : "⚠️ No response generated. Try rephrasing?").catch(() => {});
         }
       } catch (err) {
@@ -667,7 +627,7 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
         } else {
           console.error("[slack] chat error:", err.message);
           const reason = idleAborted
-            ? `⚠️ Claude Code stopped responding (${Math.round(IDLE_ABORT_MS / 60_000)} min idle). Try again — maybe with a smaller ask.`
+            ? idleNote(routed, IDLE_ABORT_MS)
             : `⚠️ Error: ${err.message || "something went wrong"}. Try again.`;
           await postInThread(channel, threadTs, reason).catch(() => {});
         }
@@ -736,7 +696,9 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
     }
 
     let content = await plainText(event.text);
-    const { media, notes, transcript } = await readFiles(event.files);
+    const { media, notes, transcript, problems } = await readFiles(event.files);
+    // A voice clip that couldn't be heard: say why first, in the thread. Words or files sent with it are still answered.
+    for (const problem of problems) await postInThread(event.channel, threadTs, problem).catch(() => {});
     if (transcript) content = content ? `${content}\n\n[Voice message]: ${transcript}` : transcript;
     if (notes.length) content = content ? `${content}\n\n${notes.join("\n")}` : notes.join("\n");
     if (!content && media.length === 0) return;

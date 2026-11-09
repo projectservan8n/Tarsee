@@ -11,7 +11,8 @@
 import { Router } from "express";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
-import { usageIndex } from "../lib/token-usage.js";
+import { modelLabel, providerLabel, providerOf, usageIndex } from "../lib/token-usage.js";
+import { normalizeProviderId } from "../ai/provider-registry.js";
 
 export const analyticsRouter = Router();
 
@@ -77,16 +78,27 @@ analyticsRouter.get("/", (req, res) => {
     ORDER BY day ASC
   `).all() || [];
 
-  // Model usage breakdown (Anthropic/Claude models only)
-  const modelUsage = db.prepare(`
-    SELECT model, COUNT(*) as count,
+  // Model usage breakdown, every provider's: each row names its provider (messages.provider; the Claude plan's
+  // older rows say "claude-code" or nothing) and the model as its card does.
+  const modelRows = db.prepare(`
+    SELECT provider, model, COUNT(*) as count,
       COALESCE(SUM(tokens_in), 0) as tokens_in,
       COALESCE(SUM(tokens_out), 0) as tokens_out
     FROM messages
-    WHERE model IS NOT NULL AND model LIKE 'claude%' AND created_at >= date('now', '-30 days')
-    GROUP BY model
-    ORDER BY count DESC
+    WHERE model IS NOT NULL AND model != '' AND created_at >= date('now', '-30 days')
+    GROUP BY provider, model
   `).all() || [];
+  const models = new Map();
+  for (const r of modelRows) {
+    const provider = providerOf(r.provider);
+    const key = `${provider}\u0000${r.model}`;
+    const m = models.get(key) || { provider, providerLabel: providerLabel(provider), model: r.model, label: modelLabel(r.model, provider), count: 0, tokens_in: 0, tokens_out: 0 };
+    m.count += r.count;
+    m.tokens_in += r.tokens_in;
+    m.tokens_out += r.tokens_out;
+    models.set(key, m);
+  }
+  const modelUsage = [...models.values()].sort((a, b) => b.count - a.count);
 
   // Channel activity (from conversation titles/sources)
   const channelActivity = db.prepare(`
@@ -169,11 +181,18 @@ async function settle(index, ms = 2500) {
   await Promise.race([index.running, new Promise((r) => setTimeout(r, ms))]);
 }
 
+/** ?provider=<id>: one provider's work only (null: every provider's). */
+function providerParam(req) {
+  return typeof req.query.provider === "string" ? normalizeProviderId(req.query.provider) : null;
+}
+
 /**
- * GET /api/analytics/usage
- * Today, the last 7 days, the last 5 hours, by model, channel and chat, the
- * heaviest jobs, speed, and each day and hour (in the configured timezone,
- * named in `timeZone`).
+ * GET /api/analytics/usage?provider=<id>
+ * Today, the last 7 days, the last 5 hours, by provider, model, channel and chat,
+ * what each cost (costUsd and costNote: "exact", "est", "plan" for "Included in
+ * plan", "free", "unknown"), the heaviest jobs, speed, and each day and hour (in
+ * the configured timezone, named in `timeZone`). `providers` lists every provider
+ * that did work this week, for the filter.
  */
 analyticsRouter.get("/usage", (req, res) => {
   const db = req.app.get("db");
@@ -181,28 +200,30 @@ analyticsRouter.get("/usage", (req, res) => {
   try {
     // windows: null. Nothing in this build reads the plan's own 5-hour and weekly limits, so those
     // cards are simply the last 5 hours and the last 7 days.
-    res.json(index.overview({ windows: null, overrides: jobOverrides() }));
+    res.json(index.overview({ windows: null, overrides: jobOverrides(), provider: providerParam(req) }));
   } catch (err) {
     res.status(500).json({ error: `Could not add up the usage: ${err.message}` });
   }
 });
 
 /**
- * GET /api/analytics/usage/jobs?days=7&conversation=<id>
- * Jobs with a turn in the last `days` days (1 to 60), newest first, each with its turns.
+ * GET /api/analytics/usage/jobs?days=7&conversation=<id>&provider=<id>
+ * Jobs with a turn in the last `days` days (1 to 60), newest first, each with its turns, providers and cost.
+ * provider: only that provider's turns.
  */
 analyticsRouter.get("/usage/jobs", (req, res) => {
   const db = req.app.get("db");
   const index = freshIndex(db);
   const days = Math.min(60, Math.max(1, Number(req.query.days) || 7));
   const conversationId = typeof req.query.conversation === "string" && req.query.conversation ? req.query.conversation : null;
+  const provider = providerParam(req);
   const now = Date.now();
   try {
-    const jobs = index.jobs({ from: now - days * DAY, conversationId, overrides: jobOverrides(), now });
+    const jobs = index.jobs({ from: now - days * DAY, conversationId, overrides: jobOverrides(), now, provider });
     const titles = index.titles([...new Set(jobs.map((j) => j.conversationId))]);
-    const turns = new Map(index.turnsBetween(now - (days + 1) * DAY, Number.MAX_SAFE_INTEGER, conversationId).map((t) => [t.turnId, t]));
+    const turns = new Map(index.turnsBetween(now - (days + 1) * DAY, Number.MAX_SAFE_INTEGER, conversationId, provider).map((t) => [t.turnId, t]));
     res.json({
-      days, now, timeZone: index.timeZone, progress: index.status(),
+      days, now, timeZone: index.timeZone, provider, progress: index.status(),
       jobs: jobs.slice(0, 300).map((j) => ({
         ...j, chatTitle: titles[j.conversationId] || null,
         turnList: j.turnIds.map((id) => turns.get(id)).filter(Boolean).map((t) => index.turnView(t, now)),

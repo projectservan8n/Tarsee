@@ -13,6 +13,15 @@ import express from "express";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tarsee-model-picker-"));
 process.env.TARSEE_STATE_DIR = tmp;
+// Hermetic: the shell's AI choice and keys, and this machine's own Claude or Codex sign-in, never decide what the
+// picker lists (the defaults read TARSEE_AI_PROVIDER/TARSEE_AI_MODEL; provider-status reads the homes).
+for (const name of ["TARSEE_AI_PROVIDER", "TARSEE_AI_MODEL", "TARSEE_KEYS_ONLY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "TARSEE_LOCAL_AI_URL", "TARSEE_LOCAL_AI_KEY", "CLAUDE_CODE_HOME", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN", "CODEX_HOME"]) {
+  delete process.env[name];
+}
+process.env.HOME = process.env.USERPROFILE = path.join(tmp, "home");
+fs.mkdirSync(process.env.HOME, { recursive: true });
+// The Claude plan counts as signed in (provider-status.js reads the Railway variable), whatever this machine has.
+process.env.CLAUDE_CODE_OAUTH_TOKEN = "test-canary-claude-oauth-token";
 const { buildPicker, parsePickerId, jsLiteralToJson, catalogFromBuildText, literalEnd, FABLE_NOTE } = await import("../src/lib/model-picker.js");
 const catalog = await import("../src/lib/model-catalog.js");
 
@@ -249,16 +258,21 @@ describe("model picker: a chat's own model and effort", () => {
     assert.deepEqual(m.picker.main.map((e) => e.name), ["Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5"]);
     assert.ok(Array.isArray(m.models), "the table is still there for Settings");
     const pick = await (await fetch(`${base}/conversations/${convId}/picker`)).json();
-    assert.deepEqual(pick, { model: null, effort: null, defaults: { model: "sonnet", effort: "medium" } });
+    assert.equal(pick.model, null);
+    assert.equal(pick.effort, null);
+    assert.equal(pick.provider, null);
+    assert.equal(pick.defaults.model, "sonnet");
+    assert.equal(pick.defaults.effort, "medium");
   });
 
   it("a pick is saved for the chat, under the keys /think uses", async () => {
     const r = await (await put({ model: "claude-opus-5-5", effort: "xhigh" })).json();
-    assert.equal(r.model, "claude-opus-5-5");
+    assert.equal(r.modelId, "claude-opus-5-5");
+    assert.equal(r.model, "claude:claude-opus-5-5", "the answer names the model as a ref");
     assert.equal(r.effort, "xhigh");
     assert.equal(settings.get(`session.${convId}.model`), "claude-opus-5-5");
     assert.equal(settings.get(`session.${convId}.effort`), "xhigh");
-    assert.equal((await (await put({ model: "claude-opus-4-7" })).json()).model, "claude-opus-4-7");
+    assert.equal((await (await put({ model: "claude-opus-4-7" })).json()).modelId, "claude-opus-4-7");
   });
 
   it("null goes back to the default; an unknown model or level is refused", async () => {
@@ -273,22 +287,24 @@ describe("model picker: a chat's own model and effort", () => {
   });
 
   it("the chat's turns run on its model and effort on every channel; a caller's own model is left alone", async () => {
-    const { withChatModel } = await import("../src/ai/providers/claude-code.js");
-    const ctx = (id) => ({ db, conversationId: id });
+    const { resolveTarget } = await import("../src/ai/turn.js");
+    const ctx = (id) => ({ db, settingsStore: settings, conversationId: id });
+    const target = async (opts) => (await resolveTarget(opts, settings)).target;
     settings.set(`session.${convId}.model`, "claude-opus-4-8");
-    assert.equal(withChatModel({ model: "sonnet", toolCtx: ctx(convId) }).model, "claude-opus-4-8", "the channels pass the default");
-    assert.equal(withChatModel({ model: undefined, toolCtx: ctx(convId) }).model, "claude-opus-4-8");
-    assert.equal(withChatModel({ model: "haiku", toolCtx: ctx(convId) }).model, "haiku", "a model chosen on purpose stays");
-    assert.equal(withChatModel({ model: "sonnet", toolCtx: ctx("other") }).model, "sonnet");
+    assert.equal((await target({ model: "sonnet", toolCtx: ctx(convId) })).model, "claude-opus-4-8", "the channels pass the default");
+    assert.equal((await target({ model: undefined, toolCtx: ctx(convId) })).model, "claude-opus-4-8");
+    assert.equal((await target({ model: "haiku", toolCtx: ctx(convId) })).model, "haiku", "a model chosen on purpose stays");
+    assert.equal((await target({ model: "sonnet", toolCtx: ctx("other") })).model, "sonnet");
     settings.delete(`session.${convId}.model`);
-    assert.equal(withChatModel({ model: "sonnet", toolCtx: ctx(convId) }).model, "sonnet");
-    assert.equal(withChatModel({ model: "sonnet", toolCtx: ctx(convId) }).effort, "medium", "unset: Medium");
+    assert.equal((await target({ model: "sonnet", toolCtx: ctx(convId) })).model, "sonnet");
+    assert.equal((await target({ model: "sonnet", toolCtx: ctx(convId) })).effort, "medium", "unset: Medium");
     settings.set(`session.${convId}.effort`, "high");
-    assert.equal(withChatModel({ toolCtx: ctx(convId) }).effort, "high");
-    assert.equal(withChatModel({ effort: "low", toolCtx: ctx(convId) }).effort, "low", "/think or !think for one message wins");
+    assert.equal((await target({ toolCtx: ctx(convId) })).effort, "high");
+    assert.equal((await target({ effort: "low", toolCtx: ctx(convId) })).effort, "low", "/think or !think for one message wins");
     settings.delete(`session.${convId}.effort`);
-    const bg = { model: "haiku", toolCtx: { db, conversationId: null } };
-    assert.deepEqual(withChatModel(bg), bg, "background work keeps its own model and effort");
+    const bg = await target({ model: "haiku", background: true, toolCtx: { db, settingsStore: settings, conversationId: null } });
+    assert.equal(bg.model, "haiku", "background work keeps its own model");
+    assert.equal(bg.effort, null, "and sends no effort without a chat");
   });
 
   it("/think says Medium is the default", async () => {

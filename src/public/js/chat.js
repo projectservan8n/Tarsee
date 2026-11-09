@@ -78,6 +78,15 @@ const Chat = {
     // Typing indicator WebSocket
     this._initTypingSocket();
 
+    // Settings → AI (js/settings.js) read the AIs and something the composer shows changed: the list and the defaults
+    // again, now. A new default (or its model, or whether it can answer) also means the model the last turn ran on is
+    // no longer what the next message runs on.
+    window.addEventListener("tarsee:ai-changed", (ev) => {
+      if (ev.detail?.defaultChanged !== false) this._turnModel = null;
+      this.refreshPicker(true);
+      this._loadPick({ fresh: true });
+    });
+
     // Diagram node clicks: iframes post a message when a node is clicked
     this._initDiagramListener();
 
@@ -888,7 +897,7 @@ const Chat = {
   onConversationCreated(convId) {
     if (!convId) return;
     // What was picked before the first message is this chat's own now.
-    const pending = this._pickConv === null && (this._pick.model || this._pick.effort) ? { ...this._pick } : null;
+    const pending = this._pickConv === null && (this._pick.model || this._pick.effort || this._pick.provider) ? ModelPickerCore.pickChange(null, this._pick) : null;
     this._pickConv = convId;
     if (pending) API.json(`/api/chat/conversations/${encodeURIComponent(convId)}/picker`, { method: "PUT", body: pending }).catch(() => {});
     document.getElementById("appScreen")?.classList.remove("is-new-chat");
@@ -1989,8 +1998,9 @@ const Chat = {
     } else if (event?.type === "context_overflow") {
       this.showOverflowRecoveryCard(event.checkpointPath);
     } else if (event?.type === "model_selected") {
-      // Auto-routing: the composer shows the model this turn runs on.
-      if (event.model) { this._turnModel = event.model; this._paintPicker(); }
+      // Every turn names the AI and model it runs on (the turn layer's route): with no pick of the chat's own (the
+      // default, auto-routing, a backup that answered), the composer shows that model.
+      if (event.model) { this._turnModel = { model: event.model, provider: event.provider || null, label: event.label || null }; this._paintPicker(); }
     }
   },
 
@@ -2075,10 +2085,10 @@ const Chat = {
 
   /* ------------------------------------------------------------ the model and the effort (js/model-picker.js) */
 
-  _picker: null,          // the list: Claude Code's own catalog, from GET /api/chat/models
+  _picker: null,          // the list: every ready AI's models, from GET /api/chat/models (routes/models.js)
   _pickerAt: 0,
   _pickDefaults: { model: "sonnet", effort: "medium" },
-  _pick: { model: null, effort: null },   // this chat's own; null is the default
+  _pick: { provider: null, model: null, effort: null },   // this chat's own; null is the default
   _pickConv: undefined,   // the chat _pick belongs to
 
   /** The model and effort a new chat sends with its first message (an existing chat's are on the server). */
@@ -2092,8 +2102,10 @@ const Chat = {
   /** The list, asked again when the menu opens and it is more than five minutes old (a new model shows up). */
   async refreshPicker(force = false) {
     if (!force && this._picker && Date.now() - this._pickerAt < 5 * 60_000) return;
-    if (this._pickerAsking) return;
+    // A forced ask while one is on its way is asked again once it is back: what changed may be newer than that answer.
+    if (this._pickerAsking) { if (force) this._pickerAgain = true; return; }
     this._pickerAsking = true;
+    this._pickerAgain = false;
     try {
       const data = await API.json("/api/chat/models");
       this._models = data.models || [];
@@ -2101,19 +2113,22 @@ const Chat = {
       if (data.defaults) this._pickDefaults = data.defaults;
       this._paintPicker();
       window.ModelPicker?.refresh();
-    } catch { /* the button keeps what it shows */ } finally { this._pickerAsking = false; }
+    } catch { /* the button keeps what it shows */ } finally {
+      this._pickerAsking = false;
+      if (this._pickerAgain) { this._pickerAgain = false; this.refreshPicker(true); }
+    }
   },
 
   /** This chat's own model and effort (a chat is only asked once per visit, unless `fresh`). */
   async _loadPick({ fresh = false } = {}) {
     const id = this.currentConversationId || null;
     if (!fresh && this._pickConv === id) return;
-    if (this._pickConv !== id) { this._pick = { model: null, effort: null }; this._pickConv = id; this._paintPicker(); }
+    if (this._pickConv !== id) { this._pick = { provider: null, model: null, effort: null }; this._pickConv = id; this._paintPicker(); }
     if (!id) return;
     try {
       const data = await API.json(`/api/chat/conversations/${encodeURIComponent(id)}/picker`);
       if (this.currentConversationId !== id) return;
-      this._pick = { model: data.model || null, effort: data.effort || null };
+      this._pick = { provider: data.provider || null, model: data.model || null, effort: data.effort || null };
       if (data.defaults) this._pickDefaults = data.defaults;
       this._paintPicker();
       window.ModelPicker?.refresh();
@@ -2135,12 +2150,10 @@ const Chat = {
     const id = this.currentConversationId;
     if (!id) return;
     try {
-      const body = {};
-      if (this._pick.model !== before.model) body.model = this._pick.model;
-      if (this._pick.effort !== before.effort) body.effort = this._pick.effort;
+      const body = ModelPickerCore.pickChange(before, this._pick);
       if (!Object.keys(body).length) return;
       const data = await API.json(`/api/chat/conversations/${encodeURIComponent(id)}/picker`, { method: "PUT", body });
-      if (this.currentConversationId === id) { this._pick = { model: data.model || null, effort: data.effort || null }; this._paintPicker(); }
+      if (this.currentConversationId === id) { this._pick = { provider: data.provider || null, model: data.model || null, effort: data.effort || null }; this._paintPicker(); }
     } catch (err) {
       if (this.currentConversationId === id) { this._pick = before; this._paintPicker(); }
       App.showToast(`Couldn't change it: ${err.message}`, "error");
@@ -2150,6 +2163,8 @@ const Chat = {
   /** /model changes the default, /think and /effort this chat's level: the button shows it. */
   afterPickCommand(text) {
     if (!/^\/(model|think|effort)\b/i.test(String(text || ""))) return;
+    // (The last turn's model is no longer what the next one runs on.)
+    this._turnModel = null;
     this.refreshPicker(true);
     this._loadPick({ fresh: true });
   },
@@ -2159,12 +2174,13 @@ const Chat = {
     const btn = document.getElementById("modelPickerBtn");
     if (!btn || typeof ModelPickerCore === "undefined") return;
     const label = ModelPickerCore.buttonLabel(this._picker, this._pick, this._pickDefaults);
-    // Auto routing (no model of the chat's own): the model the turn ran on.
-    const model = !this._pick.model && this._turnModel ? ModelPickerCore.modelName(this._picker, this._turnModel) : label.model;
+    // No model of the chat's own (the default, auto-routing): the model the last turn ran on.
+    const model = !this._pick.model && !this._pick.provider && this._turnModel ? ModelPickerCore.turnName(this._picker, this._turnModel) : label.model;
     if (this.elements.sessionModel) this.elements.sessionModel.textContent = model;
     const effortEl = document.getElementById("effortLabel");
     if (effortEl) effortEl.textContent = label.effort;
     btn.classList.toggle("no-effort", !label.effort);
+    btn.classList.toggle("has-warning", !!label.warning);
     btn.dataset.level = label.level || "";
     btn.title = label.title;
     btn.setAttribute("aria-label", label.title);

@@ -18,7 +18,8 @@ const SHAPE = /TOKEN|KEY|OAUTH|AUTH|BASE_URL|_BASE$|_URL$|SECRET|PASS|CREDENTIAL
 
 /**
  * Credential-shaped CLAUDE_* names in the pinned CLI that are deliberately NOT stripped, and why. Reviewed against
- * Agent SDK 0.3.142 (the CLI's own code was read for each one).
+ * Agent SDK 0.3.142, and the names 0.3.319 added against that CLI (the CLI's own code was read for each one, and its
+ * own lists of secrets to scrub, of hosts it sends a sign-in to, and of names that only look like secrets).
  */
 const REVIEWED_NOT_STRIPPED = {
   // Not environment variables at all.
@@ -26,6 +27,7 @@ const REVIEWED_NOT_STRIPPED = {
   CLAUDE_AI_OAUTH_SCOPES: "an exported constant name",
   CLAUDE_API_KEY: "placeholder text in the CLI's secrets screen",
   CLAUDE_BASE: "an internal constant",
+  CLAUDE_CODE_ARG_KEY_SHAPE: "on the CLI's own list of names that only look like secrets",
   // Token counts and thresholds, not tokens.
   CLAUDE_CODE_ENABLE_TOKEN_USAGE_ATTACHMENT: "a feature switch",
   CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS: "a size limit",
@@ -33,8 +35,18 @@ const REVIEWED_NOT_STRIPPED = {
   CLAUDE_CODE_MAX_CONTEXT_TOKENS: "a size limit (engine-env sets it on gateway turns)",
   CLAUDE_CODE_MAX_OUTPUT_TOKENS: "a size limit",
   CLAUDE_CODE_RESUME_TOKEN_THRESHOLD: "a size limit",
+  CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS: "a size limit",
+  CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "a size limit",
+  CLAUDE_CODE_TOTAL_TOKENS_REMINDER_AFTER_USER_TURN: "a size limit",
+  CLAUDE_CODE_TOTAL_TOKENS_REMINDER_BUDGET: "a size limit",
+  CLAUDE_CODE_WORKFLOW_SIZE_WARNING_TOKENS: "a size limit",
+  // Timers and switches around a sign-in, not a sign-in.
+  CLAUDE_CODE_AUTH_FAIL_EXIT_MS: "a timeout (on the CLI's own list of names that only look like secrets)",
+  CLAUDE_CODE_DISABLE_AUTH_REFRESH_LOCK: "a switch for the lock around a sign-in refresh",
   // Set by the SDK or the CLI itself for its own children.
   CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH: "set by the Agent SDK in the child it starts",
+  CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH: "set by the Agent SDK in the child it starts",
+  CLAUDE_CODE_SDK_HAS_SESSIONS_OAUTH_REFRESH: "set by the Agent SDK in the child it starts",
   CLAUDE_CODE_MCP_SERVER_URL: "set by the CLI for an MCP headers helper it runs",
   CLAUDE_CODE_PROXY_URL: "set by the CLI for its proxy auth helper",
   CLAUDE_CODE_PROXY_HOST: "set by the CLI for its proxy auth helper",
@@ -52,12 +64,31 @@ const REVIEWED_NOT_STRIPPED = {
   CLAUDE_CODE_CLIENT_CERT: "the operator's mTLS client identity",
   CLAUDE_CODE_CLIENT_KEY: "the operator's mTLS client identity",
   CLAUDE_CODE_CLIENT_KEY_PASSPHRASE: "the operator's mTLS client identity",
+  CLAUDE_CODE_DISABLE_LOOPED_CROSS_CERT_DROP: "how CA certificates are read",
+  CLAUDE_CODE_DISABLE_SELF_NAMED_CERT_DROP: "how CA certificates are read",
+  CLAUDE_GATEWAY_PROXY_IS_EGRESS_BOUNDARY: "the operator's proxy",
+  // Set by a cloud session's launcher or runner for its git checkout and tools; no provider login, key or model host.
+  CLAUDE_CODE_AGENT_PROXY_GH_SHIM: "a cloud session's git proxy switch",
+  CLAUDE_CODE_AGENT_PROXY_GIT_CONFIG: "a cloud session's git proxy switch",
+  CLAUDE_CODE_AGENT_PROXY_GIT_HOSTS: "the git hosts a cloud session's proxy governs",
+  CLAUDE_RUNNER_GIT_MOUNT_URL: "the repository a cloud runner checks out",
+  CLAUDE_RUNNER_PRIMARY_REPO_URL: "the repository a cloud runner checks out",
+  CLAUDE_RUNNER_REPO_URL: "the repository a cloud runner checks out",
+  CLAUDE_RUNNER_USE_GIT_PROXY: "a cloud runner's git switch",
+  CLAUDE_CODE_WEBFETCH_USE_CCR_PROXY: "a cloud session's switch; only works with its own token, which is stripped",
+  CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY: "a cloud session's switch; only works with its own token, which is stripped",
+  // Where plugins, release notes and browser tab groups come from: not a provider's login, billing or model host.
+  CLAUDE_CODE_MARKETPLACE_URL: "where plugins come from",
+  CLAUDE_CODE_PLUGIN_ARCHIVE_URL: "where plugins come from",
+  CLAUDE_CODE_DEV_RAW_CHANGELOG_URL: "where the release notes come from",
+  CLAUDE_CHROME_TAB_GROUP_KEY: "a browser tab group id",
   // Only matter with a CLAUDE_CODE_USE_* backend, which is stripped.
   CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH: "needs CLAUDE_CODE_USE_ANTHROPIC_AWS",
   CLAUDE_CODE_SKIP_BEDROCK_AUTH: "needs CLAUDE_CODE_USE_BEDROCK",
   CLAUDE_CODE_SKIP_FOUNDRY_AUTH: "needs CLAUDE_CODE_USE_FOUNDRY",
   CLAUDE_CODE_SKIP_MANTLE_AUTH: "needs CLAUDE_CODE_USE_MANTLE",
   CLAUDE_CODE_SKIP_VERTEX_AUTH: "needs CLAUDE_CODE_USE_VERTEX",
+  CLAUDE_CODE_SKIP_ANTHROPIC_GOOGLE_CLOUD_AUTH: "needs CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
 };
 
 /** The Claude sign-in and host variables the pinned CLI was found to read; each must stay stripped. */
@@ -67,6 +98,9 @@ const KNOWN_CREDENTIALS = [
   "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", "CLAUDE_CODE_CUSTOM_OAUTH_URL", "CLAUDE_LOCAL_OAUTH_API_BASE",
   "CLAUDE_LOCAL_OAUTH_APPS_BASE", "CLAUDE_LOCAL_OAUTH_CONSOLE_BASE", "CLAUDE_TRUSTED_DEVICE_TOKEN",
   "CLAUDE_SESSION_INGRESS_TOKEN_FILE", "CLAUDE_BG_AUTH_SNAPSHOT_PATH", "CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR",
+  // Agent SDK 0.3.319.
+  "CLAUDE_CODE_SESSIONS_OAUTH_TOKEN", "CLAUDE_CODE_GATEWAY_TOKEN", "CLAUDE_CODE_HOST_AUTH_ENV_VAR", "CLAUDE_BRIDGE_OAUTH_TOKEN",
+  "CLAUDE_BRIDGE_BASE_URL", "CLAUDE_CODE_ARTIFACTS_API_TOKEN", "CLAUDE_CODE_MEMORY_API_TOKEN", "CLAUDE_BG_CLAIM_AUTH",
 ];
 
 /** The CLI binary of whichever of the SDK's platform packages is installed here, or null. */

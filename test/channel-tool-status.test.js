@@ -1,7 +1,8 @@
-// A channel's "⚙️ Running command…" line turns into "✓ Command done" when the tool finishes. Claude Code runs the
-// tools itself and reports each result as a tool_result event, then ends the turn with "end_turn"; the channels used
-// to mark a tool done only in their own tool loop, which that never reaches, so every status line stayed "Running"
-// for good. Telegram's bot runs here against a Bot API server on 127.0.0.1 with a scripted model.
+// A channel's "⚙️ Running command…" line turns into "✓ Command done" when the tool finishes. The engine (whichever AI
+// the turn runs on) runs the tools itself and reports each result as a tool_result event, then ends the turn with
+// "end_turn"; the channels used to mark a tool done only in their own tool loop, which that never reaches, so every
+// status line stayed "Running" for good. The channel asks the AI once per message: it never runs a tool or calls again
+// itself. Telegram's bot runs here against a Bot API server on 127.0.0.1 with a scripted model.
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -22,7 +23,9 @@ const { createTelegramBot } = await import("../src/channels/telegram.js");
 const db = initDb(path.join(tmp, "tarsee.db"));
 new SettingsStore(db).set("ai.activeProvider", "claude-code");
 
+let streamCalls = 0;
 async function* scripted() {
+  streamCalls++;
   yield { type: "text", content: "Checking. " };
   yield { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } };
   yield { type: "tool_result", id: "toolu_1", ok: true, result: "a\nb" };
@@ -69,7 +72,7 @@ describe("tool status lines on Telegram", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("turns each tool's line into ✓ or ❌ when Claude Code reports its result", async () => {
+  it("turns each tool's line into ✓ or ❌ when the engine reports its result, asking the AI once", async () => {
     const end = Date.now() + 10_000;
     const edits = () => calls.filter((c) => c.method === "editMessageText").map((c) => c.fields.text);
     while (Date.now() < end && !(edits().some((t) => /✓ Command done/.test(t)) && edits().some((t) => /❌ Read missing\.md/.test(t)))) {
@@ -79,5 +82,6 @@ describe("tool status lines on Telegram", () => {
     assert.ok(posted.some((t) => /⚙️ Running command…/.test(t)), `the running line was posted: ${posted.join(" | ")}`);
     assert.ok(edits().some((t) => /✓ Command done/.test(t)), `the Bash line turned ✓: ${edits().join(" | ")}`);
     assert.ok(edits().some((t) => /❌ Read missing\.md/.test(t)), `the failed Read turned ❌: ${edits().join(" | ")}`);
+    assert.equal(streamCalls, 1, "one call for the message: the engine ran both tools in it");
   });
 });

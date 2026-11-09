@@ -58,6 +58,9 @@ RUN apt-get update \
     libcairo2 \
     libasound2 \
     libwayland-client0 \
+    # pdftotext: the text of a PDF for an AI that can't open PDFs itself
+    # (src/ai/media.js), and the tarsee_pdf_read tool
+    poppler-utils \
     # Python for faster-whisper
     python3 \
     python3-pip \
@@ -85,14 +88,15 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 # Claude Code CLI, installed globally at a pinned version so every build (and
-# every student's redeploy) gets the same one. This is the `claude` you sign in
-# with from the web terminal (`claude login`), and the model picker reads its
-# list of models, so a newly released model arrives when this is bumped. Chat
-# turns run on the Agent SDK's own bundled copy, whose version follows
-# @anthropic-ai/claude-agent-sdk in package.json.
-# To move it: change CLAUDE_CODE_VERSION and rebuild, or set
-# TARSEE_AUTO_UPDATE_CLI=1 to install the latest on every boot (entrypoint.sh).
-ARG CLAUDE_CODE_VERSION=2.1.308
+# every redeploy) gets the same one. This is the `claude` you sign in with from
+# the web terminal (`claude auth login`), and the model picker reads its list of
+# models. Chat turns run on the Agent SDK's own bundled copy, and the two are
+# kept the same version: CLAUDE_CODE_VERSION is the `claudeCodeVersion` of the
+# @anthropic-ai/claude-agent-sdk pinned in package.json, and the build stops
+# below if they differ. To move it: bump the SDK, set this to its
+# claudeCodeVersion and rebuild. TARSEE_AUTO_UPDATE_CLI=1 installs the latest
+# on every boot instead (entrypoint.sh warns that the two then differ).
+ARG CLAUDE_CODE_VERSION=2.1.319
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force \
   && claude --version
 
@@ -107,6 +111,38 @@ RUN curl -fsSL https://railway.com/install.sh | bash
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /root/.cache/ms-playwright /home/node/.cache/ms-playwright
 COPY package.json ./
+
+# The Terminal's claude and the Agent SDK's bundled Claude Code (the one chat
+# turns run) must be the same version: stop the build if either isn't the pin.
+RUN set -e; \
+  cli="$(claude --version 2>/dev/null | awk 'NR==1{print $1}')"; \
+  sdk="$(node -p "require('./node_modules/@anthropic-ai/claude-agent-sdk/package.json').claudeCodeVersion")"; \
+  echo "Claude Code: Terminal ${cli:-missing}, Agent SDK ${sdk}, pin ${CLAUDE_CODE_VERSION}"; \
+  if [ "$cli" != "$CLAUDE_CODE_VERSION" ] || [ "$sdk" != "$CLAUDE_CODE_VERSION" ]; then \
+    echo "Claude Code versions differ: set CLAUDE_CODE_VERSION to the Agent SDK's claudeCodeVersion (${sdk})" >&2; \
+    exit 1; \
+  fi
+
+# Codex, for the ChatGPT plan and the AIs that run on it (OpenAI, Local AI and
+# some OpenRouter models). Turns run the copy @openai/codex-sdk installed; the
+# Terminal's `codex` (`codex login --device-auth`) is that same copy, so a
+# sign-in made there is the one turns use.
+RUN chmod 755 /app/node_modules/@openai/codex/bin/codex.js \
+  && ln -sf /app/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex
+
+# Stop the build unless that codex is the version package.json pins the SDK to.
+RUN set -e; \
+  got="$(codex --version 2>/dev/null | awk 'NR==1{print $NF}')"; \
+  want="$(node -p "require('./package.json').dependencies['@openai/codex-sdk']")"; \
+  echo "Codex: ${got:-missing}, pin ${want}"; \
+  if [ "$got" != "$want" ]; then \
+    echo "Codex is ${got:-missing}, not the @openai/codex-sdk pin ${want}" >&2; \
+    exit 1; \
+  fi
+
+# pdftotext answers (poppler-utils, installed above).
+RUN pdftotext -v 2>&1 | grep -q '^pdftotext version'
+
 COPY src ./src
 COPY entrypoint.sh ./entrypoint.sh
 

@@ -15,7 +15,8 @@ import { initLiveBus } from "./lib/live-bus.js";
 import { initChatFiles } from "./lib/chat-files.js";
 import { upgradeDefaultWorkspaceFiles } from "./lib/workspace-files.js";
 import { setToolsChannelManager } from "./lib/tools.js";
-import { initModelCatalog } from "./lib/model-catalog.js";
+import { initModelCatalog, refreshChatgptModels } from "./lib/model-catalog.js";
+import { ensureLocalModels } from "./ai/provider-models.js";
 import { healthRouter } from "./routes/health.js";
 import { authRouter } from "./routes/auth-routes.js";
 import { chatRouter } from "./routes/chat.js";
@@ -46,6 +47,11 @@ import { whapiRouter } from "./routes/whapi.js";
 import { analyticsRouter } from "./routes/analytics.js";
 import { externalApiRouter } from "./routes/external-api.js";
 import { pushRouter } from "./routes/push.js";
+import { aiRouter } from "./routes/ai.js";
+import { modelsRouter } from "./routes/models.js";
+import { aiBootLine } from "./ai/provider-status.js";
+import { initOpenRouterCatalog } from "./lib/openrouter-catalog.js";
+import { startMcpHttp, stopMcpHttp } from "./ai/mcp-http.js";
 
 import { writePid, removePid } from "./daemon/pid.js";
 
@@ -95,22 +101,9 @@ if (isEncryptionEnabled()) {
 }
 
 // --- Initialize database ---
-// --- Billing guard -------------------------------------------------------
-// Tarsee authenticates with a Claude SUBSCRIPTION (`claude login`, credentials
-// on the volume). If ANTHROPIC_API_KEY is present, the CLI and the Agent SDK
-// will silently prefer API-key auth, moving every turn onto metered per-token
-// billing with no visible change in behaviour. Checked at BOOT rather than
-// inside the provider, because the provider is imported lazily on the first
-// turn — by which point nobody is reading the log.
-if (process.env.ANTHROPIC_API_KEY) {
-  console.warn(
-    "[tarsee] WARNING: ANTHROPIC_API_KEY is set. Claude may authenticate with that key "
-    + "instead of your Claude subscription, which bills PER TOKEN rather than against your "
-    + "plan. Tarsee expects subscription auth via `claude login`. Unset ANTHROPIC_API_KEY "
-    + "unless you have deliberately chosen metered API billing.",
-  );
-}
-
+// (The old ANTHROPIC_API_KEY billing warning is the [ai] boot line now, below the settings fixups: a Claude plan
+// turn strips every ANTHROPIC_* variable, so a stray key can't move it onto per-token billing, and the line says
+// when one is set but unused. Settings > AI shows the same as a banner with a one-click switch.)
 const db = initDb(config.DB_PATH);
 // A workspace seeded with the old default SOUL.md / CLAUDE.md gets their new
 // memory instructions (grep MEMORY.md, never read it whole); edited lines stay.
@@ -198,6 +191,8 @@ app.use("/api/webhooks", webhookRouter); // Token auth, no session/CSRF needed
 app.use("/api/channels/whapi", whapiRouter); // Per-channel secret in URL, no session/CSRF
 app.use("/api/analytics", requireAuth, csrfProtect, analyticsRouter);
 app.use("/api/push", requireAuth, csrfProtect, pushRouter);
+app.use("/api/ai", requireAuth, csrfProtect, aiRouter); // Settings > AI and the setup wizard (routes/ai.js)
+app.use("/api/models", requireAuth, csrfProtect, modelsRouter); // every ready AI's models, and each chat's pick (routes/models.js)
 app.use("/api/v1", requireAuth, externalApiRouter); // Bearer token auth, no CSRF needed for API clients
 
 // SPA fallback — serve index.html for client-side routes
@@ -235,6 +230,22 @@ try { settingsStore.removeFakeSubscriptionKey(); } catch (err) { console.warn("[
 // Older versions saved a base URL per provider; hosts are fixed in code now (Local AI's own address stays).
 try { settingsStore.removeProviderBaseUrls(); } catch (err) { console.warn("[settings] base URL fixup failed:", err.message); }
 settingsStore.logKeyStatus();
+// One line: which AI answers by default, on which engine, where its key comes from (last 4 only) and whether it's ready.
+// Local AI's models are read first (they live only in memory, and with no model named Local AI counts as not set up
+// until they are); ensureLocalModels returns at once when Local AI has no address, and never throws.
+ensureLocalModels(settingsStore)
+  .then(() => aiBootLine({ store: settingsStore }))
+  .then((line) => console.log(line))
+  .catch((err) => console.warn("[ai] default AI check failed:", err.message));
+// OpenRouter's model list (prices, context, which engine each model speaks): the cached copy at once, a fresh one in
+// the background and every 6 hours. Never throws; without it the picker's OpenRouter list would be empty.
+const openRouterCatalog = initOpenRouterCatalog(settingsStore);
+// The signed-in ChatGPT account's models (A2: never a hard-coded one), so the first ChatGPT turn, its backup and /model
+// don't wait for them. Returns at once, without starting Codex, when ChatGPT isn't signed in.
+refreshChatgptModels({ stateDir: config.STATE_DIR }).catch((err) => console.warn("[ai] reading the ChatGPT account's models failed:", err?.message || err));
+// Tarsee's own tools for Codex turns (ai/mcp-http.js): a loopback-only endpoint on 127.0.0.1, never on Express.
+// Started now so the first Codex turn doesn't wait for the port; it would start itself on first use anyway.
+startMcpHttp().catch((err) => console.warn("[mcp-http] could not start:", err.message));
 initTTSEngine(settingsStore).catch((err) => {
   console.warn("[tarsee] TTS engine init error:", err.message);
 });
@@ -440,6 +451,8 @@ function shutdown(signal) {
   stopCronScheduler();
   stopTokenUsage();
   stopChannelHealth();
+  openRouterCatalog.stop();
+  stopMcpHttp().catch(() => { /* shutting down anyway */ });
   channelManager.stopAll();
   server.close(() => {
     removePid();

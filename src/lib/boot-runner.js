@@ -3,8 +3,8 @@ import path from "node:path";
 import crypto from "node:crypto";
 import config from "../config/env.js";
 import { getBootContext, hasBootstrapFile, appendDailyLog } from "./workspace-files.js";
-import { buildSystemPrompt } from "./build-system-prompt.js";
-import { runBackgroundTurn, resolveBackgroundModel } from "./background-turn.js";
+import { buildSystemPromptParts } from "./build-system-prompt.js";
+import { runBackgroundTurn, resolveBackgroundModel, defaultAiReadiness } from "./background-turn.js";
 import { BACKGROUND_DEFAULTS } from "../config/constants.js";
 
 /**
@@ -60,10 +60,10 @@ export async function runBootChecklist({ db, settingsStore, channelManager = nul
     return { skipped: true, reason: "BOOT.md is empty" };
   }
 
-  const activeProvider = settingsStore.getActiveProvider();
-  if (!activeProvider?.ready || !activeProvider?.provider) {
-    console.log("[boot] No AI provider configured, skipping boot checklist");
-    return { skipped: true, reason: "No AI provider configured" };
+  const ai = await defaultAiReadiness(settingsStore);
+  if (!ai.ready) {
+    console.log(`[boot] skipping the boot checklist: ${ai.reason}`);
+    return { skipped: true, reason: ai.reason };
   }
 
   // Once per build, not once per process start. See BOOT_MARKER above.
@@ -76,7 +76,7 @@ export async function runBootChecklist({ db, settingsStore, channelManager = nul
 
   console.log("[boot] Running boot checklist...");
 
-  const systemPrompt = buildSystemPrompt({
+  const systemParts = buildSystemPromptParts({
     settingsStore,
     db,
     conversationId: null,
@@ -99,9 +99,9 @@ export async function runBootChecklist({ db, settingsStore, channelManager = nul
     liveId: "boot",
     liveSource: "boot",
     // Cheap by default; `boot.model` raises it for a checklist that needs it.
-    model: resolveBackgroundModel(settingsStore.get("boot.model")),
+    model: resolveBackgroundModel(settingsStore.get("boot.model"), null, settingsStore),
     messages,
-    systemPrompt,
+    systemParts,
     toolCtx,
     timeoutMs: BACKGROUND_DEFAULTS.BOOT_TIMEOUT_MS,
   });

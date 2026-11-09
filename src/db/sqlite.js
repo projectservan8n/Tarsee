@@ -98,7 +98,8 @@ export function ensureColumn(db, table, column, ddl) {
  */
 export const USAGE_COLUMNS = Object.freeze({
   usage_calls: Object.freeze({ provider: "TEXT", engine: "TEXT", cost_usd: "REAL" }),
-  usage_turns: Object.freeze({ provider: "TEXT", engine: "TEXT", cost_usd: "REAL" }),
+  // cost_exact: the turn's cost_usd is the provider's own figure (an Anthropic key's total, OpenRouter's usage.cost).
+  usage_turns: Object.freeze({ provider: "TEXT", engine: "TEXT", cost_usd: "REAL", cost_exact: "INTEGER" }),
 });
 
 /**

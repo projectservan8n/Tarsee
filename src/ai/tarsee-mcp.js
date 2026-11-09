@@ -16,9 +16,10 @@ import config from "../config/env.js";
 /**
  * Create a Tarsee MCP server with platform tools.
  * @param {object} ctx - Tool execution context { db, settingsStore, channelManager, conversationId }
+ * @param {{quiet?: boolean}} [opts] - quiet: no "Creating" log line (the Codex endpoint builds one per turn)
  * @returns {McpSdkServerConfigWithInstance}
  */
-export function createTarseeMcp(ctx) {
+export function createTarseeMcp(ctx, opts = {}) {
   const allTools = [
       tool(
         "tarsee_send_message",
@@ -365,6 +366,22 @@ export function createTarseeMcp(ctx) {
         }
       ),
 
+      // For an AI that can't open PDFs itself (every model but Claude's): a message's PDF arrives as its first pages'
+      // text plus the saved path (ai/media.js), and this reads the rest. Through executeTool, so Tool Permissions apply.
+      tool(
+        "tarsee_pdf_read",
+        "Read the text of a PDF: a file in the workspace (files people send in are saved in its uploads folder) or a web address. Long PDFs come a few pages at a time; the answer says which pages to ask for next. Use it whenever you need what a PDF says and can't open the file yourself. Scanned pages (pictures of text) have no text to read.",
+        {
+          path: z.string().describe("The PDF: a path in the workspace (absolute, or relative to it, e.g. 'uploads/report.pdf') or an http(s) address"),
+          pages: z.string().optional().describe("Which pages: '3', '2-5', or '6-' for page 6 to the end. Default: from page 1, as many as fit"),
+          max_chars: z.number().optional().describe("The most characters to return (default 10000, up to 50000)"),
+        },
+        async (args) => {
+          const result = await executeTool("pdf_read", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
       tool(
         "tarsee_get_key",
         "Get a value from the encrypted key vault. The session system prompt " +
@@ -446,7 +463,8 @@ export function createTarseeMcp(ctx) {
 
   ];
 
-  console.log(`[mcp] Creating Tarsee MCP server: ${allTools.length} tools, names: ${allTools.map(t => t.name).join(", ")}`);
+  // (Quiet for the Codex endpoint, ai/mcp-http.js, which builds one per turn and logs its own start once.)
+  if (!opts.quiet) console.log(`[mcp] Creating Tarsee MCP server: ${allTools.length} tools, names: ${allTools.map(t => t.name).join(", ")}`);
   // (A result past TARSEE_TOOL_RESULT_MAX_CHARS goes to a file, by Claude Code itself: ai/context-limits.js.)
   return createSdkMcpServer({ name: "tarsee", version: "1.0.0", tools: allTools });
 }

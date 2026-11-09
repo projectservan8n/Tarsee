@@ -343,11 +343,6 @@ const API = {
     }
   },
 
-  // --- Providers ---
-  async getProviders() {
-    return this.json("/api/chat/providers");
-  },
-
   // --- Settings ---
   async getSettings() {
     return this.json("/api/settings");

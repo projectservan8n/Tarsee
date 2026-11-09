@@ -18,10 +18,15 @@
  *      (30d default), AND keep no more than retention.checkpoints_max
  *      files (50 default) by deleting the oldest if over the cap.
  *
+ *   3. Prune Codex's rollouts (its record of each thread, in the ChatGPT
+ *      plan's home and the key providers') untouched for
+ *      retention.codex_rollouts_days (30d default).
+ *
  * Config (settings keys, all optional — defaults baked in):
  *   retention.conversations_days   (number, default 14)
  *   retention.checkpoints_days     (number, default 30)
  *   retention.checkpoints_max      (number, default 50)
+ *   retention.codex_rollouts_days  (number, default 30)
  *   retention.schedule_hour        (0-23, default 3 — UTC on Railway)
  *
  * State (written by this module):
@@ -36,6 +41,8 @@ import config from "../config/env.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { appendWorkspaceFile } from "./workspace-files.js";
+import { CODEX, homeFor } from "../ai/engine-env.js";
+import { pruneCodexRollouts } from "../ai/codex-rollouts.js";
 
 const ONE_HOUR = 3600_000;
 
@@ -43,6 +50,7 @@ const DEFAULTS = Object.freeze({
   conversations_days: 14,
   checkpoints_days: 30,
   checkpoints_max: 50,
+  codex_rollouts_days: 30,
   schedule_hour: 3,
 });
 
@@ -141,13 +149,31 @@ async function runSweep(settings) {
   // Memories stay (the fact is still true), but we NULL the origin pointer
   // and drop the cache rows so they don't accumulate forever.
   const orphans = cleanupOrphanedReferences();
+  const prunedRollouts = pruneOldRollouts(settings);
 
   settings.set("retention.last_pruned_convs", prunedConvs);
   settings.set("retention.last_pruned_checks", prunedChecks);
   settings.set("retention.last_orphan_cleanup", orphans);
 
-  console.log(`[retention] sweep done — pruned ${prunedConvs} conversations, ${prunedChecks} checkpoints, cleaned ${orphans.memories} memory backrefs + ${orphans.cache} cache rows`);
-  return { convs: prunedConvs, checks: prunedChecks, orphans };
+  console.log(`[retention] sweep done — pruned ${prunedConvs} conversations, ${prunedChecks} checkpoints, ${prunedRollouts} Codex rollouts, cleaned ${orphans.memories} memory backrefs + ${orphans.cache} cache rows`);
+  return { convs: prunedConvs, checks: prunedChecks, rollouts: prunedRollouts, orphans };
+}
+
+/**
+ * Codex's rollouts untouched for retention.codex_rollouts_days (30 by default), in both Codex homes: the ChatGPT
+ * plan's (.codex-home) and the one OpenAI, OpenRouter, DeepSeek and Local AI share (.codex-home-keys). Returns how many
+ * went; never throws.
+ */
+export function pruneOldRollouts(settings, { stateDir = config.STATE_DIR, now = Date.now() } = {}) {
+  try {
+    const days = Number(settings?.get?.("retention.codex_rollouts_days") ?? DEFAULTS.codex_rollouts_days);
+    const maxAgeDays = Number.isFinite(days) && days > 0 ? days : DEFAULTS.codex_rollouts_days;
+    const homes = [homeFor("chatgpt", CODEX, { stateDir }), homeFor("openai", CODEX, { stateDir })];
+    return pruneCodexRollouts({ homes: [...new Set(homes)], maxAgeDays, now });
+  } catch (err) {
+    console.warn("[retention] Codex rollout prune failed:", err?.message);
+    return 0;
+  }
 }
 
 // ------------------------------------------------------------------

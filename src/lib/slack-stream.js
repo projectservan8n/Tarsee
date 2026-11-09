@@ -58,7 +58,6 @@ export class SlackReplyStream {
     this._seg = null;                // { ts, shown } the message the current stretch of text is in
     this._segText = "";
     this._toolMsgs = new Map();      // tool id → ts of its status line
-    this._posted = [];               // ts of every message this reply made (for discard)
     this._flushTimer = null;
   }
 
@@ -158,26 +157,6 @@ export class SlackReplyStream {
       this._openTasks.clear();
       // Streamed messages earlier in this reply left the agent session "processing": set it back.
       if (this._endedMidTurn) await this._sessionActive();
-    });
-  }
-
-  /** Throw away what this reply has shown so far (the turn is being run again from the start). */
-  discard() {
-    this._disarmFlush();
-    return this._run(async () => {
-      this._pending = "";
-      this._openTasks.clear();
-      this._reopen = "";
-      this._carryTasks = false;
-      if (this._stream) await this._endStream(undefined);
-      // Every message this reply made: rolled-over streams, edited messages and tool lines alike.
-      for (const ts of this._posted) await this._call("delete", { channel: this.channel, ts });
-      this._posted = [];
-      this._toolMsgs.clear();
-      this._seg = null;
-      this._segText = "";
-      this._endedMidTurn = false;
-      this.sentText = false;
     });
   }
 
@@ -318,7 +297,6 @@ export class SlackReplyStream {
       if (this.recipientTeamId) args.recipient_team_id = this.recipientTeamId;
       const res = await this.client.chat.startStream(args);
       this._stream = { ts: res.ts, startedAt: this.now(), chars: 0, text: "", tasks: new Set() };
-      if (res.ts) this._posted.push(res.ts);
       this._reopen = "";
       this._carryTasks = false;
       this._endedMidTurn = false;
@@ -450,7 +428,6 @@ export class SlackReplyStream {
 
   async _post(markdown) {
     const res = await this._call("postMessage", { channel: this.channel, thread_ts: this.threadTs, markdown_text: markdown });
-    if (res?.ts) this._posted.push(res.ts);
     return res?.ts || null;
   }
 

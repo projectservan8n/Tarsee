@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"01a1bf55-bf70-7311-951b-e636376d3006"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"Quota exceeded. Check your plan and billing details."}
+{"type":"turn.failed","error":{"message":"Quota exceeded. Check your plan and billing details."}}
+{"type":"x-sdk-threw","message":"Codex Exec exited with code 1: WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"<tmpdir>\\\\\" (codex_home: AbsolutePathBuf(\"<tmp>\\\\.codex-home-keys\"))"}

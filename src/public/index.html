@@ -160,6 +160,10 @@
           </button>
         </div>
         <div class="topbar-right">
+          <!-- The AI that answers by default, with a dot for its state; opens Settings → AI (js/settings.js). -->
+          <button type="button" class="ai-header-chip" id="aiHeaderChip" title="Your AI" aria-label="Your AI: open Settings → AI" hidden>
+            <span class="channel-dot" data-tone="wait" aria-hidden="true"></span><span class="ai-header-chip-text" id="aiHeaderChipText"></span>
+          </button>
           <button class="topbar-icon-btn console-toggle-btn" id="consoleToggleBtn" title="Console" aria-label="Toggle console">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
           </button>
@@ -185,6 +189,9 @@
           </button>
         </div>
       </div>
+
+      <!-- Shown when the default AI can't answer (signed out, out of credit, a key turned down): what to do. -->
+      <div id="aiAttention" class="ai-attention" role="status" hidden></div>
 
       <!-- A new chat (/chat/new), or a chat with nothing in it yet. -->
       <div id="welcomeScreen" class="welcome">
@@ -257,9 +264,9 @@
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 3h12v10H2z" stroke="currentColor" stroke-width="1.2"/><path d="M5 1v4M11 1v4" stroke="currentColor" stroke-width="1.2"/></svg>
             Workspace
           </button>
-          <button class="settings-tab" data-tab="provider">
+          <button class="settings-tab" data-tab="ai">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 8h8M8 4v8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/></svg>
-            AI Provider
+            AI
           </button>
           <button class="settings-tab" data-tab="channels">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4l6 4 6-4M2 4h12v8H2z" stroke="currentColor" stroke-width="1.2"/></svg>
@@ -372,39 +379,92 @@
             </div>
           </div>
 
-          <!-- AI Provider Tab -->
-          <div class="settings-tab-panel" data-tab="provider">
-            <h2>Claude Code Agent</h2>
-            <div class="settings-section">
-              <div>
-              <div class="form-group" style="display:none">
-                <select id="settingsProvider">
-                  <option value="claude-code" selected>Claude Code (Agent)</option>
-                </select>
-              </div>
-              <div class="form-group" style="display:none">
-                <!-- Wrapped in a no-op <form> so the browser doesn't warn
-                     about a password field outside any form. autocomplete=off
-                     keeps password managers from offering to save API keys
-                     as login credentials. display:contents keeps layout. -->
-                <form style="display:contents" autocomplete="off" data-no-submit>
-                  <input type="password" id="settingsApiKey" autocomplete="off">
-                </form>
+          <!-- AI Tab: which AI answers, and how each one is connected (js/settings.js, steps from
+               js/provider-guides-core.js, data from /api/ai). Each card's controls are drawn into its data-ai-body. -->
+          <div class="settings-tab-panel" data-tab="ai">
+            <h2>AI</h2>
+            <div class="hint mb-3">
+              Choose the AI that answers you. Connect one or more below: follow a card's steps, and its line turns to
+              <em>Ready</em>. Keys are stored encrypted in your Tarsee database and never shown again (only their last
+              4 characters).
+            </div>
+            <div id="aiBanners" class="ai-banners" aria-live="polite"></div>
+            <nav class="channel-jump ai-chips" id="aiChips" aria-label="Your AIs"></nav>
+
+            <div class="settings-section" id="aiDefaultSection">
+              <h3>Default AI</h3>
+              <div class="ai-default-now" id="aiDefaultNow" aria-live="polite">Checking…</div>
+              <div class="hint">To change it, click <strong>Use this AI</strong> on a ready card below. Each chat can also pick its own AI from the model menu under the message box.</div>
+              <div class="form-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="aiKeysOnly">
+                  <span>Only use API keys</span>
+                </label>
+                <div class="hint" id="aiKeysOnlyNote">Turns off the Claude and ChatGPT plan sign-ins, so every message is billed to an API key. Switch it on when other people talk to this Tarsee.</div>
               </div>
               <div class="form-group">
-                <label>Model</label>
-                <select id="settingsModel" class="w-full">
-                  <!-- Populated dynamically from /api/chat/models on page load.
-                       The server owns the model registry so adding a new Claude
-                       model is a one-line change in src/config/constants.js. -->
-                </select>
+                <label for="aiBackupModel">Backup if the default AI can't answer <span class="settings-label">optional</span></label>
+                <select id="aiBackupModel"><option value="">Off</option></select>
+                <div class="hint">When the default AI is out of credit, signed out or down, Tarsee tries this one instead. Only ready AIs are listed.</div>
               </div>
-              <div class="form-group" id="customBaseUrlGroup" style="display:none">
-                <input type="text" id="settingsBaseUrl">
+              <div class="form-group">
+                <label for="aiMonthlyCap">Monthly spending cap, in US dollars <span class="settings-label">optional</span></label>
+                <input type="number" id="aiMonthlyCap" min="1" step="1" inputmode="decimal" placeholder="Off">
+                <div class="hint" id="aiMonthSpend" hidden></div>
+                <div class="hint">Counts what API-key AIs cost this month (plans aren't counted); at the cap Tarsee stops using them until next month. Leave it empty for no cap. A spending limit set at the provider (see each card's steps) is the surest cap.</div>
               </div>
-              </div>
-              <div class="hint mb-3">Uses your Claude Max subscription via <code>claude login</code>. No API key needed. Credentials are stored on the volume.</div>
-              <button class="btn btn-primary" id="saveProviderBtn">Save</button>
+              <button type="button" class="btn btn-sm" id="aiSaveExtrasBtn">Save backup and cap</button>
+            </div>
+
+            <div class="ai-terms" id="aiTermsNote"></div>
+
+            <div class="settings-section ai-card" id="claudeAiCard" data-ai="claude">
+              <div class="channel-head"><h3>Claude plan</h3><span class="channel-status" id="claudeAiStatus"></span></div>
+              <div class="hint mb-2" data-ai-needs="claude"></div>
+              <div data-ai-guide-slot="claude"></div>
+              <div class="ai-card-body" data-ai-body="claude"></div>
+            </div>
+
+            <div class="settings-section ai-card" id="chatgptAiCard" data-ai="chatgpt" hidden>
+              <div class="channel-head"><h3>ChatGPT plan</h3><span class="channel-status" id="chatgptAiStatus"></span></div>
+              <div class="hint mb-2" data-ai-needs="chatgpt"></div>
+              <div data-ai-guide-slot="chatgpt"></div>
+              <div class="ai-card-body" data-ai-body="chatgpt"></div>
+            </div>
+
+            <div class="settings-section ai-card" id="anthropicAiCard" data-ai="anthropic" hidden>
+              <div class="channel-head"><h3>Anthropic API key</h3><span class="channel-status" id="anthropicAiStatus"></span></div>
+              <div class="hint mb-2" data-ai-needs="anthropic"></div>
+              <div data-ai-guide-slot="anthropic"></div>
+              <div class="ai-card-body" data-ai-body="anthropic"></div>
+            </div>
+
+            <div class="settings-section ai-card" id="openaiAiCard" data-ai="openai" hidden>
+              <div class="channel-head"><h3>OpenAI API key</h3><span class="channel-status" id="openaiAiStatus"></span></div>
+              <div class="hint mb-2" data-ai-needs="openai"></div>
+              <div data-ai-guide-slot="openai"></div>
+              <div class="ai-card-body" data-ai-body="openai"></div>
+            </div>
+
+            <div class="settings-section ai-card" id="openrouterAiCard" data-ai="openrouter" hidden>
+              <div class="channel-head"><h3>OpenRouter</h3><span class="channel-status" id="openrouterAiStatus"></span></div>
+              <div class="hint mb-2" data-ai-needs="openrouter"></div>
+              <div data-ai-guide-slot="openrouter"></div>
+              <div class="ai-card-body" data-ai-body="openrouter"></div>
+            </div>
+
+            <div class="settings-section ai-card" id="deepseekAiCard" data-ai="deepseek" hidden>
+              <div class="channel-head"><h3>DeepSeek</h3><span class="channel-status" id="deepseekAiStatus"></span></div>
+              <div class="hint mb-2" data-ai-needs="deepseek"></div>
+              <div data-ai-guide-slot="deepseek"></div>
+              <div class="ai-card-body" data-ai-body="deepseek"></div>
+            </div>
+
+            <div class="settings-section ai-card" id="localAiCard" data-ai="local" hidden>
+              <div class="channel-head"><h3>Local AI</h3><span class="channel-status" id="localAiStatus"></span></div>
+              <div class="hint mb-2" data-ai-needs="local"></div>
+              <div data-ai-guide-slot="local"></div>
+              <div class="ai-card-body" data-ai-body="local"></div>
             </div>
           </div>
 
@@ -949,8 +1009,13 @@
             </div>
             <div class="settings-section">
               <h3>Tool Permissions</h3>
-              <div class="hint mb-3">Control which tools the AI can use.</div>
-              <div id="toolPermissionsList"></div>
+              <div class="hint mb-3" id="toolPermissionsNote">
+                Choose what Tarsee's own tools may do, on every AI: <strong>Allow</strong>, <strong>Warn</strong> (it runs,
+                and every use goes in the Console and the Audit Log) or <strong>Deny</strong>. The tools built into the AI itself (running commands,
+                reading and writing files) can't be limited here: every AI has them, so only let people you trust talk
+                to this Tarsee.
+              </div>
+              <div id="toolPermissionsList" class="tool-perms"></div>
             </div>
             <div class="settings-section">
               <h3>Privacy</h3>
@@ -1007,7 +1072,7 @@
           <div class="settings-tab-panel" data-tab="health">
             <h2>Token Health</h2>
             <div class="settings-section">
-              <div class="hint mb-3">Per-conversation context-window fill plus the Claude session transcript size — the real bloat signal. Sessions past the cap start <strong>fresh</strong> on their next turn instead of resuming the bloat, which is what prevents context-bloat hangs. Sorted biggest transcript first.</div>
+              <div class="hint mb-3">Per-conversation context-window fill plus, for chats on Claude Code, the session transcript size — the real bloat signal. Sessions past the cap start <strong>fresh</strong> on their next turn instead of resuming the bloat, which is what prevents context-bloat hangs. Sorted biggest transcript first.</div>
               <button class="btn btn-sm mb-3" id="refreshContextHealthBtn">Refresh</button>
               <div id="contextHealthContent" class="text-muted text-sm">Loading…</div>
             </div>
@@ -1161,6 +1226,7 @@
   <script src="/js/voice.js"></script>
   <script src="/js/console.js"></script>
   <script src="/js/channel-guides-core.js"></script>   <!-- how to connect each chat platform (Settings and the setup wizard) -->
+  <script src="/js/provider-guides-core.js"></script>   <!-- how to set up each AI (Settings → AI and the setup wizard) -->
   <script src="/js/settings.js"></script>
   <script src="/js/brand-icon.js"></script>
   <script src="/js/setup.js"></script>

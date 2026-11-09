@@ -1,0 +1,3 @@
+#!/bin/sh
+# POSIX shim for the fake codex: run fake-codex.mjs next to this file with the test's node (FAKE_CODEX_NODE) or node on PATH.
+exec "${FAKE_CODEX_NODE:-node}" "$(dirname "$0")/fake-codex.mjs" "$@"

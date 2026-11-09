@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { chatStream } from "../ai/router.js";
-import { buildSystemPrompt } from "./build-system-prompt.js";
-import { getToolDefinitions, executeTool } from "./tools.js";
+import { buildSystemPromptParts } from "./build-system-prompt.js";
 import { getAgent, getAgentWorkspace } from "./agent-registry.js";
 import { ConversationStore } from "../db/conversations.js";
 import fs from "node:fs";
@@ -15,7 +14,6 @@ const agents = new Map();
 const taskQueue = new Map(); // agentId → [{ task, name, agentId, ctx, resolve }]
 const agentSessions = new Map(); // agentId → { sessionId, lastActive }
 const MAX_AGENTS = 10;
-const MAX_TOOL_ROUNDS = 15;
 const SESSION_IDLE_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hours
 
 // Event listeners for agent state changes (UI updates)
@@ -201,7 +199,7 @@ function startAgent({ task, name, agentId, settingsStore, db, channelManager, ta
       emit("completed", { id: taskId, name: agent.name, status: "failed", error: err.message });
       console.error(`[agent:${agent.name}] failed: ${err.message}`);
       // Log failure to conversation
-      if (ac) ac.convStore.addMessage(ac.convId, { role: "assistant", content: `[Failed] ${err.message}`, provider: "claude-code", model: agent.model });
+      if (ac) ac.convStore.addMessage(ac.convId, { role: "assistant", content: `[Failed] ${err.message}`, provider: agent.provider || null, model: agent.model });
     })
     .finally(() => {
       if (agentId) processQueue(agentId);
@@ -241,88 +239,82 @@ async function runAgent(agent, { settingsStore, db, channelManager, signal }) {
     ? `You are ${agentDef.name}${nick} — NOT Tarsee, the main agent. You are your own agent.\n\n${agentDef.prompt}\n\n${agentMemory ? `## Your Memory\n${agentMemory}\n` : ""}Your task:\n${agent.task}\n\nWork independently. Save important findings to your MEMORY.md. When done, provide a clear summary.`
     : `You are "${agent.name}". Your task:\n\n${agent.task}\n\nWork independently. Be thorough.`;
 
-  const systemPrompt = buildSystemPrompt({
+  const systemParts = buildSystemPromptParts({
     settingsStore, db,
     conversationId: null,
     messageCount: 0,
     conversationPrompt: agentContext,
   });
 
-  const tools = getToolDefinitions();
   const toolCtx = { db, settingsStore, conversationId: null, channelManager };
 
-  let messages = [{ role: "user", content: agent.task }];
-  let fullResponse = "";
-
-  const model = agentDef?.model || settingsStore.getActiveProvider()?.model;
+  // The agent's own model (a model, tier word or ref like "deepseek:deepseek-flash"), else the default AI's.
+  const model = agentDef?.model || undefined;
 
   // Persistent session — resume if available
   const existingSessionId = getAgentSessionId(agent.agentId, settingsStore);
 
-  console.log(`[agent:${agent.name}] started (${model || "default"}, session: ${existingSessionId || "new"}): ${agent.task.slice(0, 80)}`);
+  console.log(`[agent:${agent.name}] started (${model || "default model"}, session: ${existingSessionId || "new"}): ${agent.task.slice(0, 80)}`);
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    if (signal.aborted) {
-      agent.status = "stopped";
-      agent.completedAt = new Date().toISOString();
-      persistTask(db, agent);
-      emit("completed", { id: agent.id, name: agent.name, status: "stopped" });
-      return;
-    }
-
-    const toolCalls = [];
-    let roundText = "";
-    let stopReason = "end_turn";
-
-    const stream = chatStream({
-      provider: "claude-code",
-      model,
-      messages,
-      systemPrompt,
-      signal,
-      tools,
-      toolCtx,
-      // A subagent runs inside its parent's conversation. Kept off the live
-      // timeline: its turn_end would mark the parent's turn as finished.
-      liveDisabled: true,
-      sessionId: existingSessionId || undefined,
-      onSessionId: (sid) => {
-        setAgentSessionId(agent.agentId, sid, settingsStore);
-      },
-    });
-
-    for await (const event of stream) {
-      if (event.type === "text") {
-        roundText += event.content;
-        fullResponse += event.content;
-      } else if (event.type === "tool_use") {
-        toolCalls.push({ id: event.id, name: event.name, input: event.input });
-        agent.toolsUsed++;
-        agent.lastTool = event.name;
-        emit("progress", { id: agent.id, name: agent.name, toolsUsed: agent.toolsUsed, lastTool: event.name });
-      } else if (event.type === "done") {
-        stopReason = event.stopReason || "end_turn";
-        break;
-      }
-    }
-
-    if (toolCalls.length === 0 || stopReason !== "tool_use") break;
-
-    const assistantContent = [];
-    if (roundText) assistantContent.push({ type: "text", text: roundText });
-    for (const tc of toolCalls) {
-      assistantContent.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
-    }
-    messages.push({ role: "assistant", content: assistantContent });
-
-    const toolResults = [];
-    for (const tc of toolCalls) {
-      console.log(`[agent:${agent.name}] tool: ${tc.name}`);
-      const result = await executeTool(tc.name, tc.input, toolCtx);
-      toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
-    }
-    messages.push({ role: "user", content: toolResults });
+  if (signal.aborted) {
+    agent.status = "stopped";
+    agent.completedAt = new Date().toISOString();
+    persistTask(db, agent);
+    emit("completed", { id: agent.id, name: agent.name, status: "stopped" });
+    return;
   }
+
+  // One turn: the engine runs the agent's tools itself, on whichever AI answers (ai/turn.js).
+  let fullResponse = "";
+  let failure = null;
+  let stopReason = null;
+  const stream = chatStream({
+    model,
+    messages: [{ role: "user", content: agent.task }],
+    systemParts,
+    signal,
+    toolCtx,
+    // A subagent runs inside its parent's conversation. Kept off the live
+    // timeline: its turn_end would mark the parent's turn as finished.
+    liveDisabled: true,
+    // What its usage rows and a cost the provider reports are filed under (agent:<turn>).
+    liveSource: "agent",
+    sessionId: existingSessionId || undefined,
+    onSessionId: (handle) => {
+      setAgentSessionId(agent.agentId, handle, settingsStore);
+    },
+  });
+
+  for await (const event of stream) {
+    if (event.type === "route") {
+      agent.provider = event.provider || null;
+      agent.model = event.model || agent.model;
+    } else if (event.type === "text") {
+      fullResponse += event.content;
+    } else if (event.type === "tool_use") {
+      agent.toolsUsed++;
+      agent.lastTool = event.name;
+      emit("progress", { id: agent.id, name: agent.name, toolsUsed: agent.toolsUsed, lastTool: event.name });
+    } else if (event.type === "error") {
+      failure = event.message || "The AI stopped with an error";
+    } else if (event.type === "done") {
+      stopReason = event.stopReason || "end_turn";
+      break;
+    }
+  }
+
+  if (stopReason === "aborted" || signal.aborted) {
+    // (Stopped with stopAgent(), which already said so; the words so far are kept.)
+    const told = agent.status === "stopped";
+    agent.status = "stopped";
+    agent.result = fullResponse || null;
+    agent.completedAt ||= new Date().toISOString();
+    persistTask(db, agent);
+    if (!told) emit("completed", { id: agent.id, name: agent.name, status: "stopped" });
+    return;
+  }
+  // A turn that didn't finish (the AI not set up, a sign-in that ran out, a spending limit) is a failure, with its words.
+  if (stopReason !== "end_turn") throw new Error(failure || `The AI stopped (${stopReason || "no reply"})`);
 
   agent.status = "completed";
   agent.result = fullResponse;
@@ -336,7 +328,7 @@ async function runAgent(agent, { settingsStore, db, channelManager, signal }) {
     ac.convStore.addMessage(ac.convId, {
       role: "assistant",
       content: fullResponse || "(no output)",
-      provider: "claude-code",
+      provider: agent.provider || null,
       model: agent.model,
     });
   }

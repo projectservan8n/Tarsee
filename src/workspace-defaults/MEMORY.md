@@ -1,6 +1,6 @@
 # Memory
 
-This file stores everything Tarsee learns across sessions. Read this at the start of every conversation.
+This file stores everything Tarsee learns across sessions. It grows long: grep it for what a task needs, and never read it whole.
 
 ## API Keys & Secrets
 <!-- When the user gives you an API key, save it to the encrypted vault with tarsee_set_key, then note it here -->

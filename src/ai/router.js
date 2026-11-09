@@ -1,68 +1,14 @@
-import { AI_PROVIDERS, getRecommendedModel } from "../config/constants.js";
-
-// Lazy-loaded provider module
-let claudeCodeModule = null;
+import { runTurn } from "./turn.js";
 
 /**
- * Routes a chat request to Claude Code.
- * Returns an async generator that yields streaming events.
+ * Every channel's turn: the engine-neutral turn layer itself (ai/turn.js runTurn), so every option a caller passes
+ * reaches it as given (thinkingSummaries, queuedNote, liveTurnId and the rest). It picks the provider, model and
+ * effort, runs the engine and yields Tarsee's events: route, text, thinking, tool_use, tool_result, usage, error and
+ * exactly one done.
  *
- * @param {object} opts
- * @param {Array<{role: string, content: string}>} opts.messages - Conversation messages
- * @param {string} [opts.provider] - Provider ID (only "claude-code" supported)
- * @param {string} [opts.model] - Model ID
- * @param {string} [opts.systemPrompt] - System prompt
- * @param {AbortSignal} [opts.signal] - Abort signal
- * @param {Array} [opts.tools] - Tool definitions (unused — Claude Code manages its own tools)
- * @returns {AsyncGenerator<{type: string, content?: string, usage?: object}>}
+ * The old generic options (apiKey, baseUrl, tools, executeTool) are ignored: the engines run their own tools, and a
+ * provider's key and host are never taken from a caller.
+ *
+ * @type {typeof runTurn}
  */
-export async function* chatStream(opts) {
-  const {
-    messages, model, systemPrompt, signal, toolCtx, sessionId, onSessionId, effort, maxTurns, maxBudgetUsd,
-    liveConversationId, liveSource, liveDisabled,
-  } = opts;
-
-  if (!claudeCodeModule) {
-    claudeCodeModule = await import("./providers/claude-code.js");
-  }
-
-  const providerDef = AI_PROVIDERS["claude-code"];
-
-  yield* claudeCodeModule.chat({
-    messages,
-    model: model || providerDef?.defaultModel || getRecommendedModel(),
-    systemPrompt,
-    signal,
-    toolCtx,
-    sessionId,
-    onSessionId,
-    // Forwarded so /think works on channels too. Without this the provider
-    // never receives an effort level and /think was a silent no-op on
-    // Telegram / Discord / WhatsApp / email (web chat calls the provider
-    // directly and so was unaffected).
-    effort,
-    // Ceilings for unattended work. Undefined on the interactive path, which
-    // keeps the provider's generous interactive defaults.
-    maxTurns,
-    maxBudgetUsd,
-    // Live dashboard timeline (lib/live-bus.js): which conversation to
-    // publish this turn under (crons have no conversation), which channel it
-    // came from, or keep it off the timeline.
-    liveConversationId,
-    liveSource,
-    liveDisabled,
-  });
-}
-
-/**
- * Gets list of available providers.
- * @returns {Array<{id: string, name: string, configured: boolean}>}
- */
-export function getAvailableProviders() {
-  return Object.values(AI_PROVIDERS).map((p) => ({
-    id: p.id,
-    name: p.name,
-    configured: true,
-    defaultModel: p.defaultModel,
-  }));
-}
+export const chatStream = runTurn;

@@ -1,539 +1,585 @@
 /**
- * Claude Code (Agent) provider
+ * The Claude Code engine (design 4.7): runs one agent turn with the Claude Agent SDK's bundled Claude Code CLI, on
+ * whichever of the four providers it serves:
  *
- * Wraps the @anthropic-ai/claude-agent-sdk to run Claude Code headlessly
- * through Tarsee's chat interface. Claude Code manages its own agentic
- * tool-use loop (Read, Write, Edit, Bash, Grep, Glob) — Tarsee just
- * streams the events to the client.
+ *   claude      the Claude plan: the operator's own sign-in (`claude auth login`, or CLAUDE_CODE_OAUTH_TOKEN), today's behaviour
+ *   anthropic   an Anthropic API key, in its own home (CLAUDE_CONFIG_DIR), billed per use with the exact cost
+ *   deepseek    DeepSeek's Anthropic-compatible endpoint, every model pinned to DeepSeek's own ids
+ *   openrouter  OpenRouter's Anthropic-compatible endpoint, anthropic/* models
  *
- * Auth: Uses Claude subscription credentials from `claude login` stored
- * in ~/.claude/.credentials.json (no API key needed).
+ * Claude Code runs its own tool loop (Read, Write, Edit, Bash, Glob, Grep and Tarsee's own tools through the in-process
+ * tarsee MCP server); this module streams what it does as Tarsee events. The engine-neutral wrapper (the live timeline,
+ * Stop, the chat's model and effort, the queued-message note, sessions and hand-offs) is src/ai/turn.js.
+ *
+ *   run(opts)                         the engine: an async generator of Tarsee events (see run() below)
+ *   buildQueryOptions(provider, opts, deps)   the SDK options for a turn, pure (snapshot-tested)
+ *
+ * Credential isolation (design 4.5) is enforced here before and while a turn runs:
+ *   R1  a key provider's home holding a sign-in file or a /login key refuses the turn (engine-env homeIsolationRefusal)
+ *   R2  the environment is engine-env claudeEnvFor(): every credential stripped, then this provider's block added
+ *   R4  a key provider with no key refuses the turn before anything starts
+ *   R5  settingSources pinned per provider, and a settings file that would set a credential refuses the turn
+ *   R6  the CLI's reported apiKeySource must be the one Tarsee set up (API_KEY_SOURCES), else the turn is stopped
  */
-
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query as sdkQuery, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agent-sdk";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import config from "../../config/env.js";
-import { MODEL_TIERS, tierOf, getRecommendedModel } from "../../config/constants.js";
+import { MODEL_TIERS, tierOf } from "../../config/constants.js";
 import { SettingsStore } from "../../db/settings.js";
 import { resolveModel } from "../../lib/model-catalog.js";
-import { EFFORT_IDS, TARSEE_DEFAULT_EFFORT } from "../../lib/model-picker.js";
 import { isTranscriptOverCap, transcriptSizeMB, SESSION_JSONL_MAX_MB } from "../../lib/claude-transcript.js";
 import { stepsFromSdkMessage, toolResultsFromSdkMessage, createStreamWatcher } from "../../lib/tool-steps.js";
-import { claimQueuedTurn, takeQueuedNote } from "../../lib/conversation-lock.js";
-import { costSaverEnv } from "../context-limits.js";
 import { agentVaultEnv } from "../agent-env.js";
 import { getSecurityManager } from "../../lib/security-manager.js";
+import { getProvider, normalizeProviderId, contextTokensFor, effortsFor, capsFor } from "../provider-registry.js";
+import {
+  CLAUDE_CODE, CredentialError, HOST_MANAGED, baseEnv, claudeEnvFor, ensureHome, homeFor, homeIsolationRefusal,
+  settingSourcesFor, settingsFilesFor, settingsFileGuard,
+} from "../engine-env.js";
+import { AUTH_EXPIRED_MESSAGE, classifyEngineError } from "../engine-errors.js";
+import { buildPreamble } from "../preamble.js";
+import { checkTurnBudget, priceUsage } from "../spend.js";
+import { parse as parseHandle, sessionFor } from "../session-handle.js";
+
+export { AUTH_EXPIRED_MESSAGE };
 
 /** Tarsee's bundled skills (src/skills), handed to Claude Code as an additional directory. */
 export const BUNDLED_SKILLS_DIR = fileURLToPath(new URL("../../skills", import.meta.url));
 
+/** The providers this engine runs. */
+export const CLAUDE_ENGINE_PROVIDERS = Object.freeze(["claude", "anthropic", "deepseek", "openrouter"]);
+
+/** The built-in tools every provider gets, plus Tarsee's own (without the mcp__tarsee__* entry the SDK filters them out). */
+export const BUILTIN_TOOLS = Object.freeze(["Read", "Write", "Edit", "Bash", "Glob", "Grep"]);
+const ALL_TOOLS = Object.freeze([...BUILTIN_TOOLS, "mcp__tarsee__*"]);
+
 /**
- * Extract image blocks from content array.
- * Returns { images: ImageBlockParam[], text: string }
+ * R6: the apiKeySource the CLI may report on its init message for each provider, recorded with fake credentials
+ * against the pinned CLI (2.1.319, test/claude-gateway.test.js):
+ *   claude      "none": the claude.ai sign-in (a .credentials.json or CLAUDE_CODE_OAUTH_TOKEN) is not an API key.
+ *               ("oauth" is the legacy name for the same, which current CLIs no longer send.)
+ *   anthropic   "ANTHROPIC_API_KEY": the key Tarsee set (and approved) in the environment
+ *   deepseek, openrouter   "none": a bearer token (ANTHROPIC_AUTH_TOKEN) is not an API key either
+ * Anything else ("/login managed key": a Console key a Terminal /login saved in the home; "apiKeyHelper"; an
+ * ANTHROPIC_API_KEY on the plan, which would move it to metered billing) stops the turn.
  */
-/**
- * Extract media blocks (images, PDFs) from content array.
- * Returns { mediaBlocks: ContentBlockParam[], text: string }
- */
-/**
- * Classify a text payload that arrived in a `result` or `error` event from
- * the Claude Agent SDK. Returns `null` if it looks like normal model output,
- * or `{ recoverable }` when the payload is actually a wire-level API error.
- *
- * `recoverable: true` means the caller can clear the stored session id and
- * retry the same turn fresh. The two cases we see most often:
- *   1. `diagnostics.previous_message_id` 400s — the resumed session is
- *      sending a stale or invalid message id and the API rejects it.
- *   2. Generic "session not found / invalid session" surfaces.
- *
- * Other API errors (4xx that are about user input, 5xx server errors) are
- * marked non-recoverable so the channel surfaces them to the user instead
- * of looping.
- */
-function classifyAgentError(text) {
-  if (!text || typeof text !== "string") return null;
-  const trimmed = text.trim();
-  if (!trimmed) return null;
-  const isApiError =
-    /^API Error[:\s]/i.test(trimmed) ||
-    /diagnostics\.previous_message_id/i.test(trimmed) ||
-    /previous_message_id/i.test(trimmed) ||
-    /\b(?:must be the id from a prior)\b/i.test(trimmed);
-  if (!isApiError) return null;
-  const recoverable =
-    /previous_message_id/i.test(trimmed) ||
-    /session.*(?:expired|invalid|not found|corrupt)/i.test(trimmed);
-  return { recoverable };
+export const API_KEY_SOURCES = Object.freeze({
+  claude: Object.freeze(["none", "oauth"]),
+  anthropic: Object.freeze(["ANTHROPIC_API_KEY"]),
+  deepseek: Object.freeze(["none"]),
+  openrouter: Object.freeze(["none"]),
+});
+
+/** R6: null when `source` is what this provider should report, else the refusal {code, message}. */
+export function apiKeySourceRefusal(providerId, source) {
+  const id = normalizeProviderId(providerId) || String(providerId || "");
+  const allowed = API_KEY_SOURCES[id];
+  if (!allowed) return null;
+  const s = source == null ? "none" : String(source);
+  if (allowed.includes(s)) return null;
+  const label = getProvider(id)?.label || id;
+  const why = s === "/login managed key"
+    ? "an Anthropic Console key saved by a Terminal /login in this provider's folder"
+    : s === "apiKeyHelper"
+      ? "an apiKeyHelper command from a settings file"
+      : s === "ANTHROPIC_API_KEY"
+        ? "an Anthropic API key in its environment"
+        : s === "none"
+          ? "no API key at all (it would fall back to a sign-in)"
+          : `"${s}"`;
+  return {
+    code: "credential-isolation",
+    message: `Tarsee stopped this turn: Claude Code was about to use ${why} instead of ${id === "claude" ? "the Claude plan's sign-in" : `the ${label} key Tarsee gave it`}. Nothing was sent. Check Settings > AI, and remove any key a Terminal /login saved.`,
+  };
 }
 
 /**
- * Claude's sign-in ran out. The CLI then answers with the error as if it were
- * the reply ("Failed to authenticate. API Error: 401 OAuth access token has
- * expired. Re-authenticate to continue."), which classifyAgentError misses
- * because it does not start with "API Error". It is not an answer: the turn
- * says what to do instead. (TarseeMacOS met it as the "reply" to an ordinary
- * question and catches it the same way.)
+ * Build a comma-separated `--fallback-model` ladder for a Claude model: one tier down at a time (fable > opus > sonnet
+ * > haiku), each resolved to the newest model of its tier (lib/model-catalog.js). Haiku has nothing below it.
  */
-const AUTH_TEXT_RE = /(Failed to authenticate|OAuth (?:access )?token (?:has )?expired|Re-authenticate to continue|API Error:\s*401)/i;
-export const AUTH_EXPIRED_MESSAGE = "**Claude's sign-in has expired**, so I can't reach the model right now. This isn't a network problem, and retrying won't fix it.\n\n"
-  + "Open the Terminal in the Tarsee dashboard (the `>_` button at the top), run `claude login` and follow the link it prints. Then send your message again.";
+function fallbackLadderFor(modelId, resolve = resolveModel) {
+  const tier = tierOf(modelId);
+  if (!tier) return undefined;
+  const below = MODEL_TIERS.slice(MODEL_TIERS.indexOf(tier) + 1);
+  return below.length ? below.map((t) => resolve(t)).join(",") : undefined;
+}
 
-/** Whether an SDK message's words (or its error flag) are Claude's sign-in failing rather than a reply. */
+const SDK_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const CONTEXT_SUFFIX_RE = /\[1m\]$/i;
+const bare = (model) => String(model ?? "").trim().replace(CONTEXT_SUFFIX_RE, "");
+
+/** A gateway model with Claude Code's "[1m]" when its window is at least 1M (engine-env's rule, for the fallback). */
+function gatewayPin(id, model, store) {
+  const m = bare(model);
+  return Number(contextTokensFor(id, m, store)) >= 1_000_000 ? `${m}[1m]` : m;
+}
+
+function entryOf(provider) {
+  if (provider && typeof provider === "object" && provider.id) return provider;
+  const p = getProvider(provider ?? "claude");
+  if (!p) throw new CredentialError("wrong-engine", `Tarsee doesn't know the AI "${provider}".`, String(provider));
+  return p;
+}
+
+/** The system prompt as the SDK takes it: Tarsee's preamble first, then the caller's prompt (or its stable and volatile parts). */
+function systemPromptFor({ preamble, systemPrompt, systemParts }) {
+  const clean = (s) => String(s ?? "").replace(/[\uD800-\uDFFF]/g, "");
+  let prompt;
+  if (systemParts && (systemParts.stable != null || systemParts.volatile != null)) {
+    const head = clean(preamble + (systemParts.stable ? `\n\n${systemParts.stable}` : ""));
+    prompt = systemParts.volatile ? [head, SYSTEM_PROMPT_DYNAMIC_BOUNDARY, clean(systemParts.volatile)] : head;
+  } else {
+    prompt = clean(preamble + (systemPrompt ? `\n\n${systemPrompt}` : ""));
+  }
+  // Rendered fresh on every request, as before the 0.3.319 SDK: that SDK records a plain prompt on a session's first
+  // request and reuses it on every resume ("snapshot"), which would freeze each turn's date, memory and context.
+  return { type: "custom", prompt, snapshot: false };
+}
+
+/**
+ * The SDK options for one turn on `provider` (an id, an alias or the registry entry). Pure: it reads no file and
+ * starts nothing (the guards that look at files run in run()). Throws engine-env's CredentialError when the turn must
+ * not start (R4: no key; a key in the wrong slot; a gateway model pinned to a Claude id).
+ *
+ * opts:
+ *   model, effort, maxTurns, maxBudgetUsd, thinkingSummaries
+ *   systemPrompt | systemParts {stable, volatile}
+ *   resume            the raw session id to resume (run() leaves it out past the transcript cap)
+ *   key               the provider's key (anthropic, deepseek, openrouter)
+ *   cwd               the workspace (default config.CLAUDE_WORKSPACE_DIR)
+ *   mcpServer         the in-process tarsee MCP server (createTarseeMcp)
+ *   abortController
+ *   tiers, contextTokens, appTitle, referer   gateway extras (OpenRouter's editable tiers and attribution)
+ * deps:
+ *   env (default process.env), vaultEnv (default {}), stateDir (default config.STATE_DIR), homeDir, store,
+ *   resolveModel, timezone
+ *
+ * Returns { options, providerId, home, settingSources, settingsFiles, model, apiKeySources, cost } where cost is
+ * "plan" (included), "exact" (total_cost_usd) or "estimate" (Tarsee prices the tokens).
+ */
+export function buildQueryOptions(provider, opts = {}, deps = {}) {
+  const entry = entryOf(provider);
+  const id = normalizeProviderId(entry.id) || entry.id;
+  if (!CLAUDE_ENGINE_PROVIDERS.includes(id)) {
+    throw new CredentialError("wrong-engine", `${entry.label || id} doesn't run on Claude Code.`, id);
+  }
+  const env = deps.env ?? process.env;
+  const store = deps.store ?? null;
+  const stateDir = deps.stateDir ?? config.STATE_DIR;
+  const resolve = deps.resolveModel ?? resolveModel;
+  const cwd = opts.cwd || config.CLAUDE_WORKSPACE_DIR || process.cwd();
+  const gateway = id === "deepseek" || id === "openrouter";
+  const claudeModels = id === "claude" || id === "anthropic";
+  const requested = opts.model || (claudeModels ? config.CLAUDE_DEFAULT_MODEL : entry.defaultModel);
+
+  const credentialEnv = claudeEnvFor(entry, {
+    env,
+    vaultEnv: deps.vaultEnv ?? {},
+    key: opts.key,
+    model: gateway ? bare(requested) : undefined,
+    tiers: opts.tiers,
+    contextTokens: gateway ? (opts.contextTokens ?? contextTokensFor(id, bare(requested), store)) : undefined,
+    appTitle: opts.appTitle,
+    referer: opts.referer,
+    stateDir,
+    homeDir: deps.homeDir,
+  });
+  // Every key and gateway turn runs host-managed: settings files can't move it, and its key is not in the shell's
+  // environment (still readable from the CLI's process on Linux; see HOST_MANAGED in engine-env.js).
+  const turnEnv = id === "claude" ? credentialEnv : { ...credentialEnv, ...HOST_MANAGED };
+  const home = id === "claude" ? homeFor("claude", CLAUDE_CODE, { homeDir: deps.homeDir }) : turnEnv.CLAUDE_CONFIG_DIR;
+  const settingSources = settingSourcesFor(id);
+  const model = gateway ? turnEnv.ANTHROPIC_MODEL : resolve(requested);
+  const caps = capsFor(id, gateway ? bare(requested) : model, store) || {};
+
+  const options = {
+    cwd,
+    env: turnEnv,
+    model,
+    tools: [...ALL_TOOLS],
+    allowedTools: [...ALL_TOOLS],
+    permissionMode: "bypassPermissions",
+    allowDangerouslySkipPermissions: true,
+    // Interactive chat keeps the generous ceiling; background callers pass a much lower one.
+    maxTurns: opts.maxTurns ?? 50,
+    includePartialMessages: true,
+    settingSources,
+    // Only the servers Tarsee hands over: never MCP servers from a settings file or a plugin the host has.
+    strictMcpConfig: true,
+    additionalDirectories: [BUNDLED_SKILLS_DIR],
+    systemPrompt: systemPromptFor({
+      preamble: buildPreamble({ engine: CLAUDE_CODE, cwd, ...(deps.timezone ? { timezone: deps.timezone } : {}) }),
+      systemPrompt: opts.systemPrompt,
+      systemParts: opts.systemParts,
+    }),
+  };
+  if (opts.mcpServer) options.mcpServers = { tarsee: opts.mcpServer };
+  if (opts.abortController) options.abortController = opts.abortController;
+  if (opts.resume) options.resume = opts.resume;
+
+  // Keep answering when the chosen model is saturated: Claude steps down one tier at a time; DeepSeek Pro falls back
+  // to Flash; OpenRouter fails over between its own hosts, so it gets none.
+  if (claudeModels) {
+    const ladder = fallbackLadderFor(requested, resolve);
+    if (ladder) options.fallbackModel = ladder;
+  } else if (id === "deepseek") {
+    const flash = entry.tiers?.sonnet;
+    if (flash && bare(requested) !== flash) options.fallbackModel = gatewayPin(id, flash, store);
+  }
+
+  // The SDK's own dollar ceiling, on the providers whose prices it knows (the turn guard in run() covers the others).
+  if (caps.nativeBudget && typeof opts.maxBudgetUsd === "number" && opts.maxBudgetUsd > 0) options.maxBudgetUsd = opts.maxBudgetUsd;
+
+  // Effort only when the model takes that level (DeepSeek: low, high, max).
+  if (opts.effort && SDK_EFFORTS.has(opts.effort) && effortsFor(id, gateway ? bare(requested) : model, store).includes(opts.effort)) {
+    options.effort = opts.effort;
+  }
+
+  // Summaries of the model's thinking for the dashboard's live view, where the provider is known to send them.
+  if (opts.thinkingSummaries && caps.thinkingSummaries) options.thinking = { type: "adaptive", display: "summarized" };
+
+  const settingsFiles = settingsFilesFor(settingSources, { home, workspace: cwd });
+  return {
+    options,
+    providerId: id,
+    home,
+    settingSources,
+    settingsFiles,
+    model,
+    apiKeySources: API_KEY_SOURCES[id],
+    cost: id === "claude" ? "plan" : id === "anthropic" ? "exact" : "estimate",
+  };
+}
+
+/**
+ * The CLI uses an ANTHROPIC_API_KEY from its environment only once that key is approved in its global config (the
+ * key's last 20 characters in customApiKeyResponses.approved), the prompt a person answers in the Terminal. A turn has
+ * nobody to answer it, so the Anthropic key's own home records the approval for the key Tarsee hands over. Writes the
+ * file the CLI reads (.config.json when it is there, else .claude.json), keeping what else is in it.
+ */
+export function approveKeyInHome(home, key, { readFile = (p) => fs.readFileSync(p, "utf8"), writeFile = (p, s) => fs.writeFileSync(p, s, { mode: 0o600 }), exists = fs.existsSync } = {}) {
+  const k = String(key ?? "").trim();
+  if (!k) return null;
+  const marker = k.slice(-20);
+  const file = exists(path.join(home, ".config.json")) ? path.join(home, ".config.json") : path.join(home, ".claude.json");
+  let json = {};
+  try {
+    const parsed = JSON.parse(String(readFile(file)).replace(/^\uFEFF/, ""));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) json = parsed;
+  } catch { /* missing or not JSON: start it */ }
+  const responses = json.customApiKeyResponses && typeof json.customApiKeyResponses === "object" ? json.customApiKeyResponses : {};
+  const approved = Array.isArray(responses.approved) ? responses.approved.filter((x) => typeof x === "string") : [];
+  const rejected = Array.isArray(responses.rejected) ? responses.rejected.filter((x) => typeof x === "string" && x !== marker) : [];
+  if (approved.includes(marker) && rejected.length === (responses.rejected || []).length) return file;
+  json.customApiKeyResponses = { ...responses, approved: [...approved.filter((x) => x !== marker), marker], rejected };
+  writeFile(file, JSON.stringify(json, null, 2));
+  return file;
+}
+
+// --- The engine ----------------------------------------------------------------------------------------------------
+
+/** Whether an SDK message's words (or its error flag) are a sign-in failing rather than a reply. */
+const AUTH_TEXT_RE = /(Failed to authenticate|OAuth (?:access )?token (?:has )?expired|Re-authenticate to continue|API Error:\s*401|Not logged in · Please run \/login)/i;
 export function isAuthFailure(text, sdkError = null) {
   return sdkError === "authentication_failed" || AUTH_TEXT_RE.test(String(text || ""));
 }
 
-/**
- * Build a comma-separated `--fallback-model` ladder for a chosen model.
- *
- * The Claude Code CLI accepts a list and tries each in turn when the primary
- * is overloaded or unavailable. We descend the tier order (fable > opus >
- * sonnet > haiku) starting one tier below the requested model, using bare tier
- * aliases so the ladder never pins a stale version. Haiku has nothing below
- * it, so it gets no ladder.
- *
- * Each step is resolved to the newest model of its tier (lib/model-catalog.js):
- * the CLI the SDK bundles would take a bare tier word to an older model.
- *
- * @param {string} modelId - resolved model id or tier alias
- * @returns {string|undefined} comma-separated models, or undefined for none
- */
-function fallbackLadderFor(modelId) {
-  const tier = tierOf(modelId);
-  if (!tier) return undefined;
-  const below = MODEL_TIERS.slice(MODEL_TIERS.indexOf(tier) + 1);
-  return below.length ? below.map((t) => resolveModel(t)).join(",") : undefined;
+/** An API error delivered as the reply ("API Error: 402 ...", "There's an issue with the selected model ..."). */
+function looksLikeApiError(text) {
+  const t = String(text || "").trim();
+  return /^API Error[:\s]/i.test(t) || /previous_message_id|must be the id from a prior/i.test(t) || /^There's an issue with the selected model/i.test(t);
 }
 
-/**
- * A conversation's own model and effort, picked in the composer's picker
- * (settings session.<id>.model / session.<id>.effort), for every channel's
- * turns in it. A model the caller chose on purpose (not the default: auto
- * routing, an API caller) is kept. Unset, a conversation thinks at the default
- * effort (ai.defaultEffort, Medium) rather than the CLI's own. Background work
- * (crons, the heartbeat, the boot checklist) has no conversation and keeps
- * its own model and effort.
- */
-export function withChatModel(opts) {
-  const conv = opts?.toolCtx?.conversationId;
-  const db = opts?.toolCtx?.db;
-  if (!conv || (!db && !opts?.toolCtx?.settingsStore)) return opts;
-  try {
-    const store = opts.toolCtx.settingsStore || new SettingsStore(db);
-    const out = { ...opts };
-    const picked = store.get(`session.${conv}.model`);
-    const defaultModel = store.get("ai.claude-code.model") || getRecommendedModel();
-    if (picked && (!opts.model || opts.model === defaultModel)) out.model = picked;
-    if (!out.effort) {
-      const effort = store.get(`session.${conv}.effort`) || store.get("ai.defaultEffort") || TARSEE_DEFAULT_EFFORT;
-      if (EFFORT_IDS.includes(effort)) out.effort = effort;
-    }
-    return out;
-  } catch { return opts; }
+function textOf(content) {
+  if (typeof content === "string") return content;
+  return Array.isArray(content) ? content.filter((b) => b?.type === "text").map((b) => b.text).join("") : "";
 }
 
 function extractMedia(content) {
-  if (!Array.isArray(content)) return { mediaBlocks: [], text: typeof content === "string" ? content : "hello" };
+  if (!Array.isArray(content)) return { mediaBlocks: [], text: typeof content === "string" ? content : "" };
   const mediaBlocks = [];
   const textParts = [];
   for (const block of content) {
-    if (block.type === "image" && block.source?.data) {
-      mediaBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: block.source.media_type || "image/png", data: block.source.data },
-      });
-    } else if (block.type === "document" && block.source?.data) {
-      mediaBlocks.push({
-        type: "document",
-        source: { type: "base64", media_type: block.source.media_type || "application/pdf", data: block.source.data },
-      });
-    } else if (block.type === "text") {
+    if (block?.type === "image" && block.source?.data) {
+      mediaBlocks.push({ type: "image", source: { type: "base64", media_type: block.source.media_type || "image/png", data: block.source.data } });
+    } else if (block?.type === "document" && block.source?.data) {
+      mediaBlocks.push({ type: "document", source: { type: "base64", media_type: block.source.media_type || "application/pdf", data: block.source.data } });
+    } else if (block?.type === "text") {
       textParts.push(block.text);
     }
   }
-  return { mediaBlocks, text: textParts.join("\n") || "hello" };
+  return { mediaBlocks, text: textParts.join("\n") };
 }
 
-/**
- * Public chat(): the engine below, wrapped so every turn is published to the
- * live timeline (turn_start, each live step, turn_end) for the realtime
- * dashboard (lib/live-bus.js). Steps are NOT passed on to callers, so
- * Telegram/Discord/WhatsApp/email/cron behaviour is exactly as before.
- * turn_end is published in `finally`, so it fires however the turn ends
- * (done, error, abort, a caller that stops reading).
- *
- * Which conversation a turn belongs to: `liveConversationId` (crons and the
- * heartbeat use ids like "cron:<id>" that are not conversations), else
- * `toolCtx.conversationId`. `liveSource` says which channel it came from;
- * `liveDisabled` keeps a turn off the timeline altogether.
- *
- * A turn on the timeline can also be stopped from the dashboard whichever
- * channel started it (stopTurns below): the dashboard shows Stop on any chat
- * at work, a Telegram or Discord one included.
- *
- * A turn sent from the dashboard (liveSource "web") asks for summaries of the
- * model's thinking, which the live view shows while it works; other channels
- * do without unless the caller sets `thinkingSummaries` (see chatEngine). A
- * turn that waited in its chat's queue takes the id it was queued under
- * (lib/conversation-lock.js claimQueuedTurn, or `liveTurnId`), so the same
- * "Queued" line becomes its working line.
- *
- * The turn's tokens so far ("usage" steps) go out at most every
- * USAGE_STEP_MS, and their totals ride on turn_end.
- */
-const USAGE_STEP_MS = 3000;
-
-/**
- * The note on a prompt that waited behind another turn of its conversation
- * (lib/conversation-lock.js): it is one message, sent once, even if the agent
- * already saw it while it worked on the turn before (it can read the chat's
- * newest messages itself and answer there). Without it, the agent told the
- * person their one message "reached me twice" (seen on TarseeMacOS). Added once
- * only, and never in front of a slash command.
- */
-export const QUEUED_NOTE = "[This message came in while you were still working on the one before. If you already saw it then (in the chat's history or the database) and answered it, it is the same single message, sent once, not a second copy: do not say it reached you twice. Carry on from where you are, briefly if it is already answered.]\n\n";
-
-export function withQueuedNote(prompt) {
-  if (typeof prompt !== "string" || !prompt || prompt.startsWith(QUEUED_NOTE) || prompt.trimStart().startsWith("/")) return prompt;
-  return QUEUED_NOTE + prompt;
-}
-
-export async function* chat(opts) {
-  opts = withChatModel(opts);
-  if (opts.thinkingSummaries == null) opts = { ...opts, thinkingSummaries: opts.liveSource === "web" };
-  // (A turn that waited behind another in its conversation says so to the agent, once: QUEUED_NOTE. Not a
-  // subagent's turn, which runs off the timeline: its task is not the message that waited.)
-  if (opts.queuedNote == null) {
-    const convId = opts.liveDisabled ? null : (opts.liveConversationId || opts.toolCtx?.conversationId || null);
-    opts = { ...opts, queuedNote: takeQueuedNote(convId) };
-  }
-  const liveConv = opts?.liveDisabled ? null : (opts?.liveConversationId || opts?.toolCtx?.conversationId || null);
-  if (!liveConv) { yield* chatEngine(opts); return; }
-  let live = null;
-  try { live = await import("../../lib/live-bus.js"); } catch { /* bus unavailable: run plain */ }
-  if (!live) { yield* chatEngine(opts); return; }
-
-  // Our own controller, following the caller's signal, so stopTurns() can end
-  // this turn without the caller's help.
-  const stopper = new AbortController();
-  if (opts.signal) {
-    if (opts.signal.aborted) stopper.abort();
-    else opts.signal.addEventListener("abort", () => stopper.abort(), { once: true });
-  }
-  let set = runningTurns.get(liveConv);
-  if (!set) { set = new Set(); runningTurns.set(liveConv, set); }
-  set.add(stopper);
-
-  // (A turn that waited in its chat's queue keeps the id of its "Queued" line: the same line begins.)
-  const turnId = opts.liveTurnId || claimQueuedTurn(liveConv) || live.newTurnId();
-  const lastUser = [...(opts.messages || [])].reverse().find((m) => m.role === "user");
-  const promptText = typeof lastUser?.content === "string"
-    ? lastUser.content
-    : (lastUser?.content || []).filter((b) => b?.type === "text").map((b) => b.text).join(" ");
-  live.publish(liveConv, "turn_start", {
-    model: opts.model || null,
-    effort: opts.effort || null,
-    source: opts.liveSource || null,
-    prompt: String(promptText || "").slice(0, 300),
-  }, { turnId });
-  let stopReason = null;
-  let errorMsg = null;
-  // The Claude Code session the turn runs in, named on turn_end: lib/token-usage.js reads the
-  // session's transcript and needs to know whose it is (claude_session_id changes on a reset).
-  let sessionId = null;
-  const onSessionId = (sid) => { sessionId = sid || sessionId; opts.onSessionId?.(sid); };
-  let usage = null;
-  let usageSentAt = 0;
-  let usageTimer = null;
-  const sendUsage = () => {
-    clearTimeout(usageTimer);
-    usageTimer = null;
-    if (!usage) return;
-    usageSentAt = Date.now();
-    live.publish(liveConv, "step", usage, { turnId });
+/** The four token counts of the SDK's modelUsage for one model, in the Messages API's names. */
+function usageOfModel(u) {
+  return {
+    input_tokens: Number(u?.inputTokens) || 0,
+    output_tokens: Number(u?.outputTokens) || 0,
+    cache_read_input_tokens: Number(u?.cacheReadInputTokens) || 0,
+    cache_creation_input_tokens: Number(u?.cacheCreationInputTokens) || 0,
   };
+}
+
+/** A provider's settings store: the turn's, or one over its database. */
+function storeOf(toolCtx, deps) {
+  if (deps.store) return deps.store;
+  if (toolCtx?.settingsStore) return toolCtx.settingsStore;
+  if (toolCtx?.db) { try { return new SettingsStore(toolCtx.db); } catch { return null; } }
+  return null;
+}
+
+function readSetting(store, key) {
+  try { return store?.get?.(key) ?? null; } catch { return null; }
+}
+
+/** The provider's key: Settings first, then its Railway variable (db/settings.js getKeyWithSource). */
+function keyFor(entry, store, env) {
+  if (entry.kind === "subscription") return null;
   try {
-    for await (const evt of chatEngine({ ...opts, onSessionId, signal: stopper.signal })) {
-      if (evt?.type === "step") {
-        const { type: _t, ...step } = evt;
-        if (step.kind === "usage") {
-          usage = step;
-          const wait = USAGE_STEP_MS - (Date.now() - usageSentAt);
-          if (wait <= 0) sendUsage();
-          else if (!usageTimer) { usageTimer = setTimeout(sendUsage, wait); usageTimer.unref?.(); }
-          continue;
-        }
-        live.publish(liveConv, "step", step, { turnId });
-        continue;
-      }
-      if (evt?.type === "done") stopReason = evt.stopReason || "end_turn";
-      else if (evt?.type === "error") errorMsg = evt.message || "error";
-      yield evt;
+    const found = store?.getKeyWithSource?.(entry.id);
+    if (found?.key) return found.key;
+  } catch { /* fall through to the environment */ }
+  return entry.envKey ? (String(env?.[entry.envKey] ?? "").trim() || null) : null;
+}
+
+/**
+ * The engine. An async generator of Tarsee events:
+ *   text{content}, thinking{status}, tool_use{id,name,input}, tool_result{id,ok,result}, step{...} (the live
+ *   timeline, lib/tool-steps.js), usage{usage, costUsd?}, error{message, recoverable?, subtype?, code?, status?}, and
+ *   exactly one done{stopReason}: end_turn | aborted | auth-expired | error | max_turns | budget. Never tool_use.
+ *
+ * opts:
+ *   target            {providerId (or provider), model, effort}: claude, anthropic, deepseek or openrouter
+ *   messages          the conversation; the last user message is the prompt
+ *   systemPrompt | systemParts {stable, volatile}
+ *   signal            stops the turn (done{aborted})
+ *   toolCtx           Tarsee's tool context (db, settingsStore, conversationId, ...)
+ *   sessionId         the raw session id the turn layer chose to resume; null (present) starts fresh on purpose
+ *   sessionHandle     without sessionId: the stored handle, resumed only when it is this provider's (a bare id is
+ *                     the plan's)
+ *   onSessionHandle(rawId)   called once with the session the turn runs in (the turn layer tags and stores it);
+ *                     onSessionId when there is no onSessionHandle
+ *   maxTurns, maxBudgetUsd, thinkingSummaries
+ *   cwd               the workspace (default config.CLAUDE_WORKSPACE_DIR): verification's scratch folder, say
+ *   media             the turn layer's adaptMedia() result ({media, text}) or its media blocks; without it the last
+ *                     message's own blocks are sent
+ *   deps              test seams: query, env, stateDir, homeDir, store, key, mcpServer, vaultEnv, guards
+ */
+export async function* run(opts = {}) {
+  const deps = opts.deps || {};
+  const target = opts.target || {};
+  const id = normalizeProviderId(target.providerId ?? target.provider ?? opts.provider ?? "claude") || "claude";
+  const entry = getProvider(id);
+  const toolCtx = opts.toolCtx || {};
+  const store = storeOf(toolCtx, deps);
+  const env = deps.env ?? process.env;
+  const signal = opts.signal;
+  const model = target.model ?? opts.model;
+  const effort = target.effort ?? opts.effort;
+
+  let doneSent = false;
+  const done = (stopReason) => { doneSent = true; return { type: "done", stopReason }; };
+  /** A failure: its words (and for a sign-in, the fix as text too), then the one done. */
+  function* fail(info, { stopReason = null, subtype = null } = {}) {
+    const auth = info.kind === "expired" || info.kind === "auth";
+    if (auth && !textOut) yield { type: "text", content: info.message };
+    const evt = { type: "error", message: info.message, recoverable: !!info.recoverable, code: info.kind };
+    if (info.status) evt.status = info.status;
+    // The provider's failure flag for the turn layer to write (ai.<id>.status): expired, rejected, out of credit.
+    if (info.state) evt.state = info.state;
+    if (subtype) evt.subtype = subtype;
+    yield evt;
+    yield done(stopReason || (auth ? "auth-expired" : "error"));
+  }
+  let textOut = false;
+
+  if (!entry || !CLAUDE_ENGINE_PROVIDERS.includes(entry.id)) {
+    yield* fail(classifyEngineError(id, CLAUDE_CODE, { code: "wrong-engine", message: `${entry?.label || id} doesn't run on Claude Code.` }));
+    return;
+  }
+
+  // --- The prompt ---
+  const lastUser = [...(opts.messages || [])].reverse().find((m) => m?.role === "user");
+  let mediaBlocks;
+  let prompt;
+  if (opts.media != null) {
+    const adapted = opts.media;
+    mediaBlocks = Array.isArray(adapted) ? adapted : (Array.isArray(adapted.media) ? adapted.media : []);
+    prompt = !Array.isArray(adapted) && typeof adapted.text === "string" ? adapted.text : extractMedia(lastUser?.content).text;
+  } else {
+    const extracted = extractMedia(lastUser?.content);
+    mediaBlocks = extracted.mediaBlocks;
+    prompt = extracted.text;
+    // A message's pictures are kept with it so the dashboard's chat shows them (lib/sent-files.js). Best-effort.
+    if (mediaBlocks.length && toolCtx.conversationId) {
+      try { (await import("../../lib/sent-files.js")).noteMediaBlocks(toolCtx.conversationId, mediaBlocks, { messageId: toolCtx.messageId || null }); } catch { /* best-effort */ }
     }
-  } finally {
-    set.delete(stopper);
-    if (!set.size && runningTurns.get(liveConv) === set) runningTurns.delete(liveConv);
-    if (usageTimer) sendUsage();
-    const { kind: _k, ...totals } = usage || {};
-    live.publish(liveConv, "turn_end", {
-      stopReason: stopReason || (stopper.signal.aborted ? "aborted" : "ended"),
-      ...(errorMsg ? { error: String(errorMsg).slice(0, 500) } : {}),
-      ...(sessionId ? { sessionId } : {}),
-      ...(usage ? { usage: totals } : {}),
-    }, { turnId });
   }
-}
+  if (!prompt && !mediaBlocks.length) prompt = "hello";
 
-/** Live conversation id -> controllers of the turns running in it right now. */
-const runningTurns = new Map();
-
-/**
- * Stop every turn running in a conversation, whichever channel started it.
- * @param {string} conversationId a conversation id, or a background job's live id
- * @returns {number} how many turns were told to stop
- */
-export function stopTurns(conversationId) {
-  const set = runningTurns.get(conversationId);
-  if (!set) return 0;
-  let n = 0;
-  for (const c of set) { if (!c.signal.aborted) { c.abort(); n++; } }
-  return n;
-}
-
-/**
- * The engine: an async generator that matches Tarsee's provider interface.
- *
- * Unlike other providers, Claude Code runs its own tool loop internally.
- * We yield events as they arrive — the chat route should NOT wrap this
- * in its own tool-use loop. Besides text/tool_use/tool_result/usage/done it
- * yields `step` events for the live timeline, which chat() above consumes.
- *
- * @param {object} opts
- * @param {Array} opts.messages - Conversation history (we extract the latest user message)
- * @param {string} opts.model - Model ID or tier alias (opus, sonnet, haiku, fable,
- *   or a pinned id like claude-opus-5). Forwarded to the CLI as --model.
- * @param {string} [opts.systemPrompt] - System prompt (passed as context to Claude Code)
- * @param {AbortSignal} [opts.signal] - Abort signal
- * @param {string} [opts.sessionId] - Claude Code session ID for resumption
- * @param {Function} [opts.onSessionId] - Callback when session ID is available
- */
-async function* chatEngine({
-  messages,
-  model,
-  systemPrompt,
-  signal,
-  sessionId,
-  onSessionId,
-  toolCtx,
-  effort,
-  maxTurns,
-  maxBudgetUsd,
-  thinkingSummaries = false,
-  queuedNote = false,
-}) {
-  // Extract the latest user message — separate text and images
-  const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
-  const { mediaBlocks, text: extractedText } = extractMedia(lastUserMsg?.content);
-  let prompt = extractedText;
-  if (queuedNote) prompt = withQueuedNote(prompt);
-  const hasMedia = mediaBlocks.length > 0;
-  // The pictures among them are kept with the person's message, so the dashboard's chat shows them: no note in the
-  // message names them (lib/sent-files.js noteMediaBlocks). Best-effort.
-  if (hasMedia && toolCtx?.conversationId) {
-    try { (await import("../../lib/sent-files.js")).noteMediaBlocks(toolCtx.conversationId, mediaBlocks, { messageId: toolCtx.messageId || null }); } catch { /* showing them is best-effort */ }
+  // --- The session to resume (only one of this provider's) ---
+  // The turn layer passes the raw id it chose (sessionId, null for a fresh session on purpose) beside the stored
+  // handle; that choice wins. A caller with only a handle gets it resumed when it is this provider's.
+  let resume = null;
+  if (Object.hasOwn(opts, "sessionId")) {
+    resume = opts.sessionId ? String(opts.sessionId) : null;
+  } else if (opts.sessionHandle) {
+    const handle = String(opts.sessionHandle);
+    const parsed = parseHandle(handle);
+    resume = parsed?.tagged ? sessionFor(handle, { provider: entry.id, engine: CLAUDE_CODE, model }) : (parsed?.rawId ?? null);
+  }
+  if (resume) {
+    const overCap = deps.isTranscriptOverCap ?? ((sid) => isTranscriptOverCap(sid, SESSION_JSONL_MAX_MB, { provider: entry.id }));
+    if (overCap(resume)) {
+      const mb = (deps.transcriptSizeMB ?? ((sid) => transcriptSizeMB(sid, { provider: entry.id })))(resume);
+      console.warn(`[claude-code] session ${resume} transcript ${mb}MB > ${SESSION_JSONL_MAX_MB}MB cap: starting fresh instead of resuming it`);
+      resume = null;
+    }
   }
 
-  const cwd = config.CLAUDE_WORKSPACE_DIR || process.cwd();
-
-  // Create MCP server with all Tarsee tools
-  const { createTarseeMcp } = await import("../tarsee-mcp.js");
-  const tarseeMcp = createTarseeMcp(toolCtx || {});
-
-  // Skills directory — Claude Code discovers SKILL.md files here
-  const skillsDir = BUNDLED_SKILLS_DIR;
-
-  const builtinTools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"];
-  // Without the mcp__tarsee__* entry, allowedTools silently filters out every
-  // tarsee_* tool even though the server is registered and the system prompt
-  // advertises them — Claude ends up shelling out to curl/Telegram instead.
-  const allTools = [...builtinTools, "mcp__tarsee__*"];
-
-  // Abort plumbing. `query()` accepts exactly two keys — `prompt` and
-  // `options` — so the `signal` this function used to pass as a third
-  // top-level key was silently dropped on the floor. Nothing could cancel a
-  // turn: the web Stop button, the cron 2-minute timeout, and the channel
-  // idle-abort all resolved their own promises while the Claude Code
-  // subprocess kept running (and kept billing) to completion. The SDK's real
-  // mechanism is options.abortController, so bridge the caller's signal onto
-  // one here.
+  // --- Abort plumbing: the SDK's own mechanism is options.abortController ---
   const abortController = new AbortController();
+  const onAbort = () => abortController.abort();
   if (signal) {
     if (signal.aborted) abortController.abort();
-    else signal.addEventListener("abort", () => abortController.abort(), { once: true });
+    else signal.addEventListener("abort", onAbort, { once: true });
   }
 
-  const queryOptions = {
-    cwd,
-    // The server's environment plus the context cost savers (ai/context-limits.js): compact at 180k tokens, and a
-    // Bash output past 8000 characters or a tool result past 12000 goes to a file the agent can read. (The SDK takes
-    // this as the whole environment, so process.env comes first.)
-    // The vault's keys too, so scripts read them by name and no key is pasted into a command (ai/agent-env.js).
-    env: { ...process.env, ...agentVaultEnv({ denied: () => getSecurityManager(toolCtx?.settingsStore).getToolPermission("get_key") === "always_deny" }), ...costSaverEnv() },
-    // A bare tier word becomes the newest model of that tier (see fallbackLadderFor).
-    model: resolveModel(model || config.CLAUDE_DEFAULT_MODEL),
-    tools: allTools,
-    allowedTools: allTools,
-    permissionMode: "bypassPermissions",
-    allowDangerouslySkipPermissions: true,
-    // Interactive chat keeps the generous ceiling; background callers pass a
-    // much lower one, because an unattended loop is where cost runs away.
-    maxTurns: maxTurns ?? 50,
-    includePartialMessages: true,
-    mcpServers: { tarsee: tarseeMcp },
-    additionalDirectories: [skillsDir],
-    abortController,
-    // Keep the agent answering when the chosen model is saturated. The CLI
-    // takes a comma-separated ladder and walks it in order; we step DOWN one
-    // tier at a time from whatever was asked for, so a Fable turn degrades to
-    // Opus rather than failing outright.
-    fallbackModel: fallbackLadderFor(model || config.CLAUDE_DEFAULT_MODEL),
-  };
+  // --- Options and the guards before anything starts (R1, R4, R5) ---
+  let built;
+  try {
+    const key = entry.kind === "subscription" ? null : (deps.key ?? keyFor(entry, store, env));
+    const vaultEnv = deps.vaultEnv ?? agentVaultEnv({
+      env: baseEnv(env),
+      denied: () => { try { return getSecurityManager(toolCtx.settingsStore).getToolPermission("get_key") === "always_deny"; } catch { return false; } },
+    });
+    const tiers = entry.id === "openrouter" ? parseJson(readSetting(store, "ai.openrouter.tiers")) : undefined;
+    built = buildQueryOptions(entry, {
+      model,
+      effort,
+      maxTurns: opts.maxTurns,
+      maxBudgetUsd: opts.maxBudgetUsd,
+      thinkingSummaries: !!opts.thinkingSummaries,
+      systemPrompt: opts.systemPrompt,
+      systemParts: opts.systemParts,
+      resume,
+      key,
+      cwd: opts.cwd || deps.cwd,
+      abortController,
+      tiers: tiers && typeof tiers === "object" ? tiers : undefined,
+      appTitle: entry.id === "openrouter" ? (readSetting(store, "ai.openrouter.appTitle") || entry.defaultAppTitle) : undefined,
+      referer: entry.id === "openrouter" ? readSetting(store, "ai.openrouter.referer") : undefined,
+    }, { env, vaultEnv, stateDir: deps.stateDir, homeDir: deps.homeDir, store, resolveModel: deps.resolveModel });
 
-  // Spend ceiling, when the caller sets one. The SDK ends the turn itself on
-  // reaching it, which is the only ceiling that survives a loop we fail to
-  // notice from the outside.
-  if (typeof maxBudgetUsd === "number" && maxBudgetUsd > 0) {
-    queryOptions.maxBudgetUsd = maxBudgetUsd;
-  }
-
-  // Thinking effort. `xhigh` sits BETWEEN high and max, and is the sweet spot
-  // for most coding and agentic work.
-  //
-  // This used to rewrite xhigh -> max, with a comment saying the Agent SDK had
-  // no dedicated xhigh level yet. It does now — the installed SDK types effort
-  // as ('low'|'medium'|'high'|'xhigh'|'max') and performs its own per-model
-  // downgrade when a model doesn't support a level. So the rewrite no longer
-  // works around anything; it just silently charged users MORE effort than they
-  // asked for. Pass the level through and let the SDK resolve it.
-  if (effort && ["low", "medium", "high", "xhigh", "max"].includes(effort)) {
-    queryOptions.effort = effort;
-  }
-
-  // Summaries of the model's thinking, for the dashboard's live view (chat() turns them on for a turn sent from
-  // the dashboard, where someone is watching). Without this the API leaves thinking out ("omitted") and the live
-  // line can only say "Thinking". They cost time: the answer's first words come about 3s later on a turn that
-  // thinks, so a Telegram, Discord or email reply, which nobody watches being written, does without.
-  if (thinkingSummaries) {
-    queryOptions.thinking = { type: "adaptive", display: "summarized" };
-  }
-
-  // The head of every turn's system prompt. It used to repeat the first 8 lines
-  // of SOUL.md (about 500 bytes on every call), which the system prompt that
-  // follows carries in full (lib/build-system-prompt.js), and to tell a new
-  // session to read MEMORY.md and USER.md first: USER.md is in that prompt too,
-  // and MEMORY.md is a pointer there saying to grep it for what a task needs.
-  const tarseeContext = `You ARE Tarsee — a headless AI agent running 24/7 on a server.
-
-## MCP Tools (call as mcp__tarsee__tarsee_<name>)
-- **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/Slack/web
-- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp/Slack or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files
-- **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs
-- **remember**(content) — append to MEMORY.md
-- **daily_log**(content) — append to today's log
-- **read_file**(filename) / **write_file**(filename, content) — workspace files
-- **search_memories**(query) — keyword search through memory files
-- **search_memories_deep**(query) — dumps ALL memories for semantic reasoning (use when keyword search finds nothing)
-- **create_canvas**(title, html, css?, js?) — create live interactive HTML/CSS/JS canvas (renders as iframe in chat)
-- **web_fetch**(url) / **web_search**(query) — web access
-- **get_key**(name) / **set_key**(name, value) — encrypted vault
-- **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head
-- **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: ${config.TIMEZONE}
-- **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving
-- **discord_admin**(action, ...) — list, make and edit Discord channels and make webhooks with Tarsee's own bot (never the bot token from Bash); changes need approved_by, a webhook URL goes to the vault, nothing deletes
-- **railway**(action, project?, environment?, service?, ...) — list Railway projects and variable names, set a variable (secrets via from_key, a vault key name) or redeploy, with the vault's RAILWAY_API_TOKEN; writes need approved_by. Use it instead of Railway calls from Bash
-
-## Memory
-Use remember for durable facts. Use daily_log for session notes. Only append, never overwrite.
-Before saying "I don't know" or "I can't remember":
-1. Try search_memories first (fast, keyword-based)
-2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)
-
-## CLI Tools Installed
-- **railway** — Railway CLI for logs and deploys (to set a variable or redeploy, use the railway tool above: never a secret in a command)
-- **gog** — Google Workspace (Gmail, Calendar, Drive, Contacts, Sheets)
-- **himalaya** — Zoho/IMAP email
-- **gh** — GitHub CLI
-- **claude** — Claude Code CLI
-- **whisper-cli** — local speech-to-text
-- Use Bash to run any of these directly.
-
-## Skill Discovery
-You have skills installed in the skills/ directory. Before saying "I can't do that":
-1. Check if a skill exists: list files in ${cwd}/skills/ or read a skill's SKILL.md
-2. If a matching skill exists, read its SKILL.md and follow the instructions
-3. If no skill exists, ask the user if they want you to create one
-
-## Workspace: ${cwd}`;
-
-  let effectiveSystemPrompt = tarseeContext + (systemPrompt ? `\n\n${systemPrompt}` : "");
-  // Strip invalid Unicode surrogates that break JSON serialization
-  effectiveSystemPrompt = effectiveSystemPrompt.replace(/[\uD800-\uDFFF]/g, "");
-  queryOptions.systemPrompt = effectiveSystemPrompt;
-
-  // Resume existing session if available — unless its transcript has grown
-  // past the cap. Claude Code re-reads the whole .jsonl on resume, so a
-  // bloated transcript refills the context window before the user's message
-  // is even considered: turns get slower, more expensive, and eventually
-  // hang. Past the cap we start a FRESH session instead of resuming the
-  // bloat. (Settings -> Token Health surfaces which sessions are near it.)
-  if (sessionId) {
-    if (isTranscriptOverCap(sessionId)) {
-      const mb = transcriptSizeMB(sessionId);
-      console.warn(
-        `[claude-code] session ${sessionId} transcript ${mb}MB > ${SESSION_JSONL_MAX_MB}MB cap — starting FRESH instead of resuming the bloat`,
-      );
+    if (entry.id !== "claude") {
+      ensureHome(built.home);
+      const refusal = (deps.homeIsolationRefusal ?? homeIsolationRefusal)(built.home, { providerId: entry.id, engine: CLAUDE_CODE });
+      if (refusal) throw new CredentialError("credential-isolation", refusal.message, entry.id);
+      if (entry.id === "anthropic") approveKeyInHome(built.home, built.options.env.ANTHROPIC_API_KEY);
+    }
+    const guard = (deps.settingsFileGuard ?? settingsFileGuard)(built.settingsFiles);
+    if (!guard.ok) throw new CredentialError("credential-isolation", guard.message, entry.id);
+  } catch (err) {
+    if (signal) signal.removeEventListener("abort", onAbort);
+    if (err instanceof CredentialError) {
+      console.warn(`[claude-code] ${entry.id}: turn refused (${err.code}): ${err.message}`);
+      yield* fail(classifyEngineError(entry.id, CLAUDE_CODE, { code: err.code, message: err.message }));
     } else {
-      queryOptions.resume = sessionId;
+      console.error(`[claude-code] ${entry.id}: couldn't set up the turn:`, err);
+      yield* fail(classifyEngineError(entry.id, CLAUDE_CODE, { message: `Tarsee couldn't set up this turn: ${err?.message || err}` }));
     }
+    return;
   }
 
-  console.log(`[claude-code] Starting task in ${cwd}, model: ${queryOptions.model}, session: ${sessionId || "new"}, media: ${mediaBlocks.length}, mcp: ${tarseeMcp ? "yes" : "NO"}, allowedTools: ${allTools.join(",")}`);
-
-  // Build prompt: use AsyncIterable with image content blocks if images present
-  let queryPrompt;
-  if (hasMedia) {
-    // Native image support via AsyncIterable<SDKUserMessage>
-    const contentBlocks = [...mediaBlocks, { type: "text", text: prompt }];
-    async function* imagePrompt() {
-      yield {
-        type: "user",
-        message: { role: "user", content: contentBlocks },
-        parent_tool_use_id: null,
-      };
-    }
-    queryPrompt = imagePrompt();
-  } else {
-    queryPrompt = prompt;
+  // Tarsee's own tools, in-process.
+  let mcpServer = deps.mcpServer;
+  if (mcpServer === undefined) {
+    const { createTarseeMcp } = await import("../tarsee-mcp.js");
+    mcpServer = createTarseeMcp(toolCtx);
   }
+  const queryOptions = { ...built.options };
+  if (mcpServer) queryOptions.mcpServers = { tarsee: mcpServer };
+  let stderrTail = "";
+  queryOptions.stderr = (data) => { stderrTail = (stderrTail + String(data)).slice(-2000); };
+
+  console.log(`[claude-code] Starting ${entry.id} turn in ${queryOptions.cwd}, model: ${queryOptions.model}, session: ${resume || "new"}, media: ${mediaBlocks.length}`);
+
+  let queryPrompt = prompt;
+  if (mediaBlocks.length) {
+    const contentBlocks = [...mediaBlocks, ...(prompt ? [{ type: "text", text: prompt }] : [])];
+    queryPrompt = (async function* mediaPrompt() {
+      yield { type: "user", message: { role: "user", content: contentBlocks }, parent_tool_use_id: null };
+    })();
+  }
+
+  const query = deps.query ?? sdkQuery;
+  const priced = built.cost === "estimate";
+  const bareModel = bare(queryOptions.model);
+  let reportedCost = 0;        // OpenRouter's usage.cost, summed over the turn's calls
+  let reportedAny = false;
+  let lastSession = null;
+  const report = (sid) => {
+    if (!sid || sid === lastSession) return;
+    lastSession = sid;
+    try { (opts.onSessionHandle || opts.onSessionId)?.(sid); } catch (err) { console.warn(`[claude-code] storing the session failed: ${err?.message || err}`); }
+  };
+  let lastAssistantError = null;
 
   try {
     let messageCount = 0;
-    let everStreamed = false; // True if ANY text was streamed via stream_event
+    let everStreamed = false;
     let inThinking = false;
-    let textOut = false; // True once any words went to the caller (an auth error after that is not the whole reply)
-    const seenToolIds = new Set(); // tool_use ids already turned into live steps
-    // Thinking summaries, API retries, compacting and the tokens so far, for the live view (lib/tool-steps.js).
+    const seenToolIds = new Set();
     const watcher = createStreamWatcher();
-    for await (const message of query({ prompt: queryPrompt, options: queryOptions, signal })) {
+    const stream = query({ prompt: queryPrompt, options: queryOptions });
+    for await (const message of stream) {
       messageCount++;
-      if (signal?.aborted) break;
-      for (const step of watcher.onMessage(message)) yield { type: "step", ...step };
+      if (abortController.signal.aborted) break;
+
+      // OpenRouter reports each call's cost on its message_delta: counted before the turn guard below looks.
+      if (message.type === "stream_event" && message.event?.type === "message_delta") {
+        const raw = message.event.usage?.cost;
+        const c = Number(raw);
+        if (raw != null && Number.isFinite(c) && c >= 0) { reportedCost += c; reportedAny = true; }
+      }
+
+      // R6: the CLI says which credential it will use before it sends anything.
+      if (message.type === "system" && message.subtype === "init") {
+        console.log(`[claude-code] ${entry.id}: apiKeySource=${message.apiKeySource}`);
+        const refusal = apiKeySourceRefusal(entry.id, message.apiKeySource);
+        if (refusal) {
+          abortController.abort();
+          console.error(`[claude-code] ${entry.id}: stopped, apiKeySource ${message.apiKeySource} is not this provider's credential`);
+          yield* fail(classifyEngineError(entry.id, CLAUDE_CODE, { code: refusal.code, message: refusal.message }));
+          return;
+        }
+      }
+
+      for (const step of watcher.onMessage(message)) {
+        yield { type: "step", ...step };
+        // The turn guard for the providers whose dollar ceiling the SDK can't keep (it doesn't know their prices).
+        if (step.kind === "usage" && priced && typeof opts.maxBudgetUsd === "number" && opts.maxBudgetUsd > 0) {
+          const check = checkTurnBudget({
+            providerId: entry.id,
+            model: bareModel,
+            maxBudgetUsd: opts.maxBudgetUsd,
+            store,
+            ...(reportedAny ? { costUsd: reportedCost } : { usage: { input_tokens: step.input, output_tokens: step.output, cache_read_input_tokens: step.cacheRead, cache_creation_input_tokens: step.cacheWrite } }),
+          });
+          if (check.tripped) {
+            abortController.abort();
+            yield { type: "error", message: check.message, recoverable: false, subtype: "error_max_budget_usd", code: "budget" };
+            yield done("budget");
+            return;
+          }
+        }
+      }
 
       switch (message.type) {
         case "stream_event": {
-          // Token-by-token streaming — text deltas and thinking
           const evt = message.event;
           if (evt?.type === "content_block_delta") {
             if (evt.delta?.type === "text_delta" && evt.delta.text) {
@@ -541,7 +587,6 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
               everStreamed = true;
               textOut = true;
             } else if (evt.delta?.type === "thinking_delta" && evt.delta.thinking) {
-              // Don't emit thinking content as text — but signal that thinking is active
               everStreamed = true;
             }
           } else if (evt?.type === "content_block_start") {
@@ -549,74 +594,44 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
               inThinking = true;
               yield { type: "thinking", status: "start" };
             }
-          } else if (evt?.type === "content_block_stop") {
-            if (inThinking) {
-              inThinking = false;
-              yield { type: "thinking", status: "stop" };
-            }
+          } else if (evt?.type === "content_block_stop" && inThinking) {
+            inThinking = false;
+            yield { type: "thinking", status: "stop" };
           }
           break;
         }
 
         case "assistant": {
-          // Claude's sign-in failing, delivered as if it were the reply: say what to do instead (AUTH_TEXT_RE).
-          if (!message.parent_tool_use_id && !textOut) {
-            const words = Array.isArray(message.message?.content)
-              ? message.message.content.filter((b) => b.type === "text").map((b) => b.text).join("")
-              : String(message.message?.content || "");
-            if (isAuthFailure(words, message.error)) {
-              console.error(`[claude-code] Claude's sign-in failed: ${words.slice(0, 200)}`);
-              yield { type: "text", content: AUTH_EXPIRED_MESSAGE };
-              yield { type: "done", stopReason: "auth-expired" };
-              return;
-            }
+          const top = !message.parent_tool_use_id;
+          // An API failure the CLI delivers as if it were the reply: never shown as the answer.
+          if (top && message.error) {
+            lastAssistantError = { code: message.error, text: textOf(message.message?.content) };
+            break;
           }
-          // Live steps (the words and each tool as it starts), for the
-          // dashboard. A subagent's own messages carry parent_tool_use_id:
-          // its inner steps stay inside its one Task step.
-          if (!message.parent_tool_use_id) {
+          if (top && !textOut && isAuthFailure(textOf(message.message?.content))) {
+            lastAssistantError = { code: "authentication_failed", text: textOf(message.message?.content) };
+            break;
+          }
+          if (top) {
             for (const step of stepsFromSdkMessage(message, seenToolIds)) yield { type: "step", ...step };
-          }
-          // Full assistant message — skip text if already streamed token-by-token
-          if (!everStreamed) {
-            const text = typeof message.message?.content === "string"
-              ? message.message.content
-              : Array.isArray(message.message?.content)
-                ? message.message.content
-                    .filter((b) => b.type === "text")
-                    .map((b) => b.text)
-                    .join("")
-                : "";
-            if (text) {
-              yield { type: "text", content: text };
-              everStreamed = true;
-              textOut = true;
-            }
-          }
-
-          // Check for tool_use blocks in the content
-          if (Array.isArray(message.message?.content)) {
-            for (const block of message.message.content) {
-              if (block.type === "tool_use") {
-                yield {
-                  type: "tool_use",
-                  id: block.id,
-                  name: block.name,
-                  input: block.input,
-                };
+            if (!everStreamed) {
+              const text = textOf(message.message?.content);
+              if (text) {
+                yield { type: "text", content: text };
+                everStreamed = true;
+                textOut = true;
               }
+            }
+            for (const block of Array.isArray(message.message?.content) ? message.message.content : []) {
+              if (block?.type === "tool_use") yield { type: "tool_use", id: block.id, name: block.name, input: block.input };
             }
           }
           break;
         }
 
         case "user": {
-          // Tool results. The SDK has no "tool_result" message type: a tool's
-          // output comes back as a `user` message whose content holds a
-          // tool_result block with the tool_use_id it answers. (A case for
-          // "tool_result" sat here before and never fired, so no caller ever
-          // saw a tool's output.) Replays of earlier turns on resume are
-          // skipped, and so are a subagent's inner results.
+          // A tool's output comes back as a user message holding a tool_result block. Replays of earlier turns on
+          // resume are skipped, and so are a subagent's inner results.
           if (message.isReplay || message.parent_tool_use_id) break;
           for (const step of stepsFromSdkMessage(message, seenToolIds)) yield { type: "step", ...step };
           for (const r of toolResultsFromSdkMessage(message)) {
@@ -626,138 +641,122 @@ You have skills installed in the skills/ directory. Before saying "I can't do th
         }
 
         case "result": {
-          // Final result — capture session ID and usage
-          const sid = message.session_id || message.sessionId;
-          if (sid && onSessionId) {
-            onSessionId(sid);
-          }
-          if (message.usage) {
-            // Forward cache fields too so the frontend can compute true
-            // prompt size = input + cache_read + cache_creation. Without
-            // these we'd undercount filled context whenever caching kicks in.
-            yield {
-              type: "usage",
-              usage: {
-                input_tokens: message.usage.input_tokens || 0,
-                output_tokens: message.usage.output_tokens || 0,
-                cache_read_input_tokens: message.usage.cache_read_input_tokens || 0,
-                cache_creation_input_tokens: message.usage.cache_creation_input_tokens || 0,
-              },
-            };
-          }
-          // A `result` message is NOT necessarily a success. The SDK uses the
-          // same type for error_during_execution / error_max_turns /
-          // error_max_budget_usd / error_max_structured_output_retries, and
-          // those carry no `result` field at all — they carry `errors[]`. This
-          // used to read `message.result || ""`, find nothing, and emit a
-          // normal end_turn, so a job that burned its entire turn budget was
-          // recorded as having completed successfully with an empty answer.
+          report(message.session_id || message.sessionId);
+          const usage = message.usage ? {
+            input_tokens: message.usage.input_tokens || 0,
+            output_tokens: message.usage.output_tokens || 0,
+            cache_read_input_tokens: message.usage.cache_read_input_tokens || 0,
+            cache_creation_input_tokens: message.usage.cache_creation_input_tokens || 0,
+          } : null;
+          const costUsd = turnCost(built.cost, entry.id, message, { reportedAny, reportedCost, store });
+          // costExact: the provider's own figure (the Anthropic key's total, OpenRouter's usage.cost), not a price-table
+          // estimate; the Usage page labels it exact (lib/token-usage.js).
+          const costExact = costUsd != null && (built.cost === "exact" || (entry.id === "openrouter" && reportedAny));
+          if (usage || costUsd != null) yield { type: "usage", usage: usage || { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, ...(costUsd != null ? { costUsd } : {}), ...(costExact ? { costExact: true } : {}) };
+
+          // A result is not always a success: the SDK uses the same type for its stops, which carry errors[] instead.
           if (message.subtype && message.subtype !== "success") {
-            const detail = Array.isArray(message.errors) && message.errors.length
-              ? message.errors.join("; ")
-              : message.subtype;
-            const friendly = message.subtype === "error_max_turns"
-              ? `Stopped after hitting the turn limit (${message.num_turns} turns). The task needs to be broken into smaller steps.`
-              : message.subtype === "error_max_budget_usd"
-                ? "Stopped after hitting the configured spend ceiling for this task."
-                : `Claude Code ended with ${message.subtype}: ${detail}`;
-            yield { type: "error", message: friendly, recoverable: false, subtype: message.subtype };
-            yield { type: "done", stopReason: message.subtype };
-            break;
+            const detail = Array.isArray(message.errors) && message.errors.length ? message.errors.join("; ") : message.subtype;
+            if (message.subtype === "error_max_turns") {
+              yield { type: "error", message: `Stopped after hitting the turn limit (${message.num_turns} turns). The task needs to be broken into smaller steps.`, recoverable: false, subtype: message.subtype, code: "max_turns" };
+              yield done("max_turns");
+            } else if (message.subtype === "error_max_budget_usd") {
+              yield { type: "error", message: "Stopped after hitting the configured spend ceiling for this task.", recoverable: false, subtype: message.subtype, code: "budget" };
+              yield done("budget");
+            } else {
+              const info = classifyEngineError(entry.id, CLAUDE_CODE, { code: lastAssistantError?.code, message: lastAssistantError?.text || detail, model: queryOptions.model });
+              yield* fail(info.kind === "unknown" ? { ...info, message: `Claude Code ended with ${message.subtype}: ${detail}` } : info, { subtype: message.subtype });
+            }
+            return;
           }
           const resultText = message.result || "";
-          if (!textOut && isAuthFailure(resultText)) {
-            console.error(`[claude-code] Claude's sign-in failed: ${resultText.slice(0, 200)}`);
-            yield { type: "text", content: AUTH_EXPIRED_MESSAGE };
-            yield { type: "done", stopReason: "auth-expired" };
-            break;
+          const failed = message.is_error || lastAssistantError || (!textOut && (isAuthFailure(resultText) || looksLikeApiError(resultText)));
+          if (failed) {
+            const words = lastAssistantError?.text || resultText;
+            const info = classifyEngineError(entry.id, CLAUDE_CODE, { code: lastAssistantError?.code, message: words, model: queryOptions.model });
+            console.error(`[claude-code] ${entry.id}: ${info.kind}: ${String(words).slice(0, 200)}`);
+            yield* fail(info);
+            return;
           }
-          const classified = classifyAgentError(resultText);
-          if (classified) {
-            // API/SDK error landed in result.result — don't leak it as a chat
-            // reply, surface as a structured error event so the channel layer
-            // can decide whether to retry, clear the session, or show a clean
-            // user-facing message.
-            yield { type: "error", message: resultText, recoverable: classified.recoverable };
-            yield { type: "done", stopReason: "error" };
-            break;
-          }
-          // Yield result text as fallback if nothing was streamed at all
           if (!everStreamed && resultText) {
             yield { type: "text", content: resultText };
             textOut = true;
           }
-          yield { type: "done", stopReason: "end_turn" };
-          break;
-        }
-
-        case "error": {
-          const errMsg = message.error?.message || message.error || "Unknown Claude Code error";
-          const classified = classifyAgentError(errMsg);
-          // Detect auth failures
-          if (/unauthorized|authentication|login|credential/i.test(errMsg) || isAuthFailure(errMsg)) {
-            yield { type: "text", content: `${AUTH_EXPIRED_MESSAGE}\n\nError: ${errMsg}` };
-          }
-          yield { type: "error", message: errMsg, recoverable: !!classified?.recoverable };
-          yield { type: "done", stopReason: "error" };
-          break;
+          yield done("end_turn");
+          return;
         }
 
         case "system": {
-          // Capture session ID from init event
-          if (message.session_id && onSessionId) {
-            onSessionId(message.session_id);
-          }
-          // Surface MCP connection status. The tarsee server can fail to
-          // register (a bad tool schema fails the whole tools/list call) while
-          // the system prompt keeps advertising twenty tools, so the model
-          // improvises with curl and Bash and the failure looks like bad
-          // prompting. Nothing logged this, so it went unnoticed. Log loudly
-          // when the server did not come up connected.
+          if (message.session_id) report(message.session_id);
+          // The tarsee server can fail to register (a bad tool schema fails the whole tools/list call) while the
+          // system prompt keeps advertising its tools; say so loudly.
           if (Array.isArray(message.mcp_servers)) {
             for (const srv of message.mcp_servers) {
-              if (srv?.status && srv.status !== "connected") {
-                console.error(
-                  `[claude-code] MCP server "${srv.name}" is ${srv.status} — its tools are NOT available to Claude this turn.`,
-                );
-              }
+              if (srv?.status && srv.status !== "connected") console.error(`[claude-code] MCP server "${srv.name}" is ${srv.status}: its tools are NOT available this turn.`);
             }
           }
           break;
         }
 
         default:
-          // Forward any other message types
-          if (message.type && !["rate_limit_event", "user"].includes(message.type)) {
-            console.log(`[claude-code] Event: ${message.type}`, JSON.stringify(message).slice(0, 200));
-          }
           break;
       }
     }
-    console.log(`[claude-code] Stream ended. Messages: ${messageCount}, streamed: ${everStreamed}`);
-    if (messageCount === 0) {
-      yield { type: "text", content: "**Claude Code returned no response.** Check the server logs for details. If its sign-in has expired, open the Terminal in the Tarsee dashboard (the `>_` button at the top) and run `claude login`." };
-      yield { type: "done", stopReason: "error" };
+    if (!doneSent) {
+      if (abortController.signal.aborted) {
+        console.log("[claude-code] Turn stopped.");
+        yield done("aborted");
+      } else if (messageCount === 0) {
+        yield* fail(classifyEngineError(entry.id, CLAUDE_CODE, { message: `Claude Code returned no response.${stderrTail ? ` ${stderrTail.trim().slice(-300)}` : ""}` }));
+      } else {
+        yield* fail(classifyEngineError(entry.id, CLAUDE_CODE, { message: "Claude Code stopped without finishing its answer." }));
+      }
     }
   } catch (error) {
-    // Stopped on purpose (Stop, the idle watchdog, a caller giving up): the
-    // SDK throws "process aborted by user". That is not a failure, and must
-    // not reach the user as an error.
+    if (doneSent) return; // (the SDK throws after an error result it already reported)
     if (abortController.signal.aborted) {
       console.log("[claude-code] Turn stopped.");
-      yield { type: "done", stopReason: "aborted" };
+      yield done("aborted");
       return;
     }
     console.error("[claude-code] Exception:", error);
-    const errMsg = error.message || "Claude Code crashed";
-
+    const errMsg = error?.message || "Claude Code crashed";
     if (/ENOENT.*claude/i.test(errMsg)) {
-      yield { type: "text", content: `**Claude Code isn't installed where Tarsee can run it.** Check the server logs.\n\nError: ${errMsg}` };
-    } else if (/unauthorized|authentication|login|credential/i.test(errMsg) || isAuthFailure(errMsg)) {
-      yield { type: "text", content: `${AUTH_EXPIRED_MESSAGE}\n\nError: ${errMsg}` };
+      yield* fail({ kind: "unknown", message: `**Claude Code isn't installed where Tarsee can run it.** Check the server logs.\n\nError: ${errMsg}`, recoverable: false });
+      return;
     }
-
-    yield { type: "error", message: errMsg };
-    yield { type: "done", stopReason: "error" };
+    yield* fail(classifyEngineError(entry.id, CLAUDE_CODE, { code: lastAssistantError?.code, message: lastAssistantError?.text || errMsg, model: queryOptions.model }));
+  } finally {
+    if (signal) signal.removeEventListener("abort", onAbort);
+    if (!doneSent) abortController.abort();
   }
 }
+
+function parseJson(v) {
+  if (v == null || typeof v === "object") return v;
+  try { return JSON.parse(String(v)); } catch { return null; }
+}
+
+/**
+ * A turn's cost in USD, or null when it has none here:
+ *   plan       null (included in the plan)
+ *   exact      the SDK's total_cost_usd (the Anthropic key)
+ *   estimate   OpenRouter's own usage.cost when it streamed one, else the price table times every model's tokens
+ *              (modelUsage: subagents and background calls included)
+ */
+function turnCost(kind, providerId, result, { reportedAny, reportedCost, store }) {
+  if (kind === "plan") return null;
+  if (kind === "exact") return Number.isFinite(Number(result.total_cost_usd)) ? Number(result.total_cost_usd) : null;
+  if (providerId === "openrouter" && reportedAny) return round6(reportedCost);
+  const byModel = result.modelUsage && typeof result.modelUsage === "object" ? result.modelUsage : null;
+  if (!byModel) return null;
+  let total = 0;
+  let any = false;
+  for (const [m, u] of Object.entries(byModel)) {
+    const usd = priceUsage(providerId, bare(m), usageOfModel(u), null, store);
+    if (usd != null) { total += usd; any = true; }
+  }
+  return any ? round6(total) : null;
+}
+
+const round6 = (n) => Math.round(n * 1e6) / 1e6;

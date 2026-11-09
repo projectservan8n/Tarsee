@@ -57,6 +57,48 @@ describe("usage page: counts and speeds as people read them", () => {
     assert.equal(U.dayLabel(now), "Oct 25", "still the evening before in New York");
     assert.equal(U.span(now - 90_000, null, now), "running 1m 30s");
   });
+  it("money: cents, thousands, and under a cent said so", () => {
+    assert.deepEqual([0, 0.004, 0.0631, 0.5, 12.5, 1234.5].map(U.money), ["$0.00", "under $0.01", "$0.06", "$0.50", "$12.50", "$1,234.50"]);
+    assert.equal(U.money(null), "");
+  });
+  it("what a cost is: exact, estimated, included in a plan, free, or not known", () => {
+    assert.equal(U.costText({ costUsd: 0.37, costNote: "exact" }), "$0.37");
+    assert.equal(U.costText({ costUsd: 0.0631, costNote: "est" }), "$0.06 est.");
+    assert.equal(U.costText({ costUsd: null, costNote: "plan" }), "Included in plan");
+    assert.equal(U.costText({ costUsd: 0, costNote: "free" }), "Free");
+    assert.equal(U.costText({ costUsd: null, costNote: "unknown" }), "Cost not known");
+    assert.equal(U.costText({ costUsd: null, costNote: null }), "", "nothing ran: nothing to say");
+    assert.equal(U.costText(null), "");
+  });
+  it("a reply's line and breakdown carry what it cost; a plan's reply line stays as it was", () => {
+    assert.equal(U.answerLine({ total: 12_400, outTps: 38.2, ms: 41_000, costUsd: 0.0123, costNote: "est" }), "12.4k tokens · 38 tk/s · 41s · $0.01 est.");
+    assert.equal(U.answerLine({ total: 12_400, outTps: 38.2, ms: 41_000, costUsd: null, costNote: "plan" }), "12.4k tokens · 38 tk/s · 41s");
+    const rows = U.breakdown({ total: 10, outTps: null, costUsd: null, costNote: "plan", providerLabel: "Claude plan" });
+    const cost = rows.find((r) => r.label === "Cost");
+    assert.equal(cost.value, "Included in plan");
+    assert.equal(rows.at(-1).label, "Cost", "after the tokens");
+    assert.equal(U.breakdown({ total: 10, costUsd: 0.37, costNote: "exact" }).find((r) => r.label === "Cost").value, "$0.37");
+    assert.equal(U.breakdown({ total: 10 }).find((r) => r.label === "Cost"), undefined, "no cost known: no row");
+  });
+  it("the chart's spend line: the days' total and the daily average, est. when any of it is", () => {
+    const days = [{ costUsd: null, costNote: "plan" }, { costUsd: 0.5, costNote: "exact" }, { costUsd: 0.9, costNote: "est" }, { costUsd: null, costNote: null }];
+    assert.equal(U.spendLine(days), "Spent $1.40 est. over 4 days, about $0.35 a day");
+    assert.equal(U.spendLine([{ costUsd: 0.5, costNote: "exact" }, { costUsd: 0.25, costNote: "exact" }]), "Spent $0.75 over 2 days, about $0.38 a day");
+    assert.equal(U.spendLine([{ costUsd: null, costNote: "plan" }, { costUsd: null, costNote: "plan" }]), "Included in plan", "only a plan's work");
+    assert.equal(U.spendLine([{ costUsd: null, costNote: null }]), "", "nothing ran");
+    assert.equal(U.spendLine(undefined), "");
+  });
+  it("the provider filter shows once more than one AI did work, and stays while it is in use", () => {
+    const list = [{ id: "claude", label: "Claude plan" }, { id: "deepseek", label: "DeepSeek" }];
+    const c = U.providerChoices(list, null);
+    assert.equal(c.show, true);
+    assert.deepEqual(c.items.map((i) => [i.id, i.label, i.pressed]), [[null, "All", true], ["claude", "Claude plan", false], ["deepseek", "DeepSeek", false]]);
+    assert.equal(U.providerChoices([list[0]], null).show, false, "one AI: nothing to choose");
+    const kept = U.providerChoices([list[1]], "deepseek");
+    assert.equal(kept.show, true);
+    assert.deepEqual(kept.items.filter((i) => i.pressed).map((i) => i.id), ["deepseek"]);
+    assert.equal(U.providerChoices(undefined, null).show, false);
+  });
   it("a zone the browser does not know falls back to the browser's own", () => {
     U.setTimeZone("Not/AZone");
     assert.equal(U.timeZone(), undefined);

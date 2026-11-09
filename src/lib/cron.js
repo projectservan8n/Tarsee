@@ -1,5 +1,5 @@
 import cron from "node-cron";
-import { buildSystemPrompt } from "./build-system-prompt.js";
+import { buildSystemPromptParts } from "./build-system-prompt.js";
 import { chatStream } from "../ai/router.js";
 import { appendDailyLog } from "./workspace-files.js";
 import { resolveModelAlias, isKnownModel, BACKGROUND_DEFAULTS } from "../config/constants.js";
@@ -48,7 +48,7 @@ function autoTierForPrompt(prompt) {
  * Without this every scheduled job ran on the globally-recommended model,
  * which is Opus — so a trivial daily reminder cost an Opus turn.
  */
-function resolveCronModel(job, activeProvider) {
+function resolveCronModel(job) {
   let pick = job.model;
   if (!pick) {
     const autoTier = _settingsStore?.get("cron.autoTier");
@@ -63,7 +63,9 @@ function resolveCronModel(job, activeProvider) {
   // Fall back to the shared cheap background floor instead of the interactive
   // default, which is what the docs always claimed happened.
   pick = pick || _settingsStore?.get("cron.defaultModel");
-  return resolveBackgroundModel(pick);
+  // A tier word, a model of the default AI or a provider:model ref; a name it doesn't offer is logged and the floor
+  // runs (background-turn.js).
+  return resolveBackgroundModel(pick, null, _settingsStore);
 }
 let _convStore = null;
 let _channelManager = null;
@@ -251,15 +253,10 @@ export async function runCronJob(job) {
     }
   }
 
-  // --- AI prompt: send to Claude Code ---
-  const activeProvider = _settingsStore.getActiveProvider();
-  if (!activeProvider?.ready || !activeProvider?.provider) {
-    return { error: "No AI provider configured" };
-  }
-
+  // --- AI prompt: a turn on the default AI (the turn layer picks it, and says plainly when it can't run) ---
   console.log(`[cron] Running AI job "${job.id}": ${(job.prompt || "").slice(0, 80)}...`);
 
-  const systemPrompt = buildSystemPrompt({
+  const systemParts = buildSystemPromptParts({
     settingsStore: _settingsStore,
     db: _db,
     conversationId: null,
@@ -277,17 +274,17 @@ export async function runCronJob(job) {
 
   // Resolve the model ONCE up front (see resolveCronModel): explicit per-job
   // tier → zero-token complexity heuristic → cheap floor → provider default.
-  const jobModel = resolveCronModel(job, activeProvider);
+  const jobModel = resolveCronModel(job);
   console.log(`[cron] Job "${job.id}" model → ${jobModel}`);
 
   const toolCtx = { db: _db, settingsStore: _settingsStore, conversationId: null, channelManager: _channelManager };
-  const { text: fullResponse, error } = await runBackgroundTurn({
+  const { text: fullResponse, error, provider: ranProvider, model: ranModel } = await runBackgroundTurn({
     label: `cron:${job.id}`,
     liveId: `cron:${job.id}`,
     liveSource: "cron",
     model: jobModel,
     messages,
-    systemPrompt,
+    systemParts,
     toolCtx,
     timeoutMs: JOB_TIMEOUT_MS,
   });
@@ -308,8 +305,8 @@ export async function runCronJob(job) {
     _convStore.addMessage(convId, {
       role: "assistant",
       content: `**[Cron: ${job.id}]**\n\n${fullResponse}`,
-      provider: activeProvider.provider,
-      model: jobModel,
+      provider: ranProvider,
+      model: ranModel || jobModel,
     });
   }
 

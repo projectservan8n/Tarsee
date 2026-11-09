@@ -1,0 +1,4 @@
+#!/bin/sh
+# POSIX shim for the fake codex (fake-codex.mjs next to this file), started by @openai/codex-sdk in place of the real
+# binary (TARSEE_CODEX_BIN). FAKE_CODEX_NODE names the test's node; node on PATH otherwise.
+exec "${FAKE_CODEX_NODE:-node}" "$(dirname "$0")/fake-codex.mjs" "$@"

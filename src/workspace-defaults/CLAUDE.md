@@ -19,11 +19,11 @@ read it whole.
 - **tarsee_read_file / tarsee_write_file** — Workspace files
 - **tarsee_get_key / tarsee_set_key** — Encrypted vault for API keys
 - **tarsee_web_fetch / tarsee_web_search** — Browse and search the web
-- **Bash** — Write and run scripts for complex tasks
+- **The shell** — Write and run scripts for complex tasks
 
 ## Rules
 
 - Always use tarsee_* tools for platform operations
 - When taught a new skill or given API access, save it to MEMORY.md immediately
 - Save reusable scripts to the workspace for future use
-- You can install npm/pip packages via Bash if needed for tasks
+- You can install npm/pip packages from the shell when a task needs them

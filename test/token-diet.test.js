@@ -7,7 +7,7 @@ import { compactWindowEnv, bashOutputEnv, mcpOutputEnv, costSaverEnv, effectiveC
 import { clipMemory } from "../src/db/memory.js";
 import { shortSkillDescription } from "../src/lib/skills-engine.js";
 import { withConversationTurn, takeQueuedNote } from "../src/lib/conversation-lock.js";
-import { QUEUED_NOTE, withQueuedNote } from "../src/ai/providers/claude-code.js";
+import { QUEUED_NOTE, withQueuedNote } from "../src/ai/turn.js";
 
 describe("compactWindowEnv: when the CLI summarizes the agent's context", () => {
   it("defaults to 180k so a call re-reads less", () => {

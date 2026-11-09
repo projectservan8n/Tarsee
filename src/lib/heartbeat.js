@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import config from "../config/env.js";
 import { getHeartbeatContext, appendDailyLog } from "./workspace-files.js";
-import { buildSystemPrompt } from "./build-system-prompt.js";
-import { runBackgroundTurn, resolveBackgroundModel } from "./background-turn.js";
+import { buildSystemPromptParts } from "./build-system-prompt.js";
+import { runBackgroundTurn, resolveBackgroundModel, defaultAiReadiness } from "./background-turn.js";
 
 /**
  * Heartbeat system — periodically runs HEARTBEAT.md tasks through the AI.
@@ -68,9 +68,11 @@ export async function runHeartbeat(reason = "scheduled") {
     return { skipped: true, reason: "Not initialized" };
   }
 
-  const activeProvider = _settingsStore.getActiveProvider();
-  if (!activeProvider?.ready || !activeProvider?.provider) {
-    return { skipped: true, reason: "No AI provider configured" };
+  // Skipped quietly while the default AI can't take a turn (every 30 minutes, a failure would only be noise); the
+  // reason names the AI and what to fix (/heartbeat shows it).
+  const ai = await defaultAiReadiness(_settingsStore);
+  if (!ai.ready) {
+    return { skipped: true, reason: ai.reason };
   }
 
   const now = new Date().toISOString();
@@ -78,7 +80,7 @@ export async function runHeartbeat(reason = "scheduled") {
   running = true;
 
   // Build a lightweight system prompt with workspace context
-  const systemPrompt = buildSystemPrompt({
+  const systemParts = buildSystemPromptParts({
     settingsStore: _settingsStore,
     db: _db,
     conversationId: null,
@@ -112,9 +114,9 @@ export async function runHeartbeat(reason = "scheduled") {
       label: "heartbeat",
       liveId: "heartbeat",
       liveSource: "heartbeat",
-      model: resolveBackgroundModel(_settingsStore.get("heartbeat.model")),
+      model: resolveBackgroundModel(_settingsStore.get("heartbeat.model"), null, _settingsStore),
       messages,
-      systemPrompt,
+      systemParts,
       toolCtx,
     });
 

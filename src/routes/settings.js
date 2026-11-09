@@ -2,8 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { Router } from "express";
 import { SettingsStore } from "../db/settings.js";
-import { AI_PROVIDERS } from "../config/constants.js";
-import { getAvailableProviders } from "../ai/router.js";
+import { getProvider, isShipped, shippedProviders, checkKeySlot } from "../ai/provider-registry.js";
+import { providerStatus, activeTarget, credentialPresence } from "../ai/provider-status.js";
+import { ensureLocalModels } from "../ai/provider-models.js";
 import { readWorkspaceFile, writeWorkspaceFile, hasBootstrapFile, deleteBootstrapFile } from "../lib/workspace-files.js";
 import { initTTSEngine } from "../voice/engine-registry.js";
 import { redactSecretFields } from "../lib/vault.js";
@@ -50,32 +51,35 @@ settingsRouter.get("/", (_req, res) => {
 });
 
 /**
- * GET /api/settings/providers
- * Get AI provider list with configuration status.
- */
-settingsRouter.get("/providers", (_req, res) => {
-  res.json({ providers: getAvailableProviders() });
-});
-
-/**
  * POST /api/settings/provider
- * Configure an AI provider.
- * Body: { provider, model?, apiKey? }. A baseUrl is refused: a provider's host
- * is fixed in code, so a stored key only ever goes to its own provider.
+ * The old setup wizard's route, kept as a thin shim: Settings > AI uses /api/ai (routes/ai.js).
+ * Body: { provider, model?, apiKey? }. provider is a public id or the Claude plan's "claude-code"; it is stored
+ * under the provider's storage id. A key is checked as Settings > AI checks it (format and wrong slot) and saved
+ * encrypted; the placeholder apiKey "subscription" the old wizard sent for the Claude plan is ignored. A baseUrl is
+ * refused: a provider's host is fixed in code, so a stored key only ever goes to its own provider.
  */
 settingsRouter.post("/provider", (req, res) => {
   const { provider, model, apiKey } = req.body || {};
 
-  if (!provider || !AI_PROVIDERS[provider]) {
-    return res.status(400).json({ error: "Invalid provider. Valid: " + Object.keys(AI_PROVIDERS).join(", ") });
+  const p = getProvider(provider);
+  if (!p || !isShipped(p.id)) {
+    return res.status(400).json({ error: "Invalid provider. Valid: " + shippedProviders().map((s) => s.id).join(", ") });
   }
   if (req.body?.baseUrl != null && req.body.baseUrl !== "") {
     return res.status(400).json({ error: "A provider's base URL can't be set: each provider's host is fixed, so its key only ever goes there." });
   }
+  const key = typeof apiKey === "string" ? apiKey.trim().replace(/^(["'])(.*)\1$/, "$2").trim() : "";
+  const placeholder = p.id === "claude" && key === "subscription";
+  if (key && !placeholder) {
+    const slot = checkKeySlot(p.id, key);
+    if (!slot.ok) return res.status(400).json({ error: slot.message });
+    if (/\s|\0/.test(key)) return res.status(400).json({ error: "This key has a line break or a space in it. Copy it again and paste it whole." });
+  }
 
-  settingsStore.setActiveProvider(provider, { model, apiKey });
+  settingsStore.setActiveProvider(p.storageId, { model: typeof model === "string" && model.trim() ? model.trim() : undefined });
+  if (key && !placeholder) settingsStore.set(`ai.${p.storageId}.apiKey`, key, { actor: "user", ip: req.ip });
 
-  res.json({ ok: true, provider, model: model || AI_PROVIDERS[provider]?.defaultModel });
+  res.json({ ok: true, provider: p.storageId, model: (typeof model === "string" && model.trim()) || p.defaultModel || null });
 });
 
 /**
@@ -304,13 +308,35 @@ settingsRouter.get("/channel/whatsapp/webhook-url", (_req, res) => {
 /**
  * GET /api/settings/setup-status
  * Check if first-time setup is needed.
+ *
+ * An AI counts as set up when the owner chose one (the wizard or Settings > AI save ai.activeProvider), or when
+ * Railway variables alone set up a ready one: TARSEE_AI_PROVIDER plus that provider's key, or the Claude plan's
+ * CLAUDE_CODE_OAUTH_TOKEN. A Claude sign-in that merely happens to be on the machine doesn't skip the wizard: the
+ * owner still picks. ai says which AI would answer and whether it is ready (providerStatus, as Settings > AI shows
+ * it); railway lists the providers connected through Railway variables, so the wizard can say so. No key is ever
+ * in the answer.
  */
-settingsRouter.get("/setup-status", (req, res) => {
-  const provider = settingsStore.get("ai.activeProvider");
+settingsRouter.get("/setup-status", async (req, res) => {
+  const env = process.env;
+  const chosen = settingsStore.get("ai.activeProvider");
+  let target = activeTarget(settingsStore, { env });
+  let status = await providerStatus(target.provider, { store: settingsStore, env });
+  // Local AI with an address and no model named runs on the first model its server lists, and that list lives only
+  // in memory: read it once (ensureLocalModels never throws), so a restart doesn't bring the wizard back.
+  if (target.provider === "local" && status.state === "needs-setup") {
+    await ensureLocalModels(settingsStore, { env });
+    target = activeTarget(settingsStore, { env });
+    status = await providerStatus(target.provider, { store: settingsStore, env });
+  }
+  const fromRailway = (s) => typeof s.keySource === "string" && s.keySource.startsWith("env:");
+  const railwayOnly = !chosen && status.ready && (target.chosenBy === "env" || (target.provider === "claude" && fromRailway(status)));
+  const configured = !!chosen || railwayOnly;
+  const railway = shippedProviders()
+    .map((p) => ({ p, s: credentialPresence(p.id, { store: settingsStore, env }) }))
+    .filter(({ s }) => fromRailway(s))
+    .map(({ p, s }) => ({ id: p.id, label: p.label, envKey: s.keySource.slice(4) }));
+
   const botName = settingsStore.get("identity.name");
-  const hasKey = provider === "claude-code"; // Claude Code uses subscription auth, no API key
-  // Claude Code is configured if CLAUDE_OAUTH_CREDENTIALS env var is set
-  const envConfigured = !!process.env.CLAUDE_OAUTH_CREDENTIALS;
   // Personality is "done" if bot name was set, OR if SOUL.md/systemPrompt exist,
   // OR if setup was explicitly completed, OR if conversations already exist (not first-time)
   const setupCompleted = !!settingsStore.get("setup.completed");
@@ -318,11 +344,22 @@ settingsRouter.get("/setup-status", (req, res) => {
   const hasConversations = db ? (db.prepare("SELECT COUNT(*) as c FROM conversations").get()?.c || 0) > 0 : false;
   const hasPersonality = !!botName || !!settingsStore.get("identity.systemPrompt") || setupCompleted || hasConversations;
   res.json({
-    needsSetup: !provider && !envConfigured,
+    needsSetup: !configured,
     needsPersonality: !hasPersonality,
     botName: botName || "Tarsee",
-    provider: provider || null,
-    hasKey: hasKey || envConfigured,
+    provider: configured ? target.provider : null,
+    hasKey: configured,
+    ai: {
+      provider: target.provider,
+      label: target.label,
+      model: target.model,
+      chosenBy: target.chosenBy,
+      state: status.state,
+      ready: status.ready,
+      detail: status.detail,
+      fix: status.fix,
+    },
+    railway,
   });
 });
 

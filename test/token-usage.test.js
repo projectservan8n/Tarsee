@@ -136,24 +136,23 @@ describe("days and hours in the configured timezone", () => {
 
 describe("where the transcripts are", () => {
   it("the workspace's folder under every Claude home, each real folder once, under either slug spelling", () => {
-    const home = path.join(tmp, "claude-a");
+    const p = path.join(tmp, "home-a");
+    const home = path.join(p, ".claude");                  // the plan's ~/.claude, the real folder
     const cwd = "/srv/my.workspace";
+    // Two of the plan's homes: p/.claude (HOME and the user's home) and the state folder's .claude-code-home.
+    const opts = { homeDir: p, env: { HOME: p }, stateDir: tmp };
     // Tarsee's slug rule folds a run of separators and dots into one "-"; Claude Code's own may not.
     fs.mkdirSync(path.join(home, "projects", "-srv-my-workspace"), { recursive: true });
-    fs.symlinkSync(home, path.join(tmp, ".claude-code-home"));   // the same folder through a symlink (TARSEE_STATE_DIR's)
-    const before = process.env.CLAUDE_CONFIG_DIR;
-    process.env.CLAUDE_CONFIG_DIR = home;
-    try {
-      const dirs = projectDirs(cwd);
-      assert.equal(dirs.length, 1, "the symlinked home is the same folder");
-      assert.equal(fs.realpathSync(dirs[0]), fs.realpathSync(path.join(home, "projects", "-srv-my-workspace")));
-      // "/srv/x_y": Tarsee's rule keeps the "_", a letters-and-digits-only rule does not.
-      fs.mkdirSync(path.join(home, "projects", "-srv-x-y"), { recursive: true });
-      assert.deepEqual(projectDirs("/srv/x_y").map((d) => path.basename(d)), ["-srv-x-y"]);
-      assert.equal(projectDirs("/nowhere/at/all").length, 0);
-    } finally {
-      if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = before;
-    }
+    // The same folder through a link, as on Railway (/home/node/.claude is the volume's .claude-code-home). A junction
+    // needs no admin rights on Windows; POSIX ignores the type.
+    fs.symlinkSync(home, path.join(tmp, ".claude-code-home"), "junction");
+    const dirs = projectDirs(cwd, opts);
+    assert.equal(dirs.length, 1, "the linked home is the same folder");
+    assert.equal(fs.realpathSync(dirs[0]), fs.realpathSync(path.join(home, "projects", "-srv-my-workspace")));
+    // "/srv/x_y": Tarsee's rule keeps the "_", a letters-and-digits-only rule does not.
+    fs.mkdirSync(path.join(home, "projects", "-srv-x-y"), { recursive: true });
+    assert.deepEqual(projectDirs("/srv/x_y", opts).map((d) => path.basename(d)), ["-srv-x-y"]);
+    assert.equal(projectDirs("/nowhere/at/all", opts).length, 0);
   });
 });
 

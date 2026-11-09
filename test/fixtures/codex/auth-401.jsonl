@@ -1,0 +1,11 @@
+{"type":"thread.started","thread_id":"01a1bf55-a34f-7fa0-a8fd-2f3a0d34b824"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 1/5 (unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***, url: http://127.0.0.1:54805/v1/responses)"}
+{"type":"error","message":"Reconnecting... 2/5 (unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***, url: http://127.0.0.1:54805/v1/responses)"}
+{"type":"error","message":"Reconnecting... 3/5 (unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***, url: http://127.0.0.1:54805/v1/responses)"}
+{"type":"error","message":"Reconnecting... 4/5 (unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***, url: http://127.0.0.1:54805/v1/responses)"}
+{"type":"error","message":"Reconnecting... 5/5 (unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***, url: http://127.0.0.1:54805/v1/responses)"}
+{"type":"error","message":"unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***, url: http://127.0.0.1:54805/v1/responses"}
+{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***, url: http://127.0.0.1:54805/v1/responses"}}
+{"type":"x-sdk-threw","message":"Codex Exec exited with code 1: WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"<tmpdir>\\\\\" (codex_home: AbsolutePathBuf(\"<tmp>\\\\.codex-home-keys\"))"}

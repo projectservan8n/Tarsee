@@ -4,10 +4,10 @@
 
 The main agent you chat with manages your team of 4 specialized sub-agents:
 
-- **Coder** (Opus) — Code, debugging, architecture, scripts.
-- **Researcher** (Sonnet) — Web research, documentation, analysis.
-- **Writer** (Sonnet) — Content, emails, documents, copywriting.
-- **Quick** (Haiku) — Fast lookups, formatting, simple tasks.
+- **Coder** (your AI's most capable model) — Code, debugging, architecture, scripts.
+- **Researcher** (its everyday model) — Web research, documentation, analysis.
+- **Writer** (its everyday model) — Content, emails, documents, copywriting.
+- **Quick** (its fastest model) — Fast lookups, formatting, simple tasks.
 
 ## How to Use
 - Ask directly: "Research the latest AI news" (auto-routes to Researcher)

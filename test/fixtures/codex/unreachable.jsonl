@@ -1,0 +1,11 @@
+{"type":"thread.started","thread_id":"01a1bf55-c4d5-75e1-bba9-7dae88a8f2d4"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `llama3.1:8b` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 1/5 (Connection failed: error sending request)"}
+{"type":"error","message":"Reconnecting... 2/5 (Connection failed: error sending request)"}
+{"type":"error","message":"Reconnecting... 3/5 (Connection failed: error sending request)"}
+{"type":"error","message":"Reconnecting... 4/5 (Connection failed: error sending request)"}
+{"type":"error","message":"Reconnecting... 5/5 (Connection failed: error sending request)"}
+{"type":"error","message":"Connection failed: error sending request"}
+{"type":"turn.failed","error":{"message":"Connection failed: error sending request"}}
+{"type":"x-sdk-threw","message":"Codex Exec exited with code 1: WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"<tmpdir>\\\\\" (codex_home: AbsolutePathBuf(\"<tmp>\\\\.codex-home-keys\"))"}

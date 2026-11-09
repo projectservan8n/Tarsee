@@ -32,9 +32,16 @@ import { costSaverEnv } from "./context-limits.js";
  * (test/claude-cli-env-names.test.js scans the installed CLI so a new one is caught on an SDK bump): the whole
  * CLAUDE_CODE_OAUTH_* family (the setup token, a refresh-token login with its scopes and client id), a claude.ai
  * session cookie, the files API host, the custom and local OAuth hosts, a trusted-device token, the session-ingress
- * token file, the background sign-in snapshot, and the file-descriptor sources of a token or key.
+ * token file, the background sign-in snapshot, and the file-descriptor sources of a token or key. Agent SDK 0.3.319's
+ * CLI added more (each on the CLI's own list of secrets to scrub or of hosts it sends a sign-in to): the background
+ * session's hand-off secrets, the bridge's host and token, the artifacts and memory APIs' hosts and tokens, a gateway
+ * token, the feature-flag host, the cloud-sessions token, the MCP-serve, messaging, Slack-tag and HFI tokens, the Design
+ * login's OAuth client, the host-managed sign-in (CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST, CLAUDE_CODE_HOST_AUTH_*,
+ * CLAUDE_CODE_HOST_CREDS_FILE), and the model catalog, client-data and remote-SDK/runner hosts that would change which
+ * model or host a turn uses. None of them is needed by the Claude plan (it signs in from its home's .credentials.json
+ * or PLAN_SIGN_IN_NAMES).
  */
-export const AUTH_ENV_RE = /^(ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDE_CODE_OAUTH_|CLAUDE_CODE_SESSION_ACCESS_TOKEN$|CLAUDE_CODE_API_BASE_URL$|CLAUDE_CODE_API_KEY_|CLAUDE_CODE_CUSTOM_OAUTH_URL$|CLAUDE_LOCAL_OAUTH_|CLAUDE_TRUSTED_DEVICE_TOKEN$|CLAUDE_SESSION_INGRESS_TOKEN_FILE$|CLAUDE_BG_AUTH_SNAPSHOT_PATH$|CLAUDE_[A-Z0-9_]*_FILE_DESCRIPTOR$|CLAUDE_CODE_SUBAGENT_MODEL$|CLAUDE_CONFIG_DIR$|CODEX_|OPENAI_BASE_URL$|AWS_BEARER_TOKEN_BEDROCK$|TARSEE_PROVIDER_KEY$|TARSEE_CHATGPT_ACCESS_TOKEN$|TARSEE_MCP_TOKEN$)/;
+export const AUTH_ENV_RE = /^(ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDE_CODE_OAUTH_|CLAUDE_CODE_SESSION_ACCESS_TOKEN$|CLAUDE_CODE_API_BASE_URL$|CLAUDE_CODE_API_KEY_|CLAUDE_CODE_CUSTOM_OAUTH_URL$|CLAUDE_LOCAL_OAUTH_|CLAUDE_TRUSTED_DEVICE_TOKEN$|CLAUDE_SESSION_INGRESS_TOKEN_FILE$|CLAUDE_BG_AUTH_SNAPSHOT_PATH$|CLAUDE_[A-Z0-9_]*_FILE_DESCRIPTOR$|CLAUDE_BG_(?:CLAIM|PTY|RV)_AUTH$|CLAUDE_BG_SOCKET_TOKENS_PATH$|CLAUDE_BRIDGE_(?:BASE_URL|OAUTH_TOKEN|SESSION_INGRESS_URL)$|CLAUDE_REMOTE_TOOLS_BRIDGE_URL$|CLAUDE_CODE_ARTIFACTS_API_(?:BASE_URL|TOKEN)$|CLAUDE_CODE_ARTIFACT_(?:ASSET|LIVE|SYNC|VIEWER)_BASE_URL$|CLAUDE_CODE_MEMORY_API_|CLAUDE_CODE_GATEWAY_TOKEN$|CLAUDE_CODE_GB_BASE_URL$|CLAUDE_CODE_SESSIONS_OAUTH_TOKEN$|CLAUDE_CODE_(?:MCP_SERVE_AUTH|MESSAGING|SLACK_TAG|HFI_BEARER)_TOKEN$|CLAUDE_CODE_DESIGN_OAUTH_CLIENT_ID$|CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST$|CLAUDE_CODE_HOST_AUTH_|CLAUDE_CODE_HOST_CREDS_FILE$|CLAUDE_CODE_MODEL_CATALOG|CLAUDE_CODE_CLIENT_DATA_URL$|CLAUDE_CODE_REMOTE_SDK_URL$|CLAUDE_RUNNER_API_BASE_URL$|CLAUDE_CODE_SUBAGENT_MODEL$|CLAUDE_CONFIG_DIR$|CODEX_|OPENAI_BASE_URL$|AWS_BEARER_TOKEN_BEDROCK$|TARSEE_PROVIDER_KEY$|TARSEE_CHATGPT_ACCESS_TOKEN$|TARSEE_MCP_TOKEN$)/;
 
 /**
  * The operator's Claude sign-in variables: `claude setup-token`'s CLAUDE_CODE_OAUTH_TOKEN, or a refresh-token login
@@ -318,7 +325,22 @@ function contextEnv(context, merged) {
  *               own default, which is the entry's constant)
  *   gateways    CLAUDE_CONFIG_DIR, ANTHROPIC_BASE_URL (constant), ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY="", every
  *               model pinned to the provider's own ids, betas, attribution and nonessential traffic off, the context.
+ * The engine (providers/claude-code.js buildQueryOptions) adds HOST_MANAGED to every block but the plan's.
  */
+/**
+ * Every key and gateway turn runs host-managed (CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1). The pinned CLI then ignores
+ * provider and credential entries in settings files' env blocks (a second layer under R5's guard: without it a planted
+ * <workspace>/.claude/settings.json env.ANTHROPIC_BASE_URL sends the turn, key and all, to that host), and keeps the
+ * block's key and headers out of the environment of the commands the agent runs (R10), while the vault's keys still
+ * reach them and the requests still carry the key and the title header. That is not isolation: those commands run as
+ * the same user as the CLI, so on Linux they can still read the key from the CLI's /proc/<pid>/environ
+ * (test/key-exposure-linux.test.js); the docs and cards say so and recommend a capped key.
+ * CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, the other candidate for R10, also strips the vault's keys from those commands, so
+ * it stays off. Both were checked against the pinned CLI (test/claude-gateway.test.js). Not on the plan: its
+ * behaviour stays as it was.
+ */
+export const HOST_MANAGED = Object.freeze({ CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1" });
+
 export function claudeEnvFor(provider, opts = {}) {
   const entry = entryOf(provider);
   const id = assertRuns(entry, CLAUDE_CODE);
@@ -398,11 +420,35 @@ export function codexEnvFor(provider, opts = {}) {
   return { ...merged, ...block };
 }
 
+/**
+ * The names kept out of a Codex turn's shell environment (R7; still readable from codex's /proc/<pid>/environ on
+ * Linux, see test/key-exposure-linux.test.js): the engine's own credentials. Everything else in the turn's
+ * environment reaches the shell (shell_environment_policy inherit "all", with Codex's default *KEY*, *SECRET* and
+ * *TOKEN* excludes switched off), so the vault's keys still reach scripts by name.
+ */
+export const CODEX_SHELL_EXCLUDED = Object.freeze([
+  "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "TARSEE_MCP_TOKEN", "TARSEE_PROVIDER_KEY", "TARSEE_CHATGPT_ACCESS_TOKEN",
+]);
+
+/**
+ * The ChatGPT sign-in's hosts in a test, or null (always, outside one). The ChatGPT plan sends its sign-in only to
+ * Codex's own hosts (hostFor() gives null), so a test that runs the real Codex on it points both of ChatGPT's hosts at
+ * a fake server through TARSEE_TEST_BASE_URL_CHATGPT (its origin): the backend (chatgpt_base_url) and the model
+ * requests (openai_base_url, which Codex also uses for ChatGPT's /codex/responses and /codex/models). Honored only
+ * as testBaseUrl() honors it: NODE_ENV exactly "test" and a loopback http(s) URL.
+ */
+export function codexChatgptTestHosts(env = process.env) {
+  const seam = testBaseUrl("chatgpt", env);
+  if (!seam) return null;
+  const origin = seam.replace(/\/+$/, "");
+  return { chatgpt_base_url: `${origin}/backend-api/`, openai_base_url: `${origin}/backend-api/codex` };
+}
+
 // --- Homes (R1) ----------------------------------------------------------------------------------------------------
 
 /**
  * The credential home for a provider on an engine:
- *   claude on Claude Code              <homeDir>/.claude (the Terminal's `claude login`; /home/node/.claude on Railway)
+ *   claude on Claude Code              <homeDir>/.claude (the Terminal's `claude auth login`; /home/node/.claude on Railway)
  *   anthropic, deepseek, openrouter    <stateDir>/.claude-home-<id> (CLAUDE_CONFIG_DIR)
  *   chatgpt on Codex                   <stateDir>/.codex-home (Codex's own device sign-in)
  *   every other Codex turn             <stateDir>/.codex-home-keys
@@ -548,30 +594,47 @@ export function settingsFileGuard(paths, { readFile = (p) => fs.readFileSync(p, 
 /**
  * The root entries a Codex config.toml may have: what Tarsee seeds (cli_auth_credentials_store,
  * check_for_update_on_startup, forced_login_method) and what Codex itself writes there when used from the Terminal
- * (project trust, notices, the model and effort chosen, the TUI's settings). Anything else refuses the turn. An
- * allowlist, not a denylist: the agent's shell can write this file, and Codex keeps adding entries that change where
- * requests go or run a program with the turn's environment (openai_base_url, chatgpt_base_url, model_provider(s),
- * profile(s), mcp_servers, notify, plugins, a network proxy...). --config overrides on the command line don't remove
- * any of them.
+ * (project trust, notices, the model and effort chosen, the TUI's settings, the Windows sandbox choice the TUI asks for
+ * on first run, feature switches from /experimental, the /personality choice). Codex 0.167's turns (`codex exec`)
+ * write nothing there; those Terminal entries were recorded by driving the pinned TUI against a fake server. None of
+ * them can change where a request goes or run a program: a [projects."<path>"] table holds only trust_level, [windows]
+ * only the sandbox kind, and every feature a turn depends on is set again on its command line, which wins.
+ * Anything else refuses the turn. An allowlist, not a denylist: the agent's shell can write this file, and Codex keeps
+ * adding entries that change where requests go or run a program with the turn's environment (openai_base_url,
+ * chatgpt_base_url, model_provider(s), profile(s), mcp_servers, notify, plugins, a network proxy...). --config
+ * overrides on the command line don't remove any of them.
  */
 export const CODEX_CONFIG_ALLOWED = Object.freeze([
   "cli_auth_credentials_store", "check_for_update_on_startup", "forced_login_method",
   "projects", "notice", "model", "model_reasoning_effort", "tui",
+  "windows", "features", "personality",
 ]);
 const CODEX_ALLOWED = new Set(CODEX_CONFIG_ALLOWED);
 
-/** The Codex config files a turn would load: the home's config.toml, then the workspace's project config. */
+/**
+ * The Codex files a turn would load: the home's config.toml and .env, then the workspace's project config. Those are
+ * the only ones: every Codex run Tarsee starts switches the project root search off (project_root_markers=[], in
+ * providers/codex-options.js and codex-cli.js CODEX_BASE_ARGS), so no .codex/config.toml above the workspace loads,
+ * and Codex reads a .env only from its home (checked against the pinned binary: one in the workspace or the process's
+ * folder is not loaded).
+ */
 export function codexConfigFilesFor({ home, workspace } = {}) {
-  const files = [path.join(home, "config.toml")];
+  const files = [path.join(home, "config.toml"), path.join(home, ".env")];
   if (workspace) files.push(path.join(workspace, ".codex", "config.toml"));
   return files;
 }
+
+/** Whether a path is a Codex home's .env (codexConfigGuard refuses any that is there, unread). */
+const isDotenv = (file) => path.basename(String(file)).toLowerCase() === ".env";
 
 class UnreadableToml extends Error {}
 
 /**
  * A TOML key path at the start of `s`: bare, 'literal' or "basic" segments joined by dots, with optional spaces.
- * Returns {segments, rest}. A basic segment with an escape in it is refused (it could spell any name).
+ * Returns {segments, rest}. A basic segment's escapes are skipped over as TOML reads them (so an escaped quote doesn't
+ * end it), and are fine after the first segment: that is how Codex writes a trusted folder whose path can't be a
+ * literal string ([projects."C:\\Users\\O'Neil\\…"]). In the first segment, the root name the guard checks, an escape
+ * is refused: it could spell any name.
  */
 function readKeyPath(s) {
   const segments = [];
@@ -579,12 +642,21 @@ function readKeyPath(s) {
   for (;;) {
     while (s[i] === " " || s[i] === "\t") i++;
     let seg;
-    if (s[i] === "\"" || s[i] === "'") {
-      const q = s[i];
-      const end = s.indexOf(q, i + 1);
+    if (s[i] === "\"") {
+      let end = i + 1;
+      let escaped = false;
+      while (end < s.length && s[end] !== "\"") {
+        if (s[end] === "\\") { escaped = true; end++; }
+        end++;
+      }
+      if (end >= s.length) throw new UnreadableToml();
+      if (escaped && segments.length === 0) throw new UnreadableToml();
+      seg = s.slice(i + 1, end);
+      i = end + 1;
+    } else if (s[i] === "'") {
+      const end = s.indexOf("'", i + 1);
       if (end < 0) throw new UnreadableToml();
       seg = s.slice(i + 1, end);
-      if (q === "\"" && seg.includes("\\")) throw new UnreadableToml();
       i = end + 1;
     } else {
       const m = /^[A-Za-z0-9_-]+/.exec(s.slice(i));
@@ -630,13 +702,58 @@ function codexRootNames(text) {
 }
 
 /**
- * Before every Codex turn: refuse when a config file it would load has a root entry outside CODEX_CONFIG_ALLOWED. A
- * file that is there but can't be read safely refuses too (fail closed); a missing one is fine. Returns
- * {ok, files: [{file, entries, unreadable?}], message?}; entries are root names, never values.
+ * A config.toml with every root entry outside CODEX_CONFIG_ALLOWED taken out: root key lines, and whole tables with
+ * their lines (Settings > AI's one-click fix, ai/settings-guard.js). Read by the same strict line reader as the guard,
+ * so what it keeps is exactly what the guard then allows. Returns {text, removed: [root names, in order]}; throws for a
+ * file the guard can't read safely (that one is set aside instead).
+ */
+export function stripCodexConfig(text) {
+  const src = String(text).replace(/^\uFEFF/, "");
+  codexRootNames(src);
+  const eol = src.includes("\r\n") ? "\r\n" : "\n";
+  const out = [];
+  const removed = [];
+  const drop = (name) => { if (!removed.includes(name)) removed.push(name); };
+  let atRoot = true;
+  let dropping = false;
+  for (const line of src.split(/\r?\n/)) {
+    if (/^\s*(#.*)?$/.test(line)) { if (!dropping) out.push(line); continue; }
+    const header = /^\s*(\[\[?)(.*)$/.exec(line);
+    if (header) {
+      const root = readKeyPath(header[2]).segments[0];
+      atRoot = false;
+      dropping = !CODEX_ALLOWED.has(root);
+      if (dropping) drop(root);
+      else out.push(line);
+      continue;
+    }
+    if (dropping) continue;
+    if (atRoot) {
+      const root = readKeyPath(line).segments[0];
+      if (!CODEX_ALLOWED.has(root)) { drop(root); continue; }
+    }
+    out.push(line);
+  }
+  return { text: out.join(eol), removed };
+}
+
+/**
+ * Before every Codex run (a turn, the device sign-in, the model list): refuse when a config file it would load has a
+ * root entry outside CODEX_CONFIG_ALLOWED. A file that is there but can't be read safely refuses too (fail closed); a
+ * missing one is fine. A .env in the Codex home refuses whatever it holds: Codex loads it into its own environment at
+ * start (every name but CODEX_*), so HTTP(S)_PROXY there would route the tools' token and the provider's key through
+ * the agent's own listener, and SSL_CERT_FILE would let that listener read TLS. It is never read, only noticed.
+ * Returns {ok, files: [{file, entries, unreadable?, dotenv?}], message?}; entries are root names, never values.
  */
 export function codexConfigGuard(paths, { readFile = (p) => fs.readFileSync(p, "utf8") } = {}) {
   const files = [];
   for (const file of paths) {
+    if (isDotenv(file)) {
+      let present = true;
+      try { fs.lstatSync(file); } catch (err) { present = !isMissing(err); }
+      if (present) files.push({ file, entries: [], unreadable: true, dotenv: true });
+      continue;
+    }
     let text;
     try { text = readFile(file); } catch (err) {
       if (isMissing(err)) continue;
@@ -652,10 +769,15 @@ export function codexConfigGuard(paths, { readFile = (p) => fs.readFileSync(p, "
     if (entries.length) files.push({ file, entries });
   }
   if (!files.length) return { ok: true, files: [] };
-  const lines = files.map((f) => (f.unreadable ? `${f.file} (can't be read safely)` : `${f.file}: ${f.entries.join(", ")}`));
-  return {
-    ok: false,
-    files,
-    message: `A Codex config file could change where this AI's key goes, so Tarsee won't start the turn. Remove these entries: ${lines.join("; ")}`,
-  };
+  const configs = files.filter((f) => !f.dotenv);
+  const dotenvs = files.filter((f) => f.dotenv);
+  const parts = [];
+  if (configs.length) {
+    const lines = configs.map((f) => (f.unreadable ? `${f.file} (can't be read safely)` : `${f.file}: ${f.entries.join(", ")}`));
+    parts.push(`A Codex config file could change where this AI's key goes, so Tarsee won't start the turn. Remove these entries: ${lines.join("; ")}`);
+  }
+  for (const f of dotenvs) {
+    parts.push(`Codex loads ${f.file} into its own environment (a proxy, a certificate file or a token there would override the turn's), so Tarsee won't start it; set the file aside.`);
+  }
+  return { ok: false, files, message: parts.join(" ") };
 }

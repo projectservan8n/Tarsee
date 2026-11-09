@@ -244,11 +244,17 @@ export class ConversationStore {
   }
 
   /**
-   * Update the Claude Code CLI session ID for a conversation.
-   * This allows resuming the session later.
+   * Store the session a conversation's turns resume (design 4.10): the Claude plan's bare session id, or any other
+   * AI's tagged handle ("deepseek/cc/deepseek:<id>", ai/session-handle.js). null forgets it. Kept in the
+   * conversations.claude_session_id column, so older installs need no migration.
    */
-  setClaudeSessionId(conversationId, claudeSessionId) {
-    this._updateClaudeSessionId.run(claudeSessionId, conversationId);
+  setSessionHandle(conversationId, handle) {
+    this._updateClaudeSessionId.run(handle, conversationId);
+  }
+
+  /** The old name of setSessionHandle. */
+  setClaudeSessionId(conversationId, handle) {
+    this.setSessionHandle(conversationId, handle);
   }
 
   /**
@@ -267,11 +273,16 @@ export class ConversationStore {
     }
   }
 
-  /**
-   * Get the Claude Code CLI session ID for a conversation.
-   * Returns null if session is stale (idle > 2 hours) to force fresh start.
-   */
+  /** The old name of getSessionHandle. */
   getClaudeSessionId(conversationId) {
+    return this.getSessionHandle(conversationId);
+  }
+
+  /**
+   * The session handle a conversation's next turn resumes (see setSessionHandle), or null. Returns null if the
+   * session is stale (idle > 2 hours) to force a fresh start, on every AI.
+   */
+  getSessionHandle(conversationId) {
     const conv = this.get(conversationId);
     if (!conv?.claude_session_id) return null;
 

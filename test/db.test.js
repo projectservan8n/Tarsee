@@ -71,6 +71,17 @@ describe("ConversationStore", () => {
     convStore.delete(conv.id);
     assert.equal(convStore.getMessages(conv.id).length, 0);
   });
+
+  it("keeps a chat's session handle (any AI's, design 4.10), under its old names too", () => {
+    const conv = convStore.create({ title: "Handle test" });
+    convStore.setSessionHandle(conv.id, "deepseek/cc/deepseek:abc");
+    assert.equal(convStore.getSessionHandle(conv.id), "deepseek/cc/deepseek:abc");
+    assert.equal(convStore.getClaudeSessionId(conv.id), "deepseek/cc/deepseek:abc", "the old name reads the same");
+    convStore.setClaudeSessionId(conv.id, "plain-raw-id");
+    assert.equal(convStore.getSessionHandle(conv.id), "plain-raw-id", "the old name writes the same");
+    convStore.setSessionHandle(conv.id, null);
+    assert.equal(convStore.getSessionHandle(conv.id), null);
+  });
 });
 
 describe("SettingsStore", () => {

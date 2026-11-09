@@ -1,15 +1,18 @@
 /**
- * Usage: the tokens the agent used, at /usage, and the line under each reply.
+ * Usage: the tokens the agent used, and what they cost, at /usage, and the line
+ * under each reply.
  *
  * The page (the main column, like a chat): today, the last 5 hours and the last
- * 7 days; speed and the cache's share; each day or hour in a small chart; tokens
- * by model, channel and chat; the heaviest jobs; and every job, each opening to
- * its numbers and its turns, to be renamed, merged with the job before it or
- * split again (in Tarsee's own dialogs, js/dialogs.js).
+ * 7 days, each with its spend ("$0.42 est.", or "Included in plan" for work a
+ * plan covers); speed and the cache's share; each day or hour in a small chart;
+ * tokens and spend by AI provider, model, channel and chat; the heaviest jobs;
+ * and every job, each opening to its numbers and its turns, to be renamed,
+ * merged with the job before it or split again (in Tarsee's own dialogs,
+ * js/dialogs.js). Once more than one AI did work, a filter shows one at a time.
  *
- * In a chat: a quiet line under each reply ("12.4k tokens · 38 tk/s · 41s")
- * that opens to the turn's numbers, and the chat's running total at the top of
- * its menu.
+ * In a chat: a quiet line under each reply ("12.4k tokens · 38 tk/s · 41s",
+ * with "· $0.01 est." when it was billed per use) that opens to the turn's
+ * numbers, and the chat's running total at the top of its menu.
  *
  * Opened from the sidebar's Usage button, by the /usage address (js/chat.js
  * route sends it here, so a reload and Back/Forward work), and from a chat's
@@ -23,6 +26,7 @@ const Usage = {
   _days: 7,
   _kind: "all",          // all | chats | background
   _filter: null,         // a conversation id: only its jobs
+  _provider: null,       // an AI provider's id: only its work
   _chart: "days",        // days | hours
   _shown: 40,
   _overview: null,
@@ -102,8 +106,10 @@ const Usage = {
     clearTimeout(this._poll);
     const q = new URLSearchParams({ days: String(this._days) });
     if (this._filter) q.set("conversation", this._filter);
+    const p = new URLSearchParams();
+    if (this._provider) { q.set("provider", this._provider); p.set("provider", this._provider); }
     try {
-      const [overview, jobs] = await Promise.all([API.json("/api/analytics/usage"), API.json(`/api/analytics/usage/jobs?${q}`)]);
+      const [overview, jobs] = await Promise.all([API.json(`/api/analytics/usage${p.toString() ? `?${p}` : ""}`), API.json(`/api/analytics/usage/jobs?${q}`)]);
       if (!this.isOpen) return;
       UsageCore.setTimeZone(overview?.timeZone);
       this._overview = overview;
@@ -135,26 +141,38 @@ const Usage = {
     const U = UsageCore;
     const o = this._overview || {};
     const now = o.at || Date.now();
+    const spend = (f) => {
+      const c = U.costText(f);
+      return c ? `<div class="usage-card-sub">${c === "Included in plan" || c === "Free" || c === "Cost not known" ? escapeHtml(c) : `Spent ${escapeHtml(c)}`}</div>` : "";
+    };
     const card = (label, f, sub) => `<div class="usage-card"><div class="usage-card-label">${label}</div>`
       + `<div class="usage-card-value">${U.tokens(f?.total)}<span> tokens</span></div>`
-      + `<div class="usage-card-sub">${sub}</div></div>`;
+      + `<div class="usage-card-sub">${sub}</div>${spend(f)}</div>`;
+    const choices = U.providerChoices(o.providers, this._provider);
+    const providerSeg = choices.show
+      ? `<div class="usage-seg" role="group" aria-label="Which AI">${choices.items.map((i) => `<button type="button" data-provider="${escapeHtml(i.id || "")}" aria-pressed="${i.pressed}">${escapeHtml(i.label)}</button>`).join("")}</div>`
+      : "";
+    // Several AIs did work this week: say which one each model and job ran on.
+    this._manyProviders = (o.providers || []).length > 1;
     const plain = (f) => (f?.total ? `${U.pct(f.cacheShare)} cache reads · ${U.tokens(f.output)} out${f.outTps != null ? ` · ${U.tps(f.outTps)}` : ""}` : "Nothing yet");
     const jobs = o.jobsThisWeek || 0;
     const jobsCard = `<div class="usage-card"><div class="usage-card-label">Jobs, last 7 days</div>`
       + `<div class="usage-card-value">${jobs.toLocaleString("en-US")}<span> job${jobs === 1 ? "" : "s"}</span></div>`
       + `<div class="usage-card-sub">${jobs && o.week?.total ? `about ${U.tokens(o.week.total / jobs)} tokens each` : "Nothing yet"}</div></div>`;
     const p = o.progress || {};
-    const reading = p.firstPass ? `<p class="usage-note">Reading Claude Code's session transcripts for the first time${p.bytesLeft ? `, ${Math.max(1, Math.round(p.bytesLeft / 1048576))} MB to go` : ""}. The numbers fill in as it goes.</p>` : "";
+    const reading = p.firstPass ? `<p class="usage-note">Reading the AI's session records for the first time${p.bytesLeft ? `, ${Math.max(1, Math.round(p.bytesLeft / 1048576))} MB to go` : ""}. The numbers fill in as it goes.</p>` : "";
     const speed = o.speed || {};
     const stat = (label, value, sub) => `<div class="usage-stat"><div class="usage-stat-value">${value}</div><div class="usage-stat-label">${label}</div><div class="usage-stat-sub">${sub}</div></div>`;
+    const only = this._provider ? (o.providers || []).find((x) => x.id === this._provider)?.label || this._provider : null;
     const html = `<div class="usage-wrap">
       <header class="usage-head">
         <div>
           <h1>Usage</h1>
-          <p class="usage-sub">Tokens ${escapeHtml(this._bot())} used, read from Claude Code's session transcripts. Updated ${U.when(now, now)}.</p>
+          <p class="usage-sub">Tokens ${escapeHtml(this._bot())} used${only ? ` on ${escapeHtml(only)}` : ""}, and what they cost. "est." means worked out from the provider's price list; work a plan covers is included in it. Updated ${U.when(now, now)}.</p>
         </div>
         <button type="button" class="usage-btn" data-act="reload">Refresh</button>
       </header>
+      ${providerSeg ? `<div class="usage-panel-head">${providerSeg}</div>` : ""}
       ${reading}
       <section class="usage-cards" aria-label="Totals">
         ${card("Today", o.today, plain(o.today))}
@@ -177,10 +195,11 @@ const Usage = {
           </div>
         </div>
         <div class="usage-chart" id="usageChart"></div>
-        <div class="usage-legend"><span><i class="usage-sw is-new"></i>Input, cache writes and output</span><span><i class="usage-sw is-cache"></i>Cache reads</span></div>
+        <div class="usage-legend"><span><i class="usage-sw is-new"></i>Input, cache writes and output</span><span><i class="usage-sw is-cache"></i>Cache reads</span>${U.spendLine(o.days) ? `<span>${escapeHtml(U.spendLine(o.days))}</span>` : ""}</div>
       </section>
+      ${(o.byProvider || []).length ? this._splitPanel("By AI provider", o.byProvider.map((x) => ({ name: x.label, ...x, cost: U.costText(x) }))) : ""}
       <section class="usage-split">
-        ${this._splitPanel("By model", (o.byModel || []).map((m) => ({ name: m.model, ...m })))}
+        ${this._splitPanel("By model", (o.byModel || []).map((m) => ({ name: m.model, ...m, prefix: this._manyProviders && !this._provider ? m.providerLabel : "", cost: U.costText(m) })))}
         ${this._splitPanel("By channel", (o.byChannel || []).map((c) => ({ name: c.channel, ...c })))}
         ${this._splitPanel("By chat", (o.byChat || []).map((c) => ({ name: this.chatName(c.conversationId, c.title), convId: c.conversationId, ...c })))}
       </section>
@@ -201,7 +220,7 @@ const Usage = {
         <div class="usage-row-top"><span class="usage-row-name">${r.convId ? `<button type="button" class="usage-link" data-filter="${escapeHtml(r.convId)}" title="Only this chat's jobs">${escapeHtml(r.name)}</button>` : escapeHtml(r.name)}</span>
         <span class="usage-row-num">${U.tokens(r.total)}</span></div>
         <div class="usage-bar"><i style="width:${Math.max(1, Math.round((r.total / max) * 100))}%"></i></div>
-        <div class="usage-row-sub">${U.tokens(r.output)} out${r.outTps != null ? ` · ${U.tps(r.outTps)}` : ""} · ${U.pct(r.cacheShare)} cache</div>
+        <div class="usage-row-sub">${r.prefix ? `${escapeHtml(r.prefix)} · ` : ""}${U.tokens(r.output)} out${r.outTps != null ? ` · ${U.tps(r.outTps)}` : ""} · ${U.pct(r.cacheShare)} cache${r.cost ? ` · ${escapeHtml(r.cost)}` : ""}</div>
       </div>`).join("") : '<p class="usage-empty">Nothing yet.</p>';
     return `<div class="usage-panel"><div class="usage-panel-head"><h2>${title}</h2></div>${body}</div>`;
   },
@@ -215,13 +234,17 @@ const Usage = {
     const filter = this._filter ? `<div class="usage-filter">Only ${escapeHtml(this.chatName(this._filter))} <button type="button" class="usage-link" data-filter="">Show every chat</button></div>` : "";
     const shown = jobs.slice(0, this._shown);
     const sum = jobs.reduce((a, j) => a + (j.total || 0), 0);
+    const priced = jobs.filter((j) => j.costUsd != null && (j.costNote === "est" || j.costNote === "exact"));
+    const spent = priced.length
+      ? `, ${UsageCore.costText({ costUsd: priced.reduce((a, j) => a + j.costUsd, 0), costNote: priced.some((j) => j.costNote === "est") ? "est" : "exact" })}`
+      : "";
     return `<div class="usage-panel-head">
         <h2>Jobs</h2>
         <div class="usage-seg" role="group" aria-label="Which jobs">${kind("all", "All")}${kind("chats", "Chats")}${kind("background", "Background")}</div>
         <div class="usage-seg" role="group" aria-label="How far back">${chip(1, "Today")}${chip(7, "7 days")}${chip(30, "30 days")}</div>
       </div>
       ${filter}
-      <p class="usage-quiet usage-jobs-sum">${jobs.length} job${jobs.length === 1 ? "" : "s"}, ${UsageCore.tokens(sum)} tokens. A job is a run of turns in one chat with no more than 45 minutes idle between them; each cron run, heartbeat and boot checklist is a job of its own.</p>
+      <p class="usage-quiet usage-jobs-sum">${jobs.length} job${jobs.length === 1 ? "" : "s"}, ${UsageCore.tokens(sum)} tokens${escapeHtml(spent)}. A job is a run of turns in one chat with no more than 45 minutes idle between them; each cron run, heartbeat and boot checklist is a job of its own.</p>
       <div class="usage-jobs">${shown.map((j) => this._jobRow(j, now, "j")).join("") || '<p class="usage-empty">No jobs in this range.</p>'}</div>
       ${jobs.length > shown.length ? `<button type="button" class="usage-btn usage-more" data-act="more">Show ${Math.min(40, jobs.length - shown.length)} more</button>` : ""}`;
   },
@@ -237,6 +260,9 @@ const Usage = {
       `${j.turns} turn${j.turns === 1 ? "" : "s"}`,
       // One model: it and its effort ("<model> high"); more: the two it used most ("<model> and <model>").
       escapeHtml((j.models || []).length > 1 ? j.models.slice(0, 2).join(" and ") : [j.models?.[0], j.effort].filter(Boolean).join(" ")),
+      // Which AI, once there is more than one to tell apart; what it cost when it was billed per use.
+      this._manyProviders && !this._provider ? escapeHtml((j.providerLabels || []).join(" and ")) : "",
+      (j.costNote === "est" || j.costNote === "exact") ? escapeHtml(U.costText(j)) : "",
     ].filter(Boolean).join(" · ");
     return `<div class="usage-job${open ? " is-open" : ""}" data-job="${escapeHtml(id)}">
       <button type="button" class="usage-job-line" aria-expanded="${open}" data-act="job">
@@ -318,7 +344,8 @@ const Usage = {
       const r = rows[i];
       if (!r) return;
       const head = hours ? `${label(r)}, ${U.dayLabel(r.from)}` : label(r);
-      tip.innerHTML = `<b>${escapeHtml(head)}</b><span>${U.tokens(r.total)} tokens</span><span>${U.tokens(r.cacheRead)} cache reads</span><span>${U.tokens((r.input || 0) + (r.cacheWrite || 0))} in, ${U.tokens(r.output)} out</span>${r.outTps != null ? `<span>${U.tps(r.outTps)}</span>` : ""}`;
+      const cost = U.costText(r);
+      tip.innerHTML = `<b>${escapeHtml(head)}</b><span>${U.tokens(r.total)} tokens</span><span>${U.tokens(r.cacheRead)} cache reads</span><span>${U.tokens((r.input || 0) + (r.cacheWrite || 0))} in, ${U.tokens(r.output)} out</span>${r.outTps != null ? `<span>${U.tps(r.outTps)}</span>` : ""}${cost ? `<span>${escapeHtml(cost)}</span>` : ""}`;
       tip.hidden = false;
       const bx = pad.l + (i + 0.5) * (pw / rows.length);
       tip.style.left = `${Math.min(Math.max(8, bx - tip.offsetWidth / 2), W - tip.offsetWidth - 8)}px`;
@@ -338,6 +365,7 @@ const Usage = {
     if (t.dataset.chart) { this._chart = t.dataset.chart; this.render(); return; }
     if (t.dataset.days) { this._days = Number(t.dataset.days); this._shown = 40; return this.load(); }
     if (t.dataset.kind) { this._kind = t.dataset.kind; this._shown = 40; this._repaintJobs(); return; }
+    if (t.dataset.provider !== undefined) { this._provider = t.dataset.provider || null; this._shown = 40; this._openJobs.clear(); return this.load(); }
     if (t.dataset.filter !== undefined) {
       this._filter = t.dataset.filter || null;
       this._shown = 40;
@@ -469,7 +497,7 @@ const Usage = {
   _breakdownEl(t) {
     const el = document.createElement("div");
     el.className = "usage-breakdown";
-    const head = [t.model, t.effort, t.ms != null ? `${UsageCore.dur(t.ms)} in all` : ""].filter(Boolean).map((x) => escapeHtml(String(x))).join(" · ");
+    const head = [t.providerLabel, t.model, t.effort, t.ms != null ? `${UsageCore.dur(t.ms)} in all` : ""].filter(Boolean).map((x) => escapeHtml(String(x))).join(" · ");
     el.innerHTML = `${head ? `<div class="usage-breakdown-head">${head}</div>` : ""}<div class="usage-kvs">${this._kvs(t)}</div>`;
     return el;
   },
@@ -479,8 +507,10 @@ const Usage = {
     if (!data?.total?.total) return "";
     const U = UsageCore;
     const t = data.total;
+    const cost = U.costText(t);
     return `<div class="chat-menu-usage"><div class="chat-menu-usage-num">${U.tokens(t.total)} tokens</div>`
       + `<div class="chat-menu-usage-sub">${data.turns} turn${data.turns === 1 ? "" : "s"}${t.outTps != null ? ` · ${U.tps(t.outTps)} average` : ""} · ${U.pct(t.cacheShare)} cache reads</div>`
+      + `${cost ? `<div class="chat-menu-usage-sub">${escapeHtml(cost)}</div>` : ""}`
       + `${data.since ? `<div class="chat-menu-usage-sub">since ${U.when(data.since)}</div>` : ""}</div>`;
   },
 };

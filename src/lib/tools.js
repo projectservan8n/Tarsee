@@ -342,16 +342,24 @@ export const TOOLS = [
 
   {
     name: "pdf_read",
-    description: "Read and extract text from a PDF file. Can read from a URL or from a workspace file path.",
+    description: "Read the text of a PDF: a file in the workspace (files people send in are saved in its uploads folder) or a web address. Long PDFs come a few pages at a time, and the answer says which pages to ask for next. Scanned pages (pictures of text) have no text to read.",
     input_schema: {
       type: "object",
       properties: {
-        source: {
+        path: {
           type: "string",
-          description: "URL of the PDF or workspace filename to read",
+          description: "The PDF: a path in the workspace (absolute, or relative to it, e.g. 'uploads/report.pdf') or an http(s) address",
+        },
+        pages: {
+          type: "string",
+          description: "Which pages: '3', '2-5', or '6-' for page 6 to the end. Default: from page 1, as many as fit",
+        },
+        max_chars: {
+          type: "number",
+          description: "The most characters to return (default 10000, up to 50000)",
         },
       },
-      required: ["source"],
+      required: ["path"],
     },
   },
 
@@ -1549,45 +1557,10 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       }
 
       case "pdf_read": {
-        const { source } = toolInput;
-        let pdfBuffer;
-
-        if (source.startsWith("http://") || source.startsWith("https://")) {
-          // Fetch PDF from URL
-          const res = await fetch(source, {
-            signal: AbortSignal.timeout(30_000),
-          });
-          if (!res.ok) return `Error fetching PDF: HTTP ${res.status}`;
-          pdfBuffer = Buffer.from(await res.arrayBuffer());
-        } else {
-          // Read from workspace
-          const filePath = path.join(config.WORKSPACE_DIR, source);
-          try {
-            pdfBuffer = fs.readFileSync(filePath);
-          } catch (err) {
-            return `Error reading PDF file '${source}': ${err.message}`;
-          }
-        }
-
-        // Try pdftotext first (poppler-utils), fall back to raw text extraction
-        try {
-          const { execSync } = await import("node:child_process");
-          const tmpPath = path.join(config.WORKSPACE_DIR, ".tmp_pdf_read.pdf");
-          fs.writeFileSync(tmpPath, pdfBuffer);
-          try {
-            const text = execSync(`pdftotext "${tmpPath}" -`, { timeout: 30_000, maxBuffer: 10 * 1024 * 1024 }).toString();
-            fs.unlinkSync(tmpPath);
-            if (text.trim()) return truncate(text, MAX_RESULT);
-          } catch {
-            // pdftotext not available, fall through
-            try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-          }
-        } catch { /* ignore */ }
-
-        // Fallback: extract readable ASCII text from PDF binary
-        const rawText = pdfBuffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s{3,}/g, " ").trim();
-        if (rawText.length < 50) return "Could not extract meaningful text from this PDF. Install poppler-utils (pdftotext) for better PDF support.";
-        return truncate(`(Raw text extraction — install pdftotext for better results)\n\n${rawText}`, MAX_RESULT);
+        // A PDF's text, a few whole pages at a time (lib/pdf-text.js): pdftotext when installed, else the built-in
+        // reader. Only the workspace's files (a protected one never) or a public web address; the old `source` still works.
+        const { readPdfTool } = await import("./pdf-text.js");
+        return await readPdfTool(toolInput, ctx);
       }
 
       case "get_key": {

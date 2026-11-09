@@ -43,6 +43,15 @@ describe("tool status labels", () => {
     assert.equal(toolStatusLabel("Edit", { file_path: "/data/tarsee/workspace/SOUL.md" }), "Editing SOUL.md…");
   });
 
+  it("reads a PDF by its file name, and never shows a web address's query or the rest of its path", () => {
+    assert.equal(toolStatusLabel("mcp__tarsee__tarsee_pdf_read", { path: "docs/q3 report.pdf" }), "Reading q3 report.pdf…");
+    assert.equal(toolDoneLabel("mcp__tarsee__tarsee_pdf_read", { path: "C:\\work\\deck.pdf" }), "Read deck.pdf");
+    assert.equal(toolDoneLabel("mcp__tarsee__tarsee_pdf_read", { path: "deck.pdf" }, true), "Reading deck.pdf failed");
+    const web = toolStatusLabel("mcp__tarsee__tarsee_pdf_read", { path: "https://files.example.com/private/a.pdf?token=sk-test-canary-123#p2" });
+    assert.equal(web, "Reading a.pdf…");
+    assert.equal(toolStatusLabel("mcp__tarsee__tarsee_pdf_read", { source: "old/arg.pdf" }), "Reading arg.pdf…", "the old source argument too");
+  });
+
   it("keeps the built-in tools' words", () => {
     assert.equal(toolStatusLabel("Bash", { command: "cat .env" }), "Running command…");
     assert.equal(toolDoneLabel("Bash", {}), "Command done");

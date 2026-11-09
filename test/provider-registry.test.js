@@ -40,6 +40,8 @@ import { vendorFor as sessionVendorFor } from "../src/ai/session-handle.js";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const store = (values = {}) => ({ get: (k) => (k in values ? values[k] : null) });
 const NO_ENV = {};
+/** Every provider's stored id, in the registry's order: what AI_PROVIDERS is keyed by. */
+const ALL_STORAGE = Object.values(PROVIDERS).map((p) => p.storageId).join();
 
 const ALL_IDS = ["claude", "anthropic", "chatgpt", "openai", "openrouter", "deepseek", "local"];
 const NON_CLAUDE = ["deepseek", "chatgpt", "openai", "local"];
@@ -74,12 +76,12 @@ describe("provider registry: entries", () => {
     }
   });
 
-  it("ships only the Claude plan in Phase 0", () => {
-    assert.deepEqual(ALL_IDS.filter((id) => PROVIDERS[id].shipped), ["claude"]);
-    assert.deepEqual(shippedProviders().map((p) => p.id), ["claude"]);
+  it("ships every provider: each one's engine path is built and tested against fakes", () => {
+    assert.deepEqual(ALL_IDS.filter((id) => PROVIDERS[id].shipped), ALL_IDS);
+    assert.deepEqual(shippedProviders().map((p) => p.id), ALL_IDS);
     assert.equal(isShipped("claude"), true);
     assert.equal(isShipped("claude-code"), true);
-    for (const id of ALL_IDS.filter((x) => x !== "claude")) assert.equal(isShipped(id), false, id);
+    assert.equal(isShipped("gemini"), false, "a provider Tarsee doesn't know");
     assert.equal(isShipped("nope"), false);
   });
 
@@ -180,10 +182,12 @@ describe("activeProviderId", () => {
     assert.equal(activeProviderId(store(), { env: { TARSEE_AI_PROVIDER: "claude-code" } }), "claude");
   });
 
-  it("falls back to the Claude plan for a provider that is not shipped yet", () => {
+  it("falls back to the Claude plan for a provider that is not shipped", () => {
+    const onlyClaude = (id) => id === "claude";
     for (const id of ALL_IDS.filter((x) => x !== "claude")) {
-      assert.equal(activeProviderId(store({ "ai.activeProvider": id }), { env: NO_ENV }), "claude", `setting ${id}`);
-      assert.equal(activeProviderId(store(), { env: { TARSEE_AI_PROVIDER: id } }), "claude", `env ${id}`);
+      assert.equal(activeProviderId(store({ "ai.activeProvider": id }), { env: NO_ENV, isShipped: onlyClaude }), "claude", `setting ${id}`);
+      assert.equal(activeProviderId(store(), { env: { TARSEE_AI_PROVIDER: id }, isShipped: onlyClaude }), "claude", `env ${id}`);
+      assert.equal(activeProviderId(store({ "ai.activeProvider": id }), { env: NO_ENV }), id, `shipped: ${id}`);
     }
     assert.equal(activeProviderId(store({ "ai.activeProvider": "gemini" }), { env: NO_ENV }), "claude");
   });
@@ -210,7 +214,7 @@ describe("activeProviderId", () => {
   it("reads process.env when no env is passed", () => {
     const before = process.env.TARSEE_AI_PROVIDER;
     process.env.TARSEE_AI_PROVIDER = "deepseek";
-    try { assert.equal(activeProviderId(store()), "claude"); }
+    try { assert.equal(activeProviderId(store()), "deepseek"); }
     finally { if (before === undefined) delete process.env.TARSEE_AI_PROVIDER; else process.env.TARSEE_AI_PROVIDER = before; }
   });
 
@@ -556,10 +560,14 @@ describe("priceFor", () => {
     }
   });
 
-  it("prices DeepSeek Flash at about $0.15 per million tokens in, the cheapest", () => {
-    assert.equal(priceFor("deepseek", "deepseek-flash", at(9, 2)).in, 0.15);
-    assert.ok(priceFor("deepseek", "deepseek-v4-pro", at(9, 2)).in > 0.15);
-    assert.equal(priceFor("deepseek", "deepseek-flash[1m]", at(9, 2)).in, 0.15);
+  it("prices DeepSeek at its published rates: Flash $0.30 in / $1.20 out at peak, half that off-peak; Pro dearer", () => {
+    const peak = priceFor("deepseek", "deepseek-flash", at(9, 2));
+    assert.deepEqual([peak.in, peak.out, peak.cacheRead, peak.cacheWrite], [0.3, 1.2, 0.006, 0.3]);
+    assert.equal(priceFor("deepseek", "deepseek-flash", at(9, 12)).in, 0.15, "off-peak is half");
+    const pro = priceFor("deepseek", "deepseek-v4-pro", at(9, 2));
+    assert.deepEqual([pro.in, pro.out, pro.cacheRead, pro.cacheWrite], [1.32, 3.96, 0.044, 1.32]);
+    assert.ok(pro.in > peak.in);
+    assert.equal(priceFor("deepseek", "deepseek-flash[1m]", at(9, 2)).in, 0.3);
   });
 
   it("prices the OpenAI table, and reads OpenRouter's from its catalog", () => {
@@ -637,8 +645,30 @@ describe("checkKeySlot", () => {
     assert.match(checkKeySlot("openrouter", "sk-ant-api03-test-canary-0000").message, /Anthropic key/);
   });
 
+  it("a DeepSeek key (sk- and 32 lowercase hex) is refused in the OpenAI and Local AI cards, so it never travels there", () => {
+    const ds = "sk-" + "0123456789abcdef".repeat(2);
+    assert.match(checkKeySlot("openai", ds).message, /looks like a DeepSeek key/);
+    assert.match(checkKeySlot("local", ds).message, /DeepSeek card/);
+    assert.equal(checkKeySlot("deepseek", ds).ok, true);
+    // OpenAI's own keys are never that shape: they still pass.
+    assert.equal(checkKeySlot("openai", "sk-proj-test-canary-00000000").ok, true);
+    assert.equal(checkKeySlot("openai", "sk-" + "0123456789ABCDEF".repeat(2)).ok, true, "upper case isn't DeepSeek's");
+    assert.equal(checkKeySlot("openai", "sk-" + "0123456789abcdef".repeat(2) + "0").ok, true, "nor is a 33rd character");
+    // A legacy OpenAI key (48 characters with T3BlbkFJ in the middle) is refused in every other card.
+    const legacy = `sk-${"testcanary0000000000"}T3BlbkFJ${"testcanary0000000000"}`;
+    assert.equal(checkKeySlot("openai", legacy).ok, true);
+    for (const id of ["deepseek", "openrouter", "anthropic", "local"]) {
+      assert.match(checkKeySlot(id, legacy).message || "", /OpenAI/, id);
+    }
+  });
+
   it("accepts each provider's own key shape", () => {
     assert.equal(checkKeySlot("anthropic", "sk-ant-api03-test-canary-0000").ok, true);
+    // Anthropic documents only the sk-ant- prefix; newer key kinds (personal, service account) needn't say api03.
+    assert.equal(checkKeySlot("anthropic", "sk-ant-svc01-test-canary-00000000").ok, true);
+    assert.equal(checkKeySlot("anthropic", "sk-ant-test-canary-0000000000000000").ok, true);
+    assert.equal(checkKeySlot("anthropic", "sk-ant-short").ok, false, "too short to be a key");
+    assert.equal(checkKeySlot("anthropic", "sk-ant-api03-has space-0000000000").ok, false);
     assert.equal(checkKeySlot("openrouter", "sk-or-v1-testcanary0000").ok, true);
     assert.equal(checkKeySlot("openai", "sk-proj-test-canary-00000000").ok, true);
     assert.equal(checkKeySlot("deepseek", "sk-testcanary0000000000000000").ok, true);
@@ -689,8 +719,8 @@ describe("Claude catalog", () => {
 });
 
 describe("AI_PROVIDERS compatibility view (config/constants.js)", () => {
-  it("still has exactly today's claude-code entry and nothing unshipped", () => {
-    assert.deepEqual(Object.keys(AI_PROVIDERS), ["claude-code"]);
+  it("keeps the claude-code entry exactly as it was, and adds every other shipped provider by its stored id", () => {
+    assert.deepEqual(Object.keys(AI_PROVIDERS), ALL_IDS.map((id) => PROVIDERS[id].storageId));
     assert.deepEqual({ ...AI_PROVIDERS["claude-code"] }, {
       id: "claude-code",
       name: "Claude Code (Agent)",
@@ -700,7 +730,10 @@ describe("AI_PROVIDERS compatibility view (config/constants.js)", () => {
       noKeyRequired: true,
     });
     assert.deepEqual(Object.keys(AI_PROVIDERS["claude-code"]), ["id", "name", "envKey", "defaultModel", "baseUrl", "noKeyRequired"]);
-    for (const id of ["claude", "anthropic", "openai", "openrouter", "deepseek", "local", "chatgpt"]) assert.equal(AI_PROVIDERS[id], undefined, id);
+    assert.equal(AI_PROVIDERS.claude, undefined, "the Claude plan is stored as claude-code");
+    assert.equal(AI_PROVIDERS.deepseek.envKey, "DEEPSEEK_API_KEY");
+    assert.equal(AI_PROVIDERS.deepseek.noKeyRequired, false);
+    assert.equal(AI_PROVIDERS.deepseek.baseUrl, null, "no host is ever handed out");
     assert.ok(Object.isFrozen(AI_PROVIDERS));
   });
 
@@ -713,10 +746,6 @@ describe("AI_PROVIDERS compatibility view (config/constants.js)", () => {
     assert.equal(typeof d.get, "function");
   });
 
-  it("keeps the router's provider list as it was", async () => {
-    const { getAvailableProviders } = await import("../src/ai/router.js");
-    assert.deepEqual(getAvailableProviders(), [{ id: "claude-code", name: "Claude Code (Agent)", configured: true, defaultModel: getRecommendedModel() }]);
-  });
 });
 
 describe("import order", () => {
@@ -726,12 +755,12 @@ describe("import order", () => {
 
   it("works when the registry is loaded first", () => {
     const out = run(`import { PROVIDERS } from "./src/ai/provider-registry.js"; import { AI_PROVIDERS } from "./src/config/constants.js"; console.log(Object.keys(AI_PROVIDERS).join(), PROVIDERS.claude.defaultModel, PROVIDERS.claude.models.length > 0);`);
-    assert.equal(out, "claude-code sonnet true");
+    assert.equal(out, `${ALL_STORAGE} sonnet true`);
   });
 
   it("works when constants.js is loaded first", () => {
     const out = run(`import { AI_PROVIDERS } from "./src/config/constants.js"; import { PROVIDERS } from "./src/ai/provider-registry.js"; console.log(Object.keys(AI_PROVIDERS).join(), AI_PROVIDERS["claude-code"].defaultModel, PROVIDERS.claude.models.length > 0);`);
-    assert.equal(out, "claude-code sonnet true");
+    assert.equal(out, `${ALL_STORAGE} sonnet true`);
   });
 
   it("works when model-ref.js is loaded first", () => {

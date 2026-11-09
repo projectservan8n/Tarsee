@@ -1,17 +1,12 @@
 // "A provider key in the environment never picks the active provider" (design 4.3 and the Phase 0 settings test),
-// checked against the day every provider ships. In Phase 0 only the Claude plan is shipped and it has no key variable,
-// so the old key-presence auto-detect (a loop over AI_PROVIDERS reading process.env[def.envKey]) could never fire and
-// a test run today could not tell it was back. Here a test-only loader hook switches every provider on before anything
-// is imported, so AI_PROVIDERS holds DeepSeek, OpenRouter, OpenAI and the rest with their key variables, and
-// getActiveProvider() must still answer only with the owner's choice. Every key here is an obvious fake.
+// with every provider shipped: AI_PROVIDERS holds DeepSeek, OpenRouter, OpenAI and the rest with their key variables,
+// so the old key-presence auto-detect (a loop over AI_PROVIDERS reading process.env[def.envKey]) would fire if it came
+// back, and getActiveProvider() must still answer only with the owner's choice. Every key here is an obvious fake.
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import { register } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-register("./fixtures/ship-all-providers.mjs", import.meta.url);
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tarsee-settings-ship-all-"));
 process.env.TARSEE_STATE_DIR = tmp;
@@ -38,7 +33,7 @@ function withEnv(vars, fn) {
 }
 
 describe("with every provider shipped, the environment still never picks the active provider", () => {
-  it("the hook worked: every provider is shipped and in AI_PROVIDERS, most with a key variable", () => {
+  it("every provider is shipped and in AI_PROVIDERS, most with a key variable", () => {
     assert.deepEqual(Object.keys(AI_PROVIDERS).sort(), Object.values(PROVIDERS).map((p) => p.storageId).sort());
     assert.ok(Object.keys(CANARIES).length >= 5, JSON.stringify(Object.keys(CANARIES)));
   });

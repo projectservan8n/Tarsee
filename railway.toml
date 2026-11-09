@@ -28,3 +28,20 @@ NODE_ENV = "production"
 TARSEE_STATE_DIR = "/data/tarsee"
 TARSEE_WORKSPACE_DIR = "/data/tarsee/workspace"
 TARSEE_DATA_DIR = "/data/tarsee/data"
+
+# Choose your AI. Set these in Railway (your service > Variables), never in this file: it is part of the
+# repository, so a value here would be public. All optional: the setup wizard and Settings > AI do the same, and
+# keys saved there are stored encrypted. Each key only ever goes to its own provider. Guide: docs/providers.md
+# A command the agent runs can still read these keys on the server (it runs as the same user as Tarsee), so give
+# every key a spending limit at its provider: that is the real guard.
+#   ENCRYPTION_KEY            encrypts the keys and tokens Tarsee stores; set it before saving any key in Settings
+#   TARSEE_AI_PROVIDER        the default AI: claude, anthropic, chatgpt, openai, openrouter, deepseek or local
+#   TARSEE_AI_MODEL           that AI's model (empty: its default; for Local AI, the first model its server lists)
+#   TARSEE_KEYS_ONLY          1 = "Only use API keys": no Claude or ChatGPT plan sign-in, for a shared Tarsee
+#   ANTHROPIC_API_KEY         Claude, billed per use (the Claude plan ignores it)
+#   OPENAI_API_KEY            OpenAI's models, billed per use
+#   OPENROUTER_API_KEY        hundreds of models with one key; give the key a credit limit
+#   DEEPSEEK_API_KEY          DeepSeek, the cheapest per message, from a prepaid balance
+#   TARSEE_LOCAL_AI_URL       your Ollama or LM Studio server, e.g. http://ollama.railway.internal:11434/v1
+#   TARSEE_LOCAL_AI_KEY       that server's key, only if it asks for one
+#   CLAUDE_CODE_OAUTH_TOKEN   the Claude plan without the Terminal: the token `claude setup-token` prints

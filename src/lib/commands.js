@@ -1,4 +1,8 @@
-import { AI_PROVIDERS, CLAUDE_MODELS, CLAUDE_MODELS_BY_ID, resolveModelAlias, getRecommendedModel } from "../config/constants.js";
+import { CLAUDE_MODELS, MODEL_TIERS } from "../config/constants.js";
+import { PROVIDERS, PROVIDER_IDS, getProvider, normalizeProviderId, isShipped as registryShipped, resolveModelFor } from "../ai/provider-registry.js";
+import { parseModelRef } from "../ai/model-ref.js";
+import { providerReadiness, defaultPick, readPick, levelsFor, describeModel, repliesWhole, modelChoices, checkModel, refreshChatgptModels } from "./model-catalog.js";
+import { EFFORT_NAMES, clampEffort, matchModels, MESSAGE_AT_A_TIME, TARSEE_DEFAULT_EFFORT } from "./model-picker.js";
 import { addCronJob, removeCronJob, loadCronJobs, runCronJob, startCronScheduler } from "./cron.js";
 import { executeTool } from "./tools.js";
 import { getSkillContent, installSkill, scanSkills } from "./skills-engine.js";
@@ -6,8 +10,11 @@ import { hasCheckpoint, peekCheckpoint, listRecentCheckpoints, CHECKPOINT_FILE_P
 import { preview as previewRetention, runNow as runRetentionNow } from "./retention.js";
 import { forgetConversation } from "./live-bus.js";
 import { forgetChatFiles } from "./chat-files.js";
+import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import config from "../config/env.js";
+import { SettingsStore } from "../db/settings.js";
 
 /**
  * Chat command processor.
@@ -15,7 +22,299 @@ import config from "../config/env.js";
  *
  * Returns { handled: true, response: "..." } if it was a command,
  * or { handled: false } if it's a normal message.
+ *
+ * ctx.ai (optional) carries what the AI commands read readiness and switches from: { isShipped, statusFor, env,
+ * stateDir, listChatgptModels }. Without it they use the provider registry's own (lib/model-catalog.js
+ * providerReadiness, and ai/codex-models.js for the ChatGPT account's models).
  */
+
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/** The words /think and /effort take for each level. */
+const EFFORT_WORDS = {
+  low: "low", medium: "medium", med: "medium",
+  high: "high", max: "max", xhigh: "xhigh", extra: "xhigh", ultra: "xhigh",
+};
+const EFFORT_HELP = {
+  low: "Minimal thinking, fastest",
+  medium: "Balanced (the default)",
+  high: "Deep reasoning",
+  xhigh: "Extra-high; the sweet spot for most coding and agentic work",
+  max: "Maximum effort, when correctness matters more than cost",
+};
+const TIER_WORDS = new Set([...MODEL_TIERS, "top", "mid", "small"]);
+
+/** The readiness and switches the AI commands go by (tests pass their own in ctx.ai). */
+function aiDeps(ctx) {
+  const ai = ctx.ai || {};
+  return { isShipped: ai.isShipped || registryShipped, statusFor: ai.statusFor || null, env: ai.env || process.env, stateDir: ai.stateDir, listChatgptModels: ai.listChatgptModels || null };
+}
+
+/**
+ * The ChatGPT account's models, read now if nothing has read them since the server started (they live only in
+ * memory), so /model answers from the account's own list. Quick when they're already in (model-catalog.js keeps them).
+ */
+function chatgptModels(ctx) {
+  const d = aiDeps(ctx);
+  return refreshChatgptModels({ list: d.listChatgptModels, env: d.env, stateDir: d.stateDir });
+}
+
+function readiness(id, ctx) {
+  const d = aiDeps(ctx);
+  return providerReadiness(id, { store: ctx.settingsStore, env: d.env, statusFor: d.statusFor, isShipped: d.isShipped, stateDir: d.stateDir });
+}
+
+const isTierWord = (s) => TIER_WORDS.has(String(s || "").toLowerCase().trim().replace(/\[1m\]$/, ""));
+const effortName = (id) => EFFORT_NAMES[id] || (id ? id.charAt(0).toUpperCase() + id.slice(1) : "");
+
+/** "DeepSeek · DeepSeek Flash" */
+function aiLabel(providerId, model, store) {
+  return `${PROVIDERS[providerId].label} · ${describeModel(providerId, model, store)}`;
+}
+
+/**
+ * The AI and model a chat's turns run on: its own pick when its AI is ready, else the default. { provider, model,
+ * own, warning? }: `own` when the chat's pick is used, `warning` when it has one whose AI isn't ready.
+ */
+async function chatTarget(ctx) {
+  const store = ctx.settingsStore;
+  const d = aiDeps(ctx);
+  const def = defaultPick(store, { env: d.env, isShipped: d.isShipped });
+  const pick = readPick(store, ctx.conversationId);
+  if (pick.provider) {
+    const s = await readiness(pick.provider, ctx);
+    if (s.ready) return { provider: pick.provider, model: pick.model, own: true };
+    return { provider: def.provider, model: def.model, own: false, warning: `${s.label} isn't ready, so this chat uses the default AI. ${s.fix || ""}`.trim() };
+  }
+  // A model of the chat's own without an AI (the Claude-only picker saved that) is the Claude plan's, as the turn
+  // layer reads it: it counts while the Claude plan is the default.
+  if (pick.model && def.provider === "claude" && checkModel("claude", pick.model, store).ok) return { provider: "claude", model: pick.model, own: true };
+  return { provider: def.provider, model: def.model, own: false };
+}
+
+/** Engine versions, from the installed packages: { claudeCode, agentSdk, codex } (null where one isn't installed). */
+function engineVersions() {
+  const read = (rel) => { try { return JSON.parse(fs.readFileSync(path.join(APP_ROOT, "node_modules", rel, "package.json"), "utf8")); } catch { return null; } };
+  const sdk = read("@anthropic-ai/claude-agent-sdk");
+  const codex = read("@openai/codex") || read("@openai/codex-sdk");
+  return { claudeCode: sdk?.claudeCodeVersion || null, agentSdk: sdk?.version || null, codex: codex?.version || null };
+}
+
+function enginesLine() {
+  const v = engineVersions();
+  const cc = v.claudeCode ? `Claude Code ${v.claudeCode}${v.agentSdk ? ` (Agent SDK ${v.agentSdk})` : ""}` : "Claude Code not installed";
+  const cx = v.codex ? `Codex ${v.codex}` : "Codex not installed";
+  return `${cc} · ${cx}`;
+}
+
+/** Save the default AI and model. `model` undefined keeps the AI's saved model, null clears it (the AI's own default). */
+function saveDefault(store, providerId, model) {
+  const p = PROVIDERS[providerId];
+  store.set("ai.activeProvider", p.storageId);
+  if (model === null) store.delete(`ai.${p.storageId}.model`);
+  else if (model !== undefined) store.set(`ai.${p.storageId}.model`, model);
+}
+
+/** /model run in a chat with a model of its own: that chat follows the new default too. */
+function releaseChat(ctx) {
+  if (!ctx.conversationId) return false;
+  const store = ctx.settingsStore;
+  const pick = readPick(store, ctx.conversationId);
+  if (!pick.provider && !pick.model) return false;
+  store.delete(`session.${ctx.conversationId}.provider`);
+  store.delete(`session.${ctx.conversationId}.model`);
+  return true;
+}
+
+function switched(ctx, providerId, { released }) {
+  const store = ctx.settingsStore;
+  const def = defaultPick(store, aiDeps(ctx));
+  const lines = [`Default AI: **${PROVIDERS[providerId].label}** · **${describeModel(providerId, def.model, store)}**`];
+  if (repliesWhole(providerId, def.model, store)) lines.push(`${MESSAGE_AT_A_TIME} on this AI.`);
+  if (released) lines.push("This chat had a model of its own; it now follows the default.");
+  return lines.join("\n");
+}
+
+/** Pick within one AI: a tier word, an exact id, or a few letters of a model. */
+function resolveWithin(providerId, query, store, preferProvider) {
+  const p = PROVIDERS[providerId];
+  if (isTierWord(query)) return { model: resolveModelFor(p.id, query, store) || null };
+  const exact = checkModel(p.id, query, store);
+  if (exact.ok && exact.model) return { model: exact.model };
+  const choices = modelChoices(p.id, store);
+  const pickable = choices.filter((c) => c.selectable);
+  const { matches } = matchModels(pickable, query, { preferProvider });
+  if (matches.length === 1) return { model: matches[0].id };
+  if (matches.length > 1) return { reply: choicesReply(query, matches) };
+  const locked = matchModels(choices.filter((c) => !c.selectable), query).matches;
+  if (locked.length) return { reply: `${locked[0].name} on ${p.label} hasn't been verified yet. Verify it in Settings > AI first.` };
+  if (exact.verify) return { reply: exact.error };
+  const known = pickable.slice(0, 6).map((c) => `\`${c.id}\``).join(", ");
+  // OpenRouter and Local AI offer any model their server lists, once it has passed Verify.
+  const verifyHint = p.id === "openrouter" || p.id === "local" ? " To use another of its models, verify it in Settings > AI first." : "";
+  return { reply: `${p.label} has no ${verifyHint ? "verified " : ""}model matching "${query}".${known ? ` Try: ${known}.` : ""}${verifyHint}` };
+}
+
+function choicesReply(query, matches) {
+  const lines = [`"${query}" fits more than one model. Pick one:`];
+  for (const m of matches.slice(0, 12)) lines.push(`- \`/model ${m.ref || `${m.provider}:${m.id}`}\` — ${m.name} (${PROVIDERS[m.provider].label})`);
+  if (matches.length > 12) lines.push(`…and ${matches.length - 12} more. Type more of the name.`);
+  return lines.join("\n");
+}
+
+async function modelCommand(args, ctx) {
+  const store = ctx.settingsStore;
+  if (!store) return "Settings not available.";
+  const d = aiDeps(ctx);
+  if (!args) return modelOverview(ctx);
+  const q = args.trim();
+
+  // "deepseek:deepseek-flash", or "deepseek pro" / "chatgpt" (an AI, then maybe a model).
+  let { provider, model } = parseModelRef(q);
+  if (!provider) {
+    const [first, ...rest] = q.split(/\s+/);
+    const id = normalizeProviderId(first);
+    if (id) { provider = id; model = rest.join(" ").trim() || null; }
+  }
+  if (provider) {
+    const p = getProvider(provider);
+    if (!d.isShipped(p.id)) return `${p.label} can't be used in this version of Tarsee.`;
+    const s = await readiness(p.id, ctx);
+    if (!s.ready) return `**${p.label}** isn't ready.${s.detail ? ` ${s.detail}` : ""}${s.fix ? `\n\n${s.fix}` : ""}`;
+    if (p.id === "chatgpt") await chatgptModels(ctx);
+    let chosen;
+    if (model) {
+      const r = resolveWithin(p.id, model, store, p.id);
+      if (r.reply) return r.reply;
+      chosen = r.model;
+    }
+    saveDefault(store, p.id, chosen);
+    return switched(ctx, p.id, { released: releaseChat(ctx) });
+  }
+
+  const def = defaultPick(store, d);
+  // A tier word ("haiku") stays on the default AI: its own model for that tier.
+  if (isTierWord(q)) {
+    saveDefault(store, def.provider, resolveModelFor(def.provider, q, store) || null);
+    return switched(ctx, def.provider, { released: releaseChat(ctx) });
+  }
+
+  // A few letters of a model, on whichever ready AI has it.
+  const ready = [];
+  const notReady = [];
+  for (const id of PROVIDER_IDS.filter((x) => d.isShipped(x))) (await readiness(id, ctx)).ready ? ready.push(id) : notReady.push(id);
+  if (ready.includes("chatgpt")) await chatgptModels(ctx);
+  const choices = ready.flatMap((id) => modelChoices(id, store));
+  const { matches } = matchModels(choices.filter((c) => c.selectable), q, { preferProvider: def.provider });
+  if (matches.length === 1) {
+    saveDefault(store, matches[0].provider, matches[0].id);
+    return switched(ctx, matches[0].provider, { released: releaseChat(ctx) });
+  }
+  if (matches.length > 1) return choicesReply(q, matches);
+  const locked = matchModels(choices.filter((c) => !c.selectable), q).matches;
+  if (locked.length) return `${locked[0].name} on ${PROVIDERS[locked[0].provider].label} hasn't been verified yet. Verify it in Settings > AI first.`;
+  // Only an AI that isn't ready has it: say which, and what to do.
+  const elsewhere = matchModels(notReady.flatMap((id) => modelChoices(id, store)), q).matches;
+  if (elsewhere.length) {
+    const m = elsewhere[0];
+    const s = await readiness(m.provider, ctx);
+    return `${m.name} is on **${s.label}**, which isn't ready.${s.detail ? ` ${s.detail}` : ""}${s.fix ? `\n\n${s.fix}` : ""}`;
+  }
+  return `No model matches "${q}". Type \`/model\` to see the AIs and models you can use.`;
+}
+
+async function modelOverview(ctx) {
+  const store = ctx.settingsStore;
+  const d = aiDeps(ctx);
+  const def = defaultPick(store, d);
+  const lines = [`**Default AI:** ${aiLabel(def.provider, def.model, store)}`];
+  const target = await chatTarget(ctx);
+  if (target.own) lines.push(`**This chat:** ${aiLabel(target.provider, target.model, store)} (picked for this chat)`);
+  else if (target.warning) lines.push(`**This chat:** ${target.warning}`);
+
+  const ready = [];
+  const notReady = [];
+  for (const id of PROVIDER_IDS.filter((x) => d.isShipped(x))) {
+    const s = await readiness(id, ctx);
+    (s.ready ? ready : notReady).push(s);
+  }
+  if (ready.some((s) => s.provider === "chatgpt")) await chatgptModels(ctx);
+  lines.push("", "**Ready to use:**");
+  for (const s of ready) {
+    const choices = modelChoices(s.provider, store).filter((c) => c.selectable);
+    const shown = s.provider === "claude" || s.provider === "anthropic"
+      ? CLAUDE_MODELS.filter((m) => m.alias).map((m) => `\`${m.id}\``)
+      : choices.slice(0, 6).map((c) => c.name);
+    const more = s.provider === "claude" || s.provider === "anthropic" ? 0 : Math.max(0, choices.length - 6);
+    const example = exampleFor(s.provider, choices, def.provider);
+    lines.push(`- **${s.label}** (\`/model ${s.provider}\`): ${shown.join(", ") || describeModel(s.provider, null, store)}${more ? `, and ${more} more` : ""}${example ? ` — e.g. \`${example}\`` : ""}`);
+  }
+  if (notReady.length) {
+    lines.push("", "**Not ready yet:**");
+    for (const s of notReady) lines.push(`- **${s.label}**: ${[s.detail, s.fix].filter(Boolean).join(" ")}`);
+  }
+  if (ready.some((s) => s.provider === "claude" || s.provider === "anthropic")) {
+    const pinned = CLAUDE_MODELS.filter((m) => !m.alias).map((m) => `\`${m.id}\``).join(", ");
+    lines.push("", `Claude's pinned versions: ${pinned}.`);
+  }
+  lines.push("", "Switch with a provider, a model, or both: `/model <provider> [model]`, `/model <model>`, or `/model haiku` for the default AI's smallest model.");
+  return lines.join("\n");
+}
+
+/** An example /model line for an AI: its second model's last word ("deepseek pro"), else just the AI. */
+function exampleFor(providerId, choices, defaultProvider) {
+  const second = choices.find((c, i) => i > 0 && c.id);
+  if (providerId === "claude" || providerId === "anthropic") return `/model ${providerId === defaultProvider ? "opus" : `${providerId} opus`}`;
+  if (!second) return `/model ${providerId}`;
+  const word = String(second.name).split(/[\s:]+/).filter(Boolean).pop()?.toLowerCase();
+  return word ? `/model ${providerId} ${word}` : `/model ${providerId}`;
+}
+
+async function thinkCommand(args, ctx) {
+  const store = ctx.settingsStore;
+  if (!store) return "Settings not available.";
+  const target = await chatTarget(ctx);
+  const levels = levelsFor(target.provider, target.model, store);
+  const modelName = describeModel(target.provider, target.model, store);
+  const defaultEffort = store.get("ai.defaultEffort") || TARSEE_DEFAULT_EFFORT;
+  const own = ctx.conversationId ? store.get(`session.${ctx.conversationId}.effort`) : null;
+
+  if (!args) {
+    if (!levels.length) return `**${modelName}** has no effort levels: it always thinks the same amount.`;
+    const shown = own ? clampEffort(levels, own) : `${clampEffort(levels, defaultEffort)} (the default)`;
+    const rows = levels.map((id) => `- \`/think ${id}\` — ${effortName(id)}${EFFORT_HELP[id] ? `: ${EFFORT_HELP[id]}` : ""}`).join("\n");
+    return `**Current effort:** ${shown}\n**Model:** ${modelName} (${levels.length} levels)\n\n**Options** (ascending cost):\n${rows}\n\nThe model and effort button beside Send sets the same thing.`;
+  }
+
+  const asked = EFFORT_WORDS[args.toLowerCase().trim()];
+  if (!asked) return `Unknown level. Use: ${(levels.length ? levels : Object.keys(EFFORT_HELP)).join(", ")}.`;
+  if (!levels.length) return `**${modelName}** has no effort levels, so there is nothing to set.`;
+  const level = clampEffort(levels, asked);
+  const note = level !== asked ? `${modelName} has no ${effortName(asked)}, so it is set to **${effortName(level)}**. Levels: ${levels.map(effortName).join(", ")}.` : null;
+  if (ctx.conversationId) {
+    store.set(`session.${ctx.conversationId}.effort`, level);
+    return note || `Thinking effort set to **${level}**`;
+  }
+  store.set("ai.defaultEffort", level);
+  return note ? `${note} It is the default for chats without a level of their own.` : `Default thinking effort set to **${level}**`;
+}
+
+async function autoCommand(args, ctx) {
+  const store = ctx.settingsStore;
+  if (!store) return "Settings not available.";
+  const current = store.get("ai.autoRoute") === true;
+  const a = (args || "").toLowerCase().trim();
+  let on;
+  if (!a) on = !current;
+  else if (a === "on") on = true;
+  else if (a === "off") on = false;
+  else return "Usage: `/auto` (toggle), `/auto on`, `/auto off`";
+  store.set("ai.autoRoute", on);
+  if (!on) return "Auto-routing **disabled** — using default model.";
+  const def = defaultPick(store, aiDeps(ctx));
+  const name = (tier) => describeModel(def.provider, resolveModelFor(def.provider, tier, store), store);
+  return `Auto-routing **enabled** on ${PROVIDERS[def.provider].label} — ${name("haiku")} for simple, ${name("sonnet")} for general, ${name("opus")} for complex.`;
+}
 
 const COMMANDS = {
   help: {
@@ -56,10 +355,11 @@ const COMMANDS = {
         // sessions accumulated thousands of transcript entries.
         //
         // We DELETE messages but keep the conversations row (the channel
-        // mapping stays valid), and NULL claude_session_id so the next spawn
-        // starts a fresh claude session — without that, claude would --resume
-        // the same session and reload the prior (now-deleted) transcript from
-        // its own .jsonl.
+        // mapping stays valid), and NULL the session handle so the next turn
+        // starts a fresh session on whichever AI runs it — without that, the
+        // engine would resume the same session and reload the prior
+        // (now-deleted) transcript. session.<conv>.clearedAt records when, so
+        // a fresh session's handoff (ai/turn.js) never brings them back.
         try {
           const r1 = ctx.db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(ctx.conversationId);
           clearedCount = r1?.changes || 0;
@@ -68,6 +368,7 @@ const COMMANDS = {
           // The chat's files go with its messages (lib/chat-files.js), so the fresh chat does not open on old ones.
           forgetChatFiles(ctx.conversationId);
           ctx.db.prepare("UPDATE conversations SET claude_session_id = NULL, updated_at = datetime('now') WHERE id = ?").run(ctx.conversationId);
+          (ctx.settingsStore || new SettingsStore(ctx.db)).set(`session.${ctx.conversationId}.clearedAt`, new Date().toISOString());
         } catch (err) {
           console.warn("[commands] /clear DB cleanup failed:", err?.message);
         }
@@ -78,87 +379,32 @@ const COMMANDS = {
       if (ctx.clearConversation) {
         ctx.clearConversation();
       }
-      const countNote = clearedCount > 0 ? ` (${clearedCount} messages deleted, claude session reset)` : "";
+      const countNote = clearedCount > 0 ? ` (${clearedCount} messages deleted, session reset)` : "";
       return "Conversation cleared. Starting fresh." + countNote + summaryNote;
     },
   },
 
   model: {
-    description: "Show or switch the AI model (fable, opus, sonnet, haiku, or any model id)",
-    usage: "/model [fable|opus|sonnet|haiku|<model-id>]",
-    handler: (args, ctx) => {
-      const settingsStore = ctx.settingsStore;
-      if (!settingsStore) return "Settings not available.";
-
-      const active = settingsStore.getActiveProvider();
-
-      if (!args) {
-        const current = active?.model || getRecommendedModel();
-        const meta = CLAUDE_MODELS_BY_ID[current];
-        const label = meta ? `${meta.displayName} (${meta.tier}, ${meta.context})` : current;
-        // Print aliases as `/model <tier>` and pinned rows as their real id.
-        // Every row used to render as `/model ${m.tier}`, so eleven models
-        // collapsed into four repeated commands and there was no way to learn
-        // a pinned id from the help itself.
-        const aliases = CLAUDE_MODELS.filter((m) => m.alias).map(
-          (m) => `- \`/model ${m.id}\` — ${m.displayName} (${m.context}${m.recommended ? ", default" : ""})`
-        ).join("\n");
-        const pinned = CLAUDE_MODELS.filter((m) => !m.alias).map(
-          (m) => `- \`/model ${m.id}\` — ${m.displayName} (${m.context})`
-        ).join("\n");
-        return `**Current model:** ${label}\n\n**Always-latest aliases** (recommended — never go stale):\n${aliases}\n\n**Pinned versions** (reproducible, frozen):\n${pinned}`;
-      }
-
-      const provider = active?.provider || "claude-code";
-      const resolved = resolveModelAlias(args);
-      if (!resolved) {
-        const knownIds = CLAUDE_MODELS.map((m) => `\`${m.id}\``).join(", ");
-        return `Unknown model \`${args}\`. Known aliases: fable, opus, sonnet, haiku. Pinned ids: ${knownIds}.`;
-      }
-      settingsStore.set(`ai.${provider}.model`, resolved);
-      const meta = CLAUDE_MODELS_BY_ID[resolved];
-      return `Model switched to **${meta?.displayName || resolved}** (\`${resolved}\`)`;
-    },
+    description: "Show or switch the AI and model (deepseek pro, chatgpt, flash, haiku, or any model id)",
+    usage: "/model [provider] [model]",
+    handler: (args, ctx) => modelCommand(args, ctx),
   },
 
   think: {
-    description: "Set thinking effort (low, medium, high, max, xhigh)",
-    usage: "/think [low|medium|high|max|xhigh]",
-    handler: (args, ctx) => {
-      const levels = {
-        low: "low", medium: "medium", med: "medium",
-        high: "high", max: "max", xhigh: "xhigh", extra: "xhigh", ultra: "xhigh",
-      };
-      const settingsStore = ctx.settingsStore;
-      if (!settingsStore) return "Settings not available.";
-
-      if (!args) {
-        // Unset, a chat runs at the default (ai.defaultEffort, else Medium: providers/claude-code.js withChatModel).
-        const fallback = `${settingsStore.get("ai.defaultEffort") || "medium"} (the default)`;
-        const current = ctx.conversationId
-          ? settingsStore.get(`session.${ctx.conversationId}.effort`) || fallback
-          : fallback;
-        return `**Current effort:** ${current}\n\n**Options** (ascending cost):\n- \`/think low\` — Minimal thinking, fastest\n- \`/think medium\` — Balanced (the default)\n- \`/think high\` — Deep reasoning\n- \`/think xhigh\` — Extra-high; the sweet spot for most coding and agentic work\n- \`/think max\` — Maximum effort, when correctness matters more than cost\n\nThe model and effort button beside Send sets the same thing.`;
-      }
-
-      const level = levels[args.toLowerCase()];
-      if (!level) return `Unknown level. Use: low, medium, high, max, or xhigh`;
-
-      if (ctx.conversationId) {
-        settingsStore.set(`session.${ctx.conversationId}.effort`, level);
-      }
-      return `Thinking effort set to **${level}**`;
-    },
+    description: "Set thinking effort (the levels the model has: low, medium, high, xhigh, max)",
+    usage: "/think [low|medium|high|xhigh|max]",
+    handler: (args, ctx) => thinkCommand(args, ctx),
   },
 
   // Alias of /think that also opens the composer's picker on the client.
   // Server-side behavior is identical; the web frontend intercepts the
   // command response and opens the picker's Effort list if no argument was given.
+  // Anywhere else (Telegram, Slack, …) there is no picker, so it lists the levels.
   effort: {
     description: "Set thinking effort (opens the picker's Effort list with no level)",
-    usage: "/effort [low|medium|high|max|xhigh]",
+    usage: "/effort [low|medium|high|xhigh|max]",
     handler: (args, ctx) => {
-      if (!args) {
+      if (!args && (!ctx.platform || ctx.platform === "web")) {
         // Signal the client to open the slider. The frontend looks for
         // this sentinel in the command response and shows the slider
         // instead of printing this line.
@@ -233,32 +479,9 @@ const COMMANDS = {
   },
 
   auto: {
-    description: "Toggle auto model routing (haiku for simple, sonnet for general, opus for complex)",
+    description: "Toggle auto model routing (the default AI's small model for simple, mid for general, top for complex)",
     usage: "/auto [on|off]",
-    handler: (args, ctx) => {
-      const settingsStore = ctx.settingsStore;
-      if (!settingsStore) return "Settings not available.";
-
-      const current = settingsStore.get("ai.autoRoute") === true;
-
-      if (!args) {
-        settingsStore.set("ai.autoRoute", !current);
-        return !current
-          ? "Auto-routing **enabled** — Haiku for simple, Sonnet for general, Opus for complex."
-          : "Auto-routing **disabled** — using default model.";
-      }
-
-      if (args.toLowerCase() === "on") {
-        settingsStore.set("ai.autoRoute", true);
-        return "Auto-routing **enabled** — Haiku for simple, Sonnet for general, Opus for complex.";
-      }
-      if (args.toLowerCase() === "off") {
-        settingsStore.set("ai.autoRoute", false);
-        return "Auto-routing **disabled** — using default model.";
-      }
-
-      return "Usage: `/auto` (toggle), `/auto on`, `/auto off`";
-    },
+    handler: (args, ctx) => autoCommand(args, ctx),
   },
 
   mention: {
@@ -697,7 +920,7 @@ artifact. Just confirm.`;
   status: {
     description: "Full system dashboard — uptime, tokens, messages, channels, memory",
     usage: "/status",
-    handler: (_args, ctx) => {
+    handler: async (_args, ctx) => {
       const mem = process.memoryUsage();
       const uptime = Math.floor(process.uptime());
       const hrs = Math.floor(uptime / 3600);
@@ -709,11 +932,17 @@ artifact. Just confirm.`;
         `⏱ **Uptime:** ${hrs}h ${mins}m | **RAM:** ${Math.round(mem.rss / 1024 / 1024)}MB`,
       ];
 
-      // Provider + model
+      // The AI and model (the default, and this chat's own if it has one), and the engines that run them
       if (ctx.settingsStore) {
-        const active = ctx.settingsStore.getActiveProvider();
-        const autoRoute = ctx.settingsStore.get("ai.autoRoute") === true;
-        lines.push(`🤖 **Model:** ${active?.model || "default"}${autoRoute ? " (auto-routing ON)" : ""}`);
+        const store = ctx.settingsStore;
+        const def = defaultPick(store, aiDeps(ctx));
+        const autoRoute = store.get("ai.autoRoute") === true;
+        const s = await readiness(def.provider, ctx);
+        lines.push(`🤖 **AI:** ${aiLabel(def.provider, def.model, store)}${s.ready ? "" : ` (not ready: ${s.fix || s.detail || s.state})`}${autoRoute ? " (auto-routing ON)" : ""}`);
+        const target = await chatTarget(ctx);
+        if (target.own && (target.provider !== def.provider || target.model !== def.model)) lines.push(`**This chat:** ${aiLabel(target.provider, target.model, store)}`);
+        else if (target.warning) lines.push(`**This chat:** ${target.warning}`);
+        lines.push(`**Engines:** ${enginesLine()}`);
       }
 
       // Channels
@@ -929,17 +1158,20 @@ artifact. Just confirm.`;
   },
 
   version: {
-    description: "Show current Tarsee version",
+    description: "Show the Tarsee version, the AI and model, and the engines",
     usage: "/version",
-    handler: async () => {
-      const fs = await import("node:fs");
-      const path = await import("node:path");
+    handler: async (_args, ctx) => {
       try {
-        const pkg = JSON.parse(fs.readFileSync(path.join("/app", "package.json"), "utf8"));
+        // package.json beside src/ (/app/package.json in the image), wherever Tarsee is installed.
+        const pkg = JSON.parse(fs.readFileSync(path.join(APP_ROOT, "package.json"), "utf8"));
         const commit = process.env.TARSEE_COMMIT_SHA?.slice(0, 7) || "unknown";
-        const { execSync } = await import("node:child_process");
-        const claudeVersion = execSync("claude --version 2>/dev/null || echo unknown", { encoding: "utf8" }).trim();
-        return `**Tarsee** v${pkg.version} (${commit})\n**Claude Code:** ${claudeVersion}\n**Node:** ${process.version}`;
+        const lines = [`**Tarsee** v${pkg.version} (${commit})`];
+        if (ctx?.settingsStore) {
+          const def = defaultPick(ctx.settingsStore, aiDeps(ctx));
+          lines.push(`**AI:** ${aiLabel(def.provider, def.model, ctx.settingsStore)}`);
+        }
+        lines.push(`**Engines:** ${enginesLine()}`, `**Node:** ${process.version}`);
+        return lines.join("\n");
       } catch (err) {
         return `Version check failed: ${err.message}`;
       }

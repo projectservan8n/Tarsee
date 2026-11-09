@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"01a1bf55-8efc-7fc1-80e4-5295238c1ac0"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_1","type":"reasoning","text":"Weighing a friendly greeting."}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Hello from the fake."}}
+{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens":200,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":12}}

@@ -1,0 +1,241 @@
+/**
+ * engine-errors.js: what an engine's failure means, per provider, in words the owner can act on (design 4.7 "Errors").
+ *
+ * An engine reports a failure as an HTTP status, an error code (the Agent SDK's assistant `error`, a Codex error code,
+ * or one of Tarsee's own refusal codes from engine-env.js) and/or the engine's own words. The same 401 means "Claude's
+ * sign-in ran out" on the Claude plan and "your DeepSeek key was rejected" on DeepSeek, so the meaning depends on the
+ * provider. classifyEngineError() answers:
+ *
+ *   { kind, provider, engine, status, code, recoverable, state, message }
+ *
+ *   kind        one of ERROR_KINDS:
+ *                 expired      a plan's sign-in ran out (Claude plan, ChatGPT plan)
+ *                 auth         a key was turned down (401/403)
+ *                 wrong-key    a key pasted in another provider's slot
+ *                 billing      out of credit or over a spending limit (402)
+ *                 rate         busy, or a plan's usage limit (429)
+ *                 unavailable  the provider is down or overloaded (5xx, 529)
+ *                 model        the model doesn't exist there, or the account can't use it (404, 400 about a model)
+ *                 session      resuming the stored session failed (start fresh and carry the chat over)
+ *                 credential-isolation, needs-key, needs-setup, bad-model, wrong-engine, needs-mcp-token
+ *                              Tarsee's own refusals before a turn starts (engine-env.js CredentialError codes)
+ *                 unknown      anything else
+ *   recoverable true only for a failed session resume: the turn layer retries once with a fresh session
+ *   state       the provider's failure flag to write (ai.<id>.status, provider-status.js), or null for none
+ *   message     the plain-language explanation for the chat
+ *
+ * Pure: no I/O. The words come from the provider registry (labels, errorHints, top-up links).
+ */
+import { getProvider, normalizeProviderId } from "./provider-registry.js";
+
+export const ERROR_KINDS = Object.freeze([
+  "expired", "auth", "wrong-key", "billing", "rate", "unavailable", "model", "session",
+  "credential-isolation", "needs-key", "needs-setup", "bad-model", "wrong-engine", "needs-mcp-token", "unknown",
+]);
+
+/** Tarsee's own refusal codes (engine-env.js CredentialError), passed through as their own kind. */
+const REFUSAL_CODES = new Set(["credential-isolation", "needs-key", "needs-setup", "bad-model", "wrong-engine", "needs-mcp-token"]);
+
+/** The Claude plan's sign-in ran out: what to do instead. (Also re-exported by providers/claude-code.js.) */
+export const AUTH_EXPIRED_MESSAGE = "**Claude's sign-in has expired**, so I can't reach the model right now. This isn't a network problem, and retrying won't fix it.\n\n"
+  + "Open the Terminal in the Tarsee dashboard (the `>_` button at the top), run `claude auth login` and follow the link it prints. Then send your message again.";
+
+const CHATGPT_EXPIRED_MESSAGE = "**The ChatGPT sign-in has expired**, so I can't reach the model right now. Retrying won't fix it.\n\n"
+  + "Sign in again in Settings > AI (it shows a link and a one-time code), or run `codex login --device-auth` in the Terminal. Then send your message again.";
+
+/** The Claude CLI's and API's words for a sign-in or key that failed. */
+const AUTH_WORDS_RE = /(Failed to authenticate|OAuth (?:access )?token (?:has )?expired|Re-authenticate to continue|Not logged in|Please run \/login|invalid (?:x-)?api[- ]?key|authentication[_ ]error|unauthori[sz]ed|invalid bearer|no auth credentials)/i;
+// codex 0.167 says "Your access token could not be refreshed ..." or "Your authentication session could not be
+// refreshed ..." for every ChatGPT sign-in it can't renew (expired, reused, revoked or replaced refresh token).
+const EXPIRED_WORDS_RE = /(OAuth (?:access )?token (?:has )?expired|Re-authenticate to continue|refresh token (?:was )?(?:revoked|expired|invalid)|(?:access token|authentication session) could not be refreshed|sign-?in (?:has )?expired|token_expired)/i;
+const BILLING_WORDS_RE = /(insufficient (?:balance|credits?|funds|quota)|credit balance is too low|out of credits?|payment required|billing|spend(?:ing)? limit|key limit|exceeded your current quota)/i;
+const RATE_WORDS_RE = /(rate[_ ]?limit|too many requests|request rejected \(429\)|usage limit|slow down)/i;
+const UNAVAILABLE_WORDS_RE = /(overloaded|service unavailable|bad gateway|gateway timeout|internal server error|server_error|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up|couldn't connect|could not reach)/i;
+const MODEL_WORDS_RE = /(issue with the selected model|model[_ ]not[_ ]found|not a valid model|invalid model|unknown model|no such model|model .*(?:does not exist|not found|not available|unavailable)|does not exist or you do not have access)/i;
+const SESSION_WORDS_RE = /(previous_message_id|must be the id from a prior|No conversation found with session ID|session.*(?:expired|invalid|not found|corrupt))/i;
+const WORKSPACE_WORDS_RE = /workspace/i;
+
+const ANTHROPIC_WORKSPACE_MESSAGE = "**Your Anthropic key isn't in a workspace**, so Anthropic turns it down for Tarsee. "
+  + "In the Claude Console, create a new key and choose a workspace for it (Default is fine), then paste it in Settings > AI (the Anthropic guide's step 3).";
+
+/** The SDK's assistant error codes (and Codex's), by what they mean. */
+const CODE_KINDS = {
+  authentication_failed: "auth",
+  oauth_org_not_allowed: "auth",
+  account_on_hold: "auth",
+  verification_required: "auth",
+  cloud_credential_error: "auth",
+  billing_error: "billing",
+  insufficient_quota: "billing",
+  rate_limit: "rate",
+  rate_limit_exceeded: "rate",
+  usage_limit_reached: "rate",
+  overloaded: "unavailable",
+  server_error: "unavailable",
+  model_not_found: "model",
+  "bad-key": "wrong-key",
+};
+
+const PLAN_IDS = new Set(["claude", "chatgpt"]);
+
+/** An HTTP status in the engine's words ("API Error: 402 ...", "Request rejected (429)"), or null. */
+export function statusFromMessage(message) {
+  const s = String(message ?? "");
+  const m = /API Error:?\s*(\d{3})\b/i.exec(s) || /\((\d{3})\)/.exec(s) || /\b(?:status|HTTP)\s*:?\s*(\d{3})\b/i.exec(s);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return n >= 400 && n <= 599 ? n : null;
+}
+
+function kindFromStatus(status, message) {
+  if (status === 401 || status === 403) return "auth";
+  if (status === 402) return "billing";
+  if (status === 429) return "rate";
+  if (status === 529 || (status >= 500 && status <= 599)) return "unavailable";
+  if (status === 404) return "model";
+  if (status === 400 && MODEL_WORDS_RE.test(message)) return "model";
+  if (status === 400 && /model/i.test(message)) return "model";
+  return null;
+}
+
+function kindFromWords(message) {
+  if (!message) return null;
+  if (SESSION_WORDS_RE.test(message)) return "session";
+  if (EXPIRED_WORDS_RE.test(message)) return "expired";
+  if (BILLING_WORDS_RE.test(message)) return "billing";
+  if (MODEL_WORDS_RE.test(message)) return "model";
+  if (AUTH_WORDS_RE.test(message)) return "auth";
+  if (RATE_WORDS_RE.test(message)) return "rate";
+  if (UNAVAILABLE_WORDS_RE.test(message)) return "unavailable";
+  return null;
+}
+
+/** The failure flag a kind sets on the provider (provider-status.js PROVIDER_STATES), or null for none. */
+export function failureStateFor(kind) {
+  switch (kind) {
+    case "expired": return "sign-in-expired";
+    case "auth":
+    case "wrong-key": return "error";
+    case "billing": return "out-of-credit";
+    case "needs-key": return "needs-key";
+    case "needs-setup": return "needs-setup";
+    default: return null;
+  }
+}
+
+/** The service's own name, for sentences ("Anthropic isn't answering", not the card's "Anthropic API key"). */
+const SERVICE_NAMES = { claude: "Claude", anthropic: "Anthropic", chatgpt: "ChatGPT", openai: "OpenAI" };
+
+function labelOf(p, id) {
+  return SERVICE_NAMES[id] || p?.label || id || "This AI";
+}
+
+/** The provider's own fix for a sign-in or key that failed. */
+export function authMessage(providerId) {
+  const id = normalizeProviderId(providerId) || String(providerId || "");
+  if (id === "claude") return AUTH_EXPIRED_MESSAGE;
+  if (id === "chatgpt") return CHATGPT_EXPIRED_MESSAGE;
+  const p = getProvider(id);
+  const hint = p?.errorHints?.auth;
+  if (hint) {
+    // The hint's first sentence in bold: "**Your DeepSeek key was rejected.** Update it in ..."
+    const cut = hint.indexOf(". ");
+    return cut > 0 ? `**${hint.slice(0, cut + 1)}** ${hint.slice(cut + 2)}` : `**${hint}**`;
+  }
+  return `**${labelOf(p, id)} turned down the key.** Check it in Settings > AI.`;
+}
+
+/** The provider's own words for being out of credit, with its top-up link. */
+function billingMessage(p, id) {
+  const hints = p?.errorHints || {};
+  if (id === "claude") return "**The Claude plan's usage limit is reached** for now. It resets on its own; you can check it at claude.ai/settings/usage, or switch to another AI in Settings > AI meanwhile.";
+  if (id === "chatgpt") return "**The ChatGPT plan's usage limit is reached** for now. It resets on its own; you can check it at chatgpt.com/codex/settings/usage, or switch to another AI in Settings > AI meanwhile.";
+  const base = hints.billing || `${labelOf(p, id)} says the account is out of credit.`;
+  const link = hints.topUpUrl && !base.includes(hints.topUpUrl) ? ` (${hints.topUpUrl})` : "";
+  return `**${labelOf(p, id)} is out of credit.** ${base}${link}`;
+}
+
+/**
+ * The words for a kind of failure on a provider. opts.detail is the engine's own words (shown for unknown failures and
+ * Tarsee's refusals), opts.model the model that failed.
+ */
+export function friendly(providerId, kind, { detail = null, model = null } = {}) {
+  const id = normalizeProviderId(providerId) || String(providerId || "");
+  const p = getProvider(id);
+  const label = labelOf(p, id);
+  const words = detail ? String(detail).trim() : "";
+  const plan = PLAN_IDS.has(id);
+  switch (kind) {
+    case "expired":
+    case "auth":
+      return authMessage(id);
+    case "wrong-key":
+      return `**That key belongs somewhere else.** ${words || `It isn't ${p?.keyNoun || "a key for this AI"}.`} Paste the right key in Settings > AI.`;
+    case "billing":
+      return billingMessage(p, id);
+    case "rate":
+      return plan
+        ? billingMessage(p, id)
+        : `**${label} is busy right now** (too many requests). Wait a minute and send your message again.`;
+    case "unavailable":
+      return `**${label} isn't answering right now** (the service is down or overloaded). This usually clears up on its own: try again in a few minutes, or switch to another AI in Settings > AI.`;
+    case "model":
+      return `**${label} can't run ${model ? `the model ${model}` : "the chosen model"}**: it doesn't exist there, or this account can't use it. Pick another model in the chat's model menu or in Settings > AI.`;
+    case "session":
+      return "**The earlier conversation couldn't be picked up again**, so I'm starting a fresh one.";
+    case "credential-isolation":
+    case "needs-key":
+    case "needs-setup":
+    case "bad-model":
+    case "wrong-engine":
+    case "needs-mcp-token":
+      return words || `**${label} can't start this turn.** Check it in Settings > AI.`;
+    default:
+      return words ? `**${label} ran into a problem:** ${words}` : `**${label} ran into a problem** it didn't explain. Try again, or check the server logs.`;
+  }
+}
+
+/**
+ * What an engine failure means on a provider. input: {status, code, message, model}. The first clear signal wins, in
+ * this order: Tarsee's refusal codes, a failed session resume, an expired plan sign-in in the words, the HTTP status
+ * (given or read from the words), the SDK's error code, the words.
+ */
+export function classifyEngineError(providerId, engine, { status = null, code = null, message = null, model = null } = {}) {
+  const id = normalizeProviderId(providerId) || (providerId == null ? null : String(providerId));
+  const text = message == null ? "" : String(message);
+  const st = Number.isInteger(Number(status)) && Number(status) >= 400 ? Number(status) : statusFromMessage(text);
+  const c = code == null ? null : String(code);
+
+  let kind = null;
+  if (c && REFUSAL_CODES.has(c)) kind = c;
+  else if (SESSION_WORDS_RE.test(text)) kind = "session";
+  else if (EXPIRED_WORDS_RE.test(text)) kind = "expired";
+  if (!kind && c && CODE_KINDS[c]) kind = CODE_KINDS[c];
+  if (!kind || kind === "auth" || kind === "rate") {
+    // A status is more exact than a broad code (the SDK calls a 402 "unknown"), except for an auth code with no status.
+    const byStatus = st ? kindFromStatus(st, text) : null;
+    if (byStatus && !(kind && !st)) kind = byStatus;
+  }
+  if (!kind) kind = kindFromWords(text) || "unknown";
+
+  // On a plan, a turned-down sign-in is the sign-in running out; on a key provider an "expired" is its key failing.
+  if (kind === "auth" && PLAN_IDS.has(id)) kind = "expired";
+  if (kind === "expired" && id && !PLAN_IDS.has(id) && getProvider(id)) kind = "auth";
+
+  // An Anthropic key made outside a workspace needs a workspace header on every request, which Tarsee never sends:
+  // the fix is a key made in a workspace (the guide's step 3), not a new copy of the same key.
+  const noWorkspace = id === "anthropic" && (st === 400 || st === 401 || st === 403 || kind === "auth") && WORKSPACE_WORDS_RE.test(text);
+  if (noWorkspace) kind = "auth";
+
+  const detail = REFUSAL_CODES.has(kind) || kind === "unknown" || kind === "wrong-key" ? text : null;
+  return {
+    kind,
+    provider: id,
+    engine: engine || null,
+    status: st,
+    code: c,
+    recoverable: kind === "session",
+    state: failureStateFor(kind),
+    message: noWorkspace ? ANTHROPIC_WORKSPACE_MESSAGE : friendly(id, kind, { detail, model }),
+  };
+}

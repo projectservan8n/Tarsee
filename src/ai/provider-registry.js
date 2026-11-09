@@ -62,10 +62,12 @@ const CLAUDE_ID_RE = /^claude-/i;
 const RUNTIME_CATALOGS = new Set(["openrouter", "openai-models", "chatgpt-models", "local-models"]);
 
 // --- Prices ---
-// USD per million tokens. They are estimates (the UI labels the cost "est."),
-// and Phase 7 checks them against each provider's own dashboard. The design
-// gives DeepSeek Flash at about $0.15 per million tokens in; the other figures
-// are this table's estimates until then.
+// USD per million tokens. OpenAI's are its list prices as OpenRouter passes them
+// through (openrouter.ai/api/v1/models, read 2026-11-09; the base rate, before any
+// long-prompt surcharge). DeepSeek's are its published peak rates (api-docs.deepseek.com,
+// Models & Pricing, read 2026-11-09): cache-miss input is the cacheWrite rate, a cache
+// hit the cacheRead one. A cost worked out from any of them is labelled "est.", and
+// Phase 7 checks them against each provider's own dashboard.
 
 /**
  * DeepSeek's peak hours: 01:00-04:00 and 06:00-10:00 UTC, Monday to Friday.
@@ -79,12 +81,12 @@ const DEEPSEEK_MODELS = [
   {
     id: "deepseek-flash", label: "DeepSeek Flash", vendor: "deepseek",
     context: 1_000_000, efforts: DEEPSEEK_EFFORTS, vision: true, pdf: false,
-    price: { in: 0.15, out: 0.6, cacheRead: 0.015, cacheWrite: 0.15, peak: DEEPSEEK_PEAK },
+    price: { in: 0.3, out: 1.2, cacheRead: 0.006, cacheWrite: 0.3, peak: DEEPSEEK_PEAK },
   },
   {
     id: "deepseek-v4-pro", label: "DeepSeek Pro", vendor: "deepseek",
     context: 1_000_000, efforts: DEEPSEEK_EFFORTS, vision: false, pdf: false,
-    price: { in: 0.5, out: 2, cacheRead: 0.05, cacheWrite: 0.5, peak: DEEPSEEK_PEAK },
+    price: { in: 1.32, out: 3.96, cacheRead: 0.044, cacheWrite: 1.32, peak: DEEPSEEK_PEAK },
   },
 ];
 
@@ -96,23 +98,23 @@ const DEEPSEEK_MODELS = [
 const OPENAI_MODELS = [
   {
     id: "gpt-6-astra", label: "GPT-6 Astra", vendor: "openai",
-    context: 400_000, efforts: [...EFFORT_IDS], vision: true, pdf: false,
-    price: { in: 5, out: 40, cacheRead: 0.5, cacheWrite: 5 },
+    context: 1_050_000, efforts: [...EFFORT_IDS], vision: true, pdf: false,
+    price: { in: 10, out: 50, cacheRead: 1, cacheWrite: 12.5 },
   },
   {
     id: "gpt-6.1-sol", label: "GPT-6.1 Sol", vendor: "openai",
-    context: 400_000, efforts: [...EFFORT_IDS], vision: true, pdf: false,
-    price: { in: 1.5, out: 12, cacheRead: 0.15, cacheWrite: 1.5 },
+    context: 1_050_000, efforts: [...EFFORT_IDS], vision: true, pdf: false,
+    price: { in: 2, out: 10, cacheRead: 0.1, cacheWrite: 2.5 },
   },
   {
     id: "gpt-6-luna", label: "GPT-6 Luna", vendor: "openai",
-    context: 400_000, efforts: [...EFFORT_IDS], vision: true, pdf: false,
-    price: { in: 0.25, out: 2, cacheRead: 0.025, cacheWrite: 0.25 },
+    context: 1_050_000, efforts: [...EFFORT_IDS], vision: true, pdf: false,
+    price: { in: 0.1, out: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
   },
   {
     id: "gpt-5.5", label: "GPT-5.5", vendor: "openai",
-    context: 400_000, efforts: ["low", "medium", "high", "xhigh"], vision: true, pdf: false,
-    price: { in: 1.25, out: 10, cacheRead: 0.125, cacheWrite: 1.25 },
+    context: 1_050_000, efforts: ["low", "medium", "high", "xhigh"], vision: true, pdf: false,
+    price: { in: 5, out: 30, cacheRead: 0.5, cacheWrite: 5 },
   },
 ];
 
@@ -127,7 +129,11 @@ const OPENROUTER_HAIKU = "~anthropic/claude-haiku-latest";
 const CLAUDE_TOKEN = { re: /^sk-ant-oat/i, message: "This is a Claude sign-in token, not an API key. Create an API key in the Anthropic Console instead." };
 const ANTHROPIC_KEY = { re: /^sk-ant-/i, message: "This is an Anthropic key. Paste it in the Anthropic API key card." };
 const OPENROUTER_KEY = { re: /^sk-or-/i, message: "This is an OpenRouter key. Paste it in the OpenRouter card." };
-const OPENAI_KEY = { re: /^sk-(proj|svcacct|admin)-/i, message: "This is an OpenAI key. Paste it in the OpenAI API key card." };
+// OpenAI's project, service-account and admin keys, and its legacy ones (48 characters with T3BlbkFJ in the middle).
+const OPENAI_KEY = { re: /^sk-(proj|svcacct|admin)-|^sk-[a-z0-9]{20}t3blbkfj[a-z0-9]{20}$/i, message: "This is an OpenAI key. Paste it in the OpenAI API key card." };
+// DeepSeek's keys are sk- and 32 lowercase hex characters, a shape no OpenAI key has (so no i flag). Some other
+// OpenAI-compatible servers make keys of that shape too, hence "looks like".
+const DEEPSEEK_KEY = { re: /^sk-[0-9a-f]{32}$/, message: "This looks like a DeepSeek key. Paste it in the DeepSeek card." };
 
 /** The Claude model table (config/constants.js) as registry rows. Built on first use: see the import cycle note at the top. */
 let _claudeModels = null;
@@ -159,7 +165,7 @@ const PROVIDER_TABLE = {
     kind: "subscription",
     shipped: true,
     engines: [CLAUDE_CODE],
-    // Signs in with `claude login` in the Terminal, or the CLAUDE_CODE_OAUTH_TOKEN
+    // Signs in with `claude auth login` in the Terminal, or the CLAUDE_CODE_OAUTH_TOKEN
     // Railway variable from `claude setup-token`. It takes no API key.
     envKey: null,
     keyNoun: null,
@@ -176,7 +182,8 @@ const PROVIDER_TABLE = {
     defaultContext: 1_000_000,
     testProbe: { kind: "sign-in", check: "claude-credentials" },
     balanceProbe: null,
-    errorHints: { auth: "Claude's sign-in expired. Run claude login in the Terminal." },
+    // Only what happened: the card and the wizard put provider-status.js's fix (the command, then Check) after it.
+    errorHints: { auth: "Claude's sign-in has expired." },
   },
 
   anthropic: {
@@ -184,14 +191,16 @@ const PROVIDER_TABLE = {
     storageId: "anthropic",
     label: "Anthropic API key",
     kind: "key",
-    shipped: false,
+    shipped: true,
     engines: [CLAUDE_CODE],
     envKey: "ANTHROPIC_API_KEY",
     keyNoun: "an Anthropic API key",
-    keyPattern: /^sk-ant-api\d+-[A-Za-z0-9_-]{8,}$/,
+    // Anthropic documents the sk-ant- prefix only (personal and service-account keys are the newer kinds); a Claude
+    // sign-in token (sk-ant-oat…) is caught first, by wrongSlot.
+    keyPattern: /^sk-ant-[A-Za-z0-9_-]{16,}$/,
     wrongSlot: [CLAUDE_TOKEN, OPENROUTER_KEY, OPENAI_KEY],
-    keyHelpUrl: "https://console.anthropic.com/settings/keys",
-    consoleUrl: "https://console.anthropic.com/settings/billing",
+    keyHelpUrl: "https://platform.claude.com/settings/keys",
+    consoleUrl: "https://platform.claude.com/settings/billing",
     // Claude Code's own default host, named so nothing is left to a default.
     baseUrl: { [CLAUDE_CODE]: "https://api.anthropic.com" },
     catalog: "claude",
@@ -205,7 +214,7 @@ const PROVIDER_TABLE = {
     errorHints: {
       auth: "Your Anthropic key was rejected. Update it in Settings > AI or the Railway variable ANTHROPIC_API_KEY.",
       billing: "Your Anthropic credit has run out. Add credit in the Anthropic Console.",
-      topUpUrl: "https://console.anthropic.com/settings/billing",
+      topUpUrl: "https://platform.claude.com/settings/billing",
     },
   },
 
@@ -214,7 +223,7 @@ const PROVIDER_TABLE = {
     storageId: "chatgpt",
     label: "ChatGPT plan",
     kind: "subscription",
-    shipped: false,
+    shipped: true,
     engines: [CODEX],
     // Signs in with Codex's own device code (codex login --device-auth). It takes no API key.
     envKey: null,
@@ -234,7 +243,8 @@ const PROVIDER_TABLE = {
     defaultContext: 200_000,
     testProbe: { kind: "sign-in", check: "codex-login-status" },
     balanceProbe: null,
-    errorHints: { auth: "ChatGPT sign-in expired. Sign in again in Settings > AI, or run codex login --device-auth in the Terminal." },
+    // Only what happened: provider-status.js's fix (sign in again, or the Terminal's command) follows it on the card.
+    errorHints: { auth: "The ChatGPT sign-in has expired." },
   },
 
   openai: {
@@ -242,12 +252,12 @@ const PROVIDER_TABLE = {
     storageId: "openai",
     label: "OpenAI API key",
     kind: "key",
-    shipped: false,
+    shipped: true,
     engines: [CODEX],
     envKey: "OPENAI_API_KEY",
     keyNoun: "an OpenAI API key",
     keyPattern: /^sk-(?!ant-|or-)[A-Za-z0-9_-]{16,}$/,
-    wrongSlot: [CLAUDE_TOKEN, ANTHROPIC_KEY, OPENROUTER_KEY],
+    wrongSlot: [CLAUDE_TOKEN, ANTHROPIC_KEY, OPENROUTER_KEY, DEEPSEEK_KEY],
     keyHelpUrl: "https://platform.openai.com/api-keys",
     consoleUrl: "https://platform.openai.com/usage",
     // Passed to Codex explicitly, so a config.toml can't move it (design 4.8).
@@ -272,7 +282,7 @@ const PROVIDER_TABLE = {
     storageId: "openrouter",
     label: "OpenRouter",
     kind: "key",
-    shipped: false,
+    shipped: true,
     // anthropic/* runs on Claude Code, openai/* on Codex, any other maker on
     // whichever engine passed verification (engineFor).
     engines: [CLAUDE_CODE, CODEX],
@@ -286,8 +296,14 @@ const PROVIDER_TABLE = {
     // The attribution title OpenRouter shows (ai.openrouter.appTitle overrides it).
     defaultAppTitle: "Tarsee",
     catalog: "openrouter",
+    // The shipped verified results (models[].verified) land here from the Phase 7 sweep
+    // (scripts/smoke-backends.mjs); the live list itself is the runtime catalog (lib/openrouter-catalog.js).
     models: [],
-    // The owner can edit these (ai.openrouter.tiers). OpenRouter has no fable-latest slug, so fable takes Opus's.
+    // The picker's Recommended section: the default first, then the other tier models, then the shipped verified
+    // ones. Anthropic's models run on Claude Code through OpenRouter's guaranteed /api/v1/messages, so these need no
+    // verification first.
+    recommended: [OPENROUTER_SONNET, OPENROUTER_OPUS, OPENROUTER_HAIKU],
+    // The owner can edit these (ai.openrouter.tiers). Fable takes Opus's slug, as on the other metered providers.
     tiers: { fable: OPENROUTER_OPUS, opus: OPENROUTER_OPUS, sonnet: OPENROUTER_SONNET, haiku: OPENROUTER_HAIKU },
     defaultModel: OPENROUTER_SONNET,
     backgroundModel: OPENROUTER_HAIKU,
@@ -306,7 +322,7 @@ const PROVIDER_TABLE = {
     storageId: "deepseek",
     label: "DeepSeek",
     kind: "key",
-    shipped: false,
+    shipped: true,
     // Claude Code against DeepSeek's Anthropic endpoint (DeepSeek documents
     // it); Codex over its Responses API only when verification picked it.
     engines: [CLAUDE_CODE, CODEX],
@@ -337,7 +353,7 @@ const PROVIDER_TABLE = {
     storageId: "local",
     label: "Local AI",
     kind: "local",
-    shipped: false,
+    shipped: true,
     engines: [CODEX],
     // Optional: only if the owner's server wants one.
     envKey: "TARSEE_LOCAL_AI_KEY",
@@ -346,7 +362,7 @@ const PROVIDER_TABLE = {
     keyNoun: "a key",
     keyPattern: null,
     // A key for another provider must not be sent to a host the owner typed in.
-    wrongSlot: [CLAUDE_TOKEN, ANTHROPIC_KEY, OPENROUTER_KEY, OPENAI_KEY],
+    wrongSlot: [CLAUDE_TOKEN, ANTHROPIC_KEY, OPENROUTER_KEY, OPENAI_KEY, DEEPSEEK_KEY],
     keyHelpUrl: null,
     consoleUrl: null,
     baseUrl: {},
@@ -378,8 +394,8 @@ export const PROVIDER_ALIASES = Object.freeze({ "claude-code": "claude" });
 /**
  * config/constants.js re-exports this as AI_PROVIDERS: the shipped providers,
  * keyed by the id their settings are stored under, in the shape that table has
- * always had. Today that is the Claude plan alone, as "claude-code", exactly
- * as before. A provider joins it when it is shipped.
+ * always had (the Claude plan as "claude-code", exactly as before). A provider
+ * joins it when it is shipped.
  */
 export const AI_PROVIDERS = Object.freeze(Object.fromEntries(
   PROVIDER_IDS.filter((id) => PROVIDERS[id].shipped).map((id) => {

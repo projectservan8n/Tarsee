@@ -4,11 +4,11 @@
 
 <h1 align="center">Tarsee</h1>
 
-<p align="center"><strong>Your personal Claude Code agent, running 24/7 in the cloud.</strong></p>
+<p align="center"><strong>Your personal AI agent, running 24/7 in the cloud.</strong></p>
 
-<p align="center">Talk to Claude from anywhere — web, Telegram, Discord, WhatsApp, Slack, email, or voice. It remembers everything, runs tools, and schedules tasks. Uses your Claude Max subscription. No API keys needed.</p>
+<p align="center">Talk to it from anywhere — web, Telegram, Discord, WhatsApp, Slack, email, or voice. It remembers everything, runs tools, and schedules tasks. Run it on your Claude or ChatGPT plan, on your own API key (Anthropic, OpenAI, OpenRouter or DeepSeek), or free on a model you run yourself.</p>
 
-> **Tarsee is built for Claude Max subscribers.** It runs a persistent Claude Code agent that uses your subscription for every message. Pro subscribers will hit usage limits quickly — Max (especially 5x) is strongly recommended for daily use.
+> **Choose your AI.** Tarsee works on seven kinds of AI account, and you can switch at any time, even for a single chat. An agent that works all day uses a lot: on a plan, a bigger plan lasts much longer; on an API key, set a spending limit at the provider. See [Choose your AI](#choose-your-ai).
 
 <p align="center">
   <a href="https://railway.com/deploy/tarsee?referralCode=sIH3US&utm_medium=integration&utm_source=template&utm_campaign=generic"><img src="https://railway.com/button.svg" alt="Deploy on Railway"></a>
@@ -23,6 +23,8 @@ I was using [OpenClaw](https://github.com/openclaw/openclaw) to run Claude Code 
 I just wanted Claude Code running 24/7 that I could talk to from my phone. So I wrapped the Claude Code SDK directly and built a lightweight frontend. No build step, no TypeScript compile, no framework overhead.
 
 Haven't looked into Claude Cowork yet, but if you love Claude Code and want it always on from any device, this is it.
+
+It started as Claude only. It now also runs on OpenAI's Codex, so the same agent, with the same tools, memory and channels, works on a ChatGPT plan, an OpenAI, OpenRouter or DeepSeek key, or a model on your own machine.
 
 ### How Tarsee Compares
 
@@ -39,15 +41,15 @@ Being honest — some of these projects are massive with huge communities. Tarse
 | **Voice** | Yes (faster-whisper + local Phonon TTS) | Yes (wake word, ElevenLabs) | No | No | Telegram/WeChat voice |
 | **Mobile** | PWA + iOS PIN pad | Native iOS/Android apps | Via messaging apps | Android APK | Via messaging apps |
 | **Memory** | Persistent + deep search | Session-based with group isolation | SQLite + per-group files | JSONL memory store | Token-based memory |
-| **Auth** | Claude subscription (OAuth) | OAuth + API keys | API keys | API keys + OAuth | API keys + OAuth |
-| **LLM support** | Claude only | Claude only | Claude only | 30+ providers | Multi-provider |
+| **Auth** | Claude or ChatGPT plan sign-in, or API keys | OAuth + API keys | API keys | API keys + OAuth | API keys + OAuth |
+| **LLM support** | Claude, OpenAI, DeepSeek, hundreds more through OpenRouter, local models | Claude only | Claude only | 30+ providers | Multi-provider |
 | **Self-host cost** | about $6/mo Railway (measured) | Higher (more resources) | Moderate | ~$10/mo (runs on anything) | Low |
 
 ### Why choose Tarsee?
 
 - **You want simplicity** — no build step, no TypeScript, no framework. Just Node.js serving HTML.
-- **You want Claude specifically** — Tarsee wraps Claude Code SDK directly. Not multi-provider, not trying to be everything.
-- **You want it cheap** — Railway runs about $6/mo for one person's everyday use (measured, Sept 2026); Claude Max is the bigger cost. No API costs on top of it.
+- **You want a real coding agent behind it** — Tarsee runs the vendors' own agents directly (Claude Code and OpenAI's Codex), not a homemade loop, with your choice of AI behind them.
+- **You want it cheap** — Railway runs about $6/mo for one person's everyday use (measured, Sept 2026). A Claude or ChatGPT plan you already pay for adds no per-message cost; DeepSeek or a free OpenRouter model costs cents or nothing.
 - **You want voice + mobile** — PWA with local speech-to-text, hold-to-talk, iOS PIN pad login.
 - **You want memory** — persistent memory across sessions with deep semantic search.
 - **You want browser automation** — stealth Playwright with captcha solving built in.
@@ -56,11 +58,11 @@ Being honest — some of these projects are massive with huge communities. Tarse
 
 - **You need 20+ channels** — OpenClaw or PicoClaw support way more platforms.
 - **You need native mobile apps** — OpenClaw has actual iOS/Android apps.
-- **You need multi-provider** — PicoClaw supports 30+ LLMs. Tarsee is Claude-only.
+- **You need a provider Tarsee doesn't connect to directly** — PicoClaw supports 30+ LLM providers natively. Tarsee connects seven ways (two plans, four kinds of API key and local models); others, such as Gemini, go through OpenRouter.
 - **You need minimal resources** — PicoClaw runs on <10MB RAM. Tarsee needs about 500 MB.
 - **You want a massive community** — OpenClaw has 353K stars and thousands of contributors.
 
-Tarsee is a Claude Code wrapper — not a fork, not a rewrite. It uses `@anthropic-ai/claude-agent-sdk` directly, so you get the exact same Claude Code experience with all built-in tools (Read, Write, Edit, Bash, Grep, Glob) plus Tarsee's own tools on top.
+Tarsee wraps the vendors' own agents — not a fork, not a rewrite. Claude models (and DeepSeek's, and OpenRouter's Claude models) run on `@anthropic-ai/claude-agent-sdk`, Claude Code; OpenAI's and local models run on `@openai/codex-sdk`, Codex. Either way you get that agent's own file and shell tools plus Tarsee's own tools on top. Tarsee picks the engine for each AI: you only choose the AI.
 
 ---
 
@@ -69,23 +71,14 @@ Tarsee is a Claude Code wrapper — not a fork, not a rewrite. It uses `@anthrop
 1. Click **Deploy on Railway** above
 2. **Change the `SETUP_PASSWORD`** — this is your 4-digit PIN to access the web UI. Everything else is pre-configured.
 3. Deploy — open the URL, log in with your PIN
-4. The setup wizard will guide you through connecting your Claude account:
-   - Click **"Open Tarsee's Terminal"** — this opens a terminal on the server (not your local machine)
-   - Click inside the terminal, then type `claude login`
-   - A login link will appear — **highlight it and right-click → Copy** (Ctrl+C won't work in the terminal)
-   - Open the link in your browser and authenticate with your Claude Max account
-   - Come back and click **"I'm connected"** — done!
+4. The setup wizard asks you to **Choose your AI**: **My Claude plan**, **My ChatGPT plan**, or **My own API key**. Follow the steps it shows (they are also in [docs/providers.md](docs/providers.md)):
+   - **A plan:** sign in once. For Claude, open **Tarsee's Terminal** (a terminal on the server, not your own computer), type `claude auth login` and open the link it prints. For ChatGPT, click **Sign in with ChatGPT** and type the one-time code it shows at the link.
+   - **An API key:** paste it in, click **Test**, then **Use this AI**.
 5. Voice works right away: on first boot Tarsee downloads its local voice (Phonon, about 72 MB) to the volume in the background, and Edge TTS speaks in the meantime.
 
-That's it. Credentials are stored on the Railway volume and auto-refresh. No env vars to manage. The Claude Code CLI does **not** update itself: the image installs the version pinned in the Dockerfile (`CLAUDE_CODE_VERSION`, 2.1.308), and a rebuild keeps it. Set `TARSEE_AUTO_UPDATE_CLI=1` to install the latest on every boot instead. The model picker's list comes with that CLI, so newly released models show up after a version bump.
+That's it. Sign-ins are kept on the Railway volume and survive restarts and redeploys; keys are stored encrypted in Tarsee's database. To set it up without the wizard, use Railway variables instead (see [Choose your AI](#choose-your-ai)).
 
-### Authenticating with Claude
-
-You need an active [Claude Max](https://claude.ai) subscription with Claude Code enabled. **Max is strongly recommended** — Pro will hit usage limits with a persistent agent.
-
-Credentials are saved to the Railway volume at `/data/tarsee/.claude-code-home/.credentials.json` and persist across restarts, redeploys, and image rebuilds. The SDK auto-refreshes tokens — you only need to log in once. If you ever get logged out, just run `claude login` again from the terminal (icon in topbar).
-
-> **Why not an env var?** OAuth refresh tokens are single-use. If you set credentials as an env var, every redeploy overwrites the SDK's refreshed token with the stale original, causing auth failures. Logging in directly on the server avoids this entirely.
+The image pins both agents: the Claude Code CLI at the version the Agent SDK bundles (`CLAUDE_CODE_VERSION`, 2.1.319, in the Dockerfile; the build stops if the two differ) and Codex at the `@openai/codex-sdk` version in package.json. Neither updates itself, and a rebuild keeps them. Set `TARSEE_AUTO_UPDATE_CLI=1` to install the latest Claude Code CLI on every boot instead. The Claude model list comes with that CLI, so newly released Claude models show up after a version bump; ChatGPT's list comes from your account.
 
 ### Staying Updated
 
@@ -98,22 +91,59 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 
 ---
 
+## Choose your AI
+
+Tarsee runs on any of these seven, and you can connect several at once. Pick the default in the setup wizard or in **Settings > AI**; each chat can pick its own from the model menu under the message box, and `/model` switches from any channel. Tarsee picks the engine for each one by itself (Claude Code or Codex): you only choose the AI.
+
+| AI | What you need | What it costs | Good to know |
+|---|---|---|---|
+| **Claude plan** | A paid Claude plan (Pro, Max or a Team seat). Sign in once: `claude auth login` in Tarsee's Terminal, or set the Railway variable `CLAUDE_CODE_OAUTH_TOKEN` to the token `claude setup-token` prints | No per-message cost: it uses your plan's limits | Pro runs out quickly with an agent; Max lasts much longer. For your own use |
+| **ChatGPT plan** | A ChatGPT account, Free included. In ChatGPT's Settings → Security, under App security, turn on **Enable device code sign-in for Codex**, then click **Sign in with ChatGPT** in Settings > AI and type the one-time code (or run `codex login --device-auth` in the Terminal) | No per-message cost: it uses your plan's Codex limits. Free plans get a smaller model with limited use | The model list shows only what your account can use. Replies arrive a message at a time. For your own use |
+| **Anthropic API key** | `ANTHROPIC_API_KEY` from the Claude Console | Pay per use, billed by Anthropic | Set a spend limit in the Console |
+| **OpenAI API key** | `OPENAI_API_KEY` from the OpenAI Platform | Pay per use, billed by OpenAI | Give the project a monthly budget with a hard limit. Replies arrive a message at a time |
+| **OpenRouter** | `OPENROUTER_API_KEY` from openrouter.ai | Pay per use at each model's price; models marked Free cost nothing | Hundreds of models with one key. Claude and OpenAI models work straight away; any other needs one click on **Verify** first. Give the key a credit limit |
+| **DeepSeek** | `DEEPSEEK_API_KEY` from platform.deepseek.com | Pay per use from a balance you top up: the cheapest per message | DeepSeek Flash for everyday use; DeepSeek Pro thinks harder but can't see pictures |
+| **Local AI** | `TARSEE_LOCAL_AI_URL`: the address of your Ollama or LM Studio server (and `TARSEE_LOCAL_AI_KEY`, only if it asks for one) | Free: it runs on your own hardware | Verify a model before you rely on it: small models use tools poorly. On Railway, run it as another service on the private network |
+
+Each one's full setup, the same steps the app shows, is in **[docs/providers.md](docs/providers.md)**.
+
+**Where keys go.** Paste a key into its card in **Settings > AI**, where it is stored encrypted and only its last 4 characters are ever shown again, or set it as a Railway variable (your service > Variables). Keys belong in one of those two places and never in files: not in the repository, not in `.env.example`, not in a chat message. Each key is only ever sent to its own provider, and a key set as a variable never changes which AI answers by itself. Set `ENCRYPTION_KEY` before you save a key in Settings. The commands the agent runs don't get an AI's key in their environment, but on a Linux server they run as the same user as Tarsee, so they can still read the key from Tarsee's processes or its data folder: give every key a spending limit at its provider, which is the real guard ([details](docs/providers.md#tools-on-every-ai)).
+
+**Plan or API key?** Signing in with a Claude or ChatGPT plan is for your own personal use, under Anthropic's and OpenAI's terms. If other people talk to this Tarsee (a team, customers, a shared channel), use an API key.
+
+### API keys only
+
+**Settings > AI** has a switch, **Only use API keys**. With it on, Tarsee never uses a Claude or ChatGPT plan sign-in: every message is billed to an API key. The Railway variable `TARSEE_KEYS_ONLY=1` locks it on, so it can't be switched off from the dashboard.
+
+### Set it up with Railway variables only
+
+Set `TARSEE_AI_PROVIDER` to `claude`, `anthropic`, `chatgpt`, `openai`, `openrouter`, `deepseek` or `local`, plus that AI's key (or `TARSEE_LOCAL_AI_URL`, or `CLAUDE_CODE_OAUTH_TOKEN` for the Claude plan), and once that AI is ready the setup wizard is skipped. `TARSEE_AI_MODEL` picks its model (empty: that AI's default; for Local AI, the first model its server lists, so set it to pin one). A choice made later in Settings > AI wins over these.
+
+### Keeping the cost down
+
+- **A spending limit at the provider** is the surest cap: a credit limit on the OpenRouter key, a small DeepSeek top-up, a project budget with a hard limit at OpenAI, a spend limit in the Claude Console. Each guide in [docs/providers.md](docs/providers.md) shows where.
+- **Monthly spending cap** (Settings > AI, optional): counts what the API-key AIs cost this month and stops using them at the cap until next month.
+- **Backup** (Settings > AI, optional): when the default AI is out of credit, signed out or down, Tarsee answers with the backup you picked, and says so.
+- Background work (crons, the heartbeat) runs on the chosen AI's smaller model with a spend ceiling per job. The Usage page shows what each AI cost: exact where the provider reports it, marked "est." where Tarsee works it out, and "Included in plan" for the plans.
+
+---
+
 ## What You Get
 
 ### Chat Everywhere
 - **Web UI** — A calm chat in the style of claude.ai: every chat has its own address (`/chat/<id>`, `/chat/new`) with Back/Forward and shareable links, a plain sidebar grouped by where each chat lives (Web, Telegram, Discord, WhatsApp, Email, Slack, and Background for crons and the heartbeat while they run), search, and a rename / fresh session / delete menu on each chat. Markdown, code blocks, tables, file attachments, image paste, drag-and-drop, multi-file upload. PWA — save to homescreen on iOS/Android.
 - **Tool steps that stay out of the way** — while the agent works, one quiet line in the answer's place ("Working · 3 steps · Reading README.md · 84.2k tokens · 41 tk/s", with Stop); once it answers, the steps fold into "Used 12 tools" above the reply, each opening to its input and output. The line opens even before the first step: to a summary of what the model is thinking (for messages sent from the dashboard; it costs the answer about 3 seconds, so Telegram, Discord, email and voice replies do without), an API error it is retrying, or compacting.
 - **Queued, not cancelled** — a message sent while a reply is running shows as "Queued · after the reply above" (no timer) and becomes the working line when its turn begins. Its own Stop takes just that message out of the queue.
-- **An expired Claude sign-in says so** — instead of a "401 / Failed to authenticate" error arriving as the reply, the chat says the sign-in expired and to run `claude login` in the Terminal (the `>_` button, on phones too).
+- **Problems in plain words** — instead of a "401 / Failed to authenticate" error arriving as the reply, the chat says what happened and what to do, the same on every channel: the Claude sign-in expired (run `claude auth login` in the Terminal, the `>_` button, on phones too), the ChatGPT sign-in expired (sign in again from Settings > AI), the balance is empty or a key's limit is reached (with where to top up).
 - **Telegram** — Text, photos, PDFs, voice messages, video notes. Group @mention support, inline buttons, forwarded message detection.
 - **Discord** — Text, images, PDFs, voice messages. Always-online bot with presence status.
 - **Email** — Real-time over IMAP IDLE + SMTP. Mention keyword (default `@tarsee`) gates replies; CC/BCC/forwards are absorbed as context without an outbound. Works with any mailbox that allows IMAP + SMTP with an app password (Gmail, iCloud, Zoho, FastMail, Yahoo, self-hosted; not Outlook.com or Microsoft 365).
 - **WhatsApp** — Text, images, PDFs, voice notes (Whisper-transcribed), and documents via [WHAPI Cloud](https://whapi.cloud) (free tier OK). Direct messages only. Per-channel webhook secret in URL, auto-generated on first enable.
 - **Slack** — DMs, and channels by @mention. Every reply goes in a thread and each thread is its own conversation; a thread Tarsee is in needs no more mentions, and a mention in someone else's thread reads the thread first. Replies stream with Slack's native AI streaming, a live card for each tool it runs, and Slack's stop button; where a workspace has no native streaming, replies are posted and edited instead. Markdown renders as written (tables and code included). Images, PDFs, voice clips (Whisper-transcribed) and any other file in; files out as real uploads. `/tarsee` for questions and commands. Socket Mode, so no public URL; the app is made from a manifest Settings copies for you.
-- **Attachment save-to-disk** — every image, PDF, voice note, and document sent via Discord, Telegram, email, WhatsApp, Slack, or web lands in `workspace/uploads/` so Claude can read, transform, and reference it across turns (not just in the message it arrived on).
+- **Attachment save-to-disk** — every image, PDF, voice note, and document sent via Discord, Telegram, email, WhatsApp, Slack, or web lands in `workspace/uploads/` so the AI can read, transform, and reference it across turns (not just in the message it arrived on).
 - **Live on every device** — one durable timeline per conversation (messages, turn start/end and every tool step) that every channel feeds and every device follows over WebSocket. A device that sleeps or reconnects catches up from the last event it saw, even across a restart, and a Telegram, Discord, WhatsApp, Slack or email turn can be watched (and stopped) live from the dashboard. Sends are optimistic and never lost; a message sent while a reply is running queues behind it instead of cancelling it.
 - **Session recap** — resume a conversation idle >30 min and a dismissible "Last time" card summarizes the last few exchanges before the first new message. Zero AI cost (extractive summary).
-- **Web Push notifications** — iOS/Android/desktop push via VAPID when cron jobs finish, webhooks fire, or Claude proactively pings you via the `tarsee_push_notification` MCP tool. Opt-in from Settings > Appearance.
+- **Web Push notifications** — iOS/Android/desktop push via VAPID when cron jobs finish, webhooks fire, or the agent proactively pings you via the `tarsee_push_notification` tool. Opt-in from Settings > Appearance.
 - **All channels share** the same AI, memory, and tools.
 
 ### Voice Mode
@@ -136,7 +166,7 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 
 ### Tools & Automation
 - **20+ MCP tools** — send messages, schedule tasks, remember facts, search the web, create canvases, manage files, encrypted vault, calculator, browser, push notifications, email threads, and more.
-- **Calculator** — precise math tool so Claude never hallucinates numbers. Arithmetic, percentages, Math.* functions.
+- **Calculator** — precise math tool so the AI never hallucinates numbers. Arithmetic, percentages, Math.* functions.
 - **Sends files** — ask for a report, an export or a picture on Telegram, Discord, WhatsApp or Slack and `tarsee_send_file` sends it as a real attachment to that chat (Telegram up to 50 MB, Discord 25 MB, WhatsApp 16 MB, Slack 100 MB; on Slack into the same thread). Email files go as attachments through `tarsee_send_email_thread`.
 - **Files in the dashboard chat** — every file the agent sends and every file people send in shows on the message it came with, in any chat: a picture or video as a tile, a PDF with its first page, a sound as a waveform player. A click opens it in the viewer (pictures zoom, PDFs show their pages, CSV as a table, text and code as text), with Download always there. Kept copies live in the workspace's `uploads` folder for 30 days.
 - **Keys by name** — the vault's keys are in the agent's environment, so its scripts read `OPENAI_API_KEY` and the like by name and a key never goes into a command. Not when `get_key` is denied in Tool Permissions; `TARSEE_AGENT_ENV_KEYS` limits or turns it off.
@@ -144,36 +174,41 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Stealth browser** — Playwright with anti-detection (real fingerprints, no webdriver flag). Navigate, fill forms, screenshot, scroll, wait, run JS.
 - **Captcha solver** — auto-detect and solve reCAPTCHA, hCaptcha, Cloudflare Turnstile via 2Captcha or Capsolver API.
 - **Proactive briefings** — `/briefing on` schedules a daily morning summary pushed to all channels.
-- **Auto model routing** — `/auto on` picks haiku/sonnet/opus based on message complexity.
+- **Auto model routing** — `/auto on` picks your AI's small, everyday or top model (haiku/sonnet/opus on Claude) based on message complexity.
 - **Deep memory search** — AI reads all memories semantically when keyword search fails.
 - **Cron scheduler** — recurring AI tasks or direct tool actions. One-time reminders auto-delete.
 - **Railway tool** — `tarsee_railway` lists your Railway projects, services and variable names, sets a variable and redeploys a service, with an account or workspace token from the vault (`RAILWAY_API_TOKEN`). A secret goes in by vault key name (`from_key`), so it never passes through a chat or a command; values are never read back. Changes need someone's go (`approved_by`), and nothing in it deletes. On Railway, leaving out the project means Tarsee's own service, and redeploying that restarts Tarsee.
 - **Web terminal** — browser-based shell access via xterm.js.
 - **File manager** — browse, edit, and create workspace files from the UI.
 - **REST API** — `/api/v1/message` endpoint for iOS Shortcuts, scripts, and automations.
-- **Skills** — modular instruction packs with credentials and configs. Claude reads them automatically when relevant. Ships with `/ultrareview` (3-agent parallel branch review — correctness / architecture / UX-a11y) and `/fewer-permission-prompts` (proposes a tool-allowlist patch from your audit log) preinstalled.
+- **Skills** — modular instruction packs with credentials and configs. The agent reads them automatically when relevant. Ships with `/ultrareview` (3-agent parallel branch review — correctness / architecture / UX-a11y) and `/fewer-permission-prompts` (proposes a tool-allowlist patch from your audit log) preinstalled.
 - **`/checkpoint` — cross-restart handoff** — manual AI-synthesized `CHECKPOINT.md` before a known redeploy, plus an activity-gated auto-checkpoint every 6h as a safety net. On the next boot, the checkpoint is injected into the system prompt so work picks up mid-thought instead of starting cold.
 - **Retention** — daily 03:00 sweep prunes conversations idle >14 days and checkpoint archives older than 30 days (or >50 files). Keeps the most recent thread per channel so Discord/Telegram/email session continuity never breaks. One-line summaries of pruned conversations append to `memory/archived-conversations.md` so nothing vanishes without a record. Configurable via `retention.*` settings or `/retention` command.
 
 ### Cost Controls
-- **Cheap floor for unattended work** — cron jobs, the 30-minute heartbeat and the boot checklist run on the Haiku alias by default, not the interactive model. Raise a specific one with the `cron.defaultModel`, `heartbeat.model` or `boot.model` setting, or per job with `job.model`. A zero-token keyword heuristic escalates a cron job to Sonnet or Opus when its prompt clearly warrants it.
-- **Hard ceilings** — every background turn carries a wall-clock timeout, a turn cap well below the interactive limit, and a spend ceiling enforced by the Agent SDK. A job that hits one is reported as failed, not as a successful empty run.
+- **Cheap floor for unattended work** — cron jobs, the 30-minute heartbeat and the boot checklist run on the AI's small model by default (the Haiku alias on Claude), not the interactive model. Raise a specific one with the `cron.defaultModel`, `heartbeat.model` or `boot.model` setting, or per job with `job.model`: each takes a tier word (haiku, sonnet, opus), a model of the default AI (for example `deepseek-v4-pro` on the DeepSeek key) or a `provider:model` ref. A name the default AI doesn't offer, or a Local AI or OpenRouter model that hasn't been verified, is logged and the small model runs instead. A zero-token keyword heuristic escalates a cron job to Sonnet or Opus when its prompt clearly warrants it.
+- **Hard ceilings** — every background turn carries a wall-clock timeout, a turn cap well below the interactive limit, and a spend ceiling (enforced by the engine where it can, otherwise by Tarsee from the live usage). A job that hits one is reported as failed, not as a successful empty run.
 - **No duplicate boot spend** — BOOT.md runs once per build, keyed to the commit and a hash of the file. A crash-looping container no longer pays for a model turn on every restart.
-- **One turn at a time per conversation** — a second message queues instead of starting a concurrent turn against the same Claude session.
-- **Automatic fallback** — an overloaded model steps down a tier rather than failing the turn.
+- **One turn at a time per conversation** — a second message queues instead of starting a concurrent turn against the same session.
+- **Automatic fallback** — an overloaded Claude model steps down a tier rather than failing the turn, and an optional **Backup** AI (Settings > AI) answers when the default one is out of credit, signed out or down.
+- **Spending you can see and cap** — the Usage page shows each AI's spend (exact where the provider reports it, "est." otherwise, "Included in plan" for the plans), Settings > AI shows OpenRouter's and DeepSeek's balance, and an optional **Monthly spending cap** stops the API-key AIs at a limit you set.
 
 ### Security
-- **Tool Permissions are enforced** — Settings > Tool Permissions gates real execution at the single point every tool call passes through. Setting a tool to `always_deny` stops it, tells the model not to work around it, and records the attempt in the audit log.
+- **Tool Permissions are enforced** — Settings > Tool Permissions gates real execution at the single point every tool call passes through. Setting a tool to `always_deny` stops it, tells the model not to work around it, and records the attempt in the audit log. This covers Tarsee's own tools on every AI; the engines' built-in shell and file editing are not gated, on any AI.
 - **Credentials encrypted at rest** — bot tokens, IMAP/SMTP passwords and webhook secrets are encrypted field-by-field inside channel configs, and are never returned to the browser (the API reports `hasToken` / `hasPassword` instead).
 - **SSRF protection** — the fetch and browser tools refuse loopback, RFC1918 and link-local targets, including the `169.254.169.254` cloud metadata endpoint.
-- **Scoped file access** — the file manager is confined to the workspace and cannot reach the Claude credentials, encryption key, API token or database.
+- **Scoped file access** — the file manager is confined to the workspace and cannot reach the AI sign-ins, encryption key, API token or database.
+- **Credentials kept apart** — each AI's sign-in and key lives in its own folder and only reaches its own turns, and a key is only ever sent to its own provider's address. A key set as a variable never changes which AI answers or how you are billed: only your choice in Settings > AI (or `TARSEE_AI_PROVIDER`) does.
 - **Isolated canvases** — model-authored pages require a login and run in a sandboxed null origin, so a prompt-injected canvas cannot reach Tarsee's API or storage.
 
 ### Models
-- **Sonnet at Medium by default** — the default is the `sonnet` alias at Medium effort (`ai.defaultEffort` changes the effort; Settings or `/model` the model). Each chat can pick its own in the composer's picker.
+- **Every ready AI in one picker** — the composer's picker lists the models of each AI that is ready, the default AI first; each chat keeps its own pick, and switching AI mid-chat carries the recent conversation over. `/model <provider> [model]` does the same from any channel.
+- **Each AI's own models** — Claude (plan or key): Claude Code's catalog, below. ChatGPT plan: only the models your account can use, read from the account. OpenAI key: the models your key can use. OpenRouter: Recommended, Verified by you, and All models (Free ones marked). DeepSeek: DeepSeek Flash and DeepSeek Pro. Local AI: whatever your server has.
+- **Verify** — a model with no tested path yet (most OpenRouter makers, every Local AI model) gets a one-click **Verify** in Settings > AI: a few short test turns that check it can reply, use Tarsee's tools and the shell, and pick up where it left off. The picker lists it once it passes.
+- **Sonnet at Medium by default on Claude** — the Claude default is the `sonnet` alias at Medium effort (`ai.defaultEffort` changes the effort; Settings or `/model` the model).
 - **Always the newest model** — the Agent SDK runs its own bundled Claude Code, which would take a bare alias (`opus`, `sonnet`, `haiku`, `fable`) to the newest model *it* knew when it was built, several releases behind. Tarsee reads Claude Code's current model catalog (from the installed `claude`, or the copy the CLI cached for your account) and turns an alias into the newest exact model id before every turn. Pinned ids (`claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`, …) remain selectable when you need a frozen, reproducible model.
 - **Tiers** — `fable`, `opus`, `sonnet` and `haiku` are all available as always-latest aliases, in capability-descending order, and `/model <name>` accepts either an alias or a pinned id. Fable is the top tier: `/model fable` tracks the newest Fable release, and `claude-fable-5-1` is selectable as a frozen pin.
-- **Automatic fallback** — every turn ships a `--fallback-model` ladder one tier below whatever you chose, so an overloaded Fable turn degrades to Opus instead of failing.
+- **Automatic fallback on Claude** — every turn ships a `--fallback-model` ladder one tier below whatever you chose, so an overloaded Fable turn degrades to Opus instead of failing.
 
 ### Search & Analytics
 - **Context kept lean** — ported from TarseeMacOS, where they were measured on long jobs: the chat's context is summarized at 180k tokens (`TARSEE_COMPACT_WINDOW`), a long Bash output or tool result goes to a file the agent can read (`TARSEE_BASH_OUTPUT_MAX_CHARS`, `TARSEE_TOOL_RESULT_MAX_CHARS`), each quick memory is one line of at most 300 characters and each skill a short description in the system prompt, a workspace file may be 12 KB there (a longer one is cut and the cut is logged), and `MEMORY.md` is never inlined or read whole: the agent greps it for what a task needs.
@@ -183,17 +218,17 @@ If you deployed from the Railway template, your instance is a snapshot — it wo
 - **Audit log** — timestamped log of all tool executions, logins, and settings changes.
 - **QR code** — scan from desktop to instantly open Tarsee on your phone.
 - **Typing indicator** — see when you're typing on another device in real-time.
-- **Todo rendering** — Claude's task lists render as styled checklists with progress indicators.
+- **Todo rendering** — the agent's task lists render as styled checklists with progress indicators.
 
 ### Memory & Identity
 - **Workspace files** — SOUL.md (personality), MEMORY.md (knowledge), USER.md (user info), IDENTITY.md.
-- **Auto-memory** — Claude saves important facts as you chat. Memories persist across sessions.
+- **Auto-memory** — the agent saves important facts as you chat. Memories persist across sessions.
 - **Daily logs** — timestamped notes auto-appended to `memory/YYYY-MM-DD.md`.
 - **Checkpoints** — `CHECKPOINT.md` on the volume survives redeploys. Read once on the next boot, then archived to `memory/checkpoints/<timestamp>.md` for grep-able history.
 
 ### Appearance & Controls
 - **Themes** — `warm-charcoal` (default, terracotta accent), `noir` (pure black OLED-friendly), `solarized-light` (daylight), `jarvis-blue` (cyan accent). Switch from Settings > Appearance or via `/theme <name>`. Plugin-shipped themes are loaded from `ui.themes.plugin` automatically.
-- **Model and effort picker** — the button beside Send ("Sonnet 5.5 · Medium") opens a picker like Claude Code's: the newest model of each family (keys 1 to 4), Effort (Low, Medium, High, Extra, Max, with the recommended level for that model) and More models. The list is Claude Code's own model catalog, so new models appear with no code change. Each chat keeps its own pick; `/effort` opens the Effort list.
+- **Model and effort picker** — the button beside Send ("Sonnet 5.5 · Medium") opens a picker like Claude Code's: a group for each ready AI with its models (number keys pick the ones on top), Effort (Low, Medium, High, Extra, Max, as far as that model goes) and search. Claude's list is Claude Code's own model catalog and ChatGPT's comes from your account, so new models appear with no code change. Each chat keeps its own pick; `/effort` opens the Effort list.
 - **Your own icon** — Settings > Appearance takes a PNG, JPG, WebP or SVG, crops it square, and serves it as the favicon, tab, home-screen and app icon.
 - **Own dialogs** — every confirmation is the dashboard's own dialog, never the browser's `confirm()` / `prompt()`.
 
@@ -207,11 +242,21 @@ You (web / telegram / discord / whatsapp / slack / email / voice / iOS push)
   v
 Tarsee Server (Railway)
   |
-  +-- Claude Code Agent SDK (subscription auth; CLI pinned in the Dockerfile)
-  |     +-- Built-in: Read, Write, Edit, Bash, Grep, Glob
-  |     +-- MCP tools: send_message, send_file, schedule_task, remember,
-  |         create_canvas, calculator, browser, web_search,
-  |         push_notification, send_email_thread, configure_email, etc.
+  +-- One turn layer: picks the AI and its engine, Stop, queue, live view,
+  |   sessions, the handoff when a chat switches AI, budgets, the backup AI
+  |     |
+  |     +-- Claude Code (Agent SDK; CLI pinned in the Dockerfile)
+  |     |     Claude plan, Anthropic key, DeepSeek, OpenRouter's Claude models
+  |     |     Built-in: Read, Write, Edit, Bash, Grep, Glob
+  |     |
+  |     +-- Codex (@openai/codex-sdk, pinned)
+  |           ChatGPT plan, OpenAI key, Local AI, OpenRouter's OpenAI models
+  |           Built-in: shell, apply_patch, todo list
+  |
+  |   Tarsee's own tools on both (in process on Claude Code, over a
+  |   private loopback endpoint on Codex): send_message, send_file,
+  |   schedule_task, remember, create_canvas, calculator, browser,
+  |   web_search, pdf_read, push_notification, send_email_thread, etc.
   |
   +-- Voice:      faster-whisper STT + Phonon TTS (Edge TTS fallback)
   +-- Browser:    Playwright (stealth) + captcha solving
@@ -247,11 +292,11 @@ Configure in **Settings > Channels** after deploying (the setup wizard's last st
 2. Once it's connected, copy the channel's **API token**.
 3. In Tarsee → `Settings > Channels > WhatsApp`, paste the token and click Save. A **webhook URL** appears.
 4. In WHAPI, open the channel's **Settings** (top right): paste that URL in the webhooks block, set **Mode** to **Body** (the other modes change the URL), turn on the `messages` event with `POST`, and save. **Check webhook** tests it.
-5. From another phone, send a WhatsApp message to the linked number — Tarsee replies via Claude.
+5. From another phone, send a WhatsApp message to the linked number — Tarsee replies.
 
 The webhook URL has to be public (a Railway domain works; `localhost` needs a tunnel). WHAPI's free sandbox covers 5 different people a month and 150 messages a day, and WhatsApp unlinks the device if the phone doesn't open WhatsApp for 14 days.
 
-Direct messages only; group messages are silently ignored. Voice notes are transcribed locally via faster-whisper. Images and PDFs go to Claude vision. Other documents (DOCX, XLSX, ZIP, TXT, CSV, etc.) are saved to `workspace/uploads/` and Claude can `Read` them with the file tool.
+Direct messages only; group messages are silently ignored. Voice notes are transcribed locally via faster-whisper. Images and PDFs go to the AI (a PDF as its text for an AI that can't open PDFs). Other documents (DOCX, XLSX, ZIP, TXT, CSV, etc.) are saved to `workspace/uploads/` and the agent can open them with its file tools.
 
 **Slack:** Tarsee connects with Socket Mode (it opens the connection to Slack), so there is no request URL to set up. The app comes from [`src/channels/slack-app-manifest.yml`](src/channels/slack-app-manifest.yml), which has every scope and event the bot uses.
 
@@ -310,11 +355,11 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all commands |
-| `/model fable\|opus\|sonnet\|haiku` | Switch AI model (alias tracks latest) or pass a pinned id like `claude-fable-5-1` |
+| `/model [provider] [model]` | Switch AI or model: `/model deepseek`, `/model openrouter`, `/model opus` (an alias tracks the latest), a pinned id like `claude-fable-5-1`, or a ref like `deepseek:deepseek-flash`. `/model` alone lists what each ready AI offers |
 | `/think low\|medium\|high\|xhigh\|max` | Set thinking effort for the session (ascending cost; `xhigh` sits between high and max; Medium is the default) |
 | `/effort` | Open the composer picker's Effort list |
 | `/theme [name]` | List or switch themes: warm-charcoal, noir, solarized-light, jarvis-blue |
-| `/auto [on\|off]` | Toggle auto model routing (haiku/sonnet/opus by complexity) |
+| `/auto [on\|off]` | Toggle auto model routing (your AI's small, everyday or top model by complexity) |
 | `/briefing [on\|off\|time]` | Morning briefing — run now, schedule daily, or set time |
 | `/send telegram\|discord\|whatsapp\|slack\|web` | Forward conversation context to another channel |
 | `/fork [from #N]` | Branch conversation — copy history into new session |
@@ -322,7 +367,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `/email [check\|summary\|draft]` | Check inbox, summarize, or draft emails (CLI helpers — see also the email channel for real-time chat) |
 | `/webhook [list\|add\|remove]` | Manage webhook triggers (external events → AI) |
 | `/files [search term]` | List or search workspace files |
-| `/status` | Full dashboard (uptime, tokens, messages, channels) |
+| `/status` | Full dashboard (uptime, the AI in use and whether it's ready, tokens, messages, channels) |
 | `/clear` | New conversation |
 | `/cron` | Manage scheduled tasks |
 | `/remember [fact]` | Save to memory |
@@ -341,7 +386,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 |-----|-------------|
 | **Identity** | Bot name (set via IDENTITY.md) |
 | **Workspace** | SOUL.md, USER.md, MEMORY.md editors |
-| **AI Provider** | Model selection, API config |
+| **AI** | Choose your AI: a card per AI with its step-by-step setup, its key or sign-in, **Test** (with the balance where the provider has one) and **Verify**; the default AI, **Only use API keys**, the backup AI and the monthly spending cap |
 | **Channels** | Telegram, Discord, WhatsApp (WHAPI), Slack (Socket Mode, native streaming), Email (IMAP + SMTP with provider presets, mention keyword, reply-all marker, allowlist) |
 | **Appearance** | Theme switcher (4 built-in + plugin themes) + Web Push enable/disable/test |
 | **Automation** | Cron jobs, webhooks, retention settings |
@@ -350,7 +395,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | **Memories** | View and manage stored memories |
 | **Security** | Security audit, tool permissions, captcha solver config |
 | **Canvas** | Gallery of AI-generated interactive UIs |
-| **Token Health** | Per-conversation context-window fill, Claude transcript (.jsonl) size, and which sessions will reset on their next turn |
+| **Token Health** | Per-conversation context-window fill, transcript (.jsonl) size, and which sessions will reset on their next turn |
 | **Audit Log** | All tool executions, logins, settings changes |
 
 ---
@@ -360,14 +405,24 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `SETUP_PASSWORD` | Yes | — | 4-digit PIN for the web UI. **Required in production** — the server refuses to boot without it, because nobody could log in and the web terminal would be exposed. |
-| `ENCRYPTION_KEY` | Yes | — | AES-256 key. `openssl rand -hex 32` |
+| `ENCRYPTION_KEY` | Yes | made on the volume | AES-256 key for everything Tarsee stores encrypted: keys saved in Settings > AI, channel tokens, the vault. Make one with `openssl rand -hex 32` and set it before you save any key in Settings; keep the same one for good. Without it, one is made and kept on the volume next to the data it protects. |
 | `NODE_ENV` | Yes | — | Set to `production` |
-| `CLAUDE_DEFAULT_MODEL` | No | `sonnet` | Default model for new sessions. Defaults to the **`sonnet` alias**, which Tarsee resolves to the newest Sonnet in Claude Code's catalog before each turn. That catalog comes with the Claude Code version the image pins (`CLAUDE_CODE_VERSION` in the Dockerfile), so a model released later arrives when that version is bumped and redeployed, or on every boot with `TARSEE_AUTO_UPDATE_CLI=1`; the list Claude Code saves for your account when you use `claude` in the web terminal counts too, when it is newer. Set `opus` for the most capable default, a pinned id (e.g. `claude-opus-5`) if you need a frozen model, or `haiku` for a cheaper one. |
+| `TARSEE_AI_PROVIDER` | No | `claude` | The default AI when Settings > AI hasn't chosen one: `claude`, `anthropic`, `chatgpt`, `openai`, `openrouter`, `deepseek` or `local`. With that AI's key it skips the setup wizard. See [Choose your AI](#choose-your-ai). |
+| `TARSEE_AI_MODEL` | No | that AI's default | The default AI's model when Settings hasn't chosen one (for example `sonnet`, or `deepseek-flash`). Empty means that AI's default; for Local AI, the first model its server lists (set it to pin one). |
+| `TARSEE_KEYS_ONLY` | No | off | Set `1` to lock **Only use API keys** on: no Claude or ChatGPT plan sign-in is ever used. For a Tarsee other people talk to. |
+| `ANTHROPIC_API_KEY` | No | — | Anthropic API key (`sk-ant-api…`), for **Anthropic API key**: Claude, billed per use. The Claude plan ignores it. A key saved in Settings > AI wins over this. |
+| `OPENAI_API_KEY` | No | — | OpenAI API key, for **OpenAI API key**, billed per use. Voice uses it only if you pick Whisper API in Settings > Voice. |
+| `OPENROUTER_API_KEY` | No | — | OpenRouter key (`sk-or-v1-…`), for hundreds of models with one key. Give the key a credit limit. |
+| `DEEPSEEK_API_KEY` | No | — | DeepSeek API key, the cheapest per message, spent from a balance you top up. |
+| `TARSEE_LOCAL_AI_URL` | No | — | Local AI: your Ollama or LM Studio server, e.g. `http://localhost:11434/v1`, or on Railway `http://ollama.railway.internal:11434/v1`. |
+| `TARSEE_LOCAL_AI_KEY` | No | — | Local AI's key, only if your server asks for one. Only ever sent to `TARSEE_LOCAL_AI_URL`. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | No | — | The Claude plan without the Terminal: the token `claude setup-token` prints (it lasts a year). Only the Claude plan ever sees it. |
+| `CLAUDE_DEFAULT_MODEL` | No | `sonnet` | The Claude plan's and Anthropic key's default model when Settings has none. Defaults to the **`sonnet` alias**, which Tarsee resolves to the newest Sonnet in Claude Code's catalog before each turn. That catalog comes with the Claude Code version the image pins (`CLAUDE_CODE_VERSION` in the Dockerfile), so a model released later arrives when that version is bumped and redeployed, or on every boot with `TARSEE_AUTO_UPDATE_CLI=1`; the list Claude Code saves for your account when you use `claude` in the web terminal counts too, when it is newer. Set `opus` for the most capable default, a pinned id (e.g. `claude-opus-5`) if you need a frozen model, or `haiku` for a cheaper one. |
 | `ELEVENLABS_API_KEY` | No | — | Premium TTS voices. Used when ElevenLabs (or Auto) is picked in Settings > Voice, or when the key is set and no engine was ever saved; otherwise the default engine, Phonon, and its fallback, Edge TTS, are free. |
 | `VAPID_SUBJECT` | No | your Railway `https://` address, else `mailto:admin@example.com` | The contact Web Push services are given for your server's notifications: a `mailto:` or `https:` URL, e.g. `mailto:you@yourdomain.com`. Apple's push service turns away subjects that aren't a real mailto/https address. |
 | `RAILWAY_API_TOKEN` | No | — | A Railway account or workspace token for the `tarsee_railway` tool (Railway: Account Settings > Tokens; a project token will not do). Better kept in the vault: tell Tarsee to save it with `tarsee_set_key` as `RAILWAY_API_TOKEN`, which is read first. Railway does not set this one for you. |
-| `TARSEE_AGENT_ENV_KEYS` | No | every vault key | Which vault keys go into the agent's environment: a comma-separated list of names, or `off` for none. By default every key named in capitals, except Claude's and Anthropic's own (login and billing) and names that change how programs run (`PATH`, `NODE_*`, proxies and the like). None while `get_key` is denied in Tool Permissions. |
-| `TARSEE_AUTO_UPDATE_CLI` | No | off | Set `1` to install the latest Claude Code CLI on every boot (adds up to ~60s to each boot). Off, the image keeps the version pinned in the Dockerfile (`CLAUDE_CODE_VERSION`). |
+| `TARSEE_AGENT_ENV_KEYS` | No | every vault key | Which vault keys go into the agent's environment: a comma-separated list of names, or `off` for none. By default every key named in capitals, except Claude's, Anthropic's and Codex's own (login, billing and host) and names that change how programs run (`PATH`, `NODE_*`, proxies and the like). None while `get_key` is denied in Tool Permissions. |
+| `TARSEE_AUTO_UPDATE_CLI` | No | off | Set `1` to install the latest Claude Code CLI on every boot (adds up to ~60s to each boot). Chat turns keep running the Agent SDK's own copy, so the Terminal's `claude` and the turns then differ (the boot log says so). Off, the image keeps the version pinned in the Dockerfile (`CLAUDE_CODE_VERSION`). |
 | `TARSEE_PHONON_AUTO_INSTALL` | No | on | Set `0` to stop Tarsee downloading Phonon's model in the background on boot when Phonon is the voice engine. The Install Phonon button in Settings > Voice still works. |
 | `TARSEE_PHONON_DIR` | No | `<data dir>/tts/phonon` | Where Phonon's model, voices and (if needed) Python venv live. On Railway that is `/data/tarsee/data/tts/phonon`, on the volume. |
 | `TARSEE_PHONON_PYTHON` | No | `python3` | Python interpreter with the `ptts` package for Phonon's worker. Without it Tarsee uses `python3`, or a private venv it creates under `TARSEE_PHONON_DIR` when `python3` lacks `ptts`. |
@@ -376,17 +431,17 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `TARSEE_COMPACT_WINDOW` | No | `180000` | Context size (tokens) at which Claude Code summarizes the older part of a chat and carries on. Every model call re-reads the whole context, so a smaller window means fewer cached tokens per call (measured: about a quarter fewer than at 300k). Accepts `250000`, `150k`, or `off` for the CLI's own (the model's full window); the CLI holds it to 100k–1M. A `CLAUDE_CODE_AUTO_COMPACT_WINDOW` you set yourself is kept when this is unset. The context meter and Token Health measure against this window. |
 | `TARSEE_TOOL_RESULT_MAX_CHARS` | No | `12000` | A tool result (Tarsee's own `tarsee_*` tools and any other MCP tool) longer than about this many characters is saved to a file by Claude Code, and the agent gets the path and how to read it. Passed as `MAX_MCP_OUTPUT_TOKENS` (characters ÷ 4; Claude Code's own default is 25000 tokens); a `MAX_MCP_OUTPUT_TOKENS` you set yourself is kept when this is unset. |
 | `TARSEE_BASH_OUTPUT_MAX_CHARS` | No | `8000` | A Bash output longer than this is saved to a file by Claude Code, and the agent gets a short preview plus the path (Claude Code's own default is 30000). Sets `BASH_MAX_OUTPUT_LENGTH` for each turn; a `BASH_MAX_OUTPUT_LENGTH` you set yourself is kept when this is unset. |
-| `TARSEE_SESSION_JSONL_MAX_MB` | No | `8` | Transcript size cap. Past it, the next turn starts a fresh Claude session instead of resuming the bloat. |
+| `TARSEE_SESSION_JSONL_MAX_MB` | No | `8` | Transcript size cap. Past it, the next turn starts a fresh session instead of resuming the bloat. |
 | `TARSEE_MODEL_CONTEXT_TOKENS` | No | from model registry | Override the context window assumed by Token Health. |
 | `TARSEE_SESSION_MAX_AGE_DAYS` | No | `30` | Login session lifetime. Sessions persist to SQLite and survive redeploys. |
 | `TARSEE_CSRF_MAX_AGE_HOURS` | No | `24` | CSRF token lifetime. |
 | `TARSEE_CHANNEL_HEALTH_MS` | No | `60000` | How often the watchdog probes for a wedged Telegram poller. |
-| `TARSEE_CLEAR_SESSIONS_ON_BOOT` | No | off | Set `1` to restore the old behaviour of wiping every Claude session id on boot. |
+| `TARSEE_CLEAR_SESSIONS_ON_BOOT` | No | off | Set `1` to restore the old behaviour of wiping every chat's session id on boot. |
 | `TARSEE_TIMEZONE` | No | host zone | IANA zone the agent reasons in for "today", "tomorrow at 9", and cron schedules (e.g. `Europe/Berlin`). Railway containers run UTC, so set this or your 8am reminders fire at 8am UTC. An unrecognised zone falls back to UTC with a warning. The Usage page counts its days in this zone too. |
 | `TARSEE_USAGE_BACKFILL_DAYS` | No | `14` | How far back the Usage page's first read of the Claude session transcripts goes. Later reads only take what each transcript gained. |
 | `TARSEE_USAGE_RETENTION_DAYS` | No | `90` | Token usage rows older than this are deleted. |
 
-> **Note:** Claude credentials are NOT set via env var. Run `claude login` in the web terminal after deploying. See [Authenticating with Claude](#authenticating-with-claude).
+> **Note:** The plans' sign-ins aren't variables (apart from the optional `CLAUDE_CODE_OAUTH_TOKEN`): the Claude plan signs in from the Terminal and the ChatGPT plan from Settings > AI, and both stay on the volume. API keys go in Settings > AI or in these variables, never in a file. See [Choose your AI](#choose-your-ai).
 
 ---
 
@@ -395,19 +450,25 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 ```bash
 docker build -t tarsee .
 
+# Make an encryption key once and keep it: Tarsee needs the same one every time it starts.
+export ENCRYPTION_KEY="$(openssl rand -hex 32)"
+echo "$ENCRYPTION_KEY"   # save this somewhere safe
+
 docker run -d \
   --name tarsee \
-  -p 8080:8080 \
+  -p 3000:3000 \
   -v tarsee-data:/data \
   -e NODE_ENV=production \
-  -e SETUP_PASSWORD=your-password \
-  -e ENCRYPTION_KEY=$(openssl rand -hex 32) \
+  -e SETUP_PASSWORD=your-4-digit-pin \
+  -e ENCRYPTION_KEY \
   tarsee
 ```
 
-After starting, open the web terminal and run `claude login` to authenticate.
+Tarsee listens on port 3000 (`PORT`). Open http://localhost:3000, log in with your PIN, and the setup wizard asks you to [choose your AI](#choose-your-ai). A plan signs in from the wizard (the Claude plan through Tarsee's Terminal), and a key is pasted into Settings > AI.
 
-Requirements: Docker, Claude Max subscription (Pro will work but will hit limits quickly).
+To give Tarsee a key as a variable instead, put it in a `.env` file that you never commit (`.env.example` lists every name, with what each one is for) and add `--env-file .env` to `docker run`, so the key never appears in a command. `docker-compose.yml` reads the same `.env` file.
+
+Requirements: Docker, and one of the seven AIs in [Choose your AI](#choose-your-ai).
 
 ---
 
@@ -420,7 +481,7 @@ Requirements: Docker, Claude Max subscription (Pro will work but will hit limits
 - Content Security Policy headers
 - Rate limiting (10 auth attempts/min/IP)
 - Path traversal protection
-- OAuth auto-refresh (tokens never stored in plain text)
+- Each AI's sign-in in its own owner-only folder on the volume, and API keys stored encrypted, shown only by their last 4 characters and only ever sent to their own provider (Tarsee never handles the Claude or ChatGPT sign-in tokens itself)
 - Session isolation per conversation
 - Audit log for all tool executions and logins
 
@@ -434,7 +495,14 @@ Tarsee is open source. PRs welcome.
 src/
   server.js                    # Express + HTTP server
   ai/
-    providers/claude-code.js   # Agent SDK wrapper
+    provider-registry.js       # The seven AIs: models, prices, which engine runs what
+    turn.js                    # One turn on any AI: Stop, queue, sessions, handoff, budgets, backup
+    engine-env.js              # Each AI's credentials, kept apart (one home and environment per AI)
+    providers/claude-code.js   # Claude Code engine (Agent SDK)
+    providers/codex.js         # Codex engine (@openai/codex-sdk)
+    mcp-http.js                # Tarsee's tools for Codex, on a private loopback endpoint
+    codex-device-login.js      # ChatGPT sign-in with a one-time code
+    verify-model.js            # One-click Verify for a model
     tarsee-mcp.js              # 20+ MCP tools
   lib/
     tools.js, commands.js      # Tool registry + chat commands
@@ -453,10 +521,13 @@ src/
     edge-tts-engine.js         # Free TTS (19 voices), the fallback
   routes/
     chat.js                    # Chat API + SSE streaming
+    ai.js                      # Settings > AI: cards, keys, Test, Verify, sign-in
     external-api.js            # REST API (/api/v1/)
     analytics.js               # Usage page API (lib/token-usage.js reads the transcripts)
   public/                      # Web UI (vanilla HTML/CSS/JS, PWA)
 ```
+
+Run `npm test` and `npm run lint` before a PR. The tests need no AI keys: every provider is checked against local fake servers. The Codex tests use the `codex` binary pinned in `package.json`. `TARSEE_CODEX_BIN` points the tests (and Tarsee) at another copy; on Windows it must name `codex.exe` itself, not a `.cmd` launcher, which Node can't start without a shell (a turn is refused and says so).
 
 ---
 

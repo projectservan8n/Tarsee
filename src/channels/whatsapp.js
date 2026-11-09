@@ -5,13 +5,13 @@ import { withConversationTurn } from "../lib/conversation-lock.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
-import { getToolDefinitions, executeTool } from "../lib/tools.js";
-import { buildSystemPrompt, sendFileHint } from "../lib/build-system-prompt.js";
+import { buildSystemPromptParts, sendFileHint } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
 import envConfig from "../config/env.js";
 import { refused } from "../lib/channel-errors.js";
+import { turnErrorNote, idleNote, errorStillToSay, sttProblem } from "./turn-notes.js";
 
 /**
  * Split a long message at line or word boundaries.
@@ -129,9 +129,9 @@ export function whapiIdentity(health) {
  * @param {object} config - { token, enabled, webhook_secret, baseUrl?, allowedChats? }
  * @param {import('better-sqlite3').Database} db
  * @param {object} [opts] - healthTimeoutMs: how long the startup token check waits for WHAPI (30 s; it takes ~16 s to
- *   refuse a token). Tests make it short.
+ *   refuse a token). Tests make it short. chatStream: the model stream (ai/router.js chatStream when left out).
  */
-export async function createWhatsAppBot(config, db, { healthTimeoutMs = 30_000 } = {}) {
+export async function createWhatsAppBot(config, db, { healthTimeoutMs = 30_000, chatStream: streamChat = chatStream } = {}) {
   const convStore = new ConversationStore(db);
   const settingsStore = new SettingsStore(db);
   const token = config.token;
@@ -298,24 +298,29 @@ export async function createWhatsAppBot(config, db, { healthTimeoutMs = 30_000 }
 
   // --- Main message handler ---
 
-  async function handleMessage(chatId, fromName, text, attachments = [], replyToId = null) {
-    // Allowlist check (optional). Empty list = allow everyone.
-    // Entries can be the full chat id (447700900000@s.whatsapp.net) or just
-    // the phone in any common format (+44 770 090 0000, 447700900000, etc).
+  /**
+   * Allowlist check (optional). Empty list = allow everyone.
+   * Entries can be the full chat id (447700900000@s.whatsapp.net) or just
+   * the phone in any common format (+44 770 090 0000, 447700900000, etc).
+   */
+  function chatAllowed(chatId) {
     const dbAllowlist = settingsStore.get("allowlist.whatsapp");
     const rawAllow = config.allowedChats?.length > 0
       ? config.allowedChats
       : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
     const allowed = Array.isArray(rawAllow) ? rawAllow.filter(Boolean) : [];
-    if (!isAllowlisted(chatId, allowed)) {
-      const normalizedTarget = normalizeWhatsappId(chatId);
-      const normalizedAllow = allowed.map((e) => normalizeWhatsappId(e)).filter(Boolean);
-      console.log(
-        `[whatsapp] dropping non-allowlisted chat — target=${normalizedTarget} ` +
-        `allow=[${normalizedAllow.join(",")}]`
-      );
-      return;
-    }
+    if (isAllowlisted(chatId, allowed)) return true;
+    const normalizedTarget = normalizeWhatsappId(chatId);
+    const normalizedAllow = allowed.map((e) => normalizeWhatsappId(e)).filter(Boolean);
+    console.log(
+      `[whatsapp] dropping non-allowlisted chat — target=${normalizedTarget} ` +
+      `allow=[${normalizedAllow.join(",")}]`
+    );
+    return false;
+  }
+
+  async function handleMessage(chatId, fromName, text, attachments = [], replyToId = null) {
+    if (!chatAllowed(chatId)) return;
 
     if (!text?.trim() && attachments.length === 0) return;
 
@@ -356,11 +361,8 @@ export async function createWhatsAppBot(config, db, { healthTimeoutMs = 30_000 }
       content: `[${fromName}]: ${text}${attachments.length ? ` [+${attachments.length} attachment(s)]` : ""}`,
     });
 
-    const activeProvider = settingsStore.getActiveProvider();
-    if (!activeProvider?.provider || !activeProvider?.ready) {
-      await sendMessage(chatId, "No AI provider configured. Set one up in the Tarsee web panel.").catch(() => {});
-      return;
-    }
+    // Which AI answers is the turn layer's to decide (ai/turn.js: this chat's own pick, else the default), and so is
+    // saying what to set up when that AI isn't ready: its answer is the reply.
 
     // Keep typing indicator alive while processing
     sendTyping(chatId);
@@ -388,7 +390,7 @@ export async function createWhatsAppBot(config, db, { healthTimeoutMs = 30_000 }
 
     const history = convStore.getRecentMessages(convId, 15);
     const conv = convStore.get(convId);
-    const systemPrompt = buildSystemPrompt({
+    const systemParts = buildSystemPromptParts({
       settingsStore,
       db,
       conversationId: convId,
@@ -402,18 +404,18 @@ ${sendFileHint("whatsapp")}`,
     });
 
     let fullResponse = "";
-    const tools = getToolDefinitions();
     // messageId: the message this turn answers (its pictures are kept on it, not on whatever came in later)
     const toolCtx = { db, settingsStore, conversationId: convId, messageId: savedUser?.id || null };
-    const MAX_TOOL_ROUNDS = 15;
 
     // One turn at a time per conversation. Without this, two messages in the
     // same chat started two turns that both resumed the SAME Claude session
     // id, appending to one transcript from two processes. Replies interleaved
     // and the session could be left corrupt enough to break every later turn.
     await withConversationTurn(convId, async () => {
+    // The AI this turn runs on, from the turn layer's route event (the backup model's, if it answered instead).
+    let routed = null;
     try {
-      let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
+      const workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
       if (aiPromptOverride && workingMessages.length > 0) {
         const last = workingMessages[workingMessages.length - 1];
@@ -430,87 +432,42 @@ ${sendFileHint("whatsapp")}`,
         }
       }
 
-      // One-shot retry budget for session-corruption recovery (same pattern as telegram)
-      let sessionRetried = false;
       let surfacedError = null;
       // Token usage for this turn — drives Settings -> Token Health.
       // Channels previously recorded NO token data at all, so every
       // channel conversation showed up as an estimate instead of real numbers.
       let tokenUsage = {};
 
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        const toolCalls = [];
-        let roundText = "";
-        let stopReason = "end_turn";
-        let recoverRound = false;
+      // One call per message. The engine runs its own tools and ends the turn itself, and the turn layer
+      // (ai/turn.js) retries, once and fresh, a session the engine couldn't resume. The channel never calls the AI
+      // again on its own: it shows what the turn says.
+      const stream = streamChat({
+        liveSource: "whatsapp",
+        messages: workingMessages,
+        systemParts,
+        toolCtx,
+        sessionId: convStore.getSessionHandle(convId),
+        onSessionId: (handle) => convStore.setSessionHandle(convId, handle),
+        signal: controller.signal,
+      });
 
-        const existingSessionId = convStore.getClaudeSessionId(convId);
-        const stream = chatStream({
-          liveSource: "whatsapp",
-          provider: activeProvider.provider,
-          model: activeProvider.model,
-          messages: workingMessages,
-          systemPrompt,
-          tools,
-          toolCtx,
-          sessionId: existingSessionId,
-          onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
-          // Resolve per-session thinking effort so /think works here too
-          // (web chat calls the provider directly; channels go via the router).
-          effort: settingsStore.get(`session.${convId}.effort`) || undefined,
-          signal: controller.signal,
-        });
-
-        for await (const event of stream) {
-          lastEventAt = Date.now();
-          if (event.type === "text") {
-            roundText += event.content;
-            fullResponse += event.content;
-          } else if (event.type === "tool_use") {
-            toolCalls.push({ id: event.id, name: event.name, input: event.input });
-            const callJson = JSON.stringify({ name: event.name, arguments: event.input })
-              .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
-            fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
-          } else if (event.type === "error") {
-            if (event.recoverable && !sessionRetried) {
-              sessionRetried = true;
-              recoverRound = true;
-              convStore.setClaudeSessionId(convId, null);
-              console.warn(`[whatsapp] session corrupt, clearing and retrying: ${String(event.message || "").slice(0, 200)}`);
-            } else {
-              surfacedError = event.message;
-            }
-          } else if (event.type === "usage") {
-            tokenUsage = { ...tokenUsage, ...event.usage };
-          } else if (event.type === "done") {
-            stopReason = event.stopReason || "end_turn";
-            break;
-          }
-        }
-
-        if (recoverRound) { round--; continue; }
-        if (surfacedError) break;
-        if (toolCalls.length === 0 || stopReason !== "tool_use") break;
-
-        // Build assistant message with tool_use blocks
-        const assistantContent = [];
-        if (roundText) assistantContent.push({ type: "text", text: roundText });
-        for (const tc of toolCalls) {
-          assistantContent.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
-        }
-        workingMessages.push({ role: "assistant", content: assistantContent });
-
-        // Execute tools
-        const toolResults = [];
-        for (const tc of toolCalls) {
-          console.log(`[whatsapp] tool: ${tc.name}`);
-          const result = await executeTool(tc.name, tc.input, toolCtx);
-          toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
-          const resultText = (typeof result === "string" ? result : JSON.stringify(result))
+      for await (const event of stream) {
+        lastEventAt = Date.now();
+        if (event.type === "route") {
+          routed = event;
+        } else if (event.type === "text") {
+          fullResponse += event.content;
+        } else if (event.type === "tool_use") {
+          const callJson = JSON.stringify({ name: event.name, arguments: event.input })
             .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
-          fullResponse += `\n<tool_response>${resultText}</tool_response>\n`;
+          fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
+        } else if (event.type === "error") {
+          surfacedError = event.message || "something went wrong";
+        } else if (event.type === "usage") {
+          tokenUsage = { ...tokenUsage, ...event.usage };
+        } else if (event.type === "done") {
+          break;
         }
-        workingMessages.push({ role: "user", content: toolResults });
       }
 
       if (fullResponse) {
@@ -529,8 +486,8 @@ ${sendFileHint("whatsapp")}`,
         convStore.addMessage(convId, {
           role: "assistant",
           content: visible || "(empty)",
-          provider: activeProvider.provider,
-          model: activeProvider.model,
+          provider: routed?.provider || null,
+          model: routed?.model || null,
           // True prompt size = input + cache_read + cache_creation. Using
           // input_tokens alone undercounts context fill whenever caching
           // kicks in (which is almost always on a long session).
@@ -549,21 +506,21 @@ ${sendFileHint("whatsapp")}`,
         for (const emoji of reactions) {
           await sendReaction(chatId, replyToId, emoji);
         }
-      } else if (surfacedError) {
-        const isSessionErr = /previous_message_id|session/i.test(String(surfacedError));
-        const userMsg = isSessionErr
-          ? "⚠️ Session reset due to a transient API hiccup. Just send your message again — your history is preserved."
-          : `⚠️ Upstream error: ${String(surfacedError).slice(0, 200)}\n\nTry again — if it keeps happening, /clear and try fresh.`;
-        await sendMessage(chatId, userMsg).catch(() => {});
-      } else if (idleAborted) {
-        await sendMessage(chatId, "⚠️ Claude Code stopped responding (3 min idle). Try again — maybe with a smaller ask.").catch(() => {});
-      } else {
+      }
+      // An error the turn reported (already in plain words: what went wrong, what to do), after whatever it said
+      // before it: a spending limit or the turn ceiling can stop a reply halfway. Not again when the reply is the
+      // error itself (the turn layer's "set this up first" answers).
+      if (surfacedError && errorStillToSay(fullResponse, surfacedError)) {
+        await sendMessage(chatId, turnErrorNote(routed, surfacedError)).catch(() => {});
+      } else if (!fullResponse && idleAborted) {
+        await sendMessage(chatId, idleNote(routed, IDLE_ABORT_MS)).catch(() => {});
+      } else if (!fullResponse && !surfacedError) {
         await sendMessage(chatId, "⚠️ No response generated. Try rephrasing?").catch(() => {});
       }
     } catch (err) {
       console.error("[whatsapp] chat error:", err.message);
       const reason = idleAborted
-        ? "⚠️ Claude Code stopped responding (3 min idle). Try again — maybe with a smaller ask."
+        ? idleNote(routed, IDLE_ABORT_MS)
         : `⚠️ Error: ${err.message || "something went wrong"}. Try again.`;
       await sendMessage(chatId, reason).catch(() => {});
     } finally {
@@ -598,6 +555,9 @@ ${sendFileHint("whatsapp")}`,
           continue;
         }
 
+        // Off the allowlist: dropped before any media is fetched or transcribed, or anything is said back.
+        if (!chatAllowed(chatId)) continue;
+
         const fromName = msg.from_name || (chatId.split("@")[0] || "User");
         const replyToId = msg.id;
 
@@ -618,7 +578,15 @@ ${sendFileHint("whatsapp")}`,
               await sendMessage(chatId, `Couldn't fetch the voice message (${err.message}).`).catch(() => {});
               break;
             }
-            const result = await transcribeAudio(buffer, "en", { settingsStore });
+            let result;
+            try {
+              result = await transcribeAudio(buffer, "en", { settingsStore });
+            } catch (err) {
+              console.error(`[whatsapp] voice transcription failed: ${err.message}`);
+              // Transcription that can't run says what to set up (Settings > Voice); anything else, a short note.
+              await sendMessage(chatId, sttProblem(err) || "Couldn't transcribe the voice message. Try again, or type it.").catch(() => {});
+              break;
+            }
             if (!result.transcript?.trim()) {
               await sendMessage(chatId, "Couldn't understand the voice message.").catch(() => {});
               break;

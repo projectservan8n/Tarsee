@@ -1,11 +1,11 @@
 import { Router } from "express";
 import { ConversationStore } from "../db/conversations.js";
 import { chatStream } from "../ai/router.js";
-import { buildSystemPrompt } from "../lib/build-system-prompt.js";
+import { buildSystemPromptParts } from "../lib/build-system-prompt.js";
 import { SettingsStore } from "../db/settings.js";
-import { getToolDefinitions, executeTool } from "../lib/tools.js";
-import { getRecommendedModel } from "../config/constants.js";
 import { withConversationTurn, QUEUE_REMOVED } from "../lib/conversation-lock.js";
+import { getProvider, isShipped, normalizeProviderId } from "../ai/provider-registry.js";
+import { parseModelRef } from "../ai/model-ref.js";
 
 export const externalApiRouter = Router();
 
@@ -24,19 +24,41 @@ externalApiRouter.use((req, _res, next) => {
  * POST /api/v1/message
  * Simple REST API for sending a message and getting a response.
  * Auth: Bearer token (API token from login).
- * Body: { message: string, conversationId?: string }
- * Returns: { response: string, conversationId: string }
+ * Body: { message: string, conversationId?: string, provider?: string, model?: string }
+ *   provider  which AI answers (claude, anthropic, chatgpt, openai, openrouter, deepseek, local); default: the
+ *             conversation's own pick, else the default AI
+ *   model     a model of that AI, or a ref naming both ("deepseek:deepseek-flash", "openrouter:anthropic/claude-x")
+ * Returns: { response, conversationId, provider, model }; when the AI couldn't answer (not set up, a sign-in that
+ * ran out, a spending limit) 502 with { error, stopReason, conversationId, provider, model, response }.
  */
 externalApiRouter.post("/message", async (req, res) => {
-  const { message, conversationId: reqConvId } = req.body || {};
+  const { message, conversationId: reqConvId, provider: reqProvider, model: reqModel } = req.body || {};
 
   if (!message || typeof message !== "string") {
     return res.status(400).json({ error: "message is required" });
+  }
+  // The AI asked for, if any: one Tarsee knows and can use, and a model ref that agrees with it.
+  let provider;
+  if (reqProvider != null && reqProvider !== "") {
+    provider = typeof reqProvider === "string" ? normalizeProviderId(reqProvider) : null;
+    if (!provider) return res.status(400).json({ error: `Unknown AI provider ${JSON.stringify(reqProvider)}` });
+    if (!isShipped(provider)) return res.status(400).json({ error: `This Tarsee can't use the ${getProvider(provider).label}` });
+  }
+  let model;
+  if (reqModel != null && reqModel !== "") {
+    if (typeof reqModel !== "string" || reqModel.length > 300) return res.status(400).json({ error: "model must be a model name or a provider:model ref" });
+    const ref = parseModelRef(reqModel);
+    if (ref.provider && provider && ref.provider !== provider) {
+      return res.status(400).json({ error: `model ${JSON.stringify(reqModel)} belongs to ${ref.provider}, not ${provider}` });
+    }
+    if (ref.provider && !isShipped(ref.provider)) return res.status(400).json({ error: `This Tarsee can't use the ${getProvider(ref.provider).label}` });
+    model = reqModel.trim();
   }
 
   try {
     // Get or create conversation
     let convId = reqConvId;
+    if (convId && !convStore.get(convId)) return res.status(404).json({ error: "Conversation not found" });
     if (!convId) {
       const conv = convStore.create({ title: message.slice(0, 50) });
       convId = conv.id;
@@ -45,63 +67,73 @@ externalApiRouter.post("/message", async (req, res) => {
     // Save user message
     convStore.addMessage(convId, { role: "user", content: message });
 
-    // Get context
+    // Get context (with each message's time: a fresh session is handed the recent conversation, ai/handoff.js)
     const messages = convStore.getRecentMessages(convId, 20);
-    const history = messages.map(m => ({ role: m.role, content: m.content }));
+    const history = messages.map((m) => ({ role: m.role, content: m.content, createdAt: m.created_at }));
 
-    const model = settingsStore?.get("ai.claude-code.model") || getRecommendedModel();
-    // buildSystemPrompt takes a destructured options object, not (app, convId).
+    const store = req.app.get("settingsStore") || settingsStore;
+    // buildSystemPromptParts takes a destructured options object, not (app, convId).
     // Passing req.app as the first arg means settingsStore + db come back
     // undefined and the MemoryStore constructor crashes with "Cannot read
-    // properties of undefined (reading 'prepare')". Likewise getToolDefinitions()
-    // takes no arguments, and executeTool expects the real handles in toolCtx —
-    // not an { app } wrapper it never unwraps.
-    const systemPrompt = buildSystemPrompt({
-      settingsStore: req.app.get("settingsStore"),
+    // properties of undefined (reading 'prepare')". executeTool expects the
+    // real handles in toolCtx — not an { app } wrapper it never unwraps.
+    const systemParts = buildSystemPromptParts({
+      settingsStore: store,
       db: req.app.get("db"),
       conversationId: convId,
       channelManager: req.app.get("channelManager"),
+      messageCount: history.length,
     });
-    const toolDefs = getToolDefinitions();
     const toolCtx = {
       db: req.app.get("db"),
-      settingsStore: req.app.get("settingsStore"),
+      settingsStore: store,
       channelManager: req.app.get("channelManager"),
       conversationId: convId,
     };
 
     // Stream and collect response. One turn per conversation at a time, like
-    // every channel (lib/conversation-lock.js): two resumes of one Claude
-    // session at once corrupt it.
+    // every channel (lib/conversation-lock.js): two resumes of one session at
+    // once corrupt it.
     let fullText = "";
-    const ran = await withConversationTurn(convId, async () => {
+    let error = null;
+    let stopReason = null;
+    let ran = { provider: null, model: null };
+    const result = await withConversationTurn(convId, async () => {
       for await (const event of chatStream({
-        provider: "claude-code",
+        provider,
         model,
         messages: history,
-        systemPrompt,
-        tools: toolDefs,
-        executeTool: (name, input) => executeTool(name, input, toolCtx),
-        // The provider gives Tarsee's MCP tools this context (db, settings,
-        // channels) and puts the turn on the dashboard's live timeline.
+        systemParts,
+        // The engine gives Tarsee's tools this context (db, settings,
+        // channels) and the turn shows on the dashboard's live timeline.
         toolCtx,
         liveSource: "api",
-        // `claudeSessionId` is the wrong key — the provider expects `sessionId`,
-        // so claude never resumed across turns and every message spawned a fresh
-        // session that re-read the whole workspace.
-        sessionId: convStore.getClaudeSessionId(convId),
-        onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
+        sessionId: convStore.getSessionHandle(convId),
+        onSessionId: (handle) => convStore.setSessionHandle(convId, handle),
       })) {
-        if (event.type === "text") fullText += event.content;
+        if (event.type === "route") ran = { provider: event.provider || null, model: event.model || null };
+        else if (event.type === "text") fullText += event.content;
+        else if (event.type === "error") error = event.message || "The AI stopped with an error";
+        else if (event.type === "done") { stopReason = event.stopReason || "end_turn"; break; }
       }
-    }, { live: { source: "api", prompt: message, model } });
+    }, { live: { source: "api", prompt: message, model: model || null } });
     // Taken out of the queue from the dashboard before it began: no reply.
-    if (ran === QUEUE_REMOVED) return res.status(409).json({ error: "Removed from the queue before it began", conversationId: convId });
+    if (result === QUEUE_REMOVED) return res.status(409).json({ error: "Removed from the queue before it began", conversationId: convId });
 
     // Save assistant message
-    convStore.addMessage(convId, { role: "assistant", content: fullText, model });
+    if (fullText) convStore.addMessage(convId, { role: "assistant", content: fullText, provider: ran.provider, model: ran.model });
 
-    res.json({ response: fullText, conversationId: convId });
+    if (stopReason !== "end_turn") {
+      return res.status(502).json({
+        error: error || `The AI stopped (${stopReason || "no reply"})`,
+        stopReason,
+        conversationId: convId,
+        provider: ran.provider,
+        model: ran.model,
+        response: fullText,
+      });
+    }
+    res.json({ response: fullText, conversationId: convId, provider: ran.provider, model: ran.model });
   } catch (err) {
     console.error("[api/v1] Error:", err.message);
     res.status(500).json({ error: err.message });

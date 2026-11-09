@@ -832,6 +832,8 @@
 .model-picker-btn .mp-sep, .model-picker-btn .mp-effort { color: var(--text-muted); }
 .model-picker-btn:hover .mp-effort, .model-picker-btn[aria-expanded="true"] .mp-effort { color: var(--text-secondary); }
 .model-picker-btn.no-effort .mp-sep, .model-picker-btn.no-effort .mp-effort { display: none; }
+/* The chat's own AI isn't ready (not connected, or off under API keys only): the default answers, the button says so. */
+.model-picker-btn.has-warning .mp-model { color: var(--warning); }
 
 /* The picker (js/model-picker.js), drawn like Claude Code's: the newest models numbered, Effort and More models
    opening beside it (in its place on a phone). */
@@ -929,7 +931,7 @@
   .sidebar { width: min(300px, 86vw); }
   .topbar { padding: 0 var(--space-2); }
   /* Room for the chat's name: the console is for a computer. The terminal stays, since signing Claude in
-     again (claude login) happens there, from a phone as much as anywhere. */
+     again (claude auth login) happens there, from a phone as much as anywhere. */
   .topbar-right .console-toggle-btn { display: none; }
   .md-table-wrap .md-table { min-width: max-content; }
   .topbar-right .topbar-icon-btn { width: 34px; height: 34px; }

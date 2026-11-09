@@ -5,8 +5,8 @@
 //   lockfile that only knows the build for the machine it was made on breaks the deploy.
 // - the MCP SDK as a runtime dependency (the image installs with --omit=dev) at the Agent SDK's own range, in one copy
 //   that the Agent SDK resolves too.
-// - the Claude Agent SDK where it stood before Phase 0. It moves on purpose in a later phase (an exact pin), and this
-//   test moves with it.
+// - the Claude Agent SDK at one exact version (Phase 2 pinned it: the engine reads its message fields and its bundled
+//   CLI's environment names, so it only moves on purpose, with this test).
 // Reads package.json, package-lock.json and node_modules only. Run after `npm install` or `npm ci`.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -28,8 +28,8 @@ const CODEX_VERSION = "0.167.0";
 const MCP = "@modelcontextprotocol/sdk";
 const MCP_RANGE = "^1.29.0";
 const AGENT_SDK = "@anthropic-ai/claude-agent-sdk";
-// As package.json and the lockfile had it before the Codex SDK came in.
-const AGENT_SDK_BEFORE = { range: "^0.3.142", version: "0.3.142" };
+// Pinned exactly in Phase 2 (design 4.16): the range is the version itself.
+const AGENT_SDK_BEFORE = { range: "0.3.319", version: "0.3.319" };
 
 /** Every lockfile entry installed under this package name, at any depth. */
 function lockCopies(name) {
@@ -98,7 +98,9 @@ describe("@modelcontextprotocol/sdk", () => {
     assert.equal(pkg.devDependencies?.[MCP], undefined);
     assert.equal(lock.packages[""].dependencies[MCP], MCP_RANGE);
     assert.equal(lock.packages[""].devDependencies?.[MCP], undefined);
-    assert.equal(installed(AGENT_SDK).dependencies[MCP], pkg.dependencies[MCP]);
+    // 0.3.319 declares the MCP SDK as a peer (it was a plain dependency before); either way its range is ours.
+    const agentSdk = installed(AGENT_SDK);
+    assert.equal(agentSdk.dependencies?.[MCP] ?? agentSdk.peerDependencies?.[MCP], pkg.dependencies[MCP]);
   });
 
   it("only one copy is installed, and the Agent SDK resolves that one", () => {
@@ -112,7 +114,7 @@ describe("@modelcontextprotocol/sdk", () => {
 });
 
 describe("@anthropic-ai/claude-agent-sdk", () => {
-  it("is unchanged by Phase 0", () => {
+  it("is pinned to exactly that version", () => {
     assert.equal(pkg.dependencies[AGENT_SDK], AGENT_SDK_BEFORE.range);
     assert.equal(lock.packages[`node_modules/${AGENT_SDK}`].version, AGENT_SDK_BEFORE.version);
     assert.equal(installed(AGENT_SDK).version, AGENT_SDK_BEFORE.version);
