@@ -629,6 +629,49 @@ describe("the AI cards drawn again (a read of the AIs comes in) while someone is
     }
   });
 
+  it("a card drawn again while its Model list has the focus (its label was clicked) still lists its models", async () => {
+    const { page, errors, context } = await openPage({ needsSetup: false, ready: ["deepseek"] });
+    try {
+      await page.locator("#aiHeaderChip:not([hidden])").click();
+      for (const id of ["aiModel-deepseek", "aiBgModel-deepseek"]) {
+        await page.locator(`#${id} option`).first().waitFor({ state: "attached" });
+        const before = await page.locator(`#${id} option`).count();
+        assert.ok(before >= 2, `${id} lists the models to begin with`);
+        // Clicking the label focuses the list itself (custom-select.js keeps it focusable, out of sight).
+        await page.locator(`label[for="${id}"]`).click();
+        assert.equal(await page.evaluate(() => document.activeElement?.id), id);
+        // The card changes (a line from Test, say) and is built again while the list has the focus.
+        await page.evaluate(() => { Settings._aiSetTest("deepseek", { text: `A line at ${Date.now()}`, tone: "bad" }); return Settings.loadAi(); });
+        await page.evaluate(() => new Promise((r) => setTimeout(r, 100))); // custom-select.js builds a new list on the next frame
+        assert.equal(await page.locator(`#${id} option`).count(), before, `${id} still lists every model`);
+        const shown = await page.locator(`#${id}`).evaluate((sel) => sel.closest(".cs-wrap")?.querySelector(".cs-trigger-label")?.textContent?.trim());
+        assert.ok(shown, `${id} shows the model chosen`);
+      }
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("a Copy chip clicked twice goes back to Copy on its own: nothing has to draw the card again", async () => {
+    const { page, errors, context } = await openPage({ needsSetup: false });
+    try {
+      await page.locator("#aiHeaderChip:not([hidden])").click();
+      await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => {} } }));
+      const chip = page.locator("#claudeAiCard [data-copy]").first();
+      const label = chip.locator(".setup-copy-label");
+      await chip.click();
+      await page.waitForTimeout(300);
+      await chip.click();
+      assert.equal(await label.textContent(), "Copied");
+      await page.waitForTimeout(1900);
+      assert.equal(await label.textContent(), "Copy");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("a card that changed is drawn again with the box someone is typing in still focused, the text and the caret kept", async () => {
     const { page, api, errors, context } = await openPage({ needsSetup: false, ready: ["claude"] });
     try {

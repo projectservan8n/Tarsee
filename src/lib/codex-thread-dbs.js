@@ -48,22 +48,29 @@ function pruneHome(home, cutoff) {
   const pending = readPending(home);
   try {
     const ids = withDb(statePath, (db) => goneThreads(db, home, cutoff));
-    // Each database that lost rows (or whose rebuild an earlier sweep couldn't finish) is rebuilt.
-    const settle = (name, db, changed) => { if (changed || pending.has(name)) rebuild(db, name, pending); };
+    // Delete, then rebuild each database that lost rows (or whose rebuild an earlier sweep didn't finish). The rebuild
+    // is noted in the home BEFORE the delete, so a sweep stopped dead in between (the server killed mid-VACUUM)
+    // leaves it to the next sweep, which would otherwise find nothing to delete there and never rebuild it.
+    const clear = (name, db, { threads = false } = {}) => {
+      const was = pending.has(name);
+      pending.add(name);
+      writePending(home, pending);
+      const r = deleteRows(db, ids, { threads });
+      if (r.changed || was) rebuild(db, name, pending);
+      else pending.delete(name);
+      return r;
+    };
     for (const name of THREAD_DBS) {
       const file = path.join(home, name);
       if (!fs.existsSync(file)) { pending.delete(name); continue; }
-      if (ids.length || pending.has(name)) withDb(file, (db) => settle(name, db, ids.length ? deleteRows(db, ids).changed : 0));
+      if (ids.length) withDb(file, (db) => clear(name, db));
+      else if (pending.has(name)) withDb(file, (db) => rebuild(db, name, pending));
     }
     if (!ids.length) {
       if (pending.has(STATE_DB)) withDb(statePath, (db) => rebuild(db, STATE_DB, pending));
       return 0;
     }
-    return withDb(statePath, (db) => {
-      const { gone, changed } = deleteRows(db, ids, { threads: true });
-      settle(STATE_DB, db, changed);
-      return gone;
-    });
+    return withDb(statePath, (db) => clear(STATE_DB, db, { threads: true }).gone);
   } finally {
     writePending(home, pending);
   }

@@ -9,10 +9,31 @@ import crypto from "node:crypto";
 
 const { parseArgs, main } = await import("../scripts/e2e/live-smoke.mjs");
 
-// Made at run time: a 4-digit PIN, a short all-lowercase word and a short mixed one.
-const pin = String(1000 + crypto.randomInt(9000));
-const word = Array.from({ length: 8 }, () => "abcdefghijklmnopqrstuvwxyz"[crypto.randomInt(26)]).join("");
-const mixed = `Pw${crypto.randomInt(100000)}!x`;
+/** The password on its own in text: not as part of a longer number or word around it. */
+const standsAlone = (text, pw) => new RegExp(`(?<![\\w.,])${pw.replace(/[.*+?^${}()|[\]\\]/g, "\\/** What main() prints on its error path")}(?![\\w.,])`).test(text);
+
+/** What main() prints on its error path whatever the password is (its usage text names localhost:3000, say). */
+async function fixedOutput() {
+  const lines = [];
+  const { log, error } = console;
+  console.log = (...a) => lines.push(a.join(" "));
+  console.error = (...a) => lines.push(a.join(" "));
+  try {
+    await main(["--colour"], { TARSEE_URL: "", TARSEE_PASSWORD: "a-baseline-password-not-used-elsewhere" });
+  } finally {
+    console.log = log;
+    console.error = error;
+  }
+  return lines.join("\n");
+}
+const baseline = await fixedOutput();
+
+// Made at run time: a 4-digit PIN, a short all-lowercase word and a short mixed one. One that the script's own fixed
+// text already has in it (a PIN of 3000, from localhost:3000) is drawn again: there it isn't the password showing.
+const draw = (make) => { let v; do v = make(); while (standsAlone(baseline, v)); return v; };
+const pin = draw(() => String(1000 + crypto.randomInt(9000)));
+const word = draw(() => Array.from({ length: 8 }, () => "abcdefghijklmnopqrstuvwxyz"[crypto.randomInt(26)]).join(""));
+const mixed = draw(() => `Pw${crypto.randomInt(100000)}!x`);
 const CASES = (pw) => [
   ["--only", pw],
   [`--only=${pw}`],
@@ -24,8 +45,6 @@ const CASES = (pw) => [
   [`--${pw}`],
   [pw],
 ];
-/** The password on its own in text: not as part of a longer number or word around it. */
-const standsAlone = (text, pw) => new RegExp(`(?<![\\w.,])${pw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w.,])`).test(text);
 
 describe("live-smoke: a password typed after an option is never repeated back", () => {
   for (const [name, pw] of [["a 4-digit PIN", pin], ["a short lowercase word", word], ["a short mixed password", mixed]]) {

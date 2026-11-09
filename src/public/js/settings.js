@@ -1076,6 +1076,9 @@ const Settings = {
   _aiFocusOf(root) {
     const el = document.activeElement;
     if (!el || el === root || !root.contains(el)) return null;
+    // A list (select) is drawn by custom-select.js, which moves a new one into its wrapper and takes the focus off it
+    // on the next frame: focus on it can't be kept, and a focused list isn't filled with its models.
+    if (el.tagName === "SELECT") return null;
     const esc = (s) => (window.CSS?.escape ? CSS.escape(s) : String(s).replace(/["\\]/g, "\\$&"));
     const sel = el.id ? `#${esc(el.id)}`
       : el.dataset?.keep ? `[data-keep="${esc(el.dataset.keep)}"]`
@@ -1203,19 +1206,21 @@ const Settings = {
     const body = section.querySelector("[data-ai-body]");
     if (!body) return;
     const html = this._aiBodyHtml(c);
+    let focus = null;
     if (body._aiHtml !== html) {
       // Built again: what someone typed and hasn't saved, the part they opened or closed (OpenRouter's whole list,
       // Local AI's key) and the box they are in, caret and all, stay as they were.
       const kept = this._aiKeep(body);
-      const focus = this._aiFocusOf(body);
+      focus = this._aiFocusOf(body);
       const opened = new Map([...body.querySelectorAll("details[class]")].map((d) => [d.className, d.open]));
       this._aiSetHtml(body, html);
       body.querySelectorAll("details[class]").forEach((d) => { if (opened.has(d.className)) d.open = opened.get(d.className); });
       this._aiRestore(body, kept);
-      this._aiRefocus(body, focus);
     }
     this._aiDrawModels(c.id);
     if (c.id === "chatgpt") this.renderChatgptLogin(body.querySelector("[data-ai-device]"), this._aiLoginView);
+    // Focus goes back last, once the card's lists are filled: a list that has the focus isn't filled (it may be open).
+    this._aiRefocus(body, focus);
   },
 
   /** A card's status line (again once its model list, and so the model's name, is in). */
@@ -1581,12 +1586,14 @@ const Settings = {
       return;
     }
     const label = btn.querySelector(".setup-copy-label");
-    const was = label?.textContent;
+    // The chip's own word, kept from the first click: a second click within the 1.5 s would otherwise keep "Copied".
+    if (label) label.dataset.idle ??= label.textContent;
+    clearTimeout(btn._copyTimer);
     btn.classList.add("copied");
     if (label) label.textContent = "Copied";
-    setTimeout(() => {
+    btn._copyTimer = setTimeout(() => {
       btn.classList.remove("copied");
-      if (label) label.textContent = was;
+      if (label) label.textContent = label.dataset.idle;
     }, 1500);
   },
 
