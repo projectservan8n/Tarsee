@@ -102,12 +102,19 @@ Set TARSEE_URL (for example http://localhost:3000) and TARSEE_PASSWORD (Tarsee's
 AIs: ${PROVIDER_IDS.join(" ")}. See docs/live-testing.md.`;
 
 /** The options, and what was wrong with them (never echoing a value that isn't an option: it could be a key). */
-export function parseArgs(argv) {
+export function parseArgs(argv, { password = "" } = {}) {
   const o = { only: null, models: [], verify: null, keep: false, timeoutSec: 300, help: false, errors: [] };
   const list = (v) => String(v).split(",").map((s) => s.trim()).filter(Boolean);
+  // A value the script doesn't know is repeated back only when it looks like a name someone meant (a typo of an AI's
+  // name or an option's) and has nothing of the password in it. Anything else may be the password, or a key, typed in
+  // the wrong place; a short password can't be blanked out of a line without showing it, so it is never put in one.
+  const pw = String(password || "");
+  const showable = (v) => /^[a-z][a-z0-9-]{0,19}$/.test(v) && !(pw && (v.includes(pw) || pw.includes(v)));
   const knownId = (id, flag) => {
     if (PROVIDER_IDS.includes(id)) return true;
-    o.errors.push(`${flag}: "${id.slice(0, 20)}" isn't an AI Tarsee knows (use ${PROVIDER_IDS.join(", ")})`);
+    o.errors.push(showable(id)
+      ? `${flag}: "${id}" isn't an AI Tarsee knows (use ${PROVIDER_IDS.join(", ")})`
+      : `${flag}: a value that isn't an AI Tarsee knows was given (it isn't shown; use ${PROVIDER_IDS.join(", ")})`);
     return false;
   };
   const pair = (item, flag) => {
@@ -155,7 +162,9 @@ export function parseArgs(argv) {
       }
       default:
         // A stray argument may be a key or the password pasted in the wrong place: say so without showing it.
-        o.errors.push(a.startsWith("--") ? `Unknown option ${redact(flag).slice(0, 30)}` : "An argument that isn't an option was given and ignored (it isn't shown: the address and password go in TARSEE_URL and TARSEE_PASSWORD, never on the command line)");
+        o.errors.push(!a.startsWith("--")
+          ? "An argument that isn't an option was given and ignored (it isn't shown: the address and password go in TARSEE_URL and TARSEE_PASSWORD, never on the command line)"
+          : showable(flag.slice(2)) ? `Unknown option ${flag}` : "An unknown option was given (it isn't shown; see --help)");
     }
   }
   return o;
@@ -377,7 +386,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   T0 = Date.now();
   anyFailed = false;
   if (env.TARSEE_PASSWORD) addSecret(env.TARSEE_PASSWORD);
-  const o = parseArgs(argv);
+  const o = parseArgs(argv, { password: String(env.TARSEE_PASSWORD || "") });
   if (o.help) { console.log(USAGE); return 0; }
   if (o.errors.length) {
     for (const e of o.errors) say("FAIL", "options", null, e);

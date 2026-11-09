@@ -148,6 +148,69 @@ describe("Codex's thread databases in the daily sweep", () => {
     }
   });
 
+  // Codex writes its databases without secure_delete. A row it rewrote at another size, or moved when a page split as
+  // a chat grew, leaves its old copy in a page's free space, where deleting the row now doesn't reach it. So after the
+  // delete the sweep rebuilds the file (VACUUM), which keeps no free space with old copies in it.
+  const grow = (home) => {
+    const history = new Database(path.join(home, "thread_history_1.sqlite"));
+    const state = new Database(path.join(home, "state_5.sqlite"));
+    const add = history.prepare("INSERT INTO thread_items VALUES (?, ?, ?, ?)");
+    // Two chats taking turns, so their rows share pages and the pages split as they grow.
+    for (let i = 0; i < 150; i++) {
+      for (const id of [ID.gone, ID.kept]) add.run(id, `t${i}`, `item-${i}`, JSON.stringify({ text: `${id === ID.gone ? "GONE-WORDS" : "KEPT-WORDS"} turn ${i} ${"w".repeat(260)}` }));
+    }
+    // And the chat's first row rewritten as it grew, as Codex updates a thread's title and preview.
+    const upd = state.prepare("UPDATE threads SET first_user_message = ? WHERE id = ?");
+    for (let i = 1; i <= 3; i++) upd.run(`GONE-WORDS first message, take ${i} ${"x".repeat(80 * i)}`, ID.gone);
+    history.close();
+    state.close();
+  };
+  const leftIn = (home, word) => fs.readdirSync(home)
+    .filter((f) => /\.sqlite(-wal)?$/.test(f))
+    .filter((f) => fs.readFileSync(path.join(home, f)).toString("latin1").includes(word));
+
+  it("words Codex's own rewrites left in free space go too: the file is rebuilt after the delete", () => {
+    const home = makeHome(STANDARD);
+    grow(home);
+    assert.ok(leftIn(home, "GONE-WORDS").length, "the fixture has the words on disk to begin with");
+    // A running Codex keeps them open between turns.
+    const codex = ["state_5.sqlite", "thread_history_1.sqlite"].map((f) => new Database(path.join(home, f)));
+    try {
+      assert.equal(pruneCodexThreadDbs({ homes: [home], maxAgeDays: 30, now: NOW }), 1);
+      assert.deepEqual(leftIn(home, "GONE-WORDS"), [], "no copy of the removed chat's words in any database or log");
+      assert.equal(codex[1].prepare("SELECT COUNT(*) AS c FROM thread_items WHERE thread_id = ?").get(ID.kept).c, 153, "the kept chat's rows are all there");
+      assert.ok(leftIn(home, "KEPT-WORDS").includes("thread_history_1.sqlite"));
+      assert.equal(fs.existsSync(path.join(home, ".tarsee-vacuum-pending")), false);
+    } finally {
+      for (const db of codex) db.close();
+    }
+  });
+
+  it("a rebuild that can't finish while Codex is reading is done on the next sweep, even with nothing new to remove", (t) => {
+    const home = makeHome(STANDARD);
+    grow(home);
+    const warn = t.mock.method(console, "warn", () => {});
+    // Codex mid-read on its history: the delete goes through, the rebuild can't be written out yet.
+    const reader = new Database(path.join(home, "thread_history_1.sqlite"));
+    reader.exec("BEGIN");
+    reader.prepare("SELECT COUNT(*) AS c FROM thread_items").get();
+    try {
+      assert.equal(pruneCodexThreadDbs({ homes: [home], maxAgeDays: 30, now: NOW }), 1);
+    } finally {
+      reader.exec("COMMIT");
+      reader.close();
+    }
+    assert.equal(threadIds(home).includes(ID.gone), false, "the rows went");
+    const pending = JSON.parse(fs.readFileSync(path.join(home, ".tarsee-vacuum-pending"), "utf8"));
+    assert.deepEqual(pending, ["thread_history_1.sqlite"], "and the sweep remembers the file it couldn't rebuild");
+    assert.ok(warn.mock.calls.some((c) => /thread_history_1\.sqlite.*next sweep/.test(String(c.arguments[0]))), "and says so");
+
+    // The next sweep: no chat is due, but the rebuild left over is done.
+    assert.equal(pruneCodexThreadDbs({ homes: [home], maxAgeDays: 30, now: NOW }), 0);
+    assert.deepEqual(leftIn(home, "GONE-WORDS"), []);
+    assert.equal(fs.existsSync(path.join(home, ".tarsee-vacuum-pending")), false, "nothing is left to do");
+  });
+
   it("removes nothing at a cutoff the threads haven't reached", () => {
     const home = makeHome(STANDARD);
     assert.equal(pruneCodexThreadDbs({ homes: [home], maxAgeDays: 60, now: NOW }), 0);

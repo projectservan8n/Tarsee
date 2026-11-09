@@ -599,6 +599,63 @@ describe("the AI pages in a browser", { skip }, () => {
   });
 });
 
+describe("the AI cards drawn again (a read of the AIs comes in) while someone is using them", { skip }, () => {
+  // Opening Settings reads the AIs more than once, and every read draws the cards again. A card drawn again while
+  // someone is in it must not take their place away: a paste right after clicking into the key box has to land there.
+  it("a card that hasn't changed isn't rebuilt: the box and the buttons are the same ones, still focused", async () => {
+    const { page, errors, context } = await openPage({ needsSetup: false, ready: ["claude"] });
+    try {
+      await page.locator("#aiHeaderChip:not([hidden])").click();
+      const box = page.locator("#aiKey-deepseek");
+      await box.click();
+      const before = await page.evaluate(() => {
+        window.__keyBox = document.getElementById("aiKey-deepseek");
+        window.__saveBtn = document.querySelector('#deepseekAiCard [data-ai-action="save-key"]');
+        return document.activeElement === window.__keyBox;
+      });
+      assert.equal(before, true);
+      await page.evaluate(() => Settings.loadAi());
+      const after = await page.evaluate(() => ({
+        sameBox: document.getElementById("aiKey-deepseek") === window.__keyBox,
+        sameButton: document.querySelector('#deepseekAiCard [data-ai-action="save-key"]') === window.__saveBtn,
+        focused: document.activeElement?.id || null,
+      }));
+      assert.deepEqual(after, { sameBox: true, sameButton: true, focused: "aiKey-deepseek" });
+      await page.keyboard.insertText(FAKE_KEY);
+      assert.equal(await box.inputValue(), FAKE_KEY, "the paste landed in the key box");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("a card that changed is drawn again with the box someone is typing in still focused, the text and the caret kept", async () => {
+    const { page, api, errors, context } = await openPage({ needsSetup: false, ready: ["claude"] });
+    try {
+      await page.locator("#aiHeaderChip:not([hidden])").click();
+      const box = page.locator("#aiKey-deepseek");
+      await box.click();
+      await page.keyboard.insertText("sk-test-half");
+      await page.evaluate(() => { const b = document.getElementById("aiKey-deepseek"); b.setSelectionRange(3, 3); });
+      // The card changes under them (its notes, say, from a read of the AIs): it has to be built again.
+      api.state.cards.deepseek.notes = ["A note that came in while you typed."];
+      await page.evaluate(() => Settings.loadAi());
+      await page.locator("#deepseekAiCard", { hasText: "A note that came in while you typed." }).waitFor();
+      const after = await page.evaluate(() => {
+        const b = document.getElementById("aiKey-deepseek");
+        return { focused: document.activeElement === b, value: b.value, caret: [b.selectionStart, b.selectionEnd] };
+      });
+      assert.deepEqual(after, { focused: true, value: "sk-test-half", caret: [3, 3] });
+      await page.keyboard.press("End");
+      await page.keyboard.insertText("-rest");
+      assert.equal(await box.inputValue(), "sk-test-half-rest", "what is typed next goes on in the same box");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+});
+
 describe("the AI pages in a browser: what a change reaches", { skip }, () => {
   const sessionModel = (page) => page.locator("#sessionModel").textContent();
   const menuGroups = (page) => page.locator("#modelPickerMenu .mp-group[aria-label]").evaluateAll((gs) => gs.map((g) => g.getAttribute("aria-label")));

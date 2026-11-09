@@ -1052,17 +1052,56 @@ const Settings = {
     const G = window.ProviderGuides;
     const el = this.elements.aiChips;
     if (!el) return;
-    el.innerHTML = this._aiShipped().map((c) => {
+    this._aiSetHtml(el, this._aiShipped().map((c) => {
       const p = G.get(c.id);
       return `<button type="button" class="channel-chip ai-chip" data-ai-jump="${c.id}"${c.active ? ' aria-current="true"' : ""}>` +
         `<span class="channel-dot" data-tone="${G.toneOf(c.state)}"></span>${this._esc(p?.shortName || c.label)} · ${this._esc(G.stateWord(c.state))}${c.active ? " · default" : ""}</button>`;
-    }).join("");
+    }).join(""));
+  },
+
+  /**
+   * Put this markup in el, unless it's what el already shows. Every read of the AIs draws the page again, and opening
+   * Settings reads them more than once: rebuilding a part that didn't change would take away the box someone is in,
+   * its caret, and a click under way (pressed on the old button, let go on the new one, it is no click at all).
+   * @returns {boolean} whether el was rebuilt
+   */
+  _aiSetHtml(el, html) {
+    if (el._aiHtml === html) return false;
+    el.innerHTML = html;
+    el._aiHtml = html;
+    return true;
+  },
+
+  /** The box or button someone is in, inside root, and their caret, to give back when root is built again. */
+  _aiFocusOf(root) {
+    const el = document.activeElement;
+    if (!el || el === root || !root.contains(el)) return null;
+    const esc = (s) => (window.CSS?.escape ? CSS.escape(s) : String(s).replace(/["\\]/g, "\\$&"));
+    const sel = el.id ? `#${esc(el.id)}`
+      : el.dataset?.keep ? `[data-keep="${esc(el.dataset.keep)}"]`
+      : el.dataset?.aiAction ? `[data-ai-action="${esc(el.dataset.aiAction)}"]`
+      : null;
+    if (!sel) return null;
+    let range = null;
+    try {
+      if (typeof el.selectionStart === "number") range = [el.selectionStart, el.selectionEnd, el.selectionDirection || "none"];
+    } catch { /* a box with no caret (a number box): focus alone */ }
+    return { sel, range };
+  },
+  _aiRefocus(root, focus) {
+    if (!focus) return;
+    const el = root.querySelector(focus.sel);
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    if (focus.range) {
+      try { el.setSelectionRange(...focus.range); } catch { /* a box with no caret */ }
+    }
   },
 
   _aiDrawBanners() {
     const el = this.elements.aiBanners;
     if (!el) return;
-    el.innerHTML = (this._ai?.banners || []).map((b) => {
+    this._aiSetHtml(el, (this._ai?.banners || []).map((b) => {
       let action = "";
       if (b.action?.kind === "settings-guard" && b.action.file) {
         action = ` <button type="button" class="btn btn-sm" data-ai-banner-fix="${this._esc(b.action.file)}">${this._esc(b.action.label || "Remove these entries")}</button>`;
@@ -1070,7 +1109,7 @@ const Settings = {
         action = ` <button type="button" class="btn btn-sm" data-ai-banner-use="${this._esc(b.action.provider)}">${this._esc(b.action.label || "Use it")}</button>`;
       }
       return `<div class="ai-banner" data-level="${this._esc(b.level || "info")}"><span>${this._esc(b.message)}</span>${action}</div>`;
-    }).join("");
+    }).join(""));
   },
 
   _aiDrawDefault() {
@@ -1163,12 +1202,18 @@ const Settings = {
     }
     const body = section.querySelector("[data-ai-body]");
     if (!body) return;
-    const kept = this._aiKeep(body);
-    // A part someone opened or closed (OpenRouter's whole list, Local AI's key) stays that way when the card is drawn again.
-    const opened = new Map([...body.querySelectorAll("details[class]")].map((d) => [d.className, d.open]));
-    body.innerHTML = this._aiBodyHtml(c);
-    body.querySelectorAll("details[class]").forEach((d) => { if (opened.has(d.className)) d.open = opened.get(d.className); });
-    this._aiRestore(body, kept);
+    const html = this._aiBodyHtml(c);
+    if (body._aiHtml !== html) {
+      // Built again: what someone typed and hasn't saved, the part they opened or closed (OpenRouter's whole list,
+      // Local AI's key) and the box they are in, caret and all, stay as they were.
+      const kept = this._aiKeep(body);
+      const focus = this._aiFocusOf(body);
+      const opened = new Map([...body.querySelectorAll("details[class]")].map((d) => [d.className, d.open]));
+      this._aiSetHtml(body, html);
+      body.querySelectorAll("details[class]").forEach((d) => { if (opened.has(d.className)) d.open = opened.get(d.className); });
+      this._aiRestore(body, kept);
+      this._aiRefocus(body, focus);
+    }
     this._aiDrawModels(c.id);
     if (c.id === "chatgpt") this.renderChatgptLogin(body.querySelector("[data-ai-device]"), this._aiLoginView);
   },

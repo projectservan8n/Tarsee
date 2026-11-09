@@ -45,13 +45,67 @@ export function pruneCodexThreadDbs({ homes = [], maxAgeDays = 30, now = Date.no
 function pruneHome(home, cutoff) {
   const statePath = path.join(home, STATE_DB);
   if (!fs.existsSync(statePath)) return 0;
-  const ids = withDb(statePath, (db) => goneThreads(db, home, cutoff));
-  if (!ids.length) return 0;
-  for (const name of THREAD_DBS) {
-    const file = path.join(home, name);
-    if (fs.existsSync(file)) withDb(file, (db) => deleteRows(db, ids));
+  const pending = readPending(home);
+  try {
+    const ids = withDb(statePath, (db) => goneThreads(db, home, cutoff));
+    // Each database that lost rows (or whose rebuild an earlier sweep couldn't finish) is rebuilt.
+    const settle = (name, db, changed) => { if (changed || pending.has(name)) rebuild(db, name, pending); };
+    for (const name of THREAD_DBS) {
+      const file = path.join(home, name);
+      if (!fs.existsSync(file)) { pending.delete(name); continue; }
+      if (ids.length || pending.has(name)) withDb(file, (db) => settle(name, db, ids.length ? deleteRows(db, ids).changed : 0));
+    }
+    if (!ids.length) {
+      if (pending.has(STATE_DB)) withDb(statePath, (db) => rebuild(db, STATE_DB, pending));
+      return 0;
+    }
+    return withDb(statePath, (db) => {
+      const { gone, changed } = deleteRows(db, ids, { threads: true });
+      settle(STATE_DB, db, changed);
+      return gone;
+    });
+  } finally {
+    writePending(home, pending);
   }
-  return withDb(statePath, (db) => deleteRows(db, ids, { threads: true }));
+}
+
+/**
+ * Rebuild a database after rows went, so no copy of them is left in its free space, then write it all into the file
+ * and empty the write-ahead log. Deleting with secure_delete wipes only the rows as they are now; Codex writes without
+ * it, so the older copies of a row it rewrote at another size, or moved when a page split, stay in a page's free space
+ * until the file is rebuilt. While Codex is reading the database the rebuild can't be written out; the name is then
+ * kept in the home's pending file and the next sweep finishes it, whether or not any thread is due by then.
+ */
+function rebuild(db, name, pending) {
+  try {
+    db.exec("VACUUM");
+    const [cp] = db.pragma("wal_checkpoint(TRUNCATE)");
+    if (cp?.busy) throw new Error("Codex is reading it");
+    pending.delete(name);
+  } catch (err) {
+    pending.add(name);
+    console.warn(`[retention] Codex ${name} isn't rebuilt yet (${err?.message || err}); the next sweep finishes it`);
+  }
+}
+
+/** The databases in this home an earlier sweep couldn't rebuild (a small JSON list in the home). */
+const PENDING_FILE = ".tarsee-vacuum-pending";
+function readPending(home) {
+  try {
+    const list = JSON.parse(fs.readFileSync(path.join(home, PENDING_FILE), "utf8"));
+    return new Set(Array.isArray(list) ? list.filter((n) => n === STATE_DB || THREAD_DBS.includes(n)) : []);
+  } catch {
+    return new Set();
+  }
+}
+function writePending(home, pending) {
+  const file = path.join(home, PENDING_FILE);
+  try {
+    if (pending.size) fs.writeFileSync(file, JSON.stringify([...pending]));
+    else fs.rmSync(file, { force: true });
+  } catch (err) {
+    console.warn(`[retention] Codex ${path.basename(home)}: couldn't note what is left to rebuild: ${err?.message || err}`);
+  }
 }
 
 /** The ids of the threads past the cutoff whose rollout is nowhere in the home. */
@@ -102,12 +156,12 @@ function rolloutsIn(home) {
 
 /**
  * Delete the threads' rows from every table with a thread column, in one transaction (and the threads rows
- * themselves, in state_5), then empty the write-ahead log. Returns how many threads rows went.
+ * themselves, in state_5). Returns how many threads rows went (gone) and how many rows went in all (changed).
  *
- * The person's words must leave the disk, not just the tables: secure_delete overwrites a deleted row's bytes (SQLite
- * otherwise leaves them in the file's free space), and the TRUNCATE checkpoint writes the change into the database
- * file and empties the log, which a running Codex holding the database open would otherwise keep, older frames with
- * the rows in them included.
+ * The person's words must leave the disk, not just the tables: secure_delete overwrites the deleted rows' bytes, so
+ * the log frames this writes don't carry them, and rebuild() (run after, when anything went) clears the older copies
+ * Codex itself left in free space, writes everything into the file and empties the log, which a running Codex
+ * holding the database open would otherwise keep.
  */
 function deleteRows(db, ids, { threads = false } = {}) {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()
@@ -115,6 +169,7 @@ function deleteRows(db, ids, { threads = false } = {}) {
     .filter((t) => !t.startsWith("sqlite_") && !t.startsWith("_sqlx_"));
   db.pragma("secure_delete = ON");
   let gone = 0;
+  let changed = 0;
   db.transaction(() => {
     db.exec("CREATE TEMP TABLE IF NOT EXISTS tarsee_gone_threads (id TEXT PRIMARY KEY)");
     db.exec("DELETE FROM temp.tarsee_gone_threads");
@@ -123,14 +178,16 @@ function deleteRows(db, ids, { threads = false } = {}) {
     for (const t of tables) {
       const cols = columnsOf(db, t);
       for (const c of THREAD_COLUMNS) {
-        if (cols.has(c)) db.prepare(`DELETE FROM main."${t.replace(/"/g, '""')}" WHERE "${c}" IN (SELECT id FROM temp.tarsee_gone_threads)`).run();
+        if (cols.has(c)) changed += db.prepare(`DELETE FROM main."${t.replace(/"/g, '""')}" WHERE "${c}" IN (SELECT id FROM temp.tarsee_gone_threads)`).run().changes;
       }
     }
-    if (threads) gone = db.prepare("DELETE FROM main.threads WHERE id IN (SELECT id FROM temp.tarsee_gone_threads)").run().changes;
+    if (threads) {
+      gone = db.prepare("DELETE FROM main.threads WHERE id IN (SELECT id FROM temp.tarsee_gone_threads)").run().changes;
+      changed += gone;
+    }
     db.exec("DELETE FROM temp.tarsee_gone_threads");
   })();
-  db.pragma("wal_checkpoint(TRUNCATE)");
-  return gone;
+  return { gone, changed };
 }
 
 function columnsOf(db, table) {
