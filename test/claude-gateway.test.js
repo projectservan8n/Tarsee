@@ -241,26 +241,48 @@ describe("the real Claude Code CLI against a fake gateway", { skip: SKIP, timeou
     assert.ok(wire(fake.messages()).includes("WORKSPACE-CLAUDE-MD-7f3a"), "the workspace CLAUDE.md wasn't sent");
   });
 
+  /**
+   * The agent's shell saves its whole environment to a file in the workspace, and the test reads that file. Not the
+   * tool result: Claude Code cuts a long Bash output, so on a machine with a big environment (a CI runner) lines go
+   * missing, the vault's keys look gone, and "the gateway key isn't there" would pass on a cut output.
+   */
+  const ENV_DUMP = "shell-env.txt";
+  const saveEnv = (id) => (req) => hasToolResult(req.body) ? { text: "done" } : { toolUse: { id, name: "Bash", input: { command: `env > ${ENV_DUMP} && echo saved`, description: "save the environment" } } };
+  function shellEnv(d) {
+    const block = lastUserBlocks(fake.messages().find((r) => hasToolResult(r.body)).body).find((b) => b.type === "tool_result");
+    const said = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
+    assert.ok(!block.is_error, said.slice(0, 300));
+    assert.match(said, /saved/, "the command ran");
+    const out = fs.readFileSync(path.join(d.cwd, ENV_DUMP), "utf8");
+    assert.match(out, /^PATH=/im, "the whole environment was saved");
+    return out;
+  }
+
   it("R10 with host-managed: the gateway key is not in the agent's shell's environment, but the vault's keys are (on Linux it is still readable from the CLI's process: key-exposure-linux.test.js)", async () => {
-    reset((req) => hasToolResult(req.body) ? { text: "done" } : { toolUse: { id: "toolu_env_1", name: "Bash", input: { command: "env", description: "list the environment" } } });
-    const { events } = await turn("openrouter", fake);
+    reset(saveEnv("toolu_env_1"));
+    const { events, d } = await turn("openrouter", fake);
     assert.deepEqual(dones(events), [{ type: "done", stopReason: "end_turn" }]);
-    const second = fake.messages().find((r) => hasToolResult(r.body));
-    const block = lastUserBlocks(second.body).find((b) => b.type === "tool_result");
-    const out = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
-    assert.ok(!block.is_error, out.slice(0, 300));
-    assert.match(out, /PATH=/i, "the command ran");
+    const out = shellEnv(d);
     assert.ok(!out.includes(KEYS.openrouter), "the gateway key reached the agent's shell");
     for (const v of Object.values(VAULT)) assert.ok(out.includes(v), "a vault key no longer reaches scripts");
   });
 
   it("R10's other candidate, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, would also take the vault's keys from scripts, so it stays off", async () => {
-    reset((req) => hasToolResult(req.body) ? { text: "done" } : { toolUse: { id: "toolu_env_2", name: "Bash", input: { command: "env", description: "list the environment" } } });
-    const { events } = await turn("openrouter", fake, { patch: (o) => ({ ...o, env: { ...o.env, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1" } }) });
+    reset(saveEnv("toolu_env_2"));
+    const { events, d } = await turn("openrouter", fake, { patch: (o) => ({ ...o, env: { ...o.env, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1" } }) });
     assert.equal(dones(events).length, 1);
+    // Two ways the scrub takes the vault's keys from scripts, depending on the machine. On Linux the CLI insists on
+    // its sandbox once the scrub is on, and where the sandbox can't start (no bwrap or socat, as on a plain server)
+    // no command runs at all. Where commands do run, the vault's keys are scrubbed from their environment.
     const block = lastUserBlocks(fake.messages().find((r) => hasToolResult(r.body)).body).find((b) => b.type === "tool_result");
-    const out = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
-    assert.ok(!out.includes(VAULT.MY_SERVICE_API_KEY), "the scrub kept vault keys now: re-evaluate turning it on (design 4.5 R10)");
+    const said = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
+    if (block.is_error) {
+      assert.match(said, /Sandbox is required/i, `the command failed for another reason: ${said.slice(0, 300)}`);
+      assert.ok(!fs.existsSync(path.join(d.cwd, ENV_DUMP)), "no command ran");
+    } else {
+      const out = shellEnv(d);
+      assert.ok(!out.includes(VAULT.MY_SERVICE_API_KEY), "the scrub kept vault keys now: re-evaluate turning it on (design 4.5 R10)");
+    }
     const built = buildQueryOptions("openrouter", { key: KEYS.openrouter, cwd: tmp }, { env: serverEnv(), stateDir: path.join(tmp, "s-off") });
     assert.equal(built.options.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, undefined);
   });
