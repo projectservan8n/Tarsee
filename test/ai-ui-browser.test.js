@@ -681,14 +681,50 @@ describe("the AI cards drawn again (a read of the AIs comes in) while someone is
       await verify.focus();
       const focused = () => page.evaluate(() => ({ action: document.activeElement?.dataset?.aiAction || null, model: document.activeElement?.dataset?.model || null }));
       const want = { action: "verify", model: "qwen/qwen3-coder:free" };
-      // The same list read again: nothing is drawn again, the focus stays.
+      // The same list read again: nothing is drawn again (the very same button, the list untouched), the focus stays.
+      await page.evaluate(() => {
+        window.__btn = document.activeElement;
+        window.__muts = 0;
+        new window.MutationObserver((r) => { window.__muts += r.length; }).observe(document.querySelector("#openrouterAiCard [data-ai-or-list]"), { childList: true, subtree: true });
+      });
       await page.evaluate(() => Settings.loadAiModels("openrouter", { force: true }));
+      assert.deepEqual(await page.evaluate(() => ({ same: document.activeElement === window.__btn, muts: window.__muts })), { same: true, muts: 0 });
       assert.deepEqual(await focused(), want);
       // A list that changed (a model added): drawn again, the focus goes back to the same model's button.
       api.MODELS.openrouter.unshift({ id: "x-ai/newer", label: "xAI: Newer", needsVerification: false });
       await page.evaluate(() => Settings.loadAiModels("openrouter", { force: true }));
       await page.locator('#openrouterAiCard [data-model="x-ai/newer"]').waitFor();
       assert.deepEqual(await focused(), want, "Enter then verifies the model it was on, not another");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("a model's Verify in Local AI's list keeps the focus when the list comes in again, changed or not", async () => {
+    const { page, api, errors, context } = await openPage({ needsSetup: false, ready: ["local"] });
+    try {
+      api.state.cards.local.settings = { baseUrl: "http://localhost:11434/v1", context: 128000 };
+      api.MODELS.local = [
+        { id: "qwen3:8b", label: "qwen3:8b", needsVerification: false, inMenu: true },
+        { id: "llama3.1:8b", label: "llama3.1:8b", needsVerification: false, inMenu: false },
+      ];
+      await page.locator("#aiHeaderChip:not([hidden])").click();
+      const verify = page.locator('#localAiCard [data-ai-local-list] [data-ai-action="verify"][data-model="llama3.1:8b"]');
+      await verify.waitFor();
+      await verify.focus();
+      await page.evaluate(() => {
+        window.__btn = document.activeElement;
+        window.__muts = 0;
+        new window.MutationObserver((r) => { window.__muts += r.length; }).observe(document.querySelector("#localAiCard [data-ai-local-list]"), { childList: true, subtree: true });
+      });
+      await page.evaluate(() => Settings.loadAiModels("local", { force: true }));
+      assert.deepEqual(await page.evaluate(() => ({ same: document.activeElement === window.__btn, muts: window.__muts })), { same: true, muts: 0 }, "an unchanged list isn't drawn again");
+      api.MODELS.local.push({ id: "mistral:7b", label: "mistral:7b", needsVerification: false, inMenu: false });
+      await page.evaluate(() => Settings.loadAiModels("local", { force: true }));
+      await page.locator('#localAiCard [data-model="mistral:7b"]').waitFor();
+      const now = await page.evaluate(() => ({ action: document.activeElement?.dataset?.aiAction || null, model: document.activeElement?.dataset?.model || null }));
+      assert.deepEqual(now, { action: "verify", model: "llama3.1:8b" }, "a changed list gives the focus back to the same model's Verify");
       assert.deepEqual(errors, []);
     } finally {
       await context.close();
