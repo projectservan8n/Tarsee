@@ -259,13 +259,6 @@ describe("what an AI's key is exposed to: the docs say a command the agent runs 
       assert.doesNotMatch(text, PROMISE, file);
     }
   });
-  it("the design records it: R10's fallback applies, and no decision says the keys are out of the shell's reach", () => {
-    const spec = read("docs/superpowers/specs/2026-11-09-multi-provider-design.md");
-    assert.doesNotMatch(spec, /No "visible to the shell" note/, "A9 no longer rules the note out");
-    assert.match(spec, /\/proc\/<engine pid>\/environ/);
-    assert.match(spec, /R10['’]s fallback applies/);
-    assert.doesNotMatch(spec, /stays? out of the agent['’]s shell(?!['’]s (own )?environment)/i, "a key stays out of the shell's environment, not its reach");
-    assert.doesNotMatch(spec, /no longer reach the agent['’]s shell(?!['’]s (own )?environment)/i);
-    assert.doesNotMatch(spec, /gateway key is not visible to the agent['’]s shell/i);
-  });
+  // The design document (docs/superpowers/) is gitignored and never ships, so no test reads it: a clean clone and CI
+  // don't have it. The files above are the ones an owner reads.
 });
