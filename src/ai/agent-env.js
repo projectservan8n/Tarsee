@@ -10,33 +10,40 @@
  * Every key whose name is an environment variable name in capitals goes in, except:
  *   - names already set in Tarsee's own environment (those win)
  *   - Claude's settings and login (CLAUDE_*) and Anthropic API keys (ANTHROPIC_*), which would move the agent off
- *     the Claude subscription onto pay-per-use billing
+ *     the Claude subscription onto pay-per-use billing; Codex's (CODEX_*) and OPENAI_BASE_URL, which would change
+ *     the Codex engine's login, home or host (ai/engine-env.js strips them again before every turn)
+ *   - Tarsee's own secrets (ENCRYPTION_KEY, SETUP_PASSWORD)
  *   - names that change how programs run rather than what they can reach: Tarsee's own settings (TARSEE_*), Node
  *     and the loader (NODE_*, LD_*, DYLD_*), npm's, Python's start-up and paths, the shell's, and the proxies
  * A value over 32 KB, or one with a NUL in it, stays out too (tarsee_get_key still has it).
  * TARSEE_AGENT_ENV_KEYS: a comma-separated list of names to use instead of every key, or "off" for none.
- * Read from the vault at most once a minute.
+ * Read from the vault at most once a minute for the default call (Tarsee's own environment); a call that passes its own
+ * `env` (engine-env's baseEnv(), say) compares against that one, so it is never answered from, or stored in, that cache.
+ * Denying get_key applies at once either way.
  */
 import { getKey, listKeys } from "../lib/key-vault.js";
 
-export const AGENT_ENV_KEEP_OUT = /^(CLAUDE_|ANTHROPIC_|TARSEE_|NODE_|LD_|DYLD_|NPM_|PYTHON|GIT_|SSL_|BASH_)/;
+export const AGENT_ENV_KEEP_OUT = /^(CLAUDE_|ANTHROPIC_|CODEX_|TARSEE_|NODE_|LD_|DYLD_|NPM_|PYTHON|GIT_|SSL_|BASH_)/;
 const KEEP_OUT_NAMES = new Set(["PATH", "HOME", "USER", "SHELL", "ENV", "PWD", "TMPDIR", "LANG", "TERM",
-  "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "MAX_MCP_OUTPUT_TOKENS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"]);
+  "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "MAX_MCP_OUTPUT_TOKENS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+  "OPENAI_BASE_URL", "ENCRYPTION_KEY", "SETUP_PASSWORD"]);
 
 let cached = { at: 0, value: {} };
 const VALUE_MAX_CHARS = 32 * 1024;
 
 /**
- * { NAME: value } for the agent's environment. names/get/list/env/now/denied: for tests (and the default, cached).
- * denied(): true when the owner has denied get_key.
+ * { NAME: value } for the agent's environment. names/get/list/now: for tests. env: the environment the vault's names
+ * are compared against (default process.env, the only one cached). denied(): true when the owner has denied get_key.
  */
-export function agentVaultEnv({ names, get = getKey, list = () => listKeys().map((k) => k.name), env = process.env, now = Date.now(), denied = () => false } = {}) {
-  const fresh = names === undefined && get === getKey;
-  if (fresh && now - cached.at < 60_000) return cached.value;
-  const out = {};
-  const skipped = [];
+export function agentVaultEnv({ names, get = getKey, list = () => listKeys().map((k) => k.name), env, now = Date.now(), denied = () => false } = {}) {
+  // Only the default call shares the cache: names, the vault and the environment are all the live ones.
+  const cachable = names === undefined && get === getKey && env === undefined;
+  env ??= process.env;
   let blocked = false;
   try { blocked = !!denied(); } catch { blocked = false; }
+  if (cachable && !blocked && now - cached.at < 60_000) return cached.value;
+  const out = {};
+  const skipped = [];
   const setting = String(env.TARSEE_AGENT_ENV_KEYS ?? "").trim();
   if (!blocked && setting.toLowerCase() !== "off") {
     let wanted = names;
@@ -53,11 +60,12 @@ export function agentVaultEnv({ names, get = getKey, list = () => listKeys().map
       if (value) out[name] = value;
     }
   }
-  if (fresh) {
+  if (cachable) {
     const had = Object.keys(cached.value).sort().join(",");
     const has = Object.keys(out).sort().join(",");
     if (had !== has) console.log(`[claude-code] ${Object.keys(out).length} vault key(s) in the agent's environment${blocked ? " (none: get_key is denied in Tool Permissions)" : ""}${skipped.length ? ` (too big or not text, left to tarsee_get_key: ${skipped.join(", ")})` : ""}`);
-    cached = { at: now, value: out };
+    // A denied answer isn't kept as fresh: allowing get_key again takes effect on the next turn.
+    cached = { at: blocked ? 0 : now, value: out };
   }
   return out;
 }

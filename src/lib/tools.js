@@ -1298,6 +1298,20 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
         }
       }
 
+      case "push_notification": {
+        // Web Push to every subscribed device (lib/push.js). Here rather than in the MCP tool, so Tool Permissions
+        // and the audit log cover it like every other tool.
+        const { title, body, url, tag } = toolInput || {};
+        try {
+          const { sendPush } = await import("./push.js");
+          const res = await sendPush({ title, body, url, tag });
+          if (res.total === 0) return "No devices have subscribed to push notifications yet. Ask the user to enable them from Settings > Appearance.";
+          return `Push sent to ${res.sent}/${res.total} devices · ${res.failed} failed · ${res.evicted} evicted as gone.`;
+        } catch (err) {
+          return "Push failed: " + err.message;
+        }
+      }
+
       case "discord_admin": {
         // Channels and webhooks in a Discord server, done by Tarsee's own logged-in bot (lib/discord-admin.js), so the
         // agent never needs the bot token in a command. Never deletes anything.

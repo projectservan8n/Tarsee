@@ -438,16 +438,9 @@ export function createTarseeMcp(ctx) {
           tag: z.string().optional().describe("Grouping tag — pushes with the same tag replace each other in the tray instead of stacking."),
         },
         async (args) => {
-          try {
-            const { sendPush } = await import("../lib/push.js");
-            const res = await sendPush(args);
-            if (res.total === 0) {
-              return { content: [{ type: "text", text: "No devices have subscribed to push notifications yet. Ask the user to enable them from Settings > Appearance." }] };
-            }
-            return { content: [{ type: "text", text: `Push sent to ${res.sent}/${res.total} devices · ${res.failed} failed · ${res.evicted} evicted as gone.` }] };
-          } catch (err) {
-            return { content: [{ type: "text", text: "Push failed: " + err.message }] };
-          }
+          // Through executeTool, so Tool Permissions and the audit log apply (lib/tools.js push_notification).
+          const result = await executeTool("push_notification", args, ctx);
+          return { content: [{ type: "text", text: result }] };
         }
       ),
 

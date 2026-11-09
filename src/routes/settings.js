@@ -60,16 +60,20 @@ settingsRouter.get("/providers", (_req, res) => {
 /**
  * POST /api/settings/provider
  * Configure an AI provider.
- * Body: { provider, model?, apiKey?, baseUrl? }
+ * Body: { provider, model?, apiKey? }. A baseUrl is refused: a provider's host
+ * is fixed in code, so a stored key only ever goes to its own provider.
  */
 settingsRouter.post("/provider", (req, res) => {
-  const { provider, model, apiKey, baseUrl } = req.body || {};
+  const { provider, model, apiKey } = req.body || {};
 
   if (!provider || !AI_PROVIDERS[provider]) {
     return res.status(400).json({ error: "Invalid provider. Valid: " + Object.keys(AI_PROVIDERS).join(", ") });
   }
+  if (req.body?.baseUrl != null && req.body.baseUrl !== "") {
+    return res.status(400).json({ error: "A provider's base URL can't be set: each provider's host is fixed, so its key only ever goes there." });
+  }
 
-  settingsStore.setActiveProvider(provider, { model, apiKey, baseUrl });
+  settingsStore.setActiveProvider(provider, { model, apiKey });
 
   res.json({ ok: true, provider, model: model || AI_PROVIDERS[provider]?.defaultModel });
 });

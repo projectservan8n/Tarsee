@@ -230,6 +230,10 @@ app.set("auditLog", auditLog);
 // --- TTS Engine (lazy init) ---
 const settingsStore = new SettingsStore(db, auditLog);
 app.set("settingsStore", settingsStore);
+// The old setup wizard saved apiKey "subscription" for the Claude plan; it was never a key. Deleted once found.
+try { settingsStore.removeFakeSubscriptionKey(); } catch (err) { console.warn("[settings] placeholder key fixup failed:", err.message); }
+// Older versions saved a base URL per provider; hosts are fixed in code now (Local AI's own address stays).
+try { settingsStore.removeProviderBaseUrls(); } catch (err) { console.warn("[settings] base URL fixup failed:", err.message); }
 settingsStore.logKeyStatus();
 initTTSEngine(settingsStore).catch((err) => {
   console.warn("[tarsee] TTS engine init error:", err.message);
@@ -327,13 +331,6 @@ import { saveBootContext } from "./lib/boot-context.js";
 setInterval(() => saveBootContext(db), 5 * 60 * 1000);
 saveBootContext(db); // Initial save on boot
 startSessionReset({ db, settingsStore, convStore });
-
-// --- OAuth: Let the Claude Code SDK handle its own token refresh ---
-// Our custom oauth-refresh.js was fighting with the Mac's Claude Code
-// over the same refresh token, causing mutual logouts. The SDK handles
-// credential refresh internally when it makes API calls.
-// import { startOAuthRefresh } from "./lib/oauth-refresh.js";
-// startOAuthRefresh();
 
 // --- Auto-summarize idle conversations ---
 import { startAutoSummarize, stopAutoSummarize } from "./lib/auto-summarize.js";

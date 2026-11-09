@@ -307,7 +307,7 @@ voiceRouter.post("/stt", async (req, res) => {
 
 /**
  * POST /api/voice/transcribe
- * Transcribe audio using whisper.cpp (multipart form with 'audio' file).
+ * Transcribe audio with the chosen speech-to-text (multipart form with 'audio' file).
  * Returns { text, language }.
  */
 voiceRouter.post("/transcribe", async (req, res) => {
@@ -358,7 +358,8 @@ voiceRouter.post("/transcribe", async (req, res) => {
       return res.status(400).json({ error: "Empty audio" });
     }
 
-    // Use multi-provider STT (OpenAI Whisper API > whisper.cpp > Gemini > error)
+    // Speech-to-text as chosen in Settings > Voice: local faster-whisper, or the paid OpenAI Whisper API only when
+    // chosen. When nothing can transcribe, the error's status and message say why and what to change.
     const sStore = req.app.get("settingsStore");
     const result = await transcribeAudio(audioBuffer, req.headers["x-language"] || "en", { settingsStore: sStore });
     res.json({ text: result.transcript, language: result.language, provider: result.provider });

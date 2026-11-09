@@ -50,6 +50,7 @@ import path from "node:path";
 import config from "../config/env.js";
 import { projectsRoots, slugifyCwd } from "./claude-transcript.js";
 import { USAGE_SCHEMA } from "../db/usage-schema.js";
+import { ensureUsageColumns } from "../db/sqlite.js";
 
 const H = 3_600_000;
 const DAY = 24 * H;
@@ -477,6 +478,9 @@ export class UsageIndex {
     this.queuedAsked = new Map(); // turn id -> { at, asked }: a queued turn's message, kept until it begins (syncTurns)
     this.progress = { files: 0, done: 0, bytesLeft: 0, firstPass: true };
     db.exec(USAGE_SCHEMA);
+    // The provider, engine and cost columns (migration 012), added only where missing: a database made some other
+    // way gets them here, and migration 012 then finds them in place instead of adding them twice.
+    ensureUsageColumns(db);
     this.q = {
       meta: db.prepare("SELECT value FROM usage_meta WHERE key = ?"),
       setMeta: db.prepare("INSERT INTO usage_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"),

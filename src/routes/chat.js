@@ -1014,7 +1014,6 @@ chatRouter.post("/send", async (req, res) => {
         provider: providerId,
         model,
         apiKey,
-        baseUrl: activeProvider?.baseUrl,
         messages: workingMessages,
         systemPrompt: effectiveSystemPrompt,
         signal: genericController.signal,

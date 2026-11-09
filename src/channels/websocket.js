@@ -609,7 +609,6 @@ async function handleChat(ws, msg, convStore, settingsStore) {
         provider: activeProvider.provider,
         model: activeProvider.model,
         apiKey: activeProvider.apiKey,
-        baseUrl: activeProvider.baseUrl,
         messages: workingMessages,
         systemPrompt: effectiveSystemPrompt,
         signal: controller.signal,

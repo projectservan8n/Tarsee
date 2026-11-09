@@ -127,17 +127,15 @@ export function tierOf(modelId) {
 }
 
 // --- AI Provider Definitions ---
-export const AI_PROVIDERS = Object.freeze({
-  "claude-code": {
-    id: "claude-code",
-    name: "Claude Code (Agent)",
-    envKey: null,
-    // Lazy getter so defaultModel always tracks the registry's recommended entry.
-    get defaultModel() { return getRecommendedModel(); },
-    baseUrl: null,
-    noKeyRequired: true,
-  },
-});
+// A compatibility view of the provider registry (ai/provider-registry.js): the
+// providers that are switched on (shipped), keyed by the id their settings are
+// stored under, in the shape this table has always had
+// ({ id, name, envKey, defaultModel, baseUrl, noKeyRequired }). Today that is
+// the Claude plan alone, as "claude-code", with defaultModel a getter on
+// getRecommendedModel() as before. It is built in the registry and re-exported
+// here because the two modules import each other: a re-export reads nothing
+// while this file runs, so either one can be loaded first.
+export { AI_PROVIDERS } from "../ai/provider-registry.js";
 
 // --- Background work budget ---
 // Cron jobs, the heartbeat and the boot checklist run with nobody watching, so
