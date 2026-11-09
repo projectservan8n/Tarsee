@@ -1431,7 +1431,7 @@ const Settings = {
     const esc = (s) => this._esc(s);
     const models = this._aiModels.local?.models || [];
     list.hidden = !models.length;
-    if (!models.length) { list.innerHTML = ""; return; }
+    if (!models.length) { this._aiDrawList(list, ""); return; }
     const row = (m) => {
       const inMenu = m.inMenu === true || m.verified === true || m.id === c?.model;
       const badges = (m.verified ? `<span class="ai-badge" data-kind="ok">Verified</span>` : "")
@@ -1440,9 +1440,21 @@ const Settings = {
       const btn = `<button type="button" class="btn btn-sm${inMenu ? " btn-ghost" : ""}" data-ai-action="verify" data-model="${esc(m.id)}">${m.verified ? "Verify again" : "Verify"}</button>`;
       return `<div class="ai-or-row" data-ai-local-row><div class="ai-or-name"><span>${esc(m.label || m.id)}</span>${badges}<div class="ai-or-meta">${esc(meta)}</div></div>${btn}</div>`;
     };
-    list.innerHTML = `<div class="ai-or-title">Your server's models (${models.length})</div>` +
+    this._aiDrawList(list, `<div class="ai-or-title">Your server's models (${models.length})</div>` +
       `<div class="hint">Verify checks that a model can use Tarsee's tools, which is worth doing for small models.</div>` +
-      models.map(row).join("");
+      models.map(row).join(""));
+  },
+
+  /**
+   * A card's list of models (Local AI's, OpenRouter's), drawn again each time the models are read: only when it
+   * changed, and with the focus given back to the very model's button someone is on, so Enter verifies or chooses
+   * the model they were on.
+   */
+  _aiDrawList(list, html) {
+    if (list._aiHtml === html) return;
+    const focus = this._aiFocusOf(list);
+    this._aiSetHtml(list, html);
+    this._aiRefocus(list, focus);
   },
 
   _aiOpenRouterHtml() {
@@ -1462,7 +1474,7 @@ const Settings = {
     const have = this._aiModels.openrouter;
     const models = have?.models || [];
     if (!models.length) {
-      list.innerHTML = `<div class="hint">${have ? esc(have.error || "OpenRouter's model list isn't in yet. Try again in a minute.") : "Loading the model list…"}</div>`;
+      this._aiDrawList(list, `<div class="hint">${have ? esc(have.error || "OpenRouter's model list isn't in yet. Try again in a minute.") : "Loading the model list…"}</div>`);
       return;
     }
     const match = (m) => !q || (q === "free" ? m.free : `${m.id} ${m.label || ""}`.toLowerCase().includes(q));
@@ -1493,7 +1505,7 @@ const Settings = {
       const more = hits.length > LIMIT ? `<div class="hint">${hits.length - LIMIT} more: search to narrow the list.</div>` : "";
       return `<div class="ai-or-group"><div class="ai-or-title">${title} (${hits.length})</div>${hits.slice(0, LIMIT).map(row).join("")}${more}</div>`;
     }).join("");
-    list.innerHTML = html || `<div class="hint">No model matches “${esc(q)}”.</div>`;
+    this._aiDrawList(list, html || `<div class="hint">No model matches “${esc(q)}”.</div>`);
   },
 
   /** Scroll to a provider's card and unfold its steps (the chips and the setup wizard use this). */

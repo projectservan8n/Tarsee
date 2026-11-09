@@ -671,6 +671,30 @@ describe("the AI cards drawn again (a read of the AIs comes in) while someone is
     }
   });
 
+  it("a model's button in OpenRouter's list keeps the focus when the list comes in again, changed or not", async () => {
+    const { page, api, errors, context } = await openPage({ needsSetup: false, ready: ["openrouter"] });
+    try {
+      await page.locator("#aiHeaderChip:not([hidden])").click();
+      await page.locator("#openrouterAiCard details.ai-or > summary").click();
+      const verify = page.locator('#openrouterAiCard [data-ai-or-list] [data-ai-action="verify"][data-model="qwen/qwen3-coder:free"]');
+      await verify.waitFor();
+      await verify.focus();
+      const focused = () => page.evaluate(() => ({ action: document.activeElement?.dataset?.aiAction || null, model: document.activeElement?.dataset?.model || null }));
+      const want = { action: "verify", model: "qwen/qwen3-coder:free" };
+      // The same list read again: nothing is drawn again, the focus stays.
+      await page.evaluate(() => Settings.loadAiModels("openrouter", { force: true }));
+      assert.deepEqual(await focused(), want);
+      // A list that changed (a model added): drawn again, the focus goes back to the same model's button.
+      api.MODELS.openrouter.unshift({ id: "x-ai/newer", label: "xAI: Newer", needsVerification: false });
+      await page.evaluate(() => Settings.loadAiModels("openrouter", { force: true }));
+      await page.locator('#openrouterAiCard [data-model="x-ai/newer"]').waitFor();
+      assert.deepEqual(await focused(), want, "Enter then verifies the model it was on, not another");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("a Copy chip clicked twice goes back to Copy on its own: nothing has to draw the card again", async () => {
     const { page, errors, context } = await openPage({ needsSetup: false });
     try {
