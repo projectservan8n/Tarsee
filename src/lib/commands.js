@@ -10,6 +10,7 @@ import { hasCheckpoint, peekCheckpoint, listRecentCheckpoints, CHECKPOINT_FILE_P
 import { preview as previewRetention, runNow as runRetentionNow } from "./retention.js";
 import { forgetConversation } from "./live-bus.js";
 import { forgetChatFiles } from "./chat-files.js";
+import { stopTurns } from "../ai/turn.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -415,7 +416,7 @@ const COMMANDS = {
   },
 
   theme: {
-    description: "Switch the UI theme (warm-charcoal, noir, solarized-light, jarvis-blue)",
+    description: "Switch the dashboard's theme (warm-charcoal, noir, solarized-light, jarvis-blue)",
     usage: "/theme [name]",
     handler: (args, ctx) => {
       const settingsStore = ctx.settingsStore;
@@ -427,6 +428,14 @@ const COMMANDS = {
       const builtIn = ["warm-charcoal", "noir", "solarized-light", "jarvis-blue"];
       const pluginThemes = settingsStore.get("ui.themes.plugin") || [];
       const all = [...builtIn, ...pluginThemes];
+
+      // A theme is how the dashboard looks, and each browser keeps its own (public/js/settings.js), so a channel
+      // (Telegram, Discord, Slack, WhatsApp, email) has nothing to switch: it is told where to pick one. Only the
+      // dashboard's chat ("web", or "api" when its sign-in has lapsed) gets the __SET_THEME__ marker its page reads.
+      const fromDashboard = !ctx.platform || ctx.platform === "web" || ctx.platform === "api";
+      if (!fromDashboard) {
+        return `Themes change how the dashboard looks, so you pick one there: open Settings > Appearance, or type \`/theme <name>\` in the dashboard's chat. Each device keeps its own theme.\n\nThemes: ${all.join(", ")}.`;
+      }
 
       if (!args || args.toLowerCase() === "list") {
         const current = settingsStore.get("ui.theme") || "warm-charcoal";
@@ -1148,14 +1157,17 @@ artifact. Just confirm.`;
   },
 
   stop: {
-    description: "Stop the current AI generation",
+    description: "Stop the reply the AI is writing in this chat",
     usage: "/stop",
     handler: (_args, ctx) => {
-      if (ctx.abortController) {
-        ctx.abortController.abort();
-        return "Generation stopped.";
+      // Slack's /tarsee comes from no thread, and in Slack each thread is its own conversation.
+      if (!ctx.conversationId && ctx.platform === "slack") {
+        return "In Slack every thread is its own conversation, so /stop works inside one: in the thread whose reply you want to stop, mention me with /stop.";
       }
-      return "Nothing is currently generating.";
+      // As the chat's Stop button does (POST /api/chat/stop): every turn running in this chat, whichever channel or
+      // device started it (ai/turn.js).
+      if (ctx.conversationId && stopTurns(ctx.conversationId) > 0) return "Stopped the reply in this chat.";
+      return "Nothing is running in this chat, so there's nothing to stop.";
     },
   },
 

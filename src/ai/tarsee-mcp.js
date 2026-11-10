@@ -256,7 +256,7 @@ export function createTarseeMcp(ctx, opts = {}) {
 
       tool(
         "tarsee_calculator",
-        "Evaluate a math expression with precision. Use for ANY math — arithmetic, percentages, conversions, financial calculations. Never do math in your head.",
+        "Evaluate a math expression with precision. Use for ANY math — arithmetic, percentages, conversions, financial calculations. Never do math in your head. Takes numbers, + - * / ** (power; ^ isn't one), % (the remainder after dividing, not a percent sign: for 15% of 80 write 15 / 100 * 80), brackets, and Math's functions and constants such as Math.sqrt(), Math.round(), Math.max(), Math.pow() and Math.PI. Nothing else: no names, text or code.",
         {
           expression: z.string().describe("Math expression, e.g. '(149 * 12) * 0.85' or 'Math.sqrt(144)'"),
         },

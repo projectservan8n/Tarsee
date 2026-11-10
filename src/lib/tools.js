@@ -285,7 +285,7 @@ export const TOOLS = [
 
   {
     name: "calculator",
-    description: "Evaluate a math expression with precision. Use this for ANY math: arithmetic, percentages, unit conversions, financial calculations, etc. Never do math in your head — always use this tool. Supports: +, -, *, /, **, %, Math.sqrt(), Math.round(), Math.ceil(), Math.floor(), Math.abs(), Math.log(), Math.PI, Math.E, parentheses.",
+    description: "Evaluate a math expression with precision. Use this for ANY math: arithmetic, percentages, unit conversions, financial calculations, etc. Never do math in your head — always use this tool. Supports: +, -, *, /, ** (power; ^ isn't one), % (the remainder after dividing, not a percent sign: for 15% of 80 write 15 / 100 * 80), parentheses, and Math's functions and constants: Math.sqrt(), Math.round(), Math.ceil(), Math.floor(), Math.abs(), Math.log(), Math.max(), Math.min(), Math.pow(), Math.PI, Math.E and the rest of Math. Nothing else: no names, text or code.",
     input_schema: {
       type: "object",
       properties: {
@@ -1364,20 +1364,170 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       }
 
       case "calculator": {
-        const { expression } = toolInput;
-        if (!expression) return "Error: 'expression' is required.";
-        // Whitelist: only allow math chars, Math.*, numbers, parentheses, spaces
-        const sanitized = expression.trim();
-        if (!/^[0-9+\-*/.%() ,eE\s]|Math\./g.test(sanitized) && /[a-zA-Z]/.test(sanitized.replace(/Math\.\w+/g, ""))) {
-          return `Error: Invalid expression. Only math operators and Math.* functions allowed.`;
-        }
+        // A small arithmetic parser of its own: no eval, no Function. The text used to go to `new Function` behind a
+        // filter that let through anything starting with a bracket, so anyone who can talk to the bot could have the AI
+        // send "(process.env.ENCRYPTION_KEY)" and get the key back, or "(import('node:fs')...)" and run code. Now only
+        // numbers, + - * / % **, brackets and Math's own functions and constants are understood, and any other name or
+        // sign is refused before anything is worked out. The numbers are JavaScript's, so every sum the old tool did
+        // comes out the same, and whole numbers are exact up to 9007199254740991 (test/calculator-tool.test.js).
+        const { expression } = toolInput || {};
+        const text = typeof expression === "number" ? String(expression) : expression;
+        if (text === undefined || text === null || (typeof text === "string" && !text.trim())) return "Error: 'expression' is required.";
+        if (typeof text !== "string") return "Error: 'expression' must be a sum written as text, such as '2 + 2'.";
+        const MATH_FUNCTIONS = new Set(["abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "cbrt", "ceil",
+          "clz32", "cos", "cosh", "exp", "expm1", "floor", "fround", "hypot", "imul", "log", "log10", "log1p", "log2", "max",
+          "min", "pow", "random", "round", "sign", "sin", "sinh", "sqrt", "tan", "tanh", "trunc"]);
+        const MATH_CONSTANTS = new Set(["E", "LN10", "LN2", "LOG10E", "LOG2E", "PI", "SQRT1_2", "SQRT2"]);
+        const TAKES = "The calculator takes numbers, + - * / % ** and brackets, and Math's functions and constants, such as Math.sqrt(2) and Math.PI.";
+        const COMMA = "A comma only goes between the numbers given to a Math function, as in Math.max(1, 2). Write a thousand as 1000, not 1,000.";
+        const refuse = (why) => Object.assign(new Error(why), { refused: true });
+        const shown = (s) => (s.length > 40 ? `${s.slice(0, 40)}...` : s);
+        // JavaScript's number forms: 12, 1.5, .5, 5., 1e3, 2.5E-3, 1_000, 0x1F, 0b101, 0o17.
+        const NUMBER = /0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|0[bB][01](?:_?[01])*|0[oO][0-7](?:_?[0-7])*|(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?/y;
+        const NAME = /[A-Za-z_$][A-Za-z0-9_$]*/y;
+        const SPACE = /\s*/y;
+        const read = (re, from) => { re.lastIndex = from; const m = re.exec(text); return m ? m[0] : ""; };
         try {
-          // Safe eval — only Math globals available
-          const fn = new Function("Math", `"use strict"; return (${sanitized});`);
-          const result = fn(Math);
-          if (typeof result !== "number" || !isFinite(result)) return `Result: ${result} (not a finite number)`;
-          return `${expression} = ${result}`;
+          // The text, read into numbers, signs and Math functions. A name that isn't Math's is refused here.
+          const tokens = [];
+          for (let i = read(SPACE, 0).length; i < text.length; i += read(SPACE, i).length) {
+            const ch = text[i];
+            const num = /[0-9.]/.test(ch) ? read(NUMBER, i) : "";
+            if (num) {
+              tokens.push({ kind: "number", value: Number(num.replace(/_/g, "")), text: num, digits: /^\d+$/.test(num) });
+              i += num.length;
+            } else if (text.startsWith("**", i)) {
+              tokens.push({ kind: "sign", sign: "**" });
+              i += 2;
+            } else if ("+-*/%(),".includes(ch)) {
+              tokens.push({ kind: "sign", sign: ch });
+              i += 1;
+            } else if (ch === "^") {
+              throw refuse("'^' isn't a power sign here: for 2 to the power of 3, write 2 ** 3.");
+            } else {
+              const name = read(NAME, i);
+              if (!name) {
+                const c = String.fromCodePoint(text.codePointAt(i));
+                const code = c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
+                throw refuse(`${/^[\x21-\x7e]$/.test(c) ? `'${c}'` : `'${c}' (U+${code})`} can't be used in a sum.`);
+              }
+              if ((name === "e" || name === "E") && i > 0 && /[0-9.]/.test(text[i - 1])) throw new Error("A number's exponent needs digits after the e, as in 2.5e3 for 2500.");
+              i += name.length;
+              if (name !== "Math") {
+                const known = [...MATH_FUNCTIONS, ...MATH_CONSTANTS].find((m) => m.toLowerCase() === name.toLowerCase());
+                throw refuse(known ? `Write Math.${known}, not ${name}.` : `'${shown(name)}' isn't a number, or a Math function or constant, that the calculator knows.`);
+              }
+              i += read(SPACE, i).length;
+              if (text[i] !== ".") throw refuse("Math on its own isn't a number: write one of its functions or constants, such as Math.sqrt(2) or Math.PI.");
+              i += 1;
+              i += read(SPACE, i).length;
+              const member = read(NAME, i);
+              if (!member) throw refuse("'Math.' needs one of Math's functions or constants after it, such as Math.sqrt(2) or Math.PI.");
+              i += member.length;
+              if (MATH_CONSTANTS.has(member)) tokens.push({ kind: "number", value: Math[member], text: `Math.${member}`, constant: member });
+              else if (MATH_FUNCTIONS.has(member) && typeof Math[member] === "function") tokens.push({ kind: "function", name: member, fn: Math[member] });
+              else throw refuse(`Math.${shown(member)} isn't one of the Math functions or constants the calculator knows.`);
+            }
+          }
+
+          // The sum, worked out with JavaScript's order: brackets, then **, then * / %, then + -.
+          let at = 0;
+          let depth = 0;
+          let rounded = false;
+          const peek = () => tokens[at];
+          const isSign = (t, ...signs) => !!t && t.kind === "sign" && signs.includes(t.sign);
+          const what = (t) => (t.kind === "sign" ? `'${t.sign}'` : t.kind === "function" ? `Math.${t.name}` : `'${shown(t.text)}'`);
+          const nested = (work) => {
+            if (++depth > 100) throw new Error("There are too many brackets or signs inside one another (100 at most).");
+            try { return work(); } finally { depth--; }
+          };
+          const closing = (missing) => {
+            if (isSign(peek(), ",")) throw refuse(COMMA);
+            if (!isSign(peek(), ")")) throw new Error(missing);
+            at++;
+          };
+          const sum = () => nested(() => {
+            let v = product();
+            while (isSign(peek(), "+", "-")) {
+              const s = tokens[at++].sign;
+              const r = product();
+              v = s === "+" ? v + r : v - r;
+            }
+            return v;
+          });
+          const product = () => {
+            let v = signed();
+            while (isSign(peek(), "*", "/", "%")) {
+              const s = tokens[at++].sign;
+              const r = signed();
+              v = s === "*" ? v * r : s === "/" ? v / r : v % r;
+            }
+            return v;
+          };
+          // JavaScript won't guess whether -2 ** 2 means (-2) ** 2 or -(2 ** 2), and neither does this.
+          const signed = () => {
+            if (!isSign(peek(), "+", "-")) return power();
+            const v = unsigned();
+            if (isSign(peek(), "**")) throw new Error("Put brackets around a sign and its number before **, as (-2) ** 2, or around the power, as -(2 ** 2).");
+            return v;
+          };
+          const unsigned = () => nested(() => {
+            if (!isSign(peek(), "+", "-")) return operand();
+            const s = tokens[at++].sign;
+            const v = unsigned();
+            return s === "-" ? -v : v;
+          });
+          const power = () => {
+            const base = operand();
+            if (!isSign(peek(), "**")) return base;
+            at++;
+            return base ** nested(signed);
+          };
+          const operand = () => {
+            // "50%" or "50% * 200": % is the remainder after dividing, as in JavaScript, not a percent sign.
+            const missing = (where) => new Error(isSign(tokens[at - 2], "%")
+              ? "'%' is the remainder after dividing, as in 7 % 3 = 1, not a percent sign: for 50% of 200, write 50 / 100 * 200."
+              : `A number is missing ${where}.`);
+            const t = tokens[at++];
+            if (!t) throw missing("at the end");
+            if (t.kind === "number") {
+              if (t.constant && isSign(peek(), "(")) throw new Error(`Math.${t.constant} is a number, not a function: write it without brackets.`);
+              if (t.digits && !Number.isSafeInteger(t.value)) rounded = true;
+              return t.value;
+            }
+            if (t.kind === "function") {
+              if (!isSign(peek(), "(")) throw new Error(`Math.${t.name} needs brackets, as in Math.${t.name}(9).`);
+              at++;
+              const args = [];
+              if (!isSign(peek(), ")")) {
+                args.push(sum());
+                while (isSign(peek(), ",")) { at++; args.push(sum()); }
+              }
+              closing(`A ')' is missing after Math.${t.name}(.`);
+              return t.fn(...args);
+            }
+            if (isSign(t, "(")) {
+              if (isSign(peek(), ")")) throw new Error("There are empty brackets: put a number between them.");
+              const v = sum();
+              closing("A ')' is missing.");
+              return v;
+            }
+            throw missing(`before ${what(t)}`);
+          };
+
+          const result = sum();
+          if (at < tokens.length) {
+            const t = tokens[at];
+            if (isSign(t, ",")) throw refuse(COMMA);
+            if (isSign(t, ")")) throw new Error("There's a ')' with no '(' before it.");
+            throw new Error(`A sign is missing before ${what(t)}.`);
+          }
+          if (!Number.isFinite(result)) return `Result: ${result} (not a finite number)`;
+          if (Math.abs(result) > Number.MAX_SAFE_INTEGER) rounded = true;
+          const note = rounded ? " (past 9007199254740991, numbers keep only about 16 significant digits, so the last digits of this may be rounded)" : "";
+          return `${text} = ${result}${note}`;
         } catch (err) {
+          if (err.refused) return `Error: Invalid expression. ${err.message} ${TAKES}`;
           return `Math error: ${err.message}`;
         }
       }

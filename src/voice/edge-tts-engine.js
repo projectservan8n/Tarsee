@@ -6,10 +6,25 @@
 
 import { TTSEngine } from "./tts-interface.js";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import crypto from "node:crypto";
 
 const MAX_RETRIES = 3;
 const TTS_TIMEOUT = 30_000; // 30s per attempt — longer text needs more time
+const RETRY_DELAY = 500; // times the attempt number
+
+// Swapped only by tests: the EdgeTTS class (null loads node-edge-tts) and the waits.
+let _EdgeTTS = null;
+let _timeoutMs = TTS_TIMEOUT;
+let _retryDelayMs = RETRY_DELAY;
+
+/** Tests only: use a fake EdgeTTS class and shorter waits. No arguments puts the real ones back. */
+export function __setForTests({ EdgeTTS, timeoutMs, retryDelayMs } = {}) {
+  _EdgeTTS = EdgeTTS || null;
+  _timeoutMs = timeoutMs ?? TTS_TIMEOUT;
+  _retryDelayMs = retryDelayMs ?? RETRY_DELAY;
+}
 
 export class EdgeTTSEngine extends TTSEngine {
   constructor(voice) {
@@ -58,20 +73,23 @@ export class EdgeTTSEngine extends TTSEngine {
 
     if (!text) throw new Error("No speakable text after cleanup");
 
-    const { EdgeTTS } = await import("node-edge-tts");
+    const EdgeTTS = _EdgeTTS || (await import("node-edge-tts")).EdgeTTS;
     const voice = voiceId || this.defaultVoice;
 
     // Retry loop — Edge TTS WebSocket can drop
     let lastError;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      const tmpFile = `/tmp/edge-tts-${crypto.randomBytes(4).toString("hex")}.mp3`;
+      // The system temp folder (there is no /tmp on Windows), and a name of its
+      // own for every attempt, so two sentences spoken at once never share a file.
+      const tmpFile = path.join(os.tmpdir(), `tarsee-edge-tts-${crypto.randomUUID()}.mp3`);
+      let timer;
       try {
         const t = new EdgeTTS({ voice });
         await Promise.race([
           t.ttsPromise(text, tmpFile),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error(`TTS timed out (attempt ${attempt}/${MAX_RETRIES})`)), TTS_TIMEOUT)
-          ),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`TTS timed out (attempt ${attempt}/${MAX_RETRIES})`)), _timeoutMs);
+          }),
         ]);
 
         const audio = fs.readFileSync(tmpFile);
@@ -79,12 +97,14 @@ export class EdgeTTSEngine extends TTSEngine {
 
         return { audio, contentType: "audio/mpeg" };
       } catch (err) {
-        lastError = err;
-        console.warn(`[edge-tts] attempt ${attempt}/${MAX_RETRIES} failed: ${err.message}`);
-        if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, 500 * attempt));
+        // node-edge-tts rejects some failures with a bare string ("Timed out").
+        lastError = err instanceof Error ? err : new Error(`Edge TTS failed: ${err}`);
+        console.warn(`[edge-tts] attempt ${attempt}/${MAX_RETRIES} failed: ${lastError.message}`);
       } finally {
-        try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+        clearTimeout(timer);
+        try { fs.rmSync(tmpFile, { force: true }); } catch { /* ignore */ }
       }
+      if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, _retryDelayMs * attempt));
     }
 
     throw lastError || new Error("Edge TTS failed after retries");

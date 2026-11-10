@@ -2222,30 +2222,43 @@ const Chat = {
   _typingDebounce: null,
   _typingIndicatorTimeout: null,
 
+  /**
+   * A click on a diagram's node asks about that node. The diagram (lib/diagram-renderer.js) posts
+   * { type: "tarsee:diagram-click", diagramId, nodeId, label, sublabel, question } to this window. It runs in an
+   * iframe sandboxed without allow-same-origin (canvasEmbedHtml), and the server adds a CSP sandbox, so its messages
+   * come from origin "null", which any sandboxed page shares: the origin can't say who sent one. What does is the
+   * sender's window being one of the chat's own diagram iframes, the message naming that diagram, and its exact shape.
+   */
   _initDiagramListener() {
+    const FIELDS = new Set(["type", "diagramId", "nodeId", "label", "sublabel", "question"]);
     window.addEventListener("message", (event) => {
-      // Defense-in-depth: same-origin check (canvas iframes run allow-same-origin).
-      if (event.origin !== location.origin) return;
+      // "null" (the sandboxed diagram) or this origin (an iframe allowed same-origin); never any other.
+      if (event.origin !== "null" && event.origin !== location.origin) return;
+
+      // A node click's exact shape: a plain object of those fields only, each a string (question may be missing).
       const data = event.data;
-      if (!data || data.type !== "tarsee:diagram-click") return;
-      // Verify the source is one of our canvas iframes
-      const iframes = document.querySelectorAll('iframe.canvas-iframe');
-      let trusted = false;
-      for (const f of iframes) {
-        if (f.contentWindow === event.source) { trusted = true; break; }
-      }
-      if (!trusted) return;
+      if (!data || typeof data !== "object" || Object.getPrototypeOf(data) !== Object.prototype) return;
+      if (data.type !== "tarsee:diagram-click" || Object.keys(data).some((k) => !FIELDS.has(k))) return;
+      const { diagramId, nodeId, label, sublabel, question } = data;
+      if (![diagramId, nodeId, label, sublabel].every((v) => typeof v === "string")) return;
+      if (question !== undefined && typeof question !== "string") return;
 
-      const label = String(data.label || "").slice(0, 200);
-      const sublabel = String(data.sublabel || "").slice(0, 200);
-      const custom = typeof data.question === "string" ? data.question.slice(0, 500) : "";
-      if (!label && !custom) return;
+      // Sent by one of this chat's diagram iframes (a canvas whose id create_diagram starts with "diagram-"), and
+      // naming that diagram.
+      if (!event.source) return;
+      const frame = [...this.elements.chatArea.querySelectorAll(".canvas-embed > iframe.canvas-iframe")]
+        .find((f) => f.contentWindow === event.source);
+      const canvasId = frame?.parentElement?.dataset.canvasId || "";
+      if (!canvasId.startsWith("diagram-") || diagramId !== canvasId) return;
 
-      const question = custom
-        || (sublabel ? `Tell me more about: ${label}. ${sublabel}` : `Tell me more about: ${label}`);
+      const name = label.slice(0, 200);
+      const more = sublabel.slice(0, 200);
+      const custom = (question || "").slice(0, 500);
+      if (!name && !custom) return;
+      const text = custom || (more ? `Tell me more about: ${name}. ${more}` : `Tell me more about: ${name}`);
 
-      // Reuse the normal send path — send() handles queueing during streaming.
-      this.elements.messageInput.value = question;
+      // The normal send path: send() queues it while a reply is still coming.
+      this.elements.messageInput.value = text;
       this.elements.sendBtn.disabled = false;
       this.send();
     });
