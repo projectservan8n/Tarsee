@@ -13,13 +13,34 @@ const API = {
     return match ? match[1] : null;
   },
 
+  /** How long one ask for a fresh CSRF token is waited for (refreshCsrf). */
+  csrfWaitMs: 10_000,
+
   /**
    * A fresh CSRF cookie from the server. Tokens last two hours and a page can
    * stay open for days (a phone's home-screen app): asked for when the cookie has
    * run out, and once more when a send is refused for its token.
+   * Every send waiting for a token at once shares one ask, so an ask that never
+   * got an answer (a stalled connection, say after a laptop wakes) would hold up
+   * every later change on the page. One with no answer in csrfWaitMs is given
+   * up on and asked once more, on a new connection; with no answer again the
+   * sends go on without a token, and the next one asks afresh.
    */
   async refreshCsrf() {
-    this._csrfAsk ||= fetch("/api/auth/csrf", { credentials: "same-origin", cache: "no-store" }).catch(() => null).finally(() => { this._csrfAsk = null; });
+    if (!this._csrfAsk) {
+      // Resolves to whether the server answered in time (an error that comes back at once counts: asking again won't help).
+      const askOnce = () => {
+        const stop = new AbortController();
+        const limit = setTimeout(() => stop.abort(), this.csrfWaitMs);
+        return fetch("/api/auth/csrf", { credentials: "same-origin", cache: "no-store", signal: stop.signal })
+          .then(() => true, () => !stop.signal.aborted)
+          .finally(() => clearTimeout(limit));
+      };
+      const ask = askOnce()
+        .then((answered) => answered || askOnce())
+        .finally(() => { if (this._csrfAsk === ask) this._csrfAsk = null; });
+      this._csrfAsk = ask;
+    }
     await this._csrfAsk;
     return this.getCsrfToken();
   },

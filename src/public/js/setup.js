@@ -52,7 +52,8 @@ const Setup = {
   _aiLoginCtl: null,
   _aiLoginView: null,
   _aiHeld: false,        // a press (or Space on a button) is down on the step: draws wait for its click (_aiHold)
-  _aiDrawWaiting: false, // a draw came in while it was down
+  _aiDrawWaiting: false, // a draw came in while it was down, or while a list was open (_aiListOpen)
+  _aiFolds: {},          // provider id → { state, open }: how its guide was left, folded or not, and for which state
 
   _esc(s) {
     return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -97,6 +98,7 @@ const Setup = {
     if (terms && window.ProviderGuides) terms.innerHTML = window.ProviderGuides.TERMS_NOTE;
     this._aiHeld = false;
     this._aiDrawWaiting = false;
+    this._aiFolds = {};
     this._aiHoldOn(root);
     root.addEventListener("click", (ev) => this._aiClick(ev));
     root.addEventListener("change", (ev) => this._aiChange(ev));
@@ -143,37 +145,90 @@ const Setup = {
 
   // Every read of the AIs draws the step again (opening it, coming back to the tab from the Terminal or ChatGPT's
   // page, after each Check, Test or sign-in), as Settings → AI does its cards. A part whose markup didn't change isn't
-  // rebuilt, and one that did gives the focus back to the box or button it was on. While a press (or Space on a
-  // button) is down on the step, a draw waits until its click has been handled: a button rebuilt under a press
-  // (pressed on the old one, let go on the new) gets no click at all.
+  // rebuilt, and one that did gives the focus back to what it was on (a box, a button, a link, a guide's heading, the
+  // model list), and each guide stays folded or unfolded as it was left. While a press (or Space on a button) is down
+  // on the step, a draw waits until its click has been handled: a button rebuilt under a press (pressed on the old
+  // one, let go on the new) gets no click at all. And while a list on it is open: the model picked from it would go
+  // to a list no longer on the page.
 
   /** Put this markup in el, unless it's what el already shows (Settings._aiSetHtml); rebuilt, it keeps the focus. */
   _aiPut(el, html) {
     if (!el || el._aiHtml === html) return;
     const focus = this._aiFocusOf(el);
     Settings._aiSetHtml(el, html);
-    Settings._aiRefocus(el, focus);
+    this._aiRefocus(el, focus);
   },
 
-  /** The box or button someone is in, inside root (Settings._aiFocusOf), and the wizard's own buttons too. */
+  /**
+   * What someone is on inside root, to find again once root is built again (_aiRefocus): a box or button
+   * (Settings._aiFocusOf), the wizard's own buttons, a link, a guide's heading (its <summary>), or a list's button.
+   */
   _aiFocusOf(root) {
     const kept = Settings._aiFocusOf(root);
     if (kept) return kept;
     const el = document.activeElement;
-    if (!el || el === root || !root.contains(el) || !(el.dataset?.setup || el.dataset?.copy)) return null;
+    if (!el || el === root || !root.contains(el)) return null;
     const esc = (s) => (window.CSS?.escape ? CSS.escape(s) : String(s).replace(/["\\]/g, "\\$&"));
-    // Found again by all its data- attributes: several share data-setup (each choice, each provider, each preset),
-    // and focus put on another one would act on that one.
-    const sel = [...el.attributes].filter((a) => a.name.startsWith("data-")).map((a) => `[${a.name}="${esc(a.value)}"]`).join("");
-    return root.querySelectorAll(sel).length === 1 ? { sel, range: null } : null;
+    // A list's button, which custom-select.js draws beside its select: found again by the select's id.
+    if (el.classList?.contains("cs-trigger")) {
+      const list = el.parentElement?.querySelector("select[id]");
+      return list ? { list: `#${esc(list.id)}` } : null;
+    }
+    if (el.dataset?.setup || el.dataset?.copy) {
+      // Found again by all its data- attributes: several share data-setup (each choice, each provider, each preset),
+      // and focus put on another one would act on that one.
+      const sel = [...el.attributes].filter((a) => a.name.startsWith("data-")).map((a) => `[${a.name}="${esc(a.value)}"]`).join("");
+      return root.querySelectorAll(sel).length === 1 ? { sel, range: null } : null;
+    }
+    // A link by its address, a guide's heading by its guide. Several alike (a step's link and a button to the same
+    // page, with the same words): the one in the same place among them.
+    const details = el.tagName === "SUMMARY" ? el.parentElement : null;
+    const sel = el.tagName === "A" && el.hasAttribute("href") ? `a[href="${esc(el.getAttribute("href"))}"]`
+      : details?.tagName === "DETAILS" && details.className
+        ? `details[class="${esc(details.className)}"]${details.dataset.aiGuide ? `[data-ai-guide="${esc(details.dataset.aiGuide)}"]` : ""} > summary`
+        : null;
+    if (!sel) return null;
+    const alike = [...root.querySelectorAll(sel)].filter((x) => x.textContent === el.textContent);
+    return { sel, text: el.textContent, nth: alike.indexOf(el), of: alike.length };
+  },
+  /** Focus back on what _aiFocusOf found, in root built again. */
+  _aiRefocus(root, focus) {
+    if (!focus) return;
+    if (focus.list) {
+      // custom-select.js would draw the new list's button on the next frame: drawn now, so the focus can go on it.
+      window.CustomSelect?.enhance(root);
+      root.querySelector(focus.list)?.parentElement?.querySelector(".cs-trigger")?.focus({ preventScroll: true });
+      return;
+    }
+    if (focus.nth === undefined) { Settings._aiRefocus(root, focus); return; }
+    const alike = [...root.querySelectorAll(focus.sel)].filter((x) => x.textContent === focus.text);
+    if (alike.length === focus.of) alike[focus.nth]?.focus({ preventScroll: true });
   },
 
-  /** Draws wait while a press (or Space on a button) is down on the step root, until its click has been handled. */
+  /** Whether a list on the step is open (custom-select.js draws its options in a panel in document.body). */
+  _aiListOpen() {
+    return !!document.querySelector('#setupAi .cs-trigger[aria-expanded="true"]');
+  },
+
+  /**
+   * Draws wait while a press (or Space on a button) is down on the step root, until its click has been handled; and
+   * while a list on it is open, until it closes, picked from or not.
+   */
   _aiHoldOn(root) {
     root.addEventListener("pointerdown", () => this._aiHold());
     root.addEventListener("keydown", (ev) => { if (ev.key === " " && ev.target.closest?.("button")) this._aiHold(); });
     // (capture: before the step's own click handler, so its draws run at once, and the draw that waited after it)
     root.addEventListener("click", () => this._aiRelease(0), true);
+    // A list's options are outside the step, so a pick is no press on it: the list's button says when it closes (once
+    // the press or key that closed it has been handled, the draw that waited runs).
+    new MutationObserver(() => {
+      if (!this._aiDrawWaiting || this._aiListOpen()) return;
+      setTimeout(() => {
+        if (!this._aiDrawWaiting || this._aiHeld || this._aiListOpen()) return;
+        this._aiDrawWaiting = false;
+        this._aiDraw();
+      }, 0);
+    }).observe(root, { subtree: true, attributes: true, attributeFilter: ["aria-expanded"] });
     if (this._aiHoldHooks) return;
     this._aiHoldHooks = true;
     // A press that ends in no click (let go somewhere else, a scroll on a phone): the draw runs a moment later.
@@ -205,7 +260,7 @@ const Setup = {
   _aiDraw() {
     const G = window.ProviderGuides;
     if (!G || !this._ai) return;
-    if (this._aiHeld) { this._aiDrawWaiting = true; return; }
+    if (this._aiHeld || this._aiListOpen()) { this._aiDrawWaiting = true; return; }
     const esc = (s) => this._esc(s);
     // With no API-key AI switched on in this version, "Only use API keys" would leave nothing to choose: neither it
     // nor the who-question (whose "Other people too" ticks it) is offered. Already on, it still shows, so it can be
@@ -266,7 +321,7 @@ const Setup = {
     const G = window.ProviderGuides;
     const panel = document.getElementById("setupAiPanel");
     if (!panel) return;
-    if (this._aiHeld) { this._aiDrawWaiting = true; return; }
+    if (this._aiHeld || this._aiListOpen()) { this._aiDrawWaiting = true; return; }
     const esc = (s) => this._esc(s);
 
     let html = "";
@@ -301,8 +356,19 @@ const Setup = {
       const list = panel.querySelector("#setupAiModel");
       const drawn = list && ([...list.options].find((o) => o.defaultSelected) || list.options[0]);
       const chosen = list && drawn && panel._aiFor === id && list.value !== drawn.value ? list.value : null;
+      // Each guide stays folded or unfolded as it was left, until its AI's state changes (it then follows that:
+      // unfolded until the AI is ready), as in Settings → AI.
+      const foldKey = (d) => `${d.className}|${d.dataset.aiGuide || ""}`;
+      if (panel._aiFor) this._aiFolds[panel._aiFor] = { state: panel._aiState, open: new Map([...panel.querySelectorAll("details[class]")].map((d) => [foldKey(d), d.open])) };
+      // (a list's options, which custom-select.js keeps in document.body with their own listeners, go with it)
+      panel.querySelectorAll("select").forEach((s) => s._customSelect?.destroy());
       Settings._aiSetHtml(panel, html);
       panel._aiFor = id;
+      panel._aiState = c?.state ?? null;
+      const folds = this._aiFolds[id];
+      if (folds && folds.state === panel._aiState) {
+        panel.querySelectorAll("details[class]").forEach((d) => { if (folds.open.has(foldKey(d))) d.open = folds.open.get(foldKey(d)); });
+      }
       for (const [name, value] of Object.entries(typed)) {
         const el = panel.querySelector(`[data-keep="${name}"]`);
         if (el) el.value = value;
@@ -312,7 +378,7 @@ const Setup = {
     }
     if (id === "chatgpt") Settings.renderChatgptLogin(document.getElementById("setupDevice"), this._aiLoginView);
     // Focus goes back last, once the sign-in box (and its Cancel) is drawn too.
-    Settings._aiRefocus(panel, focus);
+    this._aiRefocus(panel, focus);
   },
 
   _aiControlsHtml(c, p) {
@@ -788,7 +854,7 @@ const Setup = {
     setTimeout(() => {
       const box = Chat.elements?.messageInput;
       if (!box || box.value.trim()) return;
-      box.value = "Hey! I just finished setting you up. What can you do?";
+      Chat.setBox("Hey! I just finished setting you up. What can you do?");   // (the one way to change the box's words)
       box.dispatchEvent(new Event("input", { bubbles: true }));
       box.focus();
       box.select();
@@ -827,7 +893,7 @@ const Setup = {
       this.setupConversationId = conv.id;
       Chat.openChannel("web:default", conv.id);
       setTimeout(() => {
-        Chat.elements.messageInput.value = "Hey! I just set you up. Let's get to know each other.";
+        Chat.setBox("Hey! I just set you up. Let's get to know each other.");
         Chat.send();
       }, 500);
     } catch (err) {

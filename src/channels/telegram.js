@@ -23,8 +23,9 @@ import { turnErrorNote, idleNote, errorStillToSay, sttProblem } from "./turn-not
  * @param {import('better-sqlite3').Database} db
  * @param {object} [opts] - apiRoot: the Bot API base; chatStream: the model stream (ai/router.js chatStream when left
  *   out); deliverPending (see manager.js); getMeTimeoutMs: how long the startup token check waits (15 s);
- *   typingEveryMs: how often "typing…" is sent while a message is answered or waits for its turn (4 s). Tests point
- *   the first two at 127.0.0.1 and a scripted model.
+ *   typingEveryMs: how often "typing…" is sent while a message is answered or waits for its turn (4 s);
+ *   idleCheckEveryMs: how often a turn checks it has heard from the AI within TARSEE_CHANNEL_IDLE_ABORT_MS (15 s).
+ *   Tests point the first two at 127.0.0.1 and a scripted model.
  * @returns {Promise<{stop: Function, identity: string|null}>}
  */
 export async function createTelegramBot(config, db, opts = {}) {
@@ -72,6 +73,9 @@ export async function createTelegramBot(config, db, opts = {}) {
   let line = Promise.resolve();
   let stopped = false;
   const inLine = new Set(); // what waits in line and hasn't started: { chat }, for the log when the channel stops
+  // Messages waiting behind another reply in their chat's conversation (lib/conversation-lock.js): { chat, takeOut },
+  // which stop() takes out of that queue.
+  const waitingTurns = new Set();
   const botError = (err) => console.error("[telegram] bot error:", err?.message || err);
   /** Run fn now or after everything in line, counted in health() until it ends; its errors are logged, never thrown. */
   function handleUpdate(ctx, fn, { now = false } = {}) {
@@ -103,6 +107,7 @@ export async function createTelegramBot(config, db, opts = {}) {
   // "typing…" in a chat while its message is answered or waits for its turn: sent every typingEveryMs (Telegram shows
   // it for 5 s). stop() ends every one, and one still going finds the channel stopped and ends itself.
   const TYPING_EVERY_MS = opts.typingEveryMs || 4000;
+  const IDLE_CHECK_EVERY_MS = opts.idleCheckEveryMs || 15_000;
   const typing = new Set(); // the end() of each, for stop()
   /** Keep "typing…" showing in ctx's chat until the returned end() is called (any number of times). */
   function keepTyping(ctx) {
@@ -147,14 +152,25 @@ export async function createTelegramBot(config, db, opts = {}) {
   }
 
   /**
-   * Download a Telegram file and return as base64 + media type.
+   * Download a file the person sent from Telegram's file server: its bytes and type. Any answer but a 2xx (an error
+   * page from that server, or from a proxy in front of it) throws, so the handler says "Failed to process …" instead
+   * of handing the page to the AI as the person's photo, file or voice message. The file's link holds the bot token,
+   * so the error names only the status.
    */
-  async function downloadTelegramFile(fileId) {
+  async function fetchTelegramFile(fileId) {
     const fileLink = await bot.telegram.getFileLink(fileId);
     const res = await fetch(fileLink.href);
-    const buffer = Buffer.from(await res.arrayBuffer());
-    const contentType = res.headers.get("content-type") || "image/jpeg";
-    return { data: buffer.toString("base64"), mediaType: contentType, buffer };
+    if (!res.ok) {
+      try { await res.body?.cancel(); } catch { /* nothing left to read */ }
+      throw new Error(`Telegram's file server answered ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`);
+    }
+    return { buffer: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get("content-type") };
+  }
+
+  /** Download a Telegram file as base64 + media type (a photo's, when the server doesn't say), and its bytes. */
+  async function downloadTelegramFile(fileId) {
+    const { buffer, contentType } = await fetchTelegramFile(fileId);
+    return { data: buffer.toString("base64"), mediaType: contentType || "image/jpeg", buffer };
   }
 
   /**
@@ -324,26 +340,6 @@ ${sendFileHint("telegram")}`,
     // messageId: the message this turn answers (its pictures are kept on it, not on whatever came in later)
     const toolCtx = { db, settingsStore, conversationId: convId, messageId: savedUser?.id || null };
 
-    // Idle watchdog: if the SDK goes 3 min without emitting an event we abort
-    // and send the user an explicit message instead of hanging forever.
-    const controller = new AbortController();
-    let lastEventAt = Date.now();
-    let idleAborted = false;
-    // Idle abort: how long a turn may go with NO stream event before we give up.
-    // Was a hard 3 minutes, which killed legitimate long research/tool turns.
-    // Now configurable, but deliberately FINITE — the Mac build sets this to
-    // ~2e9 (23 days), which is only safe there because its PTY pool has a
-    // heartbeat + dead-socket detector. This build has neither, so an infinite
-    // value would wedge a turn forever with no console to kill it from.
-    const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
-    const idleTimer = setInterval(() => {
-      if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
-        idleAborted = true;
-        try { controller.abort(); } catch {}
-        clearInterval(idleTimer);
-      }
-    }, 15_000);
-
     // Streaming-segment state — each text block between tool boundaries
     // becomes its own Telegram message that edit-streams as tokens arrive.
     // Tool calls produce ephemeral status messages ("Running command…"
@@ -450,11 +446,34 @@ ${sendFileHint("telegram")}`,
     // "typing…" shows until the turn has ended, or the dashboard's Stop takes it out of the queue (it then never
     // runs), or the channel stops (stop() ends it, also for one still waiting).
     const stopTyping = keepTyping(ctx);
+    let waitingTurn = null; // while it waits behind another reply in this chat: for stop() to take it out of the queue
     const turn = withConversationTurn(convId, async () => {
+    if (waitingTurn) waitingTurns.delete(waitingTurn);
     // The AI this turn runs on, from the turn layer's route event (the backup model's, if it answered instead).
     let routed = null;
+    // Idle watchdog: a turn that goes IDLE_ABORT_MS with no event from the AI is aborted, and the person is told so,
+    // instead of it hanging forever. Its clock starts here, when the turn starts: started when the message came, a
+    // message that waited longer than that behind another reply in this chat was given up on before its turn began.
+    const controller = new AbortController();
+    let lastEventAt = Date.now();
+    let idleAborted = false;
+    // Idle abort: how long a turn may go with NO stream event before we give up.
+    // Was a hard 3 minutes, which killed legitimate long research/tool turns.
+    // Now configurable, but deliberately FINITE — the Mac build sets this to
+    // ~2e9 (23 days), which is only safe there because its PTY pool has a
+    // heartbeat + dead-socket detector. This build has neither, so an infinite
+    // value would wedge a turn forever with no console to kill it from.
+    const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
+    const idleTimer = setInterval(() => {
+      if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
+        idleAborted = true;
+        try { controller.abort(); } catch {}
+        clearInterval(idleTimer);
+      }
+    }, IDLE_CHECK_EVERY_MS);
     try {
-      // This may have waited behind another reply in this chat.
+      // A message waiting behind another reply in this chat is taken out of the queue when the channel stops (stop()),
+      // so it never gets here. This catches one whose turn came at that very moment.
       if (droppedOnStop(chatId, "a message", { saved: true })) return;
       const workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
@@ -595,6 +614,8 @@ ${sendFileHint("telegram")}`,
         ? idleNote(routed, IDLE_ABORT_MS)
         : `⚠️ Error: ${err.message || "something went wrong"}. Try again.`;
       await ctx.reply(reason).catch(() => {});
+    } finally {
+      clearInterval(idleTimer);
     }
     }, {
       // Waiting behind the reply in progress: a "Queued" line on the dashboard too, whose Stop takes it out.
@@ -604,11 +625,15 @@ ${sendFileHint("telegram")}`,
           ? "⏳ Still working on your last message — yours is next."
           : `⏳ Queued (${ahead} ahead).`).catch(() => {});
       },
+      onWaiting: (takeOut) => {
+        waitingTurn = { chat: chatId, takeOut };
+        waitingTurns.add(waitingTurn);
+      },
     });
-    // Both timers end however the turn ends, also when it never ran (taken out of the queue).
+    // "typing…" ends however the turn ends, also when it never ran (taken out of the queue).
     try { await turn; } finally {
       stopTyping();
-      clearInterval(idleTimer);
+      if (waitingTurn) waitingTurns.delete(waitingTurn);
     }
   }
 
@@ -788,9 +813,7 @@ ${sendFileHint("telegram")}`,
       console.log(`[telegram] ${what}: ${file.duration}s, ${file.file_size} bytes`);
 
       // Download the audio (.ogg; a video note's .mp4) from Telegram
-      const fileLink = await bot.telegram.getFileLink(file.file_id);
-      const res = await fetch(fileLink.href);
-      const audioBuffer = Buffer.from(await res.arrayBuffer());
+      const { buffer: audioBuffer } = await fetchTelegramFile(file.file_id);
       if (dropped()) return;
 
       // Transcribe
@@ -890,8 +913,10 @@ ${sendFileHint("telegram")}`,
   return {
     /**
      * Stop polling. What still waits in line (and an album still coming) is dropped without being answered, and the
-     * log says which chats it came from; a reply already running ends as it would have. No chat is shown "typing…"
-     * any more. Twice is fine.
+     * log says which chats it came from. A message waiting behind another reply in its chat is taken out of that
+     * queue at once: its "Queued" line (and the Stop on it) leaves the dashboard, the next message there is told only
+     * the replies really ahead of it, and the log says now that it was not answered (it stays in its chat's history).
+     * A reply already running ends as it would have. No chat is shown "typing…" any more. Twice is fine.
      */
     stop: async () => {
       if (stopped) return;
@@ -904,6 +929,10 @@ ${sendFileHint("telegram")}`,
         console.warn(`[telegram] the channel is stopped: ${inLine.size} message${inLine.size === 1 ? "" : "s"} still waiting in line dropped without an answer (chat ${chats})`);
         inLine.clear();
       }
+      for (const w of [...waitingTurns]) {
+        if (w.takeOut()) droppedOnStop(w.chat, "a message", { saved: true });
+      }
+      waitingTurns.clear();
       if (bot.polling) bot.stop("Tarsee shutdown"); // none yet: startPolling above won't start it now
     },
     /** Who it connected as, for Settings → Channels: @username, or null until Telegram has said. */

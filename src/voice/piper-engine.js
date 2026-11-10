@@ -31,15 +31,16 @@ let _spawn = spawn;
 let _killWaitMs = KILL_WAIT_MS;
 
 /**
- * Tests only: run another program as Piper, with shorter waits, another spawn, or other ages and gaps for the temp
- * folder's sweeps. The next engine made sweeps as if Tarsee had just started. No arguments puts the real ones back.
+ * Tests only: run another program as Piper, with shorter waits, another spawn, or other ages, gaps and waits between
+ * tries for the temp folder's sweeps. The next engine made sweeps as if Tarsee had just started. No arguments puts the
+ * real ones back.
  */
-export function __setForTests({ command, timeoutMs, spawn: spawnFn, killWaitMs, leftoverAgeMs, sweepGapMs } = {}) {
+export function __setForTests({ command, timeoutMs, spawn: spawnFn, killWaitMs, leftoverAgeMs, sweepGapMs, removeRetryMs } = {}) {
   _spawn = spawnFn || spawn;
   _command = command?.length ? command : null;
   _timeoutMs = timeoutMs ?? PIPER_TIMEOUT;
   _killWaitMs = killWaitMs ?? KILL_WAIT_MS;
-  files.reset({ leftoverAgeMs, sweepGapMs });
+  files.reset({ leftoverAgeMs, sweepGapMs, removeRetryMs });
 }
 
 /** Tests only: settles once the temp folder's sweeps begun so far are done. */

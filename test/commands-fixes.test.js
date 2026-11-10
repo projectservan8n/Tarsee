@@ -9,8 +9,10 @@
 //    and with the Live view off it is sent at once instead of waiting in the tab's queue behind the reply.
 //    Taking messages that way must not break what came with it: a Telegram album is still one message however long
 //    its photos take to download; a stopped Telegram channel shows a chat nothing more (no answer, no "couldn't
-//    understand" or "failed to process", no "typing") for what waits in its line, downloads or is transcribed; and a command
-//    mailed back whose answer the SMTP server turns away is never sent to the AI instead.
+//    understand" or "failed to process", no "typing") for what waits in its line, downloads or is transcribed, and takes
+//    a message waiting behind another reply out of that queue at once; an error page from Telegram's file server is
+//    never handed to the AI as the person's photo, file or voice message; and a command mailed back whose answer the
+//    SMTP server turns away is never sent to the AI instead.
 //  - /theme sent from Telegram, Discord, Slack, WhatsApp or email answers in plain words: a theme is how the dashboard
 //    looks, so it is picked there. Only the dashboard's chat gets the __SET_THEME__ marker its page reads.
 //  - Settings > Automation > Session Reset's "Manual" option names a command that exists and starts a fresh session
@@ -238,6 +240,9 @@ describe("/stop stops the reply running in the chat it was sent in", () => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const STOPPED = "Stopped the reply in this chat.";
 
+/** What a failing proxy in front of Telegram's file server answers with. */
+const ERROR_PAGE = "<html><body><h1>502 Bad Gateway</h1>nginx</body></html>";
+
 /** Two scripts for the AI: the first reply runs until it is stopped, the next one answers at once. */
 function stoppableThenAnswers(answer) {
   engine = createFakeEngine([
@@ -252,16 +257,22 @@ function stoppableThenAnswers(answer) {
  * updates a test queues, each once, as soon as the bot next asks. It serves photos too: a file's bytes are
  * "image <file id>", sent after api.fileDelay[file id] ms. api.delay[method]: ms a Bot API method takes to answer.
  * api.fail[method]: Telegram turns that method down with this description; api.failFile[file id]: it turns down getFile
- * for that file (as it does for one over 20 MB).
+ * for that file (as it does for one over 20 MB). api.fileStatus[file id]: its file server answers that file with this
+ * HTTP status and an error page instead of the file (as a proxy in front of it does when it fails).
  */
 async function fakeBotApi() {
-  const api = { calls: [], pending: [], nextUpdate: 1, nextMessage: 100, delay: {}, fileDelay: {}, fail: {}, failFile: {} };
+  const api = { calls: [], pending: [], nextUpdate: 1, nextMessage: 100, delay: {}, fileDelay: {}, fileStatus: {}, fail: {}, failFile: {} };
   const server = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const c of req) chunks.push(c);
     if (req.url.startsWith("/file/")) {
       const fileId = path.basename(req.url, ".jpg");
       await sleep(api.fileDelay[fileId] || 0);
+      if (api.fileStatus[fileId]) {
+        res.writeHead(api.fileStatus[fileId], { "content-type": "text/html" });
+        res.end(ERROR_PAGE);
+        return;
+      }
       res.writeHead(200, { "content-type": "image/jpeg" });
       res.end(`image ${fileId}`);
       return;
@@ -766,6 +777,59 @@ describe("stopping the Telegram channel (the real bot, a Bot API on 127.0.0.1)",
     }
   }, { typingEveryMs: 50 }));
 
+  it("a message waiting behind another reply when the channel stops leaves the queue at once: its \"Queued\" line goes, and the log says it was not answered", () => stoppingBot(963, async ({ api, bot, warned }) => {
+    const busy = busyChat(963);
+    const notAnswered = () => warned.filter((w) => /channel is stopped/.test(w) && /chat 963/.test(w) && /not answered/.test(w) && /history/.test(w));
+    try {
+      api.send(963, "hello while you're busy");
+      assert.ok(await until(() => live.queuedTurnList(busy.conv).some((t) => t.source === "telegram")), "its \"Queued\" line is on the dashboard");
+      await bot.stop();
+      assert.deepEqual(live.queuedTurnList(busy.conv).filter((t) => t.source === "telegram"), [], "its \"Queued\" line, and the Stop on it, are gone at once");
+      assert.equal(notAnswered().length, 1, `the log says it was not answered at the stop, not once the reply ahead ends: ${JSON.stringify(warned)}`);
+      await busy.release();
+      await sleep(300);
+      assert.equal(engine.calls.length, 0, "it never ran");
+      assert.equal(notAnswered().length, 1, "and the log said so once");
+      assert.ok(convs.getRecentMessages(busy.conv, 10).some((m) => /hello while you're busy/.test(m.content)), "it stays in the chat's history: it was sent");
+    } finally {
+      await busy.release();
+    }
+  }, { typingEveryMs: 50 }));
+
+  it("...and after a restart, the next message from that chat counts only the reply really ahead of it, and is answered once that reply ends", async () => {
+    const api = await fakeBotApi();
+    const { createTelegramBot } = await import("../src/channels/telegram.js");
+    const start = () => createTelegramBot({ token: "123456:test-token-not-real" }, db, { apiRoot: api.url, typingEveryMs: 50 });
+    const first = await start();
+    let second = null;
+    const busy = busyChat(964);
+    const waitNotes = () => api.said(964).filter((t) => /^⏳/.test(t));
+    try {
+      api.send(964, "first, while you're busy");
+      assert.ok(await until(() => waitNotes().length === 1), "it waits behind that reply");
+      await first.stop();
+      await sleep(250); // the stopped bot's last long poll is over, so the new bot gets the next message
+      second = await start();
+      api.send(964, "second, after the restart");
+      assert.ok(await until(() => waitNotes().length === 2), `the new message waits too: ${JSON.stringify(api.said(964))}`);
+      assert.equal(waitNotes()[1], "⏳ Still working on your last message — yours is next.", "one reply is ahead of it, not two (\"⏳ Queued (2 ahead).\")");
+      const queued = live.queuedTurnList(busy.conv).filter((t) => t.source === "telegram");
+      assert.equal(queued.length, 1, "the dashboard shows the new message waiting, and no line for the dropped one");
+      await busy.release();
+      assert.ok(await until(() => engine.calls.length === 1), "it is answered once that reply ends");
+      await sleep(300);
+      assert.equal(engine.calls.length, 1, "the message dropped at the stop never ran");
+      assert.match(engine.calls[0].prompt, /second, after the restart/);
+    } finally {
+      await busy.release();
+      stopTurns(busy.conv);
+      await first.stop();
+      await second?.stop();
+      await until(() => first.health().handlerActive === 0 && (!second || second.health().handlerActive === 0), 3000);
+      api.close();
+    }
+  });
+
   it("drops the messages still waiting in line without answering them, and says so in the log", async () => {
     const api = await fakeBotApi();
     const { createTelegramBot } = await import("../src/channels/telegram.js");
@@ -867,6 +931,71 @@ describe("stopping the Telegram channel (the real bot, a Bot API on 127.0.0.1)",
       api.close();
     }
   });
+});
+
+describe("Telegram's file server answering with an error page (the real bot, a Bot API on 127.0.0.1)", () => {
+  // An error page is not the person's file: the chat is told it could not be processed, and the AI never sees the page
+  // (it used to be handed over as the photo, saved as the file, or sent to be transcribed).
+  async function withBot(chatId, fn) {
+    const api = await fakeBotApi();
+    const { createTelegramBot } = await import("../src/channels/telegram.js");
+    const bot = await createTelegramBot({ token: "123456:test-token-not-real" }, db, { apiRoot: api.url });
+    try {
+      await fn({ api, bot });
+    } finally {
+      setStt();
+      await bot.stop();
+      const conv = settings.get(`channel_conv.telegram:${chatId}`);
+      if (conv) stopTurns(conv);
+      await until(() => bot.health().handlerActive === 0, 3000);
+      api.close();
+    }
+  }
+  /** Whether a turn was handed the error page, as a picture, a file or words. */
+  const handedThePage = () => engine.calls.some((c) => JSON.stringify(c.messages || []).includes(Buffer.from(ERROR_PAGE).toString("base64")) || JSON.stringify(c.messages || []).includes("Bad Gateway"));
+
+  it("a photo: \"Failed to process image.\", and no AI turn", () => withBot(980, async ({ api }) => {
+    api.fileStatus["photo-502"] = 502;
+    api.photo(980, "photo-502", { caption: "what is this?" });
+    assert.ok(await until(() => api.said(980).includes("Failed to process image.")), `the chat is told: ${JSON.stringify(api.said(980))}`);
+    await sleep(200);
+    assert.equal(engine.calls.length, 0, "no AI turn ran on the error page");
+    assert.equal(settings.get("channel_conv.telegram:980"), null, "nor was it taken into a chat");
+  }));
+
+  it("an album with one photo the server fails: \"Failed to process image.\", and the AI gets only the other photo", () => withBot(981, async ({ api }) => {
+    api.fileStatus["album-bad"] = 502;
+    api.photo(981, "album-good", { album: "album-981", caption: "our trip" });
+    api.photo(981, "album-bad", { album: "album-981" });
+    assert.ok(await until(() => engine.calls.length === 1), "the album is answered");
+    assert.ok(await until(() => api.said(981).includes("Failed to process image.")), `the chat is told: ${JSON.stringify(api.said(981))}`);
+    assert.deepEqual(imagesOf(engine.calls[0]), ["image album-good"]);
+    assert.equal(handedThePage(), false, "the AI never saw the error page");
+  }));
+
+  for (const [n, { mime, name }] of [{ mime: "text/csv", name: "sales-982.csv" }, { mime: "application/pdf", name: "report-983.pdf" }].entries()) {
+    it(`a file (${mime}): "Failed to process file.", nothing saved to the workspace, and no AI turn`, () => withBot(982 + n, async ({ api }) => {
+      const fileId = `file-502-${n}`;
+      api.fileStatus[fileId] = 502;
+      api.document(982 + n, fileId, { mime, name });
+      assert.ok(await until(() => api.said(982 + n).includes("Failed to process file.")), `the chat is told: ${JSON.stringify(api.said(982 + n))}`);
+      await sleep(200);
+      assert.deepEqual(savedUploads(name.split(".")[0]), [], "the error page was not saved as the file");
+      assert.equal(engine.calls.length, 0, "no AI turn ran on it");
+    }));
+  }
+
+  for (const [n, { kind, name }] of [{ kind: "voice", name: "voice message" }, { kind: "video_note", name: "video note" }].entries()) {
+    it(`a ${name}: "Failed to process ${name}.", and the error page is never sent to be transcribed`, () => withBot(985 + n, async ({ api }) => {
+      const stt = holdTranscription();
+      api.fileStatus[`${kind}-502`] = 502;
+      api.voice(985 + n, `${kind}-502`, { kind });
+      assert.ok(await until(() => api.said(985 + n).includes(`Failed to process ${name}.`)), `the chat is told: ${JSON.stringify(api.said(985 + n))}`);
+      await sleep(200);
+      assert.equal(stt.calls, 0, "it was not transcribed (the paid Whisper API may be the transcriber)");
+      assert.equal(engine.calls.length, 0, "no AI turn ran");
+    }));
+  }
 });
 
 /** Stands in for imapflow's ImapFlow, mailbox lock and all: one holder at a time, the next waits for release(). */

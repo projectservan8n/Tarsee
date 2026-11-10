@@ -34,8 +34,10 @@ const RealWebSocket = ws.WebSocket;
  * some audio and then loses the connection `dropAfterMs` later (0: at once), as
  * ws reports it (close code 1006); "end-then-close" sends the whole reply and
  * then the server closes at once. `onSpeechRequest` runs as the request comes.
+ * With `closesItself`, a terminated socket calls its own close() a moment later, as ws does when it then reads a close
+ * frame (or a bad frame) still waiting in the socket; each socket's `selfClosedAt` says when.
  */
-function fakeSocket({ openAfterMs = 0, answer = "audio", bytes = 400, dropAfterMs = 20, onSpeechRequest = null } = {}) {
+function fakeSocket({ openAfterMs = 0, answer = "audio", bytes = 400, dropAfterMs = 20, onSpeechRequest = null, closesItself = false } = {}) {
   const sockets = [];
   class FakeWebSocket extends EventEmitter {
     constructor(url) {
@@ -63,7 +65,15 @@ function fakeSocket({ openAfterMs = 0, answer = "audio", bytes = 400, dropAfterM
       });
     }
     close() { this.closed = true; }
-    terminate() { this.terminated = true; }
+    terminate() {
+      this.terminated = true;
+      if (closesItself) {
+        setImmediate(() => {
+          this.selfClosedAt = Date.now();
+          this.close(1000);
+        });
+      }
+    }
   }
   return { FakeWebSocket, sockets };
 }
@@ -77,15 +87,16 @@ async function withSocket(sock, fn) {
 /**
  * Runs fn while every file in the temp folder opens `ms` late, as it does when
  * Node's thread pool is busy: fs.createWriteStream opens its file with fs.open,
- * on that pool. fn gets the list of files opened so far.
+ * on that pool. fn gets the list of files opened so far (and, as its `times`, when each was opened).
  */
 async function withSlowOpens(ms, fn) {
   const realOpen = fs.open;
   const opened = [];
+  opened.times = [];
   fs.open = (file, ...rest) => {
     const cb = rest.pop();
     if (!String(file).startsWith(TMP)) return realOpen(file, ...rest, cb);
-    setTimeout(() => realOpen(file, ...rest, (...args) => { opened.push(file); cb(...args); }), ms);
+    setTimeout(() => realOpen(file, ...rest, (...args) => { opened.push(file); opened.times.push(Date.now()); cb(...args); }), ms);
   };
   try { return await fn(opened); } finally { fs.open = realOpen; }
 }
@@ -396,6 +407,59 @@ function plant(name, ageMs = 0, { folder = false } = {}) {
   return name;
 }
 
+const DAY = 24 * 60 * MINUTE;
+const HOUR = 60 * MINUTE;
+
+/**
+ * Runs fn while counting how often the temp folder is listed, the longest wait handed to setTimeout, and Node's
+ * warnings that a wait was too long for setTimeout (which then waits 1 ms instead). fn gets those counts.
+ */
+async function watchSweeps(fn) {
+  const seen = { listings: 0, longestWait: 0, overflows: 0 };
+  const realReaddir = fs.promises.readdir;
+  const realSetTimeout = globalThis.setTimeout;
+  const onWarning = (w) => { if (w.name === "TimeoutOverflowWarning") seen.overflows++; };
+  fs.promises.readdir = (dir, ...rest) => {
+    if (path.resolve(String(dir)) === path.resolve(TMP)) seen.listings++;
+    return realReaddir(dir, ...rest);
+  };
+  globalThis.setTimeout = (cb, ms, ...rest) => {
+    seen.longestWait = Math.max(seen.longestWait, Number(ms) || 0);
+    return realSetTimeout(cb, ms, ...rest);
+  };
+  process.on("warning", onWarning);
+  try {
+    return await fn(seen);
+  } finally {
+    fs.promises.readdir = realReaddir;
+    globalThis.setTimeout = realSetTimeout;
+    process.off("warning", onWarning);
+  }
+}
+
+/**
+ * Runs fn while the temp folder's file `name` cannot be removed (EPERM, as when another user's file sits in a shared
+ * /tmp), and while console.warn's lines are kept. fn gets the times each removal was tried, and the warnings.
+ */
+async function withStuckFile(name, fn) {
+  const realUnlink = fs.promises.unlink;
+  const realWarn = console.warn;
+  const tries = [];
+  const warnings = [];
+  fs.promises.unlink = (file, ...rest) => {
+    if (path.basename(String(file)) !== name) return realUnlink(file, ...rest);
+    tries.push(Date.now());
+    return Promise.reject(Object.assign(new Error(`EPERM: operation not permitted, unlink '${file}'`), { code: "EPERM" }));
+  };
+  console.warn = (...args) => { warnings.push(args.join(" ")); };
+  try {
+    return await fn(tries, warnings);
+  } finally {
+    fs.promises.unlink = realUnlink;
+    console.warn = realWarn;
+  }
+}
+
 describe("Edge TTS leaves no file behind, however late node-edge-tts makes it", () => {
   before(() => { assert.equal(os.tmpdir(), TMP, "the test could not move the temp folder"); });
   beforeEach(() => {
@@ -515,6 +579,102 @@ describe("Edge TTS leaves no file behind, however late node-edge-tts makes it", 
     await __leftoverSweepsDone();
     assert.deepEqual(leftovers(), [second], "the temp folder was swept again straight away");
     await waitFor(() => leftovers().length === 0, 3000, "the second sweep came once the gap had passed");
+  });
+
+  // ws calls its own close() when it reads a close frame (or a bad frame) still waiting in a socket the engine has
+  // stopped. That says nothing about the file: taken as node-edge-tts's "the file is done", it ended the watch before
+  // the file had been made, and the file stayed.
+  for (const [what, watchMs] of [["while it watches for the file", undefined], ["with no watch for the file at all", 0]]) {
+    it(`is not fooled when a stopped connection closes itself before node-edge-tts has made the file, ${what}`, async () => {
+      const sock = fakeSocket({ answer: "never", closesItself: true });
+      __setForTests({ retryDelayMs: 0, timeoutMs: 100, watchMs });
+      await withSlowOpens(400, async (opened) => {
+        await assert.rejects(withSocket(sock, () => new EdgeTTSEngine().synthesize("Hello.")), /timed out/);
+        assert.equal(sock.sockets.length, 3);
+        await waitFor(() => opened.length === 3, 5000, "every attempt's file was opened");
+        sock.sockets.forEach((s, i) => {
+          assert.ok(s.selfClosedAt, `connection ${i + 1} never closed itself`);
+          assert.ok(s.selfClosedAt < opened.times[i], `connection ${i + 1} closed itself after its file was made`);
+        });
+        await sleep(300);
+      });
+      assert.deepEqual(leftovers(), [], "a file made after its connection closed itself was left behind");
+    });
+  }
+
+  // A clock that was more than about 25 days ahead when a file was left, and was then put right (or anyone with a
+  // shared /tmp and `touch -d`). The next look was set for when the file would be old, and setTimeout cannot wait that
+  // long: it waited 1 ms instead, so the sweep ran again and again for as long as the server ran.
+  it("is not sent round and round by a leftover dated far in the future, and leaves it for now", async () => {
+    __setForTests();
+    const name = plant(`tarsee-edge-tts-${crypto.randomUUID()}.mp3`, -60 * DAY);
+    await watchSweeps(async (seen) => {
+      new EdgeTTSEngine();
+      await sleep(1000);
+      await __leftoverSweepsDone();
+      assert.equal(seen.overflows, 0, "a wait was too long for setTimeout");
+      assert.equal(seen.listings, 1, `the temp folder was listed ${seen.listings} times in a second`);
+      assert.ok(seen.longestWait <= HOUR, `a sweep waits ${seen.longestWait} ms`);
+    });
+    // Not removed at once: a Tarsee whose clock is ahead may be writing it right now.
+    assert.deepEqual(leftovers(), [name]);
+  });
+
+  it("removes a leftover dated in the future once nothing has written to it for the usual time since it was seen", async () => {
+    __setForTests({ leftoverAgeMs: 400 });
+    const name = plant(`tarsee-edge-tts-${crypto.randomUUID()}.mp3`, -60 * DAY);
+    const t = Date.now();
+    new EdgeTTSEngine();
+    await __leftoverSweepsDone();
+    assert.deepEqual(leftovers(), [name], "a file dated in the future was removed at once");
+    await waitFor(() => leftovers().length === 0, 3000, "the leftover dated in the future was removed");
+    assert.ok(Date.now() - t >= 400, "it was removed before the usual time had passed");
+  });
+
+  it("never sets a sweep to wait more than an hour, however long it is waiting for", async () => {
+    __setForTests({ leftoverAgeMs: 30 * DAY });
+    const name = plant(`tarsee-edge-tts-${crypto.randomUUID()}.mp3`);
+    await watchSweeps(async (seen) => {
+      new EdgeTTSEngine();
+      await sleep(1000);
+      await __leftoverSweepsDone();
+      assert.equal(seen.overflows, 0, "a wait was too long for setTimeout");
+      assert.equal(seen.listings, 1, `the temp folder was listed ${seen.listings} times in a second`);
+      assert.ok(seen.longestWait <= HOUR, `a sweep waits ${seen.longestWait} ms`);
+    });
+    assert.deepEqual(leftovers(), [name]);
+  });
+
+  // Another user's old file in a shared /tmp cannot be removed (EPERM: /tmp has the sticky bit). It was tried every
+  // minute for as long as the process ran, without a word.
+  it("tries a leftover it cannot remove a few times, further apart each time, then leaves it and says so once", async () => {
+    const fake = fakeEdge({ fail: new Error("socket dropped") });
+    __setForTests({ EdgeTTS: fake.EdgeTTS, retryDelayMs: 0, sweepGapMs: 0, removeRetryMs: 20 });
+    const stuck = plant(`tarsee-edge-tts-${crypto.randomUUID()}.mp3`, 10 * MINUTE);
+    await withStuckFile(stuck, async (tries, warnings) => {
+      new EdgeTTSEngine();
+      await waitFor(() => tries.length >= 5, 3000, "five tries");
+      await sleep(600);
+      await __leftoverSweepsDone();
+      assert.equal(tries.length, 5, `it was tried ${tries.length} times`);
+      for (let i = 1; i < tries.length; i++) {
+        const gap = tries[i] - tries[i - 1];
+        assert.ok(gap >= 20 * 2 ** (i - 1) - 5, `try ${i + 1} came ${gap} ms after the one before`);
+      }
+      const said = warnings.filter((w) => w.includes("[edge-tts]"));
+      assert.equal(said.length, 1, `it said so ${said.length} times: ${said.join(" | ")}`);
+      assert.match(said[0], /could not remove/);
+      assert.ok(said[0].includes(stuck), `the warning does not name the file: ${said[0]}`);
+      assert.match(said[0], /EPERM/);
+      // Sweeps after failed tries leave it alone too, and still remove what they can.
+      const other = plant(`tarsee-edge-tts-${crypto.randomUUID()}.mp3`, 10 * MINUTE);
+      await assert.rejects(new EdgeTTSEngine().synthesize("Hello."), /socket dropped/);
+      await __leftoverSweepsDone();
+      assert.equal(fs.existsSync(path.join(TMP, other)), false, "a sweep after a failed try did not run");
+      assert.equal(tries.length, 5, `it was tried ${tries.length} times`);
+      assert.equal(warnings.filter((w) => w.includes("could not remove")).length, 1);
+    });
+    assert.deepEqual(leftovers(), [stuck]);
   });
 
   it("never keeps the process running to watch for a file or to sweep later", async () => {

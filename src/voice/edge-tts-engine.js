@@ -36,15 +36,15 @@ let _retryDelayMs = RETRY_DELAY;
 let _watchMs = WATCH_MS;
 
 /**
- * Tests only: use a fake EdgeTTS class, shorter waits, and other ages and gaps for the temp folder's sweeps. The next
- * engine made sweeps as if Tarsee had just started. No arguments puts the real ones back.
+ * Tests only: use a fake EdgeTTS class, shorter waits, and other ages, gaps and waits between tries for the temp
+ * folder's sweeps. The next engine made sweeps as if Tarsee had just started. No arguments puts the real ones back.
  */
-export function __setForTests({ EdgeTTS, timeoutMs, retryDelayMs, watchMs, leftoverAgeMs, sweepGapMs } = {}) {
+export function __setForTests({ EdgeTTS, timeoutMs, retryDelayMs, watchMs, leftoverAgeMs, sweepGapMs, removeRetryMs } = {}) {
   _EdgeTTS = EdgeTTS || null;
   _timeoutMs = timeoutMs ?? null;
   _retryDelayMs = retryDelayMs ?? RETRY_DELAY;
   _watchMs = watchMs ?? WATCH_MS;
-  files.reset({ leftoverAgeMs, sweepGapMs });
+  files.reset({ leftoverAgeMs, sweepGapMs, removeRetryMs });
 }
 
 /** Tests only: settles once the temp folder's sweeps begun so far are done. */
@@ -64,9 +64,10 @@ export const __leftoverSweepsDone = () => files.settled();
  * end returns null when there is no file to see to beyond removing it now: the
  * attempt worked, or it failed before the library had its connection, and so
  * before it made the file. Otherwise the file may not have been made yet, and end
- * returns { written }: a promise that resolves once the library has finished the
- * file (it closes the connection then), or null when the connection could not be
- * watched, and so nothing says when the file is done.
+ * returns { onClose }: onClose(fn) has fn called each time the connection is
+ * closed, which the library does once it has finished the file. onClose is null
+ * when the connection could not be watched, and so nothing says when the file is
+ * done.
  */
 function trackConnection(tts) {
   let socket = null;
@@ -106,20 +107,23 @@ function trackConnection(tts) {
     socket = null;
     // A good attempt's connection, and its file, are closed by node-edge-tts itself.
     if (!failed) return null;
-    if (!connect) return { written: null };
+    if (!connect) return { onClose: null };
     if (!ws) return null;
     closeSocket(ws);
     // Once the library has finished writing the file, however late that is (even after its own timer has given up on
-    // the attempt), it closes the connection.
-    const written = new Promise((resolve) => {
-      const close = ws.close;
-      ws.close = function (...args) {
-        resolve();
-        return typeof close === "function" ? close.apply(this, args) : undefined;
-      };
-    });
+    // the attempt), it closes the connection. ws can close it as well, when it then reads a close frame (or a bad
+    // frame) still waiting in the stopped socket, and that says nothing about the file. So every close is passed on,
+    // and removeLateFile looks for the file each time.
+    const listeners = [];
+    const close = ws.close;
+    ws.close = function (...args) {
+      for (const fn of listeners) {
+        try { fn(); } catch { /* one listener's trouble is not the connection's */ }
+      }
+      return typeof close === "function" ? close.apply(this, args) : undefined;
+    };
     if (!complete) endReply(ws);
-    return { written };
+    return { onClose: (fn) => { listeners.push(fn); } };
   };
   return { lost, end };
 }
@@ -170,22 +174,24 @@ function tryRemove(file) {
  * request, on Node's thread pool, and when the pool is busy the open can wait
  * longer than the attempt lasts. The library's own timer can even give up on the
  * attempt first, so its promise settling says nothing about the file. What does
- * is `written`: once handed the end of the reply (endReply), the library finishes
- * the file and then closes its connection, and the file is removed then. Until it
- * is gone, the file is also looked for, for up to WATCH_MS, on timers that never
- * keep the process running, and removed as soon as it is there. Without a watched
- * connection (`written` null), that is all there is to go on.
+ * is the connection closing (`onClose`): once handed the end of the reply
+ * (endReply), the library finishes the file and then closes its connection, and
+ * the file is removed then. A close that finds no file is not that one (ws closed
+ * the stopped connection itself), so the watch goes on and the next close counts
+ * as well. Until it is gone, the file is also looked for, for up to WATCH_MS, on
+ * timers that never keep the process running, and removed as soon as it is there.
+ * Without a watched connection (`onClose` null), that is all there is to go on.
  *
- * Resolves, so the next attempt can start, once the file is removed, or `written`
- * came, or (with no watched connection) the library settled `speech`, or
+ * Resolves, so the next attempt can start, once the file is removed, or is there
+ * but held, or (with no watched connection) the library settled `speech`, or
  * FILE_DONE_WAIT_MS has passed. The file is still seen to after that. Should its
  * open wait for longer than all of this, the engine's sweeps of the temp folder
  * remove it.
  */
-function removeLateFile(file, written, speech) {
+function removeLateFile(file, onClose, speech) {
   if (tryRemove(file) === "removed") return Promise.resolve();
   return new Promise((resolve) => {
-    let gone = false; // removed, or finished by the library and not there: either way, nothing makes it again
+    let gone = false; // removed: nothing makes it again
     let poll = null;
     let gap = WATCH_FIRST_GAP_MS;
     let until = 0;
@@ -215,12 +221,15 @@ function removeLateFile(file, written, speech) {
       poll.unref?.();
     };
     watch();
-    if (written) {
-      written.then(() => {
+    if (onClose) {
+      onClose(() => {
         if (gone) return;
-        if (tryRemove(file) !== "stuck") return finished();
+        const now = tryRemove(file);
+        if (now === "removed") return finished();
         // There, but held: go on trying for a while.
-        letGo();
+        if (now === "stuck") letGo();
+        // Not there: the library has not finished it yet, whatever closed the connection. Go on looking for it, and
+        // waiting for the next close.
         watch();
       });
     } else {
@@ -321,7 +330,7 @@ export class EdgeTTSEngine extends TTSEngine {
       } finally {
         clearTimeout(timer);
         const late = tracked?.end(failed);
-        if (late) await removeLateFile(tmpFile, late.written, speech);
+        if (late) await removeLateFile(tmpFile, late.onClose, speech);
         else removeFile(tmpFile);
       }
       if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, _retryDelayMs * attempt));

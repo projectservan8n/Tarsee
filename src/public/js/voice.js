@@ -218,7 +218,7 @@ const Voice = {
     const after = value.slice(at);
     const lead = before && !/\s$/.test(before) ? " " : "";
     const trail = after && !/^[\s.,!?;:)]/.test(after) ? " " : "";
-    input.value = before + lead + words + trail + after;
+    Chat.setBox(before + lead + words + trail + after, { at: [at, at] });   // (the one way to change the box's words)
     const caret = (before + lead + words).length;
     const phone = window.matchMedia?.("(pointer: coarse)").matches;
     if (phone && document.activeElement !== input) {

@@ -22,7 +22,10 @@
  * caller says how (opts.live). When its slot comes, the provider claims that
  * turn id (claimQueuedTurn) for its turn_start, so the same line becomes the
  * working line. Its Stop takes it out of the queue alone (removeQueuedTurn):
- * the turn running ahead goes on, and this one never runs.
+ * the turn running ahead goes on, and this one never runs. The caller can take
+ * it out too (opts.onWaiting): a channel that stops takes out its messages
+ * still waiting. A turn taken out is ahead of nobody: the next one to wait is
+ * told only the turns really ahead of it.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { publish, newTurnId } from "./live-bus.js";
@@ -57,6 +60,7 @@ function queueLive(live, convId) {
     if (q.removed || q.slot || q.ended) return false;
     q.removed = true;
     q.end("removed");
+    q.onRemove?.();
     try { live.onRemoved?.(); } catch { /* advisory only */ }
     return true;
   };
@@ -138,28 +142,64 @@ export function queueDepth(convId) {
  *   "hold on, still working on the last one" rather than looking hung.
  * @param {object} [opts.live] - when the turn has to wait, show it on the live
  *   timeline as queued: { conversationId (default convId), source, prompt,
- *   model, onRemoved () => void (its Stop took it out of the queue) }
+ *   model, onRemoved () => void (it was taken out of the queue: its Stop, or
+ *   the caller's takeOut below) }
+ * @param {(takeOut: () => boolean) => void} [opts.onWaiting] - called when the
+ *   turn has to wait, with takeOut(): it takes the turn out of the queue at once,
+ *   as its Stop does (removeQueuedTurn), so it never runs; false once its slot
+ *   has come (it began) or it was already taken out.
  * @returns {Promise<T | typeof QUEUE_REMOVED>}
  */
 export function withConversationTurn(convId, fn, opts = {}) {
   if (!convId) return fn();
 
   const previous = chains.get(convId);
-  depth.set(convId, (depth.get(convId) || 0) + 1);
+  // The turns waiting or running ahead of this one; one taken out of the queue
+  // is not among them.
+  const ahead = depth.get(convId) || 0;
+  depth.set(convId, ahead + 1);
+  // It waits while one of them is. A turn taken out of the queue whose slot has
+  // not come yet holds it up only until its own turn ahead ends, which is the
+  // same moment.
+  const waits = Boolean(previous) && ahead > 0;
+  // This turn counts in depth until it ends, or until it is taken out of the
+  // queue: from then on it is ahead of nobody.
+  let counted = true;
+  const uncount = () => {
+    if (!counted) return;
+    counted = false;
+    const remaining = (depth.get(convId) || 1) - 1;
+    if (remaining <= 0) depth.delete(convId);
+    else depth.set(convId, remaining);
+  };
 
-  if (previous && opts.onQueued) {
-    // depth includes this turn, so subtract it to get the number ahead.
-    try { opts.onQueued((depth.get(convId) || 1) - 1); } catch { /* advisory only */ }
+  if (waits && opts.onQueued) {
+    try { opts.onQueued(ahead); } catch { /* advisory only */ }
   }
 
-  // Chain onto the previous turn regardless of how it settled. `.catch` here
-  // swallows only the ORDERING dependency, never the caller's result: the
-  // caller awaits `run` below, which still rejects properly.
-  const queued = previous && opts.live ? queueLive(opts.live, convId) : null;
-  const body = !queued ? fn : () => {
-    queued.slot = true;
-    waiting.delete(queued.turnId);
-    if (queued.removed) return QUEUE_REMOVED;
+  const queued = waits && opts.live ? queueLive(opts.live, convId) : null;
+  // Taken out of the queue before its slot came (its Stop, or takeOut): it never runs.
+  let removed = false;
+  let slotCame = false;
+  const markRemoved = () => { removed = true; uncount(); };
+  if (queued) queued.onRemove = markRemoved;
+  if (waits && opts.onWaiting) {
+    const takeOut = () => {
+      if (slotCame || removed) return false;
+      if (queued) return queued.remove();
+      markRemoved();
+      return true;
+    };
+    try { opts.onWaiting(takeOut); } catch { /* advisory only */ }
+  }
+  const body = !waits ? fn : () => {
+    slotCame = true;
+    if (queued) {
+      queued.slot = true;
+      waiting.delete(queued.turnId);
+    }
+    if (removed) return QUEUE_REMOVED;
+    if (!queued) return fn();
     // Inside fn the provider claims the queued turn id; if nothing does (the
     // turn failed first, a command answered without the model), the line ends.
     return Promise.resolve().then(() => turnStore.run(queued, fn)).then(
@@ -167,6 +207,9 @@ export function withConversationTurn(convId, fn, opts = {}) {
       (err) => { queued.end("error", { error: "It could not start" }); throw err; },
     );
   };
+  // Chain onto the previous turn regardless of how it settled. `.catch` here
+  // swallows only the ORDERING dependency, never the caller's result: the
+  // caller awaits `run` below, which still rejects properly.
   const run = (previous ? previous.catch(() => {}) : Promise.resolve()).then(body);
 
   // The chain tail must never reject, or an unhandled rejection escapes from a
@@ -175,15 +218,10 @@ export function withConversationTurn(convId, fn, opts = {}) {
   chains.set(convId, tail);
 
   tail.then(() => {
-    const remaining = (depth.get(convId) || 1) - 1;
-    if (remaining <= 0) {
-      // Last one out clears both maps so they cannot grow without bound across
-      // the lifetime of a long-running server.
-      depth.delete(convId);
-      if (chains.get(convId) === tail) chains.delete(convId);
-    } else {
-      depth.set(convId, remaining);
-    }
+    uncount();
+    // Last one out clears both maps so they cannot grow without bound across
+    // the lifetime of a long-running server.
+    if (!depth.has(convId) && chains.get(convId) === tail) chains.delete(convId);
   });
 
   return run;

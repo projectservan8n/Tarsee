@@ -130,8 +130,10 @@ export function whapiIdentity(health) {
  * @param {import('better-sqlite3').Database} db
  * @param {object} [opts] - healthTimeoutMs: how long the startup token check waits for WHAPI (30 s; it takes ~16 s to
  *   refuse a token). Tests make it short. chatStream: the model stream (ai/router.js chatStream when left out).
+ *   idleCheckEveryMs: how often a turn checks it has heard from the AI within TARSEE_CHANNEL_IDLE_ABORT_MS (15 s);
+ *   typingEveryMs: how often "typing…" is sent while a message is answered or waits for its turn (10 s).
  */
-export async function createWhatsAppBot(config, db, { healthTimeoutMs = 30_000, chatStream: streamChat = chatStream } = {}) {
+export async function createWhatsAppBot(config, db, { healthTimeoutMs = 30_000, chatStream: streamChat = chatStream, idleCheckEveryMs = 15_000, typingEveryMs = 10_000 } = {}) {
   const convStore = new ConversationStore(db);
   const settingsStore = new SettingsStore(db);
   const token = config.token;
@@ -382,27 +384,8 @@ export async function createWhatsAppBot(config, db, { healthTimeoutMs = 30_000, 
 
     // Keep typing indicator alive while processing
     sendTyping(chatId);
-    const typingInterval = setInterval(() => sendTyping(chatId), 10_000);
+    const typingInterval = setInterval(() => sendTyping(chatId), typingEveryMs);
     typingIntervals.add(typingInterval);
-
-    // Idle watchdog — abort if SDK goes 3 min without an event
-    const controller = new AbortController();
-    let lastEventAt = Date.now();
-    let idleAborted = false;
-    // Idle abort: how long a turn may go with NO stream event before we give up.
-    // Was a hard 3 minutes, which killed legitimate long research/tool turns.
-    // Now configurable, but deliberately FINITE — the Mac build sets this to
-    // ~2e9 (23 days), which is only safe there because its PTY pool has a
-    // heartbeat + dead-socket detector. This build has neither, so an infinite
-    // value would wedge a turn forever with no console to kill it from.
-    const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
-    const idleTimer = setInterval(() => {
-      if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
-        idleAborted = true;
-        try { controller.abort(); } catch {}
-        clearInterval(idleTimer);
-      }
-    }, 15_000);
 
     const history = convStore.getRecentMessages(convId, 15);
     const conv = convStore.get(convId);
@@ -430,6 +413,26 @@ ${sendFileHint("whatsapp")}`,
     await withConversationTurn(convId, async () => {
     // The AI this turn runs on, from the turn layer's route event (the backup model's, if it answered instead).
     let routed = null;
+    // Idle watchdog: a turn that goes IDLE_ABORT_MS with no event from the AI is aborted, and the person is told so.
+    // Its clock starts here, when the turn starts: started when the message came, a message that waited longer than
+    // that behind another reply in this chat was given up on before its turn began.
+    const controller = new AbortController();
+    let lastEventAt = Date.now();
+    let idleAborted = false;
+    // Idle abort: how long a turn may go with NO stream event before we give up.
+    // Was a hard 3 minutes, which killed legitimate long research/tool turns.
+    // Now configurable, but deliberately FINITE — the Mac build sets this to
+    // ~2e9 (23 days), which is only safe there because its PTY pool has a
+    // heartbeat + dead-socket detector. This build has neither, so an infinite
+    // value would wedge a turn forever with no console to kill it from.
+    const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
+    const idleTimer = setInterval(() => {
+      if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
+        idleAborted = true;
+        try { controller.abort(); } catch {}
+        clearInterval(idleTimer);
+      }
+    }, idleCheckEveryMs);
     try {
       const workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
@@ -545,8 +548,16 @@ ${sendFileHint("whatsapp")}`,
       typingIntervals.delete(typingInterval);
     }
     }, {
-      // Waiting behind the reply in progress: a "Queued" line on the dashboard.
-      live: { source: "whatsapp", prompt: text },
+      // Waiting behind the reply in progress: a "Queued" line on the dashboard. Its Stop takes it out of the queue: it
+      // never runs, so its "typing…" ends here (the turn's own finally never comes).
+      live: {
+        source: "whatsapp",
+        prompt: text,
+        onRemoved: () => {
+          clearInterval(typingInterval);
+          typingIntervals.delete(typingInterval);
+        },
+      },
     });
   }
 

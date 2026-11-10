@@ -156,9 +156,11 @@ ${sendFileHint("slack")}`;
  * @param {Function} [opts.chatStream] - The model stream (ai/router.js chatStream when left out).
  * @param {number} [opts.connectTimeoutMs] - How long connecting may take before it is given up (45 s).
  * @param {string} [opts.slackFilesOrigin] - Where files are downloaded from with the bot token (https://files.slack.com).
+ * @param {number} [opts.idleCheckEveryMs] - How often a turn checks it has heard from the AI within
+ *   TARSEE_CHANNEL_IDLE_ABORT_MS (15 s).
  * @returns {Promise<{stop: Function, sendMessage: Function, sendFile: Function, health: Function}>}
  */
-export async function createSlackBot(config, db, { slackApiUrl = null, chatStream: streamChat = chatStream, connectTimeoutMs = 45_000, slackFilesOrigin = SLACK_FILES_ORIGIN } = {}) {
+export async function createSlackBot(config, db, { slackApiUrl = null, chatStream: streamChat = chatStream, connectTimeoutMs = 45_000, slackFilesOrigin = SLACK_FILES_ORIGIN, idleCheckEveryMs = 15_000 } = {}) {
   const convStore = new ConversationStore(db);
   const settingsStore = new SettingsStore(db);
 
@@ -508,7 +510,8 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
       let fullResponse = "";
       let lastEventAt = Date.now();
       let idleAborted = false;
-      // How long a turn may go with no stream event before it is given up (finite on purpose: see discord.js).
+      // How long a turn may go with no stream event before it is given up (finite on purpose: see discord.js). Its
+      // clock starts here, when the turn starts, not when the message came: it may have waited behind another reply.
       const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
       const idleTimer = setInterval(() => {
         if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
@@ -516,7 +519,7 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
           try { controller.abort(); } catch {}
           clearInterval(idleTimer);
         }
-      }, 15_000);
+      }, idleCheckEveryMs);
 
       try {
         const history = convStore.getRecentMessages(convId, 15);

@@ -103,6 +103,36 @@ function plant(name, ageMs = 0, { folder = false } = {}) {
   return name;
 }
 
+const DAY = 24 * 60 * MINUTE;
+const HOUR = 60 * MINUTE;
+
+/**
+ * As in edge-tts-temp.test.js: runs fn while counting how often the temp folder is listed, the longest wait handed to
+ * setTimeout, and Node's warnings that a wait was too long for setTimeout (which then waits 1 ms instead).
+ */
+async function watchSweeps(fn) {
+  const seen = { listings: 0, longestWait: 0, overflows: 0 };
+  const realReaddir = fs.promises.readdir;
+  const realSetTimeout = globalThis.setTimeout;
+  const onWarning = (w) => { if (w.name === "TimeoutOverflowWarning") seen.overflows++; };
+  fs.promises.readdir = (dir, ...rest) => {
+    if (path.resolve(String(dir)) === path.resolve(TMP)) seen.listings++;
+    return realReaddir(dir, ...rest);
+  };
+  globalThis.setTimeout = (cb, ms, ...rest) => {
+    seen.longestWait = Math.max(seen.longestWait, Number(ms) || 0);
+    return realSetTimeout(cb, ms, ...rest);
+  };
+  process.on("warning", onWarning);
+  try {
+    return await fn(seen);
+  } finally {
+    fs.promises.readdir = realReaddir;
+    globalThis.setTimeout = realSetTimeout;
+    process.off("warning", onWarning);
+  }
+}
+
 const isRunning = (pid) => {
   try { process.kill(pid, 0); return true; } catch { return false; }
 };
@@ -370,6 +400,55 @@ describe("Piper keeps its audio in the system temp folder", () => {
     await assert.rejects(new PiperTTSEngine("alpha").synthesize("mode=fail Hello."), /exit code 3/);
     await __leftoverSweepsDone();
     assertTidy();
+  });
+
+  // As for Edge TTS: a file dated more than about 25 days ahead set the next look further off than setTimeout can
+  // wait, so it waited 1 ms instead, and the sweep ran again and again for as long as the server ran.
+  it("is not sent round and round by a leftover dated far in the future, and removes it once it has sat for the usual time", async () => {
+    const name = plant(`tarsee-piper-${crypto.randomUUID()}.wav`, -60 * DAY);
+    await watchSweeps(async (seen) => {
+      new PiperTTSEngine("alpha");
+      await sleep(1000);
+      await __leftoverSweepsDone();
+      assert.equal(seen.overflows, 0, "a wait was too long for setTimeout");
+      assert.equal(seen.listings, 1, `the temp folder was listed ${seen.listings} times in a second`);
+      assert.ok(seen.longestWait <= HOUR, `a sweep waits ${seen.longestWait} ms`);
+    });
+    assert.deepEqual(leftovers(), [name], "a file dated in the future was removed at once");
+    __setForTests({ command: COMMAND, leftoverAgeMs: 300 });
+    new PiperTTSEngine("alpha");
+    await __leftoverSweepsDone();
+    assert.deepEqual(leftovers(), [name], "a file dated in the future was removed at once");
+    await waitFor(() => leftovers().length === 0, 3000, "the leftover dated in the future was removed");
+  });
+
+  it("gives up on a leftover it cannot remove after a few tries, and says so once", async () => {
+    __setForTests({ command: COMMAND, removeRetryMs: 10 });
+    const stuck = plant(`tarsee-piper-${crypto.randomUUID()}.wav`, 10 * MINUTE);
+    const realUnlink = fs.promises.unlink;
+    const realWarn = console.warn;
+    let tries = 0;
+    const warnings = [];
+    fs.promises.unlink = (file, ...rest) => {
+      if (path.basename(String(file)) !== stuck) return realUnlink(file, ...rest);
+      tries++;
+      return Promise.reject(Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" }));
+    };
+    console.warn = (...args) => { warnings.push(args.join(" ")); };
+    try {
+      new PiperTTSEngine("alpha");
+      await waitFor(() => tries >= 5, 3000, "five tries");
+      await sleep(400);
+      await __leftoverSweepsDone();
+    } finally {
+      fs.promises.unlink = realUnlink;
+      console.warn = realWarn;
+    }
+    assert.equal(tries, 5, `it was tried ${tries} times`);
+    const said = warnings.filter((w) => w.includes("[piper]") && w.includes("could not remove"));
+    assert.equal(said.length, 1, `it said so ${said.length} times`);
+    assert.ok(said[0].includes(stuck));
+    assert.deepEqual(leftovers(), [stuck]);
   });
 
   it("says so when the piper program cannot be started, and leaves nothing behind", async () => {

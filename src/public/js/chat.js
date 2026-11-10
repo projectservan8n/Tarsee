@@ -31,8 +31,9 @@ const Chat = {
   pendingFiles: [],
   messageQueue: [],
 
-  // The message box: which of its words a diagram put there and are still there (_boxEdited), and until when Enter
-  // in it doesn't send (insertIntoBox).
+  // The message box: its words as this page last saw them, and which of those aren't the owner's: a diagram's, or
+  // words found there that the page didn't put there (setBox, _boxEdited). And until when Enter in it doesn't send
+  // (insertIntoBox).
   _box: { value: "", marks: [], seen: [], sel: null, clip: null },
   _enterHeldUntil: 0,
 
@@ -95,11 +96,20 @@ const Chat = {
     // Diagram node clicks: a click on a node puts its question in the message box (never sent from there)
     this._initDiagramListener();
 
-    // Which of the box's words a diagram put there (_boxEdited): where each edit was, for the one that follows.
+    // Which of the box's words aren't the owner's (_boxEdited): where each edit was, for the one that follows; and
+    // first, any change made with no edit since the last one (_boxSync), so an edit is always read against the words
+    // just before it.
     this.elements.messageInput.addEventListener("beforeinput", (e) => {
+      this._boxSync();
       const el = this.elements.messageInput;
       this._box.sel = { at: [el.selectionStart, el.selectionEnd], type: e.inputType };
     });
+    // Words already in the box that this page didn't put there are not the owner's: a command made of them asks before
+    // it runs. The box is autocomplete="off", so a browser shouldn't put a form's words back (after Back, or when it
+    // restores its tabs), but one may: here as the page starts, and when it is shown again or Back or Forward moves it.
+    this._boxFound();
+    window.addEventListener("pageshow", () => this._boxFound());
+    window.addEventListener("popstate", () => this._boxFound());
     // Words copied, cut or dragged out of the box: which of them were a diagram's, for when they are put back.
     for (const type of ["copy", "cut", "dragstart"]) this.elements.messageInput.addEventListener(type, () => this._boxClip());
     // The owner clicking in the box is the owner there: Enter sends again at once (see the keys below).
@@ -107,7 +117,10 @@ const Chat = {
 
     // Auto-resize textarea + command palette trigger
     this.elements.messageInput.addEventListener("input", (e) => {
-      this._boxEdited(e.inputType || "");
+      // An edit of the owner's (the browser's own event), or else a change no edit made (the page's own changes come
+      // through setBox, which has already taken note of them).
+      if (e.isTrusted && e.inputType) this._boxEdited(e.inputType);
+      else this._boxSync();
       // The owner typing in the box ends the wait for Enter too. Not a space alone: a node pressed twice quickly with
       // Space puts the second one here.
       if (e.isTrusted && !(/^insert(Text|LineBreak|Paragraph)$/.test(e.inputType) && !/\S/.test(e.data || ""))) this._enterHeldUntil = 0;
@@ -206,7 +219,7 @@ const Chat = {
     this.elements.slashBtn?.addEventListener("click", () => {
       const input = this.elements.messageInput;
       if (!input.value.startsWith("/")) {
-        input.value = "/" + input.value;
+        this.setBox("/" + input.value, { at: [0, 0] });
         input.dispatchEvent(new Event("input"));
       }
       input.focus();
@@ -695,7 +708,9 @@ const Chat = {
     const cmd = this.paletteCommands[index];
     if (!cmd) return;
     const hasArgs = cmd.usage.includes("[");
-    this.elements.messageInput.value = hasArgs ? `/${cmd.name} ` : cmd.usage;
+    // (The letters it keeps from what was typed keep their marks: a diagram's "/sta" made into /status is still a
+    // diagram's command.)
+    this.setBox(hasArgs ? `/${cmd.name} ` : cmd.usage);
     this.elements.messageInput.focus();
     const len = this.elements.messageInput.value.length;
     this.elements.messageInput.setSelectionRange(len, len);
@@ -1829,10 +1844,12 @@ const Chat = {
     const hasFiles = this.pendingFiles.length > 0;
     if (!text && !hasFiles) return;
 
-    // A command with words in it that a diagram put in the box asks first: the AI chose those words, and a command
-    // runs as the owner. Every way to send comes through here (Enter, the Send button). A command the owner typed
-    // themselves, or a diagram's words that aren't one, sends at once.
-    if (text.startsWith("/") && this._diagramWordsIn() && !(await this._askToRun(text))) return;
+    // A command with words in it that aren't the owner's asks first: a diagram's (the AI chose them), or words found in
+    // the box that the page didn't put there. A command runs as the owner. Every way to send comes through here
+    // (Enter, the Send button). A command the owner typed themselves, or a diagram's words that aren't one, sends at
+    // once.
+    const whose = text.startsWith("/") ? this._notOwnersIn() : null;
+    if (whose && !(await this._askToRun(text, whose))) return;
 
     // Subtle tactile ack on touch devices (Android; iOS ignores).
     App.buzz?.(12);
@@ -1847,8 +1864,7 @@ const Chat = {
     if (this.isStreaming) {
       const attachments = hasFiles ? await this.buildAttachments() : [];
       if (hasFiles) { this.pendingFiles = []; this.renderAttachmentsPreview(); }
-      this.elements.messageInput.value = "";
-      this.elements.messageInput.style.height = "auto";
+      this._emptyBox();
       this.elements.sendBtn.disabled = true;
 
       this.messageQueue.push({ text, attachments, convId: this.currentConversationId });
@@ -1873,8 +1889,7 @@ const Chat = {
     }
 
     // Clear input
-    this.elements.messageInput.value = "";
-    this.elements.messageInput.style.height = "auto";
+    this._emptyBox();
     this.elements.sendBtn.disabled = true;
 
     // Show chat area if on welcome screen
@@ -1910,8 +1925,7 @@ const Chat = {
 
   /** A /stop typed while the reply streams (the old view): sent at once, beside that reply's stream, and its answer shown. */
   async sendStopNow(text) {
-    this.elements.messageInput.value = "";
-    this.elements.messageInput.style.height = "auto";
+    this._emptyBox();
     this.appendMessage("user", text);
     let answer = "";
     await API.sendMessage(
@@ -2053,8 +2067,7 @@ const Chat = {
       this.pendingFiles = [];
       this.renderAttachmentsPreview();
     }
-    this.elements.messageInput.value = "";
-    this.elements.messageInput.style.height = "auto";
+    this._emptyBox();
     this.elements.sendBtn.disabled = true;
     this.elements.welcomeScreen.style.display = "none";
     this.elements.chatArea.style.display = "flex";
@@ -2359,7 +2372,6 @@ const Chat = {
    */
   insertIntoBox(words) {
     const input = this.elements.messageInput;
-    this._boxEdited();   // (a change made to the box with no event, before these words go in)
     const value = input.value;
     const scrolled = input.scrollTop;
     const at = Math.min(Number.isInteger(input.selectionEnd) ? input.selectionEnd : value.length, value.length);
@@ -2369,10 +2381,7 @@ const Chat = {
     const trail = after && !/^[\s.,!?;:)]/.test(after) ? " " : "";
     const from = before.length + lead.length;
     const upToCaret = before + lead + words;
-    const text = upToCaret + trail + after;
-    input.value = text;
-    this._box.sel = { at: [at, at], type: "insertText" };
-    this._boxEdited("insertText");
+    this.setBox(upToCaret + trail + after, { at: [at, at] });
     this._boxMark(from, upToCaret.length);
     const caret = upToCaret.length;
     const phone = window.matchMedia?.("(pointer: coarse)").matches;
@@ -2424,27 +2433,55 @@ const Chat = {
   },
 
   /**
-   * The box's words changed (an input event, `how` its inputType; or a change made with no event, seen now): the
-   * ranges of them a diagram put there (this._box.marks, [start, end) of the box's words) move along. An edit before
-   * one shifts it, one in it cuts out what it changed, and what the edit put in is the owner's (typed, pasted, dropped,
-   * dictated). So emptying the box, or typing over all of it, leaves none; and a send empties it. Two ways bring a
-   * diagram's words back, and their ranges with them: an undo or a redo that brings back the box's words as they were
-   * while a diagram's words were in them (the box's last states with a diagram's words in them are kept for that:
-   * this._box.seen), and pasting or dropping the very words last copied, cut or dragged out of the box (_boxClip).
-   * Where the edit was: where the selection was when it began (beforeinput), for an edit made there (typing, deleting,
-   * pasting), checked against the words; else what changed between the words before and after (the same start and
-   * end kept, the middle replaced).
+   * The one way this page changes the message box's words: test/diagram-click.test.js checks that no script in
+   * src/public sets them any other way, so what the marks say (this._box) is always about the box's words as they
+   * are. `value` is the box's words now. What it put in is the owner's (a command picked from the list, the commands
+   * button's "/", dictation, the setup tour's first message), unless the caller then marks it as a diagram's
+   * (insertIntoBox). `at`, when the caller knows it: where the change is, [start, end) of the words before it; else
+   * it is worked out from the words before and after, and the letters kept keep their marks. Emptied (each send):
+   * nothing in the box is marked, so nothing is left over for what the owner types next.
    */
-  _boxEdited(how = "") {
+  setBox(value, { at = null } = {}) {
+    const input = this.elements.messageInput;
+    this._boxSync();   // (a change made with no edit before this one)
+    input.value = value;
+    if (input.value) {
+      this._boxEdited("set", { at });
+    } else {
+      this._box.value = "";
+      this._box.marks = [];
+      this._box.sel = null;
+    }
+  },
+
+  /** The box emptied, as a send leaves it (setBox), and back to one line. */
+  _emptyBox() {
+    this.setBox("");
+    this.elements.messageInput.style.height = "auto";
+  },
+
+  /**
+   * The box's words changed: by an edit (`how`, its inputType: typed, pasted, dropped, dictated, undone; or "set" for
+   * setBox), or with no edit at all (`found`, seen now: _boxSync). The ranges of the words that aren't the owner's
+   * (this._box.marks, [start, end, whose] of the box's words, whose "diagram" or "found") move along: an edit before
+   * one shifts it, one in it cuts out what it changed. What an edit put in is the owner's; what changed with no edit
+   * is not (whose "found"). So emptying the box, or typing over all of it, leaves none; and a send empties it. Two
+   * ways bring a diagram's words back, and their ranges with them: an undo or a redo that brings back the box's words
+   * as they were while a diagram's words were in them (the box's last states with such words in them are kept for
+   * that: this._box.seen), and pasting or dropping the very words last copied, cut or dragged out of the box
+   * (_boxClip). Where the edit was: `at`, or where the selection was when it began (beforeinput), checked against the
+   * words; else what changed between the words before and after (the same start and end kept, the middle replaced).
+   */
+  _boxEdited(how = "", { at = null, found = false } = {}) {
     const box = this._box;
     const value = this.elements.messageInput.value;
     const was = box.value;
-    const sel = box.sel && box.sel.type === how ? box.sel.at : null;
+    const sel = at || (box.sel && box.sel.type === how ? box.sel.at : null);
     box.sel = null;
     if (value === was) return;
     const delta = value.length - was.length;
     let start = -1, cutTo = -1;
-    if (sel && /^(insert(Text|LineBreak|Paragraph|FromPaste|FromPasteAsQuotation|Transpose)|delete)/.test(how)) {
+    if (sel && (how === "set" || /^(insert(Text|LineBreak|Paragraph|FromPaste|FromPasteAsQuotation|Transpose)|delete)/.test(how))) {
       let [a, b] = sel;
       if (a === b && delta < 0 && /Backward$/.test(how)) a = b + delta;
       else if (a === b && delta < 0 && /Forward$/.test(how)) b = a - delta;
@@ -2463,14 +2500,15 @@ const Chat = {
     }
     const newTo = cutTo + delta;
     let marks = [];
-    for (const [a, b] of box.marks) {
-      if (b <= start) marks.push([a, b]);
-      else if (a >= cutTo) marks.push([a + delta, b + delta]);
+    for (const [a, b, whose] of box.marks) {
+      if (b <= start) marks.push([a, b, whose]);
+      else if (a >= cutTo) marks.push([a + delta, b + delta, whose]);
       else {
-        if (a < start) marks.push([a, start]);
-        if (b > cutTo) marks.push([newTo, b + delta]);
+        if (a < start) marks.push([a, start, whose]);
+        if (b > cutTo) marks.push([newTo, b + delta, whose]);
       }
     }
+    if (found) marks.push([start, newTo, "found"]);
     if (how === "historyUndo" || how === "historyRedo") {
       for (const seen of box.seen) if (seen.value === value) marks = marks.concat(seen.marks);
     }
@@ -2478,39 +2516,59 @@ const Chat = {
     if (clip && clip.marks.length && /^insertFrom(Paste|PasteAsQuotation|Drop)$/.test(how)) {
       // The words put in, if they are the ones copied, cut or dragged out: where the edit was, or (a drop's place can
       // read as a little off when the letters around it repeat) touching it.
-      let at = value.slice(start, newTo) === clip.text ? start : -1;
-      if (at < 0) {
+      let place = value.slice(start, newTo) === clip.text ? start : -1;
+      if (place < 0) {
         const i = value.indexOf(clip.text, Math.max(0, start - clip.text.length));
-        if (i >= 0 && i <= newTo) at = i;
+        if (i >= 0 && i <= newTo) place = i;
       }
-      if (at >= 0) marks = marks.concat(clip.marks.map(([a, b]) => [a + at, b + at]));
+      if (place >= 0) marks = marks.concat(clip.marks.map(([a, b, whose]) => [a + place, b + place, whose]));
     }
     box.value = value;
     box.marks = spansOf(marks);
     this._boxSeen();
   },
 
-  /** The words selected in the box, as they are copied, cut or dragged out: which of them are a diagram's. */
+  /**
+   * The box's words as they are now, against those this page last saw: what changed with no edit (no event at all,
+   * so neither this page nor the owner typing: a browser putting a form's words back, say) is not the owner's. Done
+   * before every edit (beforeinput), before the box is read for a send, and whenever setBox changes it.
+   */
+  _boxSync() {
+    this._boxEdited("", { found: true });
+  },
+
+  /** Words found in the box (_boxSync) as the page starts or is shown again, shown as any words in it are. */
+  _boxFound() {
+    this._boxSync();
+    const el = this.elements.messageInput;
+    if (!el.value.trim()) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+    this.elements.sendBtn.disabled = false;
+    if (this.isStreaming) this.elements.sendBtn.classList.remove("stop-mode");
+  },
+
+  /** The words selected in the box, as they are copied, cut or dragged out: which of them aren't the owner's. */
   _boxClip() {
-    this._boxEdited();
+    this._boxSync();
     const el = this.elements.messageInput;
     const from = el.selectionStart, to = el.selectionEnd;
     if (!(to > from)) return;
     const marks = [];
-    for (const [a, b] of this._box.marks) {
+    for (const [a, b, whose] of this._box.marks) {
       const s = Math.max(a, from), e = Math.min(b, to);
-      if (e > s) marks.push([s - from, e - from]);
+      if (e > s) marks.push([s - from, e - from, whose]);
     }
     this._box.clip = { text: el.value.slice(from, to), marks };
   },
 
   /** The box's words from `from` to `to` are a diagram's (insertIntoBox). */
   _boxMark(from, to) {
-    this._box.marks = spansOf([...this._box.marks, [from, to]]);
+    this._box.marks = spansOf([...this._box.marks, [from, to, "diagram"]]);
     this._boxSeen();
   },
 
-  /** The box's words as they are now, kept if a diagram's words are in them (for an undo that comes back to them). */
+  /** The box's words as they are now, kept if words not the owner's are in them (for an undo that comes back to them). */
   _boxSeen() {
     const box = this._box;
     if (!box.marks.length) return;
@@ -2520,28 +2578,35 @@ const Chat = {
     if (box.seen.length > 50) box.seen.shift();
   },
 
-  /** Whether any of the words a diagram put in the box are still there (more than a space). */
-  _diagramWordsIn() {
-    this._boxEdited();   // (a change made with no event, say by another script, first)
+  /**
+   * Whether words in the box aren't the owner's (more than a space of them): "diagram" when a diagram's are, else
+   * "found" when words the page didn't put there are, else null.
+   */
+  _notOwnersIn() {
+    this._boxSync();   // (a change made with no edit, first)
     const value = this.elements.messageInput.value;
-    return this._box.marks.some(([a, b]) => /\S/.test(value.slice(a, b)));
+    const there = (whose) => this._box.marks.some(([a, b, w]) => w === whose && /\S/.test(value.slice(a, b)));
+    return there("diagram") ? "diagram" : there("found") ? "found" : null;
   },
 
   /**
-   * Whether to send `text`, a command with words a diagram put in the box: Tarsee's own question (js/dialogs.js), never
-   * the browser's. It shows the whole command, folded the way a diagram's words are (ChatCore.oneLine), so nothing in
-   * it can hide, in a block of its own. Cancel is the answer to a plain Enter, and Run counts only a second after the
-   * question shows: a key or a press still going from what sent it doesn't run it. Yes only for Run, and only while the
-   * box still holds those words; Cancel leaves them in the box.
+   * Whether to send `text`, a command with words in it that aren't the owner's (`whose`, _notOwnersIn): Tarsee's own
+   * question (js/dialogs.js), never the browser's. It shows the whole command, folded the way a diagram's words are
+   * (ChatCore.oneLine), so nothing in it can hide, in a block of its own. Cancel is the answer to a plain Enter, and
+   * Run counts only a second after the question shows: a key or a press still going from what sent it doesn't run
+   * it. Yes only for Run, and only while the box still holds those words; Cancel leaves them in the box.
    */
-  async _askToRun(text) {
+  async _askToRun(text, whose = "diagram") {
     if (this._askingToRun) return false;
     this._askingToRun = true;
     try {
+      const found = whose === "found";
       const run = await TarseeDialog.ask({
-        title: "Run this command from a diagram?",
+        title: found ? "Run this command?" : "Run this command from a diagram?",
         block: Core.oneLine(text),
-        text: "A diagram put these words in your message box, and the AI chose them. A command runs as you.",
+        text: found
+          ? "These words were already in your message box, and Tarsee didn't see who put them there (a browser can put back words from an earlier visit). A command runs as you."
+          : "A diagram put these words in your message box, and the AI chose them. A command runs as you.",
         yes: "Run it",
         no: "Cancel",
         danger: true,
@@ -3215,19 +3280,19 @@ const Chat = {
       seenEmbed.add(`${kind}:${id}`);
       return token(embedHtml(kind, id));
     };
-    // As an <a> tag: a canvas's, or this page's own diagram (isOwnDiagram, as for an address on its own below). Another
-    // site's /diagram/ address stays a link, with the tag's words.
+    // As an <a> tag: this page's own canvas or diagram (isOwnAddress, as for an address on its own below). Another
+    // site's /canvas/ or /diagram/ address stays a link, with the tag's words.
     text = text.replace(/<a\s+[^>]*href=(["'])((?:https?:\/\/[^\s/"']+)?\/(canvas|diagram)\/([a-z0-9-]+)\/?)\1[^>]*>([\s\S]*?)<\/a>/gi, (_m, _q, href, kind, id, words) => {
-      if (kind.toLowerCase() === "canvas") return placeEmbed("canvas", id);
-      return /^[a-z0-9-]+$/.test(id) && isOwnDiagram(href, id) ? placeEmbed("diagram", id) : linkWords(href, words);
+      const k = kind.toLowerCase();
+      return /^[a-z0-9-]+$/.test(id) && isOwnAddress(href, k, id) ? placeEmbed(k, id) : linkWords(href, words);
     });
-    text = text.replace(/(?:https?:\/\/[^\s/)]+)?\/canvas\/([a-z0-9-]+)\/?(?=[\s)\]."',;:!?]|$)/g, (_m, id) => placeEmbed("canvas", id));
-    // A diagram's address on its own: Tarsee's own, as a path (/diagram/<id>/) or with this page's origin in front. Only
-    // where an address starts (the start of the text, a space, an opening bracket or quote), so never the end of a
-    // longer path (docs/diagram/flow.png) or of another site's address (https://app.example.com/#/diagram/x/,
-    // https://example.com/login?next=/diagram/x/). And the whole address is read as the browser reads it: only this
-    // page's own diagram counts, so another site's (https://example.com/diagram/x/) stays a link.
-    text = text.replace(/(?<![^\s([{<"'])(?:https?:\/\/[^\s/?#)"'<>]+)?\/diagram\/([a-z0-9-]+)\/?(?=[\s)\]}>."',;:!?]|$)/g, (m, id) => (isOwnDiagram(m, id) ? placeEmbed("diagram", id) : m));
+    // A canvas's or a diagram's address on its own: Tarsee's own, as a path (/canvas/<id>/, /diagram/<id>/) or with
+    // this page's origin in front. Only where an address starts (the start of the text, a space, an opening bracket or
+    // quote), so never the end of a longer path (docs/diagram/flow.png) or of another site's address
+    // (https://app.example.com/#/diagram/x/, https://example.com/login?next=/canvas/x/). And the whole address is read
+    // as the browser reads it: only this page's own counts, so another site's (https://example.com/canvas/x/) stays a
+    // link.
+    text = text.replace(/(?<![^\s([{<"'])(?:https?:\/\/[^\s/?#)"'<>]+)?\/(canvas|diagram)\/([a-z0-9-]+)\/?(?=[\s)\]}>."',;:!?]|$)/g, (m, kind, id) => (isOwnAddress(m, kind, id) ? placeEmbed(kind, id) : m));
 
     // Thinking / reasoning: folded.
     text = text.replace(/<(thinking|antThinking|antml:thinking|reasoning)>([\s\S]*?)<\/\1>/g, (_m, tag, content) => token(renderThinkingBlock(tag.includes("thinking") || tag.includes("Thinking") ? "Thinking" : "Reasoning", content.trim())));
@@ -3257,15 +3322,15 @@ function safeHref(url) {
 }
 
 /**
- * Whether `address`, as written in a message (/diagram/<id>/, or a site in front of it), is the address of this page's
- * own diagram `id`, read as the browser reads it: this page's origin, that path, and nothing else (no user name, no
- * ? or # part).
+ * Whether `address`, as written in a message (/canvas/<id>/ or /diagram/<id>/, or a site in front of it), is the
+ * address of this page's own canvas or diagram (`kind`) `id`, read as the browser reads it: this page's origin, that
+ * path, and nothing else (no user name, no ? or # part).
  */
-function isOwnDiagram(address, id) {
+function isOwnAddress(address, kind, id) {
   try {
     const url = new URL(address, window.location.href);
     return url.origin === window.location.origin && !url.username && !url.password && !url.search && !url.hash
-      && (url.pathname === `/diagram/${id}/` || url.pathname === `/diagram/${id}`);
+      && (url.pathname === `/${kind}/${id}/` || url.pathname === `/${kind}/${id}`);
   } catch {
     return false;
   }
@@ -3281,13 +3346,18 @@ function linkWords(address, html) {
   return /[\s()<>]/.test(address) ? words : `[${words}](${address})`;
 }
 
-/** Ranges [start, end) in order, those that touch or overlap joined, empty ones left out. */
+/** Ranges [start, end, whose] in order, those of the same whose that touch or overlap joined, empty ones left out. */
 function spansOf(ranges) {
   const out = [];
-  for (const [a, b] of ranges.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0])) {
-    const last = out[out.length - 1];
-    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
-    else out.push([a, b]);
+  const last = new Map();   // for each whose, its last span in out
+  for (const [a, b, whose] of ranges.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0])) {
+    const prev = last.get(whose);
+    if (prev && a <= prev[1]) prev[1] = Math.max(prev[1], b);
+    else {
+      const span = [a, b, whose];
+      out.push(span);
+      last.set(whose, span);
+    }
   }
   return out;
 }
