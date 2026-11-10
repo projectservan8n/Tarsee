@@ -303,6 +303,32 @@ describe("helpers", () => {
     assert.equal(classifyCodexFailure("openai", "unexpected status 404 Not Found: 404 page not found").kind, "model");
   });
 
+  it("a chat that no longer fits in a Local AI's context is its own kind, never a missing model (llama-server's 400s)", () => {
+    const url = "http://127.0.0.1:9931/v1";
+    for (const words of [
+      "{\"error\":{\"code\":400,\"message\":\"request (40123 tokens) exceeds the available context size (32768 tokens), try increasing it\",\"type\":\"exceed_context_size_error\",\"n_prompt_tokens\":40123,\"n_ctx\":32768}}",
+      "{\"error\":{\"code\":400,\"message\":\"the request is larger than the max context size of the model\",\"type\":\"invalid_request_error\"}}",
+      // What Codex says itself once the bridge turns a mid-stream overflow into response.failed context_length_exceeded.
+      "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
+    ]) {
+      const c = classifyCodexFailure("local", `unexpected status 400 Bad Request: ${words}, url: http://127.0.0.1:50000/t/abcdefghijklmnopqrstuv/v1/responses`, { model: "qwen3.5-9b", localUrl: url });
+      assert.equal(c.kind, "context", words);
+      assert.match(c.message, /This chat no longer fits in your Local AI's memory/);
+      assert.match(c.message, /larger -c/);
+      assert.doesNotMatch(c.message, /can't run the model/);
+      assert.doesNotMatch(c.message, /abcdefghijklmnopqrstuv/, "the bridge's turn id is never shown");
+    }
+  });
+
+  it("the bridge's address (its turn id) never reaches the words shown, and an unreachable server mentions a model still downloading", () => {
+    const c = classifyCodexFailure("local", "unexpected status 502 Bad Gateway: {\"error\":{\"message\":\"Can't reach your Local AI at http://127.0.0.1:9931/v1 (connection refused).\"}}, url: http://127.0.0.1:50000/t/abcdefghijklmnopqrstuv/v1/responses", { model: "m", localUrl: "http://127.0.0.1:9931/v1" });
+    assert.equal(c.kind, "unavailable");
+    assert.match(c.message, /Can't reach your Local AI at http:\/\/127\.0\.0\.1:9931\/v1/);
+    assert.match(c.message, /still be downloading the model/);
+    const odd = classifyCodexFailure("local", "something odd at http://127.0.0.1:50000/t/abcdefghijklmnopqrstuv/v1/responses", { model: "m" });
+    assert.doesNotMatch(odd.message, /abcdefghijklmnopqrstuv/);
+  });
+
   it("every way codex 0.167 says the ChatGPT sign-in couldn't be renewed is the sign-in running out", () => {
     // codex-rs/login/src/auth/manager.rs and cloud-config/src/chatgpt.rs: what the pinned codex writes when it can't
     // renew the ChatGPT sign-in. Each must give the plan's own "sign in again" words and turn the card sign-in-expired,

@@ -184,8 +184,9 @@
               <rect x="6.5" y="6.5" width="3" height="3" rx="0.5" fill="currentColor"/>
             </svg>
           </button>
-          <button class="topbar-icon-btn" id="voiceModeBtn" title="Voice" aria-label="Open voice mode">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2a2.5 2.5 0 012.5 2.5v3a2.5 2.5 0 01-5 0v-3A2.5 2.5 0 018 2z" stroke="currentColor" stroke-width="1.3"/><path d="M4 7.5a4 4 0 008 0M8 13v-1.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+          <!-- A voice call with the AI (js/call.js): "Call <name>", the name from Settings > Identity. -->
+          <button class="topbar-icon-btn" id="callBtn" title="Call Tarsee" aria-label="Call Tarsee">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 005 5L15 13l5 2v4a2 2 0 01-2 2A16 16 0 013 6a2 2 0 012-2" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
           </button>
         </div>
       </div>
@@ -209,6 +210,8 @@
       </div>
 
       <div id="inputArea" class="input-area" style="display:none">
+        <!-- A call going on while its window is put away: the clock, what it's doing, Show, Mute, End (js/call.js). -->
+        <div id="callBar" class="call-bar" hidden></div>
         <div id="attachmentsPreview" class="chat-attachments-preview" style="display:none"></div>
         <!-- Composer, as on claude.ai: the words on top; under them attach, commands and the microphone on the left,
              the context used, the model and the effort small on the right, then Send. -->
@@ -835,6 +838,18 @@
           <!-- Voice Tab -->
           <div class="settings-tab-panel" data-tab="voice">
             <h2>Voice</h2>
+            <!-- Calls (js/call.js): where the answer goes when you hang up while the AI is still working. -->
+            <div class="settings-section" id="callSettingsSection">
+              <h3>Calls</h3>
+              <div class="form-group">
+                <label for="callHandoffChannel">Send the answer to</label>
+                <select id="callHandoffChannel">
+                  <option value="">Off (it stays in the call's chat)</option>
+                </select>
+                <div class="hint">If you hang up while <span class="call-bot-name">Tarsee</span> is still working on something you asked on a call, its answer is sent here. Off leaves it in the call's chat only. A call hears you through the speech-to-text and speaks with the voice set below.</div>
+                <div class="hint" id="callHandoffNone" hidden>No channel is connected yet. Connect one in Settings &gt; Channels to list it here.</div>
+              </div>
+            </div>
             <div class="settings-section">
               <div id="voiceEngineStatus" class="text-muted text-sm mb-3">
                 Checking voice engine status...
@@ -858,7 +873,7 @@
                   <button type="button" class="btn btn-sm" id="phononInstallBtn" style="display:none">Install Phonon</button>
                 </div>
                 <progress id="phononInstallProgress" max="100" value="0" style="display:none;width:100%;max-width:400px;accent-color:var(--accent)" aria-label="Phonon download progress"></progress>
-                <div class="hint" id="phononInstallHint">About 70 MB (model and English voices), downloaded once to the data volume.</div>
+                <div class="hint" id="phononInstallHint">About 70 MB (model and English voices), downloaded once to the data volume. On a computer without Python, Install also downloads Tarsee's own copy of Python (about 45 MB), the one speech-to-text uses too.</div>
                 <label for="settingsPhononVoice" class="mt-3">Phonon voice</label>
                 <select id="settingsPhononVoice"></select>
                 <label for="settingsPhononSpeed" class="mt-3">Phonon speed: <span id="phononSpeedValue">1.0</span>×</label>
@@ -880,7 +895,7 @@
                 <select id="settingsDefaultVoice">
                   <option value="">Engine default</option>
                 </select>
-                <div class="hint">Select which voice the AI uses in voice mode. Upload or download voices below to add more options.</div>
+                <div class="hint">The voice the AI speaks with on a call. Upload or download voices below to add more options.</div>
               </div>
               <button class="btn btn-sm mb-4" id="saveVoiceBtn">Save Voice Settings</button>
 
@@ -912,35 +927,39 @@
                 <button class="btn btn-sm" id="piperUploadBtn">Upload Voice</button>
               </div>
             </div>
-            <div class="settings-section">
-              <h3>Speech-to-Text (STT)</h3>
+            <div class="settings-section" id="sttSection">
+              <h3>Speech-to-text</h3>
+              <div class="hint mb-3">Turns what people say into text: voice messages from your channels, and talking to Tarsee.</div>
               <div class="form-group">
-                <label>STT Provider</label>
+                <label for="settingsSTTProvider">Where speech becomes text</label>
                 <select id="settingsSTTProvider">
-                  <option value="local">Local faster-whisper (free, no API key)</option>
-                  <option value="whisper-api">OpenAI Whisper API ($0.006/min, best accuracy)</option>
+                  <option value="local">On this server, with faster-whisper (free, private, no key)</option>
+                  <option value="whisper-api">OpenAI Whisper API (paid, about $0.006 a minute)</option>
                 </select>
-                <div class="hint">Local is free but slower. Whisper API is more accurate and fast (~$0.001 per voice command).</div>
+                <div class="hint">On this server is free, and the recordings never leave it. The OpenAI Whisper API needs an OpenAI key; when it fails, this server's faster-whisper takes over.</div>
               </div>
               <div class="form-group" id="openaiKeyGroup">
-                <label>OpenAI API Key</label>
+                <label for="settingsOpenaiKey">OpenAI API Key</label>
                 <form style="display:contents" autocomplete="off" data-no-submit>
                   <input type="password" id="settingsOpenaiKey" class="form-input" placeholder="sk-..." style="max-width:400px" autocomplete="off">
                 </form>
                 <div class="hint" id="openaiKeyStatus" hidden></div>
-                <div class="hint">Required for Whisper API and GPT-4o Transcribe. Get yours at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">platform.openai.com</a>.</div>
+                <div class="hint">Needed for the OpenAI Whisper API. Get one at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">platform.openai.com</a>.</div>
               </div>
-              <div class="form-group">
-                <label>Local Whisper Model</label>
-                <select id="settingsSTTModel">
-                  <option value="tiny.en">tiny.en (~75MB) — fastest, basic accuracy</option>
-                  <option value="base.en" selected>base.en (~140MB) — balanced (recommended)</option>
-                  <option value="small.en">small.en (~460MB) — best accuracy, slower</option>
-                </select>
-                <div class="hint">Only used when STT Provider is set to Local. Model downloads automatically on first use.</div>
+              <div class="form-group" id="sttLocalGroup">
+                <label>faster-whisper on this server</label>
+                <div class="stt-runtime">
+                  <span id="sttRuntimeStatus" class="text-sm" role="status" aria-live="polite">Checking…</span>
+                  <button type="button" class="btn btn-sm" id="sttInstallBtn" hidden>Install faster-whisper</button>
+                </div>
+                <progress id="sttInstallProgress" class="stt-progress" max="100" value="0" hidden aria-label="faster-whisper install progress"></progress>
+                <div class="hint" id="sttInstallHint" hidden></div>
+                <label class="mt-3" id="sttModelsLabel">Speech model</label>
+                <div class="hint">Pick the one to use. Bigger ones understand more, and take longer on this server's processor. The ones ending in .en understand English only; the others understand many languages and find the language by themselves.</div>
+                <div id="sttModelList" class="stt-model-list" role="radiogroup" aria-labelledby="sttModelsLabel"></div>
+                <div class="hint" id="sttModelsWhere"></div>
               </div>
-              <div id="sttModelStatus" class="text-muted text-sm mt-2"></div>
-              <button class="btn btn-sm mt-2" id="saveSTTBtn">Save STT Settings</button>
+              <button class="btn btn-sm mt-2" id="saveSTTBtn">Save speech-to-text</button>
             </div>
           </div>
 
@@ -1183,21 +1202,6 @@
   </div>
 
 
-  <!-- Voice Mode Panel -->
-  <div id="voicePanel" class="voice-panel" role="dialog" aria-modal="true" aria-labelledby="voiceActiveLabel">
-    <button class="voice-close" id="voiceClose" aria-label="Close voice mode">&#10005;</button>
-    <div id="voiceActiveLabel" class="voice-active-label"></div>
-    <div class="voice-conversation" id="voiceConversation" role="log" aria-live="polite" aria-atomic="false"></div>
-    <div class="voice-orb-container">
-      <canvas id="voiceWaveform" class="voice-waveform" width="300" height="60" aria-hidden="true"></canvas>
-      <div class="voice-orb idle" id="voiceOrb" role="button" tabindex="0" aria-label="Hold Space or press Enter to talk">
-        <svg width="48" height="48" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1a3 3 0 013 3v3a3 3 0 01-6 0V4a3 3 0 013-3z" stroke="currentColor" stroke-width="1.2"/><path d="M3 7a5 5 0 0010 0M8 14v-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-      </div>
-      <div class="voice-status-text" id="voiceStatus" role="status" aria-live="polite">Hold to talk · Click to toggle</div>
-    </div>
-    <audio id="voiceAudio" class="voice-audio-player" aria-hidden="true"></audio>
-  </div>
-
   <!-- Toast Container -->
   <!-- A file opened from the chat (js/chat-files.js), in the viewer (js/file-viewer.js). Esc, the X or a click outside closes it. -->
   <div class="of-viewer is-dash" id="viewer" role="dialog" aria-modal="true" aria-label="Attachment" hidden>
@@ -1227,7 +1231,8 @@
   <script src="/js/live.js"></script>
   <script type="module" src="/js/chat-files.js"></script>   <!-- the chat's files: cards, and the viewer (window.ChatFiles) -->
   <script src="/js/usage.js"></script>       <!-- the Usage page (/usage) -->
-  <script src="/js/voice.js"></script>
+  <script src="/js/voice.js"></script>       <!-- the composer's microphone: dictation -->
+  <script src="/js/call.js"></script>        <!-- a voice call with the AI (Call <name>) -->
   <script src="/js/console.js"></script>
   <script src="/js/channel-guides-core.js"></script>   <!-- how to connect each chat platform (Settings and the setup wizard) -->
   <script src="/js/provider-guides-core.js"></script>   <!-- how to set up each AI (Settings → AI and the setup wizard) -->

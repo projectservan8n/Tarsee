@@ -608,7 +608,8 @@ export function vendorFor(idOrAlias, model) {
 /**
  * A model's context window in tokens (the model's own; the caller applies the
  * auto-compact window). Claude reads today's table as the context meter does,
- * an unknown id counting as 1M. Local AI takes the card's ai.local.context.
+ * an unknown id counting as 1M. Local AI: localContextTokens with the card's
+ * ai.local.context and what the server said about that model.
  */
 export function contextTokensFor(idOrAlias, model, store = null) {
   const p = getProvider(idOrAlias);
@@ -618,10 +619,38 @@ export function contextTokensFor(idOrAlias, model, store = null) {
     return contextFromLabel(meta?.context || "1M");
   }
   if (p.id === "local") {
-    const own = positiveInt(readSetting(store, "ai.local.context"));
-    if (own) return own;
+    const row = findModel(p, model);
+    return localContextTokens({ own: readSetting(store, "ai.local.context"), serverContext: row?.serverContext, maxContext: row?.maxContext });
   }
   return findModel(p, model)?.context || p.defaultContext;
+}
+
+/**
+ * Local AI's context, by one rule: when the server said how much it gives the model (serverContext: llama-server's
+ * n_ctx, LM Studio's loaded context, Ollama's), the smaller of that and the owner's setting (own: the card's
+ * ai.local.context); otherwise the owner's setting, then 128K. Never more than the model was trained for (maxContext),
+ * when the server says that.
+ */
+export function localContextTokens({ own = null, serverContext = null, maxContext = null } = {}) {
+  const mine = positiveInt(own);
+  const server = positiveInt(serverContext);
+  let n = server && mine ? Math.min(mine, server) : server || mine || PROVIDERS.local.defaultContext;
+  const max = positiveInt(maxContext);
+  if (max) n = Math.min(n, max);
+  return n;
+}
+
+/**
+ * Fill Local AI's catalog from its server's rows ([{id, serverContext?, maxContext?}], or ids): each model's context
+ * by localContextTokens, with the server's own size kept beside it (serverContext), so a size the server reported is
+ * never mistaken for the card's.
+ */
+export function setLocalModels(rows, store = null) {
+  const own = readSetting(store, "ai.local.context");
+  setCatalogModels("local-models", (Array.isArray(rows) ? rows : []).map((r) => {
+    const row = typeof r === "string" ? { id: r } : r || {};
+    return { id: row.id, label: row.label || row.id, context: localContextTokens({ own, serverContext: row.serverContext, maxContext: row.maxContext }), serverContext: row.serverContext, maxContext: row.maxContext };
+  }));
 }
 
 /** The effort levels a model takes (Tarsee's ids, low to max); empty when none is sent. */
@@ -925,6 +954,9 @@ function runtimeEntry(m) {
     tier: typeof m.tier === "string" && MODEL_TIERS.includes(m.tier) ? m.tier : null,
     default: m.default === true,
     free: m.free === true,
+    // Local AI: what its server said (setLocalModels); only there when it said it.
+    ...(positiveInt(m.serverContext) ? { serverContext: positiveInt(m.serverContext) } : {}),
+    ...(positiveInt(m.maxContext) ? { maxContext: positiveInt(m.maxContext) } : {}),
   };
 }
 

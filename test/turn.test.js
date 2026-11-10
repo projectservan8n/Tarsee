@@ -996,6 +996,21 @@ describe("the web chat route (routes/chat.js) through the router", () => {
     return { event: ev, data: data ? JSON.parse(data) : null };
   });
 
+  it("the 95% context check measures the last call's prompt when the engine says it, not the turn's calls summed", async () => {
+    const send = async (usage) => {
+      useEngines({ claude: [[{ type: "text", content: "ok" }, { type: "usage", usage }, { type: "done", stopReason: "end_turn" }]] });
+      const res = await fetch(`${base}/send`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId: newChat("web"), message: "hi" }) });
+      return sse(await res.text()).find((e) => e.event === "done").data;
+    };
+    // A tool-using turn: its calls summed are far past the window, but its last call filled a small part of it.
+    const summed = { input_tokens: 5_000_000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    const small = await send({ ...summed, context_input_tokens: 40_000 });
+    assert.equal(small.checkpointed, false, "no overflow snapshot for a context that isn't full");
+    assert.equal(small.usage.context_input_tokens, 40_000, "the page gets the same figure for its meter");
+    // An engine that can't tell: measured as before, so a really full context is still caught.
+    assert.equal((await send(summed)).checkpointed, true);
+  });
+
   it("streams SSE as before and persists the reply, with the provider and model that ran", async () => {
     useEngines({ claude: [[
       { type: "session", id: "web-raw-1" },
@@ -1099,6 +1114,36 @@ describe("the web chat route (routes/chat.js) through the router", () => {
     assert.equal(picked.provider, "deepseek");
     assert.equal(picked.model, "deepseek-v4-pro", "opus work goes to DeepSeek's top tier, never a claude-* id");
   });
+
+  it("a voice call's message: the mark comes off, the AI is told it is on a call, no thinking summaries, the chat keeps its name", async () => {
+    const conv = newChat("Calls with Tarsee");
+    const res = await fetch(`${base}/send`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId: conv, message: "[call] what's on today" }) });
+    assert.equal(res.status, 200);
+    await res.text();
+    const ran = engines.claude.calls[0];
+    assert.equal(ran.thinkingSummaries, false, "a spoken reply is waited for");
+    assert.match(ran.systemParts.volatile, /\[LIVE CALL\]/);
+    assert.match(ran.prompt, /^what's on today\n\n\(On a voice call: /, "the reminder rides on the message");
+    assert.deepEqual(convs.getMessages(conv).filter((m) => m.role === "user").map((m) => m.content), ["what's on today"], "saved without the mark");
+    assert.equal(convs.get(conv).title, "Calls with Tarsee");
+
+    // An ordinary message in the same chat is not a call's.
+    useEngines();
+    const plain = newChat("web");
+    await (await fetch(`${base}/send`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId: plain, message: "hello" }) })).text();
+    assert.doesNotMatch(engines.claude.calls[0].systemParts.volatile, /LIVE CALL/);
+  });
+
+  it("a call's deep ask (model \"top\") runs that one turn on the call AI's top tier", async () => {
+    settings.set("ai.deepseek.apiKey", DEEPSEEK_KEY);
+    settings.set("ai.activeProvider", "deepseek");
+    const conv = newChat("Calls with Tarsee");
+    const res = await fetch(`${base}/send`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId: conv, message: "[call] think hard about my week", model: "top" }) });
+    const picked = sse(await res.text()).find((e) => e.event === "model_selected").data;
+    assert.equal(picked.provider, "deepseek");
+    assert.equal(picked.model, "deepseek-v4-pro");
+    assert.equal(settings.get(`session.${conv}.model`) ?? null, null, "the chat's own pick is left as it was");
+  });
 });
 
 describe("the dashboard's WebSocket chat (channels/websocket.js) through the router", () => {
@@ -1155,10 +1200,11 @@ describe("the dashboard's WebSocket chat (channels/websocket.js) through the rou
     assert.equal(engines.claude.calls.length, 0);
   });
 
-  it("voice mode asks for no thinking summaries, and the turn knows the message it answers", async () => {
+  it("asks for thinking summaries, and the turn knows the message it answers (voice mode is gone)", async () => {
     const conv = newChat("web");
     await chatOverSocket({ conversationId: conv, message: "[voice] what time is it" });
-    assert.equal(engines.claude.calls[0].thinkingSummaries, false, "a spoken reply is waited for");
+    assert.equal(engines.claude.calls[0].thinkingSummaries, true, "no voice mode: the old mark is just words now");
+    assert.doesNotMatch(String(engines.claude.calls[0].systemParts?.volatile ?? ""), /VOICE MODE/);
     const asked = convs.getMessages(conv).find((m) => m.role === "user");
     assert.equal(engines.claude.calls[0].toolCtx.messageId, asked.id);
   });

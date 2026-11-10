@@ -506,11 +506,11 @@ const Settings = {
       this.loadPiperVoices();
     }
 
-    // STT save (provider + model; an OpenAI key pasted here is the one Settings → AI keeps)
+    // Speech-to-text save (where speech becomes text + the model; an OpenAI key pasted here is the one Settings → AI keeps)
     const saveSTTBtn = document.getElementById("saveSTTBtn");
     if (saveSTTBtn) {
       saveSTTBtn.addEventListener("click", async () => {
-        const model = document.getElementById("settingsSTTModel").value;
+        const model = document.querySelector('#sttModelList input[name="sttModel"]:checked')?.value || this._stt?.current || "base.en";
         const provider = document.getElementById("settingsSTTProvider")?.value || "local";
         const keyBox = document.getElementById("settingsOpenaiKey");
         const openaiKey = keyBox?.value?.trim();
@@ -521,20 +521,31 @@ const Settings = {
             await API.json("/api/ai/keys/openai", { method: "PUT", body: { apiKey: openaiKey } });
             keyBox.value = "";
           }
-          await API.json("/api/voice/stt-model", { method: "POST", body: { model } });
+          const chosen = await API.json("/api/voice/stt-model", { method: "POST", body: { model } });
           await API.json("/api/settings/general", { method: "POST", body: { key: "voice.stt_provider", value: provider } });
-          App.showToast(`STT: ${provider}${provider === "local" ? ` (${model})` : ""}${openaiKey ? ", OpenAI key saved" : ""}`, "success");
-          this.loadSTTModelStatus();
+          const where = provider === "local" ? `faster-whisper on this server, ${model}` : "OpenAI Whisper API";
+          App.showToast(`Speech-to-text saved: ${where}${openaiKey ? ", OpenAI key saved" : ""}${chosen?.downloading ? `. Downloading ${model} now.` : ""}`, "success");
+          this.loadSTT();
         } catch (e) { App.showToast(e.message, "error"); }
         // (The header's read draws the key's line again, and the header chip and the composer hear of a new key.)
         if (openaiKey) this.refreshAiHeader();
       });
-      this.loadSTTModelStatus();
+      document.getElementById("settingsSTTProvider")?.addEventListener("change", () => this.showSttKey());
+      document.getElementById("sttInstallBtn")?.addEventListener("click", () => this.installStt());
+      // A model row's Download and Delete (the rows are drawn again on every status read).
+      document.getElementById("sttModelList")?.addEventListener("click", (e) => {
+        const dl = e.target.closest("[data-stt-download]");
+        if (dl) { this.downloadSttModel(dl.dataset.sttDownload, dl); return; }
+        const del = e.target.closest("[data-stt-delete]");
+        if (del) this.deleteSttModel(del.dataset.sttDelete, del);
+      });
+      this.loadSTT();
 
       // The speech-to-text choice saved
       API.json("/api/settings").then(data => {
         const provider = (data.settings || []).find(s => s.key === "voice.stt_provider")?.value;
         if (provider) document.getElementById("settingsSTTProvider").value = provider;
+        this.showSttKey();
       }).catch(() => {});
     }
 
@@ -578,7 +589,7 @@ const Settings = {
     });
     // Load data for new tabs
     if (tabName === "ai") { this.loadAi(); }
-    if (tabName === "voice") { this.refreshAiHeader(); }   // (draws the OpenAI key's line, drawSttKey)
+    if (tabName === "voice") { this.refreshAiHeader(); this.loadSTT({ refresh: true }); }   // (draws the OpenAI key's line, drawSttKey)
     if (tabName === "security") { this.loadToolPermissions(); }
     if (tabName === "canvas") { this.loadCanvasGallery(); }
     if (tabName === "audit") { this.loadAuditLog(); }
@@ -1328,11 +1339,20 @@ const Settings = {
     const p = window.ProviderGuides.get("local");
     const s = c.settings || {};
     const presets = p.presets.map((x) => `<button type="button" class="btn btn-sm btn-ghost" data-ai-action="preset" data-url="${x.url}">${x.name}</button>`).join("");
+    // The context box holds only what the owner saved: empty means "what the server says, else the default", shown as
+    // its placeholder, so a Save that didn't touch it never stores a number nobody chose.
+    const n = (v) => Number(v).toLocaleString("en-US");
+    const placeholder = s.serverContext ? `${n(s.serverContext)}, read from your server` : `${n(s.defaultContext || 128000)} unless you set it`;
+    const used = s.context && s.serverContext && s.serverContext < s.context
+      ? `<div class="hint" data-ai-local-context-note>Your server gives this model ${n(s.serverContext)}, so Tarsee uses that.</div>`
+      : "";
     return `<label class="ai-label" for="aiLocalUrl">Server address</label>` +
       `<div class="ai-presets">Fill in: ${presets}</div>` +
+      (p.presetNote ? `<div class="hint">${p.presetNote}</div>` : "") +
       `<input type="url" id="aiLocalUrl" class="ai-input" data-keep="url" value="${this._esc(s.baseUrl || "")}" placeholder="http://localhost:11434/v1" autocomplete="off" spellcheck="false" autocapitalize="off">` +
       `<label class="ai-label" for="aiLocalContext">How much it can read at once, in tokens</label>` +
-      `<input type="number" id="aiLocalContext" class="ai-input ai-input-short" data-keep="context" value="${this._esc(s.context || "")}" min="1000" step="1000" inputmode="numeric">` +
+      `<input type="number" id="aiLocalContext" class="ai-input ai-input-short" data-keep="context" value="${this._esc(s.context || "")}" placeholder="${this._esc(placeholder)}" min="1000" step="any" inputmode="numeric">` +
+      used +
       `<div class="ai-actions"><button type="button" class="btn btn-sm btn-primary" data-ai-action="save-local">Save</button>` +
       `<button type="button" class="btn btn-sm" data-ai-action="test">Test</button></div>` +
       `<details class="ai-local-key"${c.keySource ? " open" : ""}><summary>A key, if your server asks for one</summary>` +
@@ -1440,7 +1460,9 @@ const Settings = {
       const inMenu = m.inMenu === true || m.verified === true || m.id === c?.model;
       const badges = (m.verified ? `<span class="ai-badge" data-kind="ok">Verified</span>` : "")
         + (m.recheck ? `<span class="ai-badge" data-kind="warn" title="It was verified on an older version of Tarsee's engine: Verify it again to be sure it still works.">Check again</span>` : "");
-      const meta = [inMenu ? "In a chat's model menu" : "Verify to use it in a chat", m.context ? `${Math.round(m.context / 1000)}K context` : ""].filter(Boolean).join(" · ");
+      const k = (v) => (v % 1024 === 0 ? `${v / 1024}K` : `${Math.round(v / 1000)}K`);
+      const ctx = m.context ? `${k(m.context)} context${m.serverContext ? " (from your server)" : ""}` : "";
+      const meta = [inMenu ? "In a chat's model menu" : "Verify to use it in a chat", ctx].filter(Boolean).join(" · ");
       const btn = `<button type="button" class="btn btn-sm${inMenu ? " btn-ghost" : ""}" data-ai-action="verify" data-model="${esc(m.id)}">${m.verified ? "Verify again" : "Verify"}</button>`;
       return `<div class="ai-or-row" data-ai-local-row><div class="ai-or-name"><span>${esc(m.label || m.id)}</span>${badges}<div class="ai-or-meta">${esc(meta)}</div></div>${btn}</div>`;
     };
@@ -1778,9 +1800,10 @@ const Settings = {
   /** Local AI's address and context size (PUT /api/ai/providers/local), then a Test that lists its models. */
   async saveLocalAi(btn) {
     const url = document.getElementById("aiLocalUrl")?.value.trim() || "";
-    const ctx = document.getElementById("aiLocalContext")?.value.trim() || "";
+    const box = document.getElementById("aiLocalContext");
     const body = { baseUrl: url || null };
-    if (ctx) body.context = Number(ctx);
+    // The context only when the owner changed it: an emptied box goes back to the server's size (else the default).
+    if (box && box.value.trim() !== box.defaultValue.trim()) body.context = box.value.trim() ? Number(box.value.trim()) : null;
     const done = this._aiBusy(btn, "Saving…");
     try {
       await this._aiCall("/api/ai/providers/local", { method: "PUT", body });
@@ -2859,19 +2882,234 @@ const Settings = {
     status.hidden = !status.textContent;
   },
 
-  async loadSTTModelStatus() {
-    const status = document.getElementById("sttModelStatus");
-    const select = document.getElementById("settingsSTTModel");
-    if (!status) return;
+  /** The OpenAI key box is for the OpenAI Whisper API only: shown when that is chosen. */
+  showSttKey() {
+    const group = document.getElementById("openaiKeyGroup");
+    if (group) group.hidden = (document.getElementById("settingsSTTProvider")?.value || "local") !== "whisper-api";
+  },
+
+  /**
+   * Settings → Voice → Speech-to-text (GET /api/voice/stt, routes/voice.js): whether faster-whisper is installed and
+   * on which Python, a row per model with its size, where it is, and Download / Delete, and the install's progress.
+   * refresh: look for Python again (opening the tab).
+   */
+  async loadSTT({ refresh = false } = {}) {
+    if (!document.getElementById("sttRuntimeStatus")) return;
     try {
-      const data = await API.json("/api/voice/stt-models");
-      if (select && data.current) select.value = data.current;
-      const lines = (data.models || []).map(m => {
-        const dl = m.downloaded ? "downloaded" : "not downloaded";
-        return `${m.name} (${m.sizeMB}MB) — ${dl}`;
-      });
-      status.textContent = lines.join(" · ");
-    } catch { status.textContent = "Could not check STT models."; }
+      this.renderSTT(await API.json(`/api/voice/stt${refresh ? "?refresh=1" : ""}`));
+    } catch {
+      this.renderSTT(null);
+    }
+  },
+
+  renderSTT(data) {
+    const status = document.getElementById("sttRuntimeStatus");
+    const btn = document.getElementById("sttInstallBtn");
+    const bar = document.getElementById("sttInstallProgress");
+    const hint = document.getElementById("sttInstallHint");
+    const list = document.getElementById("sttModelList");
+    const where = document.getElementById("sttModelsWhere");
+    if (!status || !list) return;
+    const rt = data?.runtime;
+    if (!rt) {
+      status.textContent = "Could not check speech-to-text on this server.";
+      status.dataset.state = "failed";
+      if (btn) btn.hidden = true;
+      if (bar) bar.hidden = true;
+      return;
+    }
+    // Keep a model the owner just picked (not saved yet) picked when the rows are drawn again.
+    const picked = list.querySelector('input[name="sttModel"]:checked')?.value;
+    this._stt = data;
+    const job = data.job || null;
+
+    // faster-whisper itself
+    status.textContent = rt.summary || "";
+    status.dataset.state = rt.state;
+    if (btn) {
+      btn.hidden = !rt.canInstall || !!job;
+      btn.textContent = rt.state === "failed" ? "Try again" : "Install faster-whisper";
+      btn.disabled = false;
+    }
+    if (bar) {
+      bar.hidden = job?.kind !== "install";
+      bar.value = job?.kind === "install" ? job.percent || 0 : 0;
+    }
+    if (hint) {
+      let text = "";
+      if (rt.state === "installing" && job?.step) text = `${job.step}… ${job.percent || 0}%`;
+      else if (rt.canInstall) {
+        text = `Downloads about ${rt.downloadMB} MB${rt.needsPythonDownload ? " (Python and faster-whisper)" : ""} into ${rt.installFolder}, then the ${data.current} model if none is downloaded yet. Takes a few minutes.`;
+      }
+      hint.textContent = text;
+      hint.hidden = !text;
+    }
+
+    // A row per model
+    const rows = [];
+    for (const m of data.models || []) {
+      const row = document.createElement("div");
+      row.className = `stt-model-row${m.current ? " current" : ""}`;
+      row.dataset.model = m.name;
+
+      const pick = document.createElement("label");
+      pick.className = "stt-model-pick";
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "sttModel";
+      radio.value = m.name;
+      radio.checked = picked ? picked === m.name : !!m.current;
+      const text = document.createElement("span");
+      text.className = "stt-model-text";
+      const name = document.createElement("span");
+      name.className = "stt-model-name";
+      name.textContent = `${m.name} `;
+      const size = document.createElement("span");
+      size.className = "stt-model-size";
+      size.textContent = m.size || `${m.sizeMB} MB`;
+      name.appendChild(size);
+      const desc = document.createElement("span");
+      desc.className = "stt-model-desc";
+      desc.textContent = m.description || "";
+      const state = document.createElement("span");
+      state.className = "stt-model-state";
+      state.dataset.state = m.state;
+      state.textContent = {
+        downloaded: "Downloaded",
+        image: "Comes with Tarsee",
+        cache: "Downloaded (by an earlier version)",
+        missing: "Not downloaded",
+        downloading: `Downloading… ${m.percent || 0}%`,
+        failed: `Download failed: ${m.error || "unknown error"}`,
+      }[m.state] || m.state;
+      text.append(name, desc, state);
+      if (m.where) {
+        const at = document.createElement("span");
+        at.className = "stt-model-where";
+        at.textContent = m.where;
+        text.appendChild(at);
+      }
+      pick.append(radio, text);
+      row.appendChild(pick);
+
+      const actions = document.createElement("div");
+      actions.className = "stt-model-actions";
+      if (!m.downloaded && m.state !== "downloading") {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn btn-sm";
+        b.dataset.sttDownload = m.name;
+        b.textContent = m.state === "failed" ? "Try again" : "Download";
+        b.disabled = !!job;
+        b.setAttribute("aria-label", `Download ${m.name} (${m.size})`);
+        actions.appendChild(b);
+      }
+      if (m.deletable) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn btn-sm btn-ghost";
+        b.dataset.sttDelete = m.name;
+        b.textContent = "Delete";
+        b.setAttribute("aria-label", `Delete ${m.name} (frees ${m.size})`);
+        actions.appendChild(b);
+      }
+      row.appendChild(actions);
+      if (m.state === "downloading") {
+        const p = document.createElement("progress");
+        p.max = 100;
+        p.value = m.percent || 0;
+        p.setAttribute("aria-label", `${m.name} download progress`);
+        row.appendChild(p);
+      }
+      rows.push(row);
+    }
+    list.replaceChildren(...rows);
+    if (where) {
+      where.textContent = data.modelsDir ? `Downloaded models are kept in ${data.modelsDir}.` : "";
+    }
+
+    // When a job ends, say how it went (the page may have been watching it for minutes).
+    const before = this._sttJob;
+    this._sttJob = job;
+    if (job) this._startSttPoll();
+    else {
+      this._stopSttPoll();
+      if (before?.kind === "install") {
+        const anyModel = (data.models || []).some((m) => m.downloaded);
+        if (rt.state === "ready" && anyModel) App.showToast("Speech-to-text is ready.", "success");
+        else if (rt.state === "ready") App.showToast("faster-whisper is installed, but no speech model is downloaded yet: download one below.", "error");
+        else if (rt.state === "failed") App.showToast(rt.error || "Installing faster-whisper failed.", "error");
+      } else if (before?.kind === "model") {
+        const m = (data.models || []).find((x) => x.name === before.model);
+        if (m?.downloaded) App.showToast(`${m.name} is downloaded.`, "success");
+        else if (m?.state === "failed") App.showToast(`Downloading ${m.name} failed: ${m.error}`, "error");
+      }
+    }
+  },
+
+  async installStt() {
+    const btn = document.getElementById("sttInstallBtn");
+    if (btn) btn.disabled = true;
+    try {
+      await API.json("/api/voice/stt/install", { method: "POST" });
+    } catch (err) {
+      App.showToast(err.message || "Could not start installing faster-whisper", "error");
+    }
+    this.loadSTT();
+  },
+
+  async downloadSttModel(name, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      await API.json(`/api/voice/stt/models/${encodeURIComponent(name)}/download`, { method: "POST" });
+    } catch (err) {
+      App.showToast(err.message || `Could not start downloading ${name}`, "error");
+    }
+    this.loadSTT();
+  },
+
+  async deleteSttModel(name, btn) {
+    const m = (this._stt?.models || []).find((x) => x.name === name);
+    const ok = await TarseeDialog.ask({
+      title: `Delete the ${name} speech model?`,
+      text: `It frees ${m?.size || "its space"}. You can download it again any time.${m?.current ? "\n\nIt's the one in use: speech-to-text switches to another downloaded model until it's back." : ""}`,
+      yes: "Delete",
+      no: "Keep it",
+      danger: true,
+    });
+    if (!ok) return;
+    if (btn) btn.disabled = true;
+    try {
+      await API.json(`/api/voice/stt/models/${encodeURIComponent(name)}`, { method: "DELETE" });
+      App.showToast(`Deleted ${name}.`, "success");
+    } catch (err) {
+      App.showToast(err.message || `Could not delete ${name}`, "error");
+    }
+    this.loadSTT();
+  },
+
+  _startSttPoll() {
+    if (this._sttPoll) return;
+    let errors = 0;
+    this._sttPoll = setInterval(async () => {
+      // Only while the section is on screen; the poll stays armed so the progress is current when it's opened again.
+      const section = document.getElementById("sttSection");
+      if (!section || section.offsetParent === null) return;
+      try {
+        // Plain fetch: a background poll should never toast or reload the page.
+        const res = await fetch("/api/voice/stt", { credentials: "same-origin", headers: API.token ? { Authorization: `Bearer ${API.token}` } : {} });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        errors = 0;
+        this.renderSTT(await res.json());
+      } catch {
+        if (++errors >= 5) this._stopSttPoll();
+      }
+    }, 1500);
+  },
+
+  _stopSttPoll() {
+    if (this._sttPoll) clearInterval(this._sttPoll);
+    this._sttPoll = null;
   },
 
   async saveVoiceSettings() {

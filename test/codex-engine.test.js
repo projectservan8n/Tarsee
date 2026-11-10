@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import {
-  run, acquireDeviceGate, refreshStale, sweepTurnProcesses, findRollout, rolloutUsageTotal, pruneCodexRollouts,
+  run, acquireDeviceGate, refreshStale, sweepTurnProcesses, findRollout, rolloutUsageTotal, rolloutLastCallInput, pruneCodexRollouts,
   withTurnContext, instructionsHash, REFRESH_STALE_MS,
 } from "../src/ai/providers/codex.js";
 import { codexConfigGuard } from "../src/ai/engine-env.js";
@@ -270,6 +270,13 @@ describe("a turn's set-up (scripted Codex)", () => {
     const resumed = fakeCodex(cumulative);
     const out = await collect(run(unitOpts(dirs, { Codex: resumed.Codex, store, extra: { sessionHandle: `openai/cx/openai:${thread}` } })));
     assert.deepEqual(of(out, "usage")[0].usage, { input_tokens: 600, cache_read_input_tokens: 900, cache_creation_input_tokens: 0, output_tokens: 20 });
+    // How full the context is: the rollout's last call (its last_token_usage), not the turn's calls summed.
+    fs.appendFileSync(file, JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: total, last_token_usage: { input_tokens: 21000, cached_input_tokens: 20000, output_tokens: 15 } } } }) + "\n");
+    assert.equal(rolloutLastCallInput(file), 21000);
+    const again = fakeCodex(cumulative);
+    const out2 = await collect(run(unitOpts(dirs, { Codex: again.Codex, store, extra: { sessionHandle: `openai/cx/openai:${thread}` } })));
+    assert.equal(of(out2, "usage")[0].usage.context_input_tokens, 21000);
+    assert.equal(rolloutLastCallInput(path.join(dirs.state, "no-such-rollout.jsonl")), null, "no rollout: not guessed");
     // Past the cap (TARSEE_SESSION_JSONL_MAX_MB): fresh, before anything runs.
     fs.appendFileSync(file, "x".repeat(1024 * 1024 + 10) + "\n");
     const capped = fakeCodex(simpleTurn);
@@ -820,7 +827,17 @@ describe("the real SDK starting a fake codex (TARSEE_CODEX_BIN)", () => {
       // The environment: this provider's one credential, the tools' token, the vault's keys, nothing of the server's.
       const env = rec.env;
       for (const name of ["CODEX_API_KEY", "TARSEE_PROVIDER_KEY"]) {
+        if (provider === "local" && name === "TARSEE_PROVIDER_KEY") {
+          // Local AI: the Local AI bridge's per-turn token; the owner's key stays in Tarsee's process (local-bridge.js).
+          assert.match(env[name], /^[A-Za-z0-9_-]{40,}$/, "local: the bridge's token");
+          assert.notEqual(env[name], KEYS.local);
+          continue;
+        }
         assert.equal(env[name], CREDENTIAL[provider] === name ? KEYS[provider] : undefined, `${provider}: ${name}`);
+      }
+      if (provider === "local") {
+        assert.ok(!Object.values(env).some((v) => String(v).includes(KEYS.local)), "local: the owner's key never reaches codex's environment");
+        assert.ok(!line.includes("11434"), "local: nor the owner's address its command line: codex is given the bridge's");
       }
       assert.equal(env.TARSEE_MCP_TOKEN, MCP_TOKEN, provider);
       assert.equal(env.CODEX_HOME, path.join(dirs.state, provider === "chatgpt" ? ".codex-home" : ".codex-home-keys"), provider);
@@ -935,7 +952,7 @@ describe("the real codex binary against the fake server", { skip: CODEX_THERE ? 
     ...extra,
   });
 
-  function turn(provider, { model, store = makeStore(), sessionHandle, signal, maxTurns, prompt = "hello", conv = "conv-real", env = serverEnv(), keys, localUrl, stable = "You are Tarsee, under test." } = {}) {
+  function turn(provider, { model, store = makeStore(), sessionHandle, signal, maxTurns, prompt = "hello", conv = "conv-real", env = serverEnv(), keys, localUrl, localBridge, stable = "You are Tarsee, under test." } = {}) {
     const handles = [];
     const s = keys ? makeStore({}, keys) : store;
     if (localUrl) s.set("ai.local.baseUrl", localUrl);
@@ -950,10 +967,67 @@ describe("the real codex binary against the fake server", { skip: CODEX_THERE ? 
       signal,
       maxTurns,
       turnId: `real-${provider}`,
-      deps: { env, stateDir: dirs.state, workspace: dirs.ws, vaultEnv: async () => ({ ...VAULT }), accountModels: () => [] },
+      deps: { env, stateDir: dirs.state, workspace: dirs.ws, vaultEnv: async () => ({ ...VAULT }), accountModels: () => [], ...(localBridge ? { localBridge } : {}) },
     });
     return { iter, handles, store: s };
   }
+
+  /** The wiring before the Local AI bridge, for comparison: Codex straight to the owner's server, with the owner's key. */
+  const NO_BRIDGE = async () => ({ open: ({ upstream, key }) => ({ url: upstream, token: key || "no-key", release() {} }) });
+
+  // llama.cpp's llama-server (and LM Studio, and Ollama before 0.34) drop the namespace tool Codex 0.167 puts Tarsee's
+  // tools in, so without the bridge the model never sees one; with it, the tool runs. A Qwen3.5-family chat template
+  // refuses Codex's second developer message; the bridge merges them.
+  it("Local AI on a llama-server: Tarsee's tool runs through the bridge, and never without it", async () => {
+    const wants = (body) => toolNames(body).find((n) => /tarsee_datetime$/.test(n));
+    const script = (body) => {
+      if (functionOutputs(body).length) return { text: `The tool said: ${functionOutputs(body).map(outputText).join(" ")}` };
+      const name = wants(body);
+      return name ? { calls: [{ name, arguments: { timezone: "UTC" } }] } : { text: `No tarsee_datetime was offered (${toolNames(body).join(",")}).` };
+    };
+    const llama = await startFakeResponses({ llama: { alias: "qwen3.5-9b" }, handler: (body) => script(body) });
+    try {
+      // Without the bridge: the model sees no Tarsee tool, so none runs.
+      mcp.calls.length = 0;
+      const before = await collect(turn("local", { model: "qwen3.5-9b", localUrl: llama.url, localBridge: NO_BRIDGE }).iter);
+      assert.deepEqual(mcp.calls, [], "no Tarsee tool ran without the bridge");
+      assert.ok(llama.responses()[0].dropped.includes("namespace"), "the server dropped the namespace tool");
+      assert.match(of(before, "text").map((e) => e.content).join(""), /No tarsee_datetime was offered/);
+
+      // Through the bridge: plain function tools reach the server, the call comes back namespaced, and the tool runs.
+      llama.reset();
+      const out = await collect(turn("local", { model: "qwen3.5-9b", localUrl: llama.url }).iter);
+      assert.deepEqual(of(out, "done"), [{ type: "done", stopReason: "end_turn" }], JSON.stringify(of(out, "error")));
+      assert.deepEqual(mcp.calls, [{ tool: "tarsee_datetime", args: { timezone: "UTC" } }]);
+      assert.deepEqual(of(out, "tool_use").map((u) => u.name), ["mcp__tarsee__tarsee_datetime"]);
+      assert.match(of(out, "text").map((e) => e.content).join(""), /09:00 UTC/);
+      const first = llama.responses()[0];
+      assert.deepEqual(first.dropped, [], "nothing for the server to drop");
+      assert.ok(toolNames(first.body).includes("mcp__tarsee__tarsee_datetime"), toolNames(first.body).join(" "));
+      assert.equal(first.headers.authorization, `Bearer ${KEYS.local}`, "the owner's key, added by the bridge");
+      for (const r of llama.responses()) assert.ok(!(r.body.input || []).some((i) => i.namespace), "no namespace in the history the server gets");
+    } finally {
+      await llama.close();
+    }
+  });
+
+  it("Local AI on a strict chat template (Qwen3.5): Codex's two developer messages fail without the bridge, and pass merged through it", async () => {
+    const strict = await startFakeResponses({ llama: { alias: "qwen3.5-9b", strictTemplate: true }, handler: () => ({ text: "hi from a strict template" }) });
+    try {
+      const before = await collect(turn("local", { model: "qwen3.5-9b", localUrl: strict.url, localBridge: NO_BRIDGE }).iter);
+      assert.equal(of(before, "done")[0]?.stopReason, "error");
+      assert.ok(strict.responses().some((r) => r.reply?.llama === "System message must be at the beginning."), "the template refused Codex's own request");
+      strict.reset();
+      const out = await collect(turn("local", { model: "qwen3.5-9b", localUrl: strict.url }).iter);
+      assert.deepEqual(of(out, "done"), [{ type: "done", stopReason: "end_turn" }], JSON.stringify(of(out, "error")));
+      assert.match(of(out, "text").map((e) => e.content).join(""), /hi from a strict template/);
+      const body = strict.responses()[0].body;
+      assert.equal(body.input.filter((i) => i.role === "developer" || i.role === "system").length, 1, "one developer message, first");
+      assert.ok(messageTexts(body, "developer")[0].includes("You are Tarsee, under test."), "Tarsee's instructions are in it");
+    } finally {
+      await strict.close();
+    }
+  });
 
   const assertNoCanary = (requests, label) => {
     const text = JSON.stringify(requests.map((r) => ({ h: r.headers, b: r.body })));
@@ -1227,8 +1301,8 @@ describe("the real codex binary against the fake server", { skip: CODEX_THERE ? 
     const second = fake.responses()[1].body;
     assert.ok(messageTexts(second, "user").some((t) => t.includes("first question")), "the first turn is in the thread");
     assert.ok(messageTexts(second, "assistant").some((t) => t.includes("First answer.")) || JSON.stringify(second.input).includes("First answer."));
-    assert.deepEqual(of(out1, "usage")[0].usage, { input_tokens: 900, cache_read_input_tokens: 100, cache_creation_input_tokens: 0, output_tokens: 10 });
-    assert.deepEqual(of(out2, "usage")[0].usage, { input_tokens: 600, cache_read_input_tokens: 900, cache_creation_input_tokens: 0, output_tokens: 20 });
+    assert.deepEqual(of(out1, "usage")[0].usage, { input_tokens: 900, cache_read_input_tokens: 100, cache_creation_input_tokens: 0, output_tokens: 10, context_input_tokens: 1000 });
+    assert.deepEqual(of(out2, "usage")[0].usage, { input_tokens: 600, cache_read_input_tokens: 900, cache_creation_input_tokens: 0, output_tokens: 20, context_input_tokens: 1500 });
   });
 
   it("Stop after three model calls: their usage is counted (from the rollout), and the next turn counts only its own", async () => {
@@ -1243,11 +1317,11 @@ describe("the real codex binary against the fake server", { skip: CODEX_THERE ? 
     const out1 = await collect(one.iter);
     clearInterval(watcher);
     assert.deepEqual(of(out1, "done"), [{ type: "done", stopReason: "aborted" }]);
-    assert.deepEqual(of(out1, "usage").map((u) => u.usage), [{ input_tokens: 30_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1500 }]);
+    assert.deepEqual(of(out1, "usage").map((u) => u.usage), [{ input_tokens: 30_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1500, context_input_tokens: 10_000 }], "billed: the three calls; the context: the last call alone");
     handler = () => ({ text: "Carried on.", usage: { input_tokens: 40_000, cached_input_tokens: 0, output_tokens: 1600 } });
     const out2 = await collect(turn("openrouter", { store, conv: "conv-stop-usage", sessionHandle: one.handles[0] }).iter);
     assert.deepEqual(of(out2, "done"), [{ type: "done", stopReason: "end_turn" }]);
-    assert.deepEqual(of(out2, "usage").map((u) => u.usage), [{ input_tokens: 40_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1600 }], "nothing counted twice");
+    assert.deepEqual(of(out2, "usage").map((u) => u.usage), [{ input_tokens: 40_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1600, context_input_tokens: 40_000 }], "nothing counted twice");
   });
 
   it("a resumed thread keeps the instructions it started with, so changed ones start fresh; a thread Codex can't find is recoverable", async () => {
@@ -1303,7 +1377,8 @@ describe("the real codex binary against the fake server", { skip: CODEX_THERE ? 
       const after = lines.slice(lines.findLastIndex((l) => l.includes("total_token_usage")) + 1).join("\n");
       assert.ok(Buffer.byteLength(after) > 1024 * 1024, `${Buffer.byteLength(after)} bytes after the last total`);
     };
-    const own = (input, output) => [{ input_tokens: input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: output }];
+    // One call a turn: its prompt is how full the context is.
+    const own = (input, output) => [{ input_tokens: input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: output, context_input_tokens: input }];
 
     handler = once({ text: "First answer.", usage: { input_tokens: 10_000, cached_input_tokens: 0, output_tokens: 100 } });
     const one = turn("openrouter", { store, conv });

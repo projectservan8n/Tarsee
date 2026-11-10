@@ -81,8 +81,31 @@ RUN curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-st
 # runtime of Phonon, the default TTS engine (pinned; an abi3 wheel for x86_64
 # and aarch64 whose only dependency is numpy, about 20 MB). Phonon's model and
 # voices are not baked in: they are downloaded to the data volume on first boot
-# (src/voice/phonon-install.js).
-RUN pip3 install --no-cache-dir --break-system-packages faster-whisper piper-tts ptts==0.4.2
+# (src/voice/phonon-install.js). faster-whisper is pinned to the version
+# Settings > Voice installs where there is no Docker (src/voice/stt-install.js
+# FASTER_WHISPER_VERSION; test/deploy-image.test.js keeps the two the same).
+RUN pip3 install --no-cache-dir --break-system-packages faster-whisper==1.2.1 piper-tts ptts==0.4.2
+
+# The default speech-to-text model (base.en, about 148 MB) is part of the image,
+# so speech-to-text works on the first try after a deploy, with no setup. It
+# lives outside /data on purpose: Railway mounts the volume at /data, which
+# would hide anything the image put there. Models downloaded later from
+# Settings > Voice go to the volume (/data/tarsee/data/whisper-models) and
+# survive redeploys. The download is the same one Settings makes (the official
+# Systran/faster-whisper-base.en on Hugging Face, at a pinned revision, every
+# file checked against its size and published hash), and the check after it
+# loads the model offline and transcribes a second of silence, so a broken
+# model or runtime stops the build. Only the two files the download needs are
+# copied in, so a change elsewhere in src/ doesn't download the model again.
+ENV TARSEE_WHISPER_BUNDLED_DIR=/opt/tarsee/whisper-models
+COPY src/voice/whisper-models.js src/voice/install-common.js /opt/tarsee/stt-build/
+RUN set -e; \
+  cd /opt/tarsee/stt-build; \
+  echo '{"type":"module"}' > package.json; \
+  node whisper-models.js download base.en "$TARSEE_WHISPER_BUNDLED_DIR"; \
+  HF_HUB_OFFLINE=1 python3 -I -c "import sys, numpy; from faster_whisper import WhisperModel; m = WhisperModel(sys.argv[1], device='cpu', compute_type='int8'); s, i = m.transcribe(numpy.zeros(16000, dtype='float32'), language='en'); list(s); print('faster-whisper loads', sys.argv[1])" "$TARSEE_WHISPER_BUNDLED_DIR/base.en"; \
+  cd /; \
+  rm -rf /opt/tarsee/stt-build
 
 ENV NODE_ENV=production
 WORKDIR /app

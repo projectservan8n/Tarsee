@@ -65,18 +65,45 @@ describe("provider guides: what they cover", () => {
     for (const p of G.PROVIDERS) assert.doesNotMatch(allText(p), /Continue with ChatGPT/, `${p.id}: no Continue with ChatGPT`);
   });
 
-  it("Local AI names Ollama and LM Studio with their usual addresses", () => {
+  it("Local AI names Ollama, LM Studio and llama.cpp with their usual addresses (llama.cpp's older 8080 too)", () => {
     const local = G.get("local");
     const text = allText(local);
     assert.match(text, /Ollama/);
     assert.match(text, /LM Studio/);
-    assert.deepEqual(local.presets.map((x) => x.url), ["http://localhost:11434/v1", "http://localhost:1234/v1"]);
+    assert.match(text, /llama\.cpp/);
+    assert.deepEqual(local.presets.map((x) => x.name), ["Ollama", "LM Studio", "llama.cpp"]);
+    assert.deepEqual(local.presets.map((x) => x.url), ["http://localhost:11434/v1", "http://localhost:1234/v1", "http://localhost:9931/v1"]);
+    assert.match(local.presetNote, /8080/, "older builds and the Docker image");
+    assert.match(text, /http:\/\/localhost:8080\/v1/);
+    assert.match(local.pitch, /Ollama, LM Studio or llama\.cpp/);
   });
 
-  it("Local AI says which versions speak the Responses API Tarsee uses (Ollama 0.13.3, LM Studio 0.3.29)", () => {
+  it("Local AI says which versions speak the Responses API Tarsee uses (Ollama 0.13.3, LM Studio 0.3.29, llama.cpp b11768)", () => {
     const text = allText(G.get("local"));
     assert.match(text, /Ollama 0\.13\.3 or newer/);
     assert.match(text, /LM Studio 0\.3\.29 or newer/);
+    assert.match(text, /b11768 \(v0\.8\.0\) or newer/);
+  });
+
+  it("Local AI on llama.cpp: how to install it everywhere, the command with a tagged -hf, --alias and enough -c, and the tips", () => {
+    const local = G.get("local");
+    const steps = local.steps.join("\n");
+    assert.match(steps, /winget install ggml\.llamacpp/, "Windows");
+    assert.match(steps, /win-cuda[\s\S]*cudart/, "an NVIDIA card's two zips");
+    assert.match(steps, /brew install llama\.cpp/, "Mac and Linux");
+    assert.match(steps, /llama-server --version/);
+    const cmd = /<code>(llama-server -hf [^<]+)<\/code>/.exec(steps)?.[1];
+    assert.ok(cmd, "the command to start it");
+    assert.match(cmd, /-hf \S+\/\S+:Q\d\w*/, "always a quant tag after the colon");
+    assert.match(cmd, /--alias \S+/);
+    const ctx = Number(/-c (\d+)/.exec(cmd)?.[1]);
+    assert.ok(ctx >= 32_768, `-c ${ctx} leaves Tarsee room`);
+    assert.match(steps, /at least 32768/);
+    const tips = local.tips.join("\n");
+    assert.match(tips, /--host 0\.0\.0\.0/);
+    assert.match(tips, /--api-key/);
+    assert.match(tips, /after the colon/);
+    assert.match(tips, /not an OpenAI model's name/);
   });
 
   it("the Anthropic key is made in a workspace (a key outside one needs a header Tarsee doesn't send)", () => {

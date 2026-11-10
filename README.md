@@ -50,7 +50,7 @@ Being honest — some of these projects are massive with huge communities. Tarse
 - **You want simplicity** — no build step, no TypeScript, no framework. Just Node.js serving HTML.
 - **You want a real coding agent behind it** — Tarsee runs the vendors' own agents directly (Claude Code and OpenAI's Codex), not a homemade loop, with your choice of AI behind them.
 - **You want it cheap** — Railway runs about $6/mo for one person's everyday use (measured, Sept 2026). A Claude or ChatGPT plan you already pay for adds no per-message cost; DeepSeek or a free OpenRouter model costs cents or nothing.
-- **You want voice + mobile** — PWA with local speech-to-text, hold-to-talk, iOS PIN pad login.
+- **You want voice + mobile** — PWA with hands-free voice calls on local speech-to-text, iOS PIN pad login.
 - **You want memory** — persistent memory across sessions with deep semantic search.
 - **You want browser automation** — stealth Playwright with captcha solving built in.
 
@@ -103,7 +103,7 @@ Tarsee runs on any of these seven, and you can connect several at once. Pick the
 | **OpenAI API key** | `OPENAI_API_KEY` from the OpenAI Platform | Pay per use, billed by OpenAI | Give the project a monthly budget with a hard limit. Replies arrive a message at a time |
 | **OpenRouter** | `OPENROUTER_API_KEY` from openrouter.ai | Pay per use at each model's price; models marked Free cost nothing | Hundreds of models with one key. Claude and OpenAI models work straight away; any other needs one click on **Verify** first. Give the key a credit limit |
 | **DeepSeek** | `DEEPSEEK_API_KEY` from platform.deepseek.com | Pay per use from a balance you top up: the cheapest per message | DeepSeek Flash for everyday use; DeepSeek Pro thinks harder but can't see pictures |
-| **Local AI** | `TARSEE_LOCAL_AI_URL`: the address of your Ollama or LM Studio server (and `TARSEE_LOCAL_AI_KEY`, only if it asks for one) | Free: it runs on your own hardware | Verify a model before you rely on it: small models use tools poorly. On Railway, run it as another service on the private network |
+| **Local AI** | `TARSEE_LOCAL_AI_URL`: the address of your Ollama, LM Studio or llama.cpp server (and `TARSEE_LOCAL_AI_KEY`, only if it asks for one) | Free: it runs on your own hardware | Verify a model before you rely on it: small models use tools poorly. On Railway, run it as another service on the private network |
 
 Each one's full setup, the same steps the app shows, is in **[docs/providers.md](docs/providers.md)**.
 
@@ -131,8 +131,8 @@ Set `TARSEE_AI_PROVIDER` to `claude`, `anthropic`, `chatgpt`, `openai`, `openrou
 ## What You Get
 
 ### Chat Everywhere
-- **Web UI** — A calm chat in the style of claude.ai: every chat has its own address (`/chat/<id>`, `/chat/new`) with Back/Forward and shareable links, a plain sidebar grouped by where each chat lives (Web, Telegram, Discord, WhatsApp, Email, Slack, and Background for crons and the heartbeat while they run), search, and a rename / fresh session / delete menu on each chat. Markdown, code blocks, tables, file attachments, image paste, drag-and-drop, multi-file upload. PWA — save to homescreen on iOS/Android.
-- **Tool steps that stay out of the way** — while the agent works, one quiet line in the answer's place ("Working · 3 steps · Reading README.md · 84.2k tokens · 41 tk/s", with Stop); once it answers, the steps fold into "Used 12 tools" above the reply, each opening to its input and output. The line opens even before the first step: to a summary of what the model is thinking (for messages sent from the dashboard; it costs the answer about 3 seconds, so Telegram, Discord, email and voice replies do without), an API error it is retrying, or compacting.
+- **Web UI** — A calm chat in the style of claude.ai: every chat has its own address (`/chat/<id>`, `/chat/new`) with Back/Forward and shareable links, a plain sidebar grouped by where each chat lives (Web, Telegram, Discord, WhatsApp, Email, Slack, Calls, and Background for crons and the heartbeat while they run), search, and a rename / fresh session / delete menu on each chat. Markdown, code blocks, tables, file attachments, image paste, drag-and-drop, multi-file upload. PWA — save to homescreen on iOS/Android.
+- **Tool steps that stay out of the way** — while the agent works, one quiet line in the answer's place ("Working · 3 steps · Reading README.md · 84.2k tokens · 41 tk/s", with Stop); once it answers, the steps fold into "Used 12 tools" above the reply, each opening to its input and output. The line opens even before the first step: to a summary of what the model is thinking (for messages sent from the dashboard; it costs the answer about 3 seconds, so Telegram, Discord, email and voice-call replies do without), an API error it is retrying, or compacting.
 - **Queued, not cancelled** — a message sent while a reply is running shows as "Queued · after the reply above" (no timer) and becomes the working line when its turn begins. Its own Stop takes just that message out of the queue.
 - **Problems in plain words** — instead of a "401 / Failed to authenticate" error arriving as the reply, the chat says what happened and what to do, the same on every channel: the Claude sign-in expired (run `claude auth login` in the Terminal, the `>_` button, on phones too), the ChatGPT sign-in expired (sign in again from Settings > AI), the balance is empty or a key's limit is reached (with where to top up).
 - **Telegram** — Text, photos, PDFs, voice messages, video notes. Group @mention support, inline buttons, forwarded message detection.
@@ -146,16 +146,21 @@ Set `TARSEE_AI_PROVIDER` to `claude`, `anthropic`, `chatgpt`, `openai`, `openrou
 - **Web Push notifications** — iOS/Android/desktop push via VAPID when cron jobs finish, webhooks fire, or the agent proactively pings you via the `tarsee_push_notification` tool. Opt-in from Settings > Appearance.
 - **All channels share** the same AI, memory, and tools.
 
-### Voice Mode
-- **Hold-to-talk or tap-to-toggle** — full-screen conversational UI with waveform visualization.
-- **Live tool status** — shows "Reading file...", "Running command...", "Calculating..." instead of generic "Thinking..."
-- **Spacebar shortcut** — hold space to talk, Space+C to cancel.
-- **Drag to cancel** — slide away from the orb or mic button to discard recording.
-- **Local speech-to-text** — faster-whisper (CTranslate2, 4x faster than OpenAI whisper). Configurable models: tiny.en / base.en / small.en. No API key. Runs on CPU.
+### Voice Calls
+- **Call your assistant** — the phone button at the top says "Call <name>" (the name from Settings > Identity). Talk hands-free: it hears when you start and stop, answers out loud, and keeps listening. Works on a phone (it asks for the microphone, and keeps the screen on during the call) and on a computer.
+- **A real turn every time** — each thing you say goes to the "Calls with <name>" chat as an ordinary message, so it is answered by that chat's own AI and model (or your default AI), with every tool, and the whole call is there to read afterwards. Say "think hard" or "take your time" and that one question goes to the AI's top model, when it has one. On an AI that sends a message at a time (ChatGPT, OpenAI, Local AI), each message is spoken as it comes.
+- **Talk over it** to interrupt; say **"stop"** to stop what it's doing (the chat's Stop). Mute, a clock, and what it's working on, in plain words.
+- **Put the call away** and keep going: a bar over the message box has the clock, Mute, Show and End, so you can read and type while you talk.
+- **Hang up while it works** — the answer goes to the channel you choose in Settings > Voice > Calls ("Send the answer to": your connected Telegram, Discord, Slack or WhatsApp). Off by default: then it stays in the call's chat.
+- **Your own speech stack, nothing paid unless you chose it** — it hears you through the speech-to-text in Settings > Voice and speaks with the voice set there. If speech-to-text isn't set up, the call says so and takes you to Settings > Voice.
+- **Dictation** — the microphone in the message box turns what you say into text in the box, where you can check it and press send (it never sends by itself). Slide left to cancel a recording. If speech-to-text isn't set up or fails, a note above the box says why, with a button to Settings > Voice.
+- **Local speech-to-text** — faster-whisper (CTranslate2, 4x faster than OpenAI whisper). Models: tiny.en / base.en / small.en, and tiny / base / small for many languages. No API key. Runs on CPU, in one warm worker that keeps the model loaded.
+- **Works out of the box** — the Docker image ships faster-whisper and the base.en model (outside the `/data` volume, so it is never hidden), and checks at build time that it loads. Other models download from Settings > Voice > Speech-to-text, each with a progress bar and a Delete button, from the official Systran models on Hugging Face (pinned revisions, every file's size and hash checked), onto the volume, so they survive redeploys.
+- **One-click install without Docker** — on Windows, macOS or Linux, Settings > Voice > Speech-to-text has an **Install faster-whisper** button: it uses a Python 3.9+ found on the computer, or downloads a standalone Python ([python-build-standalone](https://github.com/astral-sh/python-build-standalone), pinned, sha256-checked) into Tarsee's state folder, then installs the pinned faster-whisper from pypi.org into its own folder. Phonon's install uses the same Python, so Phonon works on Windows too.
 - **Local text-to-speech by default** — [Phonon](https://huggingface.co/gradium/phonon-31m-en), Gradium's open 31M model, runs on the server's CPU through one warm worker: no API key, no per-character cost, 25 English voices (Toby by default) and a speed setting. Peso amounts ("₱2,500", "PHP 2,500") are read as pesos; reading a bare "P2,500" that way is an opt-in setting.
 - **Downloads itself** — the model and voices (about 70 MB) go to the data volume, not the image. On first boot Tarsee fetches them in the background from pinned Hugging Face revisions, checking the weights' sha256; Settings > Voice shows the progress and has an **Install Phonon** button (and Retry if it fails). Turn the automatic download off with `TARSEE_PHONON_AUTO_INSTALL=0`, or run `node src/voice/phonon-install.js` from a terminal.
 - **Free fallback** — Microsoft Edge TTS (19 voices, 3 retries, markdown stripping, no API key) speaks while Phonon downloads, and for any sentence Phonon fails; after three failures in a row Phonon is skipped for five minutes. Tarsee never falls back to a paid engine on its own: ElevenLabs and Piper are used only when you pick them (or Auto) in Settings > Voice. An install that already has an ElevenLabs key but never saved an engine keeps ElevenLabs; pick Phonon in Settings > Voice to switch.
-- **Smart TTS** — tables and code shown visually, spoken response is a clean conversational summary.
+- **Speech that sounds like speech** — on a call the AI is told every word is spoken, and anything chat-shaped that slips through (lists, links, code, symbols) becomes plain sentences before the voice reads it; the chat keeps the full answer.
 
 - **Multilingual speech-to-text** — the bare `tiny`/`base`/`small` Whisper checkpoints auto-detect the spoken language; the `.en` variants are English-only and will return garbage for other languages. Switch in Settings > Voice.
 
@@ -259,7 +264,7 @@ Tarsee Server (Railway)
   |   schedule_task, remember, create_canvas, calculator, browser,
   |   web_search, pdf_read, push_notification, send_email_thread, etc.
   |
-  +-- Voice:      faster-whisper STT + Phonon TTS (Edge TTS fallback)
+  +-- Voice:      calls in the browser: faster-whisper STT + Phonon TTS (Edge TTS fallback)
   +-- Browser:    Playwright (stealth) + captcha solving
   +-- Workspace:  SOUL.md, MEMORY.md, USER.md, CHECKPOINT.md
   +-- SQLite:     conversations, settings, vault, bot_memory, push_subs
@@ -391,7 +396,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | **Channels** | Telegram, Discord, WhatsApp (WHAPI), Slack (Socket Mode, native streaming), Email (IMAP + SMTP with provider presets, mention keyword, reply-all marker, allowlist) |
 | **Appearance** | Theme switcher (4 built-in + plugin themes) + Web Push enable/disable/test |
 | **Automation** | Scheduled tasks (each one's state, who made it, its whole prompt, Switch on / Pause), HEARTBEAT.md and BOOT.md (a change made outside Settings waits for your OK: **Let it run** / **Run at each restart**), webhooks, retention settings |
-| **Voice** | TTS engine (Phonon by default, Edge TTS, ElevenLabs, Piper, Auto), Install Phonon button with download progress, Phonon voice, speed and bare-"P" peso option, STT model, voice selection. Pick `tiny.en`/`base.en`/`small.en` for English-only, or `tiny`/`base`/`small` for **multilingual** transcription with language auto-detect (needed for Tagalog, Taglish and other non-English voice notes — the `.en` checkpoints cannot transcribe them at all). |
+| **Voice** | Calls: where the answer goes if you hang up while it's working (Off, or a connected channel). TTS engine (Phonon by default, Edge TTS, ElevenLabs, Piper, Auto), Install Phonon button with download progress, Phonon voice, speed and bare-"P" peso option, STT model, voice selection. Pick `tiny.en`/`base.en`/`small.en` for English-only, or `tiny`/`base`/`small` for **multilingual** transcription with language auto-detect (needed for Tagalog, Taglish and other non-English voice notes — the `.en` checkpoints cannot transcribe them at all). |
 | **Skills** | Create, edit, delete instruction packs (includes preinstalled `/ultrareview` + `/fewer-permission-prompts`) |
 | **Memories** | View and manage stored memories |
 | **Security** | Security audit, tool permissions, captcha solver config |
@@ -416,7 +421,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `OPENAI_API_KEY` | No | — | OpenAI API key, for **OpenAI API key**, billed per use. Voice uses it only if you pick Whisper API in Settings > Voice. |
 | `OPENROUTER_API_KEY` | No | — | OpenRouter key (`sk-or-v1-…`), for hundreds of models with one key. Give the key a credit limit. |
 | `DEEPSEEK_API_KEY` | No | — | DeepSeek API key, the cheapest per message, spent from a balance you top up. |
-| `TARSEE_LOCAL_AI_URL` | No | — | Local AI: your Ollama or LM Studio server, e.g. `http://localhost:11434/v1`, or on Railway `http://ollama.railway.internal:11434/v1`. |
+| `TARSEE_LOCAL_AI_URL` | No | — | Local AI: your Ollama, LM Studio or llama.cpp server, e.g. `http://localhost:11434/v1` (Ollama), `http://localhost:9931/v1` (llama.cpp; 8080 for older builds and its Docker image), or on Railway `http://ollama.railway.internal:11434/v1`. |
 | `TARSEE_LOCAL_AI_KEY` | No | — | Local AI's key, only if your server asks for one. Only ever sent to `TARSEE_LOCAL_AI_URL`. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | No | — | The Claude plan without the Terminal: the token `claude setup-token` prints (it lasts a year). Only the Claude plan ever sees it. |
 | `CLAUDE_DEFAULT_MODEL` | No | `sonnet` | The Claude plan's and Anthropic key's default model when Settings has none. Defaults to the **`sonnet` alias**, which Tarsee resolves to the newest Sonnet in Claude Code's catalog before each turn. That catalog comes with the Claude Code version the image pins (`CLAUDE_CODE_VERSION` in the Dockerfile), so a model released later arrives when that version is bumped and redeployed, or on every boot with `TARSEE_AUTO_UPDATE_CLI=1`; the list Claude Code saves for your account when you use `claude` in the web terminal counts too, when it is newer. Set `opus` for the most capable default, a pinned id (e.g. `claude-opus-5`) if you need a frozen model, or `haiku` for a cheaper one. |
@@ -427,7 +432,9 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `TARSEE_AUTO_UPDATE_CLI` | No | off | Set `1` to install the latest Claude Code CLI on every boot (adds up to ~60s to each boot). Chat turns keep running the Agent SDK's own copy, so the Terminal's `claude` and the turns then differ (the boot log says so). Off, the image keeps the version pinned in the Dockerfile (`CLAUDE_CODE_VERSION`). |
 | `TARSEE_PHONON_AUTO_INSTALL` | No | on | Set `0` to stop Tarsee downloading Phonon's model in the background on boot when Phonon is the voice engine. The Install Phonon button in Settings > Voice still works. |
 | `TARSEE_PHONON_DIR` | No | `<data dir>/tts/phonon` | Where Phonon's model, voices and (if needed) Python venv live. On Railway that is `/data/tarsee/data/tts/phonon`, on the volume. |
-| `TARSEE_PHONON_PYTHON` | No | `python3` | Python interpreter with the `ptts` package for Phonon's worker. Without it Tarsee uses `python3`, or a private venv it creates under `TARSEE_PHONON_DIR` when `python3` lacks `ptts`. |
+| `TARSEE_PHONON_PYTHON` | No | `python3` | Python interpreter with the `ptts` package for Phonon's worker. Without it Tarsee uses `python3`, or a private venv it creates under `TARSEE_PHONON_DIR` when `python3` lacks `ptts` (made from the same Python as speech-to-text: one found on the computer, or Tarsee's own). |
+| `TARSEE_STT_PYTHON` | No | — | A Python with faster-whisper that you manage yourself, for speech-to-text. Without it Tarsee uses its own (Settings > Voice > Speech-to-text > Install faster-whisper, in `<state dir>/python`), or a Python on the computer that has faster-whisper (the Docker image's `python3`). |
+| `TARSEE_WHISPER_BUNDLED_DIR` | No | set by the Docker image | Where the image keeps the speech-to-text models it ships (`/opt/tarsee/whisper-models`, outside the volume). Downloaded models go to `<data dir>/whisper-models` (on Railway, `/data/tarsee/data/whisper-models`, on the volume). |
 | `TARSEE_PHONON_THREADS` | No | up to 4 | CPU threads for Phonon's worker. |
 | `TARSEE_CHANNEL_IDLE_ABORT_MS` | No | `1200000` (20 min) | Abandon a turn after this long with no stream event. Keep finite. |
 | `TARSEE_COMPACT_WINDOW` | No | `180000` | Context size (tokens) at which Claude Code summarizes the older part of a chat and carries on. Every model call re-reads the whole context, so a smaller window means fewer cached tokens per call (measured: about a quarter fewer than at 300k). Accepts `250000`, `150k`, or `off` for the CLI's own (the model's full window); the CLI holds it to 100k–1M. A `CLAUDE_CODE_AUTO_COMPACT_WINDOW` you set yourself is kept when this is unset. The context meter and Token Health measure against this window. |
@@ -518,13 +525,17 @@ src/
     whatsapp.js, slack.js      # (slack-app-manifest.yml: the Slack app)
     websocket.js               # Web UI real-time + cross-device sync
   voice/
-    stt-handler.js             # faster-whisper STT
+    stt-handler.js             # Speech-to-text: faster-whisper worker (stt_worker.py), or the OpenAI Whisper API
+    stt-install.js             # Settings > Voice > Speech-to-text: status, Install faster-whisper, model downloads
+    whisper-models.js          # The pinned Systran models (sizes, hashes); downloads and deletes them
+    python-runtime.js          # Finds a Python, or downloads a standalone one, for faster-whisper and Phonon
     phonon-engine.js           # Default TTS: local Phonon model, warm Python worker
     phonon-install.js          # Downloads Phonon (pinned, sha256-checked) to the volume
     engine-registry.js         # Picks the engine; Edge TTS backs Phonon up
     edge-tts-engine.js         # Free TTS (19 voices), the fallback
   routes/
     chat.js                    # Chat API + SSE streaming
+    voice-call.js              # Voice calls: the call's chat, the hang-up handoff (lib/voice-call.js)
     ai.js                      # Settings > AI: cards, keys, Test, Verify, sign-in
     external-api.js            # REST API (/api/v1/)
     analytics.js               # Usage page API (lib/token-usage.js reads the transcripts)

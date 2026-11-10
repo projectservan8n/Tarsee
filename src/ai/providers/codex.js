@@ -14,6 +14,9 @@
  * Before anything starts:
  *   - the options (providers/codex-options.js): this provider's credential only, hosts from engine-env hostFor(), the
  *     tools' grant (opts.mcpGrant from the turn layer, else one made here and revoked when the turn ends)
+ *   - Local AI: a turn of its own on the Local AI bridge (../local-bridge.js), opened with the owner's address and key
+ *     and released when the turn ends. Codex talks to the bridge's address with the bridge's token; the bridge passes
+ *     each request on to the owner's server with the owner's key, Tarsee's tools as plain function tools.
  *   - R1: the home exists (mode 0700) and a key home holds no sign-in file; R5's Codex counterpart:
  *     codexConfigGuard() on <home>/config.toml, <home>/.env (refused whatever it holds: Codex loads it into its own
  *     environment) and <workspace>/.codex/config.toml, the only files Codex loads with the project root search off
@@ -58,7 +61,7 @@ import { WORKSPACE_FILE_MAX_BYTES, truncateContent } from "../../lib/workspace-f
 import { CODEX_IMAGE_DIR } from "../../lib/turn-leftovers.js";
 import { catalogModels, contextTokensFor, getProvider, normalizeProviderId } from "../provider-registry.js";
 import {
-  CODEX, CredentialError, baseEnv, codexConfigFilesFor, codexConfigGuard, ensureHome, homeIsolationRefusal,
+  CODEX, CredentialError, baseEnv, checkedProviderKey, codexConfigFilesFor, codexConfigGuard, ensureHome, homeIsolationRefusal, hostFor,
 } from "../engine-env.js";
 import { classifyEngineError } from "../engine-errors.js";
 import { format as formatHandle, parse as parseHandle, sessionFor } from "../session-handle.js";
@@ -109,6 +112,8 @@ const DEFAULT_DEPS = {
   accountModels: () => catalogModels("chatgpt-models"),
   /** Kill what a stopped turn started (see sweepTurnProcesses). */
   sweep: (mark) => sweepTurnProcesses(mark),
+  /** The Local AI bridge (local-bridge.js): {open({upstream, key}) -> {url, token, release()}}. */
+  localBridge: async () => (await import("../local-bridge.js")).localBridge(),
 };
 
 async function codexClass(deps) {
@@ -290,7 +295,35 @@ function lineTotal(line) {
  *   null       it can't tell: the file couldn't be read, or any total is further back than maxBytes from the end (the
  *              rollout size cap, so the read stays bounded)
  */
-export function rolloutUsageTotal(file, { fsImpl = fs, maxBytes = ROLLOUT_CAP_MB * 1024 * 1024, chunkBytes = ROLLOUT_CHUNK_BYTES } = {}) {
+export function rolloutUsageTotal(file, opts = {}) {
+  return lastRolloutValue(file, lineTotal, opts);
+}
+
+const LAST_KEY = Buffer.from("last_token_usage");
+
+/** The prompt of the call a rollout line's token_count records (its last_token_usage.input_tokens), or null. */
+function lineLastCallInput(line) {
+  if (!line.length || line.indexOf(LAST_KEY) < 0) return null;
+  try {
+    const n = Number(JSON.parse(line.toString("utf8"))?.payload?.info?.last_token_usage?.input_tokens);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null; // a line still being written
+  }
+}
+
+/**
+ * How full the thread's context was at its last model call: that call's prompt (Codex's input_tokens counts the
+ * cached part too), from the rollout's last token_count. The turn's usage sums every call, so a turn of tool steps
+ * would read as several times the prompt. null when it can't tell (no rollout, no such line within maxBytes).
+ */
+export function rolloutLastCallInput(file, opts = {}) {
+  const n = lastRolloutValue(file, lineLastCallInput, opts);
+  return typeof n === "number" ? n : null;
+}
+
+/** The last rollout line's value that pick() finds, read back from the end (rolloutUsageTotal's rules and answers). */
+function lastRolloutValue(file, pick, { fsImpl = fs, maxBytes = ROLLOUT_CAP_MB * 1024 * 1024, chunkBytes = ROLLOUT_CHUNK_BYTES } = {}) {
   let fd;
   try {
     fd = fsImpl.openSync(file, "r");
@@ -309,7 +342,7 @@ export function rolloutUsageTotal(file, { fsImpl = fs, maxBytes = ROLLOUT_CAP_MB
       }
       let stop = buf.length;
       for (let nl = buf.lastIndexOf(0x0a, stop - 1); nl >= 0; nl = nl > 0 ? buf.lastIndexOf(0x0a, nl - 1) : -1) {
-        const total = lineTotal(rest.length ? Buffer.concat([buf.subarray(nl + 1, stop), ...rest]) : buf.subarray(nl + 1, stop));
+        const total = pick(rest.length ? Buffer.concat([buf.subarray(nl + 1, stop), ...rest]) : buf.subarray(nl + 1, stop));
         if (total) return total;
         rest = [];
         stop = nl;
@@ -319,7 +352,7 @@ export function rolloutUsageTotal(file, { fsImpl = fs, maxBytes = ROLLOUT_CAP_MB
     }
     // Short of the file's start, the line the read stopped in is cut, and a total may be further back still.
     if (floor > 0) return null;
-    return lineTotal(Buffer.concat(rest)) || "none";
+    return pick(Buffer.concat(rest)) || "none";
   } catch {
     return null;
   } finally {
@@ -500,6 +533,7 @@ export async function* run(opts = {}) {
 
   let grant = null;
   let ownGrant = false;
+  let bridgeTurn = null;
   let images = null;
   let releaseGate = () => {};
   let ac = null;
@@ -534,10 +568,23 @@ export async function* run(opts = {}) {
     let o;
     let codexPath;
     try {
+      // Local AI goes through the bridge (local-bridge.js): the owner's address and key are checked here and handed to
+      // it, and Codex gets only this turn's bridge address and token. The test seam (TARSEE_TEST_BASE_URL_LOCAL) is
+      // the bridge's upstream.
+      if (providerId === "local") {
+        const upstream = hostFor(entry, CODEX, { env, localUrl });
+        const ownerKey = checkedProviderKey(entry, keyFor(entry, store, env));
+        try {
+          bridgeTurn = (await deps.localBridge()).open({ upstream, key: ownerKey });
+        } catch (err) {
+          throw new CredentialError("needs-setup", `Tarsee's Local AI bridge couldn't start: ${err?.message || err}`, providerId);
+        }
+      }
       o = buildCodexOptions({ providerId, model, effort }, {
         env,
         vaultEnv: await deps.vaultEnv(env, toolCtx),
-        key: keyFor(entry, store, env),
+        key: providerId === "local" ? null : keyFor(entry, store, env),
+        localBridge: bridgeTurn ? { url: bridgeTurn.url, token: bridgeTurn.token } : undefined,
         stateDir,
         home: deps.home,
         workspace,
@@ -632,6 +679,7 @@ export async function* run(opts = {}) {
 
     let thrown = null;
     let held = null;
+    let heldUsage = null;
     let turnStarted = false;
     try {
       const { events } = await thread.runStreamed(input, { signal: ac.signal });
@@ -661,6 +709,8 @@ export async function* run(opts = {}) {
         }
         for (const out of mapCodexEvent(ev, state)) {
           if (out.type === "done") held = out;
+          // turn.completed's usage waits with its done: by then codex has written the last call to the rollout.
+          else if (out.type === "usage") heldUsage = out;
           else yield out;
         }
         if (held) continue;
@@ -678,8 +728,16 @@ export async function* run(opts = {}) {
     // A turn that ended any way but turn.completed: what it spent comes from the rollout, before the done (the turn
     // layer stops reading at the done). A held done has waited for codex to finish writing it.
     const spent = () => rolloutUsageEvents(state, o.home, state.threadId || raw, { maxBytes: capBytes });
+    // How full the context is: the last call's prompt from the rollout (the usage sums every call of the turn).
+    const withContext = (events) => {
+      if (!events.some((e) => e.type === "usage")) return events;
+      const file = findRollout(o.home, state.threadId || raw);
+      const n = file ? rolloutLastCallInput(file, { maxBytes: capBytes }) : null;
+      return n ? events.map((e) => (e.type === "usage" ? { ...e, usage: { ...e.usage, context_input_tokens: n } } : e)) : events;
+    };
+    if (heldUsage) yield* withContext([heldUsage]);
     if (held) {
-      if (held.stopReason !== "end_turn") yield* spent();
+      if (held.stopReason !== "end_turn") yield* withContext(spent());
       yield held;
       return;
     }
@@ -691,7 +749,7 @@ export async function* run(opts = {}) {
             : finishCodexEvents(state, { error: thrown });
       const done = end.pop();
       yield* end;
-      yield* spent();
+      yield* withContext(spent());
       if (done) yield done;
     }
   } finally {
@@ -711,6 +769,8 @@ export async function* run(opts = {}) {
       } catch (err) { console.warn(`[codex] stopping the turn's processes failed: ${err?.message || err}`); }
     }
     images?.cleanup?.();
+    // The turn's bridge address stops working (any request still on its way to the owner's server is stopped).
+    try { bridgeTurn?.release?.(); } catch { /* it expires on its own */ }
     if (ownGrant) { try { await grant?.revoke?.(); } catch { /* the grant expires on its own */ } }
   }
 }

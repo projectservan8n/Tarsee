@@ -46,6 +46,9 @@ const PREFERRED_FALLBACK = { phonon: "edge-tts" };
 // Phonon (the default) never falls through to ElevenLabs.
 const AFTER_FALLBACK = { phonon: ["piper"] };
 
+// Engines that cost money: used when picked (or with "auto"), never as a stand-in for another engine that can't start.
+const PAID = new Set(["elevenlabs"]);
+
 /** Edge TTS voice ids look like "en-US-AndrewMultilingualNeural" or "fil-PH-AngeloNeural". */
 const EDGE_VOICE = /^[a-z]{2,3}-[A-Z]{2}(?:-[A-Za-z]+)?-\w+Neural$/;
 
@@ -77,7 +80,8 @@ let initSeq = 0;
  *
  * voice.engine unset or "phonon": Phonon (the default), with Edge TTS speaking
  * whenever Phonon is not installed yet or fails. Another named engine: that
- * engine, then the auto order. "auto": Phonon when installed, then Piper,
+ * engine, then the free ones of the auto order (ElevenLabs costs money, so it
+ * speaks only when picked or with "auto"). "auto": Phonon when installed, then Piper,
  * ElevenLabs, Edge TTS. Nothing available: the stub (voice disabled).
  *
  * opts.loaders replaces how named engines are built (tests):
@@ -115,7 +119,7 @@ export async function initTTSEngine(settingsStore, opts = {}) {
       }
     }
     console.warn(`[voice] Preferred engine "${enginePref}" unavailable, falling back`);
-    rest = (AFTER_FALLBACK[enginePref] || AUTO_ORDER).filter((n) => n !== enginePref && n !== next);
+    rest = (AFTER_FALLBACK[enginePref] || AUTO_ORDER).filter((n) => n !== enginePref && n !== next && !PAID.has(n));
   }
 
   for (const name of rest) {

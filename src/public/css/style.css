@@ -1453,6 +1453,79 @@ label.checkbox-label {
   margin-bottom: var(--space-3);
 }
 
+/* Settings → Voice → Speech-to-text: faster-whisper's status, and a row per model with its buttons. */
+#sttSection [hidden] { display: none !important; }   /* .btn's inline-flex would show a hidden button */
+.stt-runtime {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.stt-runtime [data-state="ready"] { color: var(--success); }
+.stt-runtime [data-state="failed"] { color: var(--danger); }
+.stt-progress {
+  width: 100%;
+  max-width: 400px;
+  accent-color: var(--accent);
+}
+.stt-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+}
+.stt-model-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: var(--space-px) solid var(--border);
+  border-radius: var(--radius-md);
+}
+.stt-model-row.current { border-color: var(--accent); }
+/* (.form-group label is a block, and .form-group input a full-width box: undone for the row and its radio.) */
+.form-group label.stt-model-pick,
+.stt-model-pick {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex: 1 1 260px;
+  min-width: 0;
+  margin-bottom: 0;
+  font-weight: 400;
+  cursor: pointer;
+}
+.form-group .stt-model-pick input[type="radio"] {
+  width: auto;
+  height: auto;
+  padding: 0;
+  margin: 3px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.stt-model-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stt-model-name { font-weight: 600; font-size: var(--text-sm); color: var(--text); }
+.stt-model-size { font-weight: 400; color: var(--text-muted); }
+.stt-model-desc { font-size: var(--text-xs); color: var(--text-muted); }
+.stt-model-state { font-size: var(--text-xs); color: var(--text-muted); }
+.stt-model-state[data-state="downloaded"],
+.stt-model-state[data-state="image"],
+.stt-model-state[data-state="cache"] { color: var(--success); }
+.stt-model-state[data-state="failed"] { color: var(--danger); }
+.stt-model-where {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.stt-model-actions { display: flex; gap: var(--space-2); flex: none; }
+.stt-model-row progress { width: 100%; accent-color: var(--accent); }
+
 /* Settings → Channels: a row of links with a status dot each, then a section per platform with its steps. */
 .channel-jump {
   display: flex;
@@ -2546,16 +2619,6 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
   border-radius: inherit;
 }
 
-/* Voice active label (used in voice panel) */
-.voice-active-label {
-  position: absolute;
-  top: var(--space-3);
-  left: var(--space-4);
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-  opacity: 0.8;
-}
-
 
 /* ==========================================================================
    24. PIN Pad — iOS Lock Screen Style (mobile only)
@@ -2893,13 +2956,6 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
   .settings-content {
     padding: var(--space-4) var(--space-6) var(--space-8);
   }
-
-  /* Voice panel sized between mobile and full desktop so the orb doesn't
-     dominate iPad portrait. */
-  .voice-orb {
-    width: 112px;
-    height: 112px;
-  }
 }
 
 /* ==========================================================================
@@ -3107,11 +3163,6 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
   pointer-events: none;
 }
 
-/* ---- Voice orb listening glow (was plain) ---- */
-.voice-orb.listening {
-  filter: drop-shadow(0 0 12px var(--accent-glow));
-}
-
 /* ---- Context bar — warn color at >80% ---- */
 .context-bar-fill.warn { background: var(--warning); }
 .context-bar-fill.danger { background: var(--danger); }
@@ -3138,7 +3189,7 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
 .console-panel,
 .sidebar,
 .settings-content,
-.voice-conversation {
+.call-transcript {
   overscroll-behavior: contain;
 }
 html, body {
@@ -3228,12 +3279,6 @@ html.keyboard-open .chat-area {
   box-shadow: var(--glass-highlight), var(--shadow-md);
 }
 
-/* Voice orb: subtle specular rim so the "listening/speaking" pulse reads
-   as light on glass rather than a flat color blob. */
-.voice-orb {
-  box-shadow: var(--glass-highlight-strong);
-}
-
 /* Primary button: same light-on-edge treatment — separates it from ghost. */
 .btn-primary {
   box-shadow: var(--glass-highlight), var(--shadow-sm);
@@ -3303,17 +3348,13 @@ html.keyboard-open .chat-area {
     }
   }
 
-  /* Modals, lightbox, voice panel get softer rounded corners on small
+  /* Modals and the lightbox get softer rounded corners on small
      screens — not full glass (text on these needs max contrast) but
      concentric with the floating composer. */
   .delete-modal,
   .kbd-overlay-panel {
     border-radius: var(--radius-2xl);
     box-shadow: var(--glass-highlight), var(--shadow-xl);
-  }
-
-  .voice-panel {
-    border-radius: 0;  /* full-screen, but content inside gets soft radii */
   }
 
   .lightbox-img,

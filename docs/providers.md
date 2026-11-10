@@ -16,7 +16,7 @@ You never choose an "engine". Tarsee runs Claude Code for some AIs and OpenAI's 
 | **DeepSeek** | A DeepSeek API key and a small top-up | Pay per use from your prepaid balance: the cheapest of these | Claude Code, through DeepSeek's own Claude-compatible address | Word by word | DeepSeek Pro can't see pictures; PDFs are read as text |
 | **Local AI** | A machine you run with Ollama or LM Studio, that Tarsee can reach | Free: it runs on your own hardware | Codex | A message at a time | The model you pick on its card works at once; verify any other before a chat can switch to it. Small models use tools poorly |
 
-Every AI gets the same things: all of Tarsee's tools, every channel (web, Telegram, Discord, WhatsApp, Slack, email, voice), scheduled jobs, the live view, Stop and the queue, memory, and the Usage page.
+Every AI gets the same things: all of Tarsee's tools, every channel (web, Telegram, Discord, WhatsApp, Slack, email, voice calls), scheduled jobs, the live view, Stop and the queue, memory, and the Usage page.
 
 ## Plan or API key?
 
@@ -165,23 +165,38 @@ DeepSeek runs inside Claude Code through DeepSeek's own Claude-compatible addres
 
 **What it costs:** free: it runs on your own hardware. Small models use tools poorly, so pick a capable one.
 
-**You need:** a machine you run with Ollama or LM Studio (or any server that speaks OpenAI's Responses API), that Tarsee can reach. Railway variables: `TARSEE_LOCAL_AI_URL`, and `TARSEE_LOCAL_AI_KEY` only if your server asks for a key.
+**You need:** a machine you run with Ollama, LM Studio or llama.cpp (or any server that speaks OpenAI's Responses API), that Tarsee can reach. Railway variables: `TARSEE_LOCAL_AI_URL`, and `TARSEE_LOCAL_AI_KEY` only if your server asks for a key.
 
-1. Install [Ollama](https://ollama.com/download) or [LM Studio](https://lmstudio.ai/) on the machine that will run the AI.
-2. Download a model. Ollama: in a terminal, run `ollama pull qwen3` (or another model). LM Studio: search for a model in the app and download it.
-3. Start its server. Ollama runs one by itself. LM Studio: start the local server in the app's Developer section, or run `lms server start`.
-4. Put the server's address in the box on the Local AI card (click **Ollama** for `http://localhost:11434/v1` or **LM Studio** for `http://localhost:1234/v1`), click **Save**, then **Test**. Test lists the models it has.
+1. Install [Ollama](https://ollama.com/download), [LM Studio](https://lmstudio.ai/) or [llama.cpp](https://github.com/ggml-org/llama.cpp/releases) on the machine that will run the AI: Ollama 0.13.3 or newer, LM Studio 0.3.29 or newer, or llama.cpp build b11768 (v0.8.0) or newer (older ones don't speak the Responses API that Tarsee uses, or can mix up tool calls).
+   - llama.cpp on Windows: `winget install ggml.llamacpp` (the Vulkan build, for any graphics card). For an NVIDIA card, the [releases page](https://github.com/ggml-org/llama.cpp/releases) also has a *win-cuda* zip: unzip its *cudart* zip into the same folder.
+   - llama.cpp on a Mac or Linux: `brew install llama.cpp`.
+   - `llama-server --version` shows the build.
+2. Download a model. Ollama: in a terminal, run `ollama pull qwen3` (or another model). LM Studio: search for a model in the app and download it. llama.cpp downloads one the first time it starts (next step).
+3. Start its server.
+   - Ollama runs one by itself.
+   - LM Studio: start the local server in the app's Developer section, or run `lms server start`, and load the model with a context length of 32768 or more.
+   - llama.cpp: run `llama-server -hf unsloth/Qwen3.5-9B-GGUF:Q4_K_M --alias qwen3.5-9b -c 65536`. The first start downloads about 6 GB. `-c` is how much it can read at once: Tarsee needs at least 32768. `--alias` gives the model a short name. It listens on port 9931.
+4. Put the server's address in the box on the Local AI card (click **Ollama** for `http://localhost:11434/v1`, **LM Studio** for `http://localhost:1234/v1` or **llama.cpp** for `http://localhost:9931/v1`), click **Save**, then **Test**. Test lists the models it has, and how much it can read at once.
 5. Pick a model and click **Use this AI**: that model is used at once. To use another of your server's models from a chat's model menu, click **Verify** on that model's row in the Local AI card first (it checks that the model can use Tarsee's tools, which is worth doing for small models).
+
+Optional, with Docker: llama.cpp's own image runs the same server on the CPU only, on port 8080: `docker run -p 8080:8080 -v ~/llama-models:/root/.cache ghcr.io/ggml-org/llama.cpp:server -hf unsloth/Qwen3.5-9B-GGUF:Q4_K_M --alias qwen3.5-9b -c 65536 --host 0.0.0.0 --port 8080`, then use `http://localhost:8080/v1`.
 
 **If it doesn't work:**
 
 - `localhost` means the machine Tarsee itself runs on. If Tarsee is on Railway, run the AI as another Railway service and use its private address (like `http://ollama.railway.internal:11434/v1`), or a public address protected by a key. See [Local AI on Railway](#local-ai-on-railway).
-- Ollama only answers the machine it runs on. To reach it from another machine, start it with `OLLAMA_HOST=0.0.0.0`.
+- Ollama only answers the machine it runs on. To reach it from another machine, start it with `OLLAMA_HOST=0.0.0.0`. llama.cpp is the same: add `--host 0.0.0.0`.
+- llama.cpp's older builds and its Docker image use port 8080, not 9931: the address is then `http://localhost:8080/v1`.
+- If you start llama-server with `--api-key`, paste the same key in the key box.
+- Always give `-hf` the file's size after the colon (like `:Q4_K_M`): without it, llama-server may pick another file from the same page, such as a small helper model. Give `--alias` a short name of your own, not an OpenAI model's name.
+- If Test says there is too little room (under 32768 tokens): start llama-server with `-c 65536`, load the model in LM Studio with a longer context length, or set `OLLAMA_CONTEXT_LENGTH=65536` where Ollama runs.
+- If Test says the model is still loading, click Test again in a minute. If Tarsee can't reach a llama-server you just started with `-hf`, it may still be downloading the model.
 - If your server asks for a key, paste it in the key box. Tarsee sends it only to this address.
 - Replies appear a message at a time, not word by word.
 - Instead of setting it in Settings, you can use the Railway variables `TARSEE_LOCAL_AI_URL` and, if needed, `TARSEE_LOCAL_AI_KEY`.
 
-The card also asks how much the model can read at once, in tokens (128K by default; check your model's page). Local AI is counted as free on the Usage page.
+The card also asks how much the model can read at once, in tokens. Leave it empty and Tarsee uses what your server says it gives the model (llama.cpp's `-c`, the context LM Studio or Ollama loaded it with), shown in the box as "read from your server"; with no word from the server, 128K. A number you type there is used when it is smaller than the server's. Embedding models (like `text-embedding-nomic-embed-text-v1.5`) can't chat, so they aren't listed. Local AI is counted as free on the Usage page.
+
+Tarsee's own tools reach every Local AI model the same way: Tarsee passes each request to your server through a small bridge of its own on the same computer as Tarsee, which hands the model the tools as plain functions (Ollama before 0.34, LM Studio and llama.cpp skip the grouped form Codex sends) and keeps your server's key out of the engine's process.
 
 ## Keep spending under control
 

@@ -132,7 +132,28 @@ function ourCodex() {
 // The owner's "Local AI": answers GET /v1/models, and Test's check that it has the Responses API (POST /v1/responses
 // with no model in it) as a current Ollama does, 400 "model is required"; anything else is recorded (no turn should
 // reach it here: a turn's POST /v1/responses names its model, and is recorded with it).
+// localFlavour switches it to llama.cpp's llama-server b12238 as it answers (-c 65536 --alias e2e-local-model): "llama",
+// and its variants "llama-old" (b7792: no /v1/responses, 404 File Not Found), "llama-loading" (503 Loading model on
+// everything but /health) and "llama-key" (started with --api-key: 401 Invalid API Key).
 const localHits = [];
+let localFlavour = "ollama";
+const llamaAnswer = (req, res) => {
+  const send = (status, body) => { res.writeHead(status, { "Content-Type": typeof body === "string" ? "text/plain" : "application/json" }); res.end(typeof body === "string" ? body : JSON.stringify(body)); };
+  if (req.url === "/health") return send(200, { status: "ok" });
+  if (localFlavour === "llama-loading") return send(503, { error: { code: 503, message: "Loading model", type: "unavailable_error" } });
+  if (localFlavour === "llama-key") return send(401, { error: { code: 401, message: "Invalid API Key", type: "authentication_error" } });
+  if (req.method === "GET" && /\/v1\/models\/?$/.test(req.url)) {
+    return send(200, {
+      models: [{ name: "e2e-local-model", model: "e2e-local-model", capabilities: ["completion"] }], object: "list",
+      data: [{ id: "e2e-local-model", aliases: ["e2e-local-model"], object: "model", created: 1794273395, owned_by: "llamacpp", meta: { n_ctx: 65536, n_ctx_train: 262144 } }],
+    });
+  }
+  if (req.method === "GET" && req.url === "/props") return send(200, { build_info: localFlavour === "llama-old" ? "b7792-0f0f0f0" : "b12238-08f945ffb", default_generation_settings: { n_ctx: 65536 }, total_slots: 4 });
+  if (req.method === "POST" && /\/v1\/responses\/?$/.test(req.url)) {
+    return localFlavour === "llama-old" ? send(404, "File Not Found") : send(400, { error: { code: 400, message: "'input' is required", type: "invalid_request_error" } });
+  }
+  return send(404, "File Not Found");
+};
 const localAi = http.createServer((req, res) => {
   const chunks = [];
   req.on("data", (c) => chunks.push(c));
@@ -140,6 +161,7 @@ const localAi = http.createServer((req, res) => {
     let model = null;
     try { model = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")?.model ?? null; } catch { model = "(not JSON)"; }
     localHits.push(`${req.method} ${req.url}${model ? ` (model ${model})` : ""}`);
+    if (localFlavour.startsWith("llama")) { llamaAnswer(req, res); return; }
     if (req.method === "GET" && /\/v1\/models\/?$/.test(req.url)) {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ object: "list", data: [{ id: "e2e-local-model", object: "model", owned_by: "e2e" }] }));
@@ -761,7 +783,8 @@ await step("Settings > AI: Claude plan signs in (placeholder sign-in file), Use 
   check(p.active.provider === "claude" && String(p.active.model || "").toLowerCase().includes(String(pick.v).toLowerCase().replace(/\[1m\]$/, "")), "Settings: the chosen model is saved with the default", { file: "src/routes/ai.js", evidence: JSON.stringify({ chosen: pick.v, active: p.active }) });
   await page.locator("#aiHeaderChip:not([hidden])").waitFor();
   const chipText = await page.locator("#aiHeaderChipText").innerText();
-  check(/^Claude plan/.test(chipText.trim()), "header chip: names the new default", { file: SET, evidence: chipText });
+  // (The chip reads "Default: <AI> · <model>" since each AI got its own color.)
+  check(/^(Default: )?Claude plan/.test(chipText.trim()), "header chip: names the new default", { file: SET, evidence: chipText });
   check((await page.locator("#aiHeaderChip .channel-dot").getAttribute("data-tone")) === "ok", "header chip: green dot when ready", { file: SET });
   await shot(page, "12-settings-claude-default-1280");
   // The composer, right after the default changed: its button and its list.
@@ -863,13 +886,55 @@ await step("Settings > AI: ChatGPT card, Sign in shows link and code, Cancel", a
   check(!leftover.length, "Settings chatgpt: Cancel stops Codex", { file: "src/ai/codex-device-login.js", evidence: leftover.join(",") });
 });
 
+await step("Settings > AI: Local AI on llama.cpp: Test names the build and the context, the context box shows it; too old, still loading, a key it wants", async () => {
+  const c = card("local");
+  await c.scrollIntoViewIfNeeded();
+  /** Click the card's Test and read its line (kept under Test's six-a-minute limit, and waiting it out if hit anyway). */
+  const localTest = async () => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await paceTests();
+      await page.evaluate(() => Settings._aiSetTest("local", { text: "", tone: "off" }));
+      await c.locator('[data-ai-action="test"]').first().click();
+      const line = await cardTestLine("local");
+      const wait = /Too many tries\. Wait (\d+) seconds/.exec(line.text);
+      if (!wait) return line;
+      await page.waitForTimeout((Number(wait[1]) + 1) * 1000);
+    }
+    return cardTestLine("local");
+  };
+  check(await c.locator('[data-ai-action="preset"]', { hasText: "llama.cpp" }).getAttribute("data-url") === "http://localhost:9931/v1", "Settings local: a llama.cpp button for its usual address", { file: SET });
+  check(/8080/.test(await c.innerText()), "Settings local: the note that older llama.cpp builds and Docker use 8080", { file: "src/public/js/provider-guides-core.js" });
+  localFlavour = "llama";
+  const ok = await localTest();
+  check(ok.tone === "ok" && /Reached your Local AI · llama\.cpp b12238 · 1 model · 64K context/.test(ok.text), "Settings local: Test on a llama-server names its build and the context it was started with", { file: "src/ai/provider-probes.js", evidence: JSON.stringify(ok) });
+  await page.locator('#aiLocalContext[placeholder="65,536, read from your server"]').waitFor({ timeout: 15_000 }).catch(() => {});
+  const box = { value: await page.locator("#aiLocalContext").inputValue(), placeholder: await page.locator("#aiLocalContext").getAttribute("placeholder"), step: await page.locator("#aiLocalContext").getAttribute("step") };
+  check(box.value === "" && box.placeholder === "65,536, read from your server" && box.step === "any", "Settings local: the context box shows the server's size and holds no number nobody chose", { file: SET, evidence: JSON.stringify(box) });
+  const used = (await providersNow(desk)).providers.find((p) => p.id === "local")?.settings;
+  check(used?.context === null && used?.serverContext === 65536 && used?.contextUsed === 65536, "Settings local: a turn uses the server's 65,536, not the 128,000 default", { file: "src/routes/ai.js", evidence: JSON.stringify(used) });
+  await shot(page, "15b-settings-local-llama-1280");
+  for (const [flavour, re, what] of [
+    ["llama-old", /no Responses API[\s\S]*llama\.cpp to b11768 or newer/, "a build with no Responses API: update it"],
+    ["llama-loading", /still loading its model\. Click Test again in a minute/, "still loading its model"],
+    ["llama-key", /turned down Tarsee's key/, "started with --api-key: the key hint"],
+  ]) {
+    localFlavour = flavour;
+    const line = await localTest();
+    check(line.tone !== "ok" && re.test(line.text), `Settings local: ${what}`, { file: "src/ai/provider-probes.js", evidence: JSON.stringify(line) });
+  }
+  // Back to the owner's usual server, as the rest of this run expects (a Test that works clears the key flag).
+  localFlavour = "ollama";
+  const back = await localTest();
+  check(back.tone === "ok", "Settings local: back on the usual server, Test passes again", { file: "src/ai/provider-probes.js", evidence: JSON.stringify(back) });
+});
+
 await step("header chip opens Settings > AI; Security tab lists the server's tools", async () => {
   await page.evaluate(() => Settings.close());
   await page.locator("#aiHeaderChip:not([hidden])").click();
   await page.locator('.settings-tab-panel[data-tab="ai"].active').waitFor({ timeout: 10_000 });
   check(true, "header chip: opens Settings > AI");
   const chipText = (await page.locator("#aiHeaderChipText").innerText()).trim();
-  check(/^Local AI · e2e-local-model$/.test(chipText), "header chip: the default AI and its model", { file: SET, evidence: chipText });
+  check(/^(Default: )?Local AI · e2e-local-model$/.test(chipText), "header chip: the default AI and its model", { file: SET, evidence: chipText });
   await page.locator('.settings-tab[data-tab="security"]').click();
   await page.locator(".tool-perm-row").first().waitFor({ timeout: 20_000 });
   const server = await (await desk.request.get(`${ORIGIN}/api/admin/tool-registry`)).json();
@@ -907,6 +972,49 @@ await step("chat: the model picker groups models by provider", async () => {
   await page.keyboard.press("Escape");
 });
 
+await step("the call: Call <name> in the topbar, the real /api/call behind sign-in and CSRF, Settings > Voice > Calls; voice mode gone", async () => {
+  const CALL = "src/public/js/call.js";
+  const label = await page.locator("#callBtn").getAttribute("aria-label");
+  check(label === "Call Tarsee", "topbar: the call button says Call <name> (Tarsee with no name set)", { file: CALL, evidence: label });
+  check(await page.locator("#voiceModeBtn, #voicePanel, #voiceOrb").count() === 0, "voice mode's button and full-screen orb are gone", { file: "src/public/index.html" });
+  const started = await page.evaluate(() => API.json("/api/call/start", { method: "POST", body: {} }).catch((e) => ({ error: e.message })));
+  check(started.title === "Calls with Tarsee" && !!started.conversationId, "POST /api/call/start makes the call's chat, Calls with Tarsee", { file: "src/routes/voice-call.js", evidence: JSON.stringify(started) });
+  // (From here, not the page: a refused request would be a console error there.)
+  const noCsrf = (await desk.request.post(`${ORIGIN}/api/call/start`, { data: {} })).status();
+  check(noCsrf === 403, "/api/call is behind the CSRF check", { file: "src/server.js", evidence: String(noCsrf) });
+  const settings = await page.evaluate(() => API.json("/api/call/settings"));
+  check(settings.channel === null, "Settings > Voice > Calls: Off by default", { file: "src/lib/voice-call.js", evidence: JSON.stringify(settings) });
+  // This machine's speech-to-text through the real route: a short silent WAV.
+  const wavProbe = Buffer.alloc(44 + 3200);
+  wavProbe.write("RIFF", 0); wavProbe.writeUInt32LE(36 + 3200, 4); wavProbe.write("WAVE", 8); wavProbe.write("fmt ", 12); wavProbe.writeUInt32LE(16, 16);
+  wavProbe.writeUInt16LE(1, 20); wavProbe.writeUInt16LE(1, 22); wavProbe.writeUInt32LE(16000, 24); wavProbe.writeUInt32LE(32000, 28); wavProbe.writeUInt16LE(2, 32);
+  wavProbe.writeUInt16LE(16, 34); wavProbe.write("data", 36); wavProbe.writeUInt32LE(3200, 40);
+  const csrf = (await desk.cookies()).find((c) => c.name === "tarsee_csrf")?.value || "";
+  const sttRes = await desk.request.post(`${ORIGIN}/api/voice/transcribe`, { headers: { "X-CSRF-Token": csrf }, multipart: { audio: { name: "probe.wav", mimeType: "audio/wav", buffer: wavProbe } } });
+  const sttBody = await sttRes.json().catch(() => ({}));
+  if (sttRes.ok()) note(`speech-to-text is set up on this machine (it heard "${sttBody.text}")`);
+  else {
+    const explained = await page.evaluate((r) => SpeechToText.explain(r, { call: { name: "Tarsee" } }), { ok: false, kind: sttRes.status() === 501 ? "not-set-up" : "failed", reason: sttBody.error });
+    check(sttRes.status() === 501 && /faster-whisper/.test(sttBody.error || "") && /isn't set up, so Tarsee can't hear you/.test(explained.title) && explained.settings,
+      "no speech-to-text here: the real route answers 501 with its reason, and the call says so with Settings → Voice", { file: "src/public/js/voice.js", evidence: JSON.stringify({ status: sttRes.status(), sttBody, explained }) });
+  }
+  await page.evaluate(async () => { await Settings.open(); Settings.switchTab("voice"); });
+  await page.waitForFunction(() => document.querySelectorAll("#callHandoffChannel option").length >= 1, null, { timeout: 10_000 });
+  const opts = await page.locator("#callHandoffChannel option").allTextContents();
+  check(opts[0] === "Off (it stays in the call's chat)", "Settings > Voice > Calls: Send the answer to, with Off", { file: "src/public/index.html", evidence: JSON.stringify(opts) });
+  await shot(page, "18-settings-voice-calls-1280");
+  await page.evaluate(() => Settings.close());
+  // A microphone the browser refuses (as a phone does when it is denied): the call says so plainly.
+  await page.evaluate(() => { navigator.mediaDevices.getUserMedia = () => Promise.reject(Object.assign(new Error("Permission denied"), { name: "NotAllowedError" })); });
+  await page.locator("#callBtn").click();
+  await page.waitForFunction(() => /icrophone/.test(document.getElementById("callStatus")?.textContent || ""), null, { timeout: 10_000 }).catch(() => {});
+  const status = await page.locator("#callStatus").innerText();
+  check(/Microphone access was blocked\. Allow it for this site/.test(status), "the call window opens and says why the microphone can't be used", { file: CALL, evidence: status });
+  await shot(page, "19-call-window-1280");
+  await page.evaluate(() => (Call.isOn() ? Call.end() : Call.close()));
+  await page.evaluate(() => Call.close());
+});
+
 // ======================================================================================================================
 // 6. Phone width (390px), after setup
 // ======================================================================================================================
@@ -921,6 +1029,7 @@ await step("phone 390px: chat, model picker, Settings > AI, Security", async () 
     await p.locator("#appScreen").waitFor({ state: "visible", timeout: 20_000 });
     await p.locator("#aiHeaderChip:not([hidden])").waitFor({ timeout: 15_000 });
     await noSideScroll(p, "phone chat", "src/public/css/style.css");
+    check(await p.locator("#callBtn").isVisible(), "phone: the call button is in the topbar", { file: "src/public/css/chat-ui.css" });
     await shot(p, "30-phone-chat-390");
     await p.locator("#modelPickerBtn").click();
     await p.locator(".mp-group[aria-label]").first().waitFor({ timeout: 10_000 });
@@ -1013,8 +1122,8 @@ const fileHits = [];
   }
 })(stateDir);
 check(!fileHits.length, "no fake key in plain text anywhere in the state folder", { file: "src/db/settings.js", evidence: fileHits.join(", ") });
-const localProbe = (h) => /^GET \/v1\/models\b/.test(h) || /^POST \/v1\/responses\/?$/.test(h);
-check(!localHits.some((h) => !localProbe(h)), "the Local AI server only saw model-list reads and Test's Responses API check (no turn ran)", { file: "", evidence: localHits.join(", ") });
+const localProbe = (h) => /^GET \/v1\/models\b/.test(h) || /^GET \/props$/.test(h) || /^POST \/v1\/responses\/?$/.test(h);
+check(!localHits.some((h) => !localProbe(h)), "the Local AI server only saw model-list and /props reads and Test's Responses API check (no turn ran)", { file: "", evidence: localHits.join(", ") });
 
 const codexAfter = ourCodex();
 check(!codexAfter.length, "no codex.exe left running", { file: "src/ai/codex-device-login.js", evidence: codexAfter.join(",") });

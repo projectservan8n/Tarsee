@@ -21,6 +21,7 @@ import { healthRouter } from "./routes/health.js";
 import { authRouter } from "./routes/auth-routes.js";
 import { chatRouter } from "./routes/chat.js";
 import { voiceRouter } from "./routes/voice.js";
+import { callRouter } from "./routes/voice-call.js";
 import { settingsRouter } from "./routes/settings.js";
 import { automationApprovalRouter } from "./routes/automation-approval.js";
 import { adminRouter } from "./routes/admin.js";
@@ -182,6 +183,7 @@ app.use(healthRouter);
 app.use("/api/auth", authRouter);
 app.use("/api/chat", requireAuth, csrfProtect, chatRouter);
 app.use("/api/voice", requireAuth, csrfProtect, voiceRouter);
+app.use("/api/call", requireAuth, csrfProtect, callRouter); // voice calls: the call's chat and the hang-up handoff (routes/voice-call.js)
 app.use("/api/settings", requireAuth, csrfProtect, settingsRouter);
 // The owner's OK for HEARTBEAT.md and BOOT.md, which run the AI on their own: the OK itself is session-only.
 app.use("/api/automation-approval", requireAuth, csrfProtect, automationApprovalRouter);
@@ -260,6 +262,15 @@ initTTSEngine(settingsStore).catch((err) => {
 // Edge TTS speaks until it is ready; then the engine is re-initialised.
 import { autoInstallPhonon } from "./voice/phonon-install.js";
 autoInstallPhonon(settingsStore, { onInstalled: () => initTTSEngine(settingsStore) });
+
+// --- Speech-to-text: one line on whether it works out of the box ---
+// faster-whisper and its Python, and which model transcribes (the Docker image ships base.en). Where it is missing,
+// Settings > Voice > Speech-to-text installs it. Off the request path; never throws.
+import { sttBootLine } from "./voice/stt-install.js";
+import { stopSttWorker } from "./voice/stt-handler.js";
+sttBootLine(settingsStore)
+  .then((line) => console.log(line))
+  .catch((err) => console.warn("[stt] could not check speech-to-text:", err.message));
 
 // --- Auth profiles ---
 import { initAuthProfiles } from "./lib/auth-profiles.js";
@@ -448,6 +459,7 @@ setTimeout(() => hookRegistry.emit("boot:ready"), 2000);
 function shutdown(signal) {
   console.log(`[tarsee] ${signal} received, shutting down...`);
   stopTTSEngine();
+  stopSttWorker();
   stopHeartbeat();
   saveBootContext(db); // Persist context before shutdown
   stopAutoSummarize();
