@@ -384,9 +384,11 @@ describe("the Switch on button (js/settings.js), against the real route", { skip
 
 describe("a waiting task on a phone (css/style.css)", { skip }, () => {
   /** One waiting task with a 120-character prompt and a long id, drawn by CronCore.listHtml, measured. */
-  async function measure(width) {
+  async function measure(width, { wideFont = false } = {}) {
     const { page, context } = await openList({ width, height: 800 });
     try {
+      // A wide font: DejaVu Sans, what Linux falls back to when the page's own font isn't loaded (Verdana, its near twin in width, elsewhere). The layout must hold with it too.
+      if (wideFont) await page.addStyleTag({ content: "* { font-family: 'DejaVu Sans', Verdana, sans-serif !important; }" });
       return await page.evaluate((prompt) => {
         const list = document.getElementById("cronJobsList");
         list.innerHTML = window.CronCore.listHtml([
@@ -436,8 +438,19 @@ describe("a waiting task on a phone (css/style.css)", { skip }, () => {
     // buttons; each is whole, under the prompt and inside the row (checked above), and the two buttons stay together.
     assert.ok(Math.abs(middle(m.toggle) - middle(m.remove)) < 4, "the Switch on and delete buttons share one line");
     assert.ok(middle(m.badge) <= m.toggle.bottom + 0.5, "the badge is on the buttons' line or above it, never below");
-    assert.ok(m.toggle.left > m.badge.right, "the buttons after the badge");
+    if (Math.abs(middle(m.badge) - middle(m.toggle)) < 4) assert.ok(m.toggle.left > m.badge.right, "on one line, the buttons come after the badge");
     assert.equal(m.removeOpacity, "1", "Delete shows without a mouse to hover with");
+  });
+
+  it("with a wide font too (Linux's fallback): the two buttons stay together, and nothing runs off the side", async () => {
+    const m = await measure(360, { wideFont: true });
+    assert.deepEqual(m.outside, [], "nothing sticks out of the list");
+    assert.deepEqual(m.spilling, [], "nothing runs past its box");
+    assert.ok(m.prompt.width >= 200, `the prompt column is ${m.prompt.width}px wide`);
+    for (const part of ["badge", "toggle", "remove"]) assert.ok(m[part].top >= m.content.bottom - 0.5, `the ${part} is under the prompt`);
+    assert.ok(Math.abs(middle(m.toggle) - middle(m.remove)) < 4, "the Switch on and delete buttons share one line");
+    assert.ok(middle(m.badge) <= m.toggle.bottom + 0.5, "the badge is on the buttons' line or above it");
+    assert.ok(m.remove.left > m.toggle.right, "Delete after Switch on");
   });
 
   it("on a wide screen the row stays one line: badge, what it does, then the buttons", async () => {

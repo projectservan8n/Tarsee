@@ -2367,6 +2367,14 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
   flex-shrink: 0;
 }
 
+/* Switch on (or Pause) and Delete as one piece: whatever the font, a narrow row never splits them. */
+.cron-job .cron-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
 @container cron-task (max-width: 520px) {
   .cron-job .memory-content {
     order: -1;
@@ -2374,11 +2382,11 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
   }
 
   .cron-job .cron-state,
-  .cron-job .memory-delete {
+  .cron-job .cron-actions {
     align-self: center;
   }
 
-  .cron-job .cron-toggle {
+  .cron-job .cron-actions {
     margin-left: auto;
   }
 

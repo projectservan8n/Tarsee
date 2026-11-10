@@ -89,8 +89,9 @@
       + `<div class="cron-who">${whoMade(job)} · <code>${id}</code></div>`
       + notes.map((n) => `<div class="cron-note">${n}</div>`).join("")
       + `</div>`
-      + button
-      + `<button class="memory-delete" data-cron-delete="${id}" title="Delete" aria-label="Delete ${id}">${DELETE_ICON}</button>`
+      // The two buttons go as one: a narrow row wraps them together, never Delete on a line of its own.
+      + `<span class="cron-actions">${button}`
+      + `<button class="memory-delete" data-cron-delete="${id}" title="Delete" aria-label="Delete ${id}">${DELETE_ICON}</button></span>`
       + `</div>`;
   }
 
