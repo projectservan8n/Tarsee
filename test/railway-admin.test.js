@@ -112,6 +112,12 @@ function railway({ fail = null } = {}) {
         }
         return reply(200, { data: { variableCollectionUpsert: true } });
       }
+      case "TarseeUnrenderedVariables": {
+        // A write in Tarsee's own project reads Tarsee's variables, references left in, to keep what fills its own
+        // settings unchanged (test/railway-tool-limits.test.js). A sealed one's value never comes back.
+        const list = (acct.variables[v.environmentId] || []).filter((x) => x.serviceId === (v.serviceId ?? null) && !x.isSealed);
+        return reply(200, { data: { variables: Object.fromEntries(list.map((x) => [x.name, x.value])) } });
+      }
       case "TarseeLatestDeployment":
         return reply(200, { data: { deployments: edges(acct.deployments[`${v.input.environmentId}/${v.input.serviceId}`] || []) } });
       case "TarseeRedeploy":
@@ -230,9 +236,9 @@ describe("on Railway: Tarsee's own project, environment and service by default",
     assert.match(re.out, new RegExp(`^Asked Railway to redeploy tarsee \\(service id ${S_TARSEE}\\)`));
     assert.deepEqual(re.rw.calls.at(-1).body.variables, { id: D_TARSEE });
     assert.match(re.out, /This is Tarsee's own service: the deploy restarts Tarsee, which ends the turn that asked for it\./);
-    const set = await run({ action: "set_variable", name: "LOG_LEVEL", value: "debug", approved_by: GO }, { env: ON_RAILWAY });
-    assert.match(set.out, /restarts Tarsee/);
-    const quiet = await run({ action: "set_variable", name: "LOG_LEVEL", value: "debug", deploy: false, approved_by: GO }, { env: ON_RAILWAY });
+    const set = await run({ action: "set_variable", name: "STATUS_PAGE_URL", value: "https://status.example.com", approved_by: GO }, { env: ON_RAILWAY });
+    assert.match(set.out, /restarts Tarsee/, set.out);
+    const quiet = await run({ action: "set_variable", name: "STATUS_PAGE_URL", value: "https://status.example.com", deploy: false, approved_by: GO }, { env: ON_RAILWAY });
     assert.ok(!/restarts Tarsee/.test(quiet.out), "no deploy, no restart");
     const other = await run({ action: "redeploy", project: "Acme", service: "watchdog", approved_by: GO }, { env: ON_RAILWAY });
     assert.ok(!/restarts Tarsee/.test(other.out), "another service is not Tarsee");
@@ -547,14 +553,34 @@ describe("wording", () => {
     assert.ok(!SRC.includes("\u2014"), "src/lib/railway-admin.js");
   });
 
-  it("the default TOOLS.md has a Railway section", () => {
-    const tools = fs.readFileSync(path.join(here, "../src/workspace-defaults/TOOLS.md"), "utf8");
+  it("the default TOOLS.md has a Railway section (read with either line ending: a Windows checkout has CRLF)", () => {
+    const tools = fs.readFileSync(path.join(here, "../src/workspace-defaults/TOOLS.md"), "utf8").replace(/\r\n/g, "\n");
     assert.match(tools, /## Railway \(projects, variables, redeploys\)\n- List projects, services and variable names, set a variable or redeploy with tarsee_railway\./);
     assert.match(tools, /pass set_variable from_key \(the vault key name\)/);
     assert.match(tools, /approved_by/);
     assert.match(tools, /Redeploying Tarsee's own service restarts it/);
     const section = tools.slice(tools.indexOf("## Railway"));
     assert.ok(!section.includes("\u2014"));
+    // The limits, in the same words the tool's description uses.
+    assert.match(section, /On Tarsee's own service it sets only/);
+    assert.match(section, /ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL/);
+    assert.match(section, /TZ/);
+    assert.match(section, /Railway's dashboard/);
+    assert.match(section, /sealed/);
+    assert.match(section, /get_key/);
+  });
+
+  it("config/env.js seeds the same Railway section as the default TOOLS.md", () => {
+    // From the heading to the next heading, the end of env.js's template (a backtick) or the end of the file.
+    const section = (text) => {
+      const t = text.replace(/\r\n/g, "\n");
+      const rest = t.slice(t.indexOf("## Railway (projects"));
+      const end = rest.search(/\n(?:## |`)/);
+      return (end < 0 ? rest : rest.slice(0, end)).trimEnd();
+    };
+    const fromFile = section(fs.readFileSync(path.join(here, "../src/workspace-defaults/TOOLS.md"), "utf8"));
+    assert.ok(fromFile.length > 100, fromFile);
+    assert.equal(section(fs.readFileSync(path.join(here, "../src/config/env.js"), "utf8")), fromFile);
   });
 });
 

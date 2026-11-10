@@ -249,6 +249,14 @@ const TOOLS_SHELL_LINES = [
     "- Make, edit or list Discord channels and webhooks with tarsee_discord_admin. Never call Discord's API from the shell and never pull DISCORD_BOT_TOKEN from the vault for it: Tarsee's own bot does the work."],
   ["- List projects, services and variable names, set a variable or redeploy with tarsee_railway. Never call Railway's API from Bash and never put a Railway token or a secret value in a command: Tarsee reads the token from the vault itself (RAILWAY_API_TOKEN, an account or workspace token).",
     "- List projects, services and variable names, set a variable or redeploy with tarsee_railway. Never call Railway's API from the shell and never put a Railway token or a secret value in a command: Tarsee reads the token from the vault itself (RAILWAY_API_TOKEN, an account or workspace token)."],
+  // What tarsee_railway sets on Tarsee's own service (an allowlist) and when else it refuses. The old line is split, so
+  // once swapped it is no longer there whole and the swap runs once.
+  ["- On Railway, leaving out project means Tarsee's own project and service. Redeploying Tarsee's own service restarts it and ends the turn. Nothing in the tool deletes: deleting a variable or a service is for the owner to do by hand in Railway.", [
+    "- On Railway, leaving out project means Tarsee's own project and service. Redeploying Tarsee's own service restarts it and ends the turn.",
+    "- On Tarsee's own service it sets only a key or address for the owner's own scripts (a name in capitals ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL that Tarsee doesn't read itself), TZ and a few tuning settings. The owner sets anything else there by hand in Railway's dashboard: sign-in, the AI and its keys, how Tarsee is built, starts or runs.",
+    "- It also refuses, saying why: a variable one of those settings is filled in from, anything in Tarsee's environment while such a setting is sealed, and a vault key onto Tarsee's own service while get_key is denied in Tool Permissions. Tell the person what the refusal says; never look for a way around it.",
+    "- Nothing in the tool deletes: deleting a variable or a service is for the owner to do by hand in Railway.",
+  ].join("\n")],
 ];
 
 const DEFAULT_UPGRADES = {

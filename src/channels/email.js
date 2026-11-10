@@ -127,6 +127,8 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
       host: cfg.imap.host,
       port: cfg.imap.port || 993,
       secure: cfg.imap.secure !== false,
+      // requireTLS (saved by tarsee_configure_email_channel): without TLS from the start, STARTTLS must succeed before the login.
+      ...(cfg.imap.secure === false && cfg.imap.requireTLS ? { doSTARTTLS: true } : {}),
       auth: { user: cfg.imap.user, pass: cfg.imap.password },
       logger: false, // keep our own logs
     });
@@ -486,9 +488,10 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
     return notes.join("\n");
   }
 
-  // Check the SMTP login first: refused, no reply could ever be sent, so the channel fails with what to do about it.
-  // A server that can't be reached only warns (inbound still works, and some hosts block outbound SMTP), unless its
-  // name doesn't exist at all. Bounded, as nodemailer would wait up to two minutes on a server that never answers.
+  // Check the SMTP login first: refused, or a server that won't switch to the TLS the settings require, no reply could
+  // ever be sent, so the channel fails with what to do about it. A server that can't be reached only warns (inbound
+  // still works, and some hosts block outbound SMTP), unless its name doesn't exist at all. Bounded, as nodemailer
+  // would wait up to two minutes on a server that never answers.
   const smtpServer = { host: cfg.smtp.host, port: smtpTransportOptions(cfg.smtp).port, user: cfg.smtp.user };
   try {
     await withDeadline(smtp.verify(), 15_000, Object.assign(new Error("SMTP check timed out"), { code: "ETIMEDOUT" }));
@@ -566,14 +569,106 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
 // ── What Tarsee sends, built apart from the sending (test/email-smtp.test.js
 //    sends these through nodemailer to a local SMTP server) ──────────────────
 
-/** nodemailer's SMTP transport options: port 465 is implicit TLS; any other port upgrades with STARTTLS when offered. */
+/**
+ * nodemailer's SMTP transport options: port 465 is implicit TLS; any other port upgrades with STARTTLS when offered,
+ * or, with requireTLS (saved by tarsee_configure_email_channel), must upgrade before the login.
+ */
 export function smtpTransportOptions(smtpCfg = {}) {
   const port = smtpCfg.port || 465;
+  const secure = smtpCfg.secure !== false && port === 465;
   return {
     host: smtpCfg.host,
     port,
-    secure: smtpCfg.secure !== false && port === 465,
+    secure,
+    ...(smtpCfg.requireTLS && !secure ? { requireTLS: true } : {}),
     auth: { user: smtpCfg.user, pass: smtpCfg.password },
+  };
+}
+
+// ── What a save may change on its own, for the owner's save in Settings > Channels > Email (routes/settings.js) and
+//    the chat tool (lib/tools.js configure_email_channel), so both go by the same rules ───────────────────────────────
+
+/**
+ * The mail server one side of the settings logs in to, as the channel connects: { host, port, user, secure }. No port
+ * means 993 for IMAP and 465 for SMTP; secure is on unless it is false. A saved password goes only to this server.
+ */
+export function mailServerOf(side, s) {
+  const was = s && typeof s === "object" ? s : {};
+  return {
+    host: typeof was.host === "string" ? was.host.trim() : "",
+    port: Number(was.port) || (side === "imap" ? 993 : 465),
+    user: typeof was.user === "string" ? was.user.trim() : "",
+    secure: was.secure !== false,
+  };
+}
+
+/** What makes `next` another server than `saved` (both as mailServerOf gives them): "host" (in any case), "port", "user", "secure setting". */
+export function mailServerChanges(saved, next) {
+  return [
+    next.host.toLowerCase() !== saved.host.toLowerCase() && "host",
+    next.port !== saved.port && "port",
+    next.user !== saved.user && "user",
+    next.secure !== saved.secure && "secure setting",
+  ].filter(Boolean);
+}
+
+/** An allowlist as the channel reads it: lower case, trimmed, no blanks, each address once. */
+export function normalizeAllowlist(list) {
+  const out = [];
+  for (const a of Array.isArray(list) ? list : []) {
+    const address = String(a).toLowerCase().trim();
+    if (address && !out.includes(address)) out.push(address);
+  }
+  return out;
+}
+
+/** Whether two allowlists hold the same addresses, in any order. */
+export function sameAllowlist(a, b) {
+  const x = normalizeAllowlist(a).sort();
+  const y = normalizeAllowlist(b).sort();
+  return x.length === y.length && x.every((address, i) => address === y[i]);
+}
+
+/**
+ * The senders the owner chose (allowlistOwner): the list they last saved in Settings > Channels > Email, or OK'd there.
+ * Settings saved before Tarsee kept it have none, and then the list in force counts as the owner's, once.
+ */
+export function ownerAllowlistOf(cfg) {
+  return normalizeAllowlist(Array.isArray(cfg?.allowlistOwner) ? cfg.allowlistOwner : cfg?.allowlistFromAddresses);
+}
+
+/**
+ * Whom the list `asked` would let reach the AI by email that the list `allowed` doesn't. An empty list lets any sender
+ * in. null for nobody; otherwise { anyone: true, added: [] } (asked is empty, allowed isn't) or { anyone: false, added }.
+ */
+export function allowlistWidening(asked, allowed) {
+  const want = normalizeAllowlist(asked);
+  const have = normalizeAllowlist(allowed);
+  if (have.length === 0) return null;
+  if (want.length === 0) return { anyone: true, added: [] };
+  const added = want.filter((address) => !have.includes(address));
+  return added.length ? { anyone: false, added } : null;
+}
+
+/**
+ * Where an allowlist goes that may not be the owner's: the chat tool's ("ai"), or one saved with the API token alone
+ * ("token"), which the AI's shell can read. One that lets in nobody the owner hasn't allowed (ownerAllowlistOf) goes in
+ * force and replaces any list that waited. One that lets in more waits for the owner's OK in Settings > Channels > Email
+ * (allowlistWaiting: { addresses, since, by }), as a scheduled task the AI makes waits (lib/cron.js awaitingOwner), and
+ * the list in force stays. The owner's list stays as it was either way, so a narrower list now never shrinks what the
+ * owner allowed: an address they put on it can come back without asking again.
+ * Returns { allowlistFromAddresses, allowlistOwner, allowlistWaiting (undefined when nothing waits), widening }.
+ */
+export function proposeAllowlist(cfg, asked, by, now = new Date()) {
+  const owner = ownerAllowlistOf(cfg);
+  const list = normalizeAllowlist(asked);
+  const widening = allowlistWidening(list, owner);
+  if (!widening) return { allowlistFromAddresses: list, allowlistOwner: owner, allowlistWaiting: undefined, widening: null };
+  return {
+    allowlistFromAddresses: Array.isArray(cfg?.allowlistFromAddresses) ? cfg.allowlistFromAddresses : [],
+    allowlistOwner: owner,
+    allowlistWaiting: { addresses: list, since: now.toISOString(), by },
+    widening,
   };
 }
 
@@ -584,10 +679,21 @@ const UNREACHABLE_CODES = new Set([
 ]);
 
 /**
+ * Whether the server turned down the STARTTLS the settings insist on (requireTLS): nodemailer's ETLS when the server
+ * answered STARTTLS with a refusal, or imapflow's "Server does not support STARTTLS". The server did answer, so it
+ * isn't one that can't be reached. A TLS handshake that fails after a yes keeps its own words.
+ */
+function startTlsRefused(err) {
+  if (err.code === "ETLS" && err.command === "STARTTLS" && typeof err.response === "string" && err.response) return true;
+  return err.tlsFailed === true && /does not support STARTTLS/i.test(String(err.message || ""));
+}
+
+/**
  * A mail server's refusal or silence, put as what to fix: { kind, message } with kind "login" (the server refused the
- * login: usually a normal password where the provider wants an app password), "password" (none saved) or
- * "unreachable" (notFound: the host name doesn't exist). null for anything else, which keeps its own words.
- * Reads imapflow's errors (authenticationFailed, responseText) and nodemailer's (code EAUTH, response).
+ * login: usually a normal password where the provider wants an app password), "password" (none saved), "tls" (the
+ * settings require TLS and the server doesn't offer STARTTLS on that port, so nothing logs in) or "unreachable"
+ * (notFound: the host name doesn't exist). null for anything else, which keeps its own words.
+ * Reads imapflow's errors (authenticationFailed, responseText, tlsFailed) and nodemailer's (code EAUTH or ETLS, response).
  *
  * @param {Error} err
  * @param {"IMAP"|"SMTP"} protocol
@@ -604,6 +710,13 @@ export function mailServerError(err, protocol, { host, port, user } = {}) {
     return {
       kind: "login",
       message: `The mail server refused the ${protocol} login for ${user}. Use an app password, not your normal password (see the steps for your provider).${said ? ` The server said: ${said}` : ""}`,
+    };
+  }
+  if (startTlsRefused(err)) {
+    const ports = protocol === "IMAP" ? "993 (TLS)" : "465 (TLS) or 587 (STARTTLS)";
+    return {
+      kind: "tls",
+      message: `The ${protocol} server ${host}:${port} doesn't offer TLS (STARTTLS) on this port, so Tarsee won't log in to it. Check the ${protocol} port: most providers take ${ports}.`,
     };
   }
   const codes = [err.code, err.originalCode, err.cause?.code];

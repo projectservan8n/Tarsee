@@ -591,64 +591,77 @@ export function getToolDefinitions() {
 }
 
 // ── Browser state (persists across tool calls within a session) ──
-let browserInstance = null;
-let browserPage = null;
+// One browser at a time (lib/browser-launch.js makeBrowserSession): calls that arrive together share one launch, and a
+// browser that's replaced or closed goes with every pop-up its pages opened. Set synchronously on first use, so two
+// first calls at once still get the one session.
+let browserSession = null;
 
 const STEALTH_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
+function getBrowserSession() {
+  browserSession ??= import("./browser-launch.js").then(({ makeBrowserSession, launchBrowser }) => makeBrowserSession({
+    launch: async () => {
+      const { chromium } = await import("playwright");
+      // Sandboxed, with site isolation on and a minimal environment (lib/browser-launch.js): the AI picks the pages.
+      return await launchBrowser(chromium);
+    },
+    openPage: openStealthPage,
+  })).catch((err) => {
+    browserSession = null;
+    throw err;
+  });
+  return browserSession;
+}
+
 async function ensureBrowser() {
-  if (browserPage && !browserPage.isClosed()) return browserPage;
   try {
-    const { chromium } = await import("playwright");
-    browserInstance = await chromium.launch({
-      headless: true,
-      args: [
-        "--disable-blink-features=AutomationControlled",
-        "--disable-features=IsolateOrigins,site-per-process",
-        "--no-sandbox",
+    return await (await getBrowserSession()).page();
+  } catch (err) {
+    const hint = err?.code === "ERR_MODULE_NOT_FOUND" ? " Make sure playwright is installed (npm i playwright)." : "";
+    throw new Error(`Failed to launch browser: ${err.message}.${hint}`);
+  }
+}
+
+/** The page tarsee_browser works in, on a new browser. */
+async function openStealthPage(browser) {
+  const context = await browser.newContext({
+    userAgent: STEALTH_UA,
+    viewport: { width: 1920, height: 1080 },
+    locale: "en-US",
+    timezoneId: "America/New_York",
+    deviceScaleFactor: 1,
+    hasTouch: false,
+    javaScriptEnabled: true,
+  });
+  const page = await context.newPage();
+
+  // Stealth: remove webdriver flag and patch navigator
+  await page.addInitScript(() => {
+    // Remove webdriver property
+    Object.defineProperty(navigator, "webdriver", { get: () => false });
+    // Fake plugins
+    Object.defineProperty(navigator, "plugins", {
+      get: () => [
+        { name: "Chrome PDF Plugin", filename: "internal-pdf-viewer" },
+        { name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai" },
+        { name: "Native Client", filename: "internal-nacl-plugin" },
       ],
     });
-    const context = await browserInstance.newContext({
-      userAgent: STEALTH_UA,
-      viewport: { width: 1920, height: 1080 },
-      locale: "en-US",
-      timezoneId: "America/New_York",
-      deviceScaleFactor: 1,
-      hasTouch: false,
-      javaScriptEnabled: true,
-    });
-    browserPage = await context.newPage();
+    // Fake languages
+    Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+    // Fake permissions
+    const origQuery = window.Permissions?.prototype?.query;
+    if (origQuery) {
+      window.Permissions.prototype.query = (params) =>
+        params?.name === "notifications"
+          ? Promise.resolve({ state: Notification.permission })
+          : origQuery(params);
+    }
+    // Fake chrome runtime
+    window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {} };
+  });
 
-    // Stealth: remove webdriver flag and patch navigator
-    await browserPage.addInitScript(() => {
-      // Remove webdriver property
-      Object.defineProperty(navigator, "webdriver", { get: () => false });
-      // Fake plugins
-      Object.defineProperty(navigator, "plugins", {
-        get: () => [
-          { name: "Chrome PDF Plugin", filename: "internal-pdf-viewer" },
-          { name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai" },
-          { name: "Native Client", filename: "internal-nacl-plugin" },
-        ],
-      });
-      // Fake languages
-      Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
-      // Fake permissions
-      const origQuery = window.Permissions?.prototype?.query;
-      if (origQuery) {
-        window.Permissions.prototype.query = (params) =>
-          params?.name === "notifications"
-            ? Promise.resolve({ state: Notification.permission })
-            : origQuery(params);
-      }
-      // Fake chrome runtime
-      window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {} };
-    });
-
-    return browserPage;
-  } catch (err) {
-    throw new Error(`Failed to launch browser: ${err.message}. Make sure playwright is installed (npm i playwright).`);
-  }
+  return page;
 }
 
 /**
@@ -1443,11 +1456,8 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
         const { action, url, selector, text, script, value, timeout: userTimeout, direction } = toolInput;
         try {
           if (action === "close") {
-            if (browserInstance) {
-              await browserInstance.close();
-              browserInstance = null;
-              browserPage = null;
-            }
+            // The whole browser, pop-ups and all, and one being launched right now (lib/browser-launch.js).
+            if (browserSession) await (await browserSession).close();
             return "Browser closed.";
           }
 
@@ -1581,9 +1591,17 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       case "get_key": {
         const { name: keyName } = toolInput;
         try {
-          const { getKey } = await import("./key-vault.js");
+          const { getKey, serverOnlyName, serverOnlyTool, serverOnlyValues } = await import("./key-vault.js");
+          // Tarsee's own keys (key-vault.js SERVER_ONLY_KEYS: the Railway token) never come back, by any spelling of
+          // the name, nor a copy saved under another name: with one, a command could skip every limit of the tool
+          // that uses it.
+          const own = serverOnlyName(keyName);
+          const never = (name) => `${name} is Tarsee's own; use ${serverOnlyTool(name)}. It is never handed out, to get_key or to your commands, so that tool's limits hold; what it won't do, the owner does by hand.`;
+          if (own) return never(own);
           const value = getKey(keyName);
           if (!value) return `Key "${keyName}" not found in vault. Use list_keys to see available keys.`;
+          const copyOf = serverOnlyValues().get(String(value).trim());
+          if (copyOf) return `"${keyName}" holds the same value as ${copyOf}. ${never(copyOf)}`;
           return value;
         } catch (err) {
           return `get_key error: ${err.message}`;
@@ -1593,8 +1611,14 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       case "set_key": {
         const { name: skName, value: skValue, description: skDesc } = toolInput;
         try {
-          const { setKey } = await import("./key-vault.js");
-          const result = setKey(skName, skValue, skDesc);
+          const { setKey, serverOnlyName, serverOnlyTool, serverOnlyWriteRefusal } = await import("./key-vault.js");
+          // One of Tarsee's own keys is saved from chat only while Tarsee has none yet (how owners give it the Railway
+          // token today), under the name Tarsee reads; replacing it is the owner's, in Settings > Keys.
+          const own = serverOnlyName(skName);
+          const refused = own && serverOnlyWriteRefusal(own);
+          if (refused) return refused;
+          const result = setKey(own || skName, skValue, skDesc);
+          if (own) return `Key "${own}" saved securely. It is Tarsee's own: ${serverOnlyTool(own)} uses it, and get_key and your commands never get it. Only the owner can replace or delete it now, in Settings > Keys, which is also the place to save it next time, so it never goes through a chat.`;
           return `Key "${result.name}" saved securely (masked: ${result.masked}). Description: ${result.description || "none"}`;
         } catch (err) {
           return `set_key error: ${err.message}`;
@@ -1603,10 +1627,13 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
 
       case "list_keys": {
         try {
-          const { listKeys } = await import("./key-vault.js");
+          const { listKeys, serverOnlyName, serverOnlyTool } = await import("./key-vault.js");
           const keys = listKeys();
           if (keys.length === 0) return "No keys stored in vault. Use set_key to add API keys.";
-          return keys.map(k => k.name + ": " + (k.description || "(no description)") + " [masked: " + k.masked + "]").join("\n");
+          // Tarsee's own keys are named, with no part of the value: get_key won't return them anyway.
+          return keys.map(k => k.name + ": " + (k.description || "(no description)") + (serverOnlyName(k.name)
+            ? ` [Tarsee's own: ${serverOnlyTool(k.name)} uses it; get_key won't return it]`
+            : " [masked: " + k.masked + "]")).join("\n");
         } catch (err) {
           return `list_keys error: ${err.message}`;
         }
@@ -1615,7 +1642,10 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       case "delete_key": {
         const { name: dkName } = toolInput;
         try {
-          const { deleteKey } = await import("./key-vault.js");
+          const { deleteKey, serverOnlyWriteRefusal } = await import("./key-vault.js");
+          // Deleting one of Tarsee's own keys is the owner's, in Settings > Keys.
+          const refused = serverOnlyWriteRefusal(dkName, { deleting: true });
+          if (refused) return refused;
           const deleted = deleteKey(dkName);
           return deleted ? `Key "${dkName}" deleted from vault.` : `Key "${dkName}" not found.`;
         } catch (err) {
@@ -1665,11 +1695,79 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       }
 
       case "configure_email_channel": {
-        // Partial-update: only keys passed are written, rest preserved.
-        // Chat-driven setup path for the email channel — see plan file.
+        // Partial update: only the keys passed are written, the rest stay as saved.
+        // The AI may be steered by a page or a message it read, so the mailbox passwords only ever go to the server
+        // they were saved for: a call that changes a side's host, port, user or secure setting must carry that side's
+        // password itself, and a server it sets up is never logged in to in plain text. Nor does it let more senders
+        // reach the AI by email on its own: a wider allowlist waits for the owner's OK (test/email-config-tool.test.js).
+        // The owner's own save in Settings > Channels > Email is not this tool; both go by src/channels/email.js's rules.
         if (!ctx.settingsStore) return "configure_email_channel error: settings store unavailable";
+        const { mailServerOf, mailServerChanges, proposeAllowlist, allowlistWidening, ownerAllowlistOf } = await import("../channels/email.js");
         const prev = ctx.settingsStore.get("channel.email") || {};
         const input = toolInput || {};
+        const problems = [];
+        const servers = {};
+        for (const side of ["imap", "smtp"]) {
+          const name = side.toUpperCase();
+          const was = prev[side] && typeof prev[side] === "object" ? prev[side] : {};
+          // The server the channel connects to with what is saved (no port means 993 or 465).
+          const saved = mailServerOf(side, was);
+          const keep = (password) => ({ ...was, ...saved, password: password || was.password || "" });
+          const given = input[side];
+          if (given === undefined || given === null) { servers[side] = keep(); continue; }
+          if (typeof given !== "object" || Array.isArray(given)) {
+            problems.push(`${side} must be an object with host, port, user, password and secure.`);
+            continue;
+          }
+          const bad = ["host", "user", "password"].filter((k) => given[k] != null && typeof given[k] !== "string").map((k) => `${side}.${k} must be text.`);
+          if (given.secure != null && typeof given.secure !== "boolean") bad.push(`${side}.secure must be true or false.`);
+          const portGiven = given.port != null;
+          const portLike = typeof given.port === "number" || (typeof given.port === "string" && /^\s*\d+\s*$/.test(given.port));
+          const port = !portGiven ? saved.port : portLike ? Number(given.port) : NaN;
+          if (portGiven && !(Number.isInteger(port) && port >= 1 && port <= 65535)) bad.push(`The ${name} port must be a whole number from 1 to 65535.`);
+          if (bad.length) { problems.push(...bad); continue; }
+
+          const next = {
+            host: given.host != null ? given.host.trim() : saved.host,
+            port,
+            user: given.user != null ? given.user.trim() : saved.user,
+            secure: given.secure ?? saved.secure,
+          };
+          const password = given.password || null; // "" carries no password
+          const changed = mailServerChanges(saved, next);
+          // The same server: it stays as saved, with the new password if the call carries one.
+          if (changed.length === 0) { servers[side] = keep(password); continue; }
+
+          // Another server. It is only ever logged in to over TLS: TLS from the start, or STARTTLS that must succeed
+          // (the channel upgrades SMTP with STARTTLS on every port but 465, and IMAP when secure is off).
+          if (!next.secure && !(side === "imap" ? [143] : [587, 25, 2525]).includes(next.port)) {
+            problems.push(side === "imap"
+              ? `IMAP with secure: false on port ${next.port} would log in in plain text. Keep secure on (port 993), or, for a server that offers STARTTLS, use port 143 with secure: false: Tarsee then insists on TLS before it logs in.`
+              : `SMTP with secure: false on port ${next.port} would log in in plain text. Keep secure on (port 465, or 587 with STARTTLS), or, for a server that offers STARTTLS, use port 587, 25 or 2525 with secure: false: Tarsee then insists on TLS before it logs in.`);
+          }
+          if (!password) {
+            const what = changed.length > 1 ? `${changed.slice(0, -1).join(", ")} and ${changed.at(-1)}` : changed[0];
+            problems.push(`This call changes the ${name} ${what}, so it must carry the ${name} password itself: a saved password is only ever used with the server it was saved for. Ask the user for the app password and pass it as ${side}.password in the same call.`);
+          }
+          const tlsFromStart = side === "imap" ? next.secure : next.secure && next.port === 465;
+          servers[side] = { ...next, password: password || "", ...(tlsFromStart ? {} : { requireTLS: true }) };
+        }
+        // Who can reach the AI by email. A list that lets in anyone the owner hasn't allowed (an address they didn't put
+        // on it in Settings, or an empty list, which lets any sender in) waits for the owner's OK in Settings > Channels >
+        // Email, and the list in force stays. A narrower list, or one of addresses the owner allowed, goes straight in.
+        let allowlist = null;
+        if (input.allowlistFromAddresses != null) {
+          const asked = input.allowlistFromAddresses;
+          if (!Array.isArray(asked) || asked.some((a) => typeof a !== "string")) {
+            problems.push("allowlistFromAddresses must be a list of email addresses (an empty list lets any sender in).");
+          } else {
+            allowlist = proposeAllowlist(prev, asked, "ai");
+          }
+        }
+        if (problems.length) return `configure_email_channel error: ${problems.join(" ")} Nothing was saved.`;
+        const owner = allowlist ? allowlist.allowlistOwner : prev.allowlistOwner;
+        const waiting = allowlist ? allowlist.allowlistWaiting : prev.allowlistWaiting;
+
         const merged = {
           enabled: input.enabled !== undefined ? !!input.enabled : (prev.enabled ?? false),
           tarseeEmailAddress: input.tarseeEmailAddress ?? prev.tarseeEmailAddress ?? (input.imap?.user ?? prev.imap?.user ?? ""),
@@ -1677,31 +1775,31 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           defaultSubject: input.defaultSubject ?? prev.defaultSubject ?? "Tarsee",
           mentionKeyword: input.mentionKeyword ?? prev.mentionKeyword ?? "tarsee",
           replyAllMarker: input.replyAllMarker ?? prev.replyAllMarker ?? "[reply-all]",
-          allowlistFromAddresses: Array.isArray(input.allowlistFromAddresses)
-            ? input.allowlistFromAddresses
-            : (prev.allowlistFromAddresses || []),
-          imap: {
-            host: input.imap?.host ?? prev.imap?.host ?? "",
-            port: Number(input.imap?.port ?? prev.imap?.port ?? 993),
-            user: input.imap?.user ?? prev.imap?.user ?? "",
-            password: input.imap?.password ?? prev.imap?.password ?? "",
-            secure: input.imap?.secure !== false,
-          },
-          smtp: {
-            host: input.smtp?.host ?? prev.smtp?.host ?? "",
-            port: Number(input.smtp?.port ?? prev.smtp?.port ?? 465),
-            user: input.smtp?.user ?? prev.smtp?.user ?? "",
-            password: input.smtp?.password ?? prev.smtp?.password ?? "",
-            secure: input.smtp?.secure !== false,
-          },
+          allowlistFromAddresses: allowlist ? allowlist.allowlistFromAddresses : (prev.allowlistFromAddresses || []),
+          // The owner's list changes only with their save or OK in Settings (routes/settings.js): this tool just notes it
+          // the first time, from the list in force. What waits is the latest wider list asked for.
+          ...(Array.isArray(owner) ? { allowlistOwner: owner } : {}),
+          ...(waiting ? { allowlistWaiting: waiting } : {}),
+          imap: servers.imap,
+          smtp: servers.smtp,
         };
         ctx.settingsStore.set("channel.email", merged);
+
+        // A wider allowlist waits for the owner: say so, and whom it would let in, so the AI tells the owner instead of
+        // saying it is done.
+        const waitingFor = waiting && allowlistWidening(waiting.addresses, ownerAllowlistOf(merged));
+        const waitingNote = waitingFor
+          ? [
+            "",
+            `${allowlist?.allowlistWaiting ? "The new allowlist" : "An allowlist asked for earlier"} waits for the owner's OK in Settings > Channels > Email: it would let ${waitingFor.anyone ? "any sender (an empty list)" : waitingFor.added.join(", ")} reach you by email, which the owner hasn't allowed. Until the owner OKs it there, Tarsee answers only the allowlist in force. Tell the owner it is waiting for them; you can't OK it yourself.`,
+          ]
+          : [];
 
         // Restart the channel if fully configured + enabled.
         if (merged.enabled && merged.imap.host && merged.imap.user && merged.smtp.host && merged.smtp.user) {
           if (ctx.channelManager) {
             try { await ctx.channelManager.restart("email"); }
-            catch (err) { return `Email saved, but restart failed: ${err.message}`; }
+            catch (err) { return [`Email saved, but restart failed: ${err.message}`, ...waitingNote].join("\n"); }
           }
         } else if (!merged.enabled && ctx.channelManager) {
           try { await ctx.channelManager.stop("email"); } catch {}
@@ -1709,18 +1807,24 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
 
         // Human-readable confirmation with passwords masked.
         const maskPw = (p) => (p ? "•".repeat(Math.min(16, p.length)) : "(not set)");
+        // How each side protects its login, as the channel connects (src/channels/email.js).
+        const tlsOf = (side, s) => {
+          if (s.secure !== false && (side === "imap" || Number(s.port) === 465)) return "TLS";
+          return s.requireTLS ? "STARTTLS, TLS required" : "STARTTLS when the server offers it";
+        };
         const allowlistSummary = merged.allowlistFromAddresses.length
           ? `${merged.allowlistFromAddresses.length} address${merged.allowlistFromAddresses.length === 1 ? "" : "es"} (${merged.allowlistFromAddresses[0]}${merged.allowlistFromAddresses.length > 1 ? ", …" : ""})`
           : "empty — WARNING: allows any sender";
         return [
           "✓ Email channel configured:",
           `  Mailbox:     ${merged.tarseeEmailAddress || "(not set)"}`,
-          `  IMAP:        ${merged.imap.host || "(not set)"}:${merged.imap.port} as ${merged.imap.user || "(not set)"} (password ${maskPw(merged.imap.password)})`,
-          `  SMTP:        ${merged.smtp.host || "(not set)"}:${merged.smtp.port} as ${merged.smtp.user || "(not set)"} (password ${maskPw(merged.smtp.password)})`,
+          `  IMAP:        ${merged.imap.host || "(not set)"}:${merged.imap.port} as ${merged.imap.user || "(not set)"} (password ${maskPw(merged.imap.password)}, ${tlsOf("imap", merged.imap)})`,
+          `  SMTP:        ${merged.smtp.host || "(not set)"}:${merged.smtp.port} as ${merged.smtp.user || "(not set)"} (password ${maskPw(merged.smtp.password)}, ${tlsOf("smtp", merged.smtp)})`,
           `  Mention:     @${merged.mentionKeyword}`,
           `  Reply-all:   ${merged.replyAllMarker}`,
           `  Allowlist:   ${allowlistSummary}`,
           `  Enabled:     ${merged.enabled ? "yes — IMAP IDLE connecting…" : "no"}`,
+          ...waitingNote,
         ].join("\n");
       }
 

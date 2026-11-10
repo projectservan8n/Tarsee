@@ -591,6 +591,7 @@ const Settings = {
     if (tabName === "ai") { this.loadAi(); }
     if (tabName === "voice") { this.refreshAiHeader(); this.loadSTT({ refresh: true }); }   // (draws the OpenAI key's line, drawSttKey)
     if (tabName === "security") { this.loadToolPermissions(); }
+    if (tabName === "keys") { this.loadVaultKeys(); }
     if (tabName === "canvas") { this.loadCanvasGallery(); }
     if (tabName === "audit") { this.loadAuditLog(); }
     if (tabName === "health") { this.loadContextHealth(); }
@@ -2434,18 +2435,31 @@ const Settings = {
     e.emailImapHost.value = cfg.imap?.host || "";
     e.emailImapPort.value = cfg.imap?.port || "";
     e.emailImapUser.value = cfg.imap?.user || "";
-    // Passwords are never returned plaintext — show placeholder only if a pw exists server-side
-    e.emailImapPassword.value = "";
-    e.emailImapPassword.placeholder = cfg.imap?.hasPassword
-      ? "••••••••  (leave blank to keep existing)"
-      : "16-character app password (not your login password)";
     e.emailSmtpHost.value = cfg.smtp?.host || "";
     e.emailSmtpPort.value = cfg.smtp?.port || "";
     e.emailSmtpUser.value = cfg.smtp?.user || "";
-    e.emailSmtpPassword.value = "";
-    e.emailSmtpPassword.placeholder = cfg.smtp?.hasPassword
-      ? "••••••••  (leave blank to keep existing)"
-      : "16-character app password (not your login password)";
+    // Passwords are never returned plaintext. The server a saved one belongs to, as the server compares a save with it
+    // (routes/settings.js): a box's words say when a changed host, port or user needs the password typed again.
+    const savedServer = (s, port) => ({
+      host: String(s?.host || "").trim().toLowerCase(),
+      port: Number(s?.port) || port,
+      user: String(s?.user || "").trim(),
+      hasPassword: !!s?.hasPassword,
+    });
+    this._emailSaved = { imap: savedServer(cfg.imap, 993), smtp: savedServer(cfg.smtp, 465) };
+    for (const side of ["imap", "smtp"]) {
+      const { password } = this._emailBoxes(side);
+      password.value = "";
+      password.removeAttribute("aria-invalid");
+      if (!password.dataset.emailHint) {
+        password.dataset.emailHint = "1";
+        password.addEventListener("input", () => password.removeAttribute("aria-invalid"));
+        for (const box of Object.values(this._emailBoxes(side))) {
+          if (box !== password) box.addEventListener("input", () => this._emailPasswordHint(side));
+        }
+      }
+      this._emailPasswordHint(side);
+    }
 
     e.emailMentionKeyword.value = cfg.mentionKeyword || "@tarsee";
     e.emailReplyAllMarker.value = cfg.replyAllMarker || "[reply-all]";
@@ -2453,10 +2467,121 @@ const Settings = {
 
     const allow = cfg.allowlistFromAddresses;
     e.emailAllowlist.value = Array.isArray(allow) ? allow.join("\n") : (allow || "");
+    this.renderEmailAllowlistWaiting(cfg);
 
     if (e.emailMentionHint) {
       e.emailMentionHint.textContent = e.emailMentionKeyword.value.trim() || "@tarsee";
     }
+  },
+
+  /** One side's boxes in the email form: { host, port, user, password }. */
+  _emailBoxes(side) {
+    const e = this.elements;
+    return side === "imap"
+      ? { host: e.emailImapHost, port: e.emailImapPort, user: e.emailImapUser, password: e.emailImapPassword }
+      : { host: e.emailSmtpHost, port: e.emailSmtpPort, user: e.emailSmtpUser, password: e.emailSmtpPassword };
+  },
+
+  /**
+   * The password box's words for one side: keep the saved password, or type it again when the host, port or user now
+   * differs from the saved server (a saved password only goes to the server it was saved for), or a new one.
+   */
+  _emailPasswordHint(side) {
+    const saved = this._emailSaved?.[side];
+    const b = this._emailBoxes(side);
+    if (!saved || !b.password) return;
+    // As the server reads a save: an empty box keeps the saved value, and a host in another case is the same.
+    const host = b.host.value.trim().toLowerCase();
+    const port = Number(b.port.value) || (side === "imap" ? 993 : 465);
+    const user = b.user.value.trim();
+    const moved = (host && host !== saved.host) || port !== saved.port || (user && user !== saved.user);
+    b.password.placeholder = !saved.hasPassword
+      ? "16-character app password (not your login password)"
+      : moved
+        ? `Type the ${side.toUpperCase()} app password again: the server changed`
+        : "••••••••  (leave blank to keep existing)";
+  },
+
+  /**
+   * The note above the allowlist while a wider list waits for the owner's OK (routes/settings.js): one the AI asked
+   * for in a chat (tarsee_configure_email_channel) or one sent with the API token. It says whom the list would let in.
+   * Let them in OKs the very list the note shows; Keep my list turns it down. Until then the box shows the list in force.
+   */
+  renderEmailAllowlistWaiting(cfg) {
+    const box = this.elements.emailAllowlist;
+    if (!box) return;
+    const group = box.closest(".form-group") || box;
+    let note = group.parentElement?.querySelector("[data-email-allowlist-note]");
+    if (!note) {
+      note = document.createElement("div");
+      note.dataset.emailAllowlistNote = "";
+      note.className = "mb-3";
+      note.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-email-allowlist-answer]");
+        if (btn) this.answerEmailAllowlist(btn.dataset.emailAllowlistAnswer, btn);
+      });
+      group.before(note);
+    }
+    const asked = Array.isArray(cfg?.allowlistWaiting?.addresses) ? cfg.allowlistWaiting.addresses.map(String) : null;
+    if (!asked) {
+      note.hidden = true;
+      note.innerHTML = "";
+      this._emailAllowlistShown = null;
+      return;
+    }
+    this._emailAllowlistShown = asked;
+    const esc = (s) => this._esc(s);
+    const owner = Array.isArray(cfg.allowlistOwner) ? cfg.allowlistOwner : (cfg.allowlistFromAddresses || []);
+    const added = asked.filter((a) => !owner.includes(a));
+    const whom = asked.length === 0
+      ? "<strong>any sender at all</strong> (an empty list)"
+      : (added.length ? added : asked).map((a) => `<strong>${esc(a)}</strong>`).join(", ");
+    note.hidden = false;
+    note.innerHTML = `<div class="memory-item cron-job" role="status">`
+      + `<span class="memory-badge cron-state cron-state-waiting">Waiting for your OK</span>`
+      + `<div class="memory-content">`
+      + `<div class="cron-when"><strong>More senders asked for, waiting for your OK</strong></div>`
+      + `<div class="cron-note">Something other than this form, most likely the AI in a chat, asked to let ${whom} reach Tarsee by email. Tarsee won't answer them until you OK it: until then it answers only the list below. This is the list you would OK:</div>`
+      + `<div class="cron-prompt">${asked.length ? esc(asked.join("\n")) : "(empty: any sender)"}</div>`
+      + `</div>`
+      + `<span class="cron-actions">`
+      + `<button type="button" class="btn btn-sm btn-primary cron-toggle" data-email-allowlist-answer="approve">Let them in</button>`
+      + `<button type="button" class="btn btn-sm btn-secondary" data-email-allowlist-answer="decline">Keep my list</button>`
+      + `</span></div>`;
+  },
+
+  /** Let them in (approve: the list the note showed) or Keep my list (decline), then the note and the list as they are now. */
+  async answerEmailAllowlist(answer, btn) {
+    const body = answer === "approve"
+      ? { type: "email", allowlistAnswer: "approve", allowlistSeen: this._emailAllowlistShown || [] }
+      : { type: "email", allowlistAnswer: "decline" };
+    if (btn) btn.disabled = true;
+    let ok = false;
+    try {
+      const res = await API.request("/api/settings/channel", { method: "POST", body });
+      const data = await res.json().catch(() => ({}));
+      ok = res.ok;
+      if (ok) {
+        App.showToast(answer === "approve" ? "OK'd: those senders can reach Tarsee by email now." : "Kept your list: nobody new was let in.", "success");
+      } else {
+        App.showToast(data.error || `Nothing was changed (HTTP ${res.status})`, "error");
+        // The sign-in ran out and the page went on with the API token, which can't OK this: the sign-in screen.
+        if (data.needsSignIn) API.signInAgain(data.error);
+      }
+    } catch (err) {
+      App.showToast(err.message, "error");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+    // Only the note and, once OK'd, the list: the rest of the form may hold changes not saved yet. A list the AI
+    // changed after the note was drawn shows now, instead of being OK'd.
+    try {
+      const cfg = (await API.getSettings()).settings.find((s) => s.key === "channel.email")?.value || {};
+      if (ok && answer === "approve" && this.elements.emailAllowlist) {
+        this.elements.emailAllowlist.value = (cfg.allowlistFromAddresses || []).join("\n");
+      }
+      this.renderEmailAllowlistWaiting(cfg);
+    } catch { /* keeps what is on screen */ }
   },
 
   applyEmailPreset(name) {
@@ -2479,6 +2604,8 @@ const Settings = {
       this.elements.emailSmtpHost.value = "";
       this.elements.emailSmtpPort.value = "";
       this.elements.emailImapHost.focus();
+      this._emailPasswordHint("imap");
+      this._emailPasswordHint("smtp");
       return;
     }
     const p = presets[name];
@@ -2487,6 +2614,9 @@ const Settings = {
     this.elements.emailImapPort.value = p.imapPort;
     this.elements.emailSmtpHost.value = p.smtpHost;
     this.elements.emailSmtpPort.value = p.smtpPort;
+    // Another provider's servers: the password boxes say if the saved passwords can't go along.
+    this._emailPasswordHint("imap");
+    this._emailPasswordHint("smtp");
   },
 
   async saveEmailChannel() {
@@ -2520,7 +2650,23 @@ const Settings = {
       if (imapPw) payload.imap.password = imapPw;
       if (smtpPw) payload.smtp.password = smtpPw;
 
-      await API.saveChannel(payload);
+      const res = await API.request("/api/settings/channel", { method: "POST", body: payload });
+      const answer = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // A side whose server changed needs its password typed again (routes/settings.js): say which, and go there.
+        const boxes = (Array.isArray(answer.needsPassword) ? answer.needsPassword : [])
+          .filter((side) => side === "imap" || side === "smtp")
+          .map((side) => {
+            const box = this._emailBoxes(side).password;
+            box.setAttribute("aria-invalid", "true");
+            box.placeholder = `Type the ${side.toUpperCase()} app password again: the server changed`;
+            return box;
+          });
+        boxes[0]?.focus();
+        // The sign-in ran out and the page went on with the API token: the sign-in screen, with the server's words.
+        if (answer.needsSignIn) API.signInAgain(answer.error);
+        throw new Error(answer.error || `HTTP ${res.status}`);
+      }
       if (payload.imap.host) this._markConfigured("email");
 
       // Clear password fields after save so they don't show plaintext in the DOM
@@ -3763,6 +3909,192 @@ const Settings = {
         }
       });
     });
+  },
+
+  // --- Keys (Settings > Keys) ---
+
+  /**
+   * Settings > Keys: the vault's keys by name, with when each was saved (GET /api/settings/keys, routes/vault-keys.js),
+   * and a form to add a key or replace one's value. Each row has Replace (its name goes in the form) and Delete (after
+   * a question). No value is ever on the page: the server sends none, and the value box is emptied once saved and
+   * never filled. Tarsee's own keys (the Railway token) are marked: the AI never gets them, and only here can they be
+   * replaced or deleted. Every request goes as the signed-in owner, without the API token (_vaultKeysRequest).
+   */
+  _vaultKeys: [],
+
+  async loadVaultKeys() {
+    const el = document.getElementById("vaultKeysList");
+    if (!el) return;
+    this._wireVaultKeyForm();
+    try {
+      const { status, data } = await this._vaultKeysRequest("GET", "/api/settings/keys");
+      if (status < 200 || status >= 300) throw new Error(data.error || `HTTP ${status}`);
+      this._vaultKeys = Array.isArray(data.keys) ? data.keys : [];
+    } catch (err) {
+      el.textContent = `Couldn't list the keys: ${err.message}`;
+      el.dataset.loaded = "error";
+      return;
+    }
+    this._drawVaultKeys();
+  },
+
+  _drawVaultKeys() {
+    const el = document.getElementById("vaultKeysList");
+    if (!el) return;
+    const esc = (s) => this._esc(s);
+    const when = (iso) => {
+      const d = iso ? new Date(iso) : null;
+      return d && !Number.isNaN(d.getTime()) ? d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+    };
+    if (!this._vaultKeys.length) {
+      el.innerHTML = `<div class="hint">No keys saved yet. Add one below, or give one to the AI in a chat.</div>`;
+    } else {
+      el.innerHTML = this._vaultKeys.map((k) => {
+        const saved = when(k.savedAt);
+        const own = k.serverOnly
+          ? ` <span class="tool-perm-fixed" title="Tarsee itself uses it. The AI can't read it, and only you can replace or delete it, here.">Tarsee's own</span>`
+          : "";
+        const about = [
+          k.description,
+          saved ? `Saved ${saved}` : "",
+          k.serverOnly ? `${k.usedBy ? `${k.usedBy} uses it; ` : ""}the AI never gets it` : "",
+        ].filter(Boolean).join(" · ");
+        return `<div class="tool-perm-row" data-vault-key="${esc(k.name)}" style="flex-wrap:wrap">` +
+          `<div class="tool-perm-name"><span style="font-family:var(--font-mono);overflow-wrap:anywhere">${esc(k.name)}</span>${own}` +
+          `<div class="tool-perm-desc">${esc(about)}</div></div>` +
+          `<div style="display:flex;gap:var(--space-1);flex-shrink:0;margin-left:auto">` +
+          `<button type="button" class="btn btn-sm btn-ghost" data-vault-replace="${esc(k.name)}" aria-label="Replace ${esc(k.name)}">Replace</button>` +
+          `<button type="button" class="btn btn-sm btn-ghost" data-vault-delete="${esc(k.name)}" aria-label="Delete ${esc(k.name)}">Delete</button>` +
+          `</div></div>`;
+      }).join("");
+      el.querySelectorAll("[data-vault-replace]").forEach((b) => b.addEventListener("click", () => this._replaceVaultKey(b.dataset.vaultReplace)));
+      el.querySelectorAll("[data-vault-delete]").forEach((b) => b.addEventListener("click", () => this.deleteVaultKey(b.dataset.vaultDelete)));
+    }
+    el.dataset.loaded = "yes";
+    this._noteVaultKeyName();
+  },
+
+  _wireVaultKeyForm() {
+    const form = document.getElementById("vaultKeyForm");
+    if (!form || form.dataset.wired) return;
+    form.dataset.wired = "1";
+    form.addEventListener("submit", (e) => { e.preventDefault(); this.saveVaultKey(); });
+    document.getElementById("vaultKeyClearBtn")?.addEventListener("click", () => this._clearVaultKeyForm());
+    document.getElementById("vaultKeyName")?.addEventListener("input", () => this._noteVaultKeyName());
+  },
+
+  _clearVaultKeyForm() {
+    for (const id of ["vaultKeyName", "vaultKeyValue", "vaultKeyDescription"]) {
+      const box = document.getElementById(id);
+      if (box) box.value = "";
+    }
+    this._noteVaultKeyName();
+  },
+
+  /** The saved key the form's name is, if any (Tarsee's own in any case, as the server saves it). */
+  _vaultKeyNamed(typed) {
+    const t = String(typed || "").trim();
+    if (!t) return null;
+    return this._vaultKeys.find((k) => k.name === t) || this._vaultKeys.find((k) => k.serverOnly && k.name.toUpperCase() === t.toUpperCase()) || null;
+  },
+
+  /** Under the form: that Save replaces a saved key's value, when the name typed is one. */
+  _noteVaultKeyName() {
+    const note = document.getElementById("vaultKeyFormNote");
+    if (!note) return;
+    const k = this._vaultKeyNamed(document.getElementById("vaultKeyName")?.value);
+    note.textContent = k ? `${k.name} is saved: Save replaces its value${k.serverOnly ? ", and Tarsee uses the new one from then on" : ""}.` : "";
+    note.hidden = !k;
+  },
+
+  /** A row's Replace: its name (and description) in the form, the value box empty and ready. */
+  _replaceVaultKey(name) {
+    const k = this._vaultKeys.find((x) => x.name === name);
+    const nameBox = document.getElementById("vaultKeyName");
+    const valueBox = document.getElementById("vaultKeyValue");
+    const descBox = document.getElementById("vaultKeyDescription");
+    if (!nameBox || !valueBox) return;
+    nameBox.value = name;
+    valueBox.value = "";
+    if (descBox) descBox.value = k?.description || "";
+    this._noteVaultKeyName();
+    valueBox.scrollIntoView?.({ block: "center" });
+    valueBox.focus();
+  },
+
+  async saveVaultKey() {
+    const nameBox = document.getElementById("vaultKeyName");
+    const valueBox = document.getElementById("vaultKeyValue");
+    const descBox = document.getElementById("vaultKeyDescription");
+    const btn = document.getElementById("vaultKeySaveBtn");
+    if (!nameBox || !valueBox || btn?.disabled) return;
+    const name = nameBox.value.trim();
+    if (!name) { App.showToast("Give the key a name first, like STRIPE_SECRET_KEY.", "error"); nameBox.focus(); return; }
+    if (!valueBox.value.trim()) { App.showToast(`Paste the value to save as ${name}.`, "error"); valueBox.focus(); return; }
+    if (btn) { btn.disabled = true; btn.setAttribute("aria-busy", "true"); }
+    try {
+      const { status, data } = await this._vaultKeysRequest("POST", "/api/settings/keys", { name, value: valueBox.value, description: descBox?.value.trim() || "" }, { signIn: true });
+      if (status < 200 || status >= 300) throw new Error(data.error || `HTTP ${status}`);
+      this._clearVaultKeyForm();
+      App.showToast(`${data.replaced ? "Replaced" : "Saved"} ${data.key?.name || name}`, "success");
+      await this.loadVaultKeys();
+    } catch (err) {
+      App.showToast(`${name} wasn't saved: ${err.message}`, "error");
+    } finally {
+      if (btn) { btn.disabled = false; btn.removeAttribute("aria-busy"); }
+    }
+  },
+
+  async deleteVaultKey(name) {
+    const k = this._vaultKeys.find((x) => x.name === name);
+    const ok = await TarseeDialog.ask({
+      title: `Delete the key ${name}?`,
+      text: k?.serverOnly
+        ? `Tarsee itself uses it${k.usedBy ? ` (${k.usedBy})` : ""}, which stops working until you save a new one.`
+        : "Anything that uses it, the AI and its scripts included, can't read it any more.",
+      yes: "Delete",
+      no: "Cancel",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const { status, data } = await this._vaultKeysRequest("DELETE", `/api/settings/keys/${encodeURIComponent(name)}`, undefined, { signIn: true });
+      if (status === 404) App.showToast(`${name} was already gone`, "info");
+      else if (status < 200 || status >= 300) throw new Error(data.error || `HTTP ${status}`);
+      else App.showToast(`Deleted ${name}`, "success");
+    } catch (err) {
+      App.showToast(`${name} wasn't deleted: ${err.message}`, "error");
+    }
+    await this.loadVaultKeys();
+  },
+
+  /**
+   * A request only the owner's signed-in dashboard may make (routes/vault-keys.js), so, as _ownerPost, it goes without
+   * the API token that js/api.js adds to every other request: the sign-in's cookie, and for a change the CSRF token
+   * (fetched fresh once when it has run out). signIn: a change refused for the sign-in shows the sign-in screen with
+   * the server's words; the list only says them where it would be.
+   */
+  async _vaultKeysRequest(method, url, body, { signIn = false } = {}) {
+    const changes = method !== "GET";
+    const send = (csrf) => fetch(url, {
+      method,
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...(changes && csrf ? { "X-CSRF-Token": csrf } : {}) },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    let res = await send(changes ? (API.getCsrfToken() || await API.refreshCsrf()) : null);
+    if (changes && res.status === 403) {
+      const why = await res.clone().json().catch(() => ({}));
+      if (/CSRF token/i.test(why.error || "")) res = await send(await API.refreshCsrf());
+    }
+    const data = (await res.json().catch(() => null)) || {};
+    if (res.status === 401 || data.needsSignIn) {
+      // No cookie at all (a browser that dropped it): the sign-in this page opened with has run out all the same.
+      if (!data.needsSignIn) data.error = "Your sign-in has run out. Sign in again, then try once more.";
+      if (signIn) API.signInAgain(data.error);
+    }
+    return { status: res.status, data };
   },
 
   async loadCanvasGallery() {

@@ -295,6 +295,10 @@
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 1L3 3v4c0 4 2.5 6.5 5 8 2.5-1.5 5-4 5-8V3z" stroke="currentColor" stroke-width="1.2"/></svg>
             Security
           </button>
+          <button class="settings-tab" data-tab="keys">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="5" cy="8" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M8 8h7M12.5 8v3M15 8v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            Keys
+          </button>
           <button class="settings-tab" data-tab="canvas">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.2"/><path d="M5 8h6M8 5v6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
             Canvas
@@ -1067,6 +1071,43 @@
               </div>
               <button class="btn btn-sm" id="saveCaptchaBtn">Save</button>
               <button class="btn btn-sm btn-ghost" id="removeCaptchaKeyBtn" hidden>Remove key</button>
+            </div>
+          </div>
+
+          <!-- Keys Tab: the vault's keys by name, never a value (js/settings.js loadVaultKeys, routes/vault-keys.js) -->
+          <div class="settings-tab-panel" data-tab="keys">
+            <h2>Keys</h2>
+            <div class="settings-section">
+              <h3>Saved keys</h3>
+              <div class="hint mb-3">
+                The API keys, tokens and passwords in Tarsee's vault, encrypted. Only their names are shown, never a
+                value. The AI reads a key when it needs one, and its commands get each key named in capitals (like
+                STRIPE_SECRET_KEY) as an environment variable, except Tarsee's own keys, which the AI never gets.
+              </div>
+              <div id="vaultKeysList"></div>
+            </div>
+            <div class="settings-section">
+              <h3>Add or replace a key</h3>
+              <form id="vaultKeyForm" autocomplete="off">
+                <div class="form-group">
+                  <label for="vaultKeyName">Name</label>
+                  <input type="text" id="vaultKeyName" placeholder="STRIPE_SECRET_KEY" autocomplete="off" spellcheck="false" autocapitalize="characters" maxlength="128">
+                </div>
+                <div class="form-group">
+                  <label for="vaultKeyValue">Value</label>
+                  <input type="password" id="vaultKeyValue" placeholder="Paste the key" autocomplete="off" spellcheck="false">
+                  <div class="hint">Saved encrypted, and never shown again: to change it, save a new one under the same name.</div>
+                </div>
+                <div class="form-group">
+                  <label for="vaultKeyDescription">What it's for <span class="settings-label">(optional)</span></label>
+                  <input type="text" id="vaultKeyDescription" placeholder="Stripe, for invoices" autocomplete="off" maxlength="300">
+                </div>
+                <div class="form-group">
+                  <div class="hint mb-3" id="vaultKeyFormNote" hidden></div>
+                  <button type="submit" class="btn btn-sm" id="vaultKeySaveBtn">Save</button>
+                  <button type="button" class="btn btn-sm btn-ghost" id="vaultKeyClearBtn">Clear</button>
+                </div>
+              </form>
             </div>
           </div>
 

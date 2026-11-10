@@ -1,9 +1,16 @@
 import crypto from "node:crypto";
+import net from "node:net";
+import os from "node:os";
 import config from "../config/env.js";
 import { LIMITS } from "../config/constants.js";
 
 // --- Rate limiting + lockout state ---
-const authAttempts = new Map(); // ip → { count, resetAt, failures, lockedUntil }
+// signInKey(req) → { count, resetAt, failures, lockedUntil, lastFailureAt }. failures, lockedUntil and lastFailureAt
+// are kept in tarsee.db too (sign_in_places, initSignInLimits), so a restart doesn't give a place a fresh start.
+const authAttempts = new Map();
+// How long a place's wrong guesses are remembered after its last one. The sweep below used to forget a place as soon as
+// it was between waits, so three guesses, a five-minute pause, and three more never reached the long waits.
+const FAILURE_MEMORY_MS = 24 * 60 * 60_000;
 
 // Clean up stale entries every 5 minutes. Housekeeping timers run outside any
 // request, so an uncaught throw here takes the whole process down — keep the
@@ -11,11 +18,10 @@ const authAttempts = new Map(); // ip → { count, resetAt, failures, lockedUnti
 setInterval(() => {
   try {
     const now = Date.now();
-    for (const [ip, entry] of authAttempts) {
-      if (now >= entry.resetAt && (!entry.lockedUntil || now >= entry.lockedUntil)) {
-        authAttempts.delete(ip);
-      }
+    for (const [key, entry] of authAttempts) {
+      if (now >= entry.resetAt && placeForgotten(entry, now)) authAttempts.delete(key);
     }
+    forgetStoredPlaces(now);
   } catch (err) {
     console.error("[auth] rate-limit sweep failed:", err);
   }
@@ -111,6 +117,7 @@ export function initSessionStore(db) {
     }
   } catch {}
   console.log(`[auth] session store ready — ${restored} session(s) restored from disk (survive restarts)`);
+  initSignInLimits(db);
 }
 
 /**
@@ -280,49 +287,387 @@ export function requireAuth(req, res, next) {
   res.status(401).json({ error: "Authentication required" });
 }
 
+// --- Signing in: who a sign-in comes from, and how many wrong guesses it gets ---
+//
+// The dashboard's password may be a short PIN (4 digits is 10,000 choices), so wrong guesses are limited twice over:
+//
+// 1. Each place a sign-in comes from (signInKey) has its own budget, with waits that grow:
+//      wrong guesses 1-3: no wait (typos happen)
+//                    4-5: 30 seconds
+//                    6-7: 2 minutes
+//                    8-9: 10 minutes
+//                    10+: 1 hour each
+//    plus at most 5 tries a minute. A place's wrong guesses are remembered until a day passes without one, and a right
+//    password clears them. So one place gets 8 wrong guesses in its first 10 minutes and then 24 a day: a 4-digit PIN
+//    takes it about 200 days on average.
+//
+// 2. All places together get 30 wrong guesses in 10 minutes. Then signing in pauses for everyone for 15 minutes, and
+//    each pause that starts within a day of the last one ending is twice as long, up to 4 hours. Why these numbers:
+//    - the owner and a few people mistyping never come near 30 in 10 minutes;
+//    - one place can't reach it (8 at most, above), so one guesser can't stop everyone else from signing in: it takes
+//      four or more places guessing together. That holds only while a client can't pass as a new place with each
+//      guess, which is why X-Forwarded-For is believed only from a proxy the owner names (TARSEE_TRUSTED_PROXY);
+//    - places that do guess together get about 300 wrong guesses in the first day and 180 a day after that, so a
+//      4-digit PIN takes them about a month on average, and a 6-digit one years.
+//    During a pause, anyone already signed in stays signed in; only new sign-ins wait, the right password too (a guess
+//    must not learn it was right).
+//
+// Both counts are kept in tarsee.db (initSignInLimits) and read back at boot. A restart used to give every place, and
+// all places together, a fresh start, and the AI can cause one (the Railway tool redeploys Tarsee; today its shell
+// can stop the server), so guessers could make 29 wrong guesses, have Tarsee restarted, and go again.
+
+const THIS_MACHINE = "this machine";
+const NO_ADDRESS = "no address";
+
+/** An address as Node gives it, made comparable: lower case, without "::ffff:" before an IPv4 address or a zone ("%eth0"). */
+function plainAddress(addr) {
+  if (typeof addr !== "string") return "";
+  let a = addr.trim().toLowerCase();
+  const zone = a.indexOf("%");
+  if (zone !== -1) a = a.slice(0, zone);
+  if (a.startsWith("::ffff:") && net.isIPv4(a.slice(7))) a = a.slice(7);
+  return a;
+}
+
+let ownAddresses = { at: -Infinity, set: new Set() };
+/** This machine's own network addresses, every interface's, looked up again after a minute. */
+function ownAddressSet() {
+  const now = performance.now();
+  if (now - ownAddresses.at < 60_000) return ownAddresses.set;
+  const set = new Set();
+  try {
+    for (const nics of Object.values(os.networkInterfaces())) {
+      for (const nic of nics || []) {
+        const a = plainAddress(nic.address);
+        if (a) set.add(a);
+      }
+    }
+  } catch { /* none listed: loopback is still known below */ }
+  ownAddresses = { at: now, set };
+  return set;
+}
+
 /**
- * Middleware: Rate limits authentication attempts per IP.
+ * Whether a connection comes from this machine itself: a loopback address (any of 127.0.0.0/8, or ::1) or one of the
+ * machine's own network addresses. Whatever runs here, the AI's shell included, connects from one of these, and can
+ * write any X-Forwarded-For or X-Real-IP it likes. That holds after the AI gets its own OS user too: it still shares
+ * this machine's network.
  */
+export function isThisMachine(addr) {
+  const a = plainAddress(addr);
+  if (!a) return false;
+  if (a === "::1" || a === "::" || a === "0.0.0.0") return true;
+  if (net.isIPv4(a) && a.startsWith("127.")) return true;
+  return ownAddressSet().has(a);
+}
+
+const onRailway = () => !!process.env.RAILWAY_PROJECT_ID;
+
+// --- Which proxy may name the client: TARSEE_TRUSTED_PROXY (off Railway) ---
+//
+// A proxy in front of Tarsee connects from its own address and names the client in X-Forwarded-For. Any client can
+// write that header too, so it is believed only from a proxy the owner names:
+//   none (the default): from nobody; each connection is its own client, its socket's address. Reached directly, or
+//     through Docker's published port, a client can't pass as a new one with each guess;
+//   loopback: a proxy on this same machine (nginx, Caddy, cloudflared or Tailscale in front of `npm start`). Anything
+//     else running here, the AI's shell included, can then name any client, and only the limit for all places holds
+//     it: it can pause signing in for everyone;
+//   addresses and CIDR ranges, such as "10.0.0.2" or "172.18.0.5, fd00::/8", with "loopback" among them or not: a
+//     proxy elsewhere. They never cover this machine itself; that takes "loopback".
+// Behind several proxies, name each: the client is the first address, from the right, that isn't one of them.
+// On Railway the setting is ignored: the client is the X-Real-IP Railway's edge sets (clientAddress).
+
+let trustRead = { raw: null, trust: null };
+
 /**
- * Progressive lockout for brute-force protection.
- * 4-digit PIN = 10K combinations, so we need aggressive lockout:
- *
- *   Failures 1-3:  no delay (typos happen)
- *   Failures 4-5:  30 second lockout
- *   Failures 6-7:  2 minute lockout
- *   Failures 8-9:  10 minute lockout
- *   Failures 10+:  1 hour lockout (IP is blocked)
- *
- * Plus: max 5 attempts per 60-second window (rate limit).
- * Combined: brute-forcing 10K PINs takes ~2,000 hours.
+ * TARSEE_TRUSTED_PROXY, read: { loopback, list (a net.BlockList), names (what was taken, for the boot log), skipped
+ * (what wasn't: not "none", "loopback", an address or a range; a /0 range, every address, isn't taken either) }.
+ */
+export function trustedProxies(raw = process.env.TARSEE_TRUSTED_PROXY) {
+  const text = String(raw ?? "").trim();
+  if (trustRead.trust && text === trustRead.raw) return trustRead.trust;
+  const trust = { loopback: false, list: new net.BlockList(), names: [], skipped: [] };
+  for (const entry of text.split(/[\s,]+/).filter(Boolean)) {
+    const word = entry.toLowerCase();
+    if (word === "none") continue;
+    if (word === "loopback") {
+      if (!trust.loopback) trust.names.push("loopback");
+      trust.loopback = true;
+      continue;
+    }
+    const [addrPart, bitsPart, extra] = word.split("/");
+    const addr = plainAddress(addrPart);
+    const family = net.isIPv4(addr) ? "ipv4" : net.isIPv6(addr) ? "ipv6" : null;
+    if (!family || extra !== undefined) { trust.skipped.push(entry); continue; }
+    if (bitsPart === undefined) {
+      trust.list.addAddress(addr, family);
+      trust.names.push(addr);
+      continue;
+    }
+    const bits = /^\d{1,3}$/.test(bitsPart) ? Number(bitsPart) : NaN;
+    if (!(bits >= 1 && bits <= (family === "ipv4" ? 32 : 128))) { trust.skipped.push(entry); continue; }
+    trust.list.addSubnet(addr, bits, family);
+    trust.names.push(`${addr}/${bits}`);
+  }
+  trustRead = { raw: text, trust };
+  return trust;
+}
+
+/** Whether a connection from `addr` is a proxy the owner named, and so may name the client in X-Forwarded-For. */
+function isTrustedProxy(addr, trust = trustedProxies()) {
+  const a = plainAddress(addr);
+  if (!net.isIP(a)) return false;
+  if (isThisMachine(a)) return trust.loopback;
+  return trust.list.check(a, net.isIPv6(a) ? "ipv6" : "ipv4");
+}
+
+/**
+ * Express's "trust proxy" (server.js), so req.ip off Railway is the client clientAddress names: X-Forwarded-For is
+ * believed only from a proxy TARSEE_TRUSTED_PROXY names. On Railway it is believed from the one hop in front that
+ * isn't this machine (the edge), as before; sign-ins there go by X-Real-IP instead.
+ */
+export function trustProxyHop(addr, hop) {
+  if (!plainAddress(addr)) return false;
+  if (onRailway()) return hop === 0 && !isThisMachine(addr);
+  return isTrustedProxy(addr);
+}
+
+/**
+ * The client's address, as the sign-in limit, the Terminal's log and the sign-in log name it. Works on any request,
+ * an Express one or a WebSocket upgrade's:
+ * - on Railway: the X-Real-IP header Railway's edge sets, unless the connection comes from this machine (then that).
+ *   Railway's docs (Networking > Public Networking > Specs & Limits) say only that X-Real-IP identifies the client's
+ *   address. That the edge replaces any copy the client sent comes from Railway's community forum, Central Station:
+ *   in "Edge Proxy X-Forwarded-For and X-Real-Ip can't be trusted" (station.railway.com/questions/
+ *   edge-proxy-x-forwarded-for-and-x-real-ip-c5a50049, August 2024) a client's own X-Real-IP got through, a Railway
+ *   employee called it a bug and then said "the client can no longer set the X-Real-Ip header", and in 2026 a
+ *   moderator wrote that X-Real-IP is overwritten at the edge. It hasn't been checked on a live deploy. X-Forwarded-For
+ *   there can end with an address of Railway's own network, which many clients share, so it can't tell clients apart.
+ *   A request that skips the edge (Railway's private network from another of the owner's services, or a TCP proxy)
+ *   could write its own X-Real-IP: the limit for all places together still holds it;
+ * - elsewhere: the connection's own address, walked back through X-Forwarded-For only past proxies
+ *   TARSEE_TRUSTED_PROXY names.
+ */
+export function clientAddress(req) {
+  const peer = plainAddress(req?.socket?.remoteAddress);
+  if (!peer) return "";
+  if (onRailway()) {
+    if (isThisMachine(peer)) return peer;
+    const real = plainAddress(String(req.headers?.["x-real-ip"] ?? ""));
+    return net.isIP(real) ? real : peer;
+  }
+  const trust = trustedProxies();
+  let client = peer;
+  for (const hop of String(req.headers?.["x-forwarded-for"] ?? "").split(",").reverse()) {
+    if (!isTrustedProxy(client, trust)) break;
+    const next = plainAddress(hop);
+    if (!net.isIP(next)) break;
+    client = next;
+  }
+  return client;
+}
+
+/** An IPv6 address's /64, the block one home or one server is given, as "2001:db8:5:6::/64". */
+function ipv6Block(a) {
+  let s = a;
+  const v4 = s.match(/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const [b1, b2, b3, b4] = v4.slice(1).map(Number);
+    s = `${s.slice(0, v4.index)}${((b1 << 8) | b2).toString(16)}:${((b3 << 8) | b4).toString(16)}`;
+  }
+  const [head, tail] = s.split("::");
+  const front = head ? head.split(":") : [];
+  const back = tail ? tail.split(":") : [];
+  const groups = tail === undefined ? front : [...front, ...Array(8 - front.length - back.length).fill("0"), ...back];
+  return `${groups.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(":")}::/64`;
+}
+
+const clientKey = (a) => (net.isIPv6(a) ? ipv6Block(a) : a);
+
+/**
+ * The place a sign-in comes from, which its wrong guesses count against: the client's address (clientAddress), or
+ * "this machine" for any of this machine's own addresses (any 127.x.x.x can be used, so they are one place). An IPv6
+ * client is its /64, so one home or server can't make new budgets from its spare addresses.
+ */
+export function signInKey(req) {
+  const client = clientAddress(req);
+  if (!client) return NO_ADDRESS;
+  if (isThisMachine(client)) return THIS_MACHINE;
+  return clientKey(client);
+}
+
+// All places together (2 above).
+const EVERYONE_WRONG_GUESSES = 30;
+const EVERYONE_WINDOW_MS = 10 * 60_000;
+const EVERYONE_FIRST_PAUSE_MS = 15 * 60_000;
+const EVERYONE_LONGEST_PAUSE_MS = 4 * 60 * 60_000;
+const EVERYONE_CALM_MS = 24 * 60 * 60_000;
+const everyone = { wrong: [], pausedUntil: 0, pauses: 0 };
+
+// --- The counts, kept in tarsee.db ---
+//   sign_in_places: each place's wrong guesses, when the last one was, and until when it waits;
+//   sign_in_pause: one row, the pause for everyone: the recent wrong guesses' times (JSON), until when, how many.
+// Once the AI runs as its own OS user it can't write tarsee.db, so it can't wipe them either.
+let _limitsDb = null;
+let _limitsSaveFailed = false;
+
+/** Whether a place has nothing left to remember: no wait on, and no wrong guess within the last day. */
+function placeForgotten(entry, now) {
+  const waiting = entry.lockedUntil && now < entry.lockedUntil;
+  const remembered = entry.failures > 0 && now - entry.lastFailureAt < FAILURE_MEMORY_MS;
+  return !waiting && !remembered;
+}
+
+/** Called by initSessionStore at boot: makes the two tables and reads the counts back into memory. */
+function initSignInLimits(db) {
+  _limitsDb = null;
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS sign_in_places (
+      place TEXT PRIMARY KEY,
+      failures INTEGER NOT NULL,
+      last_failure_at INTEGER NOT NULL,
+      locked_until INTEGER NOT NULL
+    )`);
+    db.exec(`CREATE TABLE IF NOT EXISTS sign_in_pause (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      wrong TEXT NOT NULL,
+      paused_until INTEGER NOT NULL,
+      pauses INTEGER NOT NULL
+    )`);
+  } catch (err) {
+    console.error(`[auth] could not keep the sign-in limits in the database, so a restart forgets them: ${err.message}`);
+    return;
+  }
+  _limitsDb = db;
+  const now = Date.now();
+  authAttempts.clear();
+  everyone.wrong = [];
+  everyone.pausedUntil = 0;
+  everyone.pauses = 0;
+  let places = 0;
+  try {
+    for (const r of db.prepare("SELECT place, failures, last_failure_at, locked_until FROM sign_in_places").all()) {
+      const entry = { count: 0, resetAt: 0, failures: Number(r.failures) || 0, lastFailureAt: Number(r.last_failure_at) || 0, lockedUntil: Number(r.locked_until) || 0 };
+      if (placeForgotten(entry, now)) continue;
+      authAttempts.set(r.place, entry);
+      places++;
+    }
+    forgetStoredPlaces(now);
+    const p = db.prepare("SELECT wrong, paused_until, pauses FROM sign_in_pause WHERE id = 1").get();
+    if (p) {
+      let wrong = [];
+      try { wrong = JSON.parse(p.wrong); } catch { /* unreadable: no recent wrong guesses */ }
+      everyone.wrong = (Array.isArray(wrong) ? wrong : []).map(Number).filter((t) => Number.isFinite(t) && now - t < EVERYONE_WINDOW_MS);
+      everyone.pausedUntil = Number(p.paused_until) || 0;
+      everyone.pauses = Number(p.pauses) || 0;
+    }
+  } catch (err) {
+    console.error(`[auth] could not read the sign-in limits back: ${err.message}`);
+  }
+  const paused = now < everyone.pausedUntil ? `; signing in is paused for everyone for ${inWords(Math.ceil((everyone.pausedUntil - now) / 1000))} more` : "";
+  if (places || paused) console.log(`[auth] sign-in limits read back: ${places} place(s) with wrong passwords${paused}`);
+}
+
+/** Says once that the counts couldn't be written (they still hold until a restart). */
+function limitsSaveFailed(err) {
+  if (_limitsSaveFailed) return;
+  _limitsSaveFailed = true;
+  console.error(`[auth] could not write the sign-in limits to the database, so a restart would forget them: ${err.message}`);
+}
+
+function savePlace(key, entry) {
+  if (!_limitsDb) return;
+  try {
+    if (placeForgotten(entry, Date.now())) {
+      _limitsDb.prepare("DELETE FROM sign_in_places WHERE place = ?").run(key);
+    } else {
+      _limitsDb.prepare("INSERT OR REPLACE INTO sign_in_places (place, failures, last_failure_at, locked_until) VALUES (?, ?, ?, ?)")
+        .run(key, entry.failures, entry.lastFailureAt, entry.lockedUntil);
+    }
+  } catch (err) {
+    limitsSaveFailed(err);
+  }
+}
+
+function saveEveryone() {
+  if (!_limitsDb) return;
+  try {
+    _limitsDb.prepare("INSERT OR REPLACE INTO sign_in_pause (id, wrong, paused_until, pauses) VALUES (1, ?, ?, ?)")
+      .run(JSON.stringify(everyone.wrong), everyone.pausedUntil, everyone.pauses);
+  } catch (err) {
+    limitsSaveFailed(err);
+  }
+}
+
+/** Drops the stored places with nothing left to remember (the sweep, and boot). */
+function forgetStoredPlaces(now) {
+  try {
+    _limitsDb?.prepare("DELETE FROM sign_in_places WHERE locked_until <= ? AND last_failure_at <= ?").run(now, now - FAILURE_MEMORY_MS);
+  } catch (err) {
+    limitsSaveFailed(err);
+  }
+}
+
+/** A wait in words: "45 seconds", "15 minutes", "about 4 hours". */
+function inWords(seconds) {
+  if (seconds < 60) return `${seconds} second${seconds === 1 ? "" : "s"}`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 120) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  return `about ${Math.round(minutes / 60)} hours`;
+}
+
+function refuse(res, untilMs, now, error) {
+  const retryAfter = Math.max(1, Math.ceil((untilMs - now) / 1000));
+  res.set("Retry-After", String(retryAfter));
+  return res.status(429).json({ error: error(inWords(retryAfter)) });
+}
+
+let _untrustedProxyNoted = false;
+/**
+ * Says once, in the log, when a sign-in carries X-Forwarded-For from a connection TARSEE_TRUSTED_PROXY doesn't name:
+ * behind a proxy the owner hasn't named, every client shares the proxy's one budget.
+ */
+function noteUntrustedProxy(req) {
+  if (_untrustedProxyNoted || onRailway() || !req.headers?.["x-forwarded-for"]) return;
+  const peer = plainAddress(req.socket?.remoteAddress);
+  if (!peer || isTrustedProxy(peer)) return;
+  _untrustedProxyNoted = true;
+  const who = isThisMachine(peer) ? "this machine" : peer;
+  console.warn(`[auth] A sign-in carried X-Forwarded-For from ${who}, which TARSEE_TRUSTED_PROXY doesn't name, so it was counted as ${who} itself. If a proxy of yours is in front of Tarsee, name it in TARSEE_TRUSTED_PROXY ("loopback" for one on this machine) so each client behind it is limited on its own.`);
+}
+
+/**
+ * Middleware on POST /api/auth/login: turns a sign-in away while signing in is paused for everyone or its place is
+ * waiting, and counts its try. The place goes on req.signInKey, for recordFailedAttempt and clearFailedAttempts.
  */
 export function rateLimitAuth(req, res, next) {
-  const ip = req.ip || req.socket?.remoteAddress || "unknown";
+  const key = signInKey(req);
+  req.signInKey = key;
   const now = Date.now();
+  noteUntrustedProxy(req);
 
-  let entry = authAttempts.get(ip);
+  if (now < everyone.pausedUntil) {
+    return refuse(res, everyone.pausedUntil, now, (wait) =>
+      `Too many wrong passwords have been tried here from different places, so signing in is paused for everyone for ${wait}. Anyone already signed in stays signed in.`);
+  }
+
+  let entry = authAttempts.get(key);
   if (!entry) {
-    entry = { count: 0, resetAt: now + 60_000, failures: 0, lockedUntil: 0 };
-    authAttempts.set(ip, entry);
+    entry = { count: 0, resetAt: now + 60_000, failures: 0, lockedUntil: 0, lastFailureAt: 0 };
+    authAttempts.set(key, entry);
   }
 
-  // Check lockout first
   if (entry.lockedUntil && now < entry.lockedUntil) {
-    const retryAfter = Math.ceil((entry.lockedUntil - now) / 1000);
-    res.set("Retry-After", String(retryAfter));
-    return res.status(429).json({ error: `Locked out. Try again in ${retryAfter}s.` });
+    return refuse(res, entry.lockedUntil, now, (wait) => `Too many wrong passwords from here. Try again in ${wait}.`);
   }
 
-  // Rate limit: max 5 per 60s window
+  // At most 5 tries a minute.
   if (now >= entry.resetAt) {
     entry.count = 0;
     entry.resetAt = now + 60_000;
   }
-
   if (entry.count >= 5) {
-    const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
-    res.set("Retry-After", String(retryAfter));
-    return res.status(429).json({ error: "Too many attempts. Try again later." });
+    return refuse(res, entry.resetAt, now, (wait) => `Too many tries from here. Try again in ${wait}.`);
   }
 
   entry.count++;
@@ -330,27 +675,96 @@ export function rateLimitAuth(req, res, next) {
 }
 
 /**
- * Record a failed login attempt and apply progressive lockout.
+ * Counts a wrong password against its place (signInKey) and against all places together, in memory and in tarsee.db.
+ * Returns how long signing in is now paused for everyone, in ms, when this wrong guess starts that pause, else 0.
  */
-export function recordFailedAttempt(ip) {
-  let entry = authAttempts.get(ip);
+export function recordFailedAttempt(key) {
+  const now = Date.now();
+  let entry = authAttempts.get(key);
   if (!entry) {
-    entry = { count: 0, resetAt: Date.now() + 60_000, failures: 0, lockedUntil: 0 };
-    authAttempts.set(ip, entry);
+    entry = { count: 0, resetAt: now + 60_000, failures: 0, lockedUntil: 0, lastFailureAt: 0 };
+    authAttempts.set(key, entry);
   }
   entry.failures++;
+  entry.lastFailureAt = now;
 
-  // Progressive lockout
-  if (entry.failures >= 10) entry.lockedUntil = Date.now() + 60 * 60_000;       // 1 hour
-  else if (entry.failures >= 8) entry.lockedUntil = Date.now() + 10 * 60_000;    // 10 min
-  else if (entry.failures >= 6) entry.lockedUntil = Date.now() + 2 * 60_000;     // 2 min
-  else if (entry.failures >= 4) entry.lockedUntil = Date.now() + 30_000;          // 30s
+  if (entry.failures >= 10) entry.lockedUntil = now + 60 * 60_000;
+  else if (entry.failures >= 8) entry.lockedUntil = now + 10 * 60_000;
+  else if (entry.failures >= 6) entry.lockedUntil = now + 2 * 60_000;
+  else if (entry.failures >= 4) entry.lockedUntil = now + 30_000;
+  savePlace(key, entry);
+
+  everyone.wrong = everyone.wrong.filter((t) => now - t < EVERYONE_WINDOW_MS);
+  everyone.wrong.push(now);
+  let pause = 0;
+  if (everyone.wrong.length >= EVERYONE_WRONG_GUESSES) {
+    if (now - everyone.pausedUntil >= EVERYONE_CALM_MS) everyone.pauses = 0;
+    everyone.pauses++;
+    pause = Math.min(EVERYONE_FIRST_PAUSE_MS * 2 ** (everyone.pauses - 1), EVERYONE_LONGEST_PAUSE_MS);
+    everyone.pausedUntil = now + pause;
+    everyone.wrong = [];
+  }
+  saveEveryone();
+  return pause;
 }
 
 /**
- * Clear failed attempts for an IP (call on successful login).
+ * Clears a place's wrong guesses (signInKey), on a right password. All places' count stays: one right password
+ * doesn't excuse the wrong guesses others made.
  */
-export function clearFailedAttempts(ip) {
-  const entry = authAttempts.get(ip);
+export function clearFailedAttempts(key) {
+  const entry = authAttempts.get(key);
   if (entry) { entry.failures = 0; entry.lockedUntil = 0; }
+  savePlace(key, entry || { failures: 0, lockedUntil: 0, lastFailureAt: 0 });
+}
+
+/**
+ * What Tarsee says about signing in as it starts (server.js logs each, so they show in the dashboard's Console too):
+ * a SETUP_PASSWORD shorter than 12 characters, and which proxy, if any, may name the client (TARSEE_TRUSTED_PROXY).
+ * Returns [{ level: "warn" | "log", text }]. Never says the password.
+ */
+export function signInBootNotes({ password = config.SETUP_PASSWORD, env = process.env } = {}) {
+  const notes = [];
+  const length = password ? [...String(password)].length : 0;
+  if (length && length < 12) {
+    notes.push({
+      level: "warn",
+      text: `[auth] WARNING: SETUP_PASSWORD is only ${length} characters. The sign-in limits slow guessing down, but places guessing together still get about 180 tries a day, so a 4-digit PIN can be found in about a month. Use 12 or more characters (on a phone, the PIN pad's "Use password instead" takes a longer one).`,
+    });
+  }
+  const raw = String(env.TARSEE_TRUSTED_PROXY ?? "").trim();
+  if (env.RAILWAY_PROJECT_ID) {
+    if (raw) notes.push({ level: "log", text: "[auth] TARSEE_TRUSTED_PROXY is ignored on Railway: each sign-in's place is the X-Real-IP header Railway's edge sets." });
+    return notes;
+  }
+  const trust = trustedProxies(raw);
+  if (trust.skipped.length) {
+    notes.push({ level: "warn", text: `[auth] TARSEE_TRUSTED_PROXY: skipped ${trust.skipped.join(", ")}. Each entry is "none", "loopback", an address (10.0.0.2) or a range (172.18.0.0/16, fd00::/8).` });
+  }
+  if (!trust.names.length) {
+    notes.push({ level: "log", text: "[auth] Sign-in limits count each connection's own address; X-Forwarded-For is believed from no proxy. Behind a proxy of your own, name it in TARSEE_TRUSTED_PROXY, or every client behind it shares one budget." });
+    return notes;
+  }
+  const named = trust.names.filter((n) => n !== "loopback");
+  const parts = [trust.loopback ? "a proxy on this machine (loopback)" : "", named.length ? named.join(", ") : ""].filter(Boolean);
+  notes.push({ level: "log", text: `[auth] Sign-in limits believe X-Forwarded-For from ${parts.join(" and ")} (TARSEE_TRUSTED_PROXY).` });
+  if (trust.loopback) {
+    notes.push({ level: "warn", text: "[auth] With TARSEE_TRUSTED_PROXY=loopback, anything running on this machine, the AI's shell included, can name any client in X-Forwarded-For: only the limit for all places together holds it, and it can pause signing in for everyone." });
+  }
+  return notes;
+}
+
+/** Forgets every place's tries and any pause for everyone (tests), in memory and in the database. */
+export function __resetSignInLimitsForTests() {
+  authAttempts.clear();
+  everyone.wrong = [];
+  everyone.pausedUntil = 0;
+  everyone.pauses = 0;
+  ownAddresses = { at: -Infinity, set: new Set() };
+  trustRead = { raw: null, trust: null };
+  _untrustedProxyNoted = false;
+  _limitsSaveFailed = false;
+  try {
+    _limitsDb?.exec("DELETE FROM sign_in_places; DELETE FROM sign_in_pause;");
+  } catch { /* closed */ }
 }
