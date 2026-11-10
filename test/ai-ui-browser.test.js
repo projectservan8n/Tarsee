@@ -912,10 +912,21 @@ describe("the AI pages in a browser: what a change reaches", { skip }, () => {
       await page.locator("#aiHeaderChip:not([hidden])").click();
       const box = page.locator("#chatgptAiCard [data-ai-device]");
       const STEP1 = /"Enable device code sign-in for Codex" is switched on in ChatGPT \(step 1\)/;
+      // A slow server: an end of a sign-in (DELETE) is answered late, after a start sent after it. Each click below
+      // comes straight after a failure, and nothing that comes in later may take the new reason away.
+      await page.route(`${origin}/api/ai/chatgpt/login`, async (route) => {
+        if (route.request().method() === "DELETE") await new Promise((r) => setTimeout(r, 400));
+        return route.fallback();
+      });
       const attempt = async (text) => {
+        const starts = api.calls.filter((c) => c.path === "/api/ai/chatgpt/login" && c.method === "POST").length;
         await page.locator('#chatgptAiCard [data-ai-action="chatgpt-login"]').click();
-        await box.getByText(text).waitFor({ timeout: 10000 });
-        return box.innerText();
+        await box.getByText(text).waitFor({ timeout: 5000 });
+        await page.waitForTimeout(600);
+        assert.equal(api.calls.filter((c) => c.path === "/api/ai/chatgpt/login" && c.method === "POST").length, starts + 1, "the click started a sign-in");
+        const shown = await box.innerText();
+        assert.match(shown, text, "and its reason is still there");
+        return shown;
       };
 
       api.state.loginFail = { status: 502, body: { error: "ChatGPT sign-in couldn't start: Couldn't reach OpenAI to start the sign-in. Check this server's internet connection and try again.", code: "network" } };
@@ -1037,6 +1048,156 @@ describe("the AI pages in a browser: what a change reaches", { skip }, () => {
         await page.locator(`[data-setup="provider"][data-provider="${id}"]`).click();
         await check(id);
       }
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+describe("ChatGPT sign-in clicked again: the new one starts, and what it shows stays", { skip }, () => {
+  const WAIT = 5000;
+  // Longer than a poll (3 seconds) and a late end (half a second): had either taken the new sign-in away, it shows now.
+  const POLL_AND_MORE = 3800;
+
+  /**
+   * /api/ai/chatgpt/login as routes/ai.js answers it: a start while a code waits hands that code back, any other
+   * start gets a new code (CODE-0001, CODE-0002...), an end (DELETE) ends whatever sign-in the server holds, and a
+   * poll then answers idle. An end reaches the server half a second late (a slow network), so a start sent after it
+   * can land first. `fail` set: a start is refused with it. `log`: the starts and ends, in the order they landed.
+   */
+  const lateEndServer = async (page) => {
+    const s = { login: null, fail: null, codes: 0, log: [] };
+    await page.route(`${origin}/api/ai/chatgpt/login`, async (route) => {
+      const method = route.request().method();
+      const json = (status, data) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(data) });
+      if (method === "DELETE") {
+        await new Promise((r) => setTimeout(r, 500));
+        s.log.push("end");
+        s.login = null;
+        return json(200, { ok: true, state: "idle" });
+      }
+      if (method === "POST") {
+        s.log.push("start");
+        if (s.fail) return json(s.fail.status, s.fail.body);
+        if (s.login?.state !== "waiting") {
+          s.codes++;
+          s.login = { state: "waiting", url: "https://auth.openai.com/codex/device", code: `CODE-000${s.codes}`, expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString() };
+        }
+        return json(200, s.login);
+      }
+      return json(200, s.login || { state: "idle" });
+    });
+    return s;
+  };
+  const NETWORK = { status: 502, body: { error: "ChatGPT sign-in couldn't start: Couldn't reach OpenAI to start the sign-in. Check this server's internet connection and try again.", code: "network" } };
+  const NO_CODEX = { status: 502, body: { error: "ChatGPT sign-in couldn't start: Codex isn't installed on this server.", code: "codex-missing" } };
+
+  it("Settings → AI: straight after a failure, a click starts a new sign-in, and neither its reason nor its code is taken away", async () => {
+    const { page, errors, context } = await openPage({ needsSetup: false });
+    try {
+      const server = await lateEndServer(page);
+      await page.locator("#aiHeaderChip:not([hidden])").click();
+      const box = page.locator("#chatgptAiCard [data-ai-device]");
+      const signIn = page.locator('#chatgptAiCard [data-ai-action="chatgpt-login"]');
+
+      server.fail = NETWORK;
+      await signIn.evaluate((b) => { b.dataset.testMark = "before"; });
+      await signIn.click();
+      await box.getByText(/Couldn't reach OpenAI/).waitFor({ timeout: WAIT });
+      assert.equal(await signIn.getAttribute("data-test-mark"), "before", "the failure draws only the box: the button is the one clicked");
+      assert.equal(await signIn.isEnabled(), true);
+
+      // Clicked again at once, it fails another way: that reason shows, and stays.
+      server.fail = NO_CODEX;
+      await signIn.click();
+      await box.getByText(/Codex isn't installed/).waitFor({ timeout: WAIT });
+      await page.waitForTimeout(800);
+      assert.equal(await box.isHidden(), false, "the box stays, with the new reason");
+      assert.match(await box.innerText(), /Codex isn't installed/);
+
+      // Again, and this time a code comes: it stays the one to type, poll after poll.
+      server.fail = null;
+      await signIn.click();
+      await box.getByText("CODE-0001").waitFor({ timeout: WAIT });
+      await page.waitForTimeout(POLL_AND_MORE);
+      const text = await box.innerText();
+      assert.match(text, /CODE-0001/, "the new code is still there");
+      assert.doesNotMatch(text, /The sign-in stopped/, "not ended by the failed sign-in before it");
+      assert.deepEqual(server.log, ["start", "start", "start"], "a sign-in that failed has nothing to end on the server");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("Settings → AI: clicked while a code waits, that code is ended first, then a new one shows and stays", async () => {
+    const { page, errors, context } = await openPage({ needsSetup: false });
+    try {
+      const server = await lateEndServer(page);
+      await page.locator("#aiHeaderChip:not([hidden])").click();
+      const box = page.locator("#chatgptAiCard [data-ai-device]");
+      const signIn = page.locator('#chatgptAiCard [data-ai-action="chatgpt-login"]');
+      await signIn.click();
+      await box.getByText("CODE-0001").waitFor({ timeout: WAIT });
+
+      // A start that landed before the end would get CODE-0001 back from the server, then lose it to the end.
+      await signIn.click();
+      await box.getByText("Starting the ChatGPT sign-in").waitFor({ timeout: WAIT });
+      await box.getByText("CODE-0002").waitFor({ timeout: WAIT });
+      await page.waitForTimeout(POLL_AND_MORE);
+      const text = await box.innerText();
+      assert.match(text, /CODE-0002/, "the new code is still there");
+      assert.doesNotMatch(text, /CODE-0001|The sign-in stopped/);
+      assert.deepEqual(server.log, ["start", "end", "start"], "the old code is ended before a new one is asked for");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("Settings → AI: Cancel clears the box at once, and a click straight after starts a new sign-in that stays", async () => {
+    const { page, errors, context } = await openPage({ needsSetup: false });
+    try {
+      const server = await lateEndServer(page);
+      await page.locator("#aiHeaderChip:not([hidden])").click();
+      const box = page.locator("#chatgptAiCard [data-ai-device]");
+      await page.locator('#chatgptAiCard [data-ai-action="chatgpt-login"]').click();
+      await box.getByText("CODE-0001").waitFor({ timeout: WAIT });
+
+      await box.locator('[data-ai-action="chatgpt-cancel"]').click();
+      assert.equal(await box.isHidden(), true, "the code is gone as soon as Cancel is clicked");
+      await page.locator('#chatgptAiCard [data-ai-action="chatgpt-login"]').click();
+      await box.getByText("CODE-0002").waitFor({ timeout: WAIT });
+      await page.waitForTimeout(POLL_AND_MORE);
+      assert.match(await box.innerText(), /CODE-0002/, "the cancel's late end didn't take the new code away");
+      assert.deepEqual(server.log, ["start", "end", "start"]);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("the wizard: straight after a failure, a click starts a new sign-in, and its code stays", async () => {
+    const { page, errors, context } = await openPage();
+    try {
+      const server = await lateEndServer(page);
+      await page.getByRole("button", { name: /My ChatGPT plan/ }).click();
+      await page.getByText("How to set up ChatGPT plan").waitFor();
+      const box = page.locator("#setupDevice");
+      const signIn = page.getByRole("button", { name: "Sign in with ChatGPT" });
+
+      server.fail = NO_CODEX;
+      await signIn.click();
+      await box.getByText(/Codex isn't installed/).waitFor({ timeout: WAIT });
+      server.fail = null;
+      await signIn.click();
+      await box.getByText("CODE-0001").waitFor({ timeout: WAIT });
+      await page.waitForTimeout(POLL_AND_MORE);
+      const text = await box.innerText();
+      assert.match(text, /CODE-0001/, "the new code is still there");
+      assert.doesNotMatch(text, /The sign-in stopped/);
+      assert.deepEqual(server.log, ["start", "start"], "a sign-in that failed has nothing to end on the server");
       assert.deepEqual(errors, []);
     } finally {
       await context.close();

@@ -18,6 +18,9 @@ const TTS_BASE_MS = 8_000;
 const TTS_PER_CHAR_MS = 20;
 const TTS_TIMEOUT = 30_000;
 const RETRY_DELAY = 500; // times the attempt number
+// The longest a failed attempt waits for node-edge-tts to finish writing its audio file, so the file can be removed,
+// before the next attempt starts. The library normally finishes within a moment; this only matters if it never does.
+const FILE_DONE_WAIT_MS = 2_000;
 
 // Swapped only by tests: the EdgeTTS class (null loads node-edge-tts) and the
 // waits (a time limit set here is used for every sentence, whatever its length).
@@ -43,6 +46,8 @@ export function __setForTests({ EdgeTTS, timeoutMs, retryDelayMs } = {}) {
  *   audio file in the temp folder.
  * Returns `lost`, which rejects as soon as the connection closes or fails before
  * the whole reply has come, and end(failed): call it once the attempt is over.
+ * end returns true when the attempt failed after the library had its connection,
+ * and so made its audio file, which it may not have finished writing yet.
  */
 function trackConnection(tts) {
   let socket = null;
@@ -79,11 +84,13 @@ function trackConnection(tts) {
   const end = (failed) => {
     over = true;
     // A good attempt's connection, and its file, are closed by node-edge-tts itself.
-    if (failed && socket) {
+    const madeFile = Boolean(failed && socket);
+    if (madeFile) {
       closeSocket(socket);
       if (!complete) endReply(socket);
     }
     socket = null;
+    return madeFile;
   };
   return { lost, end };
 }
@@ -108,6 +115,27 @@ function closeSocket(ws) {
     if (typeof ws.terminate === "function") ws.terminate();
     else ws.close?.();
   } catch { /* already closed */ }
+}
+
+function removeFile(file) {
+  try { fs.rmSync(file, { force: true }); } catch { /* ignore */ }
+}
+
+/**
+ * Removes a failed attempt's audio file once node-edge-tts is done with it.
+ * The library opens the file a moment after it sends the speech request, on
+ * Node's thread pool, so a connection that drops first ends the attempt before
+ * the file exists. Removing it then removes nothing, and the library makes it
+ * afterwards, with the audio that had come. Once handed the end of the reply
+ * (endReply), the library settles its promise after the file is written, so the
+ * file is removed then. If that takes longer than FILE_DONE_WAIT_MS, the next
+ * attempt goes ahead and the file is still removed when the library settles.
+ */
+async function removeWhenDone(speech, file) {
+  const done = speech.then(() => {}, () => {}).then(() => removeFile(file));
+  let timer;
+  await Promise.race([done, new Promise((r) => { timer = setTimeout(r, FILE_DONE_WAIT_MS); })]);
+  clearTimeout(timer);
 }
 
 export class EdgeTTSEngine extends TTSEngine {
@@ -169,6 +197,7 @@ export class EdgeTTSEngine extends TTSEngine {
       const tmpFile = path.join(os.tmpdir(), `tarsee-edge-tts-${crypto.randomUUID()}.mp3`);
       let timer;
       let tracked = null;
+      let speech = null;
       let failed = true;
       try {
         // node-edge-tts gives up after its own timeout, 10 s unless told
@@ -176,8 +205,9 @@ export class EdgeTTSEngine extends TTSEngine {
         // limit. Give it the same limit.
         const t = new EdgeTTS({ voice, timeout: limit });
         tracked = trackConnection(t);
+        speech = t.ttsPromise(text, tmpFile);
         await Promise.race([
-          t.ttsPromise(text, tmpFile),
+          speech,
           // A connection that drops part-way ends the attempt at once, so the next one starts.
           tracked.lost,
           new Promise((_, reject) => {
@@ -196,8 +226,9 @@ export class EdgeTTSEngine extends TTSEngine {
         console.warn(`[edge-tts] attempt ${attempt}/${MAX_RETRIES} failed: ${lastError.message}`);
       } finally {
         clearTimeout(timer);
-        tracked?.end(failed);
-        try { fs.rmSync(tmpFile, { force: true }); } catch { /* ignore */ }
+        const madeFile = tracked?.end(failed);
+        removeFile(tmpFile);
+        if (madeFile && speech) await removeWhenDone(speech, tmpFile);
       }
       if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, _retryDelayMs * attempt));
     }

@@ -191,6 +191,16 @@ export async function createTelegramBot(config, db, opts = {}) {
     const chatId = ctx.chat.id;
     const username = ctx.from.username || ctx.from.first_name || "User";
 
+    // The channel can stop while an update is on its way to its AI turn: while its photo or file downloads, its voice
+    // note is transcribed, or at any wait below. It is then dropped, as one still waiting in line is, and the log says
+    // so; only a reply already running ends as it would have.
+    const channelStopped = () => {
+      if (!stopped) return false;
+      console.warn(`[telegram] the channel is stopped: a message from chat ${chatId} dropped without an answer`);
+      return true;
+    };
+    if (channelStopped()) return;
+
     if (!chatAllowed(ctx)) return;
 
     if (!text?.trim()) return;
@@ -215,6 +225,7 @@ export async function createTelegramBot(config, db, opts = {}) {
         // no-op'd, letting sessions accumulate huge transcripts.
         db,
       });
+      if (channelStopped()) return;
 
       if (cmdResult.handled) {
         const playbook = extractPlaybookPrompt(cmdResult);
@@ -265,6 +276,7 @@ export async function createTelegramBot(config, db, opts = {}) {
     // it with tool progress, but users found it noisy. Final reply is the
     // only bubble the user sees.
     await ctx.sendChatAction("typing").catch(() => {});
+    if (channelStopped()) return;
     const typingInterval = setInterval(() => {
       ctx.sendChatAction("typing").catch(() => {});
     }, 4000);
@@ -415,6 +427,8 @@ ${sendFileHint("telegram")}`,
     // The AI this turn runs on, from the turn layer's route event (the backup model's, if it answered instead).
     let routed = null;
     try {
+      // This may have waited behind another reply in this chat. (Returning here still clears the timers below.)
+      if (channelStopped()) return;
       const workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
       // Slash-command playbooks: keep the user's literal "/checkpoint" in

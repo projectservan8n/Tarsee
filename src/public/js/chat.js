@@ -107,6 +107,12 @@ const Chat = {
 
     // Keyboard: palette navigation + Enter to send
     this.elements.messageInput.addEventListener("keydown", (e) => {
+      // A held Enter acts once, when it goes down: its repeats neither send nor pick a command. So a key held down while
+      // the focus moved here (a diagram's node puts its words in the box) never sends the words it finds.
+      if (e.key === "Enter" && e.repeat && (this.paletteVisible || !e.shiftKey)) {
+        e.preventDefault();
+        return;
+      }
       if (this.paletteVisible) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -2251,7 +2257,8 @@ const Chat = {
    * A click on a diagram's node puts a question about that node in the message box, and nothing is sent: the AI chose
    * those words (and they may be one of the chat's commands, which run as the owner), so the owner reads them and
    * presses Send, as with dictation. They go in at the caret, added to a draft, and the files waiting to go with the
-   * message stay where they are. Each node shows its words before any click (lib/diagram-renderer.js).
+   * message stay where they are. Each node shows its words before any click (lib/diagram-renderer.js), and they go in
+   * on one line, all in view: no run of blank lines or spaces in front can hide a command behind them.
    * Only a diagram Tarsee drew can put them there. A diagram is at
    * /diagram/<id>/: a page the server draws itself from the diagram's data on every request, whose CSP lets one script
    * run, Tarsee's own, the same for every diagram (lib/canvas.js, lib/diagram-renderer.js). Nothing the AI writes runs
@@ -2269,6 +2276,9 @@ const Chat = {
   _initDiagramListener() {
     const FIELDS = new Set(["type", "diagramId", "nodeId", "label", "sublabel", "question", "click"]);
     const DIAGRAM_ID = /^[a-z0-9-]{1,64}$/;
+    // Words in one line, all in view: trimmed, every run of spaces, line breaks and control characters one space (as
+    // lib/diagram-renderer.js keeps them), so blank lines or spaces in front can't push them out of sight in the box.
+    const fold = (words, max) => words.replace(/[\s\p{Cc}]+/gu, " ").trim().slice(0, max).trimEnd();
     // For each diagram iframe, the last click taken from the page it shows. A page loaded again counts from 1.
     const lastClick = new WeakMap();
     this.elements.chatArea.addEventListener("load", (e) => {
@@ -2293,14 +2303,14 @@ const Chat = {
       if (type !== "tarsee:diagram-click" || diagramId !== id) return;
       if (typeof nodeId !== "string" || !nodeId || typeof label !== "string" || typeof sublabel !== "string") return;
       // A node with no question of its own sends none (lib/diagram-renderer.js leaves out one that isn't words).
-      if (question !== undefined && (typeof question !== "string" || !question.trim())) return;
+      if (question !== undefined && (typeof question !== "string" || !fold(question, 500))) return;
       // A click this page has not sent before, right after a person clicked.
       if (!Number.isSafeInteger(click) || click < 1 || click <= (lastClick.get(frame) || 0)) return;
       if (!navigator.userActivation?.isActive) return;
 
-      const name = label.slice(0, 200);
-      const more = sublabel.slice(0, 200);
-      const custom = (question || "").slice(0, 500);
+      const name = fold(label, 200);
+      const more = fold(sublabel, 200);
+      const custom = fold(question || "", 500);
       if (!name && !custom) return;
       lastClick.set(frame, click);
       const text = custom || (more ? `Tell me more about: ${name}. ${more}` : `Tell me more about: ${name}`);
@@ -2314,6 +2324,7 @@ const Chat = {
    * Words into the message box at the caret, added to what is typed (a selection stays: they go after it), with a space
    * either side where one is needed, as dictation puts them (js/voice.js). Nothing is sent, and the files waiting to go
    * with the message stay. The box gets the focus; on a phone without the keyboard popping up, until the box is tapped.
+   * The box scrolls to show the words.
    */
   insertIntoBox(words) {
     const input = this.elements.messageInput;
@@ -2323,8 +2334,10 @@ const Chat = {
     const after = value.slice(at);
     const lead = before && !/\s$/.test(before) ? " " : "";
     const trail = after && !/^[\s.,!?;:)]/.test(after) ? " " : "";
-    input.value = before + lead + words + trail + after;
-    const caret = (before + lead + words).length;
+    const upToCaret = before + lead + words;
+    const text = upToCaret + trail + after;
+    input.value = text;
+    const caret = upToCaret.length;
     const phone = window.matchMedia?.("(pointer: coarse)").matches;
     if (phone && document.activeElement !== input) {
       // inputmode=none: focused, with no keyboard. A tap on the box (or leaving it) brings the keyboard back.
@@ -2340,6 +2353,22 @@ const Chat = {
     input.focus({ preventScroll: true });
     input.setSelectionRange(caret, caret);
     input.dispatchEvent(new Event("input", { bubbles: true }));   // Send turns on, the box grows to fit
+
+    // The words in view: the box stops growing at 200px, and a long draft may be scrolled away from the caret (moving
+    // the caret doesn't scroll the box). Where the caret's line ends is the height of the text up to the caret,
+    // measured in the box itself; the box then scrolls as little as it must to show that line.
+    const top = input.scrollTop;
+    input.value = upToCaret;
+    const bottom = input.scrollHeight;
+    input.value = text;
+    input.setSelectionRange(caret, caret);
+    if (bottom <= input.clientHeight) {
+      input.scrollTop = 0;   // the text up to the caret fits in the box
+    } else {
+      const style = getComputedStyle(input);
+      const lineTop = bottom - (parseFloat(style.paddingBottom) || 0) - (parseFloat(style.lineHeight) || 20);
+      input.scrollTop = Math.min(Math.max(top, bottom - input.clientHeight), lineTop);
+    }
   },
 
   _initTypingSocket() {
@@ -3004,10 +3033,12 @@ const Chat = {
     };
     text = text.replace(/<a\s+[^>]*href=["'](?:https?:\/\/[^\s/"']+)?\/(canvas|diagram)\/([a-z0-9-]+)\/?["'][^>]*>[\s\S]*?<\/a>/gi, (_m, kind, id) => placeEmbed(kind.toLowerCase(), id));
     text = text.replace(/(?:https?:\/\/[^\s/)]+)?\/canvas\/([a-z0-9-]+)\/?(?=[\s)\]."',;:!?]|$)/g, (_m, id) => placeEmbed("canvas", id));
-    // A diagram's address on its own: Tarsee's own, as a path (/diagram/<id>/) or with this page's origin in front. Not
-    // the end of a longer path (docs/diagram/flow.png), and not another site's address (https://example.com/diagram/x/),
-    // which stays a link: what comes before the path is a whole site, and only this page's own counts.
-    text = text.replace(/(?<![\w./\-\]:@%~])(https?:\/\/[^\s/)]+)?\/diagram\/([a-z0-9-]+)\/?(?=[\s)\]."',;:!?]|$)/g, (m, site, id) => (!site || isOwnSite(site) ? placeEmbed("diagram", id) : m));
+    // A diagram's address on its own: Tarsee's own, as a path (/diagram/<id>/) or with this page's origin in front. Only
+    // where an address starts (the start of the text, a space, an opening bracket or quote), so never the end of a
+    // longer path (docs/diagram/flow.png) or of another site's address (https://app.example.com/#/diagram/x/,
+    // https://example.com/login?next=/diagram/x/). And the whole address is read as the browser reads it: only this
+    // page's own diagram counts, so another site's (https://example.com/diagram/x/) stays a link.
+    text = text.replace(/(?<![^\s([{<"'])(?:https?:\/\/[^\s/?#)"'<>]+)?\/diagram\/([a-z0-9-]+)\/?(?=[\s)\]}>."',;:!?]|$)/g, (m, id) => (isOwnDiagram(m, id) ? placeEmbed("diagram", id) : m));
 
     // Thinking / reasoning: folded.
     text = text.replace(/<(thinking|antThinking|antml:thinking|reasoning)>([\s\S]*?)<\/\1>/g, (_m, tag, content) => token(renderThinkingBlock(tag.includes("thinking") || tag.includes("Thinking") ? "Thinking" : "Reasoning", content.trim())));
@@ -3036,10 +3067,16 @@ function safeHref(url) {
   return Core.safeHref(url);
 }
 
-/** Whether `site`, a scheme and host as written in a message ("https://host:port"), is this page's own origin. */
-function isOwnSite(site) {
+/**
+ * Whether `address`, as written in a message (/diagram/<id>/, or a site in front of it), is the address of this page's
+ * own diagram `id`, read as the browser reads it: this page's origin, that path, and nothing else (no user name, no
+ * ? or # part).
+ */
+function isOwnDiagram(address, id) {
   try {
-    return new URL(site).origin === window.location.origin;
+    const url = new URL(address, window.location.href);
+    return url.origin === window.location.origin && !url.username && !url.password && !url.search && !url.hash
+      && (url.pathname === `/diagram/${id}/` || url.pathname === `/diagram/${id}`);
   } catch {
     return false;
   }

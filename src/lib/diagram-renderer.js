@@ -34,6 +34,18 @@ function textOf(value, max = MAX_TEXT) {
   return typeof value === "string" ? value.slice(0, max) : "";
 }
 
+/**
+ * Words as they show in one line: trimmed, and every run of spaces, line breaks and control characters one space, so
+ * nothing in front of them (a run of blank lines, hundreds of spaces) pushes them out of sight in the message box.
+ * js/chat.js _initDiagramListener folds what a click puts in the box the same way.
+ */
+const foldWords = (text) => text.replace(/[\s\p{Cc}]+/gu, " ").trim();
+
+/** Words (textOf), folded to one line (foldWords) before they are cut to `max`, with no space left at the cut. */
+function wordsOf(value, max = MAX_TEXT) {
+  return typeof value === "string" ? foldWords(value).slice(0, max).trimEnd() : textOf(value, max);
+}
+
 /** A position: a finite number, kept on the page; anything else is none (the layout places the node). */
 function positionOf(value) {
   return typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(value, 0), MAX_POSITION) : undefined;
@@ -45,8 +57,10 @@ function positionOf(value) {
  *   { title, nodes: [{ id, label, sublabel, kind, x?, y?, question? }], edges: [{ from, to, label? }],
  *     legend: [{ kind, label? }] }
  * A node needs an id, and the first node with an id is the one kept. A question is kept only when it is a string
- * with words in it, so a node whose question is anything else asks about its label instead. An edge is kept only
- * between two nodes that are there.
+ * with words in it, so a node whose question is anything else asks about its label instead. Every word shown (the
+ * title, labels, sublabels, questions) is folded to one line (foldWords): what a click puts in the message box is all
+ * in view, and the node's tooltip shows it as the box will. Ids are kept as written. An edge is kept only between two
+ * nodes that are there.
  */
 export function normalizeDiagramSpec(spec) {
   const s = spec && typeof spec === "object" ? spec : {};
@@ -57,12 +71,13 @@ export function normalizeDiagramSpec(spec) {
     const id = textOf(n.id);
     if (!id || ids.has(id)) continue;
     ids.add(id);
-    const node = { id, label: textOf(n.label), sublabel: textOf(n.sublabel), kind: kindOf(n.kind) };
+    const node = { id, label: wordsOf(n.label), sublabel: wordsOf(n.sublabel), kind: kindOf(n.kind) };
     const x = positionOf(n.x);
     const y = positionOf(n.y);
     if (x !== undefined) node.x = x;
     if (y !== undefined) node.y = y;
-    if (typeof n.question === "string" && n.question.trim()) node.question = n.question.slice(0, MAX_QUESTION);
+    const question = typeof n.question === "string" ? wordsOf(n.question, MAX_QUESTION) : "";
+    if (question) node.question = question;
     nodes.push(node);
   }
   const edges = [];
@@ -71,16 +86,16 @@ export function normalizeDiagramSpec(spec) {
     const from = textOf(e.from);
     const to = textOf(e.to);
     if (!ids.has(from) || !ids.has(to)) continue;
-    const label = textOf(e.label);
+    const label = wordsOf(e.label);
     edges.push(label ? { from, to, label } : { from, to });
   }
   const legend = [];
   for (const l of Array.isArray(s.legend) ? s.legend : []) {
     if (!l || typeof l !== "object") continue;
-    const label = textOf(l.label);
+    const label = wordsOf(l.label);
     legend.push(label ? { kind: kindOf(l.kind), label } : { kind: kindOf(l.kind) });
   }
-  return { title: textOf(s.title), nodes, edges, legend };
+  return { title: wordsOf(s.title), nodes, edges, legend };
 }
 
 function esc(s) {
@@ -198,22 +213,37 @@ function renderLegend(legend) {
  * The page's one script, the same for every diagram (the server's CSP names it by its hash, lib/canvas.js). It reads
  * what to send from the page (the body's data-diagram-id, each node's data-* attributes), so nothing from a diagram's
  * data is ever in it. It sends only for a person's click (not one a script made), one message per click: the second
- * click of a double-click is not another question. A node is a button, so Enter or Space on it is a click too (once
- * per press: a key held down is not more clicks).
+ * click of a double-click is not another question. A node is a button, so Enter or Space on it is a click too: once
+ * per press, when the key comes up after going down on that node. Not when it goes down: the chat then moves the focus
+ * to the message box, and a key still held there would repeat into it (an Enter that sends the words).
  */
 export const DIAGRAM_SCRIPT = `
 (function () {
   "use strict";
   var diagramId = document.body.getAttribute("data-diagram-id") || "";
   var clicks = 0;
+  var pressed = null;
+  function isPress(event) {
+    return event.isTrusted && (event.key === "Enter" || event.key === " ");
+  }
   function onClick(event) {
     if (!event.isTrusted || event.detail > 1) return;
     tell(event.currentTarget);
   }
-  function onKey(event) {
-    if (!event.isTrusted || event.repeat || (event.key !== "Enter" && event.key !== " ")) return;
+  function onKeyDown(event) {
+    if (!isPress(event)) return;
     event.preventDefault();
-    tell(event.currentTarget);
+    if (!event.repeat) pressed = { node: event.currentTarget, key: event.key };
+  }
+  function onKeyUp(event) {
+    if (!isPress(event)) return;
+    event.preventDefault();
+    var press = pressed;
+    pressed = null;
+    if (press && press.node === event.currentTarget && press.key === event.key) tell(event.currentTarget);
+  }
+  function onBlur() {
+    pressed = null;
   }
   function tell(node) {
     clicks += 1;
@@ -230,7 +260,9 @@ export const DIAGRAM_SCRIPT = `
   }
   Array.prototype.forEach.call(document.querySelectorAll(".node[role=button]"), function (node) {
     node.addEventListener("click", onClick);
-    node.addEventListener("keydown", onKey);
+    node.addEventListener("keydown", onKeyDown);
+    node.addEventListener("keyup", onKeyUp);
+    node.addEventListener("blur", onBlur);
   });
 })();
 `;

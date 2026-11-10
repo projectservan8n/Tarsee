@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 
@@ -28,10 +29,11 @@ const RealWebSocket = ws.WebSocket;
  * A stand-in for the WebSocket node-edge-tts opens to Microsoft. It opens after
  * `openAfterMs`, then answers the speech request with `bytes` of audio and the
  * end-of-turn message. Or, as `answer` says: "never" never answers; "drop" sends
- * some audio and then loses the connection, as ws reports it (close code 1006);
- * "end-then-close" sends the whole reply and then the server closes at once.
+ * some audio and then loses the connection `dropAfterMs` later (0: at once), as
+ * ws reports it (close code 1006); "end-then-close" sends the whole reply and
+ * then the server closes at once. `onSpeechRequest` runs as the request comes.
  */
-function fakeSocket({ openAfterMs = 0, answer = "audio", bytes = 400 } = {}) {
+function fakeSocket({ openAfterMs = 0, answer = "audio", bytes = 400, dropAfterMs = 20, onSpeechRequest = null } = {}) {
   const sockets = [];
   class FakeWebSocket extends EventEmitter {
     constructor(url) {
@@ -44,11 +46,14 @@ function fakeSocket({ openAfterMs = 0, answer = "audio", bytes = 400 } = {}) {
     }
     send(msg) {
       if (!String(msg).includes("Path:ssml") || answer === "never") return;
+      onSpeechRequest?.();
       setImmediate(() => {
         if (this.terminated) return;
         this.emit("message", Buffer.concat([Buffer.from("X-RequestId:1\r\nPath:audio\r\n"), Buffer.alloc(bytes, 7)]), true);
         if (answer === "drop") {
-          setTimeout(() => this.emit("close", 1006, Buffer.alloc(0)), 20);
+          const drop = () => this.emit("close", 1006, Buffer.alloc(0));
+          if (dropAfterMs > 0) setTimeout(drop, dropAfterMs);
+          else drop();
           return;
         }
         this.emit("message", Buffer.from("X-RequestId:1\r\nPath:turn.end\r\n\r\n{}"), false);
@@ -65,6 +70,28 @@ function fakeSocket({ openAfterMs = 0, answer = "audio", bytes = 400 } = {}) {
 async function withSocket(sock, fn) {
   ws.WebSocket = sock.FakeWebSocket;
   try { return await fn(); } finally { ws.WebSocket = RealWebSocket; }
+}
+
+/**
+ * Runs fn while every file in the temp folder opens `ms` late, as it does when
+ * Node's thread pool is busy: fs.createWriteStream opens its file with fs.open,
+ * on that pool. fn gets the list of files opened so far.
+ */
+async function withSlowOpens(ms, fn) {
+  const realOpen = fs.open;
+  const opened = [];
+  fs.open = (file, ...rest) => {
+    const cb = rest.pop();
+    if (!String(file).startsWith(TMP)) return realOpen(file, ...rest, cb);
+    setTimeout(() => realOpen(file, ...rest, (...args) => { opened.push(file); cb(...args); }), ms);
+  };
+  try { return await fn(opened); } finally { fs.open = realOpen; }
+}
+
+/** Keeps every thread of Node's pool busy for a while (about 100 ms each on a fast machine). */
+function busyThreadPool() {
+  const threads = Number(process.env.UV_THREADPOOL_SIZE) || 4;
+  for (let i = 0; i < threads; i++) crypto.pbkdf2(Buffer.alloc(8), Buffer.alloc(8), 250_000, 32, "sha256", () => {});
 }
 
 /**
@@ -263,6 +290,33 @@ describe("Edge TTS gives node-edge-tts the engine's own time limit", () => {
     assert.ok(took < 1500, `three dropped attempts took ${took} ms, as if each waited for its limit`);
     for (const s of sock.sockets) assert.equal(s.terminated, true, "a dropped attempt left its connection open");
     assert.deepEqual(leftovers(), []);
+  });
+
+  // node-edge-tts opens its audio file a moment after it sends the speech request. A connection that drops before
+  // then ended the attempt before the file existed: the removal found nothing, then the file was made, with the audio
+  // that had come, and stayed in the temp folder.
+  it("removes the file of an attempt whose connection drops before node-edge-tts has opened it", async () => {
+    const sock = fakeSocket({ answer: "drop", dropAfterMs: 0 });
+    __setForTests({ retryDelayMs: 0, timeoutMs: 2000 });
+    await withSlowOpens(150, async (opened) => {
+      await assert.rejects(withSocket(sock, () => new EdgeTTSEngine().synthesize("Hello.")), /lost its connection/);
+      assert.equal(sock.sockets.length, 3);
+      assert.deepEqual(leftovers(), [], "a file was left as the attempts gave up");
+      await new Promise((r) => setTimeout(r, 400)); // every late open is done by now
+      assert.equal(opened.length, 3, "each attempt's file was opened, after its connection dropped");
+    });
+    assert.deepEqual(leftovers(), [], "a file opened after its attempt gave up was left behind");
+  });
+
+  it("...and when Node's thread pool is busy as the connection drops just after the speech request", async () => {
+    // The timing the reviewer found it with: every pool thread busy, and the drop 20 ms after the request.
+    const sock = fakeSocket({ answer: "drop", dropAfterMs: 20, onSpeechRequest: busyThreadPool });
+    __setForTests({ retryDelayMs: 0, timeoutMs: 2000 });
+    await assert.rejects(withSocket(sock, () => new EdgeTTSEngine().synthesize("Hello.")), /lost its connection/);
+    assert.equal(sock.sockets.length, 3);
+    assert.deepEqual(leftovers(), [], "a file was left as the attempts gave up");
+    await new Promise((r) => setTimeout(r, 1000)); // the pool is free again
+    assert.deepEqual(leftovers(), [], "a file opened after its attempt gave up was left behind");
   });
 
   it("speaks when the connection closes just after the whole reply has come", async () => {

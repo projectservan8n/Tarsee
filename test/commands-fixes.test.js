@@ -516,6 +516,57 @@ describe("stopping the Telegram channel (the real bot, a Bot API on 127.0.0.1)",
     }
   });
 
+  it("drops a photo still downloading when the channel stops: no AI turn, no answer, and the log says so", async () => {
+    const api = await fakeBotApi();
+    api.fileDelay = { slow1: 1200 };
+    const { createTelegramBot } = await import("../src/channels/telegram.js");
+    const bot = await createTelegramBot({ token: "123456:test-token-not-real" }, db, { apiRoot: api.url });
+    try {
+      await withWarnings(async (warned) => {
+        api.photo(915, "slow1", { caption: "what is this?" });
+        assert.ok(await until(() => api.calls.some((c) => c.method === "getFile" && c.fields.file_id === "slow1")), "the download began");
+        await sleep(300);
+        await bot.stop();
+        await sleep(1500); // the download has ended
+        assert.equal(engine.calls.length, 0, "no AI turn ran for it");
+        assert.deepEqual(api.said(915), [], "nor was it answered");
+        assert.equal(settings.get("channel_conv.telegram:915"), null, "nor taken into a chat");
+        assert.ok(warned.some((w) => /stopped/i.test(w) && /915/.test(w) && /dropped/.test(w)), `the log says it was dropped: ${JSON.stringify(warned)}`);
+        assert.ok(await until(() => bot.health().handlerActive === 0, 2000), "the photo's handling ended");
+      });
+    } finally {
+      // Had it run a turn, that turn waits until stopped: end it, so a failure here can't hold the run open.
+      const conv = settings.get("channel_conv.telegram:915");
+      if (conv) stopTurns(conv);
+      await until(() => bot.health().handlerActive === 0, 3000);
+      api.close();
+    }
+  });
+
+  it("...and a message whose \"typing\" call to Telegram is still out when the channel stops", async () => {
+    const api = await fakeBotApi();
+    api.delay.sendChatAction = 1000;
+    const { createTelegramBot } = await import("../src/channels/telegram.js");
+    const bot = await createTelegramBot({ token: "123456:test-token-not-real" }, db, { apiRoot: api.url });
+    try {
+      await withWarnings(async (warned) => {
+        api.send(916, "hello there");
+        assert.ok(await until(() => api.calls.some((c) => c.method === "sendChatAction" && c.fields.chat_id === 916)), "the typing call went out");
+        await bot.stop();
+        await sleep(1300); // Telegram has answered it
+        assert.equal(engine.calls.length, 0, "no AI turn ran for it");
+        assert.deepEqual(api.said(916), [], "nor was it answered");
+        assert.ok(warned.some((w) => /stopped/i.test(w) && /916/.test(w) && /dropped/.test(w)), `the log says it was dropped: ${JSON.stringify(warned)}`);
+        assert.ok(await until(() => bot.health().handlerActive === 0, 2000), "its handling ended");
+      });
+    } finally {
+      const conv = settings.get("channel_conv.telegram:916");
+      if (conv) stopTurns(conv);
+      await until(() => bot.health().handlerActive === 0, 3000);
+      api.close();
+    }
+  });
+
   it("a channel stopped before its polling has begun never begins it", async () => {
     const api = await fakeBotApi();
     api.delay.deleteWebhook = 400; // launch asks this just before it starts polling
