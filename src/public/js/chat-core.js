@@ -55,6 +55,7 @@
     { id: "whatsapp", label: "WhatsApp", platforms: ["whatsapp"] },
     { id: "email", label: "Email", platforms: ["email"] },
     { id: "slack", label: "Slack", platforms: ["slack"] },
+    { id: "call", label: "Calls", platforms: ["call"] },   // a voice call's chat ("Calls with <name>", js/call.js)
   ];
   const BACKGROUND = { id: "background", label: "Background" };
   /** A group shows this many rows, then "Show n more" (the open chat and a working one always show). */

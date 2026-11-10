@@ -22,6 +22,7 @@ import { createLoopGuard } from "../lib/loop-guard.js";
 import { effectiveContextWindow } from "../ai/context-limits.js";
 import { placeFilesOnPage, forgetChatFiles } from "../lib/chat-files.js";   // the chat's files, kept with it
 import { keepUploadedFiles, noteReceivedFiles, viewablePath, sendViewable } from "../lib/sent-files.js";
+import { callTurn, CALL_HINT, CALL_TURN_REMINDER } from "../lib/voice-call.js";   // a voice call's turns (public/js/call.js)
 
 /**
  * Broadcast an SSE-like event to all connected WebSocket clients and record
@@ -445,8 +446,9 @@ chatRouter.post("/send", async (req, res) => {
   const askedModel = reqModel || routedTier || undefined;
   const askedProvider = reqProvider || undefined;
 
-  // Strip voice mode prefix before saving
-  let cleanMessage = message.startsWith("[voice] ") ? message.slice(8) : message;
+  // A voice call's message ("[call] ..."): the mark comes off before it is saved; the AI is told it is on a call.
+  const call = callTurn(message);
+  let cleanMessage = call.text;
 
   // Per-message thinking effort prefix: "!think do this" or "!! do this"
   const thinkMatch = cleanMessage.match(/^(?:!think\s+|!!\s*)(.*)/s);
@@ -497,6 +499,8 @@ chatRouter.post("/send", async (req, res) => {
   // stored convStore entry above keeps the original "/checkpoint" so
   // history UI stays readable, but the AI sees the playbook body.
   let userContentForAI = aiPromptOverride || cleanMessage;
+  // On every call message, so a long call can't drift back to chat formatting.
+  if (call.isCall && typeof userContentForAI === "string") userContentForAI += CALL_TURN_REMINDER;
   if (Array.isArray(attachments) && attachments.length > 0) {
     // A copy of each file, kept with the chat on this message (lib/chat-files.js), so the dashboard's chat shows them
     // after a reload and on every device. The agent gets them as before (pictures, PDFs and sounds as themselves; any
@@ -574,15 +578,9 @@ chatRouter.post("/send", async (req, res) => {
   // Send conversation ID (useful when auto-created)
   sendSSE(res, "conversation", { id: convId });
 
-  // Detect voice mode — the AI responds normally (tables, formatting, etc.)
-  // The TTS pipeline strips non-speakable content before reading aloud.
-  const isVoiceMode = message.startsWith("[voice]");
-  const voiceHint = isVoiceMode
-    ? "\n\n[VOICE MODE] Response shown visually AND read aloud. TTS limit: 2 short sentences max before any table/code. Tables are shown but NOT spoken. Structure: brief spoken intro (under 200 chars) → then table/details."
-    : "";
-
   // Build the system prompt: identity + memory + skills + conversation-specific (stable), the day's log and the
-  // other per-turn parts (volatile). Voice mode is this message's own, so it goes with the volatile part.
+  // other per-turn parts (volatile). A call's hint (every word is spoken) is this message's own, so it goes with the
+  // volatile part.
   const promptParts = buildSystemPromptParts({
     settingsStore,
     db: req.app.get("db"),
@@ -592,7 +590,7 @@ chatRouter.post("/send", async (req, res) => {
     conversationPrompt: conv?.system_prompt,
     channelHint: sendFileHint("web"),
   });
-  const systemParts = { stable: promptParts.stable, volatile: promptParts.volatile + voiceHint };
+  const systemParts = { stable: promptParts.stable, volatile: promptParts.volatile + (call.isCall ? CALL_HINT : "") };
 
   let fullResponse = "";
   let currentTextChunk = "";
@@ -721,9 +719,9 @@ chatRouter.post("/send", async (req, res) => {
         // Publish this turn to the live timeline (other devices watch it).
         liveConversationId: convId,
         liveSource: "web",
-        // Summaries of its thinking for the live view, but not for voice mode: they make the first words
-        // come about 3s later, and a spoken reply is waited for.
-        thinkingSummaries: !/^\[voice\]/i.test(String(message || "")),
+        // Summaries of its thinking for the live view, but not on a call: they make the first words come about
+        // 3s later, and a spoken reply is waited for.
+        thinkingSummaries: !call.isCall,
       });
 
       // How the turn layer said the turn ended (its one done): sent on in this request's own done, so the tab that
@@ -863,7 +861,8 @@ chatRouter.post("/send", async (req, res) => {
           tokensOut: usage.output_tokens,
         });
       }
-      if (convStore.messageCount(convId) <= 2) {
+      // (The call's chat keeps its name, "Calls with <name>".)
+      if (convStore.messageCount(convId) <= 2 && !call.isCall) {
         convStore.updateTitle(convId, message.slice(0, LIMITS.MAX_CONVERSATION_TITLE));
       }
       const contextTokens = contextWindowFor(provider, model);
@@ -896,7 +895,7 @@ chatRouter.post("/send", async (req, res) => {
   }, {
     live: {
       source: "web",
-      prompt: message,
+      prompt: call.isCall ? call.text : message,
       model: askedModel || null,
       // Its Stop took it out of the queue: this request is done now, not when the turn ahead ends.
       onRemoved: endWaiting,

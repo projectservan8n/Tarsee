@@ -1,177 +1,24 @@
 /**
- * Voice mode module.
- * Hold-to-talk or click-to-toggle with waveform visualization.
- * Drag away to cancel recording (both voice mode orb + chat mic button).
- * Uses Whisper STT + Edge TTS / ElevenLabs TTS.
+ * The composer's microphone: dictation. Hold to record (or tap to start and tap again to stop), slide left to
+ * cancel. What was said is turned into words with the speech-to-text chosen in Settings > Voice and put in the
+ * message box at the caret, after anything already typed; it is never sent from here (Send is the owner's). A failure
+ * is said by the box, with the server's reason and what to do. (Talking with the AI out loud is a call: js/call.js.)
  */
 const Voice = {
-  isListening: false,
-  isRecording: false,
-  isSpeaking: false,
-  isProcessing: false,
-  mediaRecorder: null,
-  audioChunks: [],
-  stream: null,
-  autoListen: true,
-  analyser: null,
-  waveformAnim: null,
-  holdTimer: null,
-  isHolding: false,
-  _dragCancelled: false,
-
-  elements: {},
+  _chatRecording: false,
+  _chatCancelled: false,
+  _quickRecorder: null,
+  _quickStream: null,
+  _chatHoldTimer: null,
 
   init() {
-    this.elements = {
-      panel: document.getElementById("voicePanel"),
-      conversation: document.getElementById("voiceConversation"),
-      orb: document.getElementById("voiceOrb"),
-      status: document.getElementById("voiceStatus"),
-      micBtn: document.getElementById("voiceMicBtn"),
-      closeBtn: document.getElementById("voiceClose"),
-      modeBtn: document.getElementById("voiceModeBtn"),
-      audio: document.getElementById("voiceAudio"),
-      voiceInputBtn: document.getElementById("voiceInputBtn"),
-      waveform: document.getElementById("voiceWaveform"),
-    };
-
-    // Event listeners
-    this.elements.modeBtn?.addEventListener("click", () => this.open());
-    this.elements.closeBtn?.addEventListener("click", () => this.close());
-
-    // Orb: hold-to-talk + click-to-toggle + drag-to-cancel
-    this._initOrbDrag();
-
     // Chat mic button: hold-to-record + click-to-toggle + drag-to-cancel
     this._initChatMicDrag();
-
-    // Keyboard: spacebar hold/toggle + space+c to cancel (voice mode only)
-    this._initKeyboard();
-  },
-
-  /** Spacebar hold-to-talk / toggle + Space+C to cancel in voice mode. */
-  _initKeyboard() {
-    let spaceDown = false;
-    let spaceStart = 0;
-
-    document.addEventListener("keydown", (e) => {
-      // Only when voice panel is open and not typing in an input
-      if (!this.elements.panel?.classList.contains("active")) return;
-      const tag = document.activeElement?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-
-      if (e.code === "Space" && !spaceDown) {
-        e.preventDefault();
-        spaceDown = true;
-        spaceStart = Date.now();
-        this.onPressStart();
-      }
-
-      // Space + C = cancel
-      if (e.code === "KeyC" && spaceDown && this.isRecording) {
-        e.preventDefault();
-        spaceDown = false;
-        clearTimeout(this.holdTimer);
-        this.isHolding = false;
-        this.stopRecording(true);
-        this.elements.status.textContent = "Cancelled";
-        setTimeout(() => {
-          if (!this.isRecording && !this.isProcessing && !this.isSpeaking) {
-            this.elements.status.textContent = "Hold to talk · Tap to toggle";
-          }
-        }, 1000);
-      }
-    });
-
-    document.addEventListener("keyup", (e) => {
-      if (e.code === "Space" && spaceDown) {
-        e.preventDefault();
-        spaceDown = false;
-        this.onPressEnd(Date.now() - spaceStart);
-      }
-    });
-  },
-
-  /** Set up orb drag-to-cancel (voice mode). */
-  _initOrbDrag() {
-    const orb = this.elements.orb;
-    if (!orb) return;
-
-    let pressStart = 0;
-    let startX = 0, startY = 0;
-    this._dragCancelled = false;
-
-    const CANCEL_DISTANCE = 80;
-
-    const onMove = (x, y) => {
-      if (!this.isHolding && !this.isRecording) return;
-      const dx = x - startX;
-      const dy = y - startY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-
-      if (dist > CANCEL_DISTANCE) {
-        if (!this._dragCancelled) {
-          this._dragCancelled = true;
-          this.elements.status.textContent = "Release to cancel";
-          orb.classList.add("drag-cancel");
-        }
-      } else {
-        if (this._dragCancelled) {
-          this._dragCancelled = false;
-          this.elements.status.textContent = "Listening...";
-          orb.classList.remove("drag-cancel");
-        }
-      }
-    };
-
-    // Mouse
-    orb.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      pressStart = Date.now();
-      startX = e.clientX; startY = e.clientY;
-      this._dragCancelled = false;
-      this.onPressStart();
-      const mousemove = (e2) => onMove(e2.clientX, e2.clientY);
-      const mouseup = () => {
-        document.removeEventListener("mousemove", mousemove);
-        document.removeEventListener("mouseup", mouseup);
-        this.onPressEnd(Date.now() - pressStart);
-      };
-      document.addEventListener("mousemove", mousemove);
-      document.addEventListener("mouseup", mouseup);
-    });
-
-    // Touch
-    orb.addEventListener("touchstart", (e) => {
-      e.preventDefault();
-      pressStart = Date.now();
-      const touch = e.touches[0];
-      startX = touch.clientX; startY = touch.clientY;
-      this._dragCancelled = false;
-      this.onPressStart();
-    });
-    orb.addEventListener("touchmove", (e) => {
-      const touch = e.touches[0];
-      onMove(touch.clientX, touch.clientY);
-    });
-    orb.addEventListener("touchend", () => {
-      this.onPressEnd(Date.now() - pressStart);
-    });
-
-    // Keyboard: Enter / Space toggle recording on the orb. The global
-    // keyboard handler in _initKeyboard handles hold-to-talk via Spacebar
-    // anywhere in the voice panel; this entry makes the orb itself AT-friendly.
-    orb.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        this.toggleRecording?.();
-      }
-    });
   },
 
   /** Set up chat mic button: hold-to-record + tap-to-toggle + drag-to-cancel. */
   _initChatMicDrag() {
-    const btn = this.elements.voiceInputBtn;
+    const btn = document.getElementById("voiceInputBtn");
     if (!btn) return;
 
     let pressStart = 0;
@@ -228,7 +75,7 @@ const Voice = {
     };
 
     const startRecording = async () => {
-      if (this.isRecording || this._chatRecording) return;
+      if (this._chatRecording) return;
 
       let stream;
       try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
@@ -261,32 +108,8 @@ const Voice = {
 
         if (this._chatCancelled || chunks.length === 0) return;
 
-        // Transcribe and send as chat message
-        const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
-        btn.classList.add("voice-transcribing");
-        try {
-          const formData = new FormData();
-          formData.append("audio", blob, "recording.webm");
-          const csrf = API.getCsrfToken();
-          const headers = {};
-          if (csrf) headers["X-CSRF-Token"] = csrf;
-          const res = await fetch("/api/voice/transcribe", { method: "POST", headers, credentials: "same-origin", body: formData });
-          if (!res.ok) throw new Error("Transcription failed");
-          const data = await res.json();
-          const text = data.text?.trim();
-          if (text) {
-            // Auto-send as a message (like Telegram voice)
-            const input = document.getElementById("messageInput");
-            input.value = text;
-            input.dispatchEvent(new Event("input"));
-            Chat.send();
-          }
-        } catch (err) {
-          console.error("[voice] Chat mic error:", err);
-          App.showToast("Could not transcribe audio", "error");
-        } finally {
-          btn.classList.remove("voice-transcribing");
-        }
+        // Into words, then into the message box (never sent from here: Send is the owner's).
+        await this._dictate(new Blob(chunks, { type: recorder.mimeType || "audio/webm" }), btn);
       };
       recorder.start();
     };
@@ -363,632 +186,168 @@ const Voice = {
     });
   },
 
-  /** Handle press start — start recording after short delay (hold detection). */
-  onPressStart() {
-    this.isHolding = true;
-    this.holdTimer = setTimeout(() => {
-      if (this.isHolding && !this.isRecording && !this.isSpeaking && !this.isProcessing) {
-        this.startRecording();
-      }
-    }, 150);
-  },
-
-  /** Handle press end — if quick click, toggle. If held, stop recording. */
-  onPressEnd(duration) {
-    this.isHolding = false;
-    clearTimeout(this.holdTimer);
-
-    if (this._dragCancelled) {
-      // Drag cancel — discard recording
-      this._dragCancelled = false;
-      this.elements.orb?.classList.remove("drag-cancel");
-      this.stopRecording(true);
-      this.elements.status.textContent = "Cancelled";
-      setTimeout(() => {
-        if (!this.isRecording && !this.isProcessing && !this.isSpeaking) {
-          this.elements.status.textContent = "Hold to talk · Tap to toggle";
-        }
-      }, 1000);
-      return;
-    }
-
-    if (duration < 150) {
-      // Quick click — toggle recording
-      this.toggleRecording();
-    } else if (this.isRecording) {
-      // Released after hold — stop and send
-      this.stopRecording();
-    }
-  },
-
-  open() {
-    this.elements.panel.classList.add("active");
-    this.autoListen = false;
-    this.elements.status.textContent = "Hold to talk · Tap to toggle";
-
-    const label = document.getElementById("voiceActiveLabel");
-    if (label) {
-      const voiceId = localStorage.getItem("voice.defaultVoiceId");
-      if (voiceId) {
-        label.textContent = `Voice: ${voiceId}`;
-        API.getVoices?.().then((data) => {
-          const match = data?.voices?.find((v) => v.id === voiceId);
-          // Not a voice of the engine that is speaking (an Edge voice while
-          // Phonon talks): show nothing rather than the wrong name.
-          label.textContent = match ? `Voice: ${match.name || voiceId}` : "";
-        }).catch(() => {});
-      } else {
-        label.textContent = "";
-      }
-    }
-
-    // Start a local engine's worker (Phonon) now, so the first reply is not
-    // also paying for the model to load. A no-op for the other engines.
-    const csrf = API.getCsrfToken();
-    fetch("/api/voice/warm", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: csrf ? { "X-CSRF-Token": csrf } : {},
-    }).catch(() => {});
-
-    // Prime audio element with user gesture (iOS requires this)
-    this.elements.audio.load();
-  },
-
-  close() {
-    this.autoListen = false;
-    this.stopRecording(true);
-    this.stopSpeaking();
-    this.stopWaveform();
-    this.elements.panel.classList.remove("active");
-    if (this.elements.conversation) this.elements.conversation.innerHTML = "";
-  },
-
-  toggleRecording() {
-    if (this.isRecording) {
-      this.stopRecording();
-    } else if (!this.isSpeaking && !this.isProcessing) {
-      this.startRecording();
-    }
-  },
-
-  async startRecording() {
-    if (this.isRecording || this.isProcessing || this.isSpeaking) return;
-
+  /** A recording into words, put in the message box; a failure says why, by the box. */
+  async _dictate(blob, btn) {
+    this._hideNote();
+    btn?.classList.add("voice-transcribing");
+    let result;
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (err) {
-      console.error("[voice] Microphone access denied:", err);
-      this.elements.status.textContent = "Microphone access denied";
-      this.setOrbState("idle");
+      result = await SpeechToText.transcribe(blob, "recording.webm");
+    } finally {
+      btn?.classList.remove("voice-transcribing");
+    }
+    if (!result.ok) {
+      console.warn("[voice] dictation failed:", result.kind, result.reason);
+      this._showNote(SpeechToText.explain(result), () => this._dictate(blob, btn));
       return;
     }
-
-    this.audioChunks = [];
-    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-      ? "audio/webm;codecs=opus"
-      : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
-
-    this.mediaRecorder = new MediaRecorder(this.stream, mimeType ? { mimeType } : {});
-
-    this.mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) this.audioChunks.push(e.data);
-    };
-
-    this.mediaRecorder.onstop = () => {
-      this.stream?.getTracks().forEach((t) => t.stop());
-      this.stream = null;
-    };
-
-    this.mediaRecorder.start();
-    this.isRecording = true;
-    this.setOrbState("listening");
-    this.elements.status.textContent = "Listening... drag away to cancel";
-    this.elements.micBtn?.classList.add("active");
-
-    // Start waveform visualization
-    this.startWaveform();
+    if (result.text) this._insertIntoBox(result.text);
   },
 
-  stopRecording(discard = false) {
-    if (!this.isRecording || !this.mediaRecorder) return;
-
-    this.isRecording = false;
-    this.elements.micBtn?.classList.remove("active");
-    this.stopWaveform();
-
-    if (discard) {
-      this.mediaRecorder.stop();
-      this.setOrbState("idle");
-      this.elements.status.textContent = "Hold to talk";
-      return;
-    }
-
-    const recorder = this.mediaRecorder;
-    recorder.onstop = () => {
-      this.stream?.getTracks().forEach((t) => t.stop());
-      this.stream = null;
-      if (this.audioChunks.length === 0) {
-        this.setOrbState("idle");
-        this.elements.status.textContent = "No audio captured";
-        return;
-      }
-      const blob = new Blob(this.audioChunks, { type: recorder.mimeType || "audio/webm" });
-      this.audioChunks = [];
-      this.sendToWhisper(blob);
-    };
-    recorder.stop();
-  },
-
-  /** Start waveform visualization from mic input. */
-  startWaveform() {
-    const canvas = this.elements.waveform;
-    if (!canvas || !this.stream) return;
-
-    const ctx = canvas.getContext("2d");
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = audioCtx.createMediaStreamSource(this.stream);
-    this.analyser = audioCtx.createAnalyser();
-    this.analyser.fftSize = 128;
-    source.connect(this.analyser);
-
-    const bufferLength = this.analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
-
-    const draw = () => {
-      if (!this.isRecording) return;
-      this.waveformAnim = requestAnimationFrame(draw);
-
-      this.analyser.getByteFrequencyData(dataArray);
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      const barWidth = (canvas.width / bufferLength) * 1.5;
-      let x = 0;
-
-      for (let i = 0; i < bufferLength; i++) {
-        const barHeight = (dataArray[i] / 255) * canvas.height * 0.9;
-        const hue = 35; // amber
-        const lightness = 40 + (dataArray[i] / 255) * 30;
-        ctx.fillStyle = `hsl(${hue}, 90%, ${lightness}%)`;
-        ctx.fillRect(x, (canvas.height - barHeight) / 2, barWidth - 1, barHeight || 1);
-        x += barWidth;
-      }
-    };
-    draw();
-
-    this._audioCtx = audioCtx;
-  },
-
-  /** Stop waveform visualization. */
-  stopWaveform() {
-    if (this.waveformAnim) cancelAnimationFrame(this.waveformAnim);
-    this.waveformAnim = null;
-    if (this._audioCtx) { this._audioCtx.close().catch(() => {}); this._audioCtx = null; }
-    const canvas = this.elements.waveform;
-    if (canvas) canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
-  },
-
-  /** Show waveform from audio playback (agent speaking). */
-  startSpeakingWaveform(audioEl) {
-    const canvas = this.elements.waveform;
-    if (!canvas) return;
-
-    try {
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const source = audioCtx.createMediaElementSource(audioEl);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 128;
-      source.connect(analyser);
-      analyser.connect(audioCtx.destination);
-
-      const ctx = canvas.getContext("2d");
-      const bufferLength = analyser.frequencyBinCount;
-      const dataArray = new Uint8Array(bufferLength);
-
-      const draw = () => {
-        if (!this.isSpeaking) {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          audioCtx.close().catch(() => {});
-          return;
-        }
-        this._speakAnim = requestAnimationFrame(draw);
-        analyser.getByteFrequencyData(dataArray);
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        const barWidth = (canvas.width / bufferLength) * 1.5;
-        let x = 0;
-        for (let i = 0; i < bufferLength; i++) {
-          const barHeight = (dataArray[i] / 255) * canvas.height * 0.9;
-          const lightness = 40 + (dataArray[i] / 255) * 30;
-          ctx.fillStyle = `hsl(200, 80%, ${lightness}%)`;
-          ctx.fillRect(x, (canvas.height - barHeight) / 2, barWidth - 1, barHeight || 1);
-          x += barWidth;
-        }
+  /**
+   * The words go in at the caret, added to what is typed (a selection stays: they go after it), with a space either
+   * side where one is needed. The box gets the focus; on a phone without the keyboard popping up, until the box is
+   * tapped.
+   */
+  _insertIntoBox(words) {
+    const input = document.getElementById("messageInput");
+    if (!input) return;
+    const value = input.value;
+    const at = Math.min(Number.isInteger(input.selectionEnd) ? input.selectionEnd : value.length, value.length);
+    const before = value.slice(0, at);
+    const after = value.slice(at);
+    const lead = before && !/\s$/.test(before) ? " " : "";
+    const trail = after && !/^[\s.,!?;:)]/.test(after) ? " " : "";
+    input.value = before + lead + words + trail + after;
+    const caret = (before + lead + words).length;
+    const phone = window.matchMedia?.("(pointer: coarse)").matches;
+    if (phone && document.activeElement !== input) {
+      // inputmode=none: focused, with no keyboard. A tap on the box (or leaving it) brings the keyboard back.
+      input.setAttribute("inputmode", "none");
+      const restore = () => {
+        input.removeAttribute("inputmode");
+        input.removeEventListener("pointerdown", restore);
+        input.removeEventListener("blur", restore);
       };
-      draw();
-    } catch {
-      // AudioContext not available — skip waveform
+      input.addEventListener("pointerdown", restore);
+      input.addEventListener("blur", restore);
     }
+    input.focus({ preventScroll: true });
+    input.setSelectionRange(caret, caret);
+    input.dispatchEvent(new Event("input", { bubbles: true }));   // Send turns on, the box grows to fit
   },
 
-  async sendToWhisper(audioBlob) {
-    this.isProcessing = true;
-    this.setOrbState("processing");
-    this.elements.status.textContent = "Transcribing...";
-
-    try {
-      const formData = new FormData();
-      formData.append("audio", audioBlob, "recording.webm");
-
-      const csrf = API.getCsrfToken();
-      const headers = {};
-      if (csrf) headers["X-CSRF-Token"] = csrf;
-
-      let res;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (attempt > 0) {
-          this.elements.status.textContent = `Retrying (${attempt}/2)...`;
-          await new Promise((r) => setTimeout(r, 1500 * attempt));
-        }
-        res = await fetch("/api/voice/transcribe", { method: "POST", headers, credentials: "same-origin", body: formData });
-        if (res.ok || (res.status !== 503 && res.status !== 429)) break;
-      }
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `Transcription failed (${res.status})`);
-      }
-
-      const data = await res.json();
-      const text = data.text?.trim();
-      if (!text) {
-        this.isProcessing = false;
-        this.setOrbState("idle");
-        this.elements.status.textContent = "Didn't catch that. Try again.";
-        return;
-      }
-      this.handleTranscript(text);
-    } catch (err) {
-      console.error("[voice] Whisper error:", err);
-      this.isProcessing = false;
-      this.setOrbState("idle");
-      this.elements.status.textContent = "Error: " + err.message;
+  /** By the message box: why dictation failed, and what to do (Open Settings → Voice, or Try again). */
+  _showNote(info, retry) {
+    let note = document.getElementById("micNote");
+    if (!note) {
+      note = document.createElement("div");
+      note.id = "micNote";
+      note.className = "mic-note";
+      note.setAttribute("role", "alert");
+      const area = document.getElementById("inputArea");
+      const composer = area?.querySelector(".input-container");
+      if (!area) return;
+      area.insertBefore(note, composer || null);
     }
-  },
-
-  async handleTranscript(text) {
-    this.addBubble("user", text);
-    this.setOrbState("processing");
-    this._startThinkingAnimation();
-
-    const voiceText = `[voice] ${text}`;
-    let fullResponse = "";
-
-    try {
-      await API.sendMessage(
-        Chat.currentConversationId, voiceText,
-        (content, event) => {
-          if (content) fullResponse += content;
-          if (event) this._handleVoiceEvent(event);
-        },
-        async (data) => {
-          if (data?.type === "conversation") {
-            Chat.currentConversationId = data.conversationId;
-            return; // Don't process conversation events as "done"
-          }
-          if (data?.conversationId) Chat.currentConversationId = data.conversationId;
-          this.isProcessing = false;
-          this._stopThinkingAnimation();
-
-          if (!fullResponse?.trim()) {
-            this.setOrbState("idle");
-            this.elements.status.textContent = "Hold to talk";
-            return;
-          }
-
-          // Show full response visually (tables, code, formatting all visible)
-          this.addBubble("assistant", fullResponse);
-
-          // Clean response for TTS — strip non-speakable content
-          const speakText = this.makeSpokenText(fullResponse);
-
-          if (!speakText || speakText.length < 3) {
-            this.setOrbState("idle");
-            this.elements.status.textContent = "Hold to talk";
-            return;
-          }
-
-          this.speak(speakText);
-        },
-        (error) => {
-          this.isProcessing = false;
-          this.setOrbState("idle");
-          this.elements.status.textContent = "Error: " + error;
-        }
-      );
-    } catch (err) {
-      this.isProcessing = false;
-      this.setOrbState("idle");
-      this.elements.status.textContent = "Error: " + err.message;
+    note.innerHTML = "";
+    const text = document.createElement("div");
+    text.className = "mic-note-text";
+    const title = document.createElement("strong");
+    title.textContent = info.title;
+    text.appendChild(title);
+    if (info.reason) {
+      const reason = document.createElement("span");
+      reason.className = "mic-note-reason";
+      reason.textContent = info.reason;
+      text.appendChild(reason);
     }
-  },
-
-  /** Speak text via chunked TTS — splits into sentences, plays first chunk fast while rest generates. */
-  async speak(text) {
-    if (!text?.trim()) return;
-    this.isSpeaking = true;
-    this._stopSpeaking = false;
-    this.setOrbState("speaking");
-    this.elements.status.textContent = "Speaking...";
-
-    // Split into sentence chunks (~200 chars each for fast generation)
-    const chunks = this._splitIntoChunks(text, 200);
-
-    for (let i = 0; i < chunks.length; i++) {
-      if (this._stopSpeaking || !this.isSpeaking) break;
-
-      try {
-        const csrf = API.getCsrfToken();
-        const headers = { "Content-Type": "application/json" };
-        if (csrf) headers["X-CSRF-Token"] = csrf;
-
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15_000);
-
-        const res = await fetch("/api/voice/tts-stream", {
-          method: "POST",
-          headers,
-          credentials: "same-origin",
-          body: JSON.stringify({ text: chunks[i] }),
-          signal: controller.signal,
-        });
-        clearTimeout(timeout);
-
-        if (!res.ok) throw new Error("TTS failed");
-
-        const audioBlob = await res.blob();
-        if (audioBlob.size < 100) continue; // Skip empty chunks
-
-        // Play this chunk and wait for it to finish before next
-        await new Promise((resolve, reject) => {
-          const audioUrl = URL.createObjectURL(audioBlob);
-          const audio = this.elements.audio;
-          audio.src = audioUrl;
-          audio.onended = () => { URL.revokeObjectURL(audioUrl); resolve(); };
-          audio.onerror = () => { URL.revokeObjectURL(audioUrl); resolve(); };
-          audio.play().catch(resolve);
-        });
-      } catch (err) {
-        console.warn(`[voice] TTS chunk ${i + 1}/${chunks.length} failed:`, err.message);
-        // Skip failed chunk, try next
-      }
-    }
-
-    this.isSpeaking = false;
-    this._stopSpeaking = false;
-    this.setOrbState("idle");
-    this.elements.status.textContent = "Hold to talk";
-  },
-
-  /**
-   * Split text into chunks at sentence boundaries, targeting maxLen chars per chunk.
-   */
-  _splitIntoChunks(text, maxLen) {
-    const sentences = text.match(/[^.!?]+[.!?]+\s*/g) || [text];
-    const chunks = [];
-    let current = "";
-
-    for (const sentence of sentences) {
-      if ((current + sentence).length > maxLen && current) {
-        chunks.push(current.trim());
-        current = sentence;
-      } else {
-        current += sentence;
-      }
-    }
-    if (current.trim()) chunks.push(current.trim());
-
-    // If no sentence boundaries found, just return the whole text
-    return chunks.length ? chunks : [text];
-  },
-
-  stopSpeaking() {
-    this._stopSpeaking = true;
-    this.elements.audio.pause();
-    this.elements.audio.currentTime = 0;
-    this.isSpeaking = false;
-    this.setOrbState("idle");
-  },
-
-  addBubble(role, text) {
-    const container = this.elements.conversation;
-    if (!container) return;
-    const turn = document.createElement("div");
-    turn.className = `voice-turn ${role}`;
-    const label = document.createElement("div");
-    label.className = "voice-turn-label";
-    label.textContent = role === "user" ? "You" : "Tarsee";
-    const bubble = document.createElement("div");
-    bubble.className = "voice-turn-text";
-    // Render markdown for assistant, plain text for user
-    if (role === "assistant" && typeof Chat !== "undefined" && Chat.renderMarkdown) {
-      bubble.innerHTML = Chat.renderMarkdown(text);
-    } else {
-      bubble.textContent = text;
-    }
-    turn.appendChild(label);
-    turn.appendChild(bubble);
-    container.appendChild(turn);
-    container.scrollTop = container.scrollHeight;
-  },
-
-  /**
-   * Handle streaming events in voice mode — update status with what's happening.
-   */
-  _handleVoiceEvent(event) {
-    if (!event) return;
-    const statusEl = this.elements.status;
-
-    if (event.type === "thinking") {
-      if (event.status === "start") {
-        this._setVoiceStatus("Thinking...");
-      }
-      return;
-    }
-
-    if (event.type === "tool_call") {
-      const name = event.name || "";
-      const inp = event.input || {};
-      let status = "";
-
-      if (name === "Bash") {
-        const cmd = (inp.command || "").split(" ")[0].split("/").pop();
-        status = `Running ${cmd || "command"}...`;
-      } else if (name === "Read") {
-        const file = (inp.file_path || inp.filename || "").split("/").pop();
-        status = `Reading ${file || "file"}...`;
-      } else if (name === "Write") {
-        const file = (inp.file_path || inp.filename || "").split("/").pop();
-        status = `Writing ${file || "file"}...`;
-      } else if (name === "Edit") {
-        const file = (inp.file_path || "").split("/").pop();
-        status = `Editing ${file || "file"}...`;
-      } else if (name === "Grep" || name === "Search") {
-        status = `Searching for "${(inp.pattern || "").slice(0, 20)}"...`;
-      } else if (name === "Glob" || name === "Find") {
-        status = `Finding files...`;
-      } else if (name === "TodoWrite") {
-        status = "Updating tasks...";
-      } else if (name === "calculator") {
-        status = "Calculating...";
-      } else if (name === "datetime") {
-        status = "Checking date/time...";
-      } else if (name.startsWith("tarsee_")) {
-        const tool = name.replace("tarsee_", "").replace(/_/g, " ");
-        status = `Running ${tool}...`;
-      } else if (name === "browser") {
-        const action = inp.action || "";
-        if (action === "navigate") status = "Opening page...";
-        else if (action === "screenshot") status = "Taking screenshot...";
-        else if (action === "click") status = "Clicking element...";
-        else if (action === "type") status = "Typing text...";
-        else if (action === "solve_captcha") status = "Solving captcha...";
-        else status = `Browser: ${action}...`;
-      } else {
-        status = `Running ${name}...`;
-      }
-
-      this._setVoiceStatus(status);
-      return;
-    }
-
-    if (event.type === "tool_result") {
-      this._setVoiceStatus("Processing...");
-      return;
-    }
-  },
-
-  _setVoiceStatus(text) {
-    this._stopThinkingAnimation();
-    this.elements.status.textContent = text;
-  },
-
-  /** Animated "Thinking..." ellipsis in status text. */
-  _startThinkingAnimation() {
-    this._stopThinkingAnimation();
-    let dots = 0;
-    this.elements.status.textContent = "Thinking";
-    this.elements.status.classList.add("thinking-anim");
-    this._thinkingInterval = setInterval(() => {
-      dots = (dots + 1) % 4;
-      this.elements.status.textContent = "Thinking" + ".".repeat(dots);
-    }, 400);
-  },
-
-  _stopThinkingAnimation() {
-    if (this._thinkingInterval) {
-      clearInterval(this._thinkingInterval);
-      this._thinkingInterval = null;
-    }
-    this.elements.status.classList.remove("thinking-anim");
-  },
-
-  /**
-   * Convert a full markdown response into clean speakable text.
-   * Tables become brief summaries, code blocks are skipped, formatting is stripped.
-   */
-  makeSpokenText(text) {
-    if (!text) return "";
-
-    // Remove code blocks entirely (not speakable)
-    text = text.replace(/```[\s\S]*?```/g, " (see code in chat) ");
-
-    // Convert markdown tables to spoken summary
-    // Detect table blocks: consecutive lines starting/ending with |
-    const lines = text.split("\n");
-    const output = [];
-    let tableRows = [];
-
-    const flushTable = () => {
-      if (tableRows.length < 2) {
-        output.push(...tableRows);
-        tableRows = [];
-        return;
-      }
-      // Parse header and data rows
-      const dataRows = tableRows.filter(r => !/^[\s|:-]+$/.test(r.replace(/\|/g, "").trim() || "-"));
-      const cells = dataRows.map(r =>
-        r.replace(/^\||\|$/g, "").split("|").map(c => c.trim()).filter(Boolean)
-      );
-      if (cells.length > 1) {
-        // Brief: just say how many results, skip reading rows
-        const rowCount = cells.length - 1;
-        output.push(`I found ${rowCount} results — check the table in chat for details.`);
-      }
-      tableRows = [];
+    const actions = document.createElement("div");
+    actions.className = "mic-note-actions";
+    const button = (label, onClick, extra = "") => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `mic-note-btn ${extra}`.trim();
+      b.textContent = label;
+      b.addEventListener("click", onClick);
+      actions.appendChild(b);
+      return b;
     };
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
-        tableRows.push(trimmed);
-      } else {
-        if (tableRows.length > 0) flushTable();
-        output.push(line);
-      }
-    }
-    if (tableRows.length > 0) flushTable();
-
-    text = output.join("\n");
-
-    // Strip remaining markdown formatting
-    text = text
-      .replace(/\*\*(.*?)\*\*/g, "$1")       // bold
-      .replace(/\*(.*?)\*/g, "$1")            // italic
-      .replace(/~~(.*?)~~/g, "$1")            // strikethrough
-      .replace(/#{1,6}\s+/g, "")              // headings
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1") // links → just text
-      .replace(/^[-*+]\s+/gm, "")            // bullet points
-      .replace(/^\d+\.\s+/gm, "")            // numbered lists
-      .replace(/^>\s?/gm, "")                // blockquotes
-      .replace(/`([^`]+)`/g, "$1")           // inline code
-      .replace(/---+/g, "")                  // horizontal rules
-      .replace(/\n{3,}/g, "\n\n")            // collapse whitespace
-      .trim();
-
-    // Cap at 1500 chars — Edge TTS can handle this with retry logic
-    if (text.length > 1500) {
-      const cutoff = text.lastIndexOf(".", 1450);
-      text = text.slice(0, cutoff > 500 ? cutoff + 1 : 1450) + " See chat for the rest.";
-    }
-
-    return text;
+    if (info.settings) button(SpeechToText.SETTINGS_LABEL, () => { this._hideNote(); SpeechToText.openSettings(); });
+    if (info.retry && retry) button("Try again", () => retry());
+    const close = button("×", () => this._hideNote(), "mic-note-close");
+    close.setAttribute("aria-label", "Close");
+    close.title = "Close";
+    note.append(text, actions);
+    note.hidden = false;
   },
 
-  setOrbState(state) {
-    const orb = this.elements.orb;
-    if (!orb) return;
-    orb.classList.remove("idle", "listening", "processing", "speaking");
-    orb.classList.add(state);
+  _hideNote() {
+    const note = document.getElementById("micNote");
+    if (note) note.hidden = true;
+  },
+};
+
+/**
+ * Speech-to-text from the page: POST /api/voice/transcribe, with what Settings > Voice has chosen (faster-whisper on
+ * the server, or the OpenAI Whisper API). Dictation (Voice above) and calls (js/call.js) both use it, so both say
+ * why it failed the same way.
+ */
+const SpeechToText = {
+  SETTINGS_LABEL: "Open Settings → Voice",
+
+  /**
+   * { ok: true, text }, or { ok: false, kind, reason }. kind: "not-set-up" (nothing on the server can turn speech into
+   * words: HTTP 501), "failed" (it tried and couldn't), "network" (no answer from Tarsee). reason: the server's own
+   * words, which say what to change.
+   */
+  async transcribe(blob, filename = "recording.webm") {
+    let res;
+    let body = {};
+    try {
+      const fd = new FormData();
+      fd.append("audio", blob, filename);
+      const csrf = API.getCsrfToken() || await API.refreshCsrf?.();
+      res = await fetch("/api/voice/transcribe", { method: "POST", headers: csrf ? { "X-CSRF-Token": csrf } : {}, credentials: "same-origin", body: fd });
+      body = await res.json().catch(() => ({}));
+    } catch (err) {
+      return { ok: false, kind: "network", reason: String(err?.message || "") };
+    }
+    if (res.ok) return { ok: true, text: String(body.text || "").trim() };
+    const reason = String(body.error || "").trim() || `The server answered ${res.status}.`;
+    return { ok: false, kind: res.status === 501 || body.code === "stt-unavailable" ? "not-set-up" : "failed", reason };
+  },
+
+  /**
+   * A failure in plain words: { title, reason, settings, retry }. settings: Settings → Voice can fix it; retry: trying
+   * the same recording again may work. call: { name } for a call's wording (it can't hear you), else dictation's.
+   */
+  explain(result, { call = null } = {}) {
+    const k = result?.kind;
+    if (k === "network") {
+      return {
+        title: call ? "Couldn't reach Tarsee to hear that. Check the connection." : "Couldn't reach Tarsee, so the recording wasn't turned into words. Check the connection and try again.",
+        reason: "", settings: false, retry: true,
+      };
+    }
+    if (k === "not-set-up") {
+      return {
+        title: call ? `Speech-to-text isn't set up, so ${call.name} can't hear you.` : "Speech-to-text isn't set up, so the recording can't be turned into words.",
+        reason: result.reason || "", settings: true, retry: false,
+      };
+    }
+    return {
+      title: call ? "Didn't catch that: speech-to-text failed. Say it again?" : "Speech-to-text failed, so the recording wasn't turned into words.",
+      reason: result?.reason || "", settings: true, retry: true,
+    };
+  },
+
+  /** Settings on the Voice tab, at speech-to-text. */
+  async openSettings() {
+    if (typeof Settings === "undefined") return;
+    if (!Settings.isOpen) await Settings.open();
+    Settings.switchTab("voice");
+    const stt = document.getElementById("settingsSTTProvider")?.closest(".settings-section");
+    (stt || document.querySelector('.settings-tab-panel[data-tab="voice"]'))?.scrollIntoView?.({ block: "start" });
   },
 };

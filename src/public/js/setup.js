@@ -641,7 +641,7 @@ const Setup = {
   /** Welcome tour — highlight key UI elements */
   showWelcomeTour() {
     const tips = [
-      { selector: "#voiceModeBtn", text: "Hold to talk: voice mode with speech-to-text", pos: "below" },
+      { selector: "#callBtn", text: `Call ${(typeof Chat !== "undefined" && Chat.botName) || "Tarsee"}: talk it through out loud, hands-free. It answers in its own voice, and you can talk over it.`, pos: "below" },
       { selector: "#consoleToggleBtn", text: "Server console: see what your agent is doing", pos: "below" },
       { selector: "#settingsBtn", text: "Settings: configure everything", pos: "above" },
       { selector: ".channel-list", text: "Your channels: web, Telegram, Discord, WhatsApp, Slack, email", pos: "right" },
@@ -673,7 +673,8 @@ const Setup = {
 
       if (tip.pos === "below") {
         tipEl.style.top = (rect.bottom + 8) + "px";
-        tipEl.style.left = Math.max(8, rect.left - 40) + "px";
+        // (The call button is the topbar's last: the tip stays on the screen.)
+        tipEl.style.left = Math.max(8, Math.min(rect.left - 40, window.innerWidth - 258)) + "px";
       } else if (tip.pos === "above") {
         tipEl.style.bottom = (window.innerHeight - rect.top + 8) + "px";
         tipEl.style.left = Math.max(8, rect.left) + "px";
@@ -682,7 +683,12 @@ const Setup = {
         tipEl.style.left = (rect.right + 8) + "px";
       }
 
-      tipEl.innerHTML = `${tip.text}<div style="font-size:10px;margin-top:4px;opacity:0.7">Tap to continue (${currentTip + 1}/${tips.length})</div>`;
+      // As text: a tip can carry the name from Settings > Identity.
+      tipEl.textContent = tip.text;
+      const more = document.createElement("div");
+      more.style.cssText = "font-size:10px;margin-top:4px;opacity:0.7";
+      more.textContent = `Tap to continue (${currentTip + 1}/${tips.length})`;
+      tipEl.appendChild(more);
       tipEl.addEventListener("click", () => { currentTip++; showTip(); });
 
       overlay.appendChild(tipEl);

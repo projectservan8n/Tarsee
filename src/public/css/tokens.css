@@ -187,7 +187,6 @@
   --z-sidebar:         50;
   --z-panels:          60;
   --z-files:           70;
-  --z-voice:           80;
   --z-toast:           100;
   --z-modal:           200;
 
@@ -277,26 +276,6 @@
 @keyframes streamPulse {
   0%, 100% { transform: scale(0.6); opacity: 0.4; }
   50%      { transform: scale(1);   opacity: 1; }
-}
-
-@keyframes orbListenPulse {
-  0%, 100% { transform: scale(1);    box-shadow: 0 0 0 0 var(--accent-glow); }
-  50%      { transform: scale(1.08); box-shadow: 0 0 20px 6px var(--accent-glow); }
-}
-
-@keyframes orbSpeakPulse {
-  0%, 100% { transform: scale(1);    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.25); }
-  50%      { transform: scale(1.06); box-shadow: 0 0 18px 5px rgba(52, 211, 153, 0.25); }
-}
-
-@keyframes orbThinkPulse {
-  0%, 100% { transform: scale(1); }
-  50%      { transform: scale(1.03); }
-}
-
-@keyframes orbSpin {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
 }
 
 @keyframes recDot {

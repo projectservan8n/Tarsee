@@ -907,6 +907,45 @@ await step("chat: the model picker groups models by provider", async () => {
   await page.keyboard.press("Escape");
 });
 
+await step("the call: Call <name> in the topbar, the real /api/call behind sign-in and CSRF, Settings > Voice > Calls; voice mode gone", async () => {
+  const CALL = "src/public/js/call.js";
+  const label = await page.locator("#callBtn").getAttribute("aria-label");
+  check(label === "Call Tarsee", "topbar: the call button says Call <name> (Tarsee with no name set)", { file: CALL, evidence: label });
+  check(await page.locator("#voiceModeBtn, #voicePanel, #voiceOrb").count() === 0, "voice mode's button and full-screen orb are gone", { file: "src/public/index.html" });
+  const started = await page.evaluate(() => API.json("/api/call/start", { method: "POST", body: {} }).catch((e) => ({ error: e.message })));
+  check(started.title === "Calls with Tarsee" && !!started.conversationId, "POST /api/call/start makes the call's chat, Calls with Tarsee", { file: "src/routes/voice-call.js", evidence: JSON.stringify(started) });
+  const noCsrf = await page.evaluate(() => fetch("/api/call/start", { method: "POST", credentials: "same-origin" }).then((r) => r.status));
+  check(noCsrf === 403, "/api/call is behind the CSRF check", { file: "src/server.js", evidence: String(noCsrf) });
+  const settings = await page.evaluate(() => API.json("/api/call/settings"));
+  check(settings.channel === null, "Settings > Voice > Calls: Off by default", { file: "src/lib/voice-call.js", evidence: JSON.stringify(settings) });
+  // This machine's speech-to-text through the real route: a short silent WAV.
+  const stt = await page.evaluate(async () => {
+    const view = new DataView(new ArrayBuffer(44 + 3200));
+    const str = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+    str(0, "RIFF"); view.setUint32(4, 36 + 3200, true); str(8, "WAVE"); str(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true); view.setUint32(24, 16000, true); view.setUint32(28, 32000, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    str(36, "data"); view.setUint32(40, 3200, true);
+    const r = await SpeechToText.transcribe(new Blob([view.buffer], { type: "audio/wav" }), "probe.wav");
+    return { r, explained: r.ok ? null : SpeechToText.explain(r) };
+  });
+  if (stt.r.ok) note(`speech-to-text is set up on this machine (it heard "${stt.r.text}")`);
+  else check(stt.r.kind === "not-set-up" && /faster-whisper/.test(stt.r.reason) && /isn't set up/.test(stt.explained.title), "no speech-to-text here: the real route's 501 and its reason reach the page", { file: "src/public/js/voice.js", evidence: JSON.stringify(stt) });
+  await page.evaluate(async () => { await Settings.open(); Settings.switchTab("voice"); });
+  await page.waitForFunction(() => document.querySelectorAll("#callHandoffChannel option").length >= 1, null, { timeout: 10_000 });
+  const opts = await page.locator("#callHandoffChannel option").allTextContents();
+  check(opts[0] === "Off (it stays in the call's chat)", "Settings > Voice > Calls: Send the answer to, with Off", { file: "src/public/index.html", evidence: JSON.stringify(opts) });
+  await shot(page, "18-settings-voice-calls-1280");
+  await page.evaluate(() => Settings.close());
+  // No microphone in this browser: the call says so plainly instead of failing quietly.
+  await page.locator("#callBtn").click();
+  await page.waitForFunction(() => /icrophone|Couldn't start|Listening|Connecting/.test(document.getElementById("callStatus")?.textContent || ""), null, { timeout: 10_000 });
+  const status = await page.locator("#callStatus").innerText();
+  check(/icrophone|Listening/.test(status), "the call window opens and says what it is doing (or why the microphone can't be used)", { file: CALL, evidence: status });
+  await shot(page, "19-call-window-1280");
+  await page.evaluate(() => (Call.isOn() ? Call.end() : Call.close()));
+  await page.evaluate(() => Call.close());
+});
+
 // ======================================================================================================================
 // 6. Phone width (390px), after setup
 // ======================================================================================================================
@@ -921,6 +960,7 @@ await step("phone 390px: chat, model picker, Settings > AI, Security", async () 
     await p.locator("#appScreen").waitFor({ state: "visible", timeout: 20_000 });
     await p.locator("#aiHeaderChip:not([hidden])").waitFor({ timeout: 15_000 });
     await noSideScroll(p, "phone chat", "src/public/css/style.css");
+    check(await p.locator("#callBtn").isVisible(), "phone: the call button is in the topbar", { file: "src/public/css/chat-ui.css" });
     await shot(p, "30-phone-chat-390");
     await p.locator("#modelPickerBtn").click();
     await p.locator(".mp-group[aria-label]").first().waitFor({ timeout: 10_000 });

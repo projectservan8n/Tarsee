@@ -50,7 +50,7 @@ Being honest — some of these projects are massive with huge communities. Tarse
 - **You want simplicity** — no build step, no TypeScript, no framework. Just Node.js serving HTML.
 - **You want a real coding agent behind it** — Tarsee runs the vendors' own agents directly (Claude Code and OpenAI's Codex), not a homemade loop, with your choice of AI behind them.
 - **You want it cheap** — Railway runs about $6/mo for one person's everyday use (measured, Sept 2026). A Claude or ChatGPT plan you already pay for adds no per-message cost; DeepSeek or a free OpenRouter model costs cents or nothing.
-- **You want voice + mobile** — PWA with local speech-to-text, hold-to-talk, iOS PIN pad login.
+- **You want voice + mobile** — PWA with hands-free voice calls on local speech-to-text, iOS PIN pad login.
 - **You want memory** — persistent memory across sessions with deep semantic search.
 - **You want browser automation** — stealth Playwright with captcha solving built in.
 
@@ -131,8 +131,8 @@ Set `TARSEE_AI_PROVIDER` to `claude`, `anthropic`, `chatgpt`, `openai`, `openrou
 ## What You Get
 
 ### Chat Everywhere
-- **Web UI** — A calm chat in the style of claude.ai: every chat has its own address (`/chat/<id>`, `/chat/new`) with Back/Forward and shareable links, a plain sidebar grouped by where each chat lives (Web, Telegram, Discord, WhatsApp, Email, Slack, and Background for crons and the heartbeat while they run), search, and a rename / fresh session / delete menu on each chat. Markdown, code blocks, tables, file attachments, image paste, drag-and-drop, multi-file upload. PWA — save to homescreen on iOS/Android.
-- **Tool steps that stay out of the way** — while the agent works, one quiet line in the answer's place ("Working · 3 steps · Reading README.md · 84.2k tokens · 41 tk/s", with Stop); once it answers, the steps fold into "Used 12 tools" above the reply, each opening to its input and output. The line opens even before the first step: to a summary of what the model is thinking (for messages sent from the dashboard; it costs the answer about 3 seconds, so Telegram, Discord, email and voice replies do without), an API error it is retrying, or compacting.
+- **Web UI** — A calm chat in the style of claude.ai: every chat has its own address (`/chat/<id>`, `/chat/new`) with Back/Forward and shareable links, a plain sidebar grouped by where each chat lives (Web, Telegram, Discord, WhatsApp, Email, Slack, Calls, and Background for crons and the heartbeat while they run), search, and a rename / fresh session / delete menu on each chat. Markdown, code blocks, tables, file attachments, image paste, drag-and-drop, multi-file upload. PWA — save to homescreen on iOS/Android.
+- **Tool steps that stay out of the way** — while the agent works, one quiet line in the answer's place ("Working · 3 steps · Reading README.md · 84.2k tokens · 41 tk/s", with Stop); once it answers, the steps fold into "Used 12 tools" above the reply, each opening to its input and output. The line opens even before the first step: to a summary of what the model is thinking (for messages sent from the dashboard; it costs the answer about 3 seconds, so Telegram, Discord, email and voice-call replies do without), an API error it is retrying, or compacting.
 - **Queued, not cancelled** — a message sent while a reply is running shows as "Queued · after the reply above" (no timer) and becomes the working line when its turn begins. Its own Stop takes just that message out of the queue.
 - **Problems in plain words** — instead of a "401 / Failed to authenticate" error arriving as the reply, the chat says what happened and what to do, the same on every channel: the Claude sign-in expired (run `claude auth login` in the Terminal, the `>_` button, on phones too), the ChatGPT sign-in expired (sign in again from Settings > AI), the balance is empty or a key's limit is reached (with where to top up).
 - **Telegram** — Text, photos, PDFs, voice messages, video notes. Group @mention support, inline buttons, forwarded message detection.
@@ -146,16 +146,19 @@ Set `TARSEE_AI_PROVIDER` to `claude`, `anthropic`, `chatgpt`, `openai`, `openrou
 - **Web Push notifications** — iOS/Android/desktop push via VAPID when cron jobs finish, webhooks fire, or the agent proactively pings you via the `tarsee_push_notification` tool. Opt-in from Settings > Appearance.
 - **All channels share** the same AI, memory, and tools.
 
-### Voice Mode
-- **Hold-to-talk or tap-to-toggle** — full-screen conversational UI with waveform visualization.
-- **Live tool status** — shows "Reading file...", "Running command...", "Calculating..." instead of generic "Thinking..."
-- **Spacebar shortcut** — hold space to talk, Space+C to cancel.
-- **Drag to cancel** — slide away from the orb or mic button to discard recording.
+### Voice Calls
+- **Call your assistant** — the phone button at the top says "Call <name>" (the name from Settings > Identity). Talk hands-free: it hears when you start and stop, answers out loud, and keeps listening. Works on a phone (it asks for the microphone, and keeps the screen on during the call) and on a computer.
+- **A real turn every time** — each thing you say goes to the "Calls with <name>" chat as an ordinary message, so it is answered by that chat's own AI and model (or your default AI), with every tool, and the whole call is there to read afterwards. Say "think hard" or "take your time" and that one question goes to the AI's top model, when it has one. On an AI that sends a message at a time (ChatGPT, OpenAI, Local AI), each message is spoken as it comes.
+- **Talk over it** to interrupt; say **"stop"** to stop what it's doing (the chat's Stop). Mute, a clock, and what it's working on, in plain words.
+- **Put the call away** and keep going: a bar over the message box has the clock, Mute, Show and End, so you can read and type while you talk.
+- **Hang up while it works** — the answer goes to the channel you choose in Settings > Voice > Calls ("Send the answer to": your connected Telegram, Discord, Slack or WhatsApp). Off by default: then it stays in the call's chat.
+- **Your own speech stack, nothing paid unless you chose it** — it hears you through the speech-to-text in Settings > Voice and speaks with the voice set there. If speech-to-text isn't set up, the call says so and takes you to Settings > Voice.
+- **Dictation** — the microphone in the message box still turns what you say into a message.
 - **Local speech-to-text** — faster-whisper (CTranslate2, 4x faster than OpenAI whisper). Configurable models: tiny.en / base.en / small.en. No API key. Runs on CPU.
 - **Local text-to-speech by default** — [Phonon](https://huggingface.co/gradium/phonon-31m-en), Gradium's open 31M model, runs on the server's CPU through one warm worker: no API key, no per-character cost, 25 English voices (Toby by default) and a speed setting. Peso amounts ("₱2,500", "PHP 2,500") are read as pesos; reading a bare "P2,500" that way is an opt-in setting.
 - **Downloads itself** — the model and voices (about 70 MB) go to the data volume, not the image. On first boot Tarsee fetches them in the background from pinned Hugging Face revisions, checking the weights' sha256; Settings > Voice shows the progress and has an **Install Phonon** button (and Retry if it fails). Turn the automatic download off with `TARSEE_PHONON_AUTO_INSTALL=0`, or run `node src/voice/phonon-install.js` from a terminal.
 - **Free fallback** — Microsoft Edge TTS (19 voices, 3 retries, markdown stripping, no API key) speaks while Phonon downloads, and for any sentence Phonon fails; after three failures in a row Phonon is skipped for five minutes. Tarsee never falls back to a paid engine on its own: ElevenLabs and Piper are used only when you pick them (or Auto) in Settings > Voice. An install that already has an ElevenLabs key but never saved an engine keeps ElevenLabs; pick Phonon in Settings > Voice to switch.
-- **Smart TTS** — tables and code shown visually, spoken response is a clean conversational summary.
+- **Speech that sounds like speech** — on a call the AI is told every word is spoken, and anything chat-shaped that slips through (lists, links, code, symbols) becomes plain sentences before the voice reads it; the chat keeps the full answer.
 
 - **Multilingual speech-to-text** — the bare `tiny`/`base`/`small` Whisper checkpoints auto-detect the spoken language; the `.en` variants are English-only and will return garbage for other languages. Switch in Settings > Voice.
 
@@ -258,7 +261,7 @@ Tarsee Server (Railway)
   |   schedule_task, remember, create_canvas, calculator, browser,
   |   web_search, pdf_read, push_notification, send_email_thread, etc.
   |
-  +-- Voice:      faster-whisper STT + Phonon TTS (Edge TTS fallback)
+  +-- Voice:      calls in the browser: faster-whisper STT + Phonon TTS (Edge TTS fallback)
   +-- Browser:    Playwright (stealth) + captcha solving
   +-- Workspace:  SOUL.md, MEMORY.md, USER.md, CHECKPOINT.md
   +-- SQLite:     conversations, settings, vault, bot_memory, push_subs
@@ -390,7 +393,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | **Channels** | Telegram, Discord, WhatsApp (WHAPI), Slack (Socket Mode, native streaming), Email (IMAP + SMTP with provider presets, mention keyword, reply-all marker, allowlist) |
 | **Appearance** | Theme switcher (4 built-in + plugin themes) + Web Push enable/disable/test |
 | **Automation** | Cron jobs, webhooks, retention settings |
-| **Voice** | TTS engine (Phonon by default, Edge TTS, ElevenLabs, Piper, Auto), Install Phonon button with download progress, Phonon voice, speed and bare-"P" peso option, STT model, voice selection. Pick `tiny.en`/`base.en`/`small.en` for English-only, or `tiny`/`base`/`small` for **multilingual** transcription with language auto-detect (needed for Tagalog, Taglish and other non-English voice notes — the `.en` checkpoints cannot transcribe them at all). |
+| **Voice** | Calls: where the answer goes if you hang up while it's working (Off, or a connected channel). TTS engine (Phonon by default, Edge TTS, ElevenLabs, Piper, Auto), Install Phonon button with download progress, Phonon voice, speed and bare-"P" peso option, STT model, voice selection. Pick `tiny.en`/`base.en`/`small.en` for English-only, or `tiny`/`base`/`small` for **multilingual** transcription with language auto-detect (needed for Tagalog, Taglish and other non-English voice notes — the `.en` checkpoints cannot transcribe them at all). |
 | **Skills** | Create, edit, delete instruction packs (includes preinstalled `/ultrareview` + `/fewer-permission-prompts`) |
 | **Memories** | View and manage stored memories |
 | **Security** | Security audit, tool permissions, captcha solver config |
@@ -524,6 +527,7 @@ src/
     edge-tts-engine.js         # Free TTS (19 voices), the fallback
   routes/
     chat.js                    # Chat API + SSE streaming
+    voice-call.js              # Voice calls: the call's chat, the hang-up handoff (lib/voice-call.js)
     ai.js                      # Settings > AI: cards, keys, Test, Verify, sign-in
     external-api.js            # REST API (/api/v1/)
     analytics.js               # Usage page API (lib/token-usage.js reads the transcripts)

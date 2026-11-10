@@ -21,6 +21,7 @@ import { healthRouter } from "./routes/health.js";
 import { authRouter } from "./routes/auth-routes.js";
 import { chatRouter } from "./routes/chat.js";
 import { voiceRouter } from "./routes/voice.js";
+import { callRouter } from "./routes/voice-call.js";
 import { settingsRouter } from "./routes/settings.js";
 import { adminRouter } from "./routes/admin.js";
 import { filesRouter } from "./routes/files.js";
@@ -181,6 +182,7 @@ app.use(healthRouter);
 app.use("/api/auth", authRouter);
 app.use("/api/chat", requireAuth, csrfProtect, chatRouter);
 app.use("/api/voice", requireAuth, csrfProtect, voiceRouter);
+app.use("/api/call", requireAuth, csrfProtect, callRouter); // voice calls: the call's chat and the hang-up handoff (routes/voice-call.js)
 app.use("/api/settings", requireAuth, csrfProtect, settingsRouter);
 app.use("/api/admin", requireAuth, csrfProtect, adminRouter);
 app.use("/api/files", requireAuth, csrfProtect, filesRouter);
