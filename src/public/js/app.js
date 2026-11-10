@@ -152,10 +152,10 @@ const App = {
         Setup.show(status);
         return;
       }
-      // If provider configured but no personality, start interview
+      // An AI is ready but there's no personality yet: ask (Setup.askPersonality). Starting the interview here would
+      // send its first message to the AI before the owner did anything, on an API key at their cost.
       if (status.needsPersonality && status.hasKey) {
-        this.bootApp();
-        Setup.startPersonalityInterview();
+        Setup.askPersonality();
         return;
       }
     } catch {

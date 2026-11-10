@@ -654,8 +654,8 @@ const Setup = {
       document.getElementById("welcomeTip")?.remove();
 
       if (currentTip >= tips.length) {
-        // Tour done — send sample message
-        this.sendSampleMessage();
+        // Tour done: a first message to try, left in the box for the owner to send
+        this.suggestFirstMessage();
         return;
       }
 
@@ -695,14 +695,32 @@ const Setup = {
     showTip();
   },
 
-  /** Send a sample first message so the UI isn't empty */
-  sendSampleMessage() {
+  /**
+   * The tour's end: a first message to try, in the box and selected, so Enter sends it and typing replaces it. Never
+   * sent from here: on an API key every message costs money, so only the owner sends one. Text the owner typed
+   * during the tour is left as it is.
+   */
+  suggestFirstMessage() {
     setTimeout(() => {
-      if (Chat.elements?.messageInput) {
-        Chat.elements.messageInput.value = "Hey! I just finished setting you up. What can you do?";
-        Chat.send();
-      }
+      const box = Chat.elements?.messageInput;
+      if (!box || box.value.trim()) return;
+      box.value = "Hey! I just finished setting you up. What can you do?";
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+      box.focus();
+      box.select();
     }, 500);
+  },
+
+  /**
+   * The personality step on its own, for a page that opens with an AI ready and no personality yet (a Railway key,
+   * or the wizard left before this step): its buttons start the chat or skip it. app.js used to start the chat
+   * itself, which sent a message the owner never sent.
+   */
+  askPersonality() {
+    document.getElementById("loginScreen").style.display = "none";
+    document.getElementById("appScreen").style.display = "none";
+    document.getElementById("setupWizard").style.display = "flex";
+    this.showPersonalityStep();
   },
 
   /** Start the personality interview as the first conversation */

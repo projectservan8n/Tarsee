@@ -6,7 +6,7 @@
 //   - nothing scrolls sideways at phone width
 // Runs on Playwright's own Chromium, else an installed Chrome or Edge; skipped where there is none
 // (npx playwright install chromium).
-/* global document, window, getComputedStyle, Settings, Chat, Live -- the page.evaluate() bodies run in the browser */
+/* global document, window, getComputedStyle, Settings, Chat, Live, Setup -- the page.evaluate() bodies run in the browser */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -67,7 +67,7 @@ const GUARD_FILE = "/data/tarsee/workspace/.claude/settings.json";
  * (POST /api/ai/chatgpt/login's answer: { status, body }), pollFail (the poll's), settings (GET /api/settings),
  * audit (GET /api/admin/audit's entries).
  */
-function fakeApi({ needsSetup = true, active = "claude", onlyClaude = false, guard = false, ready: readyIds = [], env = {}, settings = null } = {}) {
+function fakeApi({ needsSetup = true, needsPersonality = false, active = "claude", onlyClaude = false, guard = false, ready: readyIds = [], env = {}, settings = null } = {}) {
   const calls = [];
   const state = {
     guard,
@@ -154,7 +154,7 @@ function fakeApi({ needsSetup = true, active = "claude", onlyClaude = false, gua
 
     if (p === "/api/auth/status") return json(200, { authenticated: true, needsPassword: true });
     if (p === "/api/auth/api-token") return json(200, { apiToken: null });
-    if (p === "/api/settings/setup-status") return json(200, { needsSetup, needsPersonality: false, botName: "Tarsee", provider: needsSetup ? null : "claude-code", hasKey: !needsSetup });
+    if (p === "/api/settings/setup-status") return json(200, { needsSetup, needsPersonality, botName: "Tarsee", provider: needsSetup ? null : "claude-code", hasKey: !needsSetup });
     if (p === "/api/settings" && method === "GET") return json(200, { settings: state.settings });
     if (p === "/api/settings/general" && method === "POST") {
       // As routes/settings.js and db/settings.js do: a secret sent empty is deleted, and a secret is read back only as
@@ -1270,6 +1270,51 @@ describe("the pages in a browser: what they show and save", { skip }, () => {
       await page.evaluate(() => Live.onTurnStart({ turnId: "t-old", createdAt: Date.now(), payload: { source: "web" } }));
       assert.equal(await detail("t-old"), "Thinking");
       assert.equal(await hint("t-old").isVisible(), false);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+// A message costs money on an API key: only the owner sends one. Setup may suggest a first message, never send it.
+describe("nothing goes to an AI until the owner sends it", { skip }, () => {
+  const sent = (api) => api.calls.filter((c) => c.method === "POST" && (c.path === "/api/chat/send" || c.path === "/api/chat/conversations"));
+
+  it("the welcome tour ends with a first message in the box, chosen and ready to send, not sent", async () => {
+    const { page, api, errors, context } = await openPage({ needsSetup: false, ready: ["anthropic"], active: "anthropic" });
+    try {
+      await page.locator("#messageInput").waitFor();
+      await page.evaluate(() => Setup.showWelcomeTour());
+      // Tap through the tips, as someone would (the tour also moves on by itself every 4 s).
+      for (let i = 0; i < 8 && (await page.locator("#welcomeTip").count()); i++) await page.locator("#welcomeTip > div").click();
+      await page.waitForTimeout(1500); // longer than the 500 ms after which the tour used to send it
+      assert.deepEqual(sent(api), [], "nothing was sent to the AI");
+      const box = await page.evaluate(() => {
+        const el = document.getElementById("messageInput");
+        return { value: el.value, focused: document.activeElement === el, all: el.selectionStart === 0 && el.selectionEnd === el.value.length };
+      });
+      assert.equal(box.value, "Hey! I just finished setting you up. What can you do?");
+      assert.ok(box.focused && box.all, "the suggestion is chosen: Enter sends it, typing replaces it");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("an AI ready but no personality yet (a Railway key, a wizard left early): the page asks, and starts no chat by itself", async () => {
+    const { page, api, errors, context } = await openPage({ needsSetup: false, needsPersonality: true, ready: ["anthropic"], active: "anthropic" });
+    try {
+      await page.getByRole("button", { name: "Start Personality Chat →" }).waitFor();
+      assert.ok(await page.getByRole("button", { name: "Skip and use the defaults" }).isVisible());
+      await page.waitForTimeout(1000);
+      assert.deepEqual(sent(api), [], "no chat started and nothing sent before a button is pressed");
+
+      await page.getByRole("button", { name: "Skip and use the defaults" }).click();
+      await page.getByRole("button", { name: "Skip, start chatting" }).waitFor();
+      const saved = api.calls.filter((c) => c.method === "POST" && c.path === "/api/settings/general").map((c) => c.body);
+      assert.deepEqual(saved, [{ key: "setup.completed", value: "true" }], "skipping is remembered, so the question isn't asked again");
+      assert.deepEqual(sent(api), []);
       assert.deepEqual(errors, []);
     } finally {
       await context.close();
