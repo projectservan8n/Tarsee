@@ -16,7 +16,7 @@ You never choose an "engine". Tarsee runs Claude Code for some AIs and OpenAI's 
 | **DeepSeek** | A DeepSeek API key and a small top-up | Pay per use from your prepaid balance: the cheapest of these | Claude Code, through DeepSeek's own Claude-compatible address | Word by word | DeepSeek Pro can't see pictures; PDFs are read as text |
 | **Local AI** | A machine you run with Ollama or LM Studio, that Tarsee can reach | Free: it runs on your own hardware | Codex | A message at a time | The model you pick on its card works at once; verify any other before a chat can switch to it. Small models use tools poorly |
 
-Every AI gets the same things: all of Tarsee's tools, every channel (web, Telegram, Discord, WhatsApp, Slack, email, voice), scheduled jobs, the live view, Stop and the queue, memory, and the Usage page.
+Every AI gets the same things: all of Tarsee's tools, every channel (web, Telegram, Discord, WhatsApp, Slack, email, voice calls), scheduled jobs, the live view, Stop and the queue, memory, and the Usage page.
 
 ## Plan or API key?
 

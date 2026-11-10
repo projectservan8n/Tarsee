@@ -581,6 +581,7 @@ const Chat = {
       const ph = `Message ${this.botName}`;
       if (input.dataset.idlePlaceholder) input.dataset.idlePlaceholder = ph; else input.placeholder = ph;
     }
+    if (typeof Call !== "undefined") Call.paintButton();   // "Call <name>"
     this._paintTitle();
   },
 

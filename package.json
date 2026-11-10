@@ -12,7 +12,7 @@
     "tarsee": "./src/cli/index.js"
   },
   "type": "module",
-  "description": "Tarsee — AI Gateway & Chat Platform with voice mode, multi-provider support, and channel integrations",
+  "description": "Tarsee — AI Gateway & Chat Platform with voice calls, multi-provider support, and channel integrations",
   "engines": {
     "node": ">=22"
   },

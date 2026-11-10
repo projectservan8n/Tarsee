@@ -972,6 +972,49 @@ await step("chat: the model picker groups models by provider", async () => {
   await page.keyboard.press("Escape");
 });
 
+await step("the call: Call <name> in the topbar, the real /api/call behind sign-in and CSRF, Settings > Voice > Calls; voice mode gone", async () => {
+  const CALL = "src/public/js/call.js";
+  const label = await page.locator("#callBtn").getAttribute("aria-label");
+  check(label === "Call Tarsee", "topbar: the call button says Call <name> (Tarsee with no name set)", { file: CALL, evidence: label });
+  check(await page.locator("#voiceModeBtn, #voicePanel, #voiceOrb").count() === 0, "voice mode's button and full-screen orb are gone", { file: "src/public/index.html" });
+  const started = await page.evaluate(() => API.json("/api/call/start", { method: "POST", body: {} }).catch((e) => ({ error: e.message })));
+  check(started.title === "Calls with Tarsee" && !!started.conversationId, "POST /api/call/start makes the call's chat, Calls with Tarsee", { file: "src/routes/voice-call.js", evidence: JSON.stringify(started) });
+  // (From here, not the page: a refused request would be a console error there.)
+  const noCsrf = (await desk.request.post(`${ORIGIN}/api/call/start`, { data: {} })).status();
+  check(noCsrf === 403, "/api/call is behind the CSRF check", { file: "src/server.js", evidence: String(noCsrf) });
+  const settings = await page.evaluate(() => API.json("/api/call/settings"));
+  check(settings.channel === null, "Settings > Voice > Calls: Off by default", { file: "src/lib/voice-call.js", evidence: JSON.stringify(settings) });
+  // This machine's speech-to-text through the real route: a short silent WAV.
+  const wavProbe = Buffer.alloc(44 + 3200);
+  wavProbe.write("RIFF", 0); wavProbe.writeUInt32LE(36 + 3200, 4); wavProbe.write("WAVE", 8); wavProbe.write("fmt ", 12); wavProbe.writeUInt32LE(16, 16);
+  wavProbe.writeUInt16LE(1, 20); wavProbe.writeUInt16LE(1, 22); wavProbe.writeUInt32LE(16000, 24); wavProbe.writeUInt32LE(32000, 28); wavProbe.writeUInt16LE(2, 32);
+  wavProbe.writeUInt16LE(16, 34); wavProbe.write("data", 36); wavProbe.writeUInt32LE(3200, 40);
+  const csrf = (await desk.cookies()).find((c) => c.name === "tarsee_csrf")?.value || "";
+  const sttRes = await desk.request.post(`${ORIGIN}/api/voice/transcribe`, { headers: { "X-CSRF-Token": csrf }, multipart: { audio: { name: "probe.wav", mimeType: "audio/wav", buffer: wavProbe } } });
+  const sttBody = await sttRes.json().catch(() => ({}));
+  if (sttRes.ok()) note(`speech-to-text is set up on this machine (it heard "${sttBody.text}")`);
+  else {
+    const explained = await page.evaluate((r) => SpeechToText.explain(r, { call: { name: "Tarsee" } }), { ok: false, kind: sttRes.status() === 501 ? "not-set-up" : "failed", reason: sttBody.error });
+    check(sttRes.status() === 501 && /faster-whisper/.test(sttBody.error || "") && /isn't set up, so Tarsee can't hear you/.test(explained.title) && explained.settings,
+      "no speech-to-text here: the real route answers 501 with its reason, and the call says so with Settings → Voice", { file: "src/public/js/voice.js", evidence: JSON.stringify({ status: sttRes.status(), sttBody, explained }) });
+  }
+  await page.evaluate(async () => { await Settings.open(); Settings.switchTab("voice"); });
+  await page.waitForFunction(() => document.querySelectorAll("#callHandoffChannel option").length >= 1, null, { timeout: 10_000 });
+  const opts = await page.locator("#callHandoffChannel option").allTextContents();
+  check(opts[0] === "Off (it stays in the call's chat)", "Settings > Voice > Calls: Send the answer to, with Off", { file: "src/public/index.html", evidence: JSON.stringify(opts) });
+  await shot(page, "18-settings-voice-calls-1280");
+  await page.evaluate(() => Settings.close());
+  // A microphone the browser refuses (as a phone does when it is denied): the call says so plainly.
+  await page.evaluate(() => { navigator.mediaDevices.getUserMedia = () => Promise.reject(Object.assign(new Error("Permission denied"), { name: "NotAllowedError" })); });
+  await page.locator("#callBtn").click();
+  await page.waitForFunction(() => /icrophone/.test(document.getElementById("callStatus")?.textContent || ""), null, { timeout: 10_000 }).catch(() => {});
+  const status = await page.locator("#callStatus").innerText();
+  check(/Microphone access was blocked\. Allow it for this site/.test(status), "the call window opens and says why the microphone can't be used", { file: CALL, evidence: status });
+  await shot(page, "19-call-window-1280");
+  await page.evaluate(() => (Call.isOn() ? Call.end() : Call.close()));
+  await page.evaluate(() => Call.close());
+});
+
 // ======================================================================================================================
 // 6. Phone width (390px), after setup
 // ======================================================================================================================
@@ -986,6 +1029,7 @@ await step("phone 390px: chat, model picker, Settings > AI, Security", async () 
     await p.locator("#appScreen").waitFor({ state: "visible", timeout: 20_000 });
     await p.locator("#aiHeaderChip:not([hidden])").waitFor({ timeout: 15_000 });
     await noSideScroll(p, "phone chat", "src/public/css/style.css");
+    check(await p.locator("#callBtn").isVisible(), "phone: the call button is in the topbar", { file: "src/public/css/chat-ui.css" });
     await shot(p, "30-phone-chat-390");
     await p.locator("#modelPickerBtn").click();
     await p.locator(".mp-group[aria-label]").first().waitFor({ timeout: 10_000 });

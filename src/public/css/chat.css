@@ -1282,3 +1282,140 @@ details[open] .block-preview { display: none; }
     font-size: var(--text-xs);
   }
 }
+
+/* ==========================================================================
+   A voice call: the call window (js/call.js)
+   ========================================================================== */
+
+#callBtn.on-call { color: var(--success); }
+#callBtn.on-call svg { animation: pulse 1.5s infinite; }
+
+.call-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(var(--space-4), env(safe-area-inset-top, 0px)) var(--space-4) max(var(--space-4), env(safe-area-inset-bottom, 0px));
+  background: var(--overlay-heavy);
+}
+.call-overlay[hidden] { display: none; }
+.call-card {
+  width: 100%;
+  max-width: 420px;
+  min-width: 0;
+  max-height: calc(100dvh - 2 * var(--space-4));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl);
+  overflow: hidden;
+}
+.call-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+.call-head-text { min-width: 0; }
+.call-title { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.call-status { font-size: var(--text-sm); color: var(--text-secondary); overflow-wrap: anywhere; }
+.call-icon-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  color: var(--text-secondary);
+  background: none;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+}
+.call-icon-btn:hover { background: var(--bg-surface-hover); color: var(--text); }
+.call-orb {
+  align-self: center;
+  flex-shrink: 0;
+  width: 96px;
+  height: 96px;
+  margin: var(--space-3) 0 var(--space-1);
+  border-radius: var(--radius-full);
+  background: radial-gradient(circle at 35% 35%, var(--accent-hover), var(--accent) 60%, var(--accent-subtle));
+  box-shadow: 0 0 0 0 var(--accent-glow);
+  transition: transform var(--duration-normal), box-shadow var(--duration-normal);
+}
+.call-overlay.speaking .call-orb { animation: call-pulse 1.2s ease-in-out infinite; }
+.call-overlay.listening .call-orb { opacity: 0.85; }
+.call-overlay.hearing .call-orb { transform: scale(1.08); box-shadow: 0 0 0 10px var(--accent-subtle); }
+.call-overlay.thinking .call-orb { animation: call-think 1.6s ease-in-out infinite; }
+.call-overlay.ended .call-orb { filter: grayscale(1); opacity: 0.5; }
+@keyframes call-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 var(--accent-glow); }
+  50% { transform: scale(1.06); box-shadow: 0 0 0 14px transparent; }
+}
+@keyframes call-think { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+.call-clock { align-self: center; font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: var(--text-sm); }
+.call-now { align-self: center; font-size: var(--text-sm); color: var(--text-secondary); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-now[hidden] { display: none; }
+.call-problem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.call-problem[hidden], .call-problem [hidden] { display: none; }
+.call-problem-detail { font-size: var(--text-xs); color: var(--text-muted); overflow-wrap: anywhere; }
+.call-problem .call-btn { align-self: flex-start; flex: none; }
+.call-section-label {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  margin-top: var(--space-2);
+}
+.call-transcript {
+  flex: 1;
+  min-height: 60px;
+  max-height: 180px;
+  overflow-y: auto;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow-wrap: anywhere;
+}
+.call-line strong { color: var(--text); font-weight: 600; }
+.call-hint { font-size: var(--text-xs); color: var(--text-muted); }
+.call-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+.call-btn {
+  flex: 1;
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.call-btn:hover { background: var(--bg-surface-hover); }
+.call-btn[hidden] { display: none; }
+.call-btn[aria-pressed="true"] { border-color: var(--warning); color: var(--warning); }
+.call-btn.call-end { background: var(--danger); border-color: var(--danger); color: var(--text-inverse); font-weight: 600; }
+.call-overlay.ended .call-btn.call-end { background: var(--bg-surface); border-color: var(--border); color: var(--text); }
+.call-overlay.ended #callMute { display: none; }
+@media (max-width: 400px) {
+  .call-card { padding: var(--space-4); }
+  .call-orb { width: 72px; height: 72px; margin-top: var(--space-1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .call-overlay.speaking .call-orb, .call-overlay.thinking .call-orb, #callBtn.on-call svg { animation: none; }
+}

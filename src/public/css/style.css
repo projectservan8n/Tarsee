@@ -2574,16 +2574,6 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
   border-radius: inherit;
 }
 
-/* Voice active label (used in voice panel) */
-.voice-active-label {
-  position: absolute;
-  top: var(--space-3);
-  left: var(--space-4);
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-  opacity: 0.8;
-}
-
 
 /* ==========================================================================
    24. PIN Pad — iOS Lock Screen Style (mobile only)
@@ -2921,13 +2911,6 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
   .settings-content {
     padding: var(--space-4) var(--space-6) var(--space-8);
   }
-
-  /* Voice panel sized between mobile and full desktop so the orb doesn't
-     dominate iPad portrait. */
-  .voice-orb {
-    width: 112px;
-    height: 112px;
-  }
 }
 
 /* ==========================================================================
@@ -3135,11 +3118,6 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
   pointer-events: none;
 }
 
-/* ---- Voice orb listening glow (was plain) ---- */
-.voice-orb.listening {
-  filter: drop-shadow(0 0 12px var(--accent-glow));
-}
-
 /* ---- Context bar — warn color at >80% ---- */
 .context-bar-fill.warn { background: var(--warning); }
 .context-bar-fill.danger { background: var(--danger); }
@@ -3166,7 +3144,7 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
 .console-panel,
 .sidebar,
 .settings-content,
-.voice-conversation {
+.call-transcript {
   overscroll-behavior: contain;
 }
 html, body {
@@ -3256,12 +3234,6 @@ html.keyboard-open .chat-area {
   box-shadow: var(--glass-highlight), var(--shadow-md);
 }
 
-/* Voice orb: subtle specular rim so the "listening/speaking" pulse reads
-   as light on glass rather than a flat color blob. */
-.voice-orb {
-  box-shadow: var(--glass-highlight-strong);
-}
-
 /* Primary button: same light-on-edge treatment — separates it from ghost. */
 .btn-primary {
   box-shadow: var(--glass-highlight), var(--shadow-sm);
@@ -3331,17 +3303,13 @@ html.keyboard-open .chat-area {
     }
   }
 
-  /* Modals, lightbox, voice panel get softer rounded corners on small
+  /* Modals and the lightbox get softer rounded corners on small
      screens — not full glass (text on these needs max contrast) but
      concentric with the floating composer. */
   .delete-modal,
   .kbd-overlay-panel {
     border-radius: var(--radius-2xl);
     box-shadow: var(--glass-highlight), var(--shadow-xl);
-  }
-
-  .voice-panel {
-    border-radius: 0;  /* full-screen, but content inside gets soft radii */
   }
 
   .lightbox-img,

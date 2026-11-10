@@ -118,6 +118,15 @@ describe("TTS engine choice: Phonon is the default", () => {
     assert.ok(!l.used.includes("elevenlabs"), `consulted: ${l.used.join(", ")}`);
   });
 
+  it("a picked engine that can't start never falls through to ElevenLabs, even with its key saved (a call's speech never costs money unasked)", async () => {
+    for (const pick of ["piper", "edge-tts"]) {
+      const l = loaders({ [pick]: fakeEngine(pick, { available: false }), elevenlabs: fakeEngine("elevenlabs"), "edge-tts": fakeEngine("edge-tts", { available: pick !== "edge-tts" }) });
+      await initTTSEngine(store({ "voice.engine": pick, "voice.elevenlabs.apiKey": "sk_test" }), l);
+      assert.notEqual(getTTSEngine().name, "elevenlabs", `${pick} picked`);
+      assert.ok(!l.used.includes("elevenlabs"), `${pick}: consulted ${l.used.join(", ")}`);
+    }
+  });
+
   it("an explicit engine choice is respected: Phonon is never built", async () => {
     for (const pick of ["edge-tts", "elevenlabs", "piper"]) {
       const picked = fakeEngine(pick);

@@ -446,13 +446,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   const history = convStore.getRecentMessages(convId, 20);
   const conv = convStore.get(convId);
 
-  // Voice mode — respond normally, TTS strips non-speakable content
-  const isVoiceMode = message.startsWith("[voice]");
-  const voiceHint = isVoiceMode
-    ? "\n\n[VOICE MODE] Response shown visually AND read aloud. TTS limit: 2 short sentences max before any table/code. Tables shown but NOT spoken. Structure: brief intro (under 200 chars) → then details."
-    : "";
-
-  // Build the system prompt (parity with the HTTP handler): the stable part, then this turn's own (voice mode with it)
+  // Build the system prompt (parity with the HTTP handler): the stable part, then this turn's own
   const promptParts = buildSystemPromptParts({
     settingsStore,
     db: ws._tarsee_db,
@@ -462,7 +456,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
     conversationPrompt: conv?.system_prompt,
     channelHint: sendFileHint("web"),
   });
-  const systemParts = { stable: promptParts.stable, volatile: promptParts.volatile + voiceHint };
+  const systemParts = { stable: promptParts.stable, volatile: promptParts.volatile };
 
   // dashboard: a file the agent hands over goes to this chat; messageId: the message answered (its pictures are kept with it)
   const toolCtx = { db: ws._tarsee_db, settingsStore, conversationId: convId, channelManager: ws._tarsee_channelManager, dashboard: true, messageId: savedUser?.id || null };
@@ -527,9 +521,9 @@ async function handleChat(ws, msg, convStore, settingsStore) {
         sessionId: existingSessionId,
         onSessionId: (handle) => convStore.setSessionHandle(convId, handle),
         toolCtx,
-        // Summaries of its thinking for the live view, but not for voice mode: they make the first words come later,
-        // and a spoken reply is waited for.
-        thinkingSummaries: !isVoiceMode,
+        // Summaries of its thinking for the live view. (A voice call's turns go through POST /api/chat/send, which
+        // asks for none: a spoken reply is waited for.)
+        thinkingSummaries: true,
       });
 
       const gw = getGatewayManager();
