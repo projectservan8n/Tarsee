@@ -96,14 +96,23 @@ const localAi = http.createServer((req, res) => {
     let model = null;
     try { model = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")?.model ?? null; } catch { model = "(not JSON)"; }
     localHits.push(`${req.method} ${req.url}${model ? ` (model ${model})` : ""}`);
+    // Here the owner's Local AI is llama.cpp's llama-server b12238, as it answers (-c 65536 --alias e2e-local-model).
     if (req.method === "GET" && /\/v1\/models\/?$/.test(req.url)) {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ object: "list", data: [{ id: "e2e-local-model", object: "model", owned_by: "e2e" }] }));
+      res.end(JSON.stringify({
+        models: [{ name: "e2e-local-model", model: "e2e-local-model", capabilities: ["completion"] }], object: "list",
+        data: [{ id: "e2e-local-model", aliases: ["e2e-local-model"], object: "model", created: 1794273395, owned_by: "llamacpp", meta: { n_ctx: 65536, n_ctx_train: 262144 } }],
+      }));
+      return;
+    }
+    if (req.method === "GET" && req.url === "/props") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ build_info: "b12238-08f945ffb", default_generation_settings: { n_ctx: 65536 }, total_slots: 4, model_alias: "e2e-local-model" }));
       return;
     }
     if (req.method === "POST" && /\/v1\/responses\/?$/.test(req.url) && !model) {
       res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: { message: "model is required" } }));
+      res.end(JSON.stringify({ error: { code: 400, message: "'input' is required", type: "invalid_request_error" } }));
       return;
     }
     res.writeHead(404, { "Content-Type": "application/json" });
@@ -228,6 +237,8 @@ await step("wizard: the Railway key's panel, can it be tested, does Next take it
     await page.locator('#setupAiPanel [data-setup="save-local"]').click();
     await page.locator("#setupAiPanel .setup-ai-status", { hasText: "Ready" }).waitFor({ timeout: 20_000 });
     await page.locator("#setupAiNext:not([disabled])").waitFor();
+    const testLine = await page.locator("#setupAiPanel").innerText();
+    check(/Reached your Local AI · llama\.cpp b12238 · 1 model · 64K context/.test(testLine), "wizard railway: Test on a llama-server names its build and the context it was started with", { file: "src/ai/provider-probes.js", evidence: testLine.slice(0, 600) });
     const mark = apiCalls.length;
     await page.locator("#setupAiNext").click();
     await page.getByText("Choose Your Skills").waitFor({ timeout: 20_000 });
@@ -276,8 +287,8 @@ browser = null;
 for (const { child } of started) killTree(child);
 await new Promise((r) => localAi.close(() => r()));
 await new Promise((r) => setTimeout(r, 800));
-const localProbe = (h) => /^GET \/v1\/models\b/.test(h) || /^POST \/v1\/responses\/?$/.test(h);
-check(!localHits.some((h) => !localProbe(h)), "railway: the Local AI server only saw model-list reads and Test's Responses API check (no turn ran)", { evidence: localHits.join(", ") });
+const localProbe = (h) => /^GET \/v1\/models\b/.test(h) || /^GET \/props$/.test(h) || /^POST \/v1\/responses\/?$/.test(h);
+check(!localHits.some((h) => !localProbe(h)), "railway: the Local AI server only saw model-list and /props reads and Test's Responses API check (no turn ran)", { evidence: localHits.join(", ") });
 
 check(!consoleErrors.length, "railway: no console errors or page errors", { evidence: consoleErrors.join("\n") });
 check(!leakHits.length, "railway: no Railway key in any HTTP response", { file: "src/routes/ai.js", evidence: JSON.stringify(leakHits) });

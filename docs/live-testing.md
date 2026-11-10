@@ -24,7 +24,7 @@ npm start
 1. Open <http://localhost:3000> and sign in with the password you just chose.
 2. Open **Settings > AI**. For each AI you want to test, paste its key into its card and click **Save key**:
    - **Anthropic API key**, **OpenAI API key**, **OpenRouter** and **DeepSeek**: one key each. Give each key a spending limit at the provider (see [docs/providers.md](providers.md)); the test itself costs a few cents at most.
-   - **Local AI**: type your server's address (for example `http://localhost:11434/v1`) and choose a model on its card.
+   - **Local AI**: type your server's address, or click one of the buttons above the box (Ollama `http://localhost:11434/v1`, LM Studio `http://localhost:1234/v1`, llama.cpp `http://localhost:9931/v1`), and choose a model on its card. Test shows how much the model can read at once, as your server reports it.
 3. **ChatGPT plan**: on its card click **Sign in with ChatGPT**. Open the link it shows, sign in with your ChatGPT account and type the one-time code. (Device sign-in has to be switched on in ChatGPT > Settings > Security first.) The card turns to *Ready*.
 4. The **Claude plan** is tested too if its card says *Ready*. It costs nothing per message.
 

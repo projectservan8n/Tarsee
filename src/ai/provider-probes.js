@@ -9,7 +9,11 @@
  *   OpenRouter  GET https://openrouter.ai/api/v1/key         (Bearer; the key's spending limit and usage)
  *   DeepSeek    GET https://api.deepseek.com/user/balance    (Bearer; the prepaid balance)
  *   Local AI    GET {address}/models                         (Bearer only when a key is set), and POST
- *               {address}/responses with an empty body: a server without that API can't run a turn
+ *               {address}/responses with an empty body: a server without that API can't run a turn. A server the
+ *               model list names gets one more read for what it really runs (listLocalModels): llama-server GET
+ *               /props (its build and context), LM Studio GET /api/v0/models (each model's kind and loaded context),
+ *               Ollama GET /api/ps and POST /api/show (each model's context and capabilities). Embedding models are
+ *               left out, and Test fails for a context under 32,768 tokens or a llama.cpp build before b11768.
  *   The plans   no network: the Claude sign-in, or Codex's own ChatGPT sign-in (provider-status.js)
  *
  * Every probe answers { ok, state, message, httpStatus?, balance?, account?, models? }: a plain sentence for the
@@ -22,9 +26,11 @@ import {
   getProvider,
   checkKeySlot,
   setCatalogModels,
+  setLocalModels,
 } from "./provider-registry.js";
 import {
   providerStatus,
+  chosenModel,
   localUrlFor,
   plainHttpUrl,
   saveBalance,
@@ -159,7 +165,7 @@ function failure(p, r, url) {
   const label = p.label;
   if (r.network) {
     if (p.id === "local" && (r.network === "refused" || r.network === "dns")) {
-      return { ok: false, state: "error", reason: "unreachable", message: `Can't reach your Local AI at ${url}.` };
+      return { ok: false, state: "error", reason: "unreachable", message: `Can't reach your Local AI at ${url}. If you just started llama-server with -hf, it may still be downloading the model.` };
     }
     if (r.network === "timeout") return { ok: false, state: "error", reason: "timeout", message: `${label} took too long to answer. Try again in a moment.` };
     return { ok: false, state: "error", reason: "network", message: `Tarsee couldn't reach ${label} (${hostOf(url)}). Check this server's internet connection, then try again.` };
@@ -179,21 +185,31 @@ function failure(p, r, url) {
   if (s === 404 && p.id === "local") {
     return { ok: false, state: "needs-setup", reason: "not-found", httpStatus: s, message: `Your Local AI answered, but has no model list at ${url}. Check the address (it usually ends in /v1).` };
   }
+  if (s === 503 && p.id === "local" && /loading/i.test(errText)) {
+    // llama-server answers every request but /health with 503 "Loading model" until its model is in memory.
+    return { ok: false, state: "error", reason: "loading", httpStatus: s, message: "Your Local AI is still loading its model. Click Test again in a minute." };
+  }
   if (s >= 500) {
     return { ok: false, state: "error", reason: "unavailable", httpStatus: s, message: `${label} had a problem on its side (HTTP ${s}). Try again in a minute.` };
   }
   return { ok: false, state: "error", reason: "unexpected", httpStatus: s, message: `${label} answered with HTTP ${s}, which Tarsee didn't expect.` };
 }
 
+/** The rows a /models answer lists: OpenAI's {data: [...]}, or Ollama's own {models: [...]}, ids trimmed, no repeats. */
+function modelRowsOf(json) {
+  const rows = Array.isArray(json?.data) ? json.data : Array.isArray(json?.models) ? json.models : Array.isArray(json) ? json : [];
+  const out = [];
+  for (const m of rows) {
+    const raw = typeof m === "string" ? m : m?.id ?? m?.name ?? m?.model;
+    const id = typeof raw === "string" ? raw.trim() : "";
+    if (id && !out.some((r) => r.id === id)) out.push({ id, row: m && typeof m === "object" ? m : {} });
+  }
+  return out;
+}
+
 /** The ids a /models answer lists: OpenAI's {data: [{id}]}, or Ollama's own {models: [{name|model}]}. */
 export function modelIdsFrom(json) {
-  const rows = Array.isArray(json?.data) ? json.data : Array.isArray(json?.models) ? json.models : Array.isArray(json) ? json : [];
-  const ids = [];
-  for (const m of rows) {
-    const id = typeof m === "string" ? m : m?.id ?? m?.name ?? m?.model;
-    if (typeof id === "string" && id.trim() && !ids.includes(id.trim())) ids.push(id.trim());
-  }
-  return ids;
+  return modelRowsOf(json).map((r) => r.id);
 }
 
 /** The URL of Local AI's model list: the owner's address (one trailing slash dropped) plus /models. */
@@ -201,21 +217,175 @@ export function localModelsUrl(address) {
   return `${String(address).trim().replace(/\/+$/, "")}/models`;
 }
 
-/** Local AI's model ids from {address}/models, or a failure outcome. */
+/** The smallest context Tarsee can work in: Codex's own instructions and Tarsee's tools take about 20,000 tokens a call. */
+export const MIN_LOCAL_CONTEXT = 32_768;
+
+/** The first llama.cpp build whose stream Tarsee relies on: tool calls carry output_index (b11768, v0.8.0). */
+export const MIN_LLAMACPP_BUILD = 11_768;
+
+const posInt = (v) => {
+  const n = typeof v === "string" && v.trim() ? Number(v) : v;
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+};
+
+/** The server's own address: the owner's address without its /v1 (where llama-server's /props and Ollama's /api live). */
+export function localServerRoot(address) {
+  return String(address).trim().replace(/\/+$/, "").replace(/\/v1$/i, "");
+}
+
+/** Which server a /models answer comes from, by its rows: "llama.cpp", "LM Studio", "Ollama", or null. */
+export function localServerKind(rows) {
+  const list = rows.map((r) => r.row);
+  if (list.some((r) => r.owned_by === "llamacpp")) return "llama.cpp";
+  if (list.length && list.every((r) => r.owned_by === "organization_owner")) return "LM Studio";
+  // Ollama names each row's owner after the model's namespace ("library" for its own) and dates it; its ids have a tag.
+  if (list.length && list.every((r) => typeof r.created === "number" && typeof r.owned_by === "string")
+    && rows.some((r) => r.row.owned_by === "library" || /:[^/:]+$/.test(r.id))) return "Ollama";
+  return null;
+}
+
+/** "b12238-08f945ffb" as {build: "b12238", buildNumber: 12238}, or nulls. */
+export function llamaBuildOf(buildInfo) {
+  const m = /^b(\d+)\b/.exec(String(buildInfo ?? "").trim());
+  return m ? { build: `b${m[1]}`, buildNumber: Number(m[1]) } : { build: null, buildNumber: null };
+}
+
+/** What the extra reads add per model: {serverContext?, maxContext?, kind?: "embedding"} by id. */
+async function serverDetails(kind, root, ids, { doFetch, headers, timeoutMs }) {
+  const per = new Map();
+  const add = (id, info) => per.set(id, { ...(per.get(id) || {}), ...info });
+  const server = {};
+  if (kind === "llama.cpp") {
+    // GET /props: the build, the context each request gets, and the router role (several models, loaded on demand).
+    const r = await get(`${root}/props`, { fetch: doFetch, headers, timeoutMs });
+    if (r.status === 200 && r.json && typeof r.json === "object") {
+      Object.assign(server, llamaBuildOf(r.json.build_info));
+      server.context = posInt(r.json.default_generation_settings?.n_ctx) ?? posInt(r.json.n_ctx);
+      server.router = r.json.role === "router";
+    } else if (r.status === 401 || r.status === 403) {
+      server.authFailed = r.status;
+    } else if (r.status === 503) {
+      server.loading = true;
+    }
+  } else if (kind === "LM Studio") {
+    // LM Studio's own model list: each model's kind (llm, vlm, embeddings) and, once loaded, the context it was loaded
+    // with. Its newer /api/v1 list is read when /api/v0 isn't there.
+    const v0 = await get(`${root}/api/v0/models`, { fetch: doFetch, headers, timeoutMs });
+    if (v0.status === 200 && Array.isArray(v0.json?.data)) {
+      for (const m of v0.json.data) {
+        if (typeof m?.id !== "string") continue;
+        add(m.id, {
+          kind: /^embedding/i.test(String(m.type || "")) ? "embedding" : null,
+          serverContext: m.state === "loaded" ? posInt(m.loaded_context_length) : null,
+          maxContext: posInt(m.max_context_length),
+        });
+      }
+    } else {
+      const v1 = await get(`${root}/api/v1/models`, { fetch: doFetch, headers, timeoutMs });
+      for (const m of Array.isArray(v1.json?.models) ? v1.json.models : []) {
+        if (typeof m?.key !== "string") continue;
+        const loaded = Array.isArray(m.loaded_instances) ? m.loaded_instances.map((x) => posInt(x?.config?.context_length)).filter(Boolean) : [];
+        add(m.key, {
+          kind: /^embedding/i.test(String(m.type || "")) ? "embedding" : null,
+          serverContext: loaded.length ? Math.min(...loaded) : null,
+          maxContext: posInt(m.max_context_length),
+        });
+      }
+    }
+  } else if (kind === "Ollama") {
+    // /api/ps: the context of each model in memory. /api/show: each model's capabilities (an embedding model has no
+    // "completion") and the num_ctx it is set to load with, if any.
+    const ps = await get(`${root}/api/ps`, { fetch: doFetch, headers, timeoutMs });
+    const loaded = new Map();
+    for (const m of Array.isArray(ps.json?.models) ? ps.json.models : []) {
+      const n = posInt(m?.context_length);
+      for (const name of [m?.name, m?.model]) if (typeof name === "string" && n) loaded.set(name, n);
+    }
+    await Promise.all(ids.slice(0, 40).map(async (id) => {
+      const r = await post(`${root}/api/show`, { model: id }, { fetch: doFetch, headers, timeoutMs });
+      const caps = Array.isArray(r.json?.capabilities) ? r.json.capabilities : null;
+      const numCtx = posInt(/(?:^|\n)\s*num_ctx\s+(\d+)/.exec(String(r.json?.parameters ?? ""))?.[1]);
+      const trained = r.json?.model_info && typeof r.json.model_info === "object"
+        ? posInt(Object.entries(r.json.model_info).find(([k]) => /\.context_length$/.test(k))?.[1]) : null;
+      add(id, {
+        kind: caps && caps.includes("embedding") && !caps.includes("completion") ? "embedding" : null,
+        serverContext: loaded.get(id) ?? numCtx ?? null,
+        maxContext: trained,
+      });
+    }));
+  }
+  return { per, server };
+}
+
+/** One POST of JSON with a timeout, as get() does it: {status, json} or {network}. Never throws. */
+async function post(url, body, { fetch: doFetch = globalThis.fetch, headers = {}, timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+  let res;
+  try {
+    res = await doFetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body), redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    return { network: networkReason(err) };
+  }
+  let json = null;
+  try { const text = await res.text(); json = text ? JSON.parse(text) : null; } catch { json = null; }
+  return { status: res.status, json };
+}
+
+/** An embedding model's name, for a server that says nothing of what its models are for. */
+const EMBEDDING_NAME_RE = /(?:^|[/_.:-])(?:text-)?embed(?:ding)?s?(?:[/_.:-]|$)|(?:^|[/_.:-])(?:nomic-embed|mxbai-embed|bge-(?:m3|large|base|small))/i;
+
+/**
+ * Local AI's models from {address}/models, with what the server says about each, or a failure outcome:
+ *   { ok: true, models: [ids that can chat], rows: [{id, serverContext, maxContext}], hidden: [embedding model ids],
+ *     server: {kind: "llama.cpp" | "LM Studio" | "Ollama" | null, build?, buildNumber?, context?, router?, loading?,
+ *     authFailed?} }
+ * serverContext is the context the server actually gives that model now (llama-server's meta.n_ctx and /props n_ctx,
+ * LM Studio's loaded_context_length, Ollama's /api/ps context_length or its num_ctx); maxContext the most the model
+ * was trained for. Embedding models are left out of models and rows (LM Studio's type "embeddings", Ollama's
+ * capabilities, else a name like "text-embedding-..."). Only a server the /models answer names gets its extra reads:
+ * llama-server GET /props, LM Studio GET /api/v0/models (else /api/v1/models), Ollama GET /api/ps and POST /api/show;
+ * any other server gets no request beyond /models.
+ */
 export async function listLocalModels({ url, key = null, fetch: doFetch, timeoutMs = PROBE_TIMEOUT_MS } = {}) {
   const p = getProvider("local");
-  const r = await get(localModelsUrl(url), { fetch: doFetch, headers: key ? { Authorization: `Bearer ${key}` } : {}, timeoutMs });
+  const headers = key ? { Authorization: `Bearer ${key}` } : {};
+  const r = await get(localModelsUrl(url), { fetch: doFetch, headers, timeoutMs });
   if (r.network || r.status < 200 || r.status >= 300) return { ok: false, ...failure(p, r, url) };
-  return { ok: true, models: modelIdsFrom(r.json) };
+  return describeLocalModels(r.json, url, { key, fetch: doFetch, timeoutMs });
+}
+
+/** listLocalModels' answer for a /models answer already read (json) from the server at url. Never throws. */
+export async function describeLocalModels(json, url, { key = null, fetch: doFetch, timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+  const headers = key ? { Authorization: `Bearer ${key}` } : {};
+  const listed = modelRowsOf(json);
+  const kind = localServerKind(listed);
+  const { per, server } = kind
+    ? await serverDetails(kind, localServerRoot(url), listed.map((x) => x.id), { doFetch, headers, timeoutMs })
+    : { per: new Map(), server: {} };
+  const rows = [];
+  const hidden = [];
+  for (const { id, row } of listed) {
+    const extra = per.get(id) || {};
+    const embedding = extra.kind === "embedding" || (!per.has(id) && EMBEDDING_NAME_RE.test(id));
+    if (embedding) { hidden.push(id); continue; }
+    const meta = row.meta && typeof row.meta === "object" ? row.meta : {};
+    rows.push({
+      id,
+      serverContext: extra.serverContext ?? posInt(meta.n_ctx) ?? (kind === "llama.cpp" && !server.router ? server.context ?? null : null),
+      maxContext: extra.maxContext ?? posInt(meta.n_ctx_train) ?? null,
+    });
+  }
+  return { ok: true, models: rows.map((x) => x.id), rows, hidden, server: { kind, ...server } };
 }
 
 /**
- * Whether Local AI's server has the Responses API Tarsee talks to it through: POST {address}/responses with an empty
- * body, which names no model, so nothing loads on the server. Only a clear "no such address" says no: a 404 that names
- * no model (Ollama before 0.13.3, a chat-completions-only server) or old LM Studio's "Unexpected endpoint" answer.
- * Anything else (a 400 or 422 for the missing model, no answer at all) says nothing against it: true. Never throws.
+ * What Local AI's server answers POST {address}/responses with an empty body, which names no model, so nothing loads
+ * on the server: { has, status, words }. has is false only for a clear "no such address": a 404 that names no model
+ * (Ollama before 0.13.3, llama-server before b7793's "File Not Found", a chat-completions-only server) or old LM
+ * Studio's "Unexpected endpoint" answer. Anything else (a 400 or 422 for the missing input or model, no answer at all)
+ * says nothing against it. status and words let Test tell a key the server turned down (401) or a model still loading
+ * (503) from a pass. Never throws.
  */
-export async function localHasResponses({ url, key = null, fetch: doFetch = globalThis.fetch, timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+export async function localResponsesCheck({ url, key = null, fetch: doFetch = globalThis.fetch, timeoutMs = PROBE_TIMEOUT_MS } = {}) {
   let res;
   try {
     res = await doFetch(`${String(url).trim().replace(/\/+$/, "")}/responses`, {
@@ -226,7 +396,7 @@ export async function localHasResponses({ url, key = null, fetch: doFetch = glob
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
-    return true;
+    return { has: true, status: null, words: "" };
   }
   let words = "";
   try {
@@ -235,8 +405,20 @@ export async function localHasResponses({ url, key = null, fetch: doFetch = glob
     const said = typeof j?.error === "string" ? j.error : j?.error?.message ?? j?.detail ?? j?.message;
     if (typeof said === "string") words = said;
   } catch { /* plain text, or nothing */ }
-  if (res.status === 404 && !/model/i.test(words)) return false;
-  return !/Unexpected endpoint or method/i.test(words);
+  const has = !(res.status === 404 && !/model/i.test(words)) && !/Unexpected endpoint or method/i.test(words);
+  return { has, status: res.status, words };
+}
+
+/** Whether Local AI's server has the Responses API (localResponsesCheck's has). Never throws. */
+export async function localHasResponses(opts = {}) {
+  return (await localResponsesCheck(opts)).has;
+}
+
+/** A context size in the words a card uses: 65536 as "64K", 128000 as "128K". */
+export function contextWords(n) {
+  const v = Number(n);
+  if (!(v > 0)) return "";
+  return v % 1024 === 0 ? `${v / 1024}K` : `${Math.round(v / 1000)}K`;
 }
 
 /**
@@ -308,6 +490,67 @@ export async function refreshBalance(idOrAlias, { store, fetch: doFetch, now = D
 
 // --- Test ----------------------------------------------------------------------------------------------------------
 
+const thousands = (n) => Number(n).toLocaleString("en-US");
+
+/** Too little context for Tarsee, in the words for the server it runs on. */
+function tooSmallMessage(kind, model, n) {
+  const room = `room for only ${thousands(n)} tokens. Tarsee needs at least ${thousands(MIN_LOCAL_CONTEXT)}.`;
+  if (kind === "llama.cpp") return `llama.cpp was started with ${room} Start it again with -c 65536.`;
+  if (kind === "LM Studio") return `LM Studio loaded ${model} with ${room} Load it again with a longer context length (65536 is a good choice).`;
+  if (kind === "Ollama") return `Ollama runs ${model} with ${room} Set OLLAMA_CONTEXT_LENGTH=65536 where Ollama runs (or the model's num_ctx), then start it again.`;
+  return `Your Local AI gives ${model} ${room} Give it a larger context on your server.`;
+}
+
+/**
+ * Test's answer for Local AI from its model list (listLocalModels) and its Responses check (localResponsesCheck), for
+ * the card's model (chosen): {ok, state, message, models?, rows?, reason?, server?}. rows, when there, are the models
+ * for the catalog: a server that lists chat models and has the Responses API fills it even when Test still fails on
+ * its build or its context, so the card shows what was found.
+ */
+export function localOutcome(p, url, r, check, chosen = null) {
+  if (!r.ok) return r;
+  if (check.status === 401 || check.status === 403 || r.server?.authFailed) {
+    return { ok: false, state: "error", reason: "auth", httpStatus: check.status || r.server.authFailed, message: p.errorHints?.auth || "Your Local AI turned down Tarsee's key." };
+  }
+  if ((check.status === 503 && /loading/i.test(check.words)) || r.server?.loading) {
+    return { ok: false, state: "error", reason: "loading", httpStatus: 503, message: "Your Local AI is still loading its model. Click Test again in a minute." };
+  }
+  const usable = r.rows.filter((m) => !/\s/.test(m.id));
+  const spaced = r.rows.filter((m) => /\s/.test(m.id)).map((m) => m.id);
+  if (!r.rows.length) {
+    const only = r.hidden?.length ? ` It has only ${r.hidden.length === 1 ? "an embedding model" : "embedding models"} (${r.hidden.slice(0, 3).join(", ")}), which can't chat.` : "";
+    return { ok: false, state: "needs-setup", message: `Reached your Local AI, but it lists no models it can chat with.${only} Load one on that machine first: ollama pull qwen3, or start llama-server with -hf and a model (the guide below has the command).` };
+  }
+  if (!check.has) {
+    // It lists models but can't run a turn: every model would fail the same way, so none goes in the picker.
+    return { ok: false, state: "needs-setup", reason: "no-responses", message: localNoResponsesMessage(url).replace(/\*\*/g, "") };
+  }
+  const s = r.server || {};
+  if (!usable.length) {
+    return { ok: false, state: "needs-setup", message: `Your Local AI names its model "${spaced[0]}", with spaces in it, which Tarsee can't use. Start llama-server with --alias and a short name (for example --alias qwen3.5-9b).` };
+  }
+  const models = usable.map((m) => m.id);
+  const name = s.kind === "llama.cpp" && s.build ? `llama.cpp ${s.build}` : s.kind;
+  // The context the card's model gets: its own, or the one size the server gives every model (llama-server).
+  const row = usable.find((m) => m.id === chosen) || (usable.length === 1 ? usable[0] : null);
+  const sizes = [...new Set(usable.map((m) => m.serverContext).filter(Boolean))];
+  const context = row?.serverContext || (sizes.length === 1 && s.kind === "llama.cpp" ? sizes[0] : null);
+  const base = { rows: usable, models, server: { kind: s.kind ?? null, build: s.build ?? null, context: context ?? null } };
+  if (s.kind === "llama.cpp" && s.buildNumber && s.buildNumber < MIN_LLAMACPP_BUILD) {
+    return { ...base, ok: false, state: "needs-setup", reason: "old-build", message: `Update llama.cpp to b${MIN_LLAMACPP_BUILD} or newer: older builds can mix up tool calls. This one is ${s.build}.` };
+  }
+  if (context && context < MIN_LOCAL_CONTEXT) {
+    return { ...base, ok: false, state: "needs-setup", reason: "small-context", message: tooSmallMessage(s.kind, row?.id || models[0], context) };
+  }
+  const parts = ["Reached your Local AI"];
+  if (name) parts.push(name);
+  parts.push(`${models.length} model${models.length === 1 ? "" : "s"}`);
+  if (context) parts.push(`${contextWords(context)} context`);
+  let message = parts.join(" · ");
+  if (spaced.length) message += `. ${spaced.length === 1 ? "One model name has" : `${spaced.length} model names have`} spaces in it, which Tarsee can't use: start llama-server with --alias and a short name.`;
+  return { ...base, ok: true, state: "ready", message };
+}
+
 function keyOutcome(p, kind, { balance } = {}) {
   if (kind === "openrouter-empty") {
     return { ok: false, state: "out-of-credit", reason: "billing", message: "Key works, but its spending limit is used up. Raise it at openrouter.ai/settings/keys.", balance };
@@ -358,19 +601,11 @@ export async function probeProvider(idOrAlias, deps = {}) {
       return { ok: false, state: "needs-setup", message: `${s.detail} ${s.fix || ""}`.trim() };
     }
     // Both asked at once, so a server that doesn't answer keeps Test waiting no longer than before.
-    const responses = localHasResponses({ url, key, fetch: doFetch, timeoutMs });
+    const responses = localResponsesCheck({ url, key, fetch: doFetch, timeoutMs });
     const r = await listLocalModels({ url, key, fetch: doFetch, timeoutMs });
-    const hasResponses = await responses;
-    if (!r.ok) out = r;
-    else if (!r.models.length) {
-      out = { ok: false, state: "needs-setup", message: "Reached your Local AI, but it lists no models. Download one on that machine first (for example: ollama pull qwen3)." };
-    } else if (!hasResponses) {
-      // It lists models but can't run a turn: every model would fail the same way, so none goes in the picker.
-      out = { ok: false, state: "needs-setup", reason: "no-responses", message: localNoResponsesMessage(url).replace(/\*\*/g, "") };
-    } else {
-      setCatalogModels("local-models", r.models.map((id) => ({ id })));
-      out = { ok: true, state: "ready", message: `Reached your Local AI · ${r.models.length} model${r.models.length === 1 ? "" : "s"}`, models: r.models };
-    }
+    out = localOutcome(p, url, r, await responses, chosenModel("local", store, env));
+    if (out.rows) setLocalModels(out.rows, store);
+    delete out.rows;
   } else {
     if (!key) {
       const s = await providerStatus(p.id, deps);

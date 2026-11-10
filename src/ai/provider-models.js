@@ -6,7 +6,9 @@
  *   deepseek  GET https://api.deepseek.com/models with the key: confirms the static table (DeepSeek's model ids and
  *             prices are code constants) and names any model the table doesn't know yet.
  *   local     GET {the server's address}/models, with Local AI's own key when it has one. Every model the server
- *             lists becomes a choice (setCatalogModels "local-models"), with the context size set on the card.
+ *             lists that can chat becomes a choice (setLocalModels "local-models"; embedding models are left out),
+ *             with its context: the server's own size when it says one (llama-server, LM Studio, Ollama), else the
+ *             card's, else 128K (provider-registry.js localContextTokens).
  * The Claude catalog is lib/model-catalog.js, OpenRouter's is lib/openrouter-catalog.js and the ChatGPT account's list
  * comes from Codex (ai/codex-models.js).
  *
@@ -15,8 +17,9 @@
  * key pasted into the wrong card is refused before anything is sent, and no error ever carries the key or the
  * provider's answer text.
  */
-import { PROVIDERS, getProvider, setCatalogModels, modelsFor } from "./provider-registry.js";
+import { PROVIDERS, getProvider, setCatalogModels, setLocalModels, modelsFor } from "./provider-registry.js";
 import { hostFor, CredentialError } from "./engine-env.js";
+import { describeLocalModels } from "./provider-probes.js";
 
 const CODEX = "codex";
 const TIMEOUT_MS = 15_000;
@@ -87,6 +90,12 @@ export async function listProviderModels(providerId, opts = {}) {
   }
   const ids = idsOf(body);
   if (!ids) return { ok: false, code: "error", status: res.status, error: `${label}'s answer isn't a model list.` };
+  if (entry.id === "local") {
+    // What the server says about each model (provider-probes.js describeLocalModels): its real context, and no
+    // embedding models (they can't chat).
+    const d = await describeLocalModels(body, host, { key, fetch: fetchImpl, timeoutMs: opts.timeoutMs ?? TIMEOUT_MS });
+    return { ok: true, status: res.status, ids: d.models, rows: d.rows, hidden: d.hidden, server: d.server };
+  }
   return { ok: true, status: res.status, ids };
 }
 
@@ -125,9 +134,8 @@ export async function refreshProviderModels(providerId, opts = {}) {
       extra: out.ids.filter((id) => !known.has(id)),
     };
   }
-  const context = positiveInt(readSetting(store, "ai.local.context")) ?? PROVIDERS.local.defaultContext;
-  setCatalogModels("local-models", out.ids.map((id) => ({ id, label: id, context })));
-  return { ...out, models: modelsFor("local").map((m) => ({ id: m.id, label: m.label, context: m.context })) };
+  setLocalModels(out.rows || out.ids, store);
+  return { ...out, models: modelsFor("local").map((m) => ({ id: m.id, label: m.label, context: m.context, serverContext: m.serverContext ?? null })) };
 }
 
 /** After a Local AI server couldn't be read, how long before it is asked again (a turn would otherwise wait each time). */
@@ -184,7 +192,7 @@ function statusError(entry, status, host) {
   if (status === 404 && entry.id === "local") {
     return {
       code: "needs-setup",
-      error: `Your Local AI at ${host} has no model list there. Check the address: it usually ends in /v1 (Ollama: http://<computer>:11434/v1, LM Studio: http://<computer>:1234/v1).`,
+      error: `Your Local AI at ${host} has no model list there. Check the address: it usually ends in /v1 (Ollama: http://<computer>:11434/v1, LM Studio: http://<computer>:1234/v1, llama.cpp: http://<computer>:9931/v1, or 8080 for older builds and Docker).`,
     };
   }
   return { code: "error", error: `${label} answered ${status} when asked for its models.` };

@@ -22,8 +22,9 @@
  *   openrouter  a custom Responses provider on OpenRouter's host, with its attribution headers
  *   deepseek    a custom Responses provider on DeepSeek's host (the alternative engine, used only when a model was
  *               verified on it)
- *   local       a custom Responses provider at the owner's server address; its key only when it has one; the
- *               card's context window
+ *   local       a custom Responses provider at the turn's Local AI bridge address (ai/local-bridge.js, which passes
+ *               the requests on to the owner's server); its key is the bridge's per-turn token, so the owner's key
+ *               never reaches the Codex process; the context window from the server or the card
  */
 import { PROVIDERS, normalizeProviderId } from "../provider-registry.js";
 import { CODEX, CODEX_SHELL_EXCLUDED, CredentialError, codexChatgptTestHosts, codexEnvFor, hostFor } from "../engine-env.js";
@@ -218,7 +219,9 @@ const oneLine = (s) => String(s ?? "").replace(/[\r\n\0]+/g, " ").trim();
  *   workspace       the agent's working folder (required)
  *   mcp             the turn's grant for Tarsee's tools: { url, token } (required)
  *   developerInstructions   the stable instructions (preamble, workspace CLAUDE.md, stable system prompt)
- *   localUrl        Local AI's server address (ai.local.baseUrl, else TARSEE_LOCAL_AI_URL)
+ *   localUrl        Local AI's server address (ai.local.baseUrl, else TARSEE_LOCAL_AI_URL): checked, never sent to Codex
+ *   localBridge     Local AI only, required: the turn's bridge {url, token} (local-bridge.js open()); Codex's base_url
+ *                   is url and its key (TARSEE_PROVIDER_KEY) is token. ctx.key is not used for Local AI.
  *   appTitle, referer   OpenRouter's attribution
  *   contextTokens   the model's context window; compactWindow   TARSEE_COMPACT_WINDOW's value (default from env)
  *   thinkingSummaries   ask for reasoning summaries (the dashboard's live view)
@@ -238,9 +241,17 @@ export function buildCodexOptions(target, ctx = {}) {
   if (!workspace) throw new TypeError("buildCodexOptions: the turn's workspace folder is required");
   if (!ctx.mcp?.url) throw new CredentialError("needs-mcp-token", "This turn has no grant for Tarsee's tools.", id);
 
+  // Local AI: the owner's address is checked (none refuses the turn), and Codex is given the turn's bridge instead.
+  let bridge = null;
+  if (id === "local") {
+    hostFor(entry, CODEX, { env, localUrl: ctx.localUrl });
+    bridge = ctx.localBridge;
+    if (!bridge?.url || !bridge?.token) throw new TypeError("buildCodexOptions: a Local AI turn goes through its bridge (ctx.localBridge {url, token})");
+  }
+
   // The environment first: it refuses a provider Codex doesn't run, a missing key and a missing token (R4).
   const childEnv = codexEnvFor(entry, {
-    env, vaultEnv: ctx.vaultEnv, key: ctx.key, mcpToken: ctx.mcp.token, home: ctx.home, stateDir: ctx.stateDir,
+    env, vaultEnv: ctx.vaultEnv, key: bridge ? bridge.token : ctx.key, mcpToken: ctx.mcp.token, home: ctx.home, stateDir: ctx.stateDir,
   });
   if (ctx.turnMark) childEnv.TARSEE_CODEX_TURN = String(ctx.turnMark);
 
@@ -292,7 +303,7 @@ export function buildCodexOptions(target, ctx = {}) {
     const name = `tarsee_${id}`;
     const provider = {
       name: CUSTOM_PROVIDERS[id]?.name || entry.label || id,
-      base_url: hostFor(entry, CODEX, { env, localUrl: ctx.localUrl }),
+      base_url: bridge ? bridge.url : hostFor(entry, CODEX, { env }),
       ...(childEnv.TARSEE_PROVIDER_KEY ? { env_key: "TARSEE_PROVIDER_KEY" } : {}),
       wire_api: "responses",
     };

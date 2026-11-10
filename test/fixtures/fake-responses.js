@@ -32,6 +32,20 @@
  * Other options: models (the JSON a GET .../models gets), upgrade(headers, path) (return an HTTP status to refuse a
  * WebSocket upgrade with, as OpenAI does for a bad key; nothing to accept it).
  *
+ * llama: { alias?, nCtx?, build?, strictTemplate? } makes it behave as llama.cpp's llama-server (b12238) does, checked
+ * against server-chat.cpp and a real one:
+ *   - GET /v1/models answers llama-server's list (owned_by "llamacpp", meta.n_ctx, and Ollama's models[] beside it),
+ *     GET /props its build_info and n_ctx, GET /health {"status":"ok"}
+ *   - POST .../responses with no input answers 400 "'input' is required" (Test's probe)
+ *   - every tool that isn't a function is dropped before the handler sees the request (llama-server only logs
+ *     "unsupported Responses tool type 'namespace' skipped"): record.dropped lists their types
+ *   - an input item it doesn't know (anything but a message, a function call, its output, or reasoning with a content
+ *     array) answers 400 "Cannot determine type of 'item'"
+ *   - strictTemplate: a system or developer message that isn't the very first input item answers 500 "System message
+ *     must be at the beginning." (the Qwen3.5 family's chat template; llama.cpp makes every developer message a system one)
+ *   - replies never carry a namespace, start with output_item.added for every item, send every output_item.done at the
+ *     end, and have no sequence_number
+ *
  * Standing in for ChatGPT's backend (the ChatGPT plan, through TARSEE_TEST_BASE_URL_CHATGPT): before any model request
  * Codex asks which workspace the signed-in account routes to (GET .../wham/accounts/check) and accepts only an HTTPS
  * origin, so this needs both
@@ -211,9 +225,57 @@ export function chatgptRefreshRefusal(code = "refresh_token_invalidated") {
   return { error: { code: code || "refresh_token_invalidated", message: "This test sign-in can't be renewed." } };
 }
 
+// --- llama-server --------------------------------------------------------------------------------------------------
+
+/** The input items llama-server b12238 knows (server-chat.cpp); anything else is a 400. */
+const LLAMA_ITEMS = new Set(["message", "function_call", "function_call_output", "reasoning"]);
+
+/** llama-server's GET /v1/models: OpenAI's data[] (owned_by "llamacpp", meta.n_ctx) with Ollama's models[] beside it. */
+export function llamaModels({ alias = "qwen3.5-9b", nCtx = 65_536 } = {}) {
+  return {
+    models: [{ name: alias, model: alias, modified_at: "", size: "", digest: "", type: "model", description: "", tags: [""], capabilities: ["completion"], parameters: "", details: { format: "gguf" } }],
+    object: "list",
+    data: [{ id: alias, aliases: [alias], tags: [], object: "model", created: Math.floor(Date.now() / 1000), owned_by: "llamacpp", meta: { vocab_type: 2, n_vocab: 151_936, n_ctx: nCtx, n_ctx_train: 262_144, n_params: 9_000_000_000 } }],
+  };
+}
+
+/** llama-server's GET /props (the fields Tarsee reads, and a few beside them). */
+export function llamaProps({ alias = "qwen3.5-9b", nCtx = 65_536, build = "b12238-08f945ffb" } = {}) {
+  return { default_generation_settings: { params: { temperature: 0.8 }, n_ctx: nCtx }, total_slots: 4, model_alias: alias, model_path: `/models/${alias}.gguf`, modalities: { vision: false, audio: false }, build_info: build };
+}
+
+/** What llama-server would refuse in a Responses request: {status, message} or null. */
+export function llamaRefusal(body, { strictTemplate = false } = {}) {
+  const input = Array.isArray(body?.input) ? body.input : [];
+  for (const item of input) {
+    const type = item?.type || (item?.role ? "message" : null);
+    if (!LLAMA_ITEMS.has(type) || (type === "reasoning" && !Array.isArray(item.content))) return { status: 400, message: "Cannot determine type of 'item'" };
+  }
+  if (strictTemplate) {
+    const lead = typeof body?.instructions === "string" && body.instructions ? 1 : 0;
+    const systems = input.map((item, i) => [item, i + lead]).filter(([item]) => (item?.type || "message") === "message" && (item.role === "developer" || item.role === "system"));
+    if (systems.length + lead > 1 || systems.some(([, at]) => at > 0)) return { status: 500, message: "System message must be at the beginning." };
+  }
+  return null;
+}
+
+/** A reply's events as llama-server streams them: every item added first, every done last, no namespace anywhere. */
+function llamaEvents(events) {
+  const done = events.filter((e) => e.type === "response.output_item.done").map((e) => {
+    if (e.item?.namespace === undefined) return e;
+    const { namespace: _n, ...item } = e.item;
+    return { ...e, item };
+  });
+  const rest = events.filter((e) => e.type !== "response.output_item.done");
+  const created = rest.filter((e) => e.type === "response.created");
+  const end = rest.filter((e) => e.type !== "response.created");
+  const added = done.map((e) => ({ type: "response.output_item.added", output_index: e.output_index, item: { ...e.item, ...(e.item?.type === "function_call" ? { arguments: "" } : {}), status: "in_progress" } }));
+  return [...created, ...added, ...done, ...end.map((e) => (e.type === "response.completed" ? { ...e, response: { ...e.response, output: done.map((d) => d.item) } } : e))];
+}
+
 // --- The server ----------------------------------------------------------------------------------------------------
 
-export async function startFakeResponses({ handler, models, upgrade, tls, chatgpt } = {}) {
+export async function startFakeResponses({ handler, models, upgrade, tls, chatgpt, llama } = {}) {
   let respond = handler || (() => ({ text: "ok" }));
   const requests = [];
   const sockets = new Set();
@@ -225,7 +287,7 @@ export async function startFakeResponses({ handler, models, upgrade, tls, chatgp
     const index = n++;
     let reply;
     try {
-      reply = (await respond(record.body, { index, path: record.path, headers: record.headers, requests })) || { text: "ok" };
+      reply = (await respond(record.modelBody ?? record.body, { index, path: record.path, headers: record.headers, requests })) || { text: "ok" };
     } catch (err) {
       reply = { status: 500, error: { message: `fake handler threw: ${err?.message || err}` } };
     }
@@ -249,8 +311,27 @@ export async function startFakeResponses({ handler, models, upgrade, tls, chatgp
 
       if (req.method === "GET" && /\/models$/.test(path)) {
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(models ?? { object: "list", data: [], models: [] }));
+        res.end(JSON.stringify(models ?? (llama ? llamaModels(llama) : { object: "list", data: [], models: [] })));
         return;
+      }
+      if (llama && req.method === "GET" && (path === "/props" || path === "/health")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(path === "/props" ? llamaProps(llama) : { status: "ok" }));
+        return;
+      }
+      if (llama && req.method === "POST" && /\/responses$/.test(path)) {
+        // llama-server's own checks, before any model runs.
+        const llamaError = (status, message, type) => {
+          record.reply = { status, llama: message };
+          res.writeHead(status, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { code: status, message, type } }));
+        };
+        if (!body || typeof body !== "object" || body.input === undefined) return llamaError(400, "'input' is required", "invalid_request_error");
+        const refusal = llamaRefusal(body, llama);
+        if (refusal) return llamaError(refusal.status, refusal.message, refusal.status >= 500 ? "server_error" : "invalid_request_error");
+        const tools = Array.isArray(body.tools) ? body.tools : [];
+        record.dropped = tools.filter((t) => t?.type !== "function").map((t) => t?.type ?? "?");
+        record.modelBody = { ...body, tools: tools.filter((t) => t?.type === "function") };
       }
       if (chatgpt && req.method === "GET" && ACCOUNTS_CHECK_PATH.test(path)) {
         const { refreshError: _r, ...account } = chatgpt;
@@ -277,7 +358,7 @@ export async function startFakeResponses({ handler, models, upgrade, tls, chatgp
         return;
       }
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-      res.end(sseBody(replyEvents(reply, index + 1)));
+      res.end(sseBody(llama ? llamaEvents(replyEvents(reply, index + 1)) : replyEvents(reply, index + 1)));
     });
   };
   const server = tls ? https.createServer({ key: tls.key, cert: tls.cert }, onRequest) : http.createServer(onRequest);

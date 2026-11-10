@@ -823,7 +823,7 @@ chatRouter.post("/send", async (req, res) => {
           usage = { ...usage, ...event.usage };
         } else if (event.type === "error") {
           // The conversation outgrew the model's window: save a checkpoint so the next session can pick up from it.
-          if (!overflowSaved && /prompt is too long|context_length_exceeded|input length|too many tokens/i.test(event.message || "")) {
+          if (!overflowSaved && (event.code === "context" || /prompt is too long|context_length_exceeded|input length|too many tokens/i.test(event.message || ""))) {
             overflowSaved = true;
             try {
               const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, "auto: overflow error");

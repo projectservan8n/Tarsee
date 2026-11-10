@@ -256,6 +256,7 @@ const Setup = {
       const presets = p.presets.map((x) => `<button type="button" class="btn btn-sm btn-ghost" data-setup="preset" data-url="${x.url}">${x.name}</button>`).join("");
       return `<label class="ai-label" for="setupLocalUrl">Server address</label>` +
         `<div class="ai-presets">Fill in: ${presets}</div>` +
+        (p.presetNote ? `<div class="hint">${p.presetNote}</div>` : "") +
         `<input type="url" id="setupLocalUrl" class="ai-input" data-keep="url" value="${esc(c.settings?.baseUrl || "")}" placeholder="http://localhost:11434/v1" autocomplete="off" spellcheck="false" autocapitalize="off">` +
         `<form class="ai-key-form" autocomplete="off" data-no-submit><label class="ai-label" for="setupKey">Key, only if your server asks for one</label>` +
         `<input type="password" id="setupKey" class="ai-input" data-keep="key" placeholder="${esc(p.keyPlaceholder)}" autocomplete="off" spellcheck="false" autocapitalize="off"></form>` +
@@ -423,7 +424,7 @@ const Setup = {
   async _aiSaveLocal(btn) {
     const url = document.getElementById("setupLocalUrl")?.value.trim() || "";
     const key = document.getElementById("setupKey")?.value.trim() || "";
-    if (!url) { this._aiLine.local = { text: "Type your server's address first, or click Ollama or LM Studio.", tone: "bad" }; this._aiDrawPanel(); return; }
+    if (!url) { this._aiLine.local = { text: "Type your server's address first, or click one of the buttons above.", tone: "bad" }; this._aiDrawPanel(); return; }
     const done = this._aiBusy(btn, "Saving…");
     try {
       await API.json("/api/ai/providers/local", { method: "PUT", body: { baseUrl: url } });

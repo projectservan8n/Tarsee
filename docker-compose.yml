@@ -33,7 +33,7 @@ services:
       - OPENAI_API_KEY
       - OPENROUTER_API_KEY
       - DEEPSEEK_API_KEY
-      # Local AI: your Ollama or LM Studio server's address, and its key if it asks for one.
+      # Local AI: your Ollama, LM Studio or llama.cpp server's address, and its key if it asks for one.
       - TARSEE_LOCAL_AI_URL
       - TARSEE_LOCAL_AI_KEY
       # The Claude plan without the Terminal: the token `claude setup-token` prints.

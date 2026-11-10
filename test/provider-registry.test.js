@@ -510,9 +510,26 @@ describe("contextTokensFor", () => {
   });
 
   it("uses the Local AI card's context, 128K by default", () => {
+    setCatalogModels("local-models", []);
     assert.equal(contextTokensFor("local", "llama3.1:8b"), 128_000);
     assert.equal(contextTokensFor("local", "llama3.1:8b", store({ "ai.local.context": 32768 })), 32768);
     assert.equal(contextTokensFor("local", "llama3.1:8b", store({ "ai.local.context": "65536" })), 65536);
+  });
+
+  it("Local AI: the server's own size when it says one, the smaller of it and the card's, never past what the model was trained for", () => {
+    // The owner's case: LM Studio loaded the model at 32,768 while Tarsee assumed 128,000.
+    registry.setLocalModels([{ id: "spark-4b", serverContext: 32_768 }, { id: "qwen3:8b" }, { id: "tiny", maxContext: 8192 }]);
+    assert.equal(contextTokensFor("local", "spark-4b"), 32_768, "the server's size, not the 128K default");
+    assert.equal(contextTokensFor("local", "spark-4b", store({ "ai.local.context": 128_000 })), 32_768, "min(the owner's, the server's)");
+    assert.equal(contextTokensFor("local", "spark-4b", store({ "ai.local.context": 16_384 })), 16_384);
+    assert.equal(contextTokensFor("local", "qwen3:8b", store({ "ai.local.context": 65_536 })), 65_536, "no word from the server: the owner's");
+    assert.equal(contextTokensFor("local", "qwen3:8b"), 128_000, "then 128K");
+    assert.equal(contextTokensFor("local", "tiny"), 8192, "never past the model's own most");
+    assert.equal(registry.localContextTokens({ own: 100_000, serverContext: 65_536 }), 65_536);
+    assert.equal(registry.localContextTokens({ own: null, serverContext: null }), 128_000);
+    const rows = registry.catalogModels("local-models");
+    assert.deepEqual(rows.map((m) => [m.id, m.context, m.serverContext ?? null]), [["spark-4b", 32_768, 32_768], ["qwen3:8b", 128_000, null], ["tiny", 8192, null]], "each row keeps the server's size apart from the one used");
+    setCatalogModels("local-models", []);
   });
 
   it("uses a runtime catalog's context where there is one", () => {

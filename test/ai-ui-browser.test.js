@@ -86,7 +86,7 @@ function fakeApi({ needsSetup = true, needsPersonality = false, active = "claude
       openai: card("openai", "OpenAI API key", "key", { envKey: "OPENAI_API_KEY", model: "gpt-6.1-sol", shipped: false }),
       openrouter: card("openrouter", "OpenRouter", "key", { envKey: "OPENROUTER_API_KEY", model: "~anthropic/claude-sonnet-latest" }),
       deepseek: card("deepseek", "DeepSeek", "key", { envKey: "DEEPSEEK_API_KEY", model: "deepseek-flash", notes: ["The cheapest per token; a small top-up is enough."] }),
-      local: card("local", "Local AI", "local", { state: "needs-setup", detail: "Local AI has no server address yet.", fix: "Add your server's address.", settings: { baseUrl: null, context: 128000 } }),
+      local: card("local", "Local AI", "local", { state: "needs-setup", detail: "Local AI has no server address yet.", fix: "Add your server's address.", settings: { baseUrl: null, context: null, serverContext: null, contextUsed: 128000, defaultContext: 128000 } }),
     },
   };
   if (onlyClaude) for (const c of Object.values(state.cards)) if (c.id !== "claude") c.shipped = false;
@@ -193,6 +193,8 @@ function fakeApi({ needsSetup = true, needsPersonality = false, active = "claude
         c.settings = { ...c.settings, baseUrl: body.baseUrl };
         Object.assign(c, { detail: `Local AI at ${body.baseUrl} has no model chosen yet.`, fix: "Press Test." });
       }
+      // As the routes keep it: only the size the owner saved (null when they saved none or emptied the box).
+      if (id === "local" && "context" in body) c.settings = { ...c.settings, context: body.context };
       return json(200, { ok: true, card: c });
     }
     if (p === "/api/ai/test/local") {
@@ -202,7 +204,9 @@ function fakeApi({ needsSetup = true, needsPersonality = false, active = "claude
         { id: "llama3.1:8b", label: "llama3.1:8b", needsVerification: false, inMenu: false, verifyCost: "Free" },
       ];
       ready(state.cards.local, { model: "qwen3:8b", detail: `Using your Local AI at ${state.cards.local.settings.baseUrl}.` });
-      return json(200, { ok: true, state: "ready", message: "Reached your Local AI · 2 models", models: ["qwen3:8b", "llama3.1:8b"] });
+      // The size the server said it gives the card's model, kept apart from the one the owner saved.
+      state.cards.local.settings = { ...state.cards.local.settings, serverContext: 32768 };
+      return json(200, { ok: true, state: "ready", message: "Reached your Local AI · 2 models · 32K context", models: ["qwen3:8b", "llama3.1:8b"] });
     }
     if (p.startsWith("/api/ai/test/")) {
       if (id === "deepseek") {
@@ -566,9 +570,27 @@ describe("the AI pages in a browser", { skip }, () => {
       // Local AI: the Ollama preset, Save, then Test lists the model and the card is ready.
       await page.locator('#localAiCard [data-ai-action="preset"]', { hasText: "Ollama" }).click();
       assert.equal(await page.locator("#aiLocalUrl").inputValue(), "http://localhost:11434/v1");
+      assert.equal(await page.locator("#aiLocalContext").inputValue(), "", "no number nobody chose in the context box");
+      assert.equal(await page.locator("#aiLocalContext").getAttribute("step"), "any", "4096, 8192 and 32768 are all sizes the box takes");
+      assert.equal(await page.locator("#aiLocalContext").getAttribute("placeholder"), "128,000 unless you set it");
       await page.locator('#localAiCard [data-ai-action="save-local"]').click();
       await page.locator("#localAiStatus", { hasText: "Ready, using qwen3:8b" }).waitFor();
-      assert.equal(api.calls.find((c) => c.path === "/api/ai/providers/local").body.baseUrl, "http://localhost:11434/v1");
+      const firstSave = api.calls.find((c) => c.path === "/api/ai/providers/local");
+      assert.equal(firstSave.body.baseUrl, "http://localhost:11434/v1");
+      assert.ok(!("context" in firstSave.body), "a Save that didn't touch the context box stores no context (not the old pre-filled 128000)");
+      // After Test, the box shows what the server said, as its placeholder, still empty.
+      await page.locator('#aiLocalContext[placeholder="32,768, read from your server"]').waitFor();
+      assert.equal(await page.locator("#aiLocalContext").inputValue(), "");
+      // A size the owner types is saved; an emptied box goes back to the server's.
+      const saves = () => api.calls.filter((c) => c.path === "/api/ai/providers/local" && c.method === "PUT");
+      const before = saves().length;
+      await page.locator("#aiLocalContext").fill("16384");
+      await page.locator('#localAiCard [data-ai-action="save-local"]').click();
+      for (let i = 0; i < 100 && !saves().slice(before).some((c) => c.body && "context" in c.body); i++) await new Promise((r) => setTimeout(r, 50));
+      const typed = saves().slice(before).find((c) => c.body && "context" in c.body);
+      assert.equal(typed?.body.context, 16384, "the size typed in");
+      const llamaPreset = page.locator('#localAiCard [data-ai-action="preset"]', { hasText: "llama.cpp" });
+      assert.equal(await llamaPreset.getAttribute("data-url"), "http://localhost:9931/v1");
 
       // Every model the server has gets its own row: the card's chosen one is in a chat's model menu, another one is
       // verified on its own row, so verifying it never changes the card's model.

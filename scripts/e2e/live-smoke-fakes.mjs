@@ -31,10 +31,17 @@
  *   pin-password     Tarsee started again with a 4-digit SETUP_PASSWORD (this year), the six AIs set up here named
  *                    with --only, every chat's factors carrying the password: exit 0, and the header's date, every
  *                    sum and every other number print whole
+ *   verify-local-llama  Local AI moved to a llama.cpp llama-server (a front answering /v1/models, /props and /health
+ *                    as b12238 does, before the llama-flavoured fake model, which drops every tool that isn't a
+ *                    function): --only local --verify passes Test (build and context named), Verify and the calculator
+ *                    chat through the Local AI bridge, every request llama-server got had plain function tools and
+ *                    the owner's key; Codex's own request sent straight to it (no bridge) has its calculator dropped.
+ *                    Run on a Tarsee without the bridge, this scenario fails at Verify's tool check.
  * plus redact() on its own, and scans: nothing live-smoke printed carries a key, token, cookie value, password or
  * canary; every test chat was deleted; nothing reached a stripped host variable.
  *
- *   node scripts/e2e/live-smoke-fakes.mjs [--out <dir>] [--keep] [--skip-verify]
+ *   node scripts/e2e/live-smoke-fakes.mjs [--out <dir>] [--keep] [--skip-verify] [--scenario <name>,...]
+ *     --scenario   only these scenarios (by the names above); the setup, redact() and the scans always run
  *
  * Exit 0 when every check passed, 1 otherwise. Results: <out>/live-smoke-fakes.json and each run's output next to it.
  */
@@ -240,12 +247,17 @@ function additionalToolNames(body) {
   return out;
 }
 
-/** A call to one of Tarsee's tools, however this request offers it: outright, behind tool_search, or inside exec. */
+/**
+ * A call to one of Tarsee's tools, however this request offers it: outright (in Codex's mcp__tarsee namespace, or as
+ * the plain function the Local AI bridge makes of it, which a Local AI model calls by that flat name), behind
+ * tool_search, or inside exec.
+ */
 function codexToolCall(body, tool, args) {
   const names = [...fr.toolNames(body), ...additionalToolNames(body)];
   const searched = fr.searchedTools(body);
   const full = `mcp__tarsee.${tool}`;
   if (names.includes(full) || searched.includes(full)) return { calls: [{ name: tool, namespace: "mcp__tarsee", arguments: args }] };
+  if (names.includes(`mcp__tarsee__${tool}`)) return { calls: [{ name: `mcp__tarsee__${tool}`, arguments: args }] };
   if (names.includes("tool_search") && !searched.length) return { calls: [{ type: "tool_search", query: `tarsee ${tool.replace(/^tarsee_/, "")}` }] };
   if (names.includes("functions.exec") || names.includes("exec")) {
     const js = [`const r = await tools.mcp__tarsee__${tool}(${JSON.stringify(args)});`, "text(typeof r === \"string\" ? r : JSON.stringify(r));"].join("\n");
@@ -350,6 +362,22 @@ function localFront(req, p) {
   if (req.method !== "GET" || !/\/v1\/models$/.test(p)) return null;
   if (refused("local", req)) return { status: 401, body: { error: { message: "unauthorized" } } };
   return { body: { object: "list", data: LOCAL_MODELS.map((id) => ({ id, object: "model", owned_by: "library" })) } };
+}
+
+/** The model llama.cpp's llama-server runs in the verify-local-llama scenario (its --alias), and its -c. */
+const LLAMA_MODEL = "qwen3.5-9b";
+const LLAMA_CTX = 65_536;
+/**
+ * llama-server b12238 started with --api-key (Local AI's fake key): it answers GET /v1/models, /props and /health
+ * itself, as the real one does (/health without a key); POST /v1/responses goes to the llama-flavoured fake model
+ * (fake-responses.js llama mode), which drops every tool that isn't a function, as llama-server does.
+ */
+function llamaFront(req, p) {
+  if (req.method !== "GET") return null;
+  if (p === "/health") return { body: { status: "ok" } };
+  if (p !== "/props" && !/\/v1\/models$/.test(p)) return null;
+  if (refused("local", req)) return { status: 401, body: { error: { code: 401, message: "Invalid API Key", type: "authentication_error" } } };
+  return { body: p === "/props" ? fr.llamaProps({ alias: LLAMA_MODEL, nCtx: LLAMA_CTX }) : fr.llamaModels({ alias: LLAMA_MODEL, nCtx: LLAMA_CTX }) };
 }
 
 /**
@@ -596,8 +624,11 @@ function leaksIn(text) {
 // --- Main ----------------------------------------------------------------------------------------------------------
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tarsee-live-smoke-fakes-"));
-let fakeA; let fakeR; let dsMux; let orMux; let localMux; let chatgptMux; let trap;
+let fakeA; let fakeR; let fakeL; let dsMux; let orMux; let localMux; let llamaMux; let chatgptMux; let trap;
 let exitCode = 1;
+/** --scenario a,b: only these scenarios (the setup and the scans always run). */
+const ONLY_SCENARIOS = argOf("--scenario") ? argOf("--scenario").split(",").map((s) => s.trim()).filter(Boolean) : null;
+const want = (name) => !ONLY_SCENARIOS || ONLY_SCENARIOS.includes(name);
 
 try {
   fakeA = await fa.startFakeAnthropic({ script: (entry) => anthropicScript(entry) });
@@ -605,11 +636,14 @@ try {
     handler: (body, info) => responsesHandler(body, info),
     upgrade: (headers) => (modelRejects(ownerOf(headers)) ? 401 : null),
   });
+  // llama.cpp's llama-server: the same fake models, behind llama-server's own rules (fake-responses.js llama mode).
+  fakeL = await fr.startFakeResponses({ handler: (body, info) => responsesHandler(body, info), llama: { alias: LLAMA_MODEL, nCtx: LLAMA_CTX } });
   const aPort = Number(new URL(fakeA.url).port);
   const rPort = Number(new URL(fakeR.origin).port);
   dsMux = await startMux(aPort, rPort, { answer: deepseekFront });
   orMux = await startMux(aPort, rPort, { answer: openrouterFront });
   localMux = await startMux(aPort, rPort, { answer: localFront });
+  llamaMux = await startMux(aPort, Number(new URL(fakeL.origin).port), { answer: llamaFront });
   const tlsKit = makeTestTls();
   const caFile = path.join(tmp, "test-ca-bundle.pem");
   fs.writeFileSync(caFile, tlsKit.bundlePem);
@@ -622,7 +656,7 @@ try {
     },
   });
   trap = await startTrap();
-  log(`fakes: anthropic ${fakeA.url}, responses ${fakeR.origin}, deepseek ${dsMux.origin}, openrouter ${orMux.origin}, local ${localMux.origin}, chatgpt ${chatgptMux.origin}; temp ${tmp}`);
+  log(`fakes: anthropic ${fakeA.url}, responses ${fakeR.origin}, deepseek ${dsMux.origin}, openrouter ${orMux.origin}, local ${localMux.origin}, llama-server ${llamaMux.origin}, chatgpt ${chatgptMux.origin}; temp ${tmp}`);
 
   await bootServer({ tmp, fakeA, dsMux, orMux, fakeR, chatgptMux, caFile, trap });
   const STATE = path.join(tmp, "state");
@@ -685,14 +719,14 @@ try {
   });
 
   // --- Scenarios ---
-  await check("wrong-password: exit 1, the password turned down in words, and never printed", async () => {
+  if (want("wrong-password")) await check("wrong-password: exit 1, the password turned down in words, and never printed", async () => {
     const run = await runSmoke("wrong-password", ["--only", "deepseek"], { password: WRONG_PASSWORD });
     expect(run.code === 1, `exit ${run.code}`, run.stdout);
     expect(/TARSEE_PASSWORD was turned down/.test(run.stdout), "no plain words about the password", run.stdout);
   });
 
   const before1 = await chats();
-  await check("all-ready: no options, every ready AI passes test, turn, tool and usage; exit 0", async () => {
+  if (want("all-ready")) await check("all-ready: no options, every ready AI passes test, turn, tool and usage; exit 0", async () => {
     const run = await runSmoke("all-ready", []);
     const by = (re) => run.rows.filter((r) => re.test(r.provider));
     expect(run.code === 0, `exit ${run.code}`, run.stdout.split(/\r?\n/).filter((l) => /FAIL|WARN/.test(l)));
@@ -715,7 +749,7 @@ try {
     expect(!run.rows.some((r) => /^claude /.test(r.provider)), "the Claude plan (not ready) was tested without --only", tableOf(run));
     return { secs: run.secs, rows: run.rows.map((r) => `${r.provider} | ${r.cost}`) };
   });
-  await check("all-ready: every test chat was deleted", async () => {
+  if (want("all-ready")) await check("all-ready: every test chat was deleted", async () => {
     const after = await chats();
     expect(after === before1, `chats before ${before1}, after ${after}`);
   });
@@ -723,7 +757,7 @@ try {
   let orOther = null;
   if (!SKIP_VERIFY) {
     const before2 = await chats();
-    await check("verify-local: --only local --verify local=qwen3:4b: Verify passes, then a chat on each model; exit 0", async () => {
+    if (want("verify-local")) await check("verify-local: --only local --verify local=qwen3:4b: Verify passes, then a chat on each model; exit 0", async () => {
       const run = await runSmoke("verify-local", ["--only", "local", "--verify", `local=${LOCAL_MODELS[1]}`]);
       expect(run.code === 0, `exit ${run.code}`, run.stdout.split(/\r?\n/).filter((l) => /FAIL|WARN/.test(l)));
       expect(new RegExp(`PASS local · ${LOCAL_MODELS[1].replace(/[.]/g, "\\.")} · verify: passed on codex`).test(run.stdout), "no PASS line for Verify", run.stdout);
@@ -737,7 +771,7 @@ try {
     const makers = /^(google|deepseek|qwen|mistralai|x-ai|z-ai|moonshotai|meta-llama|minimax)\//;
     orOther = (list.json?.models || []).filter((m) => m.needsVerification && !m.free && m.price && makers.test(m.id) && !/:free|image|audio|vision|embed/i.test(m.id))
       .map((m) => m.id).sort()[0] || null;
-    if (orOther) {
+    if (orOther && want("verify-openrouter")) {
       await check(`verify-openrouter: --only openrouter --model openrouter=${orOther} --verify: Verify passes, then its chat; exit 0`, async () => {
         const run = await runSmoke("verify-openrouter", ["--only", "openrouter", "--model", `openrouter=${orOther}`, "--verify"]);
         expect(run.code === 0, `exit ${run.code}`, run.stdout.split(/\r?\n/).filter((l) => /FAIL|WARN/.test(l)));
@@ -745,7 +779,7 @@ try {
         expect(run.rows.length === 1 && run.rows[0].provider.includes(orOther) && run.rows[0].turn === "ok" && run.rows[0].tool === "tarsee_calculator", "the row didn't pass", tableOf(run));
         return { model: orOther, secs: run.secs };
       });
-    } else {
+    } else if (want("verify-openrouter")) {
       results.push({ name: "verify-openrouter: skipped (OpenRouter's public model list has no other maker's model to try: no internet?)", ok: true });
       log("SKIP verify-openrouter: no model by another maker on OpenRouter's list");
     }
@@ -755,8 +789,53 @@ try {
     });
   }
 
+  // --- llama.cpp's llama-server as the Local AI: it drops the namespace tool Codex 0.167 puts Tarsee's tools in, so
+  // without the Local AI bridge Verify's tool check and the calculator chat fail; through the bridge they pass.
+  if (!SKIP_VERIFY && want("verify-local-llama")) {
+    const before3 = await chats();
+    await check(`verify-local-llama: Local AI on llama-server (${LLAMA_MODEL}), --only local --verify: Test names the build and the context, Verify and the calculator pass through the bridge; exit 0`, async () => {
+      const set = await api("PUT", "/api/ai/providers/local", { baseUrl: `${llamaMux.origin}/v1`, model: LLAMA_MODEL });
+      expect(set.status === 200, `PUT /api/ai/providers/local answered ${set.status}`, set.text);
+      fakeL.reset();
+      const run = await runSmoke("verify-local-llama", ["--only", "local", "--verify"]);
+      expect(run.code === 0, `exit ${run.code}`, run.stdout.split(/\r?\n/).filter((l) => /FAIL|WARN/.test(l)));
+      expect(/PASS local · test: Reached your Local AI · llama\.cpp b12238 · 1 model · 64K context/.test(run.stdout), "Test doesn't name llama.cpp's build and context", run.stdout);
+      expect(new RegExp(`PASS local · ${LLAMA_MODEL.replace(/[.]/g, "\\.")} · verify: passed on codex`).test(run.stdout), "no PASS line for Verify", run.stdout);
+      expect(run.rows.length === 1 && run.rows[0].turn === "ok" && run.rows[0].tool === "tarsee_calculator" && run.rows[0].cost === "Free", "the chat didn't use the calculator", tableOf(run));
+      // What the bridge sent llama-server: plain function tools (nothing for it to drop), no namespace in the history.
+      // (Test's own POST /v1/responses with no input isn't a model request.)
+      const model = fakeL.responses().filter((r) => r.body && typeof r.body === "object" && r.body.input !== undefined);
+      expect(model.length >= 4, `${model.length} model requests`);
+      expect(model.every((r) => Array.isArray(r.dropped) && r.dropped.length === 0), "llama-server had a tool to drop", model.map((r) => r.dropped));
+      expect(model.every((r) => fr.toolNames(r.body).includes("mcp__tarsee__tarsee_calculator")), "Tarsee's calculator wasn't offered as a plain function", fr.toolNames(model[0].body));
+      expect(model.every((r) => !(r.body.input || []).some((i) => i?.namespace)), "a namespace reached llama-server in the history");
+      expect(model.every((r) => r.headers.authorization === `Bearer ${KEYS.local}`), "the owner's key didn't reach llama-server (or something else did)", model.map((r) => r.headers.authorization?.slice(0, 12)));
+      // And without the bridge: Codex's own request (Tarsee's tools in their namespace) straight to llama-server, as
+      // before the bridge: it drops the namespace, and the model has no calculator to call.
+      const direct = await fetch(`${llamaMux.origin}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${KEYS.local}` },
+        body: JSON.stringify({
+          model: LLAMA_MODEL, stream: true,
+          tools: [{ type: "function", name: "exec_command", parameters: { type: "object", properties: {} } }, { type: "namespace", name: "mcp__tarsee", tools: [{ type: "function", name: "tarsee_calculator", parameters: { type: "object", properties: {} } }] }],
+          input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Use Tarsee's calculator tool to work out 12 * 34, then reply with just the number." }] }],
+        }),
+      });
+      const words = await direct.text();
+      const last = fakeL.responses().at(-1);
+      expect(last.dropped.includes("namespace") && /No tarsee_calculator was offered/.test(words), "straight to llama-server, the calculator was still offered", { dropped: last.dropped, words: clip(words, 300) });
+      return { secs: run.secs, modelRequests: model.length, withoutTheBridge: "namespace dropped, no calculator offered" };
+    });
+    const back = await api("PUT", "/api/ai/providers/local", { baseUrl: `${localMux.origin}/v1`, model: LOCAL_MODELS[0] });
+    if (back.status !== 200) log(`WARN Local AI's address couldn't be set back: ${back.status}`);
+    await check("verify-local-llama: every test chat was deleted", async () => {
+      const after = await chats();
+      expect(after === before3, `chats before ${before3}, after ${after}`);
+    });
+  }
+
   MODES.deepseek = "401";
-  await check("rejected-key: DeepSeek turns the key down: exit 1, test and turn fail in the table, the key never printed", async () => {
+  if (want("rejected-key")) await check("rejected-key: DeepSeek turns the key down: exit 1, test and turn fail in the table, the key never printed", async () => {
     const run = await runSmoke("rejected-key", ["--only", "deepseek"]);
     expect(run.code === 1, `exit ${run.code}`, run.stdout);
     const r = run.rows[0];
@@ -768,7 +847,7 @@ try {
   MODES.deepseek = "ok";
 
   MODES.openai = "401-turn";
-  await check("rejected-turn: OpenAI's Test passes, then the model turns the key down mid-chat (quoting it): exit 1, turn FAIL in OpenAI's words, the key never printed", async () => {
+  if (want("rejected-turn")) await check("rejected-turn: OpenAI's Test passes, then the model turns the key down mid-chat (quoting it): exit 1, turn FAIL in OpenAI's words, the key never printed", async () => {
     const run = await runSmoke("rejected-turn", ["--only", "openai"]);
     expect(run.code === 1, `exit ${run.code}`, run.stdout);
     const r = run.rows[0];
@@ -779,13 +858,13 @@ try {
   });
   MODES.openai = "ok";
 
-  await check("not-ready: --only claude with no Claude sign-in: exit 1, the test says so and the chat is refused", async () => {
+  if (want("not-ready")) await check("not-ready: --only claude with no Claude sign-in: exit 1, the test says so and the chat is refused", async () => {
     const run = await runSmoke("not-ready", ["--only", "claude"]);
     expect(run.code === 1, `exit ${run.code}`, run.stdout);
     expect(run.rows.length === 1 && run.rows[0].test === "FAIL" && run.rows[0].turn === "skipped", "the row doesn't show it", tableOf(run));
   });
 
-  await check("bad options: a stray argument (a pasted key) is refused without being shown", async () => {
+  if (want("bad-options")) await check("bad options: a stray argument (a pasted key) is refused without being shown", async () => {
     const run = await runSmoke("bad-options", [KEYS.openai, "--only", "nope"]);
     expect(run.code === 1, `exit ${run.code}`, run.stdout);
     expect(/isn't an option/.test(run.stdout) && /isn't an AI Tarsee knows/.test(run.stdout), "no words for the bad options", run.stdout);
@@ -798,6 +877,7 @@ try {
     ["cut-stream", "destroy", "resets the chat's connection"],
     ["cut-stream-clean", "end", "closes the chat's connection cleanly, with no \"done\""],
   ]) {
+    if (!want(name)) continue;
     const before = await chats();
     const hangsBefore = HANGS.length;
     const callsBefore = dsMux.requests.length;
@@ -841,9 +921,9 @@ try {
   // --- A 4-digit password (SETUP_PASSWORD is often a PIN): Tarsee started again with this year as its password, and
   // every chat's factors carrying it. Nothing is blanked out of the date, the sums or anything else live-smoke prints.
   const PIN = String(new Date().getUTCFullYear());
-  await killServer();
-  await bootServer({ tmp, fakeA, dsMux, orMux, fakeR, chatgptMux, caFile, trap, password: PIN });
-  await check(`pin-password: Tarsee with a 4-digit SETUP_PASSWORD (this year), every chat's factors carrying it: exit 0, and the header's date, every sum and every other number print whole`, async () => {
+  if (want("pin-password")) await killServer();
+  if (want("pin-password")) await bootServer({ tmp, fakeA, dsMux, orMux, fakeR, chatgptMux, caFile, trap, password: PIN });
+  if (want("pin-password")) await check(`pin-password: Tarsee with a 4-digit SETUP_PASSWORD (this year), every chat's factors carrying it: exit 0, and the header's date, every sum and every other number print whole`, async () => {
     const signed = await signIn(PIN);
     expect(signed.login === 200 && signed.csrf === 200, `the harness couldn't sign in with the 4-digit password (${signed.login}, ${signed.csrf})`);
     const before = await chats();
@@ -892,12 +972,12 @@ try {
   log("HARNESS ERROR", err?.stack || err);
 } finally {
   await killServer();
-  for (const f of [fakeA, fakeR, dsMux, orMux, localMux, chatgptMux, trap]) await f?.close().catch(() => {});
+  for (const f of [fakeA, fakeR, fakeL, dsMux, orMux, localMux, llamaMux, chatgptMux, trap]) await f?.close().catch(() => {});
   fs.writeFileSync(path.join(OUT, "live-smoke-fakes.server.log"), scrub(serverLog));
   const passed = results.filter((r) => r.ok).length;
   const failed = results.filter((r) => !r.ok);
   fs.writeFileSync(path.join(OUT, "live-smoke-fakes.json"), JSON.stringify(JSON.parse(scrub(JSON.stringify({ passed, failed: failed.length, results, tmp }))), null, 2));
-  for (const name of ["all-ready", "verify-local", "verify-openrouter", "rejected-key", "rejected-turn", "cut-stream", "cut-stream-clean", "pin-password"]) {
+  for (const name of ["all-ready", "verify-local", "verify-local-llama", "verify-openrouter", "rejected-key", "rejected-turn", "cut-stream", "cut-stream-clean", "pin-password"]) {
     if (runs[name]) console.log(`\n=== live-smoke ${name} (exit ${runs[name].code}, ${runs[name].secs} s): node scripts/e2e/live-smoke.mjs ${runs[name].args.join(" ")}\n${tableOf(runs[name])}`);
   }
   log(`done: ${passed} passed, ${failed.length} failed. Results: ${path.join(OUT, "live-smoke-fakes.json")}; each run's output: ${path.join(OUT, "live-smoke-<scenario>.txt")}`);
