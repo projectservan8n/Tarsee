@@ -48,3 +48,7 @@ tool-output/
 # A migration bundle copied in from another deployment — contains the DB,
 # workspace files, encrypted vault and live sessions.
 tarsee-migration/
+
+# Python bytecode (src/voice/stt_worker.py, phonon worker)
+__pycache__/
+*.pyc
