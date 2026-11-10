@@ -216,22 +216,28 @@ describe("Dockerfile: speech-to-text works on the first try", () => {
 
   it("the build checks the model loads offline and transcribes, and the build stops if it doesn't", { skip: NO_SH }, () => {
     const dl = runStep("whisper-models.js download");
-    assert.match(dl.cmd, /HF_HUB_OFFLINE=1 python3 -I -c "[^"]*WhisperModel\(sys\.argv\[1\][^"]*\.transcribe\([^"]*"/);
+    const check = runStep("from stt_worker import decode");
+    assert.ok(check.i > dl.i, "the check runs on the model just downloaded");
+    assert.match(check.cmd, /HF_HUB_OFFLINE=1 python3 -I -c "[^"]*WhisperModel\(sys\.argv\[1\][^"]*\.transcribe\(decode\(f\)[^"]*"/,
+      "a real WAV through the worker's own decode(), as every recording goes: a blank array skipped the decoder, which newer PyAV broke");
+    const workerCopy = RUNTIME.findIndex((s) => s.op === "COPY" && /src\/voice\/stt_worker\.py/.test(s.args));
+    assert.ok(workerCopy > dl.i && workerCopy < check.i, "the worker comes in after the download, so changing it doesn't download the model again");
     assert.match(dl.cmd, /^set -e;/);
+    assert.match(check.cmd, /^set -e;/);
     const build = path.join(tmp, "stt-build");
+    const checkDir = path.join(tmp, "stt-check");
     const models = path.join(tmp, "stt-image-models");
     const log = path.join(tmp, "stt-build.log");
-    // The build folder and the model folder come from the environment (a path with an apostrophe breaks sh quoting).
-    const cmd = dl.cmd.replaceAll("/opt/tarsee/stt-build", "$STT_BUILD");
+    // The folders come from the environment (a path with an apostrophe breaks sh quoting). The two steps run in turn.
+    const cmd = [dl.cmd.replaceAll("/opt/tarsee/stt-build", "$STT_BUILD"), check.cmd.replaceAll("/opt/tarsee/stt-check", "$STT_CHECK")].join("\n");
     const run = (pythonExit) => {
-      fs.rmSync(build, { recursive: true, force: true });
-      fs.mkdirSync(build, { recursive: true });
+      for (const d of [build, checkDir]) { fs.rmSync(d, { recursive: true, force: true }); fs.mkdirSync(d, { recursive: true }); }
       fs.rmSync(log, { force: true });
       const bin = stubBin(`stt-${pythonExit}`, {
         node: 'echo "node $* [$(cat package.json)]" >> "$STT_LOG"; mkdir -p "$4/$3"',
         python3: `echo "python3 HF_HUB_OFFLINE=$HF_HUB_OFFLINE $1 $2 ... \${4:-} \${5:-}" >> "$STT_LOG"; exit ${pythonExit}`,
       });
-      return runInSh(cmd, { bin, cwd: tmp, env: { STT_BUILD: posix(build), STT_LOG: posix(log), TARSEE_WHISPER_BUNDLED_DIR: posix(models) } });
+      return runInSh(cmd, { bin, cwd: tmp, env: { STT_BUILD: posix(build), STT_CHECK: posix(checkDir), STT_LOG: posix(log), TARSEE_WHISPER_BUNDLED_DIR: posix(models) } });
     };
     const ok = run(0);
     assert.equal(ok.status, 0, ok.stderr + ok.stdout);
@@ -240,6 +246,7 @@ describe("Dockerfile: speech-to-text works on the first try", () => {
     assert.match(lines[1], /^python3 HF_HUB_OFFLINE=1 -I -c \.\.\. \S+stt-image-models\/base\.en/);
     assert.ok(fs.existsSync(path.join(models, "base.en")));
     assert.equal(fs.existsSync(build), false, "the build files are removed");
+    assert.equal(fs.existsSync(checkDir), false, "and the check's");
     const bad = run(1);
     assert.notEqual(bad.status, 0, "a model that doesn't load stops the build");
   });
