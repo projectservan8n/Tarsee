@@ -103,7 +103,7 @@ Tarsee runs on any of these seven, and you can connect several at once. Pick the
 | **OpenAI API key** | `OPENAI_API_KEY` from the OpenAI Platform | Pay per use, billed by OpenAI | Give the project a monthly budget with a hard limit. Replies arrive a message at a time |
 | **OpenRouter** | `OPENROUTER_API_KEY` from openrouter.ai | Pay per use at each model's price; models marked Free cost nothing | Hundreds of models with one key. Claude and OpenAI models work straight away; any other needs one click on **Verify** first. Give the key a credit limit |
 | **DeepSeek** | `DEEPSEEK_API_KEY` from platform.deepseek.com | Pay per use from a balance you top up: the cheapest per message | DeepSeek Flash for everyday use; DeepSeek Pro thinks harder but can't see pictures |
-| **Local AI** | `TARSEE_LOCAL_AI_URL`: the address of your Ollama or LM Studio server (and `TARSEE_LOCAL_AI_KEY`, only if it asks for one) | Free: it runs on your own hardware | Verify a model before you rely on it: small models use tools poorly. On Railway, run it as another service on the private network |
+| **Local AI** | `TARSEE_LOCAL_AI_URL`: the address of your Ollama, LM Studio or llama.cpp server (and `TARSEE_LOCAL_AI_KEY`, only if it asks for one) | Free: it runs on your own hardware | Verify a model before you rely on it: small models use tools poorly. On Railway, run it as another service on the private network |
 
 Each one's full setup, the same steps the app shows, is in **[docs/providers.md](docs/providers.md)**.
 
@@ -415,7 +415,7 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `OPENAI_API_KEY` | No | — | OpenAI API key, for **OpenAI API key**, billed per use. Voice uses it only if you pick Whisper API in Settings > Voice. |
 | `OPENROUTER_API_KEY` | No | — | OpenRouter key (`sk-or-v1-…`), for hundreds of models with one key. Give the key a credit limit. |
 | `DEEPSEEK_API_KEY` | No | — | DeepSeek API key, the cheapest per message, spent from a balance you top up. |
-| `TARSEE_LOCAL_AI_URL` | No | — | Local AI: your Ollama or LM Studio server, e.g. `http://localhost:11434/v1`, or on Railway `http://ollama.railway.internal:11434/v1`. |
+| `TARSEE_LOCAL_AI_URL` | No | — | Local AI: your Ollama, LM Studio or llama.cpp server, e.g. `http://localhost:11434/v1` (Ollama), `http://localhost:9931/v1` (llama.cpp; 8080 for older builds and its Docker image), or on Railway `http://ollama.railway.internal:11434/v1`. |
 | `TARSEE_LOCAL_AI_KEY` | No | — | Local AI's key, only if your server asks for one. Only ever sent to `TARSEE_LOCAL_AI_URL`. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | No | — | The Claude plan without the Terminal: the token `claude setup-token` prints (it lasts a year). Only the Claude plan ever sees it. |
 | `CLAUDE_DEFAULT_MODEL` | No | `sonnet` | The Claude plan's and Anthropic key's default model when Settings has none. Defaults to the **`sonnet` alias**, which Tarsee resolves to the newest Sonnet in Claude Code's catalog before each turn. That catalog comes with the Claude Code version the image pins (`CLAUDE_CODE_VERSION` in the Dockerfile), so a model released later arrives when that version is bumped and redeployed, or on every boot with `TARSEE_AUTO_UPDATE_CLI=1`; the list Claude Code saves for your account when you use `claude` in the web terminal counts too, when it is newer. Set `opus` for the most capable default, a pinned id (e.g. `claude-opus-5`) if you need a frozen model, or `haiku` for a cheaper one. |

@@ -41,6 +41,8 @@ import {
   engineFor,
   modelsFor,
   setCatalogModels,
+  setLocalModels,
+  localContextTokens,
   verifiedModels,
   capsFor,
   effortsFor,
@@ -80,6 +82,9 @@ export const AI_RATE_LIMITS = Object.freeze({
 const DEVICE_CODE_TTL_MS = 15 * 60 * 1000;
 
 const BASE_URL_REFUSED = "A provider's address can't be set: each provider's host is fixed, so its key only ever goes there. Only Local AI takes an address.";
+
+/** A model id with a space in it (llama-server names a model after its file path unless it is given --alias). */
+const NOT_A_MODEL_NAME = "That isn't a model name: a model name has no spaces in it. For llama.cpp, start llama-server with --alias and a short name.";
 
 /** Claude's model words and ids, as the Claude providers take them. */
 const CLAUDE_MODEL_RE = /^(?:(?:fable|opus|sonnet|haiku|top|mid|small)(?:\[1m\])?|claude-[a-z0-9][a-z0-9.-]*(?:\[1m\])?)$/i;
@@ -152,7 +157,7 @@ function notesFor(p) {
     case "openrouter": return ["Hundreds of models with one key; free ones are marked Free.", "A credit limit on the key caps what it can spend.", readable];
     case "deepseek": return ["The cheapest per token; a small top-up is enough, and it is all DeepSeek can spend.", readable];
     case "local": return [
-      "Free: runs on a machine you run (Ollama, LM Studio or any Responses-compatible server). Small models may use tools poorly.",
+      "Free: runs on a machine you run (Ollama, LM Studio, llama.cpp or any Responses-compatible server). Small models may use tools poorly.",
       "On a Linux server a command the agent runs can still read this key, if your server uses one, from the engine's process, so use a key made only for Tarsee.",
       messageAtATime,
     ];
@@ -243,7 +248,7 @@ export function createAiRouter(deps = {}) {
     if (raw === undefined) return { ok: true, model: undefined };
     if (raw === null || (typeof raw === "string" && !raw.trim())) return { ok: true, model: null };
     if (typeof raw !== "string" || raw.trim().length > 200 || /[\s\0]/.test(raw.trim())) {
-      return { ok: false, status: 400, error: "That isn't a model name." };
+      return { ok: false, status: 400, error: NOT_A_MODEL_NAME };
     }
     const m = raw.trim();
     if (p.catalog === "claude") {
@@ -281,12 +286,26 @@ export function createAiRouter(deps = {}) {
     else store.set(key, value);
   }
 
-  /** What a card shows for a provider's own settings. */
+  /**
+   * What a card shows for a provider's own settings. Local AI's context is two things kept apart: context, the size the
+   * owner saved (null when they saved none), and serverContext, the size the server said it gives the card's model
+   * (or, from llama-server, every model), read when its models were last read; contextUsed is what a turn uses
+   * (provider-registry.js localContextTokens: the smaller of the two, else either, else defaultContext).
+   */
   function settingsFor(p, store) {
     if (p.id === "local") {
+      const own = Number(store.get("ai.local.context")) || null;
+      const rows = modelsFor("local");
+      const chosen = chosenModel("local", store, envOf());
+      const row = rows.find((m) => m.id === chosen) || (rows.length === 1 ? rows[0] : null);
+      const sizes = [...new Set(rows.map((m) => m.serverContext).filter(Boolean))];
+      const serverContext = row?.serverContext || (!row && sizes.length === 1 && rows.every((m) => m.serverContext) ? sizes[0] : null);
       return {
         baseUrl: displayUrl(localUrlFor(store, envOf())),
-        context: Number(store.get("ai.local.context")) || p.defaultContext,
+        context: own,
+        serverContext: serverContext || null,
+        contextUsed: localContextTokens({ own, serverContext, maxContext: row?.maxContext }),
+        defaultContext: p.defaultContext,
         price: store.get("ai.local.price") || null,
         tiers: store.get("ai.local.tiers") || null,
       };
@@ -478,7 +497,7 @@ export function createAiRouter(deps = {}) {
         const v = body.baseUrl;
         if (v === null || v === "") writes.push(["ai.local.baseUrl", null]);
         else if (typeof v !== "string" || v.length > 500 || !plainHttpUrl(v)) {
-          return res.status(400).json({ error: "Local AI's address must start with http:// or https:// and have no password in it (for example http://localhost:11434/v1)." });
+          return res.status(400).json({ error: "Local AI's address must start with http:// or https:// and have no password in it (for example http://localhost:11434/v1 for Ollama, or http://localhost:9931/v1 for llama.cpp)." });
         } else writes.push(["ai.local.baseUrl", v.trim()]);
       }
       if ("context" in body) {
@@ -531,7 +550,7 @@ export function createAiRouter(deps = {}) {
           const id = v[t];
           if (id === undefined || id === null || id === "") continue;
           if (typeof id !== "string" || id.trim().length > 200 || /[\s\0]/.test(id.trim()) || (p.id === "local" && /^claude-/i.test(id.trim()))) {
-            return res.status(400).json({ error: `The ${t} model isn't a model id.` });
+            return res.status(400).json({ error: `The ${t} model isn't a model id (a model id has no spaces in it; for llama.cpp, start llama-server with --alias and a short name).` });
           }
           tiers[t] = id.trim();
         }
@@ -542,6 +561,10 @@ export function createAiRouter(deps = {}) {
     const urlChanged = writes.some(([k]) => k === "ai.local.baseUrl");
     for (const [key, value] of writes) setOrDelete(store, key, value);
     if (urlChanged) setCatalogModels("local-models", []);
+    else if (writes.some(([k]) => k === "ai.local.context")) {
+      // The models' context follows the new setting at once (each keeps what its server said).
+      setLocalModels(modelsFor("local").map((m) => ({ id: m.id, label: m.label, serverContext: m.serverContext, maxContext: m.maxContext })), store);
+    }
     if (writes.length) audit(req, { action: "ai.provider_settings", target: p.id, detail: writes.map(([k]) => k).join(", ") });
     const active = activeTarget(store, { env: envOf(), isShipped: deps.isShipped });
     res.json({ ok: true, card: await cardFor(p, store, active) });
@@ -567,7 +590,12 @@ export function createAiRouter(deps = {}) {
       const url = localUrlFor(store, env);
       if (url && plainHttpUrl(url)) {
         const r = await listLocalModels({ url, key: store.getKeyWithSource("local").key, fetch: fetchFn() });
-        if (r.ok && r.models.length) setCatalogModels("local-models", r.models.map((id) => ({ id })));
+        // Each row keeps the size the server gives it (serverContext) beside the one a turn uses (context).
+        if (r.ok && r.rows.length) setLocalModels(r.rows.filter((m) => !/\s/.test(m.id)), store);
+        if (r.ok && r.hidden?.length) {
+          const one = r.hidden.length === 1;
+          note = `${one ? "One embedding model isn't" : `${r.hidden.length} embedding models aren't`} listed (${r.hidden.slice(0, 3).join(", ")}): ${one ? "it" : "they"} can't chat.`;
+        }
       }
     } else if (p.id === "openai") {
       const { key } = store.getKeyWithSource("openai");
@@ -608,6 +636,7 @@ export function createAiRouter(deps = {}) {
       id: m.id,
       label: m.label || m.id,
       context: m.context ?? null,
+      ...(p.id === "local" ? { serverContext: m.serverContext ?? null } : {}),
       vision: m.vision ?? null,
       efforts: effortsFor(p.id, m.id, store),
       free: m.free === true,
@@ -684,7 +713,8 @@ export function createAiRouter(deps = {}) {
     if (!p || !requireShipped(p, res)) return undefined;
     const store = storeOf(req);
     const model = typeof req.body?.model === "string" ? req.body.model.trim() : "";
-    if (!model || model.length > 200 || /[\s\0]/.test(model)) return res.status(400).json({ error: "Say which model to verify." });
+    if (!model || model.length > 200 || /\0/.test(model)) return res.status(400).json({ error: "Say which model to verify." });
+    if (/\s/.test(model)) return res.status(400).json({ error: NOT_A_MODEL_NAME });
     if (p.catalog === "claude" && !CLAUDE_MODEL_RE.test(model)) return res.status(400).json({ error: `${model} isn't a Claude model.` });
     const status = await providerStatus(p.id, statusDeps(store));
     if (!status.ready) return res.status(409).json({ error: `${p.label} isn't ready: ${status.detail}`, state: status.state, fix: status.fix });

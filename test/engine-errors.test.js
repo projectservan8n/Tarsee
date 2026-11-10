@@ -132,6 +132,23 @@ describe("classifyEngineError: HTTP statuses", () => {
     assert.equal(classifyEngineError("openrouter", CC, { status: 400, message: "invalid model id foo/bar" }).kind, "model");
   });
 
+  it("a full context is its own kind (llama-server's 400s), even when the words name the model: no flag, no retry", () => {
+    for (const message of [
+      "request (40123 tokens) exceeds the available context size (32768 tokens), try increasing it",
+      "{\"error\":{\"type\":\"exceed_context_size_error\",\"message\":\"model qwen3.5-9b: request too big\"}}",
+      "the request is larger than the max context size of the model",
+      "context_length_exceeded",
+    ]) {
+      const e = classifyEngineError("local", "codex", { status: 400, message });
+      assert.equal(e.kind, "context", message);
+      assert.equal(e.state, null);
+      assert.equal(e.recoverable, false);
+      assert.match(e.message, /no longer fits in your Local AI's memory/);
+      assert.match(e.message, /llama-server with a larger -c/);
+    }
+    assert.match(classifyEngineError("openrouter", "codex", { status: 400, message: "context_length_exceeded", model: "x/y" }).message, /no longer fits in x\/y's context window/);
+  });
+
   it("only a failed session resume is recoverable", () => {
     const e = classifyEngineError("claude", CC, { message: "API Error: 400 diagnostics.previous_message_id: must be the id from a prior message" });
     assert.equal(e.kind, "session");

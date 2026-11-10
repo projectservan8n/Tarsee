@@ -16,6 +16,9 @@
  *                 rate         busy, or a plan's usage limit (429)
  *                 unavailable  the provider is down or overloaded (5xx, 529)
  *                 model        the model doesn't exist there, or the account can't use it (404, 400 about a model)
+ *                 context      the chat no longer fits in the model's context (llama-server's exceed_context_size_error,
+ *                              "request (N tokens) exceeds the available context size", LM Studio's and Codex's own
+ *                              words): never read as a "model" failure, whatever else the words name
  *                 session      resuming the stored session failed (start fresh and carry the chat over)
  *                 moderated    the provider's moderation turned the message down (OpenRouter's 403 "requires
  *                              moderation ... flagged for ..."): the key is fine, no flag, no retry, no backup
@@ -31,7 +34,7 @@
 import { getProvider, normalizeProviderId } from "./provider-registry.js";
 
 export const ERROR_KINDS = Object.freeze([
-  "expired", "auth", "wrong-key", "billing", "rate", "unavailable", "model", "session", "moderated",
+  "expired", "auth", "wrong-key", "billing", "rate", "unavailable", "model", "context", "session", "moderated",
   "credential-isolation", "needs-key", "needs-setup", "bad-model", "wrong-engine", "needs-mcp-token", "unknown",
 ]);
 
@@ -54,7 +57,13 @@ const BILLING_WORDS_RE = /(insufficient (?:balance|credits?|funds|quota)|credit 
 const RATE_WORDS_RE = /(rate[_ ]?limit|too many requests|request rejected \(429\)|usage limit|slow down)/i;
 const UNAVAILABLE_WORDS_RE = /(overloaded|service unavailable|bad gateway|gateway timeout|internal server error|server_error|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up|couldn't connect|could not reach)/i;
 const MODEL_WORDS_RE = /(issue with the selected model|model[_ ]not[_ ]found|not a valid model|invalid model|unknown model|no such model|model .*(?:does not exist|not found|not available|unavailable)|does not exist or you do not have access)/i;
-const SESSION_WORDS_RE = /(previous_message_id|must be the id from a prior|No conversation found with session ID|session.*(?:expired|invalid|not found|corrupt))/i;
+/**
+ * A chat that no longer fits in the model's context: llama-server's 400s (exceed_context_size_error, "request (N tokens)
+ * exceeds the available context size", "is larger than the max context size"), LM Studio's, a Responses server's
+ * context_length_exceeded, and Codex's own words for one ("ran out of room in the model's context window").
+ */
+const CONTEXT_WORDS_RE = /(exceed_context_size_error|exceeds the available context size|is larger than the max context size|context_length_exceeded|greater than the context length|ran out of room in the model's context window)/i;
+const SESSION_WORDS_RE =/(previous_message_id|must be the id from a prior|No conversation found with session ID|session.*(?:expired|invalid|not found|corrupt))/i;
 const WORKSPACE_WORDS_RE = /workspace/i;
 /** OpenRouter's 403 for a prompt its moderation flagged ("<model> requires moderation on <maker>. Your input was flagged for ..."). */
 const MODERATION_WORDS_RE = /requires moderation|input was flagged/i;
@@ -153,12 +162,13 @@ export function authMessage(providerId) {
 
 /**
  * A Local AI server with no Responses API, the one Tarsee talks to it through (Ollama before 0.13.3, LM Studio before
- * 0.3.29, a chat-completions-only server): what to do. localUrl is the address the owner set (…/v1).
+ * 0.3.29, llama.cpp's llama-server before b7793, a chat-completions-only server): what to do. It names b11768 for
+ * llama.cpp, the first build whose tool calls Tarsee can rely on. localUrl is the address the owner set (…/v1).
  */
 export function localNoResponsesMessage(localUrl) {
   const where = localUrl ? String(localUrl).trim().replace(/\/+$/, "") : "";
   return `**Your Local AI${where ? ` at ${where}` : ""} has no Responses API**: ${where ? `${where}/responses` : "its /responses address"} answered "not found". `
-    + "Tarsee talks to Local AI through that API. Update Ollama to 0.13.3 or newer or LM Studio to 0.3.29 or newer, or use a server that has it.";
+    + "Tarsee talks to Local AI through that API. Update Ollama to 0.13.3 or newer, LM Studio to 0.3.29 or newer or llama.cpp to b11768 or newer, or use a server that has it.";
 }
 
 /** The provider's own words for being out of credit, with its top-up link. */
@@ -197,6 +207,10 @@ export function friendly(providerId, kind, { detail = null, model = null } = {})
       return `**${label} isn't answering right now** (the service is down or overloaded). This usually clears up on its own: try again in a few minutes, or switch to another AI in Settings > AI.`;
     case "model":
       return `**${label} can't run ${model ? `the model ${model}` : "the chosen model"}**: it doesn't exist there, or this account can't use it. Pick another model in the chat's model menu or in Settings > AI.`;
+    case "context":
+      return id === "local"
+        ? "**This chat no longer fits in your Local AI's memory** (its context is full). Start a new chat, or give the model more room: start llama-server with a larger -c, load the model in LM Studio with a longer context length, or raise Ollama's OLLAMA_CONTEXT_LENGTH."
+        : `**This chat no longer fits in ${model ? `${model}'s` : `${label}'s`} context window.** Start a new chat, or pick a model with a bigger one.`;
     case "session":
       return "**The earlier conversation couldn't be picked up again**, so I'm starting a fresh one.";
     case "moderated": {
@@ -229,6 +243,8 @@ export function classifyEngineError(providerId, engine, { status = null, code = 
 
   let kind = null;
   if (c && REFUSAL_CODES.has(c)) kind = c;
+  // Before the status: llama-server's 400 for a full context is no "model" failure, whatever else its words name.
+  else if (CONTEXT_WORDS_RE.test(text)) kind = "context";
   // A 403 is not always the key: OpenRouter answers 403 for a prompt its moderation flagged. Its body quotes the
   // person's own words (metadata.flagged_input), so this comes before anything else reads them.
   else if (st === 403 && MODERATION_WORDS_RE.test(text)) kind = "moderated";

@@ -390,7 +390,7 @@ export function credentialPresence(idOrAlias, deps = {}) {
     if (!raw) {
       return result(p, "needs-setup", {
         detail: "Local AI has no server address yet.",
-        fix: "Add your server's address (for example http://localhost:11434/v1 for Ollama) in Settings > AI, or set the Railway variable TARSEE_LOCAL_AI_URL.",
+        fix: "Add your server's address in Settings > AI (its buttons fill in the usual ones, such as http://localhost:11434/v1), or set the Railway variable TARSEE_LOCAL_AI_URL.",
         cred: safeCred, encrypted,
       });
     }

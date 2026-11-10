@@ -820,7 +820,17 @@ describe("the real SDK starting a fake codex (TARSEE_CODEX_BIN)", () => {
       // The environment: this provider's one credential, the tools' token, the vault's keys, nothing of the server's.
       const env = rec.env;
       for (const name of ["CODEX_API_KEY", "TARSEE_PROVIDER_KEY"]) {
+        if (provider === "local" && name === "TARSEE_PROVIDER_KEY") {
+          // Local AI: the Local AI bridge's per-turn token; the owner's key stays in Tarsee's process (local-bridge.js).
+          assert.match(env[name], /^[A-Za-z0-9_-]{40,}$/, "local: the bridge's token");
+          assert.notEqual(env[name], KEYS.local);
+          continue;
+        }
         assert.equal(env[name], CREDENTIAL[provider] === name ? KEYS[provider] : undefined, `${provider}: ${name}`);
+      }
+      if (provider === "local") {
+        assert.ok(!Object.values(env).some((v) => String(v).includes(KEYS.local)), "local: the owner's key never reaches codex's environment");
+        assert.ok(!line.includes("11434"), "local: nor the owner's address its command line: codex is given the bridge's");
       }
       assert.equal(env.TARSEE_MCP_TOKEN, MCP_TOKEN, provider);
       assert.equal(env.CODEX_HOME, path.join(dirs.state, provider === "chatgpt" ? ".codex-home" : ".codex-home-keys"), provider);
@@ -935,7 +945,7 @@ describe("the real codex binary against the fake server", { skip: CODEX_THERE ? 
     ...extra,
   });
 
-  function turn(provider, { model, store = makeStore(), sessionHandle, signal, maxTurns, prompt = "hello", conv = "conv-real", env = serverEnv(), keys, localUrl, stable = "You are Tarsee, under test." } = {}) {
+  function turn(provider, { model, store = makeStore(), sessionHandle, signal, maxTurns, prompt = "hello", conv = "conv-real", env = serverEnv(), keys, localUrl, localBridge, stable = "You are Tarsee, under test." } = {}) {
     const handles = [];
     const s = keys ? makeStore({}, keys) : store;
     if (localUrl) s.set("ai.local.baseUrl", localUrl);
@@ -950,10 +960,67 @@ describe("the real codex binary against the fake server", { skip: CODEX_THERE ? 
       signal,
       maxTurns,
       turnId: `real-${provider}`,
-      deps: { env, stateDir: dirs.state, workspace: dirs.ws, vaultEnv: async () => ({ ...VAULT }), accountModels: () => [] },
+      deps: { env, stateDir: dirs.state, workspace: dirs.ws, vaultEnv: async () => ({ ...VAULT }), accountModels: () => [], ...(localBridge ? { localBridge } : {}) },
     });
     return { iter, handles, store: s };
   }
+
+  /** The wiring before the Local AI bridge, for comparison: Codex straight to the owner's server, with the owner's key. */
+  const NO_BRIDGE = async () => ({ open: ({ upstream, key }) => ({ url: upstream, token: key || "no-key", release() {} }) });
+
+  // llama.cpp's llama-server (and LM Studio, and Ollama before 0.34) drop the namespace tool Codex 0.167 puts Tarsee's
+  // tools in, so without the bridge the model never sees one; with it, the tool runs. A Qwen3.5-family chat template
+  // refuses Codex's second developer message; the bridge merges them.
+  it("Local AI on a llama-server: Tarsee's tool runs through the bridge, and never without it", async () => {
+    const wants = (body) => toolNames(body).find((n) => /tarsee_datetime$/.test(n));
+    const script = (body) => {
+      if (functionOutputs(body).length) return { text: `The tool said: ${functionOutputs(body).map(outputText).join(" ")}` };
+      const name = wants(body);
+      return name ? { calls: [{ name, arguments: { timezone: "UTC" } }] } : { text: `No tarsee_datetime was offered (${toolNames(body).join(",")}).` };
+    };
+    const llama = await startFakeResponses({ llama: { alias: "qwen3.5-9b" }, handler: (body) => script(body) });
+    try {
+      // Without the bridge: the model sees no Tarsee tool, so none runs.
+      mcp.calls.length = 0;
+      const before = await collect(turn("local", { model: "qwen3.5-9b", localUrl: llama.url, localBridge: NO_BRIDGE }).iter);
+      assert.deepEqual(mcp.calls, [], "no Tarsee tool ran without the bridge");
+      assert.ok(llama.responses()[0].dropped.includes("namespace"), "the server dropped the namespace tool");
+      assert.match(of(before, "text").map((e) => e.content).join(""), /No tarsee_datetime was offered/);
+
+      // Through the bridge: plain function tools reach the server, the call comes back namespaced, and the tool runs.
+      llama.reset();
+      const out = await collect(turn("local", { model: "qwen3.5-9b", localUrl: llama.url }).iter);
+      assert.deepEqual(of(out, "done"), [{ type: "done", stopReason: "end_turn" }], JSON.stringify(of(out, "error")));
+      assert.deepEqual(mcp.calls, [{ tool: "tarsee_datetime", args: { timezone: "UTC" } }]);
+      assert.deepEqual(of(out, "tool_use").map((u) => u.name), ["mcp__tarsee__tarsee_datetime"]);
+      assert.match(of(out, "text").map((e) => e.content).join(""), /09:00 UTC/);
+      const first = llama.responses()[0];
+      assert.deepEqual(first.dropped, [], "nothing for the server to drop");
+      assert.ok(toolNames(first.body).includes("mcp__tarsee__tarsee_datetime"), toolNames(first.body).join(" "));
+      assert.equal(first.headers.authorization, `Bearer ${KEYS.local}`, "the owner's key, added by the bridge");
+      for (const r of llama.responses()) assert.ok(!(r.body.input || []).some((i) => i.namespace), "no namespace in the history the server gets");
+    } finally {
+      await llama.close();
+    }
+  });
+
+  it("Local AI on a strict chat template (Qwen3.5): Codex's two developer messages fail without the bridge, and pass merged through it", async () => {
+    const strict = await startFakeResponses({ llama: { alias: "qwen3.5-9b", strictTemplate: true }, handler: () => ({ text: "hi from a strict template" }) });
+    try {
+      const before = await collect(turn("local", { model: "qwen3.5-9b", localUrl: strict.url, localBridge: NO_BRIDGE }).iter);
+      assert.equal(of(before, "done")[0]?.stopReason, "error");
+      assert.ok(strict.responses().some((r) => r.reply?.llama === "System message must be at the beginning."), "the template refused Codex's own request");
+      strict.reset();
+      const out = await collect(turn("local", { model: "qwen3.5-9b", localUrl: strict.url }).iter);
+      assert.deepEqual(of(out, "done"), [{ type: "done", stopReason: "end_turn" }], JSON.stringify(of(out, "error")));
+      assert.match(of(out, "text").map((e) => e.content).join(""), /hi from a strict template/);
+      const body = strict.responses()[0].body;
+      assert.equal(body.input.filter((i) => i.role === "developer" || i.role === "system").length, 1, "one developer message, first");
+      assert.ok(messageTexts(body, "developer")[0].includes("You are Tarsee, under test."), "Tarsee's instructions are in it");
+    } finally {
+      await strict.close();
+    }
+  });
 
   const assertNoCanary = (requests, label) => {
     const text = JSON.stringify(requests.map((r) => ({ h: r.headers, b: r.body })));

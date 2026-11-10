@@ -33,9 +33,15 @@ const CANARIES = {
 const SERVER = { PATH: "/usr/bin", HOME: "/home/node", LANG: "C.UTF-8", ...CANARIES };
 const VAULT = { SCRIPT_KEY: "script-key-from-the-vault" };
 
+/** A Local AI turn's bridge (local-bridge.js open()): its loopback address and its per-turn token. */
+const BRIDGE = { url: "http://127.0.0.1:45999/t/bridge-test-turn-01234/v1", token: "bridge-test-token-0123456789abcdefABCDEF" };
+
 const build = (id, target = {}, ctx = {}) => buildCodexOptions(
   { providerId: id, engine: "codex", ...target },
-  { env: SERVER, vaultEnv: VAULT, stateDir: STATE, workspace: WS, mcp: MCP, key: KEYS[id], developerInstructions: "You are Tarsee.", localUrl: id === "local" ? "http://ollama.railway.internal:11434/v1" : undefined, ...ctx },
+  {
+    env: SERVER, vaultEnv: VAULT, stateDir: STATE, workspace: WS, mcp: MCP, key: KEYS[id], developerInstructions: "You are Tarsee.",
+    localUrl: id === "local" ? "http://ollama.railway.internal:11434/v1" : undefined, localBridge: id === "local" ? BRIDGE : undefined, ...ctx,
+  },
 );
 
 /** Every string anywhere in a value. */
@@ -98,22 +104,31 @@ describe("buildCodexOptions: per provider", () => {
     assert.equal(o.threadOptions.model, "deepseek-flash");
   });
 
-  it("local: the owner's server address, its key only when it has one, and the card's context window", () => {
+  it("local: the turn's bridge address, the bridge's token as its key (never the owner's), and the model's context window", () => {
     const o = build("local", { model: "llama3.1:8b" }, { contextTokens: 32_000 });
     const p = o.config.model_providers.tarsee_local;
     assert.equal(o.config.model_provider, "tarsee_local");
-    assert.equal(p.base_url, "http://ollama.railway.internal:11434/v1");
+    assert.equal(p.base_url, BRIDGE.url, "Codex talks to the bridge, which passes the requests on to the owner's server");
     assert.equal(p.env_key, "TARSEE_PROVIDER_KEY");
-    assert.equal(o.env.TARSEE_PROVIDER_KEY, KEYS.local);
+    assert.equal(o.env.TARSEE_PROVIDER_KEY, BRIDGE.token);
+    // The owner's key and address appear nowhere in what the Codex process gets: its environment, its config, argv.
+    const everything = [...strings(o.env), ...strings(o.config), ...configArgs(o.config)];
+    assert.ok(!everything.some((s) => s.includes(KEYS.local)), "the owner's Local AI key never reaches the Codex process");
+    assert.ok(!everything.some((s) => s.includes("ollama.railway.internal")), "nor the owner's address");
+    assert.ok(!configArgs(o.config).some((s) => s.includes(BRIDGE.token)), "the bridge's token is in the environment only, never on the command line");
     assert.equal(o.config.model_context_window, 32_000);
     // A server that sends its headers and then nothing (a wedged GPU, a model too big for its memory): Codex waits 5
     // minutes per try, so one retry, not five, gives up in about 10 minutes and lets the backup model answer.
     assert.equal(p.stream_max_retries, 1);
     assert.equal(p.stream_idle_timeout_ms, undefined, "Codex's own 5 minutes: a slow local model still answers");
     for (const id of ["openrouter", "deepseek"]) assert.equal(build(id, { model: id === "openrouter" ? "openai/x" : "deepseek-flash" }).config.model_providers[`tarsee_${id}`].stream_max_retries, undefined, id);
+    // A server with no key: Codex still carries the bridge's token, which the bridge checks and never passes on.
     const keyless = build("local", { model: "llama3.1:8b" }, { key: null });
-    assert.equal(keyless.config.model_providers.tarsee_local.env_key, undefined);
-    assert.equal(keyless.env.TARSEE_PROVIDER_KEY, undefined);
+    assert.equal(keyless.config.model_providers.tarsee_local.env_key, "TARSEE_PROVIDER_KEY");
+    assert.equal(keyless.env.TARSEE_PROVIDER_KEY, BRIDGE.token);
+    // No bridge is a caller's mistake, never a quiet fall back to the owner's server with the owner's key.
+    assert.throws(() => build("local", { model: "llama3.1:8b" }, { localBridge: undefined }), TypeError);
+    assert.throws(() => build("local", { model: "llama3.1:8b" }, { localBridge: { url: BRIDGE.url } }), TypeError);
   });
 
   it("refuses before anything starts: a missing key, Local AI without an address, a provider Codex doesn't run", () => {
@@ -199,7 +214,9 @@ describe("buildCodexOptions: what every Codex turn gets", () => {
     for (const id of ALL) {
       const o = build(id, {}, { turnMark: "turn-mark-1" });
       for (const [name, value] of Object.entries(CANARIES)) {
-        const own = (name === "TARSEE_MCP_TOKEN" && o.env[name] === MCP.token) || (name === "TARSEE_PROVIDER_KEY" && o.env[name] === KEYS[id]) || (name === "CODEX_HOME" && o.env[name] !== value);
+        // Local AI's TARSEE_PROVIDER_KEY is its bridge's token; every other key provider's is its own key.
+        const ownKey = id === "local" ? BRIDGE.token : KEYS[id];
+        const own = (name === "TARSEE_MCP_TOKEN" && o.env[name] === MCP.token) || (name === "TARSEE_PROVIDER_KEY" && o.env[name] === ownKey) || (name === "CODEX_HOME" && o.env[name] !== value);
         if (!own) assert.equal(o.env[name], undefined, `${id}: ${name}`);
         assert.ok(!Object.values(o.env).includes(value), `${id}: the value of ${name}`);
       }

@@ -1324,11 +1324,20 @@ const Settings = {
     const p = window.ProviderGuides.get("local");
     const s = c.settings || {};
     const presets = p.presets.map((x) => `<button type="button" class="btn btn-sm btn-ghost" data-ai-action="preset" data-url="${x.url}">${x.name}</button>`).join("");
+    // The context box holds only what the owner saved: empty means "what the server says, else the default", shown as
+    // its placeholder, so a Save that didn't touch it never stores a number nobody chose.
+    const n = (v) => Number(v).toLocaleString("en-US");
+    const placeholder = s.serverContext ? `${n(s.serverContext)}, read from your server` : `${n(s.defaultContext || 128000)} unless you set it`;
+    const used = s.context && s.serverContext && s.serverContext < s.context
+      ? `<div class="hint" data-ai-local-context-note>Your server gives this model ${n(s.serverContext)}, so Tarsee uses that.</div>`
+      : "";
     return `<label class="ai-label" for="aiLocalUrl">Server address</label>` +
       `<div class="ai-presets">Fill in: ${presets}</div>` +
+      (p.presetNote ? `<div class="hint">${p.presetNote}</div>` : "") +
       `<input type="url" id="aiLocalUrl" class="ai-input" data-keep="url" value="${this._esc(s.baseUrl || "")}" placeholder="http://localhost:11434/v1" autocomplete="off" spellcheck="false" autocapitalize="off">` +
       `<label class="ai-label" for="aiLocalContext">How much it can read at once, in tokens</label>` +
-      `<input type="number" id="aiLocalContext" class="ai-input ai-input-short" data-keep="context" value="${this._esc(s.context || "")}" min="1000" step="1000" inputmode="numeric">` +
+      `<input type="number" id="aiLocalContext" class="ai-input ai-input-short" data-keep="context" value="${this._esc(s.context || "")}" placeholder="${this._esc(placeholder)}" min="1000" step="any" inputmode="numeric">` +
+      used +
       `<div class="ai-actions"><button type="button" class="btn btn-sm btn-primary" data-ai-action="save-local">Save</button>` +
       `<button type="button" class="btn btn-sm" data-ai-action="test">Test</button></div>` +
       `<details class="ai-local-key"${c.keySource ? " open" : ""}><summary>A key, if your server asks for one</summary>` +
@@ -1436,7 +1445,9 @@ const Settings = {
       const inMenu = m.inMenu === true || m.verified === true || m.id === c?.model;
       const badges = (m.verified ? `<span class="ai-badge" data-kind="ok">Verified</span>` : "")
         + (m.recheck ? `<span class="ai-badge" data-kind="warn" title="It was verified on an older version of Tarsee's engine: Verify it again to be sure it still works.">Check again</span>` : "");
-      const meta = [inMenu ? "In a chat's model menu" : "Verify to use it in a chat", m.context ? `${Math.round(m.context / 1000)}K context` : ""].filter(Boolean).join(" · ");
+      const k = (v) => (v % 1024 === 0 ? `${v / 1024}K` : `${Math.round(v / 1000)}K`);
+      const ctx = m.context ? `${k(m.context)} context${m.serverContext ? " (from your server)" : ""}` : "";
+      const meta = [inMenu ? "In a chat's model menu" : "Verify to use it in a chat", ctx].filter(Boolean).join(" · ");
       const btn = `<button type="button" class="btn btn-sm${inMenu ? " btn-ghost" : ""}" data-ai-action="verify" data-model="${esc(m.id)}">${m.verified ? "Verify again" : "Verify"}</button>`;
       return `<div class="ai-or-row" data-ai-local-row><div class="ai-or-name"><span>${esc(m.label || m.id)}</span>${badges}<div class="ai-or-meta">${esc(meta)}</div></div>${btn}</div>`;
     };
@@ -1774,9 +1785,10 @@ const Settings = {
   /** Local AI's address and context size (PUT /api/ai/providers/local), then a Test that lists its models. */
   async saveLocalAi(btn) {
     const url = document.getElementById("aiLocalUrl")?.value.trim() || "";
-    const ctx = document.getElementById("aiLocalContext")?.value.trim() || "";
+    const box = document.getElementById("aiLocalContext");
     const body = { baseUrl: url || null };
-    if (ctx) body.context = Number(ctx);
+    // The context only when the owner changed it: an emptied box goes back to the server's size (else the default).
+    if (box && box.value.trim() !== box.defaultValue.trim()) body.context = box.value.trim() ? Number(box.value.trim()) : null;
     const done = this._aiBusy(btn, "Saving…");
     try {
       await this._aiCall("/api/ai/providers/local", { method: "PUT", body });

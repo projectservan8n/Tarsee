@@ -234,6 +234,23 @@ describe("docs/providers.md", () => {
     const table = doc.split(/\r?\n/).filter((l) => l.startsWith("|"));
     for (const id of PROVIDER_IDS) assert.ok(table.some((l) => l.includes(PROVIDERS[id].label)), `the matrix has ${PROVIDERS[id].label}`);
   });
+  it("Local AI: llama.cpp as a server like the other two (its build, its ports, the Docker image), the context from the server, the bridge", () => {
+    const s = part("Local AI");
+    assert.match(s, /Ollama, LM Studio or llama\.cpp/);
+    assert.match(s, /b11768 \(v0\.8\.0\) or newer/, "the llama.cpp build Tarsee relies on");
+    assert.match(s, /http:\/\/localhost:9931\/v1/);
+    assert.match(s, /port 8080/, "older builds and the Docker image");
+    assert.match(s, /ghcr\.io\/ggml-org\/llama\.cpp:server/, "the optional Docker line");
+    assert.match(s, /CPU only/);
+    assert.match(s, /-hf \S+:Q\d/, "a quant tag after the colon");
+    assert.match(s, /read from your server/, "the card's context box");
+    assert.match(s, /[Ee]mbedding models/, "why they aren't listed");
+    assert.match(s, /bridge/, "how Tarsee's tools reach every Local AI model");
+    for (const where of ["README.md", ".env.example", "docker-compose.yml", "railway.toml"]) {
+      assert.match(read(where), /Ollama, LM Studio or llama\.cpp/, `${where} names all three servers`);
+    }
+  });
+
   it("never names a ChatGPT model: what an account can use comes from the account", () => {
     assert.doesNotMatch(doc, /\bgpt-\d/i);
     assert.doesNotMatch(read("README.md"), /\bgpt-\d/i);

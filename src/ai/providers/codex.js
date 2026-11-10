@@ -14,6 +14,9 @@
  * Before anything starts:
  *   - the options (providers/codex-options.js): this provider's credential only, hosts from engine-env hostFor(), the
  *     tools' grant (opts.mcpGrant from the turn layer, else one made here and revoked when the turn ends)
+ *   - Local AI: a turn of its own on the Local AI bridge (../local-bridge.js), opened with the owner's address and key
+ *     and released when the turn ends. Codex talks to the bridge's address with the bridge's token; the bridge passes
+ *     each request on to the owner's server with the owner's key, Tarsee's tools as plain function tools.
  *   - R1: the home exists (mode 0700) and a key home holds no sign-in file; R5's Codex counterpart:
  *     codexConfigGuard() on <home>/config.toml, <home>/.env (refused whatever it holds: Codex loads it into its own
  *     environment) and <workspace>/.codex/config.toml, the only files Codex loads with the project root search off
@@ -58,7 +61,7 @@ import { WORKSPACE_FILE_MAX_BYTES, truncateContent } from "../../lib/workspace-f
 import { CODEX_IMAGE_DIR } from "../../lib/turn-leftovers.js";
 import { catalogModels, contextTokensFor, getProvider, normalizeProviderId } from "../provider-registry.js";
 import {
-  CODEX, CredentialError, baseEnv, codexConfigFilesFor, codexConfigGuard, ensureHome, homeIsolationRefusal,
+  CODEX, CredentialError, baseEnv, checkedProviderKey, codexConfigFilesFor, codexConfigGuard, ensureHome, homeIsolationRefusal, hostFor,
 } from "../engine-env.js";
 import { classifyEngineError } from "../engine-errors.js";
 import { format as formatHandle, parse as parseHandle, sessionFor } from "../session-handle.js";
@@ -109,6 +112,8 @@ const DEFAULT_DEPS = {
   accountModels: () => catalogModels("chatgpt-models"),
   /** Kill what a stopped turn started (see sweepTurnProcesses). */
   sweep: (mark) => sweepTurnProcesses(mark),
+  /** The Local AI bridge (local-bridge.js): {open({upstream, key}) -> {url, token, release()}}. */
+  localBridge: async () => (await import("../local-bridge.js")).localBridge(),
 };
 
 async function codexClass(deps) {
@@ -500,6 +505,7 @@ export async function* run(opts = {}) {
 
   let grant = null;
   let ownGrant = false;
+  let bridgeTurn = null;
   let images = null;
   let releaseGate = () => {};
   let ac = null;
@@ -534,10 +540,23 @@ export async function* run(opts = {}) {
     let o;
     let codexPath;
     try {
+      // Local AI goes through the bridge (local-bridge.js): the owner's address and key are checked here and handed to
+      // it, and Codex gets only this turn's bridge address and token. The test seam (TARSEE_TEST_BASE_URL_LOCAL) is
+      // the bridge's upstream.
+      if (providerId === "local") {
+        const upstream = hostFor(entry, CODEX, { env, localUrl });
+        const ownerKey = checkedProviderKey(entry, keyFor(entry, store, env));
+        try {
+          bridgeTurn = (await deps.localBridge()).open({ upstream, key: ownerKey });
+        } catch (err) {
+          throw new CredentialError("needs-setup", `Tarsee's Local AI bridge couldn't start: ${err?.message || err}`, providerId);
+        }
+      }
       o = buildCodexOptions({ providerId, model, effort }, {
         env,
         vaultEnv: await deps.vaultEnv(env, toolCtx),
-        key: keyFor(entry, store, env),
+        key: providerId === "local" ? null : keyFor(entry, store, env),
+        localBridge: bridgeTurn ? { url: bridgeTurn.url, token: bridgeTurn.token } : undefined,
         stateDir,
         home: deps.home,
         workspace,
@@ -711,6 +730,8 @@ export async function* run(opts = {}) {
       } catch (err) { console.warn(`[codex] stopping the turn's processes failed: ${err?.message || err}`); }
     }
     images?.cleanup?.();
+    // The turn's bridge address stops working (any request still on its way to the owner's server is stopped).
+    try { bridgeTurn?.release?.(); } catch { /* it expires on its own */ }
     if (ownGrant) { try { await grant?.revoke?.(); } catch { /* the grant expires on its own */ } }
   }
 }

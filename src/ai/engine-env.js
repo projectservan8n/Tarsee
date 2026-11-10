@@ -191,6 +191,19 @@ function requireKey(entry, id, key, { optional = false } = {}) {
   return k;
 }
 
+/**
+ * The provider's key checked as a turn would check it (R4: trimmed of whitespace and quotes; a line break or another
+ * provider's key refused with CredentialError bad-key, a missing one with needs-key), without putting it anywhere.
+ * Local AI's key is optional: null when there is none. codex.js checks the owner's Local AI key with this before
+ * handing it to the Local AI bridge (local-bridge.js), which adds it on the way to the owner's server: the Codex
+ * process itself only ever gets the bridge's per-turn token.
+ */
+export function checkedProviderKey(provider, key) {
+  const entry = entryOf(provider);
+  const id = canonicalId(entry.id);
+  return requireKey(entry, id, key, { optional: KEY_OPTIONAL.has(id) });
+}
+
 // --- Hosts (R3) and the test-only seam -----------------------------------------------------------------------------
 
 function isLoopbackHost(hostname) {
@@ -401,7 +414,10 @@ export function claudeEnvFor(provider, opts = {}) {
  *   chatgpt     nothing else: Codex's own sign-in in its home (.codex-home)
  *   openai      nothing else in env: pass the key as the Codex SDK's apiKey, which sets CODEX_API_KEY in the child only.
  *               The key is still required here, so a missing one refuses the turn before anything starts.
- *   openrouter, deepseek, local   TARSEE_PROVIDER_KEY (the custom provider's env_key; optional for local)
+ *   openrouter, deepseek   TARSEE_PROVIDER_KEY (the custom provider's env_key)
+ *   local       TARSEE_PROVIDER_KEY holds the Local AI bridge's per-turn token (codex-options.js passes it as `key`),
+ *               never the owner's key: the bridge (local-bridge.js) adds that on the way to the owner's server.
+ *               Optional here, so a caller with no bridge token gets no TARSEE_PROVIDER_KEY at all.
  */
 export function codexEnvFor(provider, opts = {}) {
   const entry = entryOf(provider);

@@ -34,6 +34,7 @@ import { classifyEngineError, friendly, localNoResponsesMessage } from "../engin
 import { getProvider, normalizeProviderId } from "../provider-registry.js";
 import { displayToolName, resultPreview, summarizeToolInput, toolInputPreview } from "../../lib/tool-steps.js";
 import { redactSecrets } from "../../lib/redact.js";
+import { redactBridgeUrls } from "../local-bridge.js";
 
 /** A tool result's text is capped as Claude Code's turns cap it. */
 export const RESULT_MAX_CHARS = 2000;
@@ -201,7 +202,8 @@ function retryStep(state, n, of, reason) {
 
 /** The words worth showing from the SDK's "Codex Exec exited with code N: <stderr>" (its own start-up chatter dropped). */
 function cleanCodexError(message) {
-  const text = String(message ?? "");
+  // A Local AI turn's requests go to its bridge address, whose path carries the turn's token: never in what is shown.
+  const text = redactBridgeUrls(String(message ?? ""));
   const m = /^Codex Exec exited with (code \d+|signal \w+):\s*([\s\S]*)$/.exec(text);
   if (!m) return text.trim();
   const lines = m[2].split(/\r?\n/)
@@ -237,7 +239,7 @@ export function classifyCodexFailure(providerId, rawMessage, { model = null, loc
   if ((kind === "unknown" || kind === "unavailable") && UNREACHABLE_RE.test(message) && !c.status) kind = "unavailable";
   if (kind === "unavailable" && id === "local") {
     const hint = getProvider("local")?.errorHints?.unreachable || "Can't reach your Local AI at {url}.";
-    words = `**${hint.replace("{url}", localUrl || "its address")}** Check that the server is running and that the address in Settings > AI is right.`;
+    words = `**${hint.replace("{url}", localUrl || "its address")}** Check that the server is running and that the address in Settings > AI is right. If you just started llama-server with -hf, it may still be downloading the model.`;
   } else if (kind === "unavailable" && c.kind !== "unavailable") {
     words = friendly(id, "unavailable");
   }

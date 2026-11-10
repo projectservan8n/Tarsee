@@ -411,7 +411,7 @@ describe("POST /test/:id: a cheap live check per provider", () => {
     respond("http://192.168.1.20:11434/v1/models", Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } }));
     ({ body } = await api("POST", "/test/local"));
     assert.equal(body.ok, false);
-    assert.equal(body.message, "Can't reach your Local AI at http://192.168.1.20:11434/v1/.");
+    assert.equal(body.message, "Can't reach your Local AI at http://192.168.1.20:11434/v1/. If you just started llama-server with -hf, it may still be downloading the model.");
   });
 
   it("ChatGPT: Codex's own sign-in status, no network", async () => {
