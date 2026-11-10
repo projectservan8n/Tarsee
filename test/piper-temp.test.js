@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import express from "express";
@@ -31,7 +32,8 @@ const FAKE = path.join(WORK, "fake-piper.mjs");
 // on its input, logs what it was asked and when it started, creates the output
 // file (as the real one does before the audio is ready), then behaves as
 // FAKE_PIPER_MODE says, or as "mode=<name> " at the start of the text says for
-// that run alone. A run that writes its audio logs when it ended, too.
+// that run alone. A run that writes its audio logs when it ended, too. "late"
+// writes its audio 800 ms after it started, then runs until it is stopped.
 fs.writeFileSync(FAKE, `
 import fs from "node:fs";
 const started = Date.now();
@@ -51,6 +53,11 @@ if (mode === "hang") setInterval(() => {}, 1000);
 else if (mode === "fail") { process.stderr.write("Loading the voice...\\nUnable to load the voice model\\n"); process.exit(3); }
 else if (mode === "empty") fs.writeFileSync(out, Buffer.alloc(10));
 else if (mode === "none") fs.rmSync(out);
+else if (mode === "late") {
+  await new Promise((r) => setTimeout(r, 800));
+  fs.writeFileSync(out, Buffer.alloc(400, 7));
+  setInterval(() => {}, 1000);
+}
 else {
   await new Promise((r) => setTimeout(r, Number(process.env.FAKE_PIPER_DELAY_MS || 0)));
   fs.writeFileSync(out, Buffer.alloc(400, 7));
@@ -67,9 +74,38 @@ for (const id of ["alpha", "beta"]) {
   fs.writeFileSync(path.join(VOICES, `${id}.onnx.json`), JSON.stringify({ dataset: id }));
 }
 
-const { PiperTTSEngine, deletePiperVoice, __setForTests } = await import("../src/voice/piper-engine.js");
+const { PiperTTSEngine, deletePiperVoice, __setForTests, __leftoverSweepsDone } = await import("../src/voice/piper-engine.js");
 
 const leftovers = () => fs.readdirSync(TMP);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const MINUTE = 60_000;
+
+/** Waits until check() is true, and fails, saying `what`, if it is not within `ms`. */
+async function waitFor(check, ms, what) {
+  const end = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > end) assert.fail(`${what}: not within ${ms} ms`);
+    await sleep(20);
+  }
+}
+
+/** Makes `name` in the temp folder (a folder, with a file in it, when `folder`), last written `ageMs` ago. */
+function plant(name, ageMs = 0, { folder = false } = {}) {
+  const p = path.join(TMP, name);
+  if (folder) {
+    fs.mkdirSync(p);
+    fs.writeFileSync(path.join(p, "inside.wav"), "x");
+  } else {
+    fs.writeFileSync(p, "x");
+  }
+  const t = (Date.now() - ageMs) / 1000;
+  fs.utimesSync(p, t, t);
+  return name;
+}
+
+const isRunning = (pid) => {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+};
 const lines = (file) => (fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean) : []);
 const calls = () => lines(LOG).map((l) => JSON.parse(l));
 const ends = () => new Map(lines(ENDS).map((l) => JSON.parse(l)).map((e) => [e.pid, e.ended]));
@@ -104,6 +140,20 @@ const spawnHeldOpen = (ms) => (...args) => {
   child.emit = (event, ...rest) => {
     if (event !== "close") return emit(event, ...rest);
     setTimeout(() => emit(event, ...rest), ms).unref();
+    return true;
+  };
+  return child;
+};
+
+/**
+ * Node's own spawn, except that a kill reaches the child `ms` late: a Piper that
+ * takes a while to go once it is stopped, as a busy or swapped-out machine can.
+ */
+const spawnSlowToDie = (ms) => (...args) => {
+  const child = spawn(...args);
+  const kill = child.kill.bind(child);
+  child.kill = (signal) => {
+    setTimeout(() => kill(signal), ms);
     return true;
   };
   return child;
@@ -265,6 +315,60 @@ describe("Piper keeps its audio in the system temp folder", () => {
     const [call] = calls();
     assert.ok(call, "the fake Piper did not start within the limit");
     assert.throws(() => process.kill(call.pid, 0), { code: "ESRCH" }, "the stopped Piper is still running");
+    assertTidy();
+  });
+
+  it("removes the file of a stopped Piper that went on writing it after the engine stopped waiting for it", async () => {
+    // The engine waits a while for a stopped Piper to be gone, then gives the next sentence its turn. A Piper still
+    // there after that could write its file once the engine had removed it (or, on Windows, hold it open so that it
+    // could not be removed), and the file stayed.
+    __setForTests({ command: COMMAND, timeoutMs: 300, killWaitMs: 200, spawn: spawnSlowToDie(2500) });
+    await assert.rejects(new PiperTTSEngine("alpha").synthesize("mode=late Hello."), /took longer than 0.3 s/);
+    await waitFor(() => calls().length === 1, 2500, "the fake Piper started");
+    const [{ pid, out }] = calls();
+    await waitFor(() => fs.existsSync(out), 2500, "the stopped Piper wrote its file after the engine had given up on it");
+    await waitFor(() => !isRunning(pid), 5000, "the stopped Piper went");
+    await sleep(300);
+    assertTidy();
+  });
+
+  it("sweeps Tarsee's own old Piper files from the temp folder when the engine starts, and nothing else", async () => {
+    // A name the engine really made, so the sweep is checked against the engine's own naming.
+    await new PiperTTSEngine("alpha").synthesize("Hello.");
+    await __leftoverSweepsDone();
+    const id = () => crypto.randomUUID();
+    plant(path.basename(calls()[0].out), 10 * MINUTE);
+    plant(`tarsee-piper-${id()}.wav`, 60 * MINUTE);
+    const folder = plant(`tarsee-piper-${id()}.wav`, 10 * MINUTE, { folder: true }); // not a file
+    const kept = [
+      folder,
+      plant(`tarsee-piper-${id()}.wav`), // fresh: a Piper may be writing it right now
+      plant(`tarsee-piper-${id()}.wav`, 2 * MINUTE),
+      plant(`tarsee-piper-${id()}.wav.tmp`, 10 * MINUTE),
+      plant(`tarsee-piper-${id()}.mp3`, 10 * MINUTE),
+      plant(`tarsee-piper-${id().toUpperCase()}.wav`, 10 * MINUTE),
+      plant(`backup-tarsee-piper-${id()}.wav`, 10 * MINUTE),
+      plant(`tarsee-edge-tts-${id()}.mp3`, 10 * MINUTE),
+      plant(`phonon-${id()}.wav`, 10 * MINUTE),
+      plant("tarsee-piper-voice.wav", 10 * MINUTE),
+    ];
+    __setForTests({ command: COMMAND }); // as if Tarsee had just started
+    new PiperTTSEngine("alpha");
+    await __leftoverSweepsDone();
+    assert.deepEqual(leftovers().sort(), kept.sort());
+    assert.equal(fs.existsSync(path.join(TMP, folder, "inside.wav")), true, "a folder's contents were touched");
+  });
+
+  it("sweeps again after a sentence fails", async () => {
+    __setForTests({ command: COMMAND, sweepGapMs: 0 });
+    new PiperTTSEngine("alpha");
+    await __leftoverSweepsDone(); // the start sweep, with nothing to remove
+    const old = plant(`tarsee-piper-${crypto.randomUUID()}.wav`, 10 * MINUTE);
+    await sleep(100);
+    await __leftoverSweepsDone();
+    assert.deepEqual(leftovers(), [old], "the temp folder was swept with nothing failing");
+    await assert.rejects(new PiperTTSEngine("alpha").synthesize("mode=fail Hello."), /exit code 3/);
+    await __leftoverSweepsDone();
     assertTidy();
   });
 

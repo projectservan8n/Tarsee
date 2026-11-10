@@ -51,6 +51,8 @@ const Setup = {
   _aiNotes: {},          // provider id → what its model list says about itself (GET /api/ai/models' note), or null
   _aiLoginCtl: null,
   _aiLoginView: null,
+  _aiHeld: false,        // a press (or Space on a button) is down on the step: draws wait for its click (_aiHold)
+  _aiDrawWaiting: false, // a draw came in while it was down
 
   _esc(s) {
     return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -93,6 +95,9 @@ const Setup = {
     const root = document.getElementById("setupAi");
     const terms = document.getElementById("setupAiTerms");
     if (terms && window.ProviderGuides) terms.innerHTML = window.ProviderGuides.TERMS_NOTE;
+    this._aiHeld = false;
+    this._aiDrawWaiting = false;
+    this._aiHoldOn(root);
     root.addEventListener("click", (ev) => this._aiClick(ev));
     root.addEventListener("change", (ev) => this._aiChange(ev));
     document.getElementById("setupAiNext").addEventListener("click", () => this._aiNext());
@@ -111,11 +116,9 @@ const Setup = {
     try {
       this._ai = await API.json("/api/ai/providers");
     } catch (err) {
-      const panel = document.getElementById("setupAiPanel");
-      if (panel) {
-        panel.innerHTML = `<div class="ai-test-result" data-tone="bad">✗ Couldn't read Tarsee's AI settings: ${this._esc(err.message)}</div>` +
-          `<button type="button" class="btn btn-sm" data-setup="retry">Try again</button>`;
-      }
+      this._aiPut(document.getElementById("setupAiPanel"),
+        `<div class="ai-test-result" data-tone="bad">✗ Couldn't read Tarsee's AI settings: ${this._esc(err.message)}</div>` +
+        `<button type="button" class="btn btn-sm" data-setup="retry">Try again</button>`);
       return;
     }
     const k = this._ai.keysOnly || {};
@@ -138,9 +141,71 @@ const Setup = {
     return !!document.getElementById("setupKeysOnly")?.checked;
   },
 
+  // Every read of the AIs draws the step again (opening it, coming back to the tab from the Terminal or ChatGPT's
+  // page, after each Check, Test or sign-in), as Settings → AI does its cards. A part whose markup didn't change isn't
+  // rebuilt, and one that did gives the focus back to the box or button it was on. While a press (or Space on a
+  // button) is down on the step, a draw waits until its click has been handled: a button rebuilt under a press
+  // (pressed on the old one, let go on the new) gets no click at all.
+
+  /** Put this markup in el, unless it's what el already shows (Settings._aiSetHtml); rebuilt, it keeps the focus. */
+  _aiPut(el, html) {
+    if (!el || el._aiHtml === html) return;
+    const focus = this._aiFocusOf(el);
+    Settings._aiSetHtml(el, html);
+    Settings._aiRefocus(el, focus);
+  },
+
+  /** The box or button someone is in, inside root (Settings._aiFocusOf), and the wizard's own buttons too. */
+  _aiFocusOf(root) {
+    const kept = Settings._aiFocusOf(root);
+    if (kept) return kept;
+    const el = document.activeElement;
+    if (!el || el === root || !root.contains(el) || !(el.dataset?.setup || el.dataset?.copy)) return null;
+    const esc = (s) => (window.CSS?.escape ? CSS.escape(s) : String(s).replace(/["\\]/g, "\\$&"));
+    // Found again by all its data- attributes: several share data-setup (each choice, each provider, each preset),
+    // and focus put on another one would act on that one.
+    const sel = [...el.attributes].filter((a) => a.name.startsWith("data-")).map((a) => `[${a.name}="${esc(a.value)}"]`).join("");
+    return root.querySelectorAll(sel).length === 1 ? { sel, range: null } : null;
+  },
+
+  /** Draws wait while a press (or Space on a button) is down on the step root, until its click has been handled. */
+  _aiHoldOn(root) {
+    root.addEventListener("pointerdown", () => this._aiHold());
+    root.addEventListener("keydown", (ev) => { if (ev.key === " " && ev.target.closest?.("button")) this._aiHold(); });
+    // (capture: before the step's own click handler, so its draws run at once, and the draw that waited after it)
+    root.addEventListener("click", () => this._aiRelease(0), true);
+    if (this._aiHoldHooks) return;
+    this._aiHoldHooks = true;
+    // A press that ends in no click (let go somewhere else, a scroll on a phone): the draw runs a moment later.
+    window.addEventListener("pointerup", () => this._aiRelease(400), true);
+    window.addEventListener("keyup", () => this._aiRelease(400), true);
+    window.addEventListener("pointercancel", () => this._aiRelease(0), true);
+    window.addEventListener("blur", () => this._aiRelease(0));
+  },
+  _aiHold() {
+    this._aiHeld = true;
+    clearTimeout(this._aiHoldTimer);
+    // (a press held down this long isn't a click: the step doesn't wait for it any longer)
+    this._aiHoldTimer = setTimeout(() => this._aiRelease(0), 10000);
+  },
+  /** The press is over: a draw that waited runs after ms, or with 0 once the click being handled is done. */
+  _aiRelease(ms) {
+    if (!this._aiHeld) return;
+    clearTimeout(this._aiHoldTimer);
+    const go = () => {
+      this._aiHeld = false;
+      if (!this._aiDrawWaiting) return;
+      this._aiDrawWaiting = false;
+      this._aiDraw();
+    };
+    if (!ms) this._aiHeld = false;
+    this._aiHoldTimer = setTimeout(go, ms);
+  },
+
   _aiDraw() {
     const G = window.ProviderGuides;
     if (!G || !this._ai) return;
+    if (this._aiHeld) { this._aiDrawWaiting = true; return; }
     const esc = (s) => this._esc(s);
     // With no API-key AI switched on in this version, "Only use API keys" would leave nothing to choose: neither it
     // nor the who-question (whose "Other people too" ticks it) is offered. Already on, it still shows, so it can be
@@ -163,13 +228,10 @@ const Setup = {
 
     // Railway variables already connect an AI: say so, and offer it.
     const env = (this._ai.providers || []).filter((c) => c.shipped && c.ready && String(c.keySource || "").startsWith("env:") && !(keysOnly && c.kind === "subscription"));
-    const envEl = document.getElementById("setupAiEnv");
-    if (envEl) {
-      envEl.innerHTML = env.length
-        ? `<div class="setup-ai-env">Connected through Railway variables: ${env.map((c) => `${esc(G.get(c.id)?.shortName || c.label)} (${esc(c.keySource.slice(4))})`).join(", ")}.` +
-          `<div class="setup-ai-env-actions">${env.map((c) => `<button type="button" class="btn btn-sm" data-setup="use-env" data-provider="${c.id}">Use ${esc(G.get(c.id)?.shortName || c.label)}</button>`).join("")}</div></div>`
-        : "";
-    }
+    this._aiPut(document.getElementById("setupAiEnv"), env.length
+      ? `<div class="setup-ai-env">Connected through Railway variables: ${env.map((c) => `${esc(G.get(c.id)?.shortName || c.label)} (${esc(c.keySource.slice(4))})`).join(", ")}.` +
+        `<div class="setup-ai-env-actions">${env.map((c) => `<button type="button" class="btn btn-sm" data-setup="use-env" data-provider="${c.id}">Use ${esc(G.get(c.id)?.shortName || c.label)}</button>`).join("")}</div></div>`
+      : "");
 
     // The three choices (only the ones this version switches on).
     const choices = [];
@@ -187,15 +249,15 @@ const Setup = {
       choices.push(`<button type="button" class="setup-ai-choice" data-setup="choice" data-choice="key" aria-pressed="${this._aiChoice === "key"}">` +
         `<strong>My own API key</strong><span>${esc(keyIds.map((id) => G.get(id).shortName).join(", "))}. You pay per use.</span></button>`);
     }
-    const choicesEl = document.getElementById("setupAiChoices");
-    if (choicesEl) choicesEl.innerHTML = choices.join("");
+    this._aiPut(document.getElementById("setupAiChoices"), choices.join(""));
 
     this._aiDrawPanel();
     const next = document.getElementById("setupAiNext");
     const card = this._aiCard(this._aiProvider);
     if (next) {
       next.disabled = !(card && card.ready && !(keysOnly && card.kind === "subscription"));
-      next.textContent = card?.ready ? `Next: use ${G.get(card.id)?.shortName || card.label}` : "Next";
+      const word = card?.ready ? `Next: use ${G.get(card.id)?.shortName || card.label}` : "Next";
+      if (next.textContent !== word) next.textContent = word;
     }
   },
 
@@ -204,9 +266,8 @@ const Setup = {
     const G = window.ProviderGuides;
     const panel = document.getElementById("setupAiPanel");
     if (!panel) return;
+    if (this._aiHeld) { this._aiDrawWaiting = true; return; }
     const esc = (s) => this._esc(s);
-    const typed = {};
-    panel.querySelectorAll("[data-keep]").forEach((el) => { if (el.value !== el.defaultValue) typed[el.dataset.keep] = el.value; });
 
     let html = "";
     if (this._aiChoice === "key") {
@@ -230,12 +291,28 @@ const Setup = {
       html += `<div class="ai-test-result" data-tone="${line?.tone || "off"}">${line ? esc(line.text) : ""}</div>`;
       if (c.ready) html += this._aiModelHtml(c);
     }
-    panel.innerHTML = html;
-    for (const [name, value] of Object.entries(typed)) {
-      const el = panel.querySelector(`[data-keep="${name}"]`);
-      if (el) el.value = value;
+    let focus = null;
+    if (panel._aiHtml !== html) {
+      // Built again: what someone typed and hasn't saved, and a model they chose and haven't saved (Next saves it),
+      // stay as they were, and so does the focus.
+      focus = this._aiFocusOf(panel);
+      const typed = {};
+      panel.querySelectorAll("[data-keep]").forEach((el) => { if (el.value !== el.defaultValue) typed[el.dataset.keep] = el.value; });
+      const list = panel.querySelector("#setupAiModel");
+      const drawn = list && ([...list.options].find((o) => o.defaultSelected) || list.options[0]);
+      const chosen = list && drawn && panel._aiFor === id && list.value !== drawn.value ? list.value : null;
+      Settings._aiSetHtml(panel, html);
+      panel._aiFor = id;
+      for (const [name, value] of Object.entries(typed)) {
+        const el = panel.querySelector(`[data-keep="${name}"]`);
+        if (el) el.value = value;
+      }
+      const now = panel.querySelector("#setupAiModel");
+      if (chosen !== null && now && [...now.options].some((o) => o.value === chosen)) now.value = chosen;
     }
     if (id === "chatgpt") Settings.renderChatgptLogin(document.getElementById("setupDevice"), this._aiLoginView);
+    // Focus goes back last, once the sign-in box (and its Cancel) is drawn too.
+    Settings._aiRefocus(panel, focus);
   },
 
   _aiControlsHtml(c, p) {

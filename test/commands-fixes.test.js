@@ -8,7 +8,8 @@
 //    dashboard's chat, /stop also cancels what the dashboard sent that waits behind the reply, as its Stop button does,
 //    and with the Live view off it is sent at once instead of waiting in the tab's queue behind the reply.
 //    Taking messages that way must not break what came with it: a Telegram album is still one message however long
-//    its photos take to download; a stopped Telegram channel answers nothing still waiting in its line; and a command
+//    its photos take to download; a stopped Telegram channel shows a chat nothing more (no answer, no "couldn't
+//    understand" or "failed to process", no "typing") for what waits in its line, downloads or is transcribed; and a command
 //    mailed back whose answer the SMTP server turns away is never sent to the AI instead.
 //  - /theme sent from Telegram, Discord, Slack, WhatsApp or email answers in plain words: a theme is how the dashboard
 //    looks, so it is picked there. Only the dashboard's chat gets the __SET_THEME__ marker its page reads.
@@ -42,6 +43,8 @@ const live = await import("../src/lib/live-bus.js");
 const { registerEngine, configureTurns, runTurn, stopTurns } = await import("../src/ai/turn.js");
 const { processCommand, getCommandList } = await import("../src/lib/commands.js");
 const { createFakeEngine } = await import("./fakes/fake-engine.js");
+const { __setForTests: setStt } = await import("../src/voice/stt-handler.js");
+const { withConversationTurn, removeQueuedTurn } = await import("../src/lib/conversation-lock.js");
 
 const db = initDb(path.join(tmp, "tarsee.db"));
 live.initLiveBus(db);
@@ -248,9 +251,11 @@ function stoppableThenAnswers(answer) {
  * A Telegram Bot API on 127.0.0.1 that the real bot (Telegraf) long-polls: it keeps what it is sent, and hands out the
  * updates a test queues, each once, as soon as the bot next asks. It serves photos too: a file's bytes are
  * "image <file id>", sent after api.fileDelay[file id] ms. api.delay[method]: ms a Bot API method takes to answer.
+ * api.fail[method]: Telegram turns that method down with this description; api.failFile[file id]: it turns down getFile
+ * for that file (as it does for one over 20 MB).
  */
 async function fakeBotApi() {
-  const api = { calls: [], pending: [], nextUpdate: 1, nextMessage: 100, delay: {}, fileDelay: {} };
+  const api = { calls: [], pending: [], nextUpdate: 1, nextMessage: 100, delay: {}, fileDelay: {}, fail: {}, failFile: {} };
   const server = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const c of req) chunks.push(c);
@@ -266,6 +271,12 @@ async function fakeBotApi() {
     const fields = raw && /json/.test(req.headers["content-type"] || "") ? JSON.parse(raw) : {};
     api.calls.push({ method, fields });
     if (api.delay[method]) await sleep(api.delay[method]);
+    const refusal = api.fail[method] || (method === "getFile" && api.failFile[fields.file_id]);
+    if (refusal) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error_code: 400, description: refusal }));
+      return;
+    }
     let result = true;
     if (method === "getMe") result = { id: 1, is_bot: true, first_name: "Tarsee", username: "test_bot" };
     else if (method === "getFile") result = { file_id: fields.file_id, file_unique_id: fields.file_id, file_size: 16, file_path: `photos/${fields.file_id}.jpg` };
@@ -312,10 +323,41 @@ async function fakeBotApi() {
       },
     });
   };
+  /** A voice message (`kind` "voice") or a video note ("video_note") in a private chat. */
+  api.voice = (chatId, fileId, { kind = "voice" } = {}) => {
+    const file = { file_id: fileId, file_unique_id: fileId, duration: 2, file_size: 16 };
+    api.pending.push({
+      update_id: api.nextUpdate++,
+      message: {
+        message_id: api.nextMessage++,
+        date: 0,
+        chat: { id: chatId, type: "private", first_name: "Sam" },
+        from: { id: 42, is_bot: false, first_name: "Sam" },
+        [kind]: kind === "voice" ? { ...file, mime_type: "audio/ogg" } : { ...file, length: 240 },
+      },
+    });
+  };
+  /** A file sent as a document in a private chat. */
+  api.document = (chatId, fileId, { mime = "application/pdf", name = `${fileId}.pdf` } = {}) => {
+    api.pending.push({
+      update_id: api.nextUpdate++,
+      message: {
+        message_id: api.nextMessage++,
+        date: 0,
+        chat: { id: chatId, type: "private", first_name: "Sam" },
+        from: { id: 42, is_bot: false, first_name: "Sam" },
+        document: { file_id: fileId, file_unique_id: fileId, file_name: name, mime_type: mime, file_size: 16 },
+      },
+    });
+  };
   /** All the bot has said in a chat: the messages it sent and what it edited them to, in order. */
   api.said = (chatId) => api.calls
     .filter((c) => (c.method === "sendMessage" || c.method === "editMessageText") && c.fields.chat_id === chatId)
     .map((c) => c.fields.text);
+  /** Every call that shows a chat something (a message, an edit, "typing", a reaction) after the first `n` calls. */
+  api.shownSince = (n) => api.calls.slice(n)
+    .filter((c) => /^(send|edit|setMessageReaction)/.test(c.method))
+    .map((c) => `${c.method}${c.fields.text ? `: ${c.fields.text}` : ""}`);
   api.close = () => { server.closeAllConnections?.(); server.close(); };
   return api;
 }
@@ -341,6 +383,8 @@ describe("/stop on Telegram, which takes a chat's messages one at a time (the re
     }, 8000);
     chats.clear();
     settings.delete("allowlist.telegram");
+    api.fail = {};
+    api.failFile = {};
     assert.ok(idle, "the bot finished what it was given");
   });
 
@@ -414,6 +458,20 @@ describe("/stop on Telegram, which takes a chat's messages one at a time (the re
     assert.ok(live.activeTurnFor(conv), "and its /stop stopped nothing");
   });
 
+  it("...and for photos and files: one from a chat off it is never downloaded or saved, so a failed download can't answer it", async () => {
+    settings.set("allowlist.telegram", ["909"]);
+    chats.add(910);
+    api.failFile["stranger-photo"] = "Bad Request: file is too big"; // the bot says when a download fails
+    api.photo(910, "stranger-photo");
+    api.document(910, "stranger-pdf", { name: "stranger-910.pdf" });
+    api.document(910, "stranger-txt", { mime: "text/plain", name: "stranger-910.txt" });
+    await sleep(600);
+    assert.deepEqual(api.calls.filter((c) => c.method === "getFile").map((c) => c.fields.file_id), [], "nothing was downloaded");
+    assert.deepEqual(api.said(910), [], "nor said to that chat");
+    assert.deepEqual(savedUploads("stranger-910"), [], "nor saved to the workspace");
+    assert.equal(engine.calls.length, 0);
+  });
+
   // An album is one message per photo, all with one media_group_id. Taken one at a time, each photo's download held
   // up the next, and the album was cut into one reply per photo whenever a download took longer than the 500 ms the
   // album waits for its next photo.
@@ -482,7 +540,232 @@ async function withWarnings(fn) {
   try { return await fn(warned); } finally { console.warn = warn; }
 }
 
+/** The files the bot saved to the workspace's uploads folder whose names hold `part`. */
+function savedUploads(part) {
+  const dir = path.join(process.env.TARSEE_WORKSPACE_DIR, "uploads");
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.includes(part)) : [];
+}
+
+/** Transcription on this server, held: it waits until the test answers it (answer(words)) or fails it (fail()). */
+function holdTranscription() {
+  const held = { calls: 0 };
+  const result = new Promise((resolve, reject) => {
+    held.answer = (transcript) => resolve({ transcript, language: "en", provider: "local" });
+    held.fail = () => reject(new Error("the transcriber crashed"));
+  });
+  result.catch(() => {});
+  setStt({ local: { available: async () => true, transcribe: async () => { held.calls++; return result; } } });
+  return held;
+}
+
+/** Whether the log says what came from `chatId` was dropped when the channel stopped. */
+const droppedFrom = (warned, chatId) =>
+  warned.some((w) => /channel is stopped/.test(w) && w.includes(`chat ${chatId}`) && /dropped|not answered/.test(w));
+
 describe("stopping the Telegram channel (the real bot, a Bot API on 127.0.0.1)", () => {
+  /**
+   * A bot on its own Bot API, for a test that stops it: fn gets { api, bot, warned }. Whatever it began is ended
+   * after, so a failure can't hold the run open. opts: createTelegramBot's.
+   */
+  async function stoppingBot(chatId, fn, opts = {}) {
+    const api = await fakeBotApi();
+    const { createTelegramBot } = await import("../src/channels/telegram.js");
+    const bot = await createTelegramBot({ token: "123456:test-token-not-real" }, db, { apiRoot: api.url, ...opts });
+    try {
+      await withWarnings((warned) => fn({ api, bot, warned }));
+    } finally {
+      setStt();
+      await bot.stop();
+      const conv = settings.get(`channel_conv.telegram:${chatId}`);
+      if (conv) stopTurns(conv);
+      await until(() => bot.health().handlerActive === 0, 3000);
+      api.close();
+    }
+  }
+
+  // Stopped, the bot shows a chat nothing more: not that a voice note couldn't be understood, nor that a download or
+  // a transcription failed, nor "typing". What was on its way to its AI turn (a download, a transcription, a wait
+  // behind another reply) is dropped, and the log says so.
+  for (const [n, { kind, name }] of [{ kind: "voice", name: "voice message" }, { kind: "video_note", name: "video note" }].entries()) {
+    const chat = 930 + n * 10;
+    it(`a ${name} whose transcription comes back empty after the channel stops: no "Couldn't understand", nothing at all`, () => stoppingBot(chat, async ({ api, bot, warned }) => {
+      const stt = holdTranscription();
+      api.voice(chat, `${kind}-empty`, { kind });
+      assert.ok(await until(() => stt.calls === 1), "the transcription began");
+      await bot.stop();
+      const at = api.calls.length;
+      stt.answer("   ");
+      await sleep(300);
+      assert.deepEqual(api.shownSince(at), [], "the stopped bot showed the chat nothing");
+      assert.ok(droppedFrom(warned, chat), `the log says it was dropped: ${JSON.stringify(warned)}`);
+      assert.ok(await until(() => bot.health().handlerActive === 0, 2000), "its handling ended");
+    }));
+
+    it(`a ${name} whose transcription fails after the channel stops: no "Failed to process" and no what-to-set-up`, () => stoppingBot(chat + 1, async ({ api, bot, warned }) => {
+      const stt = holdTranscription();
+      api.voice(chat + 1, `${kind}-fails`, { kind });
+      assert.ok(await until(() => stt.calls === 1), "the transcription began");
+      await bot.stop();
+      const at = api.calls.length;
+      stt.fail();
+      await sleep(300);
+      assert.deepEqual(api.shownSince(at), [], "the stopped bot showed the chat nothing");
+      assert.ok(droppedFrom(warned, chat + 1), `the log says it was dropped: ${JSON.stringify(warned)}`);
+      assert.ok(await until(() => bot.health().handlerActive === 0, 2000), "its handling ended");
+    }));
+
+    it(`a ${name} transcribed after the channel stops: no AI turn, no answer, not taken into a chat`, () => stoppingBot(chat + 2, async ({ api, bot, warned }) => {
+      const stt = holdTranscription();
+      api.voice(chat + 2, `${kind}-words`, { kind });
+      assert.ok(await until(() => stt.calls === 1), "the transcription began");
+      await bot.stop();
+      const at = api.calls.length;
+      stt.answer("what's on my calendar today?");
+      await sleep(300);
+      assert.equal(engine.calls.length, 0, "no AI turn ran for it");
+      assert.deepEqual(api.shownSince(at), [], "the stopped bot showed the chat nothing");
+      assert.equal(settings.get(`channel_conv.telegram:${chat + 2}`), null, "nor took it into a chat");
+      assert.ok(droppedFrom(warned, chat + 2), `the log says it was dropped: ${JSON.stringify(warned)}`);
+    }));
+
+    it(`a ${name} still downloading when the channel stops is never transcribed, and the chat gets no "typing"`, () => stoppingBot(chat + 3, async ({ api, bot, warned }) => {
+      const stt = holdTranscription();
+      api.fileDelay[`${kind}-slow`] = 800;
+      api.voice(chat + 3, `${kind}-slow`, { kind });
+      assert.ok(await until(() => api.calls.some((c) => c.method === "getFile")), "the download began");
+      await sleep(200);
+      await bot.stop();
+      const at = api.calls.length;
+      await sleep(1000); // the download has ended
+      assert.equal(stt.calls, 0, "it was not transcribed");
+      assert.deepEqual(api.shownSince(at), [], "the stopped bot showed the chat nothing");
+      assert.ok(droppedFrom(warned, chat + 3), `the log says it was dropped: ${JSON.stringify(warned)}`);
+      assert.ok(await until(() => bot.health().handlerActive === 0, 2000), "its handling ended");
+    }));
+
+    it(`a ${name} whose download fails after the channel stops: no "Failed to process"`, () => stoppingBot(chat + 4, async ({ api, bot, warned }) => {
+      const stt = holdTranscription();
+      api.delay.getFile = 600;
+      api.fail.getFile = "Bad Request: file is too big";
+      api.voice(chat + 4, `${kind}-too-big`, { kind });
+      assert.ok(await until(() => api.calls.some((c) => c.method === "getFile")), "the download began");
+      await bot.stop();
+      const at = api.calls.length;
+      await sleep(900); // Telegram has turned it down
+      assert.equal(stt.calls, 0);
+      assert.deepEqual(api.shownSince(at), [], "the stopped bot showed the chat nothing");
+      assert.ok(droppedFrom(warned, chat + 4), `the log says it was dropped: ${JSON.stringify(warned)}`);
+      assert.ok(await until(() => bot.health().handlerActive === 0, 2000), "its handling ended");
+    }));
+  }
+
+  it("a photo whose download fails after the channel stops: no \"Failed to process image.\"", () => stoppingBot(950, async ({ api, bot, warned }) => {
+    api.delay.getFile = 600;
+    api.fail.getFile = "Bad Request: file is too big";
+    api.photo(950, "photo-too-big");
+    assert.ok(await until(() => api.calls.some((c) => c.method === "getFile")), "the download began");
+    await bot.stop();
+    const at = api.calls.length;
+    await sleep(900); // Telegram has turned it down
+    assert.deepEqual(api.shownSince(at), [], "the stopped bot showed the chat nothing");
+    assert.ok(droppedFrom(warned, 950), `the log says it was dropped: ${JSON.stringify(warned)}`);
+    assert.ok(await until(() => bot.health().handlerActive === 0, 2000), "its handling ended");
+  }));
+
+  it("a file whose download fails after the channel stops: no \"Failed to process file.\"", () => stoppingBot(951, async ({ api, bot, warned }) => {
+    api.delay.getFile = 600;
+    api.fail.getFile = "Bad Request: file is too big";
+    api.document(951, "file-too-big", { mime: "text/csv", name: "sales-951.csv" });
+    assert.ok(await until(() => api.calls.some((c) => c.method === "getFile")), "the download began");
+    await bot.stop();
+    const at = api.calls.length;
+    await sleep(900);
+    assert.deepEqual(api.shownSince(at), [], "the stopped bot showed the chat nothing");
+    assert.ok(droppedFrom(warned, 951), `the log says it was dropped: ${JSON.stringify(warned)}`);
+    assert.ok(await until(() => bot.health().handlerActive === 0, 2000), "its handling ended");
+  }));
+
+  it("a PDF still downloading when the channel stops: not saved to the workspace, no AI turn, no answer", () => stoppingBot(952, async ({ api, bot, warned }) => {
+    api.fileDelay["pdf-slow"] = 800;
+    api.document(952, "pdf-slow", { name: "report-952.pdf" });
+    assert.ok(await until(() => api.calls.some((c) => c.method === "getFile")), "the download began");
+    await sleep(200);
+    await bot.stop();
+    const at = api.calls.length;
+    await sleep(1000); // the download has ended
+    assert.deepEqual(savedUploads("report-952"), [], "nothing was saved for it");
+    assert.equal(engine.calls.length, 0, "no AI turn ran for it");
+    assert.deepEqual(api.shownSince(at), [], "the stopped bot showed the chat nothing");
+    assert.ok(droppedFrom(warned, 952), `the log says it was dropped: ${JSON.stringify(warned)}`);
+  }));
+
+  // A message can wait behind another reply in its chat's conversation (one from the dashboard, say), showing
+  // "typing" meanwhile. The tests show it every 50 ms instead of every 4 s.
+  /** Hold the conversation of Telegram chat `chatId`, as a reply running there does: release() ends that reply. */
+  function busyChat(chatId) {
+    const conv = convs.create({ title: `busy ${chatId}` });
+    settings.set(`channel_conv.telegram:${chatId}`, conv.id);
+    let release;
+    const ended = withConversationTurn(conv.id, () => new Promise((r) => { release = r; }), { live: { source: "web", prompt: "a long reply" } });
+    return { conv: conv.id, release: async () => { release(); await ended; } };
+  }
+  const typingIn = (api, chatId) => api.calls.filter((c) => c.method === "sendChatAction" && c.fields.chat_id === chatId).length;
+
+  it("a message waiting behind another reply in its chat when the channel stops: its \"typing\" ends, and it gets no AI turn or answer", () => stoppingBot(960, async ({ api, bot, warned }) => {
+    const busy = busyChat(960);
+    try {
+      api.send(960, "hello while you're busy");
+      assert.ok(await until(() => api.said(960).some((t) => /Still working/.test(t))), "it waits behind that reply");
+      assert.ok(await until(() => typingIn(api, 960) >= 3), "showing \"typing\" meanwhile");
+      await bot.stop();
+      await sleep(100); // a "typing" already on its way when it stopped
+      const at = api.calls.length;
+      await sleep(500);
+      assert.deepEqual(api.shownSince(at), [], "no more \"typing\" once the channel stopped");
+      await busy.release();
+      await sleep(300);
+      assert.equal(engine.calls.length, 0, "no AI turn ran for it once the other reply ended");
+      assert.deepEqual(api.shownSince(at), [], "and the stopped bot showed the chat nothing");
+      assert.ok(convs.getRecentMessages(busy.conv, 10).some((m) => /hello while you're busy/.test(m.content)), "it stays in the chat's history: it was sent");
+      assert.ok(warned.some((w) => /channel is stopped/.test(w) && /chat 960/.test(w) && /not answered/.test(w) && /history/.test(w)), `the log says it was not answered: ${JSON.stringify(warned)}`);
+      assert.ok(await until(() => bot.health().handlerActive === 0, 2000), "its handling ended");
+    } finally {
+      await busy.release();
+    }
+  }, { typingEveryMs: 50 }));
+
+  it("...and the reply running when the channel stops shows \"typing\" no more", () => stoppingBot(961, async ({ api, bot }) => {
+    api.send(961, "write me a long essay");
+    assert.ok(await until(() => engine.calls.length === 1 && typingIn(api, 961) >= 3), "the reply runs, showing \"typing\"");
+    await bot.stop();
+    await sleep(100);
+    const at = api.calls.length;
+    await sleep(500);
+    assert.deepEqual(api.shownSince(at).filter((m) => m.startsWith("sendChatAction")), [], "no more \"typing\" once the channel stopped");
+  }, { typingEveryMs: 50 }));
+
+  it("a message waiting behind another reply that the dashboard's Stop takes out of the queue: its \"typing\" ends", () => stoppingBot(962, async ({ api, bot }) => {
+    const busy = busyChat(962);
+    try {
+      api.send(962, "never mind this one");
+      assert.ok(await until(() => typingIn(api, 962) >= 3), "it waits behind that reply, showing \"typing\"");
+      const [queued] = live.queuedTurnList(busy.conv).filter((t) => t.source === "telegram");
+      assert.ok(queued, "its \"Queued\" line is on the dashboard");
+      assert.equal(removeQueuedTurn(queued.turnId, busy.conv), true, "the Stop on that line takes it out");
+      await sleep(100);
+      const at = api.calls.length;
+      await sleep(500);
+      assert.deepEqual(api.shownSince(at), [], "no more \"typing\" for it, though the reply ahead of it still runs");
+      await busy.release();
+      assert.ok(await until(() => bot.health().handlerActive === 0, 2000), "its handling ended with that reply");
+      await sleep(300);
+      assert.deepEqual(api.shownSince(at), [], "and none after");
+      assert.equal(engine.calls.length, 0, "it never ran");
+    } finally {
+      await busy.release();
+    }
+  }, { typingEveryMs: 50 }));
+
   it("drops the messages still waiting in line without answering them, and says so in the log", async () => {
     const api = await fakeBotApi();
     const { createTelegramBot } = await import("../src/channels/telegram.js");
@@ -556,7 +839,9 @@ describe("stopping the Telegram channel (the real bot, a Bot API on 127.0.0.1)",
         await sleep(1300); // Telegram has answered it
         assert.equal(engine.calls.length, 0, "no AI turn ran for it");
         assert.deepEqual(api.said(916), [], "nor was it answered");
-        assert.ok(warned.some((w) => /stopped/i.test(w) && /916/.test(w) && /dropped/.test(w)), `the log says it was dropped: ${JSON.stringify(warned)}`);
+        // It was saved before the typing call: it stays in the chat's history (it was sent), unanswered.
+        assert.ok(convs.getRecentMessages(settings.get("channel_conv.telegram:916"), 10).some((m) => /hello there/.test(m.content)), "it stays in the chat's history");
+        assert.ok(warned.some((w) => /channel is stopped/.test(w) && /chat 916/.test(w) && /not answered/.test(w) && /history/.test(w)), `the log says it was not answered: ${JSON.stringify(warned)}`);
         assert.ok(await until(() => bot.health().handlerActive === 0, 2000), "its handling ended");
       });
     } finally {

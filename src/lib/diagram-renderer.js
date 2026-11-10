@@ -13,6 +13,13 @@
  * sends them. Each node shows them before any click (its tooltip and its accessible name).
  */
 
+// The rule for how a diagram's words show (ChatCore.oneLine): the dashboard's own file, so the chat folds what a click
+// puts in the box exactly as the page here shows it. It is a plain script with no page in it: loaded, it sets
+// globalThis.ChatCore.
+import "../public/js/chat-core.js";
+
+const { oneLine } = globalThis.ChatCore;
+
 const KIND_STYLES = {
   trigger:    { bg: "#3a3935", border: "#5a5855", fg: "#ececec", label: "Trigger / storage" },
   processing: { bg: "#4a3d7a", border: "#6c5aa8", fg: "#ffffff", label: "Processing" },
@@ -35,15 +42,13 @@ function textOf(value, max = MAX_TEXT) {
 }
 
 /**
- * Words as they show in one line: trimmed, and every run of spaces, line breaks and control characters one space, so
- * nothing in front of them (a run of blank lines, hundreds of spaces) pushes them out of sight in the message box.
- * js/chat.js _initDiagramListener folds what a click puts in the box the same way.
+ * Words (textOf) as they show: on one line (oneLine), so nothing in front of them (a run of blank lines, hundreds of
+ * spaces or of characters that look blank) pushes them out of sight in the message box or makes it look empty, and no
+ * marks stacked up over them. Folded before they are cut to `max`, with no space left at the cut. js/chat.js
+ * _initDiagramListener folds what a click puts in the box with the same rule.
  */
-const foldWords = (text) => text.replace(/[\s\p{Cc}]+/gu, " ").trim();
-
-/** Words (textOf), folded to one line (foldWords) before they are cut to `max`, with no space left at the cut. */
 function wordsOf(value, max = MAX_TEXT) {
-  return typeof value === "string" ? foldWords(value).slice(0, max).trimEnd() : textOf(value, max);
+  return typeof value === "string" ? oneLine(value, max) : textOf(value, max);
 }
 
 /** A position: a finite number, kept on the page; anything else is none (the layout places the node). */
@@ -58,7 +63,7 @@ function positionOf(value) {
  *     legend: [{ kind, label? }] }
  * A node needs an id, and the first node with an id is the one kept. A question is kept only when it is a string
  * with words in it, so a node whose question is anything else asks about its label instead. Every word shown (the
- * title, labels, sublabels, questions) is folded to one line (foldWords): what a click puts in the message box is all
+ * title, labels, sublabels, questions) is folded to one line (wordsOf): what a click puts in the message box is all
  * in view, and the node's tooltip shows it as the box will. Ids are kept as written. An edge is kept only between two
  * nodes that are there.
  */
@@ -215,7 +220,8 @@ function renderLegend(legend) {
  * data is ever in it. It sends only for a person's click (not one a script made), one message per click: the second
  * click of a double-click is not another question. A node is a button, so Enter or Space on it is a click too: once
  * per press, when the key comes up after going down on that node. Not when it goes down: the chat then moves the focus
- * to the message box, and a key still held there would repeat into it (an Enter that sends the words).
+ * to the message box, and a key still held there would repeat into it (an Enter that sends the words). And a key
+ * pressed twice quickly on a node (a double tap, a key's chatter) is one press, as a double-click is one click.
  */
 export const DIAGRAM_SCRIPT = `
 (function () {
@@ -223,6 +229,7 @@ export const DIAGRAM_SCRIPT = `
   var diagramId = document.body.getAttribute("data-diagram-id") || "";
   var clicks = 0;
   var pressed = null;
+  var lastPress = { node: null, at: 0 };
   function isPress(event) {
     return event.isTrusted && (event.key === "Enter" || event.key === " ");
   }
@@ -240,7 +247,11 @@ export const DIAGRAM_SCRIPT = `
     event.preventDefault();
     var press = pressed;
     pressed = null;
-    if (press && press.node === event.currentTarget && press.key === event.key) tell(event.currentTarget);
+    if (!press || press.node !== event.currentTarget || press.key !== event.key) return;
+    var at = Date.now();
+    var again = lastPress.node === event.currentTarget && at - lastPress.at < 600;
+    lastPress = { node: event.currentTarget, at: at };
+    if (!again) tell(event.currentTarget);
   }
   function onBlur() {
     pressed = null;

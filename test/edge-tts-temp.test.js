@@ -6,6 +6,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
+import { spawn } from "node:child_process";
 
 // Point the system temp folder at a throwaway one, so the test can see every file
 // Edge TTS leaves behind. os.tmpdir() reads these on each call (TEMP/TMP on
@@ -16,7 +17,8 @@ process.env.TMPDIR = TMP;
 process.env.TEMP = TMP;
 process.env.TMP = TMP;
 
-const { EdgeTTSEngine, __setForTests } = await import("../src/voice/edge-tts-engine.js");
+const ENGINE_URL = new URL("../src/voice/edge-tts-engine.js", import.meta.url).href;
+const { EdgeTTSEngine, __setForTests, __leftoverSweepsDone } = await import(ENGINE_URL);
 
 // The real node-edge-tts, and the ws module it opens its connection with. A test
 // swaps ws's WebSocket for a fake one, so the real library runs with no network.
@@ -97,13 +99,20 @@ function busyThreadPool() {
 /**
  * A stand-in for node-edge-tts's EdgeTTS class: no network. It records every file
  * it was asked to write and writes `bytes` of fake audio there, or fails as told.
+ * With `lateFileMs` it fails at once and makes the file that much later (listed in
+ * `late` once made), as a library whose file opens late would.
  */
-function fakeEdge({ bytes = 400, fail = null, hang = false, delayMs = 0 } = {}) {
+function fakeEdge({ bytes = 400, fail = null, hang = false, delayMs = 0, lateFileMs = null } = {}) {
   const calls = [];
+  const late = [];
   class FakeEdgeTTS {
     constructor(opts) { this.opts = opts; }
     async ttsPromise(text, audioPath) {
       calls.push({ text, audioPath, voice: this.opts.voice, timeout: this.opts.timeout, existedBefore: fs.existsSync(audioPath) });
+      if (lateFileMs !== null) {
+        setTimeout(() => { fs.writeFileSync(audioPath, Buffer.alloc(bytes, 7)); late.push(audioPath); }, lateFileMs);
+        throw fail || new Error("Edge TTS failed");
+      }
       // Like the real one: the file is opened before the audio comes in.
       fs.writeFileSync(audioPath, Buffer.alloc(0));
       if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
@@ -112,10 +121,20 @@ function fakeEdge({ bytes = 400, fail = null, hang = false, delayMs = 0 } = {}) 
       fs.writeFileSync(audioPath, Buffer.alloc(bytes, 7));
     }
   }
-  return { EdgeTTS: FakeEdgeTTS, calls };
+  return { EdgeTTS: FakeEdgeTTS, calls, late };
 }
 
 const leftovers = () => fs.readdirSync(TMP);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Waits until check() is true, and fails, saying `what`, if it is not within `ms`. */
+async function waitFor(check, ms, what) {
+  const end = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > end) assert.fail(`${what}: not within ${ms} ms`);
+    await sleep(20);
+  }
+}
 
 after(() => { fs.rmSync(TMP, { force: true, recursive: true }); });
 
@@ -358,5 +377,190 @@ describe("Edge TTS gives node-edge-tts the engine's own time limit", () => {
     await new Promise((r) => setTimeout(r, 300));
     for (const s of sock.sockets) assert.equal(s.terminated, true, "a late connection was left open");
     assert.deepEqual(leftovers(), [], "a late connection still wrote an audio file");
+  });
+});
+
+const MINUTE = 60_000;
+
+/** Makes `name` in the temp folder (a folder, with a file in it, when `folder`), last written `ageMs` ago. */
+function plant(name, ageMs = 0, { folder = false } = {}) {
+  const p = path.join(TMP, name);
+  if (folder) {
+    fs.mkdirSync(p);
+    fs.writeFileSync(path.join(p, "inside.mp3"), "x");
+  } else {
+    fs.writeFileSync(p, "x");
+  }
+  const t = (Date.now() - ageMs) / 1000;
+  fs.utimesSync(p, t, t);
+  return name;
+}
+
+describe("Edge TTS leaves no file behind, however late node-edge-tts makes it", () => {
+  before(() => { assert.equal(os.tmpdir(), TMP, "the test could not move the temp folder"); });
+  beforeEach(() => {
+    for (const f of leftovers()) fs.rmSync(path.join(TMP, f), { force: true, recursive: true });
+  });
+  after(() => {
+    __setForTests();
+    ws.WebSocket = RealWebSocket;
+  });
+
+  // The reviewer's timing. node-edge-tts's own timer has the attempt's limit too, so it gives up on the attempt, and
+  // settles its promise, while the open of the attempt's file still waits for a thread. The file was made afterwards,
+  // once the attempt had cleaned up, and stayed.
+  it("removes the file of an attempt node-edge-tts gave up on while the file's open was still waiting (open 800 ms, limit 300 ms, no reply)", async () => {
+    const sock = fakeSocket({ answer: "never" });
+    __setForTests({ retryDelayMs: 0, timeoutMs: 300 });
+    await withSlowOpens(800, async (opened) => {
+      await assert.rejects(withSocket(sock, () => new EdgeTTSEngine().synthesize("Hello.")), /timed out/);
+      assert.equal(sock.sockets.length, 3);
+      assert.deepEqual(leftovers(), [], "a file was left as the attempts gave up");
+      await waitFor(() => opened.length === 3, 4000, "every attempt's file was opened");
+      await sleep(1500);
+    });
+    assert.deepEqual(leftovers(), [], "a file opened after node-edge-tts gave up was left behind");
+  });
+
+  it("...and however late the open is: once node-edge-tts has finished the file, even after the watch for it has ended", async () => {
+    // No looking for the file at all (watchMs 0): what removes it is node-edge-tts closing its connection once it has
+    // finished the file, which it does however long the open waited.
+    const sock = fakeSocket({ answer: "never" });
+    __setForTests({ retryDelayMs: 0, timeoutMs: 100, watchMs: 0 });
+    await withSlowOpens(600, async (opened) => {
+      await assert.rejects(withSocket(sock, () => new EdgeTTSEngine().synthesize("Hello.")), /timed out/);
+      assert.equal(sock.sockets.length, 3);
+      assert.ok(opened.length < 3, "the attempts waited for the opens; the watch was meant to be off");
+      await waitFor(() => opened.length === 3, 4000, "every attempt's file was opened");
+      await sleep(200);
+    });
+    assert.deepEqual(leftovers(), [], "a file opened after its watch had ended was left behind");
+  });
+
+  it("removes a file that appears after its attempt failed, even when the library's connection cannot be watched", async () => {
+    const fake = fakeEdge({ fail: new Error("socket dropped"), lateFileMs: 300 });
+    __setForTests({ EdgeTTS: fake.EdgeTTS, retryDelayMs: 0 });
+    await assert.rejects(new EdgeTTSEngine().synthesize("Hello."), /socket dropped/);
+    assert.equal(fake.calls.length, 3);
+    await waitFor(() => fake.late.length === 3, 3000, "every attempt's late file was made");
+    await sleep(1500);
+    assertTidy(fake);
+  });
+
+  it("sweeps Tarsee's own old Edge TTS files from the temp folder when the engine starts, and nothing else", async () => {
+    // A name the engine really made, so the sweep is checked against the engine's own naming.
+    const fake = fakeEdge();
+    __setForTests({ EdgeTTS: fake.EdgeTTS });
+    await new EdgeTTSEngine().synthesize("Hello.");
+    await __leftoverSweepsDone();
+    const id = () => crypto.randomUUID();
+    plant(path.basename(fake.calls[0].audioPath), 10 * MINUTE);
+    plant(`tarsee-edge-tts-${id()}.mp3`, 60 * MINUTE);
+    plant(`tarsee-edge-tts-${id()}.mp3`, 6 * MINUTE);
+    const folder = plant(`tarsee-edge-tts-${id()}.mp3`, 10 * MINUTE, { folder: true }); // not a file
+    const kept = [
+      folder,
+      plant(`tarsee-edge-tts-${id()}.mp3`), // fresh: an attempt may be writing it right now
+      plant(`tarsee-edge-tts-${id()}.mp3`, 2 * MINUTE),
+      plant(`tarsee-edge-tts-${id().toUpperCase()}.mp3`, 10 * MINUTE),
+      plant(`tarsee-edge-tts-${id()}.mp3.part`, 10 * MINUTE),
+      plant(`tarsee-edge-tts-${id()}.wav`, 10 * MINUTE),
+      plant(`tarsee-edge-tts-${id()}`, 10 * MINUTE),
+      plant(`my-tarsee-edge-tts-${id()}.mp3`, 10 * MINUTE),
+      plant(`tarsee-edge-tts-x${id()}.mp3`, 10 * MINUTE),
+      plant("tarsee-edge-tts-00000000-0000-0000-0000-000000000000.mp3", 10 * MINUTE),
+      plant("tarsee-edge-tts-backup.mp3", 10 * MINUTE),
+      plant(`tarsee-piper-${id()}.wav`, 10 * MINUTE),
+      plant("notes.txt", 10 * MINUTE),
+    ];
+    // A link named like Tarsee's files is not one Tarsee made (where the system lets the test make one).
+    const link = `tarsee-edge-tts-${id()}.mp3`;
+    try {
+      fs.symlinkSync(path.join(TMP, "notes.txt"), path.join(TMP, link));
+      const t = (Date.now() - 10 * MINUTE) / 1000;
+      fs.lutimesSync(path.join(TMP, link), t, t);
+      kept.push(link);
+    } catch { /* no links here */ }
+    __setForTests({ EdgeTTS: fake.EdgeTTS }); // as if Tarsee had just started
+    new EdgeTTSEngine();
+    await __leftoverSweepsDone();
+    assert.deepEqual(leftovers().sort(), kept.sort());
+    assert.equal(fs.existsSync(path.join(TMP, folder, "inside.mp3")), true, "a folder's contents were touched");
+  });
+
+  it("looks again once a leftover it found too fresh is old enough, and removes it then", async () => {
+    __setForTests({ leftoverAgeMs: 400 });
+    const name = plant(`tarsee-edge-tts-${crypto.randomUUID()}.mp3`);
+    new EdgeTTSEngine();
+    await __leftoverSweepsDone();
+    assert.deepEqual(leftovers(), [name], "a fresh file was removed");
+    await waitFor(() => leftovers().length === 0, 3000, "the leftover was removed once it was old enough");
+  });
+
+  it("sweeps again after a failed try, at most once in a while", async () => {
+    const fake = fakeEdge({ fail: new Error("socket dropped") });
+    __setForTests({ EdgeTTS: fake.EdgeTTS, retryDelayMs: 0, sweepGapMs: 600 });
+    new EdgeTTSEngine();
+    await __leftoverSweepsDone(); // the start sweep, with nothing to remove
+    const first = plant(`tarsee-edge-tts-${crypto.randomUUID()}.mp3`, 10 * MINUTE);
+    await sleep(700);
+    await __leftoverSweepsDone();
+    assert.deepEqual(leftovers(), [first], "the temp folder was swept with nothing failing");
+    await assert.rejects(new EdgeTTSEngine().synthesize("Hello."), /socket dropped/);
+    await __leftoverSweepsDone();
+    assert.deepEqual(leftovers(), [], "a failed try did not sweep the temp folder");
+    // Another failure straight after: its sweep waits until the gap has passed.
+    const second = plant(`tarsee-edge-tts-${crypto.randomUUID()}.mp3`, 10 * MINUTE);
+    await assert.rejects(new EdgeTTSEngine().synthesize("Hello."), /socket dropped/);
+    await __leftoverSweepsDone();
+    assert.deepEqual(leftovers(), [second], "the temp folder was swept again straight away");
+    await waitFor(() => leftovers().length === 0, 3000, "the second sweep came once the gap had passed");
+  });
+
+  it("never keeps the process running to watch for a file or to sweep later", async () => {
+    // In a process of its own: a fresh leftover, which the start sweep leaves and looks at again later, and three
+    // failed attempts. The first one's file appears after it failed; the others' never do, so they are still being
+    // watched for when the process has nothing else to do.
+    const dir = fs.mkdtempSync(path.join(REAL_TMP, "tarsee-edge-tts-exit-test-"));
+    const script = `
+      import fs from "node:fs";
+      import os from "node:os";
+      import path from "node:path";
+      import crypto from "node:crypto";
+      const { EdgeTTSEngine, __setForTests } = await import(${JSON.stringify(ENGINE_URL)});
+      fs.writeFileSync(path.join(os.tmpdir(), "tarsee-edge-tts-" + crypto.randomUUID() + ".mp3"), "x");
+      let n = 0;
+      const made = [];
+      class Fails {
+        async ttsPromise(text, file) {
+          if (++n === 1) setTimeout(() => { fs.writeFileSync(file, "x"); made.push(file); }, 200);
+          throw new Error("no network");
+        }
+      }
+      __setForTests({ EdgeTTS: Fails, retryDelayMs: 0 });
+      await new EdgeTTSEngine().synthesize("Hello.").catch(() => {});
+      await new Promise((r) => setTimeout(r, 1000));
+      console.log(JSON.stringify({ made: made.length, left: made.filter((f) => fs.existsSync(f)).length }));
+    `;
+    const t = Date.now();
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      env: { ...process.env, TMPDIR: dir, TEMP: dir, TMP: dir },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { err += d; });
+    const killer = setTimeout(() => child.kill(), 30_000);
+    const code = await new Promise((r) => child.on("close", r));
+    clearTimeout(killer);
+    const took = Date.now() - t;
+    try {
+      assert.equal(code, 0, `the process failed: ${err}`);
+      assert.ok(took < 10_000, `the process stayed up ${took} ms after its work was done`);
+      assert.deepEqual(JSON.parse(out.trim().split("\n").pop()), { made: 1, left: 0 });
+    } finally {
+      fs.rmSync(dir, { force: true, recursive: true });
+    }
   });
 });

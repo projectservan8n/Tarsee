@@ -19,9 +19,12 @@
  *   replyParts    a saved reply's words, its steps and what it said on the way
  *   sender        "[alice]: words" as { who, body }
  *   renderMarkdown   Markdown to HTML, every character escaped first
+ *   oneLine       words as a diagram may show them and put in the message box:
+ *                 one line, nothing blank-looking, no marks stacked up
  *
  * Loaded by index.html as a plain script (window.ChatCore) and by the tests as
- * a module (globalThis.ChatCore).
+ * a module (globalThis.ChatCore). The server's diagram renderer
+ * (lib/diagram-renderer.js) loads it too, for oneLine: one rule on both ends.
  */
 (function () {
   "use strict";
@@ -114,6 +117,54 @@
   /** The words of a name or a search as they are compared: lower case, no accents, no # or @, the rest spaces. */
   function foldWords(s) {
     return String(s ?? "").normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  }
+
+  // ------------------------------------------------------------ words a diagram shows
+
+  /**
+   * Every character that shows as nothing, or as a blank, without being a plain space: whitespace and line breaks,
+   * control, format, private-use and unassigned characters, half characters (a lone surrogate), the ones Unicode says
+   * to draw as nothing (Default_Ignorable_Code_Point: zero-width spaces and joiners, variation selectors, tags, the
+   * Hangul fillers), and the few that are blank glyphs (from a published list of invisible characters,
+   * github.com/flopp/invisible-characters, and Unicode's FILLER, BLANK and NULL names): Braille blank, the object
+   * replacement character, the Egyptian hieroglyph blanks, the Khitan filler, the null notehead. The Hangul fillers
+   * are named again for a browser whose Unicode tables are older. (The Khitan filler is a mark, so it comes first,
+   * with no character before it in the class to sit on; the pairs are ranges for the same reason.)
+   */
+  const BLANKS = /[\u{16FE4}\s\p{C}\p{Default_Ignorable_Code_Point}\u115F-\u1160\u2800\u3164\uFFA0\uFFFC\u{13441}-\u{13442}\u{1D159}]+/gu;
+  /** Nonspacing marks, as Unicode counts them for a run that stacks up (UTS #39: Mn and Me). */
+  const MARKS = /[\p{Mn}\p{Me}]+/gu;
+  const MAX_MARKS = 4;
+
+  /**
+   * Words as a diagram shows them and puts them in the message box: on one line, all of them in view, and what they
+   * look like is what they are. Trimmed, and every run of characters that look blank (BLANKS) one space, so no run of
+   * blank lines, spaces or blank-looking characters can push words out of sight or make the box look empty: only an
+   * emoji's own joiner or colour selector stays (between two emoji, or after one). Marks can't pile up over the line
+   * above or below: at most 4 on a character, never the same one twice in a row (Unicode's UTS #39 rule), counted as
+   * Unicode decomposes the text, which is put back together after (NFC). Cut to `max` characters if given, never
+   * through the middle of one.
+   */
+  function oneLine(text, max = Infinity) {
+    let s = String(text ?? "").normalize("NFD").replace(BLANKS, (run, at, all) => {
+      if (!/\p{Emoji}$/u.test(all.slice(Math.max(0, at - 2), at))) return " ";
+      // Right after an emoji: its joiner to the emoji after it (and its colour selector), or its colour selector.
+      if (/^[\uFE0E\uFE0F]?\u200D$/.test(run) && /^\p{Extended_Pictographic}/u.test(all.slice(at + run.length, at + run.length + 2))) return run;
+      if (/^[\uFE0E\uFE0F]/.test(run)) return run.length === 1 ? run : `${run[0]} `;
+      return " ";
+    });
+    s = s.replace(MARKS, (run) => {
+      let kept = "", last = "", n = 0;
+      for (const mark of run) {
+        if (mark === last || n === MAX_MARKS) continue;
+        kept += mark;
+        last = mark;
+        n += 1;
+      }
+      return kept;
+    }).normalize("NFC").trim();
+    if (s.length > max) s = s.slice(0, max).replace(/[\uD800-\uDBFF]$/, "").replace(/[\s\uFE0E\uFE0F\u200D]+$/, "");
+    return s;
   }
 
   /**
@@ -586,7 +637,7 @@
   }
 
   const api = {
-    escapeHtml, safeHref, GROUPS, GROUP_LIMIT, groupOf, parseTs, timeLabel, chatName, foldWords, groupChats,
+    escapeHtml, safeHref, GROUPS, GROUP_LIMIT, groupOf, parseTs, timeLabel, chatName, foldWords, oneLine, groupChats,
     chatPath, parseChatPath, pageTitle, stepLabel, programOf, summaryOf, plainWords, turnLine, fmtDur, replyParts, sender, renderMarkdown, inline,
   };
   globalThis.ChatCore = Object.freeze(api);

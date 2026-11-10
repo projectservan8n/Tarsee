@@ -74,6 +74,45 @@ describe("dialogs: the words of a question", () => {
   });
 });
 
+describe("dialogs: a question to read before saying yes (block, defaultNo, settleMs)", () => {
+  const key = (k, more = {}) => ({ key: k, ...more });
+
+  it("its words in a block, kept exactly; no first; yes only after a wait, never shorter than the usual one", () => {
+    const q = questionOf("yesno", { title: "Run this command from a diagram?", block: "  /cron on x\n", yes: "Run it", defaultNo: true, settleMs: 1000 });
+    assert.equal(q.block, "  /cron on x\n", "as given");
+    assert.equal(q.defaultNo, true);
+    assert.equal(q.settleMs, 1000);
+    const plain = questionOf("yesno", { title: "Delete it?" });
+    assert.equal(plain.block, "");
+    assert.equal(plain.defaultNo, false);
+    assert.equal(plain.settleMs, SETTLE_MS);
+    assert.equal(questionOf("yesno", { settleMs: 10 }).settleMs, SETTLE_MS, "never shorter than the usual wait");
+    assert.equal(questionOf("yesno", { settleMs: "soon" }).settleMs, SETTLE_MS);
+    assert.equal(questionOf("yesno", { settleMs: 1e9 }).settleMs, 5000, "at most 5 seconds");
+    assert.equal(questionOf("text", { block: "x" }).block, "", "a text question has its own box");
+    assert.notEqual(sameKey(q), sameKey(questionOf("yesno", { title: "Run this command from a diagram?", block: "/cron off x" })), "another block is another question");
+  });
+
+  it("with no first, Enter answers yes only on the yes button and only after its wait; anywhere else, no", () => {
+    const o = { defaultNo: true, settleMs: 1000 };
+    assert.equal(keyAction(key("Enter"), { ...o, onYes: true, sinceOpen: 999 }), "wait", "the first second");
+    assert.equal(keyAction(key("Enter"), { ...o, onYes: true, sinceOpen: 1000 }), "yes");
+    assert.equal(keyAction(key("Enter"), { ...o, onNo: true, sinceOpen: SETTLE_MS - 1 }), "wait");
+    assert.equal(keyAction(key("Enter"), { ...o, onNo: true, sinceOpen: SETTLE_MS }), "no", "no needs only the usual wait");
+    assert.equal(keyAction(key("Enter"), { ...o, sinceOpen: 5000 }), "no", "on its words, not a button");
+    assert.equal(keyAction(key("Enter", { repeat: true }), { ...o, onYes: true, sinceOpen: 5000 }), "wait", "held down");
+    assert.equal(keyAction(key("Escape"), { ...o, sinceOpen: 0 }), "no");
+    // Without it, as before: yes wherever the focus is but the no button.
+    assert.equal(keyAction(key("Enter"), { sinceOpen: SETTLE_MS }), "yes");
+  });
+
+  it("its yes button counts only after its wait", () => {
+    assert.equal(settled(999, 1000), false);
+    assert.equal(settled(1000, 1000), true);
+    assert.equal(settled(SETTLE_MS), true, "the usual wait when none is given");
+  });
+});
+
 describe("dialogs: its keys", () => {
   const key = (k, more = {}) => ({ key: k, ...more });
   const later = { sinceOpen: SETTLE_MS + 1 };

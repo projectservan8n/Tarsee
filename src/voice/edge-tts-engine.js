@@ -5,10 +5,8 @@
  */
 
 import { TTSEngine } from "./tts-interface.js";
+import { tempAudioFiles } from "./temp-audio.js";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import crypto from "node:crypto";
 
 const MAX_RETRIES = 3;
 // Each attempt's limit fits its sentence: a base for connecting and a short
@@ -21,19 +19,36 @@ const RETRY_DELAY = 500; // times the attempt number
 // The longest a failed attempt waits for node-edge-tts to finish writing its audio file, so the file can be removed,
 // before the next attempt starts. The library normally finishes within a moment; this only matters if it never does.
 const FILE_DONE_WAIT_MS = 2_000;
+// A failed attempt's file can still be made after that (see removeLateFile). It is looked for until it is gone, for up
+// to WATCH_MS: first after 25 ms, then twice as long each time, but never more than a second apart.
+const WATCH_MS = 2 * 60_000;
+const WATCH_FIRST_GAP_MS = 25;
+const WATCH_MAX_GAP_MS = 1_000;
+
+// Each attempt's audio file, and the sweeps that remove the ones left behind.
+const files = tempAudioFiles({ prefix: "tarsee-edge-tts-", ext: ".mp3", label: "edge-tts" });
 
 // Swapped only by tests: the EdgeTTS class (null loads node-edge-tts) and the
 // waits (a time limit set here is used for every sentence, whatever its length).
 let _EdgeTTS = null;
 let _timeoutMs = null;
 let _retryDelayMs = RETRY_DELAY;
+let _watchMs = WATCH_MS;
 
-/** Tests only: use a fake EdgeTTS class and shorter waits. No arguments puts the real ones back. */
-export function __setForTests({ EdgeTTS, timeoutMs, retryDelayMs } = {}) {
+/**
+ * Tests only: use a fake EdgeTTS class, shorter waits, and other ages and gaps for the temp folder's sweeps. The next
+ * engine made sweeps as if Tarsee had just started. No arguments puts the real ones back.
+ */
+export function __setForTests({ EdgeTTS, timeoutMs, retryDelayMs, watchMs, leftoverAgeMs, sweepGapMs } = {}) {
   _EdgeTTS = EdgeTTS || null;
   _timeoutMs = timeoutMs ?? null;
   _retryDelayMs = retryDelayMs ?? RETRY_DELAY;
+  _watchMs = watchMs ?? WATCH_MS;
+  files.reset({ leftoverAgeMs, sweepGapMs });
 }
+
+/** Tests only: settles once the temp folder's sweeps begun so far are done. */
+export const __leftoverSweepsDone = () => files.settled();
 
 /**
  * What node-edge-tts leaves undone, which this sees to by wrapping the library's
@@ -46,8 +61,12 @@ export function __setForTests({ EdgeTTS, timeoutMs, retryDelayMs } = {}) {
  *   audio file in the temp folder.
  * Returns `lost`, which rejects as soon as the connection closes or fails before
  * the whole reply has come, and end(failed): call it once the attempt is over.
- * end returns true when the attempt failed after the library had its connection,
- * and so made its audio file, which it may not have finished writing yet.
+ * end returns null when there is no file to see to beyond removing it now: the
+ * attempt worked, or it failed before the library had its connection, and so
+ * before it made the file. Otherwise the file may not have been made yet, and end
+ * returns { written }: a promise that resolves once the library has finished the
+ * file (it closes the connection then), or null when the connection could not be
+ * watched, and so nothing says when the file is done.
  */
 function trackConnection(tts) {
   let socket = null;
@@ -83,14 +102,24 @@ function trackConnection(tts) {
   }
   const end = (failed) => {
     over = true;
-    // A good attempt's connection, and its file, are closed by node-edge-tts itself.
-    const madeFile = Boolean(failed && socket);
-    if (madeFile) {
-      closeSocket(socket);
-      if (!complete) endReply(socket);
-    }
+    const ws = socket;
     socket = null;
-    return madeFile;
+    // A good attempt's connection, and its file, are closed by node-edge-tts itself.
+    if (!failed) return null;
+    if (!connect) return { written: null };
+    if (!ws) return null;
+    closeSocket(ws);
+    // Once the library has finished writing the file, however late that is (even after its own timer has given up on
+    // the attempt), it closes the connection.
+    const written = new Promise((resolve) => {
+      const close = ws.close;
+      ws.close = function (...args) {
+        resolve();
+        return typeof close === "function" ? close.apply(this, args) : undefined;
+      };
+    });
+    if (!complete) endReply(ws);
+    return { written };
   };
   return { lost, end };
 }
@@ -122,26 +151,90 @@ function removeFile(file) {
 }
 
 /**
- * Removes a failed attempt's audio file once node-edge-tts is done with it.
- * The library opens the file a moment after it sends the speech request, on
- * Node's thread pool, so a connection that drops first ends the attempt before
- * the file exists. Removing it then removes nothing, and the library makes it
- * afterwards, with the audio that had come. Once handed the end of the reply
- * (endReply), the library settles its promise after the file is written, so the
- * file is removed then. If that takes longer than FILE_DONE_WAIT_MS, the next
- * attempt goes ahead and the file is still removed when the library settles.
+ * Removes `file`, and says how that went: "removed", "absent" (there is no such
+ * file, or not yet), or "stuck" (it is there, but could not be removed just now,
+ * as when Windows holds a file that is being scanned).
  */
-async function removeWhenDone(speech, file) {
-  const done = speech.then(() => {}, () => {}).then(() => removeFile(file));
-  let timer;
-  await Promise.race([done, new Promise((r) => { timer = setTimeout(r, FILE_DONE_WAIT_MS); })]);
-  clearTimeout(timer);
+function tryRemove(file) {
+  try {
+    fs.unlinkSync(file);
+    return "removed";
+  } catch (err) {
+    return err?.code === "ENOENT" ? "absent" : "stuck";
+  }
+}
+
+/**
+ * Removes a failed attempt's audio file, which node-edge-tts can make after the
+ * attempt is over. The library opens the file a moment after it sends the speech
+ * request, on Node's thread pool, and when the pool is busy the open can wait
+ * longer than the attempt lasts. The library's own timer can even give up on the
+ * attempt first, so its promise settling says nothing about the file. What does
+ * is `written`: once handed the end of the reply (endReply), the library finishes
+ * the file and then closes its connection, and the file is removed then. Until it
+ * is gone, the file is also looked for, for up to WATCH_MS, on timers that never
+ * keep the process running, and removed as soon as it is there. Without a watched
+ * connection (`written` null), that is all there is to go on.
+ *
+ * Resolves, so the next attempt can start, once the file is removed, or `written`
+ * came, or (with no watched connection) the library settled `speech`, or
+ * FILE_DONE_WAIT_MS has passed. The file is still seen to after that. Should its
+ * open wait for longer than all of this, the engine's sweeps of the temp folder
+ * remove it.
+ */
+function removeLateFile(file, written, speech) {
+  if (tryRemove(file) === "removed") return Promise.resolve();
+  return new Promise((resolve) => {
+    let gone = false; // removed, or finished by the library and not there: either way, nothing makes it again
+    let poll = null;
+    let gap = WATCH_FIRST_GAP_MS;
+    let until = 0;
+    const wait = setTimeout(resolve, FILE_DONE_WAIT_MS);
+    const letGo = () => {
+      clearTimeout(wait);
+      resolve();
+    };
+    const finished = () => {
+      gone = true;
+      clearTimeout(poll);
+      letGo();
+    };
+    const look = () => {
+      if (gone) return;
+      if (tryRemove(file) === "removed") return finished();
+      if (Date.now() >= until) return letGo();
+      gap = Math.min(gap * 2, WATCH_MAX_GAP_MS);
+      poll = setTimeout(look, gap);
+      poll.unref?.();
+    };
+    const watch = () => {
+      clearTimeout(poll);
+      until = Date.now() + _watchMs;
+      gap = WATCH_FIRST_GAP_MS;
+      poll = setTimeout(look, gap);
+      poll.unref?.();
+    };
+    watch();
+    if (written) {
+      written.then(() => {
+        if (gone) return;
+        if (tryRemove(file) !== "stuck") return finished();
+        // There, but held: go on trying for a while.
+        letGo();
+        watch();
+      });
+    } else {
+      Promise.resolve(speech).then(letGo, letGo);
+    }
+  });
 }
 
 export class EdgeTTSEngine extends TTSEngine {
   constructor(voice) {
     super();
     this.defaultVoice = voice || "en-US-AndrewMultilingualNeural";
+    // Audio files an earlier run left behind (a crash or a restart in the middle of a sentence).
+    files.atStart();
   }
 
   get name() { return "edge-tts"; }
@@ -194,7 +287,7 @@ export class EdgeTTSEngine extends TTSEngine {
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       // The system temp folder (there is no /tmp on Windows), and a name of its
       // own for every attempt, so two sentences spoken at once never share a file.
-      const tmpFile = path.join(os.tmpdir(), `tarsee-edge-tts-${crypto.randomUUID()}.mp3`);
+      const tmpFile = files.newPath();
       let timer;
       let tracked = null;
       let speech = null;
@@ -224,11 +317,12 @@ export class EdgeTTSEngine extends TTSEngine {
         // node-edge-tts rejects some failures with a bare string ("Timed out").
         lastError = err instanceof Error ? err : new Error(`Edge TTS failed: ${err}`);
         console.warn(`[edge-tts] attempt ${attempt}/${MAX_RETRIES} failed: ${lastError.message}`);
+        files.afterFailure();
       } finally {
         clearTimeout(timer);
-        const madeFile = tracked?.end(failed);
-        removeFile(tmpFile);
-        if (madeFile && speech) await removeWhenDone(speech, tmpFile);
+        const late = tracked?.end(failed);
+        if (late) await removeLateFile(tmpFile, late.written, speech);
+        else removeFile(tmpFile);
       }
       if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, _retryDelayMs * attempt));
     }

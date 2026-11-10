@@ -6,30 +6,47 @@
  */
 
 import { TTSEngine } from "./tts-interface.js";
+import { tempAudioFiles } from "./temp-audio.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import crypto from "node:crypto";
 
 const VOICES_DIR = path.join(process.env.TARSEE_DATA_DIR || process.env.TARSEE_STATE_DIR || "/data/tarsee", "piper-voices");
 const PIPER_TIMEOUT = 15_000;
 // Once Piper has gone: how long a failed one's last words on its error output
-// are waited for. Once one is stopped: how long it is given to be gone.
+// are waited for. Once one is stopped: how long it is given to be gone (one
+// still there after that has its file removed once it has gone).
 const LAST_WORDS_MS = 500;
 const KILL_WAIT_MS = 2_000;
 
+// Each sentence's audio file, and the sweeps that remove the ones left behind.
+const files = tempAudioFiles({ prefix: "tarsee-piper-", ext: ".wav", label: "piper" });
+
 // Swapped only by tests: the program run as Piper (its first entry; the rest go
-// before Piper's own arguments), the time limit, and the spawn that starts it.
+// before Piper's own arguments), the time limit, the spawn that starts it, and
+// how long a stopped one is given to be gone.
 let _command = null;
 let _timeoutMs = PIPER_TIMEOUT;
 let _spawn = spawn;
+let _killWaitMs = KILL_WAIT_MS;
 
-/** Tests only: run another program as Piper, with a shorter limit or another spawn. No arguments puts the real ones back. */
-export function __setForTests({ command, timeoutMs, spawn: spawnFn } = {}) {
+/**
+ * Tests only: run another program as Piper, with shorter waits, another spawn, or other ages and gaps for the temp
+ * folder's sweeps. The next engine made sweeps as if Tarsee had just started. No arguments puts the real ones back.
+ */
+export function __setForTests({ command, timeoutMs, spawn: spawnFn, killWaitMs, leftoverAgeMs, sweepGapMs } = {}) {
   _spawn = spawnFn || spawn;
   _command = command?.length ? command : null;
   _timeoutMs = timeoutMs ?? PIPER_TIMEOUT;
+  _killWaitMs = killWaitMs ?? KILL_WAIT_MS;
+  files.reset({ leftoverAgeMs, sweepGapMs });
+}
+
+/** Tests only: settles once the temp folder's sweeps begun so far are done. */
+export const __leftoverSweepsDone = () => files.settled();
+
+function removeFile(file) {
+  try { fs.rmSync(file, { force: true }); } catch { /* still held (Windows), or already gone */ }
 }
 
 /**
@@ -65,8 +82,10 @@ function piperProgram() {
  * to keep going meanwhile. A Piper that runs past the limit is stopped, and this
  * waits until it is gone (though never for ever), so the file it was writing can
  * be deleted. Whatever goes wrong comes back as an Error in plain words.
+ * `onGone` is called once Piper has gone, which for a stopped Piper that was slow
+ * to go can be after this has stopped waiting for it.
  */
-function runPiper({ bin, args }, input, timeoutMs) {
+function runPiper({ bin, args }, input, timeoutMs, onGone = () => {}) {
   return new Promise((resolve, reject) => {
     let child;
     try {
@@ -79,6 +98,12 @@ function runPiper({ bin, args }, input, timeoutMs) {
     let exited = null; // how Piper itself ended, once it has
     let timedOut = false;
     let done = false;
+    let gone = false;
+    const wentAway = () => {
+      if (gone) return;
+      gone = true;
+      try { onGone(); } catch { /* nothing more to do */ }
+    };
     const timers = [];
     const later = (ms, fn) => { timers.push(setTimeout(fn, ms)); };
     const finish = (err) => {
@@ -112,7 +137,7 @@ function runPiper({ bin, args }, input, timeoutMs) {
       timedOut = true;
       child.kill("SIGKILL");
       // Wait for it to be gone, but not for ever: the next sentence is waiting its turn.
-      later(KILL_WAIT_MS, () => finish(tooLong()));
+      later(_killWaitMs, () => finish(tooLong()));
     });
 
     child.stderr.setEncoding("utf8");
@@ -120,6 +145,7 @@ function runPiper({ bin, args }, input, timeoutMs) {
     // Piper can quit before it has read all the text; its exit code says why.
     child.stdin.on("error", () => {});
     child.on("exit", (code, signal) => {
+      wentAway();
       exited = { code, signal };
       if (timedOut) return finish(tooLong());
       // Piper is gone, and so is its hold on the audio file. Its error output
@@ -129,6 +155,7 @@ function runPiper({ bin, args }, input, timeoutMs) {
       later(LAST_WORDS_MS, () => finish(outcome(exited)));
     });
     child.on("close", (code, signal) => {
+      wentAway();
       if (timedOut) return finish(tooLong());
       finish(outcome(exited || { code, signal }));
     });
@@ -156,6 +183,8 @@ export class PiperTTSEngine extends TTSEngine {
     super();
     fs.mkdirSync(VOICES_DIR, { recursive: true });
     this._defaultVoice = defaultVoice || null;
+    // Audio files an earlier run left behind (a crash or a restart in the middle of a sentence).
+    files.atStart();
   }
 
   get name() { return "piper"; }
@@ -240,7 +269,12 @@ export class PiperTTSEngine extends TTSEngine {
 
     // The system temp folder (there is no /tmp on Windows), and a name of its
     // own for every sentence, so two sentences spoken at once never share a file.
-    const tmpOut = path.join(os.tmpdir(), `tarsee-piper-${crypto.randomUUID()}.wav`);
+    const tmpOut = files.newPath();
+    // Set once this sentence is over. A stopped Piper that only goes after that
+    // may have written its file since (or, on Windows, held it so that it could
+    // not be removed), so the file is removed again once Piper has gone.
+    let over = false;
+    let spoken = false;
 
     try {
       // Pipe text to piper via stdin, output to wav file
@@ -248,7 +282,7 @@ export class PiperTTSEngine extends TTSEngine {
       await inTurn(() => runPiper({
         bin: program.bin,
         args: [...program.args, "--model", modelPath, "--output_file", tmpOut, "--sentence_silence", "0.3"],
-      }, text, _timeoutMs));
+      }, text, _timeoutMs, () => { if (over) removeFile(tmpOut); }));
 
       let audio;
       try {
@@ -259,9 +293,12 @@ export class PiperTTSEngine extends TTSEngine {
       }
       if (audio.length < 100) throw new Error("Piper generated empty audio");
 
+      spoken = true;
       return { audio, contentType: "audio/wav" };
     } finally {
-      try { fs.rmSync(tmpOut, { force: true }); } catch { /* ignore */ }
+      over = true;
+      removeFile(tmpOut);
+      if (!spoken) files.afterFailure();
     }
   }
 

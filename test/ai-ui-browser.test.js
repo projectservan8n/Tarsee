@@ -1203,6 +1203,244 @@ describe("ChatGPT sign-in clicked again: the new one starts, and what it shows s
       await context.close();
     }
   });
+
+  const waitingView = (code) => ({ state: "waiting", url: "https://auth.openai.com/codex/device", code, expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString() });
+  /**
+   * /api/ai/chatgpt/login where the first start never gets an answer (a stalled connection, say after a laptop
+   * wakes) and every later start, and every poll, gets CODE-0002. `first`: that first start, to answer it late.
+   * `log`: the starts and ends in the order they came. `dropped`: the requests the page itself dropped.
+   */
+  const stalledServer = async (page) => {
+    const s = { first: null, log: [], dropped: [] };
+    page.on("requestfailed", (req) => {
+      if (req.url().endsWith("/api/ai/chatgpt/login")) s.dropped.push(`${req.method()} ${req.failure()?.errorText}`);
+    });
+    await page.route(`${origin}/api/ai/chatgpt/login`, async (route) => {
+      const method = route.request().method();
+      const json = (data) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+      if (method !== "GET") s.log.push(method === "POST" ? "start" : "end");
+      if (method === "POST" && !s.first) { s.first = route; return undefined; }
+      if (method === "DELETE") return json({ ok: true, state: "idle" });
+      return json(waitingView("CODE-0002"));
+    });
+    return s;
+  };
+  const networkToasts = (page) => page.locator("#toastContainer .toast", { hasText: /Network error/ }).count();
+
+  it("Settings → AI: a start that gets no answer doesn't hold up the next click: a new start goes out and its code shows", async () => {
+    const { page, errors, context } = await openPage({ needsSetup: false });
+    try {
+      const server = await stalledServer(page);
+      const limits = await page.evaluate(() => ({ ...Settings._aiLoginLimits }));
+      assert.ok(limits.startMs > 35_000 && limits.startMs <= 45_000, "a start gets a little longer than the server's 30 s for Codex to show the code, and the 5 s to stop it");
+      assert.equal(limits.giveUpMs, 10_000, "a click waits 10 s at most for the last start's answer");
+      // The same wait, shorter, so the test doesn't sit through 10 s.
+      await page.evaluate(() => { Settings._aiLoginLimits = { ...Settings._aiLoginLimits, giveUpMs: 600 }; });
+      await page.locator("#aiHeaderChip:not([hidden])").click();
+      const box = page.locator("#chatgptAiCard [data-ai-device]");
+      const signIn = page.locator('#chatgptAiCard [data-ai-action="chatgpt-login"]');
+
+      await signIn.click();
+      await box.getByText("Starting the ChatGPT sign-in").waitFor({ timeout: WAIT });
+      await page.waitForTimeout(300);
+      await signIn.click();
+      await box.getByText("CODE-0002").waitFor({ timeout: WAIT });
+      // The first start answers at last, with another code: the box keeps the new one, poll after poll.
+      await server.first.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(waitingView("CODE-0001")) }).catch(() => {});
+      await page.waitForTimeout(POLL_AND_MORE);
+      const text = await box.innerText();
+      assert.match(text, /CODE-0002/, "the new code is still there");
+      assert.doesNotMatch(text, /CODE-0001|Starting the ChatGPT sign-in|The sign-in stopped/);
+      assert.deepEqual(server.log, ["start", "start"], "no code was known to wait on the server, so nothing is ended");
+      assert.deepEqual(server.dropped, ["POST net::ERR_ABORTED"], "the start given up on is dropped, so it can't answer late");
+      assert.equal(await networkToasts(page), 0, "and dropping it is no \"Network error\"");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("Settings → AI: a start with no answer in its time limit says so, and a click then starts a new one", async () => {
+    const { page, errors, context } = await openPage({ needsSetup: false });
+    try {
+      const server = await stalledServer(page);
+      await page.evaluate(() => { Settings._aiLoginLimits = { ...Settings._aiLoginLimits, startMs: 800 }; });
+      await page.locator("#aiHeaderChip:not([hidden])").click();
+      const box = page.locator("#chatgptAiCard [data-ai-device]");
+      const signIn = page.locator('#chatgptAiCard [data-ai-action="chatgpt-login"]');
+
+      await signIn.click();
+      await box.getByText(/didn't answer/).waitFor({ timeout: WAIT });
+      const text = await box.innerText();
+      assert.match(text, /didn't answer in \d+ seconds? while starting the ChatGPT sign-in\. Check your connection, then click Sign in with ChatGPT to try again/, "it says what happened and how to go on");
+      assert.doesNotMatch(text, /step 1|Starting the ChatGPT sign-in/, "not about the device code switch, and no longer starting");
+      assert.deepEqual(server.dropped, ["POST net::ERR_ABORTED"], "the start that ran out of time is dropped");
+      assert.equal(await networkToasts(page), 0, "the box says what happened: no \"Network error\" toast on top");
+
+      await signIn.click();
+      await box.getByText("CODE-0002").waitFor({ timeout: WAIT });
+      await page.waitForTimeout(POLL_AND_MORE);
+      assert.match(await box.innerText(), /CODE-0002/, "the new code stays");
+      assert.deepEqual(server.log, ["start", "start"], "a start that ran out of time has nothing to end on the server");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("the wizard: a start that gets no answer doesn't hold up the next click: a new start goes out and its code shows", async () => {
+    const { page, errors, context } = await openPage();
+    try {
+      const server = await stalledServer(page);
+      await page.evaluate(() => { Settings._aiLoginLimits = { ...Settings._aiLoginLimits, giveUpMs: 600 }; });
+      await page.getByRole("button", { name: /My ChatGPT plan/ }).click();
+      await page.getByText("How to set up ChatGPT plan").waitFor();
+      const box = page.locator("#setupDevice");
+      const signIn = page.getByRole("button", { name: "Sign in with ChatGPT" });
+
+      await signIn.click();
+      await box.getByText("Starting the ChatGPT sign-in").waitFor({ timeout: WAIT });
+      await page.waitForTimeout(300);
+      await signIn.click();
+      await box.getByText("CODE-0002").waitFor({ timeout: WAIT });
+      await server.first.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(waitingView("CODE-0001")) }).catch(() => {});
+      await page.waitForTimeout(POLL_AND_MORE);
+      const text = await box.innerText();
+      assert.match(text, /CODE-0002/, "the new code is still there");
+      assert.doesNotMatch(text, /CODE-0001|Starting the ChatGPT sign-in/);
+      assert.deepEqual(server.log, ["start", "start"]);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+describe("the wizard's AI step drawn again (a read of the AIs comes in) while someone is using it", { skip }, () => {
+  // Every read of the AIs draws the step again: opening it, coming back to the tab (from the Terminal, or ChatGPT's
+  // page), after each Check, Test or sign-in. A button rebuilt under a press (pressed on the old one, let go on the
+  // new one) gets no click at all.
+  it("a step that hasn't changed isn't rebuilt: the buttons are the same ones, and the focused one keeps the focus", async () => {
+    const { page, errors, context } = await openPage({ env: { deepseek: "DEEPSEEK_API_KEY" } });
+    try {
+      await page.getByRole("button", { name: /My ChatGPT plan/ }).click();
+      await page.getByText("How to set up ChatGPT plan").waitFor();
+      await page.getByRole("button", { name: "Sign in with ChatGPT" }).focus();
+      await page.evaluate(() => {
+        window.__before = { signIn: document.querySelector('[data-setup="chatgpt-login"]'), choice: document.querySelector('[data-choice="chatgpt"]'), env: document.querySelector('[data-setup="use-env"]') };
+        window.__muts = 0;
+        const mo = new window.MutationObserver((r) => { window.__muts += r.length; });
+        for (const id of ["setupAiPanel", "setupAiChoices", "setupAiEnv"]) mo.observe(document.getElementById(id), { childList: true, subtree: true });
+      });
+      await page.evaluate(() => Setup._aiLoad());
+      await page.evaluate(() => Setup._aiLoad());
+      const after = await page.evaluate(() => ({
+        signIn: document.querySelector('[data-setup="chatgpt-login"]') === window.__before.signIn,
+        choice: document.querySelector('[data-choice="chatgpt"]') === window.__before.choice,
+        env: !!window.__before.env && document.querySelector('[data-setup="use-env"]') === window.__before.env,
+        focused: document.activeElement === window.__before.signIn,
+        muts: window.__muts,
+      }));
+      assert.deepEqual(after, { signIn: true, choice: true, env: true, focused: true, muts: 0 });
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("a press that a changed draw comes in under still clicks the button it was on", async () => {
+    const { page, api, errors, context } = await openPage();
+    try {
+      await page.getByRole("button", { name: /My ChatGPT plan/ }).click();
+      await page.getByText("How to set up ChatGPT plan").waitFor();
+      // A real press: down on the button, then something, then up (the wizard scrolls inside itself: in view first).
+      const press = async (locator, during) => {
+        await locator.scrollIntoViewIfNeeded();
+        const at = await locator.boundingBox();
+        await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+        await page.mouse.down();
+        await during();
+        await page.mouse.up();
+      };
+
+      // Sign in with ChatGPT pressed, and a read of the AIs comes in with a new status line before it is let go.
+      api.state.cards.chatgpt.detail = "ChatGPT's sign-in was checked again.";
+      await press(page.getByRole("button", { name: "Sign in with ChatGPT" }), () => page.evaluate(() => Setup._aiLoad()));
+      await page.locator("#setupDevice").getByText("ABCD-1234").waitFor({ timeout: 5000 });
+      assert.equal(api.calls.filter((c) => c.path === "/api/ai/chatgpt/login" && c.method === "POST").length, 1, "the press started the sign-in");
+      await page.getByText("ChatGPT's sign-in was checked again.").waitFor({ timeout: 2000 });
+
+      // My Claude plan pressed while the choices are drawn again, changed ("Other people too" adds a warning to each plan).
+      await press(page.getByRole("button", { name: /My Claude plan/ }), () => page.evaluate(() => { Setup._aiShared = true; Setup._aiDraw(); }));
+      await page.getByText("How to set up Claude plan").waitFor({ timeout: 5000 });
+      assert.equal(await page.locator('[data-choice="claude"]').getAttribute("aria-pressed"), "true", "the press chose the Claude plan");
+      await page.locator('[data-choice="claude"]', { hasText: "Not for shared use" }).waitFor({ timeout: 2000 });
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("a step drawn again changed keeps the focus on the very button or box it was on, so Enter still acts on it", async () => {
+    const { page, api, errors, context } = await openPage();
+    try {
+      // A choice (several share data-setup="choice": only its data-choice tells them apart).
+      await page.getByRole("button", { name: /My ChatGPT plan/ }).focus();
+      await page.evaluate(() => { Setup._aiShared = true; Setup._aiDraw(); });
+      assert.equal(await page.evaluate(() => document.activeElement?.dataset?.choice || null), "chatgpt");
+      await page.keyboard.press("Enter");
+      await page.getByText("How to set up ChatGPT plan").waitFor();
+
+      // Sign in with ChatGPT, while the panel around it changes.
+      await page.getByRole("button", { name: "Sign in with ChatGPT" }).focus();
+      api.state.cards.chatgpt.detail = "ChatGPT's sign-in was checked again.";
+      await page.evaluate(() => Setup._aiLoad());
+      await page.getByText("ChatGPT's sign-in was checked again.").waitFor();
+      assert.equal(await page.evaluate(() => document.activeElement?.dataset?.setup || null), "chatgpt-login");
+      await page.keyboard.press("Enter");
+      await page.locator("#setupDevice").getByText("ABCD-1234").waitFor({ timeout: 5000 });
+
+      // A key box, with what is typed and the caret.
+      await page.getByRole("button", { name: /My own API key/ }).click();
+      await page.locator('[data-setup="provider"][data-provider="deepseek"]').click();
+      const key = page.locator("#setupKey");
+      await key.click();
+      await page.keyboard.insertText("sk-test-half");
+      await page.evaluate(() => document.getElementById("setupKey").setSelectionRange(3, 3));
+      api.state.cards.deepseek.detail = "Still no DeepSeek key.";
+      await page.evaluate(() => Setup._aiLoad());
+      await page.getByText("Still no DeepSeek key.").waitFor();
+      const box = await page.evaluate(() => { const b = document.getElementById("setupKey"); return { focused: document.activeElement === b, value: b.value, caret: [b.selectionStart, b.selectionEnd] }; });
+      assert.deepEqual(box, { focused: true, value: "sk-test-half", caret: [3, 3] });
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("a model chosen and not saved yet stays chosen when the step is drawn again changed (a Check's answer comes in)", async () => {
+    const { page, api, errors, context } = await openPage({ ready: ["deepseek"] });
+    try {
+      await page.getByRole("button", { name: /My own API key/ }).click();
+      await page.locator('[data-setup="provider"][data-provider="deepseek"]').click();
+      await page.waitForFunction(() => document.querySelectorAll("#setupAiModel option").length >= 2);
+      const other = await page.evaluate(() => {
+        const sel = document.getElementById("setupAiModel");
+        const pick = [...sel.options].find((o) => !o.selected).value;
+        sel.value = pick;
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+        return pick;
+      });
+      api.state.cards.deepseek.detail = "Checked again.";
+      api.state.cards.deepseek.balance = { text: "Balance $4.19" };
+      await page.evaluate(() => Setup._aiLoad());
+      await page.getByText(/Balance \$4\.19/).first().waitFor();
+      assert.equal(await page.locator("#setupAiModel").inputValue(), other, "the model chosen is still the one Next saves");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
 });
 
 describe("the pages in a browser: what they show and save", { skip }, () => {

@@ -13,6 +13,12 @@
  *   text     more words under it; a blank line (\n\n) starts another paragraph
  *   yes, no  the two buttons' words (OK and Cancel when left out)
  *   danger   the yes button in the page's red: deleting, signing out, ending something
+ *   block    words to read before answering, shown exactly as given in a block of their own (a command, say), under
+ *            the title; long ones scroll in it
+ *   defaultNo  no is the answer to a plain Enter: the focus starts on the no button, and Enter answers yes only on
+ *            the yes button
+ *   settleMs   how long after it opens a yes can't be given (by key or press), when that is longer than the usual
+ *            moment (at most 5 seconds); no and Esc are not held up by it
  *   label    the text box's label; value, the words it starts with (selected); placeholder, its hint; type "url"
  *   back     where the focus goes after if what had it is gone (an element, or a function that finds one)
  *
@@ -20,12 +26,13 @@
  * places it and makes every button 40px tall at least (44px under a finger). It is a modal <dialog> in the top layer,
  * over everything else on the page: nothing behind it can be pressed or focused.
  *
- * Its keys: Enter answers yes (on the no button, no), Esc answers no, and so does a press on the dimmed page outside
- * it; Tab and Shift+Tab go round its own controls. Enter held down from what opened it, and a press in its first
- * moments (the second click of a double click on what opened it), answer nothing. While it is up no key reaches
+ * Its keys: Enter answers yes (on the no button, no; with defaultNo, yes only on the yes button), Esc answers no, and
+ * so does a press on the dimmed page outside it; Tab and Shift+Tab go round its own controls (and a block of words,
+ * to scroll it). Enter held down from what opened it, and a press in its first moments (the second click of a double
+ * click on what opened it; for a yes, all of a question's settleMs), answer nothing. While it is up no key reaches
  * anything behind it (keydown and keypress stop here; keyup goes on, so a key held as it opened is let go), and the
- * window hears "tarsee:dialog" ({ open }) as it opens and as it closes. The focus goes into it (the yes button, or
- * the text box with its words selected), stays there, and goes back to where it was after.
+ * window hears "tarsee:dialog" ({ open }) as it opens and as it closes. The focus goes into it (the yes button, the
+ * no button for defaultNo, or the text box with its words selected), stays there, and goes back to where it was after.
  *
  * One at a time: a question waits until the one before it has been answered. The same question asked again while it
  * is up or waiting (a double click on what opened it) is answered no at once, so it is never asked twice over.
@@ -38,6 +45,7 @@
   if (G.TarseeDialog) return;   // (loaded twice: the first one stays, with its listeners)
 
   const SETTLE_MS = 400;        // a press this soon after it opens is the end of whatever opened it, not an answer
+  const MAX_SETTLE_MS = 5000;   // the longest a question may hold back its yes (settleMs)
   const now = () => (typeof performance !== "undefined" && performance.now ? performance.now() : Date.now());
 
   // ---------------------------------------------------------------- the parts that need no page
@@ -60,10 +68,14 @@
     const paras = paragraphs(ask.text);
     let title = trimmed(ask.title);
     if (!title) title = text ? trimmed(ask.label) || "Type it in" : paras.shift() || "Are you sure?";
+    const wait = Number(ask.settleMs);
     return {
       kind: text ? "text" : "yesno",
       title,
       paragraphs: paras,
+      block: text ? "" : words(ask.block),
+      defaultNo: !text && !!ask.defaultNo,
+      settleMs: Number.isFinite(wait) ? Math.min(Math.max(wait, SETTLE_MS), MAX_SETTLE_MS) : SETTLE_MS,
       label: text ? trimmed(ask.label) || title : "",
       value: text ? words(ask.value) : "",
       placeholder: text ? words(ask.placeholder) : "",
@@ -77,7 +89,7 @@
 
   /** What makes two questions the same one (asked again by a double click on what opened it). */
   function sameKey(q) {
-    return JSON.stringify([q.kind, q.title, q.paragraphs, q.label]);
+    return JSON.stringify([q.kind, q.title, q.paragraphs, q.label, q.block || ""]);
   }
 
   /** What a no is, for a kind of question: false, or null for a text question. */
@@ -85,20 +97,23 @@
 
   /**
    * What a key press does while a question is up (every one is the question's alone: nothing behind it hears it):
-   *   "yes", "no"  it answers: Enter yes (on the no button, no), Esc no
+   *   "yes", "no"  it answers: Enter yes (on the no button, no), Esc no; for a question with defaultNo, Enter is yes
+   *                on the yes button only, and no anywhere else
    *   "round"      Tab or Shift+Tab: to the next of its own controls, round from the last to the first
-   *   "wait"       Enter held down from what opened it, or in its first moments: it answers nothing
+   *   "wait"       Enter held down from what opened it, or in its first moments (a yes in the question's settleMs):
+   *                it answers nothing
    *   "own"        the focused control's own (a letter in the text box, Space on a button, an IME's keys)
-   * onNo: the no button has the focus. sinceOpen: milliseconds since it opened.
+   * onNo, onYes: the no or the yes button has the focus. sinceOpen: milliseconds since it opened.
    */
-  function keyAction(e, { onNo = false, sinceOpen = Infinity } = {}) {
+  function keyAction(e, { onNo = false, onYes = false, sinceOpen = Infinity, settleMs = SETTLE_MS, defaultNo = false } = {}) {
     const key = e && e.key;
     if (e && (e.isComposing || e.keyCode === 229)) return "own";   // (an IME picking a word: its keys are its own)
     if (key === "Escape" || key === "Esc") return "no";
     if (key === "Tab") return "round";
     if (key === "Enter") {
-      if (e.repeat || sinceOpen < SETTLE_MS) return "wait";
-      return onNo ? "no" : "yes";
+      const yes = defaultNo ? onYes : !onNo;
+      if (e.repeat || sinceOpen < (yes ? Math.max(settleMs, SETTLE_MS) : SETTLE_MS)) return "wait";
+      return yes ? "yes" : "no";
     }
     return "own";
   }
@@ -110,8 +125,11 @@
     return (i + (back ? n - 1 : 1)) % n;
   }
 
-  /** Has it been up long enough for a press to be an answer (not the second click of a double click on what opened it)? */
-  const settled = (sinceOpen) => sinceOpen >= SETTLE_MS;
+  /**
+   * Has it been up long enough for a press to be an answer (not the second click of a double click on what opened it)?
+   * settleMs: how long, for a yes the question holds back (questionOf); the usual moment when not given.
+   */
+  const settled = (sinceOpen, settleMs = SETTLE_MS) => sinceOpen >= settleMs;
 
   /** Does a press on the dimmed page outside it answer no? One that went down there and came up there, once it has settled. */
   function outsideAnswers({ downOutside, upOutside, sinceOpen }) {
@@ -142,7 +160,7 @@
     };
   }
 
-  const core = { SETTLE_MS, paragraphs, questionOf, sameKey, noOf, keyAction, tabTo, settled, outsideAnswers, focusBack, lineUp };
+  const core = { SETTLE_MS, MAX_SETTLE_MS, paragraphs, questionOf, sameKey, noOf, keyAction, tabTo, settled, outsideAnswers, focusBack, lineUp };
 
   // ---------------------------------------------------------------- the page
 
@@ -168,12 +186,20 @@
     dlg.setAttribute("aria-labelledby", `${id}-title`);
     const title = make("h2", "delete-modal-header td-title", q.title);
     title.id = `${id}-title`;
+    // The words to read, exactly as given: a <pre> keeps every character, and the keyboard can reach it to scroll it.
+    let block = null;
+    if (q.block) {
+      block = make("pre", "td-block", q.block);
+      block.id = `${id}-block`;
+      block.tabIndex = 0;
+    }
     const paras = q.paragraphs.map((words, i) => {
       const p = make("p", "delete-modal-text td-text", words);
       p.id = `${id}-text${i}`;
       return p;
     });
-    if (paras.length) dlg.setAttribute("aria-describedby", paras.map((p) => p.id).join(" "));
+    const described = [...(block ? [block] : []), ...paras];
+    if (described.length) dlg.setAttribute("aria-describedby", described.map((p) => p.id).join(" "));
     let input = null, field = null;
     if (q.kind === "text") {
       field = make("div", "td-field");
@@ -194,11 +220,11 @@
     const yes = make("button", `btn td-yes ${q.danger ? "delete-modal-confirm" : "btn-primary"}`, q.yes);
     const no = make("button", "btn delete-modal-cancel td-no", q.no);
     yes.type = no.type = "button";
-    // The question, the words, the box, then Cancel and the thing to do on the right.
+    // The question, the words to read, the words, the box, then Cancel and the thing to do on the right.
     const actions = make("div", "delete-modal-actions td-actions");
     actions.append(no, yes);
     const panel = make("div", "delete-modal td-panel");
-    panel.append(title, ...paras, ...(field ? [field] : []), actions);
+    panel.append(title, ...(block ? [block] : []), ...paras, ...(field ? [field] : []), actions);
     dlg.append(panel);
     return { dlg, panel, yes, no, input };
   }
@@ -215,7 +241,7 @@
       let done = false, downOutside = false;
       const self = {
         q, ...parts, openedAt: now(), last: null,
-        controls: () => [...dlg.querySelectorAll("input, button")].filter(shown),
+        controls: () => [...dlg.querySelectorAll("input, button, .td-block")].filter(shown),
         answer(yesOrNo) {
           if (done) return;
           done = true;
@@ -229,7 +255,7 @@
           resolve(value);
         },
       };
-      yes.addEventListener("click", () => { if (settled(now() - self.openedAt)) self.answer(true); });
+      yes.addEventListener("click", () => { if (settled(now() - self.openedAt, q.settleMs)) self.answer(true); });
       no.addEventListener("click", () => { if (settled(now() - self.openedAt)) self.answer(false); });
       // A press on the dimmed page outside the panel: no (once it went down and came up there).
       dlg.addEventListener("pointerdown", (e) => { downOutside = e.target === dlg; });
@@ -246,7 +272,7 @@
         document.body.append(dlg);
         try { dlg.showModal(); } catch { dlg.setAttribute("open", ""); }   // (no modal dialogs in this browser: still drawn over the page, css/dialogs.css)
         tell(true);
-        const first = input || yes;
+        const first = input || (q.defaultNo ? no : yes);
         first.focus({ preventScroll: true });
         if (input) input.select();
         self.last = first;
@@ -272,7 +298,10 @@
       if (!c) return;
       e.stopImmediatePropagation();
       const inside = c.dlg.contains(e.target);
-      const act = keyAction(e, { onNo: document.activeElement === c.no, sinceOpen: now() - c.openedAt });
+      const act = keyAction(e, {
+        onNo: document.activeElement === c.no, onYes: document.activeElement === c.yes, sinceOpen: now() - c.openedAt,
+        settleMs: c.q.settleMs, defaultNo: c.q.defaultNo,
+      });
       // (The focus is not in it after all, say on the page after a press on its words: nothing behind it acts on the key,
       // though the browser's own shortcuts, held with Cmd, Ctrl or Alt, still work.)
       if (act === "own") { if (!inside && !e.metaKey && !e.ctrlKey && !e.altKey) e.preventDefault(); return; }
@@ -291,7 +320,7 @@
       const c = up;
       if (!c) return;
       if (c.dlg.contains(e.target)) { c.last = e.target; return; }
-      const to = c.last && c.dlg.contains(c.last) ? c.last : c.input || c.yes;
+      const to = c.last && c.dlg.contains(c.last) ? c.last : c.input || (c.q.defaultNo ? c.no : c.yes);
       to.focus({ preventScroll: true });
     }, true);
   }
