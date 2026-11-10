@@ -18,6 +18,7 @@
  * the action, the server, the channel, never a secret.
  */
 import { ChannelType, OverwriteType, PermissionFlagsBits } from "discord.js";
+import { serverOnlyWriteRefusal } from "./key-vault.js";
 
 export const ACTIONS = Object.freeze(["list_channels", "create_channel", "edit_channel", "create_webhook", "list_webhooks"]);
 const WRITES = new Set(["create_channel", "edit_channel", "create_webhook"]);
@@ -25,6 +26,8 @@ const WRITES = new Set(["create_channel", "edit_channel", "create_webhook"]);
 const P = PermissionFlagsBits;
 const SNOWFLAKE = /^\d{15,25}$/;
 const KEY_NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
+/** Who saves a webhook's URL, as the vault's rule on Tarsee's own keys takes it (key-vault.js setKey's writer). */
+const WRITER = Object.freeze({ tool: "discord_admin" });
 
 const TYPE_OF = { text: ChannelType.GuildText, voice: ChannelType.GuildVoice, category: ChannelType.GuildCategory };
 const TYPE_NAME = new Map([
@@ -549,6 +552,11 @@ async function createWebhook(args, { client, vault, note }) {
 
   const keyName = keyNameFrom(args.save_as_key || `DISCORD_WEBHOOK_${ch.name}`);
   if (!KEY_NAME.test(keyName)) fail(`save_as_key "${args.save_as_key}" is not a usable key name (capitals, digits and underscores, e.g. UPTIME_WATCHDOG_WEBHOOK).`);
+  // Tarsee's own keys (key-vault.js SERVER_ONLY_KEYS, the Railway token) are never a save_as_key, not even while
+  // Tarsee has none: the vault refuses this tool's save of one anyway (WRITER), and saying so here, before Discord is
+  // asked, means no webhook is left made with its URL saved nowhere.
+  const own = serverOnlyWriteRefusal(keyName, { writer: WRITER });
+  if (own) fail(`save_as_key names ${keyName}. ${own} Pick another save_as_key. No webhook was made.`);
   const v = vault || await import("./key-vault.js");
   if (v.hasKey(keyName) && !args.overwrite_key) {
     fail(`The vault already has a key named ${keyName}. Pick another save_as_key, or pass overwrite_key: true if replacing it is what was asked. No webhook was made.`);
@@ -563,7 +571,7 @@ async function createWebhook(args, { client, vault, note }) {
   const purpose = oneLine(args.purpose || "");
   const description = `Discord webhook URL "${name}" for #${ch.name} (channel ${ch.id}) in the server ${guild.name} (${guild.id}), webhook ${hook.id}.${purpose ? ` Purpose: ${purpose}.` : ""} Secret: anyone with it can post there.`;
   try {
-    v.setKey(keyName, url, description);
+    v.setKey(keyName, url, description, { writer: WRITER });
   } catch (err) {
     fail(`The webhook ${hook.id} was made in #${ch.name}, but saving its URL to the vault failed (${err.message}). The URL was not shown. Try create_webhook again with another save_as_key, or the owner can copy it from Discord (channel settings > Integrations > Webhooks).`);
   }

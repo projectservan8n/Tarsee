@@ -1079,7 +1079,7 @@ artifact. Just confirm.`;
     description: "Scheduled tasks: list them, add one, switch one on or off, run or remove one",
     usage: "/cron [list|add|on|off|run|remove]",
     ownerOnly: true,
-    handler: async (args) => {
+    handler: async (args, ctx = {}) => {
       try {
         const { getCronStatus, addCronJob, removeCronJob, runCronJob, loadCronJobs, setCronJobEnabled } = await import("./cron.js");
 
@@ -1091,17 +1091,41 @@ artifact. Just confirm.`;
           const STATE = { waiting: "waiting for your OK", running: "running", on: "on", off: "off" };
           const WHO = { ai: "made by the AI in a chat", owner: "made by you" };
           const lines = ["**Scheduled tasks**", ""];
-          // A task that runs a tool directly shows the tool and its args, so the owner sees what /cron on switches on,
-          // every secret masked (lib/cron.js shownDirectAction): JSON in a code span, with each backtick in it written as
-          // its JSON escape (backslash, u0060), so it can't end the span.
-          const code = (v) => JSON.stringify(v).replace(/`/g, "\\u0060");
-          const runs = ({ tool, args }) => {
+          // A task that runs a tool directly shows the tool and its args whole, so the owner sees what /cron on switches
+          // on: only set_key's value and a mailbox password are masked (lib/cron.js shownDirectAction). They are written
+          // as Settings writes them (js/cron-core.js argsText: what would look blank as its escape), in a code span with
+          // each backtick as its escape too (backslash, u0060), so nothing ends the span, and left to right as they run
+          // (between LRO and PDF, with no bidi control left inside to undo it). A chat bot's message has a limit
+          // (Discord's is 2,000 characters), past which a channel splits or cuts it, so there args longer than
+          // ARGS_IN_A_MESSAGE are shown not at all, rather than cut: the list says to see them whole in Settings. The
+          // dashboard's chat has no such limit, and shows them whole.
+          await import("../public/js/cron-core.js");
+          const { argsText, visible } = globalThis.CronCore;
+          const ARGS_IN_A_MESSAGE = 1500;
+          const PROMPT_SHOWN = 60;
+          const whole = ctx.platform === "web";
+          const ticked = `${String.fromCharCode(92)}u0060`;
+          const json = (v) => argsText(v).replace(/`/g, ticked);
+          const span = (text) => `\`\u{202D}${text}\u{202C}\``;
+          const runs = ({ tool, args, problem }) => {
             const none = args === undefined || (args && typeof args === "object" && !Array.isArray(args) && Object.keys(args).length === 0);
-            const name = /^[A-Za-z0-9_]+$/.test(tool) ? tool : `\`${code(tool)}\``;
-            return `runs ${name} directly, no AI${none ? "" : `, with \`${code(args)}\``}`;
+            const name = /^[A-Za-z0-9_]+$/.test(tool) ? tool : span(json(tool));
+            const wont = problem ? " · won't run as it is (Settings > Automation > Scheduled tasks says why)" : "";
+            if (none) return `runs ${name} directly, no AI${wont}`;
+            const text = json(args);
+            if (!whole && text.length > ARGS_IN_A_MESSAGE) {
+              return `runs ${name} directly, no AI, with args of ${text.length.toLocaleString("en-US")} characters, too long for a message here: see them whole in Settings > Automation > Scheduled tasks before you switch it on${wont}`;
+            }
+            return `runs ${name} directly, no AI, with ${span(text)}${wont}`;
+          };
+          // A task that asks the AI: the start of its prompt on one line, made visible, and where the rest is.
+          const asks = (prompt) => {
+            const flat = Array.from(visible(String(prompt || "").replace(/\s+/g, " ").trim()));
+            if (flat.length <= PROMPT_SHOWN) return flat.join("");
+            return `${flat.slice(0, PROMPT_SHOWN).join("")}... (the whole prompt, ${flat.length.toLocaleString("en-US")} characters, is in Settings > Automation > Scheduled tasks)`;
           };
           for (const j of status.jobs) {
-            const what = j.actionShown ? runs(j.actionShown) : String(j.prompt || "").slice(0, 60);
+            const what = j.actionShown ? runs(j.actionShown) : asks(j.prompt);
             const who = WHO[j.createdBy] ? ` · ${WHO[j.createdBy]}` : "";
             lines.push(`- **${j.id}** [${STATE[j.state] || j.state}] \`${j.schedule}\` — ${what}${who}`);
           }

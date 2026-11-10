@@ -233,6 +233,13 @@ server.listen(config.PORT, "0.0.0.0", () => {
   console.log(`[tarsee] database:  ${config.DB_PATH}`);
 });
 
+// --- tarsee_railway: the Terminal's own Claude Code ---
+// With TARSEE_AUTO_UPDATE_CLI=1 the Terminal's claude can be newer than the one engine-env-names.json was made from:
+// its names are read once now, streamed in the background, and tarsee_railway refuses them on Tarsee's own service too
+// (lib/railway-admin.js). Only on Railway, where Tarsee has a service of its own. Never throws.
+import { hereOf as railwayHere, startTerminalCliScan } from "./lib/railway-admin.js";
+if (railwayHere().serviceId) startTerminalCliScan();
+
 // --- Audit log + Settings ---
 const auditLog = new AuditLog(db);
 app.set("auditLog", auditLog);

@@ -1639,16 +1639,14 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           if (badName) return `set_key refused: ${badName} Nothing was saved.`;
           if (typeof skValue !== "string" || !skValue) return "set_key refused: value is the key's value, as text, and it can't be empty. Nothing was saved.";
           if (skDesc != null && typeof skDesc !== "string") return "set_key refused: description is text. Nothing was saved.";
-          // One of Tarsee's own keys is saved from a chat only while Tarsee has none yet (how owners give it the
-          // Railway token today), under the name Tarsee reads; replacing it is the owner's, in Settings > Keys. Never
-          // from background work (a scheduled task, its direct action, the heartbeat, BOOT.md): nobody is there to
-          // have given it.
-          if (own && ctx.background) {
-            return `set_key refused: ${own} is Tarsee's own key, and background work (a scheduled task, the heartbeat, BOOT.md) never saves it: the first one comes from a chat with the owner, and after that only the owner changes it, in Settings > Keys. Nothing was saved.`;
-          }
-          const refused = own && serverOnlyWriteRefusal(own);
+          // One of Tarsee's own keys is saved under the name Tarsee reads, and only as the vault's rule allows, which
+          // this turn's context decides (key-vault.js serverOnlyWriteRefusal): a first one in a chat's own turn while
+          // Tarsee has none yet (how owners give it the Railway token today), never from background work (a scheduled
+          // task, its direct action, the heartbeat, BOOT.md) or a turn with no chat; replacing it is the owner's.
+          const writer = { tool: "set_key", ctx };
+          const refused = own && serverOnlyWriteRefusal(own, { writer });
           if (refused) return `set_key refused: ${refused}`;
-          const result = setKey(keyName, skValue, skDesc || "");
+          const result = setKey(keyName, skValue, skDesc || "", { writer });
           if (own) return `Key "${own}" saved securely. It is Tarsee's own: ${serverOnlyTool(own)} uses it, and get_key and your commands never get it. Only the owner can replace or delete it now, in Settings > Keys, which is also the place to save it next time, so it never goes through a chat.`;
           return `Key "${result.name}" saved securely (masked: ${result.masked}). Description: ${result.description || "none"}`;
         } catch (err) {

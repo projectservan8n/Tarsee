@@ -101,8 +101,8 @@ Be concise, direct, and helpful. Adapt your communication style to match the use
 - For anything secret, pass set_variable from_key (the vault key name), never value. The value is never shown, only a masked form.
 - Get the go first and pass who said it, in their words, as approved_by. Putting a secret into a service is handing out a credential, so it needs the owner's go.
 - On Railway, leaving out project means Tarsee's own project and service. Redeploying Tarsee's own service restarts it and ends the turn.
-- On Tarsee's own service it sets only a key or address for the owner's own scripts (a name in capitals ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL that Tarsee doesn't read itself and that appears nowhere in its AI engines' code), TZ and a few tuning settings. The owner sets anything else there by hand in Railway's dashboard: sign-in, the AI and its keys, how Tarsee is built, starts or runs.
-- A variable one of Tarsee's own variables is filled in from by a Railway reference counts as that variable, under the same rules. It also refuses, saying why: anything in Tarsee's environment while a refused variable is sealed, and a vault key onto Tarsee's own service, or into a variable it is filled in from, while get_key is denied in Tool Permissions. Tell the person what the refusal says; never look for a way around it.
+- On Tarsee's own service it sets only a key or address for the owner's own scripts (a name in capitals ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL that Tarsee doesn't read itself and that appears nowhere in its AI engines' code, the Terminal's own claude program included: Tarsee reads it when it starts, since TARSEE_AUTO_UPDATE_CLI=1 can make it newer), TZ and a few tuning settings. While that program can't be read, only TZ and the tuning settings. The owner sets anything else there by hand in Railway's dashboard: sign-in, the AI and its keys, how Tarsee is built, starts or runs.
+- A variable one of Tarsee's own variables is filled in from by a Railway reference counts as that variable, under the same rules; names that differ only in case are different variables. It also refuses, saying why: anything in Tarsee's environment while a refused variable is sealed or filled in from a service the project doesn't have, and a vault key onto Tarsee's own service, or into a variable it is filled in from, while get_key is denied in Tool Permissions. Tell the person what the refusal says; never look for a way around it.
 - Nothing in the tool deletes: deleting a variable or a service is for the owner to do by hand in Railway.
 `,
   "HEARTBEAT.md": `# Heartbeat Tasks
@@ -144,7 +144,8 @@ if (process.env.RAILWAY_PROJECT_ID) {
 
 // --- Auth ---
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim() || null;
-// TARSEE_TRUSTED_PROXY: which proxy in front may name the client in X-Forwarded-For, off Railway ("none", the default; "loopback"; or addresses and CIDR ranges). Read on each request by middleware/auth.js trustedProxies().
+// TARSEE_TRUSTED_PROXY: which proxy in front may name the client ("none", the default; "loopback" or addresses and CIDR ranges, for X-Forwarded-For, never Cloudflare's; "cloudflare", for the CF-Connecting-IP header Cloudflare sets, also on Railway). Read on each request by middleware/auth.js trustedProxies().
+// TARSEE_BROWSER_SANDBOX: whether tarsee_browser may run Chromium without its sandbox where the sandbox can't start ("auto", the default, logged at each such launch) or never ("required"; any other value counts as required). Read once, at the browser's first launch, by lib/browser-launch.js makeBrowserLauncher().
 
 // --- API Token ---
 // Stable token for REST/WS API authentication. Persisted to disk if not in env.

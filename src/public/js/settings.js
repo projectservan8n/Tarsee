@@ -2547,12 +2547,13 @@ const Settings = {
     else if (w.enabled) parts.push(context("SMTP: where its replies would go", server(cfg.smtp, 465)));
     if (Array.isArray(w.allowlistFromAddresses)) parts.push(change("Who can reach Tarsee by email", list(cfg.allowlistFromAddresses), list(w.allowlistFromAddresses)));
     else if (w.enabled) parts.push(context("Who could reach Tarsee by email", list(cfg.allowlistFromAddresses)));
-    if (w.senderCheck) {
-      const own = this._emailSenderCheck(cfg);
-      if (w.senderCheck.trustFromLine && !own.trustFromLine) parts.push(change("Trust the From line", "no", "yes: anyone who writes an allowed address there can reach Tarsee"));
-      if (w.senderCheck.authservId && w.senderCheck.authservId !== own.authservId) {
-        parts.push(change("Your mail server's name in Authentication-Results", own.authservId || "(none)", w.senderCheck.authservId));
-      }
+    // What Tarsee trusts to say who sent a mail never waits here: the owner sets it, signed in (routes/settings.js). A
+    // record an earlier version left with only that in it has nothing to OK, and the route won't approve it.
+    if (parts.length === 0) {
+      card.hidden = true;
+      card.innerHTML = "";
+      this._emailWaitingShown = null;
+      return;
     }
     const by = w.by === "token" ? "something using the API token (it may be the AI)" : "the AI, in a chat";
     const when = Number.isNaN(Date.parse(w.since)) ? "" : ` on ${new Date(w.since).toLocaleString()}`;
@@ -2626,50 +2627,108 @@ const Settings = {
     e.emailAllowlist.value = (cfg.allowlistFromAddresses || []).join("\n");
   },
 
-  /** What the owner trusts to say who sent a mail, for the IMAP host in force (email.js senderCheckFor). */
+  /**
+   * The mail provider Tarsee knows for an IMAP host, by name, as src/channels/email.js mailProviderOf has them
+   * (test/email-channel-settings.test.js keeps the two lists the same), or null for a server of the owner's own.
+   */
+  _emailProviderOf(imapHost) {
+    const host = String(imapHost || "").trim().toLowerCase().replace(/\.$/, "");
+    const providers = [
+      ["Gmail", /^imap\.(gmail|googlemail)\.com$/],
+      ["Microsoft 365", /^(outlook\.office365\.com|outlook\.office\.com|imap-mail\.outlook\.com)$/],
+      ["iCloud", /^(p\d+-)?imap\.mail\.me\.com$/],
+      ["Fastmail", /^(imap\.fastmail\.com|mail\.messagingengine\.com)$/],
+      ["Yahoo", /^((export\.)?imap\.mail\.yahoo\.com|imap\.aol\.com)$/],
+      ["Zoho", /^imap(pro)?\.zoho\.(com|eu|in|com\.au|jp|com\.cn|sa|ca)$/],
+    ];
+    return providers.find(([, pattern]) => pattern.test(host))?.[0] ?? null;
+  },
+
+  /** Whether two mailboxes ({ host, user }) are the same one, as email.js sameMailbox reads them: host in any case, the same user. */
+  _emailSameMailbox(a, b) {
+    const host = (m) => String(m?.host || "").trim().toLowerCase();
+    const user = (m) => String(m?.user || "").trim();
+    return !!host(a) && !!user(a) && host(a) === host(b) && user(a) === user(b);
+  },
+
+  /** The IMAP mailbox a save would leave: the boxes, or the saved host or user where one is left empty (as the route reads it). */
+  _emailMailboxNow() {
+    const b = this._emailBoxes("imap");
+    const saved = this._emailSaved?.imap || {};
+    return { host: b.host.value.trim() || saved.host || "", user: b.user.value.trim() || saved.user || "" };
+  },
+
+  /**
+   * What the owner trusts to say who sent a mail, for the IMAP mailbox in force (email.js senderCheckFor): nothing when
+   * it was set for another mailbox (host or user), or for a provider Tarsee knows.
+   */
   _emailSenderCheck(cfg) {
     const s = cfg?.senderCheck || {};
-    const same = typeof s.imapHost === "string" && s.imapHost.trim().toLowerCase() === String(cfg?.imap?.host || "").trim().toLowerCase();
-    return { trustFromLine: same && s.trustFromLine === true, authservId: same && typeof s.authservId === "string" ? s.authservId : "" };
+    const imap = { host: cfg?.imap?.host, user: cfg?.imap?.user };
+    if (this._emailProviderOf(imap.host) || !this._emailSameMailbox({ host: s.imapHost, user: s.imapUser }, imap)) {
+      return { trustFromLine: false, authservId: "" };
+    }
+    return { trustFromLine: s.trustFromLine === true, authservId: typeof s.authservId === "string" ? s.authservId : "" };
+  },
+
+  /** The "Who really sent it" block, once drawn. */
+  _emailSenderBlock() {
+    return this.elements.emailAllowlist?.closest(".form-group")?.parentElement?.querySelector("[data-email-sender-check]") || null;
   },
 
   /**
    * "Who really sent it", under the allowlist: anyone can write any address on a From line, so Tarsee answers an
-   * address on the list only when the mail provider vouches for it (email.js senderVouched). For a mail server of the
-   * owner's own: its name in its Authentication-Results line, or, if it checks nothing, "trust the From line" (off
-   * unless the owner ticks it), with what that means. Then the one-time note, if mail was refused for want of either.
+   * address on the list only when the mail provider vouches for it (email.js senderVouched). For a provider Tarsee
+   * knows there is nothing to set. For a mail server of the owner's own: its name in its Authentication-Results line,
+   * typed by the owner, or, if it writes none, "trust the From line" (off unless the owner ticks it), with what that
+   * costs; one or the other. Both are for the exact mailbox they were set for (_emailSenderCheckFollow). Then the
+   * one-time note, if mail was refused for want of either: it never shows a name a mail wrote.
    */
   renderEmailSenderCheck(cfg, note) {
     const allow = this.elements.emailAllowlist;
     const group = allow?.closest(".form-group");
     if (!group) return;
-    let block = group.parentElement?.querySelector("[data-email-sender-check]");
+    let block = this._emailSenderBlock();
     if (!block) {
       block = document.createElement("div");
       block.dataset.emailSenderCheck = "";
       block.innerHTML = `<h4 style="margin-top:18px; margin-bottom:8px;">Who really sent it</h4>`
-        + `<div class="hint mb-3">Anyone can write any address on a mail's From line. So Tarsee answers an address on your list only when your mail provider vouches that the mail really came from it: the provider's Authentication-Results line must say DMARC, DKIM or SPF passed for that address. Gmail, iCloud, Fastmail, Yahoo, Zoho and Microsoft 365 do this, and Tarsee knows how they write it.</div>`
+        + `<div class="hint mb-3">Anyone can write any address on a mail's From line. So Tarsee answers an address on your list only when your mail provider vouches that the mail really came from it: the provider's own Authentication-Results line must say DMARC, DKIM or SPF passed for that address. Gmail, iCloud, Fastmail, Yahoo, Zoho and Microsoft 365 do this, and Tarsee knows how they write it.</div>`
+        + `<div class="hint mb-3" data-email-sender-known hidden></div>`
+        + `<div data-email-sender-own>`
         + `<div class="form-group">`
         + `<label for="settingsEmailAuthservId">Your own mail server's name in its Authentication-Results line</label>`
         + `<input type="text" id="settingsEmailAuthservId" placeholder="mail.example.com" autocomplete="off" spellcheck="false">`
-        + `<div class="hint">Only for a mail server Tarsee doesn't know. Leave it empty for the providers above.</div>`
+        + `<div class="hint">For a mail server of your own that writes this line on every mail it takes in. Type the name yourself, from your server's settings: Tarsee trusts only the topmost such line in a mail, and never a name taken from a mail, as anyone can write such a line into a mail they send.</div>`
         + `</div><div class="form-group">`
         + `<label class="checkbox-label"><input type="checkbox" id="settingsEmailTrustFromLine"><span>My mail server doesn't check senders: trust the From line</span></label>`
         + `<div class="hint" style="color: var(--warning)">Only for a mail server of your own that adds no Authentication-Results line. With this on, anyone who writes an address from your list on the From line can talk to Tarsee by email.</div>`
-        + `</div>`
+        + `</div></div>`
         + `<div data-email-sender-note hidden></div>`;
       block.addEventListener("click", (ev) => {
         if (ev.target.closest("[data-email-sender-note-ok]")) this.dismissEmailSenderNote(ev.target.closest("button"));
       });
       group.after(block);
+      // Set by the owner now: for the mailbox the form shows now.
+      const setHere = () => {
+        this._emailTrustFor = this._emailMailboxNow();
+        this._emailSenderCheckFollow();
+      };
+      block.querySelector("#settingsEmailAuthservId").addEventListener("input", setHere);
+      block.querySelector("#settingsEmailTrustFromLine").addEventListener("change", setHere);
+      const imap = this._emailBoxes("imap");
+      for (const box of [imap.host, imap.user]) box?.addEventListener("input", () => this._emailSenderCheckFollow());
     }
     const own = this._emailSenderCheck(cfg);
     block.querySelector("#settingsEmailAuthservId").value = own.authservId;
     block.querySelector("#settingsEmailTrustFromLine").checked = own.trustFromLine;
+    // Drawn for the mailbox in force; the form's boxes may already show another (an edit not saved yet).
+    this._emailTrustFor = { host: String(cfg?.imap?.host || "").trim().toLowerCase(), user: String(cfg?.imap?.user || "").trim() };
+    this._emailSenderCheckFollow();
 
     const box = block.querySelector("[data-email-sender-note]");
-    const host = String(cfg?.imap?.host || "").trim().toLowerCase();
-    const fresh = note && typeof note === "object" && !note.dismissedAt && String(note.host || "").trim().toLowerCase() === host && !own.trustFromLine;
+    const fresh = note && typeof note === "object" && !note.dismissedAt && !own.trustFromLine
+      && this._emailSameMailbox({ host: note.host, user: note.user }, { host: cfg?.imap?.host, user: cfg?.imap?.user });
     if (!fresh) {
       box.hidden = true;
       box.innerHTML = "";
@@ -2678,20 +2737,55 @@ const Settings = {
     const esc = (s) => this._esc(s);
     const when = Number.isNaN(Date.parse(note.at)) ? "" : ` on ${new Date(note.at).toLocaleString()}`;
     const from = note.from ? ` from <strong>${esc(note.from)}</strong>` : "";
+    // Nothing the mail wrote but its From address, which is on the owner's list: a server name in it may be the sender's.
     const why = note.provider
       ? `${esc(note.provider)} wrote no Authentication-Results line on it that Tarsee could read, so nothing said who really sent it.`
-      : `your mail server (${esc(note.host)}) wrote no Authentication-Results line on it that Tarsee knows to trust, so nothing said who really sent it.`;
-    const what = note.seen
-      ? ` The topmost such line in it names <strong>${esc(note.seen)}</strong>. If that is your own mail server's name, type it in the box above; anyone can write such a line into a mail they send, so do this only if you know it is your server's.`
-      : note.provider ? "" : ` If your mail server doesn't check senders, tick "My mail server doesn't check senders" above.`;
+        + ` That happens with mail put in the mailbox some other way than ${esc(note.provider)} receiving it, such as an import, a filter or another app signed in to the mailbox. Tarsee won't answer such mail.`
+      : `your mail server (${esc(note.host)}) wrote no Authentication-Results line on top of it that Tarsee knows to trust, so nothing said who really sent it.`
+        + ` Tarsee trusts only a server name you type yourself, never one taken from a mail: anyone can write such a line into a mail they send.`
+        + ` To find your server's name, send this mailbox a mail from another account (Gmail, for example), open it here and show its source (Show original, or View source).`
+        + ` If your server checks senders, the topmost Authentication-Results line is its own, and its name is the word right after the colon: check it against your mail server's own settings (its authserv-id, often its host name), then type it above.`
+        + ` If there is no such line, your server doesn't check senders: tick "trust the From line" above, knowing that anyone who writes an address from your list on the From line can then talk to Tarsee.`
+        + ` Until then Tarsee won't answer such mail.`;
     box.hidden = false;
     box.innerHTML = `<div class="memory-item cron-job" role="status">`
       + `<span class="memory-badge cron-state cron-state-waiting">Mail not answered</span>`
-      + `<div class="memory-content"><div class="cron-note">Tarsee didn't answer mail${from}${esc(when)}: ${why}${what} Until then Tarsee won't answer such mail.</div></div>`
+      + `<div class="memory-content"><div class="cron-note">Tarsee didn't answer mail${from}${esc(when)}: ${why}</div></div>`
       + `<span class="cron-actions"><button type="button" class="btn btn-sm btn-secondary" data-email-sender-note-ok>OK</button></span></div>`;
   },
 
-  /** The owner's OK on the note: it is hidden for this server, until a change of server or trust (routes/settings.js). */
+  /**
+   * Keeps "Who really sent it" with the mailbox it was set for (_emailTrustFor): once the form's IMAP host or user is
+   * another mailbox (typed, or a preset), the box is unticked and the name cleared, for the owner to set again if it
+   * applies there; the route drops it the same way. For a provider Tarsee knows there is nothing to set. The name and
+   * the box are one or the other: with a name, Tarsee goes by that server's own verdict.
+   */
+  _emailSenderCheckFollow() {
+    const block = this._emailSenderBlock();
+    if (!block) return;
+    const name = block.querySelector("#settingsEmailAuthservId");
+    const trust = block.querySelector("#settingsEmailTrustFromLine");
+    const now = this._emailMailboxNow();
+    if (!this._emailSameMailbox(now, this._emailTrustFor)) {
+      name.value = "";
+      trust.checked = false;
+      this._emailTrustFor = now;
+    }
+    const provider = this._emailProviderOf(now.host);
+    const known = block.querySelector("[data-email-sender-known]");
+    known.hidden = !provider;
+    known.textContent = provider ? `${provider} checks who sent each mail itself, and Tarsee reads its own Authentication-Results line: there is nothing to set here.` : "";
+    block.querySelector("[data-email-sender-own]").hidden = !!provider;
+    if (provider) {
+      name.value = "";
+      trust.checked = false;
+    }
+    trust.disabled = !!name.value.trim();
+    if (trust.disabled) trust.checked = false;
+    name.disabled = trust.checked;
+  },
+
+  /** The owner's OK on the note: it is hidden for this mailbox, until a change of mailbox or trust (routes/settings.js). */
   async dismissEmailSenderNote(btn) {
     if (btn) btn.disabled = true;
     try {
@@ -2725,6 +2819,11 @@ const Settings = {
       yahoo:    { imapHost: "imap.mail.yahoo.com",   imapPort: 993, smtpHost: "smtp.mail.yahoo.com",   smtpPort: 465 },
       custom:   null,
     };
+    // A preset is another server: what the owner trusted under "Who really sent it" doesn't go along, whatever it was.
+    const anotherServer = () => {
+      this._emailTrustFor = null;
+      this._emailSenderCheckFollow();
+    };
     if (name === "custom") {
       this.elements.emailImapHost.value = "";
       this.elements.emailImapPort.value = "";
@@ -2733,6 +2832,7 @@ const Settings = {
       this.elements.emailImapHost.focus();
       this._emailPasswordHint("imap");
       this._emailPasswordHint("smtp");
+      anotherServer();
       return;
     }
     const p = presets[name];
@@ -2744,6 +2844,7 @@ const Settings = {
     // Another provider's servers: the password boxes say if the saved passwords can't go along.
     this._emailPasswordHint("imap");
     this._emailPasswordHint("smtp");
+    anotherServer();
   },
 
   async saveEmailChannel() {
@@ -2770,11 +2871,18 @@ const Settings = {
         fromName: e.emailFromName.value.trim(),
         allowlistFromAddresses: parseAddrs(e.emailAllowlist.value),
       };
-      // Who really sent a mail: the owner's own (renderEmailSenderCheck), sent with every save.
+      // Who really sent a mail (renderEmailSenderCheck), sent with every save: what the owner set, with the mailbox they
+      // set it for, so the route keeps it for that mailbox only. Nothing trusted for a provider Tarsee knows.
       const authservId = document.getElementById("settingsEmailAuthservId");
       const trustFromLine = document.getElementById("settingsEmailTrustFromLine");
       if (authservId && trustFromLine) {
-        payload.senderCheck = { trustFromLine: !!trustFromLine.checked, authservId: authservId.value.trim() };
+        this._emailSenderCheckFollow();
+        const check = { trustFromLine: !!trustFromLine.checked, authservId: authservId.value.trim() };
+        if ((check.trustFromLine || check.authservId) && this._emailTrustFor) {
+          check.imapHost = this._emailTrustFor.host;
+          check.imapUser = this._emailTrustFor.user;
+        }
+        payload.senderCheck = check;
       }
 
       // Only include passwords if the user typed new ones — empty string means "keep existing"
@@ -2807,6 +2915,8 @@ const Settings = {
       e.emailSmtpPassword.value = "";
 
       App.showToast(payload.enabled ? "Email saved, connecting…" : "Email saved (off)", "success");
+      // What the save didn't keep, in the route's words ("Who really sent it" set for another mailbox).
+      if (typeof answer.note === "string" && answer.note) App.showToast(answer.note, "warning");
       this.showChannelStatus("email", { wait: payload.enabled });
 
       // The saved-password placeholders ("leave blank to keep existing") come from the server's hasPassword flags.

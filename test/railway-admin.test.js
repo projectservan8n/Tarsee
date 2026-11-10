@@ -18,7 +18,10 @@ process.env.TARSEE_DATA_DIR = path.join(tmp, "data");
 process.env.TARSEE_WORKSPACE_DIR = path.join(tmp, "workspace");
 process.env.ENCRYPTION_KEY = "railway-admin-test-encryption-key-0123456789";
 for (const k of ["RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_ENVIRONMENT_ID", "RAILWAY_SERVICE_ID"]) delete process.env[k];
-const { railwayAdmin, ACTIONS, DOCS, API_URL, TOKEN_KEY, maskValue, hereOf } = await import("../src/lib/railway-admin.js");
+const { railwayAdmin, ACTIONS, DOCS, API_URL, TOKEN_KEY, maskValue, hereOf, startTerminalCliScan } = await import("../src/lib/railway-admin.js");
+// The Terminal's own Claude Code, which Tarsee reads when it starts: none here, so no test reads the claude installed
+// on the machine it runs on (test/railway-tool-limits.test.js covers that read).
+await startTerminalCliScan?.({ find: async () => [], log: () => {} });
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = fs.readFileSync(path.join(here, "../src/lib/railway-admin.js"), "utf8");
@@ -572,6 +575,12 @@ describe("wording", () => {
     assert.match(section, /appears nowhere in its AI engines' code/);
     assert.match(section, /A variable one of Tarsee's own variables is filled in from by a Railway reference counts as that variable/);
     assert.match(section, /onto Tarsee's own service, or into a variable it is filled in from, while get_key is denied/);
+    // Round 4: the Terminal's own Claude Code, which TARSEE_AUTO_UPDATE_CLI=1 can make newer, and a reference to a
+    // service the project doesn't have.
+    assert.match(section, /the Terminal's own claude program/);
+    assert.match(section, /TARSEE_AUTO_UPDATE_CLI=1/);
+    assert.match(section, /only TZ and the tuning settings/);
+    assert.match(section, /a service the project doesn't have/);
   });
 
   it("config/env.js seeds the same Railway section as the default TOOLS.md", () => {
@@ -595,7 +604,7 @@ describe("the real vault (here a temporary one) and tools.js", () => {
   let realFetch;
   before(async () => {
     const { setKey } = await import("../src/lib/key-vault.js");
-    setKey("RAILWAY_API_TOKEN", TOKEN, "test token");
+    setKey("RAILWAY_API_TOKEN", TOKEN, "test token", { owner: true });   // as the owner saves it, in Settings > Keys
     setKey("ALERTS_WEBHOOK", HOOK, "test webhook");
     realFetch = globalThis.fetch;
   });

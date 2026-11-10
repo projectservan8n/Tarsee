@@ -40,15 +40,19 @@
  *     that changes how Railway builds or runs Tarsee, how programs or shells start, where files are, who can sign in,
  *     or which AI and keys Tarsee uses is ever set there. Nor is any name that appears in the shipped code of Tarsee's
  *     AI engines or its browser library (engine-env-names.json, kept up to date by test/railway-tool-limits.test.js),
- *     since an engine may read it. With a deploy or without, so nothing is left for the next redeploy to apply. Each
- *     refusal says where the owner makes that change instead (Railway's dashboard);
+ *     or in the Terminal's own Claude Code (read when Tarsee starts, since TARSEE_AUTO_UPDATE_CLI=1 can make it newer
+ *     than the one the list comes from; while it can't be read, only TZ and the tuning settings are set there), since
+ *     an engine may read it. With a deploy or without, so nothing is left for the next redeploy to apply. Each refusal
+ *     says where the owner makes that change instead (Railway's dashboard);
  *   - a variable that any variable on Tarsee's own service is filled in from by a Railway reference the owner made (on
  *     another service, on Tarsee's own, through a shared variable, through a chain of them) counts as that variable:
  *     at Tarsee's next deploy, whoever starts it, a write to it is a write to Tarsee's own service under the
- *     referencing name. So the rules above, and the get_key one below, apply to that name too (feedersOfOwnService). A
- *     sealed variable can't be read, so while a guarded one (or a link on the way to it) is sealed, nothing is set in
- *     that environment of Tarsee's project, and while any is, no vault key either if get_key is denied. So a redeploy
- *     of Tarsee only ever applies changes the owner made;
+ *     referencing name. So the rules above, and the get_key one below, apply to that name too (feedersOfOwnService).
+ *     Names that differ only in case are different variables, and each one's references are followed. A link the walk
+ *     can't follow (a sealed variable, whose value Railway never shows, or a reference to a service the project doesn't
+ *     have) hides what comes after it, so while one stands between a guarded variable and what fills it, nothing is set
+ *     in that environment of Tarsee's project, and while any does, no vault key either if get_key is denied. So a
+ *     redeploy of Tarsee only ever applies changes the owner made;
  *   - while the owner has denied get_key in Tool Permissions, no vault key goes onto Tarsee's own service (from_key),
  *     nor into a variable it is filled in from: after the next deploy the AI's commands could read it there.
  * These hold whichever OS user the AI's commands run as: a variable on Tarsee's own service reaches the server itself.
@@ -57,6 +61,9 @@
  * environment, the service, never a value or a token.
  */
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { AUTH_ENV_RE, PROVIDER_KEY_NAMES, TARSEE_SECRETS } from "../ai/engine-env.js";
 
 export const ACTIONS = Object.freeze(["list_projects", "list_variables", "set_variable", "redeploy"]);
@@ -139,9 +146,10 @@ export function hereOf(env = process.env) {
  * @param {number} [deps.timeoutMs]
  * @param {Function} [deps.getKeyDenied] true when the owner has denied get_key in Settings > Tool Permissions
  *   (defaults to lib/security-manager.js, the same check agent-env.js makes)
+ * @param {Function} [deps.terminalCli] the Terminal's own Claude Code as read when Tarsee started (terminalCliNames)
  * @returns {Promise<string>}
  */
-export async function railwayAdmin(args = {}, { vault = null, env = process.env, fetch: fetchImpl = globalThis.fetch, log = (line) => console.log(line), timeoutMs = TIMEOUT_MS, getKeyDenied = getKeyDeniedByPolicy } = {}) {
+export async function railwayAdmin(args = {}, { vault = null, env = process.env, fetch: fetchImpl = globalThis.fetch, log = (line) => console.log(line), timeoutMs = TIMEOUT_MS, getKeyDenied = getKeyDeniedByPolicy, terminalCli = terminalCliNames } = {}) {
   args = args && typeof args === "object" ? args : {};
   const action = String(args.action ?? "");
   const note = { project: null, env: null, service: null, extra: [], secrets: [], outcomeUnknown: false };
@@ -172,7 +180,7 @@ export async function railwayAdmin(args = {}, { vault = null, env = process.env,
     const ownTokens = [...new Set([token, String(env?.[TOKEN_KEY] ?? "").trim()])].filter((t) => t.length >= 16);
     note.secrets.push(token, ...ownTokens);
     const api = (doc, variables) => gql(doc, variables, { token, fetchImpl, timeoutMs });
-    const ctx = { args, v, api, note, ownTokens, here: hereOf(env), getKeyDenied };
+    const ctx = { args, v, api, note, ownTokens, here: hereOf(env), getKeyDenied, terminalCli };
     const run = { list_projects: listProjects, list_variables: listVariables, set_variable: setVariable, redeploy }[action];
     const out = await run(ctx);
     logLine("ok");
@@ -349,7 +357,8 @@ const SELF_RESTART = "This is Tarsee's own service: the deploy restarts Tarsee, 
  *   2. the families and names below (sign-in, the AI, Tarsee's own keys, the build, the programs and shells, the
  *      browser, what Tarsee and its engines read): refused, saying why. These come first because some look like a key
  *      of the owner's (GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY, SELENIUM_REMOTE_URL, GOOGLE_API_KEY);
- *   3. SCRIPT_KEY: set, unless the name appears in the AI engines' or the browser library's code (inEngineCode);
+ *   3. SCRIPT_KEY: set, unless the name appears in the AI engines' or the browser library's code (inEngineCode) or in
+ *      the Terminal's own Claude Code (inTerminalCli), and only while that program could be read;
  *   4. anything else: refused, with the rule.
  * test/railway-tool-limits.test.js scans Tarsee's code, its start-up script and its Dockerfile for every variable they
  * read, re-extracts the engines' names from node_modules, and fails, naming it, when one would get through.
@@ -441,12 +450,17 @@ const READ_BY_TARSEE = new Set([
  */
 const ENGINE_NAMES_FILE = new URL("./engine-env-names.json", import.meta.url);
 
-/** The list's text as { names: Set, runs: [] }; throws when it isn't one. */
+/**
+ * The list's text as { names: Set, runs: [], strings: Set }; throws when it isn't one. strings: the runs the engines'
+ * code holds as one string each that hold a key-shaped name without being one (the Terminal's read counts them whole
+ * too, as the list's own check does).
+ */
 export function parseEngineNames(text) {
   const data = JSON.parse(text);
   const strings = (x) => Array.isArray(x) && x.every((s) => typeof s === "string");
   if (!strings(data?.names) || !data.names.length || !strings(data?.runs)) throw new Error("it has no list of names and runs");
-  return { names: new Set(data.names), runs: data.runs };
+  if (data.strings !== undefined && !strings(data.strings)) throw new Error("its strings are not a list of strings");
+  return { names: new Set(data.names), runs: data.runs, strings: new Set(data.strings || []) };
 }
 
 let shippedEngineNames;
@@ -476,6 +490,297 @@ export function inEngineCode(name, list = shippedEngineNames) {
   return list.names.has(name) || list.runs.some((run) => heldInRun(run, name));
 }
 
+// ---------------------------------------------------------------- the Terminal's own Claude Code
+
+/*
+ * engine-env-names.json comes from the Claude Code CLI the Agent SDK in node_modules ships, the version the image pins
+ * for the Terminal's claude too. With TARSEE_AUTO_UPDATE_CLI=1 the start-up script installs the latest Claude Code as
+ * the Terminal's claude instead, and a variable on Tarsee's own service reaches that program as well, so a newer one
+ * can read a name the list lacks. So Tarsee reads the Terminal's claude once when it starts (server.js calls
+ * startTerminalCliScan after it listens; a write that needs it before then starts it), streamed in pieces of
+ * SCAN_PIECE so the server keeps answering, the same way test/railway-tool-limits.test.js reads the engines. Its
+ * key-shaped names are refused on Tarsee's own service like the list's. Before each write that needs it, the programs
+ * are looked at again (path, size, times and file id), and read again when one changed. While none of that works (a
+ * read fails, or is still going after its waitMs), only TZ and the tuning settings are set on Tarsee's own service.
+ *
+ * Where the Terminal's claude is (terminalClaudePrograms): /usr/local/bin/claude, where the image installs it and what
+ * the Terminal runs (after agent isolation too, resolved by agent-terminal), each folder on the PATH, and ~/.local/bin
+ * (Claude Code's own installer), each followed to its real file. A file in a Claude Code package brings the package's
+ * native programs with it, so a launcher can't hide the program it starts. The Agent SDK's own copy is left out: the
+ * list has its names. All of it only ever adds names to refuse, and the image's /usr/local is root's.
+ */
+const SCAN_PIECE = 1 << 20;         // 1 MiB a piece: between two, the server answers what is waiting
+const MAX_RUN = 1 << 20;            // no string in a program is this long; a run that is fails the read
+const TERMINAL_WAIT_MS = 30_000;    // how long a write waits for a read in progress (one takes a second or two)
+const RUN_BYTE = new Uint8Array(256);
+for (let c = 0x30; c <= 0x39; c++) RUN_BYTE[c] = 1;
+for (let c = 0x41; c <= 0x5a; c++) RUN_BYTE[c] = 1;
+RUN_BYTE[0x5f] = 1;
+const QUOTE_BYTES = new Set([0x22, 0x27, 0x60]);
+
+/**
+ * The key-shaped names a run holds (up to `limit`), as heldInRun finds them: one may start at the run's start or after
+ * any character but an underscore, and end at its end or before any character but an underscore. The same rule
+ * test/railway-tool-limits.test.js keeps the list's runs by.
+ */
+export function keyNamesInRun(run, limit = Infinity) {
+  const out = new Set();
+  for (const ending of SCRIPT_KEY_ENDINGS) {
+    for (let p = run.indexOf(ending); p !== -1; p = run.indexOf(ending, p + 1)) {
+      const end = p + ending.length;
+      if (end < run.length && run[end] === "_") continue;
+      for (let i = p - 1; i >= 0; i--) {
+        if (run[i] === "_") {
+          if (i === p - 1 || i === 0 || run[i - 1] === "_" || run[i + 1] === "_") break;
+          continue;
+        }
+        if (run[i] >= "A" && run[i] <= "Z" && (i === 0 || run[i - 1] !== "_")) {
+          out.add(run.slice(i, end));
+          if (out.size >= limit) return [...out];
+        }
+      }
+    }
+  }
+  return [...out];
+}
+
+/**
+ * The key-shaped names in a program (any file), read in pieces of `chunkBytes`: never the whole file in memory, and the
+ * server gets a turn between pieces. A run is capitals, digits and underscores one after another. names: the runs that
+ * are one string (between two of the same quote) somewhere in the file and are key-shaped. runs: every other run that
+ * holds a key-shaped name, since a native program can keep its strings one after another with nothing between them
+ * (heldInRun finds a name in one). The same rules test/railway-tool-limits.test.js reads the engines with, so the two
+ * agree. Throws when the file can't be read.
+ */
+export async function scanProgramNames(file, { chunkBytes = SCAN_PIECE } = {}) {
+  const whole = new Set(), inside = new Set();
+  // The runs in buf[0, end) that hold an underscore. buf[0] is the file's first byte, or a byte that is no run's.
+  const scan = (buf, end) => {
+    for (let i = buf.indexOf(0x5f); i !== -1 && i < end; i = buf.indexOf(0x5f, i)) {
+      let a = i, b = i + 1;
+      while (a > 0 && RUN_BYTE[buf[a - 1]]) a--;
+      while (b < end && RUN_BYTE[buf[b]]) b++;
+      const run = buf.toString("latin1", a, b);
+      const set = a > 0 && b < end && QUOTE_BYTES.has(buf[a - 1]) && buf[b] === buf[a - 1] ? whole : inside;
+      if (!set.has(run) && keyNamesInRun(run, 1).length) set.add(run);
+      i = b;
+    }
+  };
+  // What a piece ends with that may go on in the next: the run at its end, and the byte before it (for its quote).
+  let carry = null;
+  for await (const piece of fs.createReadStream(file, { highWaterMark: chunkBytes })) {
+    const buf = carry ? Buffer.concat([carry, piece]) : piece;
+    let cut = buf.length;
+    while (cut > 0 && RUN_BYTE[buf[cut - 1]]) cut--;
+    scan(buf, cut);   // every run before `cut` ends before it, with the byte after it in hand
+    const keep = Math.max(0, cut - 1);
+    if (buf.length - keep > MAX_RUN) throw new Error(`${file} has a run of capitals over ${MAX_RUN} bytes long, which is no program's string`);
+    carry = Buffer.from(buf.subarray(keep));
+  }
+  if (carry) scan(carry, carry.length);   // the last run ends with the file
+  // A run seen as one string somewhere is that string, wherever else it stands.
+  for (const run of whole) inside.delete(run);
+  return { names: new Set([...whole].filter((run) => SCRIPT_KEY.test(run))), runs: [...inside] };
+}
+
+const NOT_THERE = new Set(["ENOENT", "ENOTDIR"]);
+const CLAUDE_CODE_PACKAGE = "@anthropic-ai/claude-code";
+/** This checkout's node_modules/@anthropic-ai, where the Agent SDK and its own Claude Code are. */
+const SDK_SCOPE = fileURLToPath(new URL("../../node_modules/@anthropic-ai/", import.meta.url));
+
+/** The `name` in `dir`/package.json, or null. */
+async function packageNameIn(dir) {
+  const file = path.join(dir, "package.json");
+  try {
+    const st = await fs.promises.stat(file);
+    if (!st.isFile() || st.size > 64 * 1024) return null;
+    return JSON.parse(await fs.promises.readFile(file, "utf8"))?.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The native programs of the Claude Code package `file` is in (its platform packages, nested or beside it), if any. */
+async function packagePrograms(file) {
+  let dir = path.dirname(file);
+  for (let up = 0; up < 3; up++, dir = path.dirname(dir)) {
+    if (await packageNameIn(dir) !== CLAUDE_CODE_PACKAGE) continue;
+    const out = [];
+    for (const scope of [path.join(dir, "node_modules", "@anthropic-ai"), path.dirname(dir)]) {
+      let entries;
+      try {
+        entries = await fs.promises.readdir(scope, { withFileTypes: true });
+      } catch (err) {
+        if (NOT_THERE.has(err?.code)) continue;
+        throw err;
+      }
+      for (const e of entries) {
+        if (e.name.startsWith("claude-code-") && (e.isDirectory() || e.isSymbolicLink())) out.push(path.join(scope, e.name, "claude"), path.join(scope, e.name, "claude.exe"));
+      }
+    }
+    return out;
+  }
+  return [];
+}
+
+/**
+ * The programs the Terminal may run as claude, each as its real file, the Agent SDK's own copy left out (see above).
+ * Throws when a place can't be looked in (a folder it may not read): then no one can say what the Terminal runs.
+ */
+export async function terminalClaudePrograms({ env = process.env, home = os.homedir(), fixedDirs = process.platform === "win32" ? [] : ["/usr/local/bin"] } = {}) {
+  const exes = process.platform === "win32" ? ["claude.exe", "claude"] : ["claude"];
+  const dirs = [...fixedDirs, ...String(env?.PATH ?? env?.Path ?? "").split(path.delimiter), path.join(home, ".local", "bin")].filter((d) => d && path.isAbsolute(d));
+  let sdkScope = null;
+  try { sdkScope = await fs.promises.realpath(SDK_SCOPE); } catch { /* no Agent SDK installed: nothing to leave out */ }
+  const isSdkCopy = (real) => {
+    if (!sdkScope) return false;
+    const rel = path.relative(sdkScope, real);
+    return !!rel && !rel.startsWith("..") && !path.isAbsolute(rel) && /^claude-agent-sdk(?:-[^\\/]+)?[\\/]/.test(rel);
+  };
+  const found = [], seen = new Set();
+  const add = async (file) => {
+    let st;
+    try {
+      st = await fs.promises.stat(file, { bigint: true });
+    } catch (err) {
+      if (NOT_THERE.has(err?.code)) return;
+      throw err;
+    }
+    if (!st.isFile()) return;
+    const real = await fs.promises.realpath(file);
+    if (isSdkCopy(real)) return;
+    // A hard link (npm's install of Claude Code links its native program into bin/) is read once.
+    const id = st.ino ? `${st.dev}:${st.ino}` : real;
+    if (seen.has(id)) return;
+    seen.add(id);
+    found.push(real);
+    for (const more of await packagePrograms(real)) await add(more);
+  };
+  for (const dir of dirs) for (const exe of exes) await add(path.join(dir, exe));
+  return found;
+}
+
+/** The programs as they are now (path, size, times, file id): a read is redone when this changes. Throws for a non-file. */
+async function programsNow(files) {
+  const out = [];
+  for (const file of files) {
+    const st = await fs.promises.stat(file, { bigint: true });
+    if (!st.isFile()) throw new Error(`${file} is not a program file`);
+    out.push(`${file}\0${st.size}\0${st.mtimeNs}\0${st.ctimeNs}\0${st.dev}:${st.ino}`);
+  }
+  return out.sort().join("\n");
+}
+
+/** The read in progress or done: { find, log, waitMs, promise, result }, result an Error when it failed. */
+let terminalScan = null;
+
+/**
+ * Reads the Terminal's own Claude Code (`find` lists its programs) in the background and keeps what it holds for the
+ * writes to come. Called by server.js once Tarsee listens on Railway. Resolves to { files, names, runs }, or to an
+ * Error when it can't be read; never rejects. Logs one line either way.
+ */
+export function startTerminalCliScan({ find = terminalClaudePrograms, log = (line) => console.log(line), waitMs = TERMINAL_WAIT_MS } = {}) {
+  const scan = { find, log, waitMs, started: Date.now(), result: null };
+  scan.promise = readTerminalCli(scan).then((result) => {
+    scan.result = result;
+    return result;
+  });
+  terminalScan = scan;
+  return scan.promise;
+}
+
+async function readTerminalCli({ find, log }) {
+  const started = Date.now();
+  let result;
+  try {
+    const files = [...await find()].map(String);
+    const signature = await programsNow(files);
+    const names = new Set(), runs = new Set();
+    for (const file of files) {
+      const got = await scanProgramNames(file);
+      for (const n of got.names) names.add(n);
+      for (const r of got.runs) runs.add(r);
+    }
+    // A run the engines' code holds as one string somewhere is that string here too, as the list's own check has it
+    // (it reads the Agent SDK's JavaScript, where every run is one, along with the CLI).
+    const list = shippedEngineNames instanceof Error ? null : shippedEngineNames;
+    const known = (run) => !!list && (list.names.has(run) || list.strings.has(run));
+    result = { files, signature, names, runs: [...runs].filter((run) => !known(run)) };
+  } catch (err) {
+    result = err instanceof Error ? err : new Error(String(err));
+  }
+  try { log(terminalLine(result, Date.now() - started)); } catch { /* logging never fails the read */ }
+  return result;
+}
+
+/** The one log line about the read: what it found that engine-env-names.json lacks, or why it couldn't. */
+function terminalLine(result, ms) {
+  if (result instanceof Error) {
+    return `[railway] warning: could not read the Terminal's Claude Code (${result.message}). Until it can, tarsee_railway sets only TZ and the tuning settings on Tarsee's own service; the owner sets anything else there by hand in Railway's dashboard.`;
+  }
+  if (!result.files.length) return "[railway] the Terminal's Claude Code: none besides the Agent SDK's own, whose names engine-env-names.json has";
+  const list = shippedEngineNames instanceof Error ? null : shippedEngineNames;
+  const listedRuns = new Set(list?.runs || []);
+  const lacks = (n) => !list || !inEngineCode(n, list);
+  const fresh = new Set([...result.names].filter(lacks));
+  for (const run of result.runs) if (!listedRuns.has(run)) for (const n of keyNamesInRun(run)) if (lacks(n)) fresh.add(n);
+  const newNames = [...fresh].sort();
+  const what = newNames.length
+    ? `It holds ${newNames.length} key-shaped names engine-env-names.json lacks, now refused on Tarsee's own service too: ${newNames.slice(0, 20).join(", ")}${newNames.length > 20 ? ` and ${newNames.length - 20} more` : ""}.`
+    : "It holds no key-shaped name engine-env-names.json lacks.";
+  return `[railway] the Terminal's Claude Code: read ${result.files.join(", ")} in ${(ms / 1000).toFixed(1)} s. ${what}`;
+}
+
+/** The last read's result, or null (none done yet, or one in progress). */
+const lastTerminalRead = () => terminalScan?.result ?? null;
+
+/**
+ * The Terminal's own Claude Code for a write that needs it: { files, names, runs }, or an Error while it can't be read.
+ * Starts the read when nothing has; reads again when a program changed since, or when the last read failed; and waits
+ * for a read in progress up to its waitMs (an Error after that). Never throws.
+ */
+export async function terminalCliNames() {
+  if (!terminalScan) startTerminalCliScan();
+  const was = terminalScan;
+  if (was.result) {
+    let same = false;
+    if (!(was.result instanceof Error)) {
+      try { same = (await programsNow([...await was.find()].map(String))) === was.result.signature; } catch { same = false; }
+    }
+    if (!same && terminalScan === was) startTerminalCliScan(was);
+  }
+  const scan = terminalScan;
+  if (scan.result) return scan.result;
+  // A read already going for longer than its waitMs is not waited for again.
+  const tooLong = () => new Error(`reading it took longer than ${scan.waitMs >= 1000 ? `${Math.round(scan.waitMs / 1000)} seconds` : `${scan.waitMs} ms`}`);
+  const left = scan.waitMs - (Date.now() - scan.started);
+  if (left <= 0) return tooLong();
+  let timer;
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(tooLong()), left); });
+  try {
+    return await Promise.race([scan.promise, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** ctx.terminalCli()'s answer, an Error when it fails or gives none that can be used. */
+async function terminalNow({ terminalCli }) {
+  try {
+    const got = await terminalCli();
+    if (got instanceof Error || got == null) return got ?? null;
+    if (!Array.isArray(got.files) || !(got.names instanceof Set) || !Array.isArray(got.runs)) return new Error("the read gave no list of names");
+    return got;
+  } catch (err) {
+    return err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+/** Whether `name` appears in the Terminal's own Claude Code as read (terminalCliNames). */
+export function inTerminalCli(name, terminal) {
+  return terminal.names.has(name) || terminal.runs.some((run) => heldInRun(run, name));
+}
+
 const IN_RAILWAY = "Only the owner changes it, by hand in Railway's dashboard (Tarsee's service > Variables).";
 const OWN = "so this tool never sets it on Tarsee's own service.";
 const THE_RULE = `On Tarsee's own service this tool sets only: a key or address for the owner's own scripts, named in capitals and ending in ${SCRIPT_KEY_ENDINGS.slice(0, -1).join(", ")} or ${SCRIPT_KEY_ENDINGS.at(-1)} (for example SOME_SERVICE_API_KEY or ALERTS_WEBHOOK), when no part of Tarsee reads that name itself and it appears nowhere in the code of its AI engines or browser library; TZ, with a time zone name; and Tarsee's tuning settings ${SELF_TUNING.join(", ")}.`;
@@ -484,9 +789,11 @@ const THE_RULE = `On Tarsee's own service this tool sets only: a key or address 
  * Why `name` is not set on Tarsee's own service, in plain words with where the owner changes it instead; null when it
  * may be. The refused families are matched in any case (npm reads npm_config_* in any case); the allowlist only as
  * written. `value`, when given, is checked too (TZ takes a time zone name only). `engineNames` is the list of names in
- * the engines' code (the shipped one, or an Error when it couldn't be read).
+ * the engines' code (the shipped one, or an Error when it couldn't be read). `terminal` is the Terminal's own Claude
+ * Code as read (terminalCliNames: { files, names, runs }, an Error while it can't be read, or null when there is none;
+ * by default the last read).
  */
-export function selfServiceRefusal(rawName, value, { engineNames = shippedEngineNames } = {}) {
+export function selfServiceRefusal(rawName, value, { engineNames = shippedEngineNames, terminal = lastTerminalRead() } = {}) {
   const name = String(rawName ?? "").trim();
   const upper = name.toUpperCase();
   if (SETTINGS.has(name)) {
@@ -529,6 +836,12 @@ export function selfServiceRefusal(rawName, value, { engineNames = shippedEngine
     if (found) {
       return `${name} appears in the code of Tarsee's AI engines or its browser library (the Claude Agent SDK and Claude Code, Codex, Playwright), which may read it from the environment and change how they work, ${OWN} A key for the owner's own scripts needs a name of its own. ${IN_RAILWAY}`;
     }
+    if (terminal instanceof Error) {
+      return `Tarsee could not read the Terminal's Claude Code (${terminal.message}), which can be newer than the one Tarsee ships (TARSEE_AUTO_UPDATE_CLI=1 installs the latest when Tarsee starts), so it can't tell whether that program reads ${name}. Until it can, this tool sets only TZ and the tuning settings on Tarsee's own service. ${IN_RAILWAY}`;
+    }
+    if (terminal && inTerminalCli(name, terminal)) {
+      return `${name} appears in the code of the Terminal's Claude Code (${terminal.files.join(", ")}), which can be newer than the one Tarsee ships (TARSEE_AUTO_UPDATE_CLI=1 installs the latest when Tarsee starts) and may read it from the environment, ${OWN} A key for the owner's own scripts needs a name of its own. ${IN_RAILWAY}`;
+    }
     return null;
   }
   return `${name || "That name"} is not one of the names this tool sets on Tarsee's own service. ${THE_RULE} Any other name could change how Tarsee is built, starts or runs. ${IN_RAILWAY}`;
@@ -538,12 +851,13 @@ export function selfServiceRefusal(rawName, value, { engineNames = shippedEngine
  * Why a variable that `own` on Tarsee's own service is filled in from by a Railway reference is never set, or null: the
  * reason `own` itself is never set there, since at Tarsee's next deploy a change to the one is a change to the other.
  * TZ too, which the tool sets only with a time zone name: through a reference it can't check the value TZ would get.
+ * `limits` as for selfServiceRefusal.
  */
-function refusalThroughReference(own) {
+function refusalThroughReference(own, limits) {
   if (String(own).trim() === "TZ") {
     return `TZ on Tarsee's own service takes a time zone name only, and through a reference this tool can't check the value TZ would get. ${IN_RAILWAY}`;
   }
-  return selfServiceRefusal(own);
+  return selfServiceRefusal(own, undefined, limits);
 }
 
 /** Why the vault key `keyName` is never copied into a service, or null. */
@@ -563,8 +877,14 @@ const TOKEN_ELSEWHERE = "Tarsee's own Railway token, and this tool never copies 
 // ---------------------------------------------------------------- what Tarsee's own variables are filled in from
 
 const SHARED = "shared";
-/** A service id (or SHARED) and a variable name, as one key: ids and names in any case. */
+/**
+ * A service id (or SHARED) and a variable name, as one key, ids and names in any case: what a write to `name`, or a
+ * reference to it, may reach. Railway's docs don't say whether ${{ api_key }} reaches API_KEY, so a slot holds every
+ * variable of that name in any case, and nothing in it is dropped: each one's references are followed.
+ */
 const slot = (key, name) => `${String(key).toLowerCase()}\0${String(name).toUpperCase()}`;
+/** One variable exactly as named (environment variables are case-sensitive): where a walk from Tarsee's own starts. */
+const exactSlot = (key, name) => `${String(key).toLowerCase()}\0=${name}`;
 /** How many variables feedersOfOwnService() looks at before it gives up (and the write with it). */
 const MAX_REFERENCE_STEPS = 10_000;
 
@@ -590,9 +910,16 @@ function referencesIn(value) {
  * not).
  *
  * Returns { fed, blind }. fed: a Map of slot(service id or SHARED, NAME) to the Set of names on Tarsee's own service it
- * fills. blind: the sealed variables met ({ own, name, key, direct }, `own` itself included, direct when it is the
- * sealed one): Railway never gives a sealed variable's value back, so a reference in one can't be followed, and `own`
- * could be filled in from any variable in the environment.
+ * fills. blind: the links that can't be followed ({ own, name, key, direct, service }), after which `own` could be
+ * filled in from any variable in the environment:
+ *   - a sealed variable (`own` itself included, direct when it is the sealed one): Railway never gives a sealed
+ *     variable's value back, so a reference in one can't be followed;
+ *   - a reference to a service the project doesn't have (`service`, the name it gives): Railway would look for a service
+ *     of that name, so which variable fills it is unknown.
+ *
+ * A walk starts from each variable of Tarsee's exactly as named, so two that differ only in case are followed each
+ * from its own value. A reference reaches every variable of its name in any case (slot), and the references of each are
+ * followed. `${{ shared.X }}` reaches the shared variables, and a service named shared too.
  *
  * Values are read only to find their `${{ ... }}`: each is dropped as soon as its references are taken, and none is
  * kept, shown or logged. Fails (and with it the write) when Railway can't answer.
@@ -603,8 +930,16 @@ async function feedersOfOwnService({ api, here }, project, env, names) {
     const n = String(s.name).trim().toLowerCase();
     idsByName.set(n, [...(idsByName.get(n) || []), s.id]);
   }
-  const sealed = new Set(names.filter((x) => x.sealed).map((x) => slot(x.serviceId || SHARED, x.name)));
-  const loaded = new Map();   // service id or SHARED -> Map(NAME -> { name, refs })
+  // The sealed ones: exactly as named, and the slot each falls in (with the name of the first one there).
+  const sealedExact = new Set();
+  const sealedSlots = new Map();
+  for (const x of names.filter((n) => n.sealed)) {
+    const key = x.serviceId || SHARED;
+    sealedExact.add(exactSlot(key, x.name));
+    if (!sealedSlots.has(slot(key, x.name))) sealedSlots.set(slot(key, x.name), x.name);
+  }
+  // Service id or SHARED -> { exact: Map(name -> refs), any: Map(NAME -> the refs of every variable of that name, in any case) }
+  const loaded = new Map();
   const load = async (key) => {
     const k = String(key).toLowerCase();
     if (!loaded.has(k)) {
@@ -612,7 +947,14 @@ async function feedersOfOwnService({ api, here }, project, env, names) {
       const vars = { projectId: project.id, environmentId: env.id, ...(key === SHARED ? {} : { serviceId: key }) };
       const data = await api(DOCS.unrendered, vars);
       const got = data?.variables && typeof data.variables === "object" ? data.variables : {};
-      loaded.set(k, new Map(Object.entries(got).map(([name, value]) => [name.toUpperCase(), { name, refs: referencesIn(value) }])));
+      const exact = new Map(), any = new Map();
+      for (const [name, value] of Object.entries(got)) {
+        const refs = referencesIn(value);
+        exact.set(name, refs);
+        const upper = name.toUpperCase();
+        any.set(upper, [...(any.get(upper) || []), ...refs]);
+      }
+      loaded.set(k, { exact, any });
     }
     return loaded.get(k);
   };
@@ -623,28 +965,41 @@ async function feedersOfOwnService({ api, here }, project, env, names) {
   const blind = [];
   let steps = 0;
   for (const root of own) {
-    const queue = [{ key: here.serviceId, name: root }];
+    // The first step is Tarsee's own variable as named; every later one, a slot a reference reaches.
+    const queue = [{ key: here.serviceId, name: root, exact: true }];
     const seen = new Set();
     while (queue.length) {
       // Not followed to the end: as unknown as a sealed one.
       if (++steps > MAX_REFERENCE_STEPS) {
         fail(`Tarsee's own variables in ${env.name} reference other variables too many times over to follow (over ${MAX_REFERENCE_STEPS} steps), so this tool can't tell what they are filled in from, and sets nothing there. The owner makes the change by hand in Railway's dashboard (the service's Variables tab).`);
       }
-      const { key, name } = queue.shift();
-      const at = slot(key, name);
+      const { key, name, exact } = queue.shift();
+      const at = exact ? exactSlot(key, name) : slot(key, name);
       if (seen.has(at)) continue;
       seen.add(at);
-      if (sealed.has(at)) {
-        blind.push({ own: root, name, key, direct: at === slot(here.serviceId, root) });
+      const sealedName = exact ? (sealedExact.has(at) ? name : null) : sealedSlots.get(at);
+      if (sealedName != null) {
+        blind.push({ own: root, name: sealedName, key, direct: exact });
         continue;
       }
-      for (const ref of (await load(key)).get(String(name).toUpperCase())?.refs || []) {
-        const to = ref.service == null ? [key] : ref.service.toLowerCase() === SHARED ? [SHARED] : idsByName.get(ref.service.toLowerCase()) || [];
+      const vars = await load(key);
+      // Tarsee's own as named; were Railway's two answers ever to spell it differently, every variable of that name.
+      const refs = (exact && vars.exact.get(name)) || vars.any.get(String(name).toUpperCase()) || [];
+      for (const ref of refs) {
+        let to = [key];
+        if (ref.service != null) {
+          const svcName = ref.service.toLowerCase();
+          to = [...(svcName === SHARED ? [SHARED] : []), ...(idsByName.get(svcName) || [])];
+        }
+        if (!to.length) {
+          blind.push({ own: root, name: ref.variable, key: null, direct: false, service: ref.service });
+          continue;
+        }
         for (const target of to) {
           const into = slot(target, ref.variable);
           if (!fed.has(into)) fed.set(into, new Set());
           fed.get(into).add(root);
-          queue.push({ key: target, name: ref.variable });
+          queue.push({ key: target, name: ref.variable, exact: false });
         }
       }
     }
@@ -652,19 +1007,29 @@ async function feedersOfOwnService({ api, here }, project, env, names) {
   return { fed, blind };
 }
 
-/** "Tarsee's own X is sealed", or "Tarsee's own X is filled in from Y on Z, which is sealed", and how many more. */
-function sealedWhat(blind, project) {
+/**
+ * "Tarsee's own X is sealed", "Tarsee's own X is filled in from Y on Z, which is sealed", or "... from Y on "Z", a
+ * service the project doesn't have", and how many more.
+ */
+function blindWhat(blind, project) {
   const label = (key) => (key === SHARED ? "the shared variables" : project.services.find((s) => String(s.id).toLowerCase() === String(key).toLowerCase())?.name || key);
   const first = blind[0];
-  const what = first.direct ? `Tarsee's own ${first.own} is sealed` : `Tarsee's own ${first.own} is filled in from ${first.name} on ${label(first.key)}, which is sealed`;
-  const more = blind.length > 1 ? ` (${blind.length - 1} more sealed: ${blind.slice(1, 4).map((b) => b.name).join(", ")}${blind.length > 4 ? ", ..." : ""})` : "";
+  const what = first.service != null
+    ? `Tarsee's own ${first.own} is filled in from ${first.name} on "${first.service}", a service the project "${project.name}" doesn't have`
+    : first.direct ? `Tarsee's own ${first.own} is sealed` : `Tarsee's own ${first.own} is filled in from ${first.name} on ${label(first.key)}, which is sealed`;
+  const more = blind.length > 1 ? ` (and ${blind.length - 1} more this tool can't follow: ${blind.slice(1, 4).map((b) => b.name).join(", ")}${blind.length > 4 ? ", ..." : ""})` : "";
   return `${what}${more}`;
 }
 
-/** Why nothing is set in this environment of Tarsee's project while a sealed variable hides what a guarded one of Tarsee's is filled in from. */
-function sealedRefusal(blind, project, env) {
+/** Why that link can't be followed, in a few words. */
+const blindWhy = (first) => (first.service != null
+  ? "Railway would look for a service of that name, so this tool can't tell which variable fills it"
+  : "Railway never shows its value, so this tool can't see whether it is filled in from another variable by a Railway reference (${{ ... }})");
+
+/** Why nothing is set in this environment of Tarsee's project while a link the walk can't follow hides what a guarded one of Tarsee's is filled in from. */
+function blindRefusal(blind, project, env) {
   const first = blind[0];
-  return `${sealedWhat(blind, project)}, so Railway never shows its value and this tool can't see whether it is filled in from another variable by a Railway reference (\${{ ... }}). Any variable in ${env.name} of the project "${project.name}" could be that one, and changing it would change ${first.own} at Tarsee's next deploy, so while it is sealed this tool sets nothing there. Only the owner makes this change, by hand in Railway's dashboard (the service's Variables tab). Other environments and other projects are not affected.`;
+  return `${blindWhat(blind, project)}: ${blindWhy(first)}. Any variable in ${env.name} of the project "${project.name}" could be the one that fills it, and changing it would change ${first.own} at Tarsee's next deploy, so while that stays so this tool sets nothing there. Only the owner makes this change, by hand in Railway's dashboard (the service's Variables tab). Other environments and other projects are not affected.`;
 }
 
 // ---------------------------------------------------------------- list_projects
@@ -761,28 +1126,34 @@ async function setVariable(ctx) {
   const env = resolveEnv(project, args, note, here);
   const svc = resolveService(project, args, note, here);
   const onOwn = isOwnService(svc, here);
+  const inOwnProject = !!(project.isHere && here.serviceId);
+  // The Terminal's own Claude Code as read when Tarsee started (again if it changed since): its names are refused on
+  // Tarsee's own service too, and while it can't be read only TZ and the tuning settings go there.
+  const limits = { terminal: onOwn || inOwnProject ? await terminalNow(ctx) : null };
   // With deploy: false too: a refused name left waiting on Tarsee's service would be applied by the next redeploy.
   if (onOwn) {
-    const why = selfServiceRefusal(name, value);
+    const why = selfServiceRefusal(name, value, limits);
     if (why) fail(why);
     if (hasKey) await refuseWhileGetKeyDenied(ctx, GET_KEY_ON_OWN);
   }
   // A variable one of Tarsee's own is filled in from counts as that one: at Tarsee's next deploy the change reaches it,
-  // under its name. So the same rules apply, under that name. And while a sealed variable hides what one of Tarsee's is
-  // filled in from: nothing in this environment if that one is guarded, and no vault key while get_key is denied.
+  // under its name. So the same rules apply, under that name. And while a link the walk can't follow (a sealed variable,
+  // a service the project doesn't have) hides what one of Tarsee's is filled in from: nothing in this environment if
+  // that one is guarded, and no vault key while get_key is denied.
   let names = null;
-  if (project.isHere && here.serviceId) {
+  if (inOwnProject) {
     names = await variableNames(ctx, project, env);
     const { fed, blind } = await feedersOfOwnService(ctx, project, env, names);
-    const fills = [...(fed.get(slot(svc.id, name)) || [])].filter((own) => !(onOwn && own.toUpperCase() === name.toUpperCase()));
+    // Every variable of Tarsee's this one fills, in any case, but itself: a twin that differs only in case is another one.
+    const fills = [...(fed.get(slot(svc.id, name)) || [])].filter((own) => !(onOwn && own === name));
     for (const own of fills) {
-      const why = refusalThroughReference(own);
+      const why = refusalThroughReference(own, limits);
       if (why) fail(`Tarsee's own ${own} is filled in from ${name} on ${svc.name} by a Railway reference (\${{ ... }}), so setting ${name} would set ${own} on Tarsee's own service at its next deploy. ${why}`);
     }
-    const guarded = blind.filter((b) => refusalThroughReference(b.own));
-    if (guarded.length) fail(sealedRefusal(guarded, project, env));
+    const guarded = blind.filter((b) => refusalThroughReference(b.own, limits));
+    if (guarded.length) fail(blindRefusal(guarded, project, env));
     if (hasKey && fills.length) await refuseWhileGetKeyDenied(ctx, getKeyThroughReference(fills[0], name, svc));
-    if (hasKey && blind.length) await refuseWhileGetKeyDenied(ctx, getKeyWhileSealed(blind, project, env));
+    if (hasKey && blind.length) await refuseWhileGetKeyDenied(ctx, getKeyWhileBlind(blind, project, env));
   }
   const before = (names || await variableNames(ctx, project, env)).find((x) => x.serviceId === svc.id && x.name === name);
 
@@ -834,9 +1205,9 @@ function getKeyThroughReference(own, name, svc) {
   return `${GET_KEY_DENIED}. Tarsee's own ${own} is filled in from ${name} on ${svc.name} by a Railway reference (\${{ ... }}), so a vault key set there would reach Tarsee's own service as ${own} at its next deploy, and the AI's commands with it. So while get_key is denied, from_key into a variable Tarsee's own service is filled in from is refused. The owner can set it by hand in Railway's dashboard (the service's Variables tab); ${GET_KEY_STILL}.`;
 }
 
-/** Why from_key anywhere in this environment of Tarsee's project is refused while get_key is denied and a sealed variable hides a reference. */
-function getKeyWhileSealed(blind, project, env) {
-  return `${GET_KEY_DENIED}, and ${sealedWhat(blind, project)}: Railway never shows its value, so this tool can't see whether it is filled in from this variable by a Railway reference (\${{ ... }}), and a vault key set here could reach Tarsee's own service at its next deploy. So while get_key is denied, from_key anywhere in ${env.name} of the project "${project.name}" is refused. The owner can set it by hand in Railway's dashboard (the service's Variables tab); plain values, other environments and other projects still work.`;
+/** Why from_key anywhere in this environment of Tarsee's project is refused while get_key is denied and a link the walk can't follow hides a reference. */
+function getKeyWhileBlind(blind, project, env) {
+  return `${GET_KEY_DENIED}, and ${blindWhat(blind, project)}: ${blindWhy(blind[0])}. It could be filled in from this variable, and a vault key set here could reach Tarsee's own service at its next deploy. So while get_key is denied, from_key anywhere in ${env.name} of the project "${project.name}" is refused. The owner can set it by hand in Railway's dashboard (the service's Variables tab); plain values, other environments and other projects still work.`;
 }
 
 /** The vault key whose value is exactly this one, if any (only to point at from_key; nothing is shown). */

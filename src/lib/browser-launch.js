@@ -18,6 +18,15 @@
  *   Tarsee's Docker image runs the server as node, not root, and Playwright's headless Chromium comes with no setuid
  *   helper, so there the sandbox is on wherever the host lets the container create user namespaces, and off (logged)
  *   where it doesn't.
+ * - TARSEE_BROWSER_SANDBOX says whether that launch without the sandbox may happen at all: "auto" (the default) as
+ *   above, "required" never (see sandboxSetting). Chromium's bare "No usable sandbox!" comes both from a machine that
+ *   can't sandbox and from one whose count of user namespaces is full, and before any sandboxed launch has worked
+ *   nothing tells the two apart, so on a machine where the sandbox works, "required" is what makes it hold every time.
+ *   The first launch logs which mode is in force. The setting is read from the server's own environment, which the AI
+ *   can't change: tarsee_railway never sets a TARSEE_ name on Tarsee's own service, and nothing in Tarsee writes to
+ *   process.env. With AI isolation, Chromium starts as a user of its own through a helper; `chromium` here is then that
+ *   helper's launcher, handed these same options (chromiumSandbox included, or Playwright adds --no-sandbox), and the
+ *   choice and the setting stay in the server's process.
  * - Site isolation is on (--site-per-process): each site's pages and frames get their own renderer process, so a page
  *   that breaks its renderer still can't read another site's data. This used to be turned off, with
  *   --disable-features=IsolateOrigins,site-per-process, as part of the "stealth" settings that came with the captcha
@@ -144,6 +153,47 @@ const SANDBOX_FAILED_RE = /Chromium sandboxing failed!|No usable sandbox!|crbug\
 // open files. That machine can sandbox; it was busy, perhaps made so on purpose.
 const RAN_OUT_RE = /Resource temporarily unavailable|Cannot allocate memory|Too many open files|Too many processes|\bE(AGAIN|NOMEM|MFILE|NFILE)\b/i;
 
+/*
+ * TARSEE_BROWSER_SANDBOX: may tarsee_browser run Chromium without its sandbox where the sandbox can't start?
+ * - "auto" (the default, also when it's unset or blank): yes, and the log says so at each such launch.
+ * - "required": never. For a machine where the sandbox works: there, a sandbox that doesn't start means something went
+ *   wrong, and Chromium's words don't always say what. Its bare "No usable sandbox!" is what a machine with no user
+ *   namespaces gets, and also what one gets while its count of user namespaces is full (ENOSPC), which something
+ *   running there can bring about before the browser's first launch.
+ * - Anything else counts as required: an owner who wrote something meant to change the default, and the safe reading
+ *   of a typo is the one that keeps the sandbox.
+ * Case and spaces around it don't matter. Read once, at a launcher's first launch, from the server's environment.
+ */
+const SETTING = "TARSEE_BROWSER_SANDBOX";
+
+/** The setting in `env`: { mode: "auto" | "required", written } (written: a value that was neither, as it was). */
+function sandboxSetting(env) {
+  const raw = env?.[SETTING];
+  const value = raw == null ? "" : String(raw).trim().toLowerCase();
+  if (value === "" || value === "auto") return { mode: "auto" };
+  if (value === "required") return { mode: "required" };
+  return { mode: "required", written: String(raw) };
+}
+
+/** A value as written, quoted on one line and cut short, for the log. */
+const quoted = (text) => JSON.stringify(text.length > 60 ? `${text.slice(0, 60)}...` : text);
+
+/** The line the first launch logs: which mode is in force, and what it means. */
+function modeLine({ mode, written }) {
+  if (mode === "auto") {
+    return `[browser] ${SETTING} is auto (the default): tarsee_browser runs Chromium with its sandbox, and without it ` +
+      "only where the sandbox can't start on this machine, which the log says at each such launch. On a machine where " +
+      "the sandbox works, set it to required and the browser never runs without it.";
+  }
+  const is = written === undefined ? "required" : `${quoted(written)}, which is neither auto nor required, so it's taken as required`;
+  return `[browser] ${SETTING} is ${is}: tarsee_browser never runs Chromium without its sandbox. Where the sandbox ` +
+    "doesn't start, the browser tool says why and runs nothing.";
+}
+
+// How the owner turns Chromium's sandbox on, for the log and the browser tool.
+const TURN_ON = "don't run Tarsee as root, and let its user create user namespaces (in Docker, with a seccomp profile " +
+  "that allows them), or install Chromium's setuid sandbox helper and set CHROME_DEVEL_SANDBOX to its path";
+
 const lineCut = (line) => (line.length > 300 ? `${line.slice(0, 300)}...` : line);
 const linesOf = (err) => String(err?.message || err || "").split("\n").map((l) => l.trim()).filter(Boolean);
 
@@ -158,18 +208,23 @@ function reasonOf(err) {
 
 /**
  * A function that launches the browser with `chromium` (Playwright's, or anything with its launch(options)): with
- * Chromium's sandbox, else, when that launch failed because the sandbox can't start on this machine, without it (see
- * the top of this file). Each launch tries the sandbox first, and each launch without it is logged.
+ * Chromium's sandbox, else, when that launch failed because the sandbox can't start on this machine and
+ * TARSEE_BROWSER_SANDBOX is auto, without it (see the top of this file). Each launch tries the sandbox first, and each
+ * launch without it is logged. Under "required" there is no launch without it: a sandbox failure is thrown (and
+ * logged), saying why and what the owner can do.
  * Once a sandboxed launch has worked, and while one is under way (it may work), this function hands out no browser
  * without the sandbox: a sandbox failure then is thrown (and logged), a browser it had already started without the
  * sandbox when that changed is closed, and the next call tries the sandbox again. So launches that overlap get the same
  * answer as launches one after another. What it knows is kept in memory, in the process that made it: nothing on disk
  * or in the environment can change it.
- * env/platform: read at each launch (default the server's own); log: for tests.
+ * The setting is read at the first launch, which logs which mode is in force, and holds for this launcher's life.
+ * env: where the setting is read (at the first launch) and what the browser's environment is made from (at each
+ * launch), default the server's own; platform: read at each launch, default the server's; log: for tests.
  */
 export function makeBrowserLauncher({ log = (message) => console.warn(message), env, platform } = {}) {
   let sandboxWorked = false;
   let sandboxedUnderWay = 0;
+  let setting = null;
   /** Why a browser without the sandbox isn't handed out right now, or null when it may be. */
   const holdBack = () => {
     if (sandboxWorked) return "this time, though it has worked in this run of Tarsee";
@@ -182,7 +237,22 @@ export function makeBrowserLauncher({ log = (message) => console.warn(message), 
     log(`[browser] ${message}`);
     return new Error(message, { cause: err });
   };
+  /** The refusal under "required" when nothing says the failure will pass: why, and what the owner can do. */
+  const refuseRequired = (err) => {
+    const is = setting.written === undefined ? "required" : `${quoted(setting.written)} (taken as required)`;
+    const message = `Chromium's sandbox didn't start, and ${SETTING} is ${is}, so tarsee_browser doesn't run the ` +
+      "browser without it. Each call tries the sandbox again. If it never starts on this machine, the owner can turn it " +
+      `on: ${TURN_ON}. Or the owner can set ${SETTING} to auto in Tarsee's environment, and the browser then runs ` +
+      "without the sandbox where it can't start, so a web page that exploits a bug in Chromium could act with this " +
+      `server's own rights. Chromium said: ${reasonOf(err)}`;
+    log(`[browser] ${message}`);
+    return new Error(message, { cause: err });
+  };
   return async function launchBrowser(chromium) {
+    if (setting === null) {
+      setting = sandboxSetting(env ?? process.env);
+      log(modeLine(setting));
+    }
     const options = browserLaunchOptions({ env: env ?? process.env, platform: platform ?? process.platform });
     let browser;
     sandboxedUnderWay++;
@@ -195,6 +265,8 @@ export function makeBrowserLauncher({ log = (message) => console.warn(message), 
       const held = holdBack();
       if (held) throw refuse(held, err);
       if (said.some((l) => RAN_OUT_RE.test(l))) throw refuse("because the machine ran out of processes, memory or open files", err);
+      // Every way past here that isn't "auto" is a refusal: "required" never launches without the sandbox.
+      if (setting.mode !== "auto") throw refuseRequired(err);
       const unsandboxed = await chromium.launch({ ...options, chromiumSandbox: false });
       // Another launch's sandbox worked, or one started, while this one went on without it.
       const heldNow = holdBack();
@@ -204,10 +276,9 @@ export function makeBrowserLauncher({ log = (message) => console.warn(message), 
       }
       log(
         "[browser] Chromium's sandbox couldn't start on this machine, so tarsee_browser runs without it. A web page " +
-        "that exploits a bug in Chromium could then act with this server's own rights. To turn the sandbox on, don't " +
-        "run Tarsee as root, and let its user create user namespaces (in Docker, with a seccomp profile that allows " +
-        "them), or install Chromium's setuid sandbox helper and set CHROME_DEVEL_SANDBOX to its path. " +
-        `Chromium said: ${reasonOf(err)}`,
+        `that exploits a bug in Chromium could then act with this server's own rights. To turn the sandbox on, ${TURN_ON}. ` +
+        `To never run the browser without it, set ${SETTING} to required: then, where the sandbox doesn't start, the ` +
+        `browser tool says why and runs nothing. Chromium said: ${reasonOf(err)}`,
       );
       return unsandboxed;
     }

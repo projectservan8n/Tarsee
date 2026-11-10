@@ -16,8 +16,9 @@
  *
  * Safety gates before ever touching the chat pipeline:
  *   - Allowlist of From addresses (empty = warn + allow all, dev mode)
- *   - The sender must be one the mailbox provider vouches for (its Authentication-Results line: senderVouched), as a
- *     From line is easy to fake; a self-hosted server that checks nothing needs the owner's "trust the From line"
+ *   - The sender must be one the mailbox provider vouches for (its own Authentication-Results line, read strictly:
+ *     senderVouched), as a From line is easy to fake; a self-hosted server needs the owner to type its name, or, if it
+ *     checks nothing, the owner's "trust the From line", each for that exact mailbox
  *   - Self-loop guard (drop if From == tarseeEmailAddress)
  *   - Bulk/auto-reply drop (List-Id, Auto-Submitted, Precedence headers)
  *   - Per-sender rate limit (6/10 min)
@@ -244,11 +245,12 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
 
     // Who really sent it. Anyone can write any address on the From line, so the mailbox provider must vouch for it
     // (senderVouched); otherwise the mail gets no turn and isn't kept, as from a sender who isn't on the list.
-    const vouched = senderVouched(headers, fromAddr, { imapHost: cfg.imap.host, senderCheck: cfg.senderCheck });
+    const vouched = senderVouched(headers, fromAddr, { imapHost: cfg.imap.host, imapUser: cfg.imap.user, senderCheck: cfg.senderCheck });
     if (!vouched.ok) {
       const by = vouched.provider || `the mail server ${cfg.imap.host}`;
+      // No name from the mail itself: the sender may have written it, and the owner might take it for their server's.
       console.warn(vouched.why === "unchecked"
-        ? `[email] dropped — mail from ${fromAddr}: ${by} wrote no Authentication-Results line Tarsee can read${vouched.seen ? ` (the topmost one names ${vouched.seen})` : ""}, so nothing says who sent it`
+        ? `[email] dropped — mail from ${fromAddr}: ${by} wrote no Authentication-Results line Tarsee trusts on top of it, so nothing says who sent it`
         : `[email] dropped — mail from ${fromAddr}: ${by} doesn't vouch for that sender (${vouched.detail})`);
       if (vouched.why === "unchecked") noteUncheckedMail(fromAddr, vouched);
       return;
@@ -459,19 +461,22 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
 
   /**
    * The one-time note in Settings > Channels > Email (SENDER_NOTE_KEY) that mail to this mailbox was refused because
-   * nothing in it said who sent it: written for the first such mail only, once per mail server. The owner's OK on it
-   * only hides it (dismissedAt); a change of server or of what Tarsee trusts there clears it (routes/settings.js).
+   * nothing in it said who sent it: written for the first such mail only, once per mailbox (IMAP host and user). It
+   * holds nothing the mail wrote but the From address, which is on the owner's list: never a server name from the
+   * mail, which the sender may have written. The owner's OK on it only hides it (dismissedAt); a change of mailbox or
+   * of what Tarsee trusts there clears it (routes/settings.js).
    */
   function noteUncheckedMail(fromAddr, vouched) {
     try {
+      const mailbox = { host: cfg.imap.host, user: cfg.imap.user };
       const was = settingsStore.get(SENDER_NOTE_KEY);
-      if (was && String(was.host || "").toLowerCase() === String(cfg.imap.host).toLowerCase()) return;
+      if (was && sameMailbox(was, mailbox)) return;
       settingsStore.set(SENDER_NOTE_KEY, {
         host: cfg.imap.host,
+        user: cfg.imap.user,
         at: new Date().toISOString(),
         from: fromAddr.slice(0, 254),
         provider: vouched.provider,
-        seen: vouched.seen ? vouched.seen.replace(/[^a-z0-9._-]/gi, "").slice(0, 120) : null,
       });
     } catch (err) {
       console.warn("[email] couldn't save the note for Settings:", err?.message);
@@ -660,83 +665,275 @@ export function mailProviderOf(imapHost) {
   return MAIL_PROVIDERS.find((p) => p.imap.test(host)) || null;
 }
 
+/** Nothing trusted: what the owner's sender check gives for any mailbox it wasn't set for. */
+const NO_SENDER_CHECK = Object.freeze({ trustFromLine: false, authservId: "" });
+
 /**
- * What the owner set in Settings > Channels > Email for the mail server Tarsee reads now: { trustFromLine, authservId }.
- * It is kept with the IMAP host it was set for (senderCheck.imapHost), so it never carries over to another server.
+ * Whether two mailboxes ({ host, user }, as the settings or a sender check name them) are the same one: the same IMAP
+ * host (in any case) and the same user. A mailbox with no host or no user is no mailbox.
  */
-export function senderCheckFor(senderCheck, imapHost) {
+export function sameMailbox(a, b) {
+  const host = (m) => (typeof m?.host === "string" ? m.host.trim().toLowerCase() : "");
+  const user = (m) => (typeof m?.user === "string" ? m.user.trim() : "");
+  return !!host(a) && !!user(a) && host(a) === host(b) && user(a) === user(b);
+}
+
+/**
+ * What the owner set in Settings > Channels > Email for the mailbox Tarsee reads now (imap: { host, user }):
+ * { trustFromLine, authservId }. It is kept with the exact mailbox it was set for (senderCheck.imapHost and imapUser),
+ * so it never carries over to another server or another user, and it means nothing for a provider Tarsee knows: that
+ * provider's own line is the only word on who sent a mail there.
+ */
+export function senderCheckFor(senderCheck, imap) {
   const s = senderCheck && typeof senderCheck === "object" ? senderCheck : {};
-  const same = typeof s.imapHost === "string" && s.imapHost.trim().toLowerCase() === String(imapHost || "").trim().toLowerCase();
+  if (mailProviderOf(imap?.host) || !sameMailbox({ host: s.imapHost, user: s.imapUser }, imap)) return { ...NO_SENDER_CHECK };
   return {
-    trustFromLine: same && s.trustFromLine === true,
-    authservId: same && typeof s.authservId === "string" ? s.authservId.trim().toLowerCase() : "",
+    trustFromLine: s.trustFromLine === true,
+    authservId: typeof s.authservId === "string" ? s.authservId.trim().toLowerCase() : "",
   };
 }
 
-/** Methods that start a result even where a ";" was left out (an older Zoho line reads "dkim=pass spf=pass ..."). */
+/** Method names: one of them as a bare name=value inside another result means a ";" is missing between the two. */
 const AUTH_METHODS = new Set(["auth", "dkim", "dkim2", "domainkeys", "iprev", "sender-id", "spf", "dmarc", "arc", "bimi", "rrvs", "smime", "vbr", "dnswl", "compauth"]);
-
-/** An Authentication-Results value as words and ";" separators: comments dropped, a quoted string kept in its word. */
-function authResultsWords(text) {
-  const words = [];
-  let word = "";
-  let depth = 0;
-  const end = () => { if (word) words.push(word); word = ""; };
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (depth > 0) {
-      if (c === "\\") i++;
-      else if (c === "(") depth++;
-      else if (c === ")") depth--;
-      continue;
-    }
-    if (c === "(") { end(); depth = 1; continue; }
-    if (c === '"') {
-      for (i++; i < text.length && text[i] !== '"'; i++) {
-        if (text[i] === "\\") i++;
-        word += text[i] ?? "";
-      }
-      continue;
-    }
-    if (c === ";") { end(); words.push(";"); continue; }
-    if (/\s/.test(c)) { end(); continue; }
-    word += c;
-  }
-  end();
-  return words;
-}
+/** Checks that give one result per signature; every other check gives one verdict for the whole mail. */
+const PER_SIGNATURE = new Set(["dkim", "dkim2", "domainkeys"]);
+/** The properties Tarsee reads: each must be a plain address or domain. */
+const READ_PROPERTIES = new Set(["header.d", "header.i", "header.from", "smtp.mailfrom"]);
+const METHOD = /^[a-z0-9][a-z0-9_-]*(\/[0-9]+)?$/;
+const KEYWORD = /^[a-z0-9][a-z0-9_-]*$/;
+const PROPERTY = /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9_.-]*$/;
+// Letters and digits of any script count (RFC 6531 addresses): they can't make a line read as something else.
+const DOMAIN = /^(?=.{1,253}$)(?:[\p{L}\p{N}_](?:[\p{L}\p{N}_-]{0,61}[\p{L}\p{N}_])?\.)*[\p{L}\p{N}_](?:[\p{L}\p{N}_-]{0,61}[\p{L}\p{N}_])?$/u;
+const DOT_ATOM = /^[\p{L}\p{N}!#$%&'*+/=?^_`{|}~.-]+$/u;
 
 /**
- * One Authentication-Results value (what follows "Authentication-Results:"): { authservId, results }, authservId ""
- * when the line names none (Microsoft's), each result { method, result, props } with props such as header.d,
- * header.i, header.from, smtp.mailfrom (the first of each).
+ * An Authentication-Results value as words and ";" (RFC 8601 over RFC 5322's lexical rules): { tokens, problem }.
+ * A word is a run of text and quoted strings ("\" escapes the next character in one), kept as its parts so a "=" or
+ * a local part inside quotes stays apart from one outside. Comments are dropped; they nest, and "\" escapes the next
+ * character in them. With `quotesInComments`, a '"' inside a comment opens a quoted run in which "(" and ")" don't
+ * count: how a provider that pasted an address with a quoted local part into a comment meant it to read.
  */
-export function parseAuthResults(value) {
-  const words = authResultsWords(String(value || "").replace(/\r?\n/g, " "));
+function authResultsTokens(text, quotesInComments) {
+  const tokens = [];
+  let word = null;
+  const end = () => { if (word) tokens.push(word); word = null; };
+  const add = (s, quoted) => {
+    word ??= { t: "word", parts: [] };
+    const last = word.parts.at(-1);
+    if (last && last.quoted === quoted && !quoted) last.s += s;
+    else word.parts.push({ s, quoted });
+  };
   let i = 0;
-  let authservId = "";
-  if (words.length && words[0] !== ";" && !words[0].includes("=")) {
-    authservId = words[0].toLowerCase();
-    i = 1;
-    if (/^\d+$/.test(words[i] || "")) i++; // authres-version
-  }
-  const results = [];
-  let current = null;
-  for (; i < words.length; i++) {
-    const w = words[i];
-    if (w === ";") { current = null; continue; }
-    const eq = w.indexOf("=");
-    if (eq <= 0) continue;
-    const key = w.slice(0, eq).toLowerCase();
-    const val = w.slice(eq + 1);
-    if (!key.includes(".") && (current === null || AUTH_METHODS.has(key))) {
-      current = { method: key, result: val.toLowerCase(), props: {} };
-      results.push(current);
-    } else if (current && key.includes(".") && !(key in current.props)) {
-      current.props[key] = val;
+  /** The quoted string at text[i] (a '"'), unescaped, with i after its closing '"'; null if it never closes. */
+  const quotedString = () => {
+    let s = "";
+    for (i++; i < text.length; i++) {
+      const c = text[i];
+      if (c === "\\") {
+        i++;
+        if (i >= text.length) return null;
+        s += text[i];
+      } else if (c === '"') {
+        i++;
+        return s;
+      } else {
+        s += c;
+      }
+    }
+    return null;
+  };
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "(") {
+      end();
+      let depth = 0;
+      while (i < text.length) {
+        const d = text[i];
+        if (d === "\\") { i += 2; continue; }
+        if (d === '"' && quotesInComments) {
+          if (quotedString() === null) return { tokens, problem: "a quoted part of a comment is never closed" };
+          continue;
+        }
+        i++;
+        if (d === "(") depth++;
+        else if (d === ")" && --depth === 0) break;
+      }
+      if (depth > 0) return { tokens, problem: "a comment is never closed" };
+    } else if (c === '"') {
+      const s = quotedString();
+      if (s === null) return { tokens, problem: "a quoted string is never closed" };
+      add(s, true);
+    } else if (c === ")") {
+      return { tokens, problem: 'a ")" closes no comment' };
+    } else if (c === "\\") {
+      return { tokens, problem: 'a "\\" outside a quoted string or comment' };
+    } else if (c === ";") {
+      end();
+      tokens.push({ t: ";" });
+      i++;
+    } else if (/\s/.test(c)) {
+      end();
+      i++;
+    } else {
+      add(c, false);
+      i++;
     }
   }
-  return { authservId, results };
+  end();
+  return { tokens: joinAroundEquals(tokens), problem: null };
+}
+
+/** A word's text, with its quoted parts unquoted. */
+const wordText = (w) => w.parts.map((p) => p.s).join("");
+/** Where a word's first "=" outside quotes is, in its text, or -1. */
+function wordEquals(w) {
+  let at = 0;
+  for (const p of w.parts) {
+    if (!p.quoted && p.s.includes("=")) return at + p.s.indexOf("=");
+    at += p.s.length;
+  }
+  return -1;
+}
+
+/** RFC 8601 lets comments and space stand around "=": "dkim = pass" is one word, as "dkim=pass" is. */
+function joinAroundEquals(tokens) {
+  const out = [];
+  for (const t of tokens) {
+    const last = out.at(-1);
+    if (t.t === "word" && last?.t === "word") {
+      const lastEq = wordEquals(last);
+      const startsWithEq = !t.parts[0].quoted && t.parts[0].s.startsWith("=");
+      if ((lastEq === -1 && startsWithEq) || (lastEq === wordText(last).length - 1 && !startsWithEq)) {
+        last.parts.push(...t.parts);
+        continue;
+      }
+    }
+    out.push(t);
+  }
+  return out;
+}
+
+/** A word as name=value: { name, value, quotedName, quotedValue }, or null when it has no "=" outside quotes. */
+function nameValue(w) {
+  const eq = wordEquals(w);
+  if (eq < 0) return null;
+  let at = 0;
+  let quotedName = false;
+  let quotedValue = false;
+  for (const p of w.parts) {
+    if (p.quoted) {
+      if (at < eq) quotedName = true;
+      else quotedValue = true;
+    }
+    at += p.s.length;
+  }
+  const text = wordText(w);
+  return { name: text.slice(0, eq), value: text.slice(eq + 1), quotedName, quotedValue };
+}
+
+/** What a word looked like, for a problem's words: short, and printable only. */
+const shown = (w) => (w.t === "word" ? wordText(w) : w.t).replace(/[^\x20-\x7e]/g, "?").slice(0, 40);
+
+/**
+ * Whether a property value is a plain address or domain, as RFC 8601's pvalue writes one: [local-part "@"] domain,
+ * here also in <...> (Zoho's header.from). A quoted local part may not hold what would let it pass for something
+ * else in the line, and an address literal ("[...]") isn't a domain name.
+ */
+function plainAddress({ value, quotedValue }) {
+  let s = value.trim();
+  if (s.startsWith("<") && s.endsWith(">")) s = s.slice(1, -1);
+  const at = s.lastIndexOf("@");
+  const local = at >= 0 ? s.slice(0, at) : "";
+  const domain = (at >= 0 ? s.slice(at + 1) : s).replace(/\.$/, "");
+  if (!DOMAIN.test(domain)) return false;
+  if (!local) return true;
+  return quotedValue ? !/[()<>[\]:;@\\,"=]/.test(local) : DOT_ATOM.test(local);
+}
+
+/** One result (the words between two ";"): { method, result, props }, or a string saying why it isn't one. */
+function authResultOf(words) {
+  const [first, ...rest] = words;
+  const head = first.t === "word" ? nameValue(first) : null;
+  if (!head || head.quotedName || head.quotedValue) return `"${shown(first)}" isn't method=result`;
+  const method = head.name.toLowerCase();
+  const result = head.value.toLowerCase();
+  if (!METHOD.test(method) || !KEYWORD.test(result)) return `"${shown(first)}" isn't method=result`;
+  const out = { method: method.replace(/\/[0-9]+$/, ""), result, props: {} };
+  for (const w of rest) {
+    const p = w.t === "word" ? nameValue(w) : null;
+    if (!p || p.quotedName || p.value === "") return `"${p ? p.name : shown(w)}" has no value`;
+    const name = p.name.toLowerCase();
+    // Older Zoho lines read "dkim=pass spf=pass ...": a result that ran into another can't be read for sure.
+    if (AUTH_METHODS.has(name)) return `a ";" is missing before ${name}=`;
+    // reason=..., and a name=value Tarsee doesn't read (Microsoft's action=, Fastmail's x-bits=), are left as they are.
+    if (name === "reason" || !name.includes(".")) continue;
+    if (!PROPERTY.test(name)) return `"${p.name}" isn't a property name`;
+    if (name in out.props) return `${name} is given twice`;
+    if (READ_PROPERTIES.has(name) && !plainAddress(p)) return `${name} isn't a plain address or domain`;
+    out.props[name] = p.value;
+  }
+  return out;
+}
+
+/** The words of a reading, for comparing two readings of one line. */
+const readingOf = (tokens) => JSON.stringify(tokens.map((t) => (t.t === "word" ? t.parts : t.t)));
+
+/**
+ * One Authentication-Results value (what follows "Authentication-Results:"), read strictly as RFC 8601 writes it:
+ * { authservId, results, problem }. authservId is "" when the line names none (Microsoft's); each result is
+ * { method, result, props } with the props Tarsee reads (header.d, header.i, header.from, smtp.mailfrom, ...).
+ * problem says why the line doesn't read cleanly, and then results is empty: a comment or quoted string left open, a
+ * stray ")" or "\", a result that isn't method=result, a ";" missing or doubled, a property with no value or given
+ * twice, an address that isn't a plain one, or a line that reads two ways: a provider that pastes the envelope sender
+ * (MAIL FROM, the sender's to choose) into a comment unescaped can have its comment closed early by a ")" in it. The
+ * authserv-id is given even then, as far as it was read, so the line is still known as the provider's.
+ */
+export function parseAuthResults(value) {
+  const text = String(value || "").replace(/\r?\n/g, " ");
+  const strict = authResultsTokens(text, false);
+  const unclean = (problem) => {
+    const [first, second] = strict.tokens;
+    const named = first?.t === "word" && wordEquals(first) < 0 && (!second || second.t === ";" || /^[0-9]+$/.test(second.t === "word" ? wordText(second) : ""));
+    return { authservId: named ? wordText(first).toLowerCase() : "", results: [], problem };
+  };
+  if (strict.problem) return unclean(strict.problem);
+  const asPasted = authResultsTokens(text, true);
+  if (asPasted.problem || readingOf(asPasted.tokens) !== readingOf(strict.tokens)) {
+    return unclean("it reads two ways: a comment in it holds a quoted address with a parenthesis in it");
+  }
+
+  const groups = [[]];
+  for (const t of strict.tokens) {
+    if (t.t === ";") groups.push([]);
+    else groups.at(-1).push(t);
+  }
+  let authservId = "";
+  let rest = groups.slice(1);
+  const [head] = groups;
+  if (head.length && !(head[0].t === "word" && wordEquals(head[0]) >= 0)) {
+    // authserv-id [authres-version], then ";".
+    authservId = wordText(head[0]).toLowerCase();
+    const version = head.slice(1);
+    if (version.length > 1 || (version.length === 1 && (version[0].parts.some((p) => p.quoted) || !/^[0-9]+$/.test(wordText(version[0]))))) {
+      return unclean(`the server's name isn't followed by ";"`);
+    }
+  } else if (head.length) {
+    rest = groups; // no authserv-id (Microsoft's): the line starts with a result
+  } else if (groups.length > 1) {
+    return unclean('no server name or result before the first ";"');
+  }
+  if (rest.length && rest.at(-1).length === 0) rest = rest.slice(0, -1); // a ";" at the end (Yahoo's, Microsoft's)
+  if (authservId && rest.length === 1 && rest[0].length === 1 && wordText(rest[0][0]).toLowerCase() === "none" && !rest[0][0].parts.some((p) => p.quoted)) {
+    return { authservId, results: [], problem: null };
+  }
+  const results = [];
+  for (const words of rest) {
+    if (words.length === 0) return unclean('two ";" with nothing between');
+    const r = authResultOf(words);
+    if (typeof r === "string") return unclean(r);
+    results.push(r);
+  }
+  return { authservId, results, problem: null };
 }
 
 /** The domain of an address or domain as these lines write them: "owner@example.com", "@example.com", "<a@b>". */
@@ -753,38 +950,51 @@ function aligned(a, b) {
   return short.includes(".") && long.endsWith(`.${short}`);
 }
 
+/** Headers only the sender writes: an Authentication-Results line below one of them is in the sender's part. */
+const SENDER_PART = new Set(["from", "sender", "reply-to", "to", "cc", "subject", "date", "message-id", "in-reply-to", "references", "mime-version", "content-type", "dkim-signature"]);
+
 /**
  * Whether the owner's own mailbox provider vouches for the sender of a mail (mailparser's headerLines, top first, and
- * the From address): the provider's topmost Authentication-Results line, from the provider's own authserv-id, says
- * dmarc=pass for the From domain, or dkim=pass with header.d (else header.i) aligned to it, or spf=pass with
- * smtp.mailfrom aligned to it. A dmarc=fail there is final. Lines lower down are the sender's to write and are never
- * read. The provider is known by the IMAP host (mailProviderOf); for a server Tarsee doesn't know, the owner names its
- * authserv-id in Settings, or says it checks nothing and the From line is to be trusted (senderCheck).
+ * the From address). The provider is known by the IMAP host Tarsee reads (mailProviderOf); for a server Tarsee
+ * doesn't know, it is the one whose name (authserv-id) the owner typed in Settings for this exact mailbox
+ * (senderCheck, with imapHost and imapUser). Its topmost Authentication-Results line, with its own authserv-id, must
+ * read cleanly (parseAuthResults) and say:
+ *   - dmarc=pass with header.from equal to the From domain (a dmarc=fail is final, and a DMARC result for another
+ *     domain refuses the mail: the provider read another From line than Tarsee did); else
+ *   - dkim=pass with that result's own header.d aligned to the From domain; else
+ *   - spf=pass with smtp.mailfrom aligned to it.
+ * Two results for a check that gives one verdict for the mail (dmarc, spf, ...), or two dkim results for one
+ * signature that disagree, can't both be the provider's word, so they refuse it too. Lines lower down are the
+ * sender's to write and are never read; for the owner's own server, the topmost line must also sit above every
+ * header only the sender writes. "Trust the From line" (senderCheck.trustFromLine) counts only for a server Tarsee
+ * doesn't know and the owner named no line for: one that writes none.
  * { ok: true, by: "dmarc"|"dkim"|"spf"|"from-line", provider } or
- * { ok: false, why: "unchecked" (no line Tarsee can read as the provider's) | "failed", provider, seen?, detail? }:
- * provider is its name, or the owner's name for their server, or null; seen is the topmost line's authserv-id.
+ * { ok: false, why: "unchecked" (no line Tarsee can read as the provider's) | "failed", provider, detail? }:
+ * provider is its name, or the name the owner gave their server, or null. Nothing the mail wrote comes back but the
+ * detail of a verdict, which is for the log.
  */
-export function senderVouched(headerLines, fromAddress, { imapHost = "", senderCheck = null } = {}) {
+export function senderVouched(headerLines, fromAddress, { imapHost = "", imapUser = "", senderCheck = null } = {}) {
   const lines = Array.isArray(headerLines) ? headerLines : [];
-  const own = senderCheckFor(senderCheck, imapHost);
   const known = mailProviderOf(imapHost);
-  // A name the owner gave counts too, for a provider that names itself in a way Tarsee doesn't expect.
-  const ownId = (id) => !!own.authservId && id === own.authservId;
-  const profile = known
-    ? { ...known, id: (id) => known.id(id) || ownId(id) }
-    : own.authservId ? { name: own.authservId, id: ownId, lines: "top" } : null;
+  const own = senderCheckFor(senderCheck, { host: imapHost, user: imapUser });
+  const profile = known || (own.authservId ? { name: own.authservId, id: (id) => id === own.authservId, lines: "top", own: true } : null);
   const provider = profile?.name ?? null;
-  if (own.trustFromLine) return { ok: true, by: "from-line", provider };
+  if (!profile && own.trustFromLine) return { ok: true, by: "from-line", provider };
+  const failed = (detail) => ({ ok: false, why: "failed", provider, detail });
+  const unchecked = { ok: false, why: "unchecked", provider };
 
-  if (lines.filter((h) => h.key === "from").length !== 1) return { ok: false, why: "failed", provider, detail: "more than one From line" };
+  const froms = lines.filter((h) => h.key === "from").length;
+  if (froms !== 1) return failed(froms ? "more than one From line" : "no From line");
   const fromDomain = domainOf(fromAddress);
-  if (!fromDomain) return { ok: false, why: "failed", provider, detail: "no From address" };
+  if (!fromDomain) return failed("no From address");
 
   const valueOf = (h) => String(h.line || "").slice(String(h.line || "").indexOf(":") + 1);
   const top = lines.findIndex((h) => h.key === "authentication-results");
-  const topLine = top >= 0 ? parseAuthResults(valueOf(lines[top])) : null;
-  const seen = topLine ? topLine.authservId.slice(0, 120) : null;
-  if (!profile || !topLine || !profile.id(topLine.authservId)) return { ok: false, why: "unchecked", provider, seen };
+  if (!profile || top < 0) return unchecked;
+  const topLine = parseAuthResults(valueOf(lines[top]));
+  if (!profile.id(topLine.authservId)) return unchecked;
+  // The owner's server: its line goes on top as the mail comes in, above all the sender wrote.
+  if (profile.own && lines.slice(0, top).some((h) => SENDER_PART.has(h.key))) return unchecked;
 
   // The provider's lines: the topmost one, or the run of its lines above the Received of the hop that brought the
   // mail in (anything below that hop is the sender's).
@@ -797,22 +1007,40 @@ export function senderVouched(headerLines, fromAddress, { imapHost = "", senderC
       block.push(next);
     }
   }
+  const unread = block.find((b) => b.problem);
+  if (unread) return failed(`its Authentication-Results line doesn't read cleanly: ${unread.problem}`);
   const results = block.flatMap((b) => b.results);
 
-  const dmarc = results.find((r) => r.method === "dmarc");
-  const dmarcFor = dmarc ? domainOf(dmarc.props["header.from"]) : "";
-  if (dmarc?.result === "pass" && dmarcFor === fromDomain) return { ok: true, by: "dmarc", provider };
+  const count = new Map();
+  for (const r of results) if (!PER_SIGNATURE.has(r.method)) count.set(r.method, (count.get(r.method) || 0) + 1);
+  const twice = [...count].find(([, n]) => n > 1);
+  if (twice) return failed(`more than one ${twice[0]} result`);
+  const signatures = new Map();
+  for (const r of results.filter((x) => PER_SIGNATURE.has(x.method))) {
+    const d = domainOf(r.props["header.d"] || r.props["header.i"]);
+    const key = `${r.method} ${d} ${String(r.props["header.s"] || "").toLowerCase()}`;
+    if (signatures.has(key) && signatures.get(key) !== r.result) return failed(`its ${r.method} results for ${d || "one signature"} disagree`);
+    signatures.set(key, r.result);
+  }
+
   const said = ["dmarc", "dkim", "spf"]
     .map((m) => results.find((r) => r.method === m))
     .filter(Boolean)
     .map((r) => `${r.method}=${r.result}`)
     .join(", ") || "no DMARC, DKIM or SPF verdict";
-  if (dmarc?.result === "fail" && (!dmarcFor || dmarcFor === fromDomain)) return { ok: false, why: "failed", provider, detail: said };
-  const dkim = results.some((r) => r.method === "dkim" && r.result === "pass" && aligned(domainOf(r.props["header.d"] || r.props["header.i"]), fromDomain));
-  if (dkim) return { ok: true, by: "dkim", provider };
+  const dmarc = results.find((r) => r.method === "dmarc");
+  if (dmarc) {
+    const dmarcFor = domainOf(dmarc.props["header.from"]);
+    if (dmarcFor && dmarcFor !== fromDomain) return failed(`its DMARC result is for ${dmarcFor}, not the From line's ${fromDomain}`);
+    if (dmarc.result === "pass" && dmarcFor === fromDomain) return { ok: true, by: "dmarc", provider };
+    if (dmarc.result === "fail") return failed(said);
+  }
+  if (results.some((r) => r.method === "dkim" && r.result === "pass" && aligned(domainOf(r.props["header.d"]), fromDomain))) {
+    return { ok: true, by: "dkim", provider };
+  }
   const spf = results.find((r) => r.method === "spf");
   if (spf?.result === "pass" && aligned(domainOf(spf.props["smtp.mailfrom"]), fromDomain)) return { ok: true, by: "spf", provider };
-  return { ok: false, why: "failed", provider, detail: said };
+  return failed(said);
 }
 
 // ── What a save may change on its own, for the owner's save in Settings > Channels > Email (routes/settings.js) and
@@ -896,7 +1124,11 @@ export function allowlistWidening(asked, allowed) {
   return added.length ? { anyone: false, added } : null;
 }
 
-/** The parts of a waiting record (cfg.waiting) that are well formed: enabled, imap, smtp, allowlistFromAddresses, senderCheck. */
+/**
+ * The parts of a waiting record (cfg.waiting) that are well formed: enabled, imap, smtp, allowlistFromAddresses. A
+ * sender check never waits (the owner types it, signed in: holdForOwner), so one an earlier version left waiting is
+ * dropped here, never approved.
+ */
 function waitingParts(w) {
   const out = {};
   if (!w || typeof w !== "object") return out;
@@ -905,21 +1137,69 @@ function waitingParts(w) {
     if (w[side] && typeof w[side] === "object" && !Array.isArray(w[side])) out[side] = w[side];
   }
   if (Array.isArray(w.allowlistFromAddresses)) out.allowlistFromAddresses = normalizeAllowlist(w.allowlistFromAddresses);
-  if (w.senderCheck && typeof w.senderCheck === "object") out.senderCheck = ownSenderCheck(w.senderCheck);
   return out;
 }
 
-/** The owner's sender-check fields as given: { trustFromLine, authservId } (authservId lower case, "" for none). */
+/**
+ * A sender check as saved or asked for: { imapHost, imapUser, trustFromLine, authservId }, the mailbox it is for
+ * (host lower case), and what is trusted there (authservId lower case, "" for none).
+ */
 function ownSenderCheck(s) {
   return {
+    imapHost: typeof s?.imapHost === "string" ? s.imapHost.trim().toLowerCase() : "",
+    imapUser: typeof s?.imapUser === "string" ? s.imapUser.trim() : "",
     trustFromLine: s?.trustFromLine === true,
     authservId: typeof s?.authservId === "string" ? s.authservId.trim().toLowerCase() : "",
   };
 }
 
+/** The mailbox a sender check is for: { host, user }. */
+const mailboxOfCheck = (s) => ({ host: s?.imapHost, user: s?.imapUser });
+
+/**
+ * cfg without a sender check that no longer applies: one for another mailbox than the IMAP one in force, one for a
+ * provider Tarsee knows, or one that trusts nothing. What the owner trusted never carries over to another mailbox.
+ */
+export function senderCheckInForce(cfg) {
+  if (!cfg || typeof cfg !== "object" || cfg.senderCheck === undefined) return cfg;
+  const s = senderCheckFor(cfg.senderCheck, cfg.imap);
+  if (s.trustFromLine || s.authservId) return cfg;
+  const out = { ...cfg };
+  delete out.senderCheck;
+  return out;
+}
+
+/**
+ * How a mail server set up by a caller that may be the AI (the chat tool, or the API token without the owner's live
+ * sign-in) is logged in to: over TLS only. secure: false is refused except on a STARTTLS port (IMAP 143; SMTP 587, 25,
+ * 2525), and a login that isn't over TLS from the start must switch to TLS first (requireTLS: nodemailer's requireTLS,
+ * ImapFlow's doSTARTTLS). { refused: what to say } or { requireTLS }.
+ */
+export function aiLoginRule(side, { port, secure }) {
+  if (!secure && !(side === "imap" ? [143] : [587, 25, 2525]).includes(port)) {
+    return {
+      refused: side === "imap"
+        ? `IMAP with secure: false on port ${port} would log in in plain text. Keep secure on (port 993), or, for a server that offers STARTTLS, use port 143 with secure: false: Tarsee then insists on TLS before it logs in.`
+        : `SMTP with secure: false on port ${port} would log in in plain text. Keep secure on (port 465, or 587 with STARTTLS), or, for a server that offers STARTTLS, use port 587, 25 or 2525 with secure: false: Tarsee then insists on TLS before it logs in.`,
+    };
+  }
+  const tlsFromStart = side === "imap" ? secure : secure && port === 465;
+  return { requireTLS: !tlsFromStart };
+}
+
 /** Whether `next` trusts more than `now` to say who sent a mail: the From line, or a server name it didn't. */
 function trustsMore(now, next) {
   return (next.trustFromLine && !now.trustFromLine) || (!!next.authservId && next.authservId !== now.authservId);
+}
+
+/**
+ * Whether a sender check asked for ({ imapHost, imapUser, trustFromLine, authservId }) trusts more, for the mailbox it
+ * names, than cfg has in force there. Only the owner's live sign-in may give that: the owner types their server's name
+ * themselves, and a name the AI asks for may be one it read in a forged mail.
+ */
+export function senderCheckTrustsMore(cfg, check) {
+  const want = ownSenderCheck(check);
+  return trustsMore(senderCheckFor(cfg?.senderCheck, mailboxOfCheck(want)), want);
 }
 
 /** Whether a server is another mailbox (IMAP: the one Tarsee reads) or another place replies go (SMTP): its host or user. */
@@ -937,7 +1217,6 @@ function stillWaiting(cfg, parts) {
     if (out[side] && mailServerChanges(mailServerOf(side, cfg[side]), mailServerOf(side, out[side])).length === 0) delete out[side];
   }
   if (out.allowlistFromAddresses && !allowlistWidening(out.allowlistFromAddresses, ownerAllowed(cfg))) delete out.allowlistFromAddresses;
-  if (out.senderCheck && !trustsMore(senderCheckFor(cfg.senderCheck, cfg.imap?.host), out.senderCheck)) delete out.senderCheck;
   return out;
 }
 
@@ -964,13 +1243,15 @@ function withWaiting(cfg, before, parts, by, now = new Date()) {
  *   - turning email on;
  *   - another IMAP host or user: the mailbox Tarsee reads, and whoever controls a mailbox can put any mail in it;
  *   - another SMTP host or user: where its replies go;
- *   - an allowlist that lets in anyone the owner hasn't allowed (ownerAllowed) and who can't reach the AI now;
- *   - trusting more to say who sent a mail (senderCheck), which only the API token can ask for.
- * What narrows goes straight in: senders removed, email off, the mention word, the display name, a port. For each part
- * the call asks about (asked: { enabled, imap, smtp, allowlist, senderCheck }) the latest ask replaces what waited.
- * The owner's own list and sender check change only with their save or OK.
+ *   - an allowlist that lets in anyone the owner hasn't allowed (ownerAllowed) and who can't reach the AI now.
+ * What narrows goes straight in: senders removed, email off, the mention word, the display name, a port, and less
+ * trust in who sent a mail (senderCheck, which only the API token can send). More trust there never goes in nor waits:
+ * the owner types it, signed in (routes/settings.js refuses it first: senderCheckTrustsMore). For each part the call
+ * asks about (asked: { enabled, imap, smtp, allowlist, senderCheck }) the latest ask replaces what waited.
+ * The owner's own list and sender check change only with their save or OK, and a sender check never outlives the
+ * mailbox it was set for (senderCheckInForce).
  * prev: the settings saved now. next: prev with the call's changes, the servers already checked (one that changes
- * carries its own password), next.senderCheck the { trustFromLine, authservId } asked for.
+ * carries its own password), next.senderCheck the { imapHost, imapUser, trustFromLine, authservId } asked for.
  * Returns { cfg: what to save, held: the parts this call left waiting }.
  */
 export function holdForOwner(prev, next, asked, by, now = new Date()) {
@@ -1013,31 +1294,34 @@ export function holdForOwner(prev, next, asked, by, now = new Date()) {
       delete parts.allowlistFromAddresses;
     }
   }
-  if (asked.senderCheck) {
+  // Less trust goes straight in, for the mailbox in force (for one that only waits there is nothing in force). More is
+  // left as it is: neither in force nor waiting.
+  if (asked.senderCheck && !senderCheckTrustsMore(was, next.senderCheck)) {
     const want = ownSenderCheck(next.senderCheck);
-    if (trustsMore(senderCheckFor(was.senderCheck, cfg.imap?.host), want)) {
-      parts.senderCheck = want;
-      held.push("senderCheck");
-    } else {
-      cfg.senderCheck = { imapHost: cfg.imap?.host || "", ...want };
-      delete parts.senderCheck;
+    if (sameMailbox(mailboxOfCheck(want), cfg.imap)) {
+      if (want.trustFromLine || want.authservId) cfg.senderCheck = want;
+      else delete cfg.senderCheck;
     }
   }
-  return { cfg: withWaiting(cfg, was.waiting, stillWaiting(cfg, parts), by, now), held };
+  const kept = senderCheckInForce(cfg);
+  return { cfg: withWaiting(kept, was.waiting, stillWaiting(kept, parts), by, now), held };
 }
 
 /**
  * The owner's own save from Settings > Channels > Email: everything in it is in force. What waited stays waiting
- * (a save isn't an answer to it), except a part the save has made moot.
+ * (a save isn't an answer to it), except a part the save has made moot. A sender check for another mailbox than the
+ * one now in force goes (senderCheckInForce).
  */
 export function ownerSaved(cfg, now = new Date()) {
   const before = cfg?.waiting;
-  return withWaiting(cfg, before, stillWaiting(cfg, waitingParts(before)), before?.by, now);
+  const kept = senderCheckInForce(cfg);
+  return withWaiting(kept, before, stillWaiting(kept, waitingParts(before)), before?.by, now);
 }
 
 /**
  * The settings once the owner OKs what waits (cfg.waiting): it goes in force. When it turns email on or sets the
- * allowlist, the list in force is the owner's from then on (allowlistOwner).
+ * allowlist, the list in force is the owner's from then on (allowlistOwner). What the owner trusted to say who sent a
+ * mail stays with its mailbox: an OK that moves IMAP to another one drops it (senderCheckInForce).
  */
 export function applyWaiting(cfg) {
   const parts = stillWaiting(cfg, waitingParts(cfg?.waiting));
@@ -1047,8 +1331,7 @@ export function applyWaiting(cfg) {
   for (const side of ["imap", "smtp"]) if (parts[side]) out[side] = parts[side];
   if (parts.allowlistFromAddresses) out.allowlistFromAddresses = parts.allowlistFromAddresses;
   if (parts.enabled || parts.allowlistFromAddresses) out.allowlistOwner = normalizeAllowlist(out.allowlistFromAddresses);
-  if (parts.senderCheck) out.senderCheck = { imapHost: out.imap?.host || "", ...parts.senderCheck };
-  return out;
+  return senderCheckInForce(out);
 }
 
 /** What waits for the owner's OK, in plain words for the AI or a log: one line per part, [] when nothing waits. */
@@ -1068,8 +1351,6 @@ export function waitingSummary(cfg) {
       ? "an empty allowlist, which lets any sender reach you by email"
       : `the allowlist ${w.allowlistFromAddresses.join(", ")}, which lets ${more ? more.added.join(", ") : "them"} reach you by email`);
   }
-  if (w.senderCheck?.trustFromLine) lines.push("trusting the From line of mail to this mailbox");
-  if (w.senderCheck?.authservId) lines.push(`trusting the Authentication-Results lines named ${w.senderCheck.authservId}`);
   return lines;
 }
 
@@ -1260,7 +1541,7 @@ export function normalizeConfig(c) {
     allowlistFromAddresses: Array.isArray(c.allowlistFromAddresses)
       ? c.allowlistFromAddresses
       : [],
-    // What the owner trusts to say who sent a mail, for the IMAP host it was set for (senderVouched).
+    // What the owner trusts to say who sent a mail, for the exact mailbox it was set for (senderVouched).
     senderCheck: c.senderCheck && typeof c.senderCheck === "object" ? c.senderCheck : null,
     imap: c.imap || {},
     smtp: c.smtp || {},

@@ -5,9 +5,10 @@
 //     TARSEE_AGENT_ENV_KEYS, or copied under another name;
 //   - tarsee_get_key refuses it ("RAILWAY_API_TOKEN is Tarsee's own; use tarsee_railway"), and a copy of it;
 //   - tarsee_list_keys still names it, without even its masked ends;
-//   - from chat, tarsee_set_key saves one while Tarsee has none yet (the way owners save it today), and replacing or
-//     deleting one already there is refused ("change it in Settings > Keys"); other vault writers are held to the
-//     same, and only the owner's Settings > Keys ({ owner: true }) may.
+//   - from a chat's own turn, tarsee_set_key saves one while Tarsee has none yet (the way owners save it today), and
+//     replacing or deleting one already there is refused ("change it in Settings > Keys"); only the owner's Settings >
+//     Keys ({ owner: true }) may. Every other writer (background work, another tool's save_as_key, a caller that names
+//     none) saves none at all: test/server-only-first-save.test.js.
 // Uses the real vault in a temporary data folder, encrypted, with obvious fake keys.
 import { describe, it, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -43,7 +44,11 @@ const quiet = async (fn) => {
   console.log = () => {};
   try { return await fn(); } finally { console.log = log; }
 };
-const tool = (name, input) => quiet(() => executeTool(name, input, {}));
+/** A chat's own turn, as a channel or the dashboard gives its tools: a conversation, no background mark. */
+const CHAT = Object.freeze({ conversationId: "test-chat-0001" });
+const tool = (name, input, ctx = CHAT) => quiet(() => executeTool(name, input, ctx));
+/** The owner saving the token in Settings > Keys (routes/vault-keys.js). */
+const ownerSaves = (value, description = "") => vault.setKey("RAILWAY_API_TOKEN", value, description, { owner: true });
 const names = () => vault.listKeys().map((k) => k.name).sort();
 const emptyVault = () => { try { fs.rmSync(VAULT_FILE, { force: true }); } catch { /* none yet */ } };
 
@@ -72,7 +77,7 @@ describe("SERVER_ONLY_KEYS", () => {
 
 describe("the agent's environment never carries the Railway token", () => {
   it("not from the vault, whatever else goes in", async () => {
-    await quiet(() => { vault.setKey("RAILWAY_API_TOKEN", TOKEN); vault.setKey("TEST_SCRIPT_KEY", SCRIPT_KEY); });
+    await quiet(() => { ownerSaves(TOKEN); vault.setKey("TEST_SCRIPT_KEY", SCRIPT_KEY); });
     const env = agentVaultEnv({ env: {} });
     assert.equal(env.TEST_SCRIPT_KEY, SCRIPT_KEY, "an ordinary key still reaches scripts");
     assert.ok(!("RAILWAY_API_TOKEN" in env), JSON.stringify(Object.keys(env)));
@@ -80,13 +85,13 @@ describe("the agent's environment never carries the Railway token", () => {
   });
 
   it("not when TARSEE_AGENT_ENV_KEYS names it", async () => {
-    await quiet(() => { vault.setKey("RAILWAY_API_TOKEN", TOKEN); vault.setKey("TEST_SCRIPT_KEY", SCRIPT_KEY); });
+    await quiet(() => { ownerSaves(TOKEN); vault.setKey("TEST_SCRIPT_KEY", SCRIPT_KEY); });
     const env = agentVaultEnv({ env: { TARSEE_AGENT_ENV_KEYS: "RAILWAY_API_TOKEN, TEST_SCRIPT_KEY" } });
     assert.deepEqual(env, { TEST_SCRIPT_KEY: SCRIPT_KEY });
   });
 
   it("not as a copy saved under another name, of the vault's token or of the one in Tarsee's environment", async () => {
-    await quiet(() => { vault.setKey("RAILWAY_API_TOKEN", TOKEN); vault.setKey("RAILWAY_TOKEN", ` ${TOKEN} `); vault.setKey("TEST_SCRIPT_KEY", SCRIPT_KEY); });
+    await quiet(() => { ownerSaves(TOKEN); vault.setKey("RAILWAY_TOKEN", ` ${TOKEN} `); vault.setKey("TEST_SCRIPT_KEY", SCRIPT_KEY); });
     assert.deepEqual(agentVaultEnv({ env: {} }), { TEST_SCRIPT_KEY: SCRIPT_KEY });
 
     emptyVault();
@@ -97,7 +102,7 @@ describe("the agent's environment never carries the Railway token", () => {
   });
 
   it("not on the default call, cached or not", async () => {
-    await quiet(() => { vault.setKey("RAILWAY_API_TOKEN", TOKEN); vault.setKey("TEST_SCRIPT_KEY", SCRIPT_KEY); });
+    await quiet(() => { ownerSaves(TOKEN); vault.setKey("TEST_SCRIPT_KEY", SCRIPT_KEY); });
     const first = await quiet(() => agentVaultEnv());
     const cached = await quiet(() => agentVaultEnv());
     for (const env of [first, cached]) {
@@ -115,7 +120,7 @@ describe("the agent's environment never carries the Railway token", () => {
 
 describe("tarsee_get_key and tarsee_list_keys", () => {
   it("get_key refuses the token, by any spelling of its name, and points at tarsee_railway", async () => {
-    await quiet(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN));
+    await quiet(() => ownerSaves(TOKEN));
     for (const name of ["RAILWAY_API_TOKEN", " railway_api_token "]) {
       const out = await tool("get_key", { name });
       assert.ok(out.startsWith("get_key refused: RAILWAY_API_TOKEN is Tarsee's own; use tarsee_railway"), out);
@@ -124,7 +129,7 @@ describe("tarsee_get_key and tarsee_list_keys", () => {
   });
 
   it("get_key refuses a copy of the token saved under another name; an ordinary key still comes back", async () => {
-    await quiet(() => { vault.setKey("RAILWAY_API_TOKEN", TOKEN); vault.setKey("MY_RAILWAY", TOKEN); vault.setKey("TEST_SCRIPT_KEY", SCRIPT_KEY); });
+    await quiet(() => { ownerSaves(TOKEN); vault.setKey("MY_RAILWAY", TOKEN); vault.setKey("TEST_SCRIPT_KEY", SCRIPT_KEY); });
     const copy = await tool("get_key", { name: "MY_RAILWAY" });
     assert.match(copy, /RAILWAY_API_TOKEN/, copy);
     assert.match(copy, /tarsee_railway/, copy);
@@ -143,7 +148,7 @@ describe("tarsee_get_key and tarsee_list_keys", () => {
   });
 
   it("list_keys still names it, and shows no part of it", async () => {
-    await quiet(() => { vault.setKey("RAILWAY_API_TOKEN", TOKEN, "Railway account token"); vault.setKey("TEST_SCRIPT_KEY", SCRIPT_KEY); });
+    await quiet(() => { ownerSaves(TOKEN, "Railway account token"); vault.setKey("TEST_SCRIPT_KEY", SCRIPT_KEY); });
     const out = await tool("list_keys", {});
     assert.match(out, /^RAILWAY_API_TOKEN: Railway account token/m, out);
     assert.match(out, /^TEST_SCRIPT_KEY: /m, out);
@@ -205,7 +210,7 @@ describe("tarsee_set_key and tarsee_delete_key from chat", () => {
 
 describe("the vault itself holds every writer but the owner to that", () => {
   it("setKey and deleteKey refuse to replace or delete a saved server-only key, unless { owner: true }", async () => {
-    await quiet(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN));
+    await quiet(() => ownerSaves(TOKEN));
     assert.throws(() => vault.setKey("RAILWAY_API_TOKEN", OTHER_TOKEN, "a tool that saves to the vault"), /Settings > Keys/);
     assert.throws(() => vault.deleteKey("RAILWAY_API_TOKEN"), /Settings > Keys/);
     assert.equal(vault.getKey("RAILWAY_API_TOKEN"), TOKEN);
@@ -216,8 +221,11 @@ describe("the vault itself holds every writer but the owner to that", () => {
     assert.equal(vault.getKey("RAILWAY_API_TOKEN"), null);
   });
 
-  it("a first save needs no owner; other keys are as before", async () => {
-    await quiet(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN));
+  it("a first save needs the owner or set_key in a chat's own turn; other keys are as before", async () => {
+    assert.throws(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN), /wasn't saved/, "a caller that names no writer");
+    assert.deepEqual(names(), []);
+    await quiet(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN, "", { writer: { tool: "set_key", ctx: CHAT } }));
+    assert.equal(vault.getKey("RAILWAY_API_TOKEN"), TOKEN);
     await quiet(() => { vault.setKey("TEST_SCRIPT_KEY", "a"); vault.setKey("TEST_SCRIPT_KEY", "b"); });
     assert.equal(vault.getKey("TEST_SCRIPT_KEY"), "b");
     assert.equal(await quiet(() => vault.deleteKey("TEST_SCRIPT_KEY")), true);
@@ -249,7 +257,7 @@ const vaultFile = () => fs.readFileSync(VAULT_FILE, "utf8");
 describe("the vault takes a key's name only as text of its shape", () => {
   for (const [what, name] of NOT_TEXT) {
     it(`${what}: setKey, getKey, deleteKey and hasKey refuse it, and the token stays as it was`, async () => {
-      await quiet(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN));
+      await quiet(() => ownerSaves(TOKEN));
       const before = vaultFile();
       assert.throws(() => vault.setKey(name, EVIL), /name is text/);
       assert.throws(() => vault.setKey(name, EVIL, "", { owner: true }), /name is text/, "not even the owner's own Settings > Keys");
@@ -267,7 +275,7 @@ describe("the vault takes a key's name only as text of its shape", () => {
   });
 
   it("text that isn't a key's name is refused: spaces round it, a line break, an invisible character, empty, __proto__, too long", async () => {
-    await quiet(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN));
+    await quiet(() => ownerSaves(TOKEN));
     const before = vaultFile();
     for (const name of NOT_A_NAME) {
       assert.throws(() => vault.setKey(name, EVIL), /isn't a key's name|name is text/, JSON.stringify(name));
@@ -319,7 +327,7 @@ describe("the vault takes a key's name only as text of its shape", () => {
 describe("the key tools check the name's type before anything else", () => {
   for (const [what, name] of NOT_TEXT) {
     it(`${what}: set_key, get_key and delete_key refuse it, and the token stays`, async () => {
-      await quiet(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN));
+      await quiet(() => ownerSaves(TOKEN));
       const before = vaultFile();
       for (const [t, input] of [["set_key", { name, value: EVIL }], ["get_key", { name }], ["delete_key", { name }]]) {
         const out = await tool(t, input);
@@ -400,7 +408,7 @@ describe("Tarsee's own keys set as variables where it runs reach no AI command",
 
   it("baseEnv strips a copy of the vault's token held by a variable under another name", async () => {
     delete process.env.RAILWAY_API_TOKEN;
-    await quiet(() => vault.setKey("RAILWAY_API_TOKEN", OTHER_TOKEN));
+    await quiet(() => ownerSaves(OTHER_TOKEN));
     const base = engineEnv.baseEnv({ PATH: "/usr/bin", MY_RAILWAY: OTHER_TOKEN });
     assert.deepEqual(base, { PATH: "/usr/bin" });
   });
@@ -426,7 +434,7 @@ describe("Tarsee's own keys set as variables where it runs reach no AI command",
 
   it("exec: the vault's token, and a copy of it, never; no vault key at all while get_key is denied", async () => {
     delete process.env.RAILWAY_API_TOKEN;
-    await quiet(() => { vault.setKey("RAILWAY_API_TOKEN", OTHER_TOKEN); vault.setKey("MY_RAILWAY", OTHER_TOKEN); vault.setKey("TEST_SCRIPT_KEY", SCRIPT_KEY); });
+    await quiet(() => { ownerSaves(OTHER_TOKEN); vault.setKey("MY_RAILWAY", OTHER_TOKEN); vault.setKey("TEST_SCRIPT_KEY", SCRIPT_KEY); });
     const out = await tool("exec", { command: "env" });
     assert.ok(!out.includes(OTHER_TOKEN), out.slice(0, 200));
     assert.ok(out.includes(SCRIPT_KEY));
@@ -467,7 +475,7 @@ describe("Tarsee's own keys set as variables where it runs reach no AI command",
 
 describe("the key tools' refusals are marked as errors, and the status line says so", () => {
   async function connect() {
-    const server = createTarseeMcp({}, { quiet: true });
+    const server = createTarseeMcp({ ...CHAT }, { quiet: true });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "tarsee-test", version: "1.0.0" }, { capabilities: {} });
     await Promise.all([server.instance.connect(serverSide), client.connect(clientSide)]);
@@ -480,7 +488,7 @@ describe("the key tools' refusals are marked as errors, and the status line says
   it("replacing, deleting or reading Tarsee's own key: isError, and the bots don't say it worked", async () => {
     const client = await connect();
     try {
-      await quiet(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN));
+      await quiet(() => ownerSaves(TOKEN));
       const set = await call(client, "tarsee_set_key", { key: "RAILWAY_API_TOKEN", value: EVIL });
       assert.equal(set.isError, true, text(set));
       assert.match(text(set), /Settings > Keys/);
@@ -501,7 +509,7 @@ describe("the key tools' refusals are marked as errors, and the status line says
   it("a key that isn't there, a name that isn't one, a copy of the token, a policy denial: all marked", async () => {
     const client = await connect();
     try {
-      await quiet(() => { vault.setKey("RAILWAY_API_TOKEN", TOKEN); vault.setKey("MY_RAILWAY", TOKEN); });
+      await quiet(() => { ownerSaves(TOKEN); vault.setKey("MY_RAILWAY", TOKEN); });
       for (const [name, args] of [
         ["tarsee_get_key", { key: "NO_SUCH_KEY" }],
         ["tarsee_get_key", { key: "MY_RAILWAY" }],

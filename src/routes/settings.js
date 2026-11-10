@@ -105,12 +105,19 @@ settingsRouter.post("/provider", (req, res) => {
  *   vault's .password$ regex (see src/lib/vault.js). A password left out keeps the saved one only while the side's
  *   server stays the same: a save that changes its host, port, user or secure setting must carry its password, or it
  *   gets 400 with needsPassword: ["imap"|"smtp"] and nothing is saved. A host, port or user left empty keeps the saved
- *   one; secure left out keeps the saved setting (and requireTLS) while the port stays.
- *   senderCheck?: { trustFromLine, authservId }: what the owner trusts to say who sent a mail, for the IMAP host saved.
+ *   one; secure left out keeps the saved setting (and requireTLS) while the port stays. Without the owner's live
+ *   sign-in, a server that changes gets the chat tool's TLS rule (email.js aiLoginRule): secure: false only on a
+ *   STARTTLS port, and TLS required before the login there; else 400 and nothing is saved.
+ *   senderCheck?: { trustFromLine, authservId, imapHost?, imapUser? }: what the owner trusts to say who sent a mail,
+ *   for the exact IMAP mailbox (host and user) this save leaves: their server's name, or, for one that writes no
+ *   Authentication-Results line, "trust the From line" (one or the other). It names the mailbox it was set for; one
+ *   that names none is for the mailbox in force, so a save that moves the mailbox doesn't carry it (it is dropped, and
+ *   `note` says so). A provider Tarsee knows gets 400: its own line is the only word there.
  *   From the owner's live sign-in (whoIsAsking) all of it goes in, and the allowlist is the owner's. With the API token
  *   alone, which the AI's shell can read, what would change who can reach the AI by email or where its mail goes is
  *   saved as waiting (waiting), as the chat tool's is (src/channels/email.js holdForOwner): turning email on, another
- *   IMAP or SMTP host or user, a wider allowlist, more trust in who sent a mail. What narrows goes straight in.
+ *   IMAP or SMTP host or user, a wider allowlist. What narrows goes straight in. More trust in who sent a mail (a
+ *   server name, or the From line) gets 403: only the owner's live sign-in gives it, as only the owner types it.
  *   Body { type: "email", waitingAnswer: "approve", waitingId }: the owner's OK for what waits, the very change the page
  *   showed; the owner's live sign-in only. { waitingAnswer: "discard" } turns it down.
  *   Body { type: "email", senderNote: "dismiss" }: the owner's OK on the note saying why mail was refused.
@@ -127,7 +134,8 @@ settingsRouter.post("/channel", async (req, res) => {
     // The same rules as the chat tool (lib/tools.js configure_email_channel), from src/channels/email.js:
     // test/email-channel-settings.test.js.
     const {
-      mailServerOf, mailServerChanges, normalizeAllowlist, senderCheckFor, holdForOwner, ownerSaved, applyWaiting, SENDER_NOTE_KEY,
+      mailServerOf, mailServerChanges, normalizeAllowlist, senderCheckFor, senderCheckTrustsMore, sameMailbox, mailProviderOf,
+      aiLoginRule, holdForOwner, ownerSaved, applyWaiting, SENDER_NOTE_KEY,
     } = await import("../channels/email.js");
     const { tarseeEmailAddress, imap, smtp, allowlistFromAddresses, mentionKeyword, replyAllMarker, fromName, defaultSubject } = body;
     const prev = settingsStore.get("channel.email") || {};
@@ -183,8 +191,8 @@ settingsRouter.post("/channel", async (req, res) => {
       }
       settingsStore.set("channel.email", next);
       if (answer === "approve") {
-        const moved = String(next.imap?.host || "").toLowerCase() !== String(prev.imap?.host || "").toLowerCase();
-        if (moved) settingsStore.delete(SENDER_NOTE_KEY);
+        // Another mailbox (host or user): the note was about the old one. (applyWaiting dropped what was trusted there.)
+        if (!sameMailbox(prev.imap, next.imap)) settingsStore.delete(SENDER_NOTE_KEY);
         console.log(`[channels] the owner OK'd the email change that waited: email ${next.enabled ? "on" : "off"}, reading ${next.imap?.user || "?"} at ${next.imap?.host || "?"}, ${next.allowlistFromAddresses?.length ? `answering ${next.allowlistFromAddresses.join(", ")}` : "answering any sender"}`);
         restartIfOn(next);
       }
@@ -211,9 +219,13 @@ settingsRouter.post("/channel", async (req, res) => {
 
     // Each side's server. A host, port or user left empty keeps the saved one (the form sends every field it shows).
     // The saved password stays only with the server it was saved for: another host, port, user or secure setting
-    // needs its password in this save, whoever sends it.
+    // needs its password in this save, whoever sends it. Without the owner's live sign-in (the API token, which the
+    // AI's shell can read), a server that changes is only logged in to over TLS, as the chat tool's: secure: false on
+    // a STARTTLS port only, and TLS required before the login. The owner's password typed later then never goes out
+    // in plain text to a port the token chose.
     const servers = {};
     const needs = [];
+    const plainText = [];
     for (const side of ["imap", "smtp"]) {
       const NAME = side.toUpperCase();
       const given = body[side] ?? {};
@@ -250,8 +262,18 @@ settingsRouter.post("/channel", async (req, res) => {
         needs.push({ side, changed });
         continue;
       }
-      // Another server, with its own password (or none saved to keep). STARTTLS that must succeed (requireTLS, saved
-      // by the chat tool) stays while the port and secure setting do; a new port takes the form's defaults.
+      if (!liveOwner) {
+        const rule = aiLoginRule(side, next);
+        if (rule.refused) {
+          plainText.push(rule.refused);
+          continue;
+        }
+        servers[side] = { ...next, password, ...(rule.requireTLS ? { requireTLS: true } : {}) };
+        continue;
+      }
+      // The owner's own save of another server, with its own password (or none saved to keep). STARTTLS that must
+      // succeed (requireTLS, saved by the chat tool) stays while the port and secure setting do; a new port takes the
+      // form's defaults.
       const keepTls = was.requireTLS === true && next.port === saved.port && next.secure === saved.secure;
       servers[side] = { ...next, password, ...(keepTls ? { requireTLS: true } : {}) };
     }
@@ -264,22 +286,47 @@ settingsRouter.post("/channel", async (req, res) => {
         needsPassword: needs.map(({ side }) => side),
       });
     }
+    if (plainText.length) return res.status(400).json({ error: `${plainText.join(" ")} Nothing was saved.` });
 
     if (allowlistFromAddresses != null && (!Array.isArray(allowlistFromAddresses) || allowlistFromAddresses.some((a) => typeof a !== "string"))) {
       return res.status(400).json({ error: "allowlistFromAddresses must be a list of email addresses." });
     }
-    // What the owner trusts to say who sent a mail (email.js senderVouched): a server name of their own, or the From
-    // line itself, for a server that checks nothing.
+    // What the owner trusts to say who sent a mail (email.js senderVouched), for the exact IMAP mailbox this save
+    // leaves: their own server's name (its authserv-id, typed by the owner, never taken from a mail), or, for a server
+    // that writes no Authentication-Results line, the From line itself. It names the mailbox it was set for (the form
+    // sends the one the box was ticked for); one that names none is for the mailbox in force. Set for another mailbox
+    // than this one, it isn't carried over, and the answer says so.
     const check = body.senderCheck;
+    const mailbox = { host: servers.imap.host, user: servers.imap.user };
+    let askedCheck = null;
+    let checkNote = null;
     if (check != null) {
-      const id = check.authservId;
+      const id = check?.authservId;
+      const optionalText = (v) => v == null || typeof v === "string";
       if (typeof check !== "object" || Array.isArray(check)
         || (check.trustFromLine != null && typeof check.trustFromLine !== "boolean")
-        || (id != null && (typeof id !== "string" || !/^[A-Za-z0-9.-]{0,253}$/.test(id.trim())))) {
-        return res.status(400).json({ error: "senderCheck is { trustFromLine: true or false, authservId: your mail server's name, such as mail.example.com }." });
+        || (id != null && (typeof id !== "string" || !/^[A-Za-z0-9.-]{0,253}$/.test(id.trim())))
+        || !optionalText(check.imapHost) || !optionalText(check.imapUser)) {
+        return res.status(400).json({ error: "senderCheck is { trustFromLine: true or false, authservId: your mail server's name, such as mail.example.com, imapHost and imapUser: the mailbox it is for }." });
+      }
+      const want = { trustFromLine: check.trustFromLine === true, authservId: typeof id === "string" ? id.trim().toLowerCase() : "" };
+      if (want.trustFromLine && want.authservId) {
+        return res.status(400).json({ error: "Give either your mail server's name or \"trust the From line\", not both: with its name, Tarsee goes by your server's own verdict; \"trust the From line\" is only for a server that writes none." });
+      }
+      const known = mailProviderOf(mailbox.host);
+      if ((want.trustFromLine || want.authservId) && known) {
+        return res.status(400).json({ error: `${known.name} checks who sent each mail itself, and Tarsee reads its own Authentication-Results line, so "trust the From line" and a server name don't apply to it. Untick the box, leave the name empty, and save again. Nothing was saved.` });
+      }
+      const named = check.imapHost != null || check.imapUser != null;
+      const setFor = named ? { host: check.imapHost, user: check.imapUser } : prev.imap;
+      askedCheck = { imapHost: String(mailbox.host || "").toLowerCase(), imapUser: mailbox.user || "", ...want };
+      if ((want.trustFromLine || want.authservId) && !sameMailbox(setFor, mailbox)) {
+        askedCheck = { ...askedCheck, trustFromLine: false, authservId: "" };
+        checkNote = mailbox.host && mailbox.user
+          ? `"Who really sent it" was set for ${setFor?.host || "another mailbox"}${setFor?.user ? ` as ${setFor.user}` : ""}, so it wasn't kept for ${mailbox.host} as ${mailbox.user}: set it again for this mailbox if it applies.`
+          : `"Who really sent it" wasn't kept: it is kept for an IMAP mailbox, and none is set up.`;
       }
     }
-    const askedCheck = check != null ? { trustFromLine: check.trustFromLine === true, authservId: typeof check.authservId === "string" ? check.authservId.trim().toLowerCase() : "" } : null;
 
     const next = {
       ...prev,
@@ -300,19 +347,29 @@ settingsRouter.post("/channel", async (req, res) => {
     let held = [];
     if (liveOwner) {
       // The owner's own save: all of it in force. The list is the owner's from now on, and so is the sender check, kept
-      // with the IMAP host it is for. What waited stays waiting unless this save made it moot.
+      // with the exact mailbox it is for: one for the mailbox this save moves away from goes (ownerSaved). What waited
+      // stays waiting unless this save made it moot.
       payload = { ...next };
       if (allowlistFromAddresses != null) payload.allowlistOwner = next.allowlistFromAddresses;
       if (askedCheck) {
-        if (askedCheck.trustFromLine || askedCheck.authservId) payload.senderCheck = { imapHost: servers.imap.host || "", ...askedCheck };
+        if (askedCheck.trustFromLine || askedCheck.authservId) payload.senderCheck = askedCheck;
         else delete payload.senderCheck;
       }
       payload = ownerSaved(payload);
-      const before = senderCheckFor(prev.senderCheck, prev.imap?.host);
-      const after = senderCheckFor(payload.senderCheck, payload.imap?.host);
-      const moved = String(payload.imap?.host || "").toLowerCase() !== String(prev.imap?.host || "").toLowerCase();
+      const before = senderCheckFor(prev.senderCheck, prev.imap);
+      const after = senderCheckFor(payload.senderCheck, payload.imap);
+      const moved = !sameMailbox(prev.imap, payload.imap);
       if (moved || before.trustFromLine !== after.trustFromLine || before.authservId !== after.authservId) settingsStore.delete(SENDER_NOTE_KEY);
     } else {
+      // More trust in who sent a mail is the owner's alone to give: they type their server's name themselves, and a
+      // name the AI asks for may be one it read in a forged mail. It neither goes in nor waits for an Approve.
+      if (askedCheck && senderCheckTrustsMore(prev, askedCheck)) {
+        if (who === "signed-out") return res.status(403).json({ error: signInRanOut("save again"), needsSignIn: true });
+        return res.status(403).json({
+          error: "Only you can set what Tarsee trusts to say who sent a mail, signed in to your dashboard: the API token can't, because the AI can read it. Set it under \"Who really sent it\" in Settings > Channels > Email. Nothing was saved.",
+          needsSignIn: true,
+        });
+      }
       // Anyone else, the API token alone above all: what would let more reach the AI, or send its mail elsewhere,
       // waits for the owner's OK, as the chat tool's does.
       ({ cfg: payload, held } = holdForOwner(prev, { ...next, senderCheck: askedCheck }, {
@@ -332,12 +389,16 @@ settingsRouter.post("/channel", async (req, res) => {
     if (channelManager && payload.enabled) restartIfOn(payload);
     else if (channelManager && !payload.enabled) channelManager.stop("email").catch(() => {});
 
+    const notes = [
+      held.length ? "Part of this save would change who can reach Tarsee by email or where its mail goes, so it waits for the owner's OK in Settings > Channels > Email. Until then Tarsee goes on with the settings in force." : null,
+      checkNote,
+    ].filter(Boolean);
     return res.json({
       ok: true,
       type: "email",
       enabled: payload.enabled === true,
       ...(payload.waiting ? { waiting: shown(payload.waiting) } : {}),
-      ...(held.length ? { note: "Part of this save would change who can reach Tarsee by email or where its mail goes, so it waits for the owner's OK in Settings > Channels > Email. Until then Tarsee goes on with the settings in force." } : {}),
+      ...(notes.length ? { note: notes.join(" ") } : {}),
     });
   }
 

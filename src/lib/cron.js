@@ -8,9 +8,10 @@ import config from "../config/env.js";
 import { z } from "zod";
 import { getToolDefinitions } from "./tools.js";
 import { createTarseeMcp } from "../ai/tarsee-mcp.js";
-import { getAllKeysDecrypted, serverOnlyName, serverOnlyValues } from "./key-vault.js";
-import { TARSEE_SECRETS, PROVIDER_KEY_NAMES } from "../ai/engine-env.js";
+import { getAllKeysDecrypted, serverOnlyName, serverOnlyNameLoose, serverOnlyValues } from "./key-vault.js";
+import { PROVIDER_IDS, getProvider } from "../ai/provider-registry.js";
 import { redactSecrets } from "./redact.js";
+import { getSecurityManager } from "./security-manager.js";
 
 /**
  * Cron job scheduler — run AI tasks on a schedule.
@@ -619,13 +620,15 @@ async function runOnce(job) {
   // Checked again before every run, as when it was saved (checkDirectAction): one saved by an older version, or changed
   // where it is saved, runs only if it fits, and then exactly as checked.
   if (job.action != null) {
-    const checked = checkDirectAction(job.action);
+    const secrets = secretsNow();
+    const checked = checkDirectAction(job.action, { secrets });
     if (checked.problem) {
       console.warn(`[cron] Direct action "${job.id}" not run: ${checked.problem}`);
       return { error: `Not run: ${checked.problem}` };
     }
-    const shown = shownDirectAction(checked.action);
-    console.log(`[cron] Running direct action "${job.id}": ${shown.tool}(${JSON.stringify(shown.args).slice(0, 200)})`);
+    // The log isn't where the owner decides, so it keeps what looks like a key out (lib/redact.js), and stays short.
+    const shown = shownDirectAction(checked.action, { secrets });
+    console.log(`[cron] Running direct action "${job.id}": ${shown.tool}(${redactSecrets(JSON.stringify(shown.args)).slice(0, 200)})`);
     try {
       const { executeTool } = await import("./tools.js");
       // Background work, as a prompt task's turn is (ai/turn.js): schedule_task refuses in it, so a task never makes tasks.
@@ -747,9 +750,13 @@ function saveCronJobs(jobs) {
  * (ai/tarsee-mcp.js, whose handlers pass those args through unchanged). Only the inputs named there are taken, so what
  * the owner sees is all that runs. Besides fitting:
  *   - get_key never runs as one: its answer, a key's value, would be written to the daily log and the chat;
- *   - set_key and delete_key never name one of Tarsee's own keys (key-vault.js SERVER_ONLY_KEYS), not even for a
- *     first save: nobody is in a chat to have given it.
- * /cron list and Settings' task list show the tool and its args with every secret masked (shownDirectAction).
+ *   - set_key, delete_key and discord_admin's save_as_key never name one of Tarsee's own keys (key-vault.js
+ *     SERVER_ONLY_KEYS), not even for a first save: nobody is in a chat to have given it (the vault holds every
+ *     writer to that too: key-vault.js serverOnlyWriteRefusal);
+ *   - the args never hold a secret (secretProblem): a vault value, which the task names instead, or one of Tarsee's
+ *     own tokens.
+ * /cron list and Settings' task list show the tool and its args whole (shownDirectAction): only set_key's value and a
+ * mailbox password are masked (MASKED_INPUTS), never anything picked by a value or a name the AI chose.
  */
 
 let inputsByTool = null;
@@ -901,8 +908,9 @@ function usageOf(tool, schema) {
 /**
  * A direct action, checked: { action: { tool, args } } (args as plain data, exactly what is saved and run), or
  * { problem }, a refusal in plain words that starts in lower case. See the block comment above for the rules.
+ * secrets: secretsNow(), read once by a caller checking many; read now when not given.
  */
-export function checkDirectAction(action) {
+export function checkDirectAction(action, { secrets = null } = {}) {
   if (!plainObject(action) || typeof action.tool !== "string" || !action.tool || Object.keys(action).some((k) => k !== "tool" && k !== "args")) {
     return { problem: `an action is { tool, args }: the name of the tool to run and an object of its args, like {"tool":"send_message","args":{"channel":"web","message":"Hello"}}.` };
   }
@@ -921,74 +929,159 @@ export function checkDirectAction(action) {
   if (!plainObject(args)) return { problem: `the action's args are an object of ${toolWord(tool)}'s inputs, not ${kindOf(args)}. ${usageOf(tool, schema)}` };
   const misfit = objectProblem(schema, args, "");
   if (misfit) return { problem: `the action's args don't fit ${toolWord(tool)}: ${misfit}. ${usageOf(tool, schema)}` };
-  const own = (tool === "set_key" || tool === "delete_key") ? serverOnlyName(args.name) : null;
+  // A key's name as each tool takes it: set_key and delete_key trim it and match any case; discord_admin makes one of
+  // its save_as_key (lib/discord-admin.js keyNameFrom), which serverOnlyNameLoose matches.
+  const own = (tool === "set_key" || tool === "delete_key") ? serverOnlyName(args.name)
+    : tool === "discord_admin" ? serverOnlyNameLoose(args.save_as_key) : null;
   if (own) return { problem: `a scheduled action never writes ${own}: it is Tarsee's own key, and only the owner replaces or deletes it, in Settings > Keys.` };
+  const held = secretProblem(tool, args, secrets ?? secretsNow());
+  if (held) return { problem: held };
   return { action: { tool, args } };
+}
+
+// --- The secrets a direct action never carries ------------------------------------------------------------------------
+
+/** Text shorter than this, trimmed, isn't taken for a secret (as key-vault.js serverOnlyValues). */
+const SECRET_MIN = 8;
+
+/**
+ * The inputs, by tool and path, whose whole job is to hold a secret: the only ones /cron list and Settings mask, and
+ * the only place a direct action's args may carry a vault value (a key saved again, a mailbox password the owner keeps
+ * in the vault). Each is only kept as a key's value or used to sign in, never run, so masking it hides nothing a task
+ * runs. Anything else the AI writes is shown whole, whatever its name says: a name it picks, like a header's, hides
+ * nothing.
+ */
+export const MASKED_INPUTS = Object.freeze({
+  set_key: Object.freeze(["value"]),
+  configure_email_channel: Object.freeze(["imap.password", "smtp.password"]),
+});
+const isMasked = (tool, where) => Object.hasOwn(MASKED_INPUTS, tool) && MASKED_INPUTS[tool].includes(where);
+
+/** Whether the owner has denied get_key in Tool Permissions: then the AI can't read the vault's values. */
+function getKeyDenied() {
+  try { return getSecurityManager(_settingsStore).getToolPermission("get_key") === "always_deny"; } catch { return false; }
+}
+
+/**
+ * The secrets a direct action's args are checked against, read now: a check made later (before a run) reads them
+ * again, so a key saved since the task was counts.
+ *   own    Tarsee's own tokens, each with its name: the Railway token, in the vault or where Tarsee runs, and any key
+ *          holding a copy (key-vault.js serverOnlyValues); each AI provider's key (Anthropic, OpenAI, OpenRouter,
+ *          DeepSeek), set where it runs or saved in Settings > AI, and the Claude plan's CLAUDE_CODE_OAUTH_TOKEN; the
+ *          API token Tarsee made itself (api.token). Never in a task's args, masked input or not: with one, a task
+ *          would reach Railway or a provider past every limit of Tarsee's own tools.
+ *   vault  the values get_key returns, each with the names of the keys holding it: a task names the key instead.
+ * Each refusal tells the AI that its text holds the secret, so only secrets it can't guess are checked: values it can
+ * read anyway (none while get_key is denied), and tokens a service or Tarsee issued at random. Never SETUP_PASSWORD or
+ * a mailbox password, which someone chose, nor ENCRYPTION_KEY, a TARSEE_API_TOKEN or a Local AI key, which the owner
+ * may have: a refusal would confirm a guess, as many guesses a call as a task's args hold. With nothing masked by
+ * value, nothing hides behind them.
+ */
+function secretsNow() {
+  const own = new Map();
+  const add = (v, label) => {
+    const s = typeof v === "string" ? v.trim() : "";
+    if (s.length >= SECRET_MIN && !own.has(s)) own.set(s, label);
+  };
+  try { for (const [v, name] of serverOnlyValues()) add(v, name); } catch { /* the vault can't be read */ }
+  for (const id of PROVIDER_IDS) {
+    const p = getProvider(id);
+    if (p?.kind !== "key" || !p.envKey) continue;   // a sign-in plan has no key; Local AI's may be any word typed
+    add(process.env[p.envKey], p.envKey);
+    try { add(_settingsStore?.getKeyWithSource?.(id, { envName: null })?.key, `${p.envKey}, saved in Settings > AI`); } catch { /* settings can't be read */ }
+  }
+  add(process.env.CLAUDE_CODE_OAUTH_TOKEN, "CLAUDE_CODE_OAUTH_TOKEN");
+  if (!String(process.env.TARSEE_API_TOKEN ?? "").trim()) add(config.API_TOKEN, "the API token Tarsee made, api.token");
+  const vault = new Map();
+  if (getKeyDenied()) return { own, vault };
+  let keys = {};
+  try { keys = getAllKeysDecrypted(); } catch { /* the vault can't be read */ }
+  for (const [name, v] of Object.entries(keys)) {
+    const s = typeof v === "string" ? v.trim() : "";
+    // get_key never returns Tarsee's own keys nor a copy of one: those are `own`.
+    if (s.length < SECRET_MIN || own.has(s) || serverOnlyName(name)) continue;
+    if (!vault.has(s)) vault.set(s, []);
+    vault.get(s).push(name);
+  }
+  return { own, vault };
+}
+
+/** "key A", "keys A and B". */
+const keyWords = (names) => (names.length === 1 ? `key ${names[0]}` : `keys ${names.slice(0, -1).join(", ")} and ${names.at(-1)}`);
+/** Where in the args, as a refusal says it, never too long (an object's name is the AI's). */
+const shownWhere = (where) => (where.length > 80 ? `${where.slice(0, 80)}...` : where);
+
+/** Every text in args, with where it is (as fitProblem names it: command, imap.password, to[1]); names in an object too. */
+function textsIn(value, where, out = []) {
+  if (typeof value === "string") out.push({ text: value, where, name: false });
+  else if (Array.isArray(value)) value.forEach((v, i) => textsIn(v, `${where}[${i}]`, out));
+  else if (plainObject(value)) {
+    for (const [k, v] of Object.entries(value)) {
+      out.push({ text: k, where: where ? `a name in ${where}` : "a name in the args", name: true });
+      textsIn(v, where ? `${where}.${k}` : k, out);
+    }
+  }
+  return out;
+}
+
+/** Why a direct action's args may not hold what they hold (secretsNow), or null. */
+function secretProblem(tool, args, { own, vault }) {
+  for (const { text, where, name } of textsIn(args, "")) {
+    for (const [v, label] of own) {
+      if (text.includes(v)) return `the action's args hold one of Tarsee's own secrets (${label}), in ${shownWhere(where)}. A scheduled task never carries one, not even as set_key's value or a mailbox password: Tarsee's own tools use it, and nothing else does.`;
+    }
+    if (!name && isMasked(tool, where)) continue;
+    for (const [v, keys] of vault) {
+      if (text.includes(v)) return `the action's args hold the value of the vault ${keyWords(keys)}, in ${shownWhere(where)}. What a task runs is shown to the owner whole, so its args never carry a key's value: name the vault key instead (a command reads it from its environment, as $${keys[0]}).`;
+    }
+  }
+  return null;
 }
 
 // --- What a direct action runs, as the owner sees it ------------------------------------------------------------------
 
 const SECRET_SHOWN = "[secret, not shown]";
-/** An input named like this holds a secret, whatever the tool (configure_email_channel's passwords, a header). */
-const SECRET_INPUT = /pass(?:word|phrase)?|secret|token|api[-_]?key|access[-_]?key|private[-_]?key|authorization|cookie|credential/i;
-/** Inputs that hold a secret whatever their name says. */
-const SECRET_INPUTS = { set_key: new Set(["value"]) };
-/** The most of one text value shown; the rest is counted. */
-const SHOWN_MAX = 300;
 
-/** The secret values a direct action's args could carry, longest first: the vault's, and Tarsee's own in its environment. */
-function secretValuesNow() {
-  const out = new Set();
-  const add = (v) => {
-    const value = typeof v === "string" ? v.trim() : "";
-    if (value.length >= 8) out.add(value);
-  };
-  try { for (const v of Object.values(getAllKeysDecrypted())) add(v); } catch { /* the vault can't be read */ }
-  try { for (const v of serverOnlyValues().keys()) add(v); } catch { /* the vault can't be read */ }
-  for (const name of [...TARSEE_SECRETS, ...PROVIDER_KEY_NAMES]) add(process.env[name]);
-  return [...out].sort((a, b) => b.length - a.length);
-}
-
-/** Text with every secret in it masked (a vault value, a token's pattern: lib/redact.js), cut at SHOWN_MAX. */
-function maskText(text, secrets) {
-  let out = text;
-  for (const v of secrets) if (out.includes(v)) out = out.split(v).join(SECRET_SHOWN);
-  out = redactSecrets(out).split("[REDACTED]").join(SECRET_SHOWN);
-  return out.length > SHOWN_MAX ? `${out.slice(0, SHOWN_MAX)}… (${out.length - SHOWN_MAX} more characters)` : out;
-}
-
-/** A value with its secrets masked: all of it when secret (its input's name says so), else each text in it. */
-function maskValue(value, secret, secrets, depth) {
-  if (secret && value !== null && typeof value !== "boolean") return SECRET_SHOWN;
-  if (typeof value === "string") return maskText(value, secrets);
-  if (depth > 8 && value !== null && typeof value === "object") return "…";
-  if (Array.isArray(value)) return value.map((v) => maskValue(v, false, secrets, depth + 1));
-  if (plainObject(value)) {
-    const out = {};
-    for (const [k, v] of Object.entries(value)) out[k] = maskValue(v, SECRET_INPUT.test(k), secrets, depth + 1);
-    return out;
+/** A masked input as it is shown: "[secret, not shown]", naming the vault key it is (or holds) when get_key returns one. */
+function maskedWords(text, vault) {
+  const equal = [];
+  const within = [];
+  for (const [v, keys] of vault) {
+    if (text.trim() === v) equal.push(...keys);
+    else if (text.includes(v)) within.push(...keys);
   }
+  if (equal.length) return `[secret, not shown: the value of the vault ${keyWords(equal)}]`;
+  if (within.length) return `[secret, not shown: holds the value of the vault ${keyWords(within)}]`;
+  return SECRET_SHOWN;
+}
+
+/** args with each masked input's text masked (MASKED_INPUTS); everything else as it is, whatever its kind. */
+function maskInputs(tool, value, where, vault) {
+  if (typeof value === "string") return isMasked(tool, where) ? maskedWords(value, vault) : value;
+  if (Array.isArray(value)) return value.map((v, i) => maskInputs(tool, v, `${where}[${i}]`, vault));
+  // fromEntries makes each name an entry of its own, "__proto__" too, as JSON.parse did.
+  if (plainObject(value)) return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, maskInputs(tool, v, where ? `${where}.${k}` : k, vault)]));
   return value;
 }
 
 /**
  * What a direct action runs, as /cron list, Settings' task list (getCronStatus: actionShown) and the server's log show
- * it: { tool, args }, with set_key's value, every input named like a secret, every vault value and every token's
- * pattern masked. Shown for any action, even one that no longer fits (one saved by an older version), so the owner
- * sees what they would switch on. secrets: secretValuesNow(), read once by a caller showing many.
+ * it: { tool, args }, with every text whole and only MASKED_INPUTS masked. Shown for any action, even one that no
+ * longer fits (one saved by an older version, args that aren't an object included), so the owner sees what they would
+ * switch on. How it is written out (the JSON, with what would look blank escaped) is js/cron-core.js argsText's, on
+ * both ends. secrets: secretsNow(), read once by a caller showing many.
  */
 export function shownDirectAction(action, { secrets = null } = {}) {
-  const list = secrets ?? secretValuesNow();
-  const tool = typeof action?.tool === "string" ? maskText(action.tool, list) : kindOf(action?.tool);
-  const raw = action?.args === undefined ? {} : action.args;
+  const { vault } = secrets ?? secretsNow();
+  const tool = typeof action?.tool === "string" ? action.tool : kindOf(action?.tool);
   let args;
-  if (plainObject(raw)) {
-    args = {};
-    for (const [k, v] of Object.entries(raw)) args[k] = maskValue(v, SECRET_INPUT.test(k) || !!SECRET_INPUTS[tool]?.has(k), list, 1);
-  } else {
-    args = maskValue(raw, false, list, 1);
-  }
-  return { tool, args };
+  try { args = action?.args === undefined ? {} : JSON.parse(JSON.stringify(action.args)); } catch { args = kindOf(action?.args); }
+  return { tool, args: maskInputs(tool, args === undefined ? {} : args, "", vault) };
+}
+
+/** shownDirectAction, and why it won't run as it is (checkDirectAction's problem), or null: Settings says so. */
+function actionShownOf(action, secrets) {
+  return { ...shownDirectAction(action, { secrets }), problem: checkDirectAction(action, { secrets }).problem || null };
 }
 
 /**
@@ -1118,7 +1211,8 @@ export function removeCronJob(id) {
  *   state       "running" (a run is going now), "waiting" (the AI made it; it waits for the owner's OK), "on", "off"
  *   scheduled   whether it has a timer
  *   running     whether a run is going now
- *   actionShown for a task that runs a tool directly: { tool, args } to show, every secret masked (shownDirectAction).
+ *   actionShown for a task that runs a tool directly: { tool, args, problem } to show: the args whole, only set_key's
+ *               value and a mailbox password masked (shownDirectAction), and why it won't run as it is, or null.
  *               action stays as saved, for the Switch on check (routes/settings.js sameAsSeen).
  */
 export function getCronStatus() {
@@ -1130,7 +1224,7 @@ export function getCronStatus() {
     jobs: jobs.map((j) => {
       const state = jobState.get(j.id);
       const running = (runsGoing.get(j.id) || 0) > 0;
-      const shown = j.action != null ? { actionShown: shownDirectAction(j.action, { secrets: (secrets ??= secretValuesNow()) }) } : {};
+      const shown = j.action != null ? { actionShown: actionShownOf(j.action, (secrets ??= secretsNow())) } : {};
       return {
         ...j,
         ...shown,

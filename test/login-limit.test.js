@@ -4,9 +4,10 @@
 //     its wrong guesses are remembered for a day. An IPv6 client counts against its /64, its /56 and its /48 (one
 //     server, one home, one tunnel), each with a place's budget, and adds at most 8 to the count for everyone;
 //   - the place is the connection's own address. X-Forwarded-For is believed only from a proxy the owner names in
-//     TARSEE_TRUSTED_PROXY ("loopback" for one on this machine, or addresses and ranges), so a client that reaches
-//     Tarsee directly, or through Docker's bridge gateway, can't name a new client in each guess. On Railway the
-//     place is the X-Real-IP Railway's edge sets, and the setting is ignored;
+//     TARSEE_TRUSTED_PROXY ("loopback" for one on this machine, or addresses and ranges, never Cloudflare's), so a
+//     client that reaches Tarsee directly, or through Docker's bridge gateway, can't name a new client in each guess.
+//     On Railway the place is the X-Real-IP Railway's edge sets, and the setting is ignored. "cloudflare" (the
+//     CF-Connecting-IP header) is login-limit-cloudflare.test.js;
 //   - a request from this machine itself (its loopback addresses or its own network addresses) is one place,
 //     whatever headers it carries, unless TARSEE_TRUSTED_PROXY is "loopback": the AI's shell runs here;
 //   - all places together get 30 wrong guesses in 10 minutes. Then signing in pauses for everyone for 15 minutes, and
@@ -63,7 +64,8 @@ const EDGE = notOwn("100.64.0.9", "10.255.254.9", "172.31.254.9");
 // Docker's bridge gateway: what the container sees when anything (the AI's shell included) comes back in through the
 // published port, and what every client looks like on Docker Desktop.
 const GATEWAY = notOwn("172.17.0.1", "172.18.0.1", "172.19.0.1");
-// Cloudflare's published ranges (https://www.cloudflare.com/ips/, November 2026), as the readme's example names them.
+// Cloudflare's published ranges (https://www.cloudflare.com/ips/, November 2026), as an older readme told owners to
+// name them. They are left out now; TARSEE_TRUSTED_PROXY=cloudflare is login-limit-cloudflare.test.js.
 const CLOUDFLARE = [
   "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
   "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
@@ -287,16 +289,16 @@ describe("TARSEE_TRUSTED_PROXY as addresses and ranges", () => {
     assert.equal(auth.clientAddress(req("2001:db8:5:6::1", "::ffff:127.0.0.1")), "2001:db8:5:6::1");
   });
 
-  it("takes all of Cloudflare's published ranges (cloudflare.com/ips), and walks back through any of its edges", () => {
+  it("leaves out Cloudflare's ranges: anyone with a Cloudflare account sends from them (login-limit-cloudflare.test.js)", () => {
     process.env.TARSEE_TRUSTED_PROXY = `loopback, ${CLOUDFLARE}`;
     const trust = auth.trustedProxies();
     assert.deepEqual(trust.skipped, []);
-    assert.equal(trust.names.length, 1 + 15 + 7, "loopback, 15 IPv4 ranges and 7 IPv6 ranges");
-    // Cloudflare in front of nginx on this machine: nginx adds the Cloudflare edge it saw after the client.
+    assert.deepEqual(trust.names, ["loopback"]);
+    assert.equal(trust.refused.length, 15 + 7, "15 IPv4 ranges and 7 IPv6 ranges");
+    // Cloudflare in front of nginx on this machine: a Worker's forged X-Forwarded-For, then the Worker's address that
+    // Cloudflare appends, then the edge nginx appends. The walk stops at the edge.
     const req = (xff) => ({ socket: { remoteAddress: "127.0.0.1" }, headers: { "x-forwarded-for": xff } });
-    assert.equal(auth.clientAddress(req("203.0.113.5, 173.245.48.9")), "203.0.113.5", "an edge in the first range");
-    assert.equal(auth.clientAddress(req("203.0.113.5, 131.0.72.9")), "203.0.113.5", "an edge in the last IPv4 range");
-    assert.equal(auth.clientAddress(req("2001:db8:aa:bb01::1, 2a06:98c7::5")), "2001:db8:aa:bb01::1", "an IPv6 edge");
+    assert.equal(auth.clientAddress(req("198.18.0.1, 2a06:98c0:3600::103, 173.245.48.9")), "173.245.48.9");
     assert.equal(auth.clientAddress(req("203.0.113.5, 198.51.100.4")), "198.51.100.4", "not Cloudflare's: it is the client");
   });
 

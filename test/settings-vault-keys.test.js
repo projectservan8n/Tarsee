@@ -176,7 +176,7 @@ describe("the Keys routes answer only the owner's live sign-in", () => {
 
 describe("the owner's Settings > Keys", () => {
   it("lists names, descriptions and when each was saved, with Tarsee's own marked, and never a value", async () => {
-    quiet(() => { vault.setKey("RAILWAY_API_TOKEN", RAILWAY, "Railway account"); vault.setKey("STRIPE_SECRET_KEY", STRIPE, "Stripe"); });
+    quiet(() => { vault.setKey("RAILWAY_API_TOKEN", RAILWAY, "Railway account", { owner: true }); vault.setKey("STRIPE_SECRET_KEY", STRIPE, "Stripe"); });
     const sessionId = createSession("127.0.0.1");
     const csrf = await freshCsrf();
     for (const headers of [asOwner(sessionId, csrf), asDashboard(sessionId, csrf)]) {
@@ -228,7 +228,7 @@ describe("the owner's Settings > Keys", () => {
   });
 
   it("the owner replaces and deletes Tarsee's own key, which chat can't; a name in another case is saved as Tarsee reads it", async () => {
-    quiet(() => vault.setKey("RAILWAY_API_TOKEN", RAILWAY));
+    quiet(() => vault.setKey("RAILWAY_API_TOKEN", RAILWAY, "", { owner: true }));
     const sessionId = createSession("127.0.0.1");
     const csrf = await freshCsrf();
     const res = await save({ name: "railway_api_token", value: RAILWAY_NEW }, asOwner(sessionId, csrf));
@@ -374,7 +374,7 @@ describe("Settings > Keys in a real browser, against the real routes", { skip },
   });
 
   it("Tarsee's own key is marked, and the owner can replace it here", async () => {
-    quiet(() => vault.setKey("RAILWAY_API_TOKEN", RAILWAY, "Railway account"));
+    quiet(() => vault.setKey("RAILWAY_API_TOKEN", RAILWAY, "Railway account", { owner: true }));
     const { page, context, errors } = await openKeys();
     try {
       const own = row(page, "RAILWAY_API_TOKEN");
@@ -393,7 +393,7 @@ describe("Settings > Keys in a real browser, against the real routes", { skip },
 
   it("at phone width: the list and the form fit, with nothing scrolling sideways", async () => {
     quiet(() => {
-      vault.setKey("RAILWAY_API_TOKEN", RAILWAY, "Railway account");
+      vault.setKey("RAILWAY_API_TOKEN", RAILWAY, "Railway account", { owner: true });
       vault.setKey("A_VERY_LONG_KEY_NAME_FOR_SOME_THIRD_PARTY_SERVICE_API", STRIPE, "A key with a long name and a long description to see it wrap on a phone");
     });
     const { page, context, errors } = await openKeys({ width: 360, height: 780 });

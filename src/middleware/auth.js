@@ -265,6 +265,13 @@ export function validateSessionFromRequest(req) {
 export function sessionAuth(req, _res, next) {
   req.auth = { authenticated: false, method: null };
 
+  // With TARSEE_TRUSTED_PROXY=cloudflare, req.ip is the client Cloudflare names too, as the sign-in limit counts it:
+  // Express's trust proxy reads only X-Forwarded-For, which isn't believed then (trustProxyHop).
+  if (trustedProxies().cloudflare) {
+    const client = clientAddress(req);
+    if (client) Object.defineProperty(req, "ip", { value: client, configurable: true, enumerable: true, writable: true });
+  }
+
   // Check Bearer token (for API clients)
   const bearerToken = extractBearerToken(req);
   if (bearerToken && validateApiToken(bearerToken)) {
@@ -314,7 +321,9 @@ export function requireAuth(req, res, next) {
 //    - one place can't reach it: it adds at most 8 in 10 minutes (EVERYONE_PER_PLACE; its waits hold it to that
 //      anyway, and an IPv6 client counts by its /48), so one guesser can't stop everyone else from signing in: it
 //      takes four or more places guessing together. That holds only while a client can't pass as a new place with
-//      each guess, which is why X-Forwarded-For is believed only from a proxy the owner names (TARSEE_TRUSTED_PROXY);
+//      each guess, which is why a header naming the client (X-Forwarded-For, or Cloudflare's CF-Connecting-IP) is
+//      believed only from a proxy the owner names (TARSEE_TRUSTED_PROXY), and never X-Forwarded-For through
+//      Cloudflare, which anyone with a Cloudflare account can send requests from;
 //    - places that do guess together get about 300 wrong guesses in the first day and 180 a day after that, so a
 //      4-digit PIN takes them about a month on average, and a 6-digit one years.
 //    During a pause, anyone already signed in stays signed in; only new sign-ins wait, the right password too (a guess
@@ -375,51 +384,157 @@ export function isThisMachine(addr) {
 
 const onRailway = () => !!process.env.RAILWAY_PROJECT_ID;
 
-// --- Which proxy may name the client: TARSEE_TRUSTED_PROXY (off Railway) ---
+// --- Which proxy may name the client: TARSEE_TRUSTED_PROXY ---
 //
-// A proxy in front of Tarsee connects from its own address and names the client in X-Forwarded-For. Any client can
-// write that header too, so it is believed only from a proxy the owner names:
+// A proxy in front of Tarsee connects from its own address and names the client in a header. Any client can write
+// that header too, so it is believed only from a proxy the owner names:
 //   none (the default): from nobody; each connection is its own client, its socket's address. Reached directly, or
 //     through Docker's published port, a client can't pass as a new one with each guess;
-//   loopback: a proxy on this same machine (nginx, Caddy, cloudflared or Tailscale in front of `npm start`). Anything
-//     else running here, the AI's shell included, can then name any client, and only the limit for all places holds
-//     it: it can pause signing in for everyone;
+//   loopback: a proxy on this same machine (nginx, Caddy, cloudflared or Tailscale in front of `npm start`), which
+//     names the client in X-Forwarded-For. Anything else running here, the AI's shell included, can then name any
+//     client, and only the limit for all places holds it: it can pause signing in for everyone;
 //   addresses and CIDR ranges, such as "10.0.0.2" or "172.18.0.5, fd00::/8", with "loopback" among them or not: a
-//     proxy elsewhere. They never cover this machine itself; that takes "loopback".
-// Behind several proxies, name each: the client is the first address, from the right, that isn't one of them.
-// On Railway the setting is ignored: the client is the X-Real-IP Railway's edge sets (clientAddress).
+//     proxy elsewhere, which names the client in X-Forwarded-For. They never cover this machine itself; that takes
+//     "loopback". Any that takes in an address of Cloudflare's is left out (refused): that takes "cloudflare";
+//   cloudflare: Cloudflare in front, through cloudflared or straight to Tarsee's port. The client is the
+//     CF-Connecting-IP header Cloudflare sets (cloudflareClient), believed from this machine (cloudflared, at
+//     loopback's cost), from Cloudflare's published ranges, and from any address or range named beside it (a
+//     cloudflared container). X-Forwarded-For is never believed then.
+// Behind several X-Forwarded-For proxies, name each: the client is the first address, from the right, that isn't one.
+// On Railway the setting is ignored but for cloudflare: the client is the X-Real-IP Railway's edge sets, or, with
+// cloudflare, the CF-Connecting-IP Cloudflare set when that X-Real-IP is one of Cloudflare's edges (clientAddress).
+//
+// Why Cloudflare's addresses can't name the client in X-Forwarded-For: anyone with a Cloudflare account can send
+// requests from them. A Worker's request to another account's site arrives from 2a06:98c0:3600::103, inside
+// 2a06:98c0::/29, and Cloudflare appends to whatever X-Forwarded-For it carries, so a walk back past Cloudflare's
+// addresses ends at one the Worker made up: a new place with each guess. CF-Connecting-IP is Cloudflare's own: on that
+// request it is the Worker's address. To a site that isn't on Cloudflare (Tarsee's own address, say) a Worker may
+// write any CF-Connecting-IP, but Cloudflare adds CF-Worker, the Worker's zone, to every request a Worker sends, so
+// such a request counts as the Worker's address: one place. Cloudflare's docs, "Cloudflare HTTP headers"
+// (developers.cloudflare.com/fundamentals/reference/http-headers/), say all three.
+
+// Cloudflare's published ranges, https://www.cloudflare.com/ips/ (ips-v4 and ips-v6), as of November 2026. Cloudflare
+// rarely changes them; one added later can be named beside "cloudflare" until this list has it.
+export const CLOUDFLARE_RANGES = Object.freeze([
+  "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
+  "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+  "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+  "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32", "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+]);
+const CLOUDFLARE_AS_OF = "November 2026";
+// CF-Connecting-IP on a Worker's request to another account's site, and what any Worker's request counts as.
+const CLOUDFLARE_WORKER = "2a06:98c0:3600::103";
+// The place of every Class E address a header named with no IPv6 address beside it (Cloudflare's Pseudo IPv4).
+const CLASS_E = "240.0.0.0/4";
+
+/** An address's family for net.BlockList, or null when it isn't an address. */
+const familyOf = (a) => (net.isIPv4(a) ? "ipv4" : net.isIPv6(a) ? "ipv6" : null);
+
+let cloudflareRead = null;
+/** Cloudflare's ranges: { list (a net.BlockList), starts ([address, family] of each range's first address) }. */
+function cloudflareRanges() {
+  if (cloudflareRead) return cloudflareRead;
+  const list = new net.BlockList();
+  const starts = [];
+  for (const range of CLOUDFLARE_RANGES) {
+    const [addr, bits] = range.split("/");
+    list.addSubnet(addr, Number(bits), familyOf(addr));
+    starts.push([addr, familyOf(addr)]);
+  }
+  cloudflareRead = { list, starts };
+  return cloudflareRead;
+}
+
+/** Whether an address is one of Cloudflare's: in a range it publishes. */
+function isCloudflare(addr) {
+  const a = plainAddress(addr);
+  const family = familyOf(a);
+  return !!family && cloudflareRanges().list.check(a, family);
+}
+
+/** Whether an entry of TARSEE_TRUSTED_PROXY (an address, or with `bits` a range) takes in any of Cloudflare's addresses. */
+function overlapsCloudflare(addr, bits, family) {
+  const cf = cloudflareRanges();
+  if (cf.list.check(addr, family)) return true;
+  if (bits === undefined) return false;
+  // Two ranges either don't meet or one holds the other, so one holding a range of Cloudflare's holds its start.
+  const entry = new net.BlockList();
+  entry.addSubnet(addr, bits, family);
+  return cf.starts.some(([start, f]) => f === family && entry.check(start, f));
+}
+
+/** A header that names one address, made comparable (plainAddress), else "" (none, several, or not an address). */
+function headerAddress(value) {
+  if (typeof value !== "string") return "";
+  const a = plainAddress(value);
+  return net.isIP(a) ? a : "";
+}
+
+/** Whether two addresses are the same, however each is written. */
+function sameAddress(a, b) {
+  const key = (x) => (net.isIPv6(x) ? ipv6Groups(x).join(":") : x);
+  return !!a && !!b && key(a) === key(b);
+}
+
+/** Whether an address is Class E (240.0.0.0/4): never a real client's, but what Cloudflare's Pseudo IPv4 hands on. */
+const isClassE = (a) => net.isIPv4(a) && Number(a.split(".")[0]) >= 240;
+
+/**
+ * A client a header named, with Cloudflare's Pseudo IPv4 undone: "Overwrite Headers" puts a Class E address in
+ * CF-Connecting-IP and X-Forwarded-For, and the client's real IPv6 address in CF-Connecting-IPv6. That one is taken,
+ * so an IPv6 client still counts by its /64, /56 and /48. Only for a Class E address, which only Cloudflare's
+ * rewrite puts there: next to a real address, CF-Connecting-IPv6 could be the client's own.
+ */
+function withRealIPv6(client, req) {
+  if (!isClassE(client)) return client;
+  const v6 = headerAddress(req.headers?.["cf-connecting-ipv6"]);
+  return net.isIPv6(v6) ? v6 : client;
+}
 
 let trustRead = { raw: null, trust: null };
 
 /**
- * TARSEE_TRUSTED_PROXY, read: { loopback, list (a net.BlockList), names (what was taken, for the boot log), skipped
- * (what wasn't: not "none", "loopback", an address or a range; a /0 range, every address, isn't taken either) }.
+ * TARSEE_TRUSTED_PROXY, read: { loopback, cloudflare, list (a net.BlockList), names (what was taken, for the boot
+ * log), skipped (what wasn't: not "none", "loopback", "cloudflare", an address or a range; a /0 range, every
+ * address, isn't taken either), refused (addresses and ranges left out because they take in Cloudflare's, unless
+ * "cloudflare" is there too) }.
  */
 export function trustedProxies(raw = process.env.TARSEE_TRUSTED_PROXY) {
   const text = String(raw ?? "").trim();
   if (trustRead.trust && text === trustRead.raw) return trustRead.trust;
-  const trust = { loopback: false, list: new net.BlockList(), names: [], skipped: [] };
-  for (const entry of text.split(/[\s,]+/).filter(Boolean)) {
+  const entries = text.split(/[\s,]+/).filter(Boolean);
+  const cloudflare = entries.some((e) => e.toLowerCase() === "cloudflare");
+  const trust = { loopback: false, cloudflare, list: new net.BlockList(), names: cloudflare ? ["cloudflare"] : [], skipped: [], refused: [] };
+  for (const entry of entries) {
     const word = entry.toLowerCase();
-    if (word === "none") continue;
+    if (word === "none" || word === "cloudflare") continue;
     if (word === "loopback") {
-      if (!trust.loopback) trust.names.push("loopback");
+      // With cloudflare, this machine (cloudflared) may already name the client in CF-Connecting-IP.
+      if (!trust.loopback && !cloudflare) trust.names.push("loopback");
       trust.loopback = true;
       continue;
     }
     const [addrPart, bitsPart, extra] = word.split("/");
     const addr = plainAddress(addrPart);
-    const family = net.isIPv4(addr) ? "ipv4" : net.isIPv6(addr) ? "ipv6" : null;
+    const family = familyOf(addr);
     if (!family || extra !== undefined) { trust.skipped.push(entry); continue; }
-    if (bitsPart === undefined) {
-      trust.list.addAddress(addr, family);
-      trust.names.push(addr);
+    let bits;
+    if (bitsPart !== undefined) {
+      bits = /^\d{1,3}$/.test(bitsPart) ? Number(bitsPart) : NaN;
+      if (!(bits >= 1 && bits <= (family === "ipv4" ? 32 : 128))) { trust.skipped.push(entry); continue; }
+    }
+    if (overlapsCloudflare(addr, bits, family)) {
+      // With cloudflare, Cloudflare's addresses are taken already, for CF-Connecting-IP only.
+      if (!cloudflare) trust.refused.push(entry);
       continue;
     }
-    const bits = /^\d{1,3}$/.test(bitsPart) ? Number(bitsPart) : NaN;
-    if (!(bits >= 1 && bits <= (family === "ipv4" ? 32 : 128))) { trust.skipped.push(entry); continue; }
-    trust.list.addSubnet(addr, bits, family);
-    trust.names.push(`${addr}/${bits}`);
+    if (bits === undefined) {
+      trust.list.addAddress(addr, family);
+      trust.names.push(addr);
+    } else {
+      trust.list.addSubnet(addr, bits, family);
+      trust.names.push(`${addr}/${bits}`);
+    }
   }
   trustRead = { raw: text, trust };
   return trust;
@@ -427,21 +542,92 @@ export function trustedProxies(raw = process.env.TARSEE_TRUSTED_PROXY) {
 
 /** Whether a connection from `addr` is a proxy the owner named, and so may name the client in X-Forwarded-For. */
 function isTrustedProxy(addr, trust = trustedProxies()) {
+  if (trust.cloudflare) return false; // X-Forwarded-For is never believed then
   const a = plainAddress(addr);
   if (!net.isIP(a)) return false;
   if (isThisMachine(a)) return trust.loopback;
-  return trust.list.check(a, net.isIPv6(a) ? "ipv6" : "ipv4");
+  return trust.list.check(a, familyOf(a));
+}
+
+/** With cloudflare: whether a connection from `addr` may hand on Cloudflare's CF-Connecting-IP. */
+function handsOnCloudflare(addr, trust = trustedProxies()) {
+  const a = plainAddress(addr);
+  if (!net.isIP(a)) return false;
+  return isThisMachine(a) || isCloudflare(a) || trust.list.check(a, familyOf(a));
+}
+
+/**
+ * Whether a proxy between Cloudflare and Tarsee (cloudflared, or nginx behind Cloudflare) heard the request from
+ * Cloudflare, by the last address of its X-Forwarded-For. A proxy that appends there (nginx's
+ * $proxy_add_x_forwarded_for) appends who it heard from: one of Cloudflare's edges. From cloudflared, the last is the
+ * client Cloudflare appended, the one CF-Connecting-IP (or, with Pseudo IPv4, CF-Connecting-IPv6) names. Anything
+ * else came to that proxy from outside Cloudflare, with a CF-Connecting-IP of the sender's own. With no
+ * X-Forwarded-For there is nothing to tell by, and it is believed.
+ */
+function heardFromCloudflare(req, named) {
+  const xff = req.headers?.["x-forwarded-for"];
+  if (xff === undefined) return true;
+  const last = plainAddress(String(xff).split(",").at(-1));
+  if (!net.isIP(last)) return false;
+  return isCloudflare(last) || sameAddress(last, named) || sameAddress(last, headerAddress(req.headers?.["cf-connecting-ipv6"]));
+}
+
+/**
+ * The client of a request Cloudflare handed on, reaching Tarsee from `from`: one of Cloudflare's edges, or, when
+ * `between`, a proxy between Cloudflare and Tarsee (cloudflared, or nginx behind Cloudflare).
+ * - A Worker's request (CF-Worker) is the Worker's address, whatever else it says: to a site outside Cloudflare a
+ *   Worker writes CF-Connecting-IP itself.
+ * - Otherwise the address CF-Connecting-IP names, with Pseudo IPv4 undone (withRealIPv6). Without one, it is `from`.
+ * - Through a proxy between that heard it from outside Cloudflare (heardFromCloudflare), it is `from`.
+ */
+function cloudflareClient(req, from, between) {
+  if (req.headers?.["cf-worker"] !== undefined) return CLOUDFLARE_WORKER;
+  const named = headerAddress(req.headers?.["cf-connecting-ip"]);
+  if (!named) return from;
+  if (between && !heardFromCloudflare(req, named)) return from;
+  return withRealIPv6(named, req);
 }
 
 /**
  * Express's "trust proxy" (server.js), so req.ip off Railway is the client clientAddress names: X-Forwarded-For is
- * believed only from a proxy TARSEE_TRUSTED_PROXY names. On Railway it is believed from the one hop in front that
- * isn't this machine (the edge), as before; sign-ins there go by X-Real-IP instead.
+ * believed only from a proxy TARSEE_TRUSTED_PROXY names, and never with cloudflare (sessionAuth then sets req.ip from
+ * CF-Connecting-IP). On Railway it is believed from the one hop in front that isn't this machine (the edge), as
+ * before; sign-ins there go by X-Real-IP instead.
  */
 export function trustProxyHop(addr, hop) {
   if (!plainAddress(addr)) return false;
   if (onRailway()) return hop === 0 && !isThisMachine(addr);
   return isTrustedProxy(addr);
+}
+
+/**
+ * Who a request comes from: { client, peer }. peer is the address it reached Tarsee from (on Railway, the X-Real-IP
+ * Railway's edge sets); client differs only when a header Tarsee believes named someone else.
+ */
+function whoSent(req) {
+  const peer = plainAddress(req?.socket?.remoteAddress);
+  if (!peer) return { client: "", peer: "" };
+  const trust = trustedProxies();
+  if (onRailway()) {
+    if (isThisMachine(peer)) return { client: peer, peer };
+    const real = headerAddress(req.headers?.["x-real-ip"]);
+    if (!real) return { client: peer, peer };
+    if (trust.cloudflare && isCloudflare(real)) return { client: cloudflareClient(req, real, false), peer: real };
+    return { client: real, peer: real };
+  }
+  if (trust.cloudflare) {
+    if (!handsOnCloudflare(peer, trust)) return { client: peer, peer };
+    return { client: cloudflareClient(req, peer, !isCloudflare(peer)), peer };
+  }
+  let client = peer;
+  for (const hop of String(req.headers?.["x-forwarded-for"] ?? "").split(",").reverse()) {
+    if (!isTrustedProxy(client, trust)) break;
+    const next = plainAddress(hop);
+    if (!net.isIP(next)) break;
+    client = next;
+  }
+  // cloudflared in front, with TARSEE_TRUSTED_PROXY=loopback: Pseudo IPv4 is undone here too.
+  return { client: client === peer ? client : withRealIPv6(client, req), peer };
 }
 
 /**
@@ -456,27 +642,15 @@ export function trustProxyHop(addr, hop) {
  *   moderator wrote that X-Real-IP is overwritten at the edge. It hasn't been checked on a live deploy. X-Forwarded-For
  *   there can end with an address of Railway's own network, which many clients share, so it can't tell clients apart.
  *   A request that skips the edge (Railway's private network from another of the owner's services, or a TCP proxy)
- *   could write its own X-Real-IP: the limit for all places together still holds it;
+ *   could write its own X-Real-IP: the limit for all places together still holds it. With cloudflare, when X-Real-IP
+ *   is one of Cloudflare's edges, the client Cloudflare names (cloudflareClient);
+ * - with cloudflare: the client Cloudflare names, from this machine, Cloudflare's ranges or an address named beside
+ *   it; from anywhere else, the connection's own address;
  * - elsewhere: the connection's own address, walked back through X-Forwarded-For only past proxies
  *   TARSEE_TRUSTED_PROXY names.
  */
 export function clientAddress(req) {
-  const peer = plainAddress(req?.socket?.remoteAddress);
-  if (!peer) return "";
-  if (onRailway()) {
-    if (isThisMachine(peer)) return peer;
-    const real = plainAddress(String(req.headers?.["x-real-ip"] ?? ""));
-    return net.isIP(real) ? real : peer;
-  }
-  const trust = trustedProxies();
-  let client = peer;
-  for (const hop of String(req.headers?.["x-forwarded-for"] ?? "").split(",").reverse()) {
-    if (!isTrustedProxy(client, trust)) break;
-    const next = plainAddress(hop);
-    if (!net.isIP(next)) break;
-    client = next;
-  }
-  return client;
+  return whoSent(req).client;
 }
 
 /** An IPv6 address's eight 16-bit groups, as numbers (an IPv4 address at its end, as in ::ffff:1.2.3.4, is two). */
@@ -510,9 +684,12 @@ const clientKey = (a) => (net.isIPv6(a) ? ipv6Block(ipv6Groups(a), 64) : a);
  * /56 and /48 count too (placeLevels).
  */
 export function signInKey(req) {
-  const client = clientAddress(req);
+  const { client, peer } = whoSent(req);
   if (!client) return NO_ADDRESS;
   if (isThisMachine(client)) return THIS_MACHINE;
+  // A Class E address a header named with no IPv6 address beside it (withRealIPv6): Cloudflare's stand-in for an
+  // IPv6 client whose network can't be told, so they are all one place.
+  if (client !== peer && isClassE(client)) return CLASS_E;
   return clientKey(client);
 }
 
@@ -710,18 +887,42 @@ export function refuseUnrecorded(res) {
     `Tarsee can't record sign-in attempts right now (is the disk full?), so new sign-ins are paused. Anyone already signed in stays signed in. Try again in ${wait}.`);
 }
 
-let _untrustedProxyNoted = false;
+// What noteUntrustedProxy has said already: each once.
+const noted = { xff: false, cloudflare: false, unset: false, outside: false };
 /**
- * Says once, in the log, when a sign-in carries X-Forwarded-For from a connection TARSEE_TRUSTED_PROXY doesn't name:
- * behind a proxy the owner hasn't named, every client shares the proxy's one budget.
+ * Says once, in the log, when a sign-in carries a header naming its client that Tarsee doesn't believe, so the owner
+ * can set TARSEE_TRUSTED_PROXY: behind a proxy the owner hasn't named, every client shares the proxy's one budget.
+ * `key` is the place it was counted as (signInKey).
  */
-function noteUntrustedProxy(req) {
-  if (_untrustedProxyNoted || onRailway() || !req.headers?.["x-forwarded-for"]) return;
+function noteUntrustedProxy(req, key) {
+  if (onRailway()) return;
   const peer = plainAddress(req.socket?.remoteAddress);
-  if (!peer || isTrustedProxy(peer)) return;
-  _untrustedProxyNoted = true;
+  if (!peer) return;
   const who = isThisMachine(peer) ? "this machine" : peer;
-  console.warn(`[auth] A sign-in carried X-Forwarded-For from ${who}, which TARSEE_TRUSTED_PROXY doesn't name, so it was counted as ${who} itself. If a proxy of yours is in front of Tarsee, name it in TARSEE_TRUSTED_PROXY ("loopback" for one on this machine) so each client behind it is limited on its own.`);
+  const headers = req.headers || {};
+  const named = headerAddress(headers["cf-connecting-ip"]);
+  const trust = trustedProxies();
+  if (trust.cloudflare) {
+    if (!named || headers["cf-worker"] !== undefined) return;
+    if (!handsOnCloudflare(peer, trust)) {
+      if (noted.cloudflare) return;
+      noted.cloudflare = true;
+      console.warn(`[auth] A sign-in carried CF-Connecting-IP from ${peer}, which is neither one of Cloudflare's addresses, nor this machine, nor named in TARSEE_TRUSTED_PROXY, so it was counted as ${peer} itself. If a cloudflared of yours runs there (a container), name it beside cloudflare: TARSEE_TRUSTED_PROXY=cloudflare, ${peer}.`);
+    } else if (!isCloudflare(peer) && !heardFromCloudflare(req, named) && !noted.outside) {
+      noted.outside = true;
+      const last = plainAddress(String(headers["x-forwarded-for"]).split(",").at(-1)) || "something that isn't an address";
+      console.warn(`[auth] A sign-in came through the proxy at ${who}, which heard it from ${last}, not from Cloudflare, so its CF-Connecting-IP was not believed and it was counted as ${who}. Let only Cloudflare reach that proxy (Cloudflare's ranges are at https://www.cloudflare.com/ips/), or use cloudflared.`);
+    }
+    return;
+  }
+  if (named && !noted.unset) {
+    noted.unset = true;
+    console.warn(`[auth] A sign-in carried Cloudflare's CF-Connecting-IP header (from ${who}), which Tarsee believes only with TARSEE_TRUSTED_PROXY=cloudflare, so it was counted as ${key}. If Cloudflare is in front of Tarsee, set TARSEE_TRUSTED_PROXY=cloudflare so each client is limited on its own.`);
+    return;
+  }
+  if (noted.xff || !headers["x-forwarded-for"] || isTrustedProxy(peer, trust)) return;
+  noted.xff = true;
+  console.warn(`[auth] A sign-in carried X-Forwarded-For from ${who}, which TARSEE_TRUSTED_PROXY doesn't name, so it was counted as ${who} itself. If a proxy of yours is in front of Tarsee, name it in TARSEE_TRUSTED_PROXY ("loopback" for one on this machine, "cloudflare" for Cloudflare) so each client behind it is limited on its own.`);
 }
 
 /** A place's entry in memory, made when it has none. */
@@ -743,7 +944,7 @@ export function rateLimitAuth(req, res, next) {
   const key = signInKey(req);
   req.signInKey = key;
   const now = Date.now();
-  noteUntrustedProxy(req);
+  noteUntrustedProxy(req, key);
 
   if (!openStore()) return refuseUnrecorded(res);
 
@@ -874,16 +1075,32 @@ export function signInBootNotes({ password = config.SETUP_PASSWORD, env = proces
     });
   }
   const raw = String(env.TARSEE_TRUSTED_PROXY ?? "").trim();
+  const trust = trustedProxies(raw);
+  const ranges = `Cloudflare's published ranges (built in, as of ${CLOUDFLARE_AS_OF}; https://www.cloudflare.com/ips/)`;
   if (env.RAILWAY_PROJECT_ID) {
-    if (raw) notes.push({ level: "log", text: "[auth] TARSEE_TRUSTED_PROXY is ignored on Railway: each sign-in's place is the X-Real-IP header Railway's edge sets." });
+    if (trust.cloudflare) {
+      notes.push({ level: "log", text: `[auth] Each sign-in's place is the X-Real-IP header Railway's edge sets, or, when that is one of ${ranges}, the CF-Connecting-IP header Cloudflare sets (TARSEE_TRUSTED_PROXY=cloudflare). Every request a Cloudflare Worker sends counts as one place.` });
+      const rest = trust.names.length > 1 || trust.loopback || trust.skipped.length || trust.refused.length;
+      if (rest) notes.push({ level: "log", text: "[auth] On Railway, the rest of TARSEE_TRUSTED_PROXY is ignored: only cloudflare is used there." });
+    } else if (raw) {
+      notes.push({ level: "log", text: "[auth] TARSEE_TRUSTED_PROXY is ignored on Railway (but for cloudflare): each sign-in's place is the X-Real-IP header Railway's edge sets." });
+    }
     return notes;
   }
-  const trust = trustedProxies(raw);
   if (trust.skipped.length) {
-    notes.push({ level: "warn", text: `[auth] TARSEE_TRUSTED_PROXY: skipped ${trust.skipped.join(", ")}. Each entry is "none", "loopback", an address (10.0.0.2) or a range (172.18.0.0/16, fd00::/8).` });
+    notes.push({ level: "warn", text: `[auth] TARSEE_TRUSTED_PROXY: skipped ${trust.skipped.join(", ")}. Each entry is "none", "loopback", "cloudflare", an address (10.0.0.2) or a range (172.18.0.0/16, fd00::/8).` });
+  }
+  if (trust.refused.length) {
+    notes.push({ level: "warn", text: `[auth] TARSEE_TRUSTED_PROXY: left out ${trust.refused.join(", ")}, which take${trust.refused.length === 1 ? "s" : ""} in Cloudflare's addresses. Anyone with a Cloudflare account can send requests from them (a Worker) with any X-Forwarded-For, so they can't name the client: a client through Cloudflare counts as the Cloudflare address it came from. For Cloudflare in front of Tarsee, set TARSEE_TRUSTED_PROXY=cloudflare instead: it takes each client from the CF-Connecting-IP header Cloudflare sets.` });
+  }
+  if (trust.cloudflare) {
+    const named = trust.names.filter((n) => n !== "cloudflare");
+    notes.push({ level: "log", text: `[auth] Sign-in limits take each client from the CF-Connecting-IP header Cloudflare sets (TARSEE_TRUSTED_PROXY=cloudflare), believed from this machine (cloudflared), from ${ranges}${named.length ? ` and from ${named.join(", ")}` : ""}. X-Forwarded-For is never believed, and every request a Cloudflare Worker sends counts as one place.` });
+    notes.push({ level: "warn", text: "[auth] With TARSEE_TRUSTED_PROXY=cloudflare, anything running on this machine, the AI's shell included, can name any client in CF-Connecting-IP: only the limit for all places together holds it, and it can pause signing in for everyone." });
+    return notes;
   }
   if (!trust.names.length) {
-    notes.push({ level: "log", text: "[auth] Sign-in limits count each connection's own address; X-Forwarded-For is believed from no proxy. Behind a proxy of your own, name it in TARSEE_TRUSTED_PROXY, or every client behind it shares one budget." });
+    notes.push({ level: "log", text: "[auth] Sign-in limits count each connection's own address; X-Forwarded-For is believed from no proxy. Behind a proxy of your own, name it in TARSEE_TRUSTED_PROXY (\"cloudflare\" for Cloudflare), or every client behind it shares one budget." });
     return notes;
   }
   const named = trust.names.filter((n) => n !== "loopback");
@@ -903,7 +1120,7 @@ export function __resetSignInLimitsForTests() {
   everyone.pauses = 0;
   ownAddresses = { at: -Infinity, set: new Set() };
   trustRead = { raw: null, trust: null };
-  _untrustedProxyNoted = false;
+  for (const k of Object.keys(noted)) noted[k] = false;
   store.failing = false;
   store.pending.clear();
   store.pausePending = false;

@@ -35,6 +35,9 @@ for (const k of ["RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_ENVIRONMENT
 const RA = await import("../src/lib/railway-admin.js");
 const { railwayAdmin } = RA;
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+// The Terminal's own Claude Code, which Tarsee reads when it starts (startTerminalCliScan): none here unless a test
+// gives one, so no test reads the claude installed on the machine it runs on.
+await RA.startTerminalCliScan?.({ find: async () => [], log: () => {} });
 
 const TOKEN = "owner-tok-SECRET-11111111-2222-3333";
 const OPENAI = "sk-proj-SECRET-openai-0123456789abcdef";
@@ -52,13 +55,13 @@ const ON_RAILWAY = { RAILWAY_PROJECT_ID: P_TARSEE, RAILWAY_ENVIRONMENT_ID: E_TAR
 /**
  * A stand-in for Railway's GraphQL endpoint, answering by operation name and recording every call. `more` adds
  * variables per environment ({ name, serviceId, value }; serviceId null for a shared one). `refsFail` makes the
- * unrendered-variables query fail as Railway would.
+ * unrendered-variables query fail as Railway would. `services` adds services to Tarsee's project ({ id, name }).
  */
-function railway({ more = {}, refsFail = false } = {}) {
+function railway({ more = {}, refsFail = false, services = [] } = {}) {
   const acct = {
     projects: [
       { id: P_ACME, name: "Acme", deletedAt: null, environments: [{ id: E_PROD, name: "production" }], services: [{ id: S_WEB, name: "web" }, { id: S_WORK, name: "worker" }] },
-      { id: P_TARSEE, name: "Tarsee", deletedAt: null, environments: [{ id: E_TARSEE, name: "production" }, { id: E_TSTAGE, name: "staging" }], services: [{ id: S_TARSEE, name: "tarsee" }, { id: S_PG, name: "Postgres" }, { id: S_TWORK, name: "worker" }] },
+      { id: P_TARSEE, name: "Tarsee", deletedAt: null, environments: [{ id: E_TARSEE, name: "production" }, { id: E_TSTAGE, name: "staging" }], services: [{ id: S_TARSEE, name: "tarsee" }, { id: S_PG, name: "Postgres" }, { id: S_TWORK, name: "worker" }, ...services] },
     ],
     variables: { [E_PROD]: [], [E_TARSEE]: [{ name: "SETUP_PASSWORD", serviceId: S_TARSEE, isSealed: false, value: "1234" }], [E_TSTAGE]: [] },
     deployments: { [`${E_PROD}/${S_WEB}`]: [{ id: D_WEB, status: "SUCCESS" }], [`${E_TARSEE}/${S_TARSEE}`]: [{ id: D_TARSEE, status: "SUCCESS" }] },
@@ -758,6 +761,21 @@ function engineRuns() {
 /** The allowlist's key shape (railway-admin.js SCRIPT_KEY): what it would set on Tarsee's own service if nothing refused it. */
 const KEY_NAME = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:KEY|TOKEN|SECRET|PASSWORD|WEBHOOK|URL)$/;
 const KEY_ENDINGS = ["KEY", "TOKEN", "SECRET", "PASSWORD", "WEBHOOK", "URL"];
+/** A Claude Code CLI program: `claude` (Linux, macOS) or `claude.exe` (Windows). */
+const isCliProgram = (file) => /(?:^|[\\/])claude(?:\.exe)?$/.test(file);
+
+/**
+ * Throws unless a Claude Code CLI program was scanned whenever the Claude Agent SDK is installed. Without its platform
+ * package (npm's --omit=optional, or a platform it has none for), the scan would pass on sdk.mjs alone and miss every
+ * name the CLI holds.
+ */
+function assertCliScanned({ packages, native }) {
+  if (!packages.some((p) => p.startsWith("@anthropic-ai/claude-agent-sdk@"))) return;
+  assert.ok(native.some(isCliProgram),
+    `The Claude Agent SDK is installed (${packages.join(", ")}), but no Claude Code CLI program (claude or claude.exe, from ` +
+    `its platform package) was scanned: only ${native.length ? native.join(", ") : "no programs"}. Install the SDK with its ` +
+    "optional platform package (npm ci without --omit=optional), or list one in TARSEE_ENGINE_PACKAGES.");
+}
 
 /**
  * Every key-shaped name inside a run that may hold several strings one after another: one may start at the run's start
@@ -786,21 +804,25 @@ function keyNamesInRun(run, { limit = Infinity } = {}) {
 }
 
 /** Writes the list: what it had and what the installed engines (and TARSEE_ENGINE_PACKAGES) hold. CRLF, like the checkout. */
-function updateEngineNames(names, runs, packages) {
-  let had = { names: [], runs: [], scanned: [] };
+function updateEngineNames(names, runs, strings, packages) {
+  let had = { names: [], runs: [], strings: [], scanned: [] };
   try { had = readJson(ENGINE_NAMES_FILE); } catch { /* a first list */ }
   const allNames = [...new Set([...had.names, ...names])].sort();
   const isName = new Set(allNames);
+  const allStrings = [...new Set([...(had.strings || []), ...strings])].filter((s) => !isName.has(s)).sort();
+  const isString = new Set(allStrings);
   const data = {
     about: [
       "Every name in capitals with underscores that appears as a string in the shipped code of Tarsee's AI engines and its browser library, and that tarsee_railway's allowlist would otherwise set on Tarsee's own service (a name ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL). Every other name is refused by the allowlist itself.",
       "The code: the Claude Agent SDK's JavaScript and the Claude Code CLI it ships, the Codex SDK and every file of Codex's platform packages, and Playwright's library (playwright-core), which starts Chromium. The CLI and Codex are native programs, read as bytes, for every platform in scanned.",
-      "names: strings found whole (in JavaScript, or between quotes inside a program). runs: capitals, digits and underscores found inside a native program, which can keep its strings one after another with nothing between them (GH_TOKENGITHUB_TOKEN); a name counts as found in a run when it starts at the run's start or after any character but _, and ends at its end or before any character but _.",
+      "names: strings found whole (in JavaScript, or between quotes inside a program). runs: capitals, digits and underscores found inside a native program, which can keep its strings one after another with nothing between them (GH_TOKENGITHUB_TOKEN); a name counts as found in a run when it starts at the run's start or after any character but _, and ends at its end or before any character but _. A run found whole anywhere is that string, not a run.",
+      "strings: the runs found whole that hold such a name without being one (CLAUDE_CODE_TOTAL_TOKENS_REMINDER holds CLAUDE_CODE_TOTAL_TOKEN). They refuse nothing themselves: when Tarsee reads the Terminal's own Claude Code at start, a run of it that is in names or strings counts whole, as it does here.",
       "Made and checked by test/railway-tool-limits.test.js. TARSEE_UPDATE_ENGINE_NAMES=1 node --test test/railway-tool-limits.test.js adds what the installed engines hold; that test says how to add another platform's programs. A name stays when an update drops it: refusing a name nothing reads costs nothing.",
     ],
     scanned: [...new Set([...had.scanned, ...packages])].sort(),
     names: allNames,
-    runs: [...new Set([...had.runs, ...runs])].filter((r) => !isName.has(r)).sort(),
+    runs: [...new Set([...had.runs, ...runs])].filter((r) => !isName.has(r) && !isString.has(r)).sort(),
+    strings: allStrings,
   };
   fs.writeFileSync(ENGINE_NAMES_FILE, `${JSON.stringify(data, null, 2)}\n`.replace(/\n/g, "\r\n"));
 }
@@ -813,23 +835,30 @@ describe("every name in the AI engines' and the browser library's code is refuse
     const { whole, inside, packages, text, native, ms } = engineRuns();
     assert.ok(text.length > 100 && whole.size > 1000, `found only ${whole.size} names in ${text.length} JavaScript files: is the scan working?`);
     for (const n of REVIEWED) assert.ok(whole.has(n), `the scan finds ${n} in Claude Code's code`);
+    // The check itself: an SDK without its CLI program fails it, naming what was scanned.
+    assert.throws(() => assertCliScanned({ packages: ["@anthropic-ai/claude-agent-sdk@0.3.319"], native: ["vendor/codex"] }), /no Claude Code CLI program \(claude or claude\.exe/);
+    assert.doesNotThrow(() => assertCliScanned({ packages: ["@openai/codex@0.167.0"], native: [] }), "no SDK, no CLI to scan");
+    assertCliScanned({ packages, native });
     if (native.some((f) => /codex(\.exe)?$/.test(f))) {
       assert.ok([...inside, ...whole].some((r) => r.includes("CODEX_API_KEY")), "the scan finds CODEX_API_KEY in Codex");
     }
     const names = [...whole].filter((r) => KEY_NAME.test(r));
     const runs = [...inside].filter((r) => keyNamesInRun(r, { limit: 1 }).length);
-    if (UPDATE_ENGINE_NAMES) updateEngineNames(names, runs, packages);
+    const strings = [...whole].filter((r) => !KEY_NAME.test(r) && keyNamesInRun(r, { limit: 1 }).length);
+    if (UPDATE_ENGINE_NAMES) updateEngineNames(names, runs, strings, packages);
     // The file as it is now (the module read it when it loaded, which in update mode was before this wrote it).
     const list = readJson(ENGINE_NAMES_FILE);
     const current = RA.parseEngineNames(fs.readFileSync(ENGINE_NAMES_FILE, "utf8"));
     const listed = new Set([...list.names, ...list.runs]);
     // Named: the whole names, and the runs inside a program as found (each can hold several names one after another).
+    // And the strings: without them the Terminal's read at start would count more runs than this check does.
     const missing = {
       names: names.filter((n) => !RA.inEngineCode(n, current)).sort(),
       runs: runs.filter((r) => !listed.has(r) && keyNamesInRun(r).some((n) => !RA.inEngineCode(n, current))).sort()
         .map((r) => (r.length > 200 ? `${r.slice(0, 200)}... (${r.length} characters)` : r)),
+      strings: strings.filter((s) => !current.strings.has(s)).sort(),
     };
-    assert.deepEqual(missing, { names: [], runs: [] },
+    assert.deepEqual(missing, { names: [], runs: [], strings: [] },
       `The engines installed here (${packages.join(", ")}) hold these names, and src/lib/engine-env-names.json (made from ` +
       `${list.scanned.join(", ")}) lacks them, so tarsee_railway would set them on Tarsee's own service. Add them with ` +
       "TARSEE_UPDATE_ENGINE_NAMES=1 node --test test/railway-tool-limits.test.js (this file's comment says how to add another platform's programs).");
@@ -851,6 +880,12 @@ describe("every name in the AI engines' and the browser library's code is refuse
       assert.ok(held.length, `${r}: only runs that hold a key-shaped name are listed`);
       for (const n of held) assert.ok(RA.heldInRun(r, n), `${n} in ${r}`);
       for (const n of [held[0], held.at(-1)]) assert.ok(RA.selfServiceRefusal(n), `${n} (in ${r}) is refused on Tarsee's own service`);
+    }
+    // The strings: each holds a key-shaped name without being one, and none is also a run or a name.
+    assert.ok(Array.isArray(list.strings), "the list has its strings");
+    for (const s of list.strings) {
+      assert.ok(!KEY_NAME.test(s) && keyNamesInRun(s, { limit: 1 }).length, `${s}: only strings that hold a key-shaped name without being one`);
+      assert.ok(!list.runs.includes(s) && !list.names.includes(s), `${s} is a string only`);
     }
     // Not a name inside a longer one in a JavaScript string, nor one that goes on with an underscore.
     assert.equal(RA.heldInRun("GH_TOKENGITHUB_TOKEN", "GITHUB_TOKEN"), true);
@@ -1154,6 +1189,366 @@ describe("a variable any of Tarsee's own variables is filled in from counts as t
   });
 });
 
+describe("names that differ only in case are each kept and followed", () => {
+  // Environment variables are case-sensitive, so one service can hold DATABASE_URL and database_url side by side. Each
+  // one's references are followed, whichever comes first in Railway's answer: a twin never hides the other's.
+  const DENIED = { env: ON_RAILWAY, getKeyDenied: () => true };
+  // Railway's own Postgres template: DATABASE_URL is made from other variables of the service.
+  const PG_URL = "postgresql://${{PGUSER}}:${{POSTGRES_PASSWORD}}@${{RAILWAY_PRIVATE_DOMAIN}}:5432/${{PGDATABASE}}";
+  const pgVars = (twin = null) => ({
+    [E_TARSEE]: [
+      { name: "REPORTS_DB_URL", serviceId: S_TARSEE, value: "${{Postgres.DATABASE_URL}}" },
+      ...(twin === "first" ? [{ name: "database_url", serviceId: S_PG, value: "x" }] : []),
+      { name: "DATABASE_URL", serviceId: S_PG, value: PG_URL },
+      { name: "POSTGRES_PASSWORD", serviceId: S_PG, value: "pg-pw-0001" },
+      { name: "PGUSER", serviceId: S_PG, value: "postgres" },
+      ...(twin === "last" ? [{ name: "database_url", serviceId: S_PG, value: "x" }] : []),
+    ],
+  });
+  const intoPassword = { action: "set_variable", service: "Postgres", name: "POSTGRES_PASSWORD", from_key: "OPENAI_KEY", deploy: false };
+
+  it("the reviewer's Postgres case: after a planted database_url, from_key into POSTGRES_PASSWORD is still refused", async () => {
+    const rw = railway({ more: pgVars() });
+    const first = await run(intoPassword, { rw, ...DENIED });
+    assertNothingChanged(first);
+    assert.match(first.out, /Tarsee's own REPORTS_DB_URL is filled in from POSTGRES_PASSWORD on Postgres by a Railway reference/, first.out);
+    // A plain value into the twin goes: it fills REPORTS_DB_URL, a name the tool may set on Tarsee's service itself.
+    const plant = await run({ action: "set_variable", service: "Postgres", name: "database_url", value: "x", deploy: false }, { rw, ...DENIED });
+    assert.match(plant.out, /^Set database_url on Postgres/, plant.out);
+    assert.equal(rw.valueOf(E_TARSEE, S_PG, "DATABASE_URL"), PG_URL, "DATABASE_URL keeps its references");
+    const sent = rw.writes().length;
+    const again = await run(intoPassword, { rw, ...DENIED });
+    assert.equal(rw.writes().length, sent, `no write was sent: ${again.out}`);
+    assert.match(again.out, /get_key is denied in Settings > Tool Permissions/, again.out);
+    assert.match(again.out, /Tarsee's own REPORTS_DB_URL is filled in from POSTGRES_PASSWORD on Postgres by a Railway reference/, again.out);
+    assert.match(again.out, /Nothing was changed\.$/, again.out);
+    assert.ok(!again.text.includes(OPENAI) && !again.text.includes("pg-pw-0001"), "no value in the result or the log");
+    assert.equal(rw.valueOf(E_TARSEE, S_PG, "POSTGRES_PASSWORD"), "pg-pw-0001");
+  });
+
+  it("whichever twin comes first in Railway's answer, both are followed", async () => {
+    for (const twin of ["first", "last"]) {
+      for (const name of ["POSTGRES_PASSWORD", "PGUSER"]) {
+        const r = await run({ ...intoPassword, name }, { rw: railway({ more: pgVars(twin) }), ...DENIED });
+        assertNothingChanged(r, `${name}, twin ${twin}`);
+        assert.match(r.out, new RegExp(`Tarsee's own REPORTS_DB_URL is filled in from ${name} on Postgres by a Railway reference`), r.out);
+      }
+    }
+  });
+
+  it("the worker chain: a planted worker.api_key doesn't hide worker.API_KEY's reference", async () => {
+    for (const plantedFirst of [true, false]) {
+      const chain = [{ name: "API_KEY", serviceId: S_TWORK, value: "${{Postgres.SECRET_TOKEN}}" }, { name: "api_key", serviceId: S_TWORK, value: "x" }];
+      const more = { [E_TARSEE]: [{ name: "WORKER_API_KEY", serviceId: S_TARSEE, value: "${{worker.API_KEY}}" }, ...(plantedFirst ? chain.reverse() : chain)] };
+      const r = await run({ action: "set_variable", service: "Postgres", name: "SECRET_TOKEN", from_key: "OPENAI_KEY", deploy: false }, { rw: railway({ more }), ...DENIED });
+      assertNothingChanged(r, `planted first: ${plantedFirst}`);
+      assert.match(r.out, /Tarsee's own WORKER_API_KEY is filled in from SECRET_TOKEN on Postgres by a Railway reference/, r.out);
+    }
+  });
+
+  it("twins on Tarsee's own service: each one's references are followed, and each counts under its own name", async () => {
+    for (const lowerFirst of [true, false]) {
+      const twins = [{ name: "ALERTS_API_KEY", serviceId: S_TARSEE, value: "${{worker.A_SRC}}" }, { name: "alerts_api_key", serviceId: S_TARSEE, value: "${{worker.B_SRC}}" }];
+      const more = { [E_TARSEE]: lowerFirst ? twins.reverse() : twins };
+      const label = `lower first: ${lowerFirst}`;
+      // A_SRC fills ALERTS_API_KEY, a name the tool may set: a plain value goes, a vault key waits for get_key.
+      const key = await run({ action: "set_variable", service: "worker", name: "A_SRC", from_key: "OPENAI_KEY", deploy: false }, { rw: railway({ more }), ...DENIED });
+      assertNothingChanged(key, label);
+      assert.match(key.out, /Tarsee's own ALERTS_API_KEY is filled in from A_SRC on worker by a Railway reference/, key.out);
+      const plain = await run({ action: "set_variable", service: "worker", name: "A_SRC", value: "plain-value", deploy: false }, { rw: railway({ more }), ...DENIED });
+      assert.match(plain.out, /^Set A_SRC on worker/, `${label}: ${plain.out}`);
+      // B_SRC fills alerts_api_key, a name the tool never sets on Tarsee's service (not in capitals): refused either way.
+      for (const how of [{ value: "plain-value" }, { from_key: "OPENAI_KEY" }]) {
+        const r = await run({ action: "set_variable", service: "worker", name: "B_SRC", ...how, deploy: false }, { rw: railway({ more }), env: ON_RAILWAY });
+        assertNothingChanged(r, label);
+        assert.match(r.out, /Tarsee's own alerts_api_key is filled in from B_SRC on worker by a Railway reference/, r.out);
+        assert.match(r.out, /alerts_api_key is not one of the names this tool sets on Tarsee's own service/, r.out);
+      }
+    }
+  });
+
+  it("were Railway's two answers to spell a name of Tarsee's differently, its references are still followed", async () => {
+    const rw = railway({ more: { [E_TARSEE]: [{ name: "Reports_Db_Url", serviceId: S_TARSEE, value: "${{Postgres.DATABASE_URL}}" }, { name: "DATABASE_URL", serviceId: S_PG, value: PG_URL }] } });
+    // The values come back under names in capitals; the list of names keeps them as typed.
+    const fetch = async (url, init) => {
+      const res = await rw.fetch(url, init);
+      if (!JSON.parse(init.body).query.includes("TarseeUnrenderedVariables")) return res;
+      const body = JSON.parse(await res.text());
+      body.data.variables = Object.fromEntries(Object.entries(body.data.variables).map(([k, v]) => [k.toUpperCase(), v]));
+      return { status: res.status, text: async () => JSON.stringify(body) };
+    };
+    const r = await run({ ...intoPassword, value: "plain-value", from_key: undefined }, { rw: { ...rw, fetch }, env: ON_RAILWAY });
+    assertNothingChanged(r);
+    assert.match(r.out, /Tarsee's own Reports_Db_Url is filled in from POSTGRES_PASSWORD on Postgres by a Railway reference/, r.out);
+  });
+
+  it("on Tarsee's own service, setting a name refuses what its twin would get from it", async () => {
+    const more = { [E_TARSEE]: [{ name: "status_page_url", serviceId: S_TARSEE, value: "${{STATUS_PAGE_URL}}" }] };
+    const r = await run({ action: "set_variable", name: "STATUS_PAGE_URL", value: "https://status.example.com", deploy: false }, { rw: railway({ more }), env: ON_RAILWAY });
+    assertNothingChanged(r);
+    assert.match(r.out, /Tarsee's own status_page_url is filled in from STATUS_PAGE_URL on tarsee by a Railway reference/, r.out);
+  });
+});
+
+describe("a reference to a service the project doesn't have can't be followed", () => {
+  // Railway would look for a service of that name, so what the variable is filled in from is as unknown as a sealed
+  // value: it fails closed the same way.
+  const DENIED = { env: ON_RAILWAY, getKeyDenied: () => true };
+  const guardedGhost = {
+    [E_TARSEE]: [
+      { name: "TARSEE_KEYS_ONLY", serviceId: S_TARSEE, value: "${{worker.KO_MID}}" },
+      { name: "KO_MID", serviceId: S_TWORK, value: "${{ Ghost Service.KO }}" },
+    ],
+  };
+  const keyGhost = { [E_TARSEE]: [{ name: "ALERTS_API_KEY", serviceId: S_TARSEE, value: "${{Ghost.ALERTS}}" }] };
+
+  it("one of Tarsee's guarded variables filled in from one: nothing is set in that environment of Tarsee's project", async () => {
+    for (const args of [{ service: "worker", name: "OTHER_SETTING" }, { service: "Postgres", name: "KO" }, { name: "SOME_SERVICE_API_KEY" }]) {
+      for (const deploy of [true, false]) {
+        const r = await run({ action: "set_variable", value: "plain-value", deploy, ...args }, { rw: railway({ more: guardedGhost }), env: ON_RAILWAY });
+        assertNothingChanged(r, `${JSON.stringify(args)} deploy=${deploy}`);
+        assert.match(r.out, /Tarsee's own TARSEE_KEYS_ONLY is filled in from KO on "Ghost Service", a service the project "Tarsee" doesn't have/, r.out);
+        assert.match(r.out, /by hand in Railway's dashboard/, r.out);
+      }
+    }
+    const stage = await run({ action: "set_variable", environment: "staging", service: "worker", name: "OTHER_SETTING", value: "plain-value" }, { rw: railway({ more: guardedGhost }), env: ON_RAILWAY });
+    assert.match(stage.out, /^Set OTHER_SETTING on worker .* in staging/, stage.out);
+    const acme = await run({ action: "set_variable", project: "Acme", service: "worker", name: "OTHER_SETTING", value: "plain-value" }, { rw: railway({ more: guardedGhost }), env: ON_RAILWAY });
+    assert.match(acme.out, /^Set OTHER_SETTING on worker/, acme.out);
+  });
+
+  it("an everyday key of Tarsee's filled in from one: while get_key is denied, no from_key in that environment", async () => {
+    for (const args of [{ service: "worker", name: "ALERTS" }, { service: "Postgres", name: "OTHER_KEY" }]) {
+      const r = await run({ action: "set_variable", from_key: "WORKER_PASSWORD", deploy: false, ...args }, { rw: railway({ more: keyGhost }), ...DENIED });
+      assertNothingChanged(r, JSON.stringify(args));
+      assert.match(r.out, /get_key is denied in Settings > Tool Permissions/, r.out);
+      assert.match(r.out, /Tarsee's own ALERTS_API_KEY is filled in from ALERTS on "Ghost", a service the project "Tarsee" doesn't have/, r.out);
+    }
+    for (const [args, opts] of [
+      [{ service: "worker", name: "ALERTS", value: "plain-value" }, DENIED],
+      [{ service: "worker", name: "ALERTS", from_key: "WORKER_PASSWORD" }, { env: ON_RAILWAY, getKeyDenied: () => false }],
+    ]) {
+      const r = await run({ action: "set_variable", deploy: false, ...args }, { rw: railway({ more: keyGhost }), ...opts });
+      assert.match(r.out, /^Set ALERTS on worker/, `${JSON.stringify(args)}: ${r.out}`);
+    }
+  });
+
+  it("a service named shared: ${{shared.X}} is followed to the shared variables and to that service", async () => {
+    const S_SHAREDSVC = id(49);
+    const more = { [E_TARSEE]: [{ name: "ALERTS_API_KEY", serviceId: S_TARSEE, value: "${{shared.ALERTS}}" }] };
+    const r = await run({ action: "set_variable", service: "shared", name: "ALERTS", from_key: "WORKER_PASSWORD", deploy: false }, { rw: railway({ more, services: [{ id: S_SHAREDSVC, name: "shared" }] }), ...DENIED });
+    assertNothingChanged(r);
+    assert.match(r.out, /Tarsee's own ALERTS_API_KEY is filled in from ALERTS on shared by a Railway reference/, r.out);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// The Terminal's own Claude Code. engine-env-names.json comes from the Claude Code pinned in node_modules, but with
+// TARSEE_AUTO_UPDATE_CLI=1 the start-up script installs the latest one as the Terminal's claude, and a variable on
+// Tarsee's own service reaches it there. So Tarsee reads that program once when it starts, streamed in the background
+// (startTerminalCliScan), and refuses the names in it too. While it can't be read, only TZ and the tuning settings go
+// on Tarsee's own service.
+
+const CLI_DIR = path.join(tmp, "terminal-cli");
+/** A stand-in for a Claude Code build: a native program's header, then its strings. */
+function fakeCli(rel, text) {
+  const file = path.join(CLI_DIR, rel);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0]), Buffer.from(text, "latin1")]));
+  return file;
+}
+/** One program read the way the freshness check reads the engines: its whole key-shaped names and its runs that hold one. */
+function freshnessRead(file) {
+  const whole = new Set(), inside = new Set();
+  runsIn(file, false, whole, inside);
+  for (const r of whole) inside.delete(r);
+  return {
+    names: [...whole].filter((r) => KEY_NAME.test(r)).sort(),
+    runs: [...inside].filter((r) => keyNamesInRun(r, { limit: 1 }).length).sort(),
+  };
+}
+/** Tarsee as it started with `programs` as the Terminal's claude ([]: what every other test in this file runs with). */
+const terminalRuns = (programs, opts = {}) => RA.startTerminalCliScan({ find: async () => programs, log: () => {}, ...opts });
+// Names a newer Claude Code might read that the pinned one doesn't hold: one as a JavaScript string, two inside a run
+// of strings kept one after another, as a native program keeps them.
+const NEWER = ["NEWER_CLI_PROXY_URL", "NEWER_CLI_SESSION_TOKEN", "NEWER_CLI_SIGNING_KEY"];
+const NEWER_TEXT = "\0x=\"NEWER_CLI_PROXY_URL\";\0ZNEWER_CLI_SESSION_TOKENNEWER_CLI_SIGNING_KEY\0'STATUS'\0";
+
+describe("the Terminal's own Claude Code (TARSEE_AUTO_UPDATE_CLI=1 can make it newer) is read when Tarsee starts", () => {
+  after(() => terminalRuns([]));
+
+  it("a name only it holds is refused on Tarsee's own service, saying so; the owner's names and other services still go", async () => {
+    for (const n of NEWER) assert.equal(RA.selfServiceRefusal(n, undefined, { terminal: null }), null, `${n} goes without it`);
+    const got = await terminalRuns([fakeCli("newer/claude", NEWER_TEXT)]);
+    assert.ok(!(got instanceof Error), String(got));
+    for (const name of NEWER) {
+      for (const how of [{ value: "https://attacker.example" }, { from_key: "WORKER_PASSWORD" }]) {
+        const r = await run({ action: "set_variable", name, ...how, deploy: false }, { env: ON_RAILWAY });
+        assertNothingChanged(r, name);
+        assert.match(r.out, new RegExp(`${name} appears in the code of the Terminal's Claude Code`), r.out);
+        assert.match(r.out, /TARSEE_AUTO_UPDATE_CLI=1/, r.out);
+        assert.match(r.out, /by hand in Railway's dashboard/, r.out);
+      }
+    }
+    const ok = await run({ action: "set_variable", name: "STATUS_PAGE_URL", value: "https://status.example.com", deploy: false }, { env: ON_RAILWAY });
+    assert.match(ok.out, /^Set STATUS_PAGE_URL on tarsee/, ok.out);
+    const away = await run({ action: "set_variable", project: "Acme", service: "web", name: "NEWER_CLI_PROXY_URL", value: "https://x.example" }, { env: ON_RAILWAY });
+    assert.match(away.out, /^Set NEWER_CLI_PROXY_URL on web/, away.out);
+  });
+
+  it("a variable that one of those names on Tarsee's service is filled in from is refused too", async () => {
+    await terminalRuns([fakeCli("newer/claude", NEWER_TEXT)]);
+    const more = { [E_TARSEE]: [{ name: "NEWER_CLI_PROXY_URL", serviceId: S_TARSEE, value: "${{worker.PROXY_SRC}}" }] };
+    const r = await run({ action: "set_variable", service: "worker", name: "PROXY_SRC", value: "https://attacker.example", deploy: false }, { rw: railway({ more }), env: ON_RAILWAY });
+    assertNothingChanged(r);
+    assert.match(r.out, /Tarsee's own NEWER_CLI_PROXY_URL is filled in from PROXY_SRC on worker by a Railway reference/, r.out);
+    assert.match(r.out, /appears in the code of the Terminal's Claude Code/, r.out);
+  });
+
+  it("a program that changed since it was read (an update, a reinstall) is read again before the next write", async () => {
+    const cli = fakeCli("changing/claude", "\0'NOTHING_NEW'\0");
+    await terminalRuns([cli]);
+    const args = { action: "set_variable", name: "NEWER_CLI_PROXY_URL", value: "https://x.example", deploy: false };
+    const before_ = await run(args, { env: ON_RAILWAY });
+    assert.match(before_.out, /^Set NEWER_CLI_PROXY_URL on tarsee/, before_.out);
+    fakeCli("changing/claude", NEWER_TEXT);
+    const after_ = await run(args, { env: ON_RAILWAY });
+    assertNothingChanged(after_);
+    assert.match(after_.out, /NEWER_CLI_PROXY_URL appears in the code of the Terminal's Claude Code/, after_.out);
+  });
+
+  it("while it can't be read, only TZ and the tuning settings go on Tarsee's own service", async () => {
+    fs.mkdirSync(CLI_DIR, { recursive: true });
+    for (const [label, opts] of [
+      ["a folder, not a program", { find: async () => [CLI_DIR] }],
+      ["the search for it failed", { find: async () => { throw new Error("EACCES: permission denied"); } }],
+      ["the read never finished", { find: () => new Promise(() => {}), waitMs: 50 }],
+    ]) {
+      const started = terminalRuns([], opts);
+      if (!opts.waitMs) await started;
+      for (const [name, how] of [["SOME_SERVICE_API_KEY", { from_key: "WORKER_PASSWORD" }], ["STATUS_PAGE_URL", { value: "https://status.example.com" }]]) {
+        const r = await run({ action: "set_variable", name, ...how, deploy: false }, { env: ON_RAILWAY });
+        assertNothingChanged(r, `${label}: ${name}`);
+        assert.match(r.out, /could not read the Terminal's Claude Code/, r.out);
+        assert.match(r.out, /only TZ and the tuning settings/, r.out);
+        assert.match(r.out, /by hand in Railway's dashboard/, r.out);
+      }
+      for (const [name, value] of [["TZ", "Asia/Manila"], ["TARSEE_TIMEZONE", "Asia/Manila"], ["TARSEE_PHONON_THREADS", "2"]]) {
+        const r = await run({ action: "set_variable", name, value, deploy: false }, { env: ON_RAILWAY });
+        assert.match(r.out, new RegExp(`^Set ${name} on tarsee`), `${label}: ${r.out}`);
+      }
+      // Through a reference too. A write that fills nothing of Tarsee's, and other projects, go as before.
+      const more = { [E_TARSEE]: [{ name: "ALERTS_API_KEY", serviceId: S_TARSEE, value: "${{worker.ALERTS_SRC}}" }] };
+      const fed = await run({ action: "set_variable", service: "worker", name: "ALERTS_SRC", value: "plain-value", deploy: false }, { rw: railway({ more }), env: ON_RAILWAY });
+      assertNothingChanged(fed, label);
+      assert.match(fed.out, /Tarsee's own ALERTS_API_KEY is filled in from ALERTS_SRC on worker by a Railway reference/, fed.out);
+      assert.match(fed.out, /could not read the Terminal's Claude Code/, fed.out);
+      const free = await run({ action: "set_variable", service: "worker", name: "OTHER_SETTING", value: "1", deploy: false }, { rw: railway({ more }), env: ON_RAILWAY });
+      assert.match(free.out, /^Set OTHER_SETTING on worker/, `${label}: ${free.out}`);
+      const away = await run({ action: "set_variable", project: "Acme", service: "web", name: "SOME_SERVICE_API_KEY", from_key: "WORKER_PASSWORD" }, { env: ON_RAILWAY });
+      assert.match(away.out, /^Set SOME_SERVICE_API_KEY on web/, `${label}: ${away.out}`);
+    }
+    // Once it can be read again, the owner's keys go again.
+    await terminalRuns([]);
+    const back = await run({ action: "set_variable", name: "SOME_SERVICE_API_KEY", from_key: "WORKER_PASSWORD", deploy: false }, { env: ON_RAILWAY });
+    assert.match(back.out, /^Set SOME_SERVICE_API_KEY on tarsee/, back.out);
+  });
+
+  it("it reads a program in pieces and finds what the freshness check finds, wherever a piece ends", async () => {
+    const file = fakeCli("pieces/claude", `${NEWER_TEXT}"ANOTHER_NEW_URL"\0\`TICK_KEY\`${"A".repeat(40)}_TOKEN\0X_URL`);
+    const { names, runs } = freshnessRead(file);
+    assert.ok(names.includes("NEWER_CLI_PROXY_URL") && runs.length >= 3, `${names} ${runs}`);
+    for (const chunkBytes of [1, 2, 3, 5, 7, 11, 64, 1 << 20]) {
+      const got = await RA.scanProgramNames(file, { chunkBytes });
+      assert.deepEqual([...got.names].sort(), names, `chunkBytes ${chunkBytes}`);
+      assert.deepEqual([...got.runs].sort(), runs, `chunkBytes ${chunkBytes}`);
+    }
+    // A run seen as one string somewhere is that string everywhere, as in the freshness check.
+    const twice = fakeCli("pieces/twice", "\0'XBLACK_TAG_TOKEN'\0XBLACK_TAG_TOKEN\0");
+    const got = await RA.scanProgramNames(twice, { chunkBytes: 4 });
+    assert.deepEqual([[...got.names], got.runs], [["XBLACK_TAG_TOKEN"], []]);
+  });
+
+  it("on the Claude Code CLI installed here, the start-up read finds what the freshness check finds, without holding up the server", async () => {
+    const { native, packages } = engineRuns();
+    assertCliScanned({ packages, native });
+    const cli = native.find(isCliProgram);
+    if (!cli) return;   // no Claude Agent SDK installed here (assertCliScanned would have failed otherwise)
+    const want = freshnessRead(cli);
+    let last = Date.now(), worst = 0;
+    const tick = setInterval(() => { const now = Date.now(); worst = Math.max(worst, now - last); last = now; }, 5);
+    const started = Date.now();
+    let raw;
+    try { raw = await RA.scanProgramNames(cli); } finally { clearInterval(tick); }
+    const ms = Date.now() - started;
+    assert.deepEqual([...raw.names].sort(), want.names, "the same names, found whole");
+    assert.deepEqual([...raw.runs].sort(), want.runs, "the same runs that hold a key-shaped name");
+    assert.ok(ms < 30_000, `the read took ${ms} ms`);
+    assert.ok(worst < 1000, `the server waited ${worst} ms at most between two of its turns while the CLI was read (${ms} ms in all)`);
+    // As the Terminal's claude: it is the CLI the list was made from, so the read adds nothing to refuse. A run the
+    // engines' code holds as one string (the list's names and strings) counts whole, as in the freshness check.
+    const lines = [];
+    const got = await RA.startTerminalCliScan({ find: async () => [cli], log: (l) => lines.push(l) });
+    assert.ok(!(got instanceof Error), String(got));
+    const list = readJson(ENGINE_NAMES_FILE);
+    assert.deepEqual([...got.runs].sort(), want.runs.filter((r) => !list.names.includes(r) && !list.strings.includes(r)));
+    assert.match(lines.join("\n"), /It holds no key-shaped name engine-env-names\.json lacks\./, lines.join("\n"));
+    await terminalRuns([]);
+  });
+
+  it("the module and this test find the same names in a run", () => {
+    for (const r of readJson(ENGINE_NAMES_FILE).runs) assert.deepEqual(RA.keyNamesInRun(r, 2000), keyNamesInRun(r, { limit: 2000 }), r);
+    assert.deepEqual(RA.keyNamesInRun("ZNEWER_CLI_SESSION_TOKENNEWER_CLI_SIGNING_KEY").sort(), keyNamesInRun("ZNEWER_CLI_SESSION_TOKENNEWER_CLI_SIGNING_KEY").sort());
+  });
+
+  it("the Terminal's claude is found where the Terminal looks, never the Agent SDK's own copy (engine-env-names.json has its names)", async () => {
+    const exe = process.platform === "win32" ? "claude.exe" : "claude";
+    const onPath = fakeCli(path.join("path-bin", exe), NEWER_TEXT);
+    const inHome = fakeCli(path.join("home", ".local", "bin", exe), "\0'X'\0");
+    const sdkCli = engineRuns().native.find(isCliProgram);
+    const PATH = [path.dirname(onPath), ...(sdkCli ? [path.dirname(sdkCli)] : []), path.join(CLI_DIR, "missing"), "relative-dir"].join(path.delimiter);
+    const found = await RA.terminalClaudePrograms({ env: { PATH }, home: path.join(CLI_DIR, "home"), fixedDirs: [] });
+    assert.deepEqual(found, [fs.realpathSync(onPath), fs.realpathSync(inHome)]);
+    assert.deepEqual(await RA.terminalClaudePrograms({ env: { PATH: "" }, home: path.join(CLI_DIR, "nobody"), fixedDirs: [] }), [], "none");
+  });
+
+  it("a launcher in a Claude Code package brings the package's own programs with it", async () => {
+    const pkg = path.join(CLI_DIR, "global", "node_modules", "@anthropic-ai", "claude-code");
+    fs.mkdirSync(path.join(pkg, "bin"), { recursive: true });
+    fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "@anthropic-ai/claude-code", version: "9.9.9" }));
+    fs.writeFileSync(path.join(pkg, "bin", "claude.exe"), "#!/bin/sh\necho stub\n");
+    const nested = fakeCli(path.join("global", "node_modules", "@anthropic-ai", "claude-code", "node_modules", "@anthropic-ai", "claude-code-linux-x64", "claude"), NEWER_TEXT);
+    const hoisted = fakeCli(path.join("global", "node_modules", "@anthropic-ai", "claude-code-win32-x64", "claude.exe"), "\0'Y'\0");
+    // npm links bin/claude.exe in as claude (a symlink off Windows; on Windows the folder itself is on the PATH).
+    let dir = path.join(pkg, "bin");
+    if (process.platform !== "win32") {
+      dir = path.join(CLI_DIR, "global-bin");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.symlinkSync(path.join(pkg, "bin", "claude.exe"), path.join(dir, "claude"));
+    }
+    const found = await RA.terminalClaudePrograms({ env: { PATH: dir }, home: path.join(CLI_DIR, "nobody"), fixedDirs: [] });
+    assert.deepEqual([...found].sort(), [path.join(pkg, "bin", "claude.exe"), nested, hoisted].map((f) => fs.realpathSync(f)).sort());
+  });
+
+  it("the read is logged: what it found that the list lacks, or that it couldn't read and what that means", async () => {
+    const lines = [];
+    await RA.startTerminalCliScan({ find: async () => [fakeCli("logged/claude", NEWER_TEXT)], log: (l) => lines.push(l) });
+    assert.match(lines.join("\n"), /^\[railway\] the Terminal's Claude Code/m, lines.join("\n"));
+    assert.match(lines.join("\n"), /NEWER_CLI_PROXY_URL/, lines.join("\n"));
+    lines.length = 0;
+    await RA.startTerminalCliScan({ find: async () => { throw new Error("nope"); }, log: (l) => lines.push(l) });
+    assert.match(lines.join("\n"), /could not read the Terminal's Claude Code \(nope\)/, lines.join("\n"));
+    assert.match(lines.join("\n"), /only TZ and the tuning settings/, lines.join("\n"));
+    await terminalRuns([]);
+  });
+
+  it("server.js starts the read when Tarsee starts on Railway, after it listens", () => {
+    const server = read("src/server.js");
+    assert.match(server, /startTerminalCliScan\(\)/);
+    assert.ok(server.indexOf("startTerminalCliScan()") > server.indexOf("server.listen("), "after listen: it never holds up the start");
+  });
+});
+
 describe("other services keep working", () => {
   it("a provider key from the vault onto another project's service: set, the value reaching Railway only", async () => {
     const r = await run({ action: "set_variable", project: "Acme", service: "worker", name: "OPENAI_API_KEY", from_key: "OPENAI_KEY" });
@@ -1190,7 +1585,7 @@ describe("through tools.js, the real vault and the MCP server", () => {
   let realFetch;
   before(async () => {
     const { setKey } = await import("../src/lib/key-vault.js");
-    setKey("RAILWAY_API_TOKEN", TOKEN, "test token");
+    setKey("RAILWAY_API_TOKEN", TOKEN, "test token", { owner: true });   // as the owner saves it, in Settings > Keys
     setKey("ALERTS_WEBHOOK", HOOK, "test webhook");
     realFetch = globalThis.fetch;
   });
@@ -1264,6 +1659,12 @@ describe("through tools.js, the real vault and the MCP server", () => {
       assert.match(tool.description, /TARSEE_PHONON_THREADS/);
       assert.match(tool.description, /sealed/);
       assert.match(tool.description, /get_key is denied in Tool Permissions, from_key onto Tarsee's own service, or into a variable it is filled in from, is refused/);
+      // Round 4: the Terminal's own Claude Code, and a reference to a service the project doesn't have.
+      assert.match(tool.description, /the Terminal's Claude Code/);
+      assert.match(tool.description, /TARSEE_AUTO_UPDATE_CLI=1/);
+      assert.match(tool.description, /only TZ and the tuning settings/);
+      assert.match(tool.description, /a service the project doesn't have/);
+      assert.match(tool.inputSchema.properties.name.description, /the Terminal's Claude Code/);
       assert.match(tool.description, /Railway's dashboard/);
       assert.ok(!tool.description.includes(String.fromCharCode(0x2014)), "no long dash");
       assert.match(tool.inputSchema.properties.from_key.description, /Tarsee's own keys .* are refused/);

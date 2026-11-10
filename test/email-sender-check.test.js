@@ -1,16 +1,23 @@
 // Who really sent a mail (src/channels/email.js senderVouched). Anyone can write any address on a From line, so the
 // email channel counts a sender on the allowlist only when the owner's own mailbox provider vouches for it: the
 // provider's topmost Authentication-Results line (RFC 8601), from the provider's own authserv-id, must say dmarc=pass
-// for the From domain, or dkim=pass with header.d aligned to it, or spf=pass with smtp.mailfrom aligned to it. A line
-// the sender wrote lower down never counts. A self-hosted server that writes no such line needs the owner's say-so in
-// Settings > Channels > Email ("my mail server doesn't check senders: trust the From line"); until then its mail is
-// refused, with a one-time note in Settings saying why.
+// with header.from equal to the From domain, or dkim=pass with that result's own header.d aligned to it, or spf=pass
+// with smtp.mailfrom aligned to it. A line the sender wrote lower down never counts, and neither does a provider's
+// line that doesn't read cleanly (a comment or quote left open, a ";" missing, a line that reads two ways), that has
+// two results for a method that gives one (dmarc, spf), or whose results disagree. That is how a result slipped into
+// the provider's own line, through an envelope sender (MAIL FROM) it copies into a comment, is kept out.
+// For a mail server Tarsee doesn't know, the owner types its name (the authserv-id) themselves, and only its topmost
+// line counts, above all of the sender's part; one that writes no such line needs the owner's "my mail server doesn't
+// check senders: trust the From line". Both are tied to the exact mailbox (IMAP host and user), and neither applies to
+// a provider Tarsee knows. Mail refused for want of either leaves a one-time note in Settings, which never carries a
+// name the mail itself wrote.
 //
 // The samples follow what each provider really writes (the provider's own documentation, or headers published by
-// people reading them): Gmail (mx.google.com, header.i rather than header.d), Microsoft 365 and Outlook.com (no
-// authserv-id at all), iCloud (one line per check, each with its own name), Fastmail (four lines with the MX host's
-// name, the verdicts in the last), Yahoo (atlasNNN...yahoo.com, "pass(p=...)" with no space) and Zoho (mx.zohomail.com,
-// header.from=<address>; an older line of theirs leaves out a semicolon). Addresses, IPs and signatures are made up.
+// people reading them): Gmail (mx.google.com, header.i rather than header.d, header.b with "/" and "+", one dkim result
+// per signature), Microsoft 365 and Outlook.com (no authserv-id at all, "action=none", a ";" at the end), iCloud (one
+// line per check, each with its own name, a quoted reason), Fastmail (four lines with the MX host's name, the verdicts
+// in the last), Yahoo (atlasNNN...yahoo.com, "pass(p=...)" with no space, a ";" at the end) and Zoho (mx.zohomail.com,
+// header.from=<address>). Addresses, IPs and signatures are made up.
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -44,11 +51,15 @@ after(() => {
 
 /** A raw message: the header lines as given (folded lines start with a space or tab), then a body. */
 const raw = (headers, body = "@tarsee hello") => [...headers, "", body, ""].join("\r\n");
-/** What the channel would decide for this raw mail, read from the IMAP host `imapHost`. */
-async function verdict(message, imapHost, senderCheck = null) {
+/** The mailbox Tarsee reads, in every sample. */
+const MAILBOX = "assistant@example.com";
+/** What the channel would decide for this raw mail, read from the IMAP host `imapHost` as `imapUser`. */
+async function verdict(message, imapHost, senderCheck = null, imapUser = MAILBOX) {
   const mail = await simpleParser(message);
-  return senderVouched(mail.headerLines, mail.from?.value?.[0]?.address, { imapHost, senderCheck });
+  return senderVouched(mail.headerLines, mail.from?.value?.[0]?.address, { imapHost, imapUser, senderCheck });
 }
+/** What the owner set for the mailbox `imapHost` (as MAILBOX) in Settings, as the route saves it. */
+const setFor = (imapHost, check) => ({ imapHost, imapUser: MAILBOX, trustFromLine: false, authservId: "", ...check });
 
 /** The sender's own part of a mail: everything the provider's servers found when it arrived. */
 const fromGmail = (from = "Owner <owner@gmail.com>", extra = []) => [
@@ -254,13 +265,43 @@ describe("the owner's ordinary mail is vouched for by the provider of the mailbo
     assert.deepEqual(await verdict(yahooBox(), "imap.mail.yahoo.com"), { ok: true, by: "dmarc", provider: "Yahoo" });
   });
 
-  it("Zoho: header.from=<address>, and an older line of theirs with a semicolon left out", async () => {
+  it("Zoho: header.from=<address>; an older line of theirs with a ';' left out doesn't read cleanly, so it doesn't count", async () => {
     assert.deepEqual(await verdict(zohoBox(), "imap.zoho.com"), { ok: true, by: "dmarc", provider: "Zoho" });
     const older = zohoBox({
       sender: fromGmail(),
       results: ["Authentication-Results: mx.zoho.com;", "\tdkim=pass", "\tspf=pass (zoho.com: domain of _spf.google.com designates 209.85.192.169 as permitted sender)", "\tsmtp.mailfrom=owner@gmail.com;"],
     });
-    assert.deepEqual(await verdict(older, "imap.zoho.com"), { ok: true, by: "spf", provider: "Zoho" }, "DKIM without a domain doesn't count; the aligned SPF does");
+    const v = await verdict(older, "imap.zoho.com");
+    assert.deepEqual([v.ok, v.why, v.provider], [false, "failed", "Zoho"]);
+    assert.match(v.detail, /doesn't read cleanly/);
+    assert.match(v.detail, /";" is missing before spf=/);
+  });
+
+  it("more of what they really write: Gmail's header.b with / and +, a dkim result per signature, Microsoft's action= and a closing ';'", async () => {
+    // Mail from Fastmail, which signs twice (its own domain and messagingengine.com), read at Gmail.
+    const fromFastmail = fromGmail("Owner <owner@fastmail.com>").map((l) => l.replace("d=gmail.com", "d=fastmail.com"));
+    const twoSignatures = gmailBox({
+      sender: fromFastmail,
+      mailfrom: "owner@fastmail.com",
+      results: [
+        "Authentication-Results: mx.google.com;",
+        "       dkim=pass header.i=@fastmail.com header.s=fm1 header.b=k/4bX3+d;",
+        "       dkim=pass header.i=@messagingengine.com header.s=fm1 header.b=Q+7z/Ab1;",
+        "       spf=pass (google.com: domain of owner@fastmail.com designates 103.168.172.150 as permitted sender) smtp.mailfrom=owner@fastmail.com;",
+        "       dmarc=pass (p=NONE sp=NONE dis=NONE) header.from=fastmail.com",
+      ],
+    });
+    assert.deepEqual(await verdict(twoSignatures, "imap.gmail.com"), { ok: true, by: "dmarc", provider: "Gmail" });
+    // A domain with no DMARC record, read at Microsoft: dmarc=none, no signature, an aligned SPF pass.
+    const noPolicy = microsoftBox({
+      sender: fromGmail("Owner <owner@self.example>"),
+      results: [
+        "Authentication-Results: spf=pass (sender IP is 192.0.2.10)",
+        " smtp.mailfrom=self.example; dkim=none (message not signed)",
+        " header.d=none;dmarc=none action=none header.from=self.example;",
+      ],
+    });
+    assert.deepEqual(await verdict(noPolicy, "outlook.office365.com"), { ok: true, by: "spf", provider: "Microsoft 365" });
   });
 
   it("the owner's ordinary mail from Gmail and from Outlook.com passes at every provider", async () => {
@@ -277,21 +318,20 @@ describe("the owner's ordinary mail is vouched for by the provider of the mailbo
     }
   });
 
-  it("a name the owner gives counts alongside a provider's own", async () => {
-    const renamed = yahooBox({ results: ["Authentication-Results: mx.renamed.example; dmarc=pass header.from=gmail.com"] });
-    assert.equal((await verdict(renamed, "imap.mail.yahoo.com")).ok, false);
-    assert.equal((await verdict(renamed, "imap.mail.yahoo.com", { imapHost: "imap.mail.yahoo.com", authservId: "mx.renamed.example" })).ok, true);
-  });
-
-  it("with no DMARC verdict, an aligned DKIM or SPF pass counts, and an unaligned one doesn't", async () => {
+  it("with no DMARC verdict, a DKIM pass counts only with its own header.d aligned, an SPF pass only with smtp.mailfrom aligned", async () => {
     const only = (...lines) => gmailBox({ results: ["Authentication-Results: mx.google.com;", ...lines] });
-    assert.deepEqual(await verdict(only("       dkim=pass header.i=@outlook.com header.s=selector1"), "imap.gmail.com"), { ok: true, by: "dkim", provider: "Gmail" });
+    assert.deepEqual(await verdict(only("       dkim=pass header.d=outlook.com header.i=@outlook.com header.s=selector1"), "imap.gmail.com"), { ok: true, by: "dkim", provider: "Gmail" });
     assert.deepEqual(await verdict(only("       dkim=pass header.d=mail.outlook.com"), "imap.gmail.com"), { ok: true, by: "dkim", provider: "Gmail" }, "a subdomain is aligned");
     assert.deepEqual(await verdict(only("       spf=pass smtp.mailfrom=owner@outlook.com"), "imap.gmail.com"), { ok: true, by: "spf", provider: "Gmail" });
+    // One signature by the sender's service and one by the From domain: the aligned one counts, whichever comes first.
+    assert.deepEqual(await verdict(only("       dkim=pass header.d=esp.example; dkim=pass header.d=outlook.com"), "imap.gmail.com"), { ok: true, by: "dkim", provider: "Gmail" });
     for (const line of [
+      "       dkim=pass header.i=@outlook.com header.s=selector1", // header.i alone: no header.d
       "       dkim=pass header.i=@evil.example header.s=s1",
+      "       dkim=pass header.d=evil.example header.i=@outlook.com", // header.i can't stand in for an unaligned header.d
       "       spf=pass smtp.mailfrom=bounce@evil.example",
       "       dkim=pass header.d=com",
+      "       dkim=fail header.d=outlook.com; dkim=pass header.d=evil.example",
       "       dkim=fail header.i=@outlook.com; spf=softfail smtp.mailfrom=owner@outlook.com",
       "       dmarc=bestguesspass header.from=outlook.com",
     ]) {
@@ -301,19 +341,16 @@ describe("the owner's ordinary mail is vouched for by the provider of the mailbo
     }
   });
 
-  it("reads the lines as RFC 8601 writes them: an authserv-id and version, comments, quoted strings", () => {
-    assert.deepEqual(parseAuthResults(" mx.microsoft.com 1; spf=pass (sender IP is 192.0.2.1) smtp.mailfrom=example.com"), {
-      authservId: "mx.microsoft.com",
-      results: [{ method: "spf", result: "pass", props: { "smtp.mailfrom": "example.com" } }],
-    });
-    assert.equal(parseAuthResults(" spf=pass smtp.mailfrom=example.com; dkim=none").authservId, "");
-    assert.deepEqual(parseAuthResults(" mx.example.com; none").results, []);
-    // A quoted string's ";" and "=" stay in its value: nothing in it starts a result of its own.
-    const quoted = parseAuthResults(' mx.example.com; spf=pass smtp.mailfrom="a;dmarc=pass header.from=victim.example"@evil.example');
-    assert.deepEqual(quoted.results.map((r) => r.method), ["spf"]);
-    assert.equal(quoted.results[0].props["smtp.mailfrom"], "a;dmarc=pass header.from=victim.example@evil.example");
-    // A comment can't hide a result either, and one inside another is still a comment.
-    assert.deepEqual(parseAuthResults(" mx.example.com; spf=fail (no (dmarc=pass header.from=x.example)) smtp.mailfrom=e.example").results.map((r) => r.method), ["spf"]);
+  it("a DMARC pass counts only for the From line's own domain: one for another domain refuses the mail", async () => {
+    const only = (...lines) => gmailBox({ results: ["Authentication-Results: mx.google.com;", ...lines] });
+    for (const line of [
+      "       dkim=pass header.d=outlook.com; dmarc=pass header.from=mail.outlook.com",
+      "       dkim=pass header.d=outlook.com; dmarc=pass header.from=evil.example",
+    ]) {
+      const v = await verdict(only(line), "imap.gmail.com");
+      assert.deepEqual([v.ok, v.why], [false, "failed"], line);
+      assert.match(v.detail, /DMARC result is for .* not the From line's outlook\.com/, line);
+    }
   });
 
   it("knows the providers by the IMAP host Tarsee reads, and nothing else", () => {
@@ -326,6 +363,139 @@ describe("the owner's ordinary mail is vouched for by the provider of the mailbo
       "imap.fastmail.com": "Fastmail", "imap.mail.yahoo.com": "Yahoo", "imap.aol.com": "Yahoo", "imap.zoho.com": "Zoho",
       "imappro.zoho.eu": "Zoho", "mail.self.example": null, "imap.gmail.com.evil.example": null,
     });
+  });
+});
+
+// ── Reading a line strictly ──────────────────────────────────────────────────────────────────────────────────────
+
+describe("an Authentication-Results line is read strictly, as RFC 8601 writes it", () => {
+  it("reads an authserv-id and version, nested and escaped comments, quoted strings, space around '=', a method version", () => {
+    assert.deepEqual(parseAuthResults(" mx.microsoft.com 1; spf=pass (sender IP is 192.0.2.1) smtp.mailfrom=example.com"), {
+      authservId: "mx.microsoft.com",
+      results: [{ method: "spf", result: "pass", props: { "smtp.mailfrom": "example.com" } }],
+      problem: null,
+    });
+    assert.equal(parseAuthResults(" spf=pass smtp.mailfrom=example.com; dkim=none").authservId, "", "Microsoft's line names none");
+    assert.deepEqual(parseAuthResults(" mx.example.com; none"), { authservId: "mx.example.com", results: [], problem: null });
+    const nested = parseAuthResults(' mx.example.com; dkim=pass (good (very \\) good) key) header.d=example.com reason="a \\"b\\" c"; dmarc = pass header.from = example.com;');
+    assert.equal(nested.problem, null);
+    assert.deepEqual(nested.results, [
+      { method: "dkim", result: "pass", props: { "header.d": "example.com" } },
+      { method: "dmarc", result: "pass", props: { "header.from": "example.com" } },
+    ]);
+    assert.equal(parseAuthResults(" mx.example.com; dkim/1=pass header.d=example.com").results[0].method, "dkim");
+    // Envelope senders with "=" in them (SRS, VERP), and addresses in any script, are plain addresses.
+    assert.equal(parseAuthResults(" mx.example.com; spf=pass smtp.mailfrom=SRS0=abcd=xy=example.com=user@forwarder.example").problem, null);
+    assert.equal(parseAuthResults(" mx.example.com; dmarc=pass header.from=ejemplo.españa.example; spf=pass smtp.mailfrom=josé@ejemplo.españa.example").problem, null);
+    // A comment can't hide a result, and one inside another is still a comment.
+    assert.deepEqual(parseAuthResults(" mx.example.com; spf=fail (no (dmarc=pass header.from=x.example)) smtp.mailfrom=e.example").results.map((r) => r.method), ["spf"]);
+  });
+
+  it("a line that doesn't read cleanly says why, and holds nothing Tarsee would read", () => {
+    for (const [line, why] of [
+      [" mx.example.com; dmarc=pass (left open header.from=example.com", /a comment is never closed/],
+      [' mx.example.com; spf=pass smtp.mailfrom="a@example.com', /a quoted string is never closed/],
+      [" mx.example.com; spf=pass) smtp.mailfrom=example.com", /a "\)" closes no comment/],
+      [" mx.example.com; spf=pass \\ smtp.mailfrom=example.com", /a "\\" outside a quoted string or comment/],
+      [" mx.example.com; dkim=pass spf=pass smtp.mailfrom=example.com", /a ";" is missing before spf=/],
+      [" mx.example.com; dkim=pass;; dmarc=pass header.from=example.com", /two ";" with nothing between/],
+      [" mx.example.com dmarc=pass header.from=example.com", /the server's name isn't followed by ";"/],
+      [" mx.example.com; pass", /"pass" isn't method=result/],
+      [' mx.example.com; "dmarc"=pass header.from=example.com', /isn't method=result/],
+      [" mx.example.com; dmarc=pass header.from", /"header.from" has no value/],
+      [" mx.example.com; dmarc=pass header.from=", /"header.from" has no value/],
+      [" mx.example.com; dmarc=pass header.from=a.example header.from=b.example", /header\.from is given twice/],
+      [" mx.example.com; spf=pass smtp.mailfrom=a@[x:y]", /smtp\.mailfrom isn't a plain address or domain/],
+      [' mx.example.com; spf=pass smtp.mailfrom="a;dmarc=pass header.from=victim.example"@evil.example', /smtp\.mailfrom isn't a plain address or domain/],
+      // Strictly, the comment ends at "a)" and the line still reads cleanly; as pasted, it ends at "here)".
+      [' mx.example.com; spf=pass (domain of "a)x=" designates "b(" here) smtp.mailfrom=evil.example', /reads two ways/],
+    ]) {
+      const parsed = parseAuthResults(line);
+      assert.match(String(parsed.problem), why, line);
+      assert.deepEqual(parsed.results, [], line);
+    }
+  });
+
+  it("a provider's line with two results for one check, or results that disagree, doesn't count", async () => {
+    const only = (...lines) => gmailBox({ results: ["Authentication-Results: mx.google.com;", ...lines] });
+    for (const [line, why] of [
+      ["       dmarc=pass header.from=outlook.com; dmarc=fail header.from=outlook.com", /more than one dmarc result/],
+      ["       dmarc=fail header.from=outlook.com; dmarc=pass header.from=outlook.com", /more than one dmarc result/],
+      ["       spf=pass smtp.mailfrom=owner@outlook.com; spf=fail smtp.mailfrom=owner@outlook.com", /more than one spf result/],
+      ["       dkim=pass header.d=outlook.com header.s=s1; dkim=fail header.d=outlook.com header.s=s1", /dkim results for outlook\.com disagree/],
+    ]) {
+      const v = await verdict(only(line), "imap.gmail.com");
+      assert.deepEqual([v.ok, v.why], [false, "failed"], line);
+      assert.match(v.detail, why, line);
+    }
+    // iCloud and Fastmail write several lines: a check given twice across them doesn't count either.
+    const twice = icloudBox({ results: [
+      "Authentication-Results: dmarc.icloud.com; dmarc=pass header.from=gmail.com",
+      "Authentication-Results: dmarc.icloud.com; dmarc=fail header.from=gmail.com",
+    ] });
+    const v = await verdict(twice, "imap.mail.me.com");
+    assert.equal(v.ok, false);
+    assert.match(v.detail, /more than one dmarc result/);
+  });
+});
+
+describe("one result slipped into the provider's own line doesn't win", () => {
+  // Gmail, iCloud and Zoho copy the envelope sender (MAIL FROM, the sender's to choose) into their spf comment and
+  // value. An unescaped ")" in a quoted local part ends the comment early on a strict reading, so what follows reads
+  // as a result of the provider's own.
+  /** Gmail's line on a mail sent with the envelope sender `mailfrom`, with Gmail's own DMARC verdict, if any. */
+  const gmailOn = (mailfrom, from, dmarc) => gmailBox({
+    mailfrom,
+    sender: forgedFrom(from),
+    results: [
+      "Authentication-Results: mx.google.com;",
+      "       dkim=pass header.i=@evil.example header.s=s1 header.b=ZmFrZQ;",
+      `       spf=pass (google.com: domain of ${mailfrom} designates 192.0.2.66 as permitted sender) smtp.mailfrom=${mailfrom}${dmarc ? ";" : ""}`,
+      ...(dmarc ? [`       ${dmarc}`] : []),
+    ],
+  });
+
+  it("the reviewer's MAIL FROM: a dmarc=pass, or a dkim=pass, slipped in ahead of Gmail's own dmarc=fail", async () => {
+    const realFail = "dmarc=fail (p=NONE sp=QUARANTINE dis=NONE) header.from=gmail.com";
+    for (const mailfrom of [
+      '"a)dmarc=pass header.from=gmail.com;("@evil.example',
+      '"a)dkim=pass header.d=gmail.com;("@evil.example',
+    ]) {
+      const v = await verdict(gmailOn(mailfrom, "owner@gmail.com", realFail), "imap.gmail.com");
+      assert.deepEqual([v.ok, v.why, v.provider], [false, "failed", "Gmail"], mailfrom);
+      assert.match(v.detail, /doesn't read cleanly/, mailfrom);
+    }
+  });
+
+  it("nor where the From domain has no DMARC record, so Gmail writes no dmarc result to stop it", async () => {
+    const from = "owner@nopolicy.example";
+    // Without anything slipped in, Gmail's line is for the forger's own domain only: refused.
+    assert.equal((await verdict(gmailOn("bounce@evil.example", from), "imap.gmail.com")).ok, false);
+    for (const mailfrom of [
+      '"a);dkim=pass header.d=nopolicy.example;("@evil.example',
+      // Reads cleanly the strict way: the slipped-in result stands alone and smtp.mailfrom lands on a made-up one.
+      '"a);dkim=pass header.d=nopolicy.example;x-note=1 ("@evil.example',
+      // An address literal in place of the domain (dcontent may hold ";" and "=").
+      "a@[x:;dkim=pass header.d=nopolicy.example x=]",
+    ]) {
+      const v = await verdict(gmailOn(mailfrom, from), "imap.gmail.com");
+      assert.deepEqual([v.ok, v.why], [false, "failed"], mailfrom);
+      assert.match(v.detail, /doesn't read cleanly/, mailfrom);
+    }
+  });
+
+  it("the same slip into iCloud's and Zoho's spf lines", async () => {
+    const mailfrom = '"a);dkim=pass header.d=gmail.com;x-note=1 ("@evil.example';
+    const icloud = icloudBox({ sender: forgedFrom("owner@gmail.com"), results: [
+      "Authentication-Results: dmarc.icloud.com; dmarc=none header.from=gmail.com",
+      `Authentication-Results: spf.icloud.com; spf=pass (spf.icloud.com: domain of ${mailfrom} designates 192.0.2.66 as permitted sender) smtp.mailfrom=${mailfrom}`,
+    ] });
+    assert.equal((await verdict(icloud, "imap.mail.me.com")).ok, false);
+    const zoho = zohoBox({ sender: forgedFrom("owner@outlook.com"), results: [
+      "Authentication-Results: mx.zohomail.com;",
+      `\tspf=pass (zohomail.com: domain of ${mailfrom} designates 192.0.2.66 as permitted sender)  smtp.mailfrom=${mailfrom}`,
+    ] });
+    assert.equal((await verdict(zoho, "imap.zoho.com")).ok, false);
   });
 });
 
@@ -344,6 +514,8 @@ const fromForger = (forged = []) => [
   "Date: Mon, 9 Nov 2026 16:11:00 +0000",
   "Message-ID: <forged-0001@evil.example>",
 ];
+/** The same forged mail, claiming another address on its From line. */
+const forgedFrom = (address) => fromForger().map((l) => l.replace("owner@outlook.com", address));
 /** Gmail's own verdict on such a mail: no aligned signature, SPF only for the forger's domain, DMARC fails. */
 const GMAIL_FAILS = [
   "Authentication-Results: mx.google.com;",
@@ -407,9 +579,9 @@ describe("a line the sender wrote never counts", () => {
     // Only the forger's own lines: the topmost one isn't Gmail's, or there is none at all.
     const appended = raw(fromForger(["Authentication-Results: mx.example.net; dmarc=pass header.from=outlook.com"]));
     const v = await verdict(appended, "imap.gmail.com");
-    assert.deepEqual([v.ok, v.why, v.provider, v.seen], [false, "unchecked", "Gmail", "mx.example.net"]);
+    assert.deepEqual(v, { ok: false, why: "unchecked", provider: "Gmail" }, "nothing the mail wrote comes back, not even the name on its line");
     const bare = await verdict(raw(fromForger()), "imap.gmail.com");
-    assert.deepEqual([bare.ok, bare.why, bare.seen], [false, "unchecked", null]);
+    assert.deepEqual(bare, { ok: false, why: "unchecked", provider: "Gmail" });
   });
 
   it("a DMARC pass for another domain than the From line's, or a mail with two From lines, doesn't count", async () => {
@@ -439,25 +611,80 @@ describe("a mail server Tarsee doesn't know", () => {
 
   it("with no Authentication-Results line of its own, its mail isn't vouched for", async () => {
     const v = await verdict(selfHosted([]), "mail.self.example");
-    assert.deepEqual([v.ok, v.why, v.provider, v.seen], [false, "unchecked", null, null]);
+    assert.deepEqual(v, { ok: false, why: "unchecked", provider: null });
   });
 
-  it("its own line counts only once the owner names it, and then only the topmost line", async () => {
-    let v = await verdict(selfHosted(SELF_PASS), "mail.self.example");
-    assert.deepEqual([v.ok, v.why, v.seen], [false, "unchecked", "mail.self.example"], "a name Tarsee can't check on its own");
-    const named = { imapHost: "mail.self.example", authservId: "Mail.Self.Example" };
+  it("its own line counts only once the owner names it, and then only the topmost line, above all of the sender's part", async () => {
+    const v = await verdict(selfHosted(SELF_PASS), "mail.self.example");
+    assert.deepEqual(v, { ok: false, why: "unchecked", provider: null }, "a name Tarsee can't check on its own, and doesn't hand back");
+    const named = setFor("mail.self.example", { authservId: "Mail.Self.Example" });
     assert.deepEqual(await verdict(selfHosted(SELF_PASS), "mail.self.example", named), { ok: true, by: "dmarc", provider: "mail.self.example" });
+    // A forged line with the server's name right below its own failing one isn't read.
     const failing = ["Authentication-Results: mail.self.example; dkim=none; dmarc=fail header.from=gmail.com"];
     const forged = ["Authentication-Results: mail.self.example; dmarc=pass header.from=gmail.com"];
-    v = await verdict(selfHosted(failing, fromGmail(undefined, forged)), "mail.self.example", named);
-    assert.deepEqual([v.ok, v.why], [false, "failed"]);
+    let w = await verdict(selfHosted(failing, fromGmail(undefined, forged)), "mail.self.example", named);
+    assert.deepEqual([w.ok, w.why], [false, "failed"]);
+    // A topmost line that sits below the sender's own headers (its DKIM-Signature, its From) was written by the sender.
+    w = await verdict(selfHosted([], fromGmail(undefined, SELF_PASS)), "mail.self.example", named);
+    assert.deepEqual([w.ok, w.why], [false, "unchecked"], "below the sender's DKIM-Signature");
+    w = await verdict(selfHosted([], [...fromGmail(), ...SELF_PASS]), "mail.self.example", named);
+    assert.deepEqual([w.ok, w.why], [false, "unchecked"], "below the sender's From");
   });
 
-  it("the owner's \"trust the From line\" lets its mail in, for that server only", async () => {
-    const trust = { imapHost: "mail.self.example", trustFromLine: true };
+  it("the reviewer's case: a server that writes no line, and a forged one naming it below its Received: nothing to hand back", async () => {
+    // The server's name is public (its MX record). The verdict carries nothing the mail wrote for the owner to type.
+    const v = await verdict(raw([
+      "Return-Path: <owner@gmail.com>",
+      "Received: from mail.evil.example (mail.evil.example [203.0.113.5]) by mx.owner.example (Postfix) with ESMTPS id ABC for <assistant@example.com>; Mon, 9 Nov 2026 16:11:12 +0000",
+      "Authentication-Results: mx.owner.example; dkim=pass header.d=gmail.com; spf=pass smtp.mailfrom=owner@gmail.com; dmarc=pass header.from=gmail.com",
+      ...fromGmail(),
+    ]), "imap.owner.example");
+    assert.deepEqual(v, { ok: false, why: "unchecked", provider: null });
+  });
+
+  it("the owner's \"trust the From line\" lets its mail in, for that exact mailbox only", async () => {
+    const trust = setFor("mail.self.example", { trustFromLine: true });
     assert.deepEqual(await verdict(selfHosted([]), "mail.self.example", trust), { ok: true, by: "from-line", provider: null });
     assert.equal((await verdict(selfHosted([]), "mail.other.example", trust)).ok, false, "set for another server, it doesn't apply");
-    assert.equal((await verdict(selfHosted([]), "mail.self.example", { imapHost: "mail.self.example", trustFromLine: "yes" })).ok, false, "only true is true");
+    assert.equal((await verdict(selfHosted([]), "mail.self.example", trust, "someone-else@example.com")).ok, false, "nor for another user on that server");
+    assert.equal((await verdict(selfHosted([]), "mail.self.example", { imapHost: "mail.self.example", trustFromLine: true })).ok, false, "nor when it names no user");
+    assert.equal((await verdict(selfHosted([]), "mail.self.example", setFor("mail.self.example", { trustFromLine: "yes" }))).ok, false, "only true is true");
+  });
+
+  it("with the server's name given, its own verdict counts and the From line is not trusted besides", async () => {
+    const both = setFor("mail.self.example", { trustFromLine: true, authservId: "mail.self.example" });
+    const failing = ["Authentication-Results: mail.self.example; dkim=none; dmarc=fail header.from=gmail.com"];
+    const v = await verdict(selfHosted(failing), "mail.self.example", both);
+    assert.deepEqual([v.ok, v.why], [false, "failed"]);
+  });
+});
+
+describe("for a provider Tarsee knows, nothing the owner sets changes its verdict", () => {
+  // What each provider writes on a mail that claims to be from the owner but came from the forger's server.
+  const failedAt = {
+    "imap.gmail.com": () => gmailBox({ results: GMAIL_FAILS, sender: fromForger(), mailfrom: "bounce@evil.example" }),
+    "outlook.office365.com": () => microsoftBox({ sender: forgedFrom("owner@gmail.com"), results: ["Authentication-Results: spf=pass (sender IP is 192.0.2.66) smtp.mailfrom=evil.example; dkim=none (message not signed) header.d=none;dmarc=fail action=none header.from=gmail.com;compauth=fail reason=000"] }),
+    "imap.mail.me.com": () => icloudBox({ sender: forgedFrom("owner@gmail.com"), results: ["Authentication-Results: dmarc.icloud.com; dmarc=fail header.from=gmail.com"] }),
+    "imap.fastmail.com": () => fastmailBox({ sender: forgedFrom("owner@gmail.com"), results: ["Authentication-Results: stl-mx-04.messagingengine.com;", "    dmarc=fail policy.published-domain-policy=none header.from=gmail.com;", "    spf=pass smtp.mailfrom=bounce@evil.example"] }),
+    "imap.mail.yahoo.com": () => yahooBox({ sender: forgedFrom("owner@gmail.com"), results: ["Authentication-Results: atlas321.free.mail.ne1.yahoo.com;", " dkim=pass header.i=@evil.example header.s=s1;", " spf=pass smtp.mailfrom=evil.example;", " dmarc=fail(p=QUARANTINE) header.from=gmail.com;"] }),
+    "imap.zoho.com": () => zohoBox({ sender: forgedFrom("owner@outlook.com"), results: ["Authentication-Results: mx.zohomail.com;", "\tdkim=pass  header.i=evil.example;", "\tspf=pass (zohomail.com: domain of evil.example designates 192.0.2.66 as permitted sender)  smtp.mailfrom=bounce@evil.example;", "\tdmarc=fail header.from=<owner@outlook.com>"] }),
+  };
+
+  it("the reviewer's carry case: \"trust the From line\" saved for that very mailbox, and the provider's dmarc=fail still stands", async () => {
+    for (const [host, mail] of Object.entries(failedAt)) {
+      for (const check of [{ trustFromLine: true }, { authservId: "mx.renamed.example" }, { trustFromLine: true, authservId: "mx.renamed.example" }]) {
+        const v = await verdict(mail(), host, setFor(host, check));
+        assert.deepEqual([v.ok, v.why, v.provider], [false, "failed", mailProviderOf(host).name], `${host} ${JSON.stringify(check)}`);
+      }
+    }
+  });
+
+  it("a mail with no line of the provider's on top isn't let in by them either, nor by a name the owner typed for it", async () => {
+    const renamed = yahooBox({ results: ["Authentication-Results: mx.renamed.example; dmarc=pass header.from=gmail.com"] });
+    for (const check of [{ trustFromLine: true }, { authservId: "mx.renamed.example" }]) {
+      assert.deepEqual(await verdict(renamed, "imap.mail.yahoo.com", setFor("imap.mail.yahoo.com", check)), { ok: false, why: "unchecked", provider: "Yahoo" });
+      assert.deepEqual(await verdict(raw(fromForger()), "imap.gmail.com", setFor("imap.gmail.com", check)), { ok: false, why: "unchecked", provider: "Gmail" });
+    }
   });
 });
 
@@ -538,7 +765,9 @@ describe("the email channel answers only mail the provider vouches for", () => {
     assert.equal(turns.length, 0);
     assert.equal(smtp.sent.length, 0);
     const note = settings.get(SENDER_NOTE_KEY);
+    assert.deepEqual(Object.keys(note).sort(), ["at", "from", "host", "provider", "user"]);
     assert.equal(note.host, "mail.self.example");
+    assert.equal(note.user, MAILBOX);
     assert.equal(note.from, "owner@outlook.com");
     assert.equal(note.provider, null);
     assert.ok(!Number.isNaN(Date.parse(note.at)));
@@ -554,9 +783,42 @@ describe("the email channel answers only mail the provider vouches for", () => {
     assert.equal(settings.get(SENDER_NOTE_KEY).at, note.at);
 
     deliver(raw(fromOutlook()));
-    smtp = await readInbox(channel("mail.self.example", { senderCheck: { imapHost: "mail.self.example", trustFromLine: true } }));
+    smtp = await readInbox(channel("mail.self.example", { senderCheck: setFor("mail.self.example", { trustFromLine: true }) }));
     assert.equal(turns.length, 1);
     assert.equal(smtp.sent.length, 1);
+    settings.delete(SENDER_NOTE_KEY);
+  });
+
+  it("the reviewer's note: a forged line naming the owner's server leaves no trace of that name, in the note or the log", async () => {
+    FakeImap.inbox.length = 0;
+    turns.length = 0;
+    logs.length = 0;
+    settings.delete(SENDER_NOTE_KEY);
+    // The owner's server writes no Authentication-Results line; the forger writes one with its public name.
+    deliver(raw([
+      "Return-Path: <x@evil.example>",
+      "Received: from mail.evil.example (mail.evil.example [203.0.113.5]) by mx.owner.example (Postfix) with ESMTPS id ABC for <assistant@example.com>; Mon, 9 Nov 2026 16:11:12 +0000",
+      "Authentication-Results: mx.owner.example; dkim=pass header.d=outlook.com; spf=pass smtp.mailfrom=owner@outlook.com; dmarc=pass header.from=outlook.com",
+      ...fromForger(),
+    ]));
+    const smtp = await readInbox(channel("imap.owner.example"));
+    assert.equal(turns.length, 0);
+    assert.equal(smtp.sent.length, 0);
+    const note = settings.get(SENDER_NOTE_KEY);
+    assert.equal(note.host, "imap.owner.example");
+    assert.ok(!JSON.stringify(note).includes("mx.owner.example"), JSON.stringify(note));
+    const dropped = logs.filter((l) => l.startsWith("[email] dropped"));
+    assert.equal(dropped.length, 1, logs.join("\n"));
+    assert.ok(!dropped[0].includes("mx.owner.example"), dropped[0]);
+    settings.delete(SENDER_NOTE_KEY);
+  });
+
+  it("the note is kept per mailbox: another user on the same server gets one of its own", async () => {
+    FakeImap.inbox.length = 0;
+    settings.set(SENDER_NOTE_KEY, { host: "mail.self.example", user: "someone-else@example.com", at: new Date(0).toISOString(), from: "owner@outlook.com", provider: null });
+    deliver(raw(fromOutlook()));
+    await readInbox(channel("mail.self.example"));
+    assert.equal(settings.get(SENDER_NOTE_KEY).user, MAILBOX);
     settings.delete(SENDER_NOTE_KEY);
   });
 

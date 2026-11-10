@@ -4,6 +4,8 @@
 //   - the browser gets a minimal environment: none of Tarsee's secrets, provider keys or other credentials
 //   - the launch without the sandbox happens only when the sandboxed one fails with an error that says the sandbox
 //     can't start, never once a sandboxed launch has worked in this process, and each one is logged
+//   - TARSEE_BROWSER_SANDBOX: "auto" (the default) allows that launch; "required" (or any other value) never does, and
+//     the browser tool says why and what the owner can do. The first launch logs which is in force; it's read just then
 //   - there is one browser at a time: calls at once share one launch, and a browser that's replaced goes, pop-ups and all
 // Playwright's launcher is faked for those. Then a real Chromium (Playwright's own, else an installed Chrome or Edge;
 // skipped where there is none) is started the same way, to check what it really runs with.
@@ -74,11 +76,32 @@ const sandboxError = () => new Error([
   "================================",
 ].join("\n"));
 
+// Chromium's own words when it finds no sandbox it can use (no user namespaces, no setuid helper), as a Playwright that
+// passes the log through gives them. A full user-namespace count (ENOSPC) gives the same bare words, though the machine
+// can sandbox: nothing in them tells the two apart.
+const NO_USABLE_SANDBOX = "[FATAL:zygote_host_impl_linux.cc(127)] No usable sandbox! If you are running on Ubuntu 23.10+ or another Linux distro that has disabled unprivileged user namespaces with AppArmor, see https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md.";
+const noUsableSandbox = () => new Error(`browserType.launch: Target page, context or browser has been closed\nBrowser logs:\n\n${NO_USABLE_SANDBOX}`);
+
+// Every way Chromium says, in its own words, that its sandbox can't start on this machine.
+const CHROMIUM_SANDBOX_WORDS = [
+  NO_USABLE_SANDBOX,
+  "[FATAL:zygote_host_impl_linux.cc(132)] Running as root without --no-sandbox is not supported. See https://crbug.com/638180.",
+  "[FATAL:setuid_sandbox_host.cc(163)] The SUID sandbox helper binary was found, but is not configured correctly. Rather than run without sandboxing I'm aborting now. You need to make sure that /opt/chrome/chrome-sandbox is owned by root and has mode 4755. See crbug.com/357670.",
+  // The namespace setup failing, as under Docker's default seccomp profile or an AppArmor rule against user namespaces.
+  "[FATAL:credentials.cc(127)] Check failed: . : Permission denied (13)",
+  "Failed to move to new namespace: PID namespaces supported, Network namespace supported, but failed: errno = Operation not permitted",
+];
+
+// The line the first launch logs to say which TARSEE_BROWSER_SANDBOX mode is in force. logInto(logs, modes) keeps
+// those apart from the launcher's other lines.
+const MODE_LINE = /^\[browser\] TARSEE_BROWSER_SANDBOX is /;
+const logInto = (logs, modes = []) => (m) => (MODE_LINE.test(m) ? modes : logs).push(m);
+
 describe("tarsee_browser's launch: the sandbox and site isolation", () => {
   it("the first launch asks for Chromium's sandbox, with no --no-sandbox", async () => {
     const chromium = fakeChromium();
     const logs = [];
-    const browser = await makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" })(chromium);
+    const browser = await makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" })(chromium);
     assert.equal(browser.sandboxed, true);
     assert.equal(chromium.calls.length, 1, "one launch: the sandboxed one worked");
     const [first] = chromium.calls;
@@ -340,7 +363,7 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
   it("a failed sandboxed launch is followed by one without, which is logged in plain words", async () => {
     const chromium = fakeChromium(sandboxError(), "ok");
     const logs = [];
-    const browser = await makeBrowserLauncher({ log: (m) => logs.push(m), env: { ...LINUX, ...secretEnv() }, platform: "linux" })(chromium);
+    const browser = await makeBrowserLauncher({ log: logInto(logs), env: { ...LINUX, ...secretEnv() }, platform: "linux" })(chromium);
     assert.equal(browser.sandboxed, false);
     assert.equal(chromium.calls.length, 2);
     const [first, second] = chromium.calls;
@@ -358,7 +381,7 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
   it("every launch without the sandbox is logged, not just the first", async () => {
     const chromium = fakeChromium(sandboxError(), "ok", sandboxError(), "ok", sandboxError(), "ok");
     const logs = [];
-    const launch = makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" });
+    const launch = makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" });
     for (let i = 0; i < 3; i++) assert.equal((await launch(chromium)).sandboxed, false);
     assert.equal(chromium.calls.length, 6, "each launch tries the sandbox first again");
     assert.deepEqual(chromium.calls.map((c) => c.chromiumSandbox), [true, false, true, false, true, false]);
@@ -367,19 +390,12 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
   });
 
   it("Chromium's own words for a sandbox it can't start lead to the launch without, each of them", async () => {
-    for (const message of [
-      // What Chromium says when Playwright passes its log through as it is.
-      "[FATAL:zygote_host_impl_linux.cc(127)] No usable sandbox! If you are running on Ubuntu 23.10+ or another Linux distro that has disabled unprivileged user namespaces with AppArmor, see https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md.",
-      "[FATAL:zygote_host_impl_linux.cc(132)] Running as root without --no-sandbox is not supported. See https://crbug.com/638180.",
-      "[FATAL:setuid_sandbox_host.cc(163)] The SUID sandbox helper binary was found, but is not configured correctly. Rather than run without sandboxing I'm aborting now. You need to make sure that /opt/chrome/chrome-sandbox is owned by root and has mode 4755. See crbug.com/357670.",
-      // The namespace setup failing, as under Docker's default seccomp profile or an AppArmor rule against user namespaces.
-      "[FATAL:credentials.cc(127)] Check failed: . : Permission denied (13)",
-      "Failed to move to new namespace: PID namespaces supported, Network namespace supported, but failed: errno = Operation not permitted",
-    ]) {
+    // What Chromium says when Playwright passes its log through as it is.
+    for (const message of CHROMIUM_SANDBOX_WORDS) {
       const err = new Error(`browserType.launch: Target page, context or browser has been closed\nBrowser logs:\n\n${message}`);
       const chromium = fakeChromium(err, "ok");
       const logs = [];
-      const browser = await makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" })(chromium);
+      const browser = await makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" })(chromium);
       assert.equal(browser.sandboxed, false, message);
       assert.deepEqual(chromium.calls.map((c) => c.chromiumSandbox), [true, false], message);
       assert.equal(logs.length, 1, message);
@@ -397,7 +413,7 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
       const err = new Error(message);
       const chromium = fakeChromium(err, "ok");
       const logs = [];
-      await assert.rejects(makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" })(chromium), (e) => e === err, message);
+      await assert.rejects(makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" })(chromium), (e) => e === err, message);
       assert.equal(chromium.calls.length, 1, `${message}: no launch without the sandbox`);
       assert.deepEqual(logs, [], message);
     }
@@ -407,7 +423,7 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
     const eagain = new Error("browserType.launch: spawn EAGAIN");
     const chromium = fakeChromium("ok", eagain, "ok");
     const logs = [];
-    const launch = makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" });
+    const launch = makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" });
     assert.equal((await launch(chromium)).sandboxed, true);
     await assert.rejects(launch(chromium), (e) => e === eagain);
     assert.deepEqual(chromium.calls.map((c) => c.chromiumSandbox), [true, true], "nothing launched without the sandbox");
@@ -419,7 +435,7 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
     const closed = new Error("browserType.launch: Target page, context or browser has been closed");
     const chromium = fakeChromium(sandboxError(), "ok", "ok", closed, "ok");
     const logs = [];
-    const launch = makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" });
+    const launch = makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" });
     assert.equal((await launch(chromium)).sandboxed, false, "no sandbox yet: the launch without, logged");
     assert.equal((await launch(chromium)).sandboxed, true, "the sandbox works now");
     await assert.rejects(launch(chromium), (e) => e === closed);
@@ -431,7 +447,7 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
   it("once a sandboxed launch has worked in this process, even a sandbox failure is thrown, not worked around", async () => {
     const chromium = fakeChromium("ok", sandboxError(), "ok");
     const logs = [];
-    const launch = makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" });
+    const launch = makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" });
     assert.equal((await launch(chromium)).sandboxed, true);
     await assert.rejects(launch(chromium), (e) => {
       assert.match(e.message, /sandbox/i);
@@ -456,7 +472,7 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
     ]) {
       const chromium = fakeChromium(new Error(`browserType.launch: Target page, context or browser has been closed\nBrowser logs:\n\n${reason}`), "ok");
       const logs = [];
-      await assert.rejects(makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" })(chromium), (e) => {
+      await assert.rejects(makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" })(chromium), (e) => {
         assert.match(e.message, /ran out/, reason);
         assert.ok(e.message.includes(reason), `${reason}: Chromium's reason is given`);
         return true;
@@ -469,7 +485,7 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
   it("a launch with the sandbox after one without needs no fallback and logs nothing", async () => {
     const chromium = fakeChromium(sandboxError(), "ok", "ok");
     const logs = [];
-    const launch = makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" });
+    const launch = makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" });
     assert.equal((await launch(chromium)).sandboxed, false);
     assert.equal((await launch(chromium)).sandboxed, true);
     assert.equal(chromium.calls.length, 3);
@@ -480,7 +496,7 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
     const missing = new Error("browserType.launch: Executable doesn't exist at /home/node/.cache/ms-playwright/chromium_headless_shell-1217/chrome-headless-shell-linux64/chrome-headless-shell");
     const chromium = fakeChromium(missing, "ok");
     const logs = [];
-    await assert.rejects(makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" })(chromium), (err) => err === missing);
+    await assert.rejects(makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" })(chromium), (err) => err === missing);
     assert.equal(chromium.calls.length, 1);
     assert.deepEqual(logs, []);
   });
@@ -491,7 +507,7 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
       "browserType.launch: Chromium distribution 'chrome' is not found at /opt/google/chrome/chrome",
     ]) {
       const chromium = fakeChromium(new Error(message), "ok");
-      await assert.rejects(makeBrowserLauncher({ log: () => assert.fail("nothing to log"), env: LINUX, platform: "linux" })(chromium), { message });
+      await assert.rejects(makeBrowserLauncher({ log: (m) => assert.match(m, MODE_LINE, "nothing to log but the mode in force"), env: LINUX, platform: "linux" })(chromium), { message });
       assert.equal(chromium.calls.length, 1, message);
     }
   });
@@ -504,7 +520,7 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
     ].join("\n"));
     const chromium = fakeChromium(timeout, "ok");
     const logs = [];
-    await assert.rejects(makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" })(chromium), (err) => err === timeout);
+    await assert.rejects(makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" })(chromium), (err) => err === timeout);
     assert.equal(chromium.calls.length, 1, "no launch without the sandbox");
     assert.deepEqual(logs, []);
   });
@@ -513,9 +529,228 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
     const second = new Error("browserType.launch: Timeout 180000ms exceeded.");
     const chromium = fakeChromium(sandboxError(), second);
     const logs = [];
-    await assert.rejects(makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" })(chromium), (err) => err === second);
+    await assert.rejects(makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" })(chromium), (err) => err === second);
     assert.equal(chromium.calls.length, 2);
     assert.deepEqual(logs, []);
+  });
+});
+
+// --- TARSEE_BROWSER_SANDBOX: "auto" (the default) or "required" -----------------------------------------------------
+
+describe("tarsee_browser's launch: TARSEE_BROWSER_SANDBOX, auto or required", () => {
+  /** A launcher whose environment has TARSEE_BROWSER_SANDBOX as `setting` (left out when undefined). */
+  const withSetting = (setting) => {
+    const logs = [];
+    const modes = [];
+    const env = setting === undefined ? { ...LINUX } : { ...LINUX, TARSEE_BROWSER_SANDBOX: setting };
+    return { logs, modes, env, launch: makeBrowserLauncher({ log: logInto(logs, modes), env, platform: "linux" }) };
+  };
+  const sandboxes = (chromium) => chromium.calls.map((c) => c.chromiumSandbox);
+  // What the refusal under "required" tells the owner: why, that each call tries again, how to turn the sandbox on, and
+  // the other way, with what it costs.
+  const saysWhatToDo = (e) => {
+    assert.match(e.message, /doesn't run the browser without it/);
+    assert.match(e.message, /Each call tries the sandbox again/);
+    assert.match(e.message, /don't run Tarsee as root/);
+    assert.match(e.message, /user namespaces \(in Docker, with a seccomp profile that allows them\)/);
+    assert.match(e.message, /CHROME_DEVEL_SANDBOX/);
+    assert.match(e.message, /set TARSEE_BROWSER_SANDBOX to auto/);
+    assert.match(e.message, /this server's own rights/);
+    assert.ok(e.cause instanceof Error, "Playwright's error as the cause");
+  };
+
+  it("auto is the default: the first launch says which mode is in force, once", async () => {
+    for (const setting of [undefined, "", "   ", "auto", "AUTO", " Auto "]) {
+      const label = JSON.stringify(setting);
+      const { logs, modes, launch } = withSetting(setting);
+      const chromium = fakeChromium();
+      assert.equal((await launch(chromium)).sandboxed, true, label);
+      assert.equal((await launch(chromium)).sandboxed, true, label);
+      assert.equal(modes.length, 1, `${label}: said once, at the first launch`);
+      assert.match(modes[0], /^\[browser\] TARSEE_BROWSER_SANDBOX is auto\b/, label);
+      assert.match(modes[0], /set it to required/, `${label}: and it names the other mode`);
+      assert.deepEqual(logs, [], `${label}: nothing else to say while the sandbox works`);
+    }
+  });
+
+  it("required: the first launch says so, once, and a sandbox that works is used as always", async () => {
+    for (const setting of ["required", "REQUIRED", " Required "]) {
+      const { logs, modes, launch } = withSetting(setting);
+      const chromium = fakeChromium();
+      assert.equal((await launch(chromium)).sandboxed, true);
+      assert.equal((await launch(chromium)).sandboxed, true);
+      assert.deepEqual(sandboxes(chromium), [true, true]);
+      assert.equal(modes.length, 1, setting);
+      assert.match(modes[0], /^\[browser\] TARSEE_BROWSER_SANDBOX is required: tarsee_browser never runs Chromium without its sandbox/, setting);
+      assert.doesNotMatch(modes[0], /neither/, setting);
+      assert.deepEqual(logs, [], setting);
+    }
+  });
+
+  it("the mode is said before anything else the launch logs", async () => {
+    for (const [setting, then] of [[undefined, /runs without it/], ["required", /TARSEE_BROWSER_SANDBOX is required, so/]]) {
+      const all = [];
+      const env = setting === undefined ? LINUX : { ...LINUX, TARSEE_BROWSER_SANDBOX: setting };
+      const chromium = fakeChromium(noUsableSandbox(), "ok");
+      await makeBrowserLauncher({ log: (m) => all.push(m), env, platform: "linux" })(chromium).catch(() => {});
+      assert.equal(all.length, 2, String(setting));
+      assert.match(all[0], MODE_LINE);
+      assert.match(all[1], then);
+    }
+  });
+
+  it("auto: a bare 'No usable sandbox!' before any sandboxed launch has worked still goes on without it, logged, pointing to the setting", async () => {
+    for (const [label, err] of [["Chromium's words", noUsableSandbox], ["Playwright's words", sandboxError]]) {
+      const { logs, modes, launch } = withSetting(undefined);
+      const chromium = fakeChromium(err(), "ok");
+      assert.equal((await launch(chromium)).sandboxed, false, label);
+      assert.deepEqual(sandboxes(chromium), [true, false], label);
+      assert.match(modes[0], /is auto/, label);
+      assert.equal(logs.length, 1, label);
+      assert.match(logs[0], /^\[browser\] Chromium's sandbox couldn't start on this machine, so tarsee_browser runs without it\./, label);
+      assert.match(logs[0], /set TARSEE_BROWSER_SANDBOX to required/, `${label}: the line points to the setting`);
+      assert.match(logs[0], /No usable sandbox!|Chromium sandboxing failed!/, `${label}: with Chromium's reason`);
+    }
+  });
+
+  it("required: a bare 'No usable sandbox!' before any sandboxed launch has worked is refused, saying why and what the owner can do", async () => {
+    for (const [label, err] of [["Chromium's words", noUsableSandbox], ["Playwright's words", sandboxError]]) {
+      const { logs, modes, launch } = withSetting("required");
+      const chromium = fakeChromium(err(), "ok", "ok");
+      await assert.rejects(launch(chromium), (e) => {
+        assert.match(e.message, /^Chromium's sandbox didn't start, and TARSEE_BROWSER_SANDBOX is required, so tarsee_browser doesn't run the browser without it\./, label);
+        saysWhatToDo(e);
+        assert.match(e.message, /Chromium said: .*(No usable sandbox!|Chromium sandboxing failed!)/, `${label}: with Chromium's reason`);
+        return true;
+      });
+      assert.deepEqual(sandboxes(chromium), [true], `${label}: nothing launched without the sandbox`);
+      assert.equal(modes.length, 1, label);
+      assert.equal(logs.length, 1, `${label}: the refusal is logged`);
+      assert.match(logs[0], /^\[browser\] Chromium's sandbox didn't start, and TARSEE_BROWSER_SANDBOX is required/, label);
+      assert.doesNotMatch(logs[0], /runs without it/, label);
+      assert.equal((await launch(chromium)).sandboxed, true, `${label}: the next call tries the sandbox again`);
+      assert.deepEqual(sandboxes(chromium), [true, true], label);
+    }
+  });
+
+  it("required: every way Chromium says the sandbox can't start is refused, never worked around", async () => {
+    for (const message of CHROMIUM_SANDBOX_WORDS) {
+      const { logs, launch } = withSetting("required");
+      const chromium = fakeChromium(new Error(`browserType.launch: Target page, context or browser has been closed\nBrowser logs:\n\n${message}`), "ok");
+      await assert.rejects(launch(chromium), (e) => {
+        assert.match(e.message, /TARSEE_BROWSER_SANDBOX is required/, message);
+        assert.ok(e.message.includes(message.slice(0, 60)), `Chromium's reason is given: ${message}`);
+        return true;
+      });
+      assert.deepEqual(sandboxes(chromium), [true], message);
+      assert.equal(logs.length, 1, message);
+    }
+  });
+
+  it("required: a sandbox that never starts never leads to a launch without, one call after another or many at once", async () => {
+    const { launch } = withSetting("required");
+    const chromium = fakeChromium(noUsableSandbox());
+    for (let i = 0; i < 5; i++) await assert.rejects(launch(chromium), /TARSEE_BROWSER_SANDBOX is required/);
+    assert.deepEqual(sandboxes(chromium), [true, true, true, true, true]);
+
+    const held = heldChromium();
+    const at = withSetting("required");
+    const calls = [at.launch(held), at.launch(held), at.launch(held)];
+    await turn();
+    assert.deepEqual(held.sandboxes(), [true, true, true]);
+    for (const l of held.launches) l.fail(noUsableSandbox());
+    const results = await Promise.allSettled(calls);
+    assert.deepEqual(results.map((r) => r.status), ["rejected", "rejected", "rejected"]);
+    await turn();
+    assert.deepEqual(held.sandboxes(), [true, true, true], "no launch without the sandbox once none is under way either");
+  });
+
+  it("required: failures that aren't the sandbox's come back as they were, as under auto", async () => {
+    for (const message of ["browserType.launch: spawn EAGAIN", "browserType.launch: Timeout 180000ms exceeded."]) {
+      const err = new Error(message);
+      const { logs, launch } = withSetting("required");
+      const chromium = fakeChromium(err, "ok");
+      await assert.rejects(launch(chromium), (e) => e === err, message);
+      assert.deepEqual(logs, [], message);
+    }
+  });
+
+  it("required: once the sandbox has worked, or while a launch with it is under way, the refusal says so", async () => {
+    const after = withSetting("required");
+    const chromium = fakeChromium("ok", noUsableSandbox());
+    await after.launch(chromium);
+    await assert.rejects(after.launch(chromium), /has worked in this run/);
+    assert.deepEqual(sandboxes(chromium), [true, true]);
+
+    const during = withSetting("required");
+    const held = heldChromium();
+    const first = during.launch(held);
+    const second = during.launch(held);
+    await turn();
+    held.launches[1].fail(noUsableSandbox());
+    await assert.rejects(second, /while another launch with it was under way/);
+    held.launches[0].ok();
+    assert.equal((await first).sandboxed, true);
+    assert.deepEqual(held.sandboxes(), [true, true]);
+  });
+
+  it("a value that's neither auto nor required counts as required, and the log says so, as written", async () => {
+    for (const setting of ["off", "no", "false", "0", "disabled", "requried", "auto,required", "auto\nrequired", "x".repeat(500)]) {
+      const label = JSON.stringify(setting).slice(0, 40);
+      const { modes, launch } = withSetting(setting);
+      const chromium = fakeChromium(noUsableSandbox(), "ok");
+      await assert.rejects(launch(chromium), (e) => {
+        assert.match(e.message, /TARSEE_BROWSER_SANDBOX is ".*" \(taken as required\), so tarsee_browser doesn't run the browser without it/, label);
+        saysWhatToDo(e);
+        return true;
+      });
+      assert.deepEqual(sandboxes(chromium), [true], `${label}: nothing launched without the sandbox`);
+      assert.equal(modes.length, 1, label);
+      assert.match(modes[0], /^\[browser\] TARSEE_BROWSER_SANDBOX is ".*", which is neither auto nor required, so it's taken as required: tarsee_browser never runs Chromium without its sandbox/, label);
+      assert.ok(!/[\r\n]/.test(modes[0]), `${label}: on one line`);
+      assert.ok(modes[0].length < 600, `${label}: the value is cut short`);
+    }
+    // The value as written, quoted, for the owner to find.
+    const { modes, launch } = withSetting("requried");
+    await launch(fakeChromium());
+    assert.ok(modes[0].includes('"requried"'));
+  });
+
+  it("the setting is read once, at the first launch: changing it afterwards changes nothing", async () => {
+    // auto, then required in the environment: still auto.
+    const auto = withSetting("auto");
+    const a = fakeChromium(noUsableSandbox(), "ok", noUsableSandbox(), "ok");
+    assert.equal((await auto.launch(a)).sandboxed, false);
+    auto.env.TARSEE_BROWSER_SANDBOX = "required";
+    assert.equal((await auto.launch(a)).sandboxed, false, "the launch without, as under auto");
+    assert.deepEqual(sandboxes(a), [true, false, true, false]);
+    assert.equal(auto.modes.length, 1, "the mode is said once");
+
+    // required, then auto (or nothing) in the environment: still required.
+    const required = withSetting("required");
+    await assert.rejects(required.launch(fakeChromium(noUsableSandbox(), "ok")), /TARSEE_BROWSER_SANDBOX is required/);
+    required.env.TARSEE_BROWSER_SANDBOX = "auto";
+    await assert.rejects(required.launch(fakeChromium(noUsableSandbox(), "ok")), /TARSEE_BROWSER_SANDBOX is required/);
+    delete required.env.TARSEE_BROWSER_SANDBOX;
+    const c = fakeChromium(noUsableSandbox(), "ok");
+    await assert.rejects(required.launch(c), /TARSEE_BROWSER_SANDBOX is required/);
+    assert.deepEqual(sandboxes(c), [true]);
+    assert.equal(required.modes.length, 1);
+  });
+
+  it("the setting stays out of the browser's environment", async () => {
+    const { launch } = withSetting("required");
+    const chromium = fakeChromium();
+    await launch(chromium);
+    assert.deepEqual(chromium.calls[0].env, LINUX);
+    assert.deepEqual(browserEnv({ ...WINDOWS, TARSEE_BROWSER_SANDBOX: "required" }, "win32"), WINDOWS);
+  });
+
+  it("tarsee_railway never sets it on Tarsee's own service, so the AI can't change it", async () => {
+    const { selfServiceRefusal } = await import("../src/lib/railway-admin.js");
+    for (const name of ["TARSEE_BROWSER_SANDBOX", "tarsee_browser_sandbox"]) {
+      for (const value of ["auto", "required"]) assert.ok(selfServiceRefusal(name, value), `${name}=${value} is refused`);
+    }
   });
 });
 
@@ -544,7 +779,7 @@ describe("tarsee_browser's launch: launches that overlap on one launcher", () =>
   it("the reviewer's case: a sandbox failure while a sandboxed launch is under way is thrown, not worked around", async () => {
     const chromium = heldChromium();
     const logs = [];
-    const launch = makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" });
+    const launch = makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" });
     const first = launch(chromium);
     const second = launch(chromium);
     await turn();
@@ -588,7 +823,7 @@ describe("tarsee_browser's launch: launches that overlap on one launcher", () =>
   it("once the launch under way fails too, the next sandbox failure may go on without it, as on a machine that can't sandbox", async () => {
     const chromium = heldChromium();
     const logs = [];
-    const launch = makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" });
+    const launch = makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" });
     const first = launch(chromium);
     const second = launch(chromium);
     await turn();
@@ -609,7 +844,7 @@ describe("tarsee_browser's launch: launches that overlap on one launcher", () =>
   it("a browser started without the sandbox while another launch got it working is closed, not handed out", async () => {
     const chromium = heldChromium();
     const logs = [];
-    const launch = makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" });
+    const launch = makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" });
     const first = launch(chromium);
     await turn();
     chromium.launches[0].fail(sandboxError()); // nothing under way, nothing worked: it goes on without
@@ -633,7 +868,7 @@ describe("tarsee_browser's launch: launches that overlap on one launcher", () =>
   it("a browser started without the sandbox while a sandboxed launch is under way is closed too", async () => {
     const chromium = heldChromium();
     const logs = [];
-    const launch = makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" });
+    const launch = makeBrowserLauncher({ log: logInto(logs), env: LINUX, platform: "linux" });
     const first = launch(chromium);
     await turn();
     chromium.launches[0].fail(sandboxError());
@@ -893,23 +1128,57 @@ describe("tarsee_browser's one browser: lib/tools.js goes through the session", 
   let launches;
   let executeTool;
   const quiet = { warn: console.warn };
+  const warned = [];
   const ctx = {};
 
+  before(async () => {
+    ({ chromium } = playwright);
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tarsee-browser-launch-"));
+    process.env.TARSEE_STATE_DIR = tmp;
+    process.env.TARSEE_WORKSPACE_DIR = path.join(tmp, "workspace");
+    process.env.TARSEE_DATA_DIR = path.join(tmp, "data");
+    console.warn = (...args) => { warned.push(args.join(" ")); };
+    ({ executeTool } = await import("../src/lib/tools.js"));
+  });
+
   after(async () => {
+    delete process.env.TARSEE_BROWSER_SANDBOX;
     await executeTool?.("browser", { action: "close" }, ctx);
     if (chromium) delete chromium.launch;
     console.warn = quiet.warn;
     if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
   });
 
+  it("under TARSEE_BROWSER_SANDBOX=required, a bare 'No usable sandbox!': the browser tool says why and what the owner can do", async () => {
+    // The server's own launcher reads the setting once, at its first launch: this one.
+    process.env.TARSEE_BROWSER_SANDBOX = "required";
+    const sandboxes = [];
+    try {
+      chromium.launch = async (options) => {
+        sandboxes.push(options.chromiumSandbox);
+        throw noUsableSandbox();
+      };
+      for (let i = 0; i < 2; i++) {
+        const answer = await executeTool("browser", { action: "get_text" }, ctx);
+        assert.match(answer, /^Browser error \(get_text\): Failed to launch browser: Chromium's sandbox didn't start, and TARSEE_BROWSER_SANDBOX is required, so tarsee_browser doesn't run the browser without it\./);
+        assert.match(answer, /Each call tries the sandbox again/);
+        assert.match(answer, /don't run Tarsee as root, and let its user create user namespaces/);
+        assert.match(answer, /set TARSEE_BROWSER_SANDBOX to auto/);
+        assert.match(answer, /No usable sandbox!/, "with Chromium's reason");
+      }
+      assert.deepEqual(sandboxes, [true, true], "nothing launched without the sandbox");
+      const modes = warned.filter((m) => MODE_LINE.test(m));
+      assert.equal(modes.length, 1, "the server's log says which mode is in force, once");
+      assert.match(modes[0], /TARSEE_BROWSER_SANDBOX is required/);
+      assert.equal(warned.filter((m) => /TARSEE_BROWSER_SANDBOX is required, so/.test(m)).length, 2, "and each refusal");
+      assert.ok(!warned.some((m) => /runs without it/.test(m)));
+    } finally {
+      delete process.env.TARSEE_BROWSER_SANDBOX;
+      delete chromium.launch;
+    }
+  });
+
   it("calls at once share one launch; a replaced browser and the close action close it", async () => {
-    ({ chromium } = playwright);
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tarsee-browser-launch-"));
-    process.env.TARSEE_STATE_DIR = tmp;
-    process.env.TARSEE_WORKSPACE_DIR = path.join(tmp, "workspace");
-    process.env.TARSEE_DATA_DIR = path.join(tmp, "data");
-    console.warn = () => {};
-    ({ executeTool } = await import("../src/lib/tools.js"));
     launches = gatedLaunches();
     chromium.launch = async (options) => {
       assert.equal(options.chromiumSandbox, true, "the sandbox, through browser-launch.js");
@@ -970,7 +1239,7 @@ describe("tarsee_browser's launch in a real Chromium", { skip }, () => {
   });
 
   it("runs sandboxed where it can (or says it can't), with site isolation on, under the minimal environment", async () => {
-    browser =await makeBrowserLauncher({ log: (m) => logs.push(m), env: { ...process.env, ...secretEnv() } })(realChromium);
+    browser = await makeBrowserLauncher({ log: logInto(logs), env: { ...process.env, ...secretEnv(), TARSEE_BROWSER_SANDBOX: "auto" } })(realChromium);
 
     const cdp = await browser.newBrowserCDPSession();
     const { arguments: args } = await cdp.send("Browser.getBrowserCommandLine");
@@ -990,8 +1259,32 @@ describe("tarsee_browser's launch in a real Chromium", { skip }, () => {
     assert.ok(targetInfos.some((t) => t.type === "iframe" && t.url.includes("localhost")), "the cross-site frame is out of process");
   });
 
+  it("under TARSEE_BROWSER_SANDBOX=required: sandboxed where it can, else refused, never without", async () => {
+    const said = [];
+    const modes = [];
+    let sandboxed;
+    try {
+      sandboxed = await makeBrowserLauncher({ log: logInto(said, modes), env: { ...process.env, TARSEE_BROWSER_SANDBOX: "required" } })(realChromium);
+    } catch (err) {
+      // A machine that can't sandbox Chromium (run as root, or no user namespaces): refused, saying so.
+      assert.match(err.message, /TARSEE_BROWSER_SANDBOX is required, so tarsee_browser doesn't run the browser without it/);
+      assert.equal(said.length, 1);
+      return;
+    }
+    try {
+      const cdp = await sandboxed.newBrowserCDPSession();
+      const { arguments: args } = await cdp.send("Browser.getBrowserCommandLine");
+      assert.ok(!args.includes("--no-sandbox"), "the sandbox is on");
+      assert.deepEqual(said, []);
+      assert.equal(modes.length, 1);
+      assert.match(modes[0], /TARSEE_BROWSER_SANDBOX is required/);
+    } finally {
+      await sandboxed.close();
+    }
+  });
+
   it("a browser that's replaced goes with the pop-ups its page opened", async () => {
-    const launch = makeBrowserLauncher({ log: () => {} });
+    const launch = makeBrowserLauncher({ log: () => {}, env: { ...process.env, TARSEE_BROWSER_SANDBOX: "auto" } });
     const session = makeBrowserSession({ launch: () => launch(realChromium), openPage });
     try {
       const first = await session.page();
