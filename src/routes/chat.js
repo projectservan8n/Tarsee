@@ -23,6 +23,7 @@ import { effectiveContextWindow } from "../ai/context-limits.js";
 import { placeFilesOnPage, forgetChatFiles } from "../lib/chat-files.js";   // the chat's files, kept with it
 import { keepUploadedFiles, noteReceivedFiles, viewablePath, sendViewable } from "../lib/sent-files.js";
 import { callTurn, CALL_HINT, CALL_TURN_REMINDER } from "../lib/voice-call.js";   // a voice call's turns (public/js/call.js)
+import { liveSessionId } from "../middleware/auth.js";   // the owner's sign-in, for the owner's commands
 
 /**
  * Broadcast an SSE-like event to all connected WebSocket clients and record
@@ -414,8 +415,10 @@ chatRouter.post("/send", async (req, res) => {
       conversationId: convId,
       channelManager: req.app.get("channelManager"),
       db: req.app.get("db"),
-      // The dashboard's chat, behind the owner's login: the owner's commands (/cron, /briefing, /webhook) work here.
-      platform: "web",
+      // The dashboard's chat, signed in: the owner's commands (/cron, /briefing, /webhook) work here. The API token alone
+      // isn't the owner (the AI's shell can read it, and the dashboard sends it too), so without a live sign-in this is
+      // "api", and commands.js refuses those commands as not the owner's.
+      platform: liveSessionId(req) ? "web" : "api",
     });
 
     if (cmdResult.handled) {

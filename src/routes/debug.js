@@ -305,6 +305,8 @@ export const ALLOWED_COMMANDS = {
         const s = getHeartbeatStatus();
         return [
           `Running:   ${s.running ? "Yes" : "No"}`,
+          // HEARTBEAT.md text the owner hasn't OK'd doesn't run (lib/automation-approval.js), timer or not.
+          `Waiting for your OK: ${s.waitingForOwner ? "Yes. HEARTBEAT.md changed outside Settings, so the heartbeat runs nothing until you OK it in Settings > Automation (Let it run)." : "No"}`,
           `Last run:  ${s.lastRun || "Never"}`,
           `Run count: ${s.runCount || 0}`,
           `Last result: ${s.lastResult?.slice(0, 100) || "(none)"}`,

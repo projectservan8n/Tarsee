@@ -1,9 +1,24 @@
 import { Router } from "express";
-import { validatePassword, createSession, destroySession, recordFailedAttempt, clearFailedAttempts, requireAuth, sessionMaxAgeMs, rateLimitAuth } from "../middleware/auth.js";
+import { validatePassword, createSession, destroySession, recordFailedAttempt, clearFailedAttempts, requireAuth, sessionCookieMaxAgeMs, rateLimitAuth, liveSessionId } from "../middleware/auth.js";
 import { generateCsrfCookie } from "../middleware/security.js";
 import config from "../config/env.js";
 
 export const authRouter = Router();
+
+/**
+ * The sign-in's cookie. The browser keeps it past the sign-in itself (sessionCookieMaxAgeMs), so a tab left open
+ * after the sign-in ran out still sends it, and an owner-only action it asks for is told "your sign-in has run out"
+ * (middleware/auth.js signInEnded) rather than refused in the words meant for the API token the page sends too.
+ */
+function setSessionCookie(res, sessionId) {
+  res.cookie("tarsee_session", sessionId, {
+    httpOnly: true,
+    sameSite: "Strict",
+    secure: config.NODE_ENV === "production",
+    maxAge: sessionCookieMaxAgeMs(),
+    path: "/",
+  });
+}
 
 /**
  * POST /api/auth/login
@@ -37,13 +52,7 @@ authRouter.post("/login", rateLimitAuth, (req, res) => {
   const auditLog = req.app.get("auditLog");
   auditLog?.log({ action: "auth.login", actor: "user", ip: req.ip });
 
-  res.cookie("tarsee_session", sessionId, {
-    httpOnly: true,
-    sameSite: "Strict",
-    secure: config.NODE_ENV === "production",
-    maxAge: sessionMaxAgeMs(), // kept in lockstep with the server-side session
-    path: "/",
-  });
+  setSessionCookie(res, sessionId);
 
   // Do NOT return the API token here — fetch it separately via /api/auth/api-token
   // (session-authenticated) so it doesn't end up in access logs or browser history.
@@ -62,10 +71,13 @@ authRouter.get("/api-token", requireAuth, (_req, res) => {
 
 /**
  * POST /api/auth/logout
+ * Ends this device's sign-in: the one its cookie names, also when the API token comes with it (the dashboard sends
+ * both, and sessionAuth then names the request by the token, without the sign-in's id).
  */
 authRouter.post("/logout", (req, res) => {
-  if (req.auth?.sessionId) {
-    destroySession(req.auth.sessionId);
+  const sessionId = req.auth?.sessionId || liveSessionId(req);
+  if (sessionId) {
+    destroySession(sessionId);
   }
   res.clearCookie("tarsee_session", { path: "/" });
   res.json({ ok: true });
@@ -87,6 +99,9 @@ authRouter.get("/csrf", (req, res) => {
 });
 
 authRouter.get("/status", (req, res) => {
+  // The dashboard asks this first as it opens. A live sign-in's cookie is set again with the lifetime it has now, so a
+  // cookie from before the browser kept it past the sign-in gets that too.
+  if (req.auth?.method === "session" && req.auth.sessionId) setSessionCookie(res, req.auth.sessionId);
   res.json({
     authenticated: req.auth?.authenticated || false,
     method: req.auth?.method || null,

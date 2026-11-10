@@ -145,11 +145,32 @@ function bytesFrom(s, max, from) {
 }
 
 /**
+ * What a chat's system prompt says in place of HEARTBEAT.md text that waits for the owner's OK
+ * (lib/automation-approval.js), or that it couldn't be checked against it.
+ */
+const HEARTBEAT_WAITING_NOTE = "<!-- Heartbeat Tasks (HEARTBEAT.md): waiting for the owner's OK, so not shown -->\n"
+  + "HEARTBEAT.md was changed outside Settings and the owner hasn't OK'd it, so no heartbeat check runs. "
+  + "It runs only once the owner clicks Let it run in Settings > Automation (or saves it there). "
+  + "Don't tell the owner it is set up or running until then; read the file if you need what it says.";
+const HEARTBEAT_UNCHECKED_NOTE = "<!-- Heartbeat Tasks (HEARTBEAT.md): not checked against the owner's OK, so not shown -->\n"
+  + "HEARTBEAT.md runs only text the owner has OK'd in Settings > Automation (Let it run). "
+  + "Don't tell the owner it is set up or running unless they have; read the file if you need what it says.";
+
+/**
  * Get the full bootstrap context for system prompt injection.
- * Order: AGENTS → SOUL → IDENTITY → USER → TOOLS → MEMORY
+ * Order: AGENTS → SOUL → IDENTITY → USER → TOOLS → MEMORY → HEARTBEAT
+ *
+ * HEARTBEAT.md is shown as the heartbeat's tasks only when the owner has OK'd its text (opts.heartbeatWaiting false,
+ * from lib/automation-approval.js automationStatus). Text that waits for their OK is left out, with a line saying no
+ * check runs: it doesn't run, and shown here the AI read it as live and told the owner the check was set up. It is also
+ * text nobody has reviewed (the AI may have written it from a web page or an email it read), which would otherwise
+ * reach every chat with the weight of the system prompt, and the AI can still read the file when asked about it. A
+ * change made through the shell can't be caught when it is made; this line is how the AI learns of it.
+ * @param {object} [opts]
+ * @param {boolean|null} [opts.heartbeatWaiting] true: HEARTBEAT.md holds text the owner hasn't OK'd; null: not known
  * @returns {string}
  */
-export function getBootstrapContext() {
+export function getBootstrapContext({ heartbeatWaiting = null } = {}) {
   const files = [
     { name: "AGENTS.md", label: "Agent Rules" },
     { name: "SOUL.md", label: "Soul & Personality" },
@@ -183,6 +204,14 @@ export function getBootstrapContext() {
 
     const raw = readWorkspaceFile(name);
     if (!raw || raw.trim().length < 5) continue;
+
+    if (name === "HEARTBEAT.md" && heartbeatWaiting !== false) {
+      // Only text with something to do needs the owner's OK: the default file (a heading and comments) is shown as before.
+      if (getHeartbeatContext()) {
+        sections.push(heartbeatWaiting === true ? HEARTBEAT_WAITING_NOTE : HEARTBEAT_UNCHECKED_NOTE);
+        continue;
+      }
+    }
 
     const content = truncateContent(raw, WORKSPACE_FILE_MAX_BYTES, name);
     sections.push(`<!-- ${label} (${name}) -->\n${content}`);

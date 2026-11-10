@@ -169,7 +169,7 @@ export function createTarseeMcp(ctx, opts = {}) {
 
       tool(
         "tarsee_write_file",
-        "Write or overwrite a Tarsee workspace file. Use for updating personality, identity, memory, or user notes.",
+        "Write or overwrite a Tarsee workspace file. Use for updating personality, identity, memory, or user notes. HEARTBEAT.md (the heartbeat's checks) and BOOT.md (what runs when Tarsee restarts) can be written too, but what you write there doesn't run until the owner OKs it in Settings > Automation (Let it run; for BOOT.md, Run at each restart): tell the owner so, and never say it is set up or running before then. The same goes for a change made with your own file or shell tools.",
         { filename: z.string().describe("Workspace filename"), content: z.string().describe("Full content to write") },
         async (args) => {
           const result = await executeTool("write_file", args, ctx);

@@ -2,6 +2,7 @@ import { MemoryStore } from "../db/memory.js";
 import { getSkillsPromptContext } from "./skills-engine.js";
 import { getLearningHint } from "./personality-learner.js";
 import { getBootstrapContext, readWorkspaceFile } from "./workspace-files.js";
+import { automationStatus } from "./automation-approval.js";
 import { readAndArchiveCheckpoint } from "./checkpoint.js";
 import { getCredentialInventory, renderInventoryPromptSection } from "./credential-inventory.js";
 
@@ -66,8 +67,10 @@ export function buildSystemPromptParts({
   channelHint = "",
   channelManager = null,
 }) {
-  // 1. Workspace files: AGENTS → SOUL → IDENTITY → USER → TOOLS → MEMORY
-  const bootstrapContext = getBootstrapContext();
+  // 1. Workspace files: AGENTS → SOUL → IDENTITY → USER → TOOLS → MEMORY → HEARTBEAT, the last only if the owner OK'd it
+  let heartbeatWaiting = null;
+  try { heartbeatWaiting = automationStatus(settingsStore, "HEARTBEAT.md").waiting; } catch { /* not known: left out */ }
+  const bootstrapContext = getBootstrapContext({ heartbeatWaiting });
 
   // 2. DB memories (brief supplementary — top 10 instead of 20)
   const memoryStore = new MemoryStore(db);

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { Router } from "express";
-import { validateSessionFromRequest } from "../middleware/auth.js";
+import { validateSessionFromRequest, signInEnded, signInRanOut } from "../middleware/auth.js";
 import { csrfProtect } from "../middleware/security.js";
 import { SettingsStore, isAiKeySlot, isEmptySetting, OLD_VOICE_KEY } from "../db/settings.js";
 import { getProvider, isShipped, shippedProviders, checkKeySlot } from "../ai/provider-registry.js";
@@ -532,6 +532,8 @@ settingsRouter.get("/cron", async (_req, res) => {
  * Who asks to switch a scheduled task on, or to add one switched on:
  *   "owner"       the owner's own dashboard: signed in (the session cookie), with the page's CSRF token.
  *   "stale-page"  signed in, but the page's CSRF token has run out (the dashboard fetches a fresh one and asks again).
+ *   "signed-out"  the dashboard after its sign-in ran out: the sign-in's cookie, no longer on (signInEnded), and the API
+ *                 token the page still sends. Not the owner, but told to sign in again rather than of the token.
  *   "token"       anything else, the API token alone above all.
  * The API token is never enough. Tarsee saves it in the state folder (api.token) unless TARSEE_API_TOKEN is set, and the
  * AI's shell runs as the same user, so with the token alone the AI could OK the task it has just scheduled. The
@@ -542,8 +544,8 @@ settingsRouter.get("/cron", async (_req, res) => {
  */
 function whoIsAsking(req) {
   if (req.auth?.method === "session") return "owner";
-  if (req.auth?.method !== "bearer" || !validateSessionFromRequest(req)) return "token";
-  return hasPageCsrfToken(req) ? "owner" : "stale-page";
+  if (req.auth?.method === "bearer" && validateSessionFromRequest(req)) return hasPageCsrfToken(req) ? "owner" : "stale-page";
+  return signInEnded(req) ? "signed-out" : "token";
 }
 
 /** Whether a request carries the page's CSRF token: csrfProtect's own check, run as for a signed-in request. */
@@ -606,7 +608,8 @@ settingsRouter.post("/cron", async (req, res) => {
  * Pausing only stops runs: anyone signed in or with the API token may. Switching on is the owner's OK (a task the AI
  * made stops waiting and gets its timer), so it takes:
  *   - the owner's dashboard (whoIsAsking): the API token alone gets 403, with needsSignIn (the dashboard then asks the
- *     owner to sign in again: its sign-in ran out and it went on with the token);
+ *     owner to sign in again: its sign-in ran out and it went on with the token). A tab whose sign-in has run out is
+ *     told just that ("signed-out"); a caller with no sign-in at all gets the API token's own words;
  *   - seen: what the owner's row showed (CronCore.seenOf): { schedule, prompt }, or { schedule, action }. A task that no
  *     longer matches it (changed where it is saved after the list was drawn) gets 409, and the page draws the list
  *     again; a switch-on without it gets 400.
@@ -620,6 +623,7 @@ settingsRouter.patch("/cron/:id", async (req, res) => {
   if (enabled) {
     const who = whoIsAsking(req);
     if (who === "stale-page") return res.status(403).json({ error: STALE_PAGE });
+    if (who === "signed-out") return res.status(403).json({ error: signInRanOut("switch the task on"), needsSignIn: true });
     if (who !== "owner") return res.status(403).json({ error: tokenCantSwitchOn(id), needsSignIn: true });
   }
   try {

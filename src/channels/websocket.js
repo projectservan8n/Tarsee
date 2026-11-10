@@ -1,6 +1,6 @@
 import { WebSocketServer } from "ws";
 import crypto from "node:crypto";
-import { validateApiToken, validateSessionFromRequest } from "../middleware/auth.js";
+import { validateApiToken, validateSessionFromRequest, liveSessionId, isLiveSession } from "../middleware/auth.js";
 import { chatStream } from "../ai/router.js";
 import { onEvent, eventsSince, eventsForTurn, activeTurnFor, activeTurnList, queuedTurnList, recentEvents } from "../lib/live-bus.js";
 import { ConversationStore } from "../db/conversations.js";
@@ -105,10 +105,14 @@ export function setupWebSocket(server, db, app) {
 
     // Auth via query token or session cookie
     const isAuthed = (token && validateApiToken(token)) || validateSessionFromRequest(req);
+    // The owner's sign-in, if the upgrade came with one: the owner's commands need it (handleChat), the API token
+    // alone isn't enough. Checked again at each command, so signing out or running out ends it for this socket too.
+    const signInId = liveSessionId(req);
 
     if (isAuthed) {
       wss.handleUpgrade(req, socket, head, (ws) => {
         ws.isAuthenticated = true;
+        ws._signInId = signInId;
         wss.emit("connection", ws, req);
       });
     } else {
@@ -360,7 +364,9 @@ async function handleChat(ws, msg, convStore, settingsStore) {
       settingsStore,
       convStore,
       conversationId,
-      platform: "web", // was missing — platform-gated commands misrouted
+      // The dashboard ("web") only with the owner's sign-in still on, from the upgrade; the API token alone (?token=
+      // or the auth message) is "api", which commands.js doesn't take for the owner (/cron, /briefing, /webhook).
+      platform: isLiveSession(ws._signInId) ? "web" : "api",
       // handleChat is a top-level function — the `db` handle from
       // setupWebSocket() is NOT in scope here, so reach it via the store.
       db: convStore?.db,

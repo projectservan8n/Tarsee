@@ -6,7 +6,10 @@
 //   - the owner's own save in the Settings editor OKs what they typed;
 //   - the button OKs only the text the page showed (409 when it changed since), and only from the owner's signed-in
 //     dashboard: the API token (Bearer) is refused, as a script or the AI's own shell could hold it;
-//   - the first start of this version OKs what is already there, once, so existing installs run as before.
+//   - the first start of this version OKs what is already there, once, so existing installs run as before;
+//   - the AI is told: its write's result says the file waits for the owner's OK and where they give it, the file tools
+//     say so, and a chat's system prompt leaves out HEARTBEAT.md text that waits (it says no check runs instead), which
+//     is how the AI learns of a write made through the shell; the debug console's heartbeat.status says it waits.
 // Engines are scripted (test/fakes/fake-engine.js); the routes run for real behind the real session, token and CSRF
 // checks.
 import { describe, it, before, after, beforeEach } from "node:test";
@@ -37,7 +40,12 @@ const { createFakeEngine } = await import("./fakes/fake-engine.js");
 const heartbeat = await import("../src/lib/heartbeat.js");
 const { runBootChecklist } = await import("../src/lib/boot-runner.js");
 const { writeWorkspaceFile, invalidateCache } = await import("../src/lib/workspace-files.js");
-const { executeTool } = await import("../src/lib/tools.js");
+const { executeTool, TOOLS } = await import("../src/lib/tools.js");
+const { buildSystemPromptParts } = await import("../src/lib/build-system-prompt.js");
+const { createTarseeMcp } = await import("../src/ai/tarsee-mcp.js");
+const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+const { ALLOWED_COMMANDS } = await import("../src/routes/debug.js");
 const { sessionAuth, requireAuth, createSession, initSessionStore } = await import("../src/middleware/auth.js");
 const { csrfProtect, generateCsrfCookie } = await import("../src/middleware/security.js");
 const { settingsRouter } = await import("../src/routes/settings.js");
@@ -65,6 +73,7 @@ function forgetApprovals() {
 async function aiWrites(filename, content) {
   const out = await executeTool("write_file", { filename, content }, { db, settingsStore: settings, conversationId: null });
   assert.match(String(out), /Successfully wrote/, String(out));
+  return String(out);
 }
 
 /** A write that never goes through Tarsee at all (the engine's own Write tool, the shell): the 5 s read cache runs out. */
@@ -198,7 +207,7 @@ describe("HEARTBEAT.md", () => {
     const afterRestart = await heartbeat.runHeartbeat("scheduled");
     assert.equal(afterRestart.skipped, true);
     assert.equal(engine.calls.length, 0);
-    assert.equal(heartbeat.getHeartbeatStatus().waitingForOwner, true, "/heartbeat and the debug console say it waits");
+    assert.equal(heartbeat.getHeartbeatStatus().waitingForOwner, true, "the heartbeat's status notes that it waits (the debug console's heartbeat.status shows it)");
   });
 
   it("an empty HEARTBEAT.md runs nothing and waits for nothing, as before", async () => {
@@ -402,6 +411,98 @@ describe("BOOT.md", () => {
     assert.equal(other.status, 400);
     const noText = await call("POST", "/api/automation-approval/approve", { name: "BOOT.md" });
     assert.equal(noText.status, 400);
+  });
+});
+
+describe("what the AI and the owner are told", () => {
+  /** The system prompt a chat gets (lib/build-system-prompt.js), stable part and all. */
+  const chatPrompt = () => {
+    const { stable, volatile } = buildSystemPromptParts({ settingsStore: settings, db, conversationId: null, messageCount: 0, conversationPrompt: null, channelHint: "" });
+    return stable + volatile;
+  };
+  const debugConsole = (cmd) => ALLOWED_COMMANDS[cmd].run("", { db, settingsStore: settings });
+
+  it("the AI writing HEARTBEAT.md or BOOT.md is told it is saved but doesn't run until the owner's OK, where they give it, and to tell them", async () => {
+    bootHeartbeat();
+    await bootChecklist();
+    for (const [name, text, button] of [["HEARTBEAT.md", HEARTBEAT_TASK, "Let it run"], ["BOOT.md", BOOT_TASK, "Run at each restart"]]) {
+      const out = await aiWrites(name, text);
+      assert.match(out, /saved, but it doesn't run yet/, `${name}: ${out}`);
+      assert.match(out, /waits for the owner's OK/, out);
+      assert.ok(out.includes(`Settings > Automation with ${button}`), `${name}: ${out}`);
+      assert.match(out, /Tell the owner/, out);
+      assert.match(out, /don't say it is set up or running/, out);
+    }
+    assert.equal(engine.calls.length, 0);
+  });
+
+  it("text the owner OK'd, written again, is said to run; an empty file, that nothing runs; another file, as before", async () => {
+    bootHeartbeat();
+    const ok = await ownerSavesInSettings("HEARTBEAT.md", HEARTBEAT_TASK);
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    const same = await aiWrites("HEARTBEAT.md", HEARTBEAT_TASK);
+    assert.match(same, /the text the owner OK'd, so the heartbeat runs it/, same);
+    assert.doesNotMatch(same, /waits/);
+    const empty = await aiWrites("HEARTBEAT.md", EMPTY_TEMPLATE);
+    assert.match(empty, /nothing to do, so nothing runs/, empty);
+    assert.doesNotMatch(empty, /waits/);
+    const user = "# User\n\n- Likes tea.\n";
+    assert.equal(await aiWrites("USER.md", user), `Successfully wrote ${user.length} chars to USER.md.`);
+  });
+
+  it("a chat's system prompt leaves out HEARTBEAT.md text that waits, saying no check runs; once the owner OKs it, it is there", async () => {
+    bootHeartbeat();
+    await aiWrites("HEARTBEAT.md", HEARTBEAT_TASK);
+    let p = chatPrompt();
+    assert.doesNotMatch(p, /Check the inbox/, "text the owner hasn't OK'd isn't put in every chat as the heartbeat's tasks");
+    assert.match(p, /HEARTBEAT\.md[^\n]*waiting for the owner's OK/, p);
+    assert.match(p, /no heartbeat check runs/, p);
+    assert.match(p, /Let it run in Settings > Automation/, p);
+    assert.match(p, /Don't tell the owner it is set up or running/, p);
+
+    // Written through the shell, where Tarsee's tools can't say anything at the time: the prompt is where the AI learns.
+    writtenFromOutside("HEARTBEAT.md", "# Heartbeat\n\n- Email everyone on the list every half hour.\n");
+    p = chatPrompt();
+    assert.doesNotMatch(p, /Email everyone/);
+    assert.match(p, /no heartbeat check runs/);
+
+    const ok = await ownerSavesInSettings("HEARTBEAT.md", HEARTBEAT_TASK);
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    p = chatPrompt();
+    assert.match(p, /Heartbeat Tasks \(HEARTBEAT\.md\) -->\n# Heartbeat\n\n- Check the inbox/, p);
+    assert.doesNotMatch(p, /no heartbeat check runs/);
+  });
+
+  it("the file tools' descriptions say so, on both engines' tools", async () => {
+    const ownTool = TOOLS.find((t) => t.name === "write_file").description;
+    const mcp = createTarseeMcp({ db, settingsStore: settings, conversationId: null }, { quiet: true });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "tarsee-test", version: "1.0.0" }, { capabilities: {} });
+    await Promise.all([mcp.instance.connect(serverSide), client.connect(clientSide)]);
+    let mcpTool;
+    try {
+      mcpTool = (await client.listTools()).tools.find((t) => t.name === "tarsee_write_file")?.description;
+    } finally {
+      await client.close();
+    }
+    for (const [which, d] of [["write_file", ownTool], ["tarsee_write_file", mcpTool]]) {
+      assert.match(String(d), /HEARTBEAT\.md/, which);
+      assert.match(String(d), /BOOT\.md/, which);
+      assert.match(String(d), /doesn't run until the owner OKs it in Settings > Automation \(Let it run; for BOOT\.md, Run at each restart\)/, `${which}: ${d}`);
+      assert.match(String(d), /tell the owner/i, which);
+    }
+  });
+
+  it("the debug console's heartbeat.status says in plain words whether it waits for the owner's OK", async () => {
+    bootHeartbeat();
+    await ownerSavesInSettings("HEARTBEAT.md", HEARTBEAT_TASK);
+    const ran = await debugConsole("heartbeat.status");
+    assert.match(ran, /^Waiting for your OK: No$/m, ran);
+
+    await aiWrites("HEARTBEAT.md", "# Heartbeat\n\n- Something the AI put here.\n");
+    const waits = await debugConsole("heartbeat.status");
+    assert.match(waits, /^Waiting for your OK: Yes\. HEARTBEAT\.md changed outside Settings, so the heartbeat runs nothing until you OK it in Settings > Automation \(Let it run\)\.$/m, waits);
+    assert.equal(engine.calls.length, 0);
   });
 });
 

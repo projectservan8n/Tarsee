@@ -57,7 +57,11 @@ function extractSessionToken(req) {
 }
 
 // --- Active sessions ---
-const sessions = new Map(); // sessionId → { createdAt, ip }
+// A sign-in's id is the tarsee_session cookie, and only the browser keeps it. Tarsee keeps a hash of it (sessionKey),
+// in this Map and in the sessions table, and looks a cookie up by its hash. The AI's shell runs as the same user and
+// can read tarsee.db, so with the id itself stored there it could act as the signed-in owner (a free CSRF token from
+// GET /api/auth/csrf does the rest). A hash read from the database signs nobody in: no cookie hashes to it.
+const sessions = new Map(); // sessionKey(id) → { createdAt, ip }
 // Persisted to SQLite (see initSessionStore): the in-memory Map is a
 // write-through cache hydrated from disk on boot, so a restart or a Railway
 // deploy no longer logs the whole team out. Railway REPLACES the container on
@@ -67,10 +71,21 @@ const SESSION_MAX_AGE_MS =
   (Number(process.env.TARSEE_SESSION_MAX_AGE_DAYS) || 30) * 24 * 60 * 60 * 1000;
 let _sessionDb = null;
 
+/** How a stored sign-in is marked as a hash: an older Tarsee stored the id itself (64 hex characters, no mark). */
+const HASHED = "sha256:";
+
 /**
- * Wire the sessions cache to SQLite. Creates the table, drops expired rows,
- * and hydrates surviving sessions so logins persist across restarts. Called
- * once at boot from server.js, right after initDb.
+ * What Tarsee keeps of a sign-in's id: "sha256:" and its SHA-256. The id is 32 random bytes, so a plain hash is enough:
+ * there is nothing to guess.
+ */
+function sessionKey(sessionId) {
+  return HASHED + crypto.createHash("sha256").update(String(sessionId), "utf8").digest("hex");
+}
+
+/**
+ * Wire the sessions cache to SQLite. Creates the table, drops expired rows, hashes any id an older Tarsee stored as it
+ * was (its owner stays signed in: their cookie hashes to the new row), and hydrates surviving sessions so logins
+ * persist across restarts. Called once at boot from server.js, right after initDb.
  */
 export function initSessionStore(db) {
   _sessionDb = db;
@@ -81,9 +96,16 @@ export function initSessionStore(db) {
   )`);
   const cutoff = Date.now() - SESSION_MAX_AGE_MS;
   try { db.prepare("DELETE FROM sessions WHERE created_at < ?").run(cutoff); } catch {}
+  try {
+    const hashed = hashStoredIds(db);
+    if (hashed) console.log(`[auth] ${hashed} sign-in(s) were stored as their ids; now only a hash of each is kept, and they stay signed in`);
+  } catch (err) {
+    console.error("[auth] could not hash the stored sign-ins:", err.message);
+  }
+  sessions.clear();
   let restored = 0;
   try {
-    for (const r of db.prepare("SELECT id, created_at, ip FROM sessions").all()) {
+    for (const r of db.prepare(`SELECT id, created_at, ip FROM sessions WHERE id LIKE '${HASHED}%'`).all()) {
       sessions.set(r.id, { createdAt: r.created_at, ip: r.ip });
       restored++;
     }
@@ -91,8 +113,36 @@ export function initSessionStore(db) {
   console.log(`[auth] session store ready — ${restored} session(s) restored from disk (survive restarts)`);
 }
 
-/** Session lifetime in ms — exported so cookie maxAge cannot drift from it. */
+/**
+ * Replace each sign-in stored as its id (an older Tarsee) with its hash. The old text is wiped from the file as it is
+ * replaced (secure_delete), and the write-ahead log is written back and emptied, so the ids are gone from disk too.
+ * Returns how many were hashed.
+ */
+function hashStoredIds(db) {
+  const plain = db.prepare(`SELECT id FROM sessions WHERE id NOT LIKE '${HASHED}%'`).all();
+  if (!plain.length) return 0;
+  // Back to what it was, by name: SQLite reads it as 0, 1 or 2, but takes "2" back as ON, not FAST.
+  const before = ["OFF", "ON", "FAST"][Number(db.pragma("secure_delete", { simple: true }))] || "OFF";
+  db.pragma("secure_delete = ON");
+  try {
+    const rename = db.prepare("UPDATE OR REPLACE sessions SET id = ? WHERE id = ?");
+    db.transaction(() => { for (const { id } of plain) rename.run(sessionKey(id), id); })();
+  } finally {
+    db.pragma(`secure_delete = ${before}`);
+  }
+  try { db.pragma("wal_checkpoint(TRUNCATE)"); } catch {}
+  return plain.length;
+}
+
+/** Session lifetime in ms. */
 export function sessionMaxAgeMs() { return SESSION_MAX_AGE_MS; }
+
+/**
+ * How long the browser keeps the sign-in's cookie: past the sign-in itself (400 days, the most browsers keep one), so
+ * a tab left open after its sign-in ran out still sends it, and the server can say "your sign-in has run out" rather
+ * than speak of the API token the page sends too (signInEnded). The id is no use once the sign-in has ended.
+ */
+export function sessionCookieMaxAgeMs() { return Math.max(SESSION_MAX_AGE_MS + 24 * 60 * 60 * 1000, 400 * 24 * 60 * 60 * 1000); }
 
 // Clean up expired sessions every 30 minutes (memory + disk).
 setInterval(() => {
@@ -108,22 +158,59 @@ setInterval(() => {
 }, 30 * 60_000).unref();
 
 /**
- * Creates a new session and returns the session ID.
+ * Creates a new session and returns the session ID (for the cookie; only its hash is kept).
  */
 export function createSession(ip) {
   const sessionId = crypto.randomBytes(32).toString("hex");
+  const key = sessionKey(sessionId);
   const createdAt = Date.now();
-  sessions.set(sessionId, { createdAt, ip });
-  try { _sessionDb?.prepare("INSERT OR REPLACE INTO sessions (id, created_at, ip) VALUES (?, ?, ?)").run(sessionId, createdAt, ip); } catch {}
+  sessions.set(key, { createdAt, ip });
+  try { _sessionDb?.prepare("INSERT OR REPLACE INTO sessions (id, created_at, ip) VALUES (?, ?, ?)").run(key, createdAt, ip); } catch {}
   return sessionId;
 }
 
 /**
- * Destroys a session.
+ * Destroys a session, by the id its cookie holds.
  */
 export function destroySession(sessionId) {
-  sessions.delete(sessionId);
-  try { _sessionDb?.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId); } catch {}
+  if (typeof sessionId !== "string" || !sessionId) return;
+  const key = sessionKey(sessionId);
+  sessions.delete(key);
+  try { _sessionDb?.prepare("DELETE FROM sessions WHERE id = ?").run(key); } catch {}
+}
+
+/** Whether a cookie's id is a sign-in that is still on (not run out, not signed out). */
+export function isLiveSession(sessionId) {
+  if (typeof sessionId !== "string" || !sessionId) return false;
+  const key = sessionKey(sessionId);
+  const session = sessions.get(key);
+  if (!session) return false;
+  if (Date.now() - session.createdAt >= SESSION_MAX_AGE_MS) {
+    sessions.delete(key);
+    return false;
+  }
+  return true;
+}
+
+/** The id of the request's sign-in (its tarsee_session cookie) while it is on, else null. */
+export function liveSessionId(req) {
+  const sessionId = extractSessionToken(req);
+  return sessionId && isLiveSession(sessionId) ? sessionId : null;
+}
+
+/**
+ * Whether the request carries a sign-in's cookie that is no longer on: the sign-in ran out (or was signed out
+ * elsewhere, or the server no longer knows it). The browser keeps the cookie past the sign-in (sessionCookieMaxAgeMs),
+ * so this is a dashboard tab left open, told apart from an API caller, which sends no such cookie.
+ */
+export function signInEnded(req) {
+  const sessionId = extractSessionToken(req);
+  return !!sessionId && !isLiveSession(sessionId);
+}
+
+/** The answer to an owner-only request refused because its sign-in has run out. Sign in again, then `what`. */
+export function signInRanOut(what = "try once more") {
+  return `Your sign-in has run out. Sign in again, then ${what}.`;
 }
 
 /**
@@ -156,20 +243,14 @@ export function validateSessionFromRequest(req) {
   // the volume. A missing password must mean "no session can be valid", not
   // "every request is valid" — callers already fall back to the API token,
   // which is always generated.
-  const sessionToken = extractSessionToken(req);
-  if (!sessionToken || !sessions.has(sessionToken)) return false;
-
-  const session = sessions.get(sessionToken);
-  if (Date.now() - session.createdAt > SESSION_MAX_AGE_MS) {
-    sessions.delete(sessionToken);
-    return false;
-  }
-  return true;
+  return !!liveSessionId(req);
 }
 
 /**
  * Middleware: Extracts auth info and attaches to req.auth.
  * Does NOT enforce auth — use requireAuth for that.
+ * method "bearer" when the API token is sent, even with a sign-in's cookie (the dashboard sends both): what only the
+ * owner may do checks the sign-in itself (liveSessionId).
  */
 export function sessionAuth(req, _res, next) {
   req.auth = { authenticated: false, method: null };
@@ -182,24 +263,20 @@ export function sessionAuth(req, _res, next) {
   }
 
   // Check session cookie (for WebUI)
-  const sessionToken = extractSessionToken(req);
-  if (sessionToken && sessions.has(sessionToken)) {
-    const session = sessions.get(sessionToken);
-    if (Date.now() - session.createdAt < SESSION_MAX_AGE_MS) {
-      req.auth = { authenticated: true, method: "session", sessionId: sessionToken };
-      return next();
-    }
-    sessions.delete(sessionToken);
-  }
+  const sessionId = liveSessionId(req);
+  if (sessionId) req.auth = { authenticated: true, method: "session", sessionId };
 
   next();
 }
 
 /**
- * Middleware: Requires authentication. Returns 401 if not authenticated.
+ * Middleware: Requires authentication. Returns 401 if not authenticated. A sign-in that has run out is told so, with
+ * needsSignIn (the dashboard then shows its sign-in screen): the owner's OK for HEARTBEAT.md and BOOT.md goes with the
+ * sign-in alone (js/settings.js _ownerPost), so this is where it is refused.
  */
 export function requireAuth(req, res, next) {
   if (req.auth?.authenticated) return next();
+  if (signInEnded(req)) return res.status(401).json({ error: signInRanOut(), needsSignIn: true });
   res.status(401).json({ error: "Authentication required" });
 }
 

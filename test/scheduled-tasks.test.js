@@ -570,6 +570,83 @@ describe("a run still going when the task's timer is made again", () => {
   });
 });
 
+describe("a failed run waiting to retry stops only when the owner stops that task", () => {
+  const BROKE = [{ type: "error", message: "The AI broke." }, { type: "done", stopReason: "error" }];
+  /** A one-time task of the owner's, saved as the Settings form saves it, that comes every second until it has run. */
+  const oneTime = (id) => ({ id, schedule: "* * * * * *", prompt: "Remind me to call the bank", channel: "web:default", enabled: true, createdBy: "owner", once: true });
+  const firstTry = async () => {
+    const deadline = Date.now() + 8000;
+    while (!engine.calls.length && Date.now() < deadline) await sleep(50);
+    assert.equal(engine.calls.length, 1, "the first try ran, and failed");
+  };
+  const runEnds = async (id) => {
+    const deadline = Date.now() + 15_000;
+    while (statusOf(id)?.running && Date.now() < deadline) await sleep(100);
+    assert.notEqual(statusOf(id)?.running, true, "the run ended");
+  };
+
+  it("every timer made again (as /briefing off does) while a one-time task waits to retry: it is tried again, and goes once it worked", { timeout: 30_000 }, async () => {
+    engine = createFakeEngine([BROKE, answer("Reminder sent.")]);
+    registerEngine("claude-code", engine);
+    try {
+      assert.match(await owner("/briefing on"), /enabled/i);
+      settings.set("cron.jobs", JSON.stringify([...cron.loadCronJobs(), oneTime("cron_once")]));
+      cron.startCronScheduler();
+      await firstTry();
+      assert.match(await owner("/briefing off"), /disabled/i);   // every timer is made again; the retry waits 5 seconds
+      assert.equal(statusOf("cron_once")?.scheduled, true, "the one-time task, untouched by the owner, is still on");
+      await runEnds("cron_once");
+      assert.equal(engine.calls.length, 2, "the failed run was tried again: the owner never paused it");
+      assert.equal(statusOf("cron_once"), undefined, "and the one-time task went, once it had worked");
+    } finally {
+      settings.delete("briefing.hour");
+    }
+  });
+
+  it("paused while a one-time task waits to retry: not tried again, and kept, paused, not deleted", { timeout: 30_000 }, async () => {
+    engine = createFakeEngine([BROKE, answer("Reminder sent.")]);
+    registerEngine("claude-code", engine);
+    settings.set("cron.jobs", JSON.stringify([oneTime("cron_once_paused")]));
+    cron.startCronScheduler();
+    await firstTry();
+    cron.setCronJobEnabled("cron_once_paused", false);   // the retry waits 5 seconds
+    cron.startCronScheduler();                          // and every timer made again meanwhile changes nothing
+    await runEnds("cron_once_paused");
+    assert.equal(engine.calls.length, 1, "not tried again once paused: no more paid runs");
+    assert.equal(statusOf("cron_once_paused")?.state, "off", "kept, paused, for the owner to switch on again or delete");
+  });
+
+  it("deleted while it waits to retry: not tried again", { timeout: 30_000 }, async () => {
+    engine = createFakeEngine([BROKE, answer("Reminder sent.")]);
+    registerEngine("claude-code", engine);
+    settings.set("cron.jobs", JSON.stringify([{ ...oneTime("cron_deleted"), once: false }]));
+    cron.startCronScheduler();
+    await firstTry();
+    assert.equal(cron.removeCronJob("cron_deleted"), true);   // the retry waits 5 seconds
+    const deadline = Date.now() + 15_000;
+    while (cron.getCronStatus().jobs.some((j) => j.running) && Date.now() < deadline) await sleep(100);
+    await sleep(6000);
+    assert.equal(engine.calls.length, 1, "not tried again once deleted");
+  });
+
+  it("deleted and saved again under the same id while it waits to retry (/briefing off, then on): the old run isn't tried again", { timeout: 30_000 }, async () => {
+    engine = createFakeEngine([BROKE, answer("Briefing.")]);
+    registerEngine("claude-code", engine);
+    const task = { ...oneTime("cron_same_id"), once: false };
+    settings.set("cron.jobs", JSON.stringify([task]));
+    cron.startCronScheduler();
+    await firstTry();
+    assert.equal(cron.removeCronJob("cron_same_id"), true);   // the retry waits 5 seconds
+    // Back under its fixed id, as /briefing on saves the briefing, at a time that won't come while the test runs.
+    cron.addCronJob({ id: "cron_same_id", schedule: "0 9 29 2 *", prompt: task.prompt, createdBy: "owner" });
+    const deadline = Date.now() + 15_000;
+    while (cron.getCronStatus().jobs.some((j) => j.running) && Date.now() < deadline) await sleep(100);
+    await sleep(6000);
+    assert.equal(engine.calls.length, 1, "the deleted task's run is not tried again: the owner stopped it");
+    assert.equal(statusOf("cron_same_id")?.scheduled, true, "the task saved again is on, for its own time");
+  });
+});
+
 // ---------------------------------------------------------------------------------------------------------------
 
 describe("every saved task has its own id", () => {
@@ -747,6 +824,57 @@ const { parentPort, workerData } = require("node:worker_threads");
       assert.equal(nodeCron.validate(s), true, `${s} is one node-cron takes`);
     }
     assert.equal(check("not a schedule"), null, "anything else is node-cron's to judge: it says no without hanging");
+  });
+});
+
+describe("a weekday step of 7 is refused in words that fit what was written", () => {
+  // In the weekday part 7 is Sunday, which node-cron reads as 0, so a step of 7 there is a step of 0 (refused above).
+  // Counting 7 days or more on from the first day goes past the end of the week, so what was written means that first
+  // day alone: "1-5/7" is Mondays only, not Sundays.
+  const DAYS = ["Sundays", "Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays"];
+
+  it("names the day it means and the schedule to write instead, and still refuses it", () => {
+    for (const [s, day, instead] of [
+      ["0 9 * * */7", "Sundays", "0 9 * * 0"],
+      ["0 9 * * 0-6/7", "Sundays", "0 9 * * 0"],
+      ["0 9 * * */70", "Sundays", "0 9 * * 0"],
+      ["0 9 * * 1-5/7", "Mondays", "0 9 * * 1"],
+      ["30 8 * * mon-fri/7", "Mondays", "30 8 * * mon"],
+      ["0 9 * * 5/7", "Fridays", "0 9 * * 5"],
+      ["0 9 * * 1,3-5/7", "Wednesdays", "0 9 * * 1,3"],
+      ["0 0 9 * * 2-6/7", "Tuesdays", "0 0 9 * * 2"],
+    ]) {
+      const problem = cron.unsafeScheduleProblem(s);
+      assert.match(String(problem), /weekday part.*step of 0/s, `${s}: still refused: ${problem}`);
+      assert.ok(problem.includes(`means ${day} only: write "${instead}"`), `${s}: ${problem}`);
+      for (const other of DAYS) if (other !== day) assert.ok(!problem.includes(`${other} only`), `${s} isn't ${other} only: ${problem}`);
+      assert.doesNotMatch(problem, /node-cron|regex|NaN|undefined/, "plain words");
+      assert.equal(cron.unsafeScheduleProblem(instead), null, `${instead} is fine`);
+      assert.equal(nodeCron.validate(instead), true, `${instead} is one node-cron takes`);
+    }
+    assert.ok(!cron.unsafeScheduleProblem("0 9 * * 1-5/7").includes("Sundays only"), "Monday to Friday is never Sundays only");
+  });
+
+  it("never suggests a schedule it would refuse itself: with a second step of 7 in the part, it explains without one", () => {
+    for (const s of ["0 9 * * 1-5/7,*/7", "0 9 * * */7,2-4/7", "0 9 * * 1/7,3/7"]) {
+      const problem = cron.unsafeScheduleProblem(s);
+      assert.match(String(problem), /weekday part.*step of 0/s, `${s}: still refused: ${problem}`);
+      const suggested = /write "([^"]+)"/.exec(problem)?.[1];
+      if (suggested) {
+        assert.equal(cron.unsafeScheduleProblem(suggested), null, `${s}: the suggested "${suggested}" is refused too: ${problem}`);
+        assert.equal(nodeCron.validate(suggested), true, `${s}: the suggested "${suggested}" is one node-cron takes`);
+      }
+      assert.match(problem, /must be 1 or more/, "it still says what a step must be");
+    }
+  });
+
+  it("a day's name as the step is said to be one, and still refused", () => {
+    for (const s of ["0 9 * * */sun", "0 9 * * 1-5/sunday"]) {
+      const problem = cron.unsafeScheduleProblem(s);
+      assert.match(String(problem), /weekday part.*step of 0/s, `${s}: ${problem}`);
+      assert.match(problem, /is a day's name/, problem);
+      assert.ok(!DAYS.some((d) => problem.includes(`${d} only`)), problem);
+    }
   });
 });
 

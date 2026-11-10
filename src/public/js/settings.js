@@ -3307,7 +3307,8 @@ const Settings = {
   /**
    * A POST only the owner's signed-in dashboard may make, so it goes without the API token that js/api.js adds to
    * every other request: the server refuses the token here (routes/automation-approval.js). The session cookie and
-   * the CSRF token only; a CSRF token that has run out is fetched fresh, once.
+   * the CSRF token only; a CSRF token that has run out is fetched fresh, once. Refused for the sign-in (401: it has
+   * run out, and the server says so), it shows the sign-in screen with that message, which `data.error` carries.
    */
   async _ownerPost(url, body) {
     const send = (csrf) => fetch(url, {
@@ -3322,7 +3323,12 @@ const Settings = {
       const why = await res.clone().json().catch(() => ({}));
       if (/CSRF token/i.test(why.error || "")) res = await send(await API.refreshCsrf());
     }
-    const data = await res.json().catch(() => ({}));
+    const data = (await res.json().catch(() => null)) || {};
+    if (res.status === 401 || data.needsSignIn) {
+      // No cookie at all (a browser that dropped it): the sign-in this page opened with has run out all the same.
+      if (!data.needsSignIn) data.error = "Your sign-in has run out. Sign in again, then try once more.";
+      API.signInAgain(data.error);
+    }
     return { status: res.status, data };
   },
 
@@ -3386,8 +3392,9 @@ const Settings = {
               App.showToast(enabled ? "Task switched on" : "Task paused", "success");
             } else {
               App.showToast(answer.error || `The task wasn't changed (HTTP ${res.status})`, "error");
-              // The sign-in ran out and the page went on with the API token, which can't switch a task on.
-              if (answer.needsSignIn) window.dispatchEvent(new CustomEvent("tarsee:auth-required"));
+              // The sign-in ran out and the page went on with the API token, which can't switch a task on: the sign-in
+              // screen, with the server's words for why.
+              if (answer.needsSignIn) API.signInAgain(answer.error);
             }
           } catch (err) {
             App.showToast(err.message, "error");

@@ -79,7 +79,7 @@ export async function runHeartbeat(reason = "scheduled") {
   const heartbeatContent = gate.prompt;
 
   // Skipped quietly while the default AI can't take a turn (every 30 minutes, a failure would only be noise); the
-  // reason names the AI and what to fix (/heartbeat shows it).
+  // reason names the AI and what to fix.
   const ai = await defaultAiReadiness(_settingsStore);
   if (!ai.ready) {
     return { skipped: true, reason: ai.reason };
@@ -218,7 +218,7 @@ export function stopHeartbeat() {
 }
 
 /**
- * Get heartbeat status for /heartbeat command and API.
+ * The heartbeat's status, for the debug console's heartbeat.status (routes/debug.js), which shows waitingForOwner.
  * @returns {object}
  */
 export function getHeartbeatStatus() {

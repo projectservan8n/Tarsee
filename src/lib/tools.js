@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import config from "../config/env.js";
 import { readWorkspaceFile, writeWorkspaceFile, appendDailyLog } from "./workspace-files.js";
+import { isAutomationFile, automationStatus } from "./automation-approval.js";
 import { runCmd } from "./run-cmd.js";
 
 /**
@@ -38,7 +39,7 @@ export const TOOLS = [
 
   {
     name: "write_file",
-    description: "Write or overwrite the contents of a workspace file. Use this to update your personality (SOUL.md), identity (IDENTITY.md), user notes (USER.md), long-term memory (MEMORY.md), tools (TOOLS.md), or agent rules (AGENTS.md).",
+    description: "Write or overwrite the contents of a workspace file. Use this to update your personality (SOUL.md), identity (IDENTITY.md), user notes (USER.md), long-term memory (MEMORY.md), tools (TOOLS.md), or agent rules (AGENTS.md). HEARTBEAT.md (the heartbeat's checks) and BOOT.md (what runs when Tarsee restarts) can be written too, but what you write there doesn't run until the owner OKs it in Settings > Automation (Let it run; for BOOT.md, Run at each restart): tell the owner so, and never say it is set up or running before then.",
     input_schema: {
       type: "object",
       properties: {
@@ -946,7 +947,7 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
             ctx.settingsStore.set("identity.name", nameMatch[1].trim());
           }
         }
-        return `Successfully wrote ${content.length} chars to ${filename}.`;
+        return `Successfully wrote ${content.length} chars to ${filename}.${isAutomationFile(filename) ? automationWriteNote(filename, ctx.settingsStore) : ""}`;
       }
 
       case "list_files": {
@@ -1773,6 +1774,24 @@ function isAllowedFile(filename) {
 
 function isAllowedWriteFile(filename) {
   return WORKSPACE_FILES.includes(filename);
+}
+
+/**
+ * What the AI is told after writing HEARTBEAT.md or BOOT.md (lib/automation-approval.js): text the owner hasn't OK'd
+ * doesn't run, so it is told to say so rather than tell the owner the check is set up. Without the settings it can't
+ * check, and says the file waits: whatever the AI writes waits, unless it is the very text the owner OK'd.
+ */
+function automationWriteNote(filename, settingsStore) {
+  const boot = filename === "BOOT.md";
+  let status = null;
+  try {
+    status = settingsStore ? automationStatus(settingsStore, filename) : null;
+  } catch {
+    // not known: said to wait, below
+  }
+  if (status?.empty) return " It holds nothing to do, so nothing runs.";
+  if (status?.approved) return ` It is the text the owner OK'd, so ${boot ? "it runs when Tarsee restarts" : "the heartbeat runs it"}.`;
+  return ` It is saved, but it doesn't run yet: ${filename} written from a chat waits for the owner's OK. Tell the owner so, and that they can read it and switch it on in Settings > Automation with ${boot ? "Run at each restart" : "Let it run"}. Until they do, nothing in it runs, so don't say it is set up or running.`;
 }
 
 function truncate(str, max) {

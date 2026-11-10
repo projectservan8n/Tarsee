@@ -26,7 +26,8 @@ import config from "../config/env.js";
  * A task that asks the AI (no `action`) has no seconds field and runs at most once every MIN_PROMPT_GAP_MINUTES
  * (promptScheduleProblem), checked when it is made: tasks saved before the rule keep running as they are. A run still
  * going when the task's next time comes is skipped, not stacked, even when the task's timer was made again meanwhile
- * (runScheduled).
+ * (runScheduled). A failed run is tried again unless the owner paused, switched off or deleted that task meanwhile
+ * (ownerLetItGoOn): its timer made again for another reason doesn't stop it.
  *
  * Every saved task has its own id, never used before by another (newJobId); two saved by an older version with one id
  * are told apart when the scheduler starts (giveEachTaskItsOwnId). No schedule reaches node-cron before
@@ -88,6 +89,12 @@ const activeJobs = new Map(); // id → cron.ScheduledTask
 const jobState = new Map();   // id → { lastRun, lastStatus, lastError, consecutiveErrors }
 const runsGoing = new Map();  // id → how many runs of it are going right now (the "Running" state)
 const runInProgress = new Set(); // ids of tasks whose scheduled run is going: a time that comes meanwhile is skipped
+/**
+ * id → how many times the owner has paused or switched off that task. A failed run waiting to retry stops when this
+ * changed since the run began, even if the owner switched the task on again since (ownerLetItGoOn). A timer made again
+ * for another reason (startCronScheduler, which /briefing off calls) doesn't change it.
+ */
+const ownerStops = new Map();
 
 const JOB_TIMEOUT_MS = BACKGROUND_DEFAULTS.TIMEOUT_MS; // hard wall-clock cap per job
 const MAX_CONSECUTIVE_ERRORS = 5; // Auto-disable after this many failures
@@ -164,6 +171,7 @@ export function unsafeScheduleProblem(schedule) {
     return `That schedule is ${schedule.length} characters long, far too long for one: a schedule is 5 short parts, like "0 9 * * *" for 9 AM every day.`;
   }
   const parts = schedule.replace(/\s{2,}/g, " ").trim().split(" ");
+  const written = [...parts];
   if (parts.length === 5) parts.unshift("0");
   // node-cron stops at the missing month part, before it writes out any range, and just says no.
   if (parts.length < 6) return null;
@@ -175,9 +183,7 @@ export function unsafeScheduleProblem(schedule) {
   for (let i = 0; i < parts.length; i++) {
     const step = stepUnder1(parts[i]);
     if (step === null) continue;
-    if (i === 5 && stepUnder1(weekdayAsWritten) === null) {
-      return `"${text}": the weekday part "${weekdayAsWritten}" works out to a step of ${step}, because 7 and "sun" both mean Sunday, which is day 0 to the scheduler. A step must be 1 or more; for Sundays only, write 0, like "0 9 * * 0".`;
-    }
+    if (i === 5 && stepUnder1(weekdayAsWritten) === null) return weekdayStepOf0(text, written, parts[5]);
     return `"${text}" has a step of ${step}: the number after "/" is how far to move on each time, so it must be 1 or more, like "*/15" in the minute part for every 15 minutes.`;
   }
   for (const part of parts) {
@@ -187,6 +193,46 @@ export function unsafeScheduleProblem(schedule) {
     }
   }
   return null;
+}
+
+/** The days of the week by their number to the scheduler, for the owner to read. */
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/**
+ * Why a weekday part with no step under 1 as written ("*\/7", "1-5/7", "*\/sun") still works out to a step of 0, in
+ * words that fit what was written. node-cron reads the part's first 7 as 0 and day names as numbers, so the step that
+ * became 0 was a 7 (7, 70...) or Sunday's name. Counting 7 days or more on from the first day goes past the end of the
+ * week, so a step of 7 means that day alone: the message names it ("1-5/7" is Mondays only, "*\/7" Sundays only) and
+ * gives the schedule to write instead. `written`: the schedule's parts as written; `read`: its weekday part as
+ * node-cron reads it.
+ */
+function weekdayStepOf0(text, written, read) {
+  const at = written.length === 5 ? 4 : 5;
+  const part = written[at];
+  const where = `"${text}": in the weekday part "${part}"`;
+  const pieces = part.split(",");
+  const readPieces = read.split(",");
+  const k = readPieces.length === pieces.length ? readPieces.findIndex((p) => stepUnder1(p) !== null) : -1;
+  const piece = pieces[k] ?? "";
+  const slash = piece.indexOf("/");
+  const [from, step] = slash < 0 ? ["", ""] : [piece.slice(0, slash), piece.slice(slash + 1)];
+
+  if (/^[a-z]+$/i.test(step)) {
+    return `${where}, the step "${step}" is a day's name, Sunday, which the scheduler reads as day 0, so it works out to a step of 0. The number after "/" is how many days to move on each time, so it must be 1 or more, like "1-5/2" for Monday, Wednesday and Friday.`;
+  }
+  const first = from === "*" ? "0" : from.split("-")[0];
+  let day = /^(\d+|[a-z]+)$/i.test(first) ? Number(numbersForNames(first, WEEKDAY_NAMES, 0)) : NaN;
+  if (day === 7) day = 0;
+  if (/^\d+$/.test(step) && Number.isInteger(day) && day >= 0 && day <= 6) {
+    const instead = [...written];
+    instead[at] = pieces.map((p, i) => (i === k ? first : p)).join(",");
+    const suggestion = instead.join(" ");
+    // Offered only when it is one Tarsee takes itself: another piece with a step of 7 ("1-5/7,*/7") would be refused too.
+    if (unsafeScheduleProblem(suggestion) === null && cron.validate(suggestion)) {
+      return `${where}, the scheduler reads the first 7 as 0 (7 and 0 both mean Sunday), so "${piece}" works out to a step of 0. A step must be 1 or more. Counting ${step} days on from ${DAY_NAMES[day]} goes past the end of the week, so "${piece}" means ${DAY_NAMES[day]}s only: write "${suggestion}".`;
+    }
+  }
+  return `${where}, the scheduler reads the first 7 as 0 and day names as numbers (7, 0 and "sun" all mean Sunday, day 0), so it works out to a step of 0. A step must be 1 or more, like "1-5/2" for Monday, Wednesday and Friday.`;
 }
 
 /** A part with node-cron's names turned into its numbers: each name, in the order given, becomes its place plus `first`. */
@@ -419,9 +465,11 @@ function unscheduleJob(id) {
  * timer of the task started (switching a task off and on, or startCronScheduler, makes a new timer, and node-cron's
  * noOverlap knows only its own), or one the owner started by hand. Otherwise two paid runs of one task would overlap.
  *
- * The run belongs to this timer: once it is no longer the task's (the owner paused or deleted the task, even if they
- * switched it on again, or every timer was made again), the run isn't started and gets no more retries. The task's
- * new timer starts the next run, at its next time.
+ * A time from a timer that is no longer the task's starts nothing. Once started, the run, retries included, stops only
+ * when the owner paused, switched off or deleted that task (even if they switched it on again since): a timer made
+ * again for another reason, as /briefing off does to every timer, doesn't stop it (ownerLetItGoOn). A one-time task
+ * goes once its run ends, unless the owner stopped the run: a paused one stays, paused, for them to switch on or
+ * delete.
  */
 function runScheduled(job, timer) {
   if (activeJobs.get(job.id) !== timer) return undefined;
@@ -430,9 +478,9 @@ function runScheduled(job, timer) {
     return undefined;
   }
   runInProgress.add(job.id);
-  return runCronJobWithRetry(job, { stillOn: () => activeJobs.get(job.id) === timer }).then(() => {
+  return runCronJobWithRetry(job, { stillOn: ownerLetItGoOn(job.id) }).then((result) => {
     // Auto-delete one-time jobs after they fire
-    if (job.once) {
+    if (job.once && !result?.stoppedByOwner) {
       console.log(`[cron] One-time job "${job.id}" completed, removing`);
       removeCronJob(job.id);
     }
@@ -444,8 +492,23 @@ function runScheduled(job, timer) {
 }
 
 /**
- * Run a cron job with retry and timeout. opts.stillOn: asked before each retry; false (the owner paused or deleted the
- * task meanwhile, even if they switched it on again) ends it there, so a paused run never starts another paid try.
+ * For a run of task `id` starting now: whether it may go on. True while the task is still saved and on, and the owner
+ * hasn't paused or switched it off since (ownerStops), even if they switched it on again. Nothing else counts: its
+ * timer made again (startCronScheduler, as /briefing off does to every timer) leaves the run going.
+ */
+function ownerLetItGoOn(id) {
+  const stopsAtStart = ownerStops.get(id) || 0;
+  return () => {
+    if ((ownerStops.get(id) || 0) !== stopsAtStart) return false;
+    const saved = loadCronJobs().find((j) => j.id === id);
+    return !!saved && shouldRun(saved);
+  };
+}
+
+/**
+ * Run a cron job with retry and timeout. opts.stillOn: asked before each retry; false (the owner paused, switched off
+ * or deleted the task meanwhile, even if they switched it on again: ownerLetItGoOn) ends it there, so a paused run
+ * never starts another paid try. The result then says stoppedByOwner.
  */
 export function runCronJobWithRetry(job, opts = {}) {
   return tracked(job.id, () => runWithRetry(job, opts));
@@ -487,7 +550,7 @@ async function runWithRetry(job, { stillOn = null } = {}) {
       await new Promise((r) => setTimeout(r, delay));
       if (stillOn && !stillOn()) {
         console.log(`[cron] Job "${job.id}" was paused or deleted: no more retries`);
-        return result;
+        return { ...result, stoppedByOwner: true };
       }
     } else {
       console.error(`[cron] Job "${job.id}" failed after ${MAX_RETRIES + 1} attempts: ${result.error}`);
@@ -741,6 +804,8 @@ export function setCronJobEnabled(id, enabled) {
   if (!job) return null;
   job.enabled = !!enabled;
   if (job.enabled) delete job.awaitingOwner;
+  // Paused or switched off: a failed run of it waiting to retry stops there (ownerLetItGoOn), even if it is switched on again.
+  if (!job.enabled) ownerStops.set(id, (ownerStops.get(id) || 0) + 1);
   saveCronJobs(jobs);
 
   unscheduleJob(id);
@@ -764,6 +829,9 @@ export function removeCronJob(id) {
 
   unscheduleJob(id);
   jobState.delete(id);
+  // Deleting is a stop too, counted, never forgotten: /briefing off then on saves the briefing again under its fixed id,
+  // and a run of the deleted one still waiting to retry must not go on as if the new one were its own (ownerLetItGoOn).
+  ownerStops.set(id, (ownerStops.get(id) || 0) + 1);
 
   return true;
 }
