@@ -82,15 +82,21 @@ describe("TTS engine choice: Phonon is the default", () => {
     assert.deepEqual(l.used, ["phonon"], "Edge TTS is only built when it is needed");
   });
 
-  it("an install with an ElevenLabs key that never saved an engine keeps ElevenLabs", async () => {
+  it("Phonon is the default for everything: a saved ElevenLabs key alone doesn't make the paid engine speak", async () => {
     const saved = process.env.ELEVENLABS_API_KEY;
     delete process.env.ELEVENLABS_API_KEY;
     try {
-      assert.equal(enginePreference(store({ "voice.elevenlabs.apiKey": "sk_test" })), "elevenlabs");
-      assert.equal(enginePreference(store({ "voice.elevenlabs.apiKey": "sk_test", "voice.engine": "phonon" })), "phonon", "a saved choice wins");
+      assert.equal(enginePreference(store({ "voice.elevenlabs.apiKey": "sk_test" })), "phonon", "a key is not a choice");
       process.env.ELEVENLABS_API_KEY = "sk_env";
       const withGetApiKey = { ...store(), getApiKey: (id) => (id === "elevenlabs" ? process.env.ELEVENLABS_API_KEY : null) };
-      assert.equal(enginePreference(withGetApiKey), "elevenlabs", "a key in the environment counts too");
+      assert.equal(enginePreference(withGetApiKey), "phonon", "nor is one in the environment");
+      const elevenlabs = fakeEngine("elevenlabs");
+      const l = loaders({ phonon: fakeEngine("phonon"), "edge-tts": fakeEngine("edge-tts"), elevenlabs });
+      await initTTSEngine(store({ "voice.elevenlabs.apiKey": "sk_test" }), l);
+      assert.equal(getTTSEngine().name, "phonon");
+      assert.ok(!l.used.includes("elevenlabs"), "ElevenLabs isn't even built");
+      // Picking it in Settings > Voice is what makes it speak.
+      assert.equal(enginePreference(store({ "voice.elevenlabs.apiKey": "sk_test", "voice.engine": "elevenlabs" })), "elevenlabs");
     } finally {
       if (saved === undefined) delete process.env.ELEVENLABS_API_KEY; else process.env.ELEVENLABS_API_KEY = saved;
     }
