@@ -3,7 +3,7 @@
 // The list is the server's (lib/model-picker.js), built here from a catalog like the CLI's; with every AI, the list the
 // server builds (lib/model-catalog.js getModelGroups, the body of GET /api/models): one group per ready AI, search,
 // badges, the "a message at a time" note, the warning when a chat's AI is gone, the effort clamp.
-import { describe, it, after } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -127,13 +127,14 @@ const { setCatalogModels } = await import("../src/ai/provider-registry.js");
 const STATES = { claude: "ready", anthropic: "needs-key", chatgpt: "ready", openai: "needs-key", openrouter: "ready", deepseek: "ready", local: "blocked-keys-only" };
 const SETTINGS = new Map([["ai.openrouter.verified", { "qwen/qwen3-coder": { engine: "codex", at: "2026-11-01", engineVersion: "0.167.0" } }]]);
 const store = { get: (k) => (SETTINGS.has(k) ? SETTINGS.get(k) : null) };
-__setForTests({ catalogDirs: [path.join(tmp, "none")], cli: { bin: "/x", catalog: { issuedAt: 1, config: {
+const CLI = { bin: "/x", catalog: { issuedAt: 1, config: {
   models: [
     { id: "claude-opus-5-5", name: "Opus 5.5", section: "main", runtime: { family: "opus" }, thinking: levels("medium") },
     { id: "claude-sonnet-5-5", name: "Sonnet 5.5", section: "main", runtime: { family: "sonnet" }, thinking: levels("medium") },
     { id: "claude-haiku-5-5", name: "Haiku 5.5", section: "main", runtime: { family: "haiku" }, thinking: levels("medium") },
   ],
-} } } });
+} } };
+__setForTests({ catalogDirs: [path.join(tmp, "none")], cli: CLI });
 setCatalogModels("chatgpt-models", [{ id: "gpt-6-luna", label: "GPT-6 Luna", efforts: ["low", "medium", "high"], default: true }]);
 setCatalogModels("openrouter", [
   { id: "qwen/qwen3-coder", label: "Qwen: Qwen3 Coder", vendor: "qwen", efforts: ["low", "high"], price: { in: 0.2, out: 0.8 } },
@@ -299,5 +300,26 @@ describe("model picker on the page: a model chosen before Tarsee had other AIs",
     assert.equal(b.model, "Sonnet 5.5");
     assert.equal(b.level, P.effortFor(b.entry, "max"));
     assert.notEqual(b.level, P.effortFor(b.entry, GD.effort), "not the default's level");
+  });
+});
+
+describe("model picker on the page: Fable's weekly-allowance note is the Claude plan's alone", () => {
+  const BOTH = { claude: "ready", anthropic: "ready", chatgpt: "needs-sign-in", openai: "needs-key", openrouter: "needs-key", deepseek: "needs-key", local: "needs-setup" };
+  let L;
+  // In before(), not at registration: the other describes build their lists while this file loads.
+  before(async () => {
+    __setForTests({ catalogDirs: [path.join(tmp, "none")], cli: { bin: "/x", catalog: { issuedAt: 1, config: { models: [
+      { id: "claude-fable-5-2", name: "Fable 5.2", section: "main", runtime: { family: "fable" }, thinking: levels("medium") },
+      { id: "claude-sonnet-5-5", name: "Sonnet 5.5", section: "main", runtime: { family: "sonnet" }, thinking: levels("medium") },
+    ] } } } });
+    L = await getModelGroups({ store, isShipped: () => true, statusFor: (id) => ({ state: BOTH[id], detail: "", fix: "" }), env: {}, listChatgptModels: async () => [] });
+    __setForTests({ catalogDirs: [path.join(tmp, "none")], cli: CLI });
+  });
+  const fableOn = (id) => P.groupEntries(P.groupsOf(L.picker).find((g) => g.provider === id)).find((e) => e.family === "fable");
+
+  it("the plan warns about its weekly allowance; an API key, billed per use, has none to warn about", () => {
+    assert.equal(P.noteFor(fableOn("claude")), "Uses usage credits past your weekly allowance");
+    assert.equal(P.noteFor(fableOn("anthropic")), null);
+    assert.ok(!/weekly/i.test(JSON.stringify(fableOn("anthropic"))), "nor anywhere in its row, its tooltip included");
   });
 });

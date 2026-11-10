@@ -130,10 +130,12 @@ function fakeApi({ needsSetup = true, needsPersonality = false, active = "claude
   const chatModels = () => {
     const list = Object.values(state.cards).filter((c) => c.shipped && c.ready && !(state.keysOnly && c.kind === "subscription"));
     list.sort((a, b) => (b.id === state.active) - (a.id === state.active));
+    // As lib/model-catalog.js buildGroup: its kind, OpenRouter searchable, and a plan's rows badged Plan.
     const groups = list.map((c) => ({
-      provider: c.id, label: c.label, defaultModel: c.model,
+      provider: c.id, label: c.label, kind: c.kind, defaultModel: c.model, searchable: c.id === "openrouter",
       sections: [{ id: "main", label: null, entries: (MODELS[c.id] || []).filter((m) => !m.needsVerification && m.inMenu !== false).map((m) => ({
         id: m.id, name: NAMES[m.id] || m.label, provider: c.id, ref: `${c.id}:${m.id}`, ...(NAMES[m.id] ? { alias: m.id, family: m.id } : {}),
+        badges: c.kind === "subscription" ? [{ text: "Plan", tone: "neutral", title: `Included in your ${c.label.replace(/ plan$/, "")} plan` }] : [],
       })) }],
     }));
     const unavailable = Object.values(state.cards).filter((c) => c.shipped && !list.includes(c)).map((c) => ({ provider: c.id, label: c.label, state: c.state }));
@@ -1315,6 +1317,97 @@ describe("nothing goes to an AI until the owner sends it", { skip }, () => {
       const saved = api.calls.filter((c) => c.method === "POST" && c.path === "/api/settings/general").map((c) => c.body);
       assert.deepEqual(saved, [{ key: "setup.completed", value: "true" }], "skipping is remembered, so the question isn't asked again");
       assert.deepEqual(sent(api), []);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+// Each AI has its own color (tokens.css --ai-*), one per account that pays: the Claude plan and an Anthropic key run
+// the same models but must never look alike.
+describe("each AI looks like itself: its own color, and how it is paid for", { skip }, () => {
+  const color = (loc) => loc.evaluate((el) => getComputedStyle(el).color);
+
+  it("the model list: a colored group per AI saying how it is paid; the button's dot is the chat's AI", async () => {
+    const { page, errors, context } = await openPage({ needsSetup: false, ready: ["claude", "anthropic", "openrouter", "deepseek"], active: "claude" });
+    try {
+      await page.locator("#sessionModel", { hasText: "Sonnet 5.5" }).waitFor();
+      await page.locator("#modelPickerBtn").click();
+      const menu = page.locator("#modelPickerMenu");
+      await menu.waitFor();
+      const groups = await menu.locator(".mp-group[data-ai]").evaluateAll((els) => els.map((g) => ({
+        ai: g.dataset.ai,
+        name: g.querySelector(".mp-group-name")?.textContent,
+        tag: g.querySelector(".mp-ai-tag")?.textContent,
+        color: getComputedStyle(g.querySelector(".mp-group-name")).color,
+        bar: getComputedStyle(g, "::before").backgroundColor,
+        dot: getComputedStyle(g.querySelector(".ai-dot")).backgroundColor,
+        plan: [...g.querySelectorAll(".mp-badge")].some((b) => b.textContent === "Plan"),
+      })));
+      assert.deepEqual(groups.map((g) => [g.ai, g.name, g.tag]), [
+        ["claude", "Claude plan", "Plan · no cost per message"],
+        ["anthropic", "Anthropic API key", "Your key · pay per use"],
+        ["openrouter", "OpenRouter", "Your key · pay per use"],
+        ["deepseek", "DeepSeek", "Your key · pay per use"],
+      ]);
+      assert.equal(new Set(groups.map((g) => g.color)).size, 4, "four AIs, four colors");
+      for (const g of groups) assert.ok(g.bar === g.color && g.dot === g.color, `${g.ai}: its bar and dot are its color`);
+      assert.ok(!groups.some((g) => g.plan), "the heading says how it is paid, so no row repeats Plan");
+
+      // Search across the AIs: each result names its AI, with its dot.
+      await menu.locator(".mp-search").fill("sonnet");
+      const where = await menu.locator(".mp-results .mp-where").evaluateAll((els) => els.map((w) => [w.dataset.ai, w.textContent, getComputedStyle(w.querySelector(".ai-dot")).backgroundColor]));
+      assert.deepEqual(where.map(([ai, text]) => [ai, text]).sort(), [["anthropic", "Anthropic API key"], ["claude", "Claude plan"], ["openrouter", "OpenRouter"]]);
+      for (const [ai, , dot] of where) assert.equal(dot, groups.find((g) => g.ai === ai).color);
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
+
+      // The composer's button: a dot in the color of the chat's AI, and the AI named for a screen reader.
+      const btnDot = async () => page.locator("#sessionAi").evaluate((d) => ({ ai: d.dataset.ai, hidden: d.hidden, bg: getComputedStyle(d).backgroundColor }));
+      assert.deepEqual(await btnDot(), { ai: "claude", hidden: false, bg: groups[0].color });
+      assert.match(await page.locator("#modelPickerBtn").getAttribute("aria-label"), /^Sonnet 5\.5 on the Claude plan/);
+      await page.locator("#modelPickerBtn").click();
+      await menu.locator('.mp-group[data-ai="deepseek"] .mp-item').first().click();
+      await page.locator("#sessionModel", { hasText: "DeepSeek Flash" }).waitFor();
+      assert.deepEqual(await btnDot(), { ai: "deepseek", hidden: false, bg: groups[3].color });
+      assert.match(await page.locator("#modelPickerBtn").getAttribute("aria-label"), /^DeepSeek Flash on DeepSeek/);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("the header chip says it is the default AI, in that AI's color; Settings cards and the wizard's buttons carry theirs", async () => {
+    const { page, errors, context } = await openPage({ needsSetup: false, ready: ["claude", "anthropic", "deepseek"], active: "deepseek" });
+    try {
+      const chip = page.locator("#aiHeaderChip:not([hidden])");
+      await chip.waitFor();
+      assert.match(await page.locator("#aiHeaderChipText").innerText(), /^Default: DeepSeek/);
+      assert.equal(await chip.getAttribute("data-ai"), "deepseek");
+      assert.match(await chip.getAttribute("aria-label"), /default AI/i);
+      const chipName = await color(page.locator("#aiHeaderChip .ai-header-chip-ai"));
+
+      await chip.click();
+      await page.locator('.settings-tab-panel[data-tab="ai"].active').waitFor();
+      const cards = await page.locator(".ai-card[data-ai]:not([hidden])").evaluateAll((els) => els.map((c) => ({
+        ai: c.dataset.ai, edge: getComputedStyle(c).borderLeftColor, dot: getComputedStyle(c.querySelector(".channel-head h3"), "::before").backgroundColor,
+      })));
+      const claude = cards.find((c) => c.ai === "claude");
+      const anthropic = cards.find((c) => c.ai === "anthropic");
+      const deepseek = cards.find((c) => c.ai === "deepseek");
+      assert.notEqual(claude.edge, anthropic.edge, "the Claude plan's card and the Anthropic key's don't look alike");
+      for (const c of [claude, anthropic, deepseek]) assert.equal(c.dot, c.edge, `${c.ai}: its dot and its edge are one color`);
+      assert.equal(deepseek.edge, chipName, "the same AI, the same color, wherever it shows");
+
+      // The wizard's buttons for the API-key AIs.
+      await page.evaluate(() => Setup.show({}));
+      await page.getByRole("button", { name: /My own API key/ }).click();
+      const buttons = await page.locator('[data-setup="provider"]').evaluateAll((els) => els.map((b) => ({ ai: b.dataset.ai, provider: b.dataset.provider, dot: getComputedStyle(b.querySelector("strong"), "::before").backgroundColor })));
+      assert.ok(buttons.length >= 3);
+      for (const b of buttons) assert.equal(b.ai, b.provider, "each button is in its own AI's color");
+      assert.equal(buttons.find((b) => b.ai === "anthropic").dot, anthropic.edge);
+      assert.equal(new Set(buttons.map((b) => b.dot)).size, buttons.length, "no two alike");
       assert.deepEqual(errors, []);
     } finally {
       await context.close();

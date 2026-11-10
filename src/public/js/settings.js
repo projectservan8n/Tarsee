@@ -2005,13 +2005,17 @@ const Settings = {
     const G = window.ProviderGuides;
     const name = G?.get(a.provider)?.shortName || a.label;
     e.aiHeaderChip.hidden = false;
+    // The default AI, in its own color (style.css [data-ai]): a chat on another AI shows that one's color on its
+    // model button, so the two can be told apart.
+    e.aiHeaderChip.dataset.ai = a.provider;
     e.aiHeaderChip.querySelector(".channel-dot")?.setAttribute("data-tone", a.ready ? "ok" : "bad");
     if (e.aiHeaderChipText) {
-      e.aiHeaderChipText.innerHTML = `${this._esc(name)}<span class="ai-header-chip-model"> · ${this._esc(this._aiModelLabel(a.provider, a.model))}</span>`;
+      e.aiHeaderChipText.innerHTML = `<span class="ai-header-chip-label">Default: </span><span class="ai-header-chip-ai">${this._esc(name)}</span>`
+        + `<span class="ai-header-chip-model"> · ${this._esc(this._aiModelLabel(a.provider, a.model))}</span>`;
     }
     const words = a.ready ? `${a.label}: ready` : `${a.label}: ${[a.detail, a.fix].filter(Boolean).join(" ")}`;
-    e.aiHeaderChip.title = words;
-    e.aiHeaderChip.setAttribute("aria-label", `Your AI, ${words}. Open Settings, AI.`);
+    e.aiHeaderChip.title = `Your default AI, for new chats and scheduled tasks. ${words}`;
+    e.aiHeaderChip.setAttribute("aria-label", `Your default AI, ${words}. Open Settings, AI.`);
     const att = e.aiAttention;
     if (!att) return;
     if (a.ready || this._aiDismissed === `${a.provider}|${a.state}`) {

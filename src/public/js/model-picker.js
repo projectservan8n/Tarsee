@@ -37,6 +37,8 @@
   const NARROW = 640;        // below this a list opens in the menu's place
   const SEARCH_FROM = 12;    // a search box once the list holds more models than this
   const RESULTS_MAX = 50;
+  /** How each kind of AI is paid for, on its heading (lib/model-catalog.js buildGroup's kind). */
+  const PAID = { subscription: "Plan · no cost per message", key: "Your key · pay per use", local: "Free · your own machine" };
 
   function create(opts = {}) {
     let btn = null;
@@ -62,19 +64,24 @@
     }
     const same = (a, b) => !!(a && b && a.id === b.id && (a.provider || null) === (b.provider || null));
 
-    /** One model's row. `where` names its AI (in search results); `alone`: the only AI listed, so no Plan badge. */
-    function modelRow(e, i, picked, { where = null, alone = false } = {}) {
+    /**
+     * One model's row. `where` ({ ai, label }) names its AI, with its dot (search results); `inGroup`: under its AI's
+     * heading, which already says how it is paid, so no Plan badge (nor when it is the only AI listed: `alone`).
+     */
+    function modelRow(e, i, picked, { where = null, alone = false, inGroup = false } = {}) {
       const off = e.selectable === false;
       const key = i != null && i < 9 ? `<kbd class="mp-key" aria-hidden="true">${i + 1}</kbd>` : "";
       const tip = [e.description, e.note?.tip, e.priceHint].filter(Boolean).join(". ");
       const note = Core.noteFor(e);
       // Fable's note (no tone of its own) is a warning; the others are plain.
       const noteClass = e.note && e.note.tone !== "neutral" ? "mp-note is-warning" : "mp-note";
-      const detail = [where, Core.detailFor(e)].filter(Boolean).join(" · ");
-      const badges = Core.badgesFor(e).filter((b) => !(alone && b.text === "Plan")).map((b) => `<span class="mp-badge${b.tone === "warning" ? " is-warning" : ""}"${b.title ? ` title="${esc(b.title)}"` : ""}>${esc(b.text)}</span>`).join("");
+      const detail = Core.detailFor(e);
+      const whereHtml = where ? `<span class="mp-where" data-ai="${esc(where.ai || "")}"><span class="ai-dot" aria-hidden="true"></span>${esc(where.label || "")}</span>` : "";
+      const line = [whereHtml, detail ? esc(detail) : ""].filter(Boolean).join(" · ");
+      const badges = Core.badgesFor(e).filter((b) => !((alone || inGroup) && b.text === "Plan")).map((b) => `<span class="mp-badge${b.tone === "warning" ? " is-warning" : ""}"${b.title ? ` title="${esc(b.title)}"` : ""}>${esc(b.text)}</span>`).join("");
       return `<button type="button" class="mp-item" role="menuitemradio" aria-checked="${picked}" data-pick="model" data-id="${esc(Core.pickValue(e))}"${off ? ' disabled aria-disabled="true"' : ""}${tip ? ` title="${esc(tip)}"` : ""}>`
         + `<span class="mp-text"><span class="mp-text mp-row"><span class="mp-name">${esc(e.name)}</span>${badges}</span>`
-        + (detail ? `<span class="mp-note">${esc(detail)}</span>` : "")
+        + (line ? `<span class="mp-note">${line}</span>` : "")
         + (note ? `<span class="${noteClass}">${esc(note)}</span>` : "")
         + `</span><span class="mp-end">${picked ? ICON.check : key}</span></button>`;
     }
@@ -86,6 +93,9 @@
     }
 
     const head = (text, cls = "") => `<p class="mp-head${cls}" role="presentation">${text}</p>`;
+    /** An AI's heading: its dot and name in its own color (style.css [data-ai]), and how it is paid for. */
+    const aiHead = (g) => head(`<span class="ai-dot" aria-hidden="true"></span><span class="mp-group-name">${esc(g.label || "")}</span>`
+      + (PAID[g.kind] ? `<span class="mp-ai-tag">${esc(PAID[g.kind])}</span>` : ""), " mp-ai-head");
 
     function mainHtml() {
       const { picker, pick, defaults } = state();
@@ -116,12 +126,12 @@
       const body = groups.map((g, gi) => {
         const sections = Core.sectionsOf(g);
         const open = sections.filter((s) => !s.collapsed && (s.entries || []).length);
-        let html = `<div class="mp-group" role="group" aria-label="${esc(g.label || "Models")}">`;
-        if (multi || (g.provider && g.provider !== "claude")) html += head(`<span class="mp-group-name" style="font-weight:600;color:var(--text-secondary)">${esc(g.label || "")}</span>`);
+        let html = `<div class="mp-group" role="group" aria-label="${esc(g.label || "Models")}"${g.provider ? ` data-ai="${esc(g.provider)}"` : ""}>`;
+        if (multi || (g.provider && g.provider !== "claude")) html += aiHead(g);
         if (g.note) html += head(`<span class="mp-note">${esc(g.note)}</span>`);
         for (const s of open) {
           if (s.label && open.length > 1) html += head(`<span style="font-size:var(--text-xs)">${esc(s.label)}</span>`, " mp-subhead");
-          for (const e of s.entries) html += modelRow(e, e.selectable === false ? null : n++, same(e, shown), { alone: !multi });
+          for (const e of s.entries) html += modelRow(e, e.selectable === false ? null : n++, same(e, shown), { alone: !multi, inGroup: !!g.provider });
         }
         sections.forEach((s, si) => {
           if (!s.collapsed || !(s.entries || []).length) return;
@@ -143,7 +153,7 @@
       const found = Core.search(picker, query).slice(0, RESULTS_MAX);
       if (!found.length) return head(`No model matches "${esc(query)}"`);
       const alone = Core.groupsOf(picker).length < 2;
-      return found.map(({ entry, group }) => modelRow(entry, null, same(entry, shown), { where: alone ? null : group.label, alone })).join("");
+      return found.map(({ entry, group }) => modelRow(entry, null, same(entry, shown), { where: alone ? null : { ai: group.provider, label: group.label }, alone })).join("");
     }
 
     function effortHtml() {
@@ -168,8 +178,16 @@
       const shown = shownEntry();
       if (kind === "more") return (picker.more || []).map((e) => modelRow(e, null, same(e, shown))).join("");
       const s = sectionFor(kind);
+      const g = groupFor(kind);
       const alone = Core.groupsOf(picker).length < 2;
-      return s ? s.entries.map((e) => modelRow(e, null, same(e, shown), { alone })).join("") : "";
+      // An AI's list keeps its heading (on a phone its back button names it), so its rows need no Plan badge.
+      const top = g?.provider && !alone && !narrow() ? aiHead(g) : "";
+      return s ? top + s.entries.map((e) => modelRow(e, null, same(e, shown), { alone, inGroup: !!g?.provider })).join("") : "";
+    }
+
+    function groupFor(kind) {
+      const m = /^list:(\d+):/.exec(kind || "");
+      return m ? Core.groupsOf(state().picker)[Number(m[1])] || null : null;
     }
 
     function sectionFor(kind) {
@@ -239,6 +257,8 @@
       el.className = `mp-menu mp-submenu mp-${kind === "effort" ? "effort" : "list"}`;
       el.setAttribute("role", "menu");
       el.setAttribute("aria-label", name);
+      const ai = groupFor(kind)?.provider;
+      if (ai) el.dataset.ai = ai;
       const back = narrow() ? `<button type="button" class="mp-item mp-back" role="menuitem" data-back="1">${ICON.back}<span class="mp-name">${esc(name)}</span></button><div class="mp-divider" role="separator"></div>` : "";
       el.innerHTML = back + (kind === "effort" ? effortHtml() : listHtml(kind));
       document.body.appendChild(el);

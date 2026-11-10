@@ -180,7 +180,7 @@ const Setup = {
       const title = id === "claude" ? "My Claude plan" : "My ChatGPT plan";
       const off = keysOnly ? `<span class="setup-ai-choice-warn">Off while "Only use API keys" is ticked</span>`
         : this._aiShared ? `<span class="setup-ai-choice-warn">Not for shared use under ${terms[id]} terms</span>` : "";
-      choices.push(`<button type="button" class="setup-ai-choice" data-setup="choice" data-choice="${id}" aria-pressed="${this._aiChoice === id}"${keysOnly ? " disabled" : ""}>` +
+      choices.push(`<button type="button" class="setup-ai-choice" data-setup="choice" data-choice="${id}" data-ai="${id}" aria-pressed="${this._aiChoice === id}"${keysOnly ? " disabled" : ""}>` +
         `<strong>${title}</strong><span>${esc(p.pitch)}</span>${off}</button>`);
     }
     if (keyIds.length) {
@@ -215,7 +215,7 @@ const Setup = {
         const p = G.get(id);
         const c = this._aiCard(id);
         const ready = c?.ready ? ` <span class="ai-badge" data-kind="ok">Ready</span>` : "";
-        return `<button type="button" class="setup-ai-provider" data-setup="provider" data-provider="${id}" aria-pressed="${this._aiProvider === id}"><strong>${esc(p.shortName)}${ready}</strong><span>${esc(p.pitch)}</span></button>`;
+        return `<button type="button" class="setup-ai-provider" data-setup="provider" data-provider="${id}" data-ai="${id}" aria-pressed="${this._aiProvider === id}"><strong>${esc(p.shortName)}${ready}</strong><span>${esc(p.pitch)}</span></button>`;
       }).join("")}</div>`;
     }
     const id = this._aiProvider;

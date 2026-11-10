@@ -223,8 +223,18 @@
     const model = entry?.name || nameFromId(splitRef(value).model) || PROVIDER_LABELS[provider] || "Claude";
     const level = effortFor(entry, pick?.effort, defaults?.effort);
     const effort = level ? effortName(entry, level) : "";
-    const base = effort ? `${model}, ${effort} effort. Change the model or the effort` : `${model}. Change the model`;
+    // With other AIs listed, the AI is named too: "Sonnet 5.5 on the Claude plan" isn't "… on your Anthropic API key".
+    const on = Array.isArray(picker?.groups) && provider ? ` on ${aiPhrase(providerLabel(picker, provider))}` : "";
+    const base = effort ? `${model}${on}, ${effort} effort. Change the model or the effort` : `${model}${on}. Change the model`;
     return { model, effort, entry, level, provider, warning, title: warning ? `${warning}. ${base}` : base };
+  }
+
+  /** An AI's name in a sentence: "the Claude plan", "your Anthropic API key", "DeepSeek". */
+  function aiPhrase(label) {
+    const s = String(label || "");
+    if (/ plan$/i.test(s)) return `the ${s}`;
+    if (/ API key$/i.test(s)) return `your ${s}`;
+    return s;
   }
 
   /**

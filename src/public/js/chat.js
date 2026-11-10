@@ -2193,8 +2193,17 @@ const Chat = {
     if (!btn || typeof ModelPickerCore === "undefined") return;
     const label = ModelPickerCore.buttonLabel(this._picker, this._pick, this._pickDefaults);
     // No model of the chat's own (the default, auto-routing): the model the last turn ran on.
-    const model = !this._pick.model && !this._pick.provider && this._turnModel ? ModelPickerCore.turnName(this._picker, this._turnModel) : label.model;
+    const fromTurn = !this._pick.model && !this._pick.provider && this._turnModel;
+    const model = fromTurn ? ModelPickerCore.turnName(this._picker, this._turnModel) : label.model;
     if (this.elements.sessionModel) this.elements.sessionModel.textContent = model;
+    // The chat's AI as a dot in its color (style.css [data-ai]); the header chip shows the default AI's. Only with
+    // other AIs listed: the Claude-only list has just the one.
+    const dot = document.getElementById("sessionAi");
+    if (dot) {
+      const ai = Array.isArray(this._picker?.groups) ? ((fromTurn && this._turnModel.provider) || label.provider || null) : null;
+      dot.hidden = !ai;
+      if (ai) dot.dataset.ai = ai; else delete dot.dataset.ai;
+    }
     const effortEl = document.getElementById("effortLabel");
     if (effortEl) effortEl.textContent = label.effort;
     btn.classList.toggle("no-effort", !label.effort);

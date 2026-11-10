@@ -913,6 +913,28 @@
 .mp-warn::after { content: ""; position: absolute; left: 4.5px; top: 3px; width: 1px; height: 3px; background: var(--bg-surface); }
 .mp-back { color: var(--text-secondary); gap: 8px; }
 .mp-back .mp-name { color: var(--text); font-weight: 500; }
+/* Each AI in its own color (style.css [data-ai] gives --ai): a bar down its group, its name and how it is paid for,
+   its rows' hover and check; its list that opens is topped with the same color. */
+.mp-group[data-ai] { position: relative; }
+.mp-group[data-ai]::before { content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 3px; border-radius: 3px; background: var(--ai); }
+.mp-ai-head { display: flex; align-items: center; gap: 8px; padding-top: 10px; }
+.mp-ai-head .mp-group-name { font-weight: 600; color: var(--ai, var(--text-secondary)); }
+.mp-ai-tag {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--ai) 14%, transparent);
+  color: var(--ai);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.mp-group[data-ai] .mp-item:hover:not([disabled]), .mp-group[data-ai] .mp-item:focus-visible, .mp-group[data-ai] .mp-item.is-open,
+.mp-submenu[data-ai] .mp-item:hover:not([disabled]), .mp-submenu[data-ai] .mp-item:focus-visible { background: color-mix(in srgb, var(--ai) 12%, var(--bg-surface-hover)); }
+.mp-group[data-ai] .mp-check, .mp-submenu[data-ai] .mp-check { color: var(--ai); }
+.mp-submenu[data-ai] { border-top: 3px solid var(--ai); }
+.mp-where { display: inline-flex; align-items: center; gap: 5px; }
+.model-picker-btn .ai-dot { margin-right: 2px; }
 @media (max-width: 639px) {
   .mp-menu, .mp-submenu.mp-effort { width: min(300px, calc(100vw - 24px)); max-width: calc(100vw - 24px); }
   .mp-item { min-height: 40px; }

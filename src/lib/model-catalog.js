@@ -40,7 +40,7 @@ import { claudeHomes } from "./claude-transcript.js";
 import {
   buildPicker, catalogFromBuildText, CATALOG_MARKER, FAMILIES, TARSEE_DEFAULT_EFFORT, EFFORT_IDS,
   clampEffort, effortRows, contextLabel, priceHint, costTier, familyCostTier, familyOf, nameFromSlug,
-  MESSAGE_AT_A_TIME, VERIFY_FIRST,
+  MESSAGE_AT_A_TIME, VERIFY_FIRST, FABLE_NOTE,
 } from "./model-picker.js";
 import {
   PROVIDERS, PROVIDER_IDS, getProvider, normalizeProviderId, isShipped as registryShipped, activeProviderId, keysOnly,
@@ -494,6 +494,8 @@ function claudeSections(p, store, effort) {
     const tier = p.kind === "subscription" ? null : familyCostTier(e.family);
     return {
       ...e,
+      // Fable's note is about a plan's weekly allowance: an API key is billed per use and has none.
+      note: p.kind !== "subscription" && e.note?.text === FABLE_NOTE ? null : e.note,
       provider: p.id,
       ref: formatModelRef(p.id, e.alias || e.id),
       context,
