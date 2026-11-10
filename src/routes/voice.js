@@ -183,10 +183,13 @@ voiceRouter.post("/piper-upload", async (req, res) => {
 
 /**
  * DELETE /api/voice/piper-voices/:id
- * Delete a Piper voice model.
+ * Delete a Piper voice model. An id that is not a plain name (deletePiperVoice
+ * refuses it, and deletes nothing) answers 400 with the reason.
  */
 voiceRouter.delete("/piper-voices/:id", (req, res) => {
-  deletePiperVoice(req.params.id);
+  if (!deletePiperVoice(req.params.id)) {
+    return res.status(400).json({ error: "That is not the name of a Piper voice: a voice's name has no /, \\ or : in it. Nothing was deleted." });
+  }
   res.json({ ok: true });
 });
 

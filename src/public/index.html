@@ -220,7 +220,7 @@
 
           <div class="input-row input-row-top">
             <label for="messageInput" class="sr-only">Message</label>
-            <textarea id="messageInput" placeholder="Message Tarsee" rows="1" spellcheck="false" aria-label="Message"></textarea>
+            <textarea id="messageInput" placeholder="Message Tarsee" rows="1" spellcheck="false" autocomplete="off" aria-label="Message"></textarea>
           </div>
 
           <div class="input-row input-row-bottom">
@@ -781,7 +781,7 @@
               <div class="form-group">
                 <label>Reset Mode</label>
                 <select id="settingsResetMode">
-                  <option value="manual">Manual (/reset command only)</option>
+                  <option value="manual">Manual (only when you type /new or /clear)</option>
                   <option value="daily">Daily (at a specific hour)</option>
                   <option value="idle">Idle (after inactivity timeout)</option>
                 </select>

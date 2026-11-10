@@ -6,7 +6,7 @@ import { chatStream } from "../ai/router.js";
 import { withConversationTurn } from "../lib/conversation-lock.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
-import { processCommand, extractPlaybookPrompt, getCommandList } from "../lib/commands.js";
+import { processCommand, extractPlaybookPrompt, getCommandList, answeredAtOnce } from "../lib/commands.js";
 import { buildSystemPromptParts, sendFileHint } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
@@ -22,8 +22,10 @@ import { turnErrorNote, idleNote, errorStillToSay, sttProblem } from "./turn-not
  * @param {object} config - { token, enabled, allowedChats?, ackReaction?, streaming? }
  * @param {import('better-sqlite3').Database} db
  * @param {object} [opts] - apiRoot: the Bot API base; chatStream: the model stream (ai/router.js chatStream when left
- *   out); deliverPending (see manager.js); getMeTimeoutMs: how long the startup token check waits (15 s). Tests point
- *   the first two at 127.0.0.1 and a scripted model.
+ *   out); deliverPending (see manager.js); getMeTimeoutMs: how long the startup token check waits (15 s);
+ *   typingEveryMs: how often "typing…" is sent while a message is answered or waits for its turn (4 s);
+ *   idleCheckEveryMs: how often a turn checks it has heard from the AI within TARSEE_CHANNEL_IDLE_ABORT_MS (15 s).
+ *   Tests point the first two at 127.0.0.1 and a scripted model.
  * @returns {Promise<{stop: Function, identity: string|null}>}
  */
 export async function createTelegramBot(config, db, opts = {}) {
@@ -57,7 +59,68 @@ export async function createTelegramBot(config, db, opts = {}) {
   let _updatesReceived = 0;
   let _handlerActive = 0;
   let _lastUpdateAt = 0;
-  bot.use(async (ctx, next) => {
+
+  // ── One update at a time, without holding up the poll loop ─────────────
+  // Telegraf's poll loop waits until a batch of updates is handled before it asks Telegram for more, and a message is
+  // handled until its reply ends, which can take many minutes. So a /stop sent while a reply ran was only read once
+  // that reply had ended, too late to stop anything. Now the poll loop never waits: each update gets in line here
+  // and is handled in the order it came, one at a time, as before. Only the commands meant for that moment or that
+  // change nothing (/stop, /help, /version: lib/commands.js answeredAtOnce) skip the line and are answered at once.
+  // An album takes one place in line, when its first photo comes (see takeAlbumPhoto). Once the channel is stopped,
+  // the bot shows no chat anything more: what still waits in line, or is on its way to its AI turn, is dropped without
+  // being answered, and the log says so (droppedOnStop). A reply already running ends as it would have, without its
+  // "typing…".
+  let line = Promise.resolve();
+  let stopped = false;
+  const inLine = new Set(); // what waits in line and hasn't started: { chat }, for the log when the channel stops
+  // Messages waiting behind another reply in their chat's conversation (lib/conversation-lock.js): { chat, takeOut },
+  // which stop() takes out of that queue.
+  const waitingTurns = new Set();
+  const botError = (err) => console.error("[telegram] bot error:", err?.message || err);
+  /** Run fn now or after everything in line, counted in health() until it ends; its errors are logged, never thrown. */
+  function handleUpdate(ctx, fn, { now = false } = {}) {
+    _handlerActive++;
+    const run = () => {
+      if (stopped) { _handlerActive--; return; } // dropped: stop() said so in the log
+      return Promise.resolve().then(fn).catch(botError).finally(() => { _handlerActive--; });
+    };
+    if (now) { run(); return; }
+    const waiting = { chat: ctx.chat?.id };
+    inLine.add(waiting);
+    line = line.then(() => { inLine.delete(waiting); return run(); });
+  }
+
+  /**
+   * Whether the channel has stopped, checked by whatever is on its way to its AI turn after each wait (a download, a
+   * transcription, a call to Telegram, another reply in its chat). When it has, what came from chat `chatId` (`what`:
+   * "a photo", "a voice message"...) is dropped: nothing more is said or shown to the chat, and the log says so.
+   * `saved`: the message is already in the chat's history, where it stays (the person did send it), unanswered.
+   */
+  function droppedOnStop(chatId, what = "a message", { saved = false } = {}) {
+    if (!stopped) return false;
+    console.warn(saved
+      ? `[telegram] the channel is stopped: ${what} from chat ${chatId} was not answered; it stays in the chat's history`
+      : `[telegram] the channel is stopped: ${what} from chat ${chatId} dropped without an answer`);
+    return true;
+  }
+
+  // "typing…" in a chat while its message is answered or waits for its turn: sent every typingEveryMs (Telegram shows
+  // it for 5 s). stop() ends every one, and one still going finds the channel stopped and ends itself.
+  const TYPING_EVERY_MS = opts.typingEveryMs || 4000;
+  const IDLE_CHECK_EVERY_MS = opts.idleCheckEveryMs || 15_000;
+  const typing = new Set(); // the end() of each, for stop()
+  /** Keep "typing…" showing in ctx's chat until the returned end() is called (any number of times). */
+  function keepTyping(ctx) {
+    const timer = setInterval(() => {
+      if (stopped) { end(); return; }
+      ctx.sendChatAction("typing").catch(() => {});
+    }, TYPING_EVERY_MS);
+    function end() { clearInterval(timer); typing.delete(end); }
+    typing.add(end);
+    return end;
+  }
+
+  bot.use((ctx, next) => {
     const uid = ctx.update?.update_id;
     if (uid != null) {
       if (_seenUpdates.has(uid)) {
@@ -68,11 +131,14 @@ export async function createTelegramBot(config, db, opts = {}) {
       _seenOrder.push(uid);
       if (_seenOrder.length > 1000) _seenUpdates.delete(_seenOrder.shift());
     }
+    if (stopped) {
+      console.warn(`[telegram] the channel is stopped: update ${uid} from chat ${ctx.chat?.id} dropped without an answer`);
+      return;
+    }
     _updatesReceived++;
     _lastUpdateAt = Date.now();
-    _handlerActive++;
-    try { await next(); }
-    finally { _handlerActive--; }
+    if (ctx.message?.media_group_id && ctx.message.photo) return takeAlbumPhoto(ctx);
+    handleUpdate(ctx, () => next(), { now: answersAtOnce(ctx) });
   });
 
   /**
@@ -86,14 +152,25 @@ export async function createTelegramBot(config, db, opts = {}) {
   }
 
   /**
-   * Download a Telegram file and return as base64 + media type.
+   * Download a file the person sent from Telegram's file server: its bytes and type. Any answer but a 2xx (an error
+   * page from that server, or from a proxy in front of it) throws, so the handler says "Failed to process …" instead
+   * of handing the page to the AI as the person's photo, file or voice message. The file's link holds the bot token,
+   * so the error names only the status.
    */
-  async function downloadTelegramFile(fileId) {
+  async function fetchTelegramFile(fileId) {
     const fileLink = await bot.telegram.getFileLink(fileId);
     const res = await fetch(fileLink.href);
-    const buffer = Buffer.from(await res.arrayBuffer());
-    const contentType = res.headers.get("content-type") || "image/jpeg";
-    return { data: buffer.toString("base64"), mediaType: contentType, buffer };
+    if (!res.ok) {
+      try { await res.body?.cancel(); } catch { /* nothing left to read */ }
+      throw new Error(`Telegram's file server answered ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`);
+    }
+    return { buffer: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get("content-type") };
+  }
+
+  /** Download a Telegram file as base64 + media type (a photo's, when the server doesn't say), and its bytes. */
+  async function downloadTelegramFile(fileId) {
+    const { buffer, contentType } = await fetchTelegramFile(fileId);
+    return { data: buffer.toString("base64"), mediaType: contentType || "image/jpeg", buffer };
   }
 
   /**
@@ -161,6 +238,11 @@ export async function createTelegramBot(config, db, opts = {}) {
     const chatId = ctx.chat.id;
     const username = ctx.from.username || ctx.from.first_name || "User";
 
+    // The channel can stop while an update is on its way to its AI turn: while its photo or file downloads, its voice
+    // note is transcribed, or at any wait below. It is then dropped, as one still waiting in line is (droppedOnStop);
+    // only a reply already running ends as it would have.
+    if (droppedOnStop(chatId)) return;
+
     if (!chatAllowed(ctx)) return;
 
     if (!text?.trim()) return;
@@ -185,6 +267,7 @@ export async function createTelegramBot(config, db, opts = {}) {
         // no-op'd, letting sessions accumulate huge transcripts.
         db,
       });
+      if (droppedOnStop(chatId)) return;
 
       if (cmdResult.handled) {
         const playbook = extractPlaybookPrompt(cmdResult);
@@ -230,14 +313,12 @@ export async function createTelegramBot(config, db, opts = {}) {
       ctx.react?.(ackEmoji).catch?.(() => {});
     }
 
-    // Keep the native "typing..." indicator alive while processing. No
+    // The native "typing..." indicator, kept alive below (keepTyping) while processing. No
     // "💭 Thinking..." placeholder message — we used to send one and edit
     // it with tool progress, but users found it noisy. Final reply is the
     // only bubble the user sees.
     await ctx.sendChatAction("typing").catch(() => {});
-    const typingInterval = setInterval(() => {
-      ctx.sendChatAction("typing").catch(() => {});
-    }, 4000);
+    if (droppedOnStop(chatId, "a message", { saved: true })) return;
 
     // Build full system prompt
     const history = convStore.getRecentMessages(convId, 15);
@@ -258,26 +339,6 @@ ${sendFileHint("telegram")}`,
     let fullResponse = "";
     // messageId: the message this turn answers (its pictures are kept on it, not on whatever came in later)
     const toolCtx = { db, settingsStore, conversationId: convId, messageId: savedUser?.id || null };
-
-    // Idle watchdog: if the SDK goes 3 min without emitting an event we abort
-    // and send the user an explicit message instead of hanging forever.
-    const controller = new AbortController();
-    let lastEventAt = Date.now();
-    let idleAborted = false;
-    // Idle abort: how long a turn may go with NO stream event before we give up.
-    // Was a hard 3 minutes, which killed legitimate long research/tool turns.
-    // Now configurable, but deliberately FINITE — the Mac build sets this to
-    // ~2e9 (23 days), which is only safe there because its PTY pool has a
-    // heartbeat + dead-socket detector. This build has neither, so an infinite
-    // value would wedge a turn forever with no console to kill it from.
-    const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
-    const idleTimer = setInterval(() => {
-      if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
-        idleAborted = true;
-        try { controller.abort(); } catch {}
-        clearInterval(idleTimer);
-      }
-    }, 15_000);
 
     // Streaming-segment state — each text block between tool boundaries
     // becomes its own Telegram message that edit-streams as tokens arrive.
@@ -381,10 +442,39 @@ ${sendFileHint("telegram")}`,
     // could leave the session corrupt enough that every later turn failed.
     // Follow-ups queue instead of racing: a quick correction is usually meant
     // to be read, not dropped.
-    await withConversationTurn(convId, async () => {
+    //
+    // "typing…" shows until the turn has ended, or the dashboard's Stop takes it out of the queue (it then never
+    // runs), or the channel stops (stop() ends it, also for one still waiting).
+    const stopTyping = keepTyping(ctx);
+    let waitingTurn = null; // while it waits behind another reply in this chat: for stop() to take it out of the queue
+    const turn = withConversationTurn(convId, async () => {
+    if (waitingTurn) waitingTurns.delete(waitingTurn);
     // The AI this turn runs on, from the turn layer's route event (the backup model's, if it answered instead).
     let routed = null;
+    // Idle watchdog: a turn that goes IDLE_ABORT_MS with no event from the AI is aborted, and the person is told so,
+    // instead of it hanging forever. Its clock starts here, when the turn starts: started when the message came, a
+    // message that waited longer than that behind another reply in this chat was given up on before its turn began.
+    const controller = new AbortController();
+    let lastEventAt = Date.now();
+    let idleAborted = false;
+    // Idle abort: how long a turn may go with NO stream event before we give up.
+    // Was a hard 3 minutes, which killed legitimate long research/tool turns.
+    // Now configurable, but deliberately FINITE — the Mac build sets this to
+    // ~2e9 (23 days), which is only safe there because its PTY pool has a
+    // heartbeat + dead-socket detector. This build has neither, so an infinite
+    // value would wedge a turn forever with no console to kill it from.
+    const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
+    const idleTimer = setInterval(() => {
+      if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
+        idleAborted = true;
+        try { controller.abort(); } catch {}
+        clearInterval(idleTimer);
+      }
+    }, IDLE_CHECK_EVERY_MS);
     try {
+      // A message waiting behind another reply in this chat is taken out of the queue when the channel stops (stop()),
+      // so it never gets here. This catches one whose turn came at that very moment.
+      if (droppedOnStop(chatId, "a message", { saved: true })) return;
       const workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
       // Slash-command playbooks: keep the user's literal "/checkpoint" in
@@ -525,22 +615,47 @@ ${sendFileHint("telegram")}`,
         : `⚠️ Error: ${err.message || "something went wrong"}. Try again.`;
       await ctx.reply(reason).catch(() => {});
     } finally {
-      clearInterval(typingInterval);
       clearInterval(idleTimer);
     }
     }, {
-      // Waiting behind the reply in progress: a "Queued" line on the dashboard too.
-      live: { source: "telegram", prompt: text },
+      // Waiting behind the reply in progress: a "Queued" line on the dashboard too, whose Stop takes it out.
+      live: { source: "telegram", prompt: text, onRemoved: stopTyping },
       onQueued: (ahead) => {
         ctx.reply(ahead === 1
           ? "⏳ Still working on your last message — yours is next."
           : `⏳ Queued (${ahead} ahead).`).catch(() => {});
       },
+      onWaiting: (takeOut) => {
+        waitingTurn = { chat: chatId, takeOut };
+        waitingTurns.add(waitingTurn);
+      },
     });
+    // "typing…" ends however the turn ends, also when it never ran (taken out of the queue).
+    try { await turn; } finally {
+      stopTyping();
+      if (waitingTurn) waitingTurns.delete(waitingTurn);
+    }
+  }
+
+  /** Whether an update is one of the commands answered at once (see "One update at a time" above), read as the text handler reads it. */
+  function answersAtOnce(ctx) {
+    if (typeof ctx.message?.text !== "string") return false;
+    const text = messageText(ctx);
+    return text != null && answeredAtOnce(text);
   }
 
   // --- Main text handler ---
   bot.on("text", async (ctx) => {
+    const text = messageText(ctx);
+    if (text == null) return;
+    await handleMessage(ctx, text);
+  });
+
+  /**
+   * What a text message says, as it is handled: with who it was forwarded from or the message it replies to, and the
+   * bot's @handle taken out. null for a group message that isn't for the bot (telegram.mention_mode).
+   */
+  function messageText(ctx) {
     let text = ctx.message.text;
 
     // Detect forwarded messages — add context
@@ -567,70 +682,97 @@ ${sendFileHint("telegram")}`,
       if (mentionMode === "required") {
         const isMentioned = botUsername && text.includes(`@${botUsername}`);
         const isReply = repliedMsg?.from?.id === ctx.botInfo?.id;
-        if (!isMentioned && !isReply) return;
+        if (!isMentioned && !isReply) return null;
       }
       if (botUsername) text = text.replace(new RegExp(`@${botUsername}\\b`, "gi"), "").trim();
     }
+    return text;
+  }
 
-    await handleMessage(ctx, text);
-  });
+  // --- Photo albums ---
+  // Telegram sends an album as one message per photo, each with the album's media_group_id, one right after another.
+  // They are answered as one message. The album takes its place in line when its first photo comes, and each photo's
+  // download starts as it comes, side by side. The album is complete ALBUM_GAP_MS after its last photo came, however
+  // long the downloads take (a far server can take longer than that for each); its turn then waits for them all.
+  const ALBUM_GAP_MS = 500;
+  const albums = new Map(); // media_group_id → { ctx, parts: Promise<image block|null>[], caption, timer, complete, close }
 
-  // --- Photo handler with multi-image batching ---
-  // Telegram sends media groups as separate messages with same media_group_id.
-  // Buffer them and process together after a short delay.
-  const mediaGroupBuffer = new Map(); // media_group_id → { ctx, images[], caption, timer }
+  /** A photo of an album, as it comes (not in line): its download starts, and the album waits ALBUM_GAP_MS for the next. */
+  function takeAlbumPhoto(ctx) {
+    // A chat off the allowlist is dropped before anything is downloaded, as a voice message is.
+    if (!chatAllowed(ctx)) return;
+    const groupId = ctx.message.media_group_id;
+    let album = albums.get(groupId);
+    if (!album) {
+      album = { ctx, parts: [], caption: "", timer: null };
+      album.complete = new Promise((resolve) => { album.close = resolve; });
+      albums.set(groupId, album);
+      handleUpdate(ctx, () => answerAlbum(album));
+    }
+    const photos = ctx.message.photo;
+    album.parts.push(downloadTelegramFile(photos[photos.length - 1].file_id).then(
+      ({ data, mediaType }) => ({ type: "image", source: { type: "base64", media_type: mediaType, data } }),
+      (err) => { console.error("[telegram] photo download error:", err.message); return null; },
+    ));
+    if (ctx.message.caption) album.caption = ctx.message.caption;
+    clearTimeout(album.timer);
+    album.timer = setTimeout(() => { albums.delete(groupId); album.close(); }, ALBUM_GAP_MS);
+  }
 
+  /** An album's turn in line: once it is complete and every photo is downloaded, it is answered as one message. */
+  async function answerAlbum(album) {
+    await album.complete;
+    const results = await Promise.all(album.parts);
+    if (droppedOnStop(album.ctx.chat?.id, "an album")) return;
+    const images = results.filter(Boolean);
+    const failed = results.length - images.length;
+    if (failed > 0) {
+      await album.ctx.reply(failed === 1 ? "Failed to process image." : `Failed to process ${failed} of the ${results.length} images.`).catch(() => {});
+    }
+    if (images.length === 0) return;
+    const text = album.caption
+      || (images.length === 1 ? "Please analyze this image." : `Please analyze these ${images.length} images.`);
+    await handleMessage(album.ctx, text, null, images);
+  }
+
+  // --- A photo on its own (an album's photos are taken in takeAlbumPhoto) ---
+  // A chat off the allowlist is dropped before anything is downloaded, as a voice message is: a failed download would
+  // otherwise answer it. So is one whose download ends after the channel stopped (handleMessage drops one that worked).
   bot.on("photo", async (ctx) => {
+    if (!chatAllowed(ctx)) return;
     try {
       const photos = ctx.message.photo;
       const largest = photos[photos.length - 1];
       const { data, mediaType } = await downloadTelegramFile(largest.file_id);
       const attachment = { type: "image", source: { type: "base64", media_type: mediaType, data } };
       const caption = ctx.message.caption || "";
-      const groupId = ctx.message.media_group_id;
-
-      if (groupId) {
-        // Part of a media group — buffer it
-        if (!mediaGroupBuffer.has(groupId)) {
-          mediaGroupBuffer.set(groupId, { ctx, images: [], caption: "", timer: null });
-        }
-        const group = mediaGroupBuffer.get(groupId);
-        group.images.push(attachment);
-        if (caption) group.caption = caption;
-
-        // Reset timer — process 500ms after last photo in group arrives
-        clearTimeout(group.timer);
-        group.timer = setTimeout(async () => {
-          mediaGroupBuffer.delete(groupId);
-          const text = group.caption || `Please analyze these ${group.images.length} images.`;
-          await handleMessage(group.ctx, text, null, group.images);
-        }, 500);
-      } else {
-        // Single photo — process immediately
-        await handleMessage(ctx, caption || "Please analyze this image.", null, [attachment]);
-      }
+      await handleMessage(ctx, caption || "Please analyze this image.", null, [attachment]);
     } catch (err) {
       console.error("[telegram] photo handler error:", err.message);
+      if (droppedOnStop(ctx.chat.id, "a photo")) return;
       await ctx.reply("Failed to process image.").catch(() => {});
     }
   });
 
   // --- Document handler (files including images, PDFs, and generic files) ---
+  // As a photo: a chat off the allowlist is dropped before anything is downloaded or saved, and a file whose download
+  // ends after the channel stopped is dropped without being saved.
   bot.on("document", async (ctx) => {
+    if (!chatAllowed(ctx)) return;
     try {
       const doc = ctx.message.document;
       const mime = doc.mime_type || "";
       const caption = ctx.message.caption || "";
       const sizeKb = Math.round((doc.file_size || 0) / 1024);
+      const { data, mediaType, buffer } = await downloadTelegramFile(doc.file_id);
+      if (droppedOnStop(ctx.chat.id, "a file")) return;
 
       if (mime.startsWith("image/")) {
-        const { data, mediaType } = await downloadTelegramFile(doc.file_id);
         const attachment = { type: "image", source: { type: "base64", media_type: mediaType, data } };
         await handleMessage(ctx, caption || "Please analyze this image.", null, [attachment]);
       } else if (mime === "application/pdf") {
         // PDF: multimodal document block + save to disk so Claude's Read
         // tool can reach it if needed.
-        const { data, buffer } = await downloadTelegramFile(doc.file_id);
         const attachment = { type: "document", source: { type: "base64", media_type: "application/pdf", data } };
         const savedPath = saveDocumentToDisk(buffer, doc.file_name);
         const pathNote = savedPath
@@ -641,7 +783,6 @@ ${sendFileHint("telegram")}`,
         // Generic file (txt/json/csv/docx/zip/etc.) — save to disk and
         // surface the path to Claude so it can Read the file. Previously
         // the bytes were thrown away after a one-line description.
-        const { buffer } = await downloadTelegramFile(doc.file_id);
         const savedPath = saveDocumentToDisk(buffer, doc.file_name);
         const note = savedPath
           ? `[Attached file saved: ${doc.file_name} (${mime || "unknown"}, ${sizeKb}KB) → ${savedPath}]\nYou can read this file with the Read tool at: ${savedPath}`
@@ -651,71 +792,52 @@ ${sendFileHint("telegram")}`,
       }
     } catch (err) {
       console.error("[telegram] document handler error:", err.message);
+      if (droppedOnStop(ctx.chat.id, "a file")) return;
       await ctx.reply("Failed to process file.").catch(() => {});
     }
   });
 
-  // --- Voice message handler (transcribed on this server; see voice/stt-handler.js) ---
-  // A chat off the allowlist is dropped before anything is downloaded or said back.
-  bot.on("voice", async (ctx) => {
-    if (!chatAllowed(ctx)) return;
-    try {
-      const voice = ctx.message.voice;
-      console.log(`[telegram] voice message: ${voice.duration}s, ${voice.file_size} bytes`);
+  // --- Voice messages and video notes (round videos), transcribed on this server (see voice/stt-handler.js) ---
+  bot.on("voice", (ctx) => answerSpoken(ctx, ctx.message.voice, "voice message"));
+  bot.on("video_note", (ctx) => answerSpoken(ctx, ctx.message.video_note, "video note"));
 
-      // Download the .ogg file from Telegram
-      const fileLink = await bot.telegram.getFileLink(voice.file_id);
-      const res = await fetch(fileLink.href);
-      const audioBuffer = Buffer.from(await res.arrayBuffer());
+  /**
+   * A voice message or video note (`what`): downloaded, transcribed, and answered as the words it says. A chat off the
+   * allowlist is dropped before anything is downloaded or said back. Once the channel stops, nothing more is
+   * transcribed (the paid Whisper API may be the transcriber) or said, not even that it failed: it is dropped.
+   */
+  async function answerSpoken(ctx, file, what) {
+    if (!chatAllowed(ctx)) return;
+    const dropped = () => droppedOnStop(ctx.chat.id, `a ${what}`);
+    try {
+      console.log(`[telegram] ${what}: ${file.duration}s, ${file.file_size} bytes`);
+
+      // Download the audio (.ogg; a video note's .mp4) from Telegram
+      const { buffer: audioBuffer } = await fetchTelegramFile(file.file_id);
+      if (dropped()) return;
 
       // Transcribe
       await ctx.sendChatAction("typing").catch(() => {});
+      if (dropped()) return;
       const result = await transcribeAudio(audioBuffer, "en", { settingsStore });
+      if (dropped()) return;
 
       if (!result.transcript?.trim()) {
-        await ctx.reply("Couldn't understand the voice message.", {
+        await ctx.reply(`Couldn't understand the ${what}.`, {
           reply_to_message_id: ctx.message.message_id,
         });
         return;
       }
 
-      console.log(`[telegram] transcribed: "${result.transcript.slice(0, 80)}..."`);
+      console.log(`[telegram] transcribed ${what}: "${result.transcript.slice(0, 80)}..."`);
       await handleMessage(ctx, result.transcript, ctx.message.message_id);
     } catch (err) {
-      console.error("[telegram] voice handler error:", err.message);
+      console.error(`[telegram] ${what} handler error:`, err.message);
+      if (dropped()) return;
       // Transcription that can't run says what to set up (Settings > Voice); anything else keeps the short note.
-      await ctx.reply(sttProblem(err) || "Failed to process voice message.").catch(() => {});
+      await ctx.reply(sttProblem(err) || `Failed to process ${what}.`).catch(() => {});
     }
-  });
-
-  // --- Voice note (video message / round video) handler ---
-  bot.on("video_note", async (ctx) => {
-    if (!chatAllowed(ctx)) return;
-    try {
-      const vn = ctx.message.video_note;
-      console.log(`[telegram] video note: ${vn.duration}s`);
-
-      const fileLink = await bot.telegram.getFileLink(vn.file_id);
-      const res = await fetch(fileLink.href);
-      const audioBuffer = Buffer.from(await res.arrayBuffer());
-
-      await ctx.sendChatAction("typing").catch(() => {});
-      const result = await transcribeAudio(audioBuffer, "en", { settingsStore });
-
-      if (!result.transcript?.trim()) {
-        await ctx.reply("Couldn't understand the video note.", {
-          reply_to_message_id: ctx.message.message_id,
-        });
-        return;
-      }
-
-      console.log(`[telegram] transcribed video note: "${result.transcript.slice(0, 80)}..."`);
-      await handleMessage(ctx, result.transcript, ctx.message.message_id);
-    } catch (err) {
-      console.error("[telegram] video_note handler error:", err.message);
-      await ctx.reply(sttProblem(err) || "Failed to process video note.").catch(() => {});
-    }
-  });
+  }
 
   // --- Inline button callback handler ---
   bot.on("callback_query", async (ctx) => {
@@ -730,9 +852,7 @@ ${sendFileHint("telegram")}`,
     await handleMessage(ctx, buttonText, ctx.callbackQuery?.message?.message_id);
   });
 
-  bot.catch((err) => {
-    console.error("[telegram] bot error:", err.message);
-  });
+  bot.catch(botError);
 
   // Check the token before polling starts, so a wrong one fails the channel with what to do about it (Settings shows
   // it). Only Telegram refusing it fails the channel: a timeout or network error must not hold startup up (see the
@@ -757,6 +877,11 @@ ${sendFileHint("telegram")}`,
   // On a cold boot we drop whatever queued while the container was down. When
   // the health monitor relaunches a STUCK poller those queued updates are real
   // messages the wedged poller failed to pull, so we deliver them instead.
+  //
+  // launch asks Telegram one more thing (deleteWebhook) before it starts polling, so the channel can be stopped before
+  // there is any polling to stop. Polling then never starts: started, it would take every message while dropping it.
+  const startPolling = bot.startPolling.bind(bot);
+  bot.startPolling = (...args) => (stopped ? Promise.resolve() : startPolling(...args));
   bot.launch({ dropPendingUpdates: !opts.deliverPending }).catch((err) => {
     console.error("[telegram] bot.launch error (polling will retry):", err.message);
   });
@@ -786,8 +911,29 @@ ${sendFileHint("telegram")}`,
   console.log(`[telegram] bot started`);
 
   return {
+    /**
+     * Stop polling. What still waits in line (and an album still coming) is dropped without being answered, and the
+     * log says which chats it came from. A message waiting behind another reply in its chat is taken out of that
+     * queue at once: its "Queued" line (and the Stop on it) leaves the dashboard, the next message there is told only
+     * the replies really ahead of it, and the log says now that it was not answered (it stays in its chat's history).
+     * A reply already running ends as it would have. No chat is shown "typing…" any more. Twice is fine.
+     */
     stop: async () => {
-      bot.stop("Tarsee shutdown");
+      if (stopped) return;
+      stopped = true;
+      for (const end of [...typing]) end();
+      for (const album of albums.values()) { clearTimeout(album.timer); album.close(); }
+      albums.clear();
+      if (inLine.size > 0) {
+        const chats = [...new Set([...inLine].map((w) => w.chat))].join(", ");
+        console.warn(`[telegram] the channel is stopped: ${inLine.size} message${inLine.size === 1 ? "" : "s"} still waiting in line dropped without an answer (chat ${chats})`);
+        inLine.clear();
+      }
+      for (const w of [...waitingTurns]) {
+        if (w.takeOut()) droppedOnStop(w.chat, "a message", { saved: true });
+      }
+      waitingTurns.clear();
+      if (bot.polling) bot.stop("Tarsee shutdown"); // none yet: startPolling above won't start it now
     },
     /** Who it connected as, for Settings → Channels: @username, or null until Telegram has said. */
     get identity() {
@@ -797,8 +943,8 @@ ${sendFileHint("telegram")}`,
      * Poller health for the channel-health monitor.
      *  - updatesReceived: 0 means the poller has pulled NOTHING since launch
      *    (a genuine boot-race wedge — safe to relaunch).
-     *  - handlerActive: >0 means a turn is being processed right now — the
-     *    poll loop is legitimately busy, NOT stuck; don't relaunch.
+     *  - handlerActive: updates in line or being handled now (a turn can run for
+     *    minutes). >0 means the bot is busy, NOT stuck; don't relaunch.
      */
     health: () => ({
       updatesReceived: _updatesReceived,

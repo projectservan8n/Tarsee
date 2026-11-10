@@ -23,10 +23,12 @@ import { turnErrorNote, idleNote, errorStillToSay, sttProblem } from "./turn-not
  * @param {object} config - { token, enabled, allowedChannels?, allowDMs?, ackReaction?, streaming?, status?, activity?, activityType? }
  * @param {import('better-sqlite3').Database} db
  * @param {object} [opts] - Client: the discord.js client class (tests pass a stand-in that never reaches Discord);
- *   chatStream: the model stream (ai/router.js chatStream when left out).
+ *   chatStream: the model stream (ai/router.js chatStream when left out); idleCheckEveryMs: how often a turn checks it
+ *   has heard from the AI within TARSEE_CHANNEL_IDLE_ABORT_MS (15 s); typingEveryMs: how often "typing…" is sent
+ *   while a message is answered or waits for its turn (8 s).
  * @returns {Promise<{stop: Function}>}
  */
-export async function createDiscordBot(config, db, { Client: DiscordClient = Client, chatStream: streamChat = chatStream } = {}) {
+export async function createDiscordBot(config, db, { Client: DiscordClient = Client, chatStream: streamChat = chatStream, idleCheckEveryMs = 15_000, typingEveryMs = 8000 } = {}) {
   const convStore = new ConversationStore(db);
   const settingsStore = new SettingsStore(db);
 
@@ -307,7 +309,7 @@ export async function createDiscordBot(config, db, { Client: DiscordClient = Cli
     // shows up in the channel.
     const typingInterval = setInterval(() => {
       message.channel.sendTyping().catch(() => {});
-    }, 8000);
+    }, typingEveryMs);
     message.channel.sendTyping().catch(() => {});
 
     // Build full system prompt (identity + memory + skills)
@@ -326,25 +328,6 @@ ${sendFileHint("discord")}`,
     });
 
     let fullResponse = "";
-
-    // Idle watchdog — abort if SDK goes 3 min without emitting anything.
-    const controller = new AbortController();
-    let lastEventAt = Date.now();
-    let idleAborted = false;
-    // Idle abort: how long a turn may go with NO stream event before we give up.
-    // Was a hard 3 minutes, which killed legitimate long research/tool turns.
-    // Now configurable, but deliberately FINITE — the Mac build sets this to
-    // ~2e9 (23 days), which is only safe there because its PTY pool has a
-    // heartbeat + dead-socket detector. This build has neither, so an infinite
-    // value would wedge a turn forever with no console to kill it from.
-    const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
-    const idleTimer = setInterval(() => {
-      if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
-        idleAborted = true;
-        try { controller.abort(); } catch {}
-        clearInterval(idleTimer);
-      }
-    }, 15_000);
 
     // Streaming-segment state — same shape as Telegram's. Each text block
     // between tool boundaries becomes its own Discord message that
@@ -414,6 +397,26 @@ ${sendFileHint("discord")}`,
     await withConversationTurn(convId, async () => {
     // The AI this turn runs on, from the turn layer's route event (the backup model's, if it answered instead).
     let routed = null;
+    // Idle watchdog: a turn that goes IDLE_ABORT_MS with no event from the AI is aborted, and the person is told so.
+    // Its clock starts here, when the turn starts: started when the message came, a message that waited longer than
+    // that behind another reply in this chat was given up on before its turn began.
+    const controller = new AbortController();
+    let lastEventAt = Date.now();
+    let idleAborted = false;
+    // Idle abort: how long a turn may go with NO stream event before we give up.
+    // Was a hard 3 minutes, which killed legitimate long research/tool turns.
+    // Now configurable, but deliberately FINITE — the Mac build sets this to
+    // ~2e9 (23 days), which is only safe there because its PTY pool has a
+    // heartbeat + dead-socket detector. This build has neither, so an infinite
+    // value would wedge a turn forever with no console to kill it from.
+    const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
+    const idleTimer = setInterval(() => {
+      if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
+        idleAborted = true;
+        try { controller.abort(); } catch {}
+        clearInterval(idleTimer);
+      }
+    }, idleCheckEveryMs);
     try {
       // messageId: the message this turn answers (its pictures are kept on it, not on whatever came in later)
       const toolCtx = { db, settingsStore, conversationId: convId, messageId: savedUser?.id || null };
@@ -551,8 +554,9 @@ ${sendFileHint("discord")}`,
       clearInterval(idleTimer);
     }
     }, {
-      // Waiting behind the reply in progress: a "Queued" line on the dashboard too.
-      live: { source: "discord", prompt: displayText },
+      // Waiting behind the reply in progress: a "Queued" line on the dashboard too. Its Stop takes it out of the
+      // queue: it never runs, so its "typing…" ends here (the turn's own finally never comes).
+      live: { source: "discord", prompt: displayText, onRemoved: () => clearInterval(typingInterval) },
       onQueued: () => {
         message.reply("⏳ Still working on your last message — yours is next.").catch(() => {});
       },

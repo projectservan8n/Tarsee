@@ -251,7 +251,7 @@ A model that needs a GPU will be slow on Railway's CPUs. An address saved in Set
 
 ## Set up with Railway variables only
 
-To deploy without clicking through the wizard, set `TARSEE_AI_PROVIDER` to `claude`, `anthropic`, `chatgpt`, `openai`, `openrouter`, `deepseek` or `local`, and that AI's key variable (or `TARSEE_LOCAL_AI_URL`, or `CLAUDE_CODE_OAUTH_TOKEN` for the Claude plan). `TARSEE_AI_MODEL` picks its model; empty means that AI's default (for Local AI, the first model its server lists; set it to pin one). When that AI is ready, the setup wizard is skipped. Anything chosen later in Settings > AI wins over these variables.
+To deploy without clicking through the wizard, set `TARSEE_AI_PROVIDER` to `claude`, `anthropic`, `openai`, `openrouter`, `deepseek` or `local`, and that AI's key variable (or `TARSEE_LOCAL_AI_URL`, or `CLAUDE_CODE_OAUTH_TOKEN` for the Claude plan, which is enough on its own). `TARSEE_AI_MODEL` picks its model; empty means that AI's default (for Local AI, the first model its server lists; set it to pin one). When that AI is ready, the setup wizard is skipped. The ChatGPT plan has no variable, because it needs a sign-in: with `TARSEE_AI_PROVIDER` set to `chatgpt`, the wizard still opens until someone signs in to ChatGPT, and is skipped once that sign-in is on the volume (after a redeploy, for example). Anything chosen later in Settings > AI wins over these variables.
 
 | Variable | What it does |
 |---|---|

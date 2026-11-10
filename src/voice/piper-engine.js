@@ -6,31 +6,194 @@
  */
 
 import { TTSEngine } from "./tts-interface.js";
-import { execFileSync, execSync } from "node:child_process";
+import { tempAudioFiles } from "./temp-audio.js";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 
 const VOICES_DIR = path.join(process.env.TARSEE_DATA_DIR || process.env.TARSEE_STATE_DIR || "/data/tarsee", "piper-voices");
+const PIPER_TIMEOUT = 15_000;
+// Once Piper has gone: how long a failed one's last words on its error output
+// are waited for. Once one is stopped: how long it is given to be gone (one
+// still there after that has its file removed once it has gone).
+const LAST_WORDS_MS = 500;
+const KILL_WAIT_MS = 2_000;
+
+// Each sentence's audio file, and the sweeps that remove the ones left behind.
+const files = tempAudioFiles({ prefix: "tarsee-piper-", ext: ".wav", label: "piper" });
+
+// Swapped only by tests: the program run as Piper (its first entry; the rest go
+// before Piper's own arguments), the time limit, the spawn that starts it, and
+// how long a stopped one is given to be gone.
+let _command = null;
+let _timeoutMs = PIPER_TIMEOUT;
+let _spawn = spawn;
+let _killWaitMs = KILL_WAIT_MS;
+
+/**
+ * Tests only: run another program as Piper, with shorter waits, another spawn, or other ages, gaps and waits between
+ * tries for the temp folder's sweeps. The next engine made sweeps as if Tarsee had just started. No arguments puts the
+ * real ones back.
+ */
+export function __setForTests({ command, timeoutMs, spawn: spawnFn, killWaitMs, leftoverAgeMs, sweepGapMs, removeRetryMs } = {}) {
+  _spawn = spawnFn || spawn;
+  _command = command?.length ? command : null;
+  _timeoutMs = timeoutMs ?? PIPER_TIMEOUT;
+  _killWaitMs = killWaitMs ?? KILL_WAIT_MS;
+  files.reset({ leftoverAgeMs, sweepGapMs, removeRetryMs });
+}
+
+/** Tests only: settles once the temp folder's sweeps begun so far are done. */
+export const __leftoverSweepsDone = () => files.settled();
+
+function removeFile(file) {
+  try { fs.rmSync(file, { force: true }); } catch { /* still held (Windows), or already gone */ }
+}
+
+/**
+ * The piper program on the PATH, or null. It is looked up here rather than with
+ * `which`, which Windows does not have. On Windows only piper.exe counts: a
+ * .cmd or .bat cannot be started without a shell.
+ */
+function findPiper() {
+  const name = process.platform === "win32" ? "piper.exe" : "piper";
+  for (const entry of (process.env.PATH || "").split(path.delimiter)) {
+    const dir = entry.trim().replace(/^"(.*)"$/, "$1");
+    if (!dir) continue;
+    const file = path.join(dir, name);
+    try {
+      if (!fs.statSync(file).isFile()) continue;
+      if (process.platform !== "win32") fs.accessSync(file, fs.constants.X_OK);
+      return file;
+    } catch { /* not here */ }
+  }
+  return null;
+}
+
+/** The program to run as Piper, and any arguments that go before Piper's own, or null when there is none. */
+function piperProgram() {
+  if (_command) return { bin: _command[0], args: _command.slice(1) };
+  const bin = findPiper();
+  return bin ? { bin, args: [] } : null;
+}
+
+/**
+ * Runs Piper with the text on its input and waits for it to finish, without
+ * blocking the server: a long sentence can take seconds, and a voice call has
+ * to keep going meanwhile. A Piper that runs past the limit is stopped, and this
+ * waits until it is gone (though never for ever), so the file it was writing can
+ * be deleted. Whatever goes wrong comes back as an Error in plain words.
+ * `onGone` is called once Piper has gone, which for a stopped Piper that was slow
+ * to go can be after this has stopped waiting for it.
+ */
+function runPiper({ bin, args }, input, timeoutMs, onGone = () => {}) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = _spawn(bin, args, { stdio: ["pipe", "ignore", "pipe"], windowsHide: true });
+    } catch (err) {
+      reject(new Error(`Piper could not run: ${err.message}`));
+      return;
+    }
+    let stderr = "";
+    let exited = null; // how Piper itself ended, once it has
+    let timedOut = false;
+    let done = false;
+    let gone = false;
+    const wentAway = () => {
+      if (gone) return;
+      gone = true;
+      try { onGone(); } catch { /* nothing more to do */ }
+    };
+    const timers = [];
+    const later = (ms, fn) => { timers.push(setTimeout(fn, ms)); };
+    const finish = (err) => {
+      if (done) return;
+      done = true;
+      for (const t of timers) clearTimeout(t);
+      if (err) reject(err);
+      else resolve();
+    };
+    const tooLong = () => new Error(`Piper took longer than ${timeoutMs / 1000} s and was stopped`);
+    const outcome = ({ code, signal }) => {
+      if (code === 0) return null;
+      const said = stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop();
+      const how = code === null ? `stopped by ${signal}` : `exit code ${code}`;
+      return new Error(`Piper failed (${how})${said ? `: ${said}` : ""}`);
+    };
+
+    // First of all, so that a Piper that cannot start (no such program, or no
+    // file handles left) is an error returned here, never one that stops the server.
+    child.on("error", (err) => finish(new Error(`Piper could not run: ${err.message}`)));
+    if (!child.stdin || !child.stderr) {
+      // With no file handles left, Node gives the child no input or output, and
+      // sends the reason with the "error" event, which comes before this does.
+      setImmediate(() => finish(new Error("Piper could not run: no file handles were left to start it")));
+      return;
+    }
+
+    later(timeoutMs, () => {
+      // Piper had finished, and only its error output was still open.
+      if (exited) return finish(outcome(exited));
+      timedOut = true;
+      child.kill("SIGKILL");
+      // Wait for it to be gone, but not for ever: the next sentence is waiting its turn.
+      later(_killWaitMs, () => finish(tooLong()));
+    });
+
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => { stderr = (stderr + chunk).slice(-4000); });
+    // Piper can quit before it has read all the text; its exit code says why.
+    child.stdin.on("error", () => {});
+    child.on("exit", (code, signal) => {
+      wentAway();
+      exited = { code, signal };
+      if (timedOut) return finish(tooLong());
+      // Piper is gone, and so is its hold on the audio file. Its error output
+      // closes with it, unless a process it started still holds it open: success
+      // needs nothing more from it, and a failure's last words are waited for briefly.
+      if (code === 0) return finish();
+      later(LAST_WORDS_MS, () => finish(outcome(exited)));
+    });
+    child.on("close", (code, signal) => {
+      wentAway();
+      if (timedOut) return finish(tooLong());
+      finish(outcome(exited || { code, signal }));
+    });
+    child.stdin.end(input);
+  });
+}
+
+// Piper loads its voice model again for every sentence and keeps the CPU busy
+// while it speaks, and a call asks for every sentence of an answer at once. Run
+// side by side, each would take several times as long, they would finish
+// together (so the first one is heard late), and on a small server all of them
+// would run past the limit. So they take turns, in the order they were asked
+// for, and each one's limit starts with its turn. This chain is the turn: one
+// Piper runs at a time, and one that fails or is stopped frees it like any other.
+let turn = Promise.resolve();
+
+function inTurn(task) {
+  const run = turn.then(task);
+  turn = run.catch(() => {});
+  return run;
+}
 
 export class PiperTTSEngine extends TTSEngine {
   constructor(defaultVoice) {
     super();
     fs.mkdirSync(VOICES_DIR, { recursive: true });
     this._defaultVoice = defaultVoice || null;
+    // Audio files an earlier run left behind (a crash or a restart in the middle of a sentence).
+    files.atStart();
   }
 
   get name() { return "piper"; }
 
   async isAvailable() {
-    try {
-      execSync("which piper", { stdio: "ignore", timeout: 3000 });
-      // Check if at least one voice model exists
-      const voices = this._scanVoices();
-      return voices.length > 0;
-    } catch {
-      return false;
-    }
+    if (!piperProgram()) return false;
+    // Check if at least one voice model exists
+    return this._scanVoices().length > 0;
   }
 
   /**
@@ -102,27 +265,41 @@ export class PiperTTSEngine extends TTSEngine {
 
     if (!modelPath) throw new Error("No Piper voice models found. Upload .onnx + .onnx.json files in Settings > Voice.");
 
-    const tmpOut = `/tmp/piper-${crypto.randomBytes(4).toString("hex")}.wav`;
+    const program = piperProgram();
+    if (!program) throw new Error("Piper is not installed: there is no piper program on the PATH.");
+
+    // The system temp folder (there is no /tmp on Windows), and a name of its
+    // own for every sentence, so two sentences spoken at once never share a file.
+    const tmpOut = files.newPath();
+    // Set once this sentence is over. A stopped Piper that only goes after that
+    // may have written its file since (or, on Windows, held it so that it could
+    // not be removed), so the file is removed again once Piper has gone.
+    let over = false;
+    let spoken = false;
 
     try {
       // Pipe text to piper via stdin, output to wav file
       // --sentence_silence adds natural pauses between sentences
-      execFileSync("piper", [
-        "--model", modelPath,
-        "--output_file", tmpOut,
-        "--sentence_silence", "0.3",
-      ], {
-        input: text,
-        stdio: ["pipe", "ignore", "ignore"],
-        timeout: 15_000,
-      });
+      await inTurn(() => runPiper({
+        bin: program.bin,
+        args: [...program.args, "--model", modelPath, "--output_file", tmpOut, "--sentence_silence", "0.3"],
+      }, text, _timeoutMs, () => { if (over) removeFile(tmpOut); }));
 
-      const audio = fs.readFileSync(tmpOut);
+      let audio;
+      try {
+        audio = await fs.promises.readFile(tmpOut);
+      } catch (err) {
+        if (err.code === "ENOENT") throw new Error("Piper finished but wrote no audio");
+        throw err;
+      }
       if (audio.length < 100) throw new Error("Piper generated empty audio");
 
+      spoken = true;
       return { audio, contentType: "audio/wav" };
     } finally {
-      try { fs.unlinkSync(tmpOut); } catch { /* ignore */ }
+      over = true;
+      removeFile(tmpOut);
+      if (!spoken) files.afterFailure();
     }
   }
 
@@ -169,13 +346,20 @@ export function savePiperVoice(onnxBuffer, jsonBuffer, name) {
 }
 
 /**
- * Delete a Piper voice model.
+ * Delete a Piper voice model. Returns false, and deletes nothing, for an id that
+ * is not a plain name.
  */
 export function deletePiperVoice(voiceId) {
-  const onnxPath = path.join(VOICES_DIR, `${voiceId}.onnx`);
-  const jsonPath = path.join(VOICES_DIR, `${voiceId}.onnx.json`);
+  // The id comes from a request's address. Only a plain name counts (no folder
+  // separator, and no drive colon on Windows), so an id such as "../x" can never
+  // reach a file outside the voices folder.
+  const id = String(voiceId ?? "");
+  if (!id || /[\\/:\0]/.test(id)) return false;
+  const onnxPath = path.join(VOICES_DIR, `${id}.onnx`);
+  const jsonPath = path.join(VOICES_DIR, `${id}.onnx.json`);
   try { fs.unlinkSync(onnxPath); } catch {}
   try { fs.unlinkSync(jsonPath); } catch {}
+  return true;
 }
 
 /**

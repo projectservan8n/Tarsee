@@ -337,6 +337,14 @@ chatRouter.post("/stop", async (req, res) => {
     if (removeQueuedTurn(turnId, conversationId)) return res.json({ ok: true, stopped: true, removed: true });
     if (activeTurnFor(conversationId)?.turnId !== turnId) return res.json({ ok: true, stopped: false });
   }
+  res.json({ ok: true, stopped: stopChat(conversationId) });
+});
+
+/**
+ * Stop a chat's reply and cancel what the dashboard sent that waits behind it: the Stop button (POST /stop above), and
+ * /stop typed in the dashboard's chat (lib/commands.js, given this as ctx.stopChat). Whether a reply was stopped.
+ */
+function stopChat(conversationId) {
   // Only a conversation with turns running or waiting has anything to cancel,
   // so the map holds real chats, not every string ever posted here.
   if (queueDepth(conversationId) > 0) stopEpoch.set(conversationId, (stopEpoch.get(conversationId) || 0) + 1);
@@ -350,8 +358,8 @@ chatRouter.post("/stop", async (req, res) => {
   // A turn another channel started in this chat (Telegram, Discord, a cron's
   // run), which the dashboard shows at work too (ai/turn.js).
   if (stopTurns(conversationId) > 0) stopped = true;
-  res.json({ ok: true, stopped });
-});
+  return stopped;
+}
 
 /**
  * POST /api/chat/send
@@ -419,6 +427,8 @@ chatRouter.post("/send", async (req, res) => {
       // isn't the owner (the AI's shell can read it, and the dashboard sends it too), so without a live sign-in this is
       // "api", and commands.js refuses those commands as not the owner's.
       platform: liveSessionId(req) ? "web" : "api",
+      // /stop does what the Stop button does here: what the dashboard sent that waits behind the reply is cancelled too.
+      stopChat,
     });
 
     if (cmdResult.handled) {

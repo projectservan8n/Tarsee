@@ -1,13 +1,64 @@
 /**
  * Canvas/A2UI server for Tarsee.
- * Serves AI-generated HTML/CSS/JS UIs from a canvas directory.
+ * Serves AI-generated HTML/CSS/JS UIs from a canvas directory (/canvas/<id>/), and draws diagrams (/diagram/<id>/).
+ *
+ * A canvas is a page the AI wrote: create_canvas writes it, and the AI can write any file in the canvas folder
+ * itself. A diagram is not a page anyone wrote: create_diagram keeps its data (DiagramStore), and this server draws
+ * its page from that data on every request (lib/diagram-renderer.js), with a CSP that lets only Tarsee's own diagram
+ * script run. That is the difference the chat relies on to take a diagram's node clicks as the owner's questions
+ * (js/chat.js _initDiagramListener): nothing the AI writes, under any name, can run on /diagram/<id>/.
  */
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import config from "../config/env.js";
+import { DIAGRAM_SCRIPT, normalizeDiagramSpec, renderDiagramHtml } from "./diagram-renderer.js";
 
 const CANVAS_DIR = path.join(config.WORKSPACE_DIR, "canvas");
+const DIAGRAM_DIR = path.join(config.DATA_DIR, "diagrams");
+
+/** A diagram's id: its address (/diagram/<id>/) and its data file's name (<id>.json). */
+export const DIAGRAM_ID = /^[a-z0-9-]{1,64}$/;
+
+/**
+ * The diagrams create_diagram made: each one's data, as normalizeDiagramSpec gives it, in <data>/diagrams/<id>.json.
+ * The file is data only. Whatever is in it (the AI's shell could rewrite it), the server draws the page itself.
+ */
+export class DiagramStore {
+  /** Keep a diagram's data. Returns { diagramId, path: its address }. */
+  save(diagramId, spec) {
+    if (typeof diagramId !== "string" || !DIAGRAM_ID.test(diagramId)) throw new Error("a diagram's id is lowercase letters, digits and hyphens");
+    fs.mkdirSync(DIAGRAM_DIR, { recursive: true });
+    fs.writeFileSync(path.join(DIAGRAM_DIR, `${diagramId}.json`), JSON.stringify(normalizeDiagramSpec(spec)));
+    return { diagramId, path: `/diagram/${diagramId}/` };
+  }
+
+  /** A diagram's data, or null when there is none (or it isn't JSON). */
+  get(diagramId) {
+    if (typeof diagramId !== "string" || !DIAGRAM_ID.test(diagramId)) return null;
+    try {
+      const spec = JSON.parse(fs.readFileSync(path.join(DIAGRAM_DIR, `${diagramId}.json`), "utf8"));
+      return spec && typeof spec === "object" && !Array.isArray(spec) ? spec : null;
+    } catch { return null; }
+  }
+
+  /** Every diagram kept: [{ id, size, modified }], newest first. */
+  list() {
+    try {
+      return fs.readdirSync(DIAGRAM_DIR, { withFileTypes: true })
+        .filter((d) => d.isFile() && d.name.endsWith(".json") && DIAGRAM_ID.test(d.name.slice(0, -5)))
+        .map((d) => {
+          const stat = fs.statSync(path.join(DIAGRAM_DIR, d.name));
+          return { id: d.name.slice(0, -5), size: stat.size, modified: stat.mtime };
+        })
+        .sort((a, b) => b.modified - a.modified);
+    } catch { return []; }
+  }
+
+  static create() {
+    return new DiagramStore();
+  }
+}
 
 export class CanvasServer {
   constructor() {
@@ -112,8 +163,45 @@ function applyCanvasIsolation(res) {
   res.set("X-Content-Type-Options", "nosniff");
 }
 
+/** The hash of the one script a diagram's page may run (lib/diagram-renderer.js), for its CSP. */
+const DIAGRAM_SCRIPT_HASH = crypto.createHash("sha256").update(DIAGRAM_SCRIPT, "utf8").digest("base64");
+
+/**
+ * A diagram's page is locked down further than a canvas: sandboxed into an opaque origin like one, and its CSP lets
+ * exactly one script run, Tarsee's own diagram script, named by its hash. No other inline script, no event-handler
+ * attribute, no script from anywhere else, no network at all. So even a diagram whose words were made to look like
+ * HTML runs nothing but Tarsee's script, which posts a node click only when a person clicks a node.
+ */
+function applyDiagramIsolation(res) {
+  res.set("Content-Security-Policy", [
+    "sandbox allow-scripts",
+    "default-src 'none'",
+    `script-src 'sha256-${DIAGRAM_SCRIPT_HASH}'`,
+    "style-src 'unsafe-inline'",
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join("; "));
+  res.set("Cross-Origin-Opener-Policy", "same-origin");
+  res.set("Cross-Origin-Resource-Policy", "same-origin");
+  res.set("X-Content-Type-Options", "nosniff");
+}
+
+/** GET /diagram/<id>/: the page drawn from that diagram's data, now. Never a file: nothing under /diagram/ is one. */
+function serveDiagram(req, res) {
+  applyDiagramIsolation(res);
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    return res.status(405).set("Allow", "GET, HEAD").type("text").send("Method not allowed");
+  }
+  const rest = req.path.slice("/diagram/".length);
+  const diagramId = rest.endsWith("/") ? rest.slice(0, -1) : rest;
+  const spec = DiagramStore.create().get(diagramId);
+  if (!spec) return res.status(404).type("text").send("Diagram not found");
+  return res.type("html").send(renderDiagramHtml({ ...spec, diagramId }));
+}
+
 export function canvasMiddleware(req, res, next) {
-  if (!req.path.startsWith("/canvas/")) return next();
+  const isDiagram = req.path.startsWith("/diagram/");
+  if (!isDiagram && !req.path.startsWith("/canvas/")) return next();
 
   // Canvases are private. They routinely contain whatever the user asked the
   // agent to visualise — revenue dashboards, customer lists, internal process
@@ -124,32 +212,35 @@ export function canvasMiddleware(req, res, next) {
   if (!req.auth?.authenticated) {
     return res.status(401).type("html").send(
       "<!DOCTYPE html><html><body style=\"background:#1a1a1a;color:#ececec;font-family:sans-serif;padding:40px\">"
-      + "<h1>Sign in required</h1><p>Log in to Tarsee to view this canvas.</p></body></html>",
+      + `<h1>Sign in required</h1><p>Log in to Tarsee to view this ${isDiagram ? "diagram" : "canvas"}.</p></body></html>`,
     );
   }
+
+  if (isDiagram) return serveDiagram(req, res);
 
   applyCanvasIsolation(res);
   const parts = req.path.replace("/canvas/", "").split("/").filter(Boolean);
 
-  // Gallery: /canvas/ with no ID → list all canvases
+  // Gallery: /canvas/ with no ID → list all canvases, and the diagrams (at their own address)
   if (parts.length === 0) {
     try {
       const canvases = fs.readdirSync(CANVAS_DIR, { withFileTypes: true })
         .filter(d => d.isDirectory() && fs.existsSync(path.join(CANVAS_DIR, d.name, "index.html")))
         .map(d => {
           const stat = fs.statSync(path.join(CANVAS_DIR, d.name, "index.html"));
-          return { name: d.name, size: stat.size, modified: stat.mtime };
+          return { name: d.name, href: `/canvas/${encodeURIComponent(d.name)}/`, kind: "Canvas", size: stat.size, modified: stat.mtime };
         })
+        .concat(DiagramStore.create().list().map((d) => ({ name: d.id, href: `/diagram/${d.id}/`, kind: "Diagram", size: d.size, modified: d.modified })))
         .sort((a, b) => b.modified - a.modified);
 
       if (canvases.length === 0) {
-        return res.send(`<!DOCTYPE html><html><head><title>Canvas Gallery</title><style>body{background:#1a1a1a;color:#ececec;font-family:Poppins,sans-serif;padding:40px;text-align:center}h1{color:#c45a35}p{color:#a8a8a0}</style></head><body><h1>Canvas Gallery</h1><p>No canvases yet. Ask Tarsee to create one!</p></body></html>`);
+        return res.send(`<!DOCTYPE html><html><head><title>Canvas Gallery</title><style>body{background:#1a1a1a;color:#ececec;font-family:Poppins,sans-serif;padding:40px;text-align:center}h1{color:#c45a35}p{color:#a8a8a0}</style></head><body><h1>Canvas Gallery</h1><p>No canvases or diagrams yet. Ask Tarsee to create one!</p></body></html>`);
       }
 
       // Canvas names are directory names on disk and are model-controlled, so
       // they must be escaped for text and URL-encoded for the href — otherwise
       // a canvas named `<img src=x onerror=...>` is stored XSS on this page.
-      const items = canvases.map(c => `<a href="/canvas/${encodeURIComponent(c.name)}/" style="display:block;background:#2b2a27;border-radius:8px;padding:16px;margin:8px 0;text-decoration:none;color:#ececec;border:1px solid #3a3935"><strong>${escapeHtml(c.name)}</strong><br><span style="color:#a8a8a0;font-size:12px">${Math.round(c.size/1024)}KB &middot; ${escapeHtml(c.modified.toLocaleDateString())}</span></a>`).join("");
+      const items = canvases.map(c => `<a href="${c.href}" style="display:block;background:#2b2a27;border-radius:8px;padding:16px;margin:8px 0;text-decoration:none;color:#ececec;border:1px solid #3a3935"><strong>${escapeHtml(c.name)}</strong><br><span style="color:#a8a8a0;font-size:12px">${c.kind} &middot; ${Math.round(c.size/1024)}KB &middot; ${escapeHtml(c.modified.toLocaleDateString())}</span></a>`).join("");
       return res.send(`<!DOCTYPE html><html><head><title>Canvas Gallery</title><style>body{background:#1a1a1a;color:#ececec;font-family:Poppins,sans-serif;padding:40px;max-width:600px;margin:0 auto}h1{color:#c45a35}a:hover{border-color:#c45a35!important}</style></head><body><h1>Canvas Gallery</h1>${items}</body></html>`);
     } catch {
       return res.status(500).send("Error loading gallery");

@@ -879,6 +879,13 @@ const Settings = {
   _aiOpen: {},           // provider id → the state its guide was last unfolded or folded for
   _aiLoginCtl: null,     // the ChatGPT sign-in this page started ({ cancel })
   _aiLoginView: null,    // what that sign-in shows now
+  _aiLoginEnding: null,  // a cancelled sign-in being ended on the server, which the next one waits for (shared with the wizard)
+  _aiLoginRun: 0,        // how many sign-ins have started here: the newest is the one the server's sign-in belongs to
+  _aiLoginKept: null,    // the start of a sign-in left while it was on its way, kept to end the code it brings back
+  // How long a sign-in's start may take: a little longer than the server gives Codex to show the code (startTimeoutMs,
+  // 30 s, in src/ai/codex-device-login.js) and the up to 5 s it then takes to stop Codex. And how long Sign in clicked
+  // again waits for the last start's answer, an end (DELETE) or a poll before giving up on it.
+  _aiLoginLimits: { startMs: 40_000, giveUpMs: 10_000 },
   _aiDismissed: null,    // "<provider>|<state>" of a header banner hidden for this visit
 
   _esc(s) {
@@ -1571,10 +1578,22 @@ const Settings = {
     };
   },
 
-  /** An /api/ai call that keeps the answer's fix: resolves to the JSON, or throws an Error whose message says what to do. */
-  async _aiCall(path, { method = "GET", body } = {}) {
-    const res = await API.request(path, { method, body });
+  /**
+   * An /api/ai call that keeps the answer's fix: resolves to the JSON, or throws an Error whose message says what to do.
+   * signal: aborting it ends the call at once (throwing signal.reason), even one still waiting for a fresh CSRF token,
+   * and drops the request.
+   */
+  async _aiCall(path, { method = "GET", body, signal } = {}) {
+    const aborted = () => signal.reason ?? new DOMException("The call was stopped.", "AbortError");
+    const sent = API.request(path, { method, body, signal });
+    const res = await (signal
+      ? Promise.race([sent, new Promise((_, reject) => {
+        if (signal.aborted) reject(aborted());
+        else signal.addEventListener("abort", () => reject(aborted()), { once: true });
+      })])
+      : sent);
     const data = await res.json().catch(() => ({}));
+    if (signal?.aborted) throw aborted();
     if (!res.ok) {
       const err = new Error([data.error || `HTTP ${res.status}`, data.fix].filter(Boolean).join(" "));
       err.data = data;
@@ -1877,22 +1896,83 @@ const Settings = {
    * { state: "starting" | "waiting" | "done" | "failed" | "expired" | "cancelled", url, code, expiresAt, error, account }
    * at once, every second while it waits (for the countdown) and on every change. A sign-in the server no longer has
    * (Tarsee restarted, or another window cancelled it or signed out) is a failed one that says to start again.
-   * Returns { cancel() (ends it, on the server too), stop() (stops following it here, and draws nothing more) }.
+   * Returns { cancel() (draws "cancelled" at once and ends it, on the server too; resolves once the server has
+   * answered, or after giveUpMs while the start is still on its way), stop() (stops following it here, and draws
+   * nothing more: for a sign-out, which ends it on the server itself) }.
+   *
+   * Sign in clicked again cancels the last sign-in and starts this one, so two things keep them apart:
+   *   - cancel() draws "cancelled" at once and nothing after. Drawn once the server had answered, it cleared the box
+   *     after the new sign-in had drawn its reason or its code.
+   *   - The server holds one sign-in, and a start while a code waits hands that code back. So a sign-in that may still
+   *     be waiting there is ended before this one starts (a start that landed first got the old code, then lost it to
+   *     the end), and one that has ended (refused, failed, expired, done) has nothing to end.
+   * Nothing waits for ever (a stalled connection, say after a laptop wakes), so a click always gets a new start:
+   *   - A start with no answer in _aiLoginLimits.startMs (40 s) is dropped, and its box says so and to try again.
+   *   - Sign in clicked again waits giveUpMs (10 s) at most for the last start's answer. With none by then that start is
+   *     dropped, nothing is ended (no code is known to wait), and the new one goes out: a code the server got to after
+   *     all is the one it hands the new start. A dropped start can't answer late, so no old code is drawn.
+   *   - An end (DELETE) or a poll with no answer in giveUpMs is dropped too (a poll is then sent again).
+   *   - A fresh CSRF token, which a start asks for first once the page's has run out: an ask with no answer in
+   *     API.csrfWaitMs (10 s) is asked once more, then the start goes on without one (js/api.js refreshCsrf).
+   * A sign-in left while its start is still on its way (cancelled, Next in the wizard, a sign-out) and no new one after
+   * it: that start may still bring a code back, and the server would then hold a sign-in nobody follows (Codex waits 15
+   * minutes for it). The start is kept (startMs at most), and a code it brings back is ended then. A new sign-in
+   * started in the meantime drops it instead: the server's one sign-in is the new one's.
    */
   startChatgptLogin(render) {
+    const { startMs, giveUpMs } = this._aiLoginLimits;
+    // A signal that aborts after ms (then timedOut), or at once with abort(); clear() once its call has answered.
+    const within = (ms) => {
+      const c = new AbortController();
+      let late = false;
+      const t = setTimeout(() => { late = true; c.abort(); }, ms);
+      return { signal: c.signal, timedOut: () => late, abort: () => { clearTimeout(t); c.abort(); }, clear: () => clearTimeout(t) };
+    };
+    // This is the newest sign-in: a start an older one kept (see leave) is dropped, as its code would be this one's.
+    this._aiLoginRun += 1;
+    const run = this._aiLoginRun;
+    this._aiLoginKept?.abort();
+    this._aiLoginKept = null;
     let stopped = false;
     let timer = null;
     let tick = null;
     let last = null;
+    let held = false;   // the server may still be waiting on a code this sign-in was given
+    let ask = null;     // the start (POST), once it is sent
+    let onWay = false;  // that start is sent and hasn't answered
     const stop = () => { stopped = true; clearTimeout(timer); clearInterval(tick); };
+    const endOnServer = () => {
+      const limit = within(giveUpMs);
+      return this._aiCall("/api/ai/chatgpt/login", { method: "DELETE", signal: limit.signal }).finally(limit.clear);
+    };
+    // This sign-in is left while its start is still on its way: kept, with a code it brings back ended then, unless a
+    // newer sign-in has started (that one is the server's sign-in now): then dropped.
+    let left = false;
+    const leave = () => {
+      if (!onWay || left) return;
+      left = true;
+      if (this._aiLoginRun !== run) { ask.abort(); return; }
+      const kept = ask;
+      this._aiLoginKept = kept;
+      const answered = () => {
+        if (this._aiLoginKept === kept) this._aiLoginKept = null;
+        if (!held || this._aiLoginRun !== run) return;
+        // (the next sign-in waits for this end, as for any other)
+        this._aiLoginEnding = Promise.all([this._aiLoginEnding, endOnServer().catch(() => { /* it ends by itself */ })]).then(() => {});
+      };
+      started.then(answered, answered);
+    };
     const poll = async () => {
       if (stopped) return;
       let r = null;
-      try { r = await API.json("/api/ai/chatgpt/login"); } catch { /* try again */ }
+      const limit = within(giveUpMs);
+      try { r = await this._aiCall("/api/ai/chatgpt/login", { signal: limit.signal }); } catch { /* try again */ }
+      limit.clear();
       if (stopped) return;
       if (r?.state === "waiting") { last = r; render(r); }
-      else if (r?.state === "done" || r?.state === "failed" || r?.state === "expired") { stop(); render(r); return; }
+      else if (r?.state === "done" || r?.state === "failed" || r?.state === "expired") { held = false; stop(); render(r); return; }
       else if (r?.state === "idle") {
+        held = false;
         stop();
         render({ state: "failed", error: "The sign-in stopped: Tarsee restarted, or it was cancelled or signed out in another window. Click Sign in with ChatGPT for a new code." });
         return;
@@ -1900,25 +1980,51 @@ const Settings = {
       timer = setTimeout(poll, 3000);
     };
     render({ state: "starting" });
-    // (through _aiCall, so a refusal keeps its code: device-code-disabled, network, codex-missing...)
-    this._aiCall("/api/ai/chatgpt/login", { method: "POST" }).then((r) => {
-      if (stopped) return;
-      if (r.state !== "waiting") { stop(); render(r); return; }
-      last = r;
-      render(r);
-      tick = setInterval(() => { if (!stopped && last) render(last); }, 1000);
-      timer = setTimeout(poll, 3000);
-    }, (err) => {
-      stop();
-      render({ state: "failed", error: err.message, code: err.data?.code ?? null });
+    const started = Promise.resolve(this._aiLoginEnding).then(() => {
+      if (stopped) return undefined;
+      ask = within(startMs);
+      onWay = true;
+      // (through _aiCall, so a refusal keeps its code: device-code-disabled, network, codex-missing...)
+      return this._aiCall("/api/ai/chatgpt/login", { method: "POST", signal: ask.signal }).then((r) => {
+        held = r.state === "waiting";
+        if (stopped) return;
+        if (r.state !== "waiting") { stop(); render(r); return; }
+        last = r;
+        render(r);
+        tick = setInterval(() => { if (!stopped && last) render(last); }, 1000);
+        timer = setTimeout(poll, 3000);
+      }, (err) => {
+        if (stopped) return;
+        stop();
+        if (ask.timedOut()) {
+          const s = Math.max(1, Math.round(startMs / 1000));
+          render({ state: "failed", error: `Tarsee didn't answer in ${s} second${s === 1 ? "" : "s"} while starting the ChatGPT sign-in. Check your connection, then click Sign in with ChatGPT to try again.`, code: "no-answer" });
+          return;
+        }
+        render({ state: "failed", error: err.message, code: err.data?.code ?? null });
+      }).finally(() => { onWay = false; ask.clear(); });
     });
     return {
-      cancel: async () => {
+      cancel: () => {
         stop();
-        try { await API.json("/api/ai/chatgpt/login", { method: "DELETE" }); } catch { /* it ends by itself */ }
         render({ state: "cancelled" });
+        // After a start still on its way, which may hand out a code, for giveUpMs at most (then the next sign-in
+        // doesn't wait for it any longer: see leave); and after any other end still under way.
+        let wait = null;
+        const gaveUp = new Promise((resolve) => { wait = setTimeout(() => resolve(true), giveUpMs); });
+        const end = Promise.race([started.then(() => false, () => false), gaveUp])
+          .then((late) => {
+            clearTimeout(wait);
+            if (late) { leave(); return null; }
+            return held ? endOnServer() : null;
+          })
+          .catch(() => { /* it ends by itself */ });
+        const ending = Promise.all([this._aiLoginEnding, end]).then(() => {});
+        this._aiLoginEnding = ending;
+        return ending;
       },
-      stop,
+      // (a sign-out ends what the server holds; a start still on its way may land after it)
+      stop: () => { stop(); leave(); },
     };
   },
 
