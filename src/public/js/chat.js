@@ -297,9 +297,10 @@ const Chat = {
       if (copyItem) {
         e.preventDefault();
         const embed = copyItem.closest(".canvas-embed");
-        const canvasId = embed?.dataset.canvasId;
-        if (canvasId) {
-          const url = `${location.origin}/canvas/${canvasId}/`;
+        // The canvas's or the diagram's own address (embedHtml).
+        const href = embed?.dataset.href;
+        if (href) {
+          const url = `${location.origin}${href}`;
           navigator.clipboard.writeText(url).then(() => {
             if (window.App?.showToast) App.showToast("Link copied", "success");
           }).catch(() => {});
@@ -1805,6 +1806,10 @@ const Chat = {
 
     if (this.liveOn()) return this.sendLive(text, hasFiles);
 
+    // A /stop typed while the reply streams goes now: in the queue it would wait behind that reply and only arrive once
+    // the reply had ended. The server stops the reply, as the Stop button does, and says so.
+    if (this.isStreaming && !hasFiles && /^\/stop(\s|$)/i.test(text)) return this.sendStopNow(text);
+
     // Queue if already streaming
     if (this.isStreaming) {
       const attachments = hasFiles ? await this.buildAttachments() : [];
@@ -1868,6 +1873,26 @@ const Chat = {
     const userMsg = this.appendMessage("user", text);
     if (attachments.length) this.showSentFiles(userMsg, attachments);
     await this._streamReply(text, attachments);
+  },
+
+  /** A /stop typed while the reply streams (the old view): sent at once, beside that reply's stream, and its answer shown. */
+  async sendStopNow(text) {
+    this.elements.messageInput.value = "";
+    this.elements.messageInput.style.height = "auto";
+    this.appendMessage("user", text);
+    let answer = "";
+    await API.sendMessage(
+      this.currentConversationId,
+      text,
+      (content) => { if (content) answer += content; },
+      () => { if (answer) this.appendMessage("assistant", answer); },
+      (error) => App.showToast(error, "error"),
+      this.currentChannelKey || "web:default",
+      undefined,
+      undefined,
+      // Its own request: the reply's stream is read on to its end, where the stop shows.
+      { independent: true },
+    );
   },
 
   /**
@@ -2223,38 +2248,57 @@ const Chat = {
   _typingIndicatorTimeout: null,
 
   /**
-   * A click on a diagram's node asks about that node. The diagram (lib/diagram-renderer.js) posts
-   * { type: "tarsee:diagram-click", diagramId, nodeId, label, sublabel, question } to this window. It runs in an
-   * iframe sandboxed without allow-same-origin (canvasEmbedHtml), and the server adds a CSP sandbox, so its messages
-   * come from origin "null", which any sandboxed page shares: the origin can't say who sent one. What does is the
-   * sender's window being one of the chat's own diagram iframes, the message naming that diagram, and its exact shape.
+   * A click on a diagram's node asks about that node, and only a diagram Tarsee drew can send one. A diagram is at
+   * /diagram/<id>/: a page the server draws itself from the diagram's data on every request, whose CSP lets one script
+   * run, Tarsee's own, the same for every diagram (lib/canvas.js, lib/diagram-renderer.js). Nothing the AI writes runs
+   * there, neither through create_canvas nor as a file it puts in the workspace. A canvas (/canvas/<id>/) is a page the
+   * AI wrote, so nothing a canvas posts is taken, whatever it is called.
+   * The diagram's iframe is sandboxed without allow-same-origin (embedHtml) and the server adds a CSP sandbox, so its
+   * messages come from origin "null", which every sandboxed page shares: the origin can't say who sent one. What does
+   * is the sender's window being one of this chat's own diagram iframes, as the chat drew it. Then:
+   *   - the message is a node click's exact shape, { type: "tarsee:diagram-click", diagramId, nodeId, label, sublabel,
+   *     question?, click }, every field checked, and it names that iframe's diagram;
+   *   - a person just clicked: the browser says so (navigator.userActivation, for a few seconds after a click), so a
+   *     message nobody clicked for is never sent;
+   *   - once per click: click is the page's count of its clicks (1, 2, 3, ...), and each one is taken once.
    */
   _initDiagramListener() {
-    const FIELDS = new Set(["type", "diagramId", "nodeId", "label", "sublabel", "question"]);
-    window.addEventListener("message", (event) => {
-      // "null" (the sandboxed diagram) or this origin (an iframe allowed same-origin); never any other.
-      if (event.origin !== "null" && event.origin !== location.origin) return;
+    const FIELDS = new Set(["type", "diagramId", "nodeId", "label", "sublabel", "question", "click"]);
+    const DIAGRAM_ID = /^[a-z0-9-]{1,64}$/;
+    // For each diagram iframe, the last click taken from the page it shows. A page loaded again counts from 1.
+    const lastClick = new WeakMap();
+    this.elements.chatArea.addEventListener("load", (e) => {
+      if (e.target instanceof HTMLIFrameElement) lastClick.delete(e.target);
+    }, true);
 
-      // A node click's exact shape: a plain object of those fields only, each a string (question may be missing).
+    window.addEventListener("message", (event) => {
+      // Sent by one of this chat's diagram iframes, sandboxed and showing its diagram's own address, as embedHtml drew
+      // it. Its origin is "null": a diagram's page is always sandboxed, so any other origin is some other page.
+      if (event.origin !== "null" || !event.source) return;
+      const frame = [...this.elements.chatArea.querySelectorAll(".canvas-embed[data-diagram-id] > iframe.diagram-iframe")]
+        .find((f) => f.contentWindow === event.source);
+      if (!frame) return;
+      const id = frame.parentElement.dataset.diagramId;
+      if (!DIAGRAM_ID.test(id) || frame.getAttribute("src") !== `/diagram/${id}/` || frame.getAttribute("sandbox") !== "allow-scripts") return;
+
+      // A node click's exact shape: a plain object of those fields only, naming this diagram.
       const data = event.data;
       if (!data || typeof data !== "object" || Object.getPrototypeOf(data) !== Object.prototype) return;
-      if (data.type !== "tarsee:diagram-click" || Object.keys(data).some((k) => !FIELDS.has(k))) return;
-      const { diagramId, nodeId, label, sublabel, question } = data;
-      if (![diagramId, nodeId, label, sublabel].every((v) => typeof v === "string")) return;
-      if (question !== undefined && typeof question !== "string") return;
-
-      // Sent by one of this chat's diagram iframes (a canvas whose id create_diagram starts with "diagram-"), and
-      // naming that diagram.
-      if (!event.source) return;
-      const frame = [...this.elements.chatArea.querySelectorAll(".canvas-embed > iframe.canvas-iframe")]
-        .find((f) => f.contentWindow === event.source);
-      const canvasId = frame?.parentElement?.dataset.canvasId || "";
-      if (!canvasId.startsWith("diagram-") || diagramId !== canvasId) return;
+      if (Object.keys(data).some((k) => !FIELDS.has(k))) return;
+      const { type, diagramId, nodeId, label, sublabel, question, click } = data;
+      if (type !== "tarsee:diagram-click" || diagramId !== id) return;
+      if (typeof nodeId !== "string" || !nodeId || typeof label !== "string" || typeof sublabel !== "string") return;
+      // A node with no question of its own sends none (lib/diagram-renderer.js leaves out one that isn't words).
+      if (question !== undefined && (typeof question !== "string" || !question.trim())) return;
+      // A click this page has not sent before, right after a person clicked.
+      if (!Number.isSafeInteger(click) || click < 1 || click <= (lastClick.get(frame) || 0)) return;
+      if (!navigator.userActivation?.isActive) return;
 
       const name = label.slice(0, 200);
       const more = sublabel.slice(0, 200);
       const custom = (question || "").slice(0, 500);
       if (!name && !custom) return;
+      lastClick.set(frame, click);
       const text = custom || (more ? `Tell me more about: ${name}. ${more}` : `Tell me more about: ${name}`);
 
       // The normal send path: send() queues it while a reply is still coming.
@@ -2916,16 +2960,18 @@ const Chat = {
     const blocks = [];
     const token = (html) => `\n\u0000${blocks.push(html) - 1}\u0000\n`;
 
-    // Canvas embeds: the model sometimes wraps the canvas URL in an <a> AND drops a bare /canvas/id/ too: one embed
-    // per canvas, the anchor's leftovers gone.
-    const seenCanvas = new Set();
-    const placeCanvas = (canvasId) => {
-      if (seenCanvas.has(canvasId)) return "";
-      seenCanvas.add(canvasId);
-      return token(canvasEmbedHtml(canvasId));
+    // Canvas and diagram embeds: the model sometimes wraps the URL in an <a> AND drops a bare /canvas/id/ too: one
+    // embed per canvas or diagram, the anchor's leftovers gone.
+    const seenEmbed = new Set();
+    const placeEmbed = (kind, id) => {
+      if (seenEmbed.has(`${kind}:${id}`)) return "";
+      seenEmbed.add(`${kind}:${id}`);
+      return token(embedHtml(kind, id));
     };
-    text = text.replace(/<a\s+[^>]*href=["'](?:https?:\/\/[^\s/"']+)?\/canvas\/([a-z0-9-]+)\/?["'][^>]*>[\s\S]*?<\/a>/gi, (_m, id) => placeCanvas(id));
-    text = text.replace(/(?:https?:\/\/[^\s/)]+)?\/canvas\/([a-z0-9-]+)\/?(?=[\s)\]."',;:!?]|$)/g, (_m, id) => placeCanvas(id));
+    text = text.replace(/<a\s+[^>]*href=["'](?:https?:\/\/[^\s/"']+)?\/(canvas|diagram)\/([a-z0-9-]+)\/?["'][^>]*>[\s\S]*?<\/a>/gi, (_m, kind, id) => placeEmbed(kind.toLowerCase(), id));
+    text = text.replace(/(?:https?:\/\/[^\s/)]+)?\/canvas\/([a-z0-9-]+)\/?(?=[\s)\]."',;:!?]|$)/g, (_m, id) => placeEmbed("canvas", id));
+    // A diagram's address on its own, not the end of a longer path (docs/diagram/flow.png is not one).
+    text = text.replace(/(?<![\w./-])(?:https?:\/\/[^\s/)]+)?\/diagram\/([a-z0-9-]+)\/?(?=[\s)\]."',;:!?]|$)/g, (_m, id) => placeEmbed("diagram", id));
 
     // Thinking / reasoning: folded.
     text = text.replace(/<(thinking|antThinking|antml:thinking|reasoning)>([\s\S]*?)<\/\1>/g, (_m, tag, content) => token(renderThinkingBlock(tag.includes("thinking") || tag.includes("Thinking") ? "Thinking" : "Reasoning", content.trim())));
@@ -2954,10 +3000,16 @@ function safeHref(url) {
   return Core.safeHref(url);
 }
 
-/** A canvas inline, with a floating "..." menu (Copy link, Download), as Claude draws its diagrams. */
-function canvasEmbedHtml(canvasId) {
-  const safeId = escapeHtml(canvasId);
-  return `<div class="canvas-embed" data-canvas-id="${safeId}">
+/**
+ * A canvas (kind "canvas", /canvas/<id>/) or a diagram (kind "diagram", /diagram/<id>/) inline, with a floating "..."
+ * menu (Copy link, Download), as Claude draws its diagrams. Only a diagram's iframe has data-diagram-id and the
+ * diagram-iframe class: what _initDiagramListener takes a node click from.
+ */
+function embedHtml(kind, id) {
+  const diagram = kind === "diagram";
+  const safeId = escapeHtml(id);
+  const href = `/${diagram ? "diagram" : "canvas"}/${safeId}/`;
+  return `<div class="canvas-embed" ${diagram ? "data-diagram-id" : "data-canvas-id"}="${safeId}" data-href="${href}">
     <!-- No allow-same-origin. Canvas HTML is model-authored and the model
          reads untrusted input, so pairing allow-scripts with
          allow-same-origin handed any prompt injection full authority on
@@ -2965,13 +3017,13 @@ function canvasEmbedHtml(canvasId) {
          Dropping it keeps scripts working inside a null origin. The server
          sends a matching CSP sandbox header so a directly-opened canvas is
          covered too. -->
-    <iframe src="/canvas/${safeId}/" class="canvas-iframe" sandbox="allow-scripts" loading="lazy" title="Canvas"></iframe>
-    <button type="button" class="canvas-embed-menu-btn" aria-label="Diagram options" aria-haspopup="menu" aria-expanded="false">
+    <iframe src="${href}" class="canvas-iframe${diagram ? " diagram-iframe" : ""}" sandbox="allow-scripts" loading="lazy" title="${diagram ? "Diagram" : "Canvas"}"></iframe>
+    <button type="button" class="canvas-embed-menu-btn" aria-label="${diagram ? "Diagram" : "Canvas"} options" aria-haspopup="menu" aria-expanded="false">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="3" cy="8" r="1.5" fill="currentColor"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><circle cx="13" cy="8" r="1.5" fill="currentColor"/></svg>
     </button>
     <div class="canvas-embed-menu" role="menu">
       <button type="button" class="canvas-embed-menu-item" data-canvas-action="copy" role="menuitem">Copy link</button>
-      <a class="canvas-embed-menu-item" href="/canvas/${safeId}/" download="${safeId}.html" role="menuitem">Download file</a>
+      <a class="canvas-embed-menu-item" href="${href}" download="${safeId}.html" role="menuitem">Download file</a>
     </div>
   </div>`;
 }

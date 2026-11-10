@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { EventEmitter } from "node:events";
+import { createRequire } from "node:module";
 
 // Point the system temp folder at a throwaway one, so the test can see every file
 // Edge TTS leaves behind. os.tmpdir() reads these on each call (TEMP/TMP on
@@ -15,6 +17,49 @@ process.env.TMP = TMP;
 
 const { EdgeTTSEngine, __setForTests } = await import("../src/voice/edge-tts-engine.js");
 
+// The real node-edge-tts, and the ws module it opens its connection with. A test
+// swaps ws's WebSocket for a fake one, so the real library runs with no network.
+const require = createRequire(import.meta.url);
+const { EdgeTTS: RealEdgeTTS } = require("node-edge-tts");
+const ws = createRequire(require.resolve("node-edge-tts"))("ws");
+const RealWebSocket = ws.WebSocket;
+
+/**
+ * A stand-in for the WebSocket node-edge-tts opens to Microsoft. It opens after
+ * `openAfterMs`, then answers the speech request with `bytes` of audio and the
+ * end-of-turn message, or (answer: "never") never answers.
+ */
+function fakeSocket({ openAfterMs = 0, answer = "audio", bytes = 400 } = {}) {
+  const sockets = [];
+  class FakeWebSocket extends EventEmitter {
+    constructor(url) {
+      super();
+      this.url = url;
+      this.closed = false;
+      this.terminated = false;
+      sockets.push(this);
+      setTimeout(() => this.emit("open"), openAfterMs);
+    }
+    send(msg) {
+      if (!String(msg).includes("Path:ssml") || answer === "never") return;
+      setImmediate(() => {
+        if (this.terminated) return;
+        this.emit("message", Buffer.concat([Buffer.from("X-RequestId:1\r\nPath:audio\r\n"), Buffer.alloc(bytes, 7)]), true);
+        this.emit("message", Buffer.from("X-RequestId:1\r\nPath:turn.end\r\n\r\n{}"), false);
+      });
+    }
+    close() { this.closed = true; }
+    terminate() { this.terminated = true; }
+  }
+  return { FakeWebSocket, sockets };
+}
+
+/** Runs fn with node-edge-tts opening `sock`'s fake WebSocket, and puts the real one back afterwards. */
+async function withSocket(sock, fn) {
+  ws.WebSocket = sock.FakeWebSocket;
+  try { return await fn(); } finally { ws.WebSocket = RealWebSocket; }
+}
+
 /**
  * A stand-in for node-edge-tts's EdgeTTS class: no network. It records every file
  * it was asked to write and writes `bytes` of fake audio there, or fails as told.
@@ -24,7 +69,7 @@ function fakeEdge({ bytes = 400, fail = null, hang = false, delayMs = 0 } = {}) 
   class FakeEdgeTTS {
     constructor(opts) { this.opts = opts; }
     async ttsPromise(text, audioPath) {
-      calls.push({ text, audioPath, voice: this.opts.voice, existedBefore: fs.existsSync(audioPath) });
+      calls.push({ text, audioPath, voice: this.opts.voice, timeout: this.opts.timeout, existedBefore: fs.existsSync(audioPath) });
       // Like the real one: the file is opened before the audio comes in.
       fs.writeFileSync(audioPath, Buffer.alloc(0));
       if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
@@ -37,6 +82,8 @@ function fakeEdge({ bytes = 400, fail = null, hang = false, delayMs = 0 } = {}) 
 }
 
 const leftovers = () => fs.readdirSync(TMP);
+
+after(() => { fs.rmSync(TMP, { force: true, recursive: true }); });
 
 /** Every file the fake was given sat in the temp folder and is gone, and nothing else was left there. */
 function assertTidy(fake) {
@@ -55,7 +102,7 @@ describe("Edge TTS keeps its audio in the system temp folder", () => {
   });
   after(() => {
     __setForTests();
-    fs.rmSync(TMP, { force: true, recursive: true });
+    ws.WebSocket = RealWebSocket;
   });
 
   it("writes the audio under os.tmpdir(), not a fixed /tmp, and deletes it afterwards", async () => {
@@ -137,5 +184,63 @@ describe("Edge TTS keeps its audio in the system temp folder", () => {
   it("never names a fixed Unix temp folder in the source", () => {
     const src = fs.readFileSync(new URL("../src/voice/edge-tts-engine.js", import.meta.url), "utf8");
     assert.doesNotMatch(src, /["'`]\/tmp\//);
+  });
+});
+
+describe("Edge TTS gives node-edge-tts the engine's own time limit", () => {
+  beforeEach(() => {
+    for (const f of leftovers()) fs.rmSync(path.join(TMP, f), { force: true, recursive: true });
+  });
+  after(() => {
+    __setForTests();
+    ws.WebSocket = RealWebSocket;
+  });
+
+  it("passes the 30 s limit, or the one set, as node-edge-tts's timeout", async () => {
+    const fake = fakeEdge();
+    __setForTests({ EdgeTTS: fake.EdgeTTS });
+    await new EdgeTTSEngine().synthesize("Hello there.");
+    __setForTests({ EdgeTTS: fake.EdgeTTS, timeoutMs: 1234 });
+    await new EdgeTTSEngine().synthesize("Hello again.");
+    assert.deepEqual(fake.calls.map((c) => c.timeout), [30_000, 1234]);
+  });
+
+  it("the real node-edge-tts keeps that limit instead of its own 10 s, and its audio comes back whole", async () => {
+    const made = [];
+    class Recording extends RealEdgeTTS {
+      constructor(opts) { super(opts); made.push(this); }
+    }
+    const sock = fakeSocket();
+    __setForTests({ EdgeTTS: Recording });
+    const out = await withSocket(sock, () => new EdgeTTSEngine().synthesize("Hello there."));
+    assert.equal(made.length, 1);
+    assert.equal(made[0].timeout, 30_000);
+    assert.equal(out.contentType, "audio/mpeg");
+    assert.deepEqual(out.audio, Buffer.alloc(400, 7));
+    // A good attempt leaves the connection to node-edge-tts, which closes it itself.
+    assert.equal(sock.sockets.length, 1);
+    assert.equal(sock.sockets[0].closed, true);
+    assert.equal(sock.sockets[0].terminated, false);
+    assert.deepEqual(leftovers(), []);
+  });
+
+  it("closes the connection of every attempt that timed out", async () => {
+    const sock = fakeSocket({ answer: "never" });
+    __setForTests({ retryDelayMs: 0, timeoutMs: 50 });
+    await assert.rejects(withSocket(sock, () => new EdgeTTSEngine().synthesize("Hello.")), /timed out/);
+    assert.equal(sock.sockets.length, 3);
+    for (const s of sock.sockets) assert.equal(s.terminated, true, "a timed-out attempt left its connection open");
+    assert.deepEqual(leftovers(), []);
+  });
+
+  it("closes a connection that opens after its attempt gave up, before any audio file is made", async () => {
+    const sock = fakeSocket({ openAfterMs: 120 });
+    __setForTests({ retryDelayMs: 0, timeoutMs: 30 });
+    await assert.rejects(withSocket(sock, () => new EdgeTTSEngine().synthesize("Hello.")), /timed out/);
+    assert.equal(sock.sockets.length, 3);
+    // Every attempt gave up before its connection opened. Wait until they all have.
+    await new Promise((r) => setTimeout(r, 300));
+    for (const s of sock.sockets) assert.equal(s.terminated, true, "a late connection was left open");
+    assert.deepEqual(leftovers(), [], "a late connection still wrote an audio file");
   });
 });

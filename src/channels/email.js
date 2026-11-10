@@ -34,7 +34,7 @@ import { chatStream } from "../ai/router.js";
 import { withConversationTurn } from "../lib/conversation-lock.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
-import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
+import { processCommand, extractPlaybookPrompt, answeredAtOnce } from "../lib/commands.js";
 import { buildSystemPromptParts } from "../lib/build-system-prompt.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { refused } from "../lib/channel-errors.js";
@@ -173,34 +173,76 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
     await pollNew().catch(() => {});
   }
 
+  // ── One mail at a time, without holding the mailbox ────────────────────
+  // Mail is handled in the order it came, one at a time, and a reply can take minutes. The mailbox used to stay
+  // locked for all of that, so a /stop mailed while a reply was written was only fetched once the reply had ended,
+  // too late to stop anything. Now the mailbox is held only while new mail is fetched; the mail then gets in line
+  // here. Only the commands meant for that moment or that change nothing (/stop, /help, /version:
+  // lib/commands.js answeredAtOnce) skip the line and are answered at once.
+  let line = Promise.resolve();
+  const taken = new Set(); // UIDs fetched and not yet marked seen, so a later look at the inbox doesn't take them again
+  const unmarked = new Set(); // UIDs handled whose \Seen flag couldn't be set: set on the next look
+
   /**
-   * Fetch + process any UNSEEN messages in INBOX. Marks each as seen
-   * after processing so we never double-reply.
+   * Fetch any UNSEEN messages in INBOX and handle them. Each is marked seen once it has been handled, so mail that a
+   * restart cut short is handled when the channel starts again, and none is answered twice. Resolves once they have
+   * all been handled.
    */
   async function pollNew() {
     if (!client?.usable) return;
+    const fetched = [];
     const lock = await client.getMailboxLock("INBOX");
     try {
+      for (const uid of [...unmarked]) {
+        try { await client.messageFlagsAdd({ uid }, ["\\Seen"], { uid: true }); unmarked.delete(uid); taken.delete(uid); } catch { /* next look */ }
+      }
       // Search for unseen. Range "all unseen" via search query.
       const uids = await client.search({ seen: false }, { uid: true });
-      if (!uids || uids.length === 0) return;
-      for (const uid of uids) {
+      for (const uid of uids || []) {
+        if (taken.has(uid)) continue; // in line or being handled
+        taken.add(uid);
         try {
           const { content } = await client.download(uid, undefined, { uid: true });
-          const parsed = await simpleParser(content);
-          await handleInbound(parsed).catch((e) =>
-            console.warn("[email] handleInbound error:", e?.message)
-          );
+          fetched.push({ uid, mail: await simpleParser(content) });
         } catch (err) {
           console.warn("[email] fetch error for uid", uid, err?.message);
-        } finally {
           // Mark as seen regardless — we don't want infinite retry on a
           // parse failure. Operator can unflag manually if they want to replay.
-          try { await client.messageFlagsAdd({ uid }, ["\\Seen"], { uid: true }); } catch {}
+          try { await client.messageFlagsAdd({ uid }, ["\\Seen"], { uid: true }); taken.delete(uid); } catch { unmarked.add(uid); }
         }
       }
     } finally {
       lock.release();
+    }
+
+    await Promise.all(fetched.map(({ uid, mail }) => {
+      const handle = async () => {
+        // Stopped while it waited: left unseen, so the channel handles it when it starts again.
+        if (shuttingDown) return;
+        try { await handleInbound(mail); } catch (e) { console.warn("[email] handleInbound error:", e?.message); }
+        await markSeen(uid);
+      };
+      if (answersAtOnce(mail)) return handle();
+      line = line.then(handle);
+      return line;
+    }));
+  }
+
+  /** Whether a mail is one of the commands answered at once: for Tarsee (it @mentions it) and starting with one. */
+  function answersAtOnce(mail) {
+    const stripped = strippedBody(mail);
+    return answeredAtOnce(stripped) && hasMention(stripped, cfg.mentionKeyword);
+  }
+
+  /** Mark a handled mail seen. If that fails it is set on the next look at the inbox, and never handled again. */
+  async function markSeen(uid) {
+    try {
+      const lock = await client.getMailboxLock("INBOX");
+      try { await client.messageFlagsAdd({ uid }, ["\\Seen"], { uid: true }); } finally { lock.release(); }
+      taken.delete(uid);
+    } catch (err) {
+      console.warn("[email] could not mark uid", uid, "seen:", err?.message);
+      unmarked.add(uid);
     }
   }
 
@@ -242,10 +284,7 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
       return;
     }
 
-    // Prefer text/plain; fall back to html-stripped
-    const rawBody = mail.text || htmlToText(mail.html || "");
-    const body = String(rawBody || "").slice(0, MAX_BODY_BYTES);
-    const stripped = stripQuotedReply(body);
+    const stripped = strippedBody(mail);
     const subject = mail.subject || "(no subject)";
     const mentioned = hasMention(stripped, cfg.mentionKeyword);
     const replyAll = isReplyAll({
@@ -618,6 +657,12 @@ function withDeadline(promise, ms, error) {
   let timer;
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(error), ms); });
   return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
+/** A mail's own words, as they are read: text/plain (else the HTML as text), at most 100 KB, quoted replies taken off. */
+function strippedBody(mail) {
+  const rawBody = mail.text || htmlToText(mail.html || "");
+  return stripQuotedReply(String(rawBody || "").slice(0, MAX_BODY_BYTES));
 }
 
 function fromHeader({ cfg, selfAddress }) {

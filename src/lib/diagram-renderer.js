@@ -1,9 +1,14 @@
 /**
- * Diagram renderer — turns a node/edge spec into a self-contained HTML page
- * that renders as a clickable flowchart inside a canvas iframe.
+ * Diagram renderer: turns a diagram's data (nodes, edges, legend) into the page that shows it as a clickable
+ * flowchart. The server draws that page itself, on every request to /diagram/<id>/ (lib/canvas.js), from the data
+ * create_diagram kept (lib/tools.js). The data never becomes code: every word in it is escaped text, positions are
+ * numbers only, and the page's one script (DIAGRAM_SCRIPT) is the same for every diagram, with nothing from the data
+ * in it. So the server's CSP can name that script by its hash and let nothing else run on the page, and a diagram's
+ * clicks can be trusted (js/chat.js _initDiagramListener) even though the AI chose its words.
  *
- * Clicking a node posts a message to the parent window so chat.js can
- * synthesize a follow-up question about that node.
+ * A person's click on a node posts one message to the chat:
+ *   { type: "tarsee:diagram-click", diagramId, nodeId, label, sublabel, question?, click }
+ * question is there only when the node has one (a string), and click counts that page's clicks from 1.
  */
 
 const KIND_STYLES = {
@@ -14,6 +19,68 @@ const KIND_STYLES = {
   note:       { bg: "transparent", border: "transparent", fg: "#a8a8a0", label: "Note" },
 };
 
+/** A kind Tarsee knows, else "processing". Own keys only: "constructor" or "__proto__" is not a kind. */
+const kindOf = (kind) => (typeof kind === "string" && Object.hasOwn(KIND_STYLES, kind) ? kind : "processing");
+
+const MAX_TEXT = 200;
+const MAX_QUESTION = 500;
+const MAX_POSITION = 10_000;
+
+/** A string (a number as its digits), cut to `max`; anything else is "". */
+function textOf(value, max = MAX_TEXT) {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return typeof value === "string" ? value.slice(0, max) : "";
+}
+
+/** A position: a finite number, kept on the page; anything else is none (the layout places the node). */
+function positionOf(value) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(value, 0), MAX_POSITION) : undefined;
+}
+
+/**
+ * A diagram's data as the renderer uses it, whatever it was given: what create_diagram keeps, and what the page is
+ * drawn from, so a data file changed by hand is drawn the same safe way.
+ *   { title, nodes: [{ id, label, sublabel, kind, x?, y?, question? }], edges: [{ from, to, label? }],
+ *     legend: [{ kind, label? }] }
+ * A node needs an id, and the first node with an id is the one kept. A question is kept only when it is a string
+ * with words in it, so a node whose question is anything else asks about its label instead. An edge is kept only
+ * between two nodes that are there.
+ */
+export function normalizeDiagramSpec(spec) {
+  const s = spec && typeof spec === "object" ? spec : {};
+  const ids = new Set();
+  const nodes = [];
+  for (const n of Array.isArray(s.nodes) ? s.nodes : []) {
+    if (!n || typeof n !== "object") continue;
+    const id = textOf(n.id);
+    if (!id || ids.has(id)) continue;
+    ids.add(id);
+    const node = { id, label: textOf(n.label), sublabel: textOf(n.sublabel), kind: kindOf(n.kind) };
+    const x = positionOf(n.x);
+    const y = positionOf(n.y);
+    if (x !== undefined) node.x = x;
+    if (y !== undefined) node.y = y;
+    if (typeof n.question === "string" && n.question.trim()) node.question = n.question.slice(0, MAX_QUESTION);
+    nodes.push(node);
+  }
+  const edges = [];
+  for (const e of Array.isArray(s.edges) ? s.edges : []) {
+    if (!e || typeof e !== "object") continue;
+    const from = textOf(e.from);
+    const to = textOf(e.to);
+    if (!ids.has(from) || !ids.has(to)) continue;
+    const label = textOf(e.label);
+    edges.push(label ? { from, to, label } : { from, to });
+  }
+  const legend = [];
+  for (const l of Array.isArray(s.legend) ? s.legend : []) {
+    if (!l || typeof l !== "object") continue;
+    const label = textOf(l.label);
+    legend.push(label ? { kind: kindOf(l.kind), label } : { kind: kindOf(l.kind) });
+  }
+  return { title: textOf(s.title), nodes, edges, legend };
+}
+
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -21,11 +88,9 @@ function esc(s) {
 }
 
 function layout(nodes, edges) {
-  const byId = new Map(nodes.map((n) => [n.id, n]));
   const incoming = new Map(nodes.map((n) => [n.id, []]));
   const outgoing = new Map(nodes.map((n) => [n.id, []]));
   for (const e of edges) {
-    if (!byId.has(e.from) || !byId.has(e.to)) continue;
     outgoing.get(e.from).push(e.to);
     incoming.get(e.to).push(e.from);
   }
@@ -73,11 +138,12 @@ function layout(nodes, edges) {
 }
 
 function renderNode(node, pos) {
-  const style = KIND_STYLES[node.kind] || KIND_STYLES.processing;
-  const label = esc(node.label || "");
+  const style = KIND_STYLES[node.kind];
+  const label = esc(node.label);
   const sub = node.sublabel ? `<div class="sub">${esc(node.sublabel)}</div>` : "";
   const noteClass = node.kind === "note" ? " is-note" : "";
-  return `<div class="node${noteClass}" data-node-id="${esc(node.id)}" data-label="${label}" data-sublabel="${esc(node.sublabel || "")}" style="left:${pos.x}px;top:${pos.y}px;width:${pos.w}px;height:${pos.h}px;background:${style.bg};border-color:${style.border};color:${style.fg}"><div class="label">${label}</div>${sub}</div>`;
+  const question = node.question ? ` data-question="${esc(node.question)}"` : "";
+  return `<div class="node${noteClass}" data-node-id="${esc(node.id)}" data-label="${label}" data-sublabel="${esc(node.sublabel)}"${question} style="left:${pos.x}px;top:${pos.y}px;width:${pos.w}px;height:${pos.h}px;background:${style.bg};border-color:${style.border};color:${style.fg}"><div class="label">${label}</div>${sub}</div>`;
 }
 
 function renderEdges(edges, positions) {
@@ -99,25 +165,54 @@ function renderEdges(edges, positions) {
 }
 
 function renderLegend(legend) {
-  if (!legend || !legend.length) return "";
+  if (!legend.length) return "";
   const pills = legend.map((l) => {
-    const s = KIND_STYLES[l.kind] || KIND_STYLES.processing;
+    const s = KIND_STYLES[l.kind];
     return `<div class="pill" style="background:${s.bg};border-color:${s.border};color:${s.fg}">${esc(l.label || s.label)}</div>`;
   }).join("");
   return `<div class="legend">${pills}</div>`;
 }
 
 /**
- * @param {object} spec
- * @param {string} spec.title
- * @param {Array<{id:string,label:string,sublabel?:string,kind:string,x?:number,y?:number,question?:string}>} spec.nodes
- * @param {Array<{from:string,to:string,label?:string}>} spec.edges
- * @param {Array<{kind:string,label?:string}>} [spec.legend]
- * @param {string} [spec.diagramId]
+ * The page's one script, the same for every diagram (the server's CSP names it by its hash, lib/canvas.js). It reads
+ * what to send from the page (the body's data-diagram-id, each node's data-* attributes), so nothing from a diagram's
+ * data is ever in it. It sends only for a person's click (not one a script made), one message per click: the second
+ * click of a double-click is not another question.
+ */
+export const DIAGRAM_SCRIPT = `
+(function () {
+  "use strict";
+  var diagramId = document.body.getAttribute("data-diagram-id") || "";
+  var clicks = 0;
+  function onClick(event) {
+    if (!event.isTrusted || event.detail > 1) return;
+    var node = event.currentTarget;
+    clicks += 1;
+    var message = {
+      type: "tarsee:diagram-click",
+      diagramId: diagramId,
+      nodeId: node.getAttribute("data-node-id") || "",
+      label: node.getAttribute("data-label") || "",
+      sublabel: node.getAttribute("data-sublabel") || "",
+      click: clicks
+    };
+    if (node.hasAttribute("data-question")) message.question = node.getAttribute("data-question");
+    try { window.parent.postMessage(message, "*"); } catch (err) { /* no window to tell */ }
+  }
+  Array.prototype.forEach.call(document.querySelectorAll(".node:not(.is-note)"), function (node) {
+    node.addEventListener("click", onClick);
+  });
+})();
+`;
+
+/**
+ * The diagram's page.
+ * @param {object} spec  a diagram's data (normalizeDiagramSpec says what is kept), plus diagramId: the id the page is
+ *                       served at, which its clicks name
  */
 export function renderDiagramHtml(spec) {
-  const nodes = Array.isArray(spec.nodes) ? spec.nodes : [];
-  const edges = Array.isArray(spec.edges) ? spec.edges : [];
+  const { title, nodes, edges, legend } = normalizeDiagramSpec(spec);
+  const diagramId = typeof spec?.diagramId === "string" ? spec.diagramId : "";
   const positions = layout(nodes, edges);
 
   let maxX = 800, maxY = 400;
@@ -128,25 +223,13 @@ export function renderDiagramHtml(spec) {
 
   const nodesHtml = nodes.map((n) => renderNode(n, positions.get(n.id))).join("");
   const edgesSvg = renderEdges(edges, positions);
-  const legendHtml = renderLegend(spec.legend);
-  // Safe-serialize for embedding inside a <script> tag: escape '</', line
-  // separators, and paragraph separators so user-influenced strings can't
-  // break out of the script context.
-  const scriptSafe = (v) =>
-    JSON.stringify(v)
-      .replace(/</g, "\\u003c")
-      .replace(/\u2028/g, "\\u2028")
-      .replace(/\u2029/g, "\\u2029");
-  const questionMap = scriptSafe(
-    Object.fromEntries(nodes.filter((n) => n.question).map((n) => [n.id, n.question]))
-  );
-  const diagramIdJs = scriptSafe(spec.diagramId || spec.title || "diagram");
+  const legendHtml = renderLegend(legend);
 
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>${esc(spec.title || "Diagram")}</title>
+<title>${esc(title || "Diagram")}</title>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; background: #1a1a1a; color: #ececec; font-family: Poppins, -apple-system, sans-serif; padding: 20px; }
@@ -163,8 +246,8 @@ export function renderDiagramHtml(spec) {
   .pill { padding: 6px 12px; border-radius: 6px; font-size: 12px; border: 1.5px solid; }
 </style>
 </head>
-<body>
-<div class="title">${esc(spec.title || "Diagram")}</div>
+<body data-diagram-id="${esc(diagramId)}">
+<div class="title">${esc(title || "Diagram")}</div>
 <div class="stage">
   <svg class="edges" viewBox="0 0 ${maxX} ${maxY}" xmlns="http://www.w3.org/2000/svg">
     <defs>
@@ -177,26 +260,7 @@ export function renderDiagramHtml(spec) {
   ${nodesHtml}
 </div>
 ${legendHtml}
-<script>
-(function() {
-  const questions = ${questionMap};
-  const diagramId = ${diagramIdJs};
-  document.querySelectorAll('.node:not(.is-note)').forEach((el) => {
-    el.addEventListener('click', () => {
-      const nodeId = el.dataset.nodeId;
-      const label = el.dataset.label;
-      const sublabel = el.dataset.sublabel;
-      const question = questions[nodeId];
-      try {
-        window.parent.postMessage({
-          type: 'tarsee:diagram-click',
-          diagramId, nodeId, label, sublabel, question,
-        }, '*');
-      } catch (e) { /* sandboxed */ }
-    });
-  });
-})();
-</script>
+<script>${DIAGRAM_SCRIPT}</script>
 </body>
 </html>`;
 }

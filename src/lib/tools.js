@@ -1787,28 +1787,41 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       }
 
       case "create_diagram": {
+        // A diagram is kept as data, not as a page (lib/canvas.js DiagramStore). The server draws its page from that
+        // data at /diagram/<id>/ on every request, and only Tarsee's own diagram script may run there, which is why
+        // the chat can take its node clicks as the owner's questions (js/chat.js). A canvas is a page the AI wrote,
+        // so it never counts as a diagram, whatever it is called.
         const { title, nodes, edges, legend } = toolInput;
         try {
+          if (typeof title !== "string" || !title.trim()) {
+            return "create_diagram error: title is required";
+          }
           if (!Array.isArray(nodes) || nodes.length === 0) {
             return "create_diagram error: nodes array is required and must be non-empty";
           }
           if (!Array.isArray(edges)) {
             return "create_diagram error: edges array is required";
           }
-          const ids = new Set(nodes.map((n) => n.id));
+          const ids = new Set();
+          for (const n of nodes) {
+            if (!n || typeof n !== "object" || typeof n.id !== "string" || !n.id) {
+              return "create_diagram error: every node needs an id (a string)";
+            }
+            if (ids.has(n.id)) return `create_diagram error: two nodes have the id "${n.id}"`;
+            ids.add(n.id);
+          }
           for (const e of edges) {
-            if (!ids.has(e.from) || !ids.has(e.to)) {
-              return `create_diagram error: edge references unknown node id (${e.from} -> ${e.to})`;
+            if (!e || !ids.has(e.from) || !ids.has(e.to)) {
+              return `create_diagram error: edge references unknown node id (${e?.from} -> ${e?.to})`;
             }
           }
-          const { CanvasServer } = await import("./canvas.js");
-          const { renderDiagramHtml } = await import("./diagram-renderer.js");
-          const canvas = CanvasServer.create();
-          const slug = title.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
-          const canvasId = "diagram-" + (slug || Math.random().toString(36).slice(2, 8));
-          const html = renderDiagramHtml({ title, nodes, edges, legend, diagramId: canvasId });
-          const result = canvas.serve(canvasId, html);
-          return `Diagram created! View at: /canvas/${canvasId}/  (${nodes.length} nodes, ${edges.length} edges, ${result.size} bytes)`;
+          const { DiagramStore } = await import("./canvas.js");
+          const { normalizeDiagramSpec } = await import("./diagram-renderer.js");
+          const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+/, "").slice(0, 40).replace(/-+$/, "");
+          const diagramId = slug || `diagram-${Math.random().toString(36).slice(2, 8)}`;
+          const spec = normalizeDiagramSpec({ title, nodes, edges, legend });
+          const { path: address } = DiagramStore.create().save(diagramId, spec);
+          return `Diagram created! View at: ${address}  (${spec.nodes.length} nodes, ${spec.edges.length} edges)`;
         } catch (err) {
           return `create_diagram error: ${err.message}`;
         }

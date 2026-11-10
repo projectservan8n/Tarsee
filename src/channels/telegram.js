@@ -6,7 +6,7 @@ import { chatStream } from "../ai/router.js";
 import { withConversationTurn } from "../lib/conversation-lock.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
-import { processCommand, extractPlaybookPrompt, getCommandList } from "../lib/commands.js";
+import { processCommand, extractPlaybookPrompt, getCommandList, answeredAtOnce } from "../lib/commands.js";
 import { buildSystemPromptParts, sendFileHint } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
@@ -57,7 +57,24 @@ export async function createTelegramBot(config, db, opts = {}) {
   let _updatesReceived = 0;
   let _handlerActive = 0;
   let _lastUpdateAt = 0;
-  bot.use(async (ctx, next) => {
+
+  // ── One update at a time, without holding up the poll loop ─────────────
+  // Telegraf's poll loop waits until a batch of updates is handled before it asks Telegram for more, and a message is
+  // handled until its reply ends, which can take many minutes. So a /stop sent while a reply ran was only read once
+  // that reply had ended, too late to stop anything. Now the poll loop never waits: each update gets in line here
+  // and is handled in the order it came, one at a time, as before. Only the commands meant for that moment or that
+  // change nothing (/stop, /help, /version: lib/commands.js answeredAtOnce) skip the line and are answered at once.
+  let line = Promise.resolve();
+  const botError = (err) => console.error("[telegram] bot error:", err?.message || err);
+  /** Run fn now or after everything in line, counted in health() until it ends; its errors are logged, never thrown. */
+  function handleUpdate(fn, { now = false } = {}) {
+    _handlerActive++;
+    const run = () => Promise.resolve().then(fn).catch(botError).finally(() => { _handlerActive--; });
+    if (now) run();
+    else line = line.then(run);
+  }
+
+  bot.use((ctx, next) => {
     const uid = ctx.update?.update_id;
     if (uid != null) {
       if (_seenUpdates.has(uid)) {
@@ -70,9 +87,7 @@ export async function createTelegramBot(config, db, opts = {}) {
     }
     _updatesReceived++;
     _lastUpdateAt = Date.now();
-    _handlerActive++;
-    try { await next(); }
-    finally { _handlerActive--; }
+    handleUpdate(() => next(), { now: answersAtOnce(ctx) });
   });
 
   /**
@@ -539,8 +554,25 @@ ${sendFileHint("telegram")}`,
     });
   }
 
+  /** Whether an update is one of the commands answered at once (see "One update at a time" above), read as the text handler reads it. */
+  function answersAtOnce(ctx) {
+    if (typeof ctx.message?.text !== "string") return false;
+    const text = messageText(ctx);
+    return text != null && answeredAtOnce(text);
+  }
+
   // --- Main text handler ---
   bot.on("text", async (ctx) => {
+    const text = messageText(ctx);
+    if (text == null) return;
+    await handleMessage(ctx, text);
+  });
+
+  /**
+   * What a text message says, as it is handled: with who it was forwarded from or the message it replies to, and the
+   * bot's @handle taken out. null for a group message that isn't for the bot (telegram.mention_mode).
+   */
+  function messageText(ctx) {
     let text = ctx.message.text;
 
     // Detect forwarded messages — add context
@@ -567,13 +599,12 @@ ${sendFileHint("telegram")}`,
       if (mentionMode === "required") {
         const isMentioned = botUsername && text.includes(`@${botUsername}`);
         const isReply = repliedMsg?.from?.id === ctx.botInfo?.id;
-        if (!isMentioned && !isReply) return;
+        if (!isMentioned && !isReply) return null;
       }
       if (botUsername) text = text.replace(new RegExp(`@${botUsername}\\b`, "gi"), "").trim();
     }
-
-    await handleMessage(ctx, text);
-  });
+    return text;
+  }
 
   // --- Photo handler with multi-image batching ---
   // Telegram sends media groups as separate messages with same media_group_id.
@@ -600,10 +631,11 @@ ${sendFileHint("telegram")}`,
 
         // Reset timer — process 500ms after last photo in group arrives
         clearTimeout(group.timer);
-        group.timer = setTimeout(async () => {
+        group.timer = setTimeout(() => {
           mediaGroupBuffer.delete(groupId);
           const text = group.caption || `Please analyze these ${group.images.length} images.`;
-          await handleMessage(group.ctx, text, null, group.images);
+          // In line like any message, so it never runs alongside another one's reply.
+          handleUpdate(() => handleMessage(group.ctx, text, null, group.images));
         }, 500);
       } else {
         // Single photo — process immediately
@@ -730,9 +762,7 @@ ${sendFileHint("telegram")}`,
     await handleMessage(ctx, buttonText, ctx.callbackQuery?.message?.message_id);
   });
 
-  bot.catch((err) => {
-    console.error("[telegram] bot error:", err.message);
-  });
+  bot.catch(botError);
 
   // Check the token before polling starts, so a wrong one fails the channel with what to do about it (Settings shows
   // it). Only Telegram refusing it fails the channel: a timeout or network error must not hold startup up (see the
@@ -797,8 +827,8 @@ ${sendFileHint("telegram")}`,
      * Poller health for the channel-health monitor.
      *  - updatesReceived: 0 means the poller has pulled NOTHING since launch
      *    (a genuine boot-race wedge — safe to relaunch).
-     *  - handlerActive: >0 means a turn is being processed right now — the
-     *    poll loop is legitimately busy, NOT stuck; don't relaunch.
+     *  - handlerActive: updates in line or being handled now (a turn can run for
+     *    minutes). >0 means the bot is busy, NOT stuck; don't relaunch.
      */
     health: () => ({
       updatesReceived: _updatesReceived,

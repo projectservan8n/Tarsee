@@ -1,34 +1,39 @@
-// Clicking a node in a diagram asks the chat about that node, in a real browser. A diagram is a canvas page the
-// create_diagram tool writes (src/lib/diagram-renderer.js). The chat shows it in an iframe sandboxed without
-// allow-same-origin (js/chat.js canvasEmbedHtml), and the canvas middleware (src/lib/canvas.js) serves it with a CSP
-// sandbox, so its script runs in an opaque origin and what it posts arrives from origin "null".
-// js/chat.js _initDiagramListener takes a node click from there:
-//   - a click on a node sends "Tell me more about: <label>. <sublabel>", or the node's own question
-//   - a diagram served from Tarsee's own origin (an iframe with allow-same-origin) works as well
-//   - nothing else is taken: a message from the chat window itself, from another window, from an iframe that isn't a
-//     diagram's, from a canvas that isn't a diagram, or from a diagram in any shape but a node click's
-//   - nor from one of the chat's diagram iframes showing a page from another origin
-// The page is src/public, the canvases come through the real middleware, and a small fake answers every /api call.
-// Runs on Playwright's own Chromium, else an installed Chrome or Edge; skipped where there is none
-// (npx playwright install chromium).
-/* global document, window, Chat -- the evaluate() bodies run in the browser */
+// Clicking a node in a diagram asks the chat about that node, and only a diagram Tarsee drew itself can do that.
+//
+// A diagram is data. create_diagram (src/lib/tools.js) keeps its nodes and edges (src/lib/canvas.js DiagramStore), and
+// the server draws the page itself, at /diagram/<id>/, on every request (src/lib/diagram-renderer.js). That page's CSP
+// lets one script run: Tarsee's own, named by its hash. So nothing the AI wrote runs there, even when the AI writes a
+// diagram's data file by hand. A canvas (/canvas/<id>/, create_canvas, or any file in the workspace's canvas folder) is
+// a page the AI wrote, whatever its name, so it never counts as a diagram.
+//
+// The chat shows a diagram in an iframe sandboxed without allow-same-origin (js/chat.js), and the server adds a CSP
+// sandbox, so what it posts arrives from origin "null". js/chat.js _initDiagramListener takes a node click only:
+//   - from one of the chat's own diagram iframes (src /diagram/<id>/), naming that diagram;
+//   - in a node click's exact shape, every field checked;
+//   - right after a person clicked (navigator.userActivation), and once per click (each click carries its number).
+// The page is src/public, the canvases and diagrams come through the real tools and middleware, and a small fake
+// answers every /api call. The browser tests run on Playwright's own Chromium, else an installed Chrome or Edge, and
+// are skipped where there is none (npx playwright install chromium).
+/* global document, window, MouseEvent, Chat -- the evaluate() bodies run in the browser */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 
-// Keep the canvases away from the real state directory (all three, so a folder set in the shell cannot win). Set
-// before the imports below: src/config/env.js reads them once, when it is first loaded.
+// Keep the canvases and diagrams away from the real state directory (all three, so a folder set in the shell cannot
+// win). Set before the imports below: src/config/env.js reads them once, when it is first loaded.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tarsee-diagram-click-"));
 process.env.TARSEE_STATE_DIR = tmp;
 process.env.TARSEE_WORKSPACE_DIR = path.join(tmp, "workspace");
 process.env.TARSEE_DATA_DIR = path.join(tmp, "data");
-const { CanvasServer, canvasMiddleware } = await import("../src/lib/canvas.js");
-const { renderDiagramHtml } = await import("../src/lib/diagram-renderer.js");
+const { DiagramStore, canvasMiddleware } = await import("../src/lib/canvas.js");
+const { renderDiagramHtml, DIAGRAM_SCRIPT } = await import("../src/lib/diagram-renderer.js");
 const { securityHeaders } = await import("../src/middleware/security.js");
+const { executeTool } = await import("../src/lib/tools.js");
 
 const PUBLIC = fileURLToPath(new URL("../src/public/", import.meta.url));
 
@@ -43,44 +48,87 @@ try {
 }
 const skip = browser ? false : "no Chromium, Chrome or Edge for Playwright";
 
-// --- The canvases ------------------------------------------------------------------------------------------------
+// --- The diagrams and canvases, made the way the AI makes them -----------------------------------------------------
 
-// A diagram as the create_diagram tool makes one (src/lib/tools.js): its canvas id is "diagram-" and the title's
-// slug, and the page names that id as its diagramId.
-const DIAGRAM = "diagram-test-flow";
-// A canvas that isn't a diagram (create_canvas).
-const REPORT = "weekly-report";
-const canvases = CanvasServer.create();
-canvases.serve(DIAGRAM, renderDiagramHtml({
+const created = {};
+created.flow = await executeTool("create_diagram", {
   title: "Test flow",
-  diagramId: DIAGRAM,
   nodes: [
     { id: "fetch", label: "Fetch the feed", sublabel: "Every hour", kind: "trigger" },
     { id: "sort", label: "Sort the items", kind: "processing", question: "Why sort them before saving?" },
     { id: "save", label: "Save the results", kind: "output" },
   ],
   edges: [{ from: "fetch", to: "sort" }, { from: "sort", to: "save" }],
-}));
-canvases.serve(REPORT, "<!DOCTYPE html><html><body><h1>Weekly report</h1></body></html>");
+}, {});
+const DIAGRAM = "test-flow";
 
-// --- The server: Tarsee's page and its canvases ------------------------------------------------------------------
+// Node ids that are the names of things every plain object has, and a question that isn't a string.
+created.odd = await executeTool("create_diagram", {
+  title: "Odd ids",
+  nodes: [
+    { id: "constructor", label: "Constructor node", kind: "processing", question: "What builds it?" },
+    { id: "__proto__", label: "Proto node", kind: "processing", question: "What is under it?" },
+    { id: "toString", label: "To string node", kind: "constructor" },
+    { id: "valueOf", label: "Value node", kind: "decision", question: "Which value?" },
+    { id: "hasOwnProperty", label: "Own node", kind: "output" },
+    { id: "num", label: "Number node", kind: "processing", question: 42 },
+  ],
+  edges: [
+    { from: "constructor", to: "__proto__" }, { from: "__proto__", to: "toString" }, { from: "toString", to: "valueOf" },
+    { from: "valueOf", to: "hasOwnProperty" }, { from: "hasOwnProperty", to: "num" },
+  ],
+}, {});
+
+// A page that forges node clicks: on a click on its own button, and on a timer. It names the real diagram, its own
+// canvas, and the old "diagram-" canvas names.
+const FORGER_JS = `
+  let n = 0;
+  const forge = (id) => ({ type: "tarsee:diagram-click", diagramId: id, nodeId: "fetch", label: "Fetch the feed", sublabel: "Every hour", question: "Forged for " + id, click: n });
+  const fire = () => { n += 1; for (const id of ["${DIAGRAM}", "diagram-${DIAGRAM}", "diagram-notes", "diagram-planted"]) parent.postMessage(forge(id), "*"); };
+  document.getElementById("ask").addEventListener("click", fire);
+  setInterval(fire, 250);`;
+// create_canvas with a title whose id starts with "diagram-".
+created.notes = await executeTool("create_canvas", { title: "Diagram notes", html: '<button id="ask">Ask</button>', js: FORGER_JS }, {});
+// A file the AI writes straight into the workspace's canvas folder, named like a diagram.
+const planted = path.join(tmp, "workspace", "canvas", "diagram-planted");
+fs.mkdirSync(planted, { recursive: true });
+fs.writeFileSync(path.join(planted, "index.html"), `<!DOCTYPE html><html><body><button id="ask">Ask</button><script>${FORGER_JS}</script></body></html>`);
+// A diagram's data file the AI writes by hand (its shell can write anywhere Tarsee can), trying to get a script in.
+const diagramsDir = path.join(tmp, "data", "diagrams");
+const RAN = "window.__ran = (window.__ran || 0) + 1; parent.postMessage({ type: 'tarsee:diagram-click', diagramId: 'handmade', nodeId: 'b', label: 'Injected', sublabel: '', click: 1 }, '*')";
+fs.mkdirSync(diagramsDir, { recursive: true });
+fs.writeFileSync(path.join(diagramsDir, "handmade.json"), JSON.stringify({
+  title: `Handmade</title><script>${RAN}</script>`,
+  nodes: [
+    { id: `a"><script>${RAN}</script>`, label: `</div><script>${RAN}</script>`, kind: "processing", x: `1px" onmouseover="${RAN}" data-x="`, question: { text: "Why?" } },
+    { id: "b", label: "Plain", sublabel: `<img src=x onerror="${RAN}">`, kind: "__proto__", y: `2px"><script>${RAN}</script>` },
+  ],
+  edges: [{ from: `a"><script>${RAN}</script>`, to: "b", label: `<script>${RAN}</script>` }],
+  legend: [{ kind: "constructor", label: `<script>${RAN}</script>` }],
+}));
+// And a whole page put where a diagram's data would be: never served.
+fs.mkdirSync(path.join(diagramsDir, "a-page"), { recursive: true });
+fs.writeFileSync(path.join(diagramsDir, "a-page", "index.html"), `<script>${RAN}</script>`);
+fs.writeFileSync(path.join(diagramsDir, "a-page.html"), `<script>${RAN}</script>`);
+
+// --- The server: Tarsee's page, its canvases and its diagrams -----------------------------------------------------
 
 let server;
 let otherServer;
 let origin;
 let otherOrigin;
 before(async () => {
-  if (!browser) return;
   const app = express();
   app.use(securityHeaders);
-  // Signed in (the canvases need it); /api never reaches here, the fake below answers it.
-  app.use((req, _res, next) => { req.auth = { authenticated: true }; next(); });
+  // Signed in (canvases and diagrams need it), unless the request asks not to be; /api never reaches here in the
+  // browser, the fake below answers it.
+  app.use((req, _res, next) => { req.auth = { authenticated: req.get("x-test-signed-out") !== "1" }; next(); });
   app.use(canvasMiddleware);
-  // The same diagram with no sandbox header, which any page may frame: what an iframe with allow-same-origin loads
-  // from Tarsee's own origin, or what one sent to another site gets from there.
+  // The same diagram with no sandbox header, which any page may frame: what an iframe loads from a server that left
+  // the sandbox off, here or on another site.
   app.get("/unsandboxed/:id/", (req, res) => {
     res.removeHeader("X-Frame-Options");
-    res.type("html").send(canvases.get(req.params.id));
+    res.type("html").send(renderDiagramHtml({ ...DiagramStore.create().get(req.params.id), diagramId: req.params.id }));
   });
   app.use(express.static(PUBLIC));
   await new Promise((r) => { server = app.listen(0, "127.0.0.1", r); });
@@ -95,7 +143,108 @@ after(async () => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-// --- A fake /api -------------------------------------------------------------------------------------------------
+/** The scripts in a page's HTML. */
+const scriptsOf = (html) => [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
+const sha256 = (text) => crypto.createHash("sha256").update(text, "utf8").digest("base64");
+
+// --- What the tools make, and how the server serves it -------------------------------------------------------------
+
+describe("create_diagram keeps a diagram's data, and the server draws its page", () => {
+  it("create_diagram's diagram is at /diagram/<id>/; create_canvas still makes a canvas, whatever its title", () => {
+    assert.match(created.flow, /^Diagram created! View at: \/diagram\/test-flow\/ /);
+    assert.match(created.odd, /View at: \/diagram\/odd-ids\//);
+    assert.match(created.notes, /^Canvas created! View at: \/canvas\/diagram-notes\//);
+    const kept = DiagramStore.create().get(DIAGRAM);
+    assert.equal(kept.title, "Test flow");
+    assert.deepEqual(kept.nodes.map((n) => n.id), ["fetch", "sort", "save"]);
+    assert.equal(fs.existsSync(path.join(tmp, "workspace", "canvas", "diagram-test-flow")), false, "no canvas for a diagram");
+  });
+
+  it("create_diagram refuses what isn't a diagram", async () => {
+    const make = (input) => executeTool("create_diagram", { title: "Bad", edges: [], ...input }, {});
+    assert.match(await make({ nodes: [] }), /^create_diagram error: nodes/);
+    assert.match(await make({ title: 7, nodes: [{ id: "a", label: "A", kind: "trigger" }] }), /^create_diagram error: title/);
+    assert.match(await make({ nodes: [{ id: "a", label: "A", kind: "trigger" }, { id: "a", label: "A again", kind: "trigger" }] }), /^create_diagram error: two nodes have the id "a"/);
+    assert.match(await make({ nodes: [{ id: "a", label: "A", kind: "trigger" }], edges: [{ from: "a", to: "b" }] }), /^create_diagram error: edge references unknown node id/);
+    assert.match(await make({ nodes: [{ label: "No id", kind: "trigger" }] }), /^create_diagram error: every node needs an id/);
+  });
+
+  it("the page has one script, Tarsee's own, and its CSP lets only that one run, in a sandbox", async () => {
+    const res = await fetch(`${origin}/diagram/${DIAGRAM}/`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type"), /^text\/html/);
+    const html = await res.text();
+    assert.deepEqual(scriptsOf(html), [DIAGRAM_SCRIPT], "one script, the same for every diagram");
+    const csp = res.headers.get("content-security-policy").split(/;\s*/);
+    assert.ok(csp.includes("sandbox allow-scripts"), csp.join("; "));
+    assert.ok(csp.includes(`script-src 'sha256-${sha256(DIAGRAM_SCRIPT)}'`), csp.join("; "));
+    assert.ok(csp.includes("default-src 'none'"), csp.join("; "));
+    assert.match(html, /data-diagram-id="test-flow"/);
+  });
+
+  it("a diagram's data written by hand still becomes Tarsee's page: every word is text, the one script is Tarsee's", async () => {
+    const html = await (await fetch(`${origin}/diagram/handmade/`)).text();
+    assert.deepEqual(scriptsOf(html), [DIAGRAM_SCRIPT]);
+    assert.doesNotMatch(html, /<img|onmouseover=|onerror="/i);
+    assert.doesNotMatch(html, /:undefined/, "an unknown kind looks like a processing node");
+    assert.doesNotMatch(html, /\sdata-question=/, "a question that isn't a string is left out");
+  });
+
+  it("only /diagram/<id>/ is a diagram: no file is served under it, an unknown id is not found, and it needs sign-in", async () => {
+    for (const p of [`/diagram/${DIAGRAM}/index.html`, "/diagram/a-page/", "/diagram/a-page.html", "/diagram/a-page/index.html", "/diagram/nope/", "/diagram/Test-Flow/", "/diagram/test_flow/", "/diagram/", "/diagram/..%2Fcanvas%2Fdiagram-notes/"]) {
+      const res = await fetch(`${origin}${p}`);
+      assert.equal(res.status, 404, p);
+      assert.doesNotMatch(await res.text(), /<script/i, p);
+    }
+    const out = await fetch(`${origin}/diagram/${DIAGRAM}/`, { headers: { "x-test-signed-out": "1" } });
+    assert.equal(out.status, 401);
+    assert.doesNotMatch(await out.text(), /Fetch the feed/);
+  });
+
+  it("the canvas gallery lists diagrams by their own address", async () => {
+    const html = await (await fetch(`${origin}/canvas/`)).text();
+    assert.match(html, /href="\/diagram\/test-flow\/"/);
+    assert.match(html, /href="\/canvas\/diagram-notes\/"/);
+  });
+});
+
+describe("the renderer", () => {
+  it("node ids that every plain object has are ordinary ids", () => {
+    const html = renderDiagramHtml({
+      title: "Odd",
+      diagramId: "odd",
+      nodes: ["constructor", "__proto__", "toString", "valueOf", "hasOwnProperty"].map((id) => ({ id, label: `L ${id}`, kind: "processing", question: `Q ${id}` })),
+      edges: [{ from: "constructor", to: "__proto__" }, { from: "__proto__", to: "toString" }],
+    });
+    for (const id of ["constructor", "__proto__", "toString", "valueOf", "hasOwnProperty"]) {
+      assert.match(html, new RegExp(`data-node-id="${id}" data-label="L ${id}" data-sublabel="" data-question="Q ${id}"`));
+    }
+    assert.equal((html.match(/<path d="M [\d.]+ [\d.]+ C /g) || []).length, 2, "both edges drawn");
+  });
+
+  it("a question that isn't a string is left out, so the click asks about the label", () => {
+    for (const question of [42, { text: "Why?" }, ["Why?"], true, "", "   "]) {
+      const html = renderDiagramHtml({ title: "Q", diagramId: "q", nodes: [{ id: "a", label: "A", kind: "processing", question }], edges: [] });
+      assert.doesNotMatch(html, /\sdata-question=/, JSON.stringify(question));
+    }
+  });
+
+  it("the script is the same whatever the diagram says, and positions are numbers only", () => {
+    const html = renderDiagramHtml({
+      title: "</script><script>bad()</script>",
+      diagramId: "x",
+      nodes: [{ id: "a", label: "</script>", kind: "processing", x: '1px" onclick="bad()', y: "2" }],
+      edges: [],
+    });
+    assert.deepEqual(scriptsOf(html), [DIAGRAM_SCRIPT]);
+    assert.doesNotMatch(html, /onclick=/);
+    assert.doesNotMatch(html, /left:1px"/);
+    const other = renderDiagramHtml({ title: "Other", diagramId: "other", nodes: [{ id: "z", label: "Z", kind: "output" }], edges: [] });
+    assert.deepEqual(scriptsOf(other), [DIAGRAM_SCRIPT], "nothing from a diagram is in its script");
+  });
+});
+
+// --- In a real browser ---------------------------------------------------------------------------------------------
 
 function fakeApi() {
   const calls = [];
@@ -174,22 +323,29 @@ async function frameAt(page, suffix) {
   throw new Error(`no frame at ${suffix}`);
 }
 
-/** Draw an answer in the chat, as a reply that names the canvases does. */
+/** Draw an answer in the chat, as a reply that names the diagrams and canvases does. */
 const showAnswer = (page, text) => page.evaluate((t) => { Chat.appendMessage("assistant", t); }, text);
 
-/** What a click on the "Fetch the feed" node posts (diagram-renderer.js), with `over` changed. */
-const nodeClick = (over = {}) => ({ type: "tarsee:diagram-click", diagramId: DIAGRAM, nodeId: "fetch", label: "Fetch the feed", sublabel: "Every hour", ...over });
+const diagramIn = (page, id = DIAGRAM) => page.frameLocator(`.canvas-embed[data-diagram-id="${id}"] iframe`);
+const canvasIn = (page, id) => page.frameLocator(`.canvas-embed[data-canvas-id="${id}"] iframe`);
+
+/** What the first click on the "Fetch the feed" node posts (diagram-renderer.js), with `over` changed. */
+const nodeClick = (over = {}) => ({ type: "tarsee:diagram-click", diagramId: DIAGRAM, nodeId: "fetch", label: "Fetch the feed", sublabel: "Every hour", click: 1, ...over });
+
+/** Post `msg` to the chat from inside `frame`. (Playwright's evaluate counts as a click, like a person's.) */
+const toParent = (frame, msg) => frame.evaluate((m) => window.parent.postMessage(m, "*"), msg);
 
 describe("a click on a diagram's node asks about it in the chat", { skip }, () => {
-  it("in the sandboxed iframe the chat draws: the node's label and sublabel, or its own question, are sent", async () => {
+  it("a real diagram, in the sandboxed iframe the chat draws: one click sends one message about that node", async () => {
     const { page, api, errors, context } = await openPage();
     try {
-      await showAnswer(page, `Here is the flow: /canvas/${DIAGRAM}/`);
-      const embed = page.locator(`.canvas-embed[data-canvas-id="${DIAGRAM}"] iframe.canvas-iframe`);
+      await showAnswer(page, `Here is the flow: /diagram/${DIAGRAM}/`);
+      const embed = page.locator(`.canvas-embed[data-diagram-id="${DIAGRAM}"] iframe`);
       assert.equal(await embed.getAttribute("sandbox"), "allow-scripts", "the diagram's iframe has no allow-same-origin");
-      const frame = await frameAt(page, `/canvas/${DIAGRAM}/`);
+      assert.equal(await embed.getAttribute("src"), `/diagram/${DIAGRAM}/`);
+      const frame = await frameAt(page, `/diagram/${DIAGRAM}/`);
       assert.equal(await frame.evaluate(() => window.origin), "null", "so its messages come from origin \"null\"");
-      const diagram = page.frameLocator(`.canvas-embed[data-canvas-id="${DIAGRAM}"] iframe`);
+      const diagram = diagramIn(page);
 
       await diagram.locator(".node", { hasText: "Fetch the feed" }).click();
       assert.deepEqual(await waitForSent(api, 1), ["Tell me more about: Fetch the feed. Every hour"]);
@@ -200,48 +356,136 @@ describe("a click on a diagram's node asks about it in the chat", { skip }, () =
       assert.deepEqual((await waitForSent(api, 2)).slice(1), ["Why sort them before saving?"], "a node's own question");
       await diagram.locator(".node", { hasText: "Save the results" }).click();
       assert.deepEqual((await waitForSent(api, 3)).slice(2), ["Tell me more about: Save the results"], "no sublabel");
+
+      // A double-click is one question, not two.
+      await diagram.locator(".node", { hasText: "Fetch the feed" }).dblclick();
+      await waitForSent(api, 4);
+      await page.waitForTimeout(400);
+      assert.deepEqual(sent(api).slice(3), ["Tell me more about: Fetch the feed. Every hour"]);
       assert.deepEqual(errors, []);
     } finally {
       await context.close();
     }
   });
 
-  it("a diagram from Tarsee's own origin (an iframe with allow-same-origin) works as before", async () => {
+  it("node ids like constructor, __proto__, toString and valueOf work, and a question that isn't a string asks about the label", async () => {
     const { page, api, errors, context } = await openPage();
     try {
-      await showAnswer(page, `/canvas/${DIAGRAM}/`);
-      await page.evaluate(({ id }) => {
-        const f = document.querySelector(`.canvas-embed[data-canvas-id="${id}"] iframe`);
-        f.setAttribute("sandbox", "allow-scripts allow-same-origin");
-        f.src = `/unsandboxed/${id}/`;
-      }, { id: DIAGRAM });
-      const frame = await frameAt(page, `${origin}/unsandboxed/${DIAGRAM}/`);
-      assert.equal(await frame.evaluate(() => window.origin), origin, "its messages come from Tarsee's own origin");
-      await page.frameLocator(`.canvas-embed[data-canvas-id="${DIAGRAM}"] iframe`).locator(".node", { hasText: "Fetch the feed" }).click();
+      await showAnswer(page, "/diagram/odd-ids/");
+      await frameAt(page, "/diagram/odd-ids/");
+      const diagram = diagramIn(page, "odd-ids");
+      const expected = [
+        ["Constructor node", "What builds it?"],
+        ["Proto node", "What is under it?"],
+        ["To string node", "Tell me more about: To string node"],
+        ["Value node", "Which value?"],
+        ["Own node", "Tell me more about: Own node"],
+        ["Number node", "Tell me more about: Number node"],
+      ];
+      for (const [i, [label, text]] of expected.entries()) {
+        await diagram.locator(".node", { hasText: label }).click();
+        assert.deepEqual((await waitForSent(api, i + 1)).slice(i), [text], label);
+      }
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("nothing is sent without a click: a well-formed message the real diagram posts long after any click is refused", async () => {
+    const { page, api, errors, context } = await openPage();
+    try {
+      await showAnswer(page, `/diagram/${DIAGRAM}/`);
+      const frame = await frameAt(page, `/diagram/${DIAGRAM}/`);
+      // Posted by a timer, 6.5 s on: past the browser's few seconds of "a person just clicked". Everything else about
+      // it is right, so the only thing that refuses it is that nobody clicked.
+      await frame.evaluate((m) => { setTimeout(() => window.parent.postMessage(m, "*"), 6500); }, nodeClick({ question: "Sent by a timer" }));
+      await page.waitForTimeout(7500);
+      assert.deepEqual(sent(api), [], "nothing was sent");
+      // A click a script makes on a node is not a person's: the diagram sends nothing for it, even with the browser
+      // saying someone just clicked (this evaluate counts as one).
+      await frame.evaluate(() => {
+        document.querySelector(".node").click();
+        document.querySelector(".node").dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+      });
+      await page.waitForTimeout(400);
+      assert.deepEqual(sent(api), [], "nothing was sent for a script's click");
+
+      // A person's click is taken, once: the same click posted again is not.
+      await diagramIn(page).locator(".node", { hasText: "Fetch the feed" }).click();
       assert.deepEqual(await waitForSent(api, 1), ["Tell me more about: Fetch the feed. Every hour"]);
+      await toParent(frame, nodeClick());
+      await toParent(frame, nodeClick({ question: "The same click again" }));
+      await page.waitForTimeout(400);
+      assert.deepEqual(sent(api), ["Tell me more about: Fetch the feed. Every hour"], "and only that");
       assert.deepEqual(errors, []);
     } finally {
       await context.close();
     }
   });
 
-  it("nothing else is taken: the chat window, another window, another iframe, a canvas that isn't a diagram, any other shape", async () => {
+  it("a page the AI wrote can't send one, whatever it's called: a canvas named diagram-..., a file put in the workspace", async () => {
     const { page, api, errors, context } = await openPage();
     try {
-      await showAnswer(page, `Here is the flow: /canvas/${DIAGRAM}/\n\nAnd the report: /canvas/${REPORT}/`);
-      const diagram = await frameAt(page, `/canvas/${DIAGRAM}/`);
-      const report = await frameAt(page, `/canvas/${REPORT}/`);
-      const toParent = (frame, msg) => frame.evaluate((m) => window.parent.postMessage(m, "*"), msg);
+      await showAnswer(page, `The flow: /diagram/${DIAGRAM}/\n\nNotes: /canvas/diagram-notes/\n\nAnd: /canvas/diagram-planted/`);
+      await frameAt(page, `/diagram/${DIAGRAM}/`);
+      await frameAt(page, "/canvas/diagram-notes/");
+      await frameAt(page, "/canvas/diagram-planted/");
+      // Both pages forge clicks on a timer from the start; a person's real click on each page's button forges more,
+      // with the browser saying someone just clicked.
+      await canvasIn(page, "diagram-notes").locator("#ask").click();
+      await canvasIn(page, "diagram-planted").locator("#ask").click();
+      await page.waitForTimeout(1200);
+      assert.deepEqual(sent(api), [], "nothing was sent");
+      assert.equal(await page.locator("#messageInput").inputValue(), "", "nothing was put in the box");
+
+      // The listener is there all along: the real diagram's click is taken, and only that.
+      await diagramIn(page).locator(".node", { hasText: "Fetch the feed" }).click();
+      assert.deepEqual(await waitForSent(api, 1), ["Tell me more about: Fetch the feed. Every hour"]);
+      await page.waitForTimeout(600);
+      assert.deepEqual(sent(api), ["Tell me more about: Fetch the feed. Every hour"]);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("a diagram's data written by hand runs no script of its own and sends nothing until a node is clicked", async () => {
+    const { page, api, errors, context } = await openPage();
+    try {
+      await showAnswer(page, "/diagram/handmade/");
+      const frame = await frameAt(page, "/diagram/handmade/");
+      const diagram = diagramIn(page, "handmade");
+      await diagram.locator(".node").first().hover();
+      await page.waitForTimeout(600);
+      assert.deepEqual(sent(api), []);
+      assert.equal(await frame.evaluate(() => window.__ran ?? 0), 0, "none of its words ran");
+      assert.equal(await frame.evaluate(() => document.scripts.length), 1);
+      await diagram.locator(".node", { hasText: "Plain" }).click();
+      // Its words are only words: sent as they are (cut to 200 characters), never run.
+      assert.deepEqual(await waitForSent(api, 1), [`Tell me more about: Plain. ${`<img src=x onerror="${RAN}">`.slice(0, 200)}`]);
+      assert.equal(await frame.evaluate(() => window.__ran ?? 0), 0);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("nothing else is taken: the chat window, another window, another iframe, a message in any other shape", async () => {
+    const { page, api, errors, context } = await openPage();
+    try {
+      await showAnswer(page, `Here is the flow: /diagram/${DIAGRAM}/`);
+      const diagram = await frameAt(page, `/diagram/${DIAGRAM}/`);
 
       // The chat window itself, with a node click's exact shape.
       await page.evaluate((m) => window.postMessage(m, "*"), nodeClick());
       // Another window: a popup the page opened.
       const [popup] = await Promise.all([page.waitForEvent("popup"), page.evaluate(() => { window.open("about:blank", "_blank"); })]);
       await popup.evaluate((m) => window.opener.postMessage(m, "*"), nodeClick());
-      // Another iframe in the chat, even one with the canvas iframe's class and sandbox.
+      // Another iframe in the chat, even one with a diagram iframe's classes and sandbox.
       await page.evaluate(() => {
         const f = document.createElement("iframe");
-        f.className = "canvas-iframe";
+        f.className = "canvas-iframe diagram-iframe";
         f.id = "strayFrame";
         f.setAttribute("sandbox", "allow-scripts");
         f.srcdoc = "<p>Not a diagram</p>";
@@ -251,21 +495,28 @@ describe("a click on a diagram's node asks about it in the chat", { skip }, () =
       await stray.waitForLoadState("load");
       assert.equal(await stray.evaluate(() => window.origin), "null", "an opaque origin, like a diagram's");
       await toParent(stray, nodeClick());
-      // A canvas the chat drew that isn't a diagram, naming itself or the diagram.
-      await toParent(report, nodeClick({ diagramId: REPORT }));
-      await toParent(report, nodeClick());
       // The diagram itself, in any other shape than a node click's.
       for (const msg of [
-        nodeClick({ diagramId: "diagram-another-flow" }),
+        nodeClick({ diagramId: "another-flow" }),
+        nodeClick({ diagramId: `diagram-${DIAGRAM}` }),
         nodeClick({ type: "tarsee:diagram-clicked" }),
         nodeClick({ extra: "field" }),
         nodeClick({ label: 42 }),
         nodeClick({ sublabel: ["Every hour"] }),
         nodeClick({ nodeId: null }),
+        nodeClick({ nodeId: "" }),
         nodeClick({ question: 7 }),
         nodeClick({ question: { text: "Why?" } }),
-        nodeClick({ label: "", question: "" }),
-        { type: "tarsee:diagram-click", diagramId: DIAGRAM, label: "Fetch the feed" },
+        nodeClick({ question: "" }),
+        nodeClick({ label: "", sublabel: "" }),
+        nodeClick({ click: 0 }),
+        nodeClick({ click: -1 }),
+        nodeClick({ click: 1.5 }),
+        nodeClick({ click: "1" }),
+        nodeClick({ click: Number.MAX_SAFE_INTEGER + 1 }),
+        nodeClick({ click: undefined }),
+        (({ click, ...rest }) => rest)(nodeClick()),
+        { type: "tarsee:diagram-click", diagramId: DIAGRAM, label: "Fetch the feed", click: 1 },
         [nodeClick()],
         "tarsee:diagram-click",
         null,
@@ -276,7 +527,7 @@ describe("a click on a diagram's node asks about it in the chat", { skip }, () =
       assert.equal(await page.locator("#messageInput").inputValue(), "", "nothing was put in the box");
 
       // The listener is there all along: the same diagram's real click is taken.
-      await page.frameLocator(`.canvas-embed[data-canvas-id="${DIAGRAM}"] iframe`).locator(".node", { hasText: "Fetch the feed" }).click();
+      await diagramIn(page).locator(".node", { hasText: "Fetch the feed" }).click();
       assert.deepEqual(await waitForSent(api, 1), ["Tell me more about: Fetch the feed. Every hour"]);
       await page.waitForTimeout(300);
       assert.deepEqual(sent(api), ["Tell me more about: Fetch the feed. Every hour"], "and only that");
@@ -286,32 +537,60 @@ describe("a click on a diagram's node asks about it in the chat", { skip }, () =
     }
   });
 
-  it("a diagram's iframe showing a page from another origin is refused, even a real click on it", async () => {
+  it("a diagram's iframe showing any other page is refused, even a real click on a real diagram's nodes", async () => {
     // Tarsee's page already keeps other sites out of its iframes (its CSP says frame-src 'self'). With that set aside,
     // the listener still refuses them.
     const { page, api, errors, context } = await openPage({ bypassCSP: true });
     try {
-      await showAnswer(page, `/canvas/${DIAGRAM}/`);
+      await showAnswer(page, `/diagram/${DIAGRAM}/`);
       const load = (src, sandbox) => page.evaluate(({ id, url, flags }) => {
-        const f = document.querySelector(`.canvas-embed[data-canvas-id="${id}"] iframe`);
+        const f = document.querySelector(`.canvas-embed[data-diagram-id="${id}"] iframe`);
         if (flags == null) f.removeAttribute("sandbox"); else f.setAttribute("sandbox", flags);
         f.src = url;
       }, { id: DIAGRAM, url: src, flags: sandbox });
-      const diagram = page.frameLocator(`.canvas-embed[data-canvas-id="${DIAGRAM}"] iframe`);
+      const diagram = diagramIn(page);
+      const clickFetch = () => diagram.locator(".node", { hasText: "Fetch the feed" }).click();
 
+      // Another site.
       await load(`${otherOrigin}/unsandboxed/${DIAGRAM}/`, null);
-      const elsewhere = await frameAt(page, `${otherOrigin}/unsandboxed/${DIAGRAM}/`);
-      assert.equal(await elsewhere.evaluate(() => window.origin), otherOrigin);
-      await diagram.locator(".node", { hasText: "Fetch the feed" }).click();
+      assert.equal(await (await frameAt(page, `${otherOrigin}/unsandboxed/${DIAGRAM}/`)).evaluate(() => window.origin), otherOrigin);
+      await clickFetch();
+      // Tarsee's own origin, with no sandbox (origin is Tarsee's, not "null").
+      await load(`/unsandboxed/${DIAGRAM}/`, "allow-scripts allow-same-origin");
+      assert.equal(await (await frameAt(page, `${origin}/unsandboxed/${DIAGRAM}/`)).evaluate(() => window.origin), origin);
+      await clickFetch();
+      // Sandboxed (origin "null"), but not the diagram's own address.
+      await load(`/unsandboxed/${DIAGRAM}/?sandboxed`, "allow-scripts");
+      assert.equal(await (await frameAt(page, `${origin}/unsandboxed/${DIAGRAM}/?sandboxed`)).evaluate(() => window.origin), "null");
+      await clickFetch();
       await page.waitForTimeout(500);
       assert.deepEqual(sent(api), [], "nothing was sent");
 
-      // The same iframe back on the diagram, sandboxed as the chat draws it: taken.
-      await load(`/canvas/${DIAGRAM}/`, "allow-scripts");
-      const back = await frameAt(page, `${origin}/canvas/${DIAGRAM}/`);
-      assert.equal(await back.evaluate(() => window.origin), "null");
-      await diagram.locator(".node", { hasText: "Fetch the feed" }).click();
+      // The same iframe back on the diagram, sandboxed as the chat draws it: taken (its clicks count from 1 again).
+      await load(`/diagram/${DIAGRAM}/`, "allow-scripts");
+      assert.equal(await (await frameAt(page, `${origin}/diagram/${DIAGRAM}/`)).evaluate(() => window.origin), "null");
+      await clickFetch();
       assert.deepEqual(await waitForSent(api, 1), ["Tell me more about: Fetch the feed. Every hour"]);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("the diagram's menu copies and downloads the diagram's own address", async () => {
+    const { page, errors, context } = await openPage();
+    try {
+      await showAnswer(page, `/diagram/${DIAGRAM}/`);
+      const embed = page.locator(`.canvas-embed[data-diagram-id="${DIAGRAM}"]`);
+      assert.equal(await embed.locator("a.canvas-embed-menu-item").getAttribute("href"), `/diagram/${DIAGRAM}/`);
+      await page.evaluate(() => {
+        window.__copied = [];
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: (t) => { window.__copied.push(t); return Promise.resolve(); } } });
+      });
+      await embed.hover();
+      await embed.locator(".canvas-embed-menu-btn").click();
+      await embed.locator("[data-canvas-action='copy']").click();
+      assert.deepEqual(await page.evaluate(() => window.__copied), [`${origin}/diagram/${DIAGRAM}/`]);
       assert.deepEqual(errors, []);
     } finally {
       await context.close();

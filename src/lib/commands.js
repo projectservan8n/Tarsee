@@ -1165,8 +1165,11 @@ artifact. Just confirm.`;
         return "In Slack every thread is its own conversation, so /stop works inside one: in the thread whose reply you want to stop, mention me with /stop.";
       }
       // As the chat's Stop button does (POST /api/chat/stop): every turn running in this chat, whichever channel or
-      // device started it (ai/turn.js).
-      if (ctx.conversationId && stopTurns(ctx.conversationId) > 0) return "Stopped the reply in this chat.";
+      // device started it (ai/turn.js). The dashboard's chat passes ctx.stopChat, its Stop button's own, which also
+      // cancels what the dashboard sent that waits behind the reply (routes/chat.js).
+      const stopped = ctx.conversationId
+        && (typeof ctx.stopChat === "function" ? ctx.stopChat(ctx.conversationId) : stopTurns(ctx.conversationId) > 0);
+      if (stopped) return "Stopped the reply in this chat.";
       return "Nothing is running in this chat, so there's nothing to stop.";
     },
   },
@@ -1263,6 +1266,25 @@ export async function processCommand(message, ctx = {}) {
 
   const response = await cmd.handler(args, ctx);
   return { handled: true, response };
+}
+
+/**
+ * The commands that Telegram and email, which take a chat's messages one at a time, answer straight away, even while a
+ * reply is running in that chat, instead of queueing them behind it:
+ *   /stop      it is for exactly that time, and queued it would only arrive once the reply had ended
+ *   /help      a fixed list
+ *   /version   reads the version files and the default AI's name, and changes nothing
+ * Each answers at once and touches nothing the running reply uses. Every other command waits its turn like any
+ * message: it changes the chat or its AI (/clear, /new, /model, /think, /remember, ...), reads the chat the reply is
+ * still writing (/export), runs the AI (/checkpoint, /ultrareview), or can take a while (/status asks each AI whether
+ * it is ready).
+ */
+const ANSWERED_AT_ONCE = new Set(["stop", "help", "version"]);
+
+/** Whether a message is one of those commands, read as processCommand reads it. */
+export function answeredAtOnce(message) {
+  if (typeof message !== "string" || !message.startsWith("/")) return false;
+  return ANSWERED_AT_ONCE.has(message.slice(1).split(/\s+/)[0]?.toLowerCase());
 }
 
 /**
