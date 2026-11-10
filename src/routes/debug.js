@@ -288,7 +288,7 @@ export const ALLOWED_COMMANDS = {
         if (status.jobs.length === 0) return "No cron jobs configured";
         const lines = [`Active: ${status.activeJobs}/${status.totalJobs}`];
         for (const j of status.jobs) {
-          lines.push(`  ${j.id} [${j.enabled ? "ON" : "OFF"}] ${j.schedule} — ${j.prompt.slice(0, 50)}`);
+          lines.push(`  ${j.id} [${j.state.toUpperCase()}] ${j.schedule} — ${String(j.prompt || j.action?.tool || "").slice(0, 50)}`);
         }
         return lines.join("\n");
       } catch (err) {

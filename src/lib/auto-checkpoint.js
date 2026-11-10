@@ -163,7 +163,9 @@ export function composeMechanicalCheckpoint(db, settings) {
     if (Array.isArray(jobs) && jobs.length) {
       lines.push("## Scheduled Cron Jobs");
       for (const j of jobs) {
-        lines.push(`- \`${j.schedule}\` → ${j.name || j.id} · ${(j.prompt || "").slice(0, 140)}`);
+        // A task the AI saved waits for the owner's OK (lib/cron.js): it doesn't run, so don't say it does.
+        const state = j.awaitingOwner ? " (paused, waiting for the owner's OK)" : j.enabled === false ? " (paused)" : "";
+        lines.push(`- \`${j.schedule}\` → ${j.name || j.id}${state} · ${(j.prompt || "").slice(0, 140)}`);
       }
       lines.push("");
     }

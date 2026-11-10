@@ -231,6 +231,28 @@ describe("Telegram", () => {
     await settle(200);
     assert.equal(model.calls.length, 0);
   });
+
+  // Scheduled tasks are paid turns that run with nobody asking, so only the owner manages them (lib/commands.js).
+  it("only the owner manages scheduled tasks: their own user id on the allowlist, not just their chat's", async () => {
+    settings.set("allowlist.telegram", ["711"]);   // the chat is let in; the person in it (user 42) isn't listed
+    try {
+      send(711, { text: "/cron list" });
+      const said = await until(() => sentTo(711)[0], "the refusal");
+      assert.match(said, /Only the owner/);
+      assert.match(said, /Telegram user ID/);
+      settings.set("allowlist.telegram", ["711", "42"]);
+      send(711, { text: "/cron list" });
+      assert.match(await until(() => sentTo(711)[1], "the owner's answer"), /No scheduled tasks/);
+      assert.equal(model.calls.length, 0, "a command never reaches the AI");
+    } finally {
+      settings.delete("allowlist.telegram");
+    }
+  });
+
+  it("with no allowlist anyone can talk to the bot, so nobody there counts as the owner", async () => {
+    send(712, { text: "/cron list" });
+    assert.match(await until(() => sentTo(712)[0], "the refusal"), /Only the owner/);
+  });
 });
 
 // ── WhatsApp ────────────────────────────────────────────────────────────────
@@ -312,6 +334,20 @@ describe("WhatsApp", () => {
     await inbound({ type: "voice", voice: { id: "voice-77", mime_type: "audio/ogg; codecs=opus" } });
     assert.deepEqual(texts(), [sttMessage]);
     assert.equal(model.calls.length, 0);
+  });
+
+  it("only the owner manages scheduled tasks: their number on the allowlist (with none, anyone can write in)", async () => {
+    await inbound({ type: "text", text: { body: "/cron list" } });
+    assert.match(texts().join("\n"), /Only the owner/);
+    settings.set("allowlist.whatsapp", ["+44 7700 900123"]);
+    try {
+      sent.length = 0;
+      await inbound({ type: "text", text: { body: "/cron list" } });
+      assert.match(texts().join("\n"), /No scheduled tasks/);
+      assert.equal(model.calls.length, 0);
+    } finally {
+      settings.delete("allowlist.whatsapp");
+    }
   });
 });
 
@@ -435,6 +471,32 @@ describe("Discord", () => {
     assert.equal(dm.shown()[0], sttMessage);
     assert.equal(model.calls.length, 1);
   });
+
+  it("only the owner manages scheduled tasks: their own user id on the allowlist, not just a channel's", async () => {
+    let dm = discordDM({ content: "/cron list" });
+    deliver(dm);
+    assert.match(await until(() => dm.shown()[0], "the refusal (no allowlist: anyone can DM the bot)"), /Only the owner/);
+    settings.set("allowlist.discord", ["U42"]);
+    try {
+      dm = discordDM({ content: "/cron list" });
+      deliver(dm);
+      assert.match(await until(() => dm.shown()[0], "the owner's answer"), /No scheduled tasks/);
+
+      // A server channel that is let in: someone in it who isn't listed by their own id is not the owner.
+      settings.set("allowlist.discord", ["chan-1"]);
+      const inServer = discordDM({ content: "<@999> /cron list" });
+      inServer.message.guild = { id: "G1" };
+      inServer.message.channel = { ...inServer.message.channel, id: "chan-1" };
+      inServer.message.mentions = { has: () => true };
+      deliver(inServer);
+      const said = await until(() => inServer.shown()[0], "the refusal in the server");
+      assert.match(said, /Only the owner/);
+      assert.match(said, /Discord user ID/);
+      assert.equal(model.calls.length, 0);
+    } finally {
+      settings.delete("allowlist.discord");
+    }
+  });
 });
 
 // ── Email ───────────────────────────────────────────────────────────────────
@@ -536,5 +598,22 @@ describe("email", () => {
     const [saved] = replies(convOfMail(n));
     assert.deepEqual([saved.provider, saved.model], ["deepseek", "deepseek-v4-flash"]);
     assert.ok(model.calls[0].toolCtx.messageId, "the turn knows which message it answers");
+  });
+
+  it("scheduled tasks can't be managed by email, even from an allowlisted address (a From line is easy to fake)", async () => {
+    const n = ++mailNo;
+    FakeImap.inbox.push({
+      uid: n,
+      seen: false,
+      raw: [
+        "From: Sam <sam@example.com>", "To: tarsee@example.com", `Subject: Question ${n}`, `Message-ID: <question-${n}@example.com>`,
+        "Date: Mon, 09 Nov 2026 10:00:00 +0000", "Content-Type: text/plain; charset=utf-8", "", "/cron list @tarsee", "",
+      ].join("\r\n"),
+    });
+    const smtp = await answerInbox();
+    assert.equal(model.calls.length, 0);
+    assert.equal(smtp.sent.length, 1);
+    assert.match(smtp.sent[0].text, /Only the owner/);
+    assert.match(smtp.sent[0].text, /can't be done by email/);
   });
 });

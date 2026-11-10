@@ -417,7 +417,7 @@ export const TOOLS = [
 
   {
     name: "schedule_task",
-    description: "Schedule a task to run at a specific time or interval using cron syntax. The task will be executed as an AI prompt at the scheduled time.",
+    description: "Schedule a task to run at a specific time or interval using cron syntax, as an AI prompt. Only when the owner asks for one: every run can cost money. The task is saved paused, and runs only once the owner switches it on (Settings > Automation > Scheduled tasks, or /cron on <id>). A task that asks the AI runs at most once every 15 minutes.",
     input_schema: {
       type: "object",
       properties: {
@@ -562,6 +562,13 @@ export const TOOLS = [
 // and never reach Telegram. server.js sets it once the channels start.
 let _channelManager = null;
 export function setToolsChannelManager(channelManager) { _channelManager = channelManager || null; }
+
+// What started a background turn (its tool context's `background`, ai/turn.js), as schedule_task's refusal says it.
+const SCHEDULE_REFUSED_IN = {
+  cron: "a scheduled task or a webhook",
+  heartbeat: "the heartbeat (HEARTBEAT.md)",
+  boot: "the startup checklist (BOOT.md)",
+};
 
 // The upload caps of each channel's bot API, in MB.
 // Slack takes up to 1 GB; 100 MB is Tarsee's own cap (the upload is read into memory).
@@ -1329,13 +1336,20 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       }
 
       case "schedule_task": {
-        const { schedule, prompt, name, action, once } = toolInput;
+        const { schedule, prompt, name, action, once } = toolInput || {};
+        // Only the owner sets up scheduled tasks. Background work (a scheduled task's or a webhook's run, the
+        // heartbeat, BOOT.md: ai/turn.js marks its tool context, on both engines) makes none, so a task never makes
+        // tasks. A chat's own turn may: the task is saved paused (lib/cron.js), until the owner switches it on.
+        if (ctx.background) {
+          const by = SCHEDULE_REFUSED_IN[ctx.background] || "background work";
+          return `schedule_task refused: this run was started by ${by}, not by the owner, and only the owner can set up scheduled tasks, so background work never makes more of them. Nothing was saved. If a follow-up is needed, say so in your reply, and the owner can set it up.`;
+        }
         try {
           const { addCronJob } = await import("./cron.js");
-          const job = addCronJob({ schedule, prompt: prompt || "", name, action, once: !!once });
-          const desc = action ? `direct ${action.tool}` : "AI prompt";
-          const freq = once ? "one-time" : "recurring";
-          return `Scheduled ${freq} task (${desc}): ${name || job.id} at ${schedule}`;
+          const job = addCronJob({ schedule, prompt: prompt || "", name, action, once: !!once, createdBy: "ai", conversationId: ctx.conversationId || null });
+          const what = action ? `runs ${action.tool} directly, no AI` : "asks the AI";
+          const when = once ? "once" : "on a repeat";
+          return `Saved the task "${name || job.id}" (id ${job.id}, schedule ${schedule}, ${when}, ${what}), but it is paused: it won't run until the owner switches it on, in Settings > Automation > Scheduled tasks or by sending \`/cron on ${job.id}\`. Tell the owner that, in those words.`;
         } catch (err) {
           return `schedule_task error: ${err.message}`;
         }

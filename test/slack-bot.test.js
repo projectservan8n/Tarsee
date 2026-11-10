@@ -540,6 +540,28 @@ describe("the Slack bot against a fake Slack", () => {
     assert.match(post[1].markdown_text, /slack/);
   });
 
+  // Scheduled tasks are paid turns that run with nobody asking, so only the owner manages them (lib/commands.js).
+  it("only the owner manages scheduled tasks: their own user id on the allowlist, not just a channel's", async () => {
+    sendCommand("/cron list");
+    let r = await until(() => responses.find((x) => /Only the owner/.test(x.text || "")), "the refusal (no allowlist: anyone in the workspace)");
+    assert.match(r.text, /Slack user ID/);
+    settings.set("allowlist.slack", ["U1", "C1"]);
+    try {
+      sendCommand("/cron list");
+      r = await until(() => responses.find((x) => /No scheduled tasks/.test(x.text || "")), "the owner's answer");
+      let from = calls.length;
+      sendEvent({ type: "message", channel: "C1", channel_type: "channel", user: "U1", user_team: "T1", text: "<@UBOT> /cron list", ts: "720.000100" });
+      await until(() => calls.slice(from).find(([m, a]) => m === "chat.postMessage" && /No scheduled tasks/.test(a.markdown_text || "")), "the owner's answer in a thread");
+
+      settings.set("allowlist.slack", ["C1"]);   // the channel is let in; U1 isn't listed by their own id
+      from = calls.length;
+      sendEvent({ type: "message", channel: "C1", channel_type: "channel", user: "U1", user_team: "T1", text: "<@UBOT> /cron list", ts: "721.000100" });
+      await until(() => calls.slice(from).find(([m, a]) => m === "chat.postMessage" && /Only the owner/.test(a.markdown_text || "")), "the refusal in a thread");
+    } finally {
+      settings.delete("allowlist.slack");
+    }
+  });
+
   it("help says how to type a command in Slack, where /clear on its own is Slack's", async () => {
     sendCommand("help");
     const r = await until(() => responses.find((x) => /Tarsee Commands/.test(x.blocks?.[0]?.text || "")), "the /tarsee help answer");

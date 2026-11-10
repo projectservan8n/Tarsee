@@ -114,6 +114,22 @@ export async function createTelegramBot(config, db, opts = {}) {
     }
   }
 
+  /** The allowlist from config or Settings: chat ids (a private chat's id is its person's user id). */
+  function allowedChatsNow() {
+    const dbAllowlist = settingsStore.get("allowlist.telegram");
+    return config.allowedChats?.length > 0 ? config.allowedChats : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
+  }
+
+  /**
+   * Whether the sender is the owner, for the owner's commands (/cron, /briefing, /webhook: lib/commands.js): their own
+   * user id is on the allowlist (in a private chat that is the chat's id too). A listed group lets its members talk
+   * to the bot, not manage it; with no allowlist anyone can talk to it, so nobody counts.
+   */
+  function senderIsOwner(ctx) {
+    const list = allowedChatsNow().map(String);
+    return list.length > 0 && ctx.from?.id != null && list.includes(String(ctx.from.id));
+  }
+
   /**
    * Whether this chat may talk to the bot: the allowlist from config or Settings (empty lets every chat in).
    * Settings says to message the bot and read the chat ID in the Console, so a dropped chat says its ID, and with no
@@ -121,8 +137,7 @@ export async function createTelegramBot(config, db, opts = {}) {
    */
   function chatAllowed(ctx) {
     const chatId = ctx.chat.id;
-    const dbAllowlist = settingsStore.get("allowlist.telegram");
-    const allowedChats = config.allowedChats?.length > 0 ? config.allowedChats : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
+    const allowedChats = allowedChatsNow();
     if (allowedChats.length > 0) {
       if (!allowedChats.includes(String(chatId))) {
         console.warn(`[telegram] ignoring message from chat ${chatId} (${chatLabel(ctx.chat, ctx.from)}): not on the Telegram allowlist`);
@@ -165,6 +180,7 @@ export async function createTelegramBot(config, db, opts = {}) {
         convStore,
         conversationId: existingConvId,
         platform: "telegram",
+        owner: senderIsOwner(ctx),
         // `db` was missing — /clear could not do its DB cleanup and silently
         // no-op'd, letting sessions accumulate huge transcripts.
         db,

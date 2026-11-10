@@ -3003,42 +3003,43 @@ const Settings = {
     }
   },
 
-  // --- Cron Jobs ---
+  // --- Scheduled tasks (Settings > Automation): each task's state, who made it, its whole prompt, and its buttons ---
   async loadCronJobs() {
-    if (!this.elements.cronJobsList) return;
+    const list = this.elements.cronJobsList;
+    if (!list) return;
     try {
       const data = await API.json("/api/settings/cron");
-      const jobs = data.jobs || [];
+      // Drawn by js/cron-core.js, which escapes everything a task holds (a prompt the AI wrote is only text).
+      list.innerHTML = CronCore.listHtml(data.jobs || []);
 
-      if (jobs.length === 0) {
-        this.elements.cronJobsList.innerHTML =
-          '<div style="color: var(--text-muted); font-size: 13px">No cron jobs. Add one below or use <code>/cron add</code> in chat.</div>';
-        return;
-      }
+      // Switch on (a waiting task: the owner's OK) and Pause.
+      list.querySelectorAll("[data-cron-toggle]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const enabled = btn.dataset.cronEnabled === "true";
+          btn.disabled = true;
+          try {
+            await API.json(`/api/settings/cron/${encodeURIComponent(btn.dataset.cronToggle)}`, { method: "PATCH", body: { enabled } });
+            App.showToast(enabled ? "Task switched on" : "Task paused", "success");
+          } catch (err) {
+            App.showToast(err.message, "error");
+          }
+          this.loadCronJobs();
+        });
+      });
 
-      this.elements.cronJobsList.innerHTML = jobs.map((j) =>
-        `<div class="memory-item">
-          <span class="memory-badge">${j.running ? "running" : j.enabled ? "enabled" : "off"}</span>
-          <span class="memory-content"><code>${j.schedule}</code> — ${escapeHtml(j.prompt.slice(0, 60))}</span>
-          <button class="memory-delete" data-cron-id="${j.id}" title="Delete">
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          </button>
-        </div>`
-      ).join("");
-
-      this.elements.cronJobsList.querySelectorAll("[data-cron-id]").forEach((btn) => {
+      list.querySelectorAll("[data-cron-delete]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           try {
-            await API.json(`/api/settings/cron/${btn.dataset.cronId}`, { method: "DELETE" });
+            await API.json(`/api/settings/cron/${encodeURIComponent(btn.dataset.cronDelete)}`, { method: "DELETE" });
             this.loadCronJobs();
-            App.showToast("Cron job removed", "success");
+            App.showToast("Task deleted", "success");
           } catch (err) {
             App.showToast(err.message, "error");
           }
         });
       });
     } catch {
-      this.elements.cronJobsList.innerHTML = "";
+      list.innerHTML = "";
     }
   },
 
@@ -3057,7 +3058,7 @@ const Settings = {
       this.elements.cronScheduleInput.value = "";
       this.elements.cronPromptInput.value = "";
       this.loadCronJobs();
-      App.showToast("Cron job added", "success");
+      App.showToast("Task added and switched on", "success");
     } catch (err) {
       App.showToast(err.message, "error");
     }

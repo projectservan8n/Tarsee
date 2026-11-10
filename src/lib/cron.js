@@ -10,12 +10,22 @@ import config from "../config/env.js";
  * Cron job scheduler — run AI tasks on a schedule.
  *
  * Job spec stored in settings DB as JSON array: "cron.jobs"
- * Each job: { id, schedule, prompt, channel, enabled }
+ * Each job: { id, schedule, prompt, channel, enabled, createdBy, awaitingOwner?, conversationId?, name?, action?, once? }
  *
  * - schedule: standard cron expression (e.g. "0 9 * * *" = 9 AM daily)
  * - prompt: the message to send to the AI
  * - channel: which channel to deliver to (default: "web:default")
  * - enabled: boolean
+ * - createdBy: "owner" (the Settings form, /cron add, /briefing) or "ai" (the schedule_task tool, in a chat). Tasks
+ *   saved before this was kept have none.
+ * - awaitingOwner: true while a task the AI made waits for the owner's OK. Such a task is saved switched off and
+ *   only the owner switches it on (Settings > Automation > Scheduled tasks, PATCH /api/settings/cron/:id,
+ *   /cron on <id>): each run of a task that asks the AI is a paid turn nobody asked for at the time, so the owner
+ *   decides. conversationId: the chat the AI made it in.
+ *
+ * A task that asks the AI (no `action`) has no seconds field and runs at most once every MIN_PROMPT_GAP_MINUTES
+ * (promptScheduleProblem), checked when it is made: tasks saved before the rule keep running as they are. A run still
+ * going when the task's next time comes is skipped, not stacked (scheduleJob, noOverlap).
  */
 
 let _db = null;
@@ -71,11 +81,122 @@ let _convStore = null;
 let _channelManager = null;
 const activeJobs = new Map(); // id → cron.ScheduledTask
 const jobState = new Map();   // id → { lastRun, lastStatus, lastError, consecutiveErrors }
+const runsGoing = new Map();  // id → how many runs of it are going right now (the "Running" state)
 
 const JOB_TIMEOUT_MS = BACKGROUND_DEFAULTS.TIMEOUT_MS; // hard wall-clock cap per job
 const MAX_CONSECUTIVE_ERRORS = 5; // Auto-disable after this many failures
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 5_000;
+
+/** The closest two runs of a task that asks the AI may be, in minutes. Each run is a paid turn on the AI. */
+export const MIN_PROMPT_GAP_MINUTES = 15;
+const DAY_MINUTES = 24 * 60;
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Days in the Gregorian calendar's 400-year cycle: after it, every date falls on the same weekday again. */
+const CYCLE_DAYS = 146_097;
+
+/**
+ * Why a task that asks the AI can't have this schedule, in words for the owner or the model; null when it can.
+ * Five parts (minute hour day month weekday: node-cron reads a sixth, in front, as seconds), and no two runs closer
+ * than MIN_PROMPT_GAP_MINUTES. Direct-action tasks (no AI) don't come here.
+ *
+ * The gap comes from the clock times node-cron itself reads in the expression (its own parse, so "59-0" or "5/15"
+ * mean here what they mean to it), not from walking its next-run dates: node-cron 4.2.1's walker jumps years ahead
+ * on a weekday it doesn't match, and a schedule that crowds its runs onto one day in four years ("* * 29 2 *") would
+ * hide from any short walk. Every day a task fires, it fires at the same clock times (its hours times its minutes),
+ * so the shortest gap is the shortest between those times or, when two days in a row can both fire, the one from a
+ * day's last time to the next day's first. That is clock time, as node-cron fires: the night the clocks change can
+ * bring two runs closer once.
+ */
+export function promptScheduleProblem(schedule) {
+  const text = String(schedule ?? "").trim();
+  const rule = `Tasks that ask the AI run at most once every ${MIN_PROMPT_GAP_MINUTES} minutes, since each run is paid for`;
+  const parts = text ? text.split(/\s+/).length : 0;
+  if (parts === 6) return `"${text}" has a seconds part. ${rule}: use 5 parts (minute hour day month weekday), like "0 9 * * *" for 9 AM every day.`;
+  if (parts !== 5) return `"${text}" has ${parts} parts. ${rule}: use 5 (minute hour day month weekday), like "0 9 * * *" for 9 AM every day.`;
+  if (!cron.validate(text)) return `Invalid cron schedule: ${text}`;
+  const gap = closestRuns(text);
+  if (gap >= MIN_PROMPT_GAP_MINUTES) return null;
+  return `"${text}" runs ${gap === 1 ? "1 minute" : `${gap} minutes`} apart. ${rule}: "*/${MIN_PROMPT_GAP_MINUTES} * * * *" is the most often.`;
+}
+
+/**
+ * The closest two runs of a 5-part schedule come, in minutes, when that is under MIN_PROMPT_GAP_MINUTES; else
+ * MIN_PROMPT_GAP_MINUTES or more (Infinity for a schedule that never fires twice in a day or on two days in a row).
+ */
+function closestRuns(schedule) {
+  const [, minutes, hours, days, months, weekdays] = cronFields(schedule);
+  const mins = numbersIn(minutes, 0, 59);
+  const times = numbersIn(hours, 0, 23).flatMap((h) => mins.map((m) => h * 60 + m));
+  if (!times.length) return Infinity;
+  let gap = Infinity;
+  for (let i = 1; i < times.length; i++) gap = Math.min(gap, times[i] - times[i - 1]);
+  const overnight = DAY_MINUTES - times[times.length - 1] + times[0];
+  if (overnight < Math.min(gap, MIN_PROMPT_GAP_MINUTES) && twoDaysInARow(numbersIn(days, 1, 31), numbersIn(months, 1, 12), numbersIn(weekdays, 0, 6))) {
+    gap = overnight;
+  }
+  return gap;
+}
+
+/** node-cron's own reading of an expression: [seconds, minutes, hours, days, months, weekdays], each a list of numbers. */
+function cronFields(schedule) {
+  // createTask builds the task without starting it; destroy() takes it out of node-cron's list of tasks again.
+  const task = cron.createTask(schedule, () => {});
+  try {
+    const fields = task.timeMatcher?.expressions;
+    if (!Array.isArray(fields) || fields.length !== 6 || !fields.every(Array.isArray)) {
+      throw new Error(`Tarsee couldn't read the times in the schedule "${schedule}"`);
+    }
+    return fields;
+  } finally {
+    task.destroy();
+  }
+}
+
+/** The whole numbers in a field from lo to hi, once each, smallest first. */
+function numbersIn(list, lo, hi) {
+  return [...new Set(list.map(Number).filter((n) => Number.isInteger(n) && n >= lo && n <= hi))].sort((a, b) => a - b);
+}
+
+/**
+ * Whether two days in a row can both fire: a day matches when its date, month and weekday all do, as node-cron
+ * matches them. One 400-year cycle of the calendar holds every case, so it is checked day by day (a few hundredths of
+ * a second, and only for a schedule with times either side of midnight).
+ */
+function twoDaysInARow(days, months, weekdays) {
+  const d = new Set(days);
+  const m = new Set(months);
+  const w = new Set(weekdays);
+  const fires = (t) => {
+    const day = new Date(t);
+    return d.has(day.getUTCDate()) && m.has(day.getUTCMonth() + 1) && w.has(day.getUTCDay());
+  };
+  const start = Date.UTC(2000, 0, 1);
+  let before = fires(start);
+  for (let i = 1; i <= CYCLE_DAYS; i++) {
+    const now = fires(start + i * DAY_MS);
+    if (before && now) return true;
+    before = now;
+  }
+  return false;
+}
+
+/** Whether a saved task should have a timer: switched on, and not waiting for the owner's OK. */
+function shouldRun(job) {
+  return !!job.enabled && !job.awaitingOwner;
+}
+
+/** Count a run of a task as going while fn runs (the "Running" state in Settings and /cron list). */
+async function tracked(id, fn) {
+  runsGoing.set(id, (runsGoing.get(id) || 0) + 1);
+  try {
+    return await fn();
+  } finally {
+    const left = (runsGoing.get(id) || 1) - 1;
+    if (left > 0) runsGoing.set(id, left);
+    else runsGoing.delete(id);
+  }
+}
 
 /**
  * Initialize the cron system.
@@ -95,14 +216,14 @@ export function setCronChannelManager(channelManager) {
 }
 
 /**
- * Load and start all enabled cron jobs.
+ * Load and start all enabled cron jobs. A task waiting for the owner's OK gets no timer.
  */
 export function startCronScheduler() {
   stopCronScheduler();
   const jobs = loadCronJobs();
 
   for (const job of jobs) {
-    if (!job.enabled) continue;
+    if (!shouldRun(job)) continue;
     scheduleJob(job);
   }
 
@@ -110,11 +231,11 @@ export function startCronScheduler() {
 }
 
 /**
- * Stop all running cron jobs.
+ * Stop all running cron jobs. A run already going finishes.
  */
 export function stopCronScheduler() {
   for (const [, task] of activeJobs) {
-    task.stop();
+    task.destroy();
   }
   activeJobs.clear();
 }
@@ -127,6 +248,8 @@ function scheduleJob(job) {
     console.warn(`[cron] Invalid schedule for job ${job.id}: ${job.schedule}`);
     return;
   }
+  // Never two timers for one task: the second would be one nothing could stop.
+  unscheduleJob(job.id);
 
   // Interpret the expression in the agent's configured zone, not the
   // container's. Railway containers run UTC, so "0 8 * * *" fired at 8am UTC
@@ -134,25 +257,45 @@ function scheduleJob(job) {
   // told the model to write local times. Passing `timezone` makes the two
   // agree. `config.TIMEZONE` is validated at boot, so node-cron cannot throw
   // on a bogus zone here.
-  const task = cron.schedule(job.schedule, () => {
-    runCronJobWithRetry(job).then(() => {
-      // Auto-delete one-time jobs after they fire
-      if (job.once) {
-        console.log(`[cron] One-time job "${job.id}" completed, removing`);
-        removeCronJob(job.id);
-      }
-    }).catch((err) => {
-      console.error(`[cron] Job ${job.id} fatal error:`, err.message);
-    });
-  }, { timezone: config.TIMEZONE });
+  //
+  // The callback returns the run, retries included, so node-cron knows when it ends: its runner awaits what the
+  // callback returns, and with noOverlap a time that comes while the run is still going is skipped. The callback used
+  // to return nothing, so every tick started another paid run on top of the last.
+  const task = cron.schedule(job.schedule, () => runScheduled(job), { timezone: config.TIMEZONE, noOverlap: true });
 
   activeJobs.set(job.id, task);
 }
 
+/** Stop a task's timer, if it has one (a run already going finishes). */
+function unscheduleJob(id) {
+  const task = activeJobs.get(id);
+  if (!task) return;
+  task.destroy();
+  activeJobs.delete(id);
+}
+
+/** One scheduled run of a task: the promise node-cron waits on. A task paused meanwhile gets no more retries. */
+function runScheduled(job) {
+  return runCronJobWithRetry(job, { stillOn: () => activeJobs.has(job.id) }).then(() => {
+    // Auto-delete one-time jobs after they fire
+    if (job.once) {
+      console.log(`[cron] One-time job "${job.id}" completed, removing`);
+      removeCronJob(job.id);
+    }
+  }).catch((err) => {
+    console.error(`[cron] Job ${job.id} fatal error:`, err.message);
+  });
+}
+
 /**
- * Run a cron job with retry and timeout.
+ * Run a cron job with retry and timeout. opts.stillOn: asked before each retry; false (the owner paused or deleted the
+ * task meanwhile) ends it there, so a paused task never starts another paid run.
  */
-export async function runCronJobWithRetry(job) {
+export function runCronJobWithRetry(job, opts = {}) {
+  return tracked(job.id, () => runWithRetry(job, opts));
+}
+
+async function runWithRetry(job, { stillOn = null } = {}) {
   // Check if auto-disabled from too many errors
   const state = jobState.get(job.id) || { consecutiveErrors: 0 };
   if (state.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
@@ -186,6 +329,10 @@ export async function runCronJobWithRetry(job) {
       const delay = RETRY_DELAY_MS * (attempt + 1);
       console.warn(`[cron] Job "${job.id}" failed (attempt ${attempt + 1}/${MAX_RETRIES + 1}), retrying in ${delay}ms: ${result.error}`);
       await new Promise((r) => setTimeout(r, delay));
+      if (stillOn && !stillOn()) {
+        console.log(`[cron] Job "${job.id}" was paused or deleted: no more retries`);
+        return result;
+      }
     } else {
       console.error(`[cron] Job "${job.id}" failed after ${MAX_RETRIES + 1} attempts: ${result.error}`);
       // Push only on FINAL failure, not on intermediate retries.
@@ -232,7 +379,11 @@ async function notifyJobComplete(job, status, errMsg = null) {
 /**
  * Run a cron job — either execute a direct action or send prompt to AI.
  */
-export async function runCronJob(job) {
+export function runCronJob(job) {
+  return tracked(job.id, () => runOnce(job));
+}
+
+async function runOnce(job) {
   if (!_settingsStore || !_db) {
     return { error: "Not initialized" };
   }
@@ -244,7 +395,8 @@ export async function runCronJob(job) {
     console.log(`[cron] Running direct action "${job.id}": ${job.action.tool}(${JSON.stringify(job.action.args).slice(0, 100)})`);
     try {
       const { executeTool } = await import("./tools.js");
-      const toolCtx = { db: _db, settingsStore: _settingsStore, conversationId: null, channelManager: _channelManager };
+      // Background work, as a prompt task's turn is (ai/turn.js): schedule_task refuses in it, so a task never makes tasks.
+      const toolCtx = { db: _db, settingsStore: _settingsStore, conversationId: null, channelManager: _channelManager, background: "cron" };
       const result = await executeTool(job.action.tool, job.action.args || {}, toolCtx);
       console.log(`[cron] Direct action "${job.id}" completed: ${result.slice(0, 100)}`);
       appendDailyLog(`[cron:${job.id}] ${result.slice(0, 200)}`);
@@ -351,15 +503,32 @@ function saveCronJobs(jobs) {
 
 /**
  * Add a new cron job.
+ *
+ * createdBy says who made it. "owner" (the Settings form, /cron add, /briefing: the owner typed or clicked it) saves
+ * it as asked, switched on unless enabled is false. Anything else, the AI's schedule_task tool above all, saves it
+ * switched off and waiting for the owner's OK (awaitingOwner), with no timer until the owner switches it on: a caller
+ * that doesn't say the owner made a task never starts paid runs. conversationId: the chat the AI made it in.
+ *
+ * A task that asks the AI (no action) must pass promptScheduleProblem. A direct action can't be schedule_task.
  */
-export function addCronJob({ schedule, prompt, channel = "web:default", enabled = true, name, action, once = false }) {
-  if (!cron.validate(schedule)) {
+export function addCronJob({ schedule, prompt, channel = "web:default", enabled = true, name, action, once = false, createdBy = "ai", conversationId = null }) {
+  if (typeof schedule !== "string" || !cron.validate(schedule)) {
     throw new Error(`Invalid cron schedule: ${schedule}`);
   }
+  if (action?.tool === "schedule_task") {
+    throw new Error("A task can't schedule more tasks: only the owner sets up scheduled tasks.");
+  }
+  if (!action?.tool) {
+    const problem = promptScheduleProblem(schedule);
+    if (problem) throw new Error(problem);
+  }
 
+  const byOwner = createdBy === "owner";
   const jobs = loadCronJobs();
-  const id = name ? `cron_${name.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12)}` : `cron_${Date.now().toString(36)}`;
-  const newJob = { id, schedule, prompt: prompt || "", channel, enabled };
+  const id = newJobId(jobs, name);
+  const newJob = { id, schedule, prompt: prompt || "", channel, enabled: byOwner ? enabled !== false : false, createdBy: byOwner ? "owner" : "ai" };
+  if (!byOwner) newJob.awaitingOwner = true;
+  if (!byOwner && conversationId) newJob.conversationId = conversationId;
   if (action) newJob.action = action;
   if (name) newJob.name = name;
   if (once) newJob.once = true;
@@ -368,9 +537,40 @@ export function addCronJob({ schedule, prompt, channel = "web:default", enabled 
 
   // Reset error state and start immediately if enabled
   jobState.delete(id);
-  if (enabled) scheduleJob(newJob);
+  if (shouldRun(newJob)) scheduleJob(newJob);
 
   return newJob;
+}
+
+/** A task id from its name (cron_<letters and digits>), else from the time; with _2, _3... when it is taken. */
+function newJobId(jobs, name) {
+  const slug = name ? String(name).toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12) : "";
+  const base = slug ? `cron_${slug}` : `cron_${Date.now().toString(36)}`;
+  let id = base;
+  for (let n = 2; jobs.some((j) => j.id === id); n++) id = `${base}_${n}`;
+  return id;
+}
+
+/**
+ * Switch a task on or off: the owner's call (PATCH /api/settings/cron/:id, /cron on|off <id>, the Switch on and
+ * Pause buttons in Settings > Automation > Scheduled tasks). Switching on is the owner's OK: a waiting task's mark
+ * goes (and stays gone), its failure count starts again, and it gets its timer. Off stops the timer; a run already
+ * going finishes. Returns the saved task, or null when there is no task with that id.
+ */
+export function setCronJobEnabled(id, enabled) {
+  const jobs = loadCronJobs();
+  const job = jobs.find((j) => j.id === id);
+  if (!job) return null;
+  job.enabled = !!enabled;
+  if (job.enabled) delete job.awaitingOwner;
+  saveCronJobs(jobs);
+
+  unscheduleJob(id);
+  if (shouldRun(job)) {
+    jobState.delete(id);
+    scheduleJob(job);
+  }
+  return job;
 }
 
 /**
@@ -384,18 +584,17 @@ export function removeCronJob(id) {
   jobs.splice(idx, 1);
   saveCronJobs(jobs);
 
-  const task = activeJobs.get(id);
-  if (task) {
-    task.stop();
-    activeJobs.delete(id);
-  }
+  unscheduleJob(id);
   jobState.delete(id);
 
   return true;
 }
 
 /**
- * Get cron status with runtime state.
+ * Get cron status with runtime state. Each task also says:
+ *   state       "running" (a run is going now), "waiting" (the AI made it; it waits for the owner's OK), "on", "off"
+ *   scheduled   whether it has a timer
+ *   running     whether a run is going now
  */
 export function getCronStatus() {
   const jobs = loadCronJobs();
@@ -404,9 +603,14 @@ export function getCronStatus() {
     activeJobs: activeJobs.size,
     jobs: jobs.map((j) => {
       const state = jobState.get(j.id);
+      const running = (runsGoing.get(j.id) || 0) > 0;
       return {
         ...j,
-        running: activeJobs.has(j.id),
+        createdBy: j.createdBy || null,
+        awaitingOwner: !!j.awaitingOwner,
+        state: running ? "running" : j.awaitingOwner ? "waiting" : j.enabled ? "on" : "off",
+        scheduled: activeJobs.has(j.id),
+        running,
         lastRun: state?.lastRun ? new Date(state.lastRun).toISOString() : null,
         lastStatus: state?.lastStatus || null,
         lastError: state?.lastError || null,

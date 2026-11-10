@@ -298,17 +298,32 @@ export async function createWhatsAppBot(config, db, { healthTimeoutMs = 30_000, 
 
   // --- Main message handler ---
 
+  /** The allowlist from config or Settings (see chatAllowed for what an entry may be). */
+  function allowedChatsNow() {
+    const dbAllowlist = settingsStore.get("allowlist.whatsapp");
+    const rawAllow = config.allowedChats?.length > 0
+      ? config.allowedChats
+      : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
+    return Array.isArray(rawAllow) ? rawAllow.filter(Boolean) : [];
+  }
+
+  /**
+   * Whether the sender is the owner, for the owner's commands (/cron, /briefing, /webhook: lib/commands.js): only DMs
+   * reach Tarsee, so the chat is the sender, and their number must be on the allowlist. With no allowlist anyone can
+   * write in, so nobody counts.
+   */
+  function senderIsOwner(chatId) {
+    const allowed = allowedChatsNow();
+    return allowed.length > 0 && isAllowlisted(chatId, allowed);
+  }
+
   /**
    * Allowlist check (optional). Empty list = allow everyone.
    * Entries can be the full chat id (447700900000@s.whatsapp.net) or just
    * the phone in any common format (+44 770 090 0000, 447700900000, etc).
    */
   function chatAllowed(chatId) {
-    const dbAllowlist = settingsStore.get("allowlist.whatsapp");
-    const rawAllow = config.allowedChats?.length > 0
-      ? config.allowedChats
-      : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
-    const allowed = Array.isArray(rawAllow) ? rawAllow.filter(Boolean) : [];
+    const allowed = allowedChatsNow();
     if (isAllowlisted(chatId, allowed)) return true;
     const normalizedTarget = normalizeWhatsappId(chatId);
     const normalizedAllow = allowed.map((e) => normalizeWhatsappId(e)).filter(Boolean);
@@ -335,6 +350,7 @@ export async function createWhatsAppBot(config, db, { healthTimeoutMs = 30_000, 
         convStore,
         conversationId: existingConvId,
         platform: "whatsapp",
+        owner: senderIsOwner(chatId),
         db, // was missing — /clear silently no-op'd
       });
       if (cmdResult.handled) {
