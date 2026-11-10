@@ -106,11 +106,14 @@ settingsRouter.post("/provider", (req, res) => {
  *   server stays the same: a save that changes its host, port, user or secure setting must carry its password, or it
  *   gets 400 with needsPassword: ["imap"|"smtp"] and nothing is saved. A host, port or user left empty keeps the saved
  *   one; secure left out keeps the saved setting (and requireTLS) while the port stays.
- *   allowlistFromAddresses from the owner's dashboard (whoIsAsking) is the owner's list and goes in. With the API token
- *   alone, one that lets in anyone the owner hasn't allowed waits for the owner's OK (allowlistWaiting), as the chat
- *   tool's does (src/channels/email.js proposeAllowlist).
- *   Body { type: "email", allowlistAnswer: "approve", allowlistSeen: string[] }: the owner's OK for the list that waits,
- *   the one the page showed; the owner's dashboard only. { allowlistAnswer: "decline" } turns it down.
+ *   senderCheck?: { trustFromLine, authservId }: what the owner trusts to say who sent a mail, for the IMAP host saved.
+ *   From the owner's live sign-in (whoIsAsking) all of it goes in, and the allowlist is the owner's. With the API token
+ *   alone, which the AI's shell can read, what would change who can reach the AI by email or where its mail goes is
+ *   saved as waiting (waiting), as the chat tool's is (src/channels/email.js holdForOwner): turning email on, another
+ *   IMAP or SMTP host or user, a wider allowlist, more trust in who sent a mail. What narrows goes straight in.
+ *   Body { type: "email", waitingAnswer: "approve", waitingId }: the owner's OK for what waits, the very change the page
+ *   showed; the owner's live sign-in only. { waitingAnswer: "discard" } turns it down.
+ *   Body { type: "email", senderNote: "dismiss" }: the owner's OK on the note saying why mail was refused.
  */
 settingsRouter.post("/channel", async (req, res) => {
   const body = req.body || {};
@@ -123,7 +126,9 @@ settingsRouter.post("/channel", async (req, res) => {
   if (type === "email") {
     // The same rules as the chat tool (lib/tools.js configure_email_channel), from src/channels/email.js:
     // test/email-channel-settings.test.js.
-    const { mailServerOf, mailServerChanges, normalizeAllowlist, sameAllowlist, allowlistWidening, proposeAllowlist } = await import("../channels/email.js");
+    const {
+      mailServerOf, mailServerChanges, normalizeAllowlist, senderCheckFor, holdForOwner, ownerSaved, applyWaiting, SENDER_NOTE_KEY,
+    } = await import("../channels/email.js");
     const { tarseeEmailAddress, imap, smtp, allowlistFromAddresses, mentionKeyword, replyAllMarker, fromName, defaultSubject } = body;
     const prev = settingsStore.get("channel.email") || {};
     const channelManager = req.app.get("channelManager");
@@ -136,52 +141,64 @@ settingsRouter.post("/channel", async (req, res) => {
     };
     // The owner is the signed-in dashboard; the API token alone may be the AI's shell, which can read it.
     const who = whoIsAsking(req);
+    const liveOwner = who === "owner" && validateSessionFromRequest(req);
+    /** 403 for what only the owner's live sign-in may do (`what`: the words after "Sign in again, then"). */
+    const ownerOnly = (what, error) => {
+      if (who === "stale-page") return res.status(403).json({ error: STALE_PAGE });
+      if (who === "signed-out") return res.status(403).json({ error: signInRanOut(what), needsSignIn: true });
+      return res.status(403).json({ error, needsSignIn: true });
+    };
+    const shown = (w) => (w ? redactSecretFields(w) : null);
 
-    // The owner's answer to a wider allowlist that waits (the note above the allowlist in Settings > Channels > Email).
-    // Let them in is the owner's OK, as switching on a scheduled task the AI made is: the dashboard only, and only for
-    // the list the note showed. Keep my list only turns it down, so the token may send that too.
-    if (body.allowlistAnswer !== undefined) {
-      const answer = body.allowlistAnswer;
-      if (answer !== "approve" && answer !== "decline") {
-        return res.status(400).json({ error: "allowlistAnswer must be approve or decline" });
+    // The owner's answer to what waits (the card at the top of Settings > Channels > Email). Approve is the owner's OK,
+    // as switching on a scheduled task the AI made is: the owner's live sign-in only, and only for the very change the
+    // card showed (waitingId). Discard only turns it down, so the token may send that too.
+    if (body.waitingAnswer !== undefined) {
+      const answer = body.waitingAnswer;
+      if (answer !== "approve" && answer !== "discard") {
+        return res.status(400).json({ error: "waitingAnswer must be approve or discard" });
       }
+      if (answer === "approve" && !liveOwner) {
+        return ownerOnly("approve it", "Only you can OK this, signed in to your dashboard: the API token can't, because the AI can read it. Approve it in Settings > Channels > Email.");
+      }
+      const current = ownerSaved(prev);
+      if (!current.waiting) return res.status(409).json({ error: "Nothing is waiting for your OK any more.", waiting: null });
       if (answer === "approve") {
-        if (who === "stale-page") return res.status(403).json({ error: STALE_PAGE });
-        if (who === "signed-out") return res.status(403).json({ error: signInRanOut("let them in"), needsSignIn: true });
-        if (who !== "owner") {
-          return res.status(403).json({
-            error: "Only you can let more senders reach Tarsee by email, signed in to your dashboard: the API token can't, because the AI can read it. OK it in Settings > Channels > Email.",
-            needsSignIn: true,
-          });
+        if (typeof body.waitingId !== "string" || !body.waitingId) {
+          return res.status(400).json({ error: "Tarsee can't tell which change you looked at. Reload the page, look at it again, then approve it." });
         }
-      }
-      const waiting = prev.allowlistWaiting;
-      if (!waiting || !Array.isArray(waiting.addresses)) {
-        return res.status(409).json({ error: "No allowlist change is waiting for your OK any more.", allowlistWaiting: null });
-      }
-      if (answer === "approve") {
-        if (!Array.isArray(body.allowlistSeen)) {
-          return res.status(400).json({ error: "Tarsee can't tell which list you looked at. Reload the page, look at the list again, then OK it." });
-        }
-        if (!sameAllowlist(body.allowlistSeen, waiting.addresses)) {
+        if (body.waitingId !== current.waiting.id) {
           return res.status(409).json({
-            error: "The list waiting for your OK changed after this page showed it, so nothing was changed. Look at the new list, then OK it if it's right.",
-            allowlistWaiting: waiting,
+            error: "What waits for your OK changed after this page showed it, so nothing was changed. Look at it again, then approve it if it's right.",
+            waiting: shown(current.waiting),
           });
         }
       }
-      const next = { ...prev };
-      delete next.allowlistWaiting;
+      let next = current;
       if (answer === "approve") {
-        next.allowlistFromAddresses = normalizeAllowlist(waiting.addresses);
-        next.allowlistOwner = next.allowlistFromAddresses;
+        next = applyWaiting(current);
+      } else {
+        next = { ...current };
+        delete next.waiting;
       }
       settingsStore.set("channel.email", next);
       if (answer === "approve") {
-        console.log(`[channels] the owner OK'd the email allowlist: ${next.allowlistFromAddresses.length ? next.allowlistFromAddresses.join(", ") : "any sender"}`);
+        const moved = String(next.imap?.host || "").toLowerCase() !== String(prev.imap?.host || "").toLowerCase();
+        if (moved) settingsStore.delete(SENDER_NOTE_KEY);
+        console.log(`[channels] the owner OK'd the email change that waited: email ${next.enabled ? "on" : "off"}, reading ${next.imap?.user || "?"} at ${next.imap?.host || "?"}, ${next.allowlistFromAddresses?.length ? `answering ${next.allowlistFromAddresses.join(", ")}` : "answering any sender"}`);
         restartIfOn(next);
       }
-      return res.json({ ok: true, type: "email", allowlistFromAddresses: next.allowlistFromAddresses || [] });
+      return res.json({ ok: true, type: "email", enabled: next.enabled === true, allowlistFromAddresses: next.allowlistFromAddresses || [] });
+    }
+
+    // The owner's "OK" on the one-time note saying why mail was refused (email.js SENDER_NOTE_KEY). It is only hidden,
+    // so the channel doesn't write it again for that server; a change of server or trust clears it.
+    if (body.senderNote !== undefined) {
+      if (body.senderNote !== "dismiss") return res.status(400).json({ error: "senderNote must be dismiss" });
+      if (!liveOwner) return ownerOnly("dismiss it", "Only you can dismiss this note, signed in to your dashboard.");
+      const note = settingsStore.get(SENDER_NOTE_KEY);
+      if (note && typeof note === "object") settingsStore.set(SENDER_NOTE_KEY, { ...note, dismissedAt: new Date().toISOString() });
+      return res.json({ ok: true, type: "email" });
     }
 
     // Signed in, with a page whose CSRF token has run out: the dashboard fetches a fresh one and sends this again, so
@@ -248,56 +265,79 @@ settingsRouter.post("/channel", async (req, res) => {
       });
     }
 
-    // Who can reach the AI by email. From the owner's dashboard the list is the owner's: it goes in, and a list that
-    // waited stays waiting unless this one already lets in all it asked for. Anyone else (the API token alone) goes by
-    // the chat tool's rule: one that lets in more than the owner allowed waits for the owner's OK.
-    let allowlist = {
-      allowlistFromAddresses: Array.isArray(prev.allowlistFromAddresses) ? prev.allowlistFromAddresses : [],
-      allowlistOwner: prev.allowlistOwner,
-      allowlistWaiting: prev.allowlistWaiting,
-      widening: null,
-    };
-    if (allowlistFromAddresses != null) {
-      if (!Array.isArray(allowlistFromAddresses) || allowlistFromAddresses.some((a) => typeof a !== "string")) {
-        return res.status(400).json({ error: "allowlistFromAddresses must be a list of email addresses." });
-      }
-      if (who === "owner") {
-        const list = normalizeAllowlist(allowlistFromAddresses);
-        const still = prev.allowlistWaiting && allowlistWidening(prev.allowlistWaiting.addresses, list);
-        allowlist = { allowlistFromAddresses: list, allowlistOwner: list, allowlistWaiting: still ? prev.allowlistWaiting : undefined, widening: null };
-      } else {
-        allowlist = proposeAllowlist(prev, allowlistFromAddresses, "token");
-        // The owner's tab whose sign-in ran out: sign in again rather than leave the owner's own list waiting.
-        if (allowlist.widening && who === "signed-out") {
-          return res.status(403).json({ error: signInRanOut("save the allowlist again"), needsSignIn: true });
-        }
+    if (allowlistFromAddresses != null && (!Array.isArray(allowlistFromAddresses) || allowlistFromAddresses.some((a) => typeof a !== "string"))) {
+      return res.status(400).json({ error: "allowlistFromAddresses must be a list of email addresses." });
+    }
+    // What the owner trusts to say who sent a mail (email.js senderVouched): a server name of their own, or the From
+    // line itself, for a server that checks nothing.
+    const check = body.senderCheck;
+    if (check != null) {
+      const id = check.authservId;
+      if (typeof check !== "object" || Array.isArray(check)
+        || (check.trustFromLine != null && typeof check.trustFromLine !== "boolean")
+        || (id != null && (typeof id !== "string" || !/^[A-Za-z0-9.-]{0,253}$/.test(id.trim())))) {
+        return res.status(400).json({ error: "senderCheck is { trustFromLine: true or false, authservId: your mail server's name, such as mail.example.com }." });
       }
     }
+    const askedCheck = check != null ? { trustFromLine: check.trustFromLine === true, authservId: typeof check.authservId === "string" ? check.authservId.trim().toLowerCase() : "" } : null;
 
-    const payload = {
+    const next = {
+      ...prev,
       enabled: !!enabled,
       tarseeEmailAddress: tarseeEmailAddress || prev.tarseeEmailAddress || imap?.user || "",
       fromName: fromName || prev.fromName || "Tarsee",
       defaultSubject: defaultSubject || prev.defaultSubject || "Tarsee",
       mentionKeyword: mentionKeyword || prev.mentionKeyword || "tarsee",
       replyAllMarker: replyAllMarker || prev.replyAllMarker || "[reply-all]",
-      allowlistFromAddresses: allowlist.allowlistFromAddresses,
-      ...(Array.isArray(allowlist.allowlistOwner) ? { allowlistOwner: allowlist.allowlistOwner } : {}),
-      ...(allowlist.allowlistWaiting ? { allowlistWaiting: allowlist.allowlistWaiting } : {}),
+      allowlistFromAddresses: allowlistFromAddresses != null
+        ? normalizeAllowlist(allowlistFromAddresses)
+        : (Array.isArray(prev.allowlistFromAddresses) ? prev.allowlistFromAddresses : []),
       imap: servers.imap,
       smtp: servers.smtp,
     };
+
+    let payload;
+    let held = [];
+    if (liveOwner) {
+      // The owner's own save: all of it in force. The list is the owner's from now on, and so is the sender check, kept
+      // with the IMAP host it is for. What waited stays waiting unless this save made it moot.
+      payload = { ...next };
+      if (allowlistFromAddresses != null) payload.allowlistOwner = next.allowlistFromAddresses;
+      if (askedCheck) {
+        if (askedCheck.trustFromLine || askedCheck.authservId) payload.senderCheck = { imapHost: servers.imap.host || "", ...askedCheck };
+        else delete payload.senderCheck;
+      }
+      payload = ownerSaved(payload);
+      const before = senderCheckFor(prev.senderCheck, prev.imap?.host);
+      const after = senderCheckFor(payload.senderCheck, payload.imap?.host);
+      const moved = String(payload.imap?.host || "").toLowerCase() !== String(prev.imap?.host || "").toLowerCase();
+      if (moved || before.trustFromLine !== after.trustFromLine || before.authservId !== after.authservId) settingsStore.delete(SENDER_NOTE_KEY);
+    } else {
+      // Anyone else, the API token alone above all: what would let more reach the AI, or send its mail elsewhere,
+      // waits for the owner's OK, as the chat tool's does.
+      ({ cfg: payload, held } = holdForOwner(prev, { ...next, senderCheck: askedCheck }, {
+        enabled: true,
+        imap: body.imap != null,
+        smtp: body.smtp != null,
+        allowlist: allowlistFromAddresses != null,
+        senderCheck: askedCheck != null,
+      }, "token"));
+      // The owner's tab whose sign-in ran out: sign in again rather than leave the owner's own change waiting.
+      if (held.length && who === "signed-out") {
+        return res.status(403).json({ error: signInRanOut("save again"), needsSignIn: true });
+      }
+    }
     settingsStore.set("channel.email", payload);
 
-    if (channelManager && enabled) restartIfOn(payload);
-    else if (channelManager && !enabled) channelManager.stop("email").catch(() => {});
+    if (channelManager && payload.enabled) restartIfOn(payload);
+    else if (channelManager && !payload.enabled) channelManager.stop("email").catch(() => {});
 
     return res.json({
       ok: true,
       type: "email",
-      enabled: !!enabled,
-      ...(payload.allowlistWaiting ? { allowlistWaiting: payload.allowlistWaiting } : {}),
-      ...(allowlist.widening ? { note: "The new allowlist lets in senders the owner hasn't allowed, so it waits for the owner's OK in Settings > Channels > Email. Until then Tarsee answers only the list in force." } : {}),
+      enabled: payload.enabled === true,
+      ...(payload.waiting ? { waiting: shown(payload.waiting) } : {}),
+      ...(held.length ? { note: "Part of this save would change who can reach Tarsee by email or where its mail goes, so it waits for the owner's OK in Settings > Channels > Email. Until then Tarsee goes on with the settings in force." } : {}),
     });
   }
 

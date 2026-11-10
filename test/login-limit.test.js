@@ -1,7 +1,8 @@
 // Signing in at the dashboard (POST /api/auth/login) is limited so the password, which may be a short PIN, can't be
 // guessed:
 //   - each place a sign-in comes from has its own budget: three wrong guesses, then waits that grow to an hour, and
-//     its wrong guesses are remembered for a day. An IPv6 client is its /64, the block one home or one server gets;
+//     its wrong guesses are remembered for a day. An IPv6 client counts against its /64, its /56 and its /48 (one
+//     server, one home, one tunnel), each with a place's budget, and adds at most 8 to the count for everyone;
 //   - the place is the connection's own address. X-Forwarded-For is believed only from a proxy the owner names in
 //     TARSEE_TRUSTED_PROXY ("loopback" for one on this machine, or addresses and ranges), so a client that reaches
 //     Tarsee directly, or through Docker's bridge gateway, can't name a new client in each guess. On Railway the
@@ -10,10 +11,12 @@
 //     whatever headers it carries, unless TARSEE_TRUSTED_PROXY is "loopback": the AI's shell runs here;
 //   - all places together get 30 wrong guesses in 10 minutes. Then signing in pauses for everyone for 15 minutes, and
 //     each pause within a day of the last is twice as long, up to 4 hours. Anyone already signed in stays signed in.
-// The counts are kept in tarsee.db too: test/login-limit-restart.test.js restarts Tarsee between guesses.
+// The counts are kept in tarsee.db too: test/login-limit-restart.test.js restarts Tarsee between guesses. Each try is
+// counted, and saved, before its password is checked; while tarsee.db can't be written (a full disk, a lock), sign-ins
+// are turned away unchecked, and anyone already signed in stays signed in.
 // The real authRouter runs behind the trust proxy setting server.js uses, over a real database. Other servers stand in
 // for a proxy or a client: their connections look as if they come from the address the test gives.
-import { describe, it, before, after, beforeEach, mock } from "node:test";
+import { describe, it, before, after, beforeEach, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
@@ -21,6 +24,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import express from "express";
+import Database from "better-sqlite3";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tarsee-login-limit-"));
 process.env.TARSEE_STATE_DIR = tmp;
@@ -59,6 +63,13 @@ const EDGE = notOwn("100.64.0.9", "10.255.254.9", "172.31.254.9");
 // Docker's bridge gateway: what the container sees when anything (the AI's shell included) comes back in through the
 // published port, and what every client looks like on Docker Desktop.
 const GATEWAY = notOwn("172.17.0.1", "172.18.0.1", "172.19.0.1");
+// Cloudflare's published ranges (https://www.cloudflare.com/ips/, November 2026), as the readme's example names them.
+const CLOUDFLARE = [
+  "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
+  "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+  "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+  "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32", "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+].join(", ");
 
 const app = express();
 app.set("trust proxy", auth.trustProxyHop);
@@ -276,6 +287,19 @@ describe("TARSEE_TRUSTED_PROXY as addresses and ranges", () => {
     assert.equal(auth.clientAddress(req("2001:db8:5:6::1", "::ffff:127.0.0.1")), "2001:db8:5:6::1");
   });
 
+  it("takes all of Cloudflare's published ranges (cloudflare.com/ips), and walks back through any of its edges", () => {
+    process.env.TARSEE_TRUSTED_PROXY = `loopback, ${CLOUDFLARE}`;
+    const trust = auth.trustedProxies();
+    assert.deepEqual(trust.skipped, []);
+    assert.equal(trust.names.length, 1 + 15 + 7, "loopback, 15 IPv4 ranges and 7 IPv6 ranges");
+    // Cloudflare in front of nginx on this machine: nginx adds the Cloudflare edge it saw after the client.
+    const req = (xff) => ({ socket: { remoteAddress: "127.0.0.1" }, headers: { "x-forwarded-for": xff } });
+    assert.equal(auth.clientAddress(req("203.0.113.5, 173.245.48.9")), "203.0.113.5", "an edge in the first range");
+    assert.equal(auth.clientAddress(req("203.0.113.5, 131.0.72.9")), "203.0.113.5", "an edge in the last IPv4 range");
+    assert.equal(auth.clientAddress(req("2001:db8:aa:bb01::1, 2a06:98c7::5")), "2001:db8:aa:bb01::1", "an IPv6 edge");
+    assert.equal(auth.clientAddress(req("203.0.113.5, 198.51.100.4")), "198.51.100.4", "not Cloudflare's: it is the client");
+  });
+
   it("reads loopback, addresses and ranges, and skips the rest", () => {
     const trust = auth.trustedProxies("Loopback, nginx 10.1.2.3,fd00::/8 10.0.0.0/33 0.0.0.0/0 none 172.18.0.0/16/2");
     assert.equal(trust.loopback, true);
@@ -324,11 +348,14 @@ describe("sign-in through a proxy in front", () => {
     assert.deepEqual(statuses, [401, 401, 401, 401, 429]);
   });
 
-  it("counts an IPv6 client as its /64, so new addresses from one network don't make new budgets", async () => {
+  it("counts an IPv6 client as its /64, its /56 and its /48, so new addresses from one network don't make new budgets", async () => {
     const statuses = await guesses(edge, 5, (i) => ({ xff: `2001:db8:5:6::${(i + 1).toString(16)}` }));
     assert.deepEqual(statuses, [401, 401, 401, 401, 429]);
     assert.equal((await login(edge, WRONG, { xff: "2001:db8:5:6:ffff:1:2:3" })).status, 429, "same /64");
-    assert.equal((await login(edge, WRONG, { xff: "2001:db8:5:7::1" })).status, 401, "a different /64");
+    const sameHome = await login(edge, WRONG, { xff: "2001:db8:5:7::1" });
+    assert.equal(sameHome.status, 429, "another /64 of the same /56 and /48");
+    assert.match(sameHome.json.error, /from your network/);
+    assert.equal((await login(edge, WRONG, { xff: "2001:db8:6:7::1" })).status, 401, "another /48");
   });
 
   it("remembers a client's wrong guesses when it pauses between them", async () => {
@@ -364,6 +391,13 @@ describe("all clients together", () => {
     assert.equal((await send(edge, { method: "GET", path: "/private", xff: "198.51.100.9" })).status, 401, "without the sign-in, no");
   });
 
+  it("are read back as an earlier Tarsee kept them, with only each wrong guess's time", async () => {
+    db.prepare("INSERT OR REPLACE INTO sign_in_pause (id, wrong, paused_until, pauses) VALUES (1, ?, 0, 0)").run(JSON.stringify(Array(29).fill(Date.now() - 1000)));
+    auth.initSessionStore(db); // the next start
+    assert.equal((await login(edge, WRONG, { xff: "203.0.113.5" })).status, 401);
+    assert.equal((await login(edge, PIN, { xff: "198.51.100.7" })).status, 429, "the 30th started the pause");
+  });
+
   it("don't pause for wrong guesses spread out over more than 10 minutes", async () => {
     await guesses(edge, 29, (i) => ({ xff: `203.0.113.${i + 1}` }));
     later(10 * MINUTE + 1000);
@@ -394,6 +428,143 @@ describe("all clients together", () => {
     }
     assert.ok(statuses.filter((s) => s === 401).length < 30, `wrong guesses heard: ${statuses.filter((s) => s === 401).length}`);
     assert.equal((await login(edge, PIN, { xff: "198.51.100.7" })).status, 200, "everyone else still signs in");
+  });
+});
+
+describe("IPv6: one home's or one tunnel's network gets one place's share", () => {
+  // A home is commonly given a /56 (256 /64s), and a free tunnel a /48 (65,536 /64s). They reach Tarsee directly here,
+  // with no headers at all.
+  const inOne56 = (i) => `2001:db8:aa:bb${i.toString(16).padStart(2, "0")}::1`; // 2001:db8:aa:bb00::/56
+  const inOne48 = (i) => `2001:db8:cc:${i.toString(16).padStart(2, "0")}00::1`; // 2001:db8:cc::/48, each in its own /56
+
+  it("counts 30 /64s of one /56 as one place: it can't pause everyone", async () => {
+    const statuses = await guesses(direct, 30, (i) => ({ from: inOne56(i) }));
+    assert.deepEqual(statuses.slice(0, 5), [401, 401, 401, 401, 429], "three free guesses, then the fourth starts the home's wait");
+    assert.equal(statuses.filter((s) => s === 401).length, 4, JSON.stringify(statuses));
+    const refused = await login(direct, WRONG, { from: inOne56(200) });
+    assert.match(refused.json.error, /Too many wrong passwords from your network/);
+    assert.equal((await login(direct, PIN, { from: "192.0.2.77" })).status, 200, "everyone else still signs in");
+  });
+
+  it("counts 30 /64s of one /48, each in its own /56, as one place", async () => {
+    const statuses = await guesses(direct, 30, (i) => ({ from: inOne48(i) }));
+    assert.deepEqual(statuses.slice(0, 5), [401, 401, 401, 401, 429]);
+    assert.equal(statuses.filter((s) => s === 401).length, 4, JSON.stringify(statuses));
+    assert.equal((await login(direct, PIN, { from: "192.0.2.77" })).status, 200);
+  });
+
+  it("holds one /48 to one place's waits however long it keeps at it", async () => {
+    const heard = [];
+    for (let i = 0; i < 120; i++) {
+      heard.push((await login(direct, WRONG, { from: inOne48(i) })).status);
+      later(30 * 1000); // an hour in all
+    }
+    assert.ok(heard.filter((s) => s === 401).length <= 10, `wrong guesses heard: ${heard.filter((s) => s === 401).length}`);
+    assert.equal((await login(direct, PIN, { from: "2001:db8:dd:ee01::7" })).status, 200, "a home elsewhere signs in");
+  });
+
+  it("keeps two unrelated homes apart", async () => {
+    assert.deepEqual(await guesses(direct, 5, (i) => ({ from: inOne56(i) })), [401, 401, 401, 401, 429]);
+    const elsewhere = "2001:db8:dd:ee01::7"; // another /48
+    assert.equal((await login(direct, WRONG, { from: elsewhere })).status, 401, "the other home isn't held up");
+    assert.equal((await login(direct, PIN, { from: elsewhere })).status, 200, "and signs in");
+  });
+
+  it("lets one /48 add at most what one place can (8 in 10 minutes) to the pause for everyone", async () => {
+    // A right password clears a network's waits, so one that has it could otherwise add many wrong guesses in 10
+    // minutes: here 12, three at a time.
+    for (let round = 0; round < 4; round++) {
+      assert.deepEqual(await guesses(direct, 3, (i) => ({ from: inOne48(round * 3 + i) })), [401, 401, 401]);
+      assert.equal((await login(direct, PIN, { from: inOne48(round * 3) })).status, 200);
+      later(MINUTE);
+    }
+    assert.deepEqual(await guesses(direct, 21, (i) => ({ from: `203.0.113.${i + 1}` })), Array(21).fill(401));
+    assert.equal((await login(direct, PIN, { from: "198.51.100.200" })).status, 200, "8 + 21 is under 30: no pause");
+    assert.equal((await login(direct, WRONG, { from: "198.51.100.201" })).status, 401);
+    const paused = await login(direct, PIN, { from: "198.51.100.202" });
+    assert.equal(paused.status, 429, "the 30th starts the pause");
+    assert.match(paused.json.error, /everyone/);
+  });
+});
+
+describe("when the counts can't be written (a full disk, a locked database)", () => {
+  // A database that refuses every write, as a full disk does: SQLite's query_only.
+  const writes = (on, which = db) => which.pragma(`query_only = ${on ? "OFF" : "ON"}`);
+  const stored = (place) => db.prepare("SELECT failures FROM sign_in_places WHERE place = ?").get(place);
+  afterEach(() => writes(true));
+
+  it("turns new sign-ins away unchecked, keeps anyone signed in, and opens again by itself once a write works", async () => {
+    const signedIn = await login(direct, PIN, { from: "198.51.100.9" });
+    assert.equal(signedIn.status, 200);
+    writes(false);
+    const wrong = await login(direct, WRONG, { from: "203.0.113.5" });
+    assert.equal(wrong.status, 429);
+    assert.equal(wrong.retryAfter, 60);
+    assert.match(wrong.json.error, /can't record sign-in attempts right now \(is the disk full\?\), so new sign-ins are paused/);
+    assert.match(wrong.json.error, /already signed in stays signed in/);
+    const right = await login(direct, PIN, { from: "198.51.100.10" });
+    assert.equal(right.status, 429, "the right password too: a try that can't be counted isn't checked");
+    assert.equal(right.cookie, "", "nobody is signed in");
+    assert.deepEqual(await guesses(direct, 30, (i) => ({ from: `192.0.2.${i + 1}` })), Array(30).fill(429), "nothing is checked");
+    assert.equal((await send(direct, { method: "GET", path: "/private", cookie: signedIn.cookie, from: "198.51.100.9" })).status, 200, "the sign-in still works");
+
+    writes(true);
+    assert.equal((await login(direct, WRONG, { from: "203.0.113.5" })).status, 401, "the next try is counted, then checked");
+    assert.equal(stored("203.0.113.5")?.failures, 1, "the tries turned away weren't counted");
+    assert.equal((await login(direct, PIN, { from: "198.51.100.10" })).status, 200);
+  });
+
+  it("turns sign-ins away while another program holds tarsee.db's write lock", async () => {
+    const holder = new Database(path.join(tmp, "data", "tarsee.db"));
+    db.pragma("busy_timeout = 50"); // Tarsee waits 5 s for a lock (src/db/sqlite.js); not this test
+    try {
+      holder.exec("BEGIN IMMEDIATE");
+      const locked = await login(direct, PIN, { from: "198.51.100.10" });
+      assert.equal(locked.status, 429);
+      assert.match(locked.json.error, /can't record sign-in attempts/);
+      holder.exec("ROLLBACK");
+      assert.equal((await login(direct, PIN, { from: "198.51.100.10" })).status, 200, "and opens once the lock is let go");
+    } finally {
+      if (holder.inTransaction) holder.exec("ROLLBACK");
+      holder.close();
+      db.pragma("busy_timeout = 5000");
+    }
+  });
+
+  it("writes, at the next sweep, a right password's clear that couldn't be written", async () => {
+    await guesses(direct, 2, () => ({ from: "203.0.113.5" }));
+    db.exec("CREATE TRIGGER keep_places BEFORE DELETE ON sign_in_places BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END");
+    try {
+      const right = await login(direct, PIN, { from: "203.0.113.5" });
+      assert.equal(right.status, 200, "the try was counted before the password was checked, so it signs in");
+      assert.equal(stored("203.0.113.5")?.failures, 3, "the database still has it as a wrong password: one more, never fewer");
+    } finally {
+      db.exec("DROP TRIGGER keep_places");
+    }
+    sweep();
+    assert.equal(stored("203.0.113.5"), undefined, "cleared");
+    const pause = db.prepare("SELECT wrong FROM sign_in_pause WHERE id = 1").get();
+    assert.equal(JSON.parse(pause.wrong).length, 2, "and the count for everyone has the two wrong passwords, not three");
+  });
+
+  it("turns sign-ins away while it can't read the counts back, and reads them once it can", async () => {
+    const other = initDb(path.join(tmp, "data", "unreadable.db"));
+    try {
+      auth.initSessionStore(other);
+      other.exec("DROP TABLE sign_in_places; DROP TABLE sign_in_pause;");
+      writes(false, other);
+      auth.initSessionStore(other); // a boot that can't make its tables
+      const refused = await login(direct, PIN, { from: "198.51.100.10" });
+      assert.equal(refused.status, 429);
+      assert.match(refused.json.error, /can't record sign-in attempts/);
+      writes(true, other);
+      assert.equal((await login(direct, WRONG, { from: "198.51.100.10" })).status, 401, "opens by itself");
+      assert.equal((await login(direct, PIN, { from: "198.51.100.10" })).status, 200);
+    } finally {
+      writes(true, other);
+      auth.initSessionStore(db);
+      other.close();
+    }
   });
 });
 

@@ -1091,8 +1091,17 @@ artifact. Just confirm.`;
           const STATE = { waiting: "waiting for your OK", running: "running", on: "on", off: "off" };
           const WHO = { ai: "made by the AI in a chat", owner: "made by you" };
           const lines = ["**Scheduled tasks**", ""];
+          // A task that runs a tool directly shows the tool and its args, so the owner sees what /cron on switches on,
+          // every secret masked (lib/cron.js shownDirectAction): JSON in a code span, with each backtick in it written as
+          // its JSON escape (backslash, u0060), so it can't end the span.
+          const code = (v) => JSON.stringify(v).replace(/`/g, "\\u0060");
+          const runs = ({ tool, args }) => {
+            const none = args === undefined || (args && typeof args === "object" && !Array.isArray(args) && Object.keys(args).length === 0);
+            const name = /^[A-Za-z0-9_]+$/.test(tool) ? tool : `\`${code(tool)}\``;
+            return `runs ${name} directly, no AI${none ? "" : `, with \`${code(args)}\``}`;
+          };
           for (const j of status.jobs) {
-            const what = j.action?.tool ? `runs ${j.action.tool} directly, no AI` : String(j.prompt || "").slice(0, 60);
+            const what = j.actionShown ? runs(j.actionShown) : String(j.prompt || "").slice(0, 60);
             const who = WHO[j.createdBy] ? ` · ${WHO[j.createdBy]}` : "";
             lines.push(`- **${j.id}** [${STATE[j.state] || j.state}] \`${j.schedule}\` — ${what}${who}`);
           }

@@ -3,7 +3,9 @@
 // before). The test runs it once, then again, as Tarsee would start after a restart or a redeploy.
 //   SIGN_IN_CLOCK  the time it starts at (Date only; ms since 1970)
 //   SIGN_IN_STEPS  JSON list, each { from, password } (POST /api/auth/login from the address `from`),
-//                  { from, private: true, cookie } (GET a page behind the sign-in) or { advance: ms } (move the clock)
+//                  { from, private: true, cookie } (GET a page behind the sign-in), { advance: ms } (move the clock) or
+//                  { writes: false | true } (from here tarsee.db refuses every write, as on a full disk, or takes them again)
+//   SIGN_IN_WRITES_FAIL  "1": tarsee.db refuses every write from the start of this run, after it is opened (a full disk)
 // It prints one line: JSON, each step's { status, retryAfter, error, cookie }.
 import http from "node:http";
 import { mock } from "node:test";
@@ -17,6 +19,9 @@ const auth = await import("../../src/middleware/auth.js");
 const { authRouter } = await import("../../src/routes/auth-routes.js");
 
 const db = initDb(config.DB_PATH);
+// SQLite's query_only stands in for a full disk: reads work, and every write fails.
+const writes = (on) => db.pragma(`query_only = ${on ? "OFF" : "ON"}`);
+if (process.env.SIGN_IN_WRITES_FAIL === "1") writes(false);
 auth.initSessionStore(db);
 
 const app = express();
@@ -62,9 +67,11 @@ function send(step) {
 const out = [];
 for (const step of JSON.parse(process.env.SIGN_IN_STEPS || "[]")) {
   if (step.advance) { mock.timers.tick(step.advance); out.push(null); continue; }
+  if (typeof step.writes === "boolean") { writes(step.writes); out.push(null); continue; }
   out.push(await send(step));
 }
 await new Promise((r) => server.close(r));
+writes(true);
 db.close();
 process.stdout.write(`${JSON.stringify(out)}\n`);
 process.exit(0);

@@ -253,8 +253,8 @@ const TOOLS_SHELL_LINES = [
   // once swapped it is no longer there whole and the swap runs once.
   ["- On Railway, leaving out project means Tarsee's own project and service. Redeploying Tarsee's own service restarts it and ends the turn. Nothing in the tool deletes: deleting a variable or a service is for the owner to do by hand in Railway.", [
     "- On Railway, leaving out project means Tarsee's own project and service. Redeploying Tarsee's own service restarts it and ends the turn.",
-    "- On Tarsee's own service it sets only a key or address for the owner's own scripts (a name in capitals ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL that Tarsee doesn't read itself), TZ and a few tuning settings. The owner sets anything else there by hand in Railway's dashboard: sign-in, the AI and its keys, how Tarsee is built, starts or runs.",
-    "- It also refuses, saying why: a variable one of those settings is filled in from, anything in Tarsee's environment while such a setting is sealed, and a vault key onto Tarsee's own service while get_key is denied in Tool Permissions. Tell the person what the refusal says; never look for a way around it.",
+    "- On Tarsee's own service it sets only a key or address for the owner's own scripts (a name in capitals ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL that Tarsee doesn't read itself and that appears nowhere in its AI engines' code), TZ and a few tuning settings. The owner sets anything else there by hand in Railway's dashboard: sign-in, the AI and its keys, how Tarsee is built, starts or runs.",
+    "- A variable one of Tarsee's own variables is filled in from by a Railway reference counts as that variable, under the same rules. It also refuses, saying why: anything in Tarsee's environment while a refused variable is sealed, and a vault key onto Tarsee's own service, or into a variable it is filled in from, while get_key is denied in Tool Permissions. Tell the person what the refusal says; never look for a way around it.",
     "- Nothing in the tool deletes: deleting a variable or a service is for the owner to do by hand in Railway.",
   ].join("\n")],
 ];

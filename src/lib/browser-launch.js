@@ -9,8 +9,9 @@
  *   can't sandbox: then, and only then, the browser starts without it, and the log says so at each such launch.
  *   "Only then" means: the sandboxed launch failed with an error that says the sandbox can't start (SANDBOX_FAILED_RE),
  *   not because the machine ran out of processes, memory or open files, and no sandboxed launch has worked since this
- *   process started. Any other failure (a timeout, Chromium missing, too many processes, a browser that died) keeps
- *   the sandbox and fails the call; the next call tries the sandbox again. So something that can make a launch fail
+ *   process started or is under way (so launches that overlap can't get round it). Any other failure (a timeout,
+ *   Chromium missing, too many processes, a browser that died) keeps the sandbox and fails the call; the next call
+ *   tries the sandbox again. So something that can make a launch fail
  *   (today, anything with a shell as the server's user; with AI isolation, the AI's own user, which still shares the
  *   container's process and memory limits) can't use that to get a browser without the sandbox on a machine that has
  *   one.
@@ -23,7 +24,8 @@
  *   solver. Nothing needed it: Playwright reaches into a cross-site frame (a captcha's) whether or not that frame runs
  *   in its own process, and a real Chrome runs with site isolation on, so having it on looks more like a real browser.
  * - The browser gets a minimal environment (browserEnv): what it needs to start, find its temp folder, fonts, locale
- *   and display, and reach a proxy. None of Tarsee's secrets, provider keys or the rest of the server's environment.
+ *   and display, and reach a proxy (its scheme, host and port only). None of Tarsee's secrets, provider keys or the
+ *   rest of the server's environment.
  *   Chromium's page renderers inherit it, so a sandboxed renderer a page broke into finds nothing there. Without the
  *   sandbox it protects nothing: such a renderer runs as the server's user and can read the server's files, and its
  *   environment in /proc, directly.
@@ -59,25 +61,49 @@ const WINDOWS_NAMES = new Set([
   "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER", "OS", "TZ", "LANG",
 ]);
 
-// Chromium on Linux reads its proxy from these (either case). It ignores a user name and password in them, so they are
-// taken out: a proxy's password is a credential the browser has no use for.
+// Chromium on Linux reads its proxy from these (either case), and uses only the host and port: it drops the scheme, a
+// user name and password, and a trailing '/' (proxy_config_service_linux.cc). So the browser gets the scheme, host and
+// port and nothing else: a proxy's password is a credential the browser has no use for, and a path, query or
+// fragment is something a proxy address doesn't have.
 const PROXY_RE = /^(HTTPS?|ALL)_PROXY$/i;
 const NO_PROXY_RE = /^NO_PROXY$/i;
+// The schemes a proxy is written with (curl's and Chromium's), a value that starts with one, a host the URL parser
+// leaves as a name or an address (IPv6 in brackets), and a control character (the URL parser would quietly drop a tab
+// or newline and join what's on either side).
+const PROXY_SCHEMES = new Set(["http:", "https:", "socks:", "socks4:", "socks4a:", "socks5:", "socks5h:"]);
+const SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+const HOST_RE = /^(\[[0-9a-f:.]+\]|[a-z0-9_.-]+)$/i;
+const hasControl = (text) => [...text].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f);
 
 /**
- * A proxy setting without its user name and password: its scheme (if it had one), host and port, and nothing else,
- * since a proxy address has no path, query or fragment. A value with no '@' has no user name or password and goes in
- * as it is. null (the setting stays out) when it has an '@' and can't be taken apart, or its '@' isn't the one before a
- * host (a malformed value such as http:/user:pw@proxy, whose password would otherwise end up in what's left).
+ * A proxy setting as its scheme (when it had one), host and port, and nothing else. null (the setting stays out) when
+ * it doesn't read as a proxy's address: the URL parser refuses it, the scheme isn't a proxy's, the host is no name or
+ * address, it has a control character, or an '@' in it isn't the one that ends a user name and password before the
+ * host (as in http:/user:pw@proxy, or one in the path, query or fragment), so where a password ends is unclear.
  */
-function proxyWithoutCredentials(value) {
-  if (!value.includes("@")) return value;
-  const hasScheme = value.includes("://");
+function proxyAddress(value) {
+  const text = value.trim();
+  if (hasControl(text)) return null;
+  const hasScheme = SCHEME_RE.test(text);
+  const full = hasScheme ? text : `http://${text}`;
   let url;
-  try { url = new URL(hasScheme ? value : `http://${value}`); } catch { return null; }
-  if (!url.host || (!url.username && !url.password)) return null;
-  const clean = hasScheme ? `${url.protocol}//${url.host}` : url.host;
-  return clean.includes("@") ? null : clean;
+  let port;
+  try {
+    url = new URL(full);
+    port = url.port;
+    // The URL parser drops a port that is the scheme's default (80, 443). Chromium reads the proxy without its scheme,
+    // as an http one, so https://proxy:443 must keep its 443: the same value read as the other scheme has the port
+    // it was written with.
+    if (!port && (url.protocol === "http:" || url.protocol === "https:")) {
+      port = new URL(full.replace(/^[a-z]+:/i, url.protocol === "http:" ? "https:" : "http:")).port;
+    }
+  } catch {
+    return null;
+  }
+  if (!PROXY_SCHEMES.has(url.protocol) || !HOST_RE.test(url.hostname)) return null;
+  if (text.includes("@") && ((!url.username && !url.password) || `${url.pathname}${url.search}${url.hash}`.includes("@"))) return null;
+  const address = port ? `${url.hostname}:${port}` : url.hostname;
+  return hasScheme ? `${url.protocol}//${address}` : address;
 }
 
 /** The environment the browser gets: the allowed names of `env`, each spelled as it was there. */
@@ -88,8 +114,8 @@ export function browserEnv(env = process.env, platform = process.platform) {
     if (typeof value !== "string") continue;
     const key = windows ? name.toUpperCase() : name;
     if (PROXY_RE.test(name)) {
-      const clean = proxyWithoutCredentials(value);
-      if (clean !== null) out[name] = clean;
+      const address = proxyAddress(value);
+      if (address !== null) out[name] = address;
     } else if (NO_PROXY_RE.test(name) || (windows ? WINDOWS_NAMES.has(key) : UNIX_NAMES.has(key) || LOCALE_RE.test(key))) {
       out[name] = value;
     }
@@ -131,16 +157,27 @@ function reasonOf(err) {
 }
 
 /**
- * A function that launches the browser with Playwright's `chromium`: with Chromium's sandbox, else, when that launch
- * failed because the sandbox can't start on this machine, without it (see the top of this file). Each launch tries the
- * sandbox first, and each launch without it is logged. Once a sandboxed launch has worked, this function never
- * launches without the sandbox again: a later sandbox failure is thrown (and logged), and the next call tries the
- * sandbox again. env/platform: read at each launch (default the server's own); log: for tests.
+ * A function that launches the browser with `chromium` (Playwright's, or anything with its launch(options)): with
+ * Chromium's sandbox, else, when that launch failed because the sandbox can't start on this machine, without it (see
+ * the top of this file). Each launch tries the sandbox first, and each launch without it is logged.
+ * Once a sandboxed launch has worked, and while one is under way (it may work), this function hands out no browser
+ * without the sandbox: a sandbox failure then is thrown (and logged), a browser it had already started without the
+ * sandbox when that changed is closed, and the next call tries the sandbox again. So launches that overlap get the same
+ * answer as launches one after another. What it knows is kept in memory, in the process that made it: nothing on disk
+ * or in the environment can change it.
+ * env/platform: read at each launch (default the server's own); log: for tests.
  */
 export function makeBrowserLauncher({ log = (message) => console.warn(message), env, platform } = {}) {
   let sandboxWorked = false;
+  let sandboxedUnderWay = 0;
+  /** Why a browser without the sandbox isn't handed out right now, or null when it may be. */
+  const holdBack = () => {
+    if (sandboxWorked) return "this time, though it has worked in this run of Tarsee";
+    if (sandboxedUnderWay > 0) return "this time, while another launch with it was under way";
+    return null;
+  };
   const refuse = (why, err) => {
-    const message = `Chromium's sandbox didn't start ${why}, so tarsee_browser doesn't start the browser without it. ` +
+    const message = `Chromium's sandbox didn't start ${why}, so tarsee_browser doesn't run the browser without it. ` +
       `Try again: each launch tries the sandbox first. Chromium said: ${reasonOf(err)}`;
     log(`[browser] ${message}`);
     return new Error(message, { cause: err });
@@ -148,14 +185,23 @@ export function makeBrowserLauncher({ log = (message) => console.warn(message), 
   return async function launchBrowser(chromium) {
     const options = browserLaunchOptions({ env: env ?? process.env, platform: platform ?? process.platform });
     let browser;
+    sandboxedUnderWay++;
     try {
       browser = await chromium.launch({ ...options, chromiumSandbox: true });
     } catch (err) {
+      sandboxedUnderWay--;
       const said = sandboxLines(err);
       if (said.length === 0) throw err;
-      if (sandboxWorked) throw refuse("this time, though it did earlier in this run of Tarsee", err);
+      const held = holdBack();
+      if (held) throw refuse(held, err);
       if (said.some((l) => RAN_OUT_RE.test(l))) throw refuse("because the machine ran out of processes, memory or open files", err);
       const unsandboxed = await chromium.launch({ ...options, chromiumSandbox: false });
+      // Another launch's sandbox worked, or one started, while this one went on without it.
+      const heldNow = holdBack();
+      if (heldNow) {
+        try { await unsandboxed.close(); } catch { /* it's gone either way */ }
+        throw refuse(heldNow, err);
+      }
       log(
         "[browser] Chromium's sandbox couldn't start on this machine, so tarsee_browser runs without it. A web page " +
         "that exploits a bug in Chromium could then act with this server's own rights. To turn the sandbox on, don't " +
@@ -165,6 +211,7 @@ export function makeBrowserLauncher({ log = (message) => console.warn(message), 
       );
       return unsandboxed;
     }
+    sandboxedUnderWay--;
     sandboxWorked = true;
     return browser;
   };

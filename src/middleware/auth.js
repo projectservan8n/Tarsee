@@ -5,23 +5,26 @@ import config from "../config/env.js";
 import { LIMITS } from "../config/constants.js";
 
 // --- Rate limiting + lockout state ---
-// signInKey(req) → { count, resetAt, failures, lockedUntil, lastFailureAt }. failures, lockedUntil and lastFailureAt
-// are kept in tarsee.db too (sign_in_places, initSignInLimits), so a restart doesn't give a place a fresh start.
+// A place (signInKey, and for an IPv6 client its /56 and /48 too, placeLevels) → { count, resetAt, failures,
+// lockedUntil, lastFailureAt }. failures, lockedUntil and lastFailureAt are kept in tarsee.db too (sign_in_places,
+// initSignInLimits), so a restart doesn't give a place a fresh start.
 const authAttempts = new Map();
 // How long a place's wrong guesses are remembered after its last one. The sweep below used to forget a place as soon as
 // it was between waits, so three guesses, a five-minute pause, and three more never reached the long waits.
 const FAILURE_MEMORY_MS = 24 * 60 * 60_000;
 
-// Clean up stale entries every 5 minutes. Housekeeping timers run outside any
-// request, so an uncaught throw here takes the whole process down — keep the
-// body wrapped.
+// Clean up stale entries every 5 minutes, and write what a failed write left out (savePending). Housekeeping timers
+// run outside any request, so an uncaught throw here takes the whole process down — keep the body wrapped.
 setInterval(() => {
   try {
     const now = Date.now();
     for (const [key, entry] of authAttempts) {
       if (now >= entry.resetAt && placeForgotten(entry, now)) authAttempts.delete(key);
     }
-    forgetStoredPlaces(now);
+    if (openStore()) {
+      savePending();
+      forgetStoredPlaces(now);
+    }
   } catch (err) {
     console.error("[auth] rate-limit sweep failed:", err);
   }
@@ -300,13 +303,18 @@ export function requireAuth(req, res, next) {
 //    plus at most 5 tries a minute. A place's wrong guesses are remembered until a day passes without one, and a right
 //    password clears them. So one place gets 8 wrong guesses in its first 10 minutes and then 24 a day: a 4-digit PIN
 //    takes it about 200 days on average.
+//    An IPv6 client is its /64, and its /56 and /48 are places too, each with the budget above (placeLevels): a home
+//    is commonly given a /56 (256 /64s) and a free tunnel a /48 (65,536), so with the /64 alone one home could make a
+//    new budget from each of its /64s. A guess waits while any of the three does. Clients that share a /48 share its
+//    budget, as clients behind one IPv4 address (a carrier's NAT) share that address's.
 //
 // 2. All places together get 30 wrong guesses in 10 minutes. Then signing in pauses for everyone for 15 minutes, and
 //    each pause that starts within a day of the last one ending is twice as long, up to 4 hours. Why these numbers:
 //    - the owner and a few people mistyping never come near 30 in 10 minutes;
-//    - one place can't reach it (8 at most, above), so one guesser can't stop everyone else from signing in: it takes
-//      four or more places guessing together. That holds only while a client can't pass as a new place with each
-//      guess, which is why X-Forwarded-For is believed only from a proxy the owner names (TARSEE_TRUSTED_PROXY);
+//    - one place can't reach it: it adds at most 8 in 10 minutes (EVERYONE_PER_PLACE; its waits hold it to that
+//      anyway, and an IPv6 client counts by its /48), so one guesser can't stop everyone else from signing in: it
+//      takes four or more places guessing together. That holds only while a client can't pass as a new place with
+//      each guess, which is why X-Forwarded-For is believed only from a proxy the owner names (TARSEE_TRUSTED_PROXY);
 //    - places that do guess together get about 300 wrong guesses in the first day and 180 a day after that, so a
 //      4-digit PIN takes them about a month on average, and a 6-digit one years.
 //    During a pause, anyone already signed in stays signed in; only new sign-ins wait, the right password too (a guess
@@ -315,6 +323,10 @@ export function requireAuth(req, res, next) {
 // Both counts are kept in tarsee.db (initSignInLimits) and read back at boot. A restart used to give every place, and
 // all places together, a fresh start, and the AI can cause one (the Railway tool redeploys Tarsee; today its shell
 // can stop the server), so guessers could make 29 wrong guesses, have Tarsee restarted, and go again.
+// Each try is counted as a wrong password, and saved, before its password is checked (startSignInAttempt). When that
+// can't be saved (a full disk, a locked database: the AI shares the volume, so it could fill it), the try is turned
+// away unchecked (refuseUnrecorded), so no guess is ever checked on a count that a restart would forget. Anyone
+// already signed in stays signed in, and new sign-ins open again by themselves once a write works.
 
 const THIS_MACHINE = "this machine";
 const NO_ADDRESS = "no address";
@@ -467,8 +479,8 @@ export function clientAddress(req) {
   return client;
 }
 
-/** An IPv6 address's /64, the block one home or one server is given, as "2001:db8:5:6::/64". */
-function ipv6Block(a) {
+/** An IPv6 address's eight 16-bit groups, as numbers (an IPv4 address at its end, as in ::ffff:1.2.3.4, is two). */
+function ipv6Groups(a) {
   let s = a;
   const v4 = s.match(/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (v4) {
@@ -479,15 +491,23 @@ function ipv6Block(a) {
   const front = head ? head.split(":") : [];
   const back = tail ? tail.split(":") : [];
   const groups = tail === undefined ? front : [...front, ...Array(8 - front.length - back.length).fill("0"), ...back];
-  return `${groups.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(":")}::/64`;
+  return groups.map((g) => parseInt(g, 16) || 0);
 }
 
-const clientKey = (a) => (net.isIPv6(a) ? ipv6Block(a) : a);
+/** The block of `bits` (48, 56 or 64) that IPv6 groups are in, as "2001:db8:5:6::/64", "2001:db8:5:0::/56" or "2001:db8:5::/48". */
+function ipv6Block(groups, bits) {
+  const kept = groups.slice(0, Math.ceil(bits / 16));
+  if (bits % 16) kept[kept.length - 1] &= (0xffff << (16 - (bits % 16))) & 0xffff;
+  return `${kept.map((g) => g.toString(16)).join(":")}::/${bits}`;
+}
+
+const clientKey = (a) => (net.isIPv6(a) ? ipv6Block(ipv6Groups(a), 64) : a);
 
 /**
- * The place a sign-in comes from, which its wrong guesses count against: the client's address (clientAddress), or
- * "this machine" for any of this machine's own addresses (any 127.x.x.x can be used, so they are one place). An IPv6
- * client is its /64, so one home or server can't make new budgets from its spare addresses.
+ * The place a sign-in comes from, which its wrong guesses count against, and which the logs name: the client's
+ * address (clientAddress), or "this machine" for any of this machine's own addresses (any 127.x.x.x can be used, so
+ * they are one place). An IPv6 client is its /64, so one server can't make new budgets from its spare addresses; its
+ * /56 and /48 count too (placeLevels).
  */
 export function signInKey(req) {
   const client = clientAddress(req);
@@ -496,20 +516,45 @@ export function signInKey(req) {
   return clientKey(client);
 }
 
+/**
+ * The places a sign-in from `key` (signInKey) counts against: the place itself, and for an IPv6 /64 its /56 and /48
+ * too, the blocks one home and one tunnel are given. Each has a place's budget, so a home or a tunnel gets no more
+ * than one place does, of its own wrong guesses or of the count for everyone. The widest comes last.
+ */
+export function placeLevels(key) {
+  if (typeof key !== "string" || !key.endsWith("::/64")) return [key];
+  const groups = ipv6Groups(key.slice(0, -3));
+  return [key, ipv6Block(groups, 56), ipv6Block(groups, 48)];
+}
+
 // All places together (2 above).
 const EVERYONE_WRONG_GUESSES = 30;
 const EVERYONE_WINDOW_MS = 10 * 60_000;
+// The most any one place (an IPv6 client's /48, the widest of placeLevels) adds to it in that window: what one place's
+// own waits let it make in 10 minutes. Its waits already hold it to that; this holds it too while a right password
+// keeps clearing them.
+const EVERYONE_PER_PLACE = 8;
 const EVERYONE_FIRST_PAUSE_MS = 15 * 60_000;
 const EVERYONE_LONGEST_PAUSE_MS = 4 * 60 * 60_000;
 const EVERYONE_CALM_MS = 24 * 60 * 60_000;
+// wrong: the recent wrong guesses, each [when, the widest place it came from].
 const everyone = { wrong: [], pausedUntil: 0, pauses: 0 };
 
 // --- The counts, kept in tarsee.db ---
-//   sign_in_places: each place's wrong guesses, when the last one was, and until when it waits;
-//   sign_in_pause: one row, the pause for everyone: the recent wrong guesses' times (JSON), until when, how many.
-// Once the AI runs as its own OS user it can't write tarsee.db, so it can't wipe them either.
-let _limitsDb = null;
-let _limitsSaveFailed = false;
+//   sign_in_places: each place's wrong guesses, when the last one was, and until when it waits (an IPv6 client has a
+//     row for its /64, one for its /56 and one for its /48);
+//   sign_in_pause: one row, the pause for everyone: the recent wrong guesses (JSON), until when, how many.
+// Once the AI runs as its own OS user it can't write tarsee.db, so it can't wipe them either. It still shares the
+// volume, so it could fill it: then no write goes through, and new sign-ins are turned away until one does.
+//   wired: initSignInLimits has been given the database (server.js always does; a test that never does keeps the
+//     counts in memory only);
+//   ready: the tables are there and the counts have been read back. Until then sign-ins are turned away, and each try
+//     (and the sweep) tries again;
+//   failing: the last write failed (said once in the log, and again once one goes through);
+//   pending, pausePending: rows a failed write left out, written with the next write that goes through.
+const store = { db: null, wired: false, ready: false, failing: false, pending: new Set(), pausePending: false };
+// How long a sign-in turned away because its count can't be saved is told to wait (Retry-After).
+const UNRECORDED_RETRY_MS = 60_000;
 
 /** Whether a place has nothing left to remember: no wait on, and no wrong guess within the last day. */
 function placeForgotten(entry, now) {
@@ -518,9 +563,28 @@ function placeForgotten(entry, now) {
   return !waiting && !remembered;
 }
 
-/** Called by initSessionStore at boot: makes the two tables and reads the counts back into memory. */
+/** Called by initSessionStore at boot: makes the two tables and reads the counts back into memory (openStore). */
 function initSignInLimits(db) {
-  _limitsDb = null;
+  Object.assign(store, { db, wired: true, ready: false, failing: false, pausePending: false });
+  store.pending.clear();
+  authAttempts.clear();
+  Object.assign(everyone, { wrong: [], pausedUntil: 0, pauses: 0 });
+  if (!openStore()) return;
+  const now = Date.now();
+  forgetStoredPlaces(now);
+  const places = [...authAttempts.values()].filter((e) => !placeForgotten(e, now)).length;
+  const paused = now < everyone.pausedUntil ? `; signing in is paused for everyone for ${inWords(Math.ceil((everyone.pausedUntil - now) / 1000))} more` : "";
+  if (places || paused) console.log(`[auth] sign-in limits read back: ${places} place(s) with wrong passwords${paused}`);
+}
+
+/**
+ * Makes the two tables, if they aren't there, and reads the counts back into memory, once: true when that is done
+ * (or no database was ever given). Until it is, sign-ins are turned away, since the counts on disk aren't known.
+ */
+function openStore() {
+  if (!store.wired || store.ready) return true;
+  const { db } = store;
+  const now = Date.now();
   try {
     db.exec(`CREATE TABLE IF NOT EXISTS sign_in_places (
       place TEXT PRIMARY KEY,
@@ -534,77 +598,94 @@ function initSignInLimits(db) {
       paused_until INTEGER NOT NULL,
       pauses INTEGER NOT NULL
     )`);
-  } catch (err) {
-    console.error(`[auth] could not keep the sign-in limits in the database, so a restart forgets them: ${err.message}`);
-    return;
-  }
-  _limitsDb = db;
-  const now = Date.now();
-  authAttempts.clear();
-  everyone.wrong = [];
-  everyone.pausedUntil = 0;
-  everyone.pauses = 0;
-  let places = 0;
-  try {
+    const places = new Map();
     for (const r of db.prepare("SELECT place, failures, last_failure_at, locked_until FROM sign_in_places").all()) {
       const entry = { count: 0, resetAt: 0, failures: Number(r.failures) || 0, lastFailureAt: Number(r.last_failure_at) || 0, lockedUntil: Number(r.locked_until) || 0 };
-      if (placeForgotten(entry, now)) continue;
-      authAttempts.set(r.place, entry);
-      places++;
+      if (!placeForgotten(entry, now)) places.set(r.place, entry);
     }
-    forgetStoredPlaces(now);
     const p = db.prepare("SELECT wrong, paused_until, pauses FROM sign_in_pause WHERE id = 1").get();
+    authAttempts.clear();
+    for (const [place, entry] of places) authAttempts.set(place, entry);
+    Object.assign(everyone, { wrong: [], pausedUntil: 0, pauses: 0 });
     if (p) {
       let wrong = [];
       try { wrong = JSON.parse(p.wrong); } catch { /* unreadable: no recent wrong guesses */ }
-      everyone.wrong = (Array.isArray(wrong) ? wrong : []).map(Number).filter((t) => Number.isFinite(t) && now - t < EVERYONE_WINDOW_MS);
+      // Each [when, place]; a Tarsee before it kept only the times.
+      everyone.wrong = (Array.isArray(wrong) ? wrong : [])
+        .map((w) => (Array.isArray(w) ? [Number(w[0]), typeof w[1] === "string" ? w[1] : null] : [Number(w), null]))
+        .filter(([t]) => Number.isFinite(t) && now - t < EVERYONE_WINDOW_MS);
       everyone.pausedUntil = Number(p.paused_until) || 0;
       everyone.pauses = Number(p.pauses) || 0;
     }
   } catch (err) {
-    console.error(`[auth] could not read the sign-in limits back: ${err.message}`);
+    storeFailing(err);
+    return false;
   }
-  const paused = now < everyone.pausedUntil ? `; signing in is paused for everyone for ${inWords(Math.ceil((everyone.pausedUntil - now) / 1000))} more` : "";
-  if (places || paused) console.log(`[auth] sign-in limits read back: ${places} place(s) with wrong passwords${paused}`);
+  store.ready = true;
+  return true;
 }
 
-/** Says once that the counts couldn't be written (they still hold until a restart). */
-function limitsSaveFailed(err) {
-  if (_limitsSaveFailed) return;
-  _limitsSaveFailed = true;
-  console.error(`[auth] could not write the sign-in limits to the database, so a restart would forget them: ${err.message}`);
+/** Says once, when it starts, that the counts can't be saved, and so new sign-ins are turned away. */
+function storeFailing(err) {
+  if (store.failing) return;
+  store.failing = true;
+  console.error(`[auth] Tarsee can't record sign-in attempts in its database (${err.message}), so new sign-ins are paused until it can. Anyone already signed in stays signed in. Free some space on the volume, and sign-ins open again by themselves.`);
 }
 
-function savePlace(key, entry) {
-  if (!_limitsDb) return;
+/** Says once that the counts are being saved again. */
+function storeWorking() {
+  if (!store.failing) return;
+  store.failing = false;
+  console.log("[auth] Sign-in attempts are recorded again, so new sign-ins are open again.");
+}
+
+/**
+ * Writes the rows of `places` as memory has them now, the pause for everyone with them when `withPause`, and whatever
+ * a failed write left out (pending), all in one transaction: true once it went through, or when there is no database.
+ */
+function saveLimits(places, withPause) {
+  if (!store.wired) return true;
+  if (!store.ready) return false;
+  const keys = new Set([...store.pending, ...places]);
+  const pause = withPause || store.pausePending;
   try {
-    if (placeForgotten(entry, Date.now())) {
-      _limitsDb.prepare("DELETE FROM sign_in_places WHERE place = ?").run(key);
-    } else {
-      _limitsDb.prepare("INSERT OR REPLACE INTO sign_in_places (place, failures, last_failure_at, locked_until) VALUES (?, ?, ?, ?)")
-        .run(key, entry.failures, entry.lastFailureAt, entry.lockedUntil);
-    }
+    const { db } = store;
+    db.transaction(() => {
+      const now = Date.now();
+      const drop = db.prepare("DELETE FROM sign_in_places WHERE place = ?");
+      const keep = db.prepare("INSERT OR REPLACE INTO sign_in_places (place, failures, last_failure_at, locked_until) VALUES (?, ?, ?, ?)");
+      for (const key of keys) {
+        const entry = authAttempts.get(key);
+        if (!entry || placeForgotten(entry, now)) drop.run(key);
+        else keep.run(key, entry.failures, entry.lastFailureAt, entry.lockedUntil);
+      }
+      if (pause) {
+        db.prepare("INSERT OR REPLACE INTO sign_in_pause (id, wrong, paused_until, pauses) VALUES (1, ?, ?, ?)")
+          .run(JSON.stringify(everyone.wrong), everyone.pausedUntil, everyone.pauses);
+      }
+    })();
   } catch (err) {
-    limitsSaveFailed(err);
+    storeFailing(err);
+    return false;
   }
+  store.pending.clear();
+  store.pausePending = false;
+  storeWorking();
+  return true;
 }
 
-function saveEveryone() {
-  if (!_limitsDb) return;
-  try {
-    _limitsDb.prepare("INSERT OR REPLACE INTO sign_in_pause (id, wrong, paused_until, pauses) VALUES (1, ?, ?, ?)")
-      .run(JSON.stringify(everyone.wrong), everyone.pausedUntil, everyone.pauses);
-  } catch (err) {
-    limitsSaveFailed(err);
-  }
+/** Writes what a failed write left out (the sweep). */
+function savePending() {
+  if (store.pending.size || store.pausePending) saveLimits([], false);
 }
 
-/** Drops the stored places with nothing left to remember (the sweep, and boot). */
+/** Drops the stored places with nothing left to remember (the sweep, and boot). Not saving that changes nothing. */
 function forgetStoredPlaces(now) {
+  if (!store.wired || !store.ready) return;
   try {
-    _limitsDb?.prepare("DELETE FROM sign_in_places WHERE locked_until <= ? AND last_failure_at <= ?").run(now, now - FAILURE_MEMORY_MS);
+    store.db.prepare("DELETE FROM sign_in_places WHERE locked_until <= ? AND last_failure_at <= ?").run(now, now - FAILURE_MEMORY_MS);
   } catch (err) {
-    limitsSaveFailed(err);
+    storeFailing(err);
   }
 }
 
@@ -622,6 +703,13 @@ function refuse(res, untilMs, now, error) {
   return res.status(429).json({ error: error(inWords(retryAfter)) });
 }
 
+/** Turns a sign-in away because its try can't be counted in tarsee.db (a full disk, a locked database). */
+export function refuseUnrecorded(res) {
+  const now = Date.now();
+  return refuse(res, now + UNRECORDED_RETRY_MS, now, (wait) =>
+    `Tarsee can't record sign-in attempts right now (is the disk full?), so new sign-ins are paused. Anyone already signed in stays signed in. Try again in ${wait}.`);
+}
+
 let _untrustedProxyNoted = false;
 /**
  * Says once, in the log, when a sign-in carries X-Forwarded-For from a connection TARSEE_TRUSTED_PROXY doesn't name:
@@ -636,9 +724,20 @@ function noteUntrustedProxy(req) {
   console.warn(`[auth] A sign-in carried X-Forwarded-For from ${who}, which TARSEE_TRUSTED_PROXY doesn't name, so it was counted as ${who} itself. If a proxy of yours is in front of Tarsee, name it in TARSEE_TRUSTED_PROXY ("loopback" for one on this machine) so each client behind it is limited on its own.`);
 }
 
+/** A place's entry in memory, made when it has none. */
+function placeEntry(key, now) {
+  let entry = authAttempts.get(key);
+  if (!entry) {
+    entry = { count: 0, resetAt: now + 60_000, failures: 0, lockedUntil: 0, lastFailureAt: 0 };
+    authAttempts.set(key, entry);
+  }
+  return entry;
+}
+
 /**
- * Middleware on POST /api/auth/login: turns a sign-in away while signing in is paused for everyone or its place is
- * waiting, and counts its try. The place goes on req.signInKey, for recordFailedAttempt and clearFailedAttempts.
+ * Middleware on POST /api/auth/login: turns a sign-in away while the counts can't be read (openStore), while signing
+ * in is paused for everyone, or while its place, or for IPv6 its /56 or /48, is waiting; and counts its try. The place
+ * goes on req.signInKey, for startSignInAttempt.
  */
 export function rateLimitAuth(req, res, next) {
   const key = signInKey(req);
@@ -646,56 +745,77 @@ export function rateLimitAuth(req, res, next) {
   const now = Date.now();
   noteUntrustedProxy(req);
 
+  if (!openStore()) return refuseUnrecorded(res);
+
   if (now < everyone.pausedUntil) {
     return refuse(res, everyone.pausedUntil, now, (wait) =>
       `Too many wrong passwords have been tried here from different places, so signing in is paused for everyone for ${wait}. Anyone already signed in stays signed in.`);
   }
 
-  let entry = authAttempts.get(key);
-  if (!entry) {
-    entry = { count: 0, resetAt: now + 60_000, failures: 0, lockedUntil: 0, lastFailureAt: 0 };
-    authAttempts.set(key, entry);
+  const entries = placeLevels(key).map((k) => placeEntry(k, now));
+  let longest = -1;
+  entries.forEach((e, i) => {
+    if (e.lockedUntil > now && (longest < 0 || e.lockedUntil > entries[longest].lockedUntil)) longest = i;
+  });
+  if (longest >= 0) {
+    const from = longest === 0 ? "from here" : "from your network";
+    return refuse(res, entries[longest].lockedUntil, now, (wait) => `Too many wrong passwords ${from}. Try again in ${wait}.`);
   }
 
-  if (entry.lockedUntil && now < entry.lockedUntil) {
-    return refuse(res, entry.lockedUntil, now, (wait) => `Too many wrong passwords from here. Try again in ${wait}.`);
+  // At most 5 tries a minute, from the place and from each of its wider networks.
+  for (const e of entries) {
+    if (now >= e.resetAt) {
+      e.count = 0;
+      e.resetAt = now + 60_000;
+    }
+  }
+  const full = entries.filter((e) => e.count >= 5);
+  if (full.length) {
+    return refuse(res, Math.max(...full.map((e) => e.resetAt)), now, (wait) => `Too many tries from here. Try again in ${wait}.`);
   }
 
-  // At most 5 tries a minute.
-  if (now >= entry.resetAt) {
-    entry.count = 0;
-    entry.resetAt = now + 60_000;
-  }
-  if (entry.count >= 5) {
-    return refuse(res, entry.resetAt, now, (wait) => `Too many tries from here. Try again in ${wait}.`);
-  }
-
-  entry.count++;
+  for (const e of entries) e.count++;
   next();
 }
 
+/** A place's wait after its n-th wrong guess in a row, in ms (0: none yet). */
+function waitAfter(failures) {
+  if (failures >= 10) return 60 * 60_000;
+  if (failures >= 8) return 10 * 60_000;
+  if (failures >= 6) return 2 * 60_000;
+  if (failures >= 4) return 30_000;
+  return 0;
+}
+
 /**
- * Counts a wrong password against its place (signInKey) and against all places together, in memory and in tarsee.db.
- * Returns how long signing in is now paused for everyone, in ms, when this wrong guess starts that pause, else 0.
+ * Counts a try from `key` (signInKey) as a wrong password, against the place and its wider networks (placeLevels) and
+ * against all places together, and saves that to tarsee.db, before its password is checked. Returns null when it
+ * can't be saved: the try must then be turned away unchecked (refuseUnrecorded), so no guess is checked on a count a
+ * restart would forget. Otherwise it returns { wrong, right }, and the caller says which, at once:
+ *   wrong(): it was a wrong password. Nothing more to save. Returns how long signing in is now paused for everyone, in
+ *     ms, when this one starts that pause, else 0;
+ *   right(): it was the right password. The count is taken back, and the place's wrong guesses are cleared (for IPv6
+ *     its /56's and /48's too); all places' count keeps the others' wrong guesses. If that can't be saved, the database
+ *     holds one wrong guess too many until the next write goes through: never fewer.
  */
-export function recordFailedAttempt(key) {
+export function startSignInAttempt(key) {
+  if (!openStore()) return null;
   const now = Date.now();
-  let entry = authAttempts.get(key);
-  if (!entry) {
-    entry = { count: 0, resetAt: now + 60_000, failures: 0, lockedUntil: 0, lastFailureAt: 0 };
-    authAttempts.set(key, entry);
+  const levels = placeLevels(key);
+  const entries = levels.map((k) => placeEntry(k, now));
+  const before = entries.map((e) => ({ failures: e.failures, lastFailureAt: e.lastFailureAt, lockedUntil: e.lockedUntil }));
+  const beforeEveryone = { wrong: everyone.wrong, pausedUntil: everyone.pausedUntil, pauses: everyone.pauses };
+
+  for (const e of entries) {
+    e.failures++;
+    e.lastFailureAt = now;
+    const wait = waitAfter(e.failures);
+    if (wait) e.lockedUntil = now + wait;
   }
-  entry.failures++;
-  entry.lastFailureAt = now;
-
-  if (entry.failures >= 10) entry.lockedUntil = now + 60 * 60_000;
-  else if (entry.failures >= 8) entry.lockedUntil = now + 10 * 60_000;
-  else if (entry.failures >= 6) entry.lockedUntil = now + 2 * 60_000;
-  else if (entry.failures >= 4) entry.lockedUntil = now + 30_000;
-  savePlace(key, entry);
-
-  everyone.wrong = everyone.wrong.filter((t) => now - t < EVERYONE_WINDOW_MS);
-  everyone.wrong.push(now);
+  const widest = levels.at(-1);
+  const recent = everyone.wrong.filter(([t]) => now - t < EVERYONE_WINDOW_MS);
+  if (recent.filter(([, from]) => from === widest).length < EVERYONE_PER_PLACE) recent.push([now, widest]);
+  everyone.wrong = recent;
   let pause = 0;
   if (everyone.wrong.length >= EVERYONE_WRONG_GUESSES) {
     if (now - everyone.pausedUntil >= EVERYONE_CALM_MS) everyone.pauses = 0;
@@ -704,18 +824,39 @@ export function recordFailedAttempt(key) {
     everyone.pausedUntil = now + pause;
     everyone.wrong = [];
   }
-  saveEveryone();
-  return pause;
+
+  if (!saveLimits(levels, true)) {
+    entries.forEach((e, i) => Object.assign(e, before[i]));
+    Object.assign(everyone, beforeEveryone);
+    return null;
+  }
+
+  let settled = false;
+  return {
+    wrong() {
+      settled = true;
+      return pause;
+    },
+    right() {
+      if (settled) return;
+      settled = true;
+      Object.assign(everyone, beforeEveryone);
+      for (const e of entries) { e.failures = 0; e.lockedUntil = 0; }
+      if (!saveLimits(levels, true)) {
+        for (const k of levels) store.pending.add(k);
+        store.pausePending = true;
+      }
+    },
+  };
 }
 
 /**
- * Clears a place's wrong guesses (signInKey), on a right password. All places' count stays: one right password
- * doesn't excuse the wrong guesses others made.
+ * Counts a wrong password from `key` (signInKey), as startSignInAttempt and its wrong() do. Returns how long signing
+ * in is now paused for everyone, in ms, when this one starts that pause, else 0 (also when it couldn't be saved).
  */
-export function clearFailedAttempts(key) {
-  const entry = authAttempts.get(key);
-  if (entry) { entry.failures = 0; entry.lockedUntil = 0; }
-  savePlace(key, entry || { failures: 0, lockedUntil: 0, lastFailureAt: 0 });
+export function recordFailedAttempt(key) {
+  const attempt = startSignInAttempt(key);
+  return attempt ? attempt.wrong() : 0;
 }
 
 /**
@@ -763,8 +904,10 @@ export function __resetSignInLimitsForTests() {
   ownAddresses = { at: -Infinity, set: new Set() };
   trustRead = { raw: null, trust: null };
   _untrustedProxyNoted = false;
-  _limitsSaveFailed = false;
+  store.failing = false;
+  store.pending.clear();
+  store.pausePending = false;
   try {
-    _limitsDb?.exec("DELETE FROM sign_in_places; DELETE FROM sign_in_pause;");
+    if (store.ready) store.db?.exec("DELETE FROM sign_in_places; DELETE FROM sign_in_pause;");
   } catch { /* closed */ }
 }

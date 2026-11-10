@@ -14,9 +14,30 @@ import { executeTool } from "../lib/tools.js";
 import config from "../config/env.js";
 
 /**
+ * A key tool's answer, marked isError (MCP's own failure mark) unless it is lib/tools.js's answer for what was asked: a
+ * key saved, a key deleted, a key's value, the list. So every refusal (Tarsee's own key, a name that isn't one, Tool
+ * Permissions), every error and a key that isn't there is marked; each engine passes the mark on, and the chat bots'
+ * status line then says the save, the removal or the check failed, never "Key saved" (lib/tool-status.js).
+ */
+const KEY_TOOL_FAILED = /^(?:(?:get|set|list|delete)_key (?:refused|error): |Refused\b|Tool error \(|Unknown tool: |Key ".*" not found)/s;
+const KEY_TOOL_WORKED = {
+  get_key: (r) => !KEY_TOOL_FAILED.test(r),
+  list_keys: (r) => !KEY_TOOL_FAILED.test(r),
+  set_key: (r) => /^Key "[^"\n]*" saved securely/.test(r),
+  delete_key: (r) => /^Key "[^"\n]*" deleted from vault\.$/.test(r),
+};
+function keyToolAnswer(tool, result) {
+  const text = String(result ?? "");
+  const worked = typeof result === "string" && KEY_TOOL_WORKED[tool](result);
+  return worked ? { content: [{ type: "text", text }] } : { isError: true, content: [{ type: "text", text }] };
+}
+
+/**
  * Create a Tarsee MCP server with platform tools.
  * @param {object} ctx - Tool execution context { db, settingsStore, channelManager, conversationId }
- * @param {{quiet?: boolean}} [opts] - quiet: no "Creating" log line (the Codex endpoint builds one per turn)
+ * @param {{quiet?: boolean, toolsOnly?: boolean}} [opts] - quiet: no "Creating" log line (the Codex endpoint builds one
+ *   per turn). toolsOnly: the tool definitions ({ name, description, inputSchema, handler }), with no server: what
+ *   lib/cron.js checks a scheduled direct action's args against, for a tool lib/tools.js has no definition of
  * @returns {McpSdkServerConfigWithInstance}
  */
 export function createTarseeMcp(ctx, opts = {}) {
@@ -48,7 +69,7 @@ export function createTarseeMcp(ctx, opts = {}) {
 
       tool(
         "tarsee_configure_email_channel",
-        "Configure the email channel when the user tells you their IMAP/SMTP credentials in chat. Partial-update — only the fields you pass get written; existing values stay. Passwords are stored encrypted. Call this instead of asking the user to open Settings. A saved password is only used with the server it was saved for: a call that changes the IMAP or SMTP host, port, user or secure setting must carry that side's password in the same call (ask the user for the app password), or it is refused and nothing is saved. Changing anything else (a new password alone, mention word, name, allowlist, on/off) keeps the saved passwords. A server set up here is only ever logged in to over TLS: IMAP on 993; SMTP on 465, or 587 with STARTTLS, which must then succeed. secure: false is accepted only for a server that offers STARTTLS, on IMAP port 143 or SMTP port 587, 25 or 2525, and Tarsee then won't log in unless the connection switches to TLS; any other secure: false is refused, as it would send the password in plain text. A new allowlist that lets in anyone the owner hasn't allowed (an address they didn't put on the list in Settings, or an empty list, which lets any sender in) isn't put in force: it waits for the owner's OK in Settings > Channels > Email, the rest of the call is saved, and the answer says so: tell the owner it is waiting for them, as you can't OK it yourself. A narrower list, or one of addresses the owner allowed, goes straight in. Infer common provider hosts (Gmail: imap.gmail.com:993 / smtp.gmail.com:465; iCloud: imap.mail.me.com:993 / smtp.mail.me.com:587; Zoho: imap.zoho.com:993 / smtp.zoho.com:465; FastMail: imap.fastmail.com:993 / smtp.fastmail.com:465) from the user's email domain when they don't specify. Outlook.com, Hotmail and Microsoft 365 mailboxes cannot connect this way: Microsoft refuses app passwords for IMAP and requires its own sign-in, so tell the user to use a mailbox from another provider instead of saving one.",
+        "Configure the email channel when the user tells you their IMAP/SMTP credentials in chat. Partial update: only the fields you pass get written; the rest stay as saved. Passwords are stored encrypted. A saved password is only used with the server it was saved for: a call that changes the IMAP or SMTP host, port, user or secure setting must carry that side's password in the same call (ask the user for the app password), or it is refused and nothing is saved. A server set up here is only ever logged in to over TLS: IMAP on 993; SMTP on 465, or 587 with STARTTLS, which must then succeed. secure: false is accepted only for a server that offers STARTTLS, on IMAP port 143 or SMTP port 587, 25 or 2525, and Tarsee then won't log in unless the connection switches to TLS; any other secure: false is refused, as it would send the password in plain text. What would change who can reach you by email, or where your mail goes, is saved but not put in force: turning email on, another IMAP or SMTP host or user (the mailbox Tarsee reads, and where its replies go), and an allowlist that lets in anyone the owner hasn't allowed (an empty list lets any sender in, and no list saved yet counts as nobody allowed). These wait for the owner's OK in Settings > Channels > Email, the rest of the call goes in, and the answer lists what waits: tell the owner it is waiting for them, as you can't OK it yourself. Setting up email from nothing therefore always waits for the owner. What narrows goes straight in: senders removed, email off, the mention word, the display name, another port on the same server. Tarsee answers an allowed address only when the owner's mail provider vouches that the mail really came from it (its Authentication-Results line), since anyone can write any From line; what Tarsee trusts for that is the owner's to set in Settings, not yours. Infer common provider hosts (Gmail: imap.gmail.com:993 / smtp.gmail.com:465; iCloud: imap.mail.me.com:993 / smtp.mail.me.com:587; Zoho: imap.zoho.com:993 / smtp.zoho.com:465; FastMail: imap.fastmail.com:993 / smtp.fastmail.com:465) from the user's email domain when they don't specify. Outlook.com, Hotmail and Microsoft 365 mailboxes cannot connect this way: Microsoft refuses app passwords for IMAP and requires its own sign-in, so tell the user to use a mailbox from another provider instead of saving one.",
         {
           tarseeEmailAddress: z.string().optional().describe("The mailbox Tarsee answers at, e.g. 'tarsee@yourcompany.com'"),
           imap: z.object({
@@ -57,19 +78,19 @@ export function createTarseeMcp(ctx, opts = {}) {
             user: z.string().optional().describe("Usually the same as the mailbox address"),
             password: z.string().optional().describe("App password — stored encrypted. Required in the same call whenever the IMAP host, port, user or secure setting changes"),
             secure: z.boolean().optional().describe("TLS from the start (default true). false only on port 143, where STARTTLS must then succeed before the login"),
-          }).optional(),
+          }).optional().describe("The mailbox Tarsee reads. Another host or user than the one in force waits for the owner's OK in Settings > Channels > Email."),
           smtp: z.object({
             host: z.string().optional().describe("e.g. smtp.gmail.com"),
             port: z.number().optional().describe("Default 465 (implicit TLS) or 587 (STARTTLS, which must succeed)"),
             user: z.string().optional(),
             password: z.string().optional().describe("App password — stored encrypted. Required in the same call whenever the SMTP host, port, user or secure setting changes"),
             secure: z.boolean().optional().describe("Default true. false only on port 587, 25 or 2525, where STARTTLS must then succeed before the login"),
-          }).optional(),
-          allowlistFromAddresses: z.array(z.string()).optional().describe("Only reply to emails from these addresses; empty lets any sender in. A list that lets in anyone the owner hasn't allowed (an empty one too) waits for the owner's OK in Settings > Channels > Email; a narrower one goes straight in."),
+          }).optional().describe("Where Tarsee's replies go out. Another host or user than the one in force waits for the owner's OK in Settings > Channels > Email."),
+          allowlistFromAddresses: z.array(z.string()).optional().describe("Only reply to emails from these addresses; empty lets any sender in. A list that lets in anyone the owner hasn't allowed (an empty one too, and any list where the owner has saved none) waits for the owner's OK in Settings > Channels > Email; a narrower one goes straight in."),
           mentionKeyword: z.string().optional().describe("Without leading @. Default 'tarsee'. Tarsee only replies when the body contains this mention."),
           replyAllMarker: z.string().optional().describe("Subject marker that opts into reply-all. Default '[reply-all]'."),
           fromName: z.string().optional().describe("Display name on outbound mail. Default 'Tarsee'."),
-          enabled: z.boolean().optional().describe("Toggle the channel on/off. Leave undefined to preserve current state."),
+          enabled: z.boolean().optional().describe("Turn the channel on or off. Off goes straight in; on waits for the owner's OK in Settings > Channels > Email. Leave it out to keep the current state."),
         },
         async (args) => {
           const result = await executeTool("configure_email_channel", args, ctx);
@@ -112,7 +133,8 @@ export function createTarseeMcp(ctx, opts = {}) {
             // invisible to Claude while the system prompt kept advertising
             // them. That is the real cause of the agent shelling out to curl
             // instead of calling tarsee_send_message. See test/mcp-tools.test.js.
-            args: z.record(z.string(), z.any()).describe("Tool arguments (e.g. {channel:'telegram', message:'Hello!'})"),
+            // What fits is checked in lib/cron.js against the tool's own inputs, when the task is saved and at every run.
+            args: z.record(z.string(), z.any()).describe("The tool's arguments (e.g. {channel:'telegram', message:'Hello!'}). They must fit that tool's own inputs, checked when the task is saved and at every run, and a refusal lists them (remember takes fact, daily_log takes note, the key tools take name). A direct action never runs get_key and never writes Tarsee's own keys."),
           }).optional().describe("Direct tool action — instant, no AI needed. Use for simple notifications."),
         },
         // A task that was not saved (no prompt or action, a refusal, a bad schedule, the 15-minute rule, Tool
@@ -313,14 +335,14 @@ export function createTarseeMcp(ctx, opts = {}) {
       // vault (lib/railway-admin.js). No delete actions.
       tool(
         "tarsee_railway",
-        "Railway jobs done by Tarsee itself with a Railway token it reads from the vault (RAILWAY_API_TOKEN): list_projects (projects; with project, its environments and services), list_variables (variable NAMES on a service, never values), set_variable (set one variable on a service, then Railway redeploys it as it does on any variable change), redeploy (redeploy a service's latest deployment). Use it whenever someone asks to set a Railway variable or redeploy. It replaces any Railway call from Bash: never put a Railway token or a secret value in a command (no `railway variables --set` with a secret, no GraphQL with a token).\n\nSECRETS GO THROUGH from_key: for anything secret (a token, a password, a webhook URL, a database URL) pass from_key, the vault key name that holds it (e.g. from_key: \"ALERTS_WEBHOOK\"). Tarsee reads the value itself; it never shows up in the result, the logs or your context, only a masked form. value is for plain, non-secret text only (a port, a flag, a public URL); a value that looks like a secret or is a vault key's value is refused.\n\nGET THE GO FIRST for set_variable and redeploy: from the owner, or from whoever your instructions (AGENTS.md, USER.md) say may give it. Putting a secret into a service (from_key) counts as handing out a credential, so it needs the owner's go. Put who said go, in their words, in approved_by (it is logged). If nobody has said go for this exact change, ask instead. list_projects and list_variables need no go.\n\nTARSEE'S OWN SERVICE: when Tarsee runs on Railway, leaving out project works on the project Tarsee runs in, in its environment, on its own service. Redeploying it, or setting a variable on it with a deploy, restarts Tarsee and ends the turn doing it: say so before you do it, and finish anything else first.\n\nNEVER, WHOEVER GAVE THE GO: a value with a Railway reference (${{ ... }}) in it, which pulls in another variable's value when the service deploys, is refused on every service. Tarsee's own keys (RAILWAY_API_TOKEN, and its sign-in and encryption secrets) are never copied into a service.\n\nON TARSEE'S OWN SERVICE IT SETS ONLY (an allowlist, with a deploy or without): a key or address for the owner's own scripts, named in capitals and ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL (e.g. SOME_SERVICE_API_KEY, ALERTS_WEBHOOK), unless Tarsee or its AI engines read that name themselves (GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY and the like are refused); TZ, with a time zone name; and the tuning settings TARSEE_TIMEZONE, TARSEE_DEFAULT_EFFORT, TARSEE_COMPACT_WINDOW, TARSEE_MODEL_CONTEXT_TOKENS, TARSEE_TOOL_RESULT_MAX_CHARS, TARSEE_BASH_OUTPUT_MAX_CHARS, TARSEE_SESSION_JSONL_MAX_MB, TARSEE_PHONON_THREADS. Everything else is refused there: how people sign in (SETUP_PASSWORD, ENCRYPTION_KEY, TARSEE_API_TOKEN), which AI answers or its keys (TARSEE_AI_PROVIDER, OPENAI_API_KEY and the other AI keys: those go in Settings > AI), how Railway builds and runs it, how programs and shells start, and where its files are. Nor is a variable that one of those settings is filled in from by a Railway reference, on any service; and while one of them is sealed (Railway never shows its value), nothing is set in that environment of Tarsee's project. While get_key is denied in Tool Permissions, from_key onto Tarsee's own service is refused. Each refusal says where the owner makes that change instead (Railway's dashboard, or Settings > AI): tell the person that, and do not look for another way to make it.\n\nNAMES OR IDS: project, environment (default: the one Tarsee runs in, else production) and service each take a name (any case) or an id. A name that matches nothing, or more than one, is refused with the choices listed.\n\nNOTHING HERE DELETES: deleting a variable, a service or a project is for the owner to do by hand in Railway; say so if asked. If Railway refuses, the error says why in plain words: tell the person, do not try another way around it.",
+        "Railway jobs done by Tarsee itself with a Railway token it reads from the vault (RAILWAY_API_TOKEN): list_projects (projects; with project, its environments and services), list_variables (variable NAMES on a service, never values), set_variable (set one variable on a service, then Railway redeploys it as it does on any variable change), redeploy (redeploy a service's latest deployment). Use it whenever someone asks to set a Railway variable or redeploy. It replaces any Railway call from Bash: never put a Railway token or a secret value in a command (no `railway variables --set` with a secret, no GraphQL with a token).\n\nSECRETS GO THROUGH from_key: for anything secret (a token, a password, a webhook URL, a database URL) pass from_key, the vault key name that holds it (e.g. from_key: \"ALERTS_WEBHOOK\"). Tarsee reads the value itself; it never shows up in the result, the logs or your context, only a masked form. value is for plain, non-secret text only (a port, a flag, a public URL); a value that looks like a secret or is a vault key's value is refused.\n\nGET THE GO FIRST for set_variable and redeploy: from the owner, or from whoever your instructions (AGENTS.md, USER.md) say may give it. Putting a secret into a service (from_key) counts as handing out a credential, so it needs the owner's go. Put who said go, in their words, in approved_by (it is logged). If nobody has said go for this exact change, ask instead. list_projects and list_variables need no go.\n\nTARSEE'S OWN SERVICE: when Tarsee runs on Railway, leaving out project works on the project Tarsee runs in, in its environment, on its own service. Redeploying it, or setting a variable on it with a deploy, restarts Tarsee and ends the turn doing it: say so before you do it, and finish anything else first.\n\nNEVER, WHOEVER GAVE THE GO: a value with a Railway reference (${{ ... }}) in it, which pulls in another variable's value when the service deploys, is refused on every service. Tarsee's own keys (RAILWAY_API_TOKEN, and its sign-in and encryption secrets) are never copied into a service.\n\nON TARSEE'S OWN SERVICE IT SETS ONLY (an allowlist, with a deploy or without): a key or address for the owner's own scripts, named in capitals and ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL (e.g. SOME_SERVICE_API_KEY, ALERTS_WEBHOOK), unless Tarsee reads that name itself or it appears anywhere in the code of its AI engines or browser library, which may read it (GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY, VOICE_STREAM_BASE_URL, DATABASE_URL and the like are refused); TZ, with a time zone name; and the tuning settings TARSEE_TIMEZONE, TARSEE_DEFAULT_EFFORT, TARSEE_COMPACT_WINDOW, TARSEE_MODEL_CONTEXT_TOKENS, TARSEE_TOOL_RESULT_MAX_CHARS, TARSEE_BASH_OUTPUT_MAX_CHARS, TARSEE_SESSION_JSONL_MAX_MB, TARSEE_PHONON_THREADS. Everything else is refused there: how people sign in (SETUP_PASSWORD, ENCRYPTION_KEY, TARSEE_API_TOKEN), which AI answers or its keys (TARSEE_AI_PROVIDER, OPENAI_API_KEY and the other AI keys: those go in Settings > AI), how Railway builds and runs it, how programs, shells and the browser start (GOOGLE_API_KEY included), and where its files are. A variable that one of Tarsee's own variables is filled in from by a Railway reference (on any service, through a shared variable or a chain of them) counts as that variable: the same rules apply, under that variable's name. While a refused one is sealed (Railway never shows its value), nothing is set in that environment of Tarsee's project. While get_key is denied in Tool Permissions, from_key onto Tarsee's own service, or into a variable it is filled in from, is refused, and so is any from_key in that environment while one of its variables is sealed. Each refusal says where the owner makes that change instead (Railway's dashboard, or Settings > AI): tell the person that, and do not look for another way to make it.\n\nNAMES OR IDS: project, environment (default: the one Tarsee runs in, else production) and service each take a name (any case) or an id. A name that matches nothing, or more than one, is refused with the choices listed.\n\nNOTHING HERE DELETES: deleting a variable, a service or a project is for the owner to do by hand in Railway; say so if asked. If Railway refuses, the error says why in plain words: tell the person, do not try another way around it.",
         {
           action: z.enum(["list_projects", "list_variables", "set_variable", "redeploy"]).describe("What to do"),
           project: z.string().optional().describe("The project's name (any case) or id. Leave it out for the project Tarsee runs in (on Railway); list_projects without it lists them all"),
           environment: z.string().optional().describe("The environment's name or id (default: the one Tarsee runs in, else production)"),
           service: z.string().optional().describe("list_variables, set_variable, redeploy: the service's name or id (default in Tarsee's own project: Tarsee's own service)"),
-          name: z.string().optional().describe("set_variable: the variable's name, e.g. ALERTS_WEBHOOK_URL. On Tarsee's own service only a key or address for the owner's scripts (capitals, ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL), TZ and the tuning settings above"),
-          from_key: z.string().optional().describe("set_variable: the vault key whose value to set, for anything secret. The value is read by Tarsee and never shown. Tarsee's own keys (RAILWAY_API_TOKEN, its sign-in and encryption secrets) are refused, and so is from_key onto Tarsee's own service while get_key is denied in Tool Permissions"),
+          name: z.string().optional().describe("set_variable: the variable's name, e.g. ALERTS_WEBHOOK_URL. On Tarsee's own service only a key or address for the owner's scripts (capitals, ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL, in none of its engines' code), TZ and the tuning settings above"),
+          from_key: z.string().optional().describe("set_variable: the vault key whose value to set, for anything secret. The value is read by Tarsee and never shown. Tarsee's own keys (RAILWAY_API_TOKEN, its sign-in and encryption secrets) are refused, and so is from_key onto Tarsee's own service, or into a variable it is filled in from, while get_key is denied in Tool Permissions"),
           value: z.string().optional().describe("set_variable: a plain, NON-SECRET value. Anything secret goes in the vault and through from_key instead. Pass from_key or value, not both. A Railway reference (${{ ... }}) is refused"),
           deploy: z.boolean().optional().describe("set_variable: true (default) lets Railway redeploy the service as it normally does on a variable change; false sets it without a deploy (it takes effect on the next one)"),
           approved_by: z.string().optional().describe("Required for set_variable and redeploy: who said go and for what, e.g. \"the owner in chat: put the alerts webhook on the worker service\""),
@@ -399,7 +421,7 @@ export function createTarseeMcp(ctx, opts = {}) {
         async (args) => {
           // executeTool's get_key case destructures `name` — map the MCP-level `key` to that.
           const result = await executeTool("get_key", { name: args.key }, ctx);
-          return { content: [{ type: "text", text: result }] };
+          return keyToolAnswer("get_key", result);
         }
       ),
 
@@ -414,7 +436,7 @@ export function createTarseeMcp(ctx, opts = {}) {
         },
         async (args) => {
           const result = await executeTool("set_key", { name: args.key, value: args.value, description: args.description }, ctx);
-          return { content: [{ type: "text", text: result }] };
+          return keyToolAnswer("set_key", result);
         }
       ),
 
@@ -427,7 +449,7 @@ export function createTarseeMcp(ctx, opts = {}) {
         {},
         async () => {
           const result = await executeTool("list_keys", {}, ctx);
-          return { content: [{ type: "text", text: result }] };
+          return keyToolAnswer("list_keys", result);
         }
       ),
 
@@ -438,7 +460,7 @@ export function createTarseeMcp(ctx, opts = {}) {
         { key: z.string().describe("Key name to delete") },
         async (args) => {
           const result = await executeTool("delete_key", { name: args.key }, ctx);
-          return { content: [{ type: "text", text: result }] };
+          return keyToolAnswer("delete_key", result);
         }
       ),
 
@@ -469,6 +491,7 @@ export function createTarseeMcp(ctx, opts = {}) {
       ),
 
   ];
+  if (opts.toolsOnly) return allTools;
 
   // (Quiet for the Codex endpoint, ai/mcp-http.js, which builds one per turn and logs its own start once.)
   if (!opts.quiet) console.log(`[mcp] Creating Tarsee MCP server: ${allTools.length} tools, names: ${allTools.map(t => t.name).join(", ")}`);

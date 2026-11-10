@@ -568,6 +568,10 @@ describe("wording", () => {
     assert.match(section, /Railway's dashboard/);
     assert.match(section, /sealed/);
     assert.match(section, /get_key/);
+    // Round 3: the names in the AI engines' code, and references followed from every variable on Tarsee's service.
+    assert.match(section, /appears nowhere in its AI engines' code/);
+    assert.match(section, /A variable one of Tarsee's own variables is filled in from by a Railway reference counts as that variable/);
+    assert.match(section, /onto Tarsee's own service, or into a variable it is filled in from, while get_key is denied/);
   });
 
   it("config/env.js seeds the same Railway section as the default TOOLS.md", () => {

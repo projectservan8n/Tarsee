@@ -2467,7 +2467,9 @@ const Settings = {
 
     const allow = cfg.allowlistFromAddresses;
     e.emailAllowlist.value = Array.isArray(allow) ? allow.join("\n") : (allow || "");
-    this.renderEmailAllowlistWaiting(cfg);
+    // What waits for the owner's OK, and who really sent a mail (with the one-time note, if mail was refused).
+    this.renderEmailWaiting(cfg);
+    this.renderEmailSenderCheck(cfg, settings.find((s) => s.key === "channel.email-sender-note")?.value);
 
     if (e.emailMentionHint) {
       e.emailMentionHint.textContent = e.emailMentionKeyword.value.trim() || "@tarsee";
@@ -2503,58 +2505,79 @@ const Settings = {
   },
 
   /**
-   * The note above the allowlist while a wider list waits for the owner's OK (routes/settings.js): one the AI asked
-   * for in a chat (tarsee_configure_email_channel) or one sent with the API token. It says whom the list would let in.
-   * Let them in OKs the very list the note shows; Keep my list turns it down. Until then the box shows the list in force.
+   * The card at the top of the email form while a change waits for the owner's OK (routes/settings.js): one the AI
+   * asked for in a chat (tarsee_configure_email_channel) or one sent with the API token, which would change who can
+   * reach Tarsee by email or where its mail goes. It shows each part as it is now and as it would be, and, when it
+   * turns email on, the mailbox and the list that would then be in force. Approve OKs the very change it shows
+   * (waitingId); Discard turns it down. None of it is in force until then, and the form shows what is.
    */
-  renderEmailAllowlistWaiting(cfg) {
-    const box = this.elements.emailAllowlist;
-    if (!box) return;
-    const group = box.closest(".form-group") || box;
-    let note = group.parentElement?.querySelector("[data-email-allowlist-note]");
-    if (!note) {
-      note = document.createElement("div");
-      note.dataset.emailAllowlistNote = "";
-      note.className = "mb-3";
-      note.addEventListener("click", (ev) => {
-        const btn = ev.target.closest("[data-email-allowlist-answer]");
-        if (btn) this.answerEmailAllowlist(btn.dataset.emailAllowlistAnswer, btn);
+  renderEmailWaiting(cfg) {
+    const anchor = this.elements.emailEnabled?.closest(".form-group");
+    if (!anchor) return;
+    let card = anchor.parentElement?.querySelector("[data-email-waiting]");
+    if (!card) {
+      card = document.createElement("div");
+      card.dataset.emailWaiting = "";
+      card.className = "mb-3";
+      card.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-email-waiting-answer]");
+        if (btn) this.answerEmailWaiting(btn.dataset.emailWaitingAnswer, btn);
       });
-      group.before(note);
+      anchor.before(card);
     }
-    const asked = Array.isArray(cfg?.allowlistWaiting?.addresses) ? cfg.allowlistWaiting.addresses.map(String) : null;
-    if (!asked) {
-      note.hidden = true;
-      note.innerHTML = "";
-      this._emailAllowlistShown = null;
+    const w = cfg?.waiting;
+    if (!w || typeof w !== "object" || typeof w.id !== "string") {
+      card.hidden = true;
+      card.innerHTML = "";
+      this._emailWaitingShown = null;
       return;
     }
-    this._emailAllowlistShown = asked;
+    this._emailWaitingShown = w.id;
     const esc = (s) => this._esc(s);
-    const owner = Array.isArray(cfg.allowlistOwner) ? cfg.allowlistOwner : (cfg.allowlistFromAddresses || []);
-    const added = asked.filter((a) => !owner.includes(a));
-    const whom = asked.length === 0
-      ? "<strong>any sender at all</strong> (an empty list)"
-      : (added.length ? added : asked).map((a) => `<strong>${esc(a)}</strong>`).join(", ");
-    note.hidden = false;
-    note.innerHTML = `<div class="memory-item cron-job" role="status">`
+    const server = (s, port) => (s?.host ? `${s.host}:${Number(s.port) || port} as ${s.user || "(no user)"}` : "not set up");
+    const list = (l) => (Array.isArray(l) && l.length ? l.join("\n") : "any sender (the list is empty)");
+    const change = (what, now, next) => `<div class="cron-note"><strong>${esc(what)}</strong></div>`
+      + `<div class="cron-prompt">now:      ${esc(now)}\nwould be: ${esc(next)}</div>`;
+    const context = (what, now) => `<div class="cron-note"><strong>${esc(what)}</strong></div><div class="cron-prompt">${esc(now)}</div>`;
+    const parts = [];
+    if (w.enabled) parts.push(change("Email", "off", "on"));
+    if (w.imap) parts.push(change("IMAP: the mailbox Tarsee reads", server(cfg.imap, 993), server(w.imap, 993)));
+    else if (w.enabled) parts.push(context("IMAP: the mailbox Tarsee would read", server(cfg.imap, 993)));
+    if (w.smtp) parts.push(change("SMTP: where its replies go", server(cfg.smtp, 465), server(w.smtp, 465)));
+    else if (w.enabled) parts.push(context("SMTP: where its replies would go", server(cfg.smtp, 465)));
+    if (Array.isArray(w.allowlistFromAddresses)) parts.push(change("Who can reach Tarsee by email", list(cfg.allowlistFromAddresses), list(w.allowlistFromAddresses)));
+    else if (w.enabled) parts.push(context("Who could reach Tarsee by email", list(cfg.allowlistFromAddresses)));
+    if (w.senderCheck) {
+      const own = this._emailSenderCheck(cfg);
+      if (w.senderCheck.trustFromLine && !own.trustFromLine) parts.push(change("Trust the From line", "no", "yes: anyone who writes an allowed address there can reach Tarsee"));
+      if (w.senderCheck.authservId && w.senderCheck.authservId !== own.authservId) {
+        parts.push(change("Your mail server's name in Authentication-Results", own.authservId || "(none)", w.senderCheck.authservId));
+      }
+    }
+    const by = w.by === "token" ? "something using the API token (it may be the AI)" : "the AI, in a chat";
+    const when = Number.isNaN(Date.parse(w.since)) ? "" : ` on ${new Date(w.since).toLocaleString()}`;
+    card.hidden = false;
+    card.innerHTML = `<div class="memory-item cron-job" role="status">`
       + `<span class="memory-badge cron-state cron-state-waiting">Waiting for your OK</span>`
       + `<div class="memory-content">`
-      + `<div class="cron-when"><strong>More senders asked for, waiting for your OK</strong></div>`
-      + `<div class="cron-note">Something other than this form, most likely the AI in a chat, asked to let ${whom} reach Tarsee by email. Tarsee won't answer them until you OK it: until then it answers only the list below. This is the list you would OK:</div>`
-      + `<div class="cron-prompt">${asked.length ? esc(asked.join("\n")) : "(empty: any sender)"}</div>`
+      + `<div class="cron-when"><strong>Email changes waiting for your OK</strong></div>`
+      + `<div class="cron-note">Asked for by ${esc(by)}${esc(when)}. None of this is in force until you approve it: the form below shows what is.</div>`
+      + parts.join("")
       + `</div>`
       + `<span class="cron-actions">`
-      + `<button type="button" class="btn btn-sm btn-primary cron-toggle" data-email-allowlist-answer="approve">Let them in</button>`
-      + `<button type="button" class="btn btn-sm btn-secondary" data-email-allowlist-answer="decline">Keep my list</button>`
+      + `<button type="button" class="btn btn-sm btn-primary cron-toggle" data-email-waiting-answer="approve">Approve</button>`
+      + `<button type="button" class="btn btn-sm btn-secondary" data-email-waiting-answer="discard">Discard</button>`
       + `</span></div>`;
   },
 
-  /** Let them in (approve: the list the note showed) or Keep my list (decline), then the note and the list as they are now. */
-  async answerEmailAllowlist(answer, btn) {
+  /**
+   * Approve (the change the card showed) or Discard, then the card as it is now. Once approved, the parts of the form
+   * it changed show what is in force; the rest of the form may hold changes not saved yet, so it stays as it is.
+   */
+  async answerEmailWaiting(answer, btn) {
     const body = answer === "approve"
-      ? { type: "email", allowlistAnswer: "approve", allowlistSeen: this._emailAllowlistShown || [] }
-      : { type: "email", allowlistAnswer: "decline" };
+      ? { type: "email", waitingAnswer: "approve", waitingId: this._emailWaitingShown || "" }
+      : { type: "email", waitingAnswer: "discard" };
     if (btn) btn.disabled = true;
     let ok = false;
     try {
@@ -2562,7 +2585,7 @@ const Settings = {
       const data = await res.json().catch(() => ({}));
       ok = res.ok;
       if (ok) {
-        App.showToast(answer === "approve" ? "OK'd: those senders can reach Tarsee by email now." : "Kept your list: nobody new was let in.", "success");
+        App.showToast(answer === "approve" ? "Approved: it's in force now." : "Discarded: nothing was changed.", "success");
       } else {
         App.showToast(data.error || `Nothing was changed (HTTP ${res.status})`, "error");
         // The sign-in ran out and the page went on with the API token, which can't OK this: the sign-in screen.
@@ -2573,15 +2596,119 @@ const Settings = {
     } finally {
       if (btn) btn.disabled = false;
     }
-    // Only the note and, once OK'd, the list: the rest of the form may hold changes not saved yet. A list the AI
-    // changed after the note was drawn shows now, instead of being OK'd.
+    // A change made after the card was drawn shows now, instead of being approved.
     try {
-      const cfg = (await API.getSettings()).settings.find((s) => s.key === "channel.email")?.value || {};
-      if (ok && answer === "approve" && this.elements.emailAllowlist) {
-        this.elements.emailAllowlist.value = (cfg.allowlistFromAddresses || []).join("\n");
-      }
-      this.renderEmailAllowlistWaiting(cfg);
+      const settings = (await API.getSettings()).settings;
+      const cfg = settings.find((s) => s.key === "channel.email")?.value || {};
+      if (ok && answer === "approve") this._emailShowInForce(cfg);
+      this.renderEmailWaiting(cfg);
+      this.renderEmailSenderCheck(cfg, settings.find((s) => s.key === "channel.email-sender-note")?.value);
     } catch { /* keeps what is on screen */ }
+  },
+
+  /** The parts of the form an approval can change, as they are in force now. */
+  _emailShowInForce(cfg) {
+    const e = this.elements;
+    e.emailEnabled.checked = !!cfg.enabled;
+    for (const [side, port] of [["imap", 993], ["smtp", 465]]) {
+      const b = this._emailBoxes(side);
+      b.host.value = cfg[side]?.host || "";
+      b.port.value = cfg[side]?.port || "";
+      b.user.value = cfg[side]?.user || "";
+      this._emailSaved[side] = {
+        host: String(cfg[side]?.host || "").trim().toLowerCase(),
+        port: Number(cfg[side]?.port) || port,
+        user: String(cfg[side]?.user || "").trim(),
+        hasPassword: !!cfg[side]?.hasPassword,
+      };
+      this._emailPasswordHint(side);
+    }
+    e.emailAllowlist.value = (cfg.allowlistFromAddresses || []).join("\n");
+  },
+
+  /** What the owner trusts to say who sent a mail, for the IMAP host in force (email.js senderCheckFor). */
+  _emailSenderCheck(cfg) {
+    const s = cfg?.senderCheck || {};
+    const same = typeof s.imapHost === "string" && s.imapHost.trim().toLowerCase() === String(cfg?.imap?.host || "").trim().toLowerCase();
+    return { trustFromLine: same && s.trustFromLine === true, authservId: same && typeof s.authservId === "string" ? s.authservId : "" };
+  },
+
+  /**
+   * "Who really sent it", under the allowlist: anyone can write any address on a From line, so Tarsee answers an
+   * address on the list only when the mail provider vouches for it (email.js senderVouched). For a mail server of the
+   * owner's own: its name in its Authentication-Results line, or, if it checks nothing, "trust the From line" (off
+   * unless the owner ticks it), with what that means. Then the one-time note, if mail was refused for want of either.
+   */
+  renderEmailSenderCheck(cfg, note) {
+    const allow = this.elements.emailAllowlist;
+    const group = allow?.closest(".form-group");
+    if (!group) return;
+    let block = group.parentElement?.querySelector("[data-email-sender-check]");
+    if (!block) {
+      block = document.createElement("div");
+      block.dataset.emailSenderCheck = "";
+      block.innerHTML = `<h4 style="margin-top:18px; margin-bottom:8px;">Who really sent it</h4>`
+        + `<div class="hint mb-3">Anyone can write any address on a mail's From line. So Tarsee answers an address on your list only when your mail provider vouches that the mail really came from it: the provider's Authentication-Results line must say DMARC, DKIM or SPF passed for that address. Gmail, iCloud, Fastmail, Yahoo, Zoho and Microsoft 365 do this, and Tarsee knows how they write it.</div>`
+        + `<div class="form-group">`
+        + `<label for="settingsEmailAuthservId">Your own mail server's name in its Authentication-Results line</label>`
+        + `<input type="text" id="settingsEmailAuthservId" placeholder="mail.example.com" autocomplete="off" spellcheck="false">`
+        + `<div class="hint">Only for a mail server Tarsee doesn't know. Leave it empty for the providers above.</div>`
+        + `</div><div class="form-group">`
+        + `<label class="checkbox-label"><input type="checkbox" id="settingsEmailTrustFromLine"><span>My mail server doesn't check senders: trust the From line</span></label>`
+        + `<div class="hint" style="color: var(--warning)">Only for a mail server of your own that adds no Authentication-Results line. With this on, anyone who writes an address from your list on the From line can talk to Tarsee by email.</div>`
+        + `</div>`
+        + `<div data-email-sender-note hidden></div>`;
+      block.addEventListener("click", (ev) => {
+        if (ev.target.closest("[data-email-sender-note-ok]")) this.dismissEmailSenderNote(ev.target.closest("button"));
+      });
+      group.after(block);
+    }
+    const own = this._emailSenderCheck(cfg);
+    block.querySelector("#settingsEmailAuthservId").value = own.authservId;
+    block.querySelector("#settingsEmailTrustFromLine").checked = own.trustFromLine;
+
+    const box = block.querySelector("[data-email-sender-note]");
+    const host = String(cfg?.imap?.host || "").trim().toLowerCase();
+    const fresh = note && typeof note === "object" && !note.dismissedAt && String(note.host || "").trim().toLowerCase() === host && !own.trustFromLine;
+    if (!fresh) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    const esc = (s) => this._esc(s);
+    const when = Number.isNaN(Date.parse(note.at)) ? "" : ` on ${new Date(note.at).toLocaleString()}`;
+    const from = note.from ? ` from <strong>${esc(note.from)}</strong>` : "";
+    const why = note.provider
+      ? `${esc(note.provider)} wrote no Authentication-Results line on it that Tarsee could read, so nothing said who really sent it.`
+      : `your mail server (${esc(note.host)}) wrote no Authentication-Results line on it that Tarsee knows to trust, so nothing said who really sent it.`;
+    const what = note.seen
+      ? ` The topmost such line in it names <strong>${esc(note.seen)}</strong>. If that is your own mail server's name, type it in the box above; anyone can write such a line into a mail they send, so do this only if you know it is your server's.`
+      : note.provider ? "" : ` If your mail server doesn't check senders, tick "My mail server doesn't check senders" above.`;
+    box.hidden = false;
+    box.innerHTML = `<div class="memory-item cron-job" role="status">`
+      + `<span class="memory-badge cron-state cron-state-waiting">Mail not answered</span>`
+      + `<div class="memory-content"><div class="cron-note">Tarsee didn't answer mail${from}${esc(when)}: ${why}${what} Until then Tarsee won't answer such mail.</div></div>`
+      + `<span class="cron-actions"><button type="button" class="btn btn-sm btn-secondary" data-email-sender-note-ok>OK</button></span></div>`;
+  },
+
+  /** The owner's OK on the note: it is hidden for this server, until a change of server or trust (routes/settings.js). */
+  async dismissEmailSenderNote(btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const res = await API.request("/api/settings/channel", { method: "POST", body: { type: "email", senderNote: "dismiss" } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        App.showToast(data.error || `HTTP ${res.status}`, "error");
+        if (data.needsSignIn) API.signInAgain(data.error);
+        return;
+      }
+      const box = this.elements.emailAllowlist?.closest(".form-group")?.parentElement?.querySelector("[data-email-sender-note]");
+      if (box) { box.hidden = true; box.innerHTML = ""; }
+    } catch (err) {
+      App.showToast(err.message, "error");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   },
 
   applyEmailPreset(name) {
@@ -2643,6 +2770,12 @@ const Settings = {
         fromName: e.emailFromName.value.trim(),
         allowlistFromAddresses: parseAddrs(e.emailAllowlist.value),
       };
+      // Who really sent a mail: the owner's own (renderEmailSenderCheck), sent with every save.
+      const authservId = document.getElementById("settingsEmailAuthservId");
+      const trustFromLine = document.getElementById("settingsEmailTrustFromLine");
+      if (authservId && trustFromLine) {
+        payload.senderCheck = { trustFromLine: !!trustFromLine.checked, authservId: authservId.value.trim() };
+      }
 
       // Only include passwords if the user typed new ones — empty string means "keep existing"
       const imapPw = e.emailImapPassword.value;

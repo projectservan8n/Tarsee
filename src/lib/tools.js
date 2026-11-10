@@ -1007,10 +1007,21 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       }
 
       case "exec": {
-        const { command, timeout_ms } = toolInput;
+        const { command, timeout_ms } = toolInput || {};
+        if (typeof command !== "string" || !command.trim()) return "exec refused: command is the shell command to run, as text. Nothing was run.";
+        if (timeout_ms != null && (typeof timeout_ms !== "number" || !Number.isFinite(timeout_ms) || timeout_ms < 0)) return "exec refused: timeout_ms is a number of milliseconds. Nothing was run.";
         const timeout = Math.min(timeout_ms || 60_000, 120_000);
-        // Split command for runCmd
-        const result = await runCmd("sh", ["-c", command], { timeoutMs: timeout });
+        // The command gets the environment the AI's own shell gets (ai/engine-env.js), never the server's: no sign-in or
+        // provider key, none of Tarsee's secrets, and none of Tarsee's own keys (the Railway token), even one set as a
+        // Railway variable; plus the vault's keys for scripts (ai/agent-env.js), with none while get_key is denied.
+        const [{ baseEnv, finalizeEnv }, { agentVaultEnv }, { getSecurityManager }] = await Promise.all([
+          import("../ai/engine-env.js"), import("../ai/agent-env.js"), import("./security-manager.js"),
+        ]);
+        const denied = () => { try { return getSecurityManager(ctx.settingsStore).getToolPermission("get_key") === "always_deny"; } catch { return false; } };
+        let vaultEnv = {};
+        try { vaultEnv = agentVaultEnv({ env: baseEnv(process.env), denied }); } catch { /* the vault can't be read: no vault keys */ }
+        const env = finalizeEnv({ env: process.env, vaultEnv });
+        const result = await runCmd("sh", ["-c", command], { timeoutMs: timeout, env });
         const output = truncate(result.output || "(no output)", MAX_RESULT);
         return `Exit code: ${result.code}\n${output}`;
       }
@@ -1589,19 +1600,26 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       }
 
       case "get_key": {
-        const { name: keyName } = toolInput;
+        const { name: rawName } = toolInput || {};
         try {
-          const { getKey, serverOnlyName, serverOnlyTool, serverOnlyValues } = await import("./key-vault.js");
+          const { getKey, keyNameRefusal, serverOnlyName, serverOnlyTool, serverOnlyValues } = await import("./key-vault.js");
+          // The name's type before anything else: a list or an object turns into text when used as a property name
+          // (["RAILWAY_API_TOKEN"] is RAILWAY_API_TOKEN), so it would skip the check below. Every refusal starts
+          // "get_key refused: ", which ai/tarsee-mcp.js marks as an error.
+          if (typeof rawName !== "string") return `get_key refused: ${keyNameRefusal(rawName)}`;
           // Tarsee's own keys (key-vault.js SERVER_ONLY_KEYS: the Railway token) never come back, by any spelling of
           // the name, nor a copy saved under another name: with one, a command could skip every limit of the tool
           // that uses it.
-          const own = serverOnlyName(keyName);
+          const own = serverOnlyName(rawName);
+          const keyName = own || rawName.trim();
           const never = (name) => `${name} is Tarsee's own; use ${serverOnlyTool(name)}. It is never handed out, to get_key or to your commands, so that tool's limits hold; what it won't do, the owner does by hand.`;
-          if (own) return never(own);
+          if (own) return `get_key refused: ${never(own)}`;
+          const badName = keyNameRefusal(keyName);
+          if (badName) return `get_key refused: ${badName}`;
           const value = getKey(keyName);
           if (!value) return `Key "${keyName}" not found in vault. Use list_keys to see available keys.`;
           const copyOf = serverOnlyValues().get(String(value).trim());
-          if (copyOf) return `"${keyName}" holds the same value as ${copyOf}. ${never(copyOf)}`;
+          if (copyOf) return `get_key refused: "${keyName}" holds the same value as ${copyOf}. ${never(copyOf)}`;
           return value;
         } catch (err) {
           return `get_key error: ${err.message}`;
@@ -1609,15 +1627,28 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       }
 
       case "set_key": {
-        const { name: skName, value: skValue, description: skDesc } = toolInput;
+        const { name: rawName, value: skValue, description: skDesc } = toolInput || {};
         try {
-          const { setKey, serverOnlyName, serverOnlyTool, serverOnlyWriteRefusal } = await import("./key-vault.js");
-          // One of Tarsee's own keys is saved from chat only while Tarsee has none yet (how owners give it the Railway
-          // token today), under the name Tarsee reads; replacing it is the owner's, in Settings > Keys.
-          const own = serverOnlyName(skName);
+          const { setKey, keyNameRefusal, serverOnlyName, serverOnlyTool, serverOnlyWriteRefusal } = await import("./key-vault.js");
+          // The name's type before anything else (see get_key); then its shape, the value and the description. Every
+          // refusal starts "set_key refused: ", and anything but the saved answer is marked as an error (ai/tarsee-mcp.js).
+          if (typeof rawName !== "string") return `set_key refused: ${keyNameRefusal(rawName)} Nothing was saved.`;
+          const own = serverOnlyName(rawName);
+          const keyName = own || rawName.trim();
+          const badName = keyNameRefusal(keyName);
+          if (badName) return `set_key refused: ${badName} Nothing was saved.`;
+          if (typeof skValue !== "string" || !skValue) return "set_key refused: value is the key's value, as text, and it can't be empty. Nothing was saved.";
+          if (skDesc != null && typeof skDesc !== "string") return "set_key refused: description is text. Nothing was saved.";
+          // One of Tarsee's own keys is saved from a chat only while Tarsee has none yet (how owners give it the
+          // Railway token today), under the name Tarsee reads; replacing it is the owner's, in Settings > Keys. Never
+          // from background work (a scheduled task, its direct action, the heartbeat, BOOT.md): nobody is there to
+          // have given it.
+          if (own && ctx.background) {
+            return `set_key refused: ${own} is Tarsee's own key, and background work (a scheduled task, the heartbeat, BOOT.md) never saves it: the first one comes from a chat with the owner, and after that only the owner changes it, in Settings > Keys. Nothing was saved.`;
+          }
           const refused = own && serverOnlyWriteRefusal(own);
-          if (refused) return refused;
-          const result = setKey(own || skName, skValue, skDesc);
+          if (refused) return `set_key refused: ${refused}`;
+          const result = setKey(keyName, skValue, skDesc || "");
           if (own) return `Key "${own}" saved securely. It is Tarsee's own: ${serverOnlyTool(own)} uses it, and get_key and your commands never get it. Only the owner can replace or delete it now, in Settings > Keys, which is also the place to save it next time, so it never goes through a chat.`;
           return `Key "${result.name}" saved securely (masked: ${result.masked}). Description: ${result.description || "none"}`;
         } catch (err) {
@@ -1640,12 +1671,19 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       }
 
       case "delete_key": {
-        const { name: dkName } = toolInput;
+        const { name: rawName } = toolInput || {};
         try {
-          const { deleteKey, serverOnlyWriteRefusal } = await import("./key-vault.js");
+          const { deleteKey, keyNameRefusal, serverOnlyName, serverOnlyWriteRefusal } = await import("./key-vault.js");
+          // The name's type before anything else (see get_key), then its shape. Every refusal starts "delete_key
+          // refused: ", and anything but the deleted answer is marked as an error (ai/tarsee-mcp.js).
+          if (typeof rawName !== "string") return `delete_key refused: ${keyNameRefusal(rawName)} Nothing was deleted.`;
+          const own = serverOnlyName(rawName);
+          const dkName = own || rawName.trim();
+          const badName = keyNameRefusal(dkName);
+          if (badName) return `delete_key refused: ${badName} Nothing was deleted.`;
           // Deleting one of Tarsee's own keys is the owner's, in Settings > Keys.
           const refused = serverOnlyWriteRefusal(dkName, { deleting: true });
-          if (refused) return refused;
+          if (refused) return `delete_key refused: ${refused}`;
           const deleted = deleteKey(dkName);
           return deleted ? `Key "${dkName}" deleted from vault.` : `Key "${dkName}" not found.`;
         } catch (err) {
@@ -1698,11 +1736,13 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
         // Partial update: only the keys passed are written, the rest stay as saved.
         // The AI may be steered by a page or a message it read, so the mailbox passwords only ever go to the server
         // they were saved for: a call that changes a side's host, port, user or secure setting must carry that side's
-        // password itself, and a server it sets up is never logged in to in plain text. Nor does it let more senders
-        // reach the AI by email on its own: a wider allowlist waits for the owner's OK (test/email-config-tool.test.js).
-        // The owner's own save in Settings > Channels > Email is not this tool; both go by src/channels/email.js's rules.
+        // password itself, and a server it sets up is never logged in to in plain text. Nor does it change who can
+        // reach the AI by email, or where its mail goes, on its own: turning email on, another IMAP or SMTP host or user,
+        // and a wider allowlist are saved as waiting for the owner's OK in Settings > Channels > Email, not put in force
+        // (src/channels/email.js holdForOwner; test/email-config-tool.test.js). It never touches the owner's own list or
+        // what the owner trusts to say who sent a mail. The owner's own save in Settings is not this tool.
         if (!ctx.settingsStore) return "configure_email_channel error: settings store unavailable";
-        const { mailServerOf, mailServerChanges, proposeAllowlist, allowlistWidening, ownerAllowlistOf } = await import("../channels/email.js");
+        const { mailServerOf, mailServerChanges, holdForOwner, waitingSummary } = await import("../channels/email.js");
         const prev = ctx.settingsStore.get("channel.email") || {};
         const input = toolInput || {};
         const problems = [];
@@ -1752,51 +1792,52 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           const tlsFromStart = side === "imap" ? next.secure : next.secure && next.port === 465;
           servers[side] = { ...next, password: password || "", ...(tlsFromStart ? {} : { requireTLS: true }) };
         }
-        // Who can reach the AI by email. A list that lets in anyone the owner hasn't allowed (an address they didn't put
-        // on it in Settings, or an empty list, which lets any sender in) waits for the owner's OK in Settings > Channels >
-        // Email, and the list in force stays. A narrower list, or one of addresses the owner allowed, goes straight in.
-        let allowlist = null;
+        // Who can reach the AI by email (an empty list lets any sender in).
+        let allowlist;
         if (input.allowlistFromAddresses != null) {
           const asked = input.allowlistFromAddresses;
           if (!Array.isArray(asked) || asked.some((a) => typeof a !== "string")) {
             problems.push("allowlistFromAddresses must be a list of email addresses (an empty list lets any sender in).");
           } else {
-            allowlist = proposeAllowlist(prev, asked, "ai");
+            allowlist = asked;
           }
         }
         if (problems.length) return `configure_email_channel error: ${problems.join(" ")} Nothing was saved.`;
-        const owner = allowlist ? allowlist.allowlistOwner : prev.allowlistOwner;
-        const waiting = allowlist ? allowlist.allowlistWaiting : prev.allowlistWaiting;
 
-        const merged = {
-          enabled: input.enabled !== undefined ? !!input.enabled : (prev.enabled ?? false),
+        // The call's changes on what is saved (a field this tool doesn't know, such as a signature, stays), then what
+        // of it waits for the owner instead of going in force.
+        const { cfg: merged, held } = holdForOwner(prev, {
+          ...prev,
+          enabled: input.enabled !== undefined ? input.enabled === true : prev.enabled === true,
           tarseeEmailAddress: input.tarseeEmailAddress ?? prev.tarseeEmailAddress ?? (input.imap?.user ?? prev.imap?.user ?? ""),
           fromName: input.fromName ?? prev.fromName ?? "Tarsee",
           defaultSubject: input.defaultSubject ?? prev.defaultSubject ?? "Tarsee",
           mentionKeyword: input.mentionKeyword ?? prev.mentionKeyword ?? "tarsee",
           replyAllMarker: input.replyAllMarker ?? prev.replyAllMarker ?? "[reply-all]",
-          allowlistFromAddresses: allowlist ? allowlist.allowlistFromAddresses : (prev.allowlistFromAddresses || []),
-          // The owner's list changes only with their save or OK in Settings (routes/settings.js): this tool just notes it
-          // the first time, from the list in force. What waits is the latest wider list asked for.
-          ...(Array.isArray(owner) ? { allowlistOwner: owner } : {}),
-          ...(waiting ? { allowlistWaiting: waiting } : {}),
+          allowlistFromAddresses: allowlist ?? (Array.isArray(prev.allowlistFromAddresses) ? prev.allowlistFromAddresses : []),
           imap: servers.imap,
           smtp: servers.smtp,
-        };
+        }, {
+          enabled: input.enabled !== undefined,
+          imap: input.imap != null,
+          smtp: input.smtp != null,
+          allowlist: allowlist !== undefined,
+        }, "ai");
         ctx.settingsStore.set("channel.email", merged);
 
-        // A wider allowlist waits for the owner: say so, and whom it would let in, so the AI tells the owner instead of
-        // saying it is done.
-        const waitingFor = waiting && allowlistWidening(waiting.addresses, ownerAllowlistOf(merged));
-        const waitingNote = waitingFor
+        // What waits for the owner: say so, and what it is, so the AI tells the owner instead of saying it is done.
+        const waits = waitingSummary(merged);
+        const waitingNote = waits.length
           ? [
             "",
-            `${allowlist?.allowlistWaiting ? "The new allowlist" : "An allowlist asked for earlier"} waits for the owner's OK in Settings > Channels > Email: it would let ${waitingFor.anyone ? "any sender (an empty list)" : waitingFor.added.join(", ")} reach you by email, which the owner hasn't allowed. Until the owner OKs it there, Tarsee answers only the allowlist in force. Tell the owner it is waiting for them; you can't OK it yourself.`,
+            `${held.length ? "Not in force yet" : "Still not in force, from an earlier call"}: this waits for the owner's OK in Settings > Channels > Email:`,
+            ...waits.map((line) => `  - ${line}`),
+            "Until the owner OKs it there, Tarsee goes on with the settings in force above. Tell the owner it is waiting for them; you can't OK it yourself.",
           ]
           : [];
 
         // Restart the channel if fully configured + enabled.
-        if (merged.enabled && merged.imap.host && merged.imap.user && merged.smtp.host && merged.smtp.user) {
+        if (merged.enabled && merged.imap?.host && merged.imap?.user && merged.smtp?.host && merged.smtp?.user) {
           if (ctx.channelManager) {
             try { await ctx.channelManager.restart("email"); }
             catch (err) { return [`Email saved, but restart failed: ${err.message}`, ...waitingNote].join("\n"); }
@@ -1812,18 +1853,24 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
           if (s.secure !== false && (side === "imap" || Number(s.port) === 465)) return "TLS";
           return s.requireTLS ? "STARTTLS, TLS required" : "STARTTLS when the server offers it";
         };
-        const allowlistSummary = merged.allowlistFromAddresses.length
-          ? `${merged.allowlistFromAddresses.length} address${merged.allowlistFromAddresses.length === 1 ? "" : "es"} (${merged.allowlistFromAddresses[0]}${merged.allowlistFromAddresses.length > 1 ? ", …" : ""})`
-          : "empty — WARNING: allows any sender";
+        const list = merged.allowlistFromAddresses;
+        const allowlistSummary = list.length
+          ? `${list.length} address${list.length === 1 ? "" : "es"} (${list[0]}${list.length > 1 ? ", …" : ""})`
+          : merged.enabled ? "empty — WARNING: allows any sender" : "empty";
+        const serverLine = (side) => {
+          const s = mailServerOf(side, merged[side]);
+          if (!s.host) return "(not set)";
+          return `${s.host}:${s.port} as ${s.user || "(not set)"} (password ${maskPw(merged[side]?.password)}, ${tlsOf(side, merged[side])})`;
+        };
         return [
-          "✓ Email channel configured:",
+          "✓ Email channel settings in force:",
           `  Mailbox:     ${merged.tarseeEmailAddress || "(not set)"}`,
-          `  IMAP:        ${merged.imap.host || "(not set)"}:${merged.imap.port} as ${merged.imap.user || "(not set)"} (password ${maskPw(merged.imap.password)}, ${tlsOf("imap", merged.imap)})`,
-          `  SMTP:        ${merged.smtp.host || "(not set)"}:${merged.smtp.port} as ${merged.smtp.user || "(not set)"} (password ${maskPw(merged.smtp.password)}, ${tlsOf("smtp", merged.smtp)})`,
+          `  IMAP:        ${serverLine("imap")}`,
+          `  SMTP:        ${serverLine("smtp")}`,
           `  Mention:     @${merged.mentionKeyword}`,
           `  Reply-all:   ${merged.replyAllMarker}`,
           `  Allowlist:   ${allowlistSummary}`,
-          `  Enabled:     ${merged.enabled ? "yes — IMAP IDLE connecting…" : "no"}`,
+          `  Enabled:     ${merged.enabled ? "yes — IMAP IDLE connecting…" : merged.waiting?.enabled ? "no (turning it on waits for the owner's OK)" : "no"}`,
           ...waitingNote,
         ].join("\n");
       }

@@ -5,6 +5,12 @@ import { appendDailyLog } from "./workspace-files.js";
 import { resolveModelAlias, isKnownModel, BACKGROUND_DEFAULTS } from "../config/constants.js";
 import { runBackgroundTurn, resolveBackgroundModel, overBudgetWarning } from "./background-turn.js";
 import config from "../config/env.js";
+import { z } from "zod";
+import { getToolDefinitions } from "./tools.js";
+import { createTarseeMcp } from "../ai/tarsee-mcp.js";
+import { getAllKeysDecrypted, serverOnlyName, serverOnlyValues } from "./key-vault.js";
+import { TARSEE_SECRETS, PROVIDER_KEY_NAMES } from "../ai/engine-env.js";
+import { redactSecrets } from "./redact.js";
 
 /**
  * Cron job scheduler — run AI tasks on a schedule.
@@ -610,13 +616,21 @@ async function runOnce(job) {
   const now = new Date().toISOString();
 
   // --- Direct action: execute tool immediately without AI ---
-  if (job.action?.tool) {
-    console.log(`[cron] Running direct action "${job.id}": ${job.action.tool}(${JSON.stringify(job.action.args).slice(0, 100)})`);
+  // Checked again before every run, as when it was saved (checkDirectAction): one saved by an older version, or changed
+  // where it is saved, runs only if it fits, and then exactly as checked.
+  if (job.action != null) {
+    const checked = checkDirectAction(job.action);
+    if (checked.problem) {
+      console.warn(`[cron] Direct action "${job.id}" not run: ${checked.problem}`);
+      return { error: `Not run: ${checked.problem}` };
+    }
+    const shown = shownDirectAction(checked.action);
+    console.log(`[cron] Running direct action "${job.id}": ${shown.tool}(${JSON.stringify(shown.args).slice(0, 200)})`);
     try {
       const { executeTool } = await import("./tools.js");
       // Background work, as a prompt task's turn is (ai/turn.js): schedule_task refuses in it, so a task never makes tasks.
       const toolCtx = { db: _db, settingsStore: _settingsStore, conversationId: null, channelManager: _channelManager, background: "cron" };
-      const result = await executeTool(job.action.tool, job.action.args || {}, toolCtx);
+      const result = await executeTool(checked.action.tool, checked.action.args, toolCtx);
       console.log(`[cron] Direct action "${job.id}" completed: ${result.slice(0, 100)}`);
       appendDailyLog(`[cron:${job.id}] ${result.slice(0, 200)}`);
 
@@ -721,6 +735,262 @@ function saveCronJobs(jobs) {
   _settingsStore.set("cron.jobs", JSON.stringify(jobs));
 }
 
+// --- A direct action's args -----------------------------------------------------------------------------------------
+
+/*
+ * A task's direct action is { tool, args }: a tool lib/tools.js runs (executeTool) with no AI. Its args are checked
+ * against that tool's own inputs when the task is saved (addCronJob) and again before every run (runOnce), and what
+ * doesn't fit is refused. They used to go through unchecked, so a paused "Refresh Stripe key" task could run set_key
+ * with the name ["RAILWAY_API_TOKEN"], a list, which JavaScript turns into "RAILWAY_API_TOKEN" as a property name, past
+ * the check on Tarsee's own keys. A tool's inputs are lib/tools.js's definition of it, the names executeTool reads
+ * (remember takes fact, not the MCP tool's content), else, for a tool only the MCP server has, its shape there
+ * (ai/tarsee-mcp.js, whose handlers pass those args through unchanged). Only the inputs named there are taken, so what
+ * the owner sees is all that runs. Besides fitting:
+ *   - get_key never runs as one: its answer, a key's value, would be written to the daily log and the chat;
+ *   - set_key and delete_key never name one of Tarsee's own keys (key-vault.js SERVER_ONLY_KEYS), not even for a
+ *     first save: nobody is in a chat to have given it.
+ * /cron list and Settings' task list show the tool and its args with every secret masked (shownDirectAction).
+ */
+
+let inputsByTool = null;
+
+/** Each tool's inputs (JSON Schema), by the name executeTool runs it under, read once. */
+function toolInputs() {
+  if (inputsByTool) return inputsByTool;
+  const map = new Map();
+  try {
+    for (const t of createTarseeMcp({}, { quiet: true, toolsOnly: true })) {
+      if (typeof t?.name !== "string" || !t.name.startsWith("tarsee_")) continue;
+      try { map.set(t.name.slice("tarsee_".length), z.toJSONSchema(z.object(t.inputSchema))); } catch { /* none in JSON: lib/tools.js's, if it has one */ }
+    }
+  } catch (err) {
+    console.warn(`[cron] the MCP tools' inputs could not be read: ${err.message}`);
+  }
+  for (const d of getToolDefinitions()) map.set(d.name, d.input_schema);
+  inputsByTool = map;
+  return map;
+}
+
+/** The inputs (JSON Schema) a direct action of `tool` is checked against, or null when no tool has that name. */
+export function directActionInputs(tool) {
+  return typeof tool === "string" ? toolInputs().get(tool) ?? null : null;
+}
+
+const plainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+
+/** A value's kind, in words. */
+function kindOf(v) {
+  if (v === undefined) return "missing";
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "a list";
+  if (typeof v === "string") return "text";
+  if (typeof v === "number") return "a number";
+  if (typeof v === "boolean") return "true or false";
+  return plainObject(v) ? "an object" : `a ${typeof v}`;
+}
+
+/** A value as a refusal names it: text quoted (cut), anything else by its kind. */
+const shownGiven = (v) => (typeof v === "string" ? JSON.stringify(v.length > 40 ? `${v.slice(0, 40)}…` : v) : kindOf(v));
+
+/** A tool's name as a refusal shows it: as it is when it is a plain name, else quoted. */
+const toolWord = (tool) => (/^[A-Za-z0-9_]{1,64}$/.test(tool) ? tool : JSON.stringify(String(tool).slice(0, 64)));
+
+const TYPE_WORDS = { string: "text", number: "a number", integer: "a whole number", boolean: "true or false", array: "a list", object: "an object", null: "null" };
+
+/** What a schema takes, in words: "text", "a list of text", "text or a list of text", one of "a", "b". */
+function takesWords(schema) {
+  if (!plainObject(schema)) return "anything";
+  const alts = schema.anyOf || schema.oneOf;
+  if (Array.isArray(alts)) return alts.map(takesWords).join(" or ");
+  if (Array.isArray(schema.enum)) return `one of ${schema.enum.map((e) => JSON.stringify(e)).join(", ")}`;
+  if (schema.const !== undefined) return JSON.stringify(schema.const);
+  const types = schema.type === undefined ? (schema.properties ? ["object"] : []) : [].concat(schema.type);
+  if (!types.length) return "anything";
+  return types.map((t) => {
+    if (t === "array" && plainObject(schema.items) && takesWords(schema.items) !== "anything") return `a list of ${takesWords(schema.items)}`;
+    return TYPE_WORDS[t] || t;
+  }).join(" or ");
+}
+
+/** Whether value is of the schema's type (no type: anything). */
+function typeMatches(schema, value) {
+  const types = schema.type === undefined ? (schema.properties ? ["object"] : null) : [].concat(schema.type);
+  if (!types) return true;
+  return types.some((t) => {
+    if (t === "string") return typeof value === "string";
+    if (t === "number") return typeof value === "number" && Number.isFinite(value);
+    if (t === "integer") return Number.isInteger(value);
+    if (t === "boolean") return typeof value === "boolean";
+    if (t === "array") return Array.isArray(value);
+    if (t === "object") return plainObject(value);
+    return t === "null" && value === null;
+  });
+}
+
+/** Why value doesn't fit schema (where: its path, like imap.port), or null. JSON Schema as lib/tools.js and zod write it. */
+function fitProblem(schema, value, where) {
+  if (!plainObject(schema)) return null;
+  const alts = schema.anyOf || schema.oneOf;
+  if (Array.isArray(alts)) {
+    if (alts.some((s) => fitProblem(s, value, where) === null)) return null;
+    // A list given where a list of text is one of the forms: that form's own problem, which names the item.
+    const ofKind = alts.filter((s) => plainObject(s) && typeMatches(s, value));
+    if (ofKind.length === 1) return fitProblem(ofKind[0], value, where);
+    return `${where} must be ${takesWords(schema)}, not ${kindOf(value)}`;
+  }
+  if (Array.isArray(schema.enum)) {
+    return schema.enum.some((e) => e === value) ? null : `${where} must be ${takesWords(schema)}, not ${shownGiven(value)}`;
+  }
+  if (schema.const !== undefined && value !== schema.const) return `${where} must be ${JSON.stringify(schema.const)}, not ${shownGiven(value)}`;
+  if (!typeMatches(schema, value)) return `${where} must be ${takesWords(schema)}, not ${kindOf(value)}`;
+  if (Array.isArray(value)) {
+    if (!plainObject(schema.items)) return null;
+    for (let i = 0; i < value.length; i++) {
+      const problem = fitProblem(schema.items, value[i], `${where}[${i}]`);
+      if (problem) return problem;
+    }
+    return null;
+  }
+  return plainObject(value) ? objectProblem(schema, value, where) : null;
+}
+
+/**
+ * Why an object doesn't fit: an input the inputs don't name, one of the wrong kind, or a required one missing (in that
+ * order, so remember given content says content isn't one of its inputs, before fact is missing).
+ */
+function objectProblem(schema, value, where) {
+  const props = plainObject(schema.properties) ? schema.properties : null;
+  const at = (k) => (where ? `${where}.${k}` : k);
+  const given = givenProblem(schema, props, value, at);
+  if (given) return given;
+  for (const k of Array.isArray(schema.required) ? schema.required : []) {
+    if (!Object.hasOwn(value, k)) return `${at(k)} is required`;
+  }
+  return null;
+}
+
+/** objectProblem's first part: each input given, against what the inputs say of it. */
+function givenProblem(schema, props, value, at) {
+  for (const [k, v] of Object.entries(value)) {
+    if (props && Object.hasOwn(props, k)) {
+      const problem = fitProblem(props[k], v, at(k));
+      if (problem) return problem;
+      continue;
+    }
+    const extra = schema.additionalProperties;
+    if (plainObject(extra)) {
+      const problem = fitProblem(extra, v, at(k));
+      if (problem) return problem;
+      continue;
+    }
+    // An object whose inputs name nothing (web_fetch's headers) takes any; one that names them takes only those.
+    if (extra === true || (!props && extra === undefined)) continue;
+    return `${at(k)} isn't one of its inputs`;
+  }
+  return null;
+}
+
+/** "set_key takes name (text, required), value (text, required), description (text)." */
+function usageOf(tool, schema) {
+  const props = plainObject(schema?.properties) ? Object.entries(schema.properties) : [];
+  if (!props.length) return `${toolWord(tool)} takes no args.`;
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  return `${toolWord(tool)} takes ${props.map(([k, s]) => `${k} (${takesWords(s)}${required.has(k) ? ", required" : ""})`).join(", ")}.`;
+}
+
+/**
+ * A direct action, checked: { action: { tool, args } } (args as plain data, exactly what is saved and run), or
+ * { problem }, a refusal in plain words that starts in lower case. See the block comment above for the rules.
+ */
+export function checkDirectAction(action) {
+  if (!plainObject(action) || typeof action.tool !== "string" || !action.tool || Object.keys(action).some((k) => k !== "tool" && k !== "args")) {
+    return { problem: `an action is { tool, args }: the name of the tool to run and an object of its args, like {"tool":"send_message","args":{"channel":"web","message":"Hello"}}.` };
+  }
+  const { tool } = action;
+  const schema = directActionInputs(tool);
+  if (!schema) return { problem: `there is no tool named ${toolWord(tool)} for a scheduled task to run.` };
+  if (tool === "get_key") {
+    return { problem: "get_key never runs as a scheduled action: its answer, a key's value, would be written to the daily log and the chat in plain text. A script reads a key from its environment by the key's name instead." };
+  }
+  let args;
+  try {
+    args = action.args === undefined ? {} : JSON.parse(JSON.stringify(action.args));
+  } catch {
+    return { problem: `the action's args are plain data (text, numbers, true or false, lists and objects). ${usageOf(tool, schema)}` };
+  }
+  if (!plainObject(args)) return { problem: `the action's args are an object of ${toolWord(tool)}'s inputs, not ${kindOf(args)}. ${usageOf(tool, schema)}` };
+  const misfit = objectProblem(schema, args, "");
+  if (misfit) return { problem: `the action's args don't fit ${toolWord(tool)}: ${misfit}. ${usageOf(tool, schema)}` };
+  const own = (tool === "set_key" || tool === "delete_key") ? serverOnlyName(args.name) : null;
+  if (own) return { problem: `a scheduled action never writes ${own}: it is Tarsee's own key, and only the owner replaces or deletes it, in Settings > Keys.` };
+  return { action: { tool, args } };
+}
+
+// --- What a direct action runs, as the owner sees it ------------------------------------------------------------------
+
+const SECRET_SHOWN = "[secret, not shown]";
+/** An input named like this holds a secret, whatever the tool (configure_email_channel's passwords, a header). */
+const SECRET_INPUT = /pass(?:word|phrase)?|secret|token|api[-_]?key|access[-_]?key|private[-_]?key|authorization|cookie|credential/i;
+/** Inputs that hold a secret whatever their name says. */
+const SECRET_INPUTS = { set_key: new Set(["value"]) };
+/** The most of one text value shown; the rest is counted. */
+const SHOWN_MAX = 300;
+
+/** The secret values a direct action's args could carry, longest first: the vault's, and Tarsee's own in its environment. */
+function secretValuesNow() {
+  const out = new Set();
+  const add = (v) => {
+    const value = typeof v === "string" ? v.trim() : "";
+    if (value.length >= 8) out.add(value);
+  };
+  try { for (const v of Object.values(getAllKeysDecrypted())) add(v); } catch { /* the vault can't be read */ }
+  try { for (const v of serverOnlyValues().keys()) add(v); } catch { /* the vault can't be read */ }
+  for (const name of [...TARSEE_SECRETS, ...PROVIDER_KEY_NAMES]) add(process.env[name]);
+  return [...out].sort((a, b) => b.length - a.length);
+}
+
+/** Text with every secret in it masked (a vault value, a token's pattern: lib/redact.js), cut at SHOWN_MAX. */
+function maskText(text, secrets) {
+  let out = text;
+  for (const v of secrets) if (out.includes(v)) out = out.split(v).join(SECRET_SHOWN);
+  out = redactSecrets(out).split("[REDACTED]").join(SECRET_SHOWN);
+  return out.length > SHOWN_MAX ? `${out.slice(0, SHOWN_MAX)}… (${out.length - SHOWN_MAX} more characters)` : out;
+}
+
+/** A value with its secrets masked: all of it when secret (its input's name says so), else each text in it. */
+function maskValue(value, secret, secrets, depth) {
+  if (secret && value !== null && typeof value !== "boolean") return SECRET_SHOWN;
+  if (typeof value === "string") return maskText(value, secrets);
+  if (depth > 8 && value !== null && typeof value === "object") return "…";
+  if (Array.isArray(value)) return value.map((v) => maskValue(v, false, secrets, depth + 1));
+  if (plainObject(value)) {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = maskValue(v, SECRET_INPUT.test(k), secrets, depth + 1);
+    return out;
+  }
+  return value;
+}
+
+/**
+ * What a direct action runs, as /cron list, Settings' task list (getCronStatus: actionShown) and the server's log show
+ * it: { tool, args }, with set_key's value, every input named like a secret, every vault value and every token's
+ * pattern masked. Shown for any action, even one that no longer fits (one saved by an older version), so the owner
+ * sees what they would switch on. secrets: secretValuesNow(), read once by a caller showing many.
+ */
+export function shownDirectAction(action, { secrets = null } = {}) {
+  const list = secrets ?? secretValuesNow();
+  const tool = typeof action?.tool === "string" ? maskText(action.tool, list) : kindOf(action?.tool);
+  const raw = action?.args === undefined ? {} : action.args;
+  let args;
+  if (plainObject(raw)) {
+    args = {};
+    for (const [k, v] of Object.entries(raw)) args[k] = maskValue(v, SECRET_INPUT.test(k) || !!SECRET_INPUTS[tool]?.has(k), list, 1);
+  } else {
+    args = maskValue(raw, false, list, 1);
+  }
+  return { tool, args };
+}
+
 /**
  * Add a new cron job.
  *
@@ -729,8 +999,9 @@ function saveCronJobs(jobs) {
  * switched off and waiting for the owner's OK (awaitingOwner), with no timer until the owner switches it on: a caller
  * that doesn't say the owner made a task never starts paid runs. conversationId: the chat the AI made it in.
  *
- * A task that asks the AI (no action) must pass promptScheduleProblem. A direct action can't be schedule_task. Any
- * schedule must pass unsafeScheduleProblem before node-cron sees it.
+ * A task that asks the AI (no action) must pass promptScheduleProblem. A direct action can't be schedule_task, and
+ * must pass checkDirectAction: it is saved as exactly the { tool, args } that check passed. Any schedule must pass
+ * unsafeScheduleProblem before node-cron sees it.
  *
  * id: a fixed id the caller finds its own task by later (the morning briefing's cron_briefingam), taken only when no
  * saved task has it. Otherwise the task gets a new one (newJobId).
@@ -743,7 +1014,13 @@ export function addCronJob({ schedule, prompt, channel = "web:default", enabled 
   if (action?.tool === "schedule_task") {
     throw new Error("A task can't schedule more tasks: only the owner sets up scheduled tasks.");
   }
-  if (!action?.tool) {
+  let direct = null;
+  if (action != null) {
+    const checked = checkDirectAction(action);
+    if (checked.problem) throw new Error(`${checked.problem} Nothing was saved.`);
+    direct = checked.action;
+  }
+  if (!direct) {
     const problem = promptScheduleProblem(schedule);
     if (problem) throw new Error(problem);
   }
@@ -754,7 +1031,7 @@ export function addCronJob({ schedule, prompt, channel = "web:default", enabled 
   const newJob = { id, schedule, prompt: prompt || "", channel, enabled: byOwner ? enabled !== false : false, createdBy: byOwner ? "owner" : "ai" };
   if (!byOwner) newJob.awaitingOwner = true;
   if (!byOwner && conversationId) newJob.conversationId = conversationId;
-  if (action) newJob.action = action;
+  if (direct) newJob.action = direct;
   if (name) newJob.name = name;
   if (once) newJob.once = true;
   jobs.push(newJob);
@@ -841,17 +1118,22 @@ export function removeCronJob(id) {
  *   state       "running" (a run is going now), "waiting" (the AI made it; it waits for the owner's OK), "on", "off"
  *   scheduled   whether it has a timer
  *   running     whether a run is going now
+ *   actionShown for a task that runs a tool directly: { tool, args } to show, every secret masked (shownDirectAction).
+ *               action stays as saved, for the Switch on check (routes/settings.js sameAsSeen).
  */
 export function getCronStatus() {
   const jobs = loadCronJobs();
+  let secrets = null;   // read once, and only when a task runs a tool directly
   return {
     totalJobs: jobs.length,
     activeJobs: activeJobs.size,
     jobs: jobs.map((j) => {
       const state = jobState.get(j.id);
       const running = (runsGoing.get(j.id) || 0) > 0;
+      const shown = j.action != null ? { actionShown: shownDirectAction(j.action, { secrets: (secrets ??= secretValuesNow()) }) } : {};
       return {
         ...j,
+        ...shown,
         createdBy: j.createdBy || null,
         awaitingOwner: !!j.awaitingOwner,
         state: running ? "running" : j.awaitingOwner ? "waiting" : j.enabled ? "on" : "off",

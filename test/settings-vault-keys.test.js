@@ -263,13 +263,23 @@ describe("the owner's Settings > Keys", () => {
   });
 
   it("a key saved from chat under a name the form wouldn't take can still be replaced and deleted", async () => {
-    quiet(() => vault.setKey("my key", STRIPE));
+    // Saved by an older version, before the vault took only names of its shape: written straight into the file.
+    quiet(() => vault.setKey("MY_KEY", STRIPE));
+    const saved = JSON.parse(fs.readFileSync(VAULT_FILE, "utf8"));
+    saved["my key"] = saved.MY_KEY;
+    delete saved.MY_KEY;
+    fs.writeFileSync(VAULT_FILE, JSON.stringify(saved));
+    assert.equal(vault.getKey("my key"), STRIPE);
+    assert.throws(() => vault.setKey("my other key", STRIPE), /isn't a key's name/, "a new one of that shape isn't taken");
+    const refused = await save({ name: "my other key", value: STRIPE }, asOwner(createSession("127.0.0.1"), await freshCsrf()));
+    assert.equal(refused.status, 400, "nor from the form");
     const sessionId = createSession("127.0.0.1");
     const csrf = await freshCsrf();
     assert.equal((await save({ name: "my key", value: STRIPE_NEW }, asOwner(sessionId, csrf))).status, 200);
     assert.equal(vault.getKey("my key"), STRIPE_NEW);
     assert.equal((await remove("my key", asOwner(sessionId, csrf))).status, 200);
-    assert.equal(vault.getKey("my key"), null);
+    assert.ok(!vault.listKeys().some((k) => k.name === "my key"), "deleted");
+    assert.throws(() => vault.getKey("my key"), /isn't a key's name/, "and with it gone, the name is no key's");
   });
 });
 

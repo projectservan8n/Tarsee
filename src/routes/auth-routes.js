@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { validatePassword, createSession, destroySession, recordFailedAttempt, clearFailedAttempts, requireAuth, sessionCookieMaxAgeMs, rateLimitAuth, liveSessionId, signInKey } from "../middleware/auth.js";
+import { validatePassword, createSession, destroySession, startSignInAttempt, refuseUnrecorded, requireAuth, sessionCookieMaxAgeMs, rateLimitAuth, liveSessionId, signInKey } from "../middleware/auth.js";
 import { generateCsrfCookie } from "../middleware/security.js";
 import config from "../config/env.js";
 
@@ -43,10 +43,16 @@ authRouter.post("/login", rateLimitAuth, (req, res) => {
   // nor by a proxy TARSEE_TRUSTED_PROXY doesn't name. The log names the same place.
   const place = req.signInKey ?? signInKey(req);
 
+  // Counted as a wrong password, and saved to tarsee.db, before the password is checked. When that can't be saved (a
+  // full disk, a locked database), the try is turned away unchecked: a guess checked on a count kept only in memory
+  // would be forgotten by a restart. Anyone already signed in stays signed in.
+  const attempt = startSignInAttempt(place);
+  if (!attempt) return refuseUnrecorded(res);
+
   if (!validatePassword(password)) {
     const auditLog = req.app.get("auditLog");
     auditLog?.log({ action: "auth.login_failed", actor: "user", ip: place });
-    const pausedMs = recordFailedAttempt(place);
+    const pausedMs = attempt.wrong();
     if (pausedMs) {
       const minutes = Math.round(pausedMs / 60_000);
       auditLog?.log({ action: "auth.login_paused", actor: "system", ip: place, detail: `Too many wrong passwords from different places: signing in is paused for everyone for ${minutes} minutes` });
@@ -55,8 +61,8 @@ authRouter.post("/login", rateLimitAuth, (req, res) => {
     return res.status(401).json({ error: "Invalid password" });
   }
 
-  // Successful login — clear lockout
-  clearFailedAttempts(place);
+  // The right password: the try is taken back, and the place's wrong guesses are cleared.
+  attempt.right();
   const sessionId = createSession(req.ip || req.socket?.remoteAddress);
   const auditLog = req.app.get("auditLog");
   auditLog?.log({ action: "auth.login", actor: "user", ip: place });

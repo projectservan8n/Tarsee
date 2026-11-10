@@ -205,6 +205,131 @@ describe("tarsee_browser's launch: the browser's environment", () => {
     }
   });
 
+  it("a proxy setting with no user name goes in without its path, query or fragment too", () => {
+    const env = browserEnv({
+      PATH: "/usr/bin",
+      HTTPS_PROXY: "http://proxy.example:3128/pw-canary",
+      https_proxy: "http://proxy.example:3128/?token=pw-canary",
+      HTTP_PROXY: "http://proxy.example:3128#pw-canary",
+      http_proxy: "proxy.example:3128/pw-canary?token=pw-canary#pw-canary",
+      ALL_PROXY: "socks5://proxy.example:1080/pw-canary",
+      // The user name and password percent-encoded into what would be the host: no host at all, so it stays out.
+      all_proxy: "http://u%3Apw-canary%40proxy.example:3128",
+    }, "linux");
+    assert.deepEqual(env, {
+      PATH: "/usr/bin",
+      HTTPS_PROXY: "http://proxy.example:3128",
+      https_proxy: "http://proxy.example:3128",
+      HTTP_PROXY: "http://proxy.example:3128",
+      http_proxy: "proxy.example:3128",
+      ALL_PROXY: "socks5://proxy.example:1080",
+    });
+  });
+
+  it("a proxy's port goes in as it was written, even the scheme's own default", () => {
+    // Chromium reads the proxy from these without the scheme, as an http proxy (port 80 when none is given), so
+    // https://proxy:443 has to keep its 443.
+    for (const [value, expected] of [
+      ["https://proxy.example:443", "https://proxy.example:443"],
+      ["http://proxy.example:80", "http://proxy.example:80"],
+      ["http://proxy.example:0080/", "http://proxy.example:80"],
+      ["https://someone:pw-canary@proxy.example:443/", "https://proxy.example:443"],
+      ["https://proxy.example", "https://proxy.example"],
+      ["http://proxy.example/", "http://proxy.example"],
+      ["proxy.example:80", "proxy.example:80"],
+      ["proxy.example", "proxy.example"],
+      ["socks5://proxy.example", "socks5://proxy.example"],
+      ["socks5://proxy.example:1080", "socks5://proxy.example:1080"],
+      ["HTTP://Proxy.Example:3128", "http://proxy.example:3128"],
+      ["http://[2001:db8::1]:3128", "http://[2001:db8::1]:3128"],
+    ]) {
+      assert.deepEqual(browserEnv({ HTTPS_PROXY: value }, "linux"), { HTTPS_PROXY: expected }, value);
+    }
+  });
+
+  it("a proxy setting that doesn't read as a proxy's address stays out", () => {
+    for (const value of [
+      "", "   ", "not a proxy", "http://", "http://proxy.example:99999", "http://proxy.example:3128:3128",
+      // not a proxy's scheme
+      "ws://proxy.example:3128", "ftp://proxy.example:21", "file:///etc/passwd", "javascript://proxy.example:3128",
+      // a control character inside (the URL parser would quietly drop a tab or a newline and join what's around it)
+      "http://pro\nxy.example:3128", "http://proxy.example:3128\u0000", "http://proxy.ex\tample:3128", "ht\ttp://proxy.example:3128",
+      // a host no proxy has
+      "http://pro,xy.example:3128", "socks5://proxy%2Fexample:1080", "socks5://proxy!example:1080",
+    ]) {
+      assert.deepEqual(browserEnv({ PATH: "/usr/bin", HTTPS_PROXY: value, all_proxy: value }, "linux"), { PATH: "/usr/bin" }, JSON.stringify(value));
+    }
+  });
+
+  // Odd proxy values a reviewer tried (with pw-canary for the password): each goes in as its scheme, host and port,
+  // or stays out. undefined: it stays out.
+  const C = "pw-canary";
+  const ODD_PROXIES = [
+    [`http://u:${C}@proxy:3128`, "http://proxy:3128"],
+    [`http://proxy:3128/${C}`, "http://proxy:3128"],
+    [`http://proxy:3128/?token=${C}`, "http://proxy:3128"],
+    [`http://proxy:3128#${C}`, "http://proxy:3128"],
+    [`http://u:${C}%40x@proxy:3128`, "http://proxy:3128"],
+    [`http://u%3A${C}%40proxy:3128`, undefined],
+    [`http://u:${C}@proxy:3128@`, undefined],
+    [`http://u:${C}@@proxy:3128`, "http://proxy:3128"],
+    [`http://u:${C}@proxy:3128/a@b`, undefined], // an '@' after the host: where the password ends is unclear
+    [`http:/u:${C}@proxy:3128`, undefined],
+    [`http:\\u:${C}@proxy:3128`, undefined],
+    [`HTTP://u:${C}@proxy:3128`, "http://proxy:3128"],
+    [`http://u:${C}@pro\nxy:3128`, undefined],
+    [`http://u:${C}\n@proxy:3128`, undefined],
+    [`http://u:${C}\t@proxy:3128`, undefined],
+    [` http://u:${C}@proxy:3128`, "http://proxy:3128"],
+    [`http://u:${C}@proxy:3128 `, "http://proxy:3128"],
+    [`u:${C}@proxy:3128`, "proxy:3128"],
+    [`${C}@proxy:3128`, "proxy:3128"],
+    [`:${C}@proxy:3128`, "proxy:3128"],
+    [`socks5://u:${C}@proxy:1080`, "socks5://proxy:1080"],
+    [`socks5:/u:${C}@proxy:1080`, undefined],
+    [`socks5:u:${C}@proxy:1080`, "proxy:1080"],
+    [`socks5h://u:${C}@[::1]:1080`, "socks5h://[::1]:1080"],
+    [`http://[::1]:3128@${C}`, `http://${C}`], // the canary is the host here, by any reading: the proxy's address
+    [`http://u:p@${C}.proxy:3128`, `http://${C}.proxy:3128`], // and here
+    [`file://u:${C}@proxy/x`, undefined],
+    [`http://u:${C}@proxy:3128;x`, undefined],
+    [`u:${C}@proxy:3128/x://y`, "proxy:3128"],
+    [`//u:${C}@proxy:3128`, "proxy:3128"],
+    [`http://u:${C}@proxy:99999`, undefined],
+    [`http://u:${C}@1.2.3.4.5`, undefined],
+    [`http://u:${C}@%zz`, undefined],
+    [`http://u:${C}@xn--a`, undefined],
+    [`http://u:${C}@proxy:3128?x`, "http://proxy:3128"],
+    [`http://u:${C}@proxy%2F${C}:3128`, undefined],
+    [`http://u:${C}@proxy%40${C}:3128`, undefined],
+    [`http://u:${C}@pr@oxy:3128`, "http://oxy:3128"],
+    [`http://u:${C}@proxy:3128:3128`, undefined],
+    [`ws://u:${C}@proxy:3128`, undefined],
+    [`http://u:${C}@\u{1F642}.example:3128`, "http://xn--938h.example:3128"],
+    [`http://u:${C}@proxy:3128\u0000`, undefined],
+    [`http://u:${C}@proxy\u0000${C}:3128`, undefined],
+    [`http://u:${C}@proxy:3128 ${C}`, undefined],
+    [`"http://u:${C}@proxy:3128"`, undefined],
+    [`<http://u:${C}@proxy:3128>`, undefined],
+    [`http://u:${C}@proxy:3128,http://v:${C}@p2:3128`, undefined],
+  ];
+  const ADDRESS_ONLY = /^((https?|socks|socks4a?|socks5h?):\/\/)?(\[[0-9a-f:.]+\]|[a-z0-9_.-]+)(:\d{1,5})?$/i;
+
+  it("odd proxy values: each goes in as its scheme, host and port, or stays out, on every platform", () => {
+    assert.equal(ODD_PROXIES.length, 47);
+    for (const [value, expected] of ODD_PROXIES) {
+      const label = JSON.stringify(value);
+      for (const platform of ["linux", "darwin", "win32"]) {
+        const env = browserEnv({ HTTPS_PROXY: value, http_proxy: value, ALL_PROXY: value, all_proxy: value }, platform);
+        const want = expected === undefined ? {} : { HTTPS_PROXY: expected, http_proxy: expected, ALL_PROXY: expected, all_proxy: expected };
+        assert.deepEqual(env, want, `${platform}: ${label}`);
+      }
+      if (expected === undefined) continue;
+      assert.match(expected, ADDRESS_ONLY, label);
+      if (!value.includes(`@${C}`)) assert.ok(!expected.toLowerCase().includes(C), `${label}: no password`);
+    }
+  });
+
   it("only text values go in", () => {
     const env = browserEnv({ PATH: "/usr/bin", HOME: undefined, TMPDIR: 7 }, "linux");
     assert.deepEqual(env, { PATH: "/usr/bin" });
@@ -310,14 +435,14 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
     assert.equal((await launch(chromium)).sandboxed, true);
     await assert.rejects(launch(chromium), (e) => {
       assert.match(e.message, /sandbox/i);
-      assert.match(e.message, /earlier/, "it says the sandbox worked before");
+      assert.match(e.message, /has worked in this run/, "it says the sandbox worked before");
       assert.match(e.message, /Chromium sandboxing failed!/, "with Chromium's reason");
       assert.ok(e.cause instanceof Error, "and Playwright's error as the cause");
       return true;
     });
     assert.deepEqual(chromium.calls.map((c) => c.chromiumSandbox), [true, true], "nothing launched without the sandbox");
     assert.equal(logs.length, 1, "the refusal is logged");
-    assert.match(logs[0], /earlier/);
+    assert.match(logs[0], /has worked in this run/);
     assert.doesNotMatch(logs[0], /runs without it/);
     assert.equal((await launch(chromium)).sandboxed, true, "the next call tries the sandbox again, and has it");
     assert.equal(chromium.calls.length, 3);
@@ -391,6 +516,185 @@ describe("tarsee_browser's launch: without the sandbox only when the sandboxed l
     await assert.rejects(makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" })(chromium), (err) => err === second);
     assert.equal(chromium.calls.length, 2);
     assert.deepEqual(logs, []);
+  });
+});
+
+// --- Launches that overlap on one launcher --------------------------------------------------------------------------
+
+/**
+ * A stand-in for Playwright's `chromium` whose launches wait until the test settles each one: launches[i].ok() or
+ * launches[i].fail(err). Each browser counts its close() calls.
+ */
+function heldChromium() {
+  const launches = [];
+  return {
+    launches,
+    sandboxes: () => launches.map((l) => l.options.chromiumSandbox),
+    launch(options) {
+      return new Promise((resolve, reject) => {
+        const browser = { sandboxed: options.chromiumSandbox === true, closeCalls: 0, async close() { browser.closeCalls++; } };
+        launches.push({ options, browser, ok: () => resolve(browser), fail: reject });
+      });
+    },
+  };
+}
+const turn = () => new Promise((resolve) => setImmediate(resolve));
+
+describe("tarsee_browser's launch: launches that overlap on one launcher", () => {
+  it("the reviewer's case: a sandbox failure while a sandboxed launch is under way is thrown, not worked around", async () => {
+    const chromium = heldChromium();
+    const logs = [];
+    const launch = makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" });
+    const first = launch(chromium);
+    const second = launch(chromium);
+    await turn();
+    assert.deepEqual(chromium.sandboxes(), [true, true], "both ask for the sandbox");
+    chromium.launches[1].fail(sandboxError());
+    const refused = assert.rejects(second, (e) => {
+      assert.match(e.message, /while another launch with it was under way/);
+      assert.match(e.message, /Chromium sandboxing failed!/, "with Chromium's reason");
+      assert.ok(e.cause instanceof Error);
+      return true;
+    });
+    await turn();
+    assert.deepEqual(chromium.sandboxes(), [true, true], "nothing launched without the sandbox");
+    await refused;
+    chromium.launches[0].ok();
+    assert.equal((await first).sandboxed, true);
+    assert.equal(logs.length, 1, "the refusal is logged");
+    assert.doesNotMatch(logs[0], /runs without it/);
+  });
+
+  it("the same, with the reviewer's timing: the first launch takes longer and works", async () => {
+    let n = 0;
+    const chromium = {
+      calls: [],
+      async launch(options) {
+        this.calls.push(options.chromiumSandbox);
+        if (++n === 1) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          return { sandboxed: options.chromiumSandbox === true };
+        }
+        if (options.chromiumSandbox) throw sandboxError();
+        return { sandboxed: false };
+      },
+    };
+    const launch = makeBrowserLauncher({ log: () => {}, env: LINUX, platform: "linux" });
+    const results = await Promise.allSettled([launch(chromium), launch(chromium)]);
+    assert.deepEqual(results.map((r) => (r.status === "fulfilled" ? (r.value.sandboxed ? "sandbox" : "no sandbox") : "error")), ["sandbox", "error"]);
+    assert.deepEqual(chromium.calls, [true, true], "no launch without the sandbox");
+  });
+
+  it("once the launch under way fails too, the next sandbox failure may go on without it, as on a machine that can't sandbox", async () => {
+    const chromium = heldChromium();
+    const logs = [];
+    const launch = makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" });
+    const first = launch(chromium);
+    const second = launch(chromium);
+    await turn();
+    chromium.launches[1].fail(sandboxError());
+    const refused = assert.rejects(second, /under way/);
+    await turn();
+    assert.deepEqual(chromium.sandboxes(), [true, true], "no launch without the sandbox while the first is under way");
+    await refused;
+    chromium.launches[0].fail(sandboxError()); // no other launch under way now, and none has worked
+    await turn();
+    assert.deepEqual(chromium.sandboxes(), [true, true, false]);
+    chromium.launches[2].ok();
+    assert.equal((await first).sandboxed, false);
+    assert.equal(logs.length, 2);
+    assert.match(logs[1], /sandbox couldn't start/);
+  });
+
+  it("a browser started without the sandbox while another launch got it working is closed, not handed out", async () => {
+    const chromium = heldChromium();
+    const logs = [];
+    const launch = makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" });
+    const first = launch(chromium);
+    await turn();
+    chromium.launches[0].fail(sandboxError()); // nothing under way, nothing worked: it goes on without
+    await turn();
+    assert.deepEqual(chromium.sandboxes(), [true, false]);
+    const second = launch(chromium);
+    await turn();
+    chromium.launches[2].ok(); // the sandbox works for this one
+    assert.equal((await second).sandboxed, true);
+    chromium.launches[1].ok(); // and the first one's browser without it comes up after that
+    await assert.rejects(first, (e) => {
+      assert.match(e.message, /has worked in this run/);
+      assert.match(e.message, /Chromium sandboxing failed!/);
+      return true;
+    });
+    assert.equal(chromium.launches[1].browser.closeCalls, 1, "the browser without the sandbox is closed");
+    assert.equal(logs.length, 1, "the refusal is logged");
+    assert.doesNotMatch(logs[0], /runs without it/, "and nothing says the browser runs without it");
+  });
+
+  it("a browser started without the sandbox while a sandboxed launch is under way is closed too", async () => {
+    const chromium = heldChromium();
+    const logs = [];
+    const launch = makeBrowserLauncher({ log: (m) => logs.push(m), env: LINUX, platform: "linux" });
+    const first = launch(chromium);
+    await turn();
+    chromium.launches[0].fail(sandboxError());
+    await turn();
+    const second = launch(chromium);
+    await turn();
+    chromium.launches[1].ok(); // the first one's browser without the sandbox, while the second's launch is under way
+    await assert.rejects(first, /while another launch with it was under way/);
+    assert.equal(chromium.launches[1].browser.closeCalls, 1);
+    chromium.launches[2].fail(sandboxError()); // that one can't sandbox either, and nothing else is under way
+    await turn();
+    assert.deepEqual(chromium.sandboxes(), [true, false, true, false]);
+    chromium.launches[3].ok();
+    assert.equal((await second).sandboxed, false);
+    assert.equal(chromium.launches[3].browser.closeCalls, 0, "handed out");
+    assert.equal(logs.length, 2);
+    assert.match(logs[1], /sandbox couldn't start/);
+  });
+
+  it("a closed browser that fails to close still isn't handed out", async () => {
+    const chromium = heldChromium();
+    const launch = makeBrowserLauncher({ log: () => {}, env: LINUX, platform: "linux" });
+    const first = launch(chromium);
+    await turn();
+    chromium.launches[0].fail(sandboxError());
+    await turn();
+    const second = launch(chromium);
+    await turn();
+    chromium.launches[2].ok();
+    await second;
+    chromium.launches[1].browser.close = async () => { throw new Error("already gone"); };
+    chromium.launches[1].ok();
+    await assert.rejects(first, /has worked in this run/);
+  });
+
+  it("every launch that's over stops counting as under way, however it ended", async () => {
+    // Each of these ends a sandboxed launch: a failure that isn't the sandbox's, one thrown before any promise, a
+    // refusal because the machine ran out, a launch without the sandbox that failed. After each, nothing is under
+    // way, so a sandbox failure goes on without it.
+    const ranOut = new Error("browserType.launch: Target page, context or browser has been closed\nBrowser logs:\n\n[FATAL:credentials.cc(127)] Check failed: . : Resource temporarily unavailable (11)");
+    for (const [label, before] of [
+      ["spawn EAGAIN", [new Error("browserType.launch: spawn EAGAIN")]],
+      ["ran out", [ranOut]],
+      ["the launch without failed", [sandboxError(), new Error("browserType.launch: Timeout 180000ms exceeded.")]],
+    ]) {
+      const chromium = fakeChromium(...before, sandboxError(), "ok");
+      const launch = makeBrowserLauncher({ log: () => {}, env: LINUX, platform: "linux" });
+      await assert.rejects(launch(chromium), label);
+      assert.equal((await launch(chromium)).sandboxed, false, `${label}: nothing is under way after it`);
+    }
+    let thrown = false;
+    const sync = {
+      launch(options) {
+        if (!thrown) { thrown = true; throw new Error("browserType.launch: not a promise"); }
+        if (options.chromiumSandbox) throw sandboxError();
+        return Promise.resolve({ sandboxed: false });
+      },
+    };
+    const launch = makeBrowserLauncher({ log: () => {}, env: LINUX, platform: "linux" });
+    await assert.rejects(launch(sync), /not a promise/);
+    assert.equal((await launch(sync)).sandboxed, false, "a launch that threw before any promise isn't under way either");
   });
 });
 

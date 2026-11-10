@@ -23,7 +23,10 @@ const T = Date.parse("2026-01-05T09:00:00Z");
 const dirs = [];
 after(() => { for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true }); });
 
-/** A Tarsee of its own: a new state folder and database. Returns boot(clock, steps), one run of it. */
+/**
+ * A Tarsee of its own: a new state folder and database. Returns boot(clock, steps, { writesFail }), one run of it;
+ * writesFail: tarsee.db refuses every write in that run, as on a full disk.
+ */
 function install() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tarsee-login-restart-"));
   dirs.push(dir);
@@ -35,9 +38,9 @@ function install() {
     TARSEE_DATA_DIR: path.join(dir, "data"),
     SETUP_PASSWORD: PIN,
   });
-  return (clock, steps) => {
+  return (clock, steps, { writesFail = false } = {}) => {
     const out = execFileSync(process.execPath, [CHILD], {
-      env: { ...env, SIGN_IN_CLOCK: String(clock), SIGN_IN_STEPS: JSON.stringify(steps) },
+      env: { ...env, SIGN_IN_CLOCK: String(clock), SIGN_IN_STEPS: JSON.stringify(steps), SIGN_IN_WRITES_FAIL: writesFail ? "1" : "" },
       encoding: "utf8",
       timeout: 60_000,
     });
@@ -125,5 +128,36 @@ describe("the pause for everyone, after a restart", () => {
       { from: "198.51.100.9", private: true },
     ]);
     assert.deepEqual(statuses(answers), [200, 429, 401], "the sign-in works; a new one waits; no sign-in, no");
+  });
+});
+
+describe("when tarsee.db can't be written (a full disk), and then a restart", () => {
+  // The AI shares the volume with tarsee.db, so it could fill it. A guess whose count can't be saved used to be checked
+  // anyway and counted in memory only: fill the disk, guess, free the disk, have Tarsee restarted, and every count
+  // started fresh. Now a try is counted, and saved, before its password is checked, and turned away when it can't be.
+  it("turns every new sign-in away unchecked, so the next start has forgotten nothing", () => {
+    const boot = install();
+    const first = boot(T, [right("198.51.100.9"), ...Array(3).fill(wrong("203.0.113.5"))]);
+    assert.deepEqual(statuses(first), [200, 401, 401, 401]);
+    const cookie = first[0].cookie;
+    const full = boot(T + MINUTE, [
+      ...Array(4).fill(wrong("203.0.113.5")),
+      ...spread(30, "192.0.2"),
+      right("198.51.100.10"),
+      { from: "198.51.100.9", private: true, cookie },
+    ], { writesFail: true });
+    assert.deepEqual(statuses(full), [...Array(35).fill(429), 200], "nothing checked; the sign-in made before still works");
+    assert.match(full[0].error, /can't record sign-in attempts right now \(is the disk full\?\), so new sign-ins are paused/);
+    assert.equal(full[0].retryAfter, 60);
+    assert.equal(full[34].cookie, null, "the right password signs nobody in");
+    // Space is freed and Tarsee starts again: the place still has its three wrong passwords, and nobody else is held.
+    assert.deepEqual(statuses(boot(T + 2 * MINUTE, [wrong("203.0.113.5"), wrong("203.0.113.5"), right("198.51.100.10")])), [401, 429, 200]);
+  });
+
+  it("opens again by itself once a write works, with no restart", () => {
+    const boot = install();
+    boot(T, []);
+    const answers = boot(T + MINUTE, [{ writes: false }, wrong("203.0.113.5"), right("198.51.100.10"), { writes: true }, wrong("203.0.113.5"), right("198.51.100.10")]);
+    assert.deepEqual(statuses(answers), [429, 429, 401, 200]);
   });
 });

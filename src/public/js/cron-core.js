@@ -59,12 +59,16 @@
       : { schedule: job?.schedule, prompt: job?.prompt ?? "" };
   }
 
-  /** The whole prompt, or the tool a direct-action task runs and what it passes. */
+  /**
+   * The whole prompt, or the tool a direct-action task runs and what it passes: the args as the server shows them
+   * (actionShown, every secret masked: lib/cron.js shownDirectAction). job.action stays as saved, for seenOf.
+   */
   function whatItDoes(job) {
     const action = job?.action;
     if (runsAction(job)) {
-      const hasArgs = action.args && typeof action.args === "object" && Object.keys(action.args).length > 0;
-      const args = hasArgs ? ` <code class="cron-args">${esc(JSON.stringify(action.args))}</code>` : "";
+      const shown = job.actionShown && typeof job.actionShown === "object" ? job.actionShown.args : action.args;
+      const hasArgs = shown && typeof shown === "object" && Object.keys(shown).length > 0;
+      const args = hasArgs ? ` <code class="cron-args">${esc(JSON.stringify(shown))}</code>` : "";
       return `<div class="cron-what">Runs <code>${esc(action.tool)}</code> directly, no AI.${args}</div>`;
     }
     return `<div class="cron-prompt">${esc(job?.prompt)}</div>`;

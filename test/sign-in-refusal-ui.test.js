@@ -27,6 +27,8 @@ const skip = browser ? false : "no Chromium, Chrome or Edge for Playwright";
 const PUBLIC = fileURLToPath(new URL("../src/public/", import.meta.url));
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".json": "application/json", ".ico": "image/x-icon", ".svg": "image/svg+xml" };
 const PAUSED = "Too many wrong passwords have been tried here from different places, so signing in is paused for everyone for 15 minutes. Anyone already signed in stays signed in.";
+// The refusal while tarsee.db can't be written (middleware/auth.js refuseUnrecorded).
+const UNRECORDED = "Tarsee can't record sign-in attempts right now (is the disk full?), so new sign-ins are paused. Anyone already signed in stays signed in. Try again in 1 minute.";
 
 describe("the sign-in screen, refused for a while", { skip }, () => {
   let pages;
@@ -121,6 +123,27 @@ describe("the sign-in screen, refused for a while", { skip }, () => {
       await page.clock.runFor(30_000);
       assert.equal(await line.textContent(), "", "gone once the wait is over");
       assert.equal(await page.locator(".pin-key[data-digit='1']").isDisabled(), false);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("on a phone's PIN pad: says so when Tarsee can't record sign-in attempts (a full disk), for its minute", async () => {
+    const { page, context, errors, logins } = await openSignIn({ width: 375, height: 800, answers: [{ status: 429, retryAfter: 60, error: UNRECORDED }] });
+    try {
+      for (const d of "4821") await page.locator(`.pin-key[data-digit="${d}"]`).click();
+      await page.clock.runFor(300);
+      await page.waitForFunction(() => /left/.test(document.getElementById("pinError").textContent));
+      const line = page.locator("#pinError");
+      assert.ok((await line.textContent()).startsWith(UNRECORDED), await line.textContent());
+      assert.match(await line.textContent(), /\(1:00 left\)|\(0:59 left\)/);
+      await page.clock.runFor(30_000);
+      assert.match(await line.textContent(), /is the disk full\?.*0:[23]\d left/s, "still on screen half a minute later");
+      for (const d of "4821") await page.locator(`.pin-key[data-digit="${d}"]`).click({ force: true });
+      assert.equal(logins(), 1, "the keys wait for the minute");
+      await page.clock.runFor(31_000);
+      assert.equal(await line.textContent(), "", "then it is gone, and the next try goes to Tarsee");
       assert.deepEqual(errors, []);
     } finally {
       await context.close();

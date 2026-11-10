@@ -5,11 +5,14 @@
 //   - Tarsee's own keys (its Railway token, its sign-in and encryption secrets) are never copied into a service;
 //   - on Tarsee's own service only an allowlist is set, with a deploy or without one: a key or address for the owner's
 //     own scripts (a name in capitals ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL that no part of
-//     Tarsee reads), TZ, and a few tuning settings. Every name Tarsee's code, its start-up script, its Dockerfile and
-//     its AI engines read is refused there (scanned below), and so is every other name;
-//   - nor is a variable one of Tarsee's own settings is filled in from, and while such a setting is sealed (its value
-//     can't be read) nothing is set in that environment of Tarsee's project;
-//   - from_key onto Tarsee's own service is refused while the owner has denied get_key in Tool Permissions.
+//     Tarsee reads), TZ, and a few tuning settings. Every name Tarsee's code, its start-up script and its Dockerfile
+//     read is refused there (scanned below), every name that appears anywhere in its AI engines' and browser library's
+//     shipped code (src/lib/engine-env-names.json, re-extracted below), and every other name;
+//   - a variable that any variable on Tarsee's own service is filled in from (by a Railway reference, through shared
+//     variables and chains) counts as that variable: the same rules, under the name on Tarsee's own service. While a
+//     guarded one is sealed (its value can't be read) nothing is set in that environment of Tarsee's project;
+//   - while the owner has denied get_key in Tool Permissions, no vault key (from_key) goes onto Tarsee's own service,
+//     nor into a variable it is filled in from.
 // Other services, and the allowed names on Tarsee's own, keep working. Railway is never reached: fetch is a stand-in
 // that answers like Railway's GraphQL API.
 import { describe, it, before, after } from "node:test";
@@ -324,6 +327,31 @@ describe("on Tarsee's own service only the allowlist is set: sign-in, AI keys, h
     ["XAUTHORITY", { value: "/data/tarsee/workspace/.Xauthority" }, DASH],
     ["DBUS_SESSION_BUS_ADDRESS", { value: "unix:path=/data/tarsee/workspace/bus" }, DASH],
     ["SELENIUM_REMOTE_URL", { value: "http://attacker.example:4444" }, DASH],
+    // Round 3. Chromium's keys for Google's services (and their per-service and per-client forms).
+    ["GOOGLE_API_KEY", { from_key: "WORKER_PASSWORD" }, DASH],
+    ["GOOGLE_DEFAULT_CLIENT_ID", { value: "1234.apps.googleusercontent.com" }, DASH],
+    ["GOOGLE_DEFAULT_CLIENT_SECRET", { from_key: "WORKER_PASSWORD" }, DASH],
+    ["GOOGLE_API_KEY_SODA", { from_key: "WORKER_PASSWORD" }, DASH],
+    ["GOOGLE_CLIENT_ID_MAIN", { value: "1234.apps.googleusercontent.com" }, DASH],
+    ["GOOGLE_CLIENT_SECRET_MAIN", { from_key: "WORKER_PASSWORD" }, DASH],
+    ["GOOGLE_METRICS_SIGNING_KEY", { from_key: "WORKER_PASSWORD" }, DASH],
+    // Round 3. Names Claude Code reads through its typed lists of settings (process.env[e]), never as process.env.NAME:
+    // where voice mode sends the claude.ai sign-in, a proxy for all its traffic and that proxy's token, a Google Cloud
+    // sign-in, a cloud environment's key. Refused because they appear in the engines' code.
+    ["VOICE_STREAM_BASE_URL", { value: "https://attacker.example/x" }, DASH],
+    ["AGENT_PROXY_URL", { value: "https://attacker.example/proxy" }, DASH],
+    ["AGENT_PROXY_AUTH_TOKEN", { from_key: "WORKER_PASSWORD" }, DASH],
+    ["CLOUDSDK_AUTH_ACCESS_TOKEN", { from_key: "WORKER_PASSWORD" }, DASH],
+    ["ENVIRONMENT_SERVICE_KEY", { from_key: "WORKER_PASSWORD" }, DASH],
+    // Everyday-looking names an engine's code holds: Bun's built-in database client (inside the Claude Code CLI) reads
+    // DATABASE_URL and REDIS_URL; Claude Code lists SLACK_WEBHOOK_URL and NPM_TOKEN among the names it treats as
+    // secrets; Codex reads CODEX_CONNECTORS_TOKEN.
+    ["DATABASE_URL", { from_key: "WORKER_PASSWORD" }, DASH],
+    ["REDIS_URL", { from_key: "WORKER_PASSWORD" }, DASH],
+    ["SLACK_WEBHOOK_URL", { from_key: "ALERTS_WEBHOOK" }, DASH],
+    ["NPM_TOKEN", { from_key: "WORKER_PASSWORD" }, DASH],
+    ["API_KEY", { from_key: "WORKER_PASSWORD" }, DASH],
+    ["CODEX_CONNECTORS_TOKEN", { from_key: "WORKER_PASSWORD" }, AI],
     // Names the AI engines (Claude Code, Codex) and the libraries Tarsee runs read, though they look like a key for
     // the owner's scripts: the GitHub sign-in, the cloud logins, telemetry, MCP, the chat bots' tokens, web push.
     ["GH_TOKEN", { from_key: "WORKER_PASSWORD" }, DASH],
@@ -377,8 +405,9 @@ describe("on Tarsee's own service only the allowlist is set: sign-in, AI keys, h
   });
 
   // The allowlist: a key or address for the owner's own scripts, TZ, and Tarsee's tuning settings.
-  const ALLOWED = ["SOME_SERVICE_API_KEY", "ALERTS_WEBHOOK", "TZ", "ALERTS_WEBHOOK_URL", "STATUS_PAGE_URL", "DATABASE_URL",
-    "MY_SERVICE_API_KEY", "STRIPE_SECRET", "SMTP_PASSWORD", "NOTION_TOKEN", "API_KEY", "GOOGLE_PLACES_KEY"];
+  // (DATABASE_URL and API_KEY were on this list until round 3: both appear in the engines' code, so they are refused.)
+  const ALLOWED = ["SOME_SERVICE_API_KEY", "ALERTS_WEBHOOK", "TZ", "ALERTS_WEBHOOK_URL", "STATUS_PAGE_URL", "DB_URL",
+    "MY_SERVICE_API_KEY", "STRIPE_SECRET", "SMTP_PASSWORD", "NOTION_TOKEN", "WORKER_API_KEY", "GOOGLE_PLACES_KEY"];
   const TUNING = ["TARSEE_TIMEZONE", "TARSEE_DEFAULT_EFFORT", "TARSEE_COMPACT_WINDOW", "TARSEE_MODEL_CONTEXT_TOKENS",
     "TARSEE_TOOL_RESULT_MAX_CHARS", "TARSEE_BASH_OUTPUT_MAX_CHARS", "TARSEE_SESSION_JSONL_MAX_MB", "TARSEE_PHONON_THREADS"];
 
@@ -403,6 +432,11 @@ describe("on Tarsee's own service only the allowlist is set: sign-in, AI keys, h
     assert.match(build.out, /how Railway builds and runs Tarsee/, build.out);
     const read = await run({ action: "set_variable", name: "GITHUB_TOKEN", from_key: "WORKER_PASSWORD" }, { env: ON_RAILWAY });
     assert.match(read.out, /read by Tarsee itself, its AI engines or a program it runs/, read.out);
+    const browser = await run({ action: "set_variable", name: "GOOGLE_API_KEY", from_key: "WORKER_PASSWORD", deploy: false }, { env: ON_RAILWAY });
+    assert.match(browser.out, /read by the browser Tarsee drives \(Chromium, through Playwright\)/, browser.out);
+    const engine = await run({ action: "set_variable", name: "VOICE_STREAM_BASE_URL", value: "https://attacker.example/x", deploy: false }, { env: ON_RAILWAY });
+    assert.match(engine.out, /VOICE_STREAM_BASE_URL appears in the code of Tarsee's AI engines or its browser library/, engine.out);
+    assert.match(engine.out, /by hand in Railway's dashboard/, engine.out);
   });
 
   it("TZ takes a time zone name only, never a path to a file", async () => {
@@ -522,61 +556,10 @@ function filesUnder(dir, exts) {
   return out;
 }
 
-/** Every process.env name in a (large) file, read in chunks so the whole file is never one string. */
-function envNamesInBinary(file, re = /process\.env(?:\?\.|\.|\[\s*["'`])([A-Za-z_][A-Za-z0-9_]*)/g) {
-  const CHUNK = 16 * 1024 * 1024, OVERLAP = 512;
-  const names = new Set();
-  const fd = fs.openSync(file, "r");
-  try {
-    const size = fs.fstatSync(fd).size;
-    const buf = Buffer.alloc(CHUNK + OVERLAP);
-    for (let pos = 0; pos < size; pos += CHUNK) {
-      const n = fs.readSync(fd, buf, 0, CHUNK + OVERLAP, pos);
-      for (const m of buf.toString("latin1", 0, n).matchAll(re)) names.add(m[1]);
-    }
-  } finally {
-    fs.closeSync(fd);
-  }
-  return names;
-}
-
-/** The Claude Code CLI the Agent SDK ships for this platform, or null (as test/claude-cli-env-names.test.js finds it). */
-function claudeCli() {
-  const sdk = path.join(ROOT, "node_modules", "@anthropic-ai", "claude-agent-sdk");
-  let pkg;
-  try { pkg = JSON.parse(fs.readFileSync(path.join(sdk, "package.json"), "utf8")); } catch { return null; }
-  for (const dep of Object.keys(pkg.optionalDependencies || {})) {
-    for (const dir of [path.join(ROOT, "node_modules", dep), path.join(sdk, "node_modules", dep)]) {
-      for (const name of ["claude", "claude.exe"]) if (fs.existsSync(path.join(dir, name))) return path.join(dir, name);
-    }
-  }
-  return null;
-}
-
-/** The Codex binary of whichever @openai/codex-<platform> package is installed, or null. */
-function codexBinary() {
-  const base = path.join(ROOT, "node_modules", "@openai");
-  let pkgs = [];
-  try { pkgs = fs.readdirSync(base).filter((d) => /^codex-(linux|darwin|win32)/.test(d)); } catch { return null; }
-  for (const p of pkgs) {
-    const vendor = path.join(base, p, "vendor");
-    let triples = [];
-    try { triples = fs.readdirSync(vendor); } catch { continue; }
-    for (const t of triples) for (const name of ["codex", "codex.exe"]) if (fs.existsSync(path.join(vendor, t, "bin", name))) return path.join(vendor, t, "bin", name);
-  }
-  return null;
-}
-
 /**
- * Codex is a compiled program, so its names can't be scanned like the CLI's: these are the ones in codex 0.167 that
- * look like a key for the owner's scripts (its sign-in, its host, the GitHub and cloud logins it uses).
- */
-const CODEX_READS = ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_HOME", "OPENAI_API_KEY", "OPENAI_BASE_URL", "GH_TOKEN",
-  "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "AWS_CONTAINER_AUTHORIZATION_TOKEN"];
-/**
- * What the libraries Tarsee runs read that looks like a key for the owner's scripts (found with a scan of node_modules
- * for process.env.<NAME ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL>; that scan takes too long to
- * run on every test run).
+ * What the libraries Tarsee runs (besides its AI engines and Playwright, scanned below) read that looks like a key for
+ * the owner's scripts (found with a scan of node_modules for process.env.<NAME ending in _KEY, _TOKEN, _SECRET,
+ * _PASSWORD, _WEBHOOK or _URL>; that scan takes too long to run on every test run).
  */
 const LIBRARY_READS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "APP_URL", "SESSION_INGRESS_URL",
   "DISCORD_TOKEN", "SLACK_BOT_TOKEN", "SELENIUM_REMOTE_URL", "DOTENV_KEY", "BUILD_URL", "JENKINS_URL", "CI_JOB_URL",
@@ -613,26 +596,300 @@ describe("every name Tarsee and its AI engines read is refused on Tarsee's own s
     refusedOnSelf(names, "The start-up script, the Dockerfile or the deploy files");
   });
 
-  it("Claude Code: the Agent SDK's code and the CLI it ships", () => {
-    const sdk = path.join(ROOT, "node_modules", "@anthropic-ai", "claude-agent-sdk");
-    const names = new Set();
-    for (const f of fs.existsSync(sdk) ? fs.readdirSync(sdk).filter((x) => /\.m?js$/.test(x)) : []) for (const n of envNamesInBinary(path.join(sdk, f))) names.add(n);
-    const cli = claudeCli();
-    if (cli) for (const n of envNamesInBinary(cli)) names.add(n);
-    if (cli) assert.ok(names.size > 200, `found only ${names.size} names in ${cli}: is this the CLI?`);
-    for (const n of ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]) names.add(n);
-    refusedOnSelf(names, "Claude Code");
+  it("the other libraries Tarsee runs", () => {
+    refusedOnSelf(LIBRARY_READS, "A library Tarsee runs");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// The names in the shipped code of Tarsee's AI engines and its browser library (src/lib/engine-env-names.json).
+//
+// Claude Code reads most of its settings through typed lists of names ({NAME:()=>u.str()}, each read as process.env[e]),
+// much of its CLI is bytecode, and Codex is a compiled program, so no search for process.env.NAME finds what they read.
+// So the rule is blunter: a name in capitals with underscores that appears as a string anywhere in that code is never
+// set on Tarsee's own service. The allowlist already refuses every name that isn't key-shaped, so the list keeps the
+// ones it would otherwise let through. This test re-extracts them from node_modules on every run (streaming the native
+// programs, about a second), and a name an engine update brings that the list lacks fails here, named.
+//
+// To bring the list up to date (after an engine update, or to add another platform's programs):
+//   TARSEE_UPDATE_ENGINE_NAMES=1 node --test test/railway-tool-limits.test.js
+// adds what the installed engines hold, and keeps what the list already has. Each platform ships its own CLI and Codex
+// programs, and the list holds them all (CI runs on Linux, Railway too). To add another platform's: npm pack its
+// packages (@anthropic-ai/claude-agent-sdk-linux-x64@<version>, @openai/codex@<version>-linux-x64, and the rest), unpack
+// each with tar -xzf into a folder of its own, and list the unpacked package folders in TARSEE_ENGINE_PACKAGES (joined
+// with the path delimiter, ; on Windows and : elsewhere).
+
+const ENGINE_NAMES_FILE = path.join(ROOT, "src", "lib", "engine-env-names.json");
+const UPDATE_ENGINE_NAMES = process.env.TARSEE_UPDATE_ENGINE_NAMES === "1";
+const MORE_ENGINE_PACKAGES = String(process.env.TARSEE_ENGINE_PACKAGES || "").split(path.delimiter).filter(Boolean);
+
+const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+const isJs = (file) => /\.(?:m?js|cjs)$/.test(file);
+/** "name@version" of the package in `dir`. */
+const packageOf = (dir) => { const p = readJson(path.join(dir, "package.json")); return `${p.name}@${p.version}`; };
+/** Every file under `dir` that `keep` keeps. */
+function allFiles(dir, keep = () => true) {
+  const out = [];
+  const walk = (abs) => {
+    for (const e of fs.readdirSync(abs, { withFileTypes: true })) {
+      const p = path.join(abs, e.name);
+      if (e.isDirectory()) walk(p); else if (e.isFile() && keep(p)) out.push(p);
+    }
+  };
+  if (fs.existsSync(dir)) walk(dir);
+  return out;
+}
+
+/**
+ * The engines' shipped files: `text` (JavaScript) and `native` (programs, read as bytes), and the packages they come
+ * from. The Claude Agent SDK's JavaScript (sdk.mjs and the rest) and the Claude Code CLI each installed platform package
+ * ships; the Codex SDK, the codex launcher, and every file of each installed Codex platform package (codex itself, its
+ * helpers and their libraries); Playwright's library (playwright-core), which starts Chromium and drives it. Then the
+ * unpacked packages TARSEE_ENGINE_PACKAGES lists.
+ */
+function engineFiles() {
+  const nm = path.join(ROOT, "node_modules");
+  const text = [], native = [], packages = new Set();
+  const cliIn = (dir) => ["claude", "claude.exe"].map((n) => path.join(dir, n)).find((f) => fs.existsSync(f));
+  const optional = (dir) => Object.keys(readJson(path.join(dir, "package.json")).optionalDependencies || {});
+
+  const sdk = path.join(nm, "@anthropic-ai", "claude-agent-sdk");
+  if (fs.existsSync(path.join(sdk, "package.json"))) {
+    packages.add(packageOf(sdk));
+    text.push(...fs.readdirSync(sdk).filter(isJs).map((f) => path.join(sdk, f)));
+    for (const dep of optional(sdk)) {
+      const dir = [path.join(sdk, "node_modules", dep), path.join(nm, dep)].find((d) => cliIn(d));
+      if (dir) { native.push(cliIn(dir)); packages.add(packageOf(dir)); }
+    }
+  }
+  const codexSdk = path.join(nm, "@openai", "codex-sdk");
+  if (fs.existsSync(path.join(codexSdk, "package.json"))) {
+    packages.add(packageOf(codexSdk));
+    text.push(...allFiles(path.join(codexSdk, "dist"), isJs));
+  }
+  const codex = [path.join(codexSdk, "node_modules", "@openai", "codex"), path.join(nm, "@openai", "codex")].find((d) => fs.existsSync(path.join(d, "package.json")));
+  if (codex) {
+    packages.add(packageOf(codex));
+    text.push(...allFiles(path.join(codex, "bin"), isJs));
+    for (const dep of optional(codex)) {
+      const dir = [path.join(codex, "node_modules", dep), path.join(nm, dep)].find((d) => fs.existsSync(path.join(d, "vendor")));
+      if (dir) { native.push(...allFiles(path.join(dir, "vendor"))); packages.add(packageOf(dir)); }
+    }
+  }
+  const pw = path.join(nm, "playwright-core");
+  if (fs.existsSync(path.join(pw, "package.json"))) {
+    packages.add(packageOf(pw));
+    text.push(...allFiles(path.join(pw, "lib"), isJs));
+  }
+  for (const dir of MORE_ENGINE_PACKAGES) {
+    const cli = cliIn(dir);
+    if (cli) native.push(cli);
+    else if (fs.existsSync(path.join(dir, "vendor"))) native.push(...allFiles(path.join(dir, "vendor")));
+    else throw new Error(`TARSEE_ENGINE_PACKAGES: ${dir} holds neither a claude program nor a vendor folder (pass the unpacked package folder)`);
+    packages.add(packageOf(dir));
+  }
+  return { text, native, packages: [...packages].sort() };
+}
+
+// A run: capitals, digits and underscores, one after another. Only runs holding an underscore are kept.
+const RUN_BYTE = new Uint8Array(256);
+for (let c = 0x30; c <= 0x39; c++) RUN_BYTE[c] = 1;
+for (let c = 0x41; c <= 0x5a; c++) RUN_BYTE[c] = 1;
+RUN_BYTE[0x5f] = 1;
+const QUOTE_BYTE = new Set([0x22, 0x27, 0x60]);
+const CHUNK = 16 * 1024 * 1024, EDGE = 1024 * 1024;
+
+/**
+ * The runs in `file`, read in pieces so a program of hundreds of megabytes is never one string. `whole` gets the runs
+ * that are one string each: every run of a JavaScript file, and a run between two of the same quote inside a program
+ * (a JavaScript or JSON string there). `inside` gets the rest: a native program can keep its strings one after another
+ * with nothing between them (GH_TOKENGITHUB_TOKEN), so a name can sit inside such a run.
+ */
+function runsIn(file, isText, whole, inside) {
+  const size = fs.statSync(file).size;
+  const scan = (buf, n, from, lo, hi) => {
+    for (let i = buf.indexOf(0x5f, lo); i !== -1 && i < n; i = buf.indexOf(0x5f, i)) {
+      let a = i, b = i + 1;
+      while (a > 0 && RUN_BYTE[buf[a - 1]]) a--;
+      while (b < n && RUN_BYTE[buf[b]]) b++;
+      if (a >= hi) break;   // the next piece's
+      if ((a === 0 && from > 0) || (b === n && from + n < size)) throw new Error(`${file}: a run of capitals over ${EDGE} bytes long at byte ${from + a}; raise EDGE`);
+      if (a >= lo) {
+        const run = buf.toString("latin1", a, b);
+        if (isText || (a > 0 && b < n && QUOTE_BYTE.has(buf[a - 1]) && buf[b] === buf[a - 1])) whole.add(run); else inside.add(run);
+      }
+      i = b;
+    }
+  };
+  if (size <= CHUNK) {
+    const buf = fs.readFileSync(file);
+    scan(buf, buf.length, 0, 0, buf.length);
+    return;
+  }
+  // Each piece is read with EDGE bytes on either side, so a run that starts in it is read whole.
+  const fd = fs.openSync(file, "r");
+  const buf = Buffer.allocUnsafe(EDGE + CHUNK + EDGE);
+  try {
+    for (let pos = 0; pos < size; pos += CHUNK) {
+      const from = Math.max(0, pos - EDGE);
+      const n = fs.readSync(fd, buf, 0, Math.min(size - from, pos - from + CHUNK + EDGE), from);
+      scan(buf, n, from, pos - from, pos - from + CHUNK);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+let extracted = null;
+/** Every run in the installed engines' code, extracted once for the tests below. */
+function engineRuns() {
+  if (!extracted) {
+    const started = Date.now();
+    const { text, native, packages } = engineFiles();
+    const whole = new Set(), inside = new Set();
+    for (const f of text) runsIn(f, true, whole, inside);
+    for (const f of native) runsIn(f, false, whole, inside);
+    for (const r of whole) inside.delete(r);
+    extracted = { whole, inside, packages, text, native, ms: Date.now() - started };
+  }
+  return extracted;
+}
+
+/** The allowlist's key shape (railway-admin.js SCRIPT_KEY): what it would set on Tarsee's own service if nothing refused it. */
+const KEY_NAME = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:KEY|TOKEN|SECRET|PASSWORD|WEBHOOK|URL)$/;
+const KEY_ENDINGS = ["KEY", "TOKEN", "SECRET", "PASSWORD", "WEBHOOK", "URL"];
+
+/**
+ * Every key-shaped name inside a run that may hold several strings one after another: one may start at the run's start
+ * or after any character but an underscore, and end at the run's end or before any character but an underscore. Up to
+ * `limit` of them (1 is enough to tell whether the run holds any).
+ */
+function keyNamesInRun(run, { limit = Infinity } = {}) {
+  const out = new Set();
+  for (const word of KEY_ENDINGS) {
+    for (let p = run.indexOf(`_${word}`); p !== -1; p = run.indexOf(`_${word}`, p + 1)) {
+      const end = p + 1 + word.length;
+      if (end < run.length && run[end] === "_") continue;
+      for (let i = p - 1; i >= 0; i--) {
+        if (run[i] === "_") {
+          if (i === p - 1 || i === 0 || run[i - 1] === "_" || run[i + 1] === "_") break;
+          continue;
+        }
+        if (run[i] >= "A" && run[i] <= "Z" && (i === 0 || run[i - 1] !== "_")) {
+          out.add(run.slice(i, end));
+          if (out.size >= limit) return [...out];
+        }
+      }
+    }
+  }
+  return [...out];
+}
+
+/** Writes the list: what it had and what the installed engines (and TARSEE_ENGINE_PACKAGES) hold. CRLF, like the checkout. */
+function updateEngineNames(names, runs, packages) {
+  let had = { names: [], runs: [], scanned: [] };
+  try { had = readJson(ENGINE_NAMES_FILE); } catch { /* a first list */ }
+  const allNames = [...new Set([...had.names, ...names])].sort();
+  const isName = new Set(allNames);
+  const data = {
+    about: [
+      "Every name in capitals with underscores that appears as a string in the shipped code of Tarsee's AI engines and its browser library, and that tarsee_railway's allowlist would otherwise set on Tarsee's own service (a name ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL). Every other name is refused by the allowlist itself.",
+      "The code: the Claude Agent SDK's JavaScript and the Claude Code CLI it ships, the Codex SDK and every file of Codex's platform packages, and Playwright's library (playwright-core), which starts Chromium. The CLI and Codex are native programs, read as bytes, for every platform in scanned.",
+      "names: strings found whole (in JavaScript, or between quotes inside a program). runs: capitals, digits and underscores found inside a native program, which can keep its strings one after another with nothing between them (GH_TOKENGITHUB_TOKEN); a name counts as found in a run when it starts at the run's start or after any character but _, and ends at its end or before any character but _.",
+      "Made and checked by test/railway-tool-limits.test.js. TARSEE_UPDATE_ENGINE_NAMES=1 node --test test/railway-tool-limits.test.js adds what the installed engines hold; that test says how to add another platform's programs. A name stays when an update drops it: refusing a name nothing reads costs nothing.",
+    ],
+    scanned: [...new Set([...had.scanned, ...packages])].sort(),
+    names: allNames,
+    runs: [...new Set([...had.runs, ...runs])].filter((r) => !isName.has(r)).sort(),
+  };
+  fs.writeFileSync(ENGINE_NAMES_FILE, `${JSON.stringify(data, null, 2)}\n`.replace(/\n/g, "\r\n"));
+}
+
+describe("every name in the AI engines' and the browser library's code is refused on Tarsee's own service", () => {
+  // The names that got through before this rule: Claude Code reads each one through its typed lists of settings.
+  const REVIEWED = ["VOICE_STREAM_BASE_URL", "AGENT_PROXY_URL", "AGENT_PROXY_AUTH_TOKEN", "CLOUDSDK_AUTH_ACCESS_TOKEN", "ENVIRONMENT_SERVICE_KEY"];
+
+  it("src/lib/engine-env-names.json has every name the installed engines hold that the allowlist would let through", () => {
+    const { whole, inside, packages, text, native, ms } = engineRuns();
+    assert.ok(text.length > 100 && whole.size > 1000, `found only ${whole.size} names in ${text.length} JavaScript files: is the scan working?`);
+    for (const n of REVIEWED) assert.ok(whole.has(n), `the scan finds ${n} in Claude Code's code`);
+    if (native.some((f) => /codex(\.exe)?$/.test(f))) {
+      assert.ok([...inside, ...whole].some((r) => r.includes("CODEX_API_KEY")), "the scan finds CODEX_API_KEY in Codex");
+    }
+    const names = [...whole].filter((r) => KEY_NAME.test(r));
+    const runs = [...inside].filter((r) => keyNamesInRun(r, { limit: 1 }).length);
+    if (UPDATE_ENGINE_NAMES) updateEngineNames(names, runs, packages);
+    // The file as it is now (the module read it when it loaded, which in update mode was before this wrote it).
+    const list = readJson(ENGINE_NAMES_FILE);
+    const current = RA.parseEngineNames(fs.readFileSync(ENGINE_NAMES_FILE, "utf8"));
+    const listed = new Set([...list.names, ...list.runs]);
+    // Named: the whole names, and the runs inside a program as found (each can hold several names one after another).
+    const missing = {
+      names: names.filter((n) => !RA.inEngineCode(n, current)).sort(),
+      runs: runs.filter((r) => !listed.has(r) && keyNamesInRun(r).some((n) => !RA.inEngineCode(n, current))).sort()
+        .map((r) => (r.length > 200 ? `${r.slice(0, 200)}... (${r.length} characters)` : r)),
+    };
+    assert.deepEqual(missing, { names: [], runs: [] },
+      `The engines installed here (${packages.join(", ")}) hold these names, and src/lib/engine-env-names.json (made from ` +
+      `${list.scanned.join(", ")}) lacks them, so tarsee_railway would set them on Tarsee's own service. Add them with ` +
+      "TARSEE_UPDATE_ENGINE_NAMES=1 node --test test/railway-tool-limits.test.js (this file's comment says how to add another platform's programs).");
+    assert.ok(ms < 30_000, `the scan took ${ms} ms`);
   });
 
-  it("Codex, and the libraries Tarsee runs", () => {
-    const codex = codexBinary();
-    if (codex) {
-      // A compiled program keeps its names one after another, so a name is looked for anywhere, not between words.
-      const found = envNamesInBinary(codex, new RegExp(`(${CODEX_READS.join("|")})`, "g"));
-      assert.deepEqual(CODEX_READS.filter((n) => !found.has(n)), [], `gone from ${codex}: check what replaced them`);
+  it("every name in the list is refused there, saying so and where the owner sets it instead", () => {
+    const list = readJson(ENGINE_NAMES_FILE);
+    assert.ok(list.names.length > 100 && list.runs.length > 100, "the list has names and runs");
+    for (const n of list.names) {
+      assert.ok(KEY_NAME.test(n), `${n}: only key-shaped names are listed`);
+      const why = RA.selfServiceRefusal(n);
+      assert.ok(why, `${n} is refused on Tarsee's own service`);
+      assert.match(why, /Railway's dashboard/, n);
     }
-    refusedOnSelf(CODEX_READS, "Codex");
-    refusedOnSelf(LIBRARY_READS, "A library Tarsee runs");
+    for (const r of list.runs) {
+      // Every name the test finds in a run, the module finds there too (the first 2000, for the few runs that hold more).
+      const held = keyNamesInRun(r, { limit: 2000 });
+      assert.ok(held.length, `${r}: only runs that hold a key-shaped name are listed`);
+      for (const n of held) assert.ok(RA.heldInRun(r, n), `${n} in ${r}`);
+      for (const n of [held[0], held.at(-1)]) assert.ok(RA.selfServiceRefusal(n), `${n} (in ${r}) is refused on Tarsee's own service`);
+    }
+    // Not a name inside a longer one in a JavaScript string, nor one that goes on with an underscore.
+    assert.equal(RA.heldInRun("GH_TOKENGITHUB_TOKEN", "GITHUB_TOKEN"), true);
+    assert.equal(RA.heldInRun("OPENAI_API_KEYCODEX_API_KEY", "API_KEY"), false, "starts just after an underscore");
+    assert.equal(RA.heldInRun("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", "AWS_CONTAINER_AUTHORIZATION_TOKEN"), false, "goes on with _FILE");
+  });
+
+  it("the names Claude Code reads through its typed lists are refused, saying they appear in the engines' code", async () => {
+    for (const name of REVIEWED) {
+      assert.equal(RA.inEngineCode(name), true, name);
+      const r = await run({ action: "set_variable", name, value: "https://attacker.example/x", deploy: false }, { env: ON_RAILWAY });
+      assertNothingChanged(r, name);
+      assert.match(r.out, new RegExp(`${name} appears in the code of Tarsee's AI engines or its browser library`), r.out);
+      assert.match(r.out, /by hand in Railway's dashboard/, r.out);
+    }
+  });
+
+  it("the owner's everyday names are in none of that code and still go on, and so do TZ and the tuning settings", () => {
+    for (const n of ["SOME_SERVICE_API_KEY", "ALERTS_WEBHOOK", "ALERTS_WEBHOOK_URL", "STATUS_PAGE_URL"]) {
+      assert.equal(RA.inEngineCode(n), false, n);
+      assert.equal(RA.selfServiceRefusal(n), null, n);
+    }
+    // No run of the engines' code holds a tuning setting's name: all the runs, not only the key-shaped ones.
+    const { whole, inside } = engineRuns();
+    const tuning = RA.SELF_SERVICE_SETTINGS.filter((n) => n !== "TZ");
+    for (const set of [whole, inside]) for (const r of set) for (const n of tuning) assert.ok(!r.includes(n), `${n} is in the engines' code (${r})`);
+    // TZ is read by every program (the C library reads it), the engines included. It stays on the allowlist on purpose:
+    // there it takes a time zone name only, never a path to a file, so all it changes is the clock's zone.
+    assert.equal(RA.selfServiceRefusal("TZ", "Asia/Manila"), null);
+    assert.ok(RA.selfServiceRefusal("TZ", "/data/tarsee/workspace/zone"));
+  });
+
+  it("a list that can't be read refuses every key-shaped name on Tarsee's own service", () => {
+    assert.throws(() => RA.parseEngineNames("{}"), /names/);
+    assert.throws(() => RA.parseEngineNames("not json"));
+    const why = RA.selfServiceRefusal("SOME_SERVICE_API_KEY", undefined, { engineNames: new Error("no such file") });
+    assert.match(why, /could not read the list of names in its AI engines' code/, why);
+    assert.match(why, /Railway's dashboard/, why);
+    assert.equal(RA.selfServiceRefusal("TZ", "UTC", { engineNames: new Error("no such file") }), null, "TZ and the tuning settings don't need it");
   });
 });
 
@@ -784,6 +1041,119 @@ describe("a variable Tarsee's own settings are filled in from is never set eithe
   });
 });
 
+describe("a variable any of Tarsee's own variables is filled in from counts as that variable", () => {
+  // Railway's usual set-up puts references on the app's service: a variable there made from another service's
+  // (WORKER_API_KEY=${{worker.API_KEY}}, REPORTS_DB_URL=${{Postgres.DATABASE_PUBLIC_URL}}), directly or through a shared
+  // variable. A write to the variable it is made from is, at Tarsee's next deploy, a write to Tarsee's own service under
+  // the referencing name. So references are followed from every variable on Tarsee's own service, not only the guarded
+  // ones, and every rule for Tarsee's own service applies to the referencing name: the allowlist, the names in the
+  // engines' code, and the get_key rule for from_key.
+  const refs = {
+    [E_TARSEE]: [
+      { name: "WORKER_API_KEY", serviceId: S_TARSEE, value: "${{worker.API_KEY}}" },
+      { name: "REPORTS_DB_URL", serviceId: S_TARSEE, value: "${{Postgres.DATABASE_PUBLIC_URL}}" },
+      { name: "ALERTS_API_KEY", serviceId: S_TARSEE, value: "${{shared.ALERTS}}" },
+      { name: "ALERTS", serviceId: null, value: "${{worker.ALERTS_SRC}}" },
+      { name: "CHAIN_API_KEY", serviceId: S_TARSEE, value: "${{shared.C1}}" },
+      { name: "C1", serviceId: null, value: "chain-SECRET-prefix-${{worker.C2}}" },
+      { name: "C2", serviceId: S_TWORK, value: "${{ postgres.C3 }}" },
+      // Names that appear in the engines' code, which the owner filled in by hand from another variable.
+      { name: "VOICE_STREAM_BASE_URL", serviceId: S_TARSEE, value: "https://${{worker.VOICE_HOST}}/v1" },
+      { name: "DATABASE_URL", serviceId: S_TARSEE, value: "${{ Postgres.DATABASE_URL }}" },
+      { name: "AGENT_PROXY_URL", serviceId: S_TARSEE, value: "${{MY_PROXY_URL}}" },
+    ],
+  };
+  const DENIED = { env: ON_RAILWAY, getKeyDenied: () => true };
+  // [service, name, the variable on Tarsee's own service it fills]
+  const feeders = [
+    ["worker", "API_KEY", "WORKER_API_KEY"],
+    ["Postgres", "DATABASE_PUBLIC_URL", "REPORTS_DB_URL"],
+    ["worker", "ALERTS_SRC", "ALERTS_API_KEY"],          // through a shared variable
+    ["Postgres", "C3", "CHAIN_API_KEY"],                 // shared, then worker, then Postgres
+  ];
+
+  for (const [service, name, fills] of feeders) {
+    it(`while get_key is denied, from_key into ${name} on ${service} (it fills Tarsee's ${fills}) is refused, with a deploy or without`, async () => {
+      for (const deploy of [true, false]) {
+        const rw = railway({ more: refs });
+        const r = await run({ action: "set_variable", service, name, from_key: "OPENAI_KEY", deploy }, { rw, ...DENIED });
+        assertNothingChanged(r, `${service}.${name} deploy=${deploy}`);
+        assert.match(r.out, /get_key is denied in Settings > Tool Permissions/, r.out);
+        assert.match(r.out, new RegExp(`Tarsee's own ${fills} is filled in from ${name} on ${service} by a Railway reference`), r.out);
+        assert.match(r.out, /by hand in Railway's dashboard/, r.out);
+        assert.ok(!r.text.includes("chain-SECRET-prefix"), "no value of Tarsee's own variables in the result or the log");
+      }
+    });
+  }
+
+  it("the reviewer's case end to end: the key never reaches worker, so a redeploy of Tarsee can't bring it in", async () => {
+    const rw = railway({ more: refs });
+    const r = await run({ action: "set_variable", service: "worker", name: "API_KEY", from_key: "OPENAI_KEY", deploy: false }, { rw, ...DENIED });
+    assertNothingChanged(r);
+    assert.equal(rw.valueOf(E_TARSEE, S_TWORK, "API_KEY"), undefined, "worker.API_KEY was not set");
+    const re = await run({ action: "redeploy" }, { rw, ...DENIED });
+    assert.match(re.out, /^Asked Railway to redeploy tarsee/, re.out);
+  });
+
+  it("a plain value into those still goes, and from_key too once get_key is allowed", async () => {
+    for (const [service, name] of feeders) {
+      const rw = railway({ more: refs });
+      const plain = await run({ action: "set_variable", service, name, value: "plain-value", deploy: false }, { rw, ...DENIED });
+      assert.match(plain.out, new RegExp(`^Set ${name} on ${service}`), plain.out);
+      const allowed = await run({ action: "set_variable", service, name, from_key: "WORKER_PASSWORD", deploy: false }, { rw, env: ON_RAILWAY, getKeyDenied: () => false });
+      assert.match(allowed.out, new RegExp(`^Set ${name} on ${service}`), allowed.out);
+    }
+    // And from_key, get_key denied, onto a variable nothing of Tarsee's is filled in from.
+    const free = await run({ action: "set_variable", service: "worker", name: "UNREFERENCED_KEY", from_key: "WORKER_PASSWORD" }, { rw: railway({ more: refs }), ...DENIED });
+    assert.match(free.out, /^Set UNREFERENCED_KEY on worker/, free.out);
+  });
+
+  it("a variable that fills a name in the engines' code is refused, plain or from_key, get_key allowed or not", async () => {
+    for (const [service, name, fills] of [["worker", "VOICE_HOST", "VOICE_STREAM_BASE_URL"], ["Postgres", "DATABASE_URL", "DATABASE_URL"], ["tarsee", "MY_PROXY_URL", "AGENT_PROXY_URL"]]) {
+      for (const how of [{ value: "plain-value" }, { from_key: "WORKER_PASSWORD" }]) {
+        const r = await run({ action: "set_variable", service, name, ...how, deploy: false }, { rw: railway({ more: refs }), env: ON_RAILWAY, getKeyDenied: () => false });
+        assertNothingChanged(r, `${service}.${name}`);
+        assert.match(r.out, new RegExp(`Tarsee's own ${fills} is filled in from ${name} on ${service} by a Railway reference`), r.out);
+        assert.match(r.out, new RegExp(`${fills} appears in the code of Tarsee's AI engines`), r.out);
+        assert.match(r.out, /Railway's dashboard/, r.out);
+      }
+    }
+  });
+
+  it("on Tarsee's own service too: MY_PROXY_URL is allowed by name, but it fills AGENT_PROXY_URL, so it is refused", async () => {
+    assert.equal(RA.selfServiceRefusal("MY_PROXY_URL"), null, "an allowed name by itself");
+    const r = await run({ action: "set_variable", name: "MY_PROXY_URL", value: "https://attacker.example", deploy: false }, { rw: railway({ more: refs }), env: ON_RAILWAY });
+    assertNothingChanged(r);
+    assert.match(r.out, /Tarsee's own AGENT_PROXY_URL is filled in from MY_PROXY_URL on tarsee by a Railway reference/, r.out);
+  });
+
+  it("a sealed variable on Tarsee's own service hides what it is filled in from: while get_key is denied, no from_key in that environment", async () => {
+    const sealedKey = { [E_TARSEE]: [{ name: "SOME_SERVICE_API_KEY", serviceId: S_TARSEE, isSealed: true, value: "${{worker.X}}" }] };
+    for (const args of [{ service: "worker", name: "X" }, { service: "Postgres", name: "OTHER_KEY" }]) {
+      const r = await run({ action: "set_variable", from_key: "WORKER_PASSWORD", deploy: false, ...args }, { rw: railway({ more: sealedKey }), ...DENIED });
+      assertNothingChanged(r, JSON.stringify(args));
+      assert.match(r.out, /get_key is denied in Settings > Tool Permissions/, r.out);
+      assert.match(r.out, /Tarsee's own SOME_SERVICE_API_KEY is sealed/, r.out);
+      assert.match(r.out, /by hand in Railway's dashboard/, r.out);
+    }
+    // A plain value, another environment, and from_key once get_key is allowed all still go.
+    for (const [args, opts] of [
+      [{ service: "worker", name: "X", value: "plain-value" }, DENIED],
+      [{ environment: "staging", service: "worker", name: "X", from_key: "WORKER_PASSWORD" }, DENIED],
+      [{ service: "worker", name: "X", from_key: "WORKER_PASSWORD" }, { env: ON_RAILWAY, getKeyDenied: () => false }],
+    ]) {
+      const r = await run({ action: "set_variable", deploy: false, ...args }, { rw: railway({ more: sealedKey }), ...opts });
+      assert.match(r.out, /^Set X on worker/, `${JSON.stringify(args)}: ${r.out}`);
+    }
+  });
+
+  it("when Tarsee can't tell whether get_key is denied, from_key into such a variable is refused", async () => {
+    const r = await run({ action: "set_variable", service: "worker", name: "API_KEY", from_key: "WORKER_PASSWORD" }, { rw: railway({ more: refs }), env: ON_RAILWAY, getKeyDenied: () => { throw new Error("settings unavailable"); } });
+    assertNothingChanged(r);
+    assert.match(r.out, /could not tell whether get_key is denied/, r.out);
+  });
+});
+
 describe("other services keep working", () => {
   it("a provider key from the vault onto another project's service: set, the value reaching Railway only", async () => {
     const r = await run({ action: "set_variable", project: "Acme", service: "worker", name: "OPENAI_API_KEY", from_key: "OPENAI_KEY" });
@@ -885,18 +1255,21 @@ describe("through tools.js, the real vault and the MCP server", () => {
       assert.match(tool.description, /RAILWAY_API_TOKEN/);
       assert.match(tool.description, /SETUP_PASSWORD/);
       assert.match(tool.description, /Settings > AI/);
-      assert.match(tool.description, /Nor is a variable that one of those settings is filled in from by a Railway reference/);
+      assert.match(tool.description, /A variable that one of Tarsee's own variables is filled in from by a Railway reference .* counts as that variable/);
       assert.match(tool.description, /ON TARSEE'S OWN SERVICE IT SETS ONLY/);
       assert.match(tool.description, /ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL/);
+      assert.match(tool.description, /appears anywhere in the code of its AI engines or browser library/);
+      assert.match(tool.description, /VOICE_STREAM_BASE_URL/);
       assert.match(tool.description, /TZ/);
       assert.match(tool.description, /TARSEE_PHONON_THREADS/);
       assert.match(tool.description, /sealed/);
-      assert.match(tool.description, /get_key is denied/);
+      assert.match(tool.description, /get_key is denied in Tool Permissions, from_key onto Tarsee's own service, or into a variable it is filled in from, is refused/);
       assert.match(tool.description, /Railway's dashboard/);
       assert.ok(!tool.description.includes(String.fromCharCode(0x2014)), "no long dash");
       assert.match(tool.inputSchema.properties.from_key.description, /Tarsee's own keys .* are refused/);
-      assert.match(tool.inputSchema.properties.from_key.description, /onto Tarsee's own service while get_key is denied/);
+      assert.match(tool.inputSchema.properties.from_key.description, /onto Tarsee's own service, or into a variable it is filled in from, while get_key is denied/);
       assert.match(tool.inputSchema.properties.name.description, /On Tarsee's own service only/);
+      assert.match(tool.inputSchema.properties.name.description, /in none of its engines' code/);
       assert.match(tool.inputSchema.properties.value.description, /A Railway reference \(\$\{\{ \.\.\. \}\}\) is refused/);
     } finally {
       await mcp.close();

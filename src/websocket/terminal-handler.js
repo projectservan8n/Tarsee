@@ -19,6 +19,20 @@ try {
 const terminals = new Map();
 
 /**
+ * The close code for "no live sign-in" (4401: one of an application's own, 4000-4999, after HTTP's 401). The page
+ * (js/terminal.js, which names the same number) takes it as final: it stops trying to connect and offers "Sign in
+ * again", with a button that reloads it. Trying again can't help until the owner signs in again. It used to be 1008,
+ * which the page took as a reason to try again every 5 s, for as long as the tab stayed open.
+ */
+export const SIGN_IN_REQUIRED = 4401;
+
+// A refusal is logged at most once a minute for each place (logRefusal): a page loaded before SIGN_IN_REQUIRED still
+// tries again every 5 s, and each try used to write an audit row, about 17,000 a day for one forgotten tab.
+const REFUSAL_LOG_EVERY_MS = 60_000;
+const REFUSAL_LOG_PLACES = 10_000;
+const refusalLogged = new Map(); // place → { at, notLogged }
+
+/**
  * Why a /terminal connection may not have a shell, or null when it may. The Terminal is a full shell as the server's
  * user, so it takes the owner's live sign-in to the dashboard (the tarsee_session cookie, as owner-only commands do),
  * never the API token alone (?token= or a Bearer header): every API client gets the token, and the AI's shell can
@@ -27,29 +41,54 @@ const terminals = new Map();
 export function terminalRefusal(req) {
   if (liveSessionId(req)) return null;
   return signInEnded(req)
-    ? "Your sign-in has run out. Sign in to the dashboard again; this Terminal connects once you have."
-    : "The Terminal needs you signed in to the dashboard. Sign in there; this Terminal connects once you have.";
+    ? "Your sign-in has run out. Sign in to the dashboard again, then reload this page."
+    : "The Terminal needs you signed in to the dashboard. Sign in there, then reload this page.";
 }
 
-/** Tells the page why, in its terminal, and closes (1008: refused). The page tries again every few seconds. */
+/**
+ * Logs a refused connection (terminal.refused), at most once a minute for each place. The next row says how many
+ * refusals from there weren't logged since the last one (notLogged).
+ */
+function logRefusal(auditLog, place) {
+  const now = Date.now();
+  const last = refusalLogged.get(place);
+  if (last && now - last.at < REFUSAL_LOG_EVERY_MS) {
+    last.notLogged++;
+    return;
+  }
+  if (!last && refusalLogged.size >= REFUSAL_LOG_PLACES) {
+    for (const [p, r] of refusalLogged) if (now - r.at >= REFUSAL_LOG_EVERY_MS) refusalLogged.delete(p);
+    // Still full of places refused within the minute: the oldest make room.
+    for (const p of refusalLogged.keys()) {
+      if (refusalLogged.size < REFUSAL_LOG_PLACES) break;
+      refusalLogged.delete(p);
+    }
+  }
+  const detail = { reason: "no live sign-in", ...(last?.notLogged ? { notLogged: last.notLogged } : {}) };
+  auditLog?.log({ action: "terminal.refused", actor: "unknown", ip: place, detail: JSON.stringify(detail) });
+  refusalLogged.delete(place); // to the end, so the oldest come first
+  refusalLogged.set(place, { at: now, notLogged: 0 });
+}
+
+/** Tells the page why, in its terminal, and closes for good (SIGN_IN_REQUIRED): the page stops trying. */
 function refuseTerminal(ws, why) {
   if (ws.readyState === 1) {
     ws.send(JSON.stringify({ type: "data", data: `\r\n\x1b[31m[${why}]\x1b[0m\r\n` }));
     ws.send(JSON.stringify({ type: "error", message: why }));
   }
-  ws.close(1008, "Sign-in required");
+  ws.close(SIGN_IN_REQUIRED, "Sign-in required");
 }
 
 /**
  * A /terminal WebSocket: a shell for the owner's live sign-in (terminalRefusal), ended at the next key once that
  * sign-in ends. `pty` is node-pty (tests hand in a stand-in). The log names the client's place as the sign-in limit
- * counts it (signInKey), never a raw X-Forwarded-For.
+ * counts it (signInKey), never a raw X-Forwarded-For, and a refusal at most once a minute for each place (logRefusal).
  */
 export function handleTerminalConnection(ws, req, { auditLog, pty: ptyModule = pty } = {}) {
   const place = signInKey(req);
   const refusal = terminalRefusal(req);
   if (refusal) {
-    auditLog?.log({ action: "terminal.refused", actor: "unknown", ip: place, detail: JSON.stringify({ reason: "no live sign-in" }) });
+    logRefusal(auditLog, place);
     refuseTerminal(ws, refusal);
     return;
   }
