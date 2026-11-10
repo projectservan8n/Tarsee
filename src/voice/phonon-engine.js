@@ -21,7 +21,7 @@
  */
 
 import { TTSEngine } from "./tts-interface.js";
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -29,6 +29,7 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import config from "../config/env.js";
 import { phononSpeechText } from "./speech-text.js";
+import { runPython, venvInterpreter } from "./python-runtime.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -110,12 +111,14 @@ export const INSTALL_MARKER = "install.json";
 /**
  * Where everything lives. The Python interpreter is TARSEE_PHONON_PYTHON if set,
  * else the private venv the installer creates on machines without ptts (when
- * it exists), else python3 on PATH (the Docker image installs ptts there).
+ * it exists; made from the Python speech-to-text uses, python-runtime.js), else
+ * python3 on PATH (the Docker image installs ptts there).
  */
 export function phononPaths() {
   const root = process.env.TARSEE_PHONON_DIR?.trim() || path.join(config.DATA_DIR, "tts", "phonon");
   const venv = path.join(root, "venv");
-  const venvPython = path.join(venv, "bin", "python");
+  // bin/python, or Scripts\python.exe on Windows.
+  const venvPython = venvInterpreter(venv);
   const override = process.env.TARSEE_PHONON_PYTHON?.trim();
   const useVenv = !override && fs.existsSync(venvPython);
   return {
@@ -147,9 +150,7 @@ const _importChecks = new Map();
 /** Whether `python` can import ptts. Cached per interpreter path. */
 export function canImportPtts(python) {
   if (!_importChecks.has(python)) {
-    _importChecks.set(python, new Promise((resolve) => {
-      execFile(python, ["-I", "-c", "import ptts"], { timeout: 30_000 }, (err) => resolve(!err));
-    }));
+    _importChecks.set(python, runPython({ cmd: python, args: [] }, ["-I", "-c", "import ptts"], { timeout: 30_000 }).then(() => true, () => false));
   }
   return _importChecks.get(python);
 }

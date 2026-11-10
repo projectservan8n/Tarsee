@@ -174,9 +174,80 @@ describe("Dockerfile: PDFs", () => {
   });
 });
 
+describe("Dockerfile: speech-to-text works on the first try", () => {
+  const SRC_VOICE = path.join(ROOT, "src", "voice");
+  const sttVersion = /export const FASTER_WHISPER_VERSION = "([\d.]+)"/.exec(read("src/voice/stt-install.js"))?.[1];
+  const env = () => {
+    const step = RUNTIME.find((s) => s.op === "ENV" && /TARSEE_WHISPER_BUNDLED_DIR/.test(s.args));
+    assert.ok(step, "ENV TARSEE_WHISPER_BUNDLED_DIR, where speech-to-text finds the image's models");
+    return { i: RUNTIME.indexOf(step), dir: /TARSEE_WHISPER_BUNDLED_DIR[= ](\S+)/.exec(step.args)[1] };
+  };
+
+  it("pins faster-whisper to the version Settings > Voice installs where there is no Docker", () => {
+    const { cmd } = runStep("pip3 install");
+    assert.ok(sttVersion, "stt-install.js FASTER_WHISPER_VERSION");
+    assert.equal(/faster-whisper==([\d.]+)/.exec(cmd)?.[1], sttVersion);
+  });
+
+  it("ships the default model outside /data (the volume would hide it), after faster-whisper is in", () => {
+    const { i: envAt, dir } = env();
+    assert.ok(path.posix.isAbsolute(dir));
+    assert.ok(!/^\/data(\/|$)/.test(dir), `${dir}: Railway mounts the volume at /data, over anything the image put there`);
+    const dl = runStep("whisper-models.js download");
+    assert.match(dl.cmd, /download base\.en "\$TARSEE_WHISPER_BUNDLED_DIR"/);
+    assert.ok(dl.i > runStep("pip3 install").i, "faster-whisper is installed first, for the check");
+    assert.ok(envAt < dl.i);
+    const default_ = /export const DEFAULT_WHISPER_MODEL = "([^"]+)"/.exec(read("src/voice/whisper-models.js"))?.[1];
+    assert.equal(default_, "base.en", "the model the image ships is the default");
+  });
+
+  it("copies in only what the download needs (so a change elsewhere doesn't download the model again)", () => {
+    const dl = runStep("whisper-models.js download");
+    const copy = RUNTIME.findIndex((s) => s.op === "COPY" && /whisper-models\.js/.test(s.args));
+    assert.ok(copy >= 0 && copy < dl.i, "copied before the download");
+    assert.doesNotMatch(RUNTIME[copy].args, /\bsrc\s/, "not the whole src/");
+    const imports = (file) => [...fs.readFileSync(path.join(SRC_VOICE, file), "utf8").matchAll(/^import .* from "(\.{1,2}\/[^"]+)"/gm)].map((m) => m[1]);
+    for (const rel of imports("whisper-models.js")) {
+      assert.match(rel, /^\.\/[\w.-]+\.js$/, "only files next to it");
+      assert.ok(RUNTIME[copy].args.includes(`src/voice/${rel.slice(2)}`), `${rel} is copied too`);
+      assert.deepEqual(imports(rel.slice(2)), [], `${rel} imports nothing of Tarsee's`);
+    }
+  });
+
+  it("the build checks the model loads offline and transcribes, and the build stops if it doesn't", { skip: NO_SH }, () => {
+    const dl = runStep("whisper-models.js download");
+    assert.match(dl.cmd, /HF_HUB_OFFLINE=1 python3 -I -c "[^"]*WhisperModel\(sys\.argv\[1\][^"]*\.transcribe\([^"]*"/);
+    assert.match(dl.cmd, /^set -e;/);
+    const build = path.join(tmp, "stt-build");
+    const models = path.join(tmp, "stt-image-models");
+    const log = path.join(tmp, "stt-build.log");
+    // The build folder and the model folder come from the environment (a path with an apostrophe breaks sh quoting).
+    const cmd = dl.cmd.replaceAll("/opt/tarsee/stt-build", "$STT_BUILD");
+    const run = (pythonExit) => {
+      fs.rmSync(build, { recursive: true, force: true });
+      fs.mkdirSync(build, { recursive: true });
+      fs.rmSync(log, { force: true });
+      const bin = stubBin(`stt-${pythonExit}`, {
+        node: 'echo "node $* [$(cat package.json)]" >> "$STT_LOG"; mkdir -p "$4/$3"',
+        python3: `echo "python3 HF_HUB_OFFLINE=$HF_HUB_OFFLINE $1 $2 ... \${4:-} \${5:-}" >> "$STT_LOG"; exit ${pythonExit}`,
+      });
+      return runInSh(cmd, { bin, cwd: tmp, env: { STT_BUILD: posix(build), STT_LOG: posix(log), TARSEE_WHISPER_BUNDLED_DIR: posix(models) } });
+    };
+    const ok = run(0);
+    assert.equal(ok.status, 0, ok.stderr + ok.stdout);
+    const lines = fs.readFileSync(log, "utf8").trim().split(/\r?\n/);
+    assert.match(lines[0], /^node whisper-models\.js download base\.en \S+stt-image-models \[\{"type":"module"\}\]$/);
+    assert.match(lines[1], /^python3 HF_HUB_OFFLINE=1 -I -c \.\.\. \S+stt-image-models\/base\.en/);
+    assert.ok(fs.existsSync(path.join(models, "base.en")));
+    assert.equal(fs.existsSync(build), false, "the build files are removed");
+    const bad = run(1);
+    assert.notEqual(bad.status, 0, "a model that doesn't load stops the build");
+  });
+});
+
 // --- entrypoint.sh ---
 
-const HOMES = [".claude-code-home", ".claude-home-anthropic", ".claude-home-deepseek", ".claude-home-openrouter", ".codex-home", ".codex-home-keys"];
+const HOMES =[".claude-code-home", ".claude-home-anthropic", ".claude-home-deepseek", ".claude-home-openrouter", ".codex-home", ".codex-home-keys"];
 const CANARY = "sk-test-canary-entrypoint-0000";
 
 /**
