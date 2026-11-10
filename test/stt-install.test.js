@@ -138,7 +138,9 @@ describe("speech-to-text status", () => {
 
 describe("Install faster-whisper", () => {
   it("with a Python found here: a private folder for it, the pinned faster-whisper (ready-made builds, from pypi.org only), then the default model", async () => {
-    py.set({ pythons: { python3: { version: "3.11.4" } } });
+    // pip's lines come a little apart, as a real download's do: watch() looks every 5 ms, and lines 2 ms apart could
+    // each be replaced by the next before it looks (a fast machine missed ctranslate2's).
+    py.set({ pythons: { python3: { version: "3.11.4" } }, pip: { delayMs: 25 } });
     const job = stt.startSttInstall(opts());
     assert.equal(job.kind, "install");
     const { result, seen } = await watch(job);

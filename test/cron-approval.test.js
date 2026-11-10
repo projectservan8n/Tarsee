@@ -432,7 +432,10 @@ describe("a waiting task on a phone (css/style.css)", { skip }, () => {
     for (const part of ["badge", "toggle", "remove"]) {
       assert.ok(m[part].top >= m.content.bottom - 0.5, `the ${part} is under the prompt, not beside it`);
     }
-    assert.ok(Math.abs(middle(m.badge) - middle(m.toggle)) < 4 && Math.abs(middle(m.toggle) - middle(m.remove)) < 4, "the badge and buttons share one line");
+    // With a wide font (Linux's fallback, when the page's own font isn't loaded) the badge may sit on a line above the
+    // buttons; each is whole, under the prompt and inside the row (checked above), and the two buttons stay together.
+    assert.ok(Math.abs(middle(m.toggle) - middle(m.remove)) < 4, "the Switch on and delete buttons share one line");
+    assert.ok(middle(m.badge) <= m.toggle.bottom + 0.5, "the badge is on the buttons' line or above it, never below");
     assert.ok(m.toggle.left > m.badge.right, "the buttons after the badge");
     assert.equal(m.removeOpacity, "1", "Delete shows without a mouse to hover with");
   });

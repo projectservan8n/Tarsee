@@ -152,7 +152,9 @@ export async function extractTarGz(file, dest, { strip = 0 } = {}) {
     for (const l of links) {
       if (!fs.lstatSync(l.target).isSymbolicLink()) continue;
       let real;
-      try { real = fs.realpathSync(l.target); } catch { continue; } // dangling: harmless
+      // The operating system's own answer (.native): Node's JS realpathSync reads "x/../.." past a link x -> ".." as
+      // if x were a folder, and says it stays inside when the system, following x first, goes out of the folder.
+      try { real = fs.realpathSync.native(l.target); } catch { continue; } // dangling: harmless
       if (!isInside(root, real)) throw refuse(`has links that lead outside its folder: ${l.name}`);
     }
     return counts;
