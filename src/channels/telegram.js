@@ -865,17 +865,27 @@ function buttonsToKeyboard(buttons) {
 
 /**
  * Convert common Markdown to Telegram HTML.
- * Handles: **bold**, *italic*, `code`, ```code blocks```, [links](url)
+ * Handles: **bold**, *italic*, ~~strike~~, `code`, ```code blocks```, [links](url), # headings, > quotes, tables.
+ *
+ * Code is shown as it was written. Fenced blocks, tables and inline code spans are taken out first and put back at
+ * the end, HTML-escaped, so no rule below ever runs inside them: a link, a * or a ~~ in code shows as written (lib/
+ * commands.js /cron list shows a task's args in a code span for the owner to read before switching it on). An inline
+ * span ends on its own line, so a backtick left unpaired can't pair with one on a later line and turn the code there
+ * into text. Everything else is HTML-escaped before the rules add their own tags, so no text adds a tag: Telegram
+ * refuses HTML it can't read, and the plain-text fallback then strips everything between < and >.
  */
-function mdToTelegramHtml(text) {
-  // 1. Extract code blocks first (protect from other transforms)
-  const codeBlocks = [];
+export function mdToTelegramHtml(text) {
+  // NUL marks a piece kept aside (\0<n>\0), so none is left in the text itself.
+  const NUL = String.fromCharCode(0);
+  const kept = [];
+  const keep = (html) => `${NUL}${kept.push(html) - 1}${NUL}`;
+  text = String(text ?? "").split(NUL).join("");
+
+  // 1. Fenced code blocks
   text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, lang, code) => {
-    const idx = codeBlocks.length;
     const langTag = lang ? `<code class="language-${escapeHtml(lang)}">` : "";
     const langClose = lang ? "</code>" : "";
-    codeBlocks.push(`<pre>${langTag}${escapeHtml(code.trim())}${langClose}</pre>`);
-    return `\x00CODEBLOCK_${idx}\x00`;
+    return keep(`<pre>${langTag}${escapeHtml(code.trim())}${langClose}</pre>`);
   });
 
   // 2. Detect markdown tables (lines with |) and wrap in <pre> with aligned columns
@@ -910,35 +920,35 @@ function mdToTelegramHtml(text) {
       formatted.splice(1, 0, sep);
     }
 
-    return `\n<pre>${escapeHtml(formatted.join("\n"))}</pre>\n`;
+    return `\n${keep(`<pre>${escapeHtml(formatted.join("\n"))}</pre>`)}\n`;
   });
 
-  text = text
-    // Inline code
-    .replace(/`([^`]+)`/g, (_m, code) => `<code>${escapeHtml(code)}</code>`)
+  // 3. Inline code: a run of backticks up to the next run of as many, on the same line (``a`b`` holds a backtick)
+  text = text.replace(/(?<!`)(`+)(?!`)(.*?[^`])\1(?!`)/g, (_m, _ticks, code) => keep(`<code>${escapeHtml(code)}</code>`));
+
+  // 4. The rest is text: escaped, then drawn
+  text = escapeHtml(text)
     // Bold (**text**)
     .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
     // Italic (*text*)
     .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<i>$1</i>")
     // Strikethrough (~~text~~)
     .replace(/~~(.+?)~~/g, "<s>$1</s>")
-    // Links [text](url)
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    // Links [text](url): the address is never a piece kept aside, and a quote in it can't end the attribute
+    // eslint-disable-next-line no-control-regex
+    .replace(/\[([^\]]+)\]\(([^)\x00]+)\)/g, (_m, label, url) => `<a href="${url.replace(/"/g, "&quot;")}">${label}</a>`)
     // Headings (## text) → bold
     .replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>")
-    // Blockquotes (> text) — merge consecutive lines into single blockquote
-    .replace(/(^>\s?.+$(\n^>\s?.+$)*)/gm, (block) => {
-      const lines = block.split("\n").map(l => l.replace(/^>\s?/, "")).join("\n");
+    // Blockquotes (> text, escaped as &gt;) — merge consecutive lines into single blockquote
+    .replace(/(^&gt;\s?.+$(\n^&gt;\s?.+$)*)/gm, (block) => {
+      const lines = block.split("\n").map(l => l.replace(/^&gt;\s?/, "")).join("\n");
       return `<blockquote>${lines}</blockquote>`;
     });
 
-  // 3. Restore code blocks
-  // NUL is deliberate here: it is the sentinel wrapping the placeholder token,
-  // chosen because it cannot occur in the Telegram message text being escaped.
+  // 5. Put back what was kept aside (a table can hold a fenced block kept before it)
   // eslint-disable-next-line no-control-regex
-  text = text.replace(/\x00CODEBLOCK_(\d+)\x00/g, (_m, idx) => codeBlocks[parseInt(idx)]);
-
-  return text;
+  const restore = (s) => s.replace(/\x00(\d+)\x00/g, (_m, i) => restore(kept[Number(i)] ?? ""));
+  return restore(text);
 }
 
 function escapeHtml(text) {

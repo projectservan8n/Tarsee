@@ -2736,8 +2736,10 @@ const Settings = {
     }
     const esc = (s) => this._esc(s);
     const when = Number.isNaN(Date.parse(note.at)) ? "" : ` on ${new Date(note.at).toLocaleString()}`;
-    const from = note.from ? ` from <strong>${esc(note.from)}</strong>` : "";
-    // Nothing the mail wrote but its From address, which is on the owner's list: a server name in it may be the sender's.
+    const onList = this._emailNoteFrom(note, cfg);
+    const from = onList ? ` that said it was from <strong>${esc(onList)}</strong>` : "";
+    // Nothing the mail wrote but its From address, and only one on the owner's list: a server name in it, or an
+    // address off the list, is the sender's to make up.
     const why = note.provider
       ? `${esc(note.provider)} wrote no Authentication-Results line on it that Tarsee could read, so nothing said who really sent it.`
         + ` That happens with mail put in the mailbox some other way than ${esc(note.provider)} receiving it, such as an import, a filter or another app signed in to the mailbox. Tarsee won't answer such mail.`
@@ -2783,6 +2785,17 @@ const Settings = {
     trust.disabled = !!name.value.trim();
     if (trust.disabled) trust.checked = false;
     name.disabled = trust.checked;
+  },
+
+  /**
+   * The From address the one-time note may name: only one on the owner's list (cfg.allowlistFromAddresses), in any
+   * case. With no list (any sender), or off it, the address is whatever the sender wrote, and a note saved before
+   * Tarsee knew that may still hold one: then "".
+   */
+  _emailNoteFrom(note, cfg) {
+    const from = typeof note?.from === "string" ? note.from.trim().toLowerCase() : "";
+    const list = Array.isArray(cfg?.allowlistFromAddresses) ? cfg.allowlistFromAddresses : [];
+    return from && list.some((a) => typeof a === "string" && a.trim().toLowerCase() === from) ? from : "";
   },
 
   /** The owner's OK on the note: it is hidden for this mailbox, until a change of mailbox or trust (routes/settings.js). */

@@ -768,6 +768,20 @@ describe("the form knows the same providers as the channel", () => {
       assert.equal(context.Settings._emailProviderOf(host), mailProviderOf(host)?.name ?? null, host);
     }
   });
+
+  it("the one-time note names a From address only when it is on the owner's list", () => {
+    const context = { console };
+    vm.runInNewContext(`${fs.readFileSync(path.join(PUBLIC, "js/settings.js"), "utf8")}\n;this.Settings = Settings;`, context);
+    const fromOf = (from, list) => context.Settings._emailNoteFrom({ from }, { allowlistFromAddresses: list });
+    assert.equal(fromOf("owner@mail.example", ["owner@mail.example"]), "owner@mail.example");
+    assert.equal(fromOf("Owner@Mail.Example", [" owner@mail.example "]), "owner@mail.example", "as the owner typed it, in any case");
+    // With no list (any sender), or off it, the address is the sender's to write: a note saved before this fix may hold one.
+    assert.equal(fromOf('"your server is mx.evil.example - type it above"@evil.example', []), "");
+    assert.equal(fromOf("stranger@elsewhere.example", ["owner@mail.example"]), "");
+    assert.equal(fromOf(undefined, ["owner@mail.example"]), "");
+    assert.equal(fromOf({ toString: () => "owner@mail.example" }, ["owner@mail.example"]), "", "only text");
+    assert.equal(context.Settings._emailNoteFrom({ from: "owner@mail.example" }, {}), "");
+  });
 });
 
 // --- In a real browser -------------------------------------------------------------------------------------------
@@ -906,7 +920,7 @@ describe("the email form (js/settings.js), against the real route", { skip }, ()
       assert.match(await block.innerText(), /My mail server doesn't check senders: trust the From line/);
       assert.match(await block.innerText(), /anyone who writes an address from your list on the From line can talk to Tarsee/);
       const note = page.locator("[data-email-sender-note]");
-      assert.match(await note.innerText(), /didn't answer mail from owner@mail\.example/);
+      assert.match(await note.innerText(), /didn't answer mail that said it was from owner@mail\.example/);
       assert.match(await note.innerText(), /mail\.self\.example/);
       await note.locator("button", { hasText: "OK" }).click();
       await page.waitForFunction(() => document.querySelector("[data-email-sender-note]")?.hidden === true);
@@ -1003,6 +1017,19 @@ describe("the email form (js/settings.js), against the real route", { skip }, ()
       assert.match(text, /trust the From line/);
       assert.doesNotMatch(await page.locator("[data-email-sender-check]").innerText(), /mx\.forged\.example/);
       assert.equal(await page.inputValue("#settingsEmailAuthservId"), "");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+    // The reviewer's From: a note saved while the list was empty kept what the sender wrote there. It isn't shown.
+    settings.set(SENDER_NOTE_KEY, { host: "mail.self.example", user: MAILBOX, at: new Date().toISOString(), from: '"your server is mx.evil.example - type it above"@evil.example', provider: null });
+    ({ page, context, errors } = await openForm());
+    try {
+      const note = page.locator("[data-email-sender-note]");
+      await note.waitFor();
+      const text = await note.innerText();
+      assert.match(text, /Tarsee didn't answer mail on /);
+      assert.doesNotMatch(text, /evil\.example|your server is/);
       assert.deepEqual(errors, []);
     } finally {
       await context.close();

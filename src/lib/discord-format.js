@@ -604,10 +604,78 @@ export function formatForDiscord(text) {
  *  - continuation chunks no longer start with a stray leading "\n"
  *  - hard cuts happen on code-point boundaries, so an astral char (😀) can't
  *    be split into lone surrogates
+ *
+ * A line too long for one message is cut, and a cut inside an inline code
+ * span closes the span at the end of its piece and opens it again at the
+ * start of the next, with as many backticks as the span's own: left open, the
+ * rest of the span would reach the next message as markdown, where Discord
+ * draws `||text||` as a spoiler bar and `[a](b)` as a link. A cut never lands
+ * next to a backtick, where the added ones would join a run and mean
+ * something else.
  */
 export function splitMessageFenceSafe(text, maxLen = 2000) {
   const s = String(text ?? "");
   if (s.length <= maxLen) return [s];
+
+  /**
+   * For each code point of a line, the backtick count of the inline code span
+   * whose text it is in, else 0 (the spans' own backticks are 0 too). As
+   * CommonMark reads them: a run of k backticks opens a span that the next run
+   * of exactly k closes, and a run with none to close it is only text. Each
+   * run length keeps a cursor into its own runs, so this is one pass.
+   */
+  const spanDepths = (cps) => {
+    const runs = [];
+    for (let i = 0; i < cps.length;) {
+      if (cps[i] !== "`") { i++; continue; }
+      const start = i;
+      while (cps[i] === "`") i++;
+      runs.push({ start, len: i - start });
+    }
+    const byLen = new Map();
+    runs.forEach((r, n) => {
+      if (!byLen.has(r.len)) byLen.set(r.len, []);
+      byLen.get(r.len).push(n);
+    });
+    const cursor = new Map();
+    const depth = new Array(cps.length).fill(0);
+    for (let a = 0; a < runs.length; a++) {
+      const same = byLen.get(runs[a].len);
+      let at = cursor.get(runs[a].len) || 0;
+      while (at < same.length && same[at] <= a) at++;
+      cursor.set(runs[a].len, at);
+      if (at === same.length) continue;              // nothing closes it: text
+      const b = same[at];
+      for (let p = runs[a].start + runs[a].len; p < runs[b].start; p++) depth[p] = runs[a].len;
+      a = b;                                          // the span ends at run b
+    }
+    return depth;
+  };
+
+  /** A line outside any fence in pieces of at most `budget` code points, each with its code spans whole. */
+  const cutKeepingSpans = (line, budget) => {
+    const cps = Array.from(line);
+    const depth = spanDepths(cps);
+    const out = [];
+    let start = 0;
+    let open = 0;                                     // the backticks this piece opens its span again with
+    while (cps.length - start + open > budget) {
+      const room = Math.max(1, budget - open);
+      let cut = -1;
+      let close = 0;
+      for (let p = start + room; p > start; p--) {
+        if (cps[p - 1] === "`" || cps[p] === "`") continue;
+        if (p - start + depth[p] <= room) { cut = p; close = depth[p]; break; }
+      }
+      // No place clear of backticks (a run longer than a message): cut as before.
+      if (cut < 0) { cut = start + room; close = 0; }
+      out.push("`".repeat(open) + cps.slice(start, cut).join("") + "`".repeat(close));
+      start = cut;
+      open = close;
+    }
+    out.push("`".repeat(open) + cps.slice(start).join(""));
+    return out;
+  };
 
   const chunks = [];
   let buf = [];            // lines accumulated for the current chunk
@@ -638,10 +706,14 @@ export function splitMessageFenceSafe(text, maxLen = 2000) {
     // Hard-split a single over-long line. Array.from() iterates CODE POINTS,
     // so an astral char can never be cleaved into lone surrogates — the
     // original splitMessage's `slice(0, maxLen)` does exactly that and Discord
-    // renders U+FFFD or rejects the message.
+    // renders U+FFFD or rejects the message. Outside a fence, a cut keeps each
+    // inline code span whole in its piece (cutKeepingSpans); inside one, a
+    // backtick is only text.
     const budget = maxLen - reserve() - (openFence ? reopenLine().length + 1 : 0);
     let pieces = [rawLine];
-    if (rawLine.length > budget) {
+    if (rawLine.length > budget && !openFence && !m) {
+      pieces = cutKeepingSpans(rawLine, budget);
+    } else if (rawLine.length > budget) {
       pieces = [];
       let cps = Array.from(rawLine);
       while (cps.length) { pieces.push(cps.slice(0, budget).join("")); cps = cps.slice(budget); }

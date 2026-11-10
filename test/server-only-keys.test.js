@@ -5,10 +5,11 @@
 //     TARSEE_AGENT_ENV_KEYS, or copied under another name;
 //   - tarsee_get_key refuses it ("RAILWAY_API_TOKEN is Tarsee's own; use tarsee_railway"), and a copy of it;
 //   - tarsee_list_keys still names it, without even its masked ends;
-//   - from a chat's own turn, tarsee_set_key saves one while Tarsee has none yet (the way owners save it today), and
+//   - in the owner's turn of the dashboard's chat (signed in), tarsee_set_key saves one while Tarsee has none yet, and
 //     replacing or deleting one already there is refused ("change it in Settings > Keys"); only the owner's Settings >
-//     Keys ({ owner: true }) may. Every other writer (background work, another tool's save_as_key, a caller that names
-//     none) saves none at all: test/server-only-first-save.test.js.
+//     Keys ({ owner: true }) may. Every other writer (a chat bot, email, the API, background work, another tool's
+//     save_as_key, a caller that names none) saves none at all: test/server-only-first-save.test.js and
+//     test/server-only-owner-turn.test.js.
 // Uses the real vault in a temporary data folder, encrypted, with obvious fake keys.
 import { describe, it, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -44,9 +45,13 @@ const quiet = async (fn) => {
   console.log = () => {};
   try { return await fn(); } finally { console.log = log; }
 };
-/** A chat's own turn, as a channel or the dashboard gives its tools: a conversation, no background mark. */
+/** A chat bot's, email's or the API's turn, as it gives its tools: a conversation, no background mark. */
 const CHAT = Object.freeze({ conversationId: "test-chat-0001" });
+/** The owner's turn in the dashboard's chat, signed in (routes/chat.js, channels/websocket.js). */
+const OWNER = Object.freeze({ conversationId: "test-chat-0002", dashboard: true, ownerSignedIn: true });
 const tool = (name, input, ctx = CHAT) => quiet(() => executeTool(name, input, ctx));
+/** The owner giving Tarsee its first token from the dashboard's chat. */
+const ownerTool = (name, input) => tool(name, input, OWNER);
 /** The owner saving the token in Settings > Keys (routes/vault-keys.js). */
 const ownerSaves = (value, description = "") => vault.setKey("RAILWAY_API_TOKEN", value, description, { owner: true });
 const names = () => vault.listKeys().map((k) => k.name).sort();
@@ -158,8 +163,8 @@ describe("tarsee_get_key and tarsee_list_keys", () => {
 });
 
 describe("tarsee_set_key and tarsee_delete_key from chat", () => {
-  it("the first save still works, under the name Tarsee reads, and says where to change it later", async () => {
-    const out = await tool("set_key", { name: " railway_api_token ", value: TOKEN, description: "Railway" });
+  it("the owner's first save from the dashboard's chat still works, under the name Tarsee reads, and says where to change it later", async () => {
+    const out = await ownerTool("set_key", { name: " railway_api_token ", value: TOKEN, description: "Railway" });
     assert.match(out, /saved/i, out);
     assert.match(out, /Settings > Keys/, out);
     assert.ok(!out.includes(TOKEN), out);
@@ -168,11 +173,20 @@ describe("tarsee_set_key and tarsee_delete_key from chat", () => {
     assert.ok(!fs.readFileSync(VAULT_FILE, "utf8").includes(TOKEN), "encrypted at rest");
   });
 
-  it("replacing one already saved is refused, by any spelling, and nothing changes", async () => {
-    await tool("set_key", { name: "RAILWAY_API_TOKEN", value: TOKEN });
+  it("a first save from a chat bot, email or the API is refused: the AI is told to ask the owner", async () => {
+    const out = await tool("set_key", { name: "RAILWAY_API_TOKEN", value: TOKEN });
+    assert.match(out, /^set_key refused: RAILWAY_API_TOKEN wasn't saved/, out);
+    assert.match(out, /Ask the owner to save it in Settings > Keys\./, out);
+    assert.ok(!out.includes(TOKEN), out);
+    assert.deepEqual(names(), []);
+  });
+
+  it("replacing one already saved is refused, by any spelling, from any chat, and nothing changes", async () => {
+    await ownerTool("set_key", { name: "RAILWAY_API_TOKEN", value: TOKEN });
     const before = fs.readFileSync(VAULT_FILE, "utf8");
     for (const name of ["RAILWAY_API_TOKEN", "railway_api_token", " RAILWAY_API_TOKEN"]) {
-      const out = await tool("set_key", { name, value: OTHER_TOKEN });
+      assert.match(await tool("set_key", { name, value: OTHER_TOKEN }), /wasn't saved/);
+      const out = await ownerTool("set_key", { name, value: OTHER_TOKEN });
       assert.match(out, /change it in Settings > Keys/, out);
       assert.ok(!out.includes(TOKEN) && !out.includes(OTHER_TOKEN), out);
     }
@@ -182,23 +196,22 @@ describe("tarsee_set_key and tarsee_delete_key from chat", () => {
   });
 
   it("deleting it is refused, and it stays", async () => {
-    await tool("set_key", { name: "RAILWAY_API_TOKEN", value: TOKEN });
+    await ownerTool("set_key", { name: "RAILWAY_API_TOKEN", value: TOKEN });
     for (const name of ["RAILWAY_API_TOKEN", "railway_api_token"]) {
-      const out = await tool("delete_key", { name });
-      assert.match(out, /change it in Settings > Keys/, out);
+      for (const del of [tool, ownerTool]) assert.match(await del("delete_key", { name }), /change it in Settings > Keys/);
     }
     assert.equal(vault.getKey("RAILWAY_API_TOKEN"), TOKEN);
   });
 
   it("with the token set in Tarsee's environment instead, a vault copy that would take its place is refused", async () => {
     process.env.RAILWAY_API_TOKEN = TOKEN;
-    const out = await tool("set_key", { name: "RAILWAY_API_TOKEN", value: OTHER_TOKEN });
+    const out = await ownerTool("set_key", { name: "RAILWAY_API_TOKEN", value: OTHER_TOKEN });
     assert.match(out, /change it in Settings > Keys/, out);
     assert.deepEqual(names(), []);
   });
 
   it("every other key saves, replaces and deletes from chat as before", async () => {
-    await tool("set_key", { name: "RAILWAY_API_TOKEN", value: TOKEN });
+    await ownerTool("set_key", { name: "RAILWAY_API_TOKEN", value: TOKEN });
     assert.match(await tool("set_key", { name: "TEST_SCRIPT_KEY", value: "first-value-0000" }), /saved securely/);
     assert.match(await tool("set_key", { name: "TEST_SCRIPT_KEY", value: SCRIPT_KEY }), /saved securely/);
     assert.equal(vault.getKey("TEST_SCRIPT_KEY"), SCRIPT_KEY);
@@ -221,10 +234,11 @@ describe("the vault itself holds every writer but the owner to that", () => {
     assert.equal(vault.getKey("RAILWAY_API_TOKEN"), null);
   });
 
-  it("a first save needs the owner or set_key in a chat's own turn; other keys are as before", async () => {
+  it("a first save needs the owner or set_key in the owner's turn; other keys are as before", async () => {
     assert.throws(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN), /wasn't saved/, "a caller that names no writer");
+    assert.throws(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN, "", { writer: { tool: "set_key", ctx: CHAT } }), /Ask the owner/, "a chat bot's turn");
     assert.deepEqual(names(), []);
-    await quiet(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN, "", { writer: { tool: "set_key", ctx: CHAT } }));
+    await quiet(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN, "", { writer: { tool: "set_key", ctx: OWNER } }));
     assert.equal(vault.getKey("RAILWAY_API_TOKEN"), TOKEN);
     await quiet(() => { vault.setKey("TEST_SCRIPT_KEY", "a"); vault.setKey("TEST_SCRIPT_KEY", "b"); });
     assert.equal(vault.getKey("TEST_SCRIPT_KEY"), "b");
@@ -369,7 +383,7 @@ describe("the key tools check the name's type before anything else", () => {
       assert.match(out, /Settings > Keys/, out);
     }
     assert.deepEqual(names(), []);
-    assert.match(await tool("set_key", { name: "RAILWAY_API_TOKEN", value: TOKEN }), /saved securely/, "a chat's first save still works");
+    assert.match(await ownerTool("set_key", { name: "RAILWAY_API_TOKEN", value: TOKEN }), /saved securely/, "the owner's first save from the dashboard's chat still works");
   });
 });
 
@@ -475,7 +489,7 @@ describe("Tarsee's own keys set as variables where it runs reach no AI command",
 
 describe("the key tools' refusals are marked as errors, and the status line says so", () => {
   async function connect() {
-    const server = createTarseeMcp({ ...CHAT }, { quiet: true });
+    const server = createTarseeMcp({ ...OWNER }, { quiet: true });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "tarsee-test", version: "1.0.0" }, { capabilities: {} });
     await Promise.all([server.instance.connect(serverSide), client.connect(clientSide)]);

@@ -12,7 +12,11 @@
 //     variables and chains) counts as that variable: the same rules, under the name on Tarsee's own service. While a
 //     guarded one is sealed (its value can't be read) nothing is set in that environment of Tarsee's project;
 //   - while the owner has denied get_key in Tool Permissions, no vault key (from_key) goes onto Tarsee's own service,
-//     nor into a variable it is filled in from.
+//     nor into a variable it is filled in from;
+//   - every one of these holds on any Tarsee service: Tarsee's own in any environment, a service whose variable names
+//     give it away (SETUP_PASSWORD, ENCRYPTION_KEY, a TARSEE_ name), one Railway says is deployed from Tarsee's repo or
+//     image. Where Tarsee can't read the programs a variable reaches (another Tarsee, its own service in another
+//     environment, or its own while TARSEE_AUTO_UPDATE_CLI is set), only TZ and the tuning settings go.
 // Other services, and the allowed names on Tarsee's own, keep working. Railway is never reached: fetch is a stand-in
 // that answers like Railway's GraphQL API.
 import { describe, it, before, after } from "node:test";
@@ -56,8 +60,10 @@ const ON_RAILWAY = { RAILWAY_PROJECT_ID: P_TARSEE, RAILWAY_ENVIRONMENT_ID: E_TAR
  * A stand-in for Railway's GraphQL endpoint, answering by operation name and recording every call. `more` adds
  * variables per environment ({ name, serviceId, value }; serviceId null for a shared one). `refsFail` makes the
  * unrendered-variables query fail as Railway would. `services` adds services to Tarsee's project ({ id, name }).
+ * `sources` is what Railway says a service is deployed from ({ [serviceId]: { repo, image } }), or "fail" when its API
+ * doesn't say. `namesFail` lists the environments whose variable names Railway doesn't give.
  */
-function railway({ more = {}, refsFail = false, services = [] } = {}) {
+function railway({ more = {}, refsFail = false, services = [], sources = {}, namesFail = [] } = {}) {
   const acct = {
     projects: [
       { id: P_ACME, name: "Acme", deletedAt: null, environments: [{ id: E_PROD, name: "production" }], services: [{ id: S_WEB, name: "web" }, { id: S_WORK, name: "worker" }] },
@@ -87,7 +93,16 @@ function railway({ more = {}, refsFail = false, services = [] } = {}) {
         return reply(200, { data: { project: { id: p.id, name: p.name, deletedAt: null, environments: edges(p.environments.map((e) => ({ deletedAt: null, ...e }))), services: edges(p.services) } } });
       }
       case "TarseeVariableNames":
+        if (namesFail.includes(v.environmentId)) return reply(200, { errors: [{ message: "Problem processing request" }], data: null });
         return reply(200, { data: { environment: { variables: edges((acct.variables[v.environmentId] || []).map(({ name, serviceId, isSealed }) => ({ name, serviceId, isSealed }))) } } });
+      case "TarseeServiceSources": {
+        // Each service's deployments, one per environment, with the repo or image Railway builds it from.
+        if (sources === "fail") return reply(400, { errors: [{ message: "Cannot query field \"source\" on type \"ServiceInstance\"." }] });
+        const p = acct.projects.find((x) => x.id === v.id);
+        if (!p) return reply(200, { errors: [{ message: "Project not found" }], data: null });
+        const instances = (s) => p.environments.map((e) => ({ environmentId: e.id, source: { repo: null, image: null, ...sources[s.id] } }));
+        return reply(200, { data: { project: { services: edges(p.services.map((s) => ({ id: s.id, serviceInstances: edges(instances(s)) }))) } } });
+      }
       case "TarseeUnrenderedVariables": {
         // Railway's `variables(..., unrendered: true)`: a service's variables (serviceId left out: the shared ones, as
         // Railway's Manage Variables guide shows) as { NAME: value }, references left as typed. A sealed one's value
@@ -499,8 +514,9 @@ describe("from_key onto Tarsee's own service while the owner has denied get_key"
   // Denying get_key in Tool Permissions keeps the vault's keys out of the AI's reach (agent-env.js puts none in its
   // commands' environment then). A vault key set on Tarsee's own service would reach those commands at the next deploy.
   it("is refused, with a deploy or without, in any environment of it, saying why and where the owner sets it", async () => {
-    for (const [args, deploy] of [[{}, true], [{}, false], [{ project: "Tarsee", environment: "staging", service: "tarsee" }, false]]) {
-      const r = await run({ action: "set_variable", name: "SOME_SERVICE_API_KEY", from_key: "WORKER_PASSWORD", deploy, ...args }, { env: ON_RAILWAY, getKeyDenied: () => true });
+    // In another environment only TZ and the tuning settings go at all (see below), and from_key not even those.
+    for (const [args, deploy, name] of [[{}, true, "SOME_SERVICE_API_KEY"], [{}, false, "SOME_SERVICE_API_KEY"], [{ project: "Tarsee", environment: "staging", service: "tarsee" }, false, "TARSEE_TIMEZONE"]]) {
+      const r = await run({ action: "set_variable", name, from_key: "WORKER_PASSWORD", deploy, ...args }, { env: ON_RAILWAY, getKeyDenied: () => true });
       assertNothingChanged(r, JSON.stringify(args));
       assert.match(r.out, /get_key is denied in Settings > Tool Permissions/, r.out);
       assert.match(r.out, /by hand in Railway's dashboard/, r.out);
@@ -1061,18 +1077,22 @@ describe("a variable Tarsee's own settings are filled in from is never set eithe
     assert.match(r.out, /Railway said: "Problem processing request"/);
   });
 
-  it("a write in another project never reads any variable's value", async () => {
+  it("a write in a project with no Tarsee in it never reads any variable's value", async () => {
     const rw = railway({ more: protectedRefs });
     const r = await run({ action: "set_variable", project: "Acme", service: "worker", name: "API_TOKEN", value: "plain-value" }, { rw, env: ON_RAILWAY });
     assert.match(r.out, /^Set API_TOKEN on worker/, r.out);
-    assert.ok(!rw.calls.some((c) => c.op === "TarseeUnrenderedVariables"), "no unrendered values asked for outside Tarsee's project");
+    assert.ok(!rw.calls.some((c) => c.op === "TarseeUnrenderedVariables"), "no unrendered values asked for where no service is a Tarsee");
   });
 
-  it("off Railway (Tarsee's own service unknown) nothing extra is asked for", async () => {
+  it("off Railway (Tarsee's own service unknown) the Tarsee in that project is still found by its variable names", async () => {
+    // Its SETUP_PASSWORD gives it away, so its references are followed as Tarsee's own are.
     const rw = railway({ more: protectedRefs });
     const r = await run({ action: "set_variable", project: "Tarsee", service: "worker", name: "API_TOKEN", value: "plain-value" }, { rw });
-    assert.match(r.out, /^Set API_TOKEN on worker/, r.out);
-    assert.ok(!rw.calls.some((c) => c.op === "TarseeUnrenderedVariables"));
+    assertNothingChanged(r);
+    assert.match(r.out, /The Tarsee tarsee's TARSEE_API_TOKEN \(tarsee counts as a Tarsee: its variables include SETUP_PASSWORD\) is filled in from API_TOKEN on worker by a Railway reference/, r.out);
+    assert.ok(!r.text.includes(TOK_VALUE), "no value of its variables in the result or the log");
+    const free = await run({ action: "set_variable", project: "Tarsee", service: "worker", name: "OTHER_SETTING", value: "1" }, { rw: railway({ more: protectedRefs }) });
+    assert.match(free.out, /^Set OTHER_SETTING on worker/, free.out);
   });
 });
 
@@ -1557,8 +1577,9 @@ describe("other services keep working", () => {
     assert.ok(!r.text.includes(OPENAI));
   });
 
-  it("names that are Tarsee's own settings are ordinary on another service", async () => {
-    for (const [name, how] of [["SETUP_PASSWORD", { from_key: "WORKER_PASSWORD" }], ["NODE_OPTIONS", { value: "--max-old-space-size=512" }], ["TARSEE_AI_PROVIDER", { value: "openai" }], ["PORT", { value: "8080" }]]) {
+  it("names refused on Tarsee's own service are ordinary on a service that is no Tarsee", async () => {
+    // SETUP_PASSWORD, ENCRYPTION_KEY and TARSEE_ names would make a service look like a Tarsee (see below).
+    for (const [name, how] of [["NODE_OPTIONS", { value: "--max-old-space-size=512" }], ["PORT", { value: "8080" }], ["ANTHROPIC_API_KEY", { from_key: "WORKER_PASSWORD" }], ["BUILDKIT_SYNTAX", { value: "docker/dockerfile:1" }]]) {
       const rw = railway();
       const r = await run({ action: "set_variable", project: "Acme", service: "web", name, ...how }, { rw });
       assert.match(r.out, new RegExp(`^Set ${name} on web`), r.out);
@@ -1567,14 +1588,245 @@ describe("other services keep working", () => {
   });
 
   it("another service in Tarsee's own project (on Railway) is not Tarsee", async () => {
-    const r = await run({ action: "set_variable", service: "Postgres", name: "SETUP_PASSWORD", from_key: "WORKER_PASSWORD" }, { env: ON_RAILWAY });
-    assert.match(r.out, /^Set SETUP_PASSWORD on Postgres/, r.out);
-    assert.equal(r.rw.valueOf(E_TARSEE, S_PG, "SETUP_PASSWORD"), VAULT.WORKER_PASSWORD);
+    const r = await run({ action: "set_variable", service: "Postgres", name: "POSTGRES_PASSWORD", from_key: "WORKER_PASSWORD" }, { env: ON_RAILWAY });
+    assert.match(r.out, /^Set POSTGRES_PASSWORD on Postgres/, r.out);
+    assert.equal(r.rw.valueOf(E_TARSEE, S_PG, "POSTGRES_PASSWORD"), VAULT.WORKER_PASSWORD);
   });
 
   it("redeploying another service works as before", async () => {
     const r = await run({ action: "redeploy", project: "Acme", service: "web" });
     assert.match(r.out, /^Asked Railway to redeploy web/, r.out);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Any Tarsee, not only this one. A second Tarsee of the owner's, in another project or in this one, has sign-ins, a
+// vault and a Terminal of its own, and a variable set on it reaches its start-up script (run as root), its server and
+// its engines. Its variable names give it away (SETUP_PASSWORD, ENCRYPTION_KEY or any TARSEE_ name, in any environment
+// of its project, the name being set included), and so does Railway when it says the service is deployed from a repo
+// or image named like Tarsee's. This Tarsee can't read the programs another one runs, nor those of its own service in
+// another environment, so there only TZ and the tuning settings go.
+
+describe("any Tarsee service gets the limits of Tarsee's own", () => {
+  const DENIED = { env: ON_RAILWAY, getKeyDenied: () => true };
+  // The reviewer's case: a second Tarsee as Acme's worker.
+  const acmeTarsee = {
+    [E_PROD]: [
+      { name: "SETUP_PASSWORD", serviceId: S_WORK, value: "other-pw-SECRET-0005" },
+      { name: "TARSEE_STATE_DIR", serviceId: S_WORK, value: "/data/tarsee" },
+      { name: "ENCRYPTION_KEY", serviceId: S_WORK, value: "other-enc-SECRET-0006" },
+    ],
+  };
+  const SAYS_WHAT_GOES = (r) => {
+    assert.match(r.out, /only TZ and the tuning settings/, r.out);
+    assert.match(r.out, /TARSEE_TIMEZONE, .*TARSEE_PHONON_THREADS/, "names the tuning settings");
+    assert.match(r.out, /not even a key for the owner's own scripts/, r.out);
+    assert.match(r.out, /by hand in Railway's dashboard/, r.out);
+  };
+
+  it("another project's Tarsee: its sign-in, its start-up, its AI, its build and every other name are refused, and nothing is sent", async () => {
+    for (const [name, how, deploy] of [
+      ["SETUP_PASSWORD", { value: "chosen-by-the-ai" }, true],
+      ["NODE_OPTIONS", { value: "--import=data:text/javascript,0" }, false],
+      ["TARSEE_AI_PROVIDER", { value: "openrouter" }, false],
+      ["ANTHROPIC_BASE_URL", { value: "https://relay.example" }, false],
+      ["BUILDKIT_SYNTAX", { value: "example/frontend:1" }, false],
+      // A key for the owner's scripts too: which names that Tarsee's engines and Claude Code read is unknown here.
+      ["SOME_SERVICE_API_KEY", { value: "plain-value" }, false],
+      ["STATUS_PAGE_URL", { value: "https://status.example.com" }, true],
+    ]) {
+      for (const [label, opts] of [["get_key denied", DENIED], ["get_key allowed", { env: ON_RAILWAY }], ["off Railway", {}]]) {
+        const rw = railway({ more: acmeTarsee });
+        const r = await run({ action: "set_variable", project: "Acme", service: "worker", name, ...how, deploy }, { rw, ...opts });
+        assertNothingChanged(r, `${name}, ${label}`);
+        assert.match(r.out, /worker counts as a Tarsee \(its variables include SETUP_PASSWORD\)/, r.out);
+        assert.match(r.out, /can't see which versions of the AI engines, the browser and Claude Code worker runs/, r.out);
+        SAYS_WHAT_GOES(r);
+        assert.ok(!r.text.includes("other-pw-SECRET") && !r.text.includes("other-enc-SECRET"), "none of its values is shown");
+      }
+    }
+  });
+
+  it("there TZ, with a time zone name, and the tuning settings still go, and list_variables shows names only", async () => {
+    for (const [name, value] of [["TZ", "Asia/Manila"], ["TARSEE_TIMEZONE", "Asia/Manila"], ["TARSEE_PHONON_THREADS", "2"]]) {
+      for (const deploy of [true, false]) {
+        const rw = railway({ more: acmeTarsee });
+        const r = await run({ action: "set_variable", project: "Acme", service: "worker", name, value, deploy }, { rw, ...DENIED });
+        assert.match(r.out, new RegExp(`^Set ${name} on worker`), r.out);
+        assert.equal(rw.valueOf(E_PROD, S_WORK, name), value);
+      }
+    }
+    const path_ = await run({ action: "set_variable", project: "Acme", service: "worker", name: "TZ", value: ":/data/zone" }, { rw: railway({ more: acmeTarsee }), ...DENIED });
+    assertNothingChanged(path_);
+    assert.match(path_.out, /takes a time zone name/, path_.out);
+    const list = await run({ action: "list_variables", project: "Acme", service: "worker" }, { rw: railway({ more: acmeTarsee }), ...DENIED });
+    assert.match(list.out, /- SETUP_PASSWORD\n- TARSEE_STATE_DIR/, list.out);
+    assert.ok(!list.text.includes("other-pw-SECRET"));
+  });
+
+  it("from_key onto it is refused while get_key is denied, as on Tarsee's own service", async () => {
+    const r = await run({ action: "set_variable", project: "Acme", service: "worker", name: "TARSEE_TIMEZONE", from_key: "WORKER_PASSWORD", deploy: false }, { rw: railway({ more: acmeTarsee }), ...DENIED });
+    assertNothingChanged(r);
+    assert.match(r.out, /worker counts as a Tarsee \(its variables include SETUP_PASSWORD\)/, r.out);
+    assert.match(r.out, /get_key is denied in Settings > Tool Permissions/, r.out);
+    const allowed = await run({ action: "set_variable", project: "Acme", service: "worker", name: "TARSEE_TIMEZONE", from_key: "WORKER_PASSWORD", deploy: false }, { rw: railway({ more: acmeTarsee }), env: ON_RAILWAY });
+    assert.match(allowed.out, /^Set TARSEE_TIMEZONE on worker/, allowed.out);
+  });
+
+  it("each of its marks, in any case and in any environment of its project, makes a service a Tarsee", async () => {
+    for (const mark of ["SETUP_PASSWORD", "TARSEE_STATE_DIR", "ENCRYPTION_KEY", "TARSEE_API_TOKEN", "TARSEE_SOMETHING_ELSE", "setup_password", "Tarsee_Workspace_Dir"]) {
+      // Tarsee's project's worker, written in production, with the mark in production or only in staging.
+      for (const [envName, envId] of [["production", E_TARSEE], ["staging", E_TSTAGE]]) {
+        const rw = railway({ more: { [envId]: [{ name: mark, serviceId: S_TWORK, value: "x" }] } });
+        const r = await run({ action: "set_variable", service: "worker", name: "SOME_SERVICE_API_KEY", value: "plain-value", deploy: false }, { rw, env: ON_RAILWAY });
+        assertNothingChanged(r, `${mark} in ${envName}`);
+        assert.match(r.out, new RegExp(`worker counts as a Tarsee \\(its variables${envName === "staging" ? " in staging" : ""} include ${mark}\\)`), r.out);
+      }
+    }
+    // Without one it is an ordinary service, and so is one whose marks are only shared variables.
+    for (const more of [{}, { [E_TARSEE]: [{ name: "SETUP_PASSWORD", serviceId: null, value: "x" }] }]) {
+      const r = await run({ action: "set_variable", service: "worker", name: "SOME_SERVICE_API_KEY", value: "plain-value", deploy: false }, { rw: railway({ more }), env: ON_RAILWAY });
+      assert.match(r.out, /^Set SOME_SERVICE_API_KEY on worker/, r.out);
+    }
+  });
+
+  it("a name that would make a service look like a Tarsee is refused there, on a service that is none yet", async () => {
+    for (const [name, how] of [["SETUP_PASSWORD", { from_key: "WORKER_PASSWORD" }], ["ENCRYPTION_KEY", { value: "plain-value" }], ["TARSEE_AI_PROVIDER", { value: "openai" }], ["TARSEE_STATE_DIR", { value: "/tmp/x" }], ["tarsee_api_token", { value: "plain-value" }]]) {
+      for (const args of [{ project: "Acme", service: "web" }, { service: "Postgres" }]) {
+        const r = await run({ action: "set_variable", name, ...how, ...args }, { env: ON_RAILWAY });
+        assertNothingChanged(r, `${name} ${JSON.stringify(args)}`);
+        assert.match(r.out, new RegExp(`${args.service} counts as a Tarsee \\(${name}, the name being set, is one of Tarsee's own`), r.out);
+        SAYS_WHAT_GOES(r);
+      }
+    }
+    // A tuning setting is one of those names, and goes.
+    const tuning = await run({ action: "set_variable", project: "Acme", service: "web", name: "TARSEE_TIMEZONE", value: "Asia/Manila" }, { env: ON_RAILWAY });
+    assert.match(tuning.out, /^Set TARSEE_TIMEZONE on web/, tuning.out);
+  });
+
+  it("a service Railway says is deployed from Tarsee's repo or image is a Tarsee, whatever its variables", async () => {
+    for (const source of [{ repo: "someone/Tarsee" }, { repo: "someone/tarsee-fork" }, { image: "ghcr.io/someone/tarsee:latest" }, { image: "someone/Tarsee@sha256:0123abcd" }]) {
+      const rw = railway({ sources: { [S_WEB]: source } });
+      const r = await run({ action: "set_variable", project: "Acme", service: "web", name: "SOME_SERVICE_API_KEY", value: "plain-value", deploy: false }, { rw });
+      assertNothingChanged(r, JSON.stringify(source));
+      assert.match(r.out, new RegExp(`web counts as a Tarsee \\(Railway says it is deployed from the ${source.repo ? "repo" : "image"} `), r.out);
+      SAYS_WHAT_GOES(r);
+    }
+    // Another repo or image, a Tarsee-like owner with another repo, or no answer about sources: an ordinary service.
+    for (const sources of [{ [S_WEB]: { repo: "someone/shop" } }, { [S_WEB]: { image: "ghcr.io/tarsee-labs/shop:1" } }, { [S_WEB]: { repo: "tarsee-labs/shop" } }, "fail"]) {
+      const r = await run({ action: "set_variable", project: "Acme", service: "web", name: "SOME_SERVICE_API_KEY", value: "plain-value", deploy: false }, { rw: railway({ sources }) });
+      assert.match(r.out, /^Set SOME_SERVICE_API_KEY on web/, `${JSON.stringify(sources)}: ${r.out}`);
+    }
+  });
+
+  it("a variable another Tarsee is filled in from counts as that Tarsee's: the same rules, and its sealed ones close that environment", async () => {
+    const more = {
+      [E_PROD]: [
+        ...acmeTarsee[E_PROD],
+        { name: "ANTHROPIC_API_KEY", serviceId: S_WORK, value: "${{web.AK}}" },
+        { name: "WORKER_API_KEY", serviceId: S_WORK, value: "${{ web.WK }}" },
+        { name: "TARSEE_TIMEZONE", serviceId: S_WORK, value: "${{web.ZONE}}" },
+      ],
+    };
+    for (const name of ["AK", "WK"]) {
+      for (const how of [{ value: "plain-value" }, { from_key: "WORKER_PASSWORD" }]) {
+        const r = await run({ action: "set_variable", project: "Acme", service: "web", name, ...how, deploy: false }, { rw: railway({ more }), env: ON_RAILWAY });
+        assertNothingChanged(r, name);
+        assert.match(r.out, new RegExp(`The Tarsee worker's (ANTHROPIC|WORKER)_API_KEY \\(worker counts as a Tarsee: its variables include SETUP_PASSWORD\\) is filled in from ${name} on web by a Railway reference`), r.out);
+        SAYS_WHAT_GOES(r);
+      }
+    }
+    // A tuning setting filled in from web.ZONE: a plain value goes, from_key not while get_key is denied.
+    const zone = await run({ action: "set_variable", project: "Acme", service: "web", name: "ZONE", value: "Asia/Manila", deploy: false }, { rw: railway({ more }), ...DENIED });
+    assert.match(zone.out, /^Set ZONE on web/, zone.out);
+    const zoneKey = await run({ action: "set_variable", project: "Acme", service: "web", name: "ZONE", from_key: "WORKER_PASSWORD", deploy: false }, { rw: railway({ more }), ...DENIED });
+    assertNothingChanged(zoneKey);
+    assert.match(zoneKey.out, /get_key is denied in Settings > Tool Permissions/, zoneKey.out);
+    assert.match(zoneKey.out, /The Tarsee worker's TARSEE_TIMEZONE \(worker counts as a Tarsee: .*\) is filled in from ZONE on web/, zoneKey.out);
+    // One of its variables sealed: nothing is set in that environment of its project.
+    const sealed = { [E_PROD]: [...acmeTarsee[E_PROD], { name: "MY_KEY", serviceId: S_WORK, isSealed: true, value: "${{web.X}}" }] };
+    for (const name of ["X", "OTHER_SETTING"]) {
+      const r = await run({ action: "set_variable", project: "Acme", service: "web", name, value: "1", deploy: false }, { rw: railway({ more: sealed }), env: ON_RAILWAY });
+      assertNothingChanged(r, name);
+      assert.match(r.out, /The Tarsee worker's MY_KEY \(worker counts as a Tarsee: .*\) is sealed/, r.out);
+    }
+  });
+
+  it("when Railway doesn't give a project's variable names, in any of its environments, nothing is set there, saying why", async () => {
+    for (const [args, envId] of [
+      [{ project: "Acme", service: "web" }, E_PROD],            // another project
+      [{ service: "worker" }, E_TARSEE],                        // Tarsee's own project, the environment written to
+      [{ service: "worker" }, E_TSTAGE],                        // and another environment of it
+      [{ name: "TZ", value: "UTC" }, E_TSTAGE],                 // Tarsee's own service, even TZ
+    ]) {
+      const rw = railway({ namesFail: [envId] });
+      const r = await run({ action: "set_variable", name: "OTHER_SETTING", value: "1", deploy: false, ...args }, { rw, env: ON_RAILWAY });
+      assertNothingChanged(r, JSON.stringify(args));
+      assert.match(r.out, /Railway did not give the variable names in (production|staging) of the project/, r.out);
+      assert.match(r.out, /Problem processing request/, r.out);
+      assert.match(r.out, /can't tell whether a service there is a Tarsee/, r.out);
+    }
+  });
+
+  it("Tarsee's own service in another environment: only TZ and the tuning settings, since it can run other programs there", async () => {
+    for (const [name, how] of [["SOME_SERVICE_API_KEY", { from_key: "WORKER_PASSWORD" }], ["STATUS_PAGE_URL", { value: "https://status.example.com" }]]) {
+      const r = await run({ action: "set_variable", environment: "staging", name, ...how, deploy: false }, { env: ON_RAILWAY });
+      assertNothingChanged(r, name);
+      assert.match(r.out, /this is Tarsee's own service in staging, not in production, the environment this Tarsee runs in/, r.out);
+      SAYS_WHAT_GOES(r);
+    }
+    for (const [name, value] of [["TZ", "Asia/Manila"], ["TARSEE_PHONON_THREADS", "2"]]) {
+      const r = await run({ action: "set_variable", environment: "staging", name, value, deploy: false }, { env: ON_RAILWAY });
+      assert.match(r.out, new RegExp(`^Set ${name} on tarsee .* in staging`), r.out);
+    }
+  });
+});
+
+describe("while TARSEE_AUTO_UPDATE_CLI is among Tarsee's own variables, only TZ and the tuning settings go there", () => {
+  // With it, each start installs the newest Claude Code as the Terminal's claude, and that can read names the one running
+  // now (the one Tarsee read) doesn't. A write with a deploy starts such a start, and one without waits for the next.
+  const auto = (name = "TARSEE_AUTO_UPDATE_CLI", more = []) => ({ [E_TARSEE]: [{ name, serviceId: S_TARSEE, value: "1" }, ...more] });
+
+  it("the owner's keys are refused, with a deploy or without, however it is spelled, saying exactly what goes", async () => {
+    for (const spelled of ["TARSEE_AUTO_UPDATE_CLI", "tarsee_auto_update_cli"]) {
+      for (const [name, how] of [["SOME_SERVICE_API_KEY", { from_key: "WORKER_PASSWORD" }], ["STATUS_PAGE_URL", { value: "https://status.example.com" }], ["ALERTS_WEBHOOK", { from_key: "ALERTS_WEBHOOK" }]]) {
+        for (const deploy of [true, false]) {
+          const r = await run({ action: "set_variable", name, ...how, deploy }, { rw: railway({ more: auto(spelled) }), env: ON_RAILWAY });
+          assertNothingChanged(r, `${spelled} ${name} deploy=${deploy}`);
+          assert.match(r.out, /TARSEE_AUTO_UPDATE_CLI is set on Tarsee's own service, so each time it starts it installs the newest Claude Code/, r.out);
+          assert.match(r.out, /only TZ and the tuning settings/, r.out);
+          assert.match(r.out, /TARSEE_TIMEZONE, .*TARSEE_PHONON_THREADS/, r.out);
+          assert.match(r.out, /by hand in Railway's dashboard/, r.out);
+        }
+      }
+    }
+  });
+
+  it("TZ and the tuning settings still go", async () => {
+    for (const [name, value] of [["TZ", "Asia/Manila"], ["TARSEE_TIMEZONE", "Asia/Manila"], ["TARSEE_PHONON_THREADS", "2"]]) {
+      const rw = railway({ more: auto() });
+      const r = await run({ action: "set_variable", name, value }, { rw, env: ON_RAILWAY });
+      assert.match(r.out, new RegExp(`^Set ${name} on tarsee`), r.out);
+      assert.equal(rw.valueOf(E_TARSEE, S_TARSEE, name), value);
+    }
+  });
+
+  it("a variable one of Tarsee's is filled in from is refused the same way; what fills nothing still goes", async () => {
+    const more = auto("TARSEE_AUTO_UPDATE_CLI", [{ name: "ALERTS_API_KEY", serviceId: S_TARSEE, value: "${{worker.ALERTS_SRC}}" }]);
+    const r = await run({ action: "set_variable", service: "worker", name: "ALERTS_SRC", value: "plain-value", deploy: false }, { rw: railway({ more }), env: ON_RAILWAY });
+    assertNothingChanged(r);
+    assert.match(r.out, /Tarsee's own ALERTS_API_KEY is filled in from ALERTS_SRC on worker by a Railway reference/, r.out);
+    assert.match(r.out, /TARSEE_AUTO_UPDATE_CLI is set on Tarsee's own service/, r.out);
+    const free = await run({ action: "set_variable", service: "worker", name: "OTHER_SETTING", value: "1", deploy: false }, { rw: railway({ more }), env: ON_RAILWAY });
+    assert.match(free.out, /^Set OTHER_SETTING on worker/, free.out);
+  });
+
+  it("as a shared variable it is nothing; without it on Tarsee's own service the owner's keys go", async () => {
+    const elsewhere = { [E_TARSEE]: [{ name: "TARSEE_AUTO_UPDATE_CLI", serviceId: null, value: "1" }] };
+    for (const more of [{}, elsewhere]) {
+      const r = await run({ action: "set_variable", name: "SOME_SERVICE_API_KEY", from_key: "WORKER_PASSWORD", deploy: false }, { rw: railway({ more }), env: ON_RAILWAY });
+      assert.match(r.out, /^Set SOME_SERVICE_API_KEY on tarsee/, r.out);
+    }
   });
 });
 
@@ -1664,6 +1916,14 @@ describe("through tools.js, the real vault and the MCP server", () => {
       assert.match(tool.description, /TARSEE_AUTO_UPDATE_CLI=1/);
       assert.match(tool.description, /only TZ and the tuning settings/);
       assert.match(tool.description, /a service the project doesn't have/);
+      // Round 5: any Tarsee service, and the Claude Code read being the one running now.
+      assert.match(tool.description, /ANY TARSEE SERVICE GETS THESE LIMITS/);
+      assert.match(tool.description, /SETUP_PASSWORD, ENCRYPTION_KEY or a TARSEE_ name/);
+      assert.match(tool.description, /deployed from a repo or image named like Tarsee's/);
+      assert.match(tool.description, /while TARSEE_AUTO_UPDATE_CLI is among its variables/);
+      assert.match(tool.description, /the one running now/);
+      assert.match(tool.description, /If Railway doesn't give a project's variable names, nothing is set in it/);
+      assert.match(tool.inputSchema.properties.name.description, /On another Tarsee service, only TZ and the tuning settings/);
       assert.match(tool.inputSchema.properties.name.description, /the Terminal's Claude Code/);
       assert.match(tool.description, /Railway's dashboard/);
       assert.ok(!tool.description.includes(String.fromCharCode(0x2014)), "no long dash");

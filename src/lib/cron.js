@@ -1094,13 +1094,21 @@ function actionShownOf(action, secrets) {
  *
  * A task that asks the AI (no action) must pass promptScheduleProblem. A direct action can't be schedule_task, and
  * must pass checkDirectAction: it is saved as exactly the { tool, args } that check passed. Any schedule must pass
- * unsafeScheduleProblem before node-cron sees it.
+ * unsafeScheduleProblem before node-cron sees it. It is checked and saved with one space between its parts and none
+ * at either end, as node-cron reads it: a schedule padded with spaces (which the AI could write to push a task's line
+ * in /cron list past a chat bot's message limit) is saved as the five or six short parts it is. And it holds only what
+ * a schedule is written with (digits, names like mon or jan, * , - /): node-cron reads "0 9 * * *`" as "0 9 * * *"
+ * and lets the rest be, and a backtick, a bracket or a bidi control in it would be shown wherever the schedule is.
  *
  * id: a fixed id the caller finds its own task by later (the morning briefing's cron_briefingam), taken only when no
  * saved task has it. Otherwise the task gets a new one (newJobId).
  */
 export function addCronJob({ schedule, prompt, channel = "web:default", enabled = true, name, action, once = false, createdBy = "ai", conversationId = null, id: fixedId = null }) {
   if (typeof schedule !== "string") throw new Error(`Invalid cron schedule: ${schedule}`);
+  schedule = schedule.replace(/\s+/g, " ").trim();
+  if (/[^A-Za-z0-9*,/ -]/.test(schedule)) {
+    throw new Error(`That schedule has a character no schedule holds: a schedule is written with digits, names like mon or jan, spaces and * , - /, like "0 9 * * *" for 9 AM every day.`);
+  }
   const unsafe = unsafeScheduleProblem(schedule);
   if (unsafe) throw new Error(unsafe);
   if (!cron.validate(schedule)) throw new Error(`Invalid cron schedule: ${schedule}`);

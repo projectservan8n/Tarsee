@@ -80,11 +80,13 @@ const entryOf = (vault, name) => (Object.hasOwn(vault, name) && vault[name] && t
  *     variable where Tarsee runs, does any engine's environment or the exec tool's (ai/engine-env.js, which keeps its
  *     own copy of this list, SERVER_ONLY_KEY_NAMES, and strips a variable holding the same value too);
  *   - get_key refuses one, and a key holding the same value (lib/tools.js); list_keys still names it;
- *   - the first one is saved only by the owner in Settings > Keys ({ owner: true }), or by set_key in a chat's own
- *     turn (chatTurn), while Tarsee has none yet, in the vault or in its environment: that is how owners give Tarsee
- *     its token from chat. Nothing else ever saves one, not even a first one: background work (a scheduled task or its
- *     direct action, a webhook, the heartbeat, BOOT.md), a turn with no chat (a subagent, an ACP session), another
- *     tool's save_as_key (lib/discord-admin.js), or a caller that names no writer (setKey's `writer`, FIRST_SAVER);
+ *   - the first one is saved only by the owner: in Settings > Keys ({ owner: true }), or by set_key in a turn of the
+ *     dashboard's chat sent with the owner's live sign-in (ownerTurn), while Tarsee has none yet, in the vault or in
+ *     its environment. Nothing else ever saves one, not even a first one: a message on a chat bot, by email or through
+ *     the API, whoever sent it (a sender's id, a From line or the API token isn't the owner's sign-in, and the AI's
+ *     shell can read the token); background work (a scheduled task or its direct action, a webhook, the heartbeat,
+ *     BOOT.md); a subagent or an ACP session; another tool's save_as_key (lib/discord-admin.js); or a caller that
+ *     names no writer (setKey's `writer`, FIRST_SAVER);
  *   - replacing or deleting one is the owner's alone, in Settings > Keys.
  * Names match in any case, with spaces trimmed. A name that isn't text is refused before any of this (keyNameRefusal).
  */
@@ -118,7 +120,7 @@ export function serverOnlyTool(name) {
  * Who writes to the vault, as setKey takes it (`writer`), for the rule on Tarsee's own keys (serverOnlyWriteRefusal):
  *   { owner: true }                   the owner's Settings > Keys (routes/vault-keys.js); not a writer, an option
  *   writer: { tool: "set_key", ctx }  set_key, with its turn's tool context (lib/tools.js): the one tool that may save
- *                                     a first one, and only in a chat's own turn (chatTurn)
+ *                                     a first one, and only in the owner's turn of the dashboard's chat (ownerTurn)
  *   writer: { tool: "<name>", ctx? }  any other tool that saves to the vault (discord_admin's save_as_key): never one
  *   no writer                         never one
  * The isolation design records this same writer as who set each entry (the owner, or the turn's account).
@@ -126,27 +128,31 @@ export function serverOnlyTool(name) {
 const FIRST_SAVER = "set_key";
 
 /**
- * Whether a tool context is a chat's own turn: one that answers a message in a conversation (the dashboard, a chat
- * bot, the API), not background work. Background work's context is marked (ai/turn.js: toolCtx.background is "cron"
- * for a scheduled task, its direct action or a webhook, "heartbeat", "boot"), and a turn with no conversation (a
- * subagent, an ACP session) isn't one either.
+ * Whether a tool context is the owner's own turn: one that answers a message sent in the dashboard's chat with the
+ * owner's sign-in still on. The dashboard's chat says so itself (routes/chat.js and channels/websocket.js set
+ * ownerSignedIn: true from the live sign-in, as the owner's commands /cron, /briefing and /webhook decide it there),
+ * and no other tool context ever does: a chat bot's, email's, the API's (the API token alone isn't the owner), a
+ * subagent's or an ACP session's. Background work never is, whatever its context holds (ai/turn.js: toolCtx.background
+ * is "cron" for a scheduled task, its direct action or a webhook, "heartbeat", "boot").
  */
-export function chatTurn(ctx) {
-  return !!ctx && typeof ctx === "object" && !ctx.background && typeof ctx.conversationId === "string" && ctx.conversationId.trim() !== "";
+export function ownerTurn(ctx) {
+  return !!ctx && typeof ctx === "object" && ctx.ownerSignedIn === true && !ctx.background;
 }
 
 /** Why `writer` may never save the server-only key `own`, even a first one (see FIRST_SAVER), or null when it may. */
 function writerRefusal(own, writer) {
   const why = `${own} is Tarsee's own: ${USED_BY[own]} uses it, and a new one could point Tarsee at another account`;
-  const who = `The owner saves or changes it in Settings > Keys; the first one can also come from a chat with the owner, through ${FIRST_SAVER}.`;
+  const ask = "Ask the owner to save it in Settings > Keys.";
   const tool = writer && typeof writer === "object" && typeof writer.tool === "string" ? writer.tool : "";
-  if (!tool) return `${own} wasn't saved: only the owner, or ${FIRST_SAVER} in a chat, saves Tarsee's own keys, and this write named neither. ${why}. ${who}`;
-  if (tool !== FIRST_SAVER) return `${own} wasn't saved: ${tool} never saves Tarsee's own keys, not even a first one. ${why}. ${who}`;
+  if (!tool) return `${own} wasn't saved: only the owner saves Tarsee's own keys, and this write didn't come from the owner. ${why}. The owner saves or changes it in Settings > Keys.`;
+  if (tool !== FIRST_SAVER) return `${own} wasn't saved: ${tool} never saves Tarsee's own keys, not even a first one. ${why}. The owner saves or changes it in Settings > Keys.`;
   const ctx = writer.ctx;
   if (ctx && typeof ctx === "object" && ctx.background) {
-    return `${own} wasn't saved: background work (a scheduled task or its direct action, a webhook, the heartbeat, BOOT.md) never saves Tarsee's own keys, not even a first one, since nobody is there to have given it. ${why}. ${who}`;
+    return `${own} wasn't saved: background work (a scheduled task or its direct action, a webhook, the heartbeat, BOOT.md) never saves Tarsee's own keys, not even a first one, since nobody is there to have given it. ${why}. ${ask}`;
   }
-  if (!chatTurn(ctx)) return `${own} wasn't saved: a first one comes only from a chat's own turn, and this turn isn't a chat's own (a subagent's, an ACP session's, or a tool run with no chat). ${why}. ${who}`;
+  if (!ownerTurn(ctx)) {
+    return `${own} wasn't saved: a first one is saved only by the owner, in Settings > Keys or in the dashboard's chat while signed in, and this message didn't come from there (a chat bot, email or the API, whoever sent it, or a subagent or an ACP session). ${why}. ${ask}`;
+  }
   return null;
 }
 
@@ -171,9 +177,9 @@ export function serverOnlyValues({ get = getKey, envs = [process.env] } = {}) {
 
 /**
  * Why a write by anyone but the owner to the server-only key `name` is refused, or null when it may go ahead: a name
- * that isn't one, or a first save by set_key in a chat's own turn while Tarsee has none yet. deleting: for a delete,
- * which only the owner makes. writer: who saves it (see FIRST_SAVER); none is refused. env: where Tarsee would also
- * find one (its own environment by default).
+ * that isn't one, or a first save by set_key in the owner's turn (ownerTurn) while Tarsee has none yet. deleting: for
+ * a delete, which only the owner makes. writer: who saves it (see FIRST_SAVER); none is refused. env: where Tarsee
+ * would also find one (its own environment by default).
  */
 export function serverOnlyWriteRefusal(name, { deleting = false, env = process.env, writer = null } = {}) {
   const own = serverOnlyName(name);
@@ -224,8 +230,8 @@ function saveVault(vault) {
  * @param {string} [description] - What this key is for
  * @param {{ owner?: boolean, writer?: { tool: string, ctx?: object } }} [opts] - owner: the owner's own Settings >
  *   Keys, the one writer that may replace a server-only key already there. writer: the tool that saves it, with its
- *   turn's tool context: set_key in a chat's own turn may save a first one, and nothing else saves one at all
- *   (FIRST_SAVER, serverOnlyWriteRefusal). Other keys save as before, whoever writes them.
+ *   turn's tool context: set_key in the owner's turn (ownerTurn) may save a first one, and nothing else saves one
+ *   at all (FIRST_SAVER, serverOnlyWriteRefusal). Other keys save as before, whoever writes them.
  * @returns {object} - { name, description, masked }
  */
 export function setKey(name, value, description = "", { owner = false, writer = null } = {}) {

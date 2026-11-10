@@ -339,6 +339,17 @@ describe("set_variable with from_key: the value goes to Railway and nowhere else
     assert.equal(lines[0], `[railway] set_variable project="Acme" (${P_ACME}) env="production" (${E_PROD}) service="watchdog" (${S_WATCH}) go="${GO}" name=ALERTS_WEBHOOK_URL from_key=ALERTS_WEBHOOK deploy=yes ok`);
   });
 
+  it("to find a Tarsee among its services, a write reads the names of every live environment of the project, never a value", async () => {
+    // test/railway-tool-limits.test.js has what a Tarsee found that way gets.
+    const { out, rw } = await run({ action: "set_variable", project: "Acme", service: "watchdog", name: "ALERTS_WEBHOOK_URL", from_key: "ALERTS_WEBHOOK", approved_by: GO });
+    assert.match(out, /^Set ALERTS_WEBHOOK_URL on watchdog/, out);
+    const named = rw.calls.filter((c) => c.op === "TarseeVariableNames").map((c) => c.body.variables.environmentId);
+    assert.deepEqual([...new Set(named)].sort(), [E_PROD, E_STAGE].sort(), "production and Staging; pr-12 was deleted");
+    assert.ok(rw.calls.every((c) => c.body.query === DOCS.serviceSources || c.op !== "TarseeServiceSources"), "what each service is deployed from, in the tool's own document");
+    assert.ok(rw.calls.some((c) => c.op === "TarseeServiceSources"), "and Railway is asked what each service is deployed from");
+    assert.ok(!rw.calls.some((c) => c.op === "TarseeUnrenderedVariables" || /\bvalue\b/.test(c.body.query)), "no value is asked for: no service there is a Tarsee");
+  });
+
   it("deploy: false sets it with skipDeploys and says it takes effect on the next deploy", async () => {
     const { out, rw } = await run({ action: "set_variable", project: "Acme", service: "watchdog", name: "ALERTS_WEBHOOK_URL", from_key: "ALERTS_WEBHOOK", deploy: false, approved_by: GO });
     assert.equal(rw.writes()[0].body.variables.skipDeploys, true);
@@ -581,6 +592,12 @@ describe("wording", () => {
     assert.match(section, /TARSEE_AUTO_UPDATE_CLI=1/);
     assert.match(section, /only TZ and the tuning settings/);
     assert.match(section, /a service the project doesn't have/);
+    // Round 5: any Tarsee service gets the limits, and the claude read is the one running now.
+    assert.match(section, /Any Tarsee service gets the same limits/);
+    assert.match(section, /SETUP_PASSWORD, ENCRYPTION_KEY or a TARSEE_ name/);
+    assert.match(section, /the one running now/);
+    assert.match(section, /while TARSEE_AUTO_UPDATE_CLI is among its variables/);
+    assert.match(section, /If Railway doesn't give a project's variable names, nothing is set there/);
   });
 
   it("config/env.js seeds the same Railway section as the default TOOLS.md", () => {

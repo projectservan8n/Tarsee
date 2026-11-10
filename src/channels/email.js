@@ -462,9 +462,9 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
   /**
    * The one-time note in Settings > Channels > Email (SENDER_NOTE_KEY) that mail to this mailbox was refused because
    * nothing in it said who sent it: written for the first such mail only, once per mailbox (IMAP host and user). It
-   * holds nothing the mail wrote but the From address, which is on the owner's list: never a server name from the
-   * mail, which the sender may have written. The owner's OK on it only hides it (dismissedAt); a change of mailbox or
-   * of what Tarsee trusts there clears it (routes/settings.js).
+   * holds nothing the mail wrote but the From address, and that only when it is on the owner's list: never a server
+   * name from the mail, nor an address the sender made up. The owner's OK on it only hides it (dismissedAt); a change
+   * of mailbox or of what Tarsee trusts there clears it (routes/settings.js).
    */
   function noteUncheckedMail(fromAddr, vouched) {
     try {
@@ -475,7 +475,8 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
         host: cfg.imap.host,
         user: cfg.imap.user,
         at: new Date().toISOString(),
-        from: fromAddr.slice(0, 254),
+        // Only an address on the owner's list: with no list (any sender), it is whatever the sender wrote there.
+        ...(allowlist.includes(fromAddr) ? { from: fromAddr } : {}),
         provider: vouched.provider,
       });
     } catch (err) {
@@ -695,13 +696,14 @@ export function senderCheckFor(senderCheck, imap) {
 
 /** Method names: one of them as a bare name=value inside another result means a ";" is missing between the two. */
 const AUTH_METHODS = new Set(["auth", "dkim", "dkim2", "domainkeys", "iprev", "sender-id", "spf", "dmarc", "arc", "bimi", "rrvs", "smime", "vbr", "dnswl", "compauth"]);
-/** Checks that give one result per signature; every other check gives one verdict for the whole mail. */
-const PER_SIGNATURE = new Set(["dkim", "dkim2", "domainkeys"]);
 /** The properties Tarsee reads: each must be a plain address or domain. */
 const READ_PROPERTIES = new Set(["header.d", "header.i", "header.from", "smtp.mailfrom"]);
 const METHOD = /^[a-z0-9][a-z0-9_-]*(\/[0-9]+)?$/;
 const KEYWORD = /^[a-z0-9][a-z0-9_-]*$/;
 const PROPERTY = /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9_.-]*$/;
+// RFC 2045's token, with "/" and ":" besides: real lines carry them in values (base64 in header.b=, smtp.bits=256/256,
+// IPv6 addresses). Never "[", "]", "<", ">", "@" or ",": those mark a piece of an address or literal cut short.
+const TOKEN = /^[A-Za-z0-9!#$%&'*+\-.^_`{|}~/:]+$/;
 // Letters and digits of any script count (RFC 6531 addresses): they can't make a line read as something else.
 const DOMAIN = /^(?=.{1,253}$)(?:[\p{L}\p{N}_](?:[\p{L}\p{N}_-]{0,61}[\p{L}\p{N}_])?\.)*[\p{L}\p{N}_](?:[\p{L}\p{N}_-]{0,61}[\p{L}\p{N}_])?$/u;
 const DOT_ATOM = /^[\p{L}\p{N}!#$%&'*+/=?^_`{|}~.-]+$/u;
@@ -712,9 +714,15 @@ const DOT_ATOM = /^[\p{L}\p{N}!#$%&'*+/=?^_`{|}~.-]+$/u;
  * a local part inside quotes stays apart from one outside. Comments are dropped; they nest, and "\" escapes the next
  * character in them. With `quotesInComments`, a '"' inside a comment opens a quoted run in which "(" and ")" don't
  * count: how a provider that pasted an address with a quoted local part into a comment meant it to read.
+ * `text` comes unfolded (parseAuthResults), so only a space parts two words: a tab in the middle of a line, a space of
+ * another script, or a control character is part of a word, and a word may not start right after a comment. So a
+ * name with no space in it, such as the HELO name a sender chooses, can't pass for a result and its property when a
+ * provider pastes it unquoted ("dkim=pass()header.d=...").
  */
 function authResultsTokens(text, quotesInComments) {
   const tokens = [];
+  let afterComment = false;
+  const wordAfterComment = { tokens, problem: "a word right after a comment, with no space between" };
   let word = null;
   const end = () => { if (word) tokens.push(word); word = null; };
   const add = (s, quoted) => {
@@ -759,7 +767,9 @@ function authResultsTokens(text, quotesInComments) {
         else if (d === ")" && --depth === 0) break;
       }
       if (depth > 0) return { tokens, problem: "a comment is never closed" };
+      afterComment = true;
     } else if (c === '"') {
+      if (afterComment) return wordAfterComment;
       const s = quotedString();
       if (s === null) return { tokens, problem: "a quoted string is never closed" };
       add(s, true);
@@ -770,11 +780,14 @@ function authResultsTokens(text, quotesInComments) {
     } else if (c === ";") {
       end();
       tokens.push({ t: ";" });
+      afterComment = false;
       i++;
-    } else if (/\s/.test(c)) {
+    } else if (c === " ") {
       end();
+      afterComment = false;
       i++;
     } else {
+      if (afterComment) return wordAfterComment;
       add(c, false);
       i++;
     }
@@ -813,33 +826,44 @@ function joinAroundEquals(tokens) {
   return out;
 }
 
-/** A word as name=value: { name, value, quotedName, quotedValue }, or null when it has no "=" outside quotes. */
+/**
+ * A word as name=value: { name, value, quotedName, quotedValue, valueParts }, or null when it has no "=" outside
+ * quotes. valueParts are the value's runs of text as written, each quoted or not.
+ */
 function nameValue(w) {
   const eq = wordEquals(w);
   if (eq < 0) return null;
   let at = 0;
   let quotedName = false;
-  let quotedValue = false;
+  const valueParts = [];
   for (const p of w.parts) {
-    if (p.quoted) {
-      if (at < eq) quotedName = true;
-      else quotedValue = true;
-    }
+    const from = at;
     at += p.s.length;
+    if (at <= eq) {
+      if (p.quoted) quotedName = true;
+      continue;
+    }
+    const s = from <= eq ? p.s.slice(eq + 1 - from) : p.s;
+    const last = valueParts.at(-1);
+    if (!p.quoted && !s) continue;
+    if (!p.quoted && last && !last.quoted) last.s += s;
+    else valueParts.push({ s, quoted: p.quoted });
   }
   const text = wordText(w);
-  return { name: text.slice(0, eq), value: text.slice(eq + 1), quotedName, quotedValue };
+  return { name: text.slice(0, eq), value: text.slice(eq + 1), quotedName, quotedValue: valueParts.some((p) => p.quoted), valueParts };
 }
 
-/** What a word looked like, for a problem's words: short, and printable only. */
-const shown = (w) => (w.t === "word" ? wordText(w) : w.t).replace(/[^\x20-\x7e]/g, "?").slice(0, 40);
+/** Text from the line, for a problem's words: short, and printable only. */
+const printable = (s) => String(s).replace(/[^\x20-\x7e]/g, "?").slice(0, 40);
+/** What a word looked like, for a problem's words. */
+const shown = (w) => printable(w.t === "word" ? wordText(w) : w.t);
 
 /**
- * Whether a property value is a plain address or domain, as RFC 8601's pvalue writes one: [local-part "@"] domain,
+ * Whether a value's text is a plain address or domain, as RFC 8601's pvalue writes one: [local-part "@"] domain,
  * here also in <...> (Zoho's header.from). A quoted local part may not hold what would let it pass for something
  * else in the line, and an address literal ("[...]") isn't a domain name.
  */
-function plainAddress({ value, quotedValue }) {
+function plainAddress(value, quotedLocal) {
   let s = value.trim();
   if (s.startsWith("<") && s.endsWith(">")) s = s.slice(1, -1);
   const at = s.lastIndexOf("@");
@@ -847,7 +871,24 @@ function plainAddress({ value, quotedValue }) {
   const domain = (at >= 0 ? s.slice(at + 1) : s).replace(/\.$/, "");
   if (!DOMAIN.test(domain)) return false;
   if (!local) return true;
-  return quotedValue ? !/[()<>[\]:;@\\,"=]/.test(local) : DOT_ATOM.test(local);
+  return quotedLocal ? !/[()<>[\]:;@\\,"=]/.test(local) : DOT_ATOM.test(local);
+}
+
+/**
+ * Whether a value (nameValue's valueParts) is one value, as RFC 8601's pvalue writes one, whatever it is for: a quoted
+ * string, an address or domain (its local part maybe quoted), or a token (TOKEN). { address } says whether it is an
+ * address or domain; null means it is none of these, such as a piece of a sender's address literal that held a ";"
+ * or "()" and was pasted unquoted ("smtp.helo=[x:"), which would let the rest of it read as the provider's own.
+ */
+function pvalue(parts) {
+  const text = parts.map((p) => p.s).join("");
+  if (parts.length === 1 && parts[0].quoted) return { address: plainAddress(text, true) };
+  if (parts.length === 2 && parts[0].quoted && !parts[1].quoted && parts[1].s.startsWith("@")) {
+    return plainAddress(text, true) ? { address: true } : null;
+  }
+  if (parts.some((p) => p.quoted)) return null;
+  const address = plainAddress(text, false);
+  return address || TOKEN.test(text) ? { address } : null;
 }
 
 /** One result (the words between two ";"): { method, result, props }, or a string saying why it isn't one. */
@@ -861,15 +902,18 @@ function authResultOf(words) {
   const out = { method: method.replace(/\/[0-9]+$/, ""), result, props: {} };
   for (const w of rest) {
     const p = w.t === "word" ? nameValue(w) : null;
-    if (!p || p.quotedName || p.value === "") return `"${p ? p.name : shown(w)}" has no value`;
+    if (!p || p.quotedName || p.value === "") return `"${p ? printable(p.name) : shown(w)}" has no value`;
     const name = p.name.toLowerCase();
     // Older Zoho lines read "dkim=pass spf=pass ...": a result that ran into another can't be read for sure.
     if (AUTH_METHODS.has(name)) return `a ";" is missing before ${name}=`;
-    // reason=..., and a name=value Tarsee doesn't read (Microsoft's action=, Fastmail's x-bits=), are left as they are.
+    // Every value is one value, read or not, whatever its name: reason=, a property, and a name=value that is neither
+    // (Microsoft's action=, Fastmail's x-bits=).
+    const value = pvalue(p.valueParts);
+    if (READ_PROPERTIES.has(name) && !value?.address) return `${name} isn't a plain address or domain`;
+    if (!value) return `${printable(name)} isn't one value: a word, a quoted string, or an address or domain`;
     if (name === "reason" || !name.includes(".")) continue;
-    if (!PROPERTY.test(name)) return `"${p.name}" isn't a property name`;
+    if (!PROPERTY.test(name)) return `"${printable(p.name)}" isn't a property name`;
     if (name in out.props) return `${name} is given twice`;
-    if (READ_PROPERTIES.has(name) && !plainAddress(p)) return `${name} isn't a plain address or domain`;
     out.props[name] = p.value;
   }
   return out;
@@ -884,12 +928,15 @@ const readingOf = (tokens) => JSON.stringify(tokens.map((t) => (t.t === "word" ?
  * { method, result, props } with the props Tarsee reads (header.d, header.i, header.from, smtp.mailfrom, ...).
  * problem says why the line doesn't read cleanly, and then results is empty: a comment or quoted string left open, a
  * stray ")" or "\", a result that isn't method=result, a ";" missing or doubled, a property with no value or given
- * twice, an address that isn't a plain one, or a line that reads two ways: a provider that pastes the envelope sender
- * (MAIL FROM, the sender's to choose) into a comment unescaped can have its comment closed early by a ")" in it. The
- * authserv-id is given even then, as far as it was read, so the line is still known as the provider's.
+ * twice, a value that isn't one value (an address that isn't a plain one, a piece of something cut short), a word
+ * right after a comment, or a line that reads two ways: a provider that pastes the envelope sender (MAIL FROM, the
+ * sender's to choose) into a comment unescaped can have its comment closed early by a ")" in it. The authserv-id is
+ * given even then, as far as it was read, so the line is still known as the provider's.
+ * The line is unfolded first: a line break and the spaces or tabs after it are one space, as are those right after
+ * the colon. Any other tab is part of a word.
  */
 export function parseAuthResults(value) {
-  const text = String(value || "").replace(/\r?\n/g, " ");
+  const text = String(value || "").replace(/^[ \t]+/, "").replace(/\r?\n[ \t]+/g, " ");
   const strict = authResultsTokens(text, false);
   const unclean = (problem) => {
     const [first, second] = strict.tokens;
@@ -963,10 +1010,10 @@ const SENDER_PART = new Set(["from", "sender", "reply-to", "to", "cc", "subject"
  *     domain refuses the mail: the provider read another From line than Tarsee did); else
  *   - dkim=pass with that result's own header.d aligned to the From domain; else
  *   - spf=pass with smtp.mailfrom aligned to it.
- * Two results for a check that gives one verdict for the mail (dmarc, spf, ...), or two dkim results for one
- * signature that disagree, can't both be the provider's word, so they refuse it too. Lines lower down are the
- * sender's to write and are never read; for the owner's own server, the topmost line must also sit above every
- * header only the sender writes. "Trust the From line" (senderCheck.trustFromLine) counts only for a server Tarsee
+ * Two dmarc or two spf results (each gives one verdict for the mail), or two dkim results for one signature that
+ * disagree, can't both be the provider's word, so they refuse it too. Lines lower down are the sender's to write
+ * and are never read; for the owner's own server, the topmost line must also sit above every header only the sender
+ * writes. "Trust the From line" (senderCheck.trustFromLine) counts only for a server Tarsee
  * doesn't know and the owner named no line for: one that writes none.
  * { ok: true, by: "dmarc"|"dkim"|"spf"|"from-line", provider } or
  * { ok: false, why: "unchecked" (no line Tarsee can read as the provider's) | "failed", provider, detail? }:
@@ -1011,12 +1058,12 @@ export function senderVouched(headerLines, fromAddress, { imapHost = "", imapUse
   if (unread) return failed(`its Authentication-Results line doesn't read cleanly: ${unread.problem}`);
   const results = block.flatMap((b) => b.results);
 
-  const count = new Map();
-  for (const r of results) if (!PER_SIGNATURE.has(r.method)) count.set(r.method, (count.get(r.method) || 0) + 1);
-  const twice = [...count].find(([, n]) => n > 1);
-  if (twice) return failed(`more than one ${twice[0]} result`);
+  // Of the checks Tarsee reads, dmarc and spf give one verdict for the whole mail and dkim one per signature. Checks it
+  // doesn't read may come more than once (Fastmail's x-return-mx: once for the From domain, once for MAIL FROM's).
+  const twice = ["dmarc", "spf"].find((m) => results.filter((r) => r.method === m).length > 1);
+  if (twice) return failed(`more than one ${twice} result`);
   const signatures = new Map();
-  for (const r of results.filter((x) => PER_SIGNATURE.has(x.method))) {
+  for (const r of results.filter((x) => x.method === "dkim")) {
     const d = domainOf(r.props["header.d"] || r.props["header.i"]);
     const key = `${r.method} ${d} ${String(r.props["header.s"] || "").toLowerCase()}`;
     if (signatures.has(key) && signatures.get(key) !== r.result) return failed(`its ${r.method} results for ${d || "one signature"} disagree`);

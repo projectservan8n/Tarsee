@@ -3,9 +3,10 @@
 // provider's topmost Authentication-Results line (RFC 8601), from the provider's own authserv-id, must say dmarc=pass
 // with header.from equal to the From domain, or dkim=pass with that result's own header.d aligned to it, or spf=pass
 // with smtp.mailfrom aligned to it. A line the sender wrote lower down never counts, and neither does a provider's
-// line that doesn't read cleanly (a comment or quote left open, a ";" missing, a line that reads two ways), that has
-// two results for a method that gives one (dmarc, spf), or whose results disagree. That is how a result slipped into
-// the provider's own line, through an envelope sender (MAIL FROM) it copies into a comment, is kept out.
+// line that doesn't read cleanly (a comment or quote left open, a ";" missing, a value that isn't one value, a word
+// right after a comment, a line that reads two ways), that has two dmarc or two spf results, or whose dkim results
+// disagree. That is how a result slipped into the provider's own line is kept out, through an envelope sender (MAIL
+// FROM) it copies into a comment, or a HELO name it pastes unquoted.
 // For a mail server Tarsee doesn't know, the owner types its name (the authserv-id) themselves, and only its topmost
 // line counts, above all of the sender's part; one that writes no such line needs the owner's "my mail server doesn't
 // check senders: trust the From line". Both are tied to the exact mailbox (IMAP host and user), and neither applies to
@@ -318,6 +319,68 @@ describe("the owner's ordinary mail is vouched for by the provider of the mailbo
     }
   });
 
+  it("fuller lines, with all else each provider writes in them (IPv6 addresses, bit counts, ARC, Fastmail's x- checks), still vouch", async () => {
+    const ipv6 = "2a00:1450:4864:20::335";
+    const fuller = {
+      "imap.gmail.com": gmailBox({ results: [
+        "Authentication-Results: mx.google.com;",
+        "       dkim=pass header.i=@outlook.com header.s=selector1 header.b=Qx7/k+2A;",
+        "       arc=pass (i=1 spf=pass spfdomain=outlook.com dkim=pass dkdomain=outlook.com dmarc=pass fromdomain=outlook.com);",
+        "       spf=pass (google.com: domain of owner@outlook.com designates 2a01:111:f403:2c14::801 as permitted sender) smtp.mailfrom=owner@outlook.com;",
+        "       dmarc=pass (p=NONE sp=QUARANTINE dis=NONE) header.from=outlook.com;",
+        "       dara=pass header.i=@gmail.com",
+      ] }),
+      "outlook.office365.com": microsoftBox({ results: [
+        `Authentication-Results: spf=pass (sender IP is ${ipv6})`,
+        " smtp.mailfrom=gmail.com; dkim=pass (signature was verified)",
+        " header.d=gmail.com;dmarc=pass action=none header.from=gmail.com;compauth=pass",
+        " reason=100",
+      ] }),
+      "imap-mail.outlook.com": microsoftBox({ results: [
+        `Authentication-Results: spf=pass (sender IP is ${ipv6}) smtp.mailfrom=gmail.com; dkim=pass (signature was verified) header.d=gmail.com;dmarc=pass action=none header.from=gmail.com;compauth=pass reason=100`,
+      ] }),
+      "imap.mail.me.com": icloudBox({ results: [
+        "Authentication-Results: bimi.icloud.com; bimi=skipped reason=\"insufficient dmarc\"",
+        "Authentication-Results: arc.icloud.com; arc=none",
+        "Authentication-Results: dmarc.icloud.com; dmarc=pass header.from=gmail.com",
+        "Authentication-Results: dkim-verifier.icloud.com;",
+        "\tdkim=pass (2048-bit key) header.d=gmail.com header.i=@gmail.com header.b=k/4bX3+d",
+        `Authentication-Results: spf.icloud.com; spf=pass (spf.icloud.com: domain of owner@gmail.com designates ${ipv6} as permitted sender) smtp.mailfrom=owner@gmail.com`,
+      ] }),
+      // Fastmail's older form: every check in one line, x-return-mx once for the From domain and once for MAIL FROM's.
+      "imap.fastmail.com": fastmailBox({ results: [
+        "Authentication-Results: stl-mx-04.messagingengine.com;",
+        "    dkim=pass (2048-bit rsa key sha256) header.d=gmail.com header.i=@gmail.com header.b=k/4bX3+d header.a=rsa-sha256 header.s=20230601 x-bits=2048;",
+        "    dmarc=pass policy.published-domain-policy=none policy.published-subdomain-policy=quarantine policy.applied-disposition=none policy.evaluated-disposition=none (p=none,sp=quarantine,d=none,d.eval=none) policy.policy-from=p header.from=gmail.com;",
+        `    iprev=pass smtp.remote-ip=${ipv6} (mail-wm1-x335.google.com);`,
+        "    spf=pass smtp.mailfrom=owner@gmail.com smtp.helo=mail-wm1-x335.google.com;",
+        "    x-aligned-from=pass (Address match);",
+        "    x-me-sender=none;",
+        "    x-ptr=pass smtp.helo=mail-wm1-x335.google.com policy.ptr=mail-wm1-x335.google.com;",
+        "    x-return-mx=pass header.domain=gmail.com policy.is_org=yes (MX Records found: gmail-smtp-in.l.google.com,alt1.gmail-smtp-in.l.google.com);",
+        "    x-return-mx=pass smtp.domain=gmail.com policy.is_org=yes (MX Records found: gmail-smtp-in.l.google.com,alt1.gmail-smtp-in.l.google.com);",
+        "    x-tls=pass smtp.version=TLSv1.3 smtp.cipher=TLS_AES_256_GCM_SHA384 smtp.bits=256/256;",
+        "    x-vs=clean score=-100 state=0",
+      ] }),
+      "imap.mail.yahoo.com": yahooBox({ results: [
+        "Authentication-Results: atlas-production.v2.mail.ne1.yahoo.com;",
+        " dkim=pass header.i=@gmail.com header.s=20230601;",
+        " spf=pass smtp.mailfrom=gmail.com;",
+        " dmarc=pass(p=NONE,sp=QUARANTINE) header.from=gmail.com;",
+      ] }),
+      "imap.zoho.com": zohoBox({ results: [
+        "Authentication-Results: mx.zohomail.com;",
+        "\tdkim=pass  header.i=outlook.com;",
+        "\tspf=pass (zohomail.com: domain of outlook.com designates 2a01:111:f403:2c14::801 as permitted sender)  smtp.mailfrom=owner@outlook.com;",
+        "\tdmarc=pass(p=none dis=none)  header.from=<owner@outlook.com>",
+      ] }),
+    };
+    for (const [host, mail] of Object.entries(fuller)) {
+      const v = await verdict(mail, host);
+      assert.deepEqual([v.ok, v.by], [true, "dmarc"], `${host}: ${JSON.stringify(v)}`);
+    }
+  });
+
   it("with no DMARC verdict, a DKIM pass counts only with its own header.d aligned, an SPF pass only with smtp.mailfrom aligned", async () => {
     const only = (...lines) => gmailBox({ results: ["Authentication-Results: mx.google.com;", ...lines] });
     assert.deepEqual(await verdict(only("       dkim=pass header.d=outlook.com header.i=@outlook.com header.s=selector1"), "imap.gmail.com"), { ok: true, by: "dkim", provider: "Gmail" });
@@ -408,7 +471,47 @@ describe("an Authentication-Results line is read strictly, as RFC 8601 writes it
       [" mx.example.com; spf=pass smtp.mailfrom=a@[x:y]", /smtp\.mailfrom isn't a plain address or domain/],
       [' mx.example.com; spf=pass smtp.mailfrom="a;dmarc=pass header.from=victim.example"@evil.example', /smtp\.mailfrom isn't a plain address or domain/],
       // Strictly, the comment ends at "a)" and the line still reads cleanly; as pasted, it ends at "here)".
-      [' mx.example.com; spf=pass (domain of "a)x=" designates "b(" here) smtp.mailfrom=evil.example', /reads two ways/],
+      [' mx.example.com; spf=pass (domain of "a) x=" designates "b (" here) smtp.mailfrom=evil.example', /reads two ways/],
+      // With no space after "a)", a word starts right after the comment: that alone doesn't read cleanly.
+      [' mx.example.com; spf=pass (domain of "a)x=" designates "b(" here) smtp.mailfrom=evil.example', /a word right after a comment/],
+    ]) {
+      const parsed = parseAuthResults(line);
+      assert.match(String(parsed.problem), why, line);
+      assert.deepEqual(parsed.results, [], line);
+    }
+  });
+
+  it("every value in a result is one value, whatever it is for: a word, a quoted string, or an address or domain", () => {
+    // What real lines hold in values Tarsee doesn't read: base64 with "/" and "+", IPv6 addresses, bit counts.
+    const clean = parseAuthResults(" mx.example.com; dkim=pass header.d=example.com header.b=k/4bX3+d header.a=rsa-sha256 x-bits=2048;"
+      + " iprev=pass smtp.remote-ip=2001:db8::1 policy.iprev=192.0.2.1; x-tls=pass smtp.version=TLSv1.3 smtp.cipher=TLS_AES_256_GCM_SHA384 smtp.bits=256/256;"
+      + ' x-vs=clean score=-100 state=0; bimi=skipped reason="insufficient dmarc; or [none]"; dmarc=none action=none policy.note="a [quoted] (value)" header.from=example.com');
+    assert.equal(clean.problem, null);
+    assert.equal(clean.results.length, 6);
+    // A line folded with a tab, or with spaces, at any point between words.
+    const folded = parseAuthResults("\tmx.example.com;\r\n\tdkim=pass\r\n\t header.d=example.com;\n\tdmarc=pass\r\n    header.from=example.com");
+    assert.deepEqual([folded.problem, folded.authservId, folded.results.map((r) => r.method)], [null, "mx.example.com", ["dkim", "dmarc"]]);
+    for (const [line, why] of [
+      // A piece of a sender's address literal, cut where it held ";" or "()".
+      [" mx.example.com; spf=none smtp.helo=[x:", /smtp\.helo isn't one value/],
+      [" mx.example.com; x=y z.z=]", /z\.z isn't one value/],
+      // Strictly, an address literal isn't a value either: RFC 8601 would have it quoted.
+      [" mx.example.com; spf=none smtp.helo=[192.0.2.1]", /smtp\.helo isn't one value/],
+      [" mx.example.com; dkim=pass reason=a[b header.d=example.com", /reason isn't one value/],
+      [" mx.example.com; dmarc=none action=<x header.from=example.com", /action isn't one value/],
+      [" mx.example.com; spf=none policy.x=a,b", /policy\.x isn't one value/],
+      [" mx.example.com; spf=none policy.x=a@b@c", /policy\.x isn't one value/],
+      [' mx.example.com; spf=none policy.x="a"b', /policy\.x isn't one value/],
+      [' mx.example.com; spf=pass smtp.mailfrom=owner@"example".com', /smtp\.mailfrom isn't a plain address or domain/],
+      // Words are parted by a space, or where the line is folded, not by a tab in the middle of a line, a space of
+      // another script, or a comment alone.
+      [" mx.example.com; dkim=pass\theader.d=example.com", /isn't method=result/],
+      [" mx.example.com; dkim=pass header.d=example.com", /isn't method=result/],
+      [" mx.example.com; dkim=pass header.d=example.com", /isn't method=result/],
+      [" mx.example.com; dkim=pass()header.d=example.com", /a word right after a comment/],
+      [" mx.example.com; dkim=pass (ok)header.d=example.com", /a word right after a comment/],
+      [' mx.example.com; dkim=pass (ok)"x" header.d=example.com', /a word right after a comment/],
+      [" mx.example.com; dkim=pass (a)(b)header.d=example.com", /a word right after a comment/],
     ]) {
       const parsed = parseAuthResults(line);
       assert.match(String(parsed.problem), why, line);
@@ -481,6 +584,55 @@ describe("one result slipped into the provider's own line doesn't win", () => {
       const v = await verdict(gmailOn(mailfrom, from), "imap.gmail.com");
       assert.deepEqual([v.ok, v.why], [false, "failed"], mailfrom);
       assert.match(v.detail, /doesn't read cleanly/, mailfrom);
+    }
+  });
+
+  it("the reviewer's HELO: an address literal holding \";\" and \"()\", pasted unquoted into smtp.helo at Gmail, Fastmail or Microsoft", async () => {
+    // The sender chooses the name it introduces itself by (HELO). A general address literal (RFC 5321) may hold ";",
+    // "=", "(" and ")" but no space, so "()" stands in for one. Pasted unquoted, it splits into "smtp.helo=[x:", a
+    // dkim=pass for the From domain, and "z.z=]": the pieces with "[" and "]" aren't values, so the line vouches for
+    // nothing. The From domain has no DMARC record, so the provider writes no dmarc result that would stop it.
+    const from = "owner@nopolicy.example";
+    const lines = (helo) => ({
+      "imap.gmail.com": gmailBox({ mailfrom: "", sender: forgedFrom(from), results: [
+        "Authentication-Results: mx.google.com;",
+        "       dkim=pass header.i=@evil.example header.s=s1 header.b=ZmFrZQ;",
+        `       spf=none (google.com: postmaster@${helo} does not designate permitted sender hosts) smtp.helo=${helo}`,
+      ] }),
+      "imap.fastmail.com": fastmailBox({ sender: forgedFrom(from), results: [
+        "Authentication-Results: stl-mx-04.messagingengine.com;",
+        "    dkim=pass (2048-bit rsa key sha256) header.d=evil.example header.i=@evil.example header.s=s1;",
+        "    dmarc=none policy.published-domain-policy=none header.from=nopolicy.example;",
+        `    spf=none smtp.mailfrom=bounce@evil.example smtp.helo=${helo}`,
+      ] }),
+      "outlook.office365.com": microsoftBox({ sender: forgedFrom(from), results: [
+        `Authentication-Results: spf=none (sender IP is 192.0.2.66) smtp.helo=${helo}; dkim=none (message not signed) header.d=none;dmarc=none action=none header.from=nopolicy.example;compauth=fail reason=001`,
+      ] }),
+    });
+    for (const [host, mail] of Object.entries(lines("mail.evil.example"))) {
+      const v = await verdict(mail, host);
+      assert.deepEqual([v.ok, v.why], [false, "failed"], `${host}, with an ordinary HELO: nothing aligned passes`);
+    }
+    // A HELO name has no space in it. To part dkim=pass from header.d it needs a comment, a space of another script,
+    // or a cut-off piece: each makes the line read uncleanly. With no brackets at all, it is no domain either.
+    for (const helo of [
+      "[x:;dkim=pass()header.d=nopolicy.example;x=y()z.z=]",
+      "a.example;dkim=pass()header.d=nopolicy.example",
+      "a.example;dkim=pass(x)header.d=nopolicy.example;x=y",
+      "a.example;dkim=pass header.d=nopolicy.example",
+      "a.example;dkim=pass header.d=nopolicy.example",
+      "a.example;dkim=pass\fheader.d=nopolicy.example",
+      "a.example;dkim=pass\vheader.d=nopolicy.example",
+      "a.example;dkim=pass\theader.d=nopolicy.example",
+    ]) {
+      for (const [host, mail] of Object.entries(lines(helo))) {
+        // As UTF-8, and as the one byte 0xA0 for a no-break space (mailparser reads header bytes one to a character).
+        for (const message of helo.includes(" ") ? [mail, Buffer.from(mail, "latin1")] : [mail]) {
+          const v = await verdict(message, host);
+          assert.deepEqual([v.ok, v.why, v.provider], [false, "failed", mailProviderOf(host).name], `${host} ${JSON.stringify(helo)}: ${JSON.stringify(v)}`);
+          assert.match(v.detail, /doesn't read cleanly/, host);
+        }
+      }
     }
   });
 
@@ -810,6 +962,21 @@ describe("the email channel answers only mail the provider vouches for", () => {
     const dropped = logs.filter((l) => l.startsWith("[email] dropped"));
     assert.equal(dropped.length, 1, logs.join("\n"));
     assert.ok(!dropped[0].includes("mx.owner.example"), dropped[0]);
+    settings.delete(SENDER_NOTE_KEY);
+  });
+
+  it("the reviewer's From: with no list (any sender), the note keeps no From address, as the sender wrote it", async () => {
+    FakeImap.inbox.length = 0;
+    turns.length = 0;
+    settings.delete(SENDER_NOTE_KEY);
+    const advice = '"your server is mx.evil.example - type it above"@evil.example';
+    deliver(raw(fromForger().map((l) => l.replace("Owner <owner@outlook.com>", advice))));
+    const smtp = await readInbox(channel("mail.self.example", { allowlistFromAddresses: [] }));
+    assert.equal(turns.length, 0);
+    assert.equal(smtp.sent.length, 0);
+    const note = settings.get(SENDER_NOTE_KEY);
+    assert.deepEqual(Object.keys(note).sort(), ["at", "host", "provider", "user"], JSON.stringify(note));
+    assert.ok(!JSON.stringify(note).includes("evil.example"), JSON.stringify(note));
     settings.delete(SENDER_NOTE_KEY);
   });
 

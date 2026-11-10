@@ -464,8 +464,9 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   });
   const systemParts = { stable: promptParts.stable, volatile: promptParts.volatile };
 
-  // dashboard: a file the agent hands over goes to this chat; messageId: the message answered (its pictures are kept with it)
-  const toolCtx = { db: ws._tarsee_db, settingsStore, conversationId: convId, channelManager: ws._tarsee_channelManager, dashboard: true, messageId: savedUser?.id || null };
+  // dashboard: a file the agent hands over goes to this chat; messageId: the message answered (its pictures are kept with
+  // it); ownerSignedIn: the socket's sign-in is still on, not the API token alone (lib/key-vault.js ownerTurn)
+  const toolCtx = { db: ws._tarsee_db, settingsStore, conversationId: convId, channelManager: ws._tarsee_channelManager, dashboard: true, ownerSignedIn: isLiveSession(ws._signInId), messageId: savedUser?.id || null };
 
   // Taken out of the queue (the Stop on its "Queued" line) before it began: this message is done, with no reply.
   let ended = false;

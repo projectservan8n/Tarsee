@@ -1,7 +1,9 @@
 // A first save of one of Tarsee's own keys (src/lib/key-vault.js SERVER_ONLY_KEYS: RAILWAY_API_TOKEN) comes only from
-// set_key in a chat's own turn, or from the owner in Settings > Keys. The vault itself holds every writer to that, so
-// no caller can skip it: background work (a scheduled task, its direct action, the heartbeat, BOOT.md), a turn with no
-// chat (a subagent, an ACP session), another tool's save_as_key, and a caller that names no writer all save none.
+// the owner: in Settings > Keys, or by set_key in a turn of the dashboard's chat sent with the owner's live sign-in
+// (ownerSignedIn in the turn's context). The vault itself holds every writer to that, so no caller can skip it: a chat
+// bot's, email's or the API's turn (whoever sent it), background work (a scheduled task, its direct action, the
+// heartbeat, BOOT.md), a turn with no chat (a subagent, an ACP session), another tool's save_as_key, and a caller that
+// names no writer all save none. Each channel's own context, and the dashboard's for real: server-only-owner-turn.test.js.
 // The reviewer's case: discord_admin create_webhook with save_as_key "RAILWAY_API_TOKEN", from a scheduled task or a
 // background turn, saved the webhook's URL as Tarsee's Railway token while Tarsee had none (only set_key checked
 // ctx.background). Now discord_admin refuses that name before it makes the webhook, the vault refuses it anyway, and a
@@ -39,17 +41,23 @@ const quiet = async (fn) => {
   console.log = () => {};
   try { return await fn(); } finally { console.log = log; }
 };
-/** A chat's own turn, as a channel or the dashboard gives its tools: a conversation, and no background mark. */
+/** A chat bot's, email's or the API's turn, as it gives its tools: a conversation, and no background mark. */
 const CHAT = Object.freeze({ conversationId: "test-chat-0001" });
+/** The owner's turn in the dashboard's chat, signed in (routes/chat.js, channels/websocket.js). */
+const OWNER = Object.freeze({ conversationId: "test-chat-0001", dashboard: true, ownerSignedIn: true });
 const names = () => vault.listKeys().map((k) => k.name).sort();
 const ownerSaves = (value) => vault.setKey("RAILWAY_API_TOKEN", value, "", { owner: true });
 
-/** Every writer that isn't set_key in a chat's own turn or the owner, as setKey's options name it. */
+/** Every writer that isn't set_key in the owner's turn or the owner, as setKey's options name it. */
 const NOT_ALLOWED = [
   ["a caller that names no writer", undefined],
   ["a writer with no tool named", { writer: {} }],
   ["discord_admin's save_as_key", { writer: { tool: "discord_admin" } }],
-  ["discord_admin's save_as_key, even in a chat's own turn", { writer: { tool: "discord_admin", ctx: CHAT } }],
+  ["discord_admin's save_as_key, even in the owner's turn", { writer: { tool: "discord_admin", ctx: OWNER } }],
+  ["set_key in a chat bot's, email's or the API's turn", { writer: { tool: "set_key", ctx: CHAT } }],
+  ["set_key in the dashboard's chat with the API token alone", { writer: { tool: "set_key", ctx: { conversationId: "c-1", dashboard: true, ownerSignedIn: false } } }],
+  ["set_key with an owner mark that isn't true", { writer: { tool: "set_key", ctx: { conversationId: "c-1", ownerSignedIn: "yes" } } }],
+  ["set_key in background work carrying the owner's mark", { writer: { tool: "set_key", ctx: { ...OWNER, background: "cron" } } }],
   ["set_key in a scheduled task or its direct action", { writer: { tool: "set_key", ctx: { background: "cron" } } }],
   ["set_key in background work that names a chat", { writer: { tool: "set_key", ctx: { background: "cron", conversationId: "test-chat-0001" } } }],
   ["set_key in the heartbeat", { writer: { tool: "set_key", ctx: { background: "heartbeat" } } }],
@@ -78,27 +86,33 @@ describe("the vault's own rule for a first save of Tarsee's own key", () => {
     assert.deepEqual(names(), [], "nothing was saved");
   });
 
-  it("each refusal says who may: background work, another tool and a turn with no chat in their own words", () => {
-    assert.match(vault.serverOnlyWriteRefusal("RAILWAY_API_TOKEN", { writer: { tool: "set_key", ctx: { background: "heartbeat" } } }), /background work \(a scheduled task or its direct action, a webhook, the heartbeat, BOOT\.md\) never saves/);
+  it("each refusal says who may, and a set_key refusal says to ask the owner", () => {
+    const heartbeat = vault.serverOnlyWriteRefusal("RAILWAY_API_TOKEN", { writer: { tool: "set_key", ctx: { background: "heartbeat" } } });
+    assert.match(heartbeat, /background work \(a scheduled task or its direct action, a webhook, the heartbeat, BOOT\.md\) never saves/);
+    assert.match(heartbeat, /Ask the owner to save it in Settings > Keys\.$/);
     assert.match(vault.serverOnlyWriteRefusal("RAILWAY_API_TOKEN", { writer: { tool: "discord_admin" } }), /discord_admin never saves Tarsee's own keys, not even a first one/);
-    assert.match(vault.serverOnlyWriteRefusal("RAILWAY_API_TOKEN", { writer: { tool: "set_key", ctx: { conversationId: null } } }), /this turn isn't a chat's own/);
+    for (const ctx of [CHAT, { conversationId: null }, { conversationId: "c-1", dashboard: true }]) {
+      const why = vault.serverOnlyWriteRefusal("RAILWAY_API_TOKEN", { writer: { tool: "set_key", ctx } });
+      assert.match(why, /a first one is saved only by the owner, in Settings > Keys or in the dashboard's chat while signed in, and this message didn't come from there \(a chat bot, email or the API, whoever sent it, or a subagent or an ACP session\)/, JSON.stringify(ctx));
+      assert.match(why, /Ask the owner to save it in Settings > Keys\.$/);
+    }
   });
 
-  it("set_key in a chat's own turn saves the first one; the owner always may", async () => {
-    await quiet(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN, "", { writer: { tool: "set_key", ctx: CHAT } }));
+  it("set_key in the owner's turn saves the first one; the owner always may", async () => {
+    await quiet(() => vault.setKey("RAILWAY_API_TOKEN", TOKEN, "", { writer: { tool: "set_key", ctx: OWNER } }));
     assert.equal(vault.getKey("RAILWAY_API_TOKEN"), TOKEN);
-    // After that, only the owner replaces it, even from a chat.
-    assert.throws(() => vault.setKey("RAILWAY_API_TOKEN", OTHER, "", { writer: { tool: "set_key", ctx: CHAT } }), /change it in Settings > Keys/);
+    // After that, only the owner replaces it in Settings > Keys, even from their own turn.
+    assert.throws(() => vault.setKey("RAILWAY_API_TOKEN", OTHER, "", { writer: { tool: "set_key", ctx: OWNER } }), /change it in Settings > Keys/);
     await quiet(() => ownerSaves(OTHER));
     assert.equal(vault.getKey("RAILWAY_API_TOKEN"), OTHER);
   });
 
-  it("a chat's own turn: a conversation, and no background mark", () => {
-    assert.equal(vault.chatTurn(CHAT), true);
-    assert.equal(vault.chatTurn({ conversationId: "c-1", dashboard: true, messageId: 4 }), true);
-    for (const ctx of [undefined, null, "test-chat-0001", {}, { conversationId: null }, { conversationId: "" }, { conversationId: "   " }, { conversationId: 5 },
-      { conversationId: "c-1", background: "cron" }, { conversationId: "c-1", background: true }, { conversationId: "c-1", background: "heartbeat" }]) {
-      assert.equal(vault.chatTurn(ctx), false, JSON.stringify(ctx));
+  it("the owner's turn: the dashboard's chat says the owner is signed in, and it isn't background work", () => {
+    assert.equal(vault.ownerTurn(OWNER), true);
+    assert.equal(vault.ownerTurn({ ownerSignedIn: true }), true);
+    for (const ctx of [undefined, null, "test-chat-0001", {}, CHAT, { conversationId: "c-1", dashboard: true, messageId: 4 },
+      { ownerSignedIn: 1 }, { ownerSignedIn: "true" }, { ownerSignedIn: false }, { ...OWNER, background: "cron" }, { ...OWNER, background: true }, { ...OWNER, background: "heartbeat" }]) {
+      assert.equal(vault.ownerTurn(ctx), false, JSON.stringify(ctx));
     }
   });
 
@@ -120,27 +134,27 @@ describe("the vault's own rule for a first save of Tarsee's own key", () => {
     for (const call of calls) assert.match(call, /\{ owner: true \}|\{ writer(?:: [A-Z_]+)? \}/, call);
   });
 
-  it("the token set where Tarsee runs (a Railway variable) still can't be shadowed from a chat", () => {
+  it("the token set where Tarsee runs (a Railway variable) still can't be shadowed from a chat, the owner's included", () => {
     process.env.RAILWAY_API_TOKEN = TOKEN;
-    assert.throws(() => vault.setKey("RAILWAY_API_TOKEN", OTHER, "", { writer: { tool: "set_key", ctx: CHAT } }), /already has one in its environment/);
+    assert.throws(() => vault.setKey("RAILWAY_API_TOKEN", OTHER, "", { writer: { tool: "set_key", ctx: OWNER } }), /already has one in its environment/);
     assert.deepEqual(names(), []);
   });
 });
 
 describe("set_key passes its turn's context to the vault", () => {
-  it("from background work or a turn with no chat, even a first save is refused, and says so", async () => {
-    for (const ctx of [{ background: "cron" }, { background: "heartbeat" }, { background: "boot" }, { conversationId: null }, {}]) {
+  it("from a chat bot, email, the API, background work or a turn with no chat, even a first save is refused, and says so", async () => {
+    for (const ctx of [CHAT, { background: "cron" }, { background: "heartbeat" }, { background: "boot" }, { conversationId: null }, {}]) {
       const out = await quiet(() => executeTool("set_key", { name: "RAILWAY_API_TOKEN", value: OTHER }, ctx));
       assert.ok(out.startsWith("set_key refused: RAILWAY_API_TOKEN wasn't saved"), `${JSON.stringify(ctx)}: ${out}`);
       assert.match(out, /Settings > Keys/, out);
       assert.ok(!out.includes(OTHER), out);
     }
     assert.deepEqual(names(), []);
-    assert.match(await quiet(() => executeTool("set_key", { name: "RAILWAY_API_TOKEN", value: TOKEN }, CHAT)), /^Key "RAILWAY_API_TOKEN" saved securely/);
+    assert.match(await quiet(() => executeTool("set_key", { name: "RAILWAY_API_TOKEN", value: TOKEN }, OWNER)), /^Key "RAILWAY_API_TOKEN" saved securely/);
   });
 
   it("through tarsee_set_key in a heartbeat's turn: marked as an error, and nothing saved", async () => {
-    const server = createTarseeMcp({ background: "heartbeat" }, { quiet: true });
+    const server = createTarseeMcp({ ...OWNER, background: "heartbeat" }, { quiet: true });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "tarsee-test", version: "1.0.0" }, { capabilities: {} });
     await Promise.all([server.instance.connect(serverSide), client.connect(clientSide)]);
