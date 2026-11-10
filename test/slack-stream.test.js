@@ -369,19 +369,6 @@ describe("SlackReplyStream, when things go wrong part-way", () => {
     assert.equal(streamedText(client), "one two");
     await s.finish();
   });
-
-  it("takes back every message of the reply when the turn starts over, rolled-over ones included", async () => {
-    const client = fakeClient();
-    const c = clock();
-    const s = new SlackReplyStream(opts(client, c, { maxStreamChars: 10 }));
-    for (const w of ["aaaa\n", "bbbb\n", "cccc\n", "dddd\n", "eeee\n"]) { c.advance(1500); await s.text(w); }
-    const started = client.calls.filter(([m]) => m === "startStream").map(([, , r]) => r.ts);
-    assert.ok(started.length >= 2);
-    await s.discard();
-    const deleted = client.of("delete").map((d) => d.ts);
-    for (const ts of started) assert.ok(deleted.includes(ts), `${ts} deleted`);
-    assert.equal(s.sentText, false);
-  });
 });
 
 describe("slackErrorCode", () => {

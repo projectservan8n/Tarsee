@@ -690,7 +690,7 @@ describe("the MCP server offers tarsee_discord_admin and runs it through the too
 
 describe("the agent is told: tool list, default workspace files, redaction", () => {
   it("the turn's tool list names it, and a new workspace's AGENTS.md and TOOLS.md carry the rules", () => {
-    const provider = fs.readFileSync(path.join(here, "../src/ai/providers/claude-code.js"), "utf8");
+    const provider = fs.readFileSync(path.join(here, "../src/ai/preamble.js"), "utf8");
     assert.match(provider, /\*\*discord_admin\*\*\(action, \.\.\.\)/);
     for (const file of ["../src/workspace-defaults/TOOLS.md", "../src/config/env.js"]) {
       const text = fs.readFileSync(path.join(here, file), "utf8");

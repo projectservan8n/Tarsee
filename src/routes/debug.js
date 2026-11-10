@@ -4,6 +4,7 @@ import config from "../config/env.js";
 import { getTTSEngine } from "../voice/engine-registry.js";
 import { logCapture } from "../lib/log-capture.js";
 import { isSecretKey, redactSecretFields, isEncrypted } from "../lib/vault.js";
+import { getProvider } from "../ai/provider-registry.js";
 
 /**
  * Render a stored setting for the debug console without disclosing credentials.
@@ -201,12 +202,15 @@ export const ALLOWED_COMMANDS = {
       const p = provider?.value || "none";
       const model = db.prepare("SELECT value FROM settings WHERE key = ?").get(`ai.${p}.model`);
       const key = db.prepare("SELECT value FROM settings WHERE key = ?").get(`ai.${p}.apiKey`);
-      const base = db.prepare("SELECT value FROM settings WHERE key = ?").get(`ai.${p}.baseUrl`);
+      // Hosts are fixed in code (the provider registry); only Local AI's is the owner's setting.
+      const entry = getProvider(p);
+      const local = entry?.id === "local" ? db.prepare("SELECT value FROM settings WHERE key = 'ai.local.baseUrl'").get() : null;
+      const hosts = entry ? Object.entries(entry.baseUrl).map(([engine, url]) => `${url} (${engine})`).join(", ") : "";
       return [
         `Provider: ${p}`,
         `Model:    ${model?.value || "(default)"}`,
         `API Key:  ${key?.value ? "••••" + key.value.slice(-4) : "(not set / env fallback)"}`,
-        `Base URL: ${base?.value || "(default)"}`,
+        `Host:     ${local?.value || hosts || (entry ? "(the engine's own sign-in)" : "(none)")}`,
       ].join("\n");
     },
   },
@@ -284,7 +288,7 @@ export const ALLOWED_COMMANDS = {
         if (status.jobs.length === 0) return "No cron jobs configured";
         const lines = [`Active: ${status.activeJobs}/${status.totalJobs}`];
         for (const j of status.jobs) {
-          lines.push(`  ${j.id} [${j.enabled ? "ON" : "OFF"}] ${j.schedule} — ${j.prompt.slice(0, 50)}`);
+          lines.push(`  ${j.id} [${j.state.toUpperCase()}] ${j.schedule} — ${String(j.prompt || j.action?.tool || "").slice(0, 50)}`);
         }
         return lines.join("\n");
       } catch (err) {
@@ -301,6 +305,8 @@ export const ALLOWED_COMMANDS = {
         const s = getHeartbeatStatus();
         return [
           `Running:   ${s.running ? "Yes" : "No"}`,
+          // HEARTBEAT.md text the owner hasn't OK'd doesn't run (lib/automation-approval.js), timer or not.
+          `Waiting for your OK: ${s.waitingForOwner ? "Yes. HEARTBEAT.md changed outside Settings, so the heartbeat runs nothing until you OK it in Settings > Automation (Let it run)." : "No"}`,
           `Last run:  ${s.lastRun || "Never"}`,
           `Run count: ${s.runCount || 0}`,
           `Last result: ${s.lastResult?.slice(0, 100) || "(none)"}`,

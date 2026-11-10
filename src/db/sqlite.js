@@ -28,7 +28,16 @@ export function initDb(dbPath) {
   return db;
 }
 
-function migrate(db) {
+/**
+ * Applies every migration not yet recorded in the migrations table, in order.
+ * A migration is either SQL (`sql`) or a function of the database (`up`), for
+ * changes plain SQL cannot guard, like adding a column only when it is missing.
+ * `through` stops after the named migration (tests use it to build a database
+ * the way an older install has it).
+ * @param {Database.Database} db
+ * @param {{through?: string}} [opts]
+ */
+export function migrate(db, { through = null } = {}) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS migrations (
       id INTEGER PRIMARY KEY,
@@ -42,12 +51,66 @@ function migrate(db) {
   );
 
   for (const m of MIGRATIONS) {
-    if (applied.has(m.name)) continue;
-    db.transaction(() => {
-      db.exec(m.sql);
-      db.prepare("INSERT INTO migrations (name) VALUES (?)").run(m.name);
-    })();
-    console.log(`[db] applied migration: ${m.name}`);
+    if (!applied.has(m.name)) {
+      db.transaction(() => {
+        if (m.up) m.up(db);
+        else db.exec(m.sql);
+        db.prepare("INSERT INTO migrations (name) VALUES (?)").run(m.name);
+      })();
+      console.log(`[db] applied migration: ${m.name}`);
+    }
+    if (through && m.name === through) break;
+  }
+}
+
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// A column type with optional constraints and a plain default: "TEXT", "REAL NOT NULL DEFAULT 0", "TEXT DEFAULT 'x'".
+const COLUMN_DDL = /^[A-Za-z][A-Za-z0-9_ ().,'-]*$/;
+
+/**
+ * Adds a column to a table unless it is already there, so a migration that adds
+ * columns can run on any database (fresh, upgraded, made some other way) and run
+ * twice. SQLite has no ADD COLUMN IF NOT EXISTS; this asks PRAGMA table_info first.
+ * The names are interpolated into the ALTER, so only plain identifiers are accepted.
+ * @param {Database.Database} db
+ * @param {string} table
+ * @param {string} column
+ * @param {string} ddl - the column's type and constraints, e.g. "TEXT" or "REAL NOT NULL DEFAULT 0"
+ * @returns {boolean} true if the column was added, false if it was already there
+ */
+export function ensureColumn(db, table, column, ddl) {
+  if (!IDENTIFIER.test(String(table))) throw new Error(`ensureColumn: not a table name: ${JSON.stringify(table)}`);
+  if (!IDENTIFIER.test(String(column))) throw new Error(`ensureColumn: not a column name: ${JSON.stringify(column)}`);
+  if (!COLUMN_DDL.test(String(ddl)) || /--|;/.test(ddl)) throw new Error(`ensureColumn: not a column type (ddl): ${JSON.stringify(ddl)}`);
+  const existing = db.prepare("SELECT name FROM pragma_table_info(?)").all(table);
+  if (existing.length === 0) throw new Error(`ensureColumn: no table named ${table}`);
+  if (existing.some((c) => c.name.toLowerCase() === column.toLowerCase())) return false;
+  db.exec(`ALTER TABLE "${table}" ADD COLUMN "${column}" ${ddl}`);
+  return true;
+}
+
+/**
+ * The columns migration 012 adds to the usage tables (lib/token-usage.js), design 4.13:
+ *   provider  the provider that ran the call or turn (claude-code, anthropic, openrouter, ...); null on rows from
+ *             before 012 (all Claude plan)
+ *   engine    the agent engine that ran it (claude-code or codex)
+ *   cost_usd  what it cost in US dollars, exact or estimated; null when unknown or included in a plan
+ */
+export const USAGE_COLUMNS = Object.freeze({
+  usage_calls: Object.freeze({ provider: "TEXT", engine: "TEXT", cost_usd: "REAL" }),
+  // cost_exact: the turn's cost_usd is the provider's own figure (an Anthropic key's total, OpenRouter's usage.cost).
+  usage_turns: Object.freeze({ provider: "TEXT", engine: "TEXT", cost_usd: "REAL", cost_exact: "INTEGER" }),
+});
+
+/**
+ * Adds USAGE_COLUMNS to the usage tables where they are missing. Run by migration
+ * 012 and by the UsageIndex constructor right after it re-runs USAGE_SCHEMA, so a
+ * fresh database, an upgraded one and one made some other way (a test) all have them.
+ * @param {Database.Database} db
+ */
+export function ensureUsageColumns(db) {
+  for (const [table, cols] of Object.entries(USAGE_COLUMNS)) {
+    for (const [column, ddl] of Object.entries(cols)) ensureColumn(db, table, column, ddl);
   }
 }
 
@@ -282,5 +345,13 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_chat_files_conv ON chat_files (conversation_id, id);
       CREATE INDEX IF NOT EXISTS idx_chat_files_message ON chat_files (message_id);
     `,
+  },
+  {
+    // Which provider and engine ran each model call and turn, and what it cost (USAGE_COLUMNS above), for the
+    // Usage page's provider column, spend totals and the monthly cap. Guarded column adds, so it runs on a database
+    // a UsageIndex already gave the columns, and twice. Session handles keep living in conversations.claude_session_id
+    // (the Claude plan's stay bare; other providers' are tagged), so conversations gets no new column.
+    name: "012_ai_usage_columns",
+    up: ensureUsageColumns,
   },
 ];

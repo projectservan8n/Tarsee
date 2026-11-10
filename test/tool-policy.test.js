@@ -85,3 +85,69 @@ describe("SSRF protection", () => {
     assert.match(result, /Refused|blocked/i);
   });
 });
+
+describe("Warn: the tool runs, and every use goes in the Console and the Audit Log", () => {
+  /** An audit log that keeps what it was given (tools.js checkToolPolicy writes tool.warning rows to it). */
+  function recorder() {
+    const rows = [];
+    return { rows, log: (row) => rows.push(row) };
+  }
+  // A public address (TEST-NET-3): past the private-address check, then stopped by url-safety's raw-IP rule, so no
+  // request ever leaves this machine.
+  const PUBLIC_URL = "http://203.0.113.7/status";
+
+  beforeEach(() => {
+    const sm = getSecurityManager(store);
+    for (const tool of ["web_fetch", "set_key", "calculator", "exec"]) sm.setToolPermission(tool, "always_allow");
+  });
+
+  it("web_fetch on Warn: the call goes ahead and one tool.warning row is written", async () => {
+    getSecurityManager(store).setToolPermission("web_fetch", "warn");
+    const verdict = getSecurityManager(store).checkToolPermission("web_fetch", { url: PUBLIC_URL });
+    assert.equal(verdict.allowed, true);
+    assert.match(verdict.warning || "", /web_fetch/);
+    const audit = recorder();
+    const result = await executeTool("web_fetch", { url: PUBLIC_URL }, { ...ctx, auditLog: audit });
+    assert.doesNotMatch(String(result), /Refused by security policy/);
+    const warned = audit.rows.filter((r) => r.action === "tool.warning");
+    assert.equal(warned.length, 1, JSON.stringify(audit.rows));
+    assert.equal(warned[0].target, "web_fetch");
+  });
+
+  it("web_fetch on Allow: nothing is written", async () => {
+    const audit = recorder();
+    await executeTool("web_fetch", { url: PUBLIC_URL }, { ...ctx, auditLog: audit });
+    assert.deepEqual(audit.rows.filter((r) => r.action === "tool.warning"), []);
+    assert.equal(getSecurityManager(store).checkToolPermission("web_fetch", { url: PUBLIC_URL }).warning, undefined);
+  });
+
+  it("any tool on Warn is logged on every call, and the record never carries the tool's input", async () => {
+    getSecurityManager(store).setToolPermission("calculator", "warn");
+    const audit = recorder();
+    for (let i = 0; i < 3; i++) {
+      const result = await executeTool("calculator", { expression: "6*7" }, { ...ctx, auditLog: audit });
+      assert.match(String(result), /42/);
+    }
+    assert.equal(audit.rows.filter((r) => r.action === "tool.warning").length, 3);
+
+    // set_key's value is a secret: only the tool's name goes in the record.
+    getSecurityManager(store).setToolPermission("set_key", "warn");
+    const secret = "sk-test-canary-warn-value-9Qz";
+    const verdict = getSecurityManager(store).checkToolPermission("set_key", { name: "TEST_KEY", value: secret });
+    assert.equal(verdict.allowed, true);
+    assert.ok(verdict.warning, "Warn gives a warning");
+    assert.ok(!verdict.warning.includes(secret), verdict.warning);
+    assert.ok(!verdict.warning.includes(secret.slice(-6)), verdict.warning);
+  });
+
+  it("a dangerous exec command is still flagged on Allow, and Deny still wins over Warn", () => {
+    const sm = getSecurityManager(store);
+    assert.match(sm.checkToolPermission("exec", { command: "rm -rf /tmp/x" }).warning || "", /dangerous/i);
+    sm.setToolPermission("exec", "warn");
+    assert.match(sm.checkToolPermission("exec", { command: "sudo reboot" }).warning || "", /dangerous/i, "the specific warning comes first");
+    sm.setToolPermission("web_fetch", "always_deny");
+    assert.equal(sm.checkToolPermission("web_fetch", { url: PUBLIC_URL }).allowed, false);
+    sm.setToolPermission("web_fetch", "warn");
+    assert.equal(sm.checkToolPermission("web_fetch", { url: "http://169.254.169.254/" }).allowed, false, "the private-address block still wins");
+  });
+});

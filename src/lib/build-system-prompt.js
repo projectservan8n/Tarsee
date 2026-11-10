@@ -2,6 +2,7 @@ import { MemoryStore } from "../db/memory.js";
 import { getSkillsPromptContext } from "./skills-engine.js";
 import { getLearningHint } from "./personality-learner.js";
 import { getBootstrapContext, readWorkspaceFile } from "./workspace-files.js";
+import { automationStatus } from "./automation-approval.js";
 import { readAndArchiveCheckpoint } from "./checkpoint.js";
 import { getCredentialInventory, renderInventoryPromptSection } from "./credential-inventory.js";
 
@@ -20,19 +21,33 @@ export function sendFileHint(channel) {
  * Build the effective system prompt from all sources.
  * Used by HTTP, WebSocket, Discord, Telegram, and Slack handlers.
  *
- * Composition order:
- *   1. AGENTS.md + SOUL.md + IDENTITY.md + USER.md + TOOLS.md + MEMORY.md (workspace files)
- *   2. Memory instructions (how to use memory system)
- *   3. DB memories (bot_memory table — supplementary)
- *   4. Skills context (SKILL.md files)
- *   5. Per-conversation prompt (if set)
- *   6. Channel hint (e.g. "You are in a Discord conversation")
- *   7. Learning hint (periodic nudge)
- *   8. Fallback if everything empty
+ * It is buildSystemPromptParts()'s two parts, stable then volatile, as one string.
+ *
+ * @param {object} opts see buildSystemPromptParts
+ * @returns {string}
+ */
+export function buildSystemPrompt(opts) {
+  const { stable, volatile } = buildSystemPromptParts(opts);
+  return stable + volatile;
+}
+
+/**
+ * The system prompt in two parts (design 4.6 g and 4.8):
+ *
+ *   stable    what stays the same from one turn to the next: AGENTS.md + SOUL.md + IDENTITY.md + USER.md +
+ *             TOOLS.md + MEMORY.md (the workspace files), the saved memories, the skills, the conversation's own
+ *             prompt and the channel hint (or, with none of those, "You are <name>, a helpful AI assistant.")
+ *   volatile  what changes during a conversation: today's log, the checkpoint a previous instance left (first message
+ *             only, then archived), the credential inventory (first message of a session), the periodic learning
+ *             nudge
+ *
+ * Claude Code takes the two as one system prompt (buildSystemPrompt). Codex keeps the stable part as its instructions
+ * and gets the volatile part with each message, so a new daily log line doesn't start its session over.
  *
  * Individual files are truncated at 12KB (WORKSPACE_FILE_MAX_BYTES); MEMORY.md is
  * a pointer to grep, not inlined. Quick memories are one line each (300 chars),
- * skills a short description each. Total prompt capped at 50KB.
+ * skills a short description each. The two parts together are capped at 50KB (the
+ * stable part first).
  *
  * @param {object} opts
  * @param {import('../db/settings.js').SettingsStore} opts.settingsStore
@@ -41,9 +56,9 @@ export function sendFileHint(channel) {
  * @param {number} opts.messageCount
  * @param {string|null} opts.conversationPrompt
  * @param {string} opts.channelHint
- * @returns {string}
+ * @returns {{stable: string, volatile: string}}
  */
-export function buildSystemPrompt({
+export function buildSystemPromptParts({
   settingsStore,
   db,
   conversationId = null,
@@ -52,8 +67,10 @@ export function buildSystemPrompt({
   channelHint = "",
   channelManager = null,
 }) {
-  // 1. Workspace files: AGENTS → SOUL → IDENTITY → USER → TOOLS → MEMORY
-  const bootstrapContext = getBootstrapContext();
+  // 1. Workspace files: AGENTS → SOUL → IDENTITY → USER → TOOLS → MEMORY → HEARTBEAT, the last only if the owner OK'd it
+  let heartbeatWaiting = null;
+  try { heartbeatWaiting = automationStatus(settingsStore, "HEARTBEAT.md").waiting; } catch { /* not known: left out */ }
+  const bootstrapContext = getBootstrapContext({ heartbeatWaiting });
 
   // 2. DB memories (brief supplementary — top 10 instead of 20)
   const memoryStore = new MemoryStore(db);
@@ -62,37 +79,21 @@ export function buildSystemPrompt({
   // 3. Skills (just names)
   const skillsContext = getSkillsPromptContext();
 
-  // 4. Today's daily log only (yesterday accessible via tools if needed)
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const todayLog = readWorkspaceFile(`memory/${todayStr}.md`);
-
-  let dailyLogsContext = "";
-  if (todayLog) {
-    // Only last 2KB of today's log — most recent entries
-    const trimmed = todayLog.length > 2048 ? todayLog.slice(-2048) : todayLog;
-    dailyLogsContext = `\n\n## Today's Log (${todayStr})\n${trimmed.trim()}`;
-  }
-
-  // Build lightweight context — no tool lists or memory instructions (handled by tarseeContext in claude-code.js)
-  let prompt = "";
+  // --- The stable part. No tool lists or memory instructions: the engine's preamble has those (ai/preamble.js).
+  let stable = "";
 
   if (bootstrapContext) {
-    prompt = bootstrapContext;
-  }
-
-  // Inject daily memory logs (today + yesterday only)
-  if (dailyLogsContext) {
-    prompt += dailyLogsContext;
+    stable = bootstrapContext;
   }
 
   // DB memories (brief supplementary context)
   if (dbMemoryContext) {
-    prompt += dbMemoryContext;
+    stable += dbMemoryContext;
   }
 
   // Skills list (just names, not full docs)
   if (skillsContext) {
-    prompt += skillsContext;
+    stable += skillsContext;
   }
 
   // Boot context injection REMOVED: it broadcast the last user message +
@@ -106,6 +107,31 @@ export function buildSystemPrompt({
   // knowledge still flows via MEMORY.md / USER.md / bot_memory — those are
   // intentional shared facts, not private chatter.
 
+  if (conversationPrompt) {
+    stable += (stable ? "\n\n" : "") + conversationPrompt;
+  }
+
+  if (channelHint) {
+    stable += (stable ? "\n\n" : "") + channelHint;
+  }
+
+  if (!stable) {
+    const identityName = settingsStore.get("identity.name") || "Tarsee";
+    stable = `You are ${identityName}, a helpful AI assistant.`;
+  }
+
+  // --- The volatile part.
+  let volatile = "";
+
+  // 4. Today's daily log only (yesterday accessible via tools if needed)
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayLog = readWorkspaceFile(`memory/${todayStr}.md`);
+  if (todayLog) {
+    // Only last 2KB of today's log — most recent entries
+    const trimmed = todayLog.length > 2048 ? todayLog.slice(-2048) : todayLog;
+    volatile += `\n\n## Today's Log (${todayStr})\n${trimmed.trim()}`;
+  }
+
   // Checkpoint — user-written detailed handoff from a previous instance
   // (dropped via /checkpoint before a planned restart). Inject on the
   // VERY first message of a session only, and consume atomically so the
@@ -115,7 +141,7 @@ export function buildSystemPrompt({
   if (messageCount === 0) {
     const checkpointBody = readAndArchiveCheckpoint();
     if (checkpointBody) {
-      prompt += `\n\n## Handoff from previous instance
+      volatile += `\n\n## Handoff from previous instance
 *This CHECKPOINT.md was written by your previous self before a container
 wipe. It's the deliberate handoff — treat it as authoritative for what
 was in-flight. After absorbing, confirm to the user in ONE line that
@@ -133,36 +159,33 @@ ${checkpointBody.trim()}`;
     try {
       const inv = getCredentialInventory({ settingsStore, channelManager });
       const section = renderInventoryPromptSection(inv);
-      if (section) prompt += section;
+      if (section) volatile += section;
     } catch (err) {
       // Never block prompt assembly on an inventory failure.
       console.warn("[prompt] credential inventory failed:", err.message);
     }
   }
 
-  if (conversationPrompt) {
-    prompt += (prompt ? "\n\n" : "") + conversationPrompt;
-  }
-
-  if (channelHint) {
-    prompt += (prompt ? "\n\n" : "") + channelHint;
-  }
-
-  if (!prompt) {
-    const identityName = settingsStore.get("identity.name") || "Tarsee";
-    prompt = `You are ${identityName}, a helpful AI assistant.`;
-  }
-
   // Learning hints (zero API cost — just encourages memory extraction)
   if (conversationId && messageCount > 0) {
     const learningHint = getLearningHint(conversationId, messageCount);
-    if (learningHint) prompt += learningHint;
+    if (learningHint) volatile += learningHint;
   }
 
-  // Enforce total budget
-  if (Buffer.byteLength(prompt, "utf8") > MAX_TOTAL_BYTES) {
-    prompt = prompt.slice(0, MAX_TOTAL_BYTES);
-  }
+  // Enforce total budget, in bytes: the stable part first, the volatile part in what is left.
+  stable = clipBytes(stable, MAX_TOTAL_BYTES);
+  volatile = clipBytes(volatile, MAX_TOTAL_BYTES - Buffer.byteLength(stable, "utf8"));
 
-  return prompt;
+  return { stable, volatile };
+}
+
+/** The text cut to at most maxBytes of UTF-8, never through the middle of a character. */
+function clipBytes(text, maxBytes) {
+  if (maxBytes <= 0) return "";
+  const buf = Buffer.from(text, "utf8");
+  if (buf.length <= maxBytes) return text;
+  let end = maxBytes;
+  // (UTF-8 continuation bytes are 10xxxxxx: step back to the first byte of the character that doesn't fit.)
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end--;
+  return buf.subarray(0, end).toString("utf8");
 }

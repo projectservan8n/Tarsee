@@ -20,7 +20,7 @@ const channelPermissions = new Map(); // channel -> Set of blocked tools
 
 // Default permissions
 const DEFAULT_PERMISSIONS = {
-  exec: "warn", // warn on dangerous commands but allow
+  exec: "warn", // runs, and every use is logged (a dangerous command is flagged as such in any mode but Deny)
   write_file: "always_allow",
   browser: "always_allow",
   web_fetch: "check_ssrf",
@@ -94,6 +94,11 @@ export class SecurityManager {
         }
       } catch { /* ignore */ }
     }
+
+    // Warn: the call runs, and every use is recorded (tools.js checkToolPolicy writes it to the Console and the
+    // Audit Log as tool.warning). Only the tool's name goes in the record: inputs such as set_key's value can be
+    // secrets. The checks above come first, so a denial or exec's dangerous-command warning still wins.
+    if (perm === "warn") return { allowed: true, warning: `Used ${toolName} (Tool Permissions: Warn)` };
 
     return { allowed: true };
   }

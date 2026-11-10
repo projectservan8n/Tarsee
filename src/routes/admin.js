@@ -9,6 +9,8 @@ import { isEncryptionEnabled } from "../lib/vault.js";
 import { AuditLog } from "../db/audit.js";
 import { CLAUDE_MODELS_BY_ID, getRecommendedModel } from "../config/constants.js";
 import { effectiveContextWindow } from "../ai/context-limits.js";
+import { contextTokensFor, engineFor, getProvider, normalizeProviderId } from "../ai/provider-registry.js";
+import { parse as parseHandle } from "../ai/session-handle.js";
 import {
   transcriptSizeMB,
   isTranscriptOverCap,
@@ -16,6 +18,34 @@ import {
 } from "../lib/claude-transcript.js";
 
 export const adminRouter = Router();
+
+/**
+ * The owner's signed-in dashboard session, not just any credential: an API token (Bearer) can drive chats from
+ * scripts, but what the agent is able to do is for the owner's own eyes.
+ */
+function requireOwnerSession(req, res, next) {
+  if (!req.auth?.authenticated) return res.status(401).json({ error: "Sign in to Tarsee first." });
+  if (req.auth.method !== "session") return res.status(403).json({ error: "Open this from Tarsee's dashboard while signed in." });
+  next();
+}
+
+/**
+ * GET /api/admin/tool-registry
+ * Every tool the agent can run, for Settings > Security: Tarsee's own (lib/tools.js and the tarsee MCP server's
+ * live list, push_notification and pdf_read among them) and the engines' built-in ones, as
+ * [{ name, label, description, group, policyCovered, mcpName, engines, mode }] (lib/tool-registry.js). mode is the
+ * current Tool Permissions setting of a tool it covers, null for one it can't (the engines' own).
+ */
+adminRouter.get("/tool-registry", requireOwnerSession, async (req, res) => {
+  try {
+    const [{ toolRegistry }, { getSecurityManager }] = await Promise.all([import("../lib/tool-registry.js"), import("../lib/security-manager.js")]);
+    const sm = getSecurityManager(req.app.get("settingsStore"));
+    const tools = await toolRegistry();
+    res.json(tools.map((t) => ({ ...t, mode: t.policyCovered ? sm.getToolPermission(t.name) : null })));
+  } catch (err) {
+    res.status(500).json({ error: `Could not list the tools: ${err.message}` });
+  }
+});
 
 /**
  * GET /api/admin/status
@@ -275,13 +305,17 @@ adminRouter.post("/restore", (req, res) => {
 
 /**
  * The window Token Health measures a chat against: TARSEE_MODEL_CONTEXT_TOKENS,
- * else the model's own, capped by the auto-compact window (ai/context-limits.js:
- * where Claude Code summarizes the older part).
+ * else the model's own (the provider's, from the registry), capped by the
+ * auto-compact window on Claude Code (ai/context-limits.js: where Claude Code
+ * summarizes the older part). Codex keeps the model's own window.
  */
-function contextWindowTokens(modelId) {
+function contextWindowTokens(modelId, provider = "claude", engine = "claude-code") {
   const override = Number(process.env.TARSEE_MODEL_CONTEXT_TOKENS);
   if (override > 0) return override;
-  return effectiveContextWindow(modelWindowTokens(modelId));
+  const own = getProvider(provider)?.catalog === "claude"
+    ? modelWindowTokens(modelId)
+    : contextTokensFor(provider, modelId) || 200_000;
+  return engine === "codex" ? own : effectiveContextWindow(own);
 }
 
 /** The model's own window from the registry (no compact window applied). */
@@ -315,17 +349,38 @@ function modelWindowTokens(modelId) {
  * Conversations whose transcript is past the cap are flagged
  * `willResetNextTurn`; the provider enforces that same cap by refusing to
  * resume, so the flag reflects real behaviour rather than predicting it.
+ *
+ * Which provider. The stored session is a handle (ai/session-handle.js):
+ * "deepseek/cc/deepseek:<id>" names its provider and engine, so its transcript
+ * is looked for in that provider's own Claude Code home (an Anthropic key,
+ * DeepSeek and OpenRouter each have one); a bare id is the Claude plan's.
+ * Codex sessions keep no Claude transcript and are never reset by size. A chat
+ * with no session yet is its chosen provider's (session.<id>.provider).
+ * ?provider=<id> keeps one provider's chats.
  */
 adminRouter.get("/context-health", (req, res) => {
   try {
     const db = req.app.get("db");
     if (!db) return res.status(500).json({ error: "db unavailable" });
+    const settingsStore = req.app.get("settingsStore");
+    const only = typeof req.query.provider === "string" ? normalizeProviderId(req.query.provider) : null;
 
     const convs = db.prepare(
-      "SELECT id, title, model, claude_session_id, updated_at FROM conversations ORDER BY updated_at DESC LIMIT 80",
+      "SELECT id, title, provider, model, claude_session_id, updated_at FROM conversations ORDER BY updated_at DESC LIMIT 80",
     ).all();
 
+    const chosenProvider = (c) => {
+      let v = null;
+      try { v = settingsStore?.get?.(`session.${c.id}.provider`); } catch { /* none */ }
+      return normalizeProviderId(v) || normalizeProviderId(c.provider) || "claude";
+    };
+
     const rows = convs.map((c) => {
+      const handle = parseHandle(c.claude_session_id || "");
+      const provider = handle?.tagged ? (normalizeProviderId(handle.provider) || handle.provider) : handle ? "claude" : chosenProvider(c);
+      const engine = handle?.tagged ? handle.engine : (engineFor(provider, c.model) || "claude-code");
+      return { c, handle, provider, engine };
+    }).filter((x) => !only || x.provider === only).map(({ c, handle, provider, engine }) => {
       const messages = db.prepare(
         "SELECT COUNT(*) n FROM messages WHERE conversation_id=?",
       ).get(c.id)?.n || 0;
@@ -344,7 +399,7 @@ adminRouter.get("/context-health", (req, res) => {
            FROM messages WHERE conversation_id=?`,
       ).get(c.id) || { ti: 0, tou: 0 };
 
-      const contextWindow = contextWindowTokens(c.model);
+      const contextWindow = contextWindowTokens(c.model, provider, engine);
       const measured = lastIn > 0;
       // Only estimate when we genuinely have no telemetry for this chat.
       const tokensEst = measured ? lastIn : messages * 80;
@@ -352,11 +407,17 @@ adminRouter.get("/context-health", (req, res) => {
         100,
         Math.round((tokensEst / contextWindow) * 1000) / 10,
       );
-      const transcriptMB = transcriptSizeMB(c.claude_session_id);
+      // A Claude Code session's transcript, in its own provider's home. Codex keeps none of Claude's.
+      const onClaudeCode = engine === "claude-code" && !!handle;
+      const transcriptMB = onClaudeCode ? transcriptSizeMB(c.claude_session_id, { provider }) : null;
 
       return {
         id: c.id,
         title: c.title || "(untitled)",
+        provider,
+        providerLabel: getProvider(provider)?.label || provider,
+        engine,
+        sessionId: handle?.rawId || null,
         messages,
         contextTokens: tokensEst,
         contextWindow,
@@ -367,13 +428,14 @@ adminRouter.get("/context-health", (req, res) => {
         lifetimeTokensIn: totals.ti,
         lifetimeTokensOut: totals.tou,
         transcriptMB,
-        willResetNextTurn: isTranscriptOverCap(c.claude_session_id),
+        willResetNextTurn: onClaudeCode ? isTranscriptOverCap(c.claude_session_id, SESSION_JSONL_MAX_MB, { provider }) : false,
         updatedAt: c.updated_at,
       };
     }).sort((a, b) => (b.transcriptMB || 0) - (a.transcriptMB || 0));
 
     res.json({
       sessionCapMB: SESSION_JSONL_MAX_MB,
+      provider: only,
       conversations: rows,
     });
   } catch (err) {

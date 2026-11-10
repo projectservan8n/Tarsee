@@ -12,6 +12,8 @@
 
 /** The file name at the end of a path, either slash. */
 const fileBase = (p) => String(p || "").split(/[\\/]/).pop() || "file";
+/** A PDF's file name, from a path or a web address (never its query string or fragment, which can hold a token). */
+const pdfBase = (i) => fileBase(String(i?.path || i?.source || "").split(/[?#]/)[0]);
 
 /** mcp__tarsee__tarsee_send_file → tarsee_send_file; a built-in tool's name stays as it is. */
 const bareName = (name) => String(name || "tool").replace(/^mcp__[^_]+(?:_[^_]+)*?__/, "");
@@ -31,9 +33,13 @@ const TARSEE = {
   tarsee_search_memories_deep: ["Searching memories…", "Memory search done", "Memory search failed"],
   tarsee_daily_log: ["Writing the daily log…", "Daily log written", "Writing the daily log failed"],
   tarsee_read_file: [(i) => `Reading ${fileBase(i.filename)}…`, (i) => `Read ${fileBase(i.filename)}`, (i) => `Reading ${fileBase(i.filename)} failed`],
+  tarsee_pdf_read: [(i) => `Reading ${pdfBase(i)}…`, (i) => `Read ${pdfBase(i)}`, (i) => `Reading ${pdfBase(i)} failed`],
   tarsee_write_file: [(i) => `Writing ${fileBase(i.filename)}…`, (i) => `Wrote ${fileBase(i.filename)}`, (i) => `Writing ${fileBase(i.filename)} failed`],
   tarsee_list_files: ["Listing files…", "Files listed", "Listing files failed"],
-  tarsee_schedule_task: ["Scheduling a task…", "Task scheduled", "Scheduling the task failed"],
+  // A task the AI schedules is saved paused, until the owner switches it on (lib/cron.js). The saved words only when
+  // the tool's result has no error mark: ai/tarsee-mcp.js marks every answer where no task was saved (a refusal, a
+  // bad schedule, the 15-minute rule), and those say so plainly.
+  tarsee_schedule_task: ["Scheduling a task…", "Task saved, waiting for your OK", "Task not saved"],
   tarsee_create_canvas: ["Making a canvas…", "Canvas made", "Making the canvas failed"],
   tarsee_create_diagram: ["Drawing a diagram…", "Diagram drawn", "Drawing the diagram failed"],
   tarsee_datetime: ["Checking the time…", "Time checked", "Checking the time failed"],

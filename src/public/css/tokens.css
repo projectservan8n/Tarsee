@@ -82,6 +82,17 @@
   --model-haiku:        #34d399;
   --model-haiku-subtle: rgba(52, 211, 153, 0.15);
 
+  /* Each AI's own color, one per account that pays (an element with data-ai="<id>" gets it as --ai, style.css):
+     the model list, the composer's button, the header chip, Settings > AI and the setup wizard. The Claude plan and
+     an Anthropic key run the same models, so they must never look alike. Each is at least 4.5:1 on --bg-surface. */
+  --ai-claude:          #e8875f;
+  --ai-anthropic:       #d9b24f;
+  --ai-chatgpt:         #46c79f;
+  --ai-openai:          #4bb8d8;
+  --ai-openrouter:      #a58bfa;
+  --ai-deepseek:        #7d9bff;
+  --ai-local:           #a6c45c;
+
   --success:            #34d399;
   --success-subtle:     rgba(52, 211, 153, 0.12);
   --warning:            #fbbf24;
@@ -176,7 +187,6 @@
   --z-sidebar:         50;
   --z-panels:          60;
   --z-files:           70;
-  --z-voice:           80;
   --z-toast:           100;
   --z-modal:           200;
 
@@ -266,26 +276,6 @@
 @keyframes streamPulse {
   0%, 100% { transform: scale(0.6); opacity: 0.4; }
   50%      { transform: scale(1);   opacity: 1; }
-}
-
-@keyframes orbListenPulse {
-  0%, 100% { transform: scale(1);    box-shadow: 0 0 0 0 var(--accent-glow); }
-  50%      { transform: scale(1.08); box-shadow: 0 0 20px 6px var(--accent-glow); }
-}
-
-@keyframes orbSpeakPulse {
-  0%, 100% { transform: scale(1);    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.25); }
-  50%      { transform: scale(1.06); box-shadow: 0 0 18px 5px rgba(52, 211, 153, 0.25); }
-}
-
-@keyframes orbThinkPulse {
-  0%, 100% { transform: scale(1); }
-  50%      { transform: scale(1.03); }
-}
-
-@keyframes orbSpin {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
 }
 
 @keyframes recDot {

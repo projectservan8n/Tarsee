@@ -122,12 +122,28 @@ export class ConversationStore {
   }
 
   /**
-   * Delete a conversation and all its messages (cascade).
+   * Delete a conversation and all its messages (cascade), and the chat's own settings
+   * (session.<id>.provider, .model, .effort, .clearedAt, .instrHash): nothing reads them once the chat is gone.
    */
   delete(id) {
     const gone = this._deleteConversation.run(id).changes > 0;
-    if (gone) forgetConversation(id);   // its live timeline too (lib/live-bus.js)
+    if (gone) {
+      forgetConversation(id);   // its live timeline too (lib/live-bus.js)
+      this._forgetChatSettings(id);
+    }
     return gone;
+  }
+
+  /** Remove session.<id>.* (an exact prefix, so session.reset.* is never touched). Never throws. */
+  _forgetChatSettings(id) {
+    const prefix = `session.${id}.`;
+    try {
+      this._deleteChatSettings ||= this.db.prepare("DELETE FROM settings WHERE substr(key, 1, ?) = ?");
+      this._deleteChatSettings.run(prefix.length, prefix);
+    } catch (err) {
+      // A database with no settings table (a bare test one) has none to remove.
+      if (!/no such table/i.test(err?.message || "")) console.warn(`[conv] removing chat ${id}'s settings failed: ${err?.message || err}`);
+    }
   }
 
   /**
@@ -244,11 +260,17 @@ export class ConversationStore {
   }
 
   /**
-   * Update the Claude Code CLI session ID for a conversation.
-   * This allows resuming the session later.
+   * Store the session a conversation's turns resume (design 4.10): the Claude plan's bare session id, or any other
+   * AI's tagged handle ("deepseek/cc/deepseek:<id>", ai/session-handle.js). null forgets it. Kept in the
+   * conversations.claude_session_id column, so older installs need no migration.
    */
-  setClaudeSessionId(conversationId, claudeSessionId) {
-    this._updateClaudeSessionId.run(claudeSessionId, conversationId);
+  setSessionHandle(conversationId, handle) {
+    this._updateClaudeSessionId.run(handle, conversationId);
+  }
+
+  /** The old name of setSessionHandle. */
+  setClaudeSessionId(conversationId, handle) {
+    this.setSessionHandle(conversationId, handle);
   }
 
   /**
@@ -267,11 +289,16 @@ export class ConversationStore {
     }
   }
 
-  /**
-   * Get the Claude Code CLI session ID for a conversation.
-   * Returns null if session is stale (idle > 2 hours) to force fresh start.
-   */
+  /** The old name of getSessionHandle. */
   getClaudeSessionId(conversationId) {
+    return this.getSessionHandle(conversationId);
+  }
+
+  /**
+   * The session handle a conversation's next turn resumes (see setSessionHandle), or null. Returns null if the
+   * session is stale (idle > 2 hours) to force a fresh start, on every AI.
+   */
+  getSessionHandle(conversationId) {
     const conv = this.get(conversationId);
     if (!conv?.claude_session_id) return null;
 

@@ -16,9 +16,10 @@ import config from "../config/env.js";
 /**
  * Create a Tarsee MCP server with platform tools.
  * @param {object} ctx - Tool execution context { db, settingsStore, channelManager, conversationId }
+ * @param {{quiet?: boolean}} [opts] - quiet: no "Creating" log line (the Codex endpoint builds one per turn)
  * @returns {McpSdkServerConfigWithInstance}
  */
-export function createTarseeMcp(ctx) {
+export function createTarseeMcp(ctx, opts = {}) {
   const allTools = [
       tool(
         "tarsee_send_message",
@@ -95,12 +96,12 @@ export function createTarseeMcp(ctx) {
 
       tool(
         "tarsee_schedule_task",
-        `Schedule a task using cron syntax. Supports one-time and recurring. For simple notifications, use action (direct, instant). For complex tasks, use prompt (AI session).\n\nEXAMPLES:\n- One-time reminder: schedule='30 12 7 4 *', once=true, action={tool:'send_message', args:{channel:'telegram', message:'Meeting now!'}}\n- Daily recurring: schedule='0 8 * * *', action={tool:'send_message', args:{channel:'telegram', message:'Good morning!'}}\n- Complex: schedule='0 8 * * 1', prompt='Check calendar and summarize the week'\n\nALWAYS prefer action over prompt for send_message tasks. Set once=true for one-time reminders (auto-deletes after firing). Cron expressions are interpreted in ${config.TIMEZONE} — call tarsee_datetime to confirm the current local time before scheduling.`,
+        `Schedule a task using cron syntax. Supports one-time and recurring. For simple notifications, use action (direct, instant). For complex tasks, use prompt (AI session).\n\nOnly schedule a task when the owner asks for one, or has said yes when you offered: every run of a prompt task is a paid turn on the AI. A task you schedule starts paused, and won't run until the owner switches it on, in Settings > Automation > Scheduled tasks or by sending /cron on <id>. Say so when you save one, with its id. You can't schedule tasks while running a scheduled task, the heartbeat or BOOT.md.\n\nEXAMPLES:\n- One-time reminder: schedule='30 12 7 4 *', once=true, action={tool:'send_message', args:{channel:'telegram', message:'Meeting now!'}}\n- Daily recurring: schedule='0 8 * * *', action={tool:'send_message', args:{channel:'telegram', message:'Good morning!'}}\n- Complex: schedule='0 8 * * 1', prompt='Check calendar and summarize the week'\n\nALWAYS prefer action over prompt for send_message tasks. Set once=true for one-time reminders (auto-deletes after firing). A prompt task runs at most once every 15 minutes (5-part schedules, no seconds). Cron expressions are interpreted in ${config.TIMEZONE} — call tarsee_datetime to confirm the current local time before scheduling.`,
         {
           schedule: z.string().describe(`Cron expression. Format: 'min hour day month weekday'. Interpreted in ${config.TIMEZONE}.`),
           name: z.string().optional().describe("Human-friendly name"),
           once: z.boolean().optional().describe("If true, job auto-deletes after firing once. Use for one-time reminders."),
-          prompt: z.string().optional().describe("AI prompt for complex tasks (spawns full Claude session)"),
+          prompt: z.string().optional().describe("AI prompt for complex tasks (each run is a full, paid AI session)"),
           action: z.object({
             tool: z.string().describe("Tool to execute directly (e.g. 'send_message')"),
             // MUST pass a key schema. zod 4 removed the single-argument form:
@@ -114,12 +115,19 @@ export function createTarseeMcp(ctx) {
             args: z.record(z.string(), z.any()).describe("Tool arguments (e.g. {channel:'telegram', message:'Hello!'})"),
           }).optional().describe("Direct tool action — instant, no AI needed. Use for simple notifications."),
         },
+        // A task that was not saved (no prompt or action, a refusal, a bad schedule, the 15-minute rule, Tool
+        // Permissions) comes back marked isError, MCP's own failure mark: each engine passes it on (Claude Code as the
+        // tool_result's is_error, Codex as a failed call), and the chat bots show a cross, not a tick and "Task saved,
+        // waiting for your OK" (lib/tool-status.js). Only lib/tools.js's saved answer counts as saved; anything else,
+        // even an answer worded in a way nobody planned for, is marked.
         async (args) => {
           if (!args.prompt && !args.action) {
-            return { content: [{ type: "text", text: "Error: Either 'prompt' or 'action' is required." }] };
+            return { isError: true, content: [{ type: "text", text: "Error: Either 'prompt' or 'action' is required. Nothing was saved." }] };
           }
           const result = await executeTool("schedule_task", args, ctx);
-          return { content: [{ type: "text", text: result }] };
+          // lib/tools.js's answer starts so when, and only when, addCronJob saved the task.
+          const saved = typeof result === "string" && result.startsWith("Saved the task ");
+          return saved ? { content: [{ type: "text", text: result }] } : { isError: true, content: [{ type: "text", text: result }] };
         }
       ),
 
@@ -161,7 +169,7 @@ export function createTarseeMcp(ctx) {
 
       tool(
         "tarsee_write_file",
-        "Write or overwrite a Tarsee workspace file. Use for updating personality, identity, memory, or user notes.",
+        "Write or overwrite a Tarsee workspace file. Use for updating personality, identity, memory, or user notes. HEARTBEAT.md (the heartbeat's checks) and BOOT.md (what runs when Tarsee restarts) can be written too, but what you write there doesn't run until the owner OKs it in Settings > Automation (Let it run; for BOOT.md, Run at each restart): tell the owner so, and never say it is set up or running before then. The same goes for a change made with your own file or shell tools.",
         { filename: z.string().describe("Workspace filename"), content: z.string().describe("Full content to write") },
         async (args) => {
           const result = await executeTool("write_file", args, ctx);
@@ -365,6 +373,22 @@ export function createTarseeMcp(ctx) {
         }
       ),
 
+      // For an AI that can't open PDFs itself (every model but Claude's): a message's PDF arrives as its first pages'
+      // text plus the saved path (ai/media.js), and this reads the rest. Through executeTool, so Tool Permissions apply.
+      tool(
+        "tarsee_pdf_read",
+        "Read the text of a PDF: a file in the workspace (files people send in are saved in its uploads folder) or a web address. Long PDFs come a few pages at a time; the answer says which pages to ask for next. Use it whenever you need what a PDF says and can't open the file yourself. Scanned pages (pictures of text) have no text to read.",
+        {
+          path: z.string().describe("The PDF: a path in the workspace (absolute, or relative to it, e.g. 'uploads/report.pdf') or an http(s) address"),
+          pages: z.string().optional().describe("Which pages: '3', '2-5', or '6-' for page 6 to the end. Default: from page 1, as many as fit"),
+          max_chars: z.number().optional().describe("The most characters to return (default 10000, up to 50000)"),
+        },
+        async (args) => {
+          const result = await executeTool("pdf_read", args, ctx);
+          return { content: [{ type: "text", text: result }] };
+        }
+      ),
+
       tool(
         "tarsee_get_key",
         "Get a value from the encrypted key vault. The session system prompt " +
@@ -438,22 +462,16 @@ export function createTarseeMcp(ctx) {
           tag: z.string().optional().describe("Grouping tag — pushes with the same tag replace each other in the tray instead of stacking."),
         },
         async (args) => {
-          try {
-            const { sendPush } = await import("../lib/push.js");
-            const res = await sendPush(args);
-            if (res.total === 0) {
-              return { content: [{ type: "text", text: "No devices have subscribed to push notifications yet. Ask the user to enable them from Settings > Appearance." }] };
-            }
-            return { content: [{ type: "text", text: `Push sent to ${res.sent}/${res.total} devices · ${res.failed} failed · ${res.evicted} evicted as gone.` }] };
-          } catch (err) {
-            return { content: [{ type: "text", text: "Push failed: " + err.message }] };
-          }
+          // Through executeTool, so Tool Permissions and the audit log apply (lib/tools.js push_notification).
+          const result = await executeTool("push_notification", args, ctx);
+          return { content: [{ type: "text", text: result }] };
         }
       ),
 
   ];
 
-  console.log(`[mcp] Creating Tarsee MCP server: ${allTools.length} tools, names: ${allTools.map(t => t.name).join(", ")}`);
+  // (Quiet for the Codex endpoint, ai/mcp-http.js, which builds one per turn and logs its own start once.)
+  if (!opts.quiet) console.log(`[mcp] Creating Tarsee MCP server: ${allTools.length} tools, names: ${allTools.map(t => t.name).join(", ")}`);
   // (A result past TARSEE_TOOL_RESULT_MAX_CHARS goes to a file, by Claude Code itself: ai/context-limits.js.)
   return createSdkMcpServer({ name: "tarsee", version: "1.0.0", tools: allTools });
 }

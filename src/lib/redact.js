@@ -5,12 +5,19 @@
  */
 export function redactSecrets(text) {
   return String(text)
-    // OpenAI keys (sk-...)
+    // OpenAI keys (sk-..., sk-proj-..., sk-svcacct-...) and DeepSeek keys (sk- and 32 hex)
     .replace(/sk-[A-Za-z0-9_-]{10,}/g, "[REDACTED]")
-    // Anthropic keys (sk-ant-...)
+    // Anthropic keys and Claude sign-in tokens (sk-ant-api..., sk-ant-oat..., sk-ant-ort...)
     .replace(/sk-ant-[A-Za-z0-9_-]{10,}/g, "[REDACTED]")
     // OpenRouter keys (sk-or-v1-...)
     .replace(/sk-or-v1-[A-Za-z0-9_-]{10,}/g, "[REDACTED]")
+    // OAuth and key fields in JSON, whatever their values look like ("refresh_token": "...", "apiKey": "..."):
+    // ChatGPT's and Claude's sign-in files and token answers carry them
+    .replace(/("(?:access_token|refresh_token|id_token|client_secret|code_verifier|api_key|apiKey|primaryApiKey|OPENAI_API_KEY)"\s*:\s*")[^"]+(")/g, "$1[REDACTED]$2")
+    // The same fields in a query string or form body (refresh_token=...)
+    .replace(/\b((?:access_token|refresh_token|id_token|client_secret|code_verifier|api_key)=)[^&\s"']+/g, "$1[REDACTED]")
+    // An API key header, whatever the key looks like (x-api-key: ...)
+    .replace(/(x-api-key:\s*)[^\s"',;]+/gi, "$1[REDACTED]")
     // Stripe keys (sk_live_, sk_test_, pk_live_, pk_test_, whsec_)
     .replace(/\b(?:sk|pk)_(?:test|live)_[A-Za-z0-9]{16,}/g, "[REDACTED]")
     .replace(/\bwhsec_[A-Za-z0-9]{16,}/g, "[REDACTED]")

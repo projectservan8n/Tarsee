@@ -1,4 +1,6 @@
 # Tarsee — Self-hosted Docker Compose
+# Values come from your shell or a .env file next to this one (see .env.example). This file holds names only:
+# never write a key into it.
 version: "3.8"
 
 services:
@@ -14,14 +16,29 @@ services:
       - TARSEE_STATE_DIR=/data/tarsee
       - TARSEE_WORKSPACE_DIR=/data/tarsee/workspace
       - TARSEE_DATA_DIR=/data/tarsee/data
-      # NOTE: no ANTHROPIC_API_KEY here, deliberately. Tarsee authenticates with
-      # a Claude SUBSCRIPTION via `claude login` in the built-in web terminal;
-      # credentials persist on the volume. Passing an API key through would
-      # silently switch billing to metered per-token API usage.
-      # Third-party keys (ElevenLabs, OpenAI Whisper, captcha) are stored in the
-      # encrypted vault via Settings, not passed as environment variables.
-      # Optional encryption key for stored secrets
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      # Encrypts the keys and tokens Tarsee stores. Set it before you save any key in Settings > AI.
+      - ENCRYPTION_KEY
+      # Choose your AI. All optional: the setup wizard and Settings > AI do the same, and keys saved there are
+      # stored encrypted. A name with no value is passed on only when your shell or .env sets it. Each key only ever
+      # goes to its own provider. Guide: docs/providers.md
+      # A command the agent runs can still read these keys inside the container (it runs as the same user as
+      # Tarsee), so give every key a spending limit at its provider: that is the real guard.
+      # The default AI: claude, anthropic, chatgpt, openai, openrouter, deepseek or local; and its model.
+      - TARSEE_AI_PROVIDER
+      - TARSEE_AI_MODEL
+      # 1 keeps "Only use API keys" on (no Claude or ChatGPT plan sign-in), for a Tarsee other people talk to.
+      - TARSEE_KEYS_ONLY
+      # API keys, each billed per use by its provider. The Claude plan ignores ANTHROPIC_API_KEY.
+      - ANTHROPIC_API_KEY
+      - OPENAI_API_KEY
+      - OPENROUTER_API_KEY
+      - DEEPSEEK_API_KEY
+      # Local AI: your Ollama, LM Studio or llama.cpp server's address, and its key if it asks for one.
+      - TARSEE_LOCAL_AI_URL
+      - TARSEE_LOCAL_AI_KEY
+      # The Claude plan without the Terminal: the token `claude setup-token` prints.
+      - CLAUDE_CODE_OAUTH_TOKEN
+      # Other services' keys (ElevenLabs, captcha solvers) go in the encrypted vault from Settings.
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]

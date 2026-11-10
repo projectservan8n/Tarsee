@@ -1,6 +1,6 @@
 /**
  * First-time setup wizard.
- * Step 1: Connect Claude (terminal + claude login)
+ * Step 1: Choose your AI (a Claude or ChatGPT plan, or an API key: js/provider-guides-core.js, /api/ai)
  * Step 2: Choose skills to install
  * Step 3: Personality interview OR skip
  * Step 4: Channel setup (Telegram, Discord, Slack, WhatsApp, email: js/channel-guides-core.js)
@@ -19,7 +19,7 @@ const Setup = {
 
   /** Render the progress bar HTML */
   _progressBar(step) {
-    const steps = ["Connect", "Skills", "Personality", "Channels"];
+    const steps = ["Your AI", "Skills", "Personality", "Channels"];
     return `<div style="display:flex;gap:4px;margin-bottom:20px;padding:0 4px">${steps.map((label, i) => {
       const num = i + 1;
       const done = num < step;
@@ -33,8 +33,31 @@ const Setup = {
     }).join("")}</div>`;
   },
 
-  /** Step 1: Connect Claude */
-  show(status) {
+  // --- Step 1: Choose your AI ---
+  //
+  // Who will talk to this Tarsee, then three big choices: My Claude plan, My ChatGPT plan, or My own API key (then
+  // which provider). The chosen one's steps (js/provider-guides-core.js) and its live status sit right under it, and
+  // Next is enabled only once that AI is Ready. Nothing is saved but what the person does here: a key they paste and
+  // test, a sign-in they finish, "Only use API keys" if they leave it ticked, and the chosen AI as the default.
+  // Everything goes through /api/ai (src/routes/ai.js), like Settings → AI.
+
+  _ai: null,             // GET /api/ai/providers
+  _aiChoice: null,       // "claude" | "chatgpt" | "key"
+  _aiProvider: null,     // the provider being set up
+  _aiShared: false,      // "Other people too"
+  _aiAutoTicked: false,  // "Only use API keys" was ticked by choosing "Other people too"
+  _aiLine: {},           // provider id → the last Test or sign-in answer ({ text, tone })
+  _aiModels: {},         // provider id → its usable models
+  _aiNotes: {},          // provider id → what its model list says about itself (GET /api/ai/models' note), or null
+  _aiLoginCtl: null,
+  _aiLoginView: null,
+
+  _esc(s) {
+    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  },
+
+  /** Step 1: Choose your AI */
+  show(_status) {
     this.currentStep = 1;
     document.getElementById("loginScreen").style.display = "none";
     document.getElementById("appScreen").style.display = "none";
@@ -46,82 +69,426 @@ const Setup = {
       <div class="setup-card-header">
         <div class="logo-large"><img src="/icon-192.png" alt="Tarsee" style="width:100%;height:100%;object-fit:cover;border-radius:inherit"></div>
         <h2>Welcome to Tarsee</h2>
-        <p>Your personal AI agent. Let's get connected.</p>
+        <p>Your personal AI agent. First, the AI that will answer you.</p>
       </div>
-      <div class="setup-card-body">
-        <div style="margin-bottom:16px">
-          <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px">
-            <span style="background:var(--accent);color:var(--text-inverse);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px;font-weight:700">1</span>
-            <div><strong>Open Tarsee's Server Terminal</strong><br><span style="color:var(--text-muted);font-size:13px">This opens a terminal on the server where Tarsee runs (not your local machine)</span></div>
-          </div>
-          <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px">
-            <span style="background:var(--accent);color:var(--text-inverse);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px;font-weight:700">2</span>
-            <div><strong>Click inside the terminal, then type:</strong><br>
-              <button type="button" id="setupCmd" class="setup-copy-chip" aria-label="Copy command: claude login">
-                <span class="setup-copy-cmd">claude login</span>
-                <svg class="setup-copy-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <path d="M5.5 5.5h7.5v7.5h-7.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-                  <path d="M3 3h7.5v2.5M3 3v7.5h2.5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-                </svg>
-                <span class="setup-copy-label">Copy</span>
-              </button>
-              <br><span style="color:var(--text-muted);font-size:13px;margin-top:4px;display:block">A link will appear: open it in your browser and log in with your Claude Max account.<br>
-              <em>Tip: To copy the login link, highlight it and right-click → Copy (Ctrl+C won't work in the terminal)</em></span>
-            </div>
-          </div>
-          <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px">
-            <span style="background:var(--accent);color:var(--text-inverse);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px;font-weight:700">3</span>
-            <div><strong>Come back here and click "I'm connected"</strong><br><span style="color:var(--text-muted);font-size:13px">Tarsee will verify your credentials and you're all set</span></div>
-          </div>
-        </div>
-        <a href="/terminal.html" target="_blank" class="btn btn-ghost" style="width:100%;padding:12px;font-size:14px;margin-bottom:10px;text-align:center;display:block;text-decoration:none">Open Tarsee's Terminal →</a>
-        <div id="setupError" style="color:var(--danger);font-size:13px;margin-bottom:12px;display:none"></div>
-        <button class="btn btn-primary" id="setupConnectBtn" style="width:100%;padding:12px;font-size:14px">I'm connected, next</button>
-        <p style="text-align:center;margin-top:14px;font-size:11px;color:var(--text-muted)">
-          Requires Claude Max subscription. Pro works but hits limits quickly.
-        </p>
+      <div class="setup-card-body setup-ai" id="setupAi">
+        <h3 class="setup-ai-title">Choose your AI</h3>
+        <fieldset class="setup-ai-who">
+          <legend>Who will talk to this Tarsee?</legend>
+          <label class="setup-ai-radio"><input type="radio" name="setupWho" value="me" checked><span>Just me</span></label>
+          <label class="setup-ai-radio"><input type="radio" name="setupWho" value="others"><span>Other people too (a team, customers)</span></label>
+        </fieldset>
+        <div id="setupAiEnv"></div>
+        <div class="setup-ai-choices" id="setupAiChoices"></div>
+        <div class="setup-ai-panel" id="setupAiPanel" aria-live="polite"></div>
+        <label class="checkbox-label setup-ai-keysonly"><input type="checkbox" id="setupKeysOnly"><span>Only use API keys</span></label>
+        <div class="setup-ai-note" id="setupKeysOnlyNote">Plan sign-ins (Claude, ChatGPT) stay off, so every message is billed to an API key. Right for a Tarsee other people talk to.</div>
+        <div class="setup-ai-note" id="setupAiTerms"></div>
+        <div id="setupError" class="setup-error" role="alert" hidden></div>
+        <button type="button" class="btn btn-primary btn-block" id="setupAiNext" disabled>Next</button>
+        <p class="setup-ai-later">You can add more AIs any time in Settings → AI.</p>
       </div>
     `;
 
-    // Click-to-copy with an in-chip success flash (green bg + checkmark).
-    document.getElementById("setupCmd")?.addEventListener("click", () => {
-      const btn = document.getElementById("setupCmd");
-      const iconEl = btn?.querySelector(".setup-copy-icon");
-      const labelEl = btn?.querySelector(".setup-copy-label");
-      if (!btn || !iconEl || !labelEl) return;
-      const origIcon = iconEl.innerHTML;
-      const origLabel = labelEl.textContent;
-      navigator.clipboard.writeText("claude login").then(() => {
-        btn.classList.add("copied");
-        iconEl.innerHTML = '<path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>';
-        labelEl.textContent = "Copied";
-        setTimeout(() => {
-          btn.classList.remove("copied");
-          iconEl.innerHTML = origIcon;
-          labelEl.textContent = origLabel;
-        }, 1500);
-      }).catch(() => {});
-    });
-
-    document.getElementById("setupConnectBtn").addEventListener("click", () => this.saveAndProceed());
+    const root = document.getElementById("setupAi");
+    const terms = document.getElementById("setupAiTerms");
+    if (terms && window.ProviderGuides) terms.innerHTML = window.ProviderGuides.TERMS_NOTE;
+    root.addEventListener("click", (ev) => this._aiClick(ev));
+    root.addEventListener("change", (ev) => this._aiChange(ev));
+    document.getElementById("setupAiNext").addEventListener("click", () => this._aiNext());
+    // Back from the Terminal or ChatGPT's page: read the status again, so it turns Ready by itself.
+    if (!this._aiVisibilityHook) {
+      this._aiVisibilityHook = () => {
+        if (!document.hidden && this.currentStep === 1 && document.getElementById("setupAi")) this._aiLoad();
+      };
+      document.addEventListener("visibilitychange", this._aiVisibilityHook);
+    }
+    this._aiLoad();
   },
 
-  async saveAndProceed() {
-    const errorEl = document.getElementById("setupError");
-    errorEl.style.display = "none";
-    document.getElementById("setupConnectBtn").disabled = true;
-    document.getElementById("setupConnectBtn").textContent = "Checking...";
-
+  /** Read every provider's state (GET /api/ai/providers) and draw the step again. */
+  async _aiLoad() {
     try {
-      // Omit model — server fills from its registry's recommended entry.
-      await API.saveProvider({ provider: "claude-code", apiKey: "subscription" });
-      this.showSkillPicker();
+      this._ai = await API.json("/api/ai/providers");
     } catch (err) {
-      errorEl.textContent = err.message;
-      errorEl.style.display = "block";
-      document.getElementById("setupConnectBtn").disabled = false;
-      document.getElementById("setupConnectBtn").textContent = "I'm connected. Next →";
+      const panel = document.getElementById("setupAiPanel");
+      if (panel) {
+        panel.innerHTML = `<div class="ai-test-result" data-tone="bad">✗ Couldn't read Tarsee's AI settings: ${this._esc(err.message)}</div>` +
+          `<button type="button" class="btn btn-sm" data-setup="retry">Try again</button>`;
+      }
+      return;
     }
+    const k = this._ai.keysOnly || {};
+    const box = document.getElementById("setupKeysOnly");
+    if (box && (k.locked || (k.on && !box.dataset.touched))) box.checked = true;
+    if (box) box.disabled = !!k.locked;
+    this._aiDraw();
+    if (this._aiProvider && this._aiCard(this._aiProvider)?.ready) this._aiLoadModels(this._aiProvider);
+  },
+
+  _aiCard(id) {
+    return (this._ai?.providers || []).find((c) => c.id === id) || null;
+  },
+
+  _aiShipped(id) {
+    return !!this._aiCard(id)?.shipped;
+  },
+
+  _aiKeysOnly() {
+    return !!document.getElementById("setupKeysOnly")?.checked;
+  },
+
+  _aiDraw() {
+    const G = window.ProviderGuides;
+    if (!G || !this._ai) return;
+    const esc = (s) => this._esc(s);
+    // With no API-key AI switched on in this version, "Only use API keys" would leave nothing to choose: neither it
+    // nor the who-question (whose "Other people too" ticks it) is offered. Already on, it still shows, so it can be
+    // unticked (never silently).
+    const keyIds = G.WIZARD.keys.filter((id) => this._aiShipped(id));
+    const k = this._ai.keysOnly || {};
+    const who = document.querySelector("#setupAi .setup-ai-who");
+    if (who) who.hidden = !keyIds.length;
+    const offerKeysOnly = keyIds.length > 0 || !!k.on || !!k.locked;
+    for (const el of [document.querySelector("#setupAi .setup-ai-keysonly"), document.getElementById("setupKeysOnlyNote")]) {
+      if (el) el.hidden = !offerKeysOnly;
+    }
+    const note = document.getElementById("setupKeysOnlyNote");
+    if (note && k.locked) {
+      note.textContent = "Locked on by the Railway variable TARSEE_KEYS_ONLY=1: plan sign-ins stay off." +
+        (keyIds.length ? "" : " No API-key AI is switched on in this version of Tarsee, so remove that variable to use your plan.");
+    }
+    const keysOnly = this._aiKeysOnly();
+    if (keysOnly && (this._aiChoice === "claude" || this._aiChoice === "chatgpt")) { this._aiChoice = null; this._aiProvider = null; }
+
+    // Railway variables already connect an AI: say so, and offer it.
+    const env = (this._ai.providers || []).filter((c) => c.shipped && c.ready && String(c.keySource || "").startsWith("env:") && !(keysOnly && c.kind === "subscription"));
+    const envEl = document.getElementById("setupAiEnv");
+    if (envEl) {
+      envEl.innerHTML = env.length
+        ? `<div class="setup-ai-env">Connected through Railway variables: ${env.map((c) => `${esc(G.get(c.id)?.shortName || c.label)} (${esc(c.keySource.slice(4))})`).join(", ")}.` +
+          `<div class="setup-ai-env-actions">${env.map((c) => `<button type="button" class="btn btn-sm" data-setup="use-env" data-provider="${c.id}">Use ${esc(G.get(c.id)?.shortName || c.label)}</button>`).join("")}</div></div>`
+        : "";
+    }
+
+    // The three choices (only the ones this version switches on).
+    const choices = [];
+    const terms = { claude: "Anthropic's", chatgpt: "OpenAI's" };
+    for (const id of G.WIZARD.plans) {
+      if (!this._aiShipped(id)) continue;
+      const p = G.get(id);
+      const title = id === "claude" ? "My Claude plan" : "My ChatGPT plan";
+      const off = keysOnly ? `<span class="setup-ai-choice-warn">Off while "Only use API keys" is ticked</span>`
+        : this._aiShared ? `<span class="setup-ai-choice-warn">Not for shared use under ${terms[id]} terms</span>` : "";
+      choices.push(`<button type="button" class="setup-ai-choice" data-setup="choice" data-choice="${id}" data-ai="${id}" aria-pressed="${this._aiChoice === id}"${keysOnly ? " disabled" : ""}>` +
+        `<strong>${title}</strong><span>${esc(p.pitch)}</span>${off}</button>`);
+    }
+    if (keyIds.length) {
+      choices.push(`<button type="button" class="setup-ai-choice" data-setup="choice" data-choice="key" aria-pressed="${this._aiChoice === "key"}">` +
+        `<strong>My own API key</strong><span>${esc(keyIds.map((id) => G.get(id).shortName).join(", "))}. You pay per use.</span></button>`);
+    }
+    const choicesEl = document.getElementById("setupAiChoices");
+    if (choicesEl) choicesEl.innerHTML = choices.join("");
+
+    this._aiDrawPanel();
+    const next = document.getElementById("setupAiNext");
+    const card = this._aiCard(this._aiProvider);
+    if (next) {
+      next.disabled = !(card && card.ready && !(keysOnly && card.kind === "subscription"));
+      next.textContent = card?.ready ? `Next: use ${G.get(card.id)?.shortName || card.label}` : "Next";
+    }
+  },
+
+  /** The chosen AI: its status, steps and controls. */
+  _aiDrawPanel() {
+    const G = window.ProviderGuides;
+    const panel = document.getElementById("setupAiPanel");
+    if (!panel) return;
+    const esc = (s) => this._esc(s);
+    const typed = {};
+    panel.querySelectorAll("[data-keep]").forEach((el) => { if (el.value !== el.defaultValue) typed[el.dataset.keep] = el.value; });
+
+    let html = "";
+    if (this._aiChoice === "key") {
+      const ids = G.WIZARD.keys.filter((id) => this._aiShipped(id));
+      html += `<div class="setup-ai-providers">${ids.map((id) => {
+        const p = G.get(id);
+        const c = this._aiCard(id);
+        const ready = c?.ready ? ` <span class="ai-badge" data-kind="ok">Ready</span>` : "";
+        return `<button type="button" class="setup-ai-provider" data-setup="provider" data-provider="${id}" data-ai="${id}" aria-pressed="${this._aiProvider === id}"><strong>${esc(p.shortName)}${ready}</strong><span>${esc(p.pitch)}</span></button>`;
+      }).join("")}</div>`;
+    }
+    const id = this._aiProvider;
+    const c = this._aiCard(id);
+    const p = G.get(id);
+    if (id && c && p) {
+      const { text, tone } = G.statusLine(c, { modelLabel: this._aiModelLabel(id, c.model) });
+      html += `<div class="setup-ai-status" data-tone="${tone}">${tone === "ok" ? "✓ " : tone === "bad" ? "✗ " : ""}${esc(text)}</div>`;
+      html += G.guideHtml(id, { open: !c.ready, wizard: true });
+      html += this._aiControlsHtml(c, p);
+      const line = this._aiLine[id];
+      html += `<div class="ai-test-result" data-tone="${line?.tone || "off"}">${line ? esc(line.text) : ""}</div>`;
+      if (c.ready) html += this._aiModelHtml(c);
+    }
+    panel.innerHTML = html;
+    for (const [name, value] of Object.entries(typed)) {
+      const el = panel.querySelector(`[data-keep="${name}"]`);
+      if (el) el.value = value;
+    }
+    if (id === "chatgpt") Settings.renderChatgptLogin(document.getElementById("setupDevice"), this._aiLoginView);
+  },
+
+  _aiControlsHtml(c, p) {
+    const esc = (s) => this._esc(s);
+    if (c.id === "claude") {
+      return `<div class="ai-actions">` +
+        `<a class="btn btn-sm" href="/terminal.html" target="_blank" rel="noopener noreferrer">Open the Terminal ↗</a>` +
+        `<button type="button" class="setup-copy-chip" data-copy="${p.command}" aria-label="Copy the command ${p.command}"><span class="setup-copy-cmd">${p.command}</span><span class="setup-copy-label">Copy</span></button>` +
+        `<button type="button" class="btn btn-sm btn-primary" data-setup="test">Check</button></div>` +
+        `<div class="setup-ai-note">Or set the Railway variable <code>CLAUDE_CODE_OAUTH_TOKEN</code> (from <code>claude setup-token</code>), then click Check.</div>`;
+    }
+    if (c.id === "chatgpt") {
+      if (c.ready) return `<div class="ai-actions"><button type="button" class="btn btn-sm" data-setup="test">Check</button></div>`;
+      return `<div class="ai-actions"><button type="button" class="btn btn-sm btn-primary" data-setup="chatgpt-login">Sign in with ChatGPT</button></div>` +
+        `<div class="ai-device" id="setupDevice" hidden></div>`;
+    }
+    if (c.id === "local") {
+      const presets = p.presets.map((x) => `<button type="button" class="btn btn-sm btn-ghost" data-setup="preset" data-url="${x.url}">${x.name}</button>`).join("");
+      return `<label class="ai-label" for="setupLocalUrl">Server address</label>` +
+        `<div class="ai-presets">Fill in: ${presets}</div>` +
+        (p.presetNote ? `<div class="hint">${p.presetNote}</div>` : "") +
+        `<input type="url" id="setupLocalUrl" class="ai-input" data-keep="url" value="${esc(c.settings?.baseUrl || "")}" placeholder="http://localhost:11434/v1" autocomplete="off" spellcheck="false" autocapitalize="off">` +
+        `<form class="ai-key-form" autocomplete="off" data-no-submit><label class="ai-label" for="setupKey">Key, only if your server asks for one</label>` +
+        `<input type="password" id="setupKey" class="ai-input" data-keep="key" placeholder="${esc(p.keyPlaceholder)}" autocomplete="off" spellcheck="false" autocapitalize="off"></form>` +
+        `<div class="ai-actions"><button type="button" class="btn btn-sm btn-primary" data-setup="save-local">Save and test</button></div>`;
+    }
+    const where = c.keySource ? `<div class="ai-keysource">Key: ${esc(c.keySourceText || c.keySource)}${c.keyHint ? ` <code>${esc(c.keyHint)}</code>` : ""}</div>` : "";
+    // A key Tarsee already has (saved, or a Railway variable) is tested as it is: Test sends no key (POST {}).
+    const test = c.keySource ? `<button type="button" class="btn btn-sm" data-setup="test">Test</button>` : "";
+    return where +
+      `<form class="ai-key-form" autocomplete="off" data-no-submit><label class="ai-label" for="setupKey">${c.keySource ? "Replace the key" : `Paste your ${esc(p.shortName)} key`}</label>` +
+      `<div class="ai-inline"><input type="password" id="setupKey" class="ai-input" data-keep="key" placeholder="${esc(p.keyPlaceholder)}" autocomplete="off" spellcheck="false" autocapitalize="off">` +
+      `<button type="button" class="btn btn-sm btn-primary" data-setup="test-save">Test and save</button></div></form>` +
+      `<div class="ai-actions">${test}<a class="btn btn-sm btn-ghost" href="${p.getKeyUrl}" target="_blank" rel="noopener noreferrer">Get a key ↗</a></div>`;
+  },
+
+  _aiModelLabel(id, model) {
+    const m = (this._aiModels[id] || []).find((x) => x.id === model);
+    if (m?.label && m.label !== m.id) return m.label;
+    if (model && /^(fable|opus|sonnet|haiku)(\[1m\])?$/i.test(model)) return model[0].toUpperCase() + model.slice(1);
+    return model || null;
+  },
+
+  _aiModelHtml(c) {
+    const esc = (s) => this._esc(s);
+    const models = this._aiModels[c.id];
+    const opts = [];
+    if (c.id === "chatgpt") opts.push({ value: "", label: "Your account's default" });
+    // (confirmed: false is a model the provider's own list leaves out for this key, so a turn on it would be refused)
+    for (const m of models || []) opts.push({ value: m.id, label: [m.label && m.label !== m.id ? m.label : m.id, m.free ? "Free" : "", m.confirmed === false ? "Not listed for this key" : ""].filter(Boolean).join(" · ") });
+    if (c.model && !opts.some((o) => o.value === c.model)) opts.unshift({ value: c.model, label: this._aiModelLabel(c.id, c.model) });
+    if (!opts.length) opts.push({ value: "", label: models ? "Its default model" : "Loading…" });
+    const more = c.id === "openrouter" ? `<div class="setup-ai-note">Any other OpenRouter model can be verified and chosen later in Settings → AI.</div>` : "";
+    const note = this._aiNotes[c.id] ? `<div class="setup-ai-note">${esc(this._aiNotes[c.id])}</div>` : "";
+    return `<label class="ai-label" for="setupAiModel">Model</label>` +
+      `<select id="setupAiModel" class="ai-input">${opts.map((o) => `<option value="${esc(o.value)}"${o.value === (c.model || "") ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>${note}${more}`;
+  },
+
+  async _aiLoadModels(id) {
+    if (this._aiModels[id]) return;
+    try {
+      const r = await API.json(`/api/ai/models/${encodeURIComponent(id)}`);
+      this._aiModels[id] = (r.models || []).filter((m) => !m.needsVerification);
+      this._aiNotes[id] = typeof r.note === "string" && r.note.trim() ? r.note : null;
+    } catch {
+      this._aiModels[id] = [];
+      this._aiNotes[id] = null;
+    }
+    if (this._aiProvider === id) this._aiDrawPanel();
+  },
+
+  _aiSetError(text) {
+    const el = document.getElementById("setupError");
+    if (!el) return;
+    el.textContent = text || "";
+    el.hidden = !text;
+  },
+
+  _aiChange(ev) {
+    const t = ev.target;
+    if (t.name === "setupWho") {
+      this._aiShared = t.value === "others";
+      const box = document.getElementById("setupKeysOnly");
+      if (box && !box.disabled) {
+        if (this._aiShared && !box.checked) { box.checked = true; this._aiAutoTicked = true; }
+        else if (!this._aiShared && this._aiAutoTicked) { box.checked = !!this._ai?.keysOnly?.on; this._aiAutoTicked = false; }
+      }
+      this._aiDraw();
+    } else if (t.id === "setupKeysOnly") {
+      t.dataset.touched = "1";
+      this._aiAutoTicked = false;
+      this._aiDraw();
+    }
+  },
+
+  _aiClick(ev) {
+    const copy = ev.target.closest("[data-copy]");
+    if (copy) { Settings.copyText(copy); return; }
+    if (ev.target.closest('[data-ai-action="chatgpt-cancel"]')) { this._aiCancelLogin(); return; }
+    const btn = ev.target.closest("[data-setup]");
+    if (!btn) return;
+    this._aiSetError("");
+    switch (btn.dataset.setup) {
+      case "retry": this._aiLoad(); break;
+      case "choice": {
+        const choice = btn.dataset.choice;
+        this._aiChoice = choice;
+        this._aiProvider = choice === "key" ? (this._aiCard(this._aiProvider)?.kind !== "subscription" ? this._aiProvider : null) : choice;
+        this._aiDraw();
+        if (this._aiProvider && this._aiCard(this._aiProvider)?.ready) this._aiLoadModels(this._aiProvider);
+        break;
+      }
+      case "provider":
+      case "use-env": {
+        const id = btn.dataset.provider;
+        this._aiChoice = this._aiCard(id)?.kind === "subscription" ? id : "key";
+        this._aiProvider = id;
+        this._aiDraw();
+        if (this._aiCard(id)?.ready) this._aiLoadModels(id);
+        break;
+      }
+      case "test": this._aiTest(this._aiProvider, btn); break;
+      case "test-save": this._aiTestSave(this._aiProvider, btn); break;
+      case "save-local": this._aiSaveLocal(btn); break;
+      case "preset": {
+        const input = document.getElementById("setupLocalUrl");
+        if (input) { input.value = btn.dataset.url; input.focus(); }
+        break;
+      }
+      case "chatgpt-login": this._aiChatgptLogin(); break;
+    }
+  },
+
+  _aiBusy(btn, text) {
+    if (!btn) return () => {};
+    const was = btn.textContent;
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    btn.textContent = text;
+    return () => { btn.disabled = false; btn.removeAttribute("aria-busy"); btn.textContent = was; };
+  },
+
+  /** Test (Check, on the plans): what's saved or signed in now. */
+  async _aiTest(id, btn) {
+    const done = this._aiBusy(btn, this._aiCard(id)?.kind === "subscription" ? "Checking…" : "Testing…");
+    try {
+      const r = await API.json(`/api/ai/test/${id}`, { method: "POST", body: {} });
+      this._aiLine[id] = window.ProviderGuides.testLine(r);
+    } catch (err) {
+      this._aiLine[id] = { text: `✗ ${err.message}`, tone: "bad" };
+    }
+    done();
+    await this._aiLoad();
+  },
+
+  /** A pasted key: tested first, saved only once the provider took it (POST /api/ai/test, then PUT /api/ai/keys). */
+  async _aiTestSave(id, btn) {
+    const input = document.getElementById("setupKey");
+    const key = input?.value.trim() || "";
+    if (!key) { this._aiLine[id] = { text: "Paste a key first.", tone: "bad" }; this._aiDrawPanel(); return; }
+    const done = this._aiBusy(btn, "Testing…");
+    let r;
+    try {
+      r = await API.json(`/api/ai/test/${id}`, { method: "POST", body: { apiKey: key } });
+    } catch (err) {
+      r = { ok: false, message: err.message };
+    }
+    this._aiLine[id] = window.ProviderGuides.testLine(r);
+    // A key the provider took is saved, even with an empty balance (topping up is the next step).
+    if (r.ok || r.state === "out-of-credit") {
+      try {
+        await API.json(`/api/ai/keys/${id}`, { method: "PUT", body: { apiKey: key } });
+        input.value = "";
+        this._aiLine[id] = { text: `${this._aiLine[id].text} · Saved.`, tone: this._aiLine[id].tone };
+      } catch (err) {
+        this._aiLine[id] = { text: `✗ ${err.message}`, tone: "bad" };
+      }
+    }
+    done();
+    delete this._aiModels[id];
+    delete this._aiNotes[id];
+    await this._aiLoad();
+  },
+
+  /** Local AI: its address (and a key if typed), then a Test that lists its models. */
+  async _aiSaveLocal(btn) {
+    const url = document.getElementById("setupLocalUrl")?.value.trim() || "";
+    const key = document.getElementById("setupKey")?.value.trim() || "";
+    if (!url) { this._aiLine.local = { text: "Type your server's address first, or click one of the buttons above.", tone: "bad" }; this._aiDrawPanel(); return; }
+    const done = this._aiBusy(btn, "Saving…");
+    try {
+      await API.json("/api/ai/providers/local", { method: "PUT", body: { baseUrl: url } });
+      if (key) await API.json("/api/ai/keys/local", { method: "PUT", body: { apiKey: key } });
+      const urlEl = document.getElementById("setupLocalUrl");
+      if (urlEl) urlEl.defaultValue = url;
+      const keyEl = document.getElementById("setupKey");
+      if (keyEl) keyEl.value = "";
+      const r = await API.json("/api/ai/test/local", { method: "POST", body: {} });
+      this._aiLine.local = window.ProviderGuides.testLine(r);
+    } catch (err) {
+      this._aiLine.local = { text: `✗ ${err.message}`, tone: "bad" };
+    }
+    done();
+    delete this._aiModels.local;
+    delete this._aiNotes.local;
+    await this._aiLoad();
+  },
+
+  _aiChatgptLogin() {
+    this._aiLoginCtl?.cancel?.();
+    this._aiLine.chatgpt = null;
+    // (render runs once before startChatgptLogin returns, so ctl is still null then)
+    let ctl = null;
+    ctl = Settings.startChatgptLogin(async (v) => {
+      if (ctl && this._aiLoginCtl !== ctl && v.state !== "cancelled") return;
+      this._aiLoginView = v;
+      Settings.renderChatgptLogin(document.getElementById("setupDevice"), v);
+      if (v.state === "done") {
+        this._aiLoginView = null;
+        this._aiLine.chatgpt = { text: `✓ Signed in to ChatGPT${v.account ? ` as ${v.account}` : ""}.`, tone: "ok" };
+        await this._aiLoad();
+      }
+    });
+    this._aiLoginCtl = ctl;
+  },
+
+  _aiCancelLogin() {
+    const ctl = this._aiLoginCtl;
+    this._aiLoginCtl = null;
+    this._aiLoginView = null;
+    ctl?.cancel();
+  },
+
+  /** Next: "Only use API keys" as ticked, the chosen AI (and model) as the default, then the skills step. */
+  async _aiNext() {
+    const id = this._aiProvider;
+    const card = this._aiCard(id);
+    if (!card?.ready) return;
+    const btn = document.getElementById("setupAiNext");
+    const done = this._aiBusy(btn, "Saving…");
+    try {
+      const want = this._aiKeysOnly();
+      const k = this._ai?.keysOnly || {};
+      if (!k.locked && want !== !!k.on) await API.json("/api/ai/keys-only", { method: "PUT", body: { on: want } });
+      const model = document.getElementById("setupAiModel")?.value || undefined;
+      await API.json("/api/ai/active", { method: "PUT", body: { provider: id, model } });
+    } catch (err) {
+      this._aiSetError(err.message);
+      done();
+      return;
+    }
+    if (this._aiLoginCtl) this._aiCancelLogin();
+    this.showSkillPicker();
   },
 
   /** Step 2: Skill picker */
@@ -275,7 +642,7 @@ const Setup = {
   /** Welcome tour — highlight key UI elements */
   showWelcomeTour() {
     const tips = [
-      { selector: "#voiceModeBtn", text: "Hold to talk: voice mode with speech-to-text", pos: "below" },
+      { selector: "#callBtn", text: `Call ${(typeof Chat !== "undefined" && Chat.botName) || "Tarsee"}: talk it through out loud, hands-free. It answers in its own voice, and you can talk over it.`, pos: "below" },
       { selector: "#consoleToggleBtn", text: "Server console: see what your agent is doing", pos: "below" },
       { selector: "#settingsBtn", text: "Settings: configure everything", pos: "above" },
       { selector: ".channel-list", text: "Your channels: web, Telegram, Discord, WhatsApp, Slack, email", pos: "right" },
@@ -288,8 +655,8 @@ const Setup = {
       document.getElementById("welcomeTip")?.remove();
 
       if (currentTip >= tips.length) {
-        // Tour done — send sample message
-        this.sendSampleMessage();
+        // Tour done: a first message to try, left in the box for the owner to send
+        this.suggestFirstMessage();
         return;
       }
 
@@ -307,7 +674,8 @@ const Setup = {
 
       if (tip.pos === "below") {
         tipEl.style.top = (rect.bottom + 8) + "px";
-        tipEl.style.left = Math.max(8, rect.left - 40) + "px";
+        // (The call button is the topbar's last: the tip stays on the screen.)
+        tipEl.style.left = Math.max(8, Math.min(rect.left - 40, window.innerWidth - 258)) + "px";
       } else if (tip.pos === "above") {
         tipEl.style.bottom = (window.innerHeight - rect.top + 8) + "px";
         tipEl.style.left = Math.max(8, rect.left) + "px";
@@ -316,7 +684,12 @@ const Setup = {
         tipEl.style.left = (rect.right + 8) + "px";
       }
 
-      tipEl.innerHTML = `${tip.text}<div style="font-size:10px;margin-top:4px;opacity:0.7">Tap to continue (${currentTip + 1}/${tips.length})</div>`;
+      // As text: a tip can carry the name from Settings > Identity.
+      tipEl.textContent = tip.text;
+      const more = document.createElement("div");
+      more.style.cssText = "font-size:10px;margin-top:4px;opacity:0.7";
+      more.textContent = `Tap to continue (${currentTip + 1}/${tips.length})`;
+      tipEl.appendChild(more);
       tipEl.addEventListener("click", () => { currentTip++; showTip(); });
 
       overlay.appendChild(tipEl);
@@ -329,14 +702,32 @@ const Setup = {
     showTip();
   },
 
-  /** Send a sample first message so the UI isn't empty */
-  sendSampleMessage() {
+  /**
+   * The tour's end: a first message to try, in the box and selected, so Enter sends it and typing replaces it. Never
+   * sent from here: on an API key every message costs money, so only the owner sends one. Text the owner typed
+   * during the tour is left as it is.
+   */
+  suggestFirstMessage() {
     setTimeout(() => {
-      if (Chat.elements?.messageInput) {
-        Chat.elements.messageInput.value = "Hey! I just finished setting you up. What can you do?";
-        Chat.send();
-      }
+      const box = Chat.elements?.messageInput;
+      if (!box || box.value.trim()) return;
+      box.value = "Hey! I just finished setting you up. What can you do?";
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+      box.focus();
+      box.select();
     }, 500);
+  },
+
+  /**
+   * The personality step on its own, for a page that opens with an AI ready and no personality yet (a Railway key,
+   * or the wizard left before this step): its buttons start the chat or skip it. app.js used to start the chat
+   * itself, which sent a message the owner never sent.
+   */
+  askPersonality() {
+    document.getElementById("loginScreen").style.display = "none";
+    document.getElementById("appScreen").style.display = "none";
+    document.getElementById("setupWizard").style.display = "flex";
+    this.showPersonalityStep();
   },
 
   /** Start the personality interview as the first conversation */

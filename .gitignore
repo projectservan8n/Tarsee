@@ -36,6 +36,19 @@ credentials.json
 .claude-code-home/
 .encryption-key
 
+# The other AIs' sign-ins and key homes: Codex's folder and its ChatGPT sign-in
+# (auth.json), each key provider's Claude Code home, and the tool results the
+# MCP endpoint spills to disk.
+.codex/
+.codex-home*/
+.claude-home-*/
+auth.json
+tool-output/
+
 # A migration bundle copied in from another deployment — contains the DB,
 # workspace files, encrypted vault and live sessions.
 tarsee-migration/
+
+# Python bytecode (src/voice/stt_worker.py, phonon worker)
+__pycache__/
+*.pyc

@@ -1,1 +1,4 @@
 entrypoint.sh text eol=lf
+# The fake codex launchers the tests start through a POSIX shell: a CRLF shebang would break them on Linux or WSL.
+test/fixtures/fake-codex/codex text eol=lf
+test/fixtures/fake-codex-login/codex text eol=lf

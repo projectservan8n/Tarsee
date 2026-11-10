@@ -1,0 +1,15 @@
+{"type":"thread.started","thread_id":"01a1bf55-9377-7883-a411-7875261c0d71"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"node -e \\\"console.log('hi from the shell')\\\"\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"node -e \\\"console.log('hi from the shell')\\\"\"","aggregated_output":"hi from the shell\n","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"node -e \\\"console.error('nope'); process.exit(3)\\\"\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"node -e \\\"console.error('nope'); process.exit(3)\\\"\"","aggregated_output":"nope\n","exit_code":1,"status":"failed"}}
+{"type":"item.started","item":{"id":"item_2","type":"mcp_tool_call","server":"tarsee","tool":"tarsee_datetime","arguments":{"timezone":"UTC"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"tarsee","tool":"tarsee_datetime","arguments":{"timezone":"UTC"},"result":{"content":[{"type":"text","text":"Monday, 9 November 2026, 09:00 UTC (stub)"}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_3","type":"mcp_tool_call","server":"tarsee","tool":"tarsee_fail","arguments":{},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","server":"tarsee","tool":"tarsee_fail","arguments":{},"result":{"content":[{"type":"text","text":"This tool always fails (stub)."}],"structured_content":null},"error":null,"status":"failed"}}
+{"type":"item.started","item":{"id":"item_4","type":"file_change","changes":[{"path":"<tmp>\\workspace\\notes.txt","kind":"add"},{"path":"<tmp>\\workspace\\readme.txt","kind":"update"},{"path":"<tmp>\\workspace\\stale.txt","kind":"delete"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_4","type":"file_change","changes":[{"path":"<tmp>\\workspace\\notes.txt","kind":"add"},{"path":"<tmp>\\workspace\\readme.txt","kind":"update"},{"path":"<tmp>\\workspace\\stale.txt","kind":"delete"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_5","type":"reasoning","text":"Everything ran."}}
+{"type":"item.completed","item":{"id":"item_6","type":"agent_message","text":"All done."}}
+{"type":"turn.completed","usage":{"input_tokens":5500,"cached_input_tokens":4000,"cache_write_input_tokens":0,"output_tokens":130,"reasoning_output_tokens":0}}

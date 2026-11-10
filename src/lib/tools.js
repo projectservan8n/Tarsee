@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import config from "../config/env.js";
 import { readWorkspaceFile, writeWorkspaceFile, appendDailyLog } from "./workspace-files.js";
+import { isAutomationFile, automationStatus } from "./automation-approval.js";
 import { runCmd } from "./run-cmd.js";
 
 /**
@@ -38,7 +39,7 @@ export const TOOLS = [
 
   {
     name: "write_file",
-    description: "Write or overwrite the contents of a workspace file. Use this to update your personality (SOUL.md), identity (IDENTITY.md), user notes (USER.md), long-term memory (MEMORY.md), tools (TOOLS.md), or agent rules (AGENTS.md).",
+    description: "Write or overwrite the contents of a workspace file. Use this to update your personality (SOUL.md), identity (IDENTITY.md), user notes (USER.md), long-term memory (MEMORY.md), tools (TOOLS.md), or agent rules (AGENTS.md). HEARTBEAT.md (the heartbeat's checks) and BOOT.md (what runs when Tarsee restarts) can be written too, but what you write there doesn't run until the owner OKs it in Settings > Automation (Let it run; for BOOT.md, Run at each restart): tell the owner so, and never say it is set up or running before then.",
     input_schema: {
       type: "object",
       properties: {
@@ -342,16 +343,24 @@ export const TOOLS = [
 
   {
     name: "pdf_read",
-    description: "Read and extract text from a PDF file. Can read from a URL or from a workspace file path.",
+    description: "Read the text of a PDF: a file in the workspace (files people send in are saved in its uploads folder) or a web address. Long PDFs come a few pages at a time, and the answer says which pages to ask for next. Scanned pages (pictures of text) have no text to read.",
     input_schema: {
       type: "object",
       properties: {
-        source: {
+        path: {
           type: "string",
-          description: "URL of the PDF or workspace filename to read",
+          description: "The PDF: a path in the workspace (absolute, or relative to it, e.g. 'uploads/report.pdf') or an http(s) address",
+        },
+        pages: {
+          type: "string",
+          description: "Which pages: '3', '2-5', or '6-' for page 6 to the end. Default: from page 1, as many as fit",
+        },
+        max_chars: {
+          type: "number",
+          description: "The most characters to return (default 10000, up to 50000)",
         },
       },
-      required: ["source"],
+      required: ["path"],
     },
   },
 
@@ -409,7 +418,7 @@ export const TOOLS = [
 
   {
     name: "schedule_task",
-    description: "Schedule a task to run at a specific time or interval using cron syntax. The task will be executed as an AI prompt at the scheduled time.",
+    description: "Schedule a task to run at a specific time or interval using cron syntax, as an AI prompt. Only when the owner asks for one: every run can cost money. The task is saved paused, and runs only once the owner switches it on (Settings > Automation > Scheduled tasks, or /cron on <id>). A task that asks the AI runs at most once every 15 minutes.",
     input_schema: {
       type: "object",
       properties: {
@@ -554,6 +563,13 @@ export const TOOLS = [
 // and never reach Telegram. server.js sets it once the channels start.
 let _channelManager = null;
 export function setToolsChannelManager(channelManager) { _channelManager = channelManager || null; }
+
+// What started a background turn (its tool context's `background`, ai/turn.js), as schedule_task's refusal says it.
+const SCHEDULE_REFUSED_IN = {
+  cron: "a scheduled task or a webhook",
+  heartbeat: "the heartbeat (HEARTBEAT.md)",
+  boot: "the startup checklist (BOOT.md)",
+};
 
 // The upload caps of each channel's bot API, in MB.
 // Slack takes up to 1 GB; 100 MB is Tarsee's own cap (the upload is read into memory).
@@ -931,7 +947,7 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
             ctx.settingsStore.set("identity.name", nameMatch[1].trim());
           }
         }
-        return `Successfully wrote ${content.length} chars to ${filename}.`;
+        return `Successfully wrote ${content.length} chars to ${filename}.${isAutomationFile(filename) ? automationWriteNote(filename, ctx.settingsStore) : ""}`;
       }
 
       case "list_files": {
@@ -1298,6 +1314,20 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
         }
       }
 
+      case "push_notification": {
+        // Web Push to every subscribed device (lib/push.js). Here rather than in the MCP tool, so Tool Permissions
+        // and the audit log cover it like every other tool.
+        const { title, body, url, tag } = toolInput || {};
+        try {
+          const { sendPush } = await import("./push.js");
+          const res = await sendPush({ title, body, url, tag });
+          if (res.total === 0) return "No devices have subscribed to push notifications yet. Ask the user to enable them from Settings > Appearance.";
+          return `Push sent to ${res.sent}/${res.total} devices · ${res.failed} failed · ${res.evicted} evicted as gone.`;
+        } catch (err) {
+          return "Push failed: " + err.message;
+        }
+      }
+
       case "discord_admin": {
         // Channels and webhooks in a Discord server, done by Tarsee's own logged-in bot (lib/discord-admin.js), so the
         // agent never needs the bot token in a command. Never deletes anything.
@@ -1307,13 +1337,20 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       }
 
       case "schedule_task": {
-        const { schedule, prompt, name, action, once } = toolInput;
+        const { schedule, prompt, name, action, once } = toolInput || {};
+        // Only the owner sets up scheduled tasks. Background work (a scheduled task's or a webhook's run, the
+        // heartbeat, BOOT.md: ai/turn.js marks its tool context, on both engines) makes none, so a task never makes
+        // tasks. A chat's own turn may: the task is saved paused (lib/cron.js), until the owner switches it on.
+        if (ctx.background) {
+          const by = SCHEDULE_REFUSED_IN[ctx.background] || "background work";
+          return `schedule_task refused: this run was started by ${by}, not by the owner, and only the owner can set up scheduled tasks, so background work never makes more of them. Nothing was saved. If a follow-up is needed, say so in your reply, and the owner can set it up.`;
+        }
         try {
           const { addCronJob } = await import("./cron.js");
-          const job = addCronJob({ schedule, prompt: prompt || "", name, action, once: !!once });
-          const desc = action ? `direct ${action.tool}` : "AI prompt";
-          const freq = once ? "one-time" : "recurring";
-          return `Scheduled ${freq} task (${desc}): ${name || job.id} at ${schedule}`;
+          const job = addCronJob({ schedule, prompt: prompt || "", name, action, once: !!once, createdBy: "ai", conversationId: ctx.conversationId || null });
+          const what = action ? `runs ${action.tool} directly, no AI` : "asks the AI";
+          const when = once ? "once" : "on a repeat";
+          return `Saved the task "${name || job.id}" (id ${job.id}, schedule ${schedule}, ${when}, ${what}), but it is paused: it won't run until the owner switches it on, in Settings > Automation > Scheduled tasks or by sending \`/cron on ${job.id}\`. Tell the owner that, in those words.`;
         } catch (err) {
           return `schedule_task error: ${err.message}`;
         }
@@ -1535,45 +1572,10 @@ export async function executeTool(toolName, toolInput, ctx = {}) {
       }
 
       case "pdf_read": {
-        const { source } = toolInput;
-        let pdfBuffer;
-
-        if (source.startsWith("http://") || source.startsWith("https://")) {
-          // Fetch PDF from URL
-          const res = await fetch(source, {
-            signal: AbortSignal.timeout(30_000),
-          });
-          if (!res.ok) return `Error fetching PDF: HTTP ${res.status}`;
-          pdfBuffer = Buffer.from(await res.arrayBuffer());
-        } else {
-          // Read from workspace
-          const filePath = path.join(config.WORKSPACE_DIR, source);
-          try {
-            pdfBuffer = fs.readFileSync(filePath);
-          } catch (err) {
-            return `Error reading PDF file '${source}': ${err.message}`;
-          }
-        }
-
-        // Try pdftotext first (poppler-utils), fall back to raw text extraction
-        try {
-          const { execSync } = await import("node:child_process");
-          const tmpPath = path.join(config.WORKSPACE_DIR, ".tmp_pdf_read.pdf");
-          fs.writeFileSync(tmpPath, pdfBuffer);
-          try {
-            const text = execSync(`pdftotext "${tmpPath}" -`, { timeout: 30_000, maxBuffer: 10 * 1024 * 1024 }).toString();
-            fs.unlinkSync(tmpPath);
-            if (text.trim()) return truncate(text, MAX_RESULT);
-          } catch {
-            // pdftotext not available, fall through
-            try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-          }
-        } catch { /* ignore */ }
-
-        // Fallback: extract readable ASCII text from PDF binary
-        const rawText = pdfBuffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s{3,}/g, " ").trim();
-        if (rawText.length < 50) return "Could not extract meaningful text from this PDF. Install poppler-utils (pdftotext) for better PDF support.";
-        return truncate(`(Raw text extraction — install pdftotext for better results)\n\n${rawText}`, MAX_RESULT);
+        // A PDF's text, a few whole pages at a time (lib/pdf-text.js): pdftotext when installed, else the built-in
+        // reader. Only the workspace's files (a protected one never) or a public web address; the old `source` still works.
+        const { readPdfTool } = await import("./pdf-text.js");
+        return await readPdfTool(toolInput, ctx);
       }
 
       case "get_key": {
@@ -1772,6 +1774,24 @@ function isAllowedFile(filename) {
 
 function isAllowedWriteFile(filename) {
   return WORKSPACE_FILES.includes(filename);
+}
+
+/**
+ * What the AI is told after writing HEARTBEAT.md or BOOT.md (lib/automation-approval.js): text the owner hasn't OK'd
+ * doesn't run, so it is told to say so rather than tell the owner the check is set up. Without the settings it can't
+ * check, and says the file waits: whatever the AI writes waits, unless it is the very text the owner OK'd.
+ */
+function automationWriteNote(filename, settingsStore) {
+  const boot = filename === "BOOT.md";
+  let status = null;
+  try {
+    status = settingsStore ? automationStatus(settingsStore, filename) : null;
+  } catch {
+    // not known: said to wait, below
+  }
+  if (status?.empty) return " It holds nothing to do, so nothing runs.";
+  if (status?.approved) return ` It is the text the owner OK'd, so ${boot ? "it runs when Tarsee restarts" : "the heartbeat runs it"}.`;
+  return ` It is saved, but it doesn't run yet: ${filename} written from a chat waits for the owner's OK. Tell the owner so, and that they can read it and switch it on in Settings > Automation with ${boot ? "Run at each restart" : "Let it run"}. Until they do, nothing in it runs, so don't say it is set up or running.`;
 }
 
 function truncate(str, max) {

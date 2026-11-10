@@ -15,23 +15,15 @@ export function setTTSEngine(engine) {
 export const DEFAULT_ENGINE = "phonon";
 
 /**
- * The engine the user asked for: voice.engine, else Phonon. One exception: an
- * install that has an ElevenLabs key but never saved an engine keeps
- * ElevenLabs, as before Phonon was the default. The key is a paid, deliberate
- * choice, and switching it off silently would be a surprise. Picking Phonon
- * (or anything else) in Settings > Voice saves voice.engine and ends that.
+ * The engine the user asked for: voice.engine, else Phonon, for everything that speaks (calls, read-aloud, voice
+ * replies on channels). A saved ElevenLabs key is not a choice: the paid engine speaks only when picked in Settings >
+ * Voice (or with "auto"). Installs from before Phonon that had a key and never picked an engine speak with Phonon now,
+ * which is free and local; Settings > Voice already showed Phonon for them.
  */
 export function enginePreference(settingsStore) {
   const v = settingsStore?.get("voice.engine");
   if (typeof v === "string" && v.trim()) return v.trim();
-  if (hasElevenLabsKey(settingsStore)) return "elevenlabs";
   return DEFAULT_ENGINE;
-}
-
-function hasElevenLabsKey(settingsStore) {
-  try {
-    return !!(settingsStore?.getApiKey?.("elevenlabs") || settingsStore?.get("voice.elevenlabs.apiKey"));
-  } catch { return false; }
 }
 
 /** "Auto" tries these in order. Phonon is only available once it is installed. */
@@ -45,6 +37,9 @@ const PREFERRED_FALLBACK = { phonon: "edge-tts" };
 // What is tried after the picked engine and its preferred fallback both fail.
 // Phonon (the default) never falls through to ElevenLabs.
 const AFTER_FALLBACK = { phonon: ["piper"] };
+
+// Engines that cost money: used when picked (or with "auto"), never as a stand-in for another engine that can't start.
+const PAID = new Set(["elevenlabs"]);
 
 /** Edge TTS voice ids look like "en-US-AndrewMultilingualNeural" or "fil-PH-AngeloNeural". */
 const EDGE_VOICE = /^[a-z]{2,3}-[A-Z]{2}(?:-[A-Za-z]+)?-\w+Neural$/;
@@ -77,7 +72,8 @@ let initSeq = 0;
  *
  * voice.engine unset or "phonon": Phonon (the default), with Edge TTS speaking
  * whenever Phonon is not installed yet or fails. Another named engine: that
- * engine, then the auto order. "auto": Phonon when installed, then Piper,
+ * engine, then the free ones of the auto order (ElevenLabs costs money, so it
+ * speaks only when picked or with "auto"). "auto": Phonon when installed, then Piper,
  * ElevenLabs, Edge TTS. Nothing available: the stub (voice disabled).
  *
  * opts.loaders replaces how named engines are built (tests):
@@ -115,7 +111,7 @@ export async function initTTSEngine(settingsStore, opts = {}) {
       }
     }
     console.warn(`[voice] Preferred engine "${enginePref}" unavailable, falling back`);
-    rest = (AFTER_FALLBACK[enginePref] || AUTO_ORDER).filter((n) => n !== enginePref && n !== next);
+    rest = (AFTER_FALLBACK[enginePref] || AUTO_ORDER).filter((n) => n !== enginePref && n !== next && !PAID.has(n));
   }
 
   for (const name of rest) {

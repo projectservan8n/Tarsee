@@ -16,12 +16,21 @@ const Settings = {
     this.elements = {
       settingsPage: document.getElementById("settingsPage"),
       openBtn: document.getElementById("settingsBtn"),
-      provider: document.getElementById("settingsProvider"),
-      apiKey: document.getElementById("settingsApiKey"),
-      model: document.getElementById("settingsModel"),
-      baseUrl: document.getElementById("settingsBaseUrl"),
-      baseUrlGroup: document.getElementById("customBaseUrlGroup"),
-      saveProviderBtn: document.getElementById("saveProviderBtn"),
+      // AI (Settings → AI, the header chip and its banner)
+      aiPanel: document.querySelector('.settings-tab-panel[data-tab="ai"]'),
+      aiChips: document.getElementById("aiChips"),
+      aiBanners: document.getElementById("aiBanners"),
+      aiDefaultNow: document.getElementById("aiDefaultNow"),
+      aiKeysOnly: document.getElementById("aiKeysOnly"),
+      aiKeysOnlyNote: document.getElementById("aiKeysOnlyNote"),
+      aiBackupModel: document.getElementById("aiBackupModel"),
+      aiMonthlyCap: document.getElementById("aiMonthlyCap"),
+      aiMonthSpend: document.getElementById("aiMonthSpend"),
+      aiSaveExtrasBtn: document.getElementById("aiSaveExtrasBtn"),
+      aiTermsNote: document.getElementById("aiTermsNote"),
+      aiHeaderChip: document.getElementById("aiHeaderChip"),
+      aiHeaderChipText: document.getElementById("aiHeaderChipText"),
+      aiAttention: document.getElementById("aiAttention"),
       // Telegram and Discord: one bot token each
       telegramEnabled: document.getElementById("settingsTelegramEnabled"),
       telegramToken: document.getElementById("settingsTelegramToken"),
@@ -236,10 +245,9 @@ const Settings = {
       tab.addEventListener("click", () => this.switchTab(tab.dataset.tab));
     });
 
-    // Provider is always claude-code — no change handler needed
-    this.elements.provider.value = "claude-code";
+    // Settings → AI: the guides into their cards, the controls wired, and the header chip
+    this.initAi();
 
-    this.elements.saveProviderBtn.addEventListener("click", () => this.saveProvider());
     this.elements.saveTelegramBtn?.addEventListener("click", () => this.saveTokenChannel("telegram"));
     this.elements.saveDiscordBtn?.addEventListener("click", () => this.saveTokenChannel("discord"));
     this.drawChannelGuides();
@@ -276,17 +284,42 @@ const Settings = {
       this.elements.runAuditBtn.addEventListener("click", () => this.loadSecurityAudit());
     }
 
-    // Captcha solver settings
+    // Captcha solver settings. GET /api/settings sends a saved key as its masked display ("abcd...wxyz"): it is never
+    // put in the box (Save would write the mask over the key). The line under the box says a key is saved, Save writes
+    // only a key typed in, and Remove deletes the saved one.
     const saveCaptchaBtn = document.getElementById("saveCaptchaBtn");
     if (saveCaptchaBtn) {
+      const keyBox = document.getElementById("captchaApiKey");
+      const removeBtn = document.getElementById("removeCaptchaKeyBtn");
+      const showSavedKey = (masked) => {
+        const status = document.getElementById("captchaKeyStatus");
+        const last4 = typeof masked === "string" && /^.{4}\.\.\..{4}$/.test(masked) ? ` …${masked.slice(-4)}` : "";
+        keyBox.placeholder = masked ? `Saved${last4}` : "Your API key";
+        if (status) {
+          status.textContent = masked ? `A key is saved${last4}. Type a new one to replace it.` : "";
+          status.hidden = !masked;
+        }
+        if (removeBtn) removeBtn.hidden = !masked;
+      };
       saveCaptchaBtn.addEventListener("click", async () => {
         const service = document.getElementById("captchaService").value;
-        const apiKey = document.getElementById("captchaApiKey").value.trim();
+        const apiKey = keyBox.value.trim();
         try {
           await API.json("/api/settings/general", { method: "POST", body: { key: "captcha.service", value: service } });
-          await API.json("/api/settings/general", { method: "POST", body: { key: "captcha.api_key", value: apiKey } });
+          if (apiKey) {
+            await API.json("/api/settings/general", { method: "POST", body: { key: "captcha.api_key", value: apiKey } });
+            keyBox.value = "";
+            showSavedKey(apiKey.length >= 12 ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}` : "****");
+          }
           App.showToast("Captcha settings saved", "success");
         } catch { App.showToast("Failed to save", "error"); }
+      });
+      removeBtn?.addEventListener("click", async () => {
+        try {
+          await API.json("/api/settings/general", { method: "POST", body: { key: "captcha.api_key", value: "" } });
+          showSavedKey(null);
+          App.showToast("Captcha key removed", "success");
+        } catch { App.showToast("Failed to remove the key", "error"); }
       });
       // Load existing values
       API.json("/api/settings").then(data => {
@@ -294,7 +327,7 @@ const Settings = {
         const svc = settings.find(s => s.key === "captcha.service")?.value;
         const key = settings.find(s => s.key === "captcha.api_key")?.value;
         if (svc) document.getElementById("captchaService").value = svc;
-        if (key) document.getElementById("captchaApiKey").value = key;
+        showSavedKey(typeof key === "string" && key ? key : null);
       }).catch(() => {});
     }
 
@@ -321,7 +354,11 @@ const Settings = {
       const statusEl = document.getElementById(statusId);
       const autoSave = debounce(async () => {
         if (statusEl) { statusEl.textContent = "Saving..."; statusEl.className = "save-status saving"; }
-        const ok = await this.saveWorkspaceFile(name, el.value, true);
+        // What the owner types here is theirs, so saving HEARTBEAT.md or BOOT.md OKs that text to run
+        // (routes/automation-approval.js). Only this input event gets here: the page loading a file doesn't.
+        const content = el.value;
+        const ok = await this.saveWorkspaceFile(name, content, true);
+        if (ok && this.AUTOMATION_FILES[name]) await this.approveAutomationFile(name, content, "editor");
         if (statusEl) {
           statusEl.textContent = ok ? "Saved" : "Save failed";
           statusEl.className = ok ? "save-status saved" : "save-status error";
@@ -469,34 +506,46 @@ const Settings = {
       this.loadPiperVoices();
     }
 
-    // STT save (provider + model + OpenAI key)
+    // Speech-to-text save (where speech becomes text + the model; an OpenAI key pasted here is the one Settings → AI keeps)
     const saveSTTBtn = document.getElementById("saveSTTBtn");
     if (saveSTTBtn) {
       saveSTTBtn.addEventListener("click", async () => {
-        const model = document.getElementById("settingsSTTModel").value;
+        const model = document.querySelector('#sttModelList input[name="sttModel"]:checked')?.value || this._stt?.current || "base.en";
         const provider = document.getElementById("settingsSTTProvider")?.value || "local";
-        const openaiKey = document.getElementById("settingsOpenaiKey")?.value?.trim();
+        const keyBox = document.getElementById("settingsOpenaiKey");
+        const openaiKey = keyBox?.value?.trim();
         try {
-          await API.json("/api/voice/stt-model", { method: "POST", body: { model } });
-          await API.json("/api/settings/general", { method: "POST", body: { key: "voice.stt_provider", value: provider } });
+          // The OpenAI key is one slot, shared with the OpenAI API key card: saved through Settings → AI's own route,
+          // with its checks, and never put back in the box.
           if (openaiKey) {
-            // Save in both formats — voice-specific and provider-generic (for getApiKey)
-            await API.json("/api/settings/general", { method: "POST", body: { key: "voice.openai_api_key", value: openaiKey } });
-            await API.json("/api/settings/general", { method: "POST", body: { key: "ai.openai.apiKey", value: openaiKey } });
+            await API.json("/api/ai/keys/openai", { method: "PUT", body: { apiKey: openaiKey } });
+            keyBox.value = "";
           }
-          App.showToast(`STT: ${provider}${provider === "local" ? ` (${model})` : ""}`, "success");
-          this.loadSTTModelStatus();
+          const chosen = await API.json("/api/voice/stt-model", { method: "POST", body: { model } });
+          await API.json("/api/settings/general", { method: "POST", body: { key: "voice.stt_provider", value: provider } });
+          const where = provider === "local" ? `faster-whisper on this server, ${model}` : "OpenAI Whisper API";
+          App.showToast(`Speech-to-text saved: ${where}${openaiKey ? ", OpenAI key saved" : ""}${chosen?.downloading ? `. Downloading ${model} now.` : ""}`, "success");
+          this.loadSTT();
         } catch (e) { App.showToast(e.message, "error"); }
+        // (The header's read draws the key's line again, and the header chip and the composer hear of a new key.)
+        if (openaiKey) this.refreshAiHeader();
       });
-      this.loadSTTModelStatus();
+      document.getElementById("settingsSTTProvider")?.addEventListener("change", () => this.showSttKey());
+      document.getElementById("sttInstallBtn")?.addEventListener("click", () => this.installStt());
+      // A model row's Download and Delete (the rows are drawn again on every status read).
+      document.getElementById("sttModelList")?.addEventListener("click", (e) => {
+        const dl = e.target.closest("[data-stt-download]");
+        if (dl) { this.downloadSttModel(dl.dataset.sttDownload, dl); return; }
+        const del = e.target.closest("[data-stt-delete]");
+        if (del) this.deleteSttModel(del.dataset.sttDelete, del);
+      });
+      this.loadSTT();
 
-      // Load saved values
+      // The speech-to-text choice saved
       API.json("/api/settings").then(data => {
-        const settings = data.settings || [];
-        const provider = settings.find(s => s.key === "voice.stt_provider")?.value;
-        const key = settings.find(s => s.key === "voice.openai_api_key")?.value;
+        const provider = (data.settings || []).find(s => s.key === "voice.stt_provider")?.value;
         if (provider) document.getElementById("settingsSTTProvider").value = provider;
-        if (key) document.getElementById("settingsOpenaiKey").value = key;
+        this.showSttKey();
       }).catch(() => {});
     }
 
@@ -539,6 +588,8 @@ const Settings = {
       p.classList.toggle("active", p.dataset.tab === tabName);
     });
     // Load data for new tabs
+    if (tabName === "ai") { this.loadAi(); }
+    if (tabName === "voice") { this.refreshAiHeader(); this.loadSTT({ refresh: true }); }   // (draws the OpenAI key's line, drawSttKey)
     if (tabName === "security") { this.loadToolPermissions(); }
     if (tabName === "canvas") { this.loadCanvasGallery(); }
     if (tabName === "audit") { this.loadAuditLog(); }
@@ -556,31 +607,60 @@ const Settings = {
     try {
       const data = await API.json("/api/admin/context-health");
       if (!data.conversations || !data.conversations.length) { el.textContent = "No conversations yet."; return; }
-      const body = data.conversations.map((c) => {
-        const color = c.status === "critical" ? "#ef4444" : c.status === "warning" ? "#f59e0b" : "#22c55e";
-        const mb = c.transcriptMB != null ? c.transcriptMB + " MB" : "—";
-        const reset = c.willResetNextTurn ? ' <span style="color:#f59e0b;font-size:11px">↻ resets next turn</span>' : "";
-        // An estimate must never be shown as if it were measured telemetry.
-        const approx = c.measured ? "" : "~";
-        const est = c.measured ? "" : ' <span style="color:var(--text-muted);font-size:11px">est.</span>';
-        return `<tr style="border-top:1px solid var(--border)">
-          <td style="padding:7px 8px">${esc(c.title)}</td>
-          <td style="padding:7px 8px;text-align:right">${c.messages}</td>
-          <td style="padding:7px 8px;text-align:right;white-space:nowrap">${mb}${reset}</td>
-          <td style="padding:7px 8px;text-align:right;white-space:nowrap">${approx}${fmt(c.contextTokens)} / ${fmt(c.contextWindow)}</td>
-          <td style="padding:7px 8px;text-align:right;white-space:nowrap"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>${approx}${c.contextPct}%${est}</td>
-        </tr>`;
-      }).join("");
-      el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px">
-        <thead><tr style="text-align:left;color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px">
-          <th style="padding:6px 8px">Conversation</th><th style="padding:6px 8px;text-align:right">Msgs</th>
-          <th style="padding:6px 8px;text-align:right">Transcript</th><th style="padding:6px 8px;text-align:right">Context</th>
-          <th style="padding:6px 8px;text-align:right">Fill</th>
-        </tr></thead><tbody>${body}</tbody></table>
-        <div class="hint mt-2">Transcript cap: ${data.sessionCapMB} MB · under 80% is fine, 80 to 95% is a warning, past 95% it starts fresh · “est.” means no token telemetry recorded yet for that conversation.</div>`;
+      this._healthData = data;
+      this._drawContextHealth();
     } catch (err) {
       el.textContent = "Could not load token health.";
     }
+  },
+
+  /**
+   * Token Health's table: one row per chat, the AI it runs on (a column and a filter once more than one AI has
+   * chats), its transcript (Claude Code keeps one per chat; Codex keeps none here) and how full its context is.
+   */
+  _drawContextHealth() {
+    const el = document.getElementById("contextHealthContent");
+    const data = this._healthData;
+    if (!el || !data) return;
+    const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    const fmt = (n) => n >= 1000 ? Math.round(n / 1000) + "k" : String(n);
+    const ais = [];
+    for (const c of data.conversations) if (c.provider && !ais.some((a) => a.id === c.provider)) ais.push({ id: c.provider, label: c.providerLabel || c.provider });
+    const several = ais.length > 1;
+    if (!ais.some((a) => a.id === this._healthProvider)) this._healthProvider = "";
+    const shown = data.conversations.filter((c) => !this._healthProvider || c.provider === this._healthProvider);
+    const filter = several
+      ? `<label class="text-sm" style="display:inline-flex;gap:6px;align-items:center;margin-bottom:8px">AI <select id="contextHealthProvider" class="ai-input">
+          <option value="">All AIs</option>${ais.map((a) => `<option value="${esc(a.id)}"${a.id === this._healthProvider ? " selected" : ""}>${esc(a.label)}</option>`).join("")}
+        </select></label>`
+      : "";
+    const body = shown.map((c) => {
+      const color = c.status === "critical" ? "#ef4444" : c.status === "warning" ? "#f59e0b" : "#22c55e";
+      const mb = c.transcriptMB != null ? c.transcriptMB + " MB" : (c.engine === "codex" ? '<span class="text-muted">no transcript</span>' : "—");
+      const reset = c.willResetNextTurn ? ' <span style="color:#f59e0b;font-size:11px">↻ resets next turn</span>' : "";
+      // An estimate must never be shown as if it were measured telemetry.
+      const approx = c.measured ? "" : "~";
+      const est = c.measured ? "" : ' <span style="color:var(--text-muted);font-size:11px">est.</span>';
+      return `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:7px 8px">${esc(c.title)}</td>
+        ${several ? `<td style="padding:7px 8px">${esc(c.providerLabel || c.provider || "")}</td>` : ""}
+        <td style="padding:7px 8px;text-align:right">${c.messages}</td>
+        <td style="padding:7px 8px;text-align:right;white-space:nowrap">${mb}${reset}</td>
+        <td style="padding:7px 8px;text-align:right;white-space:nowrap">${approx}${fmt(c.contextTokens)} / ${fmt(c.contextWindow)}</td>
+        <td style="padding:7px 8px;text-align:right;white-space:nowrap"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>${approx}${c.contextPct}%${est}</td>
+      </tr>`;
+    }).join("");
+    el.innerHTML = `${filter}<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="text-align:left;color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px">
+        <th style="padding:6px 8px">Conversation</th>${several ? '<th style="padding:6px 8px">AI</th>' : ""}<th style="padding:6px 8px;text-align:right">Msgs</th>
+        <th style="padding:6px 8px;text-align:right">Transcript</th><th style="padding:6px 8px;text-align:right">Context</th>
+        <th style="padding:6px 8px;text-align:right">Fill</th>
+      </tr></thead><tbody>${body}</tbody></table></div>
+      <div class="hint mt-2">Transcript cap: ${data.sessionCapMB} MB · under 80% is fine, 80 to 95% is a warning, past 95% it starts fresh · “est.” means no token telemetry recorded yet for that conversation. Codex-run chats (ChatGPT, OpenAI, Local AI) keep no Claude transcript here.</div>`;
+    el.querySelector("#contextHealthProvider")?.addEventListener("change", (ev) => {
+      this._healthProvider = ev.target.value;
+      this._drawContextHealth();
+    });
   },
 
   // --- Open / Close ---
@@ -643,22 +723,20 @@ const Settings = {
     if (typeof Chat !== "undefined" && Chat._paintHeader) Chat._paintHeader();
     else document.getElementById("topbarTitle").textContent = "Tarsee";
 
+    // The composer was hidden while Settings was open: its model list and defaults, fresh, for whatever was changed
+    // here (a key saved or removed, a model verified, Local AI's address, a sign-in).
+    if (typeof Chat !== "undefined") { Chat.refreshPicker?.(true); Chat._loadPick?.({ fresh: true }); }
+
     // Un-highlight settings button
     this.elements.openBtn.classList.remove("settings-active");
   },
 
   async load() {
     try {
-      // Populate the model dropdown FIRST so setting its value below actually sticks —
-      // assigning to <select>.value silently no-ops if the matching <option> isn't there.
-      await this.loadModelsDropdown();
-
       const { settings } = await API.getSettings();
 
-      // Provider (always claude-code)
-      this.elements.provider.value = "claude-code";
-      const model = settings.find((s) => s.key === "ai.claude-code.model")?.value;
-      if (model) this.elements.model.value = model;
+      // AI: every provider's card, the default AI and the switches (GET /api/ai/providers)
+      this.loadAi({ settings });
 
       // Channels
       // Bot tokens are never sent to the browser any more — the server
@@ -786,44 +864,1195 @@ const Settings = {
     }
   },
 
-  async saveProvider() {
-    try {
-      await API.saveProvider({
-        provider: "claude-code",
-        model: this.elements.model.value,
-      });
-      App.showToast("Model saved", "success");
-    } catch (err) {
-      App.showToast(err.message, "error");
+  // --- AI: Settings → AI, the header chip and its banner ---
+  //
+  // Everything comes from /api/ai (src/routes/ai.js). GET /providers draws the chips, the default AI, the switches and
+  // one card per provider; each card's buttons call their own endpoint, then the cards are drawn again. The steps and
+  // the status words come from js/provider-guides-core.js (window.ProviderGuides). Keys are never shown: only where a
+  // key lives and its last 4 characters. A provider this version doesn't switch on (shipped: false) has no card.
+
+  _ai: null,             // the last GET /api/ai/providers answer
+  _aiAt: 0,              // when it came
+  _aiSettings: null,     // the settings list (GET /api/settings), for the backup model and the monthly cap
+  _aiModels: {},         // provider id → { models, at } (GET /api/ai/models/:id)
+  _aiTest: {},           // provider id → the last Test, Verify or Save answer on its card ({ text, tone })
+  _aiOpen: {},           // provider id → the state its guide was last unfolded or folded for
+  _aiLoginCtl: null,     // the ChatGPT sign-in this page started ({ cancel })
+  _aiLoginView: null,    // what that sign-in shows now
+  _aiDismissed: null,    // "<provider>|<state>" of a header banner hidden for this visit
+
+  _esc(s) {
+    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  },
+
+  /** The guides into their cards, the controls wired, and the header chip kept up to date. */
+  initAi() {
+    const G = window.ProviderGuides;
+    const e = this.elements;
+    if (G) {
+      for (const p of G.PROVIDERS) {
+        const slot = document.querySelector(`[data-ai-guide-slot="${p.id}"]`);
+        if (slot) slot.innerHTML = G.guideHtml(p.id, { open: true });
+        const needs = document.querySelector(`[data-ai-needs="${p.id}"]`);
+        if (needs) needs.textContent = p.needs;
+      }
+      if (e.aiTermsNote) e.aiTermsNote.innerHTML = G.TERMS_NOTE;
     }
+    if (e.aiKeysOnlyNote) e.aiKeysOnlyNote.dataset.text = e.aiKeysOnlyNote.textContent.trim();
+    e.aiChips?.addEventListener("click", (ev) => {
+      const chip = ev.target.closest("[data-ai-jump]");
+      if (chip) this.focusAi(chip.dataset.aiJump);
+    });
+    e.aiPanel?.addEventListener("click", (ev) => this._aiClick(ev));
+    e.aiPanel?.addEventListener("change", (ev) => {
+      const bg = ev.target.closest("[data-ai-bg-model]");
+      if (bg) { this.saveAiBackgroundModel(bg.closest("[data-ai]")?.dataset.ai, bg.value); return; }
+      const select = ev.target.closest("[data-ai-model]");
+      if (select) this.saveAiModel(select.closest("[data-ai]")?.dataset.ai, select.value);
+    });
+    e.aiPanel?.addEventListener("input", (ev) => {
+      if (ev.target.matches("[data-ai-or-search]")) this._aiDrawOpenRouter();
+    });
+    e.aiKeysOnly?.addEventListener("change", () => this.saveKeysOnly());
+    e.aiSaveExtrasBtn?.addEventListener("click", () => this.saveAiExtras());
+    e.aiBanners?.addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-ai-banner-use]");
+      if (b) this.useAi(b.dataset.aiBannerUse, b);
+      const fix = ev.target.closest("[data-ai-banner-fix]");
+      if (fix) this.fixSettingsFile(fix.dataset.aiBannerFix, fix);
+    });
+    e.aiHeaderChip?.addEventListener("click", () => this.openAiSettings());
+    e.aiAttention?.addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-ai-attention]");
+      if (!b) return;
+      if (b.dataset.aiAttention === "open") this.openAiSettings();
+      else {
+        const a = this._ai?.active;
+        this._aiDismissed = a ? `${a.provider}|${a.state}` : null;
+        e.aiAttention.hidden = true;
+      }
+    });
+
+    // The header chip: now, every 5 minutes while the page is in view, and on coming back to it.
+    this.refreshAiHeader();
+    clearInterval(this._aiHeaderTimer);
+    this._aiHeaderTimer = setInterval(() => { if (!document.hidden) this.refreshAiHeader(); }, 5 * 60 * 1000);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && Date.now() - this._aiAt > 60 * 1000) this.refreshAiHeader();
+    });
+  },
+
+  /** Settings → AI opened (from the header chip, its banner, or a link). */
+  async openAiSettings() {
+    if (!this.isOpen) await this.open();
+    this.switchTab("ai");
+  },
+
+  /** The AI tab shown, at a provider's card when id names one (js/model-picker.js calls this after Settings.open()). */
+  focusAI(id) {
+    this.switchTab("ai");
+    if (id) this.focusAi(id);
+  },
+
+  /** The providers this version switches on, as GET /api/ai/providers drew them. */
+  _aiShipped() {
+    return (this._ai?.providers || []).filter((c) => c.shipped);
+  },
+
+  _aiCard(id) {
+    return (this._ai?.providers || []).find((c) => c.id === id) || null;
   },
 
   /**
-   * Populate the Settings > AI Provider model dropdown from the server's
-   * central model registry. Called on page load so new models added in
-   * src/config/constants.js show up without any client-side code change.
+   * Read every provider again and draw the AI tab and the header. settings: the settings list if the caller has it
+   * (the backup model and the cap live there). refresh: read OpenRouter's and DeepSeek's balances now, not from cache.
    */
-  async loadModelsDropdown() {
-    const select = this.elements.model;
-    if (!select) return;
+  async loadAi({ settings = null, refresh = false } = {}) {
+    let data;
     try {
-      const { models } = await API.json("/api/chat/models");
-      if (!Array.isArray(models) || !models.length) return;
-      const current = select.value;
-      select.innerHTML = models.map((m) => {
-        const notes = [m.context];
-        if (m.recommended) notes.push("recommended");
-        return `<option value="${m.id}">${m.displayName} (${notes.join(", ")})</option>`;
-      }).join("");
-      // Restore previous selection if still present; otherwise leave on the first option.
-      if (current && models.some((m) => m.id === current)) {
-        select.value = current;
-      }
+      data = await API.json(`/api/ai/providers${refresh ? "?refresh=1" : ""}`);
     } catch (err) {
-      // Leave the (empty) select alone — saveProvider still works with whatever
-      // value is already stored server-side; the dropdown just won't render.
-      console.warn("[settings] Failed to load model list:", err.message);
+      if (this.elements.aiDefaultNow) {
+        this.elements.aiDefaultNow.textContent = `Couldn't read the AI settings: ${err.message}`;
+        this.elements.aiDefaultNow.dataset.tone = "bad";
+      }
+      return null;
     }
+    this._ai = data;
+    this._aiAt = Date.now();
+    this._aiNoticeChange();
+    if (!settings) {
+      try { settings = (await API.getSettings()).settings; } catch { settings = this._aiSettings || []; }
+    }
+    this._aiSettings = settings || [];
+    this.drawAi();
+    this.drawAiHeader();
+    this.drawSttKey();
+    for (const c of this._aiShipped()) {
+      // ChatGPT's list is the signed-in account's own; Local AI's comes from its server once it has an address.
+      if (c.id === "chatgpt" && !c.ready) continue;
+      if (c.id === "local" && !c.settings?.baseUrl) continue;
+      this.loadAiModels(c.id);
+    }
+    return data;
+  },
+
+  /**
+   * Tell the composer (js/chat.js) when a fresh GET /api/ai/providers changed what its model button and list show:
+   * the default AI, its model, whether it can answer, "Only use API keys", or which AIs are ready (and on which
+   * model). Every read goes through here, so a change made on this page, in a chat command's wake or on another
+   * device is caught the same way. detail.defaultChanged: what the next message runs on changed, so the model the
+   * last turn ran on is no longer the one to show. The first read only sets what is compared against.
+   */
+  _aiNoticeChange() {
+    const d = this._ai;
+    if (!d) return;
+    const a = d.active || {};
+    const def = [a.provider, a.model, !!a.ready, !!d.keysOnly?.on].join("|");
+    const ready = (d.providers || []).filter((c) => c.ready).map((c) => `${c.id}:${c.model || ""}`).sort().join(",");
+    const was = this._aiSeen;
+    this._aiSeen = { def, ready };
+    if (!was || (was.def === def && was.ready === ready)) return;
+    window.dispatchEvent(new CustomEvent("tarsee:ai-changed", { detail: { defaultChanged: was.def !== def, provider: a.provider || null } }));
+  },
+
+  /** A provider's models (GET /api/ai/models/:id), kept a minute unless force. Draws its card's model list. */
+  async loadAiModels(id, { force = false } = {}) {
+    const have = this._aiModels[id];
+    if (!force && have && Date.now() - have.at < 60 * 1000) {
+      this._aiDrawModels(id);
+      return have;
+    }
+    try {
+      const r = await API.json(`/api/ai/models/${encodeURIComponent(id)}`);
+      // note: what the list says about itself (a model DeepSeek doesn't list for this key, ChatGPT's list unread).
+      const note = typeof r.note === "string" && r.note.trim() ? r.note : null;
+      this._aiModels[id] = { models: Array.isArray(r.models) ? r.models : [], note, at: Date.now() };
+    } catch (err) {
+      this._aiModels[id] = { models: have?.models || [], note: have?.note || null, at: Date.now(), error: err.message };
+    }
+    this._aiDrawModels(id);
+    const c = this._aiCard(id);
+    if (c) this._aiDrawStatus(c);
+    if (this._ai?.active?.provider === id) { this.drawAiHeader(); this._aiDrawDefault(); }
+    if (c?.ready) this._aiDrawSwitches();
+    return this._aiModels[id];
+  },
+
+  /** A model's name in words: its label from the list, a Claude size word capitalised, or the id. */
+  _aiModelLabel(id, model) {
+    if (!model) return id === "chatgpt" ? "your account's default model" : "its default model";
+    const m = this._aiModels[id]?.models?.find((x) => x.id === model);
+    if (m?.label && m.label !== m.id) return m.label;
+    if (/^(fable|opus|sonnet|haiku)(\[1m\])?$/i.test(model)) return model[0].toUpperCase() + model.slice(1);
+    return model;
+  },
+
+  drawAi() {
+    const data = this._ai;
+    const G = window.ProviderGuides;
+    if (!data || !G) return;
+    for (const p of G.PROVIDERS) {
+      const el = document.getElementById(p.section);
+      if (el) el.hidden = !this._aiCard(p.id)?.shipped;
+    }
+    this._aiDrawChips();
+    this._aiDrawBanners();
+    this._aiDrawDefault();
+    this._aiDrawSwitches();
+    for (const c of this._aiShipped()) this._aiDrawCard(c);
+  },
+
+  _aiDrawChips() {
+    const G = window.ProviderGuides;
+    const el = this.elements.aiChips;
+    if (!el) return;
+    this._aiSetHtml(el, this._aiShipped().map((c) => {
+      const p = G.get(c.id);
+      return `<button type="button" class="channel-chip ai-chip" data-ai-jump="${c.id}"${c.active ? ' aria-current="true"' : ""}>` +
+        `<span class="channel-dot" data-tone="${G.toneOf(c.state)}"></span>${this._esc(p?.shortName || c.label)} · ${this._esc(G.stateWord(c.state))}${c.active ? " · default" : ""}</button>`;
+    }).join(""));
+  },
+
+  /**
+   * Put this markup in el, unless it's what el already shows. Every read of the AIs draws the page again, and opening
+   * Settings reads them more than once: rebuilding a part that didn't change would take away the box someone is in,
+   * its caret, and a click under way (pressed on the old button, let go on the new one, it is no click at all).
+   * @returns {boolean} whether el was rebuilt
+   */
+  _aiSetHtml(el, html) {
+    if (el._aiHtml === html) return false;
+    el.innerHTML = html;
+    el._aiHtml = html;
+    return true;
+  },
+
+  /** The box or button someone is in, inside root, and their caret, to give back when root is built again. */
+  _aiFocusOf(root) {
+    const el = document.activeElement;
+    if (!el || el === root || !root.contains(el)) return null;
+    // A list (select) is drawn by custom-select.js, which moves a new one into its wrapper and takes the focus off it
+    // on the next frame: focus on it can't be kept, and a focused list isn't filled with its models.
+    if (el.tagName === "SELECT") return null;
+    const esc = (s) => (window.CSS?.escape ? CSS.escape(s) : String(s).replace(/["\\]/g, "\\$&"));
+    // A button is found again by all its data- attributes: several share an action (each model's Choose and Verify,
+    // Local AI's presets) and only their data-model or data-url tells them apart.
+    const dataSel = () => [...el.attributes].filter((a) => a.name.startsWith("data-")).map((a) => `[${a.name}="${esc(a.value)}"]`).join("");
+    const sel = el.id ? `#${esc(el.id)}`
+      : el.dataset?.keep ? `[data-keep="${esc(el.dataset.keep)}"]`
+      : el.dataset?.aiAction ? dataSel()
+      : null;
+    // Only what is found again for sure: focus put on another button (another model's Choose) would act on that one.
+    if (!sel || root.querySelectorAll(sel).length !== 1) return null;
+    let range = null;
+    try {
+      if (typeof el.selectionStart === "number") range = [el.selectionStart, el.selectionEnd, el.selectionDirection || "none"];
+    } catch { /* a box with no caret (a number box): focus alone */ }
+    return { sel, range };
+  },
+  _aiRefocus(root, focus) {
+    if (!focus) return;
+    const el = root.querySelector(focus.sel);
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    if (focus.range) {
+      try { el.setSelectionRange(...focus.range); } catch { /* a box with no caret */ }
+    }
+  },
+
+  _aiDrawBanners() {
+    const el = this.elements.aiBanners;
+    if (!el) return;
+    this._aiSetHtml(el, (this._ai?.banners || []).map((b) => {
+      let action = "";
+      if (b.action?.kind === "settings-guard" && b.action.file) {
+        action = ` <button type="button" class="btn btn-sm" data-ai-banner-fix="${this._esc(b.action.file)}">${this._esc(b.action.label || "Remove these entries")}</button>`;
+      } else if (b.action?.provider) {
+        action = ` <button type="button" class="btn btn-sm" data-ai-banner-use="${this._esc(b.action.provider)}">${this._esc(b.action.label || "Use it")}</button>`;
+      }
+      return `<div class="ai-banner" data-level="${this._esc(b.level || "info")}"><span>${this._esc(b.message)}</span>${action}</div>`;
+    }).join(""));
+  },
+
+  _aiDrawDefault() {
+    const el = this.elements.aiDefaultNow;
+    const a = this._ai?.active;
+    if (!el || !a) return;
+    const how = a.chosenBy === "env" ? " (set by the Railway variable TARSEE_AI_PROVIDER)"
+      : a.chosenBy === "default" ? " (nothing chosen yet, so Tarsee starts with the Claude plan)" : "";
+    const model = this._aiModelLabel(a.provider, a.model);
+    el.textContent = a.ready
+      ? `✓ ${a.label}, using ${model}${how}`
+      : `${a.label}${how} can't answer right now: ${[a.detail, a.fix].filter(Boolean).join(" ")}`;
+    el.dataset.tone = a.ready ? "ok" : "bad";
+  },
+
+  _aiDrawSwitches() {
+    const e = this.elements;
+    const k = this._ai?.keysOnly || { on: false, locked: false };
+    // With no API-key AI switched on in this version, the switch would only silence Tarsee: it isn't offered then,
+    // unless it is already on (it shows, so it can be switched off).
+    const anyKey = this._aiShipped().some((c) => c.kind !== "subscription");
+    const group = e.aiKeysOnly?.closest(".form-group");
+    if (group) group.hidden = !(anyKey || k.on || k.locked);
+    if (e.aiKeysOnly) {
+      e.aiKeysOnly.checked = !!k.on;
+      e.aiKeysOnly.disabled = !!k.locked;
+    }
+    if (e.aiKeysOnlyNote) {
+      e.aiKeysOnlyNote.textContent = k.locked
+        ? "Locked on by the Railway variable TARSEE_KEYS_ONLY=1: the Claude and ChatGPT plan sign-ins stay off. Remove that variable to change it here."
+        : (e.aiKeysOnlyNote.dataset.text || "");
+    }
+
+    // The backup model: Off, or a ready AI with its model. The one saved stays listed even when it isn't ready now.
+    // Neither it nor the cap saves on change (only "Save backup and cap" does), and every card action draws this
+    // again: a choice not saved yet stays chosen (dataset.drawn and defaultValue hold what was last drawn as saved).
+    const setting = (key) => (this._aiSettings || []).find((s) => s.key === key)?.value;
+    const saved = typeof setting("ai.backupModel") === "string" ? setting("ai.backupModel") : "";
+    const sel = e.aiBackupModel;
+    if (sel && document.activeElement !== sel) {
+      const dirty = "drawn" in sel.dataset && sel.value !== sel.dataset.drawn;
+      const want = dirty ? sel.value : saved;
+      const options = [{ value: "", label: "Off" }];
+      for (const c of this._aiShipped()) {
+        if (!c.ready || !c.model) continue;
+        options.push({ value: `${c.id}:${c.model}`, label: `${c.label} · ${this._aiModelLabel(c.id, c.model)}` });
+      }
+      for (const v of new Set([saved, want])) {
+        if (v && !options.some((o) => o.value === v)) options.push({ value: v, label: `${v} (not ready now)` });
+      }
+      sel.innerHTML = options.map((o) => `<option value="${this._esc(o.value)}">${this._esc(o.label)}</option>`).join("");
+      sel.value = want;
+      if (!dirty) sel.dataset.drawn = saved;
+    }
+    const cap = e.aiMonthlyCap;
+    if (cap && document.activeElement !== cap && cap.value === cap.defaultValue) {
+      const v = setting("ai.spendCap.monthlyUsd");
+      const s = v === undefined || v === null ? "" : String(v).replace(/[$,\s]/g, "");
+      cap.value = s;
+      cap.defaultValue = s;
+    }
+    // What API-key AIs have cost so far this month (GET /api/ai/providers), next to the cap.
+    const spent = e.aiMonthSpend;
+    const sp = this._ai?.spend;
+    if (spent) {
+      const usd = Number(sp?.monthUsd);
+      spent.hidden = !(sp && Number.isFinite(usd));
+      if (!spent.hidden) {
+        const money = (n) => `$${n < 10 ? n.toFixed(2) : n.toFixed(0)}`;
+        // costNote "exact": every cost is the provider's own figure (Anthropic's, OpenRouter's); anything else, or an
+        // answer without it, holds an estimate from the price table.
+        const est = sp.costNote === "exact" ? "" : " (est.)";
+        spent.textContent = `Spent so far this month: ${money(usd)}${est}${sp.capUsd ? ` of your ${money(Number(sp.capUsd))} cap` : ""}.`;
+      }
+    }
+  },
+
+  /** One provider's card: its status line, its guide (unfolded until it's ready) and its controls. */
+  _aiDrawCard(c) {
+    const G = window.ProviderGuides;
+    const p = G.get(c.id);
+    if (!p) return;
+    const section = document.getElementById(p.section);
+    if (!section) return;
+    this._aiDrawStatus(c);
+    const guide = section.querySelector(".ai-guide");
+    if (guide && this._aiOpen[c.id] !== c.state) {
+      guide.open = !c.ready;
+      this._aiOpen[c.id] = c.state;
+    }
+    const body = section.querySelector("[data-ai-body]");
+    if (!body) return;
+    const html = this._aiBodyHtml(c);
+    let focus = null;
+    if (body._aiHtml !== html) {
+      // Built again: what someone typed and hasn't saved, the part they opened or closed (OpenRouter's whole list,
+      // Local AI's key) and the box they are in, caret and all, stay as they were.
+      const kept = this._aiKeep(body);
+      focus = this._aiFocusOf(body);
+      const opened = new Map([...body.querySelectorAll("details[class]")].map((d) => [d.className, d.open]));
+      this._aiSetHtml(body, html);
+      body.querySelectorAll("details[class]").forEach((d) => { if (opened.has(d.className)) d.open = opened.get(d.className); });
+      this._aiRestore(body, kept);
+    }
+    this._aiDrawModels(c.id);
+    if (c.id === "chatgpt") this.renderChatgptLogin(body.querySelector("[data-ai-device]"), this._aiLoginView);
+    // Focus goes back last, once the card's lists are filled: a list that has the focus isn't filled (it may be open).
+    this._aiRefocus(body, focus);
+  },
+
+  /** A card's status line (again once its model list, and so the model's name, is in). */
+  _aiDrawStatus(c) {
+    const G = window.ProviderGuides;
+    const status = document.getElementById(`${c.id}AiStatus`);
+    if (!G || !status) return;
+    const { text, tone } = G.statusLine(c, { modelLabel: c.model ? this._aiModelLabel(c.id, c.model) : null });
+    status.textContent = tone === "ok" ? `✓ ${text}` : tone === "bad" ? `✗ ${text}` : text;
+    status.dataset.tone = tone;
+  },
+
+  /** What someone typed in a card (and hasn't saved), so drawing it again doesn't lose it. */
+  _aiKeep(root) {
+    const out = {};
+    root.querySelectorAll("[data-keep]").forEach((el) => {
+      if (el.value !== el.defaultValue) out[el.dataset.keep] = el.value;
+    });
+    return out;
+  },
+  _aiRestore(root, kept) {
+    for (const [name, value] of Object.entries(kept)) {
+      const el = root.querySelector(`[data-keep="${name}"]`);
+      if (el) el.value = value;
+    }
+  },
+
+  _aiBodyHtml(c) {
+    const esc = (s) => this._esc(s);
+    const parts = [];
+    if (c.notes?.length) parts.push(`<ul class="ai-notes">${c.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`);
+    if (c.state === "blocked-keys-only") {
+      parts.push(`<div class="ai-note-off">"Only use API keys" is on, so this plan sign-in isn't used. Switch it off at the top of this page to use it.</div>`);
+      return parts.join("");
+    }
+    if (c.id === "claude") parts.push(this._aiClaudeHtml(c));
+    else if (c.id === "chatgpt") parts.push(this._aiChatgptHtml(c));
+    else if (c.id === "local") parts.push(this._aiLocalHtml(c));
+    else parts.push(this._aiKeyHtml(c));
+    const t = this._aiTest[c.id];
+    parts.push(`<div class="ai-test-result" data-ai-test aria-live="polite"${t ? ` data-tone="${t.tone}"` : ""}>${t ? esc(t.text) : ""}</div>`);
+    parts.push(this._aiModelHtml(c));
+    if (c.id === "openrouter") parts.push(this._aiOpenRouterHtml());
+    return parts.join("");
+  },
+
+  _aiKeySourceHtml(c, { none = "No key yet." } = {}) {
+    if (!c.keySource) return `<div class="ai-keysource">${this._esc(none)}</div>`;
+    const where = c.keySourceText || c.keySource;
+    return `<div class="ai-keysource">Key: ${this._esc(where)}${c.keyHint ? ` <code>${this._esc(c.keyHint)}</code>` : ""}</div>`;
+  },
+
+  _aiKeyFormHtml(c, { label, placeholder }) {
+    const id = c.id;
+    return `<form class="ai-key-form" autocomplete="off" data-no-submit>` +
+      `<label class="ai-label" for="aiKey-${id}">${this._esc(label)}</label>` +
+      `<div class="ai-inline">` +
+      `<input type="password" id="aiKey-${id}" class="ai-input" data-ai-key data-keep="key" placeholder="${this._esc(placeholder || "")}" autocomplete="off" spellcheck="false" autocapitalize="off">` +
+      `<button type="button" class="btn btn-sm btn-primary" data-ai-action="save-key">Save key</button>` +
+      `</div></form>`;
+  },
+
+  _aiKeyHtml(c) {
+    const p = window.ProviderGuides.get(c.id);
+    const fromEnv = (c.keySource || "").startsWith("env:");
+    return this._aiKeySourceHtml(c) +
+      this._aiKeyFormHtml(c, { label: c.keySource ? "Replace the key" : "API key", placeholder: p?.keyPlaceholder }) +
+      (fromEnv ? `<div class="hint">A key saved here is used instead of the Railway variable; remove it here to go back to the variable.</div>` : "") +
+      `<div class="ai-actions">` +
+      `<button type="button" class="btn btn-sm" data-ai-action="test">Test</button>` +
+      (c.keySource === "settings" ? `<button type="button" class="btn btn-sm btn-ghost" data-ai-action="remove-key">Remove key</button>` : "") +
+      (p?.getKeyUrl ? `<a class="btn btn-sm btn-ghost" href="${p.getKeyUrl}" target="_blank" rel="noopener noreferrer">Get a key ↗</a>` : "") +
+      `</div>`;
+  },
+
+  _aiClaudeHtml(c) {
+    const p = window.ProviderGuides.get("claude");
+    const how = c.keySourceText ? `<div class="ai-keysource">${this._esc(c.keySourceText)}</div>` : "";
+    return how + `<div class="ai-actions">` +
+      `<a class="btn btn-sm" href="/terminal.html" target="_blank" rel="noopener noreferrer">Open the Terminal ↗</a>` +
+      `<button type="button" class="setup-copy-chip" data-copy="${p.command}" aria-label="Copy the command ${p.command}"><span class="setup-copy-cmd">${p.command}</span><span class="setup-copy-label">Copy</span></button>` +
+      `<button type="button" class="btn btn-sm btn-primary" data-ai-action="test">Check</button>` +
+      `</div>`;
+  },
+
+  _aiChatgptHtml(c) {
+    const signedIn = c.keySource === "sign-in" || !!c.account || c.ready;
+    let html = c.account ? `<div class="ai-keysource">Signed in as ${this._esc(c.account)}</div>` : "";
+    html += `<div class="ai-actions">`;
+    if (!c.ready) html += `<button type="button" class="btn btn-sm btn-primary" data-ai-action="chatgpt-login">Sign in with ChatGPT</button>`;
+    if (signedIn) html += `<button type="button" class="btn btn-sm" data-ai-action="test">Check</button><button type="button" class="btn btn-sm btn-ghost" data-ai-action="chatgpt-logout">Sign out</button>`;
+    html += `</div><div class="ai-device" data-ai-device hidden></div>`;
+    return html;
+  },
+
+  _aiLocalHtml(c) {
+    const p = window.ProviderGuides.get("local");
+    const s = c.settings || {};
+    const presets = p.presets.map((x) => `<button type="button" class="btn btn-sm btn-ghost" data-ai-action="preset" data-url="${x.url}">${x.name}</button>`).join("");
+    // The context box holds only what the owner saved: empty means "what the server says, else the default", shown as
+    // its placeholder, so a Save that didn't touch it never stores a number nobody chose.
+    const n = (v) => Number(v).toLocaleString("en-US");
+    const placeholder = s.serverContext ? `${n(s.serverContext)}, read from your server` : `${n(s.defaultContext || 128000)} unless you set it`;
+    const used = s.context && s.serverContext && s.serverContext < s.context
+      ? `<div class="hint" data-ai-local-context-note>Your server gives this model ${n(s.serverContext)}, so Tarsee uses that.</div>`
+      : "";
+    return `<label class="ai-label" for="aiLocalUrl">Server address</label>` +
+      `<div class="ai-presets">Fill in: ${presets}</div>` +
+      (p.presetNote ? `<div class="hint">${p.presetNote}</div>` : "") +
+      `<input type="url" id="aiLocalUrl" class="ai-input" data-keep="url" value="${this._esc(s.baseUrl || "")}" placeholder="http://localhost:11434/v1" autocomplete="off" spellcheck="false" autocapitalize="off">` +
+      `<label class="ai-label" for="aiLocalContext">How much it can read at once, in tokens</label>` +
+      `<input type="number" id="aiLocalContext" class="ai-input ai-input-short" data-keep="context" value="${this._esc(s.context || "")}" placeholder="${this._esc(placeholder)}" min="1000" step="any" inputmode="numeric">` +
+      used +
+      `<div class="ai-actions"><button type="button" class="btn btn-sm btn-primary" data-ai-action="save-local">Save</button>` +
+      `<button type="button" class="btn btn-sm" data-ai-action="test">Test</button></div>` +
+      `<details class="ai-local-key"${c.keySource ? " open" : ""}><summary>A key, if your server asks for one</summary>` +
+      this._aiKeySourceHtml(c, { none: "No key: none is sent." }) +
+      this._aiKeyFormHtml(c, { label: c.keySource ? "Replace the key" : "Key", placeholder: p.keyPlaceholder }) +
+      (c.keySource === "settings" ? `<div class="ai-actions"><button type="button" class="btn btn-sm btn-ghost" data-ai-action="remove-key">Remove key</button></div>` : "") +
+      `</details>`;
+  },
+
+  _aiModelHtml(c) {
+    const active = this._ai?.active?.provider === c.id;
+    const use = active
+      ? `<span class="ai-default-badge">✓ Your default AI</span>`
+      : `<button type="button" class="btn btn-sm btn-primary" data-ai-action="use"${c.ready ? "" : " disabled"}>Use this AI</button>`;
+    // Local AI: each of the server's models gets its own row (with its own Verify), so verifying one never changes
+    // the card's model (_aiDrawLocalModels).
+    const localList = c.id === "local" ? `<div class="ai-local-models" data-ai-local-list hidden></div>` : "";
+    // The OpenAI key: a newer model its list lacks is checked by its id (Verify runs that exact model), and once it
+    // passes it is in the list above and in a chat's model menu.
+    const custom = c.id === "openai" && c.ready
+      ? `<details class="ai-custom-model"><summary>A model that isn't in this list</summary>` +
+        `<div class="hint">A newer OpenAI model your key can use: type its id as OpenAI names it, then Verify. That's a short check that it can use Tarsee's tools, and it costs a few cents on your key. Once it passes, you can choose it here and in a chat's model menu.</div>` +
+        `<div class="ai-inline"><input type="text" class="ai-input" data-ai-custom-model data-keep="custom-model" placeholder="The model's id" aria-label="OpenAI model id" autocomplete="off" spellcheck="false" autocapitalize="off">` +
+        `<button type="button" class="btn btn-sm" data-ai-action="verify-custom">Verify</button></div></details>`
+      : "";
+    const why = !c.ready && !active ? `<div class="hint">Once its line says Ready, you can make it your default.</div>` : "";
+    // Background jobs (scheduled tasks, summaries) run on ai.<id>.backgroundModel, else the cheapest (turn.js).
+    const bg = c.ready
+      ? `<label class="ai-label" for="aiBgModel-${c.id}">Background jobs use</label>` +
+        `<select id="aiBgModel-${c.id}" class="ai-input" data-ai-bg-model></select>` +
+        `<div class="hint">Scheduled tasks and other work done without a chat. The cheapest model keeps them cheap.</div>`
+      : "";
+    return `<div class="ai-model-row">` +
+      `<label class="ai-label" for="aiModel-${c.id}">Model</label>` +
+      `<div class="ai-inline"><select id="aiModel-${c.id}" class="ai-input" data-ai-model></select>${use}</div>` +
+      `<div class="hint" id="aiModelNote-${c.id}" hidden></div>${localList}${custom}${why}${bg}` +
+      `</div>`;
+  },
+
+  /** The background model saved for a provider ("" when it's left to the cheapest), under the id its card says it is stored by. */
+  _aiSavedBackground(id) {
+    const sid = this._aiCard(id)?.storageId || id;
+    const v = (this._aiSettings || []).find((s) => s.key === `ai.${sid}.backgroundModel`)?.value;
+    return typeof v === "string" ? v.trim() : "";
+  },
+
+  /** A card's model list: the ones it can use now (OpenRouter's others are under "All OpenRouter models"). */
+  _aiDrawModels(id) {
+    const c = this._aiCard(id);
+    const sel = document.getElementById(`aiModel-${id}`);
+    const bgSel = document.getElementById(`aiBgModel-${id}`);
+    if (!c || !sel) {
+      if (id === "openrouter") this._aiDrawOpenRouter();
+      return;
+    }
+    const models = (this._aiModels[id]?.models || []).filter((m) => !m.needsVerification);
+    const noteEl = document.getElementById(`aiModelNote-${id}`);
+    if (noteEl) {
+      const note = this._aiModels[id]?.note || "";
+      noteEl.textContent = note;
+      noteEl.hidden = !note;
+    }
+    const opts = [];
+    if (id === "chatgpt" || id === "local") opts.push({ value: "", label: id === "chatgpt" ? "Your account's default" : "Choose a model" });
+    for (const m of models) {
+      const bits = [m.label && m.label !== m.id ? m.label : m.id];
+      if (m.free) bits.push("Free");
+      if (m.verified) bits.push("Verified");
+      // (the provider's own list leaves it out for this key, so a turn on it would be refused)
+      if (m.confirmed === false) bits.push("Not listed for this key");
+      opts.push({ value: m.id, label: bits.join(" · ") });
+    }
+    if (c.model && !opts.some((o) => o.value === c.model)) opts.unshift({ value: c.model, label: this._aiModelLabel(id, c.model) });
+    const html = (list) => list.map((o) => `<option value="${this._esc(o.value)}">${this._esc(o.label)}</option>`).join("");
+    // (A list someone has open is left alone: drawing it again would close it.)
+    if (bgSel && document.activeElement !== bgSel) {
+      const saved = this._aiSavedBackground(id);
+      const bgOpts = [{ value: "", label: "Automatic: the cheapest model" }, ...opts.filter((o) => o.value)];
+      if (saved && !bgOpts.some((o) => o.value === saved)) bgOpts.push({ value: saved, label: this._aiModelLabel(id, saved) });
+      bgSel.innerHTML = html(bgOpts);
+      bgSel.value = saved;
+    }
+    if (document.activeElement !== sel) {
+      if (!opts.length) opts.push({ value: "", label: this._aiModels[id] ? "No models yet" : "Loading…" });
+      sel.innerHTML = html(opts);
+      sel.value = c.model || "";
+    }
+    if (id === "openrouter") this._aiDrawOpenRouter();
+    if (id === "local") this._aiDrawLocalModels(c);
+  },
+
+  /**
+   * Local AI's models, a row each (GET /api/ai/models/local): the one chosen on the card, and any verified one, are in
+   * a chat's model menu (inMenu); any other needs a Verify first, on its own row, so verifying it never changes the
+   * card's model.
+   */
+  _aiDrawLocalModels(c) {
+    const list = document.querySelector("#localAiCard [data-ai-local-list]");
+    if (!list) return;
+    const esc = (s) => this._esc(s);
+    const models = this._aiModels.local?.models || [];
+    list.hidden = !models.length;
+    if (!models.length) { this._aiDrawList(list, ""); return; }
+    const row = (m) => {
+      const inMenu = m.inMenu === true || m.verified === true || m.id === c?.model;
+      const badges = (m.verified ? `<span class="ai-badge" data-kind="ok">Verified</span>` : "")
+        + (m.recheck ? `<span class="ai-badge" data-kind="warn" title="It was verified on an older version of Tarsee's engine: Verify it again to be sure it still works.">Check again</span>` : "");
+      const k = (v) => (v % 1024 === 0 ? `${v / 1024}K` : `${Math.round(v / 1000)}K`);
+      const ctx = m.context ? `${k(m.context)} context${m.serverContext ? " (from your server)" : ""}` : "";
+      const meta = [inMenu ? "In a chat's model menu" : "Verify to use it in a chat", ctx].filter(Boolean).join(" · ");
+      const btn = `<button type="button" class="btn btn-sm${inMenu ? " btn-ghost" : ""}" data-ai-action="verify" data-model="${esc(m.id)}">${m.verified ? "Verify again" : "Verify"}</button>`;
+      return `<div class="ai-or-row" data-ai-local-row><div class="ai-or-name"><span>${esc(m.label || m.id)}</span>${badges}<div class="ai-or-meta">${esc(meta)}</div></div>${btn}</div>`;
+    };
+    this._aiDrawList(list, `<div class="ai-or-title">Your server's models (${models.length})</div>` +
+      `<div class="hint">Verify checks that a model can use Tarsee's tools, which is worth doing for small models.</div>` +
+      models.map(row).join(""));
+  },
+
+  /**
+   * A card's list of models (Local AI's, OpenRouter's), drawn again each time the models are read: only when it
+   * changed, and with the focus given back to the very model's button someone is on, so Enter verifies or chooses
+   * the model they were on.
+   */
+  _aiDrawList(list, html) {
+    if (list._aiHtml === html) return;
+    const focus = this._aiFocusOf(list);
+    this._aiSetHtml(list, html);
+    this._aiRefocus(list, focus);
+  },
+
+  _aiOpenRouterHtml() {
+    return `<details class="ai-or"><summary>All OpenRouter models</summary>` +
+      `<div class="hint">Claude and OpenAI models work straight away. Any other model needs one <strong>Verify</strong> first: a short check that it can use Tarsee's tools (it costs a few cents).</div>` +
+      `<input type="search" class="ai-input" data-ai-or-search data-keep="search" placeholder="Search: gemini, qwen, free…" aria-label="Search OpenRouter's models" autocomplete="off">` +
+      `<div class="ai-or-list" data-ai-or-list></div></details>`;
+  },
+
+  /** OpenRouter's whole list, searchable: verified by you, ready to use, then everything else (Verify to use). */
+  _aiDrawOpenRouter() {
+    const card = document.getElementById("openrouterAiCard");
+    const list = card?.querySelector("[data-ai-or-list]");
+    if (!list) return;
+    const esc = (s) => this._esc(s);
+    const q = (card.querySelector("[data-ai-or-search]")?.value || "").trim().toLowerCase();
+    const have = this._aiModels.openrouter;
+    const models = have?.models || [];
+    if (!models.length) {
+      this._aiDrawList(list, `<div class="hint">${have ? esc(have.error || "OpenRouter's model list isn't in yet. Try again in a minute.") : "Loading the model list…"}</div>`);
+      return;
+    }
+    const match = (m) => !q || (q === "free" ? m.free : `${m.id} ${m.label || ""}`.toLowerCase().includes(q));
+    const price = (m) => {
+      if (m.free) return "Free";
+      const p = m.price;
+      return p && Number.isFinite(p.in) && Number.isFinite(p.out) ? `$${Number(p.in.toPrecision(3))} in, $${Number(p.out.toPrecision(3))} out per million tokens` : "";
+    };
+    const row = (m) => {
+      const badges = (m.free ? `<span class="ai-badge" data-kind="free">Free</span>` : "") + (m.verified ? `<span class="ai-badge" data-kind="ok">Verified</span>` : "")
+        + (m.recheck ? `<span class="ai-badge" data-kind="warn" title="It was verified on an older version of Tarsee's engine: Verify it again to be sure it still works.">Check again</span>` : "");
+      const meta = [m.id, price(m), m.context ? `${Math.round(m.context / 1000)}K context` : ""].filter(Boolean).join(" · ");
+      const verifyBtn = (label) => `<button type="button" class="btn btn-sm${m.needsVerification ? "" : " btn-ghost"}" data-ai-action="verify" data-model="${esc(m.id)}">${label}</button>`;
+      const btn = m.needsVerification
+        ? verifyBtn("Verify")
+        : (m.recheck ? verifyBtn("Verify again") : "") + `<button type="button" class="btn btn-sm" data-ai-action="choose" data-model="${esc(m.id)}">Choose</button>`;
+      return `<div class="ai-or-row"><div class="ai-or-name"><span>${esc(m.label || m.id)}</span>${badges}<div class="ai-or-meta">${esc(meta)}</div></div>${btn}</div>`;
+    };
+    const LIMIT = 30;
+    const groups = [
+      ["Verified by you", models.filter((m) => m.verified)],
+      ["Ready to use", models.filter((m) => !m.verified && !m.needsVerification)],
+      ["Verify to use", models.filter((m) => !m.verified && m.needsVerification)],
+    ];
+    const html = groups.map(([title, ms]) => {
+      const hits = ms.filter(match);
+      if (!hits.length) return "";
+      const more = hits.length > LIMIT ? `<div class="hint">${hits.length - LIMIT} more: search to narrow the list.</div>` : "";
+      return `<div class="ai-or-group"><div class="ai-or-title">${title} (${hits.length})</div>${hits.slice(0, LIMIT).map(row).join("")}${more}</div>`;
+    }).join("");
+    this._aiDrawList(list, html || `<div class="hint">No model matches “${esc(q)}”.</div>`);
+  },
+
+  /** Scroll to a provider's card and unfold its steps (the chips and the setup wizard use this). */
+  focusAi(id) {
+    const p = window.ProviderGuides?.get(id);
+    const section = p && document.getElementById(p.section);
+    if (!section || section.hidden) return;
+    const guide = section.querySelector(".ai-guide");
+    if (guide) guide.open = true;
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
+    section.classList.remove("channel-flash");
+    void section.offsetWidth;   // restart the highlight
+    section.classList.add("channel-flash");
+  },
+
+  _aiSetTest(id, line) {
+    this._aiTest[id] = line;
+    const el = document.querySelector(`[data-ai="${id}"] [data-ai-test]`);
+    if (el) {
+      el.textContent = line?.text || "";
+      if (line?.tone) el.dataset.tone = line.tone;
+      else delete el.dataset.tone;
+    }
+  },
+
+  /** A button shows it's working; the returned function puts it back. */
+  _aiBusy(btn, text) {
+    if (!btn) return () => {};
+    const was = btn.textContent;
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    if (text) btn.textContent = text;
+    return () => {
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+      btn.textContent = was;
+    };
+  },
+
+  /** An /api/ai call that keeps the answer's fix: resolves to the JSON, or throws an Error whose message says what to do. */
+  async _aiCall(path, { method = "GET", body } = {}) {
+    const res = await API.request(path, { method, body });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error([data.error || `HTTP ${res.status}`, data.fix].filter(Boolean).join(" "));
+      err.data = data;
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  },
+
+  _aiClick(ev) {
+    const copy = ev.target.closest("[data-copy]");
+    if (copy) { this.copyText(copy); return; }
+    const btn = ev.target.closest("[data-ai-action]");
+    if (!btn) return;
+    const card = btn.closest("[data-ai]");
+    const id = card?.dataset.ai;
+    switch (btn.dataset.aiAction) {
+      case "save-key": this.saveAiKey(id, btn); break;
+      case "remove-key": this.removeAiKey(id, btn); break;
+      case "test": this.testAi(id, btn); break;
+      case "use": this.useAi(id, btn); break;
+      case "verify": this.verifyAiModel(id, btn.dataset.model || card?.querySelector("[data-ai-model]")?.value, btn); break;
+      case "verify-custom": {
+        const model = card?.querySelector("[data-ai-custom-model]")?.value.trim() || "";
+        if (!model) this._aiSetTest(id, { text: "Type a model id first.", tone: "bad" });
+        else if (/\s/.test(model)) this._aiSetTest(id, { text: "A model id has no spaces in it.", tone: "bad" });
+        else this.verifyAiModel(id, model, btn);
+        break;
+      }
+      case "choose": this.saveAiModel(id, btn.dataset.model); break;
+      case "chatgpt-login": this.chatgptLoginInCard(); break;
+      case "chatgpt-cancel": this.cancelChatgptLogin(); break;
+      case "chatgpt-logout": this.chatgptLogout(btn); break;
+      case "preset": {
+        const input = card?.querySelector("#aiLocalUrl");
+        if (input) { input.value = btn.dataset.url; input.focus(); }
+        break;
+      }
+      case "save-local": this.saveLocalAi(btn); break;
+    }
+  },
+
+  /** Copy a button's data-copy text, and say so on the button. */
+  async copyText(btn) {
+    const text = btn?.dataset.copy;
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      window.App?.showToast?.("Couldn't copy: select the text and copy it by hand.", "error");
+      return;
+    }
+    const label = btn.querySelector(".setup-copy-label");
+    // The chip's own word, kept from the first click: a second click within the 1.5 s would otherwise keep "Copied".
+    if (label) label.dataset.idle ??= label.textContent;
+    clearTimeout(btn._copyTimer);
+    btn.classList.add("copied");
+    if (label) label.textContent = "Copied";
+    btn._copyTimer = setTimeout(() => {
+      btn.classList.remove("copied");
+      if (label) label.textContent = label.dataset.idle;
+    }, 1500);
+  },
+
+  /** Save a pasted key (PUT /api/ai/keys/:id), then Test it so the card shows whether it works and the balance. */
+  async saveAiKey(id, btn) {
+    const input = document.querySelector(`[data-ai="${id}"] [data-ai-key]`);
+    const key = input?.value.trim() || "";
+    if (!key) { this._aiSetTest(id, { text: "Paste a key first.", tone: "bad" }); input?.focus(); return; }
+    const done = this._aiBusy(btn, "Saving…");
+    try {
+      const r = await this._aiCall(`/api/ai/keys/${id}`, { method: "PUT", body: { apiKey: key } });
+      input.value = "";
+      input.defaultValue = "";
+      App.showToast(r.encrypted === false ? "Key saved (not encrypted: set ENCRYPTION_KEY)" : "Key saved", r.encrypted === false ? "info" : "success");
+    } catch (err) {
+      this._aiSetTest(id, { text: `✗ ${err.message}`, tone: "bad" });
+      done();
+      return;
+    }
+    done();
+    delete this._aiModels[id];
+    await this.testAi(id);
+  },
+
+  async removeAiKey(id, btn) {
+    const c = this._aiCard(id);
+    const after = c?.envKey ? ` Tarsee then uses the Railway variable ${c.envKey}, if it's set.` : "";
+    const ok = await TarseeDialog.ask({ title: `Remove the saved ${c?.label || "AI"} key?`, text: `It's deleted from Tarsee.${after}`, yes: "Remove", no: "Cancel", danger: true });
+    if (!ok) return;
+    const done = this._aiBusy(btn, "Removing…");
+    try {
+      await this._aiCall(`/api/ai/keys/${id}`, { method: "DELETE" });
+      this._aiSetTest(id, null);
+      App.showToast("Key removed", "success");
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+    done();
+    delete this._aiModels[id];
+    await this.loadAi();
+    this.drawAiHeader();
+  },
+
+  /** Test (or Check, on the plans): a key typed in the box is tried before it's saved; else what's saved. */
+  async testAi(id, btn) {
+    const G = window.ProviderGuides;
+    const typed = document.querySelector(`[data-ai="${id}"] [data-ai-key]`)?.value.trim();
+    const done = this._aiBusy(btn, "Testing…");
+    this._aiSetTest(id, { text: "Testing…", tone: "wait" });
+    let line;
+    try {
+      const r = await this._aiCall(`/api/ai/test/${id}`, { method: "POST", body: typed ? { apiKey: typed } : {} });
+      line = G.testLine(r);
+      if (typed && r.ok) line = { text: `${line.text} (not saved yet: click Save key)`, tone: line.tone };
+    } catch (err) {
+      line = G.testLine({ ok: false, state: err.data?.state, message: err.message });
+    }
+    done();
+    this._aiSetTest(id, line);
+    await this.loadAi();
+    this.loadAiModels(id, { force: true });
+  },
+
+  /** Make a ready provider the default AI, with the model chosen on its card. */
+  async useAi(id, btn) {
+    const model = document.getElementById(`aiModel-${id}`)?.value || undefined;
+    const done = this._aiBusy(btn, "Switching…");
+    try {
+      await this._aiCall("/api/ai/active", { method: "PUT", body: { provider: id, model } });
+      App.showToast(`${this._aiCard(id)?.label || "That AI"} is now your default AI`, "success");
+      // (the composer hears of it from the loadAi below: _aiNoticeChange)
+    } catch (err) {
+      this._aiSetTest(id, { text: `✗ ${err.message}`, tone: "bad" });
+      App.showToast(err.message, "error");
+    }
+    done();
+    await this.loadAi();
+  },
+
+  /** A provider's own model (PUT /api/ai/providers/:id): its default for every chat that uses it. */
+  async saveAiModel(id, model) {
+    if (!id) return;
+    try {
+      await this._aiCall(`/api/ai/providers/${id}`, { method: "PUT", body: { model: model || null } });
+      App.showToast("Model saved", "success");
+    } catch (err) {
+      this._aiSetTest(id, { text: `✗ ${err.message}`, tone: "bad" });
+    }
+    await this.loadAi();
+    // Local AI's rows say which model is in a chat's menu, and that follows the card's model.
+    if (id === "local") await this.loadAiModels("local", { force: true });
+  },
+
+  /** The model a provider's background jobs use (PUT /api/ai/providers/:id); empty goes back to the cheapest. */
+  async saveAiBackgroundModel(id, model) {
+    if (!id) return;
+    try {
+      await this._aiCall(`/api/ai/providers/${id}`, { method: "PUT", body: { backgroundModel: model || null } });
+      this._aiSetTest(id, { text: `✓ Background jobs now use ${model ? this._aiModelLabel(id, model) : "the cheapest model"}.`, tone: "ok" });
+    } catch (err) {
+      this._aiSetTest(id, { text: `✗ ${err.message}`, tone: "bad" });
+    }
+    document.getElementById(`aiBgModel-${id}`)?.blur();
+    await this.loadAi();
+  },
+
+  /**
+   * The banner's one-click fix for a settings file the engines refuse (POST /api/ai/settings-guard/fix): the entries
+   * that could send a key or its requests elsewhere come out of that file (or, if it can't be read, it is set aside).
+   */
+  async fixSettingsFile(file, btn) {
+    const banner = (this._ai?.banners || []).find((b) => b.action?.file === file);
+    const setAside = banner?.action?.label === "Set this file aside";
+    const ok = await TarseeDialog.ask({
+      title: setAside ? "Set this file aside?" : "Remove these entries?",
+      text: setAside
+        ? `${file} is renamed, so nothing loads it any more. Nothing in it is deleted.`
+        : `Tarsee removes the entries that could send an AI key or its requests somewhere else from ${file}. The rest of the file stays as it is.`,
+      yes: setAside ? "Set it aside" : "Remove",
+      no: "Cancel",
+      back: btn,
+    });
+    if (!ok) return;
+    const done = this._aiBusy(btn, "Fixing…");
+    try {
+      await this._aiCall("/api/ai/settings-guard/fix", { method: "POST", body: { file } });
+      App.showToast(setAside ? "File set aside" : "Entries removed", "success");
+    } catch (err) {
+      App.showToast(`Couldn't fix it: ${err.message}`, "error");
+    }
+    done();
+    await this.loadAi();
+  },
+
+  /** Verify a model (POST /api/ai/verify/:id): a short real turn with a tool. A pass makes it choosable. */
+  async verifyAiModel(id, model, btn) {
+    if (!model) { this._aiSetTest(id, { text: "Choose a model first.", tone: "bad" }); return; }
+    // It spends a little on the owner's own key: say what, and ask first (the server's estimate, GET /api/ai/models).
+    const row = this._aiModels[id]?.models?.find((m) => m.id === model);
+    const cost = row?.verifyCost || "a few cents (est.)";
+    const ok = await TarseeDialog.ask({
+      title: `Verify ${row?.label || model}?`,
+      text: `Tarsee runs a few short test turns with it: a reply, one of Tarsee's tools, the shell, and picking the conversation back up. It takes up to a minute.\n\nCost: ${cost}.`,
+      yes: "Verify",
+      no: "Cancel",
+      back: btn,
+    });
+    if (!ok) return;
+    const done = this._aiBusy(btn, "Verifying…");
+    this._aiSetTest(id, { text: `Verifying ${model}… this takes up to a minute.`, tone: "wait" });
+    try {
+      const r = await this._aiCall(`/api/ai/verify/${id}`, { method: "POST", body: { model } });
+      this._aiSetTest(id, { text: `${r.ok ? "✓" : "✗"} ${r.message || (r.ok ? "It passed." : "It didn't pass.")}`, tone: r.ok ? "ok" : "bad" });
+    } catch (err) {
+      this._aiSetTest(id, { text: `✗ ${err.message}`, tone: "bad" });
+    }
+    done();
+    await this.loadAiModels(id, { force: true });
+    await this.loadAi();
+  },
+
+  /** Local AI's address and context size (PUT /api/ai/providers/local), then a Test that lists its models. */
+  async saveLocalAi(btn) {
+    const url = document.getElementById("aiLocalUrl")?.value.trim() || "";
+    const box = document.getElementById("aiLocalContext");
+    const body = { baseUrl: url || null };
+    // The context only when the owner changed it: an emptied box goes back to the server's size (else the default).
+    if (box && box.value.trim() !== box.defaultValue.trim()) body.context = box.value.trim() ? Number(box.value.trim()) : null;
+    const done = this._aiBusy(btn, "Saving…");
+    try {
+      await this._aiCall("/api/ai/providers/local", { method: "PUT", body });
+      App.showToast("Local AI saved", "success");
+      ["aiLocalUrl", "aiLocalContext"].forEach((elId) => { const el = document.getElementById(elId); if (el) el.defaultValue = el.value; });
+    } catch (err) {
+      this._aiSetTest("local", { text: `✗ ${err.message}`, tone: "bad" });
+      done();
+      return;
+    }
+    done();
+    delete this._aiModels.local;
+    if (url) await this.testAi("local");
+    else await this.loadAi();
+  },
+
+  /** "Only use API keys" (PUT /api/ai/keys-only). Asked first when it would switch off the default AI. */
+  async saveKeysOnly() {
+    const box = this.elements.aiKeysOnly;
+    const on = !!box.checked;
+    const a = this._ai?.active;
+    const planDefault = a && (a.provider === "claude" || a.provider === "chatgpt");
+    if (on && planDefault) {
+      const ok = await TarseeDialog.ask({
+        title: "Only use API keys?",
+        text: `Your default AI is the ${a.label}, which this switches off. Tarsee won't answer until you choose an API-key AI as the default.`,
+        yes: "Switch it on", no: "Cancel",
+      });
+      if (!ok) { box.checked = false; return; }
+    }
+    try {
+      const r = await this._aiCall("/api/ai/keys-only", { method: "PUT", body: { on } });
+      App.showToast(r.message || (on ? "Only API keys from now on" : "Plan sign-ins can be used again"), r.activeBlocked ? "info" : "success");
+    } catch (err) {
+      box.checked = !on;
+      App.showToast(err.message, "error");
+    }
+    await this.loadAi();
+  },
+
+  /** The backup model and the monthly cap (ai.backupModel, ai.spendCap.monthlyUsd; empty turns each off). */
+  async saveAiExtras() {
+    const e = this.elements;
+    const backup = e.aiBackupModel?.value || "";
+    const capRaw = (e.aiMonthlyCap?.value || "").trim().replace(/[$,\s]/g, "");
+    if (capRaw && !(Number(capRaw) > 0)) {
+      App.showToast("The cap is a number of US dollars, like 20 (or leave it empty for no cap).", "error");
+      return;
+    }
+    const done = this._aiBusy(e.aiSaveExtrasBtn, "Saving…");
+    try {
+      await API.json("/api/settings/general", { method: "POST", body: { key: "ai.backupModel", value: backup } });
+      await API.json("/api/settings/general", { method: "POST", body: { key: "ai.spendCap.monthlyUsd", value: capRaw ? String(Number(capRaw)) : "" } });
+      // Saved: both are drawn from the settings again (a failed save leaves them as chosen, for another try).
+      if (e.aiBackupModel) e.aiBackupModel.dataset.drawn = backup;
+      if (e.aiMonthlyCap) e.aiMonthlyCap.defaultValue = e.aiMonthlyCap.value;
+      App.showToast(`Saved: backup ${backup ? "on" : "off"}, ${capRaw ? `cap $${Number(capRaw)} a month` : "no monthly cap"}`, "success");
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+    done();
+    e.aiBackupModel?.blur();
+    e.aiMonthlyCap?.blur();
+    await this.loadAi();
+  },
+
+  // ChatGPT's device-code sign-in, shared with the setup wizard (js/setup.js).
+
+  /**
+   * Start ChatGPT's sign-in (POST /api/ai/chatgpt/login) and follow it (GET every 3 seconds). render(view) gets
+   * { state: "starting" | "waiting" | "done" | "failed" | "expired" | "cancelled", url, code, expiresAt, error, account }
+   * at once, every second while it waits (for the countdown) and on every change. A sign-in the server no longer has
+   * (Tarsee restarted, or another window cancelled it or signed out) is a failed one that says to start again.
+   * Returns { cancel() (ends it, on the server too), stop() (stops following it here, and draws nothing more) }.
+   */
+  startChatgptLogin(render) {
+    let stopped = false;
+    let timer = null;
+    let tick = null;
+    let last = null;
+    const stop = () => { stopped = true; clearTimeout(timer); clearInterval(tick); };
+    const poll = async () => {
+      if (stopped) return;
+      let r = null;
+      try { r = await API.json("/api/ai/chatgpt/login"); } catch { /* try again */ }
+      if (stopped) return;
+      if (r?.state === "waiting") { last = r; render(r); }
+      else if (r?.state === "done" || r?.state === "failed" || r?.state === "expired") { stop(); render(r); return; }
+      else if (r?.state === "idle") {
+        stop();
+        render({ state: "failed", error: "The sign-in stopped: Tarsee restarted, or it was cancelled or signed out in another window. Click Sign in with ChatGPT for a new code." });
+        return;
+      }
+      timer = setTimeout(poll, 3000);
+    };
+    render({ state: "starting" });
+    // (through _aiCall, so a refusal keeps its code: device-code-disabled, network, codex-missing...)
+    this._aiCall("/api/ai/chatgpt/login", { method: "POST" }).then((r) => {
+      if (stopped) return;
+      if (r.state !== "waiting") { stop(); render(r); return; }
+      last = r;
+      render(r);
+      tick = setInterval(() => { if (!stopped && last) render(last); }, 1000);
+      timer = setTimeout(poll, 3000);
+    }, (err) => {
+      stop();
+      render({ state: "failed", error: err.message, code: err.data?.code ?? null });
+    });
+    return {
+      cancel: async () => {
+        stop();
+        try { await API.json("/api/ai/chatgpt/login", { method: "DELETE" }); } catch { /* it ends by itself */ }
+        render({ state: "cancelled" });
+      },
+      stop,
+    };
+  },
+
+  /** Minutes and seconds until a code runs out ("14:05"). */
+  _aiLeft(expiresAt) {
+    const left = Math.max(0, (Date.parse(expiresAt) || 0) - Date.now());
+    return `${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, "0")}`;
+  },
+
+  /** A sign-in as HTML: the link, the code to type with a Copy button, and how long the code lasts. */
+  chatgptLoginHtml(v) {
+    const esc = (s) => this._esc(s);
+    if (!v || v.state === "cancelled") return "";
+    if (v.state === "starting") return `<div class="ai-device-wait"><span class="ai-spinner" aria-hidden="true"></span><span>Starting the ChatGPT sign-in…</span></div>`;
+    if (v.state === "waiting") {
+      const url = /^https:\/\/[^\s"'<>]+$/i.test(v.url || "") ? v.url : null;
+      const open = url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>` : "the sign-in page";
+      return `<div class="ai-device-box">` +
+        `<ol class="ai-device-steps"><li>Open ${open} and sign in to ChatGPT.</li>` +
+        `<li>Type this code: <button type="button" class="setup-copy-chip ai-device-code" data-copy="${esc(v.code)}" aria-label="Copy the code"><span class="setup-copy-cmd">${esc(v.code)}</span><span class="setup-copy-label">Copy</span></button></li></ol>` +
+        `<div class="ai-device-wait"><span class="ai-spinner" aria-hidden="true"></span><span>Waiting for you to finish. The code works for another <span data-ai-countdown>${this._aiLeft(v.expiresAt)}</span>.</span></div>` +
+        `<button type="button" class="btn btn-sm btn-ghost" data-ai-action="chatgpt-cancel">Cancel</button></div>`;
+    }
+    if (v.state === "done") return `<div class="ai-test-result" data-tone="ok">✓ Signed in to ChatGPT${v.account ? ` as ${esc(v.account)}` : ""}.</div>`;
+    if (v.state === "expired") return `<div class="ai-test-result" data-tone="bad">✗ The code ran out before sign-in finished. Click Sign in with ChatGPT for a new one.</div>`;
+    // The switch in step 1 only when it is the reason, or the reason isn't known. An allow-list: a failed view's code
+    // can still be the one-time code that was shown, and a network, Codex or rate-limit failure has its own fix.
+    const hint = v.code === "device-code-disabled" || v.code === "failed"
+      ? " Check that \"Enable device code sign-in for Codex\" is switched on in ChatGPT (step 1), then try again."
+      : "";
+    return `<div class="ai-test-result" data-tone="bad">✗ ${esc(v.error || "Sign-in didn't finish.")}${hint}</div>`;
+  },
+
+  /** Draw a sign-in into el. While it waits only the countdown changes, so the Copy button stays put. */
+  renderChatgptLogin(el, v) {
+    if (!el) return;
+    if (v?.state === "waiting" && el.dataset.code === v.code) {
+      const cd = el.querySelector("[data-ai-countdown]");
+      if (cd) { cd.textContent = this._aiLeft(v.expiresAt); return; }
+    }
+    el.dataset.code = v?.state === "waiting" ? v.code : "";
+    el.innerHTML = this.chatgptLoginHtml(v);
+    el.hidden = !el.innerHTML;
+  },
+
+  chatgptLoginInCard() {
+    this._aiLoginCtl?.cancel?.();
+    this._aiLoginView = null;
+    this._aiSetTest("chatgpt", null);
+    // (render runs once before startChatgptLogin returns, so ctl is still null then)
+    let ctl = null;
+    ctl = this.startChatgptLogin(async (v) => {
+      if (ctl && this._aiLoginCtl !== ctl && v.state !== "cancelled") return;
+      this._aiLoginView = v;
+      this.renderChatgptLogin(document.querySelector("#chatgptAiCard [data-ai-device]"), v);
+      if (v.state === "done") {
+        App.showToast("Signed in to ChatGPT", "success");
+        delete this._aiModels.chatgpt;
+        await this.loadAi();
+      }
+    });
+    this._aiLoginCtl = ctl;
+  },
+
+  cancelChatgptLogin() {
+    const ctl = this._aiLoginCtl;
+    this._aiLoginCtl = null;
+    ctl?.cancel();
+    this._aiLoginView = null;
+  },
+
+  async chatgptLogout(btn) {
+    const ok = await TarseeDialog.ask({ title: "Sign out of ChatGPT?", text: "Tarsee stops using your ChatGPT plan until you sign in again.", yes: "Sign out", no: "Cancel", danger: true });
+    if (!ok) return;
+    // Signing out ends a sign-in still waiting here too: stop following it first, or its end would read as a failure.
+    this._aiLoginCtl?.stop();
+    this._aiLoginCtl = null;
+    this._aiLoginView = null;
+    const done = this._aiBusy(btn, "Signing out…");
+    try {
+      await this._aiCall("/api/ai/chatgpt/logout", { method: "POST" });
+      delete this._aiModels.chatgpt;
+      App.showToast("Signed out of ChatGPT", "success");
+    } catch (err) {
+      App.showToast(err.message, "error");
+    }
+    done();
+    await this.loadAi();
+  },
+
+  /** The header chip and its banner, from a fresh GET /api/ai/providers. */
+  async refreshAiHeader() {
+    try {
+      this._ai = await API.json("/api/ai/providers");
+      this._aiAt = Date.now();
+    } catch {
+      return;
+    }
+    this._aiNoticeChange();
+    this.drawAiHeader();
+    this.drawSttKey();
+    const a = this._ai.active;
+    if (a?.model && !this._aiModels[a.provider] && !(a.provider === "chatgpt" && !a.ready)) this.loadAiModels(a.provider);
+  },
+
+  /** The active AI in the header (a red dot when it can't answer), and a banner saying what to do. */
+  drawAiHeader() {
+    const e = this.elements;
+    const a = this._ai?.active;
+    if (!a || !e.aiHeaderChip) return;
+    const G = window.ProviderGuides;
+    const name = G?.get(a.provider)?.shortName || a.label;
+    e.aiHeaderChip.hidden = false;
+    // The default AI, in its own color (style.css [data-ai]): a chat on another AI shows that one's color on its
+    // model button, so the two can be told apart.
+    e.aiHeaderChip.dataset.ai = a.provider;
+    e.aiHeaderChip.querySelector(".channel-dot")?.setAttribute("data-tone", a.ready ? "ok" : "bad");
+    if (e.aiHeaderChipText) {
+      e.aiHeaderChipText.innerHTML = `<span class="ai-header-chip-label">Default: </span><span class="ai-header-chip-ai">${this._esc(name)}</span>`
+        + `<span class="ai-header-chip-model"> · ${this._esc(this._aiModelLabel(a.provider, a.model))}</span>`;
+    }
+    const words = a.ready ? `${a.label}: ready` : `${a.label}: ${[a.detail, a.fix].filter(Boolean).join(" ")}`;
+    e.aiHeaderChip.title = `Your default AI, for new chats and scheduled tasks. ${words}`;
+    e.aiHeaderChip.setAttribute("aria-label", `Your default AI, ${words}. Open Settings, AI.`);
+    const att = e.aiAttention;
+    if (!att) return;
+    if (a.ready || this._aiDismissed === `${a.provider}|${a.state}`) {
+      att.hidden = true;
+      return;
+    }
+    att.innerHTML = `<span class="ai-attention-text">${this._esc(`${a.label} can't answer right now: ${[a.detail, a.fix].filter(Boolean).join(" ")}`)}</span>` +
+      `<button type="button" class="btn btn-sm" data-ai-attention="open">Open Settings → AI</button>` +
+      `<button type="button" class="ai-attention-close" data-ai-attention="dismiss" aria-label="Hide this message">×</button>`;
+    att.hidden = false;
   },
 
   loadWhatsappChannel(settings) {
@@ -1629,19 +2858,258 @@ const Settings = {
     } catch { App.showToast("Failed to delete", "error"); }
   },
 
-  async loadSTTModelStatus() {
-    const status = document.getElementById("sttModelStatus");
-    const select = document.getElementById("settingsSTTModel");
-    if (!status) return;
+  /**
+   * Settings → Voice: where the OpenAI key Whisper uses comes from, from the last read of the AIs (drawn after every
+   * one). It is the OpenAI API key card's (one slot, shared with Settings → AI), so the box stays empty and only says
+   * which key it is: "Saved in Tarsee (encrypted) …wxyz".
+   */
+  drawSttKey() {
+    const box = document.getElementById("settingsOpenaiKey");
+    const status = document.getElementById("openaiKeyStatus");
+    if (!box || !status) return;
+    const card = (this._ai?.providers || []).find((p) => p.id === "openai") || null;
+    const hint = card?.keyHint ? ` ${card.keyHint}` : "";
+    if (card?.keySource === "settings") {
+      box.placeholder = `Saved${hint}`;
+      status.textContent = `${card.keySourceText || "Saved in Tarsee"}${hint}. It's the key on the OpenAI API key card in Settings > AI; paste a new one here to replace it.`;
+    } else if (card?.keySource?.startsWith("env:")) {
+      box.placeholder = `From Railway${hint}`;
+      status.textContent = `${card.keySourceText || "A Railway variable"}${hint}. It's the key on the OpenAI API key card in Settings > AI; a key pasted here is saved in Tarsee and used instead.`;
+    } else {
+      box.placeholder = "sk-...";
+      status.textContent = card ? "No OpenAI key yet. One pasted here is also the OpenAI API key card's in Settings > AI." : "";
+    }
+    status.hidden = !status.textContent;
+  },
+
+  /** The OpenAI key box is for the OpenAI Whisper API only: shown when that is chosen. */
+  showSttKey() {
+    const group = document.getElementById("openaiKeyGroup");
+    if (group) group.hidden = (document.getElementById("settingsSTTProvider")?.value || "local") !== "whisper-api";
+  },
+
+  /**
+   * Settings → Voice → Speech-to-text (GET /api/voice/stt, routes/voice.js): whether faster-whisper is installed and
+   * on which Python, a row per model with its size, where it is, and Download / Delete, and the install's progress.
+   * refresh: look for Python again (opening the tab).
+   */
+  async loadSTT({ refresh = false } = {}) {
+    if (!document.getElementById("sttRuntimeStatus")) return;
     try {
-      const data = await API.json("/api/voice/stt-models");
-      if (select && data.current) select.value = data.current;
-      const lines = (data.models || []).map(m => {
-        const dl = m.downloaded ? "downloaded" : "not downloaded";
-        return `${m.name} (${m.sizeMB}MB) — ${dl}`;
-      });
-      status.textContent = lines.join(" · ");
-    } catch { status.textContent = "Could not check STT models."; }
+      this.renderSTT(await API.json(`/api/voice/stt${refresh ? "?refresh=1" : ""}`));
+    } catch {
+      this.renderSTT(null);
+    }
+  },
+
+  renderSTT(data) {
+    const status = document.getElementById("sttRuntimeStatus");
+    const btn = document.getElementById("sttInstallBtn");
+    const bar = document.getElementById("sttInstallProgress");
+    const hint = document.getElementById("sttInstallHint");
+    const list = document.getElementById("sttModelList");
+    const where = document.getElementById("sttModelsWhere");
+    if (!status || !list) return;
+    const rt = data?.runtime;
+    if (!rt) {
+      status.textContent = "Could not check speech-to-text on this server.";
+      status.dataset.state = "failed";
+      if (btn) btn.hidden = true;
+      if (bar) bar.hidden = true;
+      return;
+    }
+    // Keep a model the owner just picked (not saved yet) picked when the rows are drawn again.
+    const picked = list.querySelector('input[name="sttModel"]:checked')?.value;
+    this._stt = data;
+    const job = data.job || null;
+
+    // faster-whisper itself
+    status.textContent = rt.summary || "";
+    status.dataset.state = rt.state;
+    if (btn) {
+      btn.hidden = !rt.canInstall || !!job;
+      btn.textContent = rt.state === "failed" ? "Try again" : "Install faster-whisper";
+      btn.disabled = false;
+    }
+    if (bar) {
+      bar.hidden = job?.kind !== "install";
+      bar.value = job?.kind === "install" ? job.percent || 0 : 0;
+    }
+    if (hint) {
+      let text = "";
+      if (rt.state === "installing" && job?.step) text = `${job.step}… ${job.percent || 0}%`;
+      else if (rt.canInstall) {
+        text = `Downloads about ${rt.downloadMB} MB${rt.needsPythonDownload ? " (Python and faster-whisper)" : ""} into ${rt.installFolder}, then the ${data.current} model if none is downloaded yet. Takes a few minutes.`;
+      }
+      hint.textContent = text;
+      hint.hidden = !text;
+    }
+
+    // A row per model
+    const rows = [];
+    for (const m of data.models || []) {
+      const row = document.createElement("div");
+      row.className = `stt-model-row${m.current ? " current" : ""}`;
+      row.dataset.model = m.name;
+
+      const pick = document.createElement("label");
+      pick.className = "stt-model-pick";
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "sttModel";
+      radio.value = m.name;
+      radio.checked = picked ? picked === m.name : !!m.current;
+      const text = document.createElement("span");
+      text.className = "stt-model-text";
+      const name = document.createElement("span");
+      name.className = "stt-model-name";
+      name.textContent = `${m.name} `;
+      const size = document.createElement("span");
+      size.className = "stt-model-size";
+      size.textContent = m.size || `${m.sizeMB} MB`;
+      name.appendChild(size);
+      const desc = document.createElement("span");
+      desc.className = "stt-model-desc";
+      desc.textContent = m.description || "";
+      const state = document.createElement("span");
+      state.className = "stt-model-state";
+      state.dataset.state = m.state;
+      state.textContent = {
+        downloaded: "Downloaded",
+        image: "Comes with Tarsee",
+        cache: "Downloaded (by an earlier version)",
+        missing: "Not downloaded",
+        downloading: `Downloading… ${m.percent || 0}%`,
+        failed: `Download failed: ${m.error || "unknown error"}`,
+      }[m.state] || m.state;
+      text.append(name, desc, state);
+      if (m.where) {
+        const at = document.createElement("span");
+        at.className = "stt-model-where";
+        at.textContent = m.where;
+        text.appendChild(at);
+      }
+      pick.append(radio, text);
+      row.appendChild(pick);
+
+      const actions = document.createElement("div");
+      actions.className = "stt-model-actions";
+      if (!m.downloaded && m.state !== "downloading") {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn btn-sm";
+        b.dataset.sttDownload = m.name;
+        b.textContent = m.state === "failed" ? "Try again" : "Download";
+        b.disabled = !!job;
+        b.setAttribute("aria-label", `Download ${m.name} (${m.size})`);
+        actions.appendChild(b);
+      }
+      if (m.deletable) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn btn-sm btn-ghost";
+        b.dataset.sttDelete = m.name;
+        b.textContent = "Delete";
+        b.setAttribute("aria-label", `Delete ${m.name} (frees ${m.size})`);
+        actions.appendChild(b);
+      }
+      row.appendChild(actions);
+      if (m.state === "downloading") {
+        const p = document.createElement("progress");
+        p.max = 100;
+        p.value = m.percent || 0;
+        p.setAttribute("aria-label", `${m.name} download progress`);
+        row.appendChild(p);
+      }
+      rows.push(row);
+    }
+    list.replaceChildren(...rows);
+    if (where) {
+      where.textContent = data.modelsDir ? `Downloaded models are kept in ${data.modelsDir}.` : "";
+    }
+
+    // When a job ends, say how it went (the page may have been watching it for minutes).
+    const before = this._sttJob;
+    this._sttJob = job;
+    if (job) this._startSttPoll();
+    else {
+      this._stopSttPoll();
+      if (before?.kind === "install") {
+        const anyModel = (data.models || []).some((m) => m.downloaded);
+        if (rt.state === "ready" && anyModel) App.showToast("Speech-to-text is ready.", "success");
+        else if (rt.state === "ready") App.showToast("faster-whisper is installed, but no speech model is downloaded yet: download one below.", "error");
+        else if (rt.state === "failed") App.showToast(rt.error || "Installing faster-whisper failed.", "error");
+      } else if (before?.kind === "model") {
+        const m = (data.models || []).find((x) => x.name === before.model);
+        if (m?.downloaded) App.showToast(`${m.name} is downloaded.`, "success");
+        else if (m?.state === "failed") App.showToast(`Downloading ${m.name} failed: ${m.error}`, "error");
+      }
+    }
+  },
+
+  async installStt() {
+    const btn = document.getElementById("sttInstallBtn");
+    if (btn) btn.disabled = true;
+    try {
+      await API.json("/api/voice/stt/install", { method: "POST" });
+    } catch (err) {
+      App.showToast(err.message || "Could not start installing faster-whisper", "error");
+    }
+    this.loadSTT();
+  },
+
+  async downloadSttModel(name, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      await API.json(`/api/voice/stt/models/${encodeURIComponent(name)}/download`, { method: "POST" });
+    } catch (err) {
+      App.showToast(err.message || `Could not start downloading ${name}`, "error");
+    }
+    this.loadSTT();
+  },
+
+  async deleteSttModel(name, btn) {
+    const m = (this._stt?.models || []).find((x) => x.name === name);
+    const ok = await TarseeDialog.ask({
+      title: `Delete the ${name} speech model?`,
+      text: `It frees ${m?.size || "its space"}. You can download it again any time.${m?.current ? "\n\nIt's the one in use: speech-to-text switches to another downloaded model until it's back." : ""}`,
+      yes: "Delete",
+      no: "Keep it",
+      danger: true,
+    });
+    if (!ok) return;
+    if (btn) btn.disabled = true;
+    try {
+      await API.json(`/api/voice/stt/models/${encodeURIComponent(name)}`, { method: "DELETE" });
+      App.showToast(`Deleted ${name}.`, "success");
+    } catch (err) {
+      App.showToast(err.message || `Could not delete ${name}`, "error");
+    }
+    this.loadSTT();
+  },
+
+  _startSttPoll() {
+    if (this._sttPoll) return;
+    let errors = 0;
+    this._sttPoll = setInterval(async () => {
+      // Only while the section is on screen; the poll stays armed so the progress is current when it's opened again.
+      const section = document.getElementById("sttSection");
+      if (!section || section.offsetParent === null) return;
+      try {
+        // Plain fetch: a background poll should never toast or reload the page.
+        const res = await fetch("/api/voice/stt", { credentials: "same-origin", headers: API.token ? { Authorization: `Bearer ${API.token}` } : {} });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        errors = 0;
+        this.renderSTT(await res.json());
+      } catch {
+        if (++errors >= 5) this._stopSttPoll();
+      }
+    }, 1500);
+  },
+
+  _stopSttPoll() {
+    if (this._sttPoll) clearInterval(this._sttPoll);
+    this._sttPoll = null;
   },
 
   async saveVoiceSettings() {
@@ -1727,6 +3195,7 @@ const Settings = {
         // ignore
       }
     }
+    await this.loadAutomationApproval();
   },
 
   async saveWorkspaceFile(name, content, silent = false) {
@@ -1744,6 +3213,123 @@ const Settings = {
       App.showToast(`${name}: ${err.message}`, "error");
       return false;
     }
+  },
+
+  // --- HEARTBEAT.md and BOOT.md: the owner's OK (routes/automation-approval.js) ---
+  // Both run the AI on their own, and each run is paid for, so they run only text the owner has OK'd: what they type
+  // in the editor, or a change made elsewhere (most likely by the AI in a chat) once they click its note's button.
+  AUTOMATION_FILES: {
+    "HEARTBEAT.md": { element: "heartbeatMd", button: "Let it run", runs: "every 30 minutes", done: "HEARTBEAT.md will run every 30 minutes." },
+    "BOOT.md": { element: "bootMd", button: "Run at each restart", runs: "when Tarsee restarts", done: "BOOT.md will run when Tarsee restarts." },
+  },
+  _automationShown: {}, // file name → the text its note shows, which is what its button OKs
+
+  async loadAutomationApproval() {
+    try {
+      const data = await API.json("/api/automation-approval");
+      for (const file of data.files || []) this.renderAutomationApproval(file);
+    } catch (err) {
+      console.warn("[settings] couldn't check HEARTBEAT.md and BOOT.md for changes made outside Settings:", err.message);
+    }
+  },
+
+  /** The note above a file's editor, shown while the file changed outside Settings and waits for the owner's OK. */
+  renderAutomationApproval(file) {
+    const spec = this.AUTOMATION_FILES[file?.name];
+    const editor = spec && this.elements[spec.element];
+    if (!editor) return;
+    const name = file.name;
+    const group = editor.closest(".form-group") || editor;
+    let note = group.parentElement?.querySelector(`[data-automation-note="${name}"]`);
+    if (!note) {
+      note = document.createElement("div");
+      note.dataset.automationNote = name;
+      note.className = "mb-3";
+      note.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-automation-approve]");
+        if (btn) this.approveFromNote(name, btn);
+      });
+      group.before(note);
+    }
+    if (!file.waiting) {
+      note.hidden = true;
+      note.innerHTML = "";
+      delete this._automationShown[name];
+      return;
+    }
+    this._automationShown[name] = file.text;
+    const esc = (s) => this._esc(s);
+    note.hidden = false;
+    note.innerHTML = `<div class="memory-item cron-job" role="status">`
+      + `<span class="memory-badge cron-state cron-state-waiting">Waiting for your OK</span>`
+      + `<div class="memory-content">`
+      + `<div class="cron-when"><strong>Changed outside Settings, waiting for your OK</strong></div>`
+      + `<div class="cron-note">Something other than this page changed ${esc(name)}, most likely the AI in a chat. Tarsee won't run it, or spend anything on it, until you OK it. This is what would run ${esc(spec.runs)}:</div>`
+      + `<div class="cron-prompt">${esc(file.text)}</div>`
+      + `</div>`
+      + `<button type="button" class="btn btn-sm btn-primary cron-toggle" data-automation-approve="${esc(name)}">${esc(spec.button)}</button>`
+      + `</div>`;
+  },
+
+  async approveFromNote(name, btn) {
+    const text = this._automationShown[name];
+    if (typeof text !== "string") return;
+    btn.disabled = true;
+    const ok = await this.approveAutomationFile(name, text, "button");
+    btn.disabled = false;
+    if (!ok) return;
+    App.showToast(this.AUTOMATION_FILES[name].done, "success");
+    // The editor shows what now runs, unless the owner is typing in it.
+    const editor = this.elements[this.AUTOMATION_FILES[name].element];
+    if (editor && document.activeElement !== editor) editor.value = text;
+  },
+
+  /**
+   * The owner's OK for `text`: the text the editor just saved (via "editor"), or the text a note showed. Returns
+   * whether it was OK'd. When the file changed since (409), nothing is OK'd and the note shows the new text.
+   */
+  async approveAutomationFile(name, text, via) {
+    try {
+      const { status, data } = await this._ownerPost("/api/automation-approval/approve", { name, text, via });
+      if (data?.file) this.renderAutomationApproval(data.file);
+      if (status === 409) {
+        App.showToast(data.error || `${name} changed again: read the new text above its editor.`, "error");
+        return false;
+      }
+      if (status < 200 || status >= 300) throw new Error(data?.error || `HTTP ${status}`);
+      return true;
+    } catch (err) {
+      App.showToast(`${name} wasn't OK'd to run: ${err.message}`, "error");
+      return false;
+    }
+  },
+
+  /**
+   * A POST only the owner's signed-in dashboard may make, so it goes without the API token that js/api.js adds to
+   * every other request: the server refuses the token here (routes/automation-approval.js). The session cookie and
+   * the CSRF token only; a CSRF token that has run out is fetched fresh, once. Refused for the sign-in (401: it has
+   * run out, and the server says so), it shows the sign-in screen with that message, which `data.error` carries.
+   */
+  async _ownerPost(url, body) {
+    const send = (csrf) => fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(csrf ? { "X-CSRF-Token": csrf } : {}) },
+      body: JSON.stringify(body),
+    });
+    let res = await send(API.getCsrfToken() || await API.refreshCsrf());
+    if (res.status === 403) {
+      const why = await res.clone().json().catch(() => ({}));
+      if (/CSRF token/i.test(why.error || "")) res = await send(await API.refreshCsrf());
+    }
+    const data = (await res.json().catch(() => null)) || {};
+    if (res.status === 401 || data.needsSignIn) {
+      // No cookie at all (a browser that dropped it): the sign-in this page opened with has run out all the same.
+      if (!data.needsSignIn) data.error = "Your sign-in has run out. Sign in again, then try once more.";
+      API.signInAgain(data.error);
+    }
+    return { status: res.status, data };
   },
 
   // --- Session Reset ---
@@ -1777,42 +3363,59 @@ const Settings = {
     }
   },
 
-  // --- Cron Jobs ---
+  // --- Scheduled tasks (Settings > Automation): each task's state, who made it, its whole prompt, and its buttons ---
   async loadCronJobs() {
-    if (!this.elements.cronJobsList) return;
+    const list = this.elements.cronJobsList;
+    if (!list) return;
     try {
       const data = await API.json("/api/settings/cron");
       const jobs = data.jobs || [];
+      // Drawn by js/cron-core.js, which escapes everything a task holds (a prompt the AI wrote is only text).
+      list.innerHTML = CronCore.listHtml(jobs);
+      // What each row shows of its task, from this very draw. Switch on sends it (seen), so the server switches on only
+      // the task the owner looked at: one that changed since gets 409, and the list is drawn again.
+      const shown = new Map(jobs.map((job) => [String(job.id), CronCore.seenOf(job)]));
 
-      if (jobs.length === 0) {
-        this.elements.cronJobsList.innerHTML =
-          '<div style="color: var(--text-muted); font-size: 13px">No cron jobs. Add one below or use <code>/cron add</code> in chat.</div>';
-        return;
-      }
+      // Switch on (a waiting task: the owner's OK) and Pause.
+      list.querySelectorAll("[data-cron-toggle]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.dataset.cronToggle;
+          const enabled = btn.dataset.cronEnabled === "true";
+          btn.disabled = true;
+          try {
+            const res = await API.request(`/api/settings/cron/${encodeURIComponent(id)}`, {
+              method: "PATCH",
+              body: enabled ? { enabled, seen: shown.get(id) } : { enabled },
+            });
+            const answer = await res.json().catch(() => ({}));
+            if (res.ok) {
+              App.showToast(enabled ? "Task switched on" : "Task paused", "success");
+            } else {
+              App.showToast(answer.error || `The task wasn't changed (HTTP ${res.status})`, "error");
+              // The sign-in ran out and the page went on with the API token, which can't switch a task on: the sign-in
+              // screen, with the server's words for why.
+              if (answer.needsSignIn) API.signInAgain(answer.error);
+            }
+          } catch (err) {
+            App.showToast(err.message, "error");
+          }
+          this.loadCronJobs();
+        });
+      });
 
-      this.elements.cronJobsList.innerHTML = jobs.map((j) =>
-        `<div class="memory-item">
-          <span class="memory-badge">${j.running ? "running" : j.enabled ? "enabled" : "off"}</span>
-          <span class="memory-content"><code>${j.schedule}</code> — ${escapeHtml(j.prompt.slice(0, 60))}</span>
-          <button class="memory-delete" data-cron-id="${j.id}" title="Delete">
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          </button>
-        </div>`
-      ).join("");
-
-      this.elements.cronJobsList.querySelectorAll("[data-cron-id]").forEach((btn) => {
+      list.querySelectorAll("[data-cron-delete]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           try {
-            await API.json(`/api/settings/cron/${btn.dataset.cronId}`, { method: "DELETE" });
+            await API.json(`/api/settings/cron/${encodeURIComponent(btn.dataset.cronDelete)}`, { method: "DELETE" });
             this.loadCronJobs();
-            App.showToast("Cron job removed", "success");
+            App.showToast("Task deleted", "success");
           } catch (err) {
             App.showToast(err.message, "error");
           }
         });
       });
     } catch {
-      this.elements.cronJobsList.innerHTML = "";
+      list.innerHTML = "";
     }
   },
 
@@ -1824,14 +3427,20 @@ const Settings = {
       return;
     }
     try {
-      await API.json("/api/settings/cron", {
+      const added = await API.json("/api/settings/cron", {
         method: "POST",
         body: { schedule, prompt },
       });
       this.elements.cronScheduleInput.value = "";
       this.elements.cronPromptInput.value = "";
       this.loadCronJobs();
-      App.showToast("Cron job added", "success");
+      if (added.awaitingOwner) {
+        // Sent with only the API token (the sign-in ran out), so the server kept it switched off.
+        App.showToast("Task added, switched off: it waits for your OK in the list above. Sign in again to switch it on.", "info");
+        window.dispatchEvent(new CustomEvent("tarsee:auth-required"));
+      } else {
+        App.showToast("Task added and switched on", "success");
+      }
     } catch (err) {
       App.showToast(err.message, "error");
     }
@@ -2094,30 +3703,66 @@ const Settings = {
     } catch(err) { App.showToast("Audit failed: " + err.message, "error"); }
   },
 
+  /**
+   * Tool Permissions: every tool the agent can run, from the registry (GET /api/admin/tool-registry: Tarsee's own
+   * tools, the tarsee MCP server's live list, and the tools built into the AIs), grouped as it groups them. Tarsee's
+   * own tools get Allow / Warn / Deny; the built-in ones say plainly that nothing here limits them.
+   */
   async loadToolPermissions() {
+    const el = document.getElementById("toolPermissionsList");
+    if (!el) return;
+    const esc = (s) => this._esc(s);
+    let tools;
     try {
-      const data = await API.json("/api/admin/tool-permissions");
-      const el = document.getElementById("toolPermissionsList");
-      if (!el) return;
-      const tools = ["read_file","write_file","edit_file","exec","web_fetch","web_search","browser","spawn_agent","send_message","send_file","discord_admin","railway","get_key","set_key","list_keys","generate_image","analyze_image","create_canvas","schedule_task","pdf_read","remember","search_memories"];
-      const perms = data.permissions || {};
-      el.innerHTML = tools.map(function(t) {
-        var mode = perms[t] || "always_allow";
-        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:13px">' +
-          '<code>' + t + '</code>' +
-          '<select data-tool="' + t + '" class="tool-perm-select" style="font-size:12px;padding:2px 6px;background:var(--bg-raised);color:var(--text);border:1px solid var(--border-light);border-radius:4px">' +
-          '<option value="always_allow"' + (mode==="always_allow"?" selected":"") + '>Allow</option>' +
-          '<option value="warn"' + (mode==="warn"?" selected":"") + '>Warn</option>' +
-          '<option value="always_deny"' + (mode==="always_deny"?" selected":"") + '>Deny</option>' +
-          '</select></div>';
+      // Without the API token: this list answers only the signed-in owner's own session (routes/admin.js).
+      const res = await fetch("/api/admin/tool-registry", { credentials: "same-origin", cache: "no-store" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      tools = Array.isArray(body) ? body : (body.tools || []);
+    } catch (err) {
+      el.textContent = `Couldn't list the tools: ${err.message}`;
+      return;
+    }
+    const MODES = [["always_allow", "Allow"], ["warn", "Warn"], ["always_deny", "Deny"]];
+    const OTHER_MODES = { check_ssrf: "Allow, but not private addresses" };
+    const groups = new Map();
+    for (const t of tools) {
+      const g = t.group || "Other";
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(t);
+    }
+    // Tarsee's own tools first, the AI's built-in ones last.
+    const ordered = [...groups].sort(([, a], [, b]) => (a.some((t) => t.policyCovered) ? 0 : 1) - (b.some((t) => t.policyCovered) ? 0 : 1));
+    el.innerHTML = ordered.map(([group, list]) => {
+      const covered = list.some((t) => t.policyCovered);
+      const rows = list.map((t) => {
+        const desc = [t.description, t.mcpName ? `(${t.mcpName})` : ""].filter(Boolean).join(" ");
+        let control;
+        if (t.policyCovered) {
+          const mode = t.mode || "always_allow";
+          const opts = MODES.map(([v, label]) => `<option value="${v}"${mode === v ? " selected" : ""}>${label}</option>`);
+          if (!MODES.some(([v]) => v === mode)) opts.unshift(`<option value="${esc(mode)}" selected>${esc(OTHER_MODES[mode] || mode)}</option>`);
+          control = `<select class="tool-perm-select" data-tool="${esc(t.name)}" data-mode="${esc(mode)}" aria-label="${esc(t.label || t.name)}">${opts.join("")}</select>`;
+        } else {
+          control = `<span class="tool-perm-fixed" title="Built into the AI itself: Tool Permissions can't limit it">Always on</span>`;
+        }
+        return `<div class="tool-perm-row"><div class="tool-perm-name"><span>${esc(t.label || t.name)}</span><div class="tool-perm-desc">${esc(desc)}</div></div>${control}</div>`;
       }).join("");
-      el.querySelectorAll(".tool-perm-select").forEach(function(sel) {
-        sel.addEventListener("change", async function() {
-          await API.json("/api/admin/tool-permissions", { method: "POST", body: { toolName: sel.dataset.tool, mode: sel.value }});
+      const note = covered ? "" : `<div class="hint">Every AI has these, and nothing here can switch them off or limit them.</div>`;
+      return `<div class="tool-perm-group"><h4>${esc(group)}</h4>${note}${rows}</div>`;
+    }).join("") || `<div class="hint">No tools listed.</div>`;
+    el.querySelectorAll(".tool-perm-select").forEach((sel) => {
+      sel.addEventListener("change", async () => {
+        try {
+          await API.json("/api/admin/tool-permissions", { method: "POST", body: { toolName: sel.dataset.tool, mode: sel.value } });
+          sel.dataset.mode = sel.value;
           App.showToast("Permission updated", "success");
-        });
+        } catch (err) {
+          sel.value = sel.dataset.mode;
+          App.showToast(err.message, "error");
+        }
       });
-    } catch(err) { console.warn("Tool permissions error:", err); }
+    });
   },
 
   async loadCanvasGallery() {
@@ -2152,16 +3797,26 @@ const Settings = {
         return;
       }
 
+      // Every value is set as text: entries carry model names, file entries and the agent's shell commands as they were.
+      const span = (className, text) => {
+        const el = document.createElement("span");
+        el.className = className;
+        el.textContent = text;
+        return el;
+      };
       for (const e of entries) {
         const div = document.createElement("div");
         div.className = "audit-entry";
-        const actionClass = e.action?.startsWith("auth") ? "auth" : e.action?.startsWith("tool") ? "tool" : "setting";
+        const action = String(e.action ?? "");
+        const actionClass = action.startsWith("auth") ? "auth" : action.startsWith("tool") ? "tool" : "setting";
         const time = e.created_at ? new Date(e.created_at + "Z").toLocaleString() : "";
-        div.innerHTML = `
-          <span class="audit-entry-time">${time}</span>
-          <span class="audit-entry-action ${actionClass}">${e.action}${e.target ? ` → ${e.target}` : ""}</span>
-          <span class="audit-entry-detail" title="${e.detail || ""}">${e.detail || e.ip || ""}</span>
-        `;
+        const detail = span("audit-entry-detail", String(e.detail || e.ip || ""));
+        detail.title = String(e.detail || "");
+        div.append(
+          span("audit-entry-time", time),
+          span(`audit-entry-action ${actionClass}`, `${action}${e.target ? ` → ${e.target}` : ""}`),
+          detail,
+        );
         container.appendChild(div);
       }
 

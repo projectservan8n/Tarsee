@@ -2,14 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import config from "../config/env.js";
 import { getHeartbeatContext, appendDailyLog } from "./workspace-files.js";
-import { buildSystemPrompt } from "./build-system-prompt.js";
-import { runBackgroundTurn, resolveBackgroundModel } from "./background-turn.js";
+import { buildSystemPromptParts } from "./build-system-prompt.js";
+import { runBackgroundTurn, resolveBackgroundModel, defaultAiReadiness, overBudgetWarning } from "./background-turn.js";
+import { gateAutomation, upgradeApproval, automationStatus } from "./automation-approval.js";
 
 /**
  * Heartbeat system — periodically runs HEARTBEAT.md tasks through the AI.
  *
  * - Default interval: 30 minutes
  * - Skips if HEARTBEAT.md is empty (zero API cost)
+ * - Runs only text the owner has OK'd (lib/automation-approval.js): the AI can write HEARTBEAT.md in any chat, and
+ *   without this a paid turn would start every 30 minutes on its say-so. A change made outside Settings waits for
+ *   the owner's OK (Settings > Automation shows it, with Let it run).
  * - HEARTBEAT_OK response token = suppress output (save noise)
  * - State tracked in memory/heartbeat-state.json
  */
@@ -58,9 +62,7 @@ export async function runHeartbeat(reason = "scheduled") {
     return { skipped: true, reason: "Previous heartbeat still running" };
   }
 
-  const heartbeatContent = getHeartbeatContext();
-
-  if (!heartbeatContent) {
+  if (!getHeartbeatContext()) {
     return { skipped: true, reason: "HEARTBEAT.md is empty" };
   }
 
@@ -68,9 +70,19 @@ export async function runHeartbeat(reason = "scheduled") {
     return { skipped: true, reason: "Not initialized" };
   }
 
-  const activeProvider = _settingsStore.getActiveProvider();
-  if (!activeProvider?.ready || !activeProvider?.provider) {
-    return { skipped: true, reason: "No AI provider configured" };
+  // Only text the owner has OK'd runs, and what is sent is that text (lib/automation-approval.js). Checked before
+  // anything else is asked of the AI. A change made outside Settings is logged once and shown in Settings.
+  const gate = gateAutomation(_settingsStore, "HEARTBEAT.md");
+  if (!gate.run) {
+    return { skipped: true, reason: gate.empty ? "HEARTBEAT.md is empty" : gate.reason, ...(gate.waiting ? { waitingForOwner: true } : {}) };
+  }
+  const heartbeatContent = gate.prompt;
+
+  // Skipped quietly while the default AI can't take a turn (every 30 minutes, a failure would only be noise); the
+  // reason names the AI and what to fix.
+  const ai = await defaultAiReadiness(_settingsStore);
+  if (!ai.ready) {
+    return { skipped: true, reason: ai.reason };
   }
 
   const now = new Date().toISOString();
@@ -78,7 +90,7 @@ export async function runHeartbeat(reason = "scheduled") {
   running = true;
 
   // Build a lightweight system prompt with workspace context
-  const systemPrompt = buildSystemPrompt({
+  const systemParts = buildSystemPromptParts({
     settingsStore: _settingsStore,
     db: _db,
     conversationId: null,
@@ -108,13 +120,13 @@ export async function runHeartbeat(reason = "scheduled") {
     // the overwhelming majority of the time, and it fires every 30 minutes
     // forever — running it on the interactive top-tier default was the most
     // expensive idle loop in the product. `heartbeat.model` raises it.
-    const { text: fullResponse, error } = await runBackgroundTurn({
+    const { text: fullResponse, error, overBudget } = await runBackgroundTurn({
       label: "heartbeat",
       liveId: "heartbeat",
       liveSource: "heartbeat",
-      model: resolveBackgroundModel(_settingsStore.get("heartbeat.model")),
+      model: resolveBackgroundModel(_settingsStore.get("heartbeat.model"), null, _settingsStore),
       messages,
-      systemPrompt,
+      systemParts,
       toolCtx,
     });
 
@@ -127,12 +139,14 @@ export async function runHeartbeat(reason = "scheduled") {
     }
 
     const isSuppressed = fullResponse.trim() === "HEARTBEAT_OK";
+    // Finished, but over its spending limit (a Codex AI's cost is known only at the end).
+    const warning = overBudgetWarning(overBudget);
 
     // Update state
     const state = loadState();
     state.lastRun = now;
     state.runCount = (state.runCount || 0) + 1;
-    state.lastResult = isSuppressed ? "OK (suppressed)" : fullResponse.slice(0, 500);
+    state.lastResult = (isSuppressed ? "OK (suppressed)" : fullResponse.slice(0, 500)) + (warning ? ` (${warning})` : "");
     saveState(state);
 
     // Log to daily log
@@ -143,7 +157,7 @@ export async function runHeartbeat(reason = "scheduled") {
       console.log("[heartbeat] OK (suppressed)");
     }
 
-    return { skipped: false, suppressed: isSuppressed, response: fullResponse };
+    return { skipped: false, suppressed: isSuppressed, response: fullResponse, ...(warning ? { warning } : {}) };
   } catch (err) {
     console.error("[heartbeat] Error:", err.message);
     const state = loadState();
@@ -171,6 +185,14 @@ export function startHeartbeat({ db, settingsStore, channelManager = null, inter
   _settingsStore = settingsStore;
   if (channelManager) _channelManager = channelManager;
 
+  // The first start of this version: the HEARTBEAT.md already here counts as the owner's, once, so an existing
+  // install keeps running as before. At boot, before any chat could have changed it.
+  try {
+    upgradeApproval(settingsStore, "HEARTBEAT.md");
+  } catch (err) {
+    console.warn("[heartbeat] could not note the owner's OK for HEARTBEAT.md:", err.message);
+  }
+
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
   }
@@ -196,14 +218,22 @@ export function stopHeartbeat() {
 }
 
 /**
- * Get heartbeat status for /heartbeat command and API.
+ * The heartbeat's status, for the debug console's heartbeat.status (routes/debug.js), which shows waitingForOwner.
  * @returns {object}
  */
 export function getHeartbeatStatus() {
   const state = loadState();
+  let waitingForOwner = false;
+  try {
+    waitingForOwner = !!_settingsStore && automationStatus(_settingsStore, "HEARTBEAT.md").waiting;
+  } catch {
+    // the status is only for display
+  }
   return {
     running: !!heartbeatTimer,
     ...state,
+    // HEARTBEAT.md changed outside Settings and won't run until the owner OKs it (Settings > Automation).
+    waitingForOwner,
   };
 }
 

@@ -592,6 +592,9 @@
 .steps-usage { font-size: var(--text-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .steps-usage:empty { display: none; }
 .steps-source { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; }
+/* Under the line while a Codex model works: its reply comes when each step finishes, not word by word. */
+.steps-hint { margin: var(--space-1) 0 0 4px; font-size: var(--text-xs); color: var(--text-muted); }
+.steps-hint[hidden] { display: none; }
 .steps-caret { flex-shrink: 0; opacity: 0.7; transition: transform var(--duration-normal) var(--ease-default); }
 .steps.is-open .steps-caret { transform: rotate(90deg); }
 .steps-dot { width: 7px; height: 7px; border-radius: var(--radius-full); background: var(--text-muted); opacity: 0.7; flex-shrink: 0; display: none; }
@@ -832,6 +835,8 @@
 .model-picker-btn .mp-sep, .model-picker-btn .mp-effort { color: var(--text-muted); }
 .model-picker-btn:hover .mp-effort, .model-picker-btn[aria-expanded="true"] .mp-effort { color: var(--text-secondary); }
 .model-picker-btn.no-effort .mp-sep, .model-picker-btn.no-effort .mp-effort { display: none; }
+/* The chat's own AI isn't ready (not connected, or off under API keys only): the default answers, the button says so. */
+.model-picker-btn.has-warning .mp-model { color: var(--warning); }
 
 /* The picker (js/model-picker.js), drawn like Claude Code's: the newest models numbered, Effort and More models
    opening beside it (in its place on a phone). */
@@ -908,6 +913,28 @@
 .mp-warn::after { content: ""; position: absolute; left: 4.5px; top: 3px; width: 1px; height: 3px; background: var(--bg-surface); }
 .mp-back { color: var(--text-secondary); gap: 8px; }
 .mp-back .mp-name { color: var(--text); font-weight: 500; }
+/* Each AI in its own color (style.css [data-ai] gives --ai): a bar down its group, its name and how it is paid for,
+   its rows' hover and check; its list that opens is topped with the same color. */
+.mp-group[data-ai] { position: relative; }
+.mp-group[data-ai]::before { content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 3px; border-radius: 3px; background: var(--ai); }
+.mp-ai-head { display: flex; align-items: center; gap: 8px; padding-top: 10px; }
+.mp-ai-head .mp-group-name { font-weight: 600; color: var(--ai, var(--text-secondary)); }
+.mp-ai-tag {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--ai) 14%, transparent);
+  color: var(--ai);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.mp-group[data-ai] .mp-item:hover:not([disabled]), .mp-group[data-ai] .mp-item:focus-visible, .mp-group[data-ai] .mp-item.is-open,
+.mp-submenu[data-ai] .mp-item:hover:not([disabled]), .mp-submenu[data-ai] .mp-item:focus-visible { background: color-mix(in srgb, var(--ai) 12%, var(--bg-surface-hover)); }
+.mp-group[data-ai] .mp-check, .mp-submenu[data-ai] .mp-check { color: var(--ai); }
+.mp-submenu[data-ai] { border-top: 3px solid var(--ai); }
+.mp-where { display: inline-flex; align-items: center; gap: 5px; }
+.model-picker-btn .ai-dot { margin-right: 2px; }
 @media (max-width: 639px) {
   .mp-menu, .mp-submenu.mp-effort { width: min(300px, calc(100vw - 24px)); max-width: calc(100vw - 24px); }
   .mp-item { min-height: 40px; }
@@ -919,6 +946,82 @@
 .input-btn-send { border-radius: var(--radius-full); color: var(--text); }
 .input-btn-send:disabled { background: var(--bg-surface-hover); color: var(--text-muted); }
 
+/* A call going on while its window is put away, over the composer (js/call.js). */
+.call-bar {
+  max-width: var(--chat-col);
+  margin: 0 auto var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  min-width: 0;
+}
+.call-bar[hidden] { display: none; }
+.call-bar-dot { width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--success); flex-shrink: 0; animation: pulse 1.6s ease-in-out infinite; }
+.call-bar[data-state="speaking"] .call-bar-dot { background: var(--accent); }
+.call-bar[data-state="thinking"] .call-bar-dot { background: var(--warning); }
+.call-bar[data-state="ended"] .call-bar-dot, .call-bar[data-state="error"] .call-bar-dot { background: var(--text-muted); animation: none; }
+.call-bar-title { color: var(--text); font-weight: 500; white-space: nowrap; }
+.call-bar-clock { font-variant-numeric: tabular-nums; color: var(--text-muted); white-space: nowrap; }
+.call-bar-now { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+.call-bar-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: none;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.call-bar-btn:hover { background: var(--bg-surface-hover); }
+.call-bar-btn[aria-pressed="true"] { background: var(--bg-surface-hover); border-color: var(--border-hover); }
+.call-bar-btn.is-end { border-color: var(--danger); color: var(--danger); }
+.call-bar-btn.is-end:hover { background: var(--danger-subtle); }
+.call-bar-btn.call-bar-chat { border: none; padding: 2px 4px; margin-left: -4px; min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
+.call-bar-btn.call-bar-chat:hover { background: none; text-decoration: underline; text-underline-offset: 3px; }
+
+/* Why dictation (the message box's microphone) failed, and what to do (js/voice.js). */
+.mic-note {
+  max-width: var(--chat-col);
+  margin: 0 auto var(--space-2);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 8px 10px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-lg);
+  font-size: var(--text-sm);
+  color: var(--text);
+  min-width: 0;
+}
+.mic-note[hidden] { display: none; }
+.mic-note-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.mic-note-text strong { font-weight: 500; }
+.mic-note-reason { color: var(--text-secondary); font-size: var(--text-xs); line-height: var(--leading-normal); }
+.mic-note-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.mic-note-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: none;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mic-note-btn:hover { background: var(--bg-surface-hover); }
+.mic-note-btn.mic-note-close { border: none; padding: 2px 8px; font-size: var(--text-lg); line-height: 1; color: var(--text-muted); }
+
 /* ---------------------------------------------------------------- tablets and phones */
 
 @media (min-width: 768px) and (max-width: 1100px) {
@@ -929,7 +1032,7 @@
   .sidebar { width: min(300px, 86vw); }
   .topbar { padding: 0 var(--space-2); }
   /* Room for the chat's name: the console is for a computer. The terminal stays, since signing Claude in
-     again (claude login) happens there, from a phone as much as anywhere. */
+     again (claude auth login) happens there, from a phone as much as anywhere. */
   .topbar-right .console-toggle-btn { display: none; }
   .md-table-wrap .md-table { min-width: max-content; }
   .topbar-right .topbar-icon-btn { width: 34px; height: 34px; }
@@ -942,6 +1045,11 @@
   .input-container { border-radius: 20px; padding: 8px 8px 6px 10px; }
   .composer-meta .context-meter { display: none; }
   .welcome h2 { font-size: var(--text-2xl); }
+  .call-bar { flex-wrap: wrap; row-gap: 4px; }
+  .call-bar-now { flex-basis: 100%; order: 5; }
+  .mic-note { flex-wrap: wrap; }
+  .mic-note-text { flex-basis: calc(100% - 40px); }
+  .mic-note-actions { flex-wrap: wrap; }
   .steps-line { max-width: 100%; }
   .step-body { margin-left: 8px; }
 }
@@ -952,7 +1060,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .nav-dot, .steps-dot, .step-dot, .steps[data-state="running"] .steps-title { animation: none !important; }
+  .nav-dot, .steps-dot, .step-dot, .call-bar-dot, .steps[data-state="running"] .steps-title { animation: none !important; }
   .jump-latest { transition: none; }
   .message { animation: none; }
 }

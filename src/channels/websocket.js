@@ -1,6 +1,6 @@
 import { WebSocketServer } from "ws";
 import crypto from "node:crypto";
-import { validateApiToken, validateSessionFromRequest } from "../middleware/auth.js";
+import { validateApiToken, validateSessionFromRequest, liveSessionId, isLiveSession } from "../middleware/auth.js";
 import { chatStream } from "../ai/router.js";
 import { onEvent, eventsSince, eventsForTurn, activeTurnFor, activeTurnList, queuedTurnList, recentEvents } from "../lib/live-bus.js";
 import { ConversationStore } from "../db/conversations.js";
@@ -9,8 +9,8 @@ import { AuditLog } from "../db/audit.js";
 import { WS_CODES } from "../config/constants.js";
 import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
 import { logCapture } from "../lib/log-capture.js";
-import { buildSystemPrompt } from "../lib/build-system-prompt.js";
-import { getToolDefinitions, executeTool } from "../lib/tools.js";
+import { buildSystemPromptParts, sendFileHint } from "../lib/build-system-prompt.js";
+import { withConversationTurn, QUEUE_REMOVED } from "../lib/conversation-lock.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { handleTerminalConnection } from "../websocket/terminal-handler.js";
 
@@ -105,10 +105,14 @@ export function setupWebSocket(server, db, app) {
 
     // Auth via query token or session cookie
     const isAuthed = (token && validateApiToken(token)) || validateSessionFromRequest(req);
+    // The owner's sign-in, if the upgrade came with one: the owner's commands need it (handleChat), the API token
+    // alone isn't enough. Checked again at each command, so signing out or running out ends it for this socket too.
+    const signInId = liveSessionId(req);
 
     if (isAuthed) {
       wss.handleUpgrade(req, socket, head, (ws) => {
         ws.isAuthenticated = true;
+        ws._signInId = signInId;
         wss.emit("connection", ws, req);
       });
     } else {
@@ -360,7 +364,9 @@ async function handleChat(ws, msg, convStore, settingsStore) {
       settingsStore,
       convStore,
       conversationId,
-      platform: "web", // was missing — platform-gated commands misrouted
+      // The dashboard ("web") only with the owner's sign-in still on, from the upgrade; the API token alone (?token=
+      // or the auth message) is "api", which commands.js doesn't take for the owner (/cron, /briefing, /webhook).
+      platform: isLiveSession(ws._signInId) ? "web" : "api",
       // handleChat is a top-level function — the `db` handle from
       // setupWebSocket() is NOT in scope here, so reach it via the store.
       db: convStore?.db,
@@ -399,15 +405,11 @@ async function handleChat(ws, msg, convStore, settingsStore) {
     convId = conv.id;
   }
 
-  // Resolve provider
-  const activeProvider = settingsStore.getActiveProvider();
-  if (!activeProvider?.provider || !activeProvider?.ready) {
-    ws.send(JSON.stringify({ type: "error", message: "No AI provider configured" }));
-    return;
-  }
+  // (Which AI answers, and whether it is set up, is the turn layer's: ai/turn.js. One that isn't set up answers
+  // with what to fix, as on every channel.)
 
   // Save user message (text only — no base64 blobs in DB)
-  convStore.addMessage(convId, { role: "user", content: message });
+  const savedUser = convStore.addMessage(convId, { role: "user", content: message });
   // Mirror to other devices viewing this conversation.
   getGatewayManager().broadcast(convId, "user_message", { content: message, conversationId: convId });
 
@@ -425,9 +427,15 @@ async function handleChat(ws, msg, convStore, settingsStore) {
           source: { type: "base64", media_type: att.mediaType || "image/png", data: att.data },
         });
       } else if (att.type === "audio") {
+        // A voice note: the turn layer turns it into its transcript for every AI (ai/media.js)
         contentBlocks.push({
           type: "audio",
           source: { type: "base64", media_type: att.mediaType || "audio/wav", data: att.data },
+        });
+      } else if (att.type === "pdf" || att.mediaType === "application/pdf") {
+        contentBlocks.push({
+          type: "document",
+          source: { type: "base64", media_type: "application/pdf", data: att.data },
         });
       } else {
         contentBlocks.push({
@@ -436,7 +444,7 @@ async function handleChat(ws, msg, convStore, settingsStore) {
         });
       }
     }
-    contentBlocks.push({ type: "text", text: message });
+    contentBlocks.push({ type: "text", text: aiPromptOverride || message });
     userContentForAI = contentBlocks;
   }
 
@@ -444,76 +452,94 @@ async function handleChat(ws, msg, convStore, settingsStore) {
   const history = convStore.getRecentMessages(convId, 20);
   const conv = convStore.get(convId);
 
-  // Voice mode — respond normally, TTS strips non-speakable content
-  const isVoiceMode = message.startsWith("[voice]");
-  const voiceHint = isVoiceMode
-    ? "[VOICE MODE] Response shown visually AND read aloud. TTS limit: 2 short sentences max before any table/code. Tables shown but NOT spoken. Structure: brief intro (under 200 chars) → then details."
-    : "";
-
-  // Build effective system prompt (parity with HTTP handler)
-  const effectiveSystemPrompt = buildSystemPrompt({
+  // Build the system prompt (parity with the HTTP handler): the stable part, then this turn's own
+  const promptParts = buildSystemPromptParts({
     settingsStore,
     db: ws._tarsee_db,
     channelManager: ws._tarsee_channelManager,
     conversationId: convId,
     messageCount: history.length,
     conversationPrompt: conv?.system_prompt,
-    channelHint: voiceHint,
+    channelHint: sendFileHint("web"),
   });
+  const systemParts = { stable: promptParts.stable, volatile: promptParts.volatile };
 
-  let fullResponse = "";
-  let usage = {};
-  const tools = getToolDefinitions();
-  const toolCtx = { db: ws._tarsee_db, settingsStore, conversationId: convId, channelManager: ws._tarsee_channelManager, dashboard: true };
-  const MAX_TOOL_ROUNDS = 15;
-  const providerId = activeProvider.provider;
+  // dashboard: a file the agent hands over goes to this chat; messageId: the message answered (its pictures are kept with it)
+  const toolCtx = { db: ws._tarsee_db, settingsStore, conversationId: convId, channelManager: ws._tarsee_channelManager, dashboard: true, messageId: savedUser?.id || null };
 
-  // --- Claude Code provider: runs its own agentic loop ---
-  if (providerId === "claude-code") {
-    // Heartbeat + 3-min idle abort for parity with the HTTP SSE path.
+  // Taken out of the queue (the Stop on its "Queued" line) before it began: this message is done, with no reply.
+  let ended = false;
+  const endRemoved = () => {
+    if (ended) return;
+    ended = true;
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "done", conversationId: convId, stopReason: "stopped" }));
+  };
+
+  // One turn per conversation at a time, whichever channel sent it (lib/conversation-lock.js): two resumes of one
+  // session at once corrupt it.
+  const ran = await withConversationTurn(convId, async () => {
+    let fullResponse = "";
+    let usage = {};
+    // The AI this turn runs on, from the turn layer's route event (the backup model's, if it answered instead).
+    let routed = null;
+    // How the turn layer said the turn ended (its one done): sent on in this socket's done, so the tab that pressed
+    // Stop shows the reply as stopped, not finished.
+    let endReason = null;
+
+    // Heartbeat + idle abort for parity with the HTTP SSE path.
     let lastEventAt = Date.now();
     let idleAborted = false;
+    const controller = new AbortController();
+    ws._currentAbort = controller; // expose for /stop
+    const onClose = () => controller.abort();
+    ws.on("close", onClose);
     const hb = setInterval(() => {
       if (ws.readyState !== ws.OPEN) return clearInterval(hb);
       try { ws.send(JSON.stringify({ type: "heartbeat", ts: Date.now() })); } catch {}
       if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
         idleAborted = true;
         clearInterval(hb);
-        try { ws._currentAbort?.abort(); } catch {}
+        try { controller.abort(); } catch {}
       }
     }, 15_000);
 
     try {
-      const controller = new AbortController();
-      ws._currentAbort = controller; // expose for /stop
-      const onClose = () => controller.abort();
-      ws.on("close", onClose);
-
-      const existingSessionId = convStore.getClaudeSessionId(convId);
-      const mod = await import("../ai/providers/claude-code.js");
-      const ccMessages = history.map((m) => ({ role: m.role, content: m.content }));
-      // Apply playbook override to the last user turn so the AI sees the
-      // playbook body instead of the literal "/checkpoint" token.
-      if (aiPromptOverride && ccMessages.length > 0) {
-        const last = ccMessages[ccMessages.length - 1];
-        if (last.role === "user") last.content = aiPromptOverride;
+      const existingSessionId = convStore.getSessionHandle(convId);
+      // The chat's messages for the AI, with their times (the handoff to a new session leaves out what was cleared).
+      const aiMessages = history.map((m) => {
+        let content = m.content;
+        if (content?.startsWith('{"__timeline":true')) {
+          try { content = JSON.parse(content).text || content; } catch {}
+        }
+        return { role: m.role, content, createdAt: m.created_at };
+      });
+      // The AI sees the attachments and a playbook's body in place of the literal "/checkpoint".
+      if (userContentForAI !== message && aiMessages.length > 0) {
+        const last = aiMessages[aiMessages.length - 1];
+        if (last.role === "user") last.content = userContentForAI;
       }
-      const stream = mod.chat({
+      const stream = chatStream({
         liveSource: "web",
-        messages: ccMessages,
-        model: activeProvider.model,
-        systemPrompt: effectiveSystemPrompt,
+        liveConversationId: convId,
+        messages: aiMessages,
+        systemParts,
         signal: controller.signal,
         sessionId: existingSessionId,
-        onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
+        onSessionId: (handle) => convStore.setSessionHandle(convId, handle),
         toolCtx,
+        // Summaries of its thinking for the live view. (A voice call's turns go through POST /api/chat/send, which
+        // asks for none: a spoken reply is waited for.)
+        thinkingSummaries: true,
       });
 
       const gw = getGatewayManager();
       for await (const event of stream) {
         if (ws.readyState !== ws.OPEN) break;
         lastEventAt = Date.now();
-        if (event.type === "text") {
+        if (event.type === "route") {
+          routed = event;
+          ws.send(JSON.stringify({ type: "model_selected", provider: event.provider, model: event.model, label: event.label, effort: event.effort || null, backup: !!event.backup }));
+        } else if (event.type === "text") {
           fullResponse += event.content;
           ws.send(JSON.stringify({ type: "text", content: event.content }));
           gw.broadcast(convId, "text", { content: event.content });
@@ -535,20 +561,23 @@ async function handleChat(ws, msg, convStore, settingsStore) {
         } else if (event.type === "error") {
           ws.send(JSON.stringify({ type: "error", message: event.message }));
         } else if (event.type === "done") {
+          endReason = event.stopReason || null;
           break;
         }
       }
 
-      ws.removeListener("close", onClose);
-      ws._currentAbort = null;
+      if (idleAborted && ws.readyState === ws.OPEN) {
+        const minutes = Math.max(1, Math.round(IDLE_ABORT_MS / 60_000));
+        ws.send(JSON.stringify({ type: "error", message: `${routed?.label || "The AI"} stopped responding (${minutes} min idle). Try again.` }));
+      }
 
       if (fullResponse) {
         fullResponse = extractAndSaveMemories(fullResponse, ws._tarsee_db, convId);
         convStore.addMessage(convId, {
           role: "assistant",
           content: fullResponse,
-          provider: providerId,
-          model: activeProvider.model,
+          provider: routed?.provider || null,
+          model: routed?.model || null,
           tokensIn: (usage.input_tokens || 0)
           + (usage.cache_read_input_tokens || 0)
           + (usage.cache_creation_input_tokens || 0) || null,
@@ -556,149 +585,27 @@ async function handleChat(ws, msg, convStore, settingsStore) {
         });
       }
 
+      // "stopped" is the page's word for a turn Stop ended (a message taken out of the queue says it too).
+      const stopReason = endReason === "aborted" ? "stopped" : endReason;
       if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: "done", conversationId: convId, usage }));
+        ws.send(JSON.stringify({ type: "done", conversationId: convId, usage, provider: routed?.provider || null, model: routed?.model || null, stopReason }));
       }
-      gw.broadcast(convId, "done", { conversationId: convId });
+      gw.broadcast(convId, "done", { conversationId: convId, stopReason });
     } catch (err) {
       if (ws.readyState === ws.OPEN) {
+        const minutes = Math.max(1, Math.round(IDLE_ABORT_MS / 60_000));
         const message = idleAborted
-          ? "Claude Code stopped responding (3 min idle). Try again."
+          ? `${routed?.label || "The AI"} stopped responding (${minutes} min idle). Try again.`
           : err.message;
         ws.send(JSON.stringify({ type: "error", message }));
       }
     } finally {
       clearInterval(hb);
+      ws.removeListener("close", onClose);
+      if (ws._currentAbort === controller) ws._currentAbort = null;
     }
-    return;
-  }
-
-  // Heartbeat + 3-min idle abort for the generic provider branch too.
-  let lastEventAt2 = Date.now();
-  let idleAborted2 = false;
-  const hb2 = setInterval(() => {
-    if (ws.readyState !== ws.OPEN) return clearInterval(hb2);
-    try { ws.send(JSON.stringify({ type: "heartbeat", ts: Date.now() })); } catch {}
-    if (Date.now() - lastEventAt2 > IDLE_ABORT_MS) {
-      idleAborted2 = true;
-      clearInterval(hb2);
-    }
-  }, 15_000);
-
-  try {
-    const controller = new AbortController();
-    const onClose = () => controller.abort();
-    ws.on("close", onClose);
-    // Abort the stream if the idle watchdog fires.
-    const idleWatch = setInterval(() => {
-      if (idleAborted2) { try { controller.abort(); } catch {} clearInterval(idleWatch); }
-    }, 5_000);
-
-    // Replace the last user message content with the attachment-enriched version
-    let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
-    if (workingMessages.length > 0 && workingMessages[workingMessages.length - 1].role === "user") {
-      workingMessages[workingMessages.length - 1].content = userContentForAI;
-    }
-
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const toolCalls = [];
-      let roundText = "";
-      let stopReason = "end_turn";
-
-      const stream = chatStream({
-        provider: activeProvider.provider,
-        model: activeProvider.model,
-        apiKey: activeProvider.apiKey,
-        baseUrl: activeProvider.baseUrl,
-        messages: workingMessages,
-        systemPrompt: effectiveSystemPrompt,
-        signal: controller.signal,
-        tools,
-      });
-
-      const gw = getGatewayManager();
-      for await (const event of stream) {
-        if (ws.readyState !== ws.OPEN) break;
-        lastEventAt2 = Date.now();
-
-        if (event.type === "text") {
-          roundText += event.content;
-          fullResponse += event.content;
-          ws.send(JSON.stringify({ type: "text", content: event.content }));
-          gw.broadcast(convId, "text", { content: event.content });
-        } else if (event.type === "tool_use") {
-          toolCalls.push({ id: event.id, name: event.name, input: event.input });
-          const shown = redactOn ? redactDeep(event.input) : event.input;
-          ws.send(JSON.stringify({ type: "tool_call", id: event.id, name: event.name, input: shown }));
-          gw.broadcast(convId, "tool_call", { id: event.id, name: event.name, input: shown });
-        } else if (event.type === "usage") {
-          usage = { ...usage, ...event.usage };
-        } else if (event.type === "done") {
-          stopReason = event.stopReason || "end_turn";
-          break;
-        }
-      }
-
-      if (toolCalls.length === 0 || stopReason !== "tool_use") break;
-
-      // Build assistant message with tool_use blocks
-      const assistantContent = [];
-      if (roundText) assistantContent.push({ type: "text", text: roundText });
-      for (const tc of toolCalls) {
-        assistantContent.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
-      }
-      workingMessages.push({ role: "assistant", content: assistantContent });
-
-      // Execute tools and build results
-      const toolResults = [];
-      for (const tc of toolCalls) {
-        console.log(`[tools] executing: ${tc.name}(${JSON.stringify(tc.input).slice(0, 100)})`);
-        const result = await executeTool(tc.name, tc.input, toolCtx);
-        toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
-        const short = result.slice(0, 500);
-        if (ws.readyState === ws.OPEN) {
-          ws.send(JSON.stringify({ type: "tool_result", id: tc.id, name: tc.name, result: short }));
-        }
-        gw.broadcast(convId, "tool_result", { id: tc.id, name: tc.name, result: short });
-      }
-      workingMessages.push({ role: "user", content: toolResults });
-    }
-
-    ws.removeListener("close", onClose);
-
-    // Extract [REMEMBER: ...] markers and auto-save memories
-    if (fullResponse) {
-      fullResponse = extractAndSaveMemories(fullResponse, ws._tarsee_db, convId);
-    }
-
-    // Save assistant message (with markers stripped)
-    if (fullResponse) {
-      convStore.addMessage(convId, {
-        role: "assistant",
-        content: fullResponse,
-        provider: activeProvider.provider,
-        model: activeProvider.model,
-        tokensIn: (usage.input_tokens || 0)
-          + (usage.cache_read_input_tokens || 0)
-          + (usage.cache_creation_input_tokens || 0) || null,
-        tokensOut: usage.output_tokens,
-      });
-    }
-
-    if (ws.readyState === ws.OPEN) {
-      ws.send(JSON.stringify({ type: "done", conversationId: convId, usage }));
-    }
-    getGatewayManager().broadcast(convId, "done", { conversationId: convId });
-  } catch (err) {
-    if (ws.readyState === ws.OPEN) {
-      const message = idleAborted2
-        ? "Model stopped responding (3 min idle). Try again."
-        : err.message;
-      ws.send(JSON.stringify({ type: "error", message }));
-    }
-  } finally {
-    clearInterval(hb2);
-  }
+  }, { live: { source: "web", prompt: message, onRemoved: endRemoved } });
+  if (ran === QUEUE_REMOVED) endRemoved();
 }
 
 /**

@@ -26,10 +26,29 @@ const DENIED_SEGMENTS = [
   "api.token",
   ".claude-code-home",
   "vault.json",
+  // The AI sign-ins and key homes (design 4.15): Codex's own folder and its ChatGPT sign-in file, and the tool
+  // results the MCP endpoint spills outside the workspace.
+  ".codex",
+  "auth.json",
+  "tool-output",
 ];
+
+/**
+ * Whole path segments that are a credential home: .codex-home (the ChatGPT sign-in), .codex-home-keys (the key
+ * providers on Codex) and .claude-home-<id> (the key providers on Claude Code).
+ */
+const DENIED_SEGMENT_PATTERNS = [/^\.codex-home/, /^\.claude-home-/];
 
 /** Anything matching these is a database or its sidecars. */
 const DENIED_PATTERNS = [/\.db$/i, /\.db-wal$/i, /\.db-shm$/i, /\.credentials\.json$/i];
+
+/**
+ * A path segment as the file system will treat it: lower case (Windows and macOS match names case-insensitively),
+ * without an NTFS stream suffix ("auth.json::$DATA") or the trailing dots and spaces Windows drops ("auth.json.").
+ */
+function segmentName(s) {
+  return s.toLowerCase().replace(/:.*$/, "").replace(/[. ]+$/, "");
+}
 
 /**
  * True when a resolved path points at something that must never be served.
@@ -37,8 +56,9 @@ const DENIED_PATTERNS = [/\.db$/i, /\.db-wal$/i, /\.db-shm$/i, /\.credentials\.j
  * @returns {boolean}
  */
 export function isSensitivePath(resolvedPath) {
-  const segments = String(resolvedPath).split(/[\\/]/);
+  const segments = String(resolvedPath).split(/[\\/]/).map(segmentName);
   if (segments.some((s) => DENIED_SEGMENTS.includes(s))) return true;
+  if (segments.some((s) => DENIED_SEGMENT_PATTERNS.some((re) => re.test(s)))) return true;
   return DENIED_PATTERNS.some((re) => re.test(resolvedPath));
 }
 

@@ -20,15 +20,18 @@ import globals from "globals";
 const appGlobals = {
   API: "readonly",          // js/api.js
   App: "readonly",          // js/app.js
+  Call: "readonly",         // js/call.js
   Chat: "readonly",         // js/chat.js
   ChatCore: "readonly",     // js/chat-core.js
   ChatFiles: "readonly",    // js/chat-files.js (a module that puts it on window)
   Live: "readonly",         // js/live.js
   ModelPickerCore: "readonly", // js/model-picker-core.js
   Console: "readonly",      // js/console.js
+  CronCore: "readonly",     // js/cron-core.js
   FileManager: "readonly",  // js/files.js
   Settings: "readonly",     // js/settings.js
   Setup: "readonly",        // js/setup.js
+  SpeechToText: "readonly", // js/voice.js
   TarseeBrand: "readonly",  // js/brand-icon.js
   TarseeDialog: "readonly", // js/dialogs.js
   Usage: "readonly",        // js/usage.js

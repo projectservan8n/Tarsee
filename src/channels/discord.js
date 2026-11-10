@@ -6,29 +6,31 @@ import { withConversationTurn } from "../lib/conversation-lock.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
-import { buildSystemPrompt, sendFileHint } from "../lib/build-system-prompt.js";
+import { buildSystemPromptParts, sendFileHint } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
-import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { toolStatusLabel, toolDoneLabel } from "../lib/tool-status.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
 import { formatForDiscord, splitMessageFenceSafe } from "../lib/discord-format.js";
 import envConfig from "../config/env.js";
 import { discordAdmin } from "../lib/discord-admin.js";
 import { refused } from "../lib/channel-errors.js";
+import { turnErrorNote, idleNote, errorStillToSay, sttProblem } from "./turn-notes.js";
 
 /**
  * Creates and starts a Discord bot.
  *
  * @param {object} config - { token, enabled, allowedChannels?, allowDMs?, ackReaction?, streaming?, status?, activity?, activityType? }
  * @param {import('better-sqlite3').Database} db
+ * @param {object} [opts] - Client: the discord.js client class (tests pass a stand-in that never reaches Discord);
+ *   chatStream: the model stream (ai/router.js chatStream when left out).
  * @returns {Promise<{stop: Function}>}
  */
-export async function createDiscordBot(config, db) {
+export async function createDiscordBot(config, db, { Client: DiscordClient = Client, chatStream: streamChat = chatStream } = {}) {
   const convStore = new ConversationStore(db);
   const settingsStore = new SettingsStore(db);
 
-  const client = new Client({
+  const client = new DiscordClient({
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
@@ -139,6 +141,7 @@ export async function createDiscordBot(config, db) {
     const mediaAttachments = [];    // multimodal content blocks for model
     const savedFileNotes = [];      // text notes describing files on disk
     let voiceTranscript = "";
+    let voiceProblem = null;        // why a voice message wasn't transcribed, said back to the person
     const uploadsDir = path.join(envConfig.WORKSPACE_DIR, "uploads");
     if (message.attachments?.size > 0) {
       try { fs.mkdirSync(uploadsDir, { recursive: true }); } catch {}
@@ -179,13 +182,19 @@ export async function createDiscordBot(config, db) {
               savedFileNotes.push(`[PDF attached: ${att.name} → ${savedPath}] — multimodal PDF block provided above; you can also Read this file directly at the path.`);
             }
           } else if (ct.startsWith("audio/") || att.name?.endsWith(".ogg") || att.name?.endsWith(".webm")) {
-            // Voice message — transcribe with whisper
+            // Voice message — transcribed on this server (voice/stt-handler.js)
             console.log(`[discord] voice attachment: ${att.name} (${ct})`);
             message.channel.sendTyping().catch(() => {});
-            const result = await transcribeAudio(buffer, "en", { settingsStore });
-            if (result.transcript?.trim()) {
-              voiceTranscript = result.transcript;
-              console.log(`[discord] transcribed: "${voiceTranscript.slice(0, 80)}..."`);
+            try {
+              const result = await transcribeAudio(buffer, "en", { settingsStore });
+              if (result.transcript?.trim()) {
+                voiceTranscript = result.transcript;
+                console.log(`[discord] transcribed: "${voiceTranscript.slice(0, 80)}..."`);
+              }
+            } catch (err) {
+              console.error(`[discord] voice transcription failed: ${err.message}`);
+              // Transcription that can't run says what to set up (Settings > Voice); anything else, a short note.
+              voiceProblem = sttProblem(err) || "Couldn't transcribe the voice message. Try again, or type it.";
             }
           } else {
             // Generic file (txt, json, csv, docx, zip, etc.) — save to disk
@@ -202,6 +211,9 @@ export async function createDiscordBot(config, db) {
       }
     }
     const imageAttachments = mediaAttachments; // Backward compat for enrichment below
+
+    // A voice message that couldn't be heard: say why first. Words or files sent with it are still answered below.
+    if (voiceProblem) await message.reply(voiceProblem).catch(() => {});
 
     // Use voice transcript as content if no text was provided
     if (voiceTranscript && !content) {
@@ -234,6 +246,10 @@ export async function createDiscordBot(config, db) {
         convStore,
         conversationId: existingConvId,
         platform: "discord",
+        // The owner, for the owner's commands (/cron, /briefing, /webhook: lib/commands.js): the author's own user id is
+        // on the allowlist. A listed channel lets its members talk to the bot, not manage it; with no allowlist anyone
+        // can talk to it, so nobody counts.
+        owner: allowedIds.length > 0 && allowedIds.map(String).includes(String(message.author.id)),
         db, // was missing — /clear silently no-op'd
       });
 
@@ -277,12 +293,8 @@ export async function createDiscordBot(config, db) {
       content: `[${message.author.username}]: ${displayText}${mediaSuffix ? ` ${mediaSuffix}` : ""}`,
     });
 
-    // Get provider config
-    const activeProvider = settingsStore.getActiveProvider();
-    if (!activeProvider?.provider || !activeProvider?.ready) {
-      await message.reply("No AI provider configured. Set one up in the Tarsee web panel.");
-      return;
-    }
+    // Which AI answers is the turn layer's to decide (ai/turn.js: this chat's own pick, else the default), and so is
+    // saying what to set up when that AI isn't ready: its answer is the reply.
 
     // Ack reaction — let user know we're processing
     const ackEmoji = config.ackReaction ?? "👀";
@@ -301,7 +313,7 @@ export async function createDiscordBot(config, db) {
     // Build full system prompt (identity + memory + skills)
     const history = convStore.getRecentMessages(convId, 15);
     const conv = convStore.get(convId);
-    const systemPrompt = buildSystemPrompt({
+    const systemParts = buildSystemPromptParts({
       settingsStore,
       db,
       conversationId: convId,
@@ -400,12 +412,12 @@ ${sendFileHint("discord")}`,
     // id, appending to one transcript from two processes. Replies interleaved
     // and the session could be left corrupt enough to break every later turn.
     await withConversationTurn(convId, async () => {
+    // The AI this turn runs on, from the turn layer's route event (the backup model's, if it answered instead).
+    let routed = null;
     try {
-      const tools = getToolDefinitions();
       // messageId: the message this turn answers (its pictures are kept on it, not on whatever came in later)
       const toolCtx = { db, settingsStore, conversationId: convId, messageId: savedUser?.id || null };
-      const MAX_TOOL_ROUNDS = 15;
-      let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
+      const workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
       // Slash-command playbooks: swap the AI-visible last user turn for
       // the playbook body while the stored message stays as "/checkpoint".
@@ -424,112 +436,59 @@ ${sendFileHint("discord")}`,
         }
       }
 
-      // One-shot retry budget for recoverable session-corruption errors
-      // (Anthropic API rejecting diagnostics.previous_message_id from a
-      // stale resumed session). Mirror the same pattern as the Telegram
-      // handler so both channels self-heal on a corrupt session.
-      let sessionRetried = false;
       let surfacedError = null;
       // Token usage for this turn — drives Settings -> Token Health.
       // Channels previously recorded NO token data at all, so every
       // channel conversation showed up as an estimate instead of real numbers.
       let tokenUsage = {};
+      const toolsSeen = new Map(); // tool id → { name, input }, for its "done" label
 
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        const toolCalls = [];
-        let roundText = "";
-        let stopReason = "end_turn";
-        let recoverRound = false;
+      // One call per message. The engine runs its own tools and ends the turn itself, and the turn layer
+      // (ai/turn.js) retries, once and fresh, a session the engine couldn't resume. The channel never calls the AI
+      // again on its own: it shows what the turn says.
+      const stream = streamChat({
+        liveSource: "discord",
+        messages: workingMessages,
+        systemParts,
+        toolCtx,
+        sessionId: convStore.getSessionHandle(convId),
+        onSessionId: (handle) => convStore.setSessionHandle(convId, handle),
+        signal: controller.signal,
+      });
 
-        const existingSessionId = convStore.getClaudeSessionId(convId);
-        const stream = chatStream({
-          liveSource: "discord",
-          provider: activeProvider.provider,
-          model: activeProvider.model,
-          messages: workingMessages,
-          systemPrompt,
-          tools,
-          toolCtx,
-          sessionId: existingSessionId,
-          onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
-          // Resolve per-session thinking effort so /think works here too
-          // (web chat calls the provider directly; channels go via the router).
-          effort: settingsStore.get(`session.${convId}.effort`) || undefined,
-          signal: controller.signal,
-        });
-
-        for await (const event of stream) {
-          lastEventAt = Date.now();
-          if (event.type === "text") {
-            roundText += event.content;
-            fullResponse += event.content;
-            // Stream this delta into the current segment message — create
-            // the placeholder on first text of each segment.
-            if (!segmentMsg) {
-              try {
-                segmentMsg = await retryOnRateLimit(() => message.reply("…"));
-              } catch { /* fall through to batched send at the end */ }
-            }
-            segmentText += event.content;
-            await flushSegmentEdit(false);
-          } else if (event.type === "tool_use") {
-            await closeSegment();
-            toolCalls.push({ id: event.id, name: event.name, input: event.input });
-            const callJson = JSON.stringify({ name: event.name, arguments: event.input })
-              .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
-            fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
-            await postToolStatus(event);
-          } else if (event.type === "tool_result") {
-            // Claude Code runs the tools itself and reports each result here, then ends the turn with "end_turn", so
-            // the tool loop below never runs for it. Without this every status line stayed "⚙️ Running…" for good.
-            const tc = toolCalls.find((t) => t.id === event.id);
-            await markToolDone(event.id, tc?.name || "tool", tc?.input || {}, event.ok === false ? "error" : "");
-          } else if (event.type === "error") {
-            if (event.recoverable && !sessionRetried) {
-              sessionRetried = true;
-              recoverRound = true;
-              convStore.setClaudeSessionId(convId, null);
-              console.warn(`[discord] session corrupt, clearing and retrying: ${String(event.message || "").slice(0, 200)}`);
-              if (segmentMsg) {
-                try { await segmentMsg.delete(); } catch {}
-                segmentMsg = null;
-                segmentText = "";
-              }
-            } else {
-              surfacedError = event.message;
-            }
-          } else if (event.type === "usage") {
-            tokenUsage = { ...tokenUsage, ...event.usage };
-          } else if (event.type === "done") {
-            stopReason = event.stopReason || "end_turn";
-            break;
+      for await (const event of stream) {
+        lastEventAt = Date.now();
+        if (event.type === "route") {
+          routed = event;
+        } else if (event.type === "text") {
+          fullResponse += event.content;
+          // Stream this delta into the current segment message — create
+          // the placeholder on first text of each segment.
+          if (!segmentMsg) {
+            try {
+              segmentMsg = await retryOnRateLimit(() => message.reply("…"));
+            } catch { /* fall through to batched send at the end */ }
           }
-        }
-
-        if (recoverRound) { round--; continue; }
-        if (surfacedError) break;
-        if (toolCalls.length === 0 || stopReason !== "tool_use") break;
-
-        // Build assistant content blocks
-        const assistantContent = [];
-        if (roundText) assistantContent.push({ type: "text", text: roundText });
-        for (const tc of toolCalls) {
-          assistantContent.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
-        }
-        workingMessages.push({ role: "assistant", content: assistantContent });
-
-        // Execute tools and update each status message as results land.
-        const toolResults = [];
-        for (const tc of toolCalls) {
-          console.log(`[discord] tool: ${tc.name}`);
-          const result = await executeTool(tc.name, tc.input, toolCtx);
-          toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
-          const resultText = (typeof result === "string" ? result : JSON.stringify(result))
+          segmentText += event.content;
+          await flushSegmentEdit(false);
+        } else if (event.type === "tool_use") {
+          await closeSegment();
+          toolsSeen.set(event.id, { name: event.name, input: event.input });
+          const callJson = JSON.stringify({ name: event.name, arguments: event.input })
             .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
-          fullResponse += `\n<tool_response>${resultText}</tool_response>\n`;
-          await markToolDone(tc.id, tc.name, tc.input, result);
+          fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
+          await postToolStatus(event);
+        } else if (event.type === "tool_result") {
+          // The engine runs the tool and reports its result here: the status line turns ✓ or ❌.
+          const tc = toolsSeen.get(event.id);
+          await markToolDone(event.id, tc?.name || "tool", tc?.input || {}, event.ok === false ? "error" : "");
+        } else if (event.type === "error") {
+          surfacedError = event.message || "something went wrong";
+        } else if (event.type === "usage") {
+          tokenUsage = { ...tokenUsage, ...event.usage };
+        } else if (event.type === "done") {
+          break;
         }
-        workingMessages.push({ role: "user", content: toolResults });
       }
 
       if (fullResponse) {
@@ -539,8 +498,8 @@ ${sendFileHint("discord")}`,
         convStore.addMessage(convId, {
           role: "assistant",
           content: cleanText,
-          provider: activeProvider.provider,
-          model: activeProvider.model,
+          provider: routed?.provider || null,
+          model: routed?.model || null,
           // True prompt size = input + cache_read + cache_creation. Using
           // input_tokens alone undercounts context fill whenever caching
           // kicks in (which is almost always on a long session).
@@ -567,15 +526,15 @@ ${sendFileHint("discord")}`,
         if (sentSegments.length === 0) {
           await message.reply("⚠️ Done — no message body.").catch(() => {});
         }
-      } else if (surfacedError) {
-        const isSessionErr = /previous_message_id|session/i.test(String(surfacedError));
-        const userMsg = isSessionErr
-          ? "⚠️ Session reset due to a transient API hiccup. Just send your message again — your history is preserved."
-          : `⚠️ Upstream error: ${String(surfacedError).slice(0, 200)}\n\nTry again — if it keeps happening, /clear and try fresh.`;
-        await message.reply(userMsg).catch(() => {});
-      } else if (idleAborted) {
-        await message.reply("⚠️ Claude Code stopped responding (3 min idle). Try again — maybe with a smaller ask.").catch(() => {});
-      } else {
+      }
+      // An error the turn reported (already in plain words: what went wrong, what to do), after whatever it said
+      // before it: a spending limit or the turn ceiling can stop a reply halfway. Not again when the reply is the
+      // error itself (the turn layer's "set this up first" answers).
+      if (surfacedError && errorStillToSay(fullResponse, surfacedError)) {
+        await message.reply(turnErrorNote(routed, surfacedError)).catch(() => {});
+      } else if (!fullResponse && idleAborted) {
+        await message.reply(idleNote(routed, IDLE_ABORT_MS)).catch(() => {});
+      } else if (!fullResponse && !surfacedError) {
         await message.reply("⚠️ No response generated. Try rephrasing?").catch(() => {});
       }
     } catch (err) {
@@ -584,7 +543,7 @@ ${sendFileHint("discord")}`,
         message.reactions.cache.get(ackEmoji)?.users.remove(client.user.id).catch(() => {});
       }
       const reason = idleAborted
-        ? "⚠️ Claude Code stopped responding (3 min idle). Try again — maybe with a smaller ask."
+        ? idleNote(routed, IDLE_ABORT_MS)
         : `⚠️ Error: ${err.message || "something went wrong"}. Try again.`;
       await message.reply(reason).catch(() => {});
     } finally {

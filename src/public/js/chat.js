@@ -78,6 +78,15 @@ const Chat = {
     // Typing indicator WebSocket
     this._initTypingSocket();
 
+    // Settings → AI (js/settings.js) read the AIs and something the composer shows changed: the list and the defaults
+    // again, now. A new default (or its model, or whether it can answer) also means the model the last turn ran on is
+    // no longer what the next message runs on.
+    window.addEventListener("tarsee:ai-changed", (ev) => {
+      if (ev.detail?.defaultChanged !== false) this._turnModel = null;
+      this.refreshPicker(true);
+      this._loadPick({ fresh: true });
+    });
+
     // Diagram node clicks: iframes post a message when a node is clicked
     this._initDiagramListener();
 
@@ -430,6 +439,8 @@ const Chat = {
   // count against the context window even though they price differently.
   promptTokensFromUsage(u) {
     if (!u) return 0;
+    // The last call's prompt when the engine knows it: a turn's usage sums its calls (routes/chat.js does the same).
+    if (Number(u.context_input_tokens) > 0) return Number(u.context_input_tokens);
     return (u.input_tokens || 0)
       + (u.cache_read_input_tokens || 0)
       + (u.cache_creation_input_tokens || 0);
@@ -572,6 +583,7 @@ const Chat = {
       const ph = `Message ${this.botName}`;
       if (input.dataset.idlePlaceholder) input.dataset.idlePlaceholder = ph; else input.placeholder = ph;
     }
+    if (typeof Call !== "undefined") Call.paintButton();   // "Call <name>"
     this._paintTitle();
   },
 
@@ -888,7 +900,7 @@ const Chat = {
   onConversationCreated(convId) {
     if (!convId) return;
     // What was picked before the first message is this chat's own now.
-    const pending = this._pickConv === null && (this._pick.model || this._pick.effort) ? { ...this._pick } : null;
+    const pending = this._pickConv === null && (this._pick.model || this._pick.effort || this._pick.provider) ? ModelPickerCore.pickChange(null, this._pick) : null;
     this._pickConv = convId;
     if (pending) API.json(`/api/chat/conversations/${encodeURIComponent(convId)}/picker`, { method: "PUT", body: pending }).catch(() => {});
     document.getElementById("appScreen")?.classList.remove("is-new-chat");
@@ -1245,6 +1257,8 @@ const Chat = {
    * tokens; begin(at) makes it the working line when the turn really begins.
    * The line always opens, even before the first step: to what it thought (a summary, for a turn sent from the
    * dashboard), why it waits (an API retry, compacting), or a word that nothing has happened yet.
+   * setModel(name, streaming) names the AI answering ("Thinking with DeepSeek Flash"); one that sends its reply only
+   * when each step finishes (a Codex model: streaming false) gets a note under the line while it works.
    */
   createSteps({ state = "running", startedAt = Date.now(), tools = [], notes = [], items = null, lazy = null, onStop = null } = {}) {
     const el = document.createElement("div");
@@ -1253,15 +1267,18 @@ const Chat = {
       + '<span class="steps-dot" aria-hidden="true"></span><span class="steps-title"></span><span class="steps-detail"></span>'
       + '<span class="steps-usage"></span><span class="steps-time"></span>'
       + '<svg class="steps-caret" width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-      + '</button></div><div class="steps-list" hidden></div>';
+      + '</button></div><p class="steps-hint" hidden></p><div class="steps-list" hidden></div>';
     const line = el.querySelector(".steps-line");
     const list = el.querySelector(".steps-list");
+    const hint = el.querySelector(".steps-hint");
+    hint.textContent = "This AI sends its reply when each step finishes; tools still appear as they start.";
     // What the list says while it has nothing in it yet (it opens all the same).
     const empty = document.createElement("p");
     empty.className = "steps-empty";
     list.appendChild(empty);
     const s = {
       el, state, startedAt, endedAt: null, error: null, rows: new Map(), order: [], notes: 0, last: "", lazy, loaded: null,
+      model: null, streaming: true,
     };
     const setOpen = (open) => {
       list.hidden = !open;
@@ -1292,7 +1309,7 @@ const Chat = {
       const now = Date.now();
       const ms = (s.endedAt || now) - (s.startedAt || now);
       const n = toolCount();
-      const tl = Core.turnLine({ state: s.state, tools: n, failed: failedCount(), ms: s.state === "running" || s.startedAt ? ms : null, last: s.last, error: s.error });
+      const tl = Core.turnLine({ state: s.state, tools: n, failed: failedCount(), ms: s.state === "running" || s.startedAt ? ms : null, last: s.last, error: s.error, model: s.model });
       let title = tl.title;
       let detail = tl.detail;
       if (s.state === "done" && !n && s.notes) { title = "Thought process"; detail = ""; }
@@ -1304,6 +1321,7 @@ const Chat = {
       el.dataset.state = s.state;
       el.dataset.tone = tl.tone;
       el.hidden = s.state === "done" && !n && !s.notes;
+      hint.hidden = !(s.state === "running" && s.streaming === false);
       empty.hidden = s.order.length > 0;
       empty.textContent = s.state === "queued"
         ? "Waiting for the reply above to finish. It starts right after."
@@ -1414,8 +1432,8 @@ const Chat = {
       r.el.querySelector(".step-label").textContent = Core.stepLabel({ name: r.name, summary: r.summary, input: r.input }, { running: false });
       if (r.startedAt) r.time.textContent = Core.fmtDur(endedAt - r.startedAt);
       if (!r.body.hidden) fillBody(r);
-      // Nothing running now: back to "Thinking" until the next step.
-      if (s.order.every((k) => s.rows.get(k).kind !== "tool" || s.rows.get(k).endedAt)) s.last = "Thinking";
+      // Nothing running now: back to "Thinking with …" until the next step.
+      if (s.order.every((k) => s.rows.get(k).kind !== "tool" || s.rows.get(k).endedAt)) s.last = "";
       s.paint();
     };
 
@@ -1452,7 +1470,7 @@ const Chat = {
       s.order.push(k);
       list.appendChild(n);
       s.notes += 1;
-      if (s.state === "running") s.last = "Thinking";
+      if (s.state === "running") s.last = "";
       s.paint();
       return n;
     };
@@ -1475,9 +1493,19 @@ const Chat = {
     /** The turn's tokens so far ({ total, nowTps, outTps, ... } from a usage step), for the working line. */
     s.setUsage = (u) => {
       s.usage = u || null;
-      // A model call going again after a retry: the line goes back from the retry's words to "Thinking".
-      if (s.statusLast && s.last === s.statusLast) s.last = "Thinking";
+      // A model call going again after a retry: the line goes back from the retry's words to "Thinking with …".
+      if (s.statusLast && s.last === s.statusLast) s.last = "";
       s.statusLast = null;
+      s.paint();
+    };
+
+    /**
+     * The AI answering: its model's name for the line, and whether its words come as they are written (false: a
+     * Codex model, whose reply comes when each step finishes). Called again when a backup takes over.
+     */
+    s.setModel = (name, streaming) => {
+      s.model = String(name || "").trim() || null;
+      s.streaming = streaming !== false;
       s.paint();
     };
 
@@ -1875,6 +1903,8 @@ const Chat = {
         // onText (content for text, null + event for tool/thinking events)
         (content, event) => {
           if (event?.type === "usage" || event?.type === "context_overflow" || event?.type === "model_selected") {
+            // The AI answering (a backup that takes over sends it again): named on the working line.
+            if (event.type === "model_selected") steps.setModel(event.label, event.streaming);
             this.handleTurnMeta(event);
             return;
           }
@@ -1989,8 +2019,9 @@ const Chat = {
     } else if (event?.type === "context_overflow") {
       this.showOverflowRecoveryCard(event.checkpointPath);
     } else if (event?.type === "model_selected") {
-      // Auto-routing: the composer shows the model this turn runs on.
-      if (event.model) { this._turnModel = event.model; this._paintPicker(); }
+      // Every turn names the AI and model it runs on (the turn layer's route): with no pick of the chat's own (the
+      // default, auto-routing, a backup that answered), the composer shows that model.
+      if (event.model) { this._turnModel = { model: event.model, provider: event.provider || null, label: event.label || null }; this._paintPicker(); }
     }
   },
 
@@ -2000,6 +2031,8 @@ const Chat = {
     // Combine with the stashed usage and finalize the meter for this turn.
     if (data?.contextTokens) {
       this._lastContextTokens = data.contextTokens;
+      // The done event carries the turn's usage: this turn's, never a figure left from the turn before.
+      if (data.usage) this._lastUsage = { ...data.usage };
       if (this._lastUsage) {
         this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
       }
@@ -2075,10 +2108,10 @@ const Chat = {
 
   /* ------------------------------------------------------------ the model and the effort (js/model-picker.js) */
 
-  _picker: null,          // the list: Claude Code's own catalog, from GET /api/chat/models
+  _picker: null,          // the list: every ready AI's models, from GET /api/chat/models (routes/models.js)
   _pickerAt: 0,
   _pickDefaults: { model: "sonnet", effort: "medium" },
-  _pick: { model: null, effort: null },   // this chat's own; null is the default
+  _pick: { provider: null, model: null, effort: null },   // this chat's own; null is the default
   _pickConv: undefined,   // the chat _pick belongs to
 
   /** The model and effort a new chat sends with its first message (an existing chat's are on the server). */
@@ -2092,8 +2125,10 @@ const Chat = {
   /** The list, asked again when the menu opens and it is more than five minutes old (a new model shows up). */
   async refreshPicker(force = false) {
     if (!force && this._picker && Date.now() - this._pickerAt < 5 * 60_000) return;
-    if (this._pickerAsking) return;
+    // A forced ask while one is on its way is asked again once it is back: what changed may be newer than that answer.
+    if (this._pickerAsking) { if (force) this._pickerAgain = true; return; }
     this._pickerAsking = true;
+    this._pickerAgain = false;
     try {
       const data = await API.json("/api/chat/models");
       this._models = data.models || [];
@@ -2101,19 +2136,22 @@ const Chat = {
       if (data.defaults) this._pickDefaults = data.defaults;
       this._paintPicker();
       window.ModelPicker?.refresh();
-    } catch { /* the button keeps what it shows */ } finally { this._pickerAsking = false; }
+    } catch { /* the button keeps what it shows */ } finally {
+      this._pickerAsking = false;
+      if (this._pickerAgain) { this._pickerAgain = false; this.refreshPicker(true); }
+    }
   },
 
   /** This chat's own model and effort (a chat is only asked once per visit, unless `fresh`). */
   async _loadPick({ fresh = false } = {}) {
     const id = this.currentConversationId || null;
     if (!fresh && this._pickConv === id) return;
-    if (this._pickConv !== id) { this._pick = { model: null, effort: null }; this._pickConv = id; this._paintPicker(); }
+    if (this._pickConv !== id) { this._pick = { provider: null, model: null, effort: null }; this._pickConv = id; this._paintPicker(); }
     if (!id) return;
     try {
       const data = await API.json(`/api/chat/conversations/${encodeURIComponent(id)}/picker`);
       if (this.currentConversationId !== id) return;
-      this._pick = { model: data.model || null, effort: data.effort || null };
+      this._pick = { provider: data.provider || null, model: data.model || null, effort: data.effort || null };
       if (data.defaults) this._pickDefaults = data.defaults;
       this._paintPicker();
       window.ModelPicker?.refresh();
@@ -2135,12 +2173,10 @@ const Chat = {
     const id = this.currentConversationId;
     if (!id) return;
     try {
-      const body = {};
-      if (this._pick.model !== before.model) body.model = this._pick.model;
-      if (this._pick.effort !== before.effort) body.effort = this._pick.effort;
+      const body = ModelPickerCore.pickChange(before, this._pick);
       if (!Object.keys(body).length) return;
       const data = await API.json(`/api/chat/conversations/${encodeURIComponent(id)}/picker`, { method: "PUT", body });
-      if (this.currentConversationId === id) { this._pick = { model: data.model || null, effort: data.effort || null }; this._paintPicker(); }
+      if (this.currentConversationId === id) { this._pick = { provider: data.provider || null, model: data.model || null, effort: data.effort || null }; this._paintPicker(); }
     } catch (err) {
       if (this.currentConversationId === id) { this._pick = before; this._paintPicker(); }
       App.showToast(`Couldn't change it: ${err.message}`, "error");
@@ -2150,6 +2186,8 @@ const Chat = {
   /** /model changes the default, /think and /effort this chat's level: the button shows it. */
   afterPickCommand(text) {
     if (!/^\/(model|think|effort)\b/i.test(String(text || ""))) return;
+    // (The last turn's model is no longer what the next one runs on.)
+    this._turnModel = null;
     this.refreshPicker(true);
     this._loadPick({ fresh: true });
   },
@@ -2159,12 +2197,22 @@ const Chat = {
     const btn = document.getElementById("modelPickerBtn");
     if (!btn || typeof ModelPickerCore === "undefined") return;
     const label = ModelPickerCore.buttonLabel(this._picker, this._pick, this._pickDefaults);
-    // Auto routing (no model of the chat's own): the model the turn ran on.
-    const model = !this._pick.model && this._turnModel ? ModelPickerCore.modelName(this._picker, this._turnModel) : label.model;
+    // No model of the chat's own (the default, auto-routing): the model the last turn ran on.
+    const fromTurn = !this._pick.model && !this._pick.provider && this._turnModel;
+    const model = fromTurn ? ModelPickerCore.turnName(this._picker, this._turnModel) : label.model;
     if (this.elements.sessionModel) this.elements.sessionModel.textContent = model;
+    // The chat's AI as a dot in its color (style.css [data-ai]); the header chip shows the default AI's. Only with
+    // other AIs listed: the Claude-only list has just the one.
+    const dot = document.getElementById("sessionAi");
+    if (dot) {
+      const ai = Array.isArray(this._picker?.groups) ? ((fromTurn && this._turnModel.provider) || label.provider || null) : null;
+      dot.hidden = !ai;
+      if (ai) dot.dataset.ai = ai; else delete dot.dataset.ai;
+    }
     const effortEl = document.getElementById("effortLabel");
     if (effortEl) effortEl.textContent = label.effort;
     btn.classList.toggle("no-effort", !label.effort);
+    btn.classList.toggle("has-warning", !!label.warning);
     btn.dataset.level = label.level || "";
     btn.title = label.title;
     btn.setAttribute("aria-label", label.title);

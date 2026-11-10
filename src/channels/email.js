@@ -9,7 +9,7 @@
  *   1. Parse inbound email with mailparser
  *   2. Strip quoted reply history → "stripped body"
  *   3. Check for mention keyword (default @tarsee) in stripped body
- *      - YES → buildSystemPrompt + chatStream + SMTP reply to From: only
+ *      - YES → buildSystemPromptParts + chatStream + SMTP reply to From: only
  *      - NO  → persist as context to the conversation; NO outbound
  *   4. `[reply-all]` subject marker OR `@tarsee reply-all` opts into
  *      replying to To+Cc (sender-only otherwise).
@@ -35,9 +35,10 @@ import { withConversationTurn } from "../lib/conversation-lock.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand, extractPlaybookPrompt } from "../lib/commands.js";
-import { buildSystemPrompt } from "../lib/build-system-prompt.js";
+import { buildSystemPromptParts } from "../lib/build-system-prompt.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { refused } from "../lib/channel-errors.js";
+import { turnErrorNote, errorStillToSay } from "./turn-notes.js";
 import {
   stripQuotedReply,
   hasMention,
@@ -58,7 +59,6 @@ const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 5;
 const RATE_LIMIT_MAX = 6;
 const RATE_LIMIT_WINDOW_MS = 10 * 60_000;
-const MAX_TOOL_ROUNDS = 15;
 const HISTORY_WINDOW = 15;
 
 /**
@@ -71,9 +71,12 @@ const HISTORY_WINDOW = 15;
  * @param {string} [config.mentionKeyword]
  * @param {string} [config.replyAllMarker]
  * @param {import('better-sqlite3').Database} db
+ * @param {object} [opts] - chatStream: the model stream (ai/router.js chatStream when left out). ImapFlow: the IMAP
+ *   client class, and smtpTransport: a nodemailer transport ({verify, sendMail, close}) used instead of one made from
+ *   config.smtp. Tests pass stand-ins for the last two, so nothing reaches a mail server.
  * @returns {Promise<{stop: Function, sendMessage: Function, sendNew: Function}>}
  */
-export async function createEmailBot(rawConfig, db) {
+export async function createEmailBot(rawConfig, db, { chatStream: streamChat = chatStream, ImapFlow: ImapClient = ImapFlow, smtpTransport = null } = {}) {
   const cfg = normalizeConfig(rawConfig);
   const convStore = new ConversationStore(db);
   const settingsStore = new SettingsStore(db);
@@ -110,7 +113,7 @@ export async function createEmailBot(rawConfig, db) {
   try { fs.mkdirSync(uploadsDir, { recursive: true }); } catch {}
 
   // SMTP transporter — reused across all outbound messages.
-  const smtp = nodemailer.createTransport(smtpTransportOptions(cfg.smtp));
+  const smtp = smtpTransport || nodemailer.createTransport(smtpTransportOptions(cfg.smtp));
   const sender = { cfg, selfAddress };
 
   // IMAP client with IDLE support.
@@ -120,7 +123,7 @@ export async function createEmailBot(rawConfig, db) {
 
   async function connect() {
     if (shuttingDown) return;
-    client = new ImapFlow({
+    client = new ImapClient({
       host: cfg.imap.host,
       port: cfg.imap.port || 993,
       secure: cfg.imap.secure !== false,
@@ -296,7 +299,7 @@ export async function createEmailBot(rawConfig, db) {
       attachmentNotes ? "\n" + attachmentNotes : "",
     ].join("\n").trim();
 
-    convStore.addMessage(convId, {
+    const savedUser = convStore.addMessage(convId, {
       role: "user",
       content: savedContent,
     });
@@ -318,6 +321,9 @@ export async function createEmailBot(rawConfig, db) {
           settingsStore, convStore,
           conversationId: convId,
           platform: "email", // was missing — platform-gated commands misrouted
+          // Never the owner, for the owner's commands (/cron, /briefing, /webhook: lib/commands.js): a From address,
+          // allowlisted or not, is easy to fake.
+          owner: false,
           db,                // was missing — /clear silently no-op'd
         });
         if (cmdResult?.handled) {
@@ -338,20 +344,11 @@ export async function createEmailBot(rawConfig, db) {
       }
     }
 
-    // Engage the AI. Same pipeline as Discord/Telegram.
-    const activeProvider = settingsStore.getActiveProvider();
-    if (!activeProvider?.provider || !activeProvider?.ready) {
-      await sendReply({
-        incoming: mail,
-        bodyText: "No AI provider configured. Set one up in the Tarsee web panel.",
-        replyAll,
-      }).catch(() => {});
-      return;
-    }
-
+    // Engage the AI. Same pipeline as Discord/Telegram. Which AI answers is the turn layer's to decide (ai/turn.js:
+    // this conversation's own pick, else the default), and so is saying what to set up when that AI isn't ready.
     const history = convStore.getRecentMessages(convId, HISTORY_WINDOW);
     const conv = convStore.get(convId);
-    const systemPrompt = buildSystemPrompt({
+    const systemParts = buildSystemPromptParts({
       settingsStore, db,
       conversationId: convId,
       messageCount: history.length,
@@ -368,7 +365,8 @@ export async function createEmailBot(rawConfig, db) {
     // and the session could be left corrupt enough to break every later turn.
     await withConversationTurn(convId, async () => {
     try {
-      const toolCtx = { db, settingsStore, conversationId: convId };
+      // messageId: the message this turn answers (its files are kept on it, not on whatever came in later)
+      const toolCtx = { db, settingsStore, conversationId: convId, messageId: savedUser?.id || null };
       const workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
       // Slash-command playbooks: swap the AI-visible last user turn for
       // the playbook body while the stored email/message stays as-sent.
@@ -377,47 +375,54 @@ export async function createEmailBot(rawConfig, db) {
         if (last.role === "user") last.content = aiPromptOverride;
       }
       // The very last message is the one we just saved — already has the
-      // full context prefix, so Claude sees the whole picture.
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        let stopReason = "end_turn";
-        const stream = chatStream({
-          liveSource: "email",
-          provider: activeProvider.provider,
-          model: activeProvider.model,
-          messages: workingMessages,
-          systemPrompt,
-          toolCtx,
-          sessionId: convStore.getClaudeSessionId(convId),
-          onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
-        });
-        for await (const event of stream) {
-          if (event.type === "text") fullResponse += event.content;
-          else if (event.type === "usage") tokenUsage = { ...tokenUsage, ...event.usage };
-          else if (event.type === "done") { stopReason = event.stopReason || "end_turn"; break; }
-        }
-        if (stopReason !== "tool_use") break;
-      }
-
-      if (!fullResponse.trim()) {
-        fullResponse = "(no response)";
+      // full context prefix, so the AI sees the whole picture.
+      // One call per mail. The engine runs its own tools and ends the turn itself, and the turn layer (ai/turn.js)
+      // retries, once and fresh, a session the engine couldn't resume. Email never calls the AI again on its own: it
+      // used to call again for as long as a turn ended on a tool, mailing the same answer over and over.
+      let routed = null; // the AI this turn runs on, from the turn layer's route event
+      let surfacedError = null;
+      const stream = streamChat({
+        liveSource: "email",
+        messages: workingMessages,
+        systemParts,
+        toolCtx,
+        sessionId: convStore.getSessionHandle(convId),
+        onSessionId: (handle) => convStore.setSessionHandle(convId, handle),
+      });
+      for await (const event of stream) {
+        if (event.type === "route") routed = event;
+        else if (event.type === "text") fullResponse += event.content;
+        else if (event.type === "error") surfacedError = event.message || "something went wrong";
+        else if (event.type === "usage") tokenUsage = { ...tokenUsage, ...event.usage };
+        else if (event.type === "done") break;
       }
 
       // Persist + save any [REMEMBER:…] markers
-      fullResponse = extractAndSaveMemories(fullResponse, db, convId);
-      convStore.addMessage(convId, {
-        role: "assistant",
-        content: fullResponse,
-        provider: activeProvider.provider,
-        model: activeProvider.model,
-        tokensIn: (tokenUsage.input_tokens || 0)
-          + (tokenUsage.cache_read_input_tokens || 0)
-          + (tokenUsage.cache_creation_input_tokens || 0) || null,
-        tokensOut: tokenUsage.output_tokens ?? null,
-      });
+      fullResponse = extractAndSaveMemories(fullResponse, db, convId).trim();
+      if (fullResponse) {
+        convStore.addMessage(convId, {
+          role: "assistant",
+          content: fullResponse,
+          provider: routed?.provider || null,
+          model: routed?.model || null,
+          tokensIn: (tokenUsage.input_tokens || 0)
+            + (tokenUsage.cache_read_input_tokens || 0)
+            + (tokenUsage.cache_creation_input_tokens || 0) || null,
+          tokensOut: tokenUsage.output_tokens ?? null,
+        });
+      }
+
+      // An error the turn reported (already in plain words: what went wrong, what to do) goes after whatever was said
+      // before it, but not again when the reply is the error itself (the turn layer's "set this up first" answers).
+      const parts = [fullResponse];
+      if (surfacedError && errorStillToSay(fullResponse, surfacedError)) {
+        parts.push(turnErrorNote(routed, surfacedError, { clearHint: "reply with /clear", plain: true }));
+      }
+      const bodyText = parts.filter(Boolean).join("\n\n") || "(no response)";
 
       await sendReply({
         incoming: mail,
-        bodyText: fullResponse,
+        bodyText,
         replyAll,
       });
     } catch (err) {

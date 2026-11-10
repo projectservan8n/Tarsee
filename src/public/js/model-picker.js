@@ -1,19 +1,26 @@
 /**
- * The composer's model and effort picker, drawn like Claude Code's own and filled from the list Claude Code itself
- * keeps, so new models show up without a code change. The list is the server's (lib/model-catalog.js and
- * lib/model-picker.js); the rules are js/model-picker-core.js; the chat's own pick lives in Chat (js/chat.js).
+ * The composer's model and effort picker, drawn like Claude Code's own and filled from the server's list
+ * (GET /api/models: lib/model-catalog.js and lib/model-picker.js), so new models show up without a code change. The
+ * rules are js/model-picker-core.js; the chat's own pick lives in Chat (js/chat.js).
  *
- *   the newest of each family, numbered 1 to 4 (the chat's one has a check); a number key picks while it is open
- *   Effort, opening Low, Medium, High, Extra and Max, with the Recommended one and Max's warning
- *   More models, opening the older versions, newest first
+ * With every AI (design 4.11):
+ *   one section per AI that is ready, the default AI first, each model with its context, whether it sees images,
+ *   its badges (Plan, Free, an estimated cost tier, Verified) and its note ("Replies appear a message at a time" on
+ *   the models Codex runs); the pickable ones on top numbered 1 to 9 (a number key picks while it is open)
+ *   a list that opens for each AI's older or other models (Claude's More models, OpenRouter's All models, whose rows
+ *   say to verify them in Settings > AI first and can't be picked)
+ *   a search box once there are many models, over every AI's models
+ *   a warning on top when the chat's AI is no longer ready ("DeepSeek not connected, using default")
+ *   Effort, opening only the levels the model has
+ * The Claude-only list (no groups) is drawn as before: the newest of each family, Effort, More models.
  *
- * Arrows move, Enter or Space picks, the right arrow opens a list and the left one goes back, Esc closes. On a
- * phone a list opens in the menu's place with a way back. Our own look, no emoji.
+ * Arrows move, Enter or Space picks, the right arrow opens a list and the left one goes back, Esc closes; a letter
+ * starts a search. On a phone a list opens in the menu's place with a way back. Our own look, no emoji.
  *
  * One picker per button: ModelPicker.create(opts), and window.ModelPicker itself is the dashboard composer's, on
  * Chat. opts:
- *   state()           { picker, pick, defaults } of the chat it is for
- *   setPick(change)   { model } or { effort } picked: shown and saved for the chat
+ *   state()           { picker, pick, defaults } of the chat it is for (pick: { provider?, model, effort })
+ *   setPick(change)   { model } (a model ref, and its { provider }) or { effort } picked: shown and saved for the chat
  *   onOpen()          as it opens (a fresher list, the chat's pick again)
  *   afterPick({ keys }) after a pick closed it (keys: with the keyboard, and the focus went back to the button)
  */
@@ -27,7 +34,11 @@
     next: '<svg class="mp-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     back: '<svg class="mp-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5L5.5 8 10 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   };
-  const NARROW = 640;   // below this a list opens in the menu's place
+  const NARROW = 640;        // below this a list opens in the menu's place
+  const SEARCH_FROM = 12;    // a search box once the list holds more models than this
+  const RESULTS_MAX = 50;
+  /** How each kind of AI is paid for, on its heading (lib/model-catalog.js buildGroup's kind). */
+  const PAID = { subscription: "Plan · no cost per message", key: "Your key · pay per use", local: "Free · your own machine" };
 
   function create(opts = {}) {
     let btn = null;
@@ -41,34 +52,108 @@
       return { picker: s.picker || { main: [], more: [] }, pick: s.pick || {}, defaults: s.defaults || { model: "sonnet", effort: "medium" } };
     };
     const narrow = () => window.innerWidth < NARROW;
-    const rows = (el) => [...(el?.querySelectorAll(".mp-item:not([disabled])") || [])];
+    const rows = (el) => [...(el?.querySelectorAll(".mp-item:not([disabled])") || [])].filter((b) => !b.closest("[hidden]"));
+    const allEntries = (picker) => Core.groupsOf(picker).flatMap(Core.groupEntries);
+    const grouped = (picker) => Array.isArray(picker?.groups);
+    const searchBox = () => menu?.querySelector(".mp-search") || null;
 
-    /** One model's row. */
-    function modelRow(e, i, picked) {
-      const key = i != null ? `<kbd class="mp-key" aria-hidden="true">${i + 1}</kbd>` : "";
-      const tip = [e.description, e.note?.tip].filter(Boolean).join(". ");
-      return `<button type="button" class="mp-item" role="menuitemradio" aria-checked="${picked}" data-pick="model" data-id="${esc(e.id)}"${tip ? ` title="${esc(tip)}"` : ""}>`
-        + `<span class="mp-text"><span class="mp-name">${esc(e.name)}</span>${e.note ? `<span class="mp-note is-warning">${esc(e.note.text)}</span>` : ""}</span>`
-        + `<span class="mp-end">${picked ? ICON.check : key}</span></button>`;
+    /** The entry the button shows (the chat's model, or the default): its row gets the check. */
+    function shownEntry() {
+      const { picker, pick, defaults } = state();
+      return Core.buttonLabel(picker, pick, defaults).entry;
+    }
+    const same = (a, b) => !!(a && b && a.id === b.id && (a.provider || null) === (b.provider || null));
+
+    /**
+     * One model's row. `where` ({ ai, label }) names its AI, with its dot (search results); `inGroup`: under its AI's
+     * heading, which already says how it is paid, so no Plan badge (nor when it is the only AI listed: `alone`).
+     */
+    function modelRow(e, i, picked, { where = null, alone = false, inGroup = false } = {}) {
+      const off = e.selectable === false;
+      const key = i != null && i < 9 ? `<kbd class="mp-key" aria-hidden="true">${i + 1}</kbd>` : "";
+      const tip = [e.description, e.note?.tip, e.priceHint].filter(Boolean).join(". ");
+      const note = Core.noteFor(e);
+      // Fable's note (no tone of its own) is a warning; the others are plain.
+      const noteClass = e.note && e.note.tone !== "neutral" ? "mp-note is-warning" : "mp-note";
+      const detail = Core.detailFor(e);
+      const whereHtml = where ? `<span class="mp-where" data-ai="${esc(where.ai || "")}"><span class="ai-dot" aria-hidden="true"></span>${esc(where.label || "")}</span>` : "";
+      const line = [whereHtml, detail ? esc(detail) : ""].filter(Boolean).join(" · ");
+      const badges = Core.badgesFor(e).filter((b) => !((alone || inGroup) && b.text === "Plan")).map((b) => `<span class="mp-badge${b.tone === "warning" ? " is-warning" : ""}"${b.title ? ` title="${esc(b.title)}"` : ""}>${esc(b.text)}</span>`).join("");
+      return `<button type="button" class="mp-item" role="menuitemradio" aria-checked="${picked}" data-pick="model" data-id="${esc(Core.pickValue(e))}"${off ? ' disabled aria-disabled="true"' : ""}${tip ? ` title="${esc(tip)}"` : ""}>`
+        + `<span class="mp-text"><span class="mp-text mp-row"><span class="mp-name">${esc(e.name)}</span>${badges}</span>`
+        + (line ? `<span class="mp-note">${line}</span>` : "")
+        + (note ? `<span class="${noteClass}">${esc(note)}</span>` : "")
+        + `</span><span class="mp-end">${picked ? ICON.check : key}</span></button>`;
     }
 
     function subRow(kind, label, value, { disabled = false } = {}) {
-      return `<button type="button" class="mp-item mp-subrow" role="menuitem" aria-haspopup="menu" aria-expanded="false" data-sub="${kind}"${disabled ? " disabled" : ""}>`
+      return `<button type="button" class="mp-item mp-subrow" role="menuitem" aria-haspopup="menu" aria-expanded="false" data-sub="${esc(kind)}"${disabled ? " disabled" : ""}>`
         + `<span class="mp-text"><span class="mp-name">${esc(label)}</span></span>`
         + `<span class="mp-end">${value ? `<span class="mp-value">${esc(value)}</span>` : ""}${ICON.next}</span></button>`;
     }
 
+    const head = (text, cls = "") => `<p class="mp-head${cls}" role="presentation">${text}</p>`;
+    /** An AI's heading: its dot and name in its own color (style.css [data-ai]), and how it is paid for. */
+    const aiHead = (g) => head(`<span class="ai-dot" aria-hidden="true"></span><span class="mp-group-name">${esc(g.label || "")}</span>`
+      + (PAID[g.kind] ? `<span class="mp-ai-tag">${esc(PAID[g.kind])}</span>` : ""), " mp-ai-head");
+
     function mainHtml() {
       const { picker, pick, defaults } = state();
-      const current = pick.model || defaults.model;
       const label = Core.buttonLabel(picker, pick, defaults);
-      const top = (picker.main || []).map((e, i) => modelRow(e, i, Core.isPicked(picker, e, current))).join("");
-      const olderPicked = (picker.more || []).find((e) => Core.isPicked(picker, e, current));
+      const shown = label.entry;
       const hasLevels = !label.entry || (label.entry.efforts || []).length > 0;
-      return `<div class="mp-group" role="group" aria-label="Models">${top}</div>`
-        + `<div class="mp-divider" role="separator"></div>`
-        + subRow("effort", "Effort", hasLevels ? label.effort : "None", { disabled: !hasLevels })
-        + ((picker.more || []).length ? `<div class="mp-divider" role="separator"></div>${subRow("more", "More models", olderPicked ? olderPicked.name : "")}` : "");
+      const effortRow = subRow("effort", "Effort", hasLevels ? label.effort : "None", { disabled: !hasLevels });
+      const warning = label.warning ? head(`<span class="mp-note is-warning">${esc(label.warning)}</span>`) : "";
+
+      if (!grouped(picker)) {
+        // The Claude-only list, as it has always been drawn.
+        const top = (picker.main || []).map((e, i) => modelRow(e, i, same(e, shown))).join("");
+        const olderPicked = (picker.more || []).find((e) => same(e, shown));
+        return warning + `<div class="mp-group" role="group" aria-label="Models">${top}</div>`
+          + `<div class="mp-divider" role="separator"></div>`
+          + effortRow
+          + ((picker.more || []).length ? `<div class="mp-divider" role="separator"></div>${subRow("more", "More models", olderPicked ? olderPicked.name : "")}` : "");
+      }
+
+      const groups = Core.groupsOf(picker);
+      const total = allEntries(picker).length;
+      const search = groups.some((g) => g.searchable) || total > SEARCH_FROM
+        ? `<div class="mp-searchbox" role="presentation" style="padding:4px 4px 6px"><input type="search" class="search-input mp-search" style="width:100%;box-sizing:border-box" placeholder="Search models" aria-label="Search models" autocomplete="off" spellcheck="false"></div>`
+          + `<div class="mp-results" role="group" aria-label="Matching models" hidden></div>`
+        : "";
+      let n = 0;
+      const multi = groups.length > 1;
+      const body = groups.map((g, gi) => {
+        const sections = Core.sectionsOf(g);
+        const open = sections.filter((s) => !s.collapsed && (s.entries || []).length);
+        let html = `<div class="mp-group" role="group" aria-label="${esc(g.label || "Models")}"${g.provider ? ` data-ai="${esc(g.provider)}"` : ""}>`;
+        if (multi || (g.provider && g.provider !== "claude")) html += aiHead(g);
+        if (g.note) html += head(`<span class="mp-note">${esc(g.note)}</span>`);
+        for (const s of open) {
+          if (s.label && open.length > 1) html += head(`<span style="font-size:var(--text-xs)">${esc(s.label)}</span>`, " mp-subhead");
+          for (const e of s.entries) html += modelRow(e, e.selectable === false ? null : n++, same(e, shown), { alone: !multi, inGroup: !!g.provider });
+        }
+        sections.forEach((s, si) => {
+          if (!s.collapsed || !(s.entries || []).length) return;
+          const here = s.entries.find((e) => same(e, shown));
+          html += subRow(`list:${gi}:${si}`, s.label || "More models", here ? here.name : String(s.entries.length));
+        });
+        return `${html}</div>`;
+      }).join(`<div class="mp-divider" role="separator"></div>`);
+      const elsewhere = (picker.unavailable || []).length || allEntries(picker).some((e) => e.selectable === false)
+        ? `<div class="mp-divider" role="separator"></div><button type="button" class="mp-item" role="menuitem" data-action="settings"><span class="mp-text"><span class="mp-name">Connect or verify in Settings &gt; AI</span>${(picker.unavailable || []).length ? `<span class="mp-note">Not ready: ${esc(picker.unavailable.map((u) => u.label).join(", "))}</span>` : ""}</span><span class="mp-end">${ICON.next}</span></button>`
+        : "";
+      return warning + search
+        + `<div class="mp-body">${body}<div class="mp-divider" role="separator"></div>${effortRow}${elsewhere}</div>`;
+    }
+
+    function resultsHtml(query) {
+      const { picker } = state();
+      const shown = shownEntry();
+      const found = Core.search(picker, query).slice(0, RESULTS_MAX);
+      if (!found.length) return head(`No model matches "${esc(query)}"`);
+      const alone = Core.groupsOf(picker).length < 2;
+      return found.map(({ entry, group }) => modelRow(entry, null, same(entry, shown), { where: alone ? null : { ai: group.provider, label: group.label }, alone })).join("");
     }
 
     function effortHtml() {
@@ -84,13 +169,40 @@
         return `<button type="button" class="mp-item" role="menuitemradio" aria-checked="${on}" data-pick="effort" data-value="${esc(l.id)}"${l.tip ? ` title="${esc(l.tip)}"` : ""}>`
           + `<span class="mp-text mp-row"><span class="mp-name">${esc(l.name)}</span>${badges}</span><span class="mp-end">${on ? ICON.check : ""}</span></button>`;
       }).join("");
-      return (note ? `<p class="mp-head">${esc(note)}</p>` : "") + rowsHtml;
+      return (note ? head(esc(note)) : "") + rowsHtml;
     }
 
-    function moreHtml() {
-      const { picker, pick, defaults } = state();
-      const current = pick.model || defaults.model;
-      return (picker.more || []).map((e) => modelRow(e, null, Core.isPicked(picker, e, current))).join("");
+    /** A list that opens: Claude's More models (the Claude-only list), or one AI's collapsed section. */
+    function listHtml(kind) {
+      const { picker } = state();
+      const shown = shownEntry();
+      if (kind === "more") return (picker.more || []).map((e) => modelRow(e, null, same(e, shown))).join("");
+      const s = sectionFor(kind);
+      const g = groupFor(kind);
+      const alone = Core.groupsOf(picker).length < 2;
+      // An AI's list keeps its heading (on a phone its back button names it), so its rows need no Plan badge.
+      const top = g?.provider && !alone && !narrow() ? aiHead(g) : "";
+      return s ? top + s.entries.map((e) => modelRow(e, null, same(e, shown), { alone, inGroup: !!g?.provider })).join("") : "";
+    }
+
+    function groupFor(kind) {
+      const m = /^list:(\d+):/.exec(kind || "");
+      return m ? Core.groupsOf(state().picker)[Number(m[1])] || null : null;
+    }
+
+    function sectionFor(kind) {
+      const m = /^list:(\d+):(\d+)$/.exec(kind || "");
+      if (!m) return null;
+      const g = Core.groupsOf(state().picker)[Number(m[1])];
+      return g ? Core.sectionsOf(g)[Number(m[2])] || null : null;
+    }
+
+    function subLabel(kind) {
+      if (kind === "effort") return "Effort";
+      if (kind === "more") return "More models";
+      const s = sectionFor(kind);
+      const g = Core.groupsOf(state().picker)[Number(/^list:(\d+)/.exec(kind)?.[1])];
+      return [g?.label, s?.label || "More models"].filter(Boolean).join(": ");
     }
 
     /* ---------------------------------------------------------------- placing */
@@ -132,20 +244,23 @@
     function focusRow(el, which = "picked") {
       const all = rows(el);
       const target = (which === "picked" && all.find((b) => b.getAttribute("aria-checked") === "true")) || all[0];
-      target?.focus({ preventScroll: true });
+      target?.focus({ preventScroll: false });
     }
 
     function openSub(kind, { focus = false } = {}) {
       if (sub?.kind === kind) { if (focus) focusRow(sub.el); return; }
       closeSub();
-      const row = menu?.querySelector(`[data-sub="${kind}"]`);
+      const row = menu?.querySelector(`[data-sub="${CSS.escape(kind)}"]`);
       if (!row || row.disabled) return;
       const el = document.createElement("div");
-      el.className = `mp-menu mp-submenu mp-${kind}`;
+      const name = subLabel(kind);
+      el.className = `mp-menu mp-submenu mp-${kind === "effort" ? "effort" : "list"}`;
       el.setAttribute("role", "menu");
-      el.setAttribute("aria-label", kind === "effort" ? "Effort" : "More models");
-      const back = narrow() ? `<button type="button" class="mp-item mp-back" role="menuitem" data-back="1">${ICON.back}<span class="mp-name">${kind === "effort" ? "Effort" : "More models"}</span></button><div class="mp-divider" role="separator"></div>` : "";
-      el.innerHTML = back + (kind === "effort" ? effortHtml() : moreHtml());
+      el.setAttribute("aria-label", name);
+      const ai = groupFor(kind)?.provider;
+      if (ai) el.dataset.ai = ai;
+      const back = narrow() ? `<button type="button" class="mp-item mp-back" role="menuitem" data-back="1">${ICON.back}<span class="mp-name">${esc(name)}</span></button><div class="mp-divider" role="separator"></div>` : "";
+      el.innerHTML = back + (kind === "effort" ? effortHtml() : listHtml(kind));
       document.body.appendChild(el);
       wire(el);
       placeSub(el, row);
@@ -200,38 +315,64 @@
       if (focusButton) btn?.focus({ preventScroll: true });
     }
 
-    const rowKey = (b) => `${b.dataset.pick || b.dataset.sub || b.dataset.back || ""}:${b.dataset.id || b.dataset.value || ""}`;
+    const rowKey = (b) => `${b.dataset.pick || b.dataset.sub || b.dataset.back || b.dataset.action || ""}:${b.dataset.id || b.dataset.value || ""}`;
 
     /** Repaint an open menu (the list came back fresher, or the pick changed elsewhere), the focus kept on its row. */
     function refresh() {
       if (!menu) return;
       const kind = sub?.kind;
+      const query = searchBox()?.value || "";
+      const searching = document.activeElement === searchBox();
       const f = document.activeElement?.closest?.(".mp-item");
       const inSub = !!(f && sub?.el.contains(f));
       const had = f && (inSub || menu.contains(f)) ? rowKey(f) : null;
       closeSub();
       menu.innerHTML = mainHtml();   // (its own listeners stay: they are on the menu, not on its rows)
+      if (query && searchBox()) { searchBox().value = query; showResults(query); }
       placeMain();
-      if (kind) openSub(kind);
+      if (kind && menu.querySelector(`[data-sub="${CSS.escape(kind)}"]`)) openSub(kind);
+      if (searching) { searchBox()?.focus({ preventScroll: true }); return; }
       if (had == null) return;
       const where = inSub && sub ? sub.el : menu;
       const again = rows(where).find((b) => rowKey(b) === had);
       if (again) again.focus({ preventScroll: true }); else focusRow(where);
     }
 
+    /** The search box's words: the matching models in place of the groups, or the groups again. */
+    function showResults(query) {
+      const results = menu?.querySelector(".mp-results");
+      const body = menu?.querySelector(".mp-body");
+      if (!results || !body) return;
+      const q = String(query || "").trim();
+      closeSub();
+      // Kept as wide as it opened, so it doesn't jump about while the results change.
+      if (!menu.style.minWidth) menu.style.minWidth = `${menu.offsetWidth}px`;
+      results.hidden = !q;
+      body.hidden = !!q;
+      results.innerHTML = q ? resultsHtml(q) : "";
+      placeMain();
+    }
+
     function pick(kind, value) {
       if (!opts.setPick) return;
       if (kind === "model") {
         const { picker } = state();
-        const entry = [...(picker.main || []), ...(picker.more || [])].find((e) => e.id === value);
-        if (!entry) return;
-        opts.setPick({ model: Core.pickValue(entry) });
+        const entry = allEntries(picker).find((e) => Core.pickValue(e) === value) || allEntries(picker).find((e) => e.id === value);
+        if (!entry || entry.selectable === false) return;
+        opts.setPick(entry.provider ? { provider: entry.provider, model: Core.pickValue(entry) } : { model: Core.pickValue(entry) });
       } else {
         opts.setPick({ effort: value });
       }
       const keys = lastFocusFromKeys;
       close({ focusButton: keys });
       opts.afterPick?.({ keys });
+    }
+
+    /** Settings > AI, where an AI is connected and a model verified. */
+    function openSettings() {
+      close();
+      if (typeof Settings === "undefined") return;
+      Promise.resolve(Settings.open()).then(() => Settings.focusAI()).catch(() => {});
     }
 
     /* ---------------------------------------------------------------- events */
@@ -248,11 +389,13 @@
         if (!item || item.disabled) return;
         lastFocusFromKeys = e.detail === 0;   // Enter or Space on a button clicks it with no pointer
         if (item.dataset.back) { closeSub({ focusRow: true }); return; }
+        if (item.dataset.action === "settings") { openSettings(); return; }
         if (item.dataset.sub) { openSub(item.dataset.sub, { focus: lastFocusFromKeys }); return; }
         if (item.dataset.pick === "model") pick("model", item.dataset.id);
         else if (item.dataset.pick === "effort") pick("effort", item.dataset.value);
       });
       if (el === menu) {
+        el.addEventListener("input", (e) => { if (e.target.classList?.contains("mp-search")) showResults(e.target.value); });
         // On a computer a list opens when the pointer rests on its row, and closes on another row.
         el.addEventListener("pointerover", (e) => {
           if (e.pointerType !== "mouse" || narrow()) return;
@@ -267,24 +410,38 @@
 
     function onKey(e) {
       if (!menu) return;
+      const box = searchBox();
+      const inSearch = !!box && document.activeElement === box;
       const inSub = sub && sub.el.contains(document.activeElement);
       const here = inSub ? sub.el : menu;
       lastFocusFromKeys = true;
       if (e.key === "Escape") {
         e.preventDefault(); e.stopPropagation();
-        if (sub) closeSub({ focusRow: true }); else close({ focusButton: true });
+        if (sub) closeSub({ focusRow: true });
+        else if (inSearch && box.value) { box.value = ""; showResults(""); }
+        else close({ focusButton: true });
         return;
       }
       if (e.key === "Tab") { close(); return; }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (inSearch) {
+        if (e.key === "ArrowDown") { e.preventDefault(); rows(menu)[0]?.focus({ preventScroll: false }); }
+        else if (e.key === "Enter") {
+          e.preventDefault();
+          const first = rows(menu.querySelector(".mp-results"))[0];
+          if (first?.dataset.pick === "model") pick("model", first.dataset.id);
+        }
+        return;   // the rest is typing
+      }
       const { picker } = state();
       const byNumber = Core.numberKey(picker, e.key);
-      if (byNumber) { e.preventDefault(); e.stopPropagation(); pick("model", byNumber.id); return; }
+      if (byNumber && !inSub) { e.preventDefault(); e.stopPropagation(); pick("model", Core.pickValue(byNumber)); return; }
+      if (box && !inSub && e.key.length === 1 && /\S/.test(e.key)) { box.focus({ preventScroll: true }); return; }   // a letter starts a search
       if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
         e.preventDefault();
         const all = rows(here);
         const i = Core.nextIndex(all.length, all.indexOf(document.activeElement), e.key);
-        all[i]?.focus({ preventScroll: true });
+        all[i]?.focus({ preventScroll: false });
         return;
       }
       if (e.key === "ArrowRight" && !inSub) {

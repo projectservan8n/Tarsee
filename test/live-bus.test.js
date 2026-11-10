@@ -66,6 +66,13 @@ describe("live bus: the timeline", () => {
     assert.equal(live.activeTurnFor("c2"), null);
   });
 
+  it("a backup taking over (a route step) names the AI, and is no step of the turn's", () => {
+    live.publish("c5", "turn_start", { source: "web" }, { turnId: "t5" });
+    live.publish("c5", "step", { kind: "route", label: "DeepSeek Flash", streaming: true }, { turnId: "t5" });
+    assert.equal(live.activeTurnFor("c5").steps, 0);
+    live.publish("c5", "turn_end", { stopReason: "end_turn" }, { turnId: "t5" });
+  });
+
   it("caps long strings in a step, and pushes every event to subscribers", () => {
     const seen = [];
     const off = live.onEvent((e) => seen.push(e));

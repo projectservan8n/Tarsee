@@ -54,6 +54,15 @@
 /* Shadows need more presence on a light bg — the default dark shadows
    fade. Lighten opacity + tint with accent subtly. */
 [data-theme="solarized-light"] {
+  /* Each AI's color, darkened to read on a light page (at least 4.5:1 on --bg-surface). */
+  --ai-claude:     #a83e1b;
+  --ai-anthropic:  #7a5c08;
+  --ai-chatgpt:    #0a6e52;
+  --ai-openai:     #0d6680;
+  --ai-openrouter: #6a46c8;
+  --ai-deepseek:   #3a56c8;
+  --ai-local:      #4e6817;
+
   --shadow-xs: 0 1px 2px rgba(7, 54, 66, 0.12);
   --shadow-sm: 0 1px 3px rgba(7, 54, 66, 0.14);
   --shadow-md: 0 4px 8px rgba(7, 54, 66, 0.14);

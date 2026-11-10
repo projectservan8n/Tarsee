@@ -152,10 +152,10 @@ const App = {
         Setup.show(status);
         return;
       }
-      // If provider configured but no personality, start interview
+      // An AI is ready but there's no personality yet: ask (Setup.askPersonality). Starting the interview here would
+      // send its first message to the AI before the owner did anything, on an API key at their cost.
       if (status.needsPersonality && status.hasKey) {
-        this.bootApp();
-        Setup.startPersonalityInterview();
+        Setup.askPersonality();
         return;
       }
     } catch {
@@ -187,7 +187,8 @@ const App = {
 
     // Initialize modules
     Chat.init();
-    Voice.init();
+    Voice.init();   // the composer's microphone (dictation)
+    Call.init();    // a voice call with the AI (the topbar's Call button)
     Settings.init();
     FileManager.init();
     Console.init();
@@ -377,11 +378,9 @@ const App = {
           <span class="kbd-label">Max thinking effort for this message</span>
           <span class="kbd-keys"><span class="kbd-key">!!</span></span>
 
-          <div class="kbd-group-title">Voice</div>
-          <span class="kbd-label">Hold to talk (when voice panel is open)</span>
-          <span class="kbd-keys"><span class="kbd-key">Space</span></span>
-          <span class="kbd-label">Cancel recording</span>
-          <span class="kbd-keys"><span class="kbd-key">Space</span><span class="kbd-key">C</span></span>
+          <div class="kbd-group-title">Call</div>
+          <span class="kbd-label">Put the call window away (the call goes on)</span>
+          <span class="kbd-keys"><span class="kbd-key">Esc</span></span>
         </div>
         <div style="text-align:right">
           <button class="btn btn-sm" id="kbdClose">Close</button>

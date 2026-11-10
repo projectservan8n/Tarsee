@@ -1,6 +1,8 @@
 /**
  * The composer's model picker, as Claude Code's own: it pulls the models Claude Code itself lists, so a new
- * release shows up without a code change.
+ * release shows up without a code change. With every AI (design 4.11), the small rules the picker and /model share
+ * sit at the end of this file: the effort clamp, the context and price wording, the cost tier, and the matching
+ * /model uses for "deepseek pro" or "flash". lib/model-catalog.js puts each AI's models together with them.
  *
  * Claude Code's picker is drawn from a model catalog the CLI keeps: for each model its name, a section ("main" for
  * the newest of each family, "overflow" for the older ones under More models), its effort levels with the
@@ -275,3 +277,145 @@ export function catalogFromBuildText(text) {
 }
 
 export { CATALOG_MARKER };
+
+/* ------------------------------------------------------------------ every AI's models (design 4.11) */
+
+/** The note on a model Codex runs: its replies arrive whole, one message at a time, not word by word. */
+export const MESSAGE_AT_A_TIME = "Replies appear a message at a time";
+/** What a model that must be verified before it can be used says instead of being pickable. */
+export const VERIFY_FIRST = "Verify it in Settings > AI first";
+
+/**
+ * The level a model runs at, from the levels it has (ids, or { id } objects): the one asked for, else the nearest
+ * one it has below (as Claude Code does), else its lowest. Nothing asked for is the default (Medium). null when the
+ * model takes no level at all.
+ */
+export function clampEffort(levels, want, fallback = TARSEE_DEFAULT_EFFORT) {
+  const have = [...new Set((levels || []).map((l) => (typeof l === "string" ? l : l?.id)).filter(Boolean).map((l) => String(l).toLowerCase()))];
+  if (!have.length) return null;
+  const rank = (id) => { const i = EFFORT_IDS.indexOf(id); return i === -1 ? EFFORT_IDS.length : i; };
+  have.sort((a, b) => rank(a) - rank(b));
+  const w = String(want || fallback || TARSEE_DEFAULT_EFFORT).toLowerCase();
+  if (have.includes(w)) return w;
+  for (let i = EFFORT_IDS.indexOf(w); i >= 0; i--) if (have.includes(EFFORT_IDS[i])) return EFFORT_IDS[i];
+  return have[0];
+}
+
+/** The effort rows a picker shows for a model's levels: names, the one it runs at by default marked Recommended. */
+export function effortRows(levels, defaultEffort = TARSEE_DEFAULT_EFFORT) {
+  const ids = (levels || []).map((l) => String(typeof l === "string" ? l : l?.id || "").toLowerCase()).filter(Boolean);
+  const rec = clampEffort(ids, defaultEffort);
+  return ids.map((id) => ({ id, name: EFFORT_NAMES[id] || cap(id), recommended: id === rec, badge: null, tip: id === "max" ? MAX_TIP : null }));
+}
+
+/** A context window in words a person reads: 1000000 as "1M", 400000 as "400K", 1500000 as "1.5M". */
+export function contextLabel(tokens) {
+  const n = Number(tokens);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
+  return `${Math.round(n / 1_000)}K`;
+}
+
+const usd = (n) => `$${n >= 10 ? n.toFixed(0) : n.toFixed(2)}`;
+
+/** A model's list price as one line: "$0.15 in · $0.60 out per million tokens, est.". null without a price. */
+export function priceHint(price) {
+  if (!price || typeof price.in !== "number" || typeof price.out !== "number") return null;
+  if (price.in === 0 && price.out === 0) return "Free";
+  return `${usd(price.in)} in · ${usd(price.out)} out per million tokens, est.`;
+}
+
+/**
+ * A rough cost tier for a metered model, from its price in USD per million tokens, weighted three tokens in for one
+ * out (a chat's usual mix): "$" under $0.50, "$$" under $5, "$$$" above. null with no price, or when it is free.
+ */
+export function costTier(price) {
+  if (!price || typeof price.in !== "number" || typeof price.out !== "number") return null;
+  // A model with peak hours (DeepSeek: peak rates for 35 hours of the week, half price the rest) is tiered at its
+  // week-average price, which is what a chat that runs at any hour pays; the hint still gives the peak figures.
+  const f = weekAverageFactor(price.peak);
+  const blended = ((price.in * 3 + price.out) / 4) * f;
+  if (blended <= 0) return null;
+  return blended < 0.5 ? "$" : blended < 5 ? "$$" : "$$$";
+}
+
+/**
+ * What a peak-priced rate averages to over a week, as a factor of the peak rate: peak = {days, hoursUtc, offPeakFactor}
+ * (the registry's DeepSeek window). 1 for a price with no peak hours.
+ */
+export function weekAverageFactor(peak) {
+  if (!peak || typeof peak !== "object" || !Array.isArray(peak.days) || !Array.isArray(peak.hoursUtc)) return 1;
+  const off = Number(peak.offPeakFactor);
+  if (!Number.isFinite(off) || off <= 0) return 1;
+  const hoursPerDay = peak.hoursUtc.reduce((n, [a, b]) => n + Math.max(0, Math.min(24, b) - Math.max(0, a)), 0);
+  const share = Math.min(1, (peak.days.length * hoursPerDay) / (7 * 24));
+  return share + (1 - share) * off;
+}
+
+/** A Claude family's cost tier when there is no per-token price to go by (Anthropic reports the exact cost after each reply). */
+export function familyCostTier(family) {
+  const f = String(family || "").toLowerCase();
+  if (f === "haiku") return "$$";
+  if (f === "sonnet" || f === "opus" || f === "fable") return "$$$";
+  return null;
+}
+
+/** A Claude family named in an id or a slug ("claude-sonnet-5-5", "~anthropic/claude-haiku-latest"), or null. */
+export function familyOf(id) {
+  const m = /(?:^|[/-])(fable|opus|sonnet|haiku)(?:-|$)/.exec(String(id || "").toLowerCase());
+  return m ? m[1] : null;
+}
+
+/** A name for a model known only by its id: "~anthropic/claude-sonnet-latest" as "Claude Sonnet (latest)". */
+export function nameFromSlug(id) {
+  const s = String(id || "").replace(/^~/, "");
+  const tail = s.includes("/") ? s.slice(s.lastIndexOf("/") + 1) : s;
+  const latest = /-latest$/i.test(tail);
+  const words = tail.replace(/-latest$/i, "").split(/[-_]/).filter(Boolean).map((w) => (/^\d/.test(w) ? w : cap(w)));
+  const name = words.join(" ") || s;
+  return latest ? `${name} (latest)` : name;
+}
+
+const normWord = (s) => String(s || "").toLowerCase().replace(/\[1m\]$/, "").trim();
+const tokensOf = (s) => normWord(s).split(/[^a-z0-9]+/).filter(Boolean);
+
+/** How well a model fits what someone typed: 100 its exact id or name, down to 30 a piece of either; 0 not at all. */
+function fit(choice, q, qTokens) {
+  const id = normWord(choice.id);
+  const name = normWord(choice.name);
+  if (!q) return 0;
+  if (id === q || name === q || normWord(choice.ref) === q) return 100;
+  if (id.replace(/^~/, "").split("/").pop() === q) return 90;
+  const hay = [...tokensOf(id), ...tokensOf(name)];
+  if (qTokens.length && qTokens.every((t) => hay.includes(t))) return 70;
+  if (qTokens.length && qTokens.every((t) => hay.some((h) => h.startsWith(t)))) return 50;
+  if (id.includes(q) || name.includes(q)) return 30;
+  return 0;
+}
+
+/**
+ * The models that best fit what someone typed (/model's "flash", "deepseek pro", "opus 4.6"), from
+ * choices [{ provider, id, name, ref?, selectable? }]. Only the best-fitting ones come back: one is a clear answer,
+ * several are choices to list. The same model on two AIs (GPT-6 Luna on the ChatGPT plan and an OpenAI key) goes
+ * to `preferProvider`, the default AI, when it is one of them. Returns { matches, score }.
+ */
+export function matchModels(choices, query, { preferProvider = null } = {}) {
+  const q = normWord(query);
+  const qTokens = tokensOf(q);
+  let best = 0;
+  let matches = [];
+  const seen = new Set();
+  for (const c of choices || []) {
+    const key = `${c.provider}\u0000${c.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const s = fit(c, q, qTokens);
+    if (!s) continue;
+    if (s > best) { best = s; matches = [c]; } else if (s === best) matches.push(c);
+  }
+  if (matches.length > 1 && preferProvider && new Set(matches.map((m) => normWord(m.id))).size === 1) {
+    const mine = matches.filter((m) => m.provider === preferProvider);
+    if (mine.length === 1) matches = mine;
+  }
+  return { matches, score: best };
+}

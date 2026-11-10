@@ -145,11 +145,32 @@ function bytesFrom(s, max, from) {
 }
 
 /**
+ * What a chat's system prompt says in place of HEARTBEAT.md text that waits for the owner's OK
+ * (lib/automation-approval.js), or that it couldn't be checked against it.
+ */
+const HEARTBEAT_WAITING_NOTE = "<!-- Heartbeat Tasks (HEARTBEAT.md): waiting for the owner's OK, so not shown -->\n"
+  + "HEARTBEAT.md was changed outside Settings and the owner hasn't OK'd it, so no heartbeat check runs. "
+  + "It runs only once the owner clicks Let it run in Settings > Automation (or saves it there). "
+  + "Don't tell the owner it is set up or running until then; read the file if you need what it says.";
+const HEARTBEAT_UNCHECKED_NOTE = "<!-- Heartbeat Tasks (HEARTBEAT.md): not checked against the owner's OK, so not shown -->\n"
+  + "HEARTBEAT.md runs only text the owner has OK'd in Settings > Automation (Let it run). "
+  + "Don't tell the owner it is set up or running unless they have; read the file if you need what it says.";
+
+/**
  * Get the full bootstrap context for system prompt injection.
- * Order: AGENTS → SOUL → IDENTITY → USER → TOOLS → MEMORY
+ * Order: AGENTS → SOUL → IDENTITY → USER → TOOLS → MEMORY → HEARTBEAT
+ *
+ * HEARTBEAT.md is shown as the heartbeat's tasks only when the owner has OK'd its text (opts.heartbeatWaiting false,
+ * from lib/automation-approval.js automationStatus). Text that waits for their OK is left out, with a line saying no
+ * check runs: it doesn't run, and shown here the AI read it as live and told the owner the check was set up. It is also
+ * text nobody has reviewed (the AI may have written it from a web page or an email it read), which would otherwise
+ * reach every chat with the weight of the system prompt, and the AI can still read the file when asked about it. A
+ * change made through the shell can't be caught when it is made; this line is how the AI learns of it.
+ * @param {object} [opts]
+ * @param {boolean|null} [opts.heartbeatWaiting] true: HEARTBEAT.md holds text the owner hasn't OK'd; null: not known
  * @returns {string}
  */
-export function getBootstrapContext() {
+export function getBootstrapContext({ heartbeatWaiting = null } = {}) {
   const files = [
     { name: "AGENTS.md", label: "Agent Rules" },
     { name: "SOUL.md", label: "Soul & Personality" },
@@ -184,6 +205,14 @@ export function getBootstrapContext() {
     const raw = readWorkspaceFile(name);
     if (!raw || raw.trim().length < 5) continue;
 
+    if (name === "HEARTBEAT.md" && heartbeatWaiting !== false) {
+      // Only text with something to do needs the owner's OK: the default file (a heading and comments) is shown as before.
+      if (getHeartbeatContext()) {
+        sections.push(heartbeatWaiting === true ? HEARTBEAT_WAITING_NOTE : HEARTBEAT_UNCHECKED_NOTE);
+        continue;
+      }
+    }
+
     const content = truncateContent(raw, WORKSPACE_FILE_MAX_BYTES, name);
     sections.push(`<!-- ${label} (${name}) -->\n${content}`);
   }
@@ -195,9 +224,14 @@ export function getBootstrapContext() {
  * The default SOUL.md and CLAUDE.md an install was seeded with used to say
  * "read MEMORY.md at the start of every session", which now contradicts the
  * system prompt's "grep it, never read it whole" (and CLAUDE.md said cron runs
- * in UTC). Existing workspaces keep their seeded files, so on boot the exact
- * old default lines are replaced with the new ones. A line the owner changed
- * no longer matches and is left alone. Returns the files it updated.
+ * in UTC). Later the defaults stopped naming one AI: they said "powered by
+ * Claude", named Claude Code's own tools (Bash, Read/Write/Edit/Grep/Glob,
+ * mcp__tarsee__*) and the agent team's Claude models, none of which hold on
+ * another AI. Existing workspaces keep their seeded files, so on boot each line
+ * that is still exactly an old default line, the whole line, is replaced with
+ * the new one. A line the owner changed or added words to no longer matches and
+ * is left alone. Returns the files it updated.
+ * test/workspace-defaults.test.js keeps each old default as a fixture.
  */
 // The tool lines of the default CLAUDE.md. A new line replaces the old one whole, so the swap runs once.
 // Three generations: the first defaults (Slack, no files), the WhatsApp ones (Slack gone), and today's (Slack back).
@@ -206,19 +240,57 @@ const SEND_MESSAGE_LINE_WHATSAPP = "- **tarsee_send_message** — Push messages 
 const SEND_FILE_LINE_WHATSAPP = "- **tarsee_send_file** — Send a file as a real attachment to the Telegram, Discord or WhatsApp chat you are in (never answer with a folder path)";
 const SEND_MESSAGE_LINE = "- **tarsee_send_message** — Push messages to Telegram, Discord, WhatsApp, Slack, or web";
 const SEND_FILE_LINE = "- **tarsee_send_file** — Send a file as a real attachment to the Telegram, Discord, WhatsApp or Slack chat you are in (never answer with a folder path)";
-const SOUL_TOOLS_LINE = "- **Platform tools** (mcp__tarsee__*): Send messages and files (real attachments) to Telegram/Discord/WhatsApp/Slack, schedule tasks, manage memory, search the web, use the encrypted vault.";
+// SOUL.md's tool line, through four generations: Slack, WhatsApp, files, then Slack back (all naming mcp__tarsee__*,
+// which only Claude Code calls them), and today's, which names them as every AI sees them.
+const SOUL_TOOLS_LINE = "- **Platform tools** (the tarsee_* tools): Send messages and files (real attachments) to Telegram/Discord/WhatsApp/Slack, schedule tasks, manage memory, search the web, use the encrypted vault.";
+// The lines of TOOLS.md (both the image's and config/env.js's) that told the agent to stay out of Bash.
+const TOOLS_SHELL_LINES = [
+  ["- Make, edit or list Discord channels and webhooks with tarsee_discord_admin. Never call Discord's API from Bash and never pull DISCORD_BOT_TOKEN from the vault for it: Tarsee's own bot does the work.",
+    "- Make, edit or list Discord channels and webhooks with tarsee_discord_admin. Never call Discord's API from the shell and never pull DISCORD_BOT_TOKEN from the vault for it: Tarsee's own bot does the work."],
+  ["- List projects, services and variable names, set a variable or redeploy with tarsee_railway. Never call Railway's API from Bash and never put a Railway token or a secret value in a command: Tarsee reads the token from the vault itself (RAILWAY_API_TOKEN, an account or workspace token).",
+    "- List projects, services and variable names, set a variable or redeploy with tarsee_railway. Never call Railway's API from the shell and never put a Railway token or a secret value in a command: Tarsee reads the token from the vault itself (RAILWAY_API_TOKEN, an account or workspace token)."],
+];
 
 const DEFAULT_UPGRADES = {
   "SOUL.md": [
+    ["You are **Tarsee** — a 24/7 autonomous AI agent powered by Claude.",
+      "You are **Tarsee** — a 24/7 autonomous AI agent."],
+    ["- **Full tool access**: Read, Write, Edit, Bash, Grep, Glob — you can work with any file or run any command.",
+      "- **Full tool access**: you can read, write, edit and search any file, and run any command in the shell."],
     ["- **Platform tools** (mcp__tarsee__*): Send messages to Telegram/Discord/Slack, schedule tasks, manage memory, search the web, use the encrypted vault.",
       SOUL_TOOLS_LINE],
     ["- **Platform tools** (mcp__tarsee__*): Send messages and files (real attachments) to Telegram/Discord/WhatsApp, schedule tasks, manage memory, search the web, use the encrypted vault.",
       SOUL_TOOLS_LINE],
+    ["- **Platform tools** (mcp__tarsee__*): Send messages and files (real attachments) to Telegram/Discord/WhatsApp/Slack, schedule tasks, manage memory, search the web, use the encrypted vault.",
+      SOUL_TOOLS_LINE],
     ["- **Persistent memory**: MEMORY.md stores everything you learn. Read it every session.",
       "- **Persistent memory**: MEMORY.md stores everything you learn. Grep it for what a task needs."],
+    ["- **Image analysis**: Users can send images and you can read them.",
+      "- **Images and files**: Users can send pictures, PDFs and other files. Each one is saved in the workspace for you to open, and you see a picture yourself when your model can."],
     ["- Always read MEMORY.md at the start of a session to know what you've learned.",
       "- MEMORY.md grows long: grep it for the topic at hand (`grep -n -i \"term\" MEMORY.md`) or use search_memories. Never read it whole."],
+    ["- Use mcp__tarsee__* tools for platform actions. Never use Bash for scheduling or messaging.",
+      "- Use the tarsee_* tools for platform actions. Never use the shell for scheduling or messaging."],
+    // Every default before scheduled tasks waited for the owner's OK said to schedule a follow-up outright: each run of
+    // a task can be a paid turn, so the agent offers and the owner decides.
+    ["- You are proactive. If you notice something useful, mention it. If a task needs a follow-up, schedule it.",
+      "- You are proactive. If you notice something useful, mention it. If a task needs a follow-up, offer to schedule it, and schedule it only once the owner says yes."],
   ],
+  "AGENTS.md": [
+    ["- **Coder** (Opus) — Code, debugging, architecture, scripts.",
+      "- **Coder** (your AI's most capable model) — Code, debugging, architecture, scripts."],
+    ["- **Researcher** (Sonnet) — Web research, documentation, analysis.",
+      "- **Researcher** (its everyday model) — Web research, documentation, analysis."],
+    ["- **Writer** (Sonnet) — Content, emails, documents, copywriting.",
+      "- **Writer** (its everyday model) — Content, emails, documents, copywriting."],
+    ["- **Quick** (Haiku) — Fast lookups, formatting, simple tasks.",
+      "- **Quick** (its fastest model) — Fast lookups, formatting, simple tasks."],
+  ],
+  "MEMORY.md": [
+    ["This file stores everything Tarsee learns across sessions. Read this at the start of every conversation.",
+      "This file stores everything Tarsee learns across sessions. It grows long: grep it for what a task needs, and never read it whole."],
+  ],
+  "TOOLS.md": TOOLS_SHELL_LINES,
   "CLAUDE.md": [
     [[
       "## On Every Session Start",
@@ -241,8 +313,37 @@ const DEFAULT_UPGRADES = {
     [SEND_MESSAGE_LINE_OLD, `${SEND_MESSAGE_LINE}\n${SEND_FILE_LINE}`],
     [SEND_MESSAGE_LINE_WHATSAPP, SEND_MESSAGE_LINE],
     [SEND_FILE_LINE_WHATSAPP, SEND_FILE_LINE],
+    ["- **Bash** — Write and run scripts for complex tasks",
+      "- **The shell** — Write and run scripts for complex tasks"],
+    ["- You can install npm/pip packages via Bash if needed for tasks",
+      "- You can install npm/pip packages from the shell when a task needs them"],
   ],
 };
+
+/**
+ * `text` with each run of whole lines that reads `from` (one line, or several joined by \n) replaced by `to`. A line
+ * matches only whole, its own ending (CRLF or LF) aside: a line the owner added words to, before or after the old
+ * default, is theirs and stays. The new lines keep the file's endings: a CRLF file stays CRLF.
+ */
+function swapWholeLines(text, from, to) {
+  const want = from.split("\n");
+  const lines = text.split("\n"); // a CRLF file's lines keep their \r here
+  const bare = (line) => (line.endsWith("\r") ? line.slice(0, -1) : line);
+  const out = [];
+  for (let i = 0; i < lines.length;) {
+    if (i + want.length <= lines.length && want.every((w, k) => bare(lines[i + k]) === w)) {
+      const cr = lines[i].endsWith("\r") ? "\r" : "";
+      const lastCr = lines[i + want.length - 1].endsWith("\r") ? "\r" : "";
+      const news = to.split("\n");
+      news.forEach((line, k) => out.push(line + (k === news.length - 1 ? lastCr : cr)));
+      i += want.length;
+    } else {
+      out.push(lines[i]);
+      i += 1;
+    }
+  }
+  return out.join("\n");
+}
 
 export function upgradeDefaultWorkspaceFiles(dir = config.WORKSPACE_DIR) {
   const updated = [];
@@ -251,7 +352,8 @@ export function upgradeDefaultWorkspaceFiles(dir = config.WORKSPACE_DIR) {
     let text;
     try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
     let next = text;
-    for (const [from, to] of swaps) if (next.includes(from)) next = next.split(from).join(to);
+    // (The first line only: in a CRLF file a block of lines never holds `from`, joined by \n, as it is.)
+    for (const [from, to] of swaps) if (next.includes(from.split("\n")[0])) next = swapWholeLines(next, from, to);
     if (next === text) continue;
     try {
       fs.writeFileSync(file, next, "utf8");
@@ -261,7 +363,7 @@ export function upgradeDefaultWorkspaceFiles(dir = config.WORKSPACE_DIR) {
       console.warn(`[workspace] could not update ${name}: ${err.message}`);
     }
   }
-  if (updated.length) console.log(`[workspace] updated the default instructions in ${updated.join(" and ")} (grep MEMORY.md, never read it whole; send files as attachments; Slack)`);
+  if (updated.length) console.log(`[workspace] updated the default instructions in ${updated.join(", ")} (grep MEMORY.md, never read it whole; send files as attachments; Slack; wording that fits any AI; offer a follow-up, schedule it only once the owner says yes)`);
   return updated;
 }
 

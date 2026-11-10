@@ -191,6 +191,12 @@ describe("chat core: the line in the answer's place", () => {
     assert.deepEqual(C.turnLine({ state: "removed" }), { title: "Removed from the queue", detail: "", tone: "muted" });
     for (const s of ["queued", "removed"]) assert.doesNotMatch(JSON.stringify(C.turnLine({ state: s })), /[\u2013\u2014]/, "no long dashes");
   });
+  it("while it thinks, the line names the AI that answers (design 5: \"Thinking with DeepSeek Flash\")", () => {
+    assert.deepEqual(C.turnLine({ state: "running", tools: 0, model: "DeepSeek Flash" }), { title: "Working", detail: "Thinking with DeepSeek Flash", tone: "running" });
+    assert.equal(C.turnLine({ state: "running", tools: 2, model: "GPT-6 Luna" }).detail, "2 steps \u00b7 Thinking with GPT-6 Luna");
+    assert.equal(C.turnLine({ state: "running", tools: 1, last: "Reading README.md", model: "GPT-6 Luna" }).detail, "1 step \u00b7 Reading README.md", "a step on now says what it does");
+    assert.equal(C.turnLine({ state: "queued", model: "GPT-6 Luna" }).detail, "after the reply above");
+  });
 });
 
 describe("chat core: a saved reply's parts", () => {

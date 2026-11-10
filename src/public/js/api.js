@@ -135,6 +135,23 @@ const API = {
     return res.json();
   },
 
+  /**
+   * The sign-in screen, saying why: an owner-only action (Switch on, Let it run, Run at each restart, the editor's OK)
+   * was refused because this tab's sign-in has run out (the server's answer has needsSignIn). The page went on with
+   * the API token, which can't do those. App.showLogin (js/app.js) shows the screen; signing in reloads the page.
+   */
+  signInAgain(message) {
+    window.dispatchEvent(new CustomEvent("tarsee:auth-required"));
+    if (!message) return;
+    const form = document.getElementById("loginError");   // the desktop form's line, hidden until it has something
+    if (form) {
+      form.textContent = message;
+      form.style.display = "block";
+    }
+    const pin = document.getElementById("pinError");   // the phone's PIN pad's
+    if (pin) pin.textContent = message;
+  },
+
   // --- Channels ---
   async listChannels() {
     return this.json("/api/chat/channels");
@@ -341,11 +358,6 @@ const API = {
     } finally {
       finishWatchdog();
     }
-  },
-
-  // --- Providers ---
-  async getProviders() {
-    return this.json("/api/chat/providers");
   },
 
   // --- Settings ---

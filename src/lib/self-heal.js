@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import config from "../config/env.js";
 import { readWorkspaceFile, writeWorkspaceFile, invalidateCache, appendDailyLog } from "./workspace-files.js";
+import { PROVIDER_IDS, getProvider, isShipped, resolveModelFor } from "../ai/provider-registry.js";
+import { providerStatus, credentialPresence, activeTarget, chosenModel } from "../ai/provider-status.js";
 
 /**
  * Self-healing engine for Tarsee.
@@ -85,8 +87,9 @@ export async function runDiagnostics(ctx = {}) {
   // 2. Workspace files
   results.push(...checkWorkspaceFiles());
 
-  // 3. AI provider
-  results.push(checkProvider(ctx.settingsStore));
+  // 3. AI provider: the default one (an error while it can't answer), then any other connected one that stopped working
+  results.push(await checkProvider(ctx.settingsStore));
+  results.push(...await checkOtherProviders(ctx.settingsStore));
 
   // 4. Disk space
   results.push(checkDiskSpace());
@@ -251,26 +254,74 @@ function checkWorkspaceFiles() {
   return results;
 }
 
-function checkProvider(settingsStore) {
+/**
+ * An AI provider's readiness, from providerStatus() (the same answer Settings > AI shows): the default AI unless
+ * deps.providerId names another. ok when it can answer, error with what to do when it can't. The detail names where
+ * its key lives by its last 4 characters only.
+ * deps: providerStatus deps (env, stateDir, claudeHomes, loginStatus, ...) plus providerId and isShipped.
+ */
+export async function checkProvider(settingsStore, deps = {}) {
   if (!settingsStore) return { check: "ai_provider", status: "error", detail: "Settings store not available" };
 
   try {
-    const active = settingsStore.getActiveProvider();
-    if (!active?.provider) {
-      return { check: "ai_provider", status: "error", detail: "No provider configured" };
+    const env = deps.env ?? process.env;
+    const target = activeTarget(settingsStore, { env, isShipped: deps.isShipped });
+    const p = deps.providerId ? getProvider(deps.providerId) : getProvider(target.provider);
+    if (!p) return { check: "ai_provider", status: "error", detail: `Tarsee doesn't know an AI called "${deps.providerId}"` };
+    const s = await providerStatus(p.id, { ...deps, store: settingsStore, env });
+    if (!s.ready) {
+      return {
+        check: "ai_provider",
+        status: "error",
+        provider: p.id,
+        state: s.state,
+        detail: `${p.label}: ${s.detail}${s.fix ? ` ${s.fix}` : ""}`,
+      };
     }
-    if (!active?.ready) {
-      return { check: "ai_provider", status: "error", detail: `Provider ${active.provider} is not ready` };
-    }
-    const keyDisplay = active.apiKey ? `key: ••••${active.apiKey.slice(-4)}` : "subscription auth";
+    const model = p.id === target.provider ? target.model : resolveModelFor(p.id, chosenModel(p.id, settingsStore, env), settingsStore);
+    const where = s.keySourceText ? `${s.keySourceText}${s.keyHint ? ` ${s.keyHint}` : ""}` : "no key needed";
     return {
       check: "ai_provider",
       status: "ok",
-      detail: `${active.provider} / ${active.model || "default"} — ${keyDisplay}`,
+      provider: p.id,
+      state: s.state,
+      detail: `${p.label} / ${model || "its default model"} — ${where}`,
     };
   } catch (err) {
     return { check: "ai_provider", status: "error", detail: err.message };
   }
+}
+
+/** States that mean a provider was connected and has stopped working (as opposed to never set up). */
+const BROKEN_STATES = new Set(["error", "out-of-credit", "sign-in-expired"]);
+
+/**
+ * Every other provider the owner connected that has stopped working (a rejected key, an empty balance, an expired
+ * sign-in): a warning each, so a backup model or a chat's own pick doesn't fail unnoticed. Providers nobody set up
+ * aren't a problem and aren't listed.
+ */
+async function checkOtherProviders(settingsStore, deps = {}) {
+  if (!settingsStore) return [];
+  const out = [];
+  try {
+    const env = deps.env ?? process.env;
+    const active = activeTarget(settingsStore, { env, isShipped: deps.isShipped }).provider;
+    const shipped = deps.isShipped ?? isShipped;
+    for (const id of PROVIDER_IDS) {
+      const p = getProvider(id);
+      if (id === active || !shipped(id)) continue;
+      // Not set up at all (no key, no sign-in, no address): nothing to check further.
+      const present = credentialPresence(id, { ...deps, store: settingsStore, env });
+      if (present.state !== "ready" && !BROKEN_STATES.has(present.state)) continue;
+      const s = await providerStatus(id, { ...deps, store: settingsStore, env });
+      if (BROKEN_STATES.has(s.state)) {
+        out.push({ check: `ai_provider_${id}`, status: "warn", provider: id, state: s.state, detail: `${p.label}: ${s.detail}${s.fix ? ` ${s.fix}` : ""}` });
+      }
+    }
+  } catch (err) {
+    out.push({ check: "ai_providers", status: "warn", detail: err.message });
+  }
+  return out;
 }
 
 function checkDiskSpace() {

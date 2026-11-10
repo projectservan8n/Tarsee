@@ -321,6 +321,7 @@ const Live = {
       had.queued = false;
       had.startedAt = evt.createdAt || Date.now();
       had.source = evt.payload?.source || had.source;
+      had.steps.setModel(evt.payload?.label, this.streams(evt.payload));
       had.steps.begin(had.startedAt);
       had.steps.setStop(had.source === "web" ? () => this.stop() : null);
       had.el.classList.add("is-working");
@@ -346,6 +347,8 @@ const Live = {
     if (state === "running") el.classList.add("is-working");
     el.dataset.turnId = evt.turnId;
     const steps = Chat.createSteps({ state, startedAt: evt.createdAt || Date.now(), onStop: state === "running" && p.source === "web" ? () => this.stop() : null });
+    // The AI answering, on the working line ("Thinking with DeepSeek Flash"); a queued turn's is known once it begins.
+    if (state === "running") steps.setModel(p.label, this.streams(p));
     // The chat is an aria-live log; announcing every tool step would drown
     // a screen reader. The reply itself is still announced.
     steps.el.setAttribute("aria-live", "off");
@@ -367,10 +370,24 @@ const Live = {
     return turn;
   },
 
+  /**
+   * Whether a turn's words come as they are written: its turn_start's `streaming`, else its engine's way (Claude Code
+   * streams; Codex sends each reply when its step finishes). Not known: as if it streams (no note).
+   */
+  streams(p) {
+    if (typeof p?.streaming === "boolean") return p.streaming;
+    return p?.engine ? p.engine !== "codex" : true;
+  },
+
   onStep(evt) {
     const turn = this.turns.get(evt.turnId);
     if (!turn) return;
     const p = evt.payload || {};
+    if (p.kind === "route") {
+      // Another AI answers from here on (the backup model): the line names it. Not a step.
+      turn.steps.setModel(p.label, this.streams(p));
+      return;
+    }
     if (p.kind === "tool_start") {
       turn.steps.addTool({ id: p.id, name: p.name || "tool", summary: p.summary || "", input: p.input || "", startedAt: evt.createdAt });
     } else if (p.kind === "tool_end") {
@@ -665,7 +682,8 @@ const Live = {
       this.activity.set(id, { conversationId: id, turnId: e.turnId, startedAt: e.createdAt, source: e.payload?.source || null, steps: 0, lastStepLabel: null });
     } else if (e.type === "step") {
       const t = this.activity.get(id);
-      if (t) {
+      // (A route names the AI answering; it is no step.)
+      if (t && e.payload?.kind !== "route") {
         t.steps += 1;
         if (e.payload?.kind === "tool_start") t.lastStepLabel = ChatCore.stepLabel({ name: e.payload.name, summary: e.payload.summary }, { running: true });
       }

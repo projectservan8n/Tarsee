@@ -1,17 +1,17 @@
 import { Router } from "express";
-import { chatStream, getAvailableProviders } from "../ai/router.js";
+import { chatStream } from "../ai/router.js";
+import { stopTurns } from "../ai/turn.js";
+import { contextTokensFor } from "../ai/provider-registry.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { initSSE, sendSSE } from "../lib/stream-utils.js";
-import { LIMITS, CLAUDE_MODELS, CLAUDE_MODELS_BY_ID, resolveModelAlias, tierOf, getRecommendedModel } from "../config/constants.js";
-import { getModelPicker } from "../lib/model-catalog.js";
-import { EFFORT_IDS, TARSEE_DEFAULT_EFFORT } from "../lib/model-picker.js";
+import { LIMITS, tierOf } from "../config/constants.js";
+import { modelsHandlers } from "./models.js";
 import { snapshotForContextOverflow } from "../lib/auto-checkpoint.js";
 import { processCommand, getCommandList, extractPlaybookPrompt } from "../lib/commands.js";
-import { buildSystemPrompt, sendFileHint } from "../lib/build-system-prompt.js";
+import { buildSystemPromptParts, sendFileHint } from "../lib/build-system-prompt.js";
 import { trackActivity } from "../lib/session-reset.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
-import { getToolDefinitions, executeTool } from "../lib/tools.js";
 import { getGatewayManager } from "../lib/gateway.js";
 import { redactSecrets, redactDeep } from "../lib/redact.js";
 import { messageTools, slimMessage } from "../lib/message-tools.js";   // a reply's tools; history without their inputs and outputs
@@ -22,6 +22,8 @@ import { createLoopGuard } from "../lib/loop-guard.js";
 import { effectiveContextWindow } from "../ai/context-limits.js";
 import { placeFilesOnPage, forgetChatFiles } from "../lib/chat-files.js";   // the chat's files, kept with it
 import { keepUploadedFiles, noteReceivedFiles, viewablePath, sendViewable } from "../lib/sent-files.js";
+import { callTurn, CALL_HINT, CALL_TURN_REMINDER } from "../lib/voice-call.js";   // a voice call's turns (public/js/call.js)
+import { liveSessionId } from "../middleware/auth.js";   // the owner's sign-in, for the owner's commands
 
 /**
  * Broadcast an SSE-like event to all connected WebSocket clients and record
@@ -36,9 +38,10 @@ function broadcastToOthers(convId, eventType, data) {
 
 /**
  * Classify message complexity for auto model routing.
- * Heuristic only — no AI calls. Returns a *tier* which gets resolved to
- * the latest concrete model in that tier from the central registry, so
- * when Anthropic ships a new Opus this routing picks it up automatically.
+ * Heuristic only — no AI calls. Returns a *tier* word (opus, sonnet, haiku),
+ * which the turn layer maps to the chat's AI's own model of that tier
+ * (provider-registry.js resolveModelFor): on the Claude plan the newest Opus,
+ * on DeepSeek its Pro model, and so on.
  */
 function classifyMessageModel(message) {
   const words = message.split(/\s+/).length;
@@ -49,34 +52,27 @@ function classifyMessageModel(message) {
     "analyze", "complex", "explain how", "write a", "build", "create a", "deploy",
     "optimize", "migrate", "security", "performance", "!think", "!!"];
   const hasCode = message.includes("```") || /\b(function|const|import|class|def|async|await)\s/.test(message);
-  if (hasCode || opusKeywords.some((k) => lower.includes(k))) return resolveModelAlias("opus");
+  if (hasCode || opusKeywords.some((k) => lower.includes(k))) return "opus";
 
   // Haiku signals: short, simple
   if (words <= 12 && /^(hi|hello|hey|yes|no|ok|thanks|sure|yep|nah|what is|who is|when is|where is|how much|how many)/i.test(lower)) {
-    return resolveModelAlias("haiku");
+    return "haiku";
   }
 
   // Default: Sonnet tier
-  return resolveModelAlias("sonnet");
+  return "sonnet";
 }
 
-// Resolve the registry's human-readable context size ("1M", "200K") to a
-// concrete token count for the live context meter. Unknown models fall back
-// to 1M so the bar shows *something* rather than dividing by zero. The meter
+// The model's context window in tokens, for the live context meter: the
+// provider registry's figure (contextTokensFor; an unknown Claude model counts
+// as 1M, so the bar shows *something* rather than dividing by zero). The meter
 // measures against the auto-compact window when that is smaller (180k by
-// default, ai/context-limits.js): that is where Claude Code summarizes the
+// default, ai/context-limits.js): that is where the engine summarizes the
 // older part, so a full bar means "about to be summarized", not 15% of 1M.
-function contextTokensForModel(modelId) {
-  const meta = modelId && CLAUDE_MODELS_BY_ID[modelId];
-  const c = (meta && meta.context) || "1M";
-  let n;
-  if (c === "200K") n = 200_000;
-  else if (c === "1M") n = 1_000_000;
-  else {
-    const m = String(c).match(/^(\d+)\s*(K|M)$/i);
-    n = m ? Number(m[1]) * (m[2].toUpperCase() === "M" ? 1_000_000 : 1_000) : 1_000_000;
-  }
-  return effectiveContextWindow(n);
+function contextWindowFor(provider, model) {
+  let n = null;
+  try { n = contextTokensFor(provider || "claude", model, settingsStore); } catch { n = null; }
+  return effectiveContextWindow(n || 1_000_000);
 }
 
 // Sum the prompt-side fields of an Anthropic usage object — this is what
@@ -85,6 +81,9 @@ function contextTokensForModel(modelId) {
 // though they don't bill at the same rate as fresh input.
 function promptTokensFromUsage(u) {
   if (!u) return 0;
+  // The engines' usage sums every call of the turn, so a turn of tool steps counts its prompt again and again: the
+  // last call's prompt (context_input_tokens, when the engine knows it) is how full the context really is.
+  if (Number(u.context_input_tokens) > 0) return Number(u.context_input_tokens);
   return (u.input_tokens || 0)
     + (u.cache_read_input_tokens || 0)
     + (u.cache_creation_input_tokens || 0);
@@ -123,14 +122,6 @@ chatRouter.get("/file", (req, res) => {
 });
 
 /**
- * GET /api/chat/providers
- * List available AI providers.
- */
-chatRouter.get("/providers", (_req, res) => {
-  res.json({ providers: getAvailableProviders() });
-});
-
-/**
  * GET /api/chat/commands
  * List available chat commands.
  */
@@ -140,64 +131,16 @@ chatRouter.get("/commands", (_req, res) => {
 
 /**
  * GET /api/chat/models
- * Every Claude model in Tarsee's table (the Settings dropdown), plus the
- * composer's picker: Claude Code's own list, the newest of each family on top
- * and older ones under More models (lib/model-catalog.js), and the defaults a
- * chat runs on when it has no model or effort of its own.
- */
-chatRouter.get("/models", (_req, res) => {
-  const picker = getModelPicker({ defaultEffort: settingsStore.get("ai.defaultEffort") || undefined });
-  res.json({ models: CLAUDE_MODELS, picker, defaults: pickerDefaults() });
-});
-
-/** What a chat runs on when it has no model or effort of its own: the default model (Sonnet) at Medium. */
-function pickerDefaults() {
-  return {
-    model: settingsStore.get("ai.claude-code.model") || getRecommendedModel(),
-    effort: settingsStore.get("ai.defaultEffort") || TARSEE_DEFAULT_EFFORT,
-  };
-}
-function chatPick(convId) {
-  return {
-    model: settingsStore.get(`session.${convId}.model`) || null,
-    effort: settingsStore.get(`session.${convId}.effort`) || null,
-    defaults: pickerDefaults(),
-  };
-}
-
-/**
  * GET /api/chat/conversations/:id/picker
- * The model and effort this chat has of its own (null: the default), as the composer's picker shows them.
+ * PUT /api/chat/conversations/:id/picker  { provider?, model?, effort? }
+ * The composer's picker at the addresses the page has always used, served by
+ * the same handlers as /api/models (routes/models.js): every AI that is ready,
+ * with its models, and a chat's own AI, model and effort (null: the default).
+ * A chat's next turn, on any channel, runs on its pick (ai/turn.js resolveTarget).
  */
-chatRouter.get("/conversations/:id/picker", (req, res) => {
-  if (!convStore.get(req.params.id)) return res.status(404).json({ error: "Conversation not found" });
-  res.json(chatPick(req.params.id));
-});
-
-/**
- * PUT /api/chat/conversations/:id/picker  { model?, effort? }
- * Give this chat a model or an effort (null goes back to the default). Its
- * next turn, on any channel, runs on it (providers/claude-code.js withChatModel).
- */
-chatRouter.put("/conversations/:id/picker", (req, res) => {
-  const convId = req.params.id;
-  if (!convStore.get(convId)) return res.status(404).json({ error: "Conversation not found" });
-  const body = req.body || {};
-  if ("model" in body) {
-    const raw = body.model == null || body.model === "" ? null : String(body.model).toLowerCase().trim();
-    const picker = getModelPicker();
-    const listed = raw && [...picker.main, ...picker.more].some((e) => e.id === raw || e.alias === raw);
-    const model = raw && (listed ? raw : resolveModelAlias(raw));
-    if (raw && !model) return res.status(400).json({ error: `Unknown model ${raw}` });
-    if (model) settingsStore.set(`session.${convId}.model`, model); else settingsStore.delete(`session.${convId}.model`);
-  }
-  if ("effort" in body) {
-    const effort = body.effort == null || body.effort === "" ? null : String(body.effort).toLowerCase().trim();
-    if (effort && !EFFORT_IDS.includes(effort)) return res.status(400).json({ error: `Unknown effort ${effort}` });
-    if (effort) settingsStore.set(`session.${convId}.effort`, effort); else settingsStore.delete(`session.${convId}.effort`);
-  }
-  res.json({ ok: true, ...chatPick(convId) });
-});
+chatRouter.get("/models", modelsHandlers.list);
+chatRouter.get("/conversations/:id/picker", modelsHandlers.getPick);
+chatRouter.put("/conversations/:id/picker", modelsHandlers.putPick);
 
 /**
  * GET /api/chat/channels
@@ -360,12 +303,15 @@ chatRouter.patch("/conversations/:id", (req, res) => {
 
 /**
  * POST /api/chat/conversations/:id/reset-session
- * Clear the Claude Code session ID so the next message starts a fresh session.
+ * Clear the chat's session so the next message starts a fresh one, and note when
+ * (session.<id>.clearedAt): the recent conversation a fresh session is handed
+ * (ai/handoff.js) never brings back what came before the reset.
  */
 chatRouter.post("/conversations/:id/reset-session", (req, res) => {
   const conv = convStore.get(req.params.id);
   if (!conv) return res.status(404).json({ error: "Conversation not found" });
-  convStore.setClaudeSessionId(req.params.id, null);
+  convStore.setSessionHandle(req.params.id, null);
+  settingsStore.set(`session.${req.params.id}.clearedAt`, new Date().toISOString());
   res.json({ ok: true });
 });
 
@@ -402,11 +348,8 @@ chatRouter.post("/stop", async (req, res) => {
     stopped = true;
   }
   // A turn another channel started in this chat (Telegram, Discord, a cron's
-  // run), which the dashboard shows at work too.
-  try {
-    const { stopTurns } = await import("../ai/providers/claude-code.js");
-    if (stopTurns(conversationId) > 0) stopped = true;
-  } catch { /* provider not loaded: nothing of its running */ }
+  // run), which the dashboard shows at work too (ai/turn.js).
+  if (stopTurns(conversationId) > 0) stopped = true;
   res.json({ ok: true, stopped });
 });
 
@@ -472,6 +415,10 @@ chatRouter.post("/send", async (req, res) => {
       conversationId: convId,
       channelManager: req.app.get("channelManager"),
       db: req.app.get("db"),
+      // The dashboard's chat, signed in: the owner's commands (/cron, /briefing, /webhook) work here. The API token alone
+      // isn't the owner (the AI's shell can read it, and the dashboard sends it too), so without a live sign-in this is
+      // "api", and commands.js refuses those commands as not the owner's.
+      platform: liveSessionId(req) ? "web" : "api",
     });
 
     if (cmdResult.handled) {
@@ -499,24 +446,17 @@ chatRouter.post("/send", async (req, res) => {
     if (!conv) return res.status(404).json({ error: "Conversation not found" });
   }
 
-  // Resolve provider
-  const activeProvider = settingsStore.getActiveProvider();
-  const providerId = reqProvider || activeProvider?.provider;
-  let model = reqModel || activeProvider?.model;
-  const apiKey = activeProvider?.apiKey;
-
-  // Auto model routing: classify message complexity. A chat given a model of its own in the picker keeps it.
+  // Which AI answers is the turn layer's to work out (ai/turn.js): the provider and model the request names, else
+  // the chat's own pick, else the default AI. Auto-routing names a tier (opus, sonnet, haiku), which each AI maps
+  // to a model of its own. A chat given a model of its own in the picker keeps it.
   const autoRoute = settingsStore.get("ai.autoRoute") === true && !settingsStore.get(`session.${convId}.model`);
-  if (autoRoute && !reqModel) {
-    model = classifyMessageModel(message);
-  }
+  const routedTier = autoRoute && !reqModel ? classifyMessageModel(message) : null;
+  const askedModel = reqModel || routedTier || undefined;
+  const askedProvider = reqProvider || undefined;
 
-  if (!providerId || !activeProvider?.ready) {
-    return res.status(400).json({ error: "No AI provider configured. Go to Settings to configure one." });
-  }
-
-  // Strip voice mode prefix before saving
-  let cleanMessage = message.startsWith("[voice] ") ? message.slice(8) : message;
+  // A voice call's message ("[call] ..."): the mark comes off before it is saved; the AI is told it is on a call.
+  const call = callTurn(message);
+  let cleanMessage = call.text;
 
   // Per-message thinking effort prefix: "!think do this" or "!! do this"
   const thinkMatch = cleanMessage.match(/^(?:!think\s+|!!\s*)(.*)/s);
@@ -567,6 +507,8 @@ chatRouter.post("/send", async (req, res) => {
   // stored convStore entry above keeps the original "/checkpoint" so
   // history UI stays readable, but the AI sees the playbook body.
   let userContentForAI = aiPromptOverride || cleanMessage;
+  // On every call message, so a long call can't drift back to chat formatting.
+  if (call.isCall && typeof userContentForAI === "string") userContentForAI += CALL_TURN_REMINDER;
   if (Array.isArray(attachments) && attachments.length > 0) {
     // A copy of each file, kept with the chat on this message (lib/chat-files.js), so the dashboard's chat shows them
     // after a reload and on every device. The agent gets them as before (pictures, PDFs and sounds as themselves; any
@@ -593,19 +535,19 @@ chatRouter.post("/send", async (req, res) => {
           source: { type: "base64", media_type: att.mediaType || "image/png", data: att.data },
         });
       } else if (att.type === "audio") {
-        // Pass audio as a document-style block (provider will adapt)
+        // A voice note: the turn layer turns it into its transcript for every AI (ai/media.js)
         contentBlocks.push({
           type: "audio",
           source: { type: "base64", media_type: att.mediaType || "audio/wav", data: att.data },
         });
       } else if (att.type === "pdf" || att.mediaType === "application/pdf") {
-        // PDF — pass as document block (Anthropic API supports this natively)
+        // PDF — as a document block: read natively where the model can, else its text goes in (ai/media.js)
         contentBlocks.push({
           type: "document",
           source: { type: "base64", media_type: "application/pdf", data: att.data },
         });
       } else {
-        // Generic file — on disk so Claude can Read it (the copy kept with the chat, or one written now)
+        // Generic file — on disk so the agent can read it (the copy kept with the chat, or one written now)
         try {
           let filePath = kept[i]?.path;
           if (!filePath) {
@@ -644,24 +586,10 @@ chatRouter.post("/send", async (req, res) => {
   // Send conversation ID (useful when auto-created)
   sendSSE(res, "conversation", { id: convId });
 
-  // Tell frontend which model was selected (useful for auto-routing)
-  if (autoRoute && !reqModel) {
-    // Send the tier too. The client used to derive it with
-    // `model.includes("opus") ? … : "sonnet"`, which silently labelled every
-    // Fable turn "SONNET". The registry already knows the answer, so let the
-    // server answer instead of making the browser guess at string matching.
-    sendSSE(res, "model_selected", { model, tier: tierOf(model) });
-  }
-
-  // Detect voice mode — Claude responds normally (tables, formatting, etc.)
-  // The TTS pipeline strips non-speakable content before reading aloud.
-  const isVoiceMode = message.startsWith("[voice]");
-  const voiceHint = isVoiceMode
-    ? "\n\n[VOICE MODE] Response shown visually AND read aloud. TTS limit: 2 short sentences max before any table/code. Tables are shown but NOT spoken. Structure: brief spoken intro (under 200 chars) → then table/details."
-    : "";
-
-  // Build effective system prompt: identity + memory + skills + conversation-specific
-  const effectiveSystemPrompt = buildSystemPrompt({
+  // Build the system prompt: identity + memory + skills + conversation-specific (stable), the day's log and the
+  // other per-turn parts (volatile). A call's hint (every word is spoken) is this message's own, so it goes with the
+  // volatile part.
+  const promptParts = buildSystemPromptParts({
     settingsStore,
     db: req.app.get("db"),
     channelManager: req.app.get("channelManager"),
@@ -669,17 +597,16 @@ chatRouter.post("/send", async (req, res) => {
     messageCount: history.length,
     conversationPrompt: conv?.system_prompt,
     channelHint: sendFileHint("web"),
-  }) + voiceHint;
+  });
+  const systemParts = { stable: promptParts.stable, volatile: promptParts.volatile + (call.isCall ? CALL_HINT : "") };
 
   let fullResponse = "";
   let currentTextChunk = "";
   const timeline = []; // Track timeline for persistence: [{type:"text",text:""},{type:"tool",name:"",detail:"",input:"",output:"",status:"done"}]
   let lastToolIdx = -1;
   let usage = {};
-  const tools = getToolDefinitions();
   // dashboard: a file the agent hands over goes to this chat, whatever channel it is; messageId: the message answered
   const toolCtx = { db: req.app.get("db"), settingsStore, conversationId: convId, channelManager: req.app.get("channelManager"), dashboard: true, messageId: savedUser?.id || null };
-  const MAX_TOOL_ROUNDS = 15;
   // Snapshot of `req.ip` — read once now, because once the socket closes
   // the `req.ip` getter pulls from a destroyed socket and may return
   // undefined. Audit log calls after `res.close` use this instead.
@@ -693,430 +620,294 @@ chatRouter.post("/send", async (req, res) => {
   const redactStr = redactOn ? redactSecrets : (s) => s;
   const redactObj = redactOn ? redactDeep : (v) => v;
 
-  // --- Claude Code provider: runs its own agentic loop ---
-  if (providerId === "claude-code") {
-    // Queue behind any turn already running in this conversation, from any
-    // channel, instead of cancelling it (a message sent mid-reply used to
-    // abort the reply). The user message is already saved and on the live
-    // timeline, so every device shows it at once; the reply follows when the
-    // turn ahead finishes. Socket close never cancels a turn, so a queued
-    // message still runs even if the tab that sent it is gone.
-    const epochAtEnqueue = stopEpoch.get(convId) || 0;
-    const waitingBehind = queueDepth(convId) > 0;
-    if (waitingBehind) sendSSE(res, "queued", { conversationId: convId });
-    const waitBeat = waitingBehind
-      ? setInterval(() => { if (!res.writableEnded) sendSSE(res, "heartbeat", { ts: Date.now(), queued: true }); }, 15_000)
-      : null;
-    // While it waits it shows as "Queued · after the reply above" on every device (lib/conversation-lock.js),
-    // and becomes the working line when it begins; its own Stop takes it out of the queue alone.
-    const endWaiting = () => {
-      if (waitBeat) clearInterval(waitBeat);
-      sendSSE(res, "done", { conversationId: convId, stopReason: "stopped" });
-      if (!res.writableEnded) res.end();
-    };
-    const ran = await withConversationTurn(convId, async () => {
-      if (waitBeat) clearInterval(waitBeat);
-      if ((stopEpoch.get(convId) || 0) !== epochAtEnqueue) {
-        // Stop was pressed while this message waited: don't run it.
-        currentQueuedTurn()?.end("aborted");
-        endWaiting();
-        return;
-      }
-      const controller = new AbortController();
-      activeRequests.set(convId, controller);
-      // Tab freeze / OS sleep / Wi-Fi blip will close the SSE socket while
-      // the model is still producing. Don't abort the generator on socket
-      // close — let it run to completion so the assistant message persists
-      // and every device keeps following it on the live timeline. Only
-      // /stop and the idle watchdog below end a turn early.
-      let clientDetached = false;
-      res.on("close", () => {
-        clientDetached = true;
-      });
+  // Queue behind any turn already running in this conversation, from any
+  // channel, instead of cancelling it (a message sent mid-reply used to
+  // abort the reply). The user message is already saved and on the live
+  // timeline, so every device shows it at once; the reply follows when the
+  // turn ahead finishes. Socket close never cancels a turn, so a queued
+  // message still runs even if the tab that sent it is gone.
+  const epochAtEnqueue = stopEpoch.get(convId) || 0;
+  const waitingBehind = queueDepth(convId) > 0;
+  if (waitingBehind) sendSSE(res, "queued", { conversationId: convId });
+  const waitBeat = waitingBehind
+    ? setInterval(() => { if (!res.writableEnded) sendSSE(res, "heartbeat", { ts: Date.now(), queued: true }); }, 15_000)
+    : null;
+  // While it waits it shows as "Queued · after the reply above" on every device (lib/conversation-lock.js),
+  // and becomes the working line when it begins; its own Stop takes it out of the queue alone.
+  const endWaiting = () => {
+    if (waitBeat) clearInterval(waitBeat);
+    sendSSE(res, "done", { conversationId: convId, stopReason: "stopped" });
+    if (!res.writableEnded) res.end();
+  };
+  const ran = await withConversationTurn(convId, async () => {
+    if (waitBeat) clearInterval(waitBeat);
+    if ((stopEpoch.get(convId) || 0) !== epochAtEnqueue) {
+      // Stop was pressed while this message waited: don't run it.
+      currentQueuedTurn()?.end("aborted");
+      endWaiting();
+      return;
+    }
+    const controller = new AbortController();
+    activeRequests.set(convId, controller);
+    // Tab freeze / OS sleep / Wi-Fi blip will close the SSE socket while
+    // the model is still producing. Don't abort the generator on socket
+    // close — let it run to completion so the assistant message persists
+    // and every device keeps following it on the live timeline. Only
+    // /stop and the idle watchdog below end a turn early.
+    let clientDetached = false;
+    res.on("close", () => {
+      clientDetached = true;
+    });
 
-      // Heartbeat + idle watchdog. Emits a `heartbeat` SSE event every 15s
-      // so proxies don't buffer the response to death (skipped once the
-      // client detaches — there's no socket to feed). Idle abort still
-      // fires if the SDK produces no events for 3 minutes — that's a
-      // stuck-model guard, unrelated to the client connection.
-      let lastEventAt = Date.now();
-      const HEARTBEAT_MS = 15_000;
-      // Idle abort: how long a turn may go with NO stream event before we give up.
-      // Was a hard 3 minutes, which killed legitimate long research/tool turns.
-      // Now configurable, but deliberately FINITE — the Mac build sets this to
-      // ~2e9 (23 days), which is only safe there because its PTY pool has a
-      // heartbeat + dead-socket detector. This build has neither, so an infinite
-      // value would wedge a turn forever with no console to kill it from.
-      const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
-      const hb = setInterval(() => {
-        if (res.writableEnded || clientDetached) {
-          if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
-            clearInterval(hb);
-            try { controller.abort(); } catch {}
-          }
-          return;
-        }
-        sendSSE(res, "heartbeat", { ts: Date.now() });
+    // The AI this turn runs on, from the turn layer's route event (the backup model's, if it answered instead).
+    let routed = null;
+
+    // Heartbeat + idle watchdog. Emits a `heartbeat` SSE event every 15s
+    // so proxies don't buffer the response to death (skipped once the
+    // client detaches — there's no socket to feed). Idle abort still
+    // fires if the engine produces no events for a long while — that's a
+    // stuck-model guard, unrelated to the client connection.
+    let lastEventAt = Date.now();
+    const HEARTBEAT_MS = 15_000;
+    // Idle abort: how long a turn may go with NO stream event before we give up.
+    // Was a hard 3 minutes, which killed legitimate long research/tool turns.
+    // Now configurable, but deliberately FINITE — the Mac build sets this to
+    // ~2e9 (23 days), which is only safe there because its PTY pool has a
+    // heartbeat + dead-socket detector. This build has neither, so an infinite
+    // value would wedge a turn forever with no console to kill it from.
+    const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
+    const hb = setInterval(() => {
+      if (res.writableEnded || clientDetached) {
         if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
           clearInterval(hb);
           try { controller.abort(); } catch {}
-          sendSSE(res, "error", { message: "Claude Code stopped responding (3 min idle). Try again." });
-          sendSSE(res, "done", { conversationId: convId });
-          if (!res.writableEnded) res.end();
         }
-      }, HEARTBEAT_MS);
-
-      try {
-        const existingSessionId = convStore.getClaudeSessionId(convId);
-        const mod = await import("../ai/providers/claude-code.js");
-        // Build messages with image blocks for the last user message
-        const ccMessages = history.map((m) => {
-          // Extract plain text from timeline JSON for AI context
-          let content = m.content;
-          if (content?.startsWith('{"__timeline":true')) {
-            try { content = JSON.parse(content).text || content; } catch {}
-          }
-          // Strip invalid Unicode surrogates that break JSON
-          if (typeof content === "string") content = content.replace(/[\uD800-\uDFFF]/g, "");
-          return { role: m.role, content };
-        });
-        if (userContentForAI !== message && ccMessages.length > 0) {
-          const last = ccMessages[ccMessages.length - 1];
-          if (last.role === "user") last.content = userContentForAI;
-        }
-        // Resolve effort: per-request > session setting > default
-        const effort = reqEffort || settingsStore.get(`session.${convId}.effort`) || undefined;
-
-        const stream = mod.chat({
-          messages: ccMessages,
-          model,
-          systemPrompt: effectiveSystemPrompt,
-          signal: controller.signal,
-          sessionId: existingSessionId,
-          onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
-          toolCtx,
-          effort,
-          // Publish this turn to the live timeline (other devices watch it).
-          liveConversationId: convId,
-          liveSource: "web",
-          // Summaries of its thinking for the live view, but not for voice mode: they make the first words
-          // come about 3s later, and a spoken reply is waited for.
-          thinkingSummaries: !/^\[voice\]/i.test(String(message || "")),
-        });
-
-        // Loop prevention: a turn stuck repeating itself is stopped (lib/loop-guard.js).
-        const loopGuard = createLoopGuard();
-        const toolIdxById = new Map(); // tool_use id -> its index in `timeline`
-
-        for await (const event of stream) {
-          lastEventAt = Date.now();
-          if (event.type === "text") {
-            fullResponse += event.content;
-            currentTextChunk += event.content;
-            sendSSE(res, "text", { content: event.content });
-            broadcastToOthers(convId, "text", { content: event.content });
-          } else if (event.type === "thinking") {
-            sendSSE(res, "thinking", { status: event.status });
-            broadcastToOthers(convId, "thinking", { status: event.status });
-          } else if (event.type === "tool_use") {
-            // Flush text to timeline
-            if (currentTextChunk.trim()) {
-              const last = timeline[timeline.length - 1];
-              if (last?.type === "text") { last.text = currentTextChunk; }
-              else { timeline.push({ type: "text", text: currentTextChunk }); }
-            }
-            currentTextChunk = "";
-            const inp = event.input || {};
-            let detail = "";
-            let label = event.name;
-            const isTodo = event.name === "TodoWrite" || event.name === "todowrite" || event.name === "todo_write";
-            if (event.name === "Bash") detail = inp.command || "";
-            else if (event.name === "Read") { detail = inp.file_path || ""; label = "Read"; }
-            else if (event.name === "Write") { detail = inp.file_path || ""; label = "Write"; }
-            else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
-            else if (isTodo) { label = "Update Todos"; detail = ""; }
-            else detail = inp.command || inp.file_path || inp.url || inp.query || JSON.stringify(inp).slice(0, 80);
-            // Pattern-redact secrets before they enter the timeline / SSE / WS
-            // broadcast. Bash command lines and inline tool inputs are the
-            // common leak vectors (e.g. `curl -H "Authorization: Bearer …"`).
-            // TodoWrite items are user-authored content, not secrets — pass
-            // through unchanged.
-            detail = redactStr(String(detail));
-            const safeInput = isTodo ? event.input : redactObj(event.input);
-            lastToolIdx = timeline.length;
-            if (event.id) toolIdxById.set(event.id, lastToolIdx);
-            // summary: the step's one line in the chat (Bash's own description, a file's name), never the raw command.
-            const timelineItem = { type: "tool", name: label, summary: redactStr(summarizeToolInput(event.name, inp)), detail: detail.slice(0, 200), input: detail.slice(0, 500), output: "", status: "running" };
-            if (isTodo && Array.isArray(inp.todos)) timelineItem.todos = inp.todos;
-            timeline.push(timelineItem);
-            loopGuard.onCall(event.id, event.name, event.input);
-            sendSSE(res, "tool_call", { id: event.id, name: event.name, input: safeInput });
-            broadcastToOthers(convId, "tool_call", { id: event.id, name: event.name, input: safeInput });
-            auditLog?.log({ action: "tool.call", target: event.name, actor: "claude", ip: reqIp, detail: detail.slice(0, 200) });
-          } else if (event.type === "tool_result") {
-            // Redact stdout/stderr from tools before it goes anywhere user-
-            // visible or persistent. Bash runs that print env vars, Read of
-            // .env files, etc. — this is the highest-volume leak vector.
-            const safeResult = redactStr(event.result || "");
-            // Matched by the tool's id: tools can run side by side, so the
-            // result is not always the last tool's.
-            const idx = toolIdxById.has(event.id) ? toolIdxById.get(event.id) : lastToolIdx;
-            if (idx >= 0 && timeline[idx]) {
-              timeline[idx].status = event.ok === false ? "error" : "done";
-              timeline[idx].output = safeResult.slice(0, 2000);
-            }
-            // Check for loops (the result's own error flag, on the call it answers) — abort if stuck
-            loopGuard.onResult(event.id, event.ok);
-            const loopReason = loopGuard.check();
-            if (loopReason) {
-              console.warn(`[loop-guard] Aborting: ${loopReason} (${loopGuard.count} total tool calls)`);
-              sendSSE(res, "text", { content: `\n\n**Loop detected — stopped automatically.** (${loopReason})\n\nI was repeating the same failing operation. Let me know what you'd like me to try differently.` });
-              fullResponse += `\n\n**Loop detected — stopped automatically.** (${loopReason})`;
-              controller.abort();
-              break;
-            }
-
-            const toolName = timeline[idx]?.name || event.name || "tool";
-            sendSSE(res, "tool_result", { id: event.id, name: toolName, result: safeResult });
-            broadcastToOthers(convId, "tool_result", { id: event.id, name: toolName, result: safeResult });
-          } else if (event.type === "usage") {
-            usage = { ...usage, ...event.usage };
-          } else if (event.type === "error") {
-            sendSSE(res, "error", { message: event.message });
-          } else if (event.type === "done") {
-            break;
-          }
-        }
-        // Flush remaining text
-        if (currentTextChunk.trim()) {
-          const last = timeline[timeline.length - 1];
-          if (last?.type === "text") { last.text = currentTextChunk; }
-          else { timeline.push({ type: "text", text: currentTextChunk }); }
-        }
-
-        if (fullResponse || timeline.some(t => t.type === "tool")) {
-          fullResponse = fullResponse ? extractAndSaveMemories(fullResponse, req.app.get("db"), convId) : "";
-          // Save with timeline metadata if tools were used
-          const hasTools = timeline.some(t => t.type === "tool");
-          const content = hasTools
-            ? JSON.stringify({ __timeline: true, items: timeline, text: fullResponse })
-            : fullResponse;
-          convStore.addMessage(convId, {
-            role: "assistant",
-            content,
-            provider: providerId,
-            model,
-            tokensIn: (usage.input_tokens || 0)
-            + (usage.cache_read_input_tokens || 0)
-            + (usage.cache_creation_input_tokens || 0) || null,
-            tokensOut: usage.output_tokens,
-          });
-        }
-        if (convStore.messageCount(convId) <= 2) {
-          convStore.updateTitle(convId, message.slice(0, LIMITS.MAX_CONVERSATION_TITLE));
-        }
-        const contextTokens = contextTokensForModel(model);
-        const promptTokens = promptTokensFromUsage(usage);
-        const pct = contextTokens ? (promptTokens / contextTokens) * 100 : 0;
-        let checkpointed = false;
-        if (pct >= CONTEXT_AUTOSAVE_PCT) {
-          try {
-            const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, `auto: ${Math.round(pct)}% threshold`);
-            checkpointed = !!path;
-          } catch (e) {
-            console.warn("[chat] threshold snapshot failed:", e?.message);
-          }
-        }
-        sendSSE(res, "done", { conversationId: convId, usage, model, contextTokens, checkpointed });
-        broadcastToOthers(convId, "done", { conversationId: convId });
-      } catch (err) {
-        const isOverflow = /prompt is too long|context_length_exceeded|input length|too many tokens/i.test(err.message || "");
-        if (isOverflow) {
-          try {
-            const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, "auto: overflow error");
-            sendSSE(res, "context_overflow", { checkpointPath: path, message: err.message });
-          } catch (e) {
-            console.warn("[chat] overflow snapshot failed:", e?.message);
-          }
-        }
-        if (!controller.signal.aborted) {
-          sendSSE(res, "error", { message: err.message });
-        }
-      } finally {
+        return;
+      }
+      sendSSE(res, "heartbeat", { ts: Date.now() });
+      if (Date.now() - lastEventAt > IDLE_ABORT_MS) {
         clearInterval(hb);
-        if (activeRequests.get(convId) === controller) {
-          activeRequests.delete(convId);
-        }
+        try { controller.abort(); } catch {}
+        const minutes = Math.max(1, Math.round(IDLE_ABORT_MS / 60_000));
+        sendSSE(res, "error", { message: `${routed?.label || "The AI"} stopped responding (${minutes} min idle). Try again.` });
+        sendSSE(res, "done", { conversationId: convId });
         if (!res.writableEnded) res.end();
       }
-    }, {
-      live: {
-        source: "web",
-        prompt: message,
-        model: model || null,
-        // Its Stop took it out of the queue: this request is done now, not when the turn ahead ends.
-        onRemoved: endWaiting,
-      },
-    });
-    if (ran === QUEUE_REMOVED && !res.writableEnded) endWaiting();
-    return;
-  }
+    }, HEARTBEAT_MS);
 
-  // Heartbeat + idle abort for non-Claude-Code providers too. Same
-  // tab-survival contract as the Claude Code path: socket close does
-  // NOT abort; only the 3-min stuck-model watchdog does.
-  let lastEventAt2 = Date.now();
-  const HEARTBEAT_MS = 15_000;
-  // Idle abort: how long a turn may go with NO stream event before we give up.
-  // Was a hard 3 minutes, which killed legitimate long research/tool turns.
-  // Now configurable, but deliberately FINITE — the Mac build sets this to
-  // ~2e9 (23 days), which is only safe there because its PTY pool has a
-  // heartbeat + dead-socket detector. This build has neither, so an infinite
-  // value would wedge a turn forever with no console to kill it from.
-  const IDLE_ABORT_MS = Number(process.env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000;
-  const genericController = new AbortController();
-  let clientDetached2 = false;
-  res.on("close", () => {
-    clientDetached2 = true;
-  });
-  const hb2 = setInterval(() => {
-    if (res.writableEnded || clientDetached2) {
-      if (Date.now() - lastEventAt2 > IDLE_ABORT_MS) {
-        clearInterval(hb2);
-        try { genericController.abort(); } catch {}
+    try {
+      const existingSessionId = convStore.getSessionHandle(convId);
+      // The chat's messages for the AI, with their times (the handoff to a new session leaves out what was cleared).
+      const aiMessages = history.map((m) => {
+        // Extract plain text from timeline JSON for AI context
+        let content = m.content;
+        if (content?.startsWith('{"__timeline":true')) {
+          try { content = JSON.parse(content).text || content; } catch {}
+        }
+        // Strip invalid Unicode surrogates that break JSON
+        if (typeof content === "string") content = content.replace(/[\uD800-\uDFFF]/g, "");
+        return { role: m.role, content, createdAt: m.created_at };
+      });
+      if (userContentForAI !== message && aiMessages.length > 0) {
+        const last = aiMessages[aiMessages.length - 1];
+        if (last.role === "user") last.content = userContentForAI;
       }
-      return;
-    }
-    sendSSE(res, "heartbeat", { ts: Date.now() });
-    if (Date.now() - lastEventAt2 > IDLE_ABORT_MS) {
-      clearInterval(hb2);
-      try { genericController.abort(); } catch {}
-      sendSSE(res, "error", { message: "Model stopped responding (3 min idle). Try again." });
-      sendSSE(res, "done", { conversationId: convId });
-      if (!res.writableEnded) res.end();
-    }
-  }, HEARTBEAT_MS);
-
-  try {
-    // Build the working message array (may grow with tool results)
-    // Replace the last user message content with the attachment-enriched version
-    let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
-    if (workingMessages.length > 0 && workingMessages[workingMessages.length - 1].role === "user") {
-      workingMessages[workingMessages.length - 1].content = userContentForAI;
-    }
-
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const toolCalls = [];
-      let roundText = "";
-      let stopReason = "end_turn";
 
       const stream = chatStream({
-        provider: providerId,
-        model,
-        apiKey,
-        baseUrl: activeProvider?.baseUrl,
-        messages: workingMessages,
-        systemPrompt: effectiveSystemPrompt,
-        signal: genericController.signal,
-        tools,
+        provider: askedProvider,
+        model: askedModel,
+        // This message's own effort (!think, or the request's); the chat's own and the default are the turn layer's.
+        effort: reqEffort || undefined,
+        messages: aiMessages,
+        systemParts,
+        signal: controller.signal,
+        sessionId: existingSessionId,
+        onSessionId: (handle) => convStore.setSessionHandle(convId, handle),
+        toolCtx,
+        // Publish this turn to the live timeline (other devices watch it).
+        liveConversationId: convId,
+        liveSource: "web",
+        // Summaries of its thinking for the live view, but not on a call: they make the first words come about
+        // 3s later, and a spoken reply is waited for.
+        thinkingSummaries: !call.isCall,
       });
 
+      // How the turn layer said the turn ended (its one done): sent on in this request's own done, so the tab that
+      // pressed Stop shows the reply as stopped, not finished.
+      let endReason = null;
+      // Loop prevention: a turn stuck repeating itself is stopped (lib/loop-guard.js).
+      const loopGuard = createLoopGuard();
+      const toolIdxById = new Map(); // tool_use id -> its index in `timeline`
+      let overflowSaved = false;
+
       for await (const event of stream) {
-        lastEventAt2 = Date.now();
-        if (event.type === "text") {
-          roundText += event.content;
+        lastEventAt = Date.now();
+        if (event.type === "route") {
+          routed = event;
+          // The composer shows the AI and model this turn runs on (auto-routing's pick, a backup that answered).
+          sendSSE(res, "model_selected", {
+            model: event.model,
+            tier: tierOf(event.model) || routedTier || null,
+            provider: event.provider,
+            label: event.label,
+            effort: event.effort || null,
+            streaming: event.streaming,
+            backup: !!event.backup,
+          });
+        } else if (event.type === "text") {
           fullResponse += event.content;
+          currentTextChunk += event.content;
           sendSSE(res, "text", { content: event.content });
+          broadcastToOthers(convId, "text", { content: event.content });
         } else if (event.type === "thinking") {
           sendSSE(res, "thinking", { status: event.status });
+          broadcastToOthers(convId, "thinking", { status: event.status });
         } else if (event.type === "tool_use") {
-          toolCalls.push({ id: event.id, name: event.name, input: event.input });
-          // Notify client about tool call (input redacted before broadcast)
-          sendSSE(res, "tool_call", { id: event.id, name: event.name, input: redactObj(event.input) });
+          // Flush text to timeline
+          if (currentTextChunk.trim()) {
+            const last = timeline[timeline.length - 1];
+            if (last?.type === "text") { last.text = currentTextChunk; }
+            else { timeline.push({ type: "text", text: currentTextChunk }); }
+          }
+          currentTextChunk = "";
+          const inp = event.input || {};
+          let detail = "";
+          let label = event.name;
+          const isTodo = event.name === "TodoWrite" || event.name === "todowrite" || event.name === "todo_write";
+          if (event.name === "Bash") detail = inp.command || "";
+          else if (event.name === "Read") { detail = inp.file_path || ""; label = "Read"; }
+          else if (event.name === "Write") { detail = inp.file_path || ""; label = "Write"; }
+          else if (event.name === "Edit") { detail = inp.file_path || ""; label = "Edit"; }
+          else if (isTodo) { label = "Update Todos"; detail = ""; }
+          else detail = inp.command || inp.file_path || inp.url || inp.query || JSON.stringify(inp).slice(0, 80);
+          // Pattern-redact secrets before they enter the timeline / SSE / WS
+          // broadcast. Bash command lines and inline tool inputs are the
+          // common leak vectors (e.g. `curl -H "Authorization: Bearer …"`).
+          // TodoWrite items are user-authored content, not secrets — pass
+          // through unchanged.
+          detail = redactStr(String(detail));
+          const safeInput = isTodo ? event.input : redactObj(event.input);
+          lastToolIdx = timeline.length;
+          if (event.id) toolIdxById.set(event.id, lastToolIdx);
+          // summary: the step's one line in the chat (Bash's own description, a file's name), never the raw command.
+          const timelineItem = { type: "tool", name: label, summary: redactStr(summarizeToolInput(event.name, inp)), detail: detail.slice(0, 200), input: detail.slice(0, 500), output: "", status: "running" };
+          if (isTodo && Array.isArray(inp.todos)) timelineItem.todos = inp.todos;
+          timeline.push(timelineItem);
+          loopGuard.onCall(event.id, event.name, event.input);
+          sendSSE(res, "tool_call", { id: event.id, name: event.name, input: safeInput });
+          broadcastToOthers(convId, "tool_call", { id: event.id, name: event.name, input: safeInput });
+          auditLog?.log({ action: "tool.call", target: event.name, actor: routed?.provider || "ai", ip: reqIp, detail: detail.slice(0, 200) });
+        } else if (event.type === "tool_result") {
+          // Redact stdout/stderr from tools before it goes anywhere user-
+          // visible or persistent. Bash runs that print env vars, Read of
+          // .env files, etc. — this is the highest-volume leak vector.
+          const safeResult = redactStr(event.result || "");
+          // Matched by the tool's id: tools can run side by side, so the
+          // result is not always the last tool's.
+          const idx = toolIdxById.has(event.id) ? toolIdxById.get(event.id) : lastToolIdx;
+          if (idx >= 0 && timeline[idx]) {
+            timeline[idx].status = event.ok === false ? "error" : "done";
+            timeline[idx].output = safeResult.slice(0, 2000);
+          }
+          // Check for loops (the result's own error flag, on the call it answers) — abort if stuck
+          loopGuard.onResult(event.id, event.ok);
+          const loopReason = loopGuard.check();
+          if (loopReason) {
+            console.warn(`[loop-guard] Aborting: ${loopReason} (${loopGuard.count} total tool calls)`);
+            sendSSE(res, "text", { content: `\n\n**Loop detected — stopped automatically.** (${loopReason})\n\nI was repeating the same failing operation. Let me know what you'd like me to try differently.` });
+            fullResponse += `\n\n**Loop detected — stopped automatically.** (${loopReason})`;
+            controller.abort();
+            break;
+          }
+
+          const toolName = timeline[idx]?.name || event.name || "tool";
+          sendSSE(res, "tool_result", { id: event.id, name: toolName, result: safeResult });
+          broadcastToOthers(convId, "tool_result", { id: event.id, name: toolName, result: safeResult });
         } else if (event.type === "usage") {
           usage = { ...usage, ...event.usage };
+        } else if (event.type === "error") {
+          // The conversation outgrew the model's window: save a checkpoint so the next session can pick up from it.
+          if (!overflowSaved && (event.code === "context" || /prompt is too long|context_length_exceeded|input length|too many tokens/i.test(event.message || ""))) {
+            overflowSaved = true;
+            try {
+              const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, "auto: overflow error");
+              sendSSE(res, "context_overflow", { checkpointPath: path, message: event.message });
+            } catch (e) {
+              console.warn("[chat] overflow snapshot failed:", e?.message);
+            }
+          }
+          sendSSE(res, "error", { message: event.message });
         } else if (event.type === "done") {
-          stopReason = event.stopReason || "end_turn";
+          endReason = event.stopReason || null;
           break;
         }
       }
-
-      // If no tool calls, we're done
-      if (toolCalls.length === 0 || stopReason !== "tool_use") break;
-
-      // Build the assistant message with text + tool_use blocks
-      const assistantContent = [];
-      if (roundText) assistantContent.push({ type: "text", text: roundText });
-      for (const tc of toolCalls) {
-        assistantContent.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
+      // Flush remaining text
+      if (currentTextChunk.trim()) {
+        const last = timeline[timeline.length - 1];
+        if (last?.type === "text") { last.text = currentTextChunk; }
+        else { timeline.push({ type: "text", text: currentTextChunk }); }
       }
-      workingMessages.push({ role: "assistant", content: assistantContent });
 
-      // Execute each tool and build tool_result blocks
-      const toolResults = [];
-      for (const tc of toolCalls) {
-        console.log(`[tools] executing: ${tc.name}(${JSON.stringify(tc.input).slice(0, 100)})`);
-        const result = await executeTool(tc.name, tc.input, toolCtx);
-        toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
-        // Notify client about tool result. The model still gets the raw
-        // result above (for accurate context), but the UI/timeline/log
-        // sees a redacted copy.
-        sendSSE(res, "tool_result", { id: tc.id, name: tc.name, result: redactStr(result).slice(0, 500) });
-      }
-      workingMessages.push({ role: "user", content: toolResults });
-    }
-
-    // Extract [REMEMBER: ...] markers and auto-save memories
-    if (fullResponse) {
-      fullResponse = extractAndSaveMemories(fullResponse, req.app.get("db"), convId);
-    }
-
-    // Save assistant message (with markers stripped)
-    if (fullResponse) {
-      convStore.addMessage(convId, {
-        role: "assistant",
-        content: fullResponse,
-        provider: providerId,
-        model,
-        tokensIn: (usage.input_tokens || 0)
+      const provider = routed?.provider || null;
+      const model = routed?.model || null;
+      if (fullResponse || timeline.some(t => t.type === "tool")) {
+        fullResponse = fullResponse ? extractAndSaveMemories(fullResponse, req.app.get("db"), convId) : "";
+        // Save with timeline metadata if tools were used
+        const hasTools = timeline.some(t => t.type === "tool");
+        const content = hasTools
+          ? JSON.stringify({ __timeline: true, items: timeline, text: fullResponse })
+          : fullResponse;
+        convStore.addMessage(convId, {
+          role: "assistant",
+          content,
+          provider,
+          model,
+          tokensIn: (usage.input_tokens || 0)
           + (usage.cache_read_input_tokens || 0)
           + (usage.cache_creation_input_tokens || 0) || null,
-        tokensOut: usage.output_tokens,
-      });
-    }
-
-    // Auto-title if this is the first exchange
-    if (convStore.messageCount(convId) <= 2) {
-      const title = message.slice(0, LIMITS.MAX_CONVERSATION_TITLE);
-      convStore.updateTitle(convId, title);
-    }
-
-    const contextTokens = contextTokensForModel(model);
-    const promptTokens = promptTokensFromUsage(usage);
-    const pct = contextTokens ? (promptTokens / contextTokens) * 100 : 0;
-    let checkpointed = false;
-    if (pct >= CONTEXT_AUTOSAVE_PCT) {
-      try {
-        const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, `auto: ${Math.round(pct)}% threshold`);
-        checkpointed = !!path;
-      } catch (e) {
-        console.warn("[chat] threshold snapshot failed:", e?.message);
+          tokensOut: usage.output_tokens,
+        });
       }
-    }
-    sendSSE(res, "done", { conversationId: convId, usage, model, contextTokens, checkpointed });
-  } catch (err) {
-    const isOverflow = /prompt is too long|context_length_exceeded|input length|too many tokens/i.test(err.message || "");
-    if (isOverflow) {
-      try {
-        const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, "auto: overflow error");
-        if (!res.writableEnded) sendSSE(res, "context_overflow", { checkpointPath: path, message: err.message });
-      } catch (e) {
-        console.warn("[chat] overflow snapshot failed:", e?.message);
+      // (The call's chat keeps its name, "Calls with <name>".)
+      if (convStore.messageCount(convId) <= 2 && !call.isCall) {
+        convStore.updateTitle(convId, message.slice(0, LIMITS.MAX_CONVERSATION_TITLE));
       }
+      const contextTokens = contextWindowFor(provider, model);
+      const promptTokens = promptTokensFromUsage(usage);
+      const pct = contextTokens ? (promptTokens / contextTokens) * 100 : 0;
+      let checkpointed = false;
+      if (pct >= CONTEXT_AUTOSAVE_PCT) {
+        try {
+          const path = snapshotForContextOverflow(req.app.get("db"), settingsStore, `auto: ${Math.round(pct)}% threshold`);
+          checkpointed = !!path;
+        } catch (e) {
+          console.warn("[chat] threshold snapshot failed:", e?.message);
+        }
+      }
+      // "stopped" is the page's word for a turn Stop ended (a queued turn taken out of the queue says it too).
+      const stopReason = endReason === "aborted" ? "stopped" : endReason;
+      sendSSE(res, "done", { conversationId: convId, usage, model, provider, contextTokens, checkpointed, stopReason });
+      broadcastToOthers(convId, "done", { conversationId: convId, stopReason });
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        sendSSE(res, "error", { message: err.message });
+      }
+    } finally {
+      clearInterval(hb);
+      if (activeRequests.get(convId) === controller) {
+        activeRequests.delete(convId);
+      }
+      if (!res.writableEnded) res.end();
     }
-    if (!res.writableEnded) sendSSE(res, "error", { message: err.message });
-  } finally {
-    clearInterval(hb2);
-    if (!res.writableEnded) res.end();
-  }
+  }, {
+    live: {
+      source: "web",
+      prompt: call.isCall ? call.text : message,
+      model: askedModel || null,
+      // Its Stop took it out of the queue: this request is done now, not when the turn ahead ends.
+      onRemoved: endWaiting,
+    },
+  });
+  if (ran === QUEUE_REMOVED && !res.writableEnded) endWaiting();
 });

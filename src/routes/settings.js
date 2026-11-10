@@ -1,13 +1,18 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { Router } from "express";
-import { SettingsStore } from "../db/settings.js";
-import { AI_PROVIDERS } from "../config/constants.js";
-import { getAvailableProviders } from "../ai/router.js";
+import { validateSessionFromRequest, signInEnded, signInRanOut } from "../middleware/auth.js";
+import { csrfProtect } from "../middleware/security.js";
+import { SettingsStore, isAiKeySlot, isEmptySetting, OLD_VOICE_KEY } from "../db/settings.js";
+import { getProvider, isShipped, shippedProviders, checkKeySlot } from "../ai/provider-registry.js";
+import { providerStatus, activeTarget, credentialPresence } from "../ai/provider-status.js";
+import { ensureLocalModels } from "../ai/provider-models.js";
 import { readWorkspaceFile, writeWorkspaceFile, hasBootstrapFile, deleteBootstrapFile } from "../lib/workspace-files.js";
 import { initTTSEngine } from "../voice/engine-registry.js";
-import { redactSecretFields } from "../lib/vault.js";
+import { redactSecretFields, isSecretKey } from "../lib/vault.js";
 import { brandStatus, saveBrandIcon, resetBrandIcon, decodeBase64 } from "../lib/brand-icon.js";
+import { isApprovalKey } from "../lib/automation-approval.js";
 
 export const settingsRouter = Router();
 
@@ -50,28 +55,35 @@ settingsRouter.get("/", (_req, res) => {
 });
 
 /**
- * GET /api/settings/providers
- * Get AI provider list with configuration status.
- */
-settingsRouter.get("/providers", (_req, res) => {
-  res.json({ providers: getAvailableProviders() });
-});
-
-/**
  * POST /api/settings/provider
- * Configure an AI provider.
- * Body: { provider, model?, apiKey?, baseUrl? }
+ * The old setup wizard's route, kept as a thin shim: Settings > AI uses /api/ai (routes/ai.js).
+ * Body: { provider, model?, apiKey? }. provider is a public id or the Claude plan's "claude-code"; it is stored
+ * under the provider's storage id. A key is checked as Settings > AI checks it (format and wrong slot) and saved
+ * encrypted; the placeholder apiKey "subscription" the old wizard sent for the Claude plan is ignored. A baseUrl is
+ * refused: a provider's host is fixed in code, so a stored key only ever goes to its own provider.
  */
 settingsRouter.post("/provider", (req, res) => {
-  const { provider, model, apiKey, baseUrl } = req.body || {};
+  const { provider, model, apiKey } = req.body || {};
 
-  if (!provider || !AI_PROVIDERS[provider]) {
-    return res.status(400).json({ error: "Invalid provider. Valid: " + Object.keys(AI_PROVIDERS).join(", ") });
+  const p = getProvider(provider);
+  if (!p || !isShipped(p.id)) {
+    return res.status(400).json({ error: "Invalid provider. Valid: " + shippedProviders().map((s) => s.id).join(", ") });
+  }
+  if (req.body?.baseUrl != null && req.body.baseUrl !== "") {
+    return res.status(400).json({ error: "A provider's base URL can't be set: each provider's host is fixed, so its key only ever goes there." });
+  }
+  const key = typeof apiKey === "string" ? apiKey.trim().replace(/^(["'])(.*)\1$/, "$2").trim() : "";
+  const placeholder = p.id === "claude" && key === "subscription";
+  if (key && !placeholder) {
+    const slot = checkKeySlot(p.id, key);
+    if (!slot.ok) return res.status(400).json({ error: slot.message });
+    if (/\s|\0/.test(key)) return res.status(400).json({ error: "This key has a line break or a space in it. Copy it again and paste it whole." });
   }
 
-  settingsStore.setActiveProvider(provider, { model, apiKey, baseUrl });
+  settingsStore.setActiveProvider(p.storageId, { model: typeof model === "string" && model.trim() ? model.trim() : undefined });
+  if (key && !placeholder) settingsStore.set(`ai.${p.storageId}.apiKey`, key, { actor: "user", ip: req.ip });
 
-  res.json({ ok: true, provider, model: model || AI_PROVIDERS[provider]?.defaultModel });
+  res.json({ ok: true, provider: p.storageId, model: (typeof model === "string" && model.trim()) || p.defaultModel || null });
 });
 
 /**
@@ -300,13 +312,35 @@ settingsRouter.get("/channel/whatsapp/webhook-url", (_req, res) => {
 /**
  * GET /api/settings/setup-status
  * Check if first-time setup is needed.
+ *
+ * An AI counts as set up when the owner chose one (the wizard or Settings > AI save ai.activeProvider), or when
+ * Railway variables alone set up a ready one: TARSEE_AI_PROVIDER plus that provider's key, or the Claude plan's
+ * CLAUDE_CODE_OAUTH_TOKEN. A Claude sign-in that merely happens to be on the machine doesn't skip the wizard: the
+ * owner still picks. ai says which AI would answer and whether it is ready (providerStatus, as Settings > AI shows
+ * it); railway lists the providers connected through Railway variables, so the wizard can say so. No key is ever
+ * in the answer.
  */
-settingsRouter.get("/setup-status", (req, res) => {
-  const provider = settingsStore.get("ai.activeProvider");
+settingsRouter.get("/setup-status", async (req, res) => {
+  const env = process.env;
+  const chosen = settingsStore.get("ai.activeProvider");
+  let target = activeTarget(settingsStore, { env });
+  let status = await providerStatus(target.provider, { store: settingsStore, env });
+  // Local AI with an address and no model named runs on the first model its server lists, and that list lives only
+  // in memory: read it once (ensureLocalModels never throws), so a restart doesn't bring the wizard back.
+  if (target.provider === "local" && status.state === "needs-setup") {
+    await ensureLocalModels(settingsStore, { env });
+    target = activeTarget(settingsStore, { env });
+    status = await providerStatus(target.provider, { store: settingsStore, env });
+  }
+  const fromRailway = (s) => typeof s.keySource === "string" && s.keySource.startsWith("env:");
+  const railwayOnly = !chosen && status.ready && (target.chosenBy === "env" || (target.provider === "claude" && fromRailway(status)));
+  const configured = !!chosen || railwayOnly;
+  const railway = shippedProviders()
+    .map((p) => ({ p, s: credentialPresence(p.id, { store: settingsStore, env }) }))
+    .filter(({ s }) => fromRailway(s))
+    .map(({ p, s }) => ({ id: p.id, label: p.label, envKey: s.keySource.slice(4) }));
+
   const botName = settingsStore.get("identity.name");
-  const hasKey = provider === "claude-code"; // Claude Code uses subscription auth, no API key
-  // Claude Code is configured if CLAUDE_OAUTH_CREDENTIALS env var is set
-  const envConfigured = !!process.env.CLAUDE_OAUTH_CREDENTIALS;
   // Personality is "done" if bot name was set, OR if SOUL.md/systemPrompt exist,
   // OR if setup was explicitly completed, OR if conversations already exist (not first-time)
   const setupCompleted = !!settingsStore.get("setup.completed");
@@ -314,11 +348,22 @@ settingsRouter.get("/setup-status", (req, res) => {
   const hasConversations = db ? (db.prepare("SELECT COUNT(*) as c FROM conversations").get()?.c || 0) > 0 : false;
   const hasPersonality = !!botName || !!settingsStore.get("identity.systemPrompt") || setupCompleted || hasConversations;
   res.json({
-    needsSetup: !provider && !envConfigured,
+    needsSetup: !configured,
     needsPersonality: !hasPersonality,
     botName: botName || "Tarsee",
-    provider: provider || null,
-    hasKey: hasKey || envConfigured,
+    provider: configured ? target.provider : null,
+    hasKey: configured,
+    ai: {
+      provider: target.provider,
+      label: target.label,
+      model: target.model,
+      chosenBy: target.chosenBy,
+      state: status.state,
+      ready: status.ready,
+      detail: status.detail,
+      fix: status.fix,
+    },
+    railway,
   });
 });
 
@@ -362,7 +407,8 @@ settingsRouter.put("/workspace-file", (req, res) => {
 /**
  * POST /api/settings/general
  * Update general settings.
- * Body: { key, value }
+ * Body: { key, value }. For a secret (a key, token or password) an empty value (none, null, "" or only spaces)
+ * deletes it: { ok, removed } says whether there was one.
  */
 settingsRouter.post("/general", (req, res) => {
   const { key, value } = req.body || {};
@@ -377,13 +423,39 @@ settingsRouter.post("/general", (req, res) => {
     return res.status(400).json({ error: "Use the dedicated endpoint for channel settings" });
   }
 
+  // An AI's key goes through Settings > AI (PUT /api/ai/keys/<id>), which checks it is that AI's key and never a
+  // masked display ("sk-p...wxyz") posted back. The old Voice tab's copy of the OpenAI key is read by nothing.
+  if (isAiKeySlot(key) || key === OLD_VOICE_KEY) {
+    return res.status(400).json({ error: "Save AI keys in Settings > AI." });
+  }
+
+  // The owner's OK for HEARTBEAT.md and BOOT.md is given only from the dashboard's own session
+  // (routes/automation-approval.js); written here, the API token could OK what the AI wrote.
+  if (isApprovalKey(key)) {
+    return res.status(400).json({ error: "OK HEARTBEAT.md and BOOT.md in Settings > Automation." });
+  }
+
+  // The saved scheduled tasks change only through /cron below, which keeps the owner's OK: written here, the API token
+  // could save a task switched on that the owner never saw, and it would start with Tarsee's next restart.
+  if (key === "cron.jobs") {
+    return res.status(400).json({ error: "Add, switch on or delete scheduled tasks in Settings > Automation > Scheduled tasks." });
+  }
+
   // Enum-shaped settings — defend the API even though the UI dropdown
   // already constrains the input. Anyone can hit /api/settings/general.
   if (key.endsWith(".mention_mode") && value !== "required" && value !== "off") {
     return res.status(400).json({ error: "mention_mode must be 'required' or 'off'" });
   }
 
-  settingsStore.set(key, value);
+  // A secret sent with nothing in it (Settings > Security's Remove sends "" for the captcha key) is a removal: the row
+  // is deleted and audited as credential.delete. Saved, it would sit in the table as an encrypted empty string that
+  // read back as a saved key.
+  let removed;
+  if (isSecretKey(key) && isEmptySetting(value)) {
+    removed = settingsStore.delete(key, { actor: "user", ip: req.ip, detail: "Removed in Settings" });
+  } else {
+    settingsStore.set(key, value, { actor: "user", ip: req.ip });
+  }
 
   // Hot-reload: re-init TTS engine when voice settings change (no restart needed)
   if (key.startsWith("voice.")) {
@@ -392,7 +464,7 @@ settingsRouter.post("/general", (req, res) => {
     });
   }
 
-  res.json({ ok: true });
+  res.json(removed === undefined ? { ok: true } : { ok: true, removed });
 });
 
 /**
@@ -457,21 +529,121 @@ settingsRouter.get("/cron", async (_req, res) => {
 });
 
 /**
+ * Who asks to switch a scheduled task on, or to add one switched on:
+ *   "owner"       the owner's own dashboard: signed in (the session cookie), with the page's CSRF token.
+ *   "stale-page"  signed in, but the page's CSRF token has run out (the dashboard fetches a fresh one and asks again).
+ *   "signed-out"  the dashboard after its sign-in ran out: the sign-in's cookie, no longer on (signInEnded), and the API
+ *                 token the page still sends. Not the owner, but told to sign in again rather than of the token.
+ *   "token"       anything else, the API token alone above all.
+ * The API token is never enough. Tarsee saves it in the state folder (api.token) unless TARSEE_API_TOKEN is set, and the
+ * AI's shell runs as the same user, so with the token alone the AI could OK the task it has just scheduled. The
+ * dashboard sends the token too (js/api.js), and sessionAuth names a request by its token first (req.auth.method
+ * "bearer"), so a token request is checked here for the sign-in and the CSRF token, which csrfProtect skips for it. A
+ * request let in by the sign-in alone ("session") has passed both (server.js mounts this router behind requireAuth and
+ * csrfProtect). With no req.auth at all, nobody signed in.
+ */
+function whoIsAsking(req) {
+  if (req.auth?.method === "session") return "owner";
+  if (req.auth?.method === "bearer" && validateSessionFromRequest(req)) return hasPageCsrfToken(req) ? "owner" : "stale-page";
+  return signInEnded(req) ? "signed-out" : "token";
+}
+
+/** Whether a request carries the page's CSRF token: csrfProtect's own check, run as for a signed-in request. */
+function hasPageCsrfToken(req) {
+  let passed = false;
+  const asSignedIn = { auth: { method: "session" }, method: req.method, headers: req.headers };
+  const refused = { status: () => ({ json: () => {} }) };
+  try {
+    csrfProtect(asSignedIn, refused, () => { passed = true; });
+  } catch {
+    // a token that isn't one Tarsee made
+  }
+  return passed;
+}
+
+// "CSRF token" in it: js/api.js then fetches a fresh token and sends the request once more.
+const STALE_PAGE = "This page's security check (its CSRF token) has run out. Reload the page, then try again.";
+
+const tokenCantSwitchOn = (id) => `Only you can switch a scheduled task on, signed in to your dashboard: the API token can't, because the AI can read it. Switch it on in Settings > Automation > Scheduled tasks, or with /cron on ${id} from your own chat.`;
+
+/**
+ * Whether a task is still the one the owner's row showed (CronCore.seenOf in js/cron-core.js): its schedule, and its
+ * prompt or, for a task that runs a tool directly, its action.
+ */
+function sameAsSeen(job, seen) {
+  if (!seen || typeof seen !== "object" || seen.schedule !== job.schedule) return false;
+  if (job.action?.tool) return isDeepStrictEqual(seen.action, job.action);
+  return seen.action == null && seen.prompt === (job.prompt ?? "");
+}
+
+/**
  * POST /api/settings/cron
- * Add a new cron job.
- * Body: { schedule, prompt, channel?, enabled? }
+ * Add a task. Body: { schedule, prompt, channel?, enabled? }
+ * From the owner's dashboard (the form in Settings > Automation > Scheduled tasks) it is the owner's, switched on. With
+ * the API token alone it may be the AI's (whoIsAsking), so it is saved as one the AI made: switched off and waiting for
+ * the owner's OK, whatever enabled says, with a note saying so.
  */
 settingsRouter.post("/cron", async (req, res) => {
   const { schedule, prompt, channel, enabled } = req.body || {};
   if (!schedule || !prompt) {
     return res.status(400).json({ error: "schedule and prompt are required" });
   }
+  const who = whoIsAsking(req);
+  if (who === "stale-page") return res.status(403).json({ error: STALE_PAGE });
   try {
     const { addCronJob } = await import("../lib/cron.js");
-    const job = addCronJob({ schedule, prompt, channel, enabled });
-    res.status(201).json(job);
+    if (who === "owner") {
+      return res.status(201).json(addCronJob({ schedule, prompt, channel, enabled: enabled !== false, createdBy: "owner" }));
+    }
+    const job = addCronJob({ schedule, prompt, channel, createdBy: "ai" });
+    res.status(201).json({ ...job, note: `Added switched off: a task added with the API token waits for the owner's OK in Settings > Automation > Scheduled tasks (or /cron on ${job.id} from the owner's own chat).` });
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/settings/cron/:id
+ * Switch a task on or off (the Switch on and Pause buttons). Body: { enabled: true | false, seen? }.
+ * Pausing only stops runs: anyone signed in or with the API token may. Switching on is the owner's OK (a task the AI
+ * made stops waiting and gets its timer), so it takes:
+ *   - the owner's dashboard (whoIsAsking): the API token alone gets 403, with needsSignIn (the dashboard then asks the
+ *     owner to sign in again: its sign-in ran out and it went on with the token). A tab whose sign-in has run out is
+ *     told just that ("signed-out"); a caller with no sign-in at all gets the API token's own words;
+ *   - seen: what the owner's row showed (CronCore.seenOf): { schedule, prompt }, or { schedule, action }. A task that no
+ *     longer matches it (changed where it is saved after the list was drawn) gets 409, and the page draws the list
+ *     again; a switch-on without it gets 400.
+ */
+settingsRouter.patch("/cron/:id", async (req, res) => {
+  const { enabled, seen } = req.body || {};
+  const id = req.params.id;
+  if (typeof enabled !== "boolean") {
+    return res.status(400).json({ error: "enabled must be true or false" });
+  }
+  if (enabled) {
+    const who = whoIsAsking(req);
+    if (who === "stale-page") return res.status(403).json({ error: STALE_PAGE });
+    if (who === "signed-out") return res.status(403).json({ error: signInRanOut("switch the task on"), needsSignIn: true });
+    if (who !== "owner") return res.status(403).json({ error: tokenCantSwitchOn(id), needsSignIn: true });
+  }
+  try {
+    const { loadCronJobs, setCronJobEnabled } = await import("../lib/cron.js");
+    if (enabled) {
+      const saved = loadCronJobs().find((j) => j.id === id);
+      if (!saved) return res.status(404).json({ error: `No scheduled task ${id}` });
+      if (seen == null) {
+        return res.status(400).json({ error: "Tarsee can't tell which version of this task you looked at. Reload the page, look at the task again, then switch it on." });
+      }
+      if (!sameAsSeen(saved, seen)) {
+        return res.status(409).json({ error: "This task changed after your list was drawn: when it runs or what it does is different now. Look at it again, then switch it on if you still want it." });
+      }
+    }
+    // Nothing waits between the check and this: both read and write the saved tasks synchronously.
+    const job = setCronJobEnabled(id, enabled);
+    if (!job) return res.status(404).json({ error: `No scheduled task ${id}` });
+    res.json({ ok: true, job });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

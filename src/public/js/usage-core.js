@@ -6,9 +6,14 @@
  *   tps           a speed: "38 tk/s", "4.2 tk/s"
  *   dur           how long: 41s, 2m 05s, 1h 05m
  *   pct           a share: "96%"
- *   answerLine    the line under a reply: "12.4k tokens · 38 tk/s · 41s"
+ *   money         dollars: "$0.06", "$1,234.50", "under $0.01"
+ *   costText      what something cost, from the API's costUsd and costNote: "$0.37", "$0.06 est.",
+ *                 "Included in plan", "Free", "Cost not known"
+ *   answerLine    the line under a reply: "12.4k tokens · 38 tk/s · 41s" (and "· $0.01 est." when it was billed)
  *   liveLine      the working line's part: "84.2k tokens · 41 tk/s"
- *   breakdown     a turn's or a job's numbers, in rows
+ *   breakdown     a turn's or a job's numbers, in rows (with what it cost, when that is known)
+ *   spendLine     under the chart: the days' spend and the daily average
+ *   providerChoices  the page's filter by AI: shown once more than one did work
  *   when, span    a moment and a run of time
  *   dayLabel, hourLabel   a chart bar's label
  *   bars          a chart's bars: where each one goes and how tall
@@ -71,10 +76,34 @@
     return `${Math.round(v * 100)}%`;
   }
 
-  /** The line under a reply. t: { total, outTps, ms } (a turn from the API). */
+  /** Dollars: two decimals with thousands separators; a positive amount under half a cent is "under $0.01". */
+  function money(usd) {
+    if (usd == null || !Number.isFinite(Number(usd))) return "";
+    const v = Number(usd);
+    if (v > 0 && v < 0.005) return "under $0.01";
+    return `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+
+  /**
+   * What something cost, from the API's costUsd and costNote (lib/token-usage.js costNoteOf):
+   * "exact" an amount the provider reported, "est" one worked out from its price list, "plan" included in a plan
+   * (never billed per use), "free" a local AI with no price, "unknown" billed but no price known; "" for nothing.
+   */
+  function costText(c) {
+    if (!c) return "";
+    const note = c.costNote;
+    if (note === "plan") return "Included in plan";
+    if (note === "free") return "Free";
+    if (note === "unknown") return "Cost not known";
+    if (c.costUsd == null || !Number.isFinite(Number(c.costUsd))) return "";
+    return note === "est" ? `${money(c.costUsd)} est.` : money(c.costUsd);
+  }
+
+  /** The line under a reply. t: { total, outTps, ms, costUsd, costNote } (a turn from the API). A plan's cost is left out. */
   function answerLine(t) {
     if (!t || !(t.total > 0)) return "";
-    return [`${tokens(t.total)} tokens`, t.outTps != null ? tps(t.outTps) : "", t.ms != null ? dur(t.ms) : ""].filter(Boolean).join(" · ");
+    const billed = (t.costNote === "est" || t.costNote === "exact") && t.costUsd != null ? costText(t) : "";
+    return [`${tokens(t.total)} tokens`, t.outTps != null ? tps(t.outTps) : "", t.ms != null ? dur(t.ms) : "", billed].filter(Boolean).join(" · ");
   }
 
   /**
@@ -102,7 +131,42 @@
     ];
     if (t.genMs) rows.push({ label: "Generating", value: dur(t.genMs), note: `over ${num(t.calls)} model call${t.calls === 1 ? "" : "s"}` });
     else if (t.calls) rows.push({ label: "Model calls", value: num(t.calls) });
+    const cost = costText(t);
+    if (cost) rows.push({ label: "Cost", value: cost, note: COST_NOTES[t.costNote] || "" });
     return rows;
+  }
+  const COST_NOTES = {
+    exact: "as the provider reported it",
+    est: "worked out from the provider's price list",
+    plan: "a plan has no charge per use",
+    free: "your own AI server, no price set",
+    unknown: "no price known for this model",
+  };
+
+  /**
+   * The chart's spend line, from its days ([{ costUsd, costNote }]): "Spent $1.40 est. over 14 days, about $0.10 a
+   * day" ("est." when any day's is), "Included in plan" when only a plan did work, "" when nothing ran.
+   */
+  function spendLine(days) {
+    const list = Array.isArray(days) ? days : [];
+    const priced = list.filter((d) => d && d.costUsd != null && Number.isFinite(Number(d.costUsd)));
+    if (!priced.length) return list.some((d) => d && d.costNote === "plan") ? "Included in plan" : "";
+    const sum = priced.reduce((a, d) => a + Number(d.costUsd), 0);
+    const est = priced.some((d) => d.costNote === "est") ? " est." : "";
+    return `Spent ${money(sum)}${est} over ${list.length} day${list.length === 1 ? "" : "s"}, about ${money(sum / list.length)} a day`;
+  }
+
+  /**
+   * The page's filter by AI. list: the API's `providers` ([{ id, label }]), current: the id in use or null.
+   * Returns { show, items: [{ id, label, pressed }] }, "All" first; shown once more than one AI did work, and
+   * while a filter is in use (so it can be taken off).
+   */
+  function providerChoices(list, current) {
+    const ps = Array.isArray(list) ? list.filter((p) => p && p.id) : [];
+    const cur = current || null;
+    const items = [{ id: null, label: "All", pressed: !cur }, ...ps.map((p) => ({ id: p.id, label: p.label || p.id, pressed: p.id === cur }))];
+    if (cur && !ps.some((p) => p.id === cur)) items.push({ id: cur, label: cur, pressed: true });
+    return { show: ps.length > 1 || !!cur, items };
   }
   function num(n) { return Math.round(Number(n) || 0).toLocaleString("en-US"); }
 
@@ -159,6 +223,6 @@
     return 10 * p;
   }
 
-  const api = { setTimeZone, timeZone, tokens, tps, dur, pct, answerLine, liveLine, breakdown, when, dayLabel, hourLabel, span, bars, niceMax };
+  const api = { setTimeZone, timeZone, tokens, tps, dur, pct, money, costText, answerLine, liveLine, breakdown, spendLine, providerChoices, when, dayLabel, hourLabel, span, bars, niceMax };
   globalThis.UsageCore = Object.freeze(api);
 })();

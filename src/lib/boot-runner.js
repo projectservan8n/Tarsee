@@ -3,9 +3,10 @@ import path from "node:path";
 import crypto from "node:crypto";
 import config from "../config/env.js";
 import { getBootContext, hasBootstrapFile, appendDailyLog } from "./workspace-files.js";
-import { buildSystemPrompt } from "./build-system-prompt.js";
-import { runBackgroundTurn, resolveBackgroundModel } from "./background-turn.js";
+import { buildSystemPromptParts } from "./build-system-prompt.js";
+import { runBackgroundTurn, resolveBackgroundModel, defaultAiReadiness, overBudgetWarning } from "./background-turn.js";
 import { BACKGROUND_DEFAULTS } from "../config/constants.js";
+import { gateAutomation, upgradeApproval } from "./automation-approval.js";
 
 /**
  * Marker recording which build last ran the boot checklist.
@@ -44,7 +45,10 @@ function recordRun(fingerprint) {
 
 /**
  * Boot runner — executes BOOT.md as a one-shot AI task on every server restart.
- * Skips if BOOT.md is empty or no AI provider is configured.
+ * Skips if BOOT.md is empty or no AI provider is configured, and runs only text the owner has OK'd
+ * (lib/automation-approval.js): the AI can write BOOT.md in any chat, and without this every restart would start a
+ * paid turn on its say-so. A change made outside Settings waits for the owner's OK (Settings > Automation shows it,
+ * with Run at each restart).
  *
  * @param {object} opts
  * @param {import('better-sqlite3').Database} opts.db
@@ -53,17 +57,34 @@ function recordRun(fingerprint) {
  * @returns {Promise<{skipped: boolean, response?: string, error?: string}>}
  */
 export async function runBootChecklist({ db, settingsStore, channelManager = null }) {
-  const bootContent = getBootContext();
+  // The first start of this version: the BOOT.md already here counts as the owner's, once, so an existing install
+  // keeps running as before. server.js calls this at boot, and this part runs before anything is awaited.
+  try {
+    upgradeApproval(settingsStore, "BOOT.md");
+  } catch (err) {
+    console.warn("[boot] could not note the owner's OK for BOOT.md:", err.message);
+  }
 
-  if (!bootContent) {
+  if (!getBootContext()) {
     console.log("[boot] BOOT.md is empty, skipping boot checklist");
     return { skipped: true, reason: "BOOT.md is empty" };
   }
 
-  const activeProvider = settingsStore.getActiveProvider();
-  if (!activeProvider?.ready || !activeProvider?.provider) {
-    console.log("[boot] No AI provider configured, skipping boot checklist");
-    return { skipped: true, reason: "No AI provider configured" };
+  // Only text the owner has OK'd runs, and what is sent is that text. Checked before anything else is asked of the AI.
+  const gate = gateAutomation(settingsStore, "BOOT.md");
+  if (!gate.run) {
+    if (gate.empty) {
+      console.log("[boot] BOOT.md is empty, skipping boot checklist");
+      return { skipped: true, reason: "BOOT.md is empty" };
+    }
+    return { skipped: true, reason: gate.reason, ...(gate.waiting ? { waitingForOwner: true } : {}) };
+  }
+  const bootContent = gate.prompt;
+
+  const ai = await defaultAiReadiness(settingsStore);
+  if (!ai.ready) {
+    console.log(`[boot] skipping the boot checklist: ${ai.reason}`);
+    return { skipped: true, reason: ai.reason };
   }
 
   // Once per build, not once per process start. See BOOT_MARKER above.
@@ -76,7 +97,7 @@ export async function runBootChecklist({ db, settingsStore, channelManager = nul
 
   console.log("[boot] Running boot checklist...");
 
-  const systemPrompt = buildSystemPrompt({
+  const systemParts = buildSystemPromptParts({
     settingsStore,
     db,
     conversationId: null,
@@ -94,14 +115,14 @@ export async function runBootChecklist({ db, settingsStore, channelManager = nul
   ];
 
   const toolCtx = { db, settingsStore, conversationId: null, channelManager };
-  const { text: fullResponse, error } = await runBackgroundTurn({
+  const { text: fullResponse, error, overBudget } = await runBackgroundTurn({
     label: "boot",
     liveId: "boot",
     liveSource: "boot",
     // Cheap by default; `boot.model` raises it for a checklist that needs it.
-    model: resolveBackgroundModel(settingsStore.get("boot.model")),
+    model: resolveBackgroundModel(settingsStore.get("boot.model"), null, settingsStore),
     messages,
-    systemPrompt,
+    systemParts,
     toolCtx,
     timeoutMs: BACKGROUND_DEFAULTS.BOOT_TIMEOUT_MS,
   });
@@ -111,8 +132,11 @@ export async function runBootChecklist({ db, settingsStore, channelManager = nul
     return { skipped: false, error };
   }
 
-  appendDailyLog(`[boot] ${fullResponse.slice(0, 200)}`);
-  return { skipped: false, response: fullResponse };
+  // Finished, but over its spending limit (a Codex AI's cost is known only at the end).
+  const warning = overBudgetWarning(overBudget);
+  if (warning) console.warn(`[boot] the checklist ${warning.charAt(0).toLowerCase()}${warning.slice(1)}`);
+  appendDailyLog(`[boot] ${fullResponse.slice(0, 200)}${warning ? ` (${warning})` : ""}`);
+  return { skipped: false, response: fullResponse, ...(warning ? { warning } : {}) };
 }
 
 /**

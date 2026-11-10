@@ -7,14 +7,14 @@ import { withConversationTurn } from "../lib/conversation-lock.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { processCommand, extractPlaybookPrompt, getCommandList } from "../lib/commands.js";
-import { getToolDefinitions, executeTool } from "../lib/tools.js";
-import { buildSystemPrompt, sendFileHint } from "../lib/build-system-prompt.js";
+import { buildSystemPromptParts, sendFileHint } from "../lib/build-system-prompt.js";
 import { parseReactions } from "../lib/reaction-parser.js";
 import { extractAndSaveMemories } from "../lib/memory-extractor.js";
 import { toolStatusLabel, toolDoneLabel } from "../lib/tool-status.js";
 import { transcribeAudio } from "../voice/stt-handler.js";
 import envConfig from "../config/env.js";
 import { refused } from "../lib/channel-errors.js";
+import { turnErrorNote, idleNote, errorStillToSay, sttProblem } from "./turn-notes.js";
 
 /**
  * Creates and starts a Telegram bot.
@@ -29,6 +29,7 @@ import { refused } from "../lib/channel-errors.js";
 export async function createTelegramBot(config, db, opts = {}) {
   const convStore = new ConversationStore(db);
   const settingsStore = new SettingsStore(db);
+  const streamChat = opts.chatStream || chatStream;
 
   // Telegraf's default handlerTimeout (90s) abandons a handler mid-turn — the
   // reply gets generated but NEVER delivered, and stderr fills with
@@ -113,6 +114,42 @@ export async function createTelegramBot(config, db, opts = {}) {
     }
   }
 
+  /** The allowlist from config or Settings: chat ids (a private chat's id is its person's user id). */
+  function allowedChatsNow() {
+    const dbAllowlist = settingsStore.get("allowlist.telegram");
+    return config.allowedChats?.length > 0 ? config.allowedChats : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
+  }
+
+  /**
+   * Whether the sender is the owner, for the owner's commands (/cron, /briefing, /webhook: lib/commands.js): their own
+   * user id is on the allowlist (in a private chat that is the chat's id too). A listed group lets its members talk
+   * to the bot, not manage it; with no allowlist anyone can talk to it, so nobody counts.
+   */
+  function senderIsOwner(ctx) {
+    const list = allowedChatsNow().map(String);
+    return list.length > 0 && ctx.from?.id != null && list.includes(String(ctx.from.id));
+  }
+
+  /**
+   * Whether this chat may talk to the bot: the allowlist from config or Settings (empty lets every chat in).
+   * Settings says to message the bot and read the chat ID in the Console, so a dropped chat says its ID, and with no
+   * allowlist yet each chat says it once (to start one with) without filling the Console.
+   */
+  function chatAllowed(ctx) {
+    const chatId = ctx.chat.id;
+    const allowedChats = allowedChatsNow();
+    if (allowedChats.length > 0) {
+      if (!allowedChats.includes(String(chatId))) {
+        console.warn(`[telegram] ignoring message from chat ${chatId} (${chatLabel(ctx.chat, ctx.from)}): not on the Telegram allowlist`);
+        return false;
+      }
+    } else if (!chatsSeen.has(chatId)) {
+      chatsSeen.add(chatId);
+      console.log(`[telegram] message from chat ${chatId} (${chatLabel(ctx.chat, ctx.from)})`);
+    }
+    return true;
+  }
+
   /**
    * Handle a message (shared by text, photo, and callback handlers).
    * @param {object} ctx - Telegraf context
@@ -124,20 +161,7 @@ export async function createTelegramBot(config, db, opts = {}) {
     const chatId = ctx.chat.id;
     const username = ctx.from.username || ctx.from.first_name || "User";
 
-    // Check allowed chats (from config or settings DB allowlist)
-    const dbAllowlist = settingsStore.get("allowlist.telegram");
-    const allowedChats = config.allowedChats?.length > 0 ? config.allowedChats : (dbAllowlist ? (typeof dbAllowlist === "string" ? JSON.parse(dbAllowlist) : dbAllowlist) : []);
-    // Settings says to message the bot and read the chat ID in the Console, so a dropped chat says its ID, and with no
-    // allowlist yet each chat says it once (to start one with) without filling the Console.
-    if (allowedChats.length > 0) {
-      if (!allowedChats.includes(String(chatId))) {
-        console.warn(`[telegram] ignoring message from chat ${chatId} (${chatLabel(ctx.chat, ctx.from)}): not on the Telegram allowlist`);
-        return;
-      }
-    } else if (!chatsSeen.has(chatId)) {
-      chatsSeen.add(chatId);
-      console.log(`[telegram] message from chat ${chatId} (${chatLabel(ctx.chat, ctx.from)})`);
-    }
+    if (!chatAllowed(ctx)) return;
 
     if (!text?.trim()) return;
 
@@ -156,6 +180,7 @@ export async function createTelegramBot(config, db, opts = {}) {
         convStore,
         conversationId: existingConvId,
         platform: "telegram",
+        owner: senderIsOwner(ctx),
         // `db` was missing — /clear could not do its DB cleanup and silently
         // no-op'd, letting sessions accumulate huge transcripts.
         db,
@@ -196,12 +221,8 @@ export async function createTelegramBot(config, db, opts = {}) {
       content: `[${username}]: ${text}${attachments.length ? ` [+${attachments.length} image(s)]` : ""}`,
     });
 
-    // Get provider
-    const activeProvider = settingsStore.getActiveProvider();
-    if (!activeProvider?.provider || !activeProvider?.ready) {
-      await ctx.reply("No AI provider configured. Set one up in the Tarsee web panel.");
-      return;
-    }
+    // Which AI answers is the turn layer's to decide (ai/turn.js: this chat's own pick, else the default), and so is
+    // saying what to set up when that AI isn't ready: its answer is the reply.
 
     // Ack reaction — let user know we're processing
     const ackEmoji = config.ackReaction ?? "👀";
@@ -221,7 +242,7 @@ export async function createTelegramBot(config, db, opts = {}) {
     // Build full system prompt
     const history = convStore.getRecentMessages(convId, 15);
     const conv = convStore.get(convId);
-    const systemPrompt = buildSystemPrompt({
+    const systemParts = buildSystemPromptParts({
       settingsStore,
       db,
       conversationId: convId,
@@ -235,10 +256,8 @@ ${sendFileHint("telegram")}`,
     });
 
     let fullResponse = "";
-    const tools = getToolDefinitions();
     // messageId: the message this turn answers (its pictures are kept on it, not on whatever came in later)
     const toolCtx = { db, settingsStore, conversationId: convId, messageId: savedUser?.id || null };
-    const MAX_TOOL_ROUNDS = 15;
 
     // Idle watchdog: if the SDK goes 3 min without emitting an event we abort
     // and send the user an explicit message instead of hanging forever.
@@ -363,8 +382,10 @@ ${sendFileHint("telegram")}`,
     // Follow-ups queue instead of racing: a quick correction is usually meant
     // to be read, not dropped.
     await withConversationTurn(convId, async () => {
+    // The AI this turn runs on, from the turn layer's route event (the backup model's, if it answered instead).
+    let routed = null;
     try {
-      let workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
+      const workingMessages = history.map((m) => ({ role: m.role, content: m.content }));
 
       // Slash-command playbooks: keep the user's literal "/checkpoint" in
       // the DB / chat history, but swap the AI-visible last user turn for
@@ -385,119 +406,63 @@ ${sendFileHint("telegram")}`,
         }
       }
 
-      // One-shot retry budget for recoverable session-corruption errors
-      // (Anthropic API rejecting diagnostics.previous_message_id from a
-      // stale resumed session). We clear the stored session id and retry
-      // the SAME round once. Further rounds use the cleared (null) session
-      // so we don't loop on the same corrupt state.
-      let sessionRetried = false;
       let surfacedError = null;
       // Token usage for this turn — drives Settings -> Token Health.
       // Channels previously recorded NO token data at all, so every
       // channel conversation showed up as an estimate instead of real numbers.
       let tokenUsage = {};
+      const toolsSeen = new Map(); // tool id → { name, input }, for its "done" label
 
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        const toolCalls = [];
-        let roundText = "";
-        let stopReason = "end_turn";
-        let recoverRound = false;
+      // One call per message. The engine runs its own tools and ends the turn itself, and the turn layer
+      // (ai/turn.js) retries, once and fresh, a session the engine couldn't resume. The channel never calls the AI
+      // again on its own: it shows what the turn says.
+      const stream = streamChat({
+        liveSource: "telegram",
+        messages: workingMessages,
+        systemParts,
+        toolCtx,
+        sessionId: convStore.getSessionHandle(convId),
+        onSessionId: (handle) => convStore.setSessionHandle(convId, handle),
+        signal: controller.signal,
+      });
 
-        const existingSessionId = convStore.getClaudeSessionId(convId);
-        const stream = (opts.chatStream || chatStream)({
-          liveSource: "telegram",
-          provider: activeProvider.provider,
-          model: activeProvider.model,
-          messages: workingMessages,
-          systemPrompt,
-          tools,
-          toolCtx,
-          sessionId: existingSessionId,
-          onSessionId: (sid) => convStore.setClaudeSessionId(convId, sid),
-          // Resolve per-session thinking effort so /think works here too
-          // (web chat calls the provider directly; channels go via the router).
-          effort: settingsStore.get(`session.${convId}.effort`) || undefined,
-          signal: controller.signal,
-        });
-
-        for await (const event of stream) {
-          lastEventAt = Date.now();
-          if (event.type === "text") {
-            roundText += event.content;
-            fullResponse += event.content;
-            // Stream this delta into the current segment message — create
-            // the placeholder on first text of each segment.
-            if (!segmentMsgId) {
-              try {
-                const placeholder = await ctx.reply("…");
-                segmentMsgId = placeholder.message_id;
-              } catch { /* if reply fails just keep accumulating; we'll
-                            fall back to a final batched send */ }
-            }
-            segmentText += event.content;
-            await flushSegmentEdit(false);
-          } else if (event.type === "tool_use") {
-            // Narration ends here — finalize the visible segment and post
-            // the tool status indicator.
-            await closeSegment();
-            toolCalls.push({ id: event.id, name: event.name, input: event.input });
-            const callJson = JSON.stringify({ name: event.name, arguments: event.input })
-              .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
-            fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
-            await postToolStatus(event);
-          } else if (event.type === "tool_result") {
-            // Claude Code runs the tools itself and reports each result here, then ends the turn with "end_turn", so
-            // the tool loop below never runs for it. Without this every status line stayed "⚙️ Running…" for good.
-            const tc = toolCalls.find((t) => t.id === event.id);
-            await markToolDone(event.id, tc?.name || "tool", tc?.input || {}, event.ok === false ? "error" : "");
-          } else if (event.type === "error") {
-            if (event.recoverable && !sessionRetried) {
-              sessionRetried = true;
-              recoverRound = true;
-              convStore.setClaudeSessionId(convId, null);
-              console.warn(`[telegram] session corrupt, clearing and retrying: ${String(event.message || "").slice(0, 200)}`);
-              // Drop any half-built segment placeholder so we don't leave
-              // a stray "…" message hanging when the retry succeeds.
-              if (segmentMsgId) {
-                try { await ctx.telegram.deleteMessage(chatId, segmentMsgId); } catch {}
-                segmentMsgId = null;
-                segmentText = "";
-              }
-            } else {
-              surfacedError = event.message;
-            }
-          } else if (event.type === "usage") {
-            tokenUsage = { ...tokenUsage, ...event.usage };
-          } else if (event.type === "done") {
-            stopReason = event.stopReason || "end_turn";
-            break;
+      for await (const event of stream) {
+        lastEventAt = Date.now();
+        if (event.type === "route") {
+          routed = event;
+        } else if (event.type === "text") {
+          fullResponse += event.content;
+          // Stream this delta into the current segment message — create
+          // the placeholder on first text of each segment.
+          if (!segmentMsgId) {
+            try {
+              const placeholder = await ctx.reply("…");
+              segmentMsgId = placeholder.message_id;
+            } catch { /* if reply fails just keep accumulating; we'll
+                          fall back to a final batched send */ }
           }
-        }
-
-        if (recoverRound) { round--; continue; }
-        if (surfacedError) break;
-        if (toolCalls.length === 0 || stopReason !== "tool_use") break;
-
-        // Build assistant message with tool_use blocks
-        const assistantContent = [];
-        if (roundText) assistantContent.push({ type: "text", text: roundText });
-        for (const tc of toolCalls) {
-          assistantContent.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
-        }
-        workingMessages.push({ role: "assistant", content: assistantContent });
-
-        // Execute tools and update each status message as results land.
-        const toolResults = [];
-        for (const tc of toolCalls) {
-          console.log(`[telegram] tool: ${tc.name}`);
-          const result = await executeTool(tc.name, tc.input, toolCtx);
-          toolResults.push({ type: "tool_result", tool_use_id: tc.id, content: result });
-          const resultText = (typeof result === "string" ? result : JSON.stringify(result))
+          segmentText += event.content;
+          await flushSegmentEdit(false);
+        } else if (event.type === "tool_use") {
+          // Narration ends here — finalize the visible segment and post
+          // the tool status indicator.
+          await closeSegment();
+          toolsSeen.set(event.id, { name: event.name, input: event.input });
+          const callJson = JSON.stringify({ name: event.name, arguments: event.input })
             .replace(/<\/(tool_call|tool_response)>/gi, "<_/$1>");
-          fullResponse += `\n<tool_response>${resultText}</tool_response>\n`;
-          await markToolDone(tc.id, tc.name, tc.input, result);
+          fullResponse += `\n<tool_call>${callJson}</tool_call>\n`;
+          await postToolStatus(event);
+        } else if (event.type === "tool_result") {
+          // The engine runs the tool and reports its result here: the status line turns ✓ or ❌.
+          const tc = toolsSeen.get(event.id);
+          await markToolDone(event.id, tc?.name || "tool", tc?.input || {}, event.ok === false ? "error" : "");
+        } else if (event.type === "error") {
+          surfacedError = event.message || "something went wrong";
+        } else if (event.type === "usage") {
+          tokenUsage = { ...tokenUsage, ...event.usage };
+        } else if (event.type === "done") {
+          break;
         }
-        workingMessages.push({ role: "user", content: toolResults });
       }
 
       if (fullResponse) {
@@ -507,8 +472,8 @@ ${sendFileHint("telegram")}`,
         convStore.addMessage(convId, {
           role: "assistant",
           content: cleanText,
-          provider: activeProvider.provider,
-          model: activeProvider.model,
+          provider: routed?.provider || null,
+          model: routed?.model || null,
           // True prompt size = input + cache_read + cache_creation. Using
           // input_tokens alone undercounts context fill whenever caching
           // kicks in (which is almost always on a long session).
@@ -542,24 +507,21 @@ ${sendFileHint("telegram")}`,
           // Surface a soft note so the chat doesn't look broken.
           await ctx.reply("⚠️ Done — no message body.").catch(() => {});
         }
-      } else if (surfacedError) {
-        // Show a clean recovery message instead of leaking the raw API
-        // error string. Session has already been cleared above, so the
-        // next user message will start fresh.
-        const isSessionErr = /previous_message_id|session/i.test(String(surfacedError));
-        const userMsg = isSessionErr
-          ? "⚠️ Session reset due to a transient API hiccup. Just send your message again — your history is preserved."
-          : `⚠️ Upstream error: ${String(surfacedError).slice(0, 200)}\n\nTry again — if it keeps happening, /clear and try fresh.`;
-        await ctx.reply(userMsg).catch(() => {});
-      } else if (idleAborted) {
-        await ctx.reply("⚠️ Claude Code stopped responding (3 min idle). Try again — maybe with a smaller ask.").catch(() => {});
-      } else {
+      }
+      // An error the turn reported (already in plain words: what went wrong, what to do), after whatever it said
+      // before it: a spending limit or the turn ceiling can stop a reply halfway. Not again when the reply is the
+      // error itself (the turn layer's "set this up first" answers).
+      if (surfacedError && errorStillToSay(fullResponse, surfacedError)) {
+        await ctx.reply(turnErrorNote(routed, surfacedError)).catch(() => {});
+      } else if (!fullResponse && idleAborted) {
+        await ctx.reply(idleNote(routed, IDLE_ABORT_MS)).catch(() => {});
+      } else if (!fullResponse && !surfacedError) {
         await ctx.reply("⚠️ No response generated. Try rephrasing?").catch(() => {});
       }
     } catch (err) {
       console.error("[telegram] chat error:", err.message);
       const reason = idleAborted
-        ? "⚠️ Claude Code stopped responding (3 min idle). Try again — maybe with a smaller ask."
+        ? idleNote(routed, IDLE_ABORT_MS)
         : `⚠️ Error: ${err.message || "something went wrong"}. Try again.`;
       await ctx.reply(reason).catch(() => {});
     } finally {
@@ -693,8 +655,10 @@ ${sendFileHint("telegram")}`,
     }
   });
 
-  // --- Voice message handler (transcribe with whisper.cpp) ---
+  // --- Voice message handler (transcribed on this server; see voice/stt-handler.js) ---
+  // A chat off the allowlist is dropped before anything is downloaded or said back.
   bot.on("voice", async (ctx) => {
+    if (!chatAllowed(ctx)) return;
     try {
       const voice = ctx.message.voice;
       console.log(`[telegram] voice message: ${voice.duration}s, ${voice.file_size} bytes`);
@@ -719,12 +683,14 @@ ${sendFileHint("telegram")}`,
       await handleMessage(ctx, result.transcript, ctx.message.message_id);
     } catch (err) {
       console.error("[telegram] voice handler error:", err.message);
-      await ctx.reply("Failed to process voice message.").catch(() => {});
+      // Transcription that can't run says what to set up (Settings > Voice); anything else keeps the short note.
+      await ctx.reply(sttProblem(err) || "Failed to process voice message.").catch(() => {});
     }
   });
 
   // --- Voice note (video message / round video) handler ---
   bot.on("video_note", async (ctx) => {
+    if (!chatAllowed(ctx)) return;
     try {
       const vn = ctx.message.video_note;
       console.log(`[telegram] video note: ${vn.duration}s`);
@@ -747,7 +713,7 @@ ${sendFileHint("telegram")}`,
       await handleMessage(ctx, result.transcript, ctx.message.message_id);
     } catch (err) {
       console.error("[telegram] video_note handler error:", err.message);
-      await ctx.reply("Failed to process video note.").catch(() => {});
+      await ctx.reply(sttProblem(err) || "Failed to process video note.").catch(() => {});
     }
   });
 

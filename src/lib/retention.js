@@ -18,10 +18,18 @@
  *      (30d default), AND keep no more than retention.checkpoints_max
  *      files (50 default) by deleting the oldest if over the cap.
  *
+ *   3. Prune Codex's rollouts (its record of each thread, in the ChatGPT
+ *      plan's home and the key providers') untouched for
+ *      retention.codex_rollouts_days (30d default), then the rows Codex
+ *      keeps of those threads in its own databases (lib/codex-thread-dbs.js).
+ *
+ *   4. Remove a chat's own settings (session.<id>.*) left after its chat went.
+ *
  * Config (settings keys, all optional — defaults baked in):
  *   retention.conversations_days   (number, default 14)
  *   retention.checkpoints_days     (number, default 30)
  *   retention.checkpoints_max      (number, default 50)
+ *   retention.codex_rollouts_days  (number, default 30)
  *   retention.schedule_hour        (0-23, default 3 — UTC on Railway)
  *
  * State (written by this module):
@@ -36,6 +44,9 @@ import config from "../config/env.js";
 import { ConversationStore } from "../db/conversations.js";
 import { SettingsStore } from "../db/settings.js";
 import { appendWorkspaceFile } from "./workspace-files.js";
+import { CODEX, homeFor } from "../ai/engine-env.js";
+import { pruneCodexRollouts } from "../ai/codex-rollouts.js";
+import { pruneCodexThreadDbs } from "./codex-thread-dbs.js";
 
 const ONE_HOUR = 3600_000;
 
@@ -43,6 +54,7 @@ const DEFAULTS = Object.freeze({
   conversations_days: 14,
   checkpoints_days: 30,
   checkpoints_max: 50,
+  codex_rollouts_days: 30,
   schedule_hour: 3,
 });
 
@@ -134,20 +146,54 @@ async function runSweep(settings) {
 
   const prunedConvs = pruneConversations(convDays, settings);
   const prunedChecks = pruneCheckpoints(checkDays, checkMax);
-  // After deleting conversations, clean up any dangling back-references in
-  // memory tables. Two tables have conv pointers without FK constraints:
+  // After deleting conversations, clean up any dangling back-references.
+  // Three tables have conv pointers without FK constraints:
   //   bot_memory.source_conversation_id      — learned fact → convo origin
   //   compaction_cache.conversation_id       — per-conv summary cache
+  //   settings session.<conv>.<field>        — a chat's own picks and markers
   // Memories stay (the fact is still true), but we NULL the origin pointer
-  // and drop the cache rows so they don't accumulate forever.
+  // and drop the cache and settings rows so they don't accumulate forever.
   const orphans = cleanupOrphanedReferences();
+  const codex = pruneOldRollouts(settings);
 
   settings.set("retention.last_pruned_convs", prunedConvs);
   settings.set("retention.last_pruned_checks", prunedChecks);
   settings.set("retention.last_orphan_cleanup", orphans);
 
-  console.log(`[retention] sweep done — pruned ${prunedConvs} conversations, ${prunedChecks} checkpoints, cleaned ${orphans.memories} memory backrefs + ${orphans.cache} cache rows`);
-  return { convs: prunedConvs, checks: prunedChecks, orphans };
+  console.log(`[retention] sweep done — pruned ${prunedConvs} conversations, ${prunedChecks} checkpoints, ${codex.rollouts} Codex rollouts, ${codex.threads} Codex threads' saved rows, cleaned ${orphans.memories} memory backrefs + ${orphans.cache} cache rows + ${orphans.settings} chat settings`);
+  return { convs: prunedConvs, checks: prunedChecks, rollouts: codex.rollouts, codexThreads: codex.threads, orphans };
+}
+
+/**
+ * Codex's rollouts untouched for retention.codex_rollouts_days (30 by default), in both Codex homes: the ChatGPT
+ * plan's (.codex-home) and the one OpenAI, OpenRouter, DeepSeek and Local AI share (.codex-home-keys). Then the rows
+ * Codex keeps of those threads in its databases (lib/codex-thread-dbs.js): a thread whose rollout is gone and that is
+ * past the same cutoff. Returns { rollouts, threads }, how many of each went; never throws.
+ */
+export function pruneOldRollouts(settings, { stateDir = config.STATE_DIR, now = Date.now() } = {}) {
+  let homes;
+  let maxAgeDays;
+  try {
+    const days = Number(settings?.get?.("retention.codex_rollouts_days") ?? DEFAULTS.codex_rollouts_days);
+    maxAgeDays = Number.isFinite(days) && days > 0 ? days : DEFAULTS.codex_rollouts_days;
+    homes = [...new Set([homeFor("chatgpt", CODEX, { stateDir }), homeFor("openai", CODEX, { stateDir })])];
+  } catch (err) {
+    console.warn("[retention] Codex rollout prune failed:", err?.message);
+    return { rollouts: 0, threads: 0 };
+  }
+  let rollouts = 0;
+  let threads = 0;
+  try {
+    rollouts = pruneCodexRollouts({ homes, maxAgeDays, now });
+  } catch (err) {
+    console.warn("[retention] Codex rollout prune failed:", err?.message);
+  }
+  try {
+    threads = pruneCodexThreadDbs({ homes, maxAgeDays, now });
+  } catch (err) {
+    console.warn("[retention] Codex thread rows prune failed:", err?.message);
+  }
+  return { rollouts, threads };
 }
 
 // ------------------------------------------------------------------
@@ -274,22 +320,24 @@ function pruneCheckpoints(days, maxFiles) {
 
 // ------------------------------------------------------------------
 // Orphan cleanup
-// Two tables reference conversations.id without a foreign key, so rows
+// Three tables reference conversations.id without a foreign key, so rows
 // linger after a cascade delete wipes the conversation. Left alone they
 // don't break anything (memories still read, compaction_cache is scoped
-// per query), but they grow unbounded and make the DB less tidy.
+// per query, nothing reads a gone chat's settings), but they grow unbounded
+// and make the DB less tidy.
 // ------------------------------------------------------------------
 
-function cleanupOrphanedReferences() {
+export function cleanupOrphanedReferences(db = _db) {
   let memories = 0;
   let cache = 0;
+  let settings = 0;
   try {
     // bot_memory: NULL out source_conversation_id where the target is gone.
     // We deliberately keep the row (the fact is still true; only the origin
     // pointer is stale). The LIMIT 0 inner select is a defensive no-op — we
     // want UPDATE ... WHERE NOT EXISTS matching, which SQLite supports via
     // correlated subquery.
-    const r1 = _db.prepare(`
+    const r1 = db.prepare(`
       UPDATE bot_memory
       SET source_conversation_id = NULL
       WHERE source_conversation_id IS NOT NULL
@@ -301,7 +349,7 @@ function cleanupOrphanedReferences() {
   }
   try {
     // compaction_cache: delete rows pointing at dead convos.
-    const r2 = _db.prepare(`
+    const r2 = db.prepare(`
       DELETE FROM compaction_cache
       WHERE NOT EXISTS (SELECT 1 FROM conversations c WHERE c.id = compaction_cache.conversation_id)
     `).run();
@@ -309,5 +357,19 @@ function cleanupOrphanedReferences() {
   } catch (err) {
     console.warn("[retention] compaction_cache cleanup failed:", err?.message);
   }
-  return { memories, cache };
+  try {
+    // settings: a chat's own session.<id>.<field> rows (provider, model, effort, clearedAt, instrHash) whose chat is
+    // gone. ConversationStore.delete removes them with the chat, so these are rows an older version left behind, or
+    // one a turn wrote after its chat was deleted. session.reset.* is a global setting, never a chat's.
+    const exists = db.prepare("SELECT 1 FROM conversations WHERE id = ?");
+    const drop = db.prepare("DELETE FROM settings WHERE key = ?");
+    const dead = db.prepare("SELECT key FROM settings WHERE key LIKE 'session.%'").all().map((r) => r.key).filter((key) => {
+      const id = key.slice("session.".length, key.lastIndexOf("."));
+      return id && id !== "reset" && !exists.get(id);
+    });
+    db.transaction(() => { for (const key of dead) settings += drop.run(key).changes; })();
+  } catch (err) {
+    console.warn("[retention] chat settings cleanup failed:", err?.message);
+  }
+  return { memories, cache, settings };
 }

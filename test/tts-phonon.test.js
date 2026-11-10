@@ -20,8 +20,15 @@ const {
   PhononTTSEngine, phononInstalled, phononPaths, speedToDelta, clampSpeed, findVoice, DEFAULT_VOICE, SPEED_MAX, SPEED_MIN,
 } = await import("../src/voice/phonon-engine.js");
 const {
-  installPhonon, downloadFile, acquireLock, autoInstallPhonon, getPhononInstallStatus, checkPhononInstall, hfUrl,
+  installPhonon, downloadFile, acquireLock, autoInstallPhonon, getPhononInstallStatus, checkPhononInstall, hfUrl, PTTS_VERSION,
 } = await import("../src/voice/phonon-install.js");
+const { resetPhononAvailability } = await import("../src/voice/phonon-engine.js");
+const {
+  __setForTests: setPythonForTests, venvInterpreter, interpreterIn, pythonHome, pythonTarget, standaloneDir, standaloneReady, STANDALONE_PYTHON,
+} = await import("../src/voice/python-runtime.js");
+const { fakePython, fakeInterpreter } = await import("./fakes/fake-python.js");
+const { fakeDownloadHost } = await import("./fakes/fake-download-host.js");
+const { makeTarGz } = await import("./fakes/tar.js");
 
 /** A settings store with just get/set, as initTTSEngine uses it. */
 function store(values = {}) {
@@ -75,15 +82,21 @@ describe("TTS engine choice: Phonon is the default", () => {
     assert.deepEqual(l.used, ["phonon"], "Edge TTS is only built when it is needed");
   });
 
-  it("an install with an ElevenLabs key that never saved an engine keeps ElevenLabs", async () => {
+  it("Phonon is the default for everything: a saved ElevenLabs key alone doesn't make the paid engine speak", async () => {
     const saved = process.env.ELEVENLABS_API_KEY;
     delete process.env.ELEVENLABS_API_KEY;
     try {
-      assert.equal(enginePreference(store({ "voice.elevenlabs.apiKey": "sk_test" })), "elevenlabs");
-      assert.equal(enginePreference(store({ "voice.elevenlabs.apiKey": "sk_test", "voice.engine": "phonon" })), "phonon", "a saved choice wins");
+      assert.equal(enginePreference(store({ "voice.elevenlabs.apiKey": "sk_test" })), "phonon", "a key is not a choice");
       process.env.ELEVENLABS_API_KEY = "sk_env";
       const withGetApiKey = { ...store(), getApiKey: (id) => (id === "elevenlabs" ? process.env.ELEVENLABS_API_KEY : null) };
-      assert.equal(enginePreference(withGetApiKey), "elevenlabs", "a key in the environment counts too");
+      assert.equal(enginePreference(withGetApiKey), "phonon", "nor is one in the environment");
+      const elevenlabs = fakeEngine("elevenlabs");
+      const l = loaders({ phonon: fakeEngine("phonon"), "edge-tts": fakeEngine("edge-tts"), elevenlabs });
+      await initTTSEngine(store({ "voice.elevenlabs.apiKey": "sk_test" }), l);
+      assert.equal(getTTSEngine().name, "phonon");
+      assert.ok(!l.used.includes("elevenlabs"), "ElevenLabs isn't even built");
+      // Picking it in Settings > Voice is what makes it speak.
+      assert.equal(enginePreference(store({ "voice.elevenlabs.apiKey": "sk_test", "voice.engine": "elevenlabs" })), "elevenlabs");
     } finally {
       if (saved === undefined) delete process.env.ELEVENLABS_API_KEY; else process.env.ELEVENLABS_API_KEY = saved;
     }
@@ -109,6 +122,15 @@ describe("TTS engine choice: Phonon is the default", () => {
     await initTTSEngine(store(), l);
     assert.equal(getTTSEngine().name, "stub");
     assert.ok(!l.used.includes("elevenlabs"), `consulted: ${l.used.join(", ")}`);
+  });
+
+  it("a picked engine that can't start never falls through to ElevenLabs, even with its key saved (a call's speech never costs money unasked)", async () => {
+    for (const pick of ["piper", "edge-tts"]) {
+      const l = loaders({ [pick]: fakeEngine(pick, { available: false }), elevenlabs: fakeEngine("elevenlabs"), "edge-tts": fakeEngine("edge-tts", { available: pick !== "edge-tts" }) });
+      await initTTSEngine(store({ "voice.engine": pick, "voice.elevenlabs.apiKey": "sk_test" }), l);
+      assert.notEqual(getTTSEngine().name, "elevenlabs", `${pick} picked`);
+      assert.ok(!l.used.includes("elevenlabs"), `${pick}: consulted ${l.used.join(", ")}`);
+    }
   });
 
   it("an explicit engine choice is respected: Phonon is never built", async () => {
@@ -496,6 +518,81 @@ describe("Phonon installer", () => {
     } finally {
       if (prev === undefined) delete process.env.TARSEE_PHONON_AUTO_INSTALL; else process.env.TARSEE_PHONON_AUTO_INSTALL = prev;
     }
+  });
+});
+
+// ── Phonon's Python: the one speech-to-text uses (python-runtime.js) ─────
+
+describe("Phonon's Python runtime", () => {
+  let dir;
+  let py;
+  const cand = (cmd, args = []) => ({ cmd, args, source: "system", label: [cmd, ...args].join(" ") });
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(TMP, "phonon-py-"));
+    process.env.TARSEE_PHONON_DIR = dir;
+    py = fakePython(path.join(dir, "fake"));
+    resetPhononAvailability();
+    fs.rmSync(pythonHome(), { recursive: true, force: true });
+  });
+  afterEach(() => {
+    process.env.TARSEE_PHONON_DIR = path.join(TMP, "phonon-none");
+    setPythonForTests();
+    resetPhononAvailability();
+  });
+  const smoke = { smokeTest: async () => "ok", log: () => {}, retryDelayMs: 1 };
+
+  it("the venv's python is where this OS puts it (Scripts\\python.exe on Windows)", () => {
+    const p = phononPaths();
+    assert.equal(p.venvPython, venvInterpreter(p.venv));
+  });
+
+  it("no python3 with ptts: the venv is made from the Python found here (the py launcher on Windows), and pip installs the pinned ptts from pypi.org only", async () => {
+    py.set({ pythons: { "py -3.12": { version: "3.12.1" } }, pip: { mode: "ok", delayMs: 1 } });
+    setPythonForTests({ spawn: py.spawn, candidates: [cand("py", ["-3.12"])] });
+    const { fetch } = fakeHub(hubFiles());
+    const status = await installPhonon({ ...smoke, fetch, model: MODEL, voices: VOICES });
+    assert.equal(status.state, "installed");
+    const p = phononPaths();
+    assert.equal(p.python, p.venvPython, "Phonon now runs on its venv");
+    const calls = py.calls();
+    const venv = calls.find((c) => c.args?.includes("venv"));
+    assert.equal(venv.cmd, "py");
+    assert.deepEqual(venv.args.slice(0, 1), ["-3.12"]);
+    assert.equal(venv.args.at(-1), p.venv);
+    const pip = calls.find((c) => c.args?.includes("install"));
+    assert.equal(pip.cmd, p.venvPython);
+    assert.ok(pip.args.includes(`ptts==${PTTS_VERSION}`));
+    for (const flag of ["--isolated", "--only-binary=:all:"]) assert.ok(pip.args.includes(flag), flag);
+    assert.equal(pip.args[pip.args.indexOf("--index-url") + 1], "https://pypi.org/simple");
+    assert.equal((await checkPhononInstall()).state, "installed");
+  });
+
+  it("no Python at all: the background install on boot fails in plain words; Install (a click) downloads Tarsee's own Python first", async () => {
+    py.set({ pythons: {}, pip: { mode: "ok", delayMs: 1 } });
+    setPythonForTests({ spawn: py.spawn, candidates: [cand("python3")] });
+    const hub = hubFiles();
+    await assert.rejects(installPhonon({ ...smoke, fetch: fakeHub(hub).fetch, model: MODEL, voices: VOICES }), (err) => {
+      assert.match(err.message, /No Python 3\.9 or newer/);
+      assert.doesNotMatch(err.message, /python3 was not found|ENOENT/);
+      return true;
+    });
+    assert.equal(getPhononInstallStatus().state, "failed");
+
+    const target = pythonTarget();
+    const exeRel = path.relative("X", interpreterIn("X")).split(path.sep).join("/");
+    const archive = makeTarGz([{ name: `python/${exeRel}`, body: fakeInterpreter("3.12.16"), mode: 0o755 }]);
+    const pin = { ...STANDALONE_PYTHON, sha256: { [target.triple]: sha(archive) } };
+    const name = `cpython-${pin.version}+${pin.tag}-${target.triple}-install_only.tar.gz`;
+    const dl = `https://github.com/${pin.repo}/releases/download/${pin.tag}/${encodeURIComponent(name)}`;
+    const host = fakeDownloadHost({
+      [`https://api.github.com/repos/${pin.repo}/releases/tags/${pin.tag}`]: { json: { assets: [{ name, size: archive.length, digest: `sha256:${sha(archive)}`, browser_download_url: dl }] } },
+      [dl]: { body: archive },
+      ...Object.fromEntries(Object.entries(hub).map(([u, b]) => [u, { body: b }])),
+    });
+    const status = await installPhonon({ ...smoke, fetch: host.fetch, model: MODEL, voices: VOICES, allowPythonDownload: true, pin });
+    assert.equal(status.state, "installed");
+    assert.ok(standaloneReady(pin), "Tarsee's own Python, shared with speech-to-text");
+    assert.equal(py.calls().find((c) => c.args?.includes("venv")).cmd, interpreterIn(standaloneDir(pin)));
   });
 });
 
