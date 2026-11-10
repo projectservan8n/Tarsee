@@ -15,23 +15,15 @@ export function setTTSEngine(engine) {
 export const DEFAULT_ENGINE = "phonon";
 
 /**
- * The engine the user asked for: voice.engine, else Phonon. One exception: an
- * install that has an ElevenLabs key but never saved an engine keeps
- * ElevenLabs, as before Phonon was the default. The key is a paid, deliberate
- * choice, and switching it off silently would be a surprise. Picking Phonon
- * (or anything else) in Settings > Voice saves voice.engine and ends that.
+ * The engine the user asked for: voice.engine, else Phonon, for everything that speaks (calls, read-aloud, voice
+ * replies on channels). A saved ElevenLabs key is not a choice: the paid engine speaks only when picked in Settings >
+ * Voice (or with "auto"). Installs from before Phonon that had a key and never picked an engine speak with Phonon now,
+ * which is free and local; Settings > Voice already showed Phonon for them.
  */
 export function enginePreference(settingsStore) {
   const v = settingsStore?.get("voice.engine");
   if (typeof v === "string" && v.trim()) return v.trim();
-  if (hasElevenLabsKey(settingsStore)) return "elevenlabs";
   return DEFAULT_ENGINE;
-}
-
-function hasElevenLabsKey(settingsStore) {
-  try {
-    return !!(settingsStore?.getApiKey?.("elevenlabs") || settingsStore?.get("voice.elevenlabs.apiKey"));
-  } catch { return false; }
 }
 
 /** "Auto" tries these in order. Phonon is only available once it is installed. */

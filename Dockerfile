@@ -93,19 +93,25 @@ RUN pip3 install --no-cache-dir --break-system-packages faster-whisper==1.2.1 pi
 # Settings > Voice go to the volume (/data/tarsee/data/whisper-models) and
 # survive redeploys. The download is the same one Settings makes (the official
 # Systran/faster-whisper-base.en on Hugging Face, at a pinned revision, every
-# file checked against its size and published hash), and the check after it
-# loads the model offline and transcribes a second of silence, so a broken
-# model or runtime stops the build. Only the two files the download needs are
-# copied in, so a change elsewhere in src/ doesn't download the model again.
+# file checked against its size and published hash). Only the two files the
+# download needs are copied in, so a change elsewhere in src/ doesn't download
+# the model again.
 ENV TARSEE_WHISPER_BUNDLED_DIR=/opt/tarsee/whisper-models
 COPY src/voice/whisper-models.js src/voice/install-common.js /opt/tarsee/stt-build/
 RUN set -e; \
   cd /opt/tarsee/stt-build; \
   echo '{"type":"module"}' > package.json; \
   node whisper-models.js download base.en "$TARSEE_WHISPER_BUNDLED_DIR"; \
-  HF_HUB_OFFLINE=1 python3 -I -c "import sys, numpy; from faster_whisper import WhisperModel; m = WhisperModel(sys.argv[1], device='cpu', compute_type='int8'); s, i = m.transcribe(numpy.zeros(16000, dtype='float32'), language='en'); list(s); print('faster-whisper loads', sys.argv[1])" "$TARSEE_WHISPER_BUNDLED_DIR/base.en"; \
   cd /; \
   rm -rf /opt/tarsee/stt-build
+# The check: a real WAV goes through the worker's own decode() (src/voice/stt_worker.py), as every recording does,
+# and the model, loaded offline, transcribes it; a failure stops the build. A blank array would skip the decoder,
+# and the decoder is what broke when PyAV dropped an option faster-whisper's own decoder still passes. The worker
+# comes in after the download, so changing it doesn't download the model again.
+COPY src/voice/stt_worker.py /opt/tarsee/stt-check/
+RUN set -e; \
+  HF_HUB_OFFLINE=1 python3 -I -c "import sys, wave, math, struct; sys.path.insert(0, '/opt/tarsee/stt-check'); from stt_worker import decode; from faster_whisper import WhisperModel; f = '/tmp/tarsee-stt-check.wav'; w = wave.open(f, 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(b''.join(struct.pack('<h', int(8000 * math.sin(2 * math.pi * 440 * n / 16000))) for n in range(16000))); w.close(); m = WhisperModel(sys.argv[1], device='cpu', compute_type='int8'); s, i = m.transcribe(decode(f), language='en'); list(s); assert i.duration > 0.9, i.duration; print('faster-whisper decodes a WAV and transcribes with', sys.argv[1])" "$TARSEE_WHISPER_BUNDLED_DIR/base.en"; \
+  rm -rf /opt/tarsee/stt-check /tmp/tarsee-stt-check.wav
 
 ENV NODE_ENV=production
 WORKDIR /app
