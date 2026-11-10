@@ -6,9 +6,11 @@
  * in it. So the server's CSP can name that script by its hash and let nothing else run on the page, and a diagram's
  * clicks can be trusted (js/chat.js _initDiagramListener) even though the AI chose its words.
  *
- * A person's click on a node posts one message to the chat:
+ * A person's click on a node (or Enter or Space on it) posts one message to the chat:
  *   { type: "tarsee:diagram-click", diagramId, nodeId, label, sublabel, question?, click }
- * question is there only when the node has one (a string), and click counts that page's clicks from 1.
+ * question is there only when the node has one (a string), and click counts that page's clicks from 1. The chat puts
+ * the node's question in the message box and sends nothing: the AI chose those words, so the owner reads them and
+ * sends them. Each node shows them before any click (its tooltip and its accessible name).
  */
 
 const KIND_STYLES = {
@@ -137,13 +139,32 @@ function layout(nodes, edges) {
   return positions;
 }
 
+/**
+ * What a click on the node puts in the message box, as js/chat.js _initDiagramListener words it: its question, else
+ * "Tell me more about: <label>" (and its sublabel). A note is not clicked, and a node with neither a label nor a
+ * question asks nothing: "".
+ */
+function askOf(node) {
+  if (node.kind === "note") return "";
+  if (node.question) return node.question;
+  if (!node.label) return "";
+  return node.sublabel ? `Tell me more about: ${node.label}. ${node.sublabel}` : `Tell me more about: ${node.label}`;
+}
+
 function renderNode(node, pos) {
   const style = KIND_STYLES[node.kind];
   const label = esc(node.label);
   const sub = node.sublabel ? `<div class="sub">${esc(node.sublabel)}</div>` : "";
   const noteClass = node.kind === "note" ? " is-note" : "";
   const question = node.question ? ` data-question="${esc(node.question)}"` : "";
-  return `<div class="node${noteClass}" data-node-id="${esc(node.id)}" data-label="${label}" data-sublabel="${esc(node.sublabel)}"${question} style="left:${pos.x}px;top:${pos.y}px;width:${pos.w}px;height:${pos.h}px;background:${style.bg};border-color:${style.border};color:${style.fg}"><div class="label">${label}</div>${sub}</div>`;
+  // A node that asks something is a button that says what it puts in the box: as its tooltip, and as its name for a
+  // screen reader (its label and sublabel first).
+  const ask = askOf(node);
+  const named = [node.label, node.sublabel].filter(Boolean).join(". ");
+  const button = ask
+    ? ` role="button" tabindex="0" title="${esc(`Adds to your message: ${ask}`)}" aria-label="${esc(`${named ? `${named}. ` : ""}Adds to your message: ${ask}`)}"`
+    : "";
+  return `<div class="node${noteClass}" data-node-id="${esc(node.id)}" data-label="${label}" data-sublabel="${esc(node.sublabel)}"${question}${button} style="left:${pos.x}px;top:${pos.y}px;width:${pos.w}px;height:${pos.h}px;background:${style.bg};border-color:${style.border};color:${style.fg}"><div class="label">${label}</div>${sub}</div>`;
 }
 
 function renderEdges(edges, positions) {
@@ -177,7 +198,8 @@ function renderLegend(legend) {
  * The page's one script, the same for every diagram (the server's CSP names it by its hash, lib/canvas.js). It reads
  * what to send from the page (the body's data-diagram-id, each node's data-* attributes), so nothing from a diagram's
  * data is ever in it. It sends only for a person's click (not one a script made), one message per click: the second
- * click of a double-click is not another question.
+ * click of a double-click is not another question. A node is a button, so Enter or Space on it is a click too (once
+ * per press: a key held down is not more clicks).
  */
 export const DIAGRAM_SCRIPT = `
 (function () {
@@ -186,7 +208,14 @@ export const DIAGRAM_SCRIPT = `
   var clicks = 0;
   function onClick(event) {
     if (!event.isTrusted || event.detail > 1) return;
-    var node = event.currentTarget;
+    tell(event.currentTarget);
+  }
+  function onKey(event) {
+    if (!event.isTrusted || event.repeat || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    tell(event.currentTarget);
+  }
+  function tell(node) {
     clicks += 1;
     var message = {
       type: "tarsee:diagram-click",
@@ -199,8 +228,9 @@ export const DIAGRAM_SCRIPT = `
     if (node.hasAttribute("data-question")) message.question = node.getAttribute("data-question");
     try { window.parent.postMessage(message, "*"); } catch (err) { /* no window to tell */ }
   }
-  Array.prototype.forEach.call(document.querySelectorAll(".node:not(.is-note)"), function (node) {
+  Array.prototype.forEach.call(document.querySelectorAll(".node[role=button]"), function (node) {
     node.addEventListener("click", onClick);
+    node.addEventListener("keydown", onKey);
   });
 })();
 `;
@@ -238,6 +268,8 @@ export function renderDiagramHtml(spec) {
   svg.edges { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
   .node { position: absolute; border: 1.5px solid; border-radius: 10px; padding: 14px 18px; cursor: pointer; transition: transform .12s, box-shadow .12s; display: flex; flex-direction: column; justify-content: center; font-size: 14px; }
   .node:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(245,166,35,.25); border-color: #f5a623 !important; }
+  .node:focus-visible { outline: 2px solid #f5a623; outline-offset: 2px; }
+  .node:not([role=button]) { cursor: default; }
   .node .label { font-weight: 600; }
   .node .sub { font-size: 12px; opacity: .8; margin-top: 4px; font-weight: 400; }
   .node.is-note { border-style: dashed; cursor: default; font-style: italic; }

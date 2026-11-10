@@ -27,7 +27,9 @@ const RealWebSocket = ws.WebSocket;
 /**
  * A stand-in for the WebSocket node-edge-tts opens to Microsoft. It opens after
  * `openAfterMs`, then answers the speech request with `bytes` of audio and the
- * end-of-turn message, or (answer: "never") never answers.
+ * end-of-turn message. Or, as `answer` says: "never" never answers; "drop" sends
+ * some audio and then loses the connection, as ws reports it (close code 1006);
+ * "end-then-close" sends the whole reply and then the server closes at once.
  */
 function fakeSocket({ openAfterMs = 0, answer = "audio", bytes = 400 } = {}) {
   const sockets = [];
@@ -45,7 +47,12 @@ function fakeSocket({ openAfterMs = 0, answer = "audio", bytes = 400 } = {}) {
       setImmediate(() => {
         if (this.terminated) return;
         this.emit("message", Buffer.concat([Buffer.from("X-RequestId:1\r\nPath:audio\r\n"), Buffer.alloc(bytes, 7)]), true);
+        if (answer === "drop") {
+          setTimeout(() => this.emit("close", 1006, Buffer.alloc(0)), 20);
+          return;
+        }
         this.emit("message", Buffer.from("X-RequestId:1\r\nPath:turn.end\r\n\r\n{}"), false);
+        if (answer === "end-then-close") this.emit("close", 1000, Buffer.alloc(0));
       });
     }
     close() { this.closed = true; }
@@ -196,25 +203,38 @@ describe("Edge TTS gives node-edge-tts the engine's own time limit", () => {
     ws.WebSocket = RealWebSocket;
   });
 
-  it("passes the 30 s limit, or the one set, as node-edge-tts's timeout", async () => {
+  it("fits each attempt's limit to the sentence: a short one fails fast, a long one gets longer, never past 30 s", async () => {
     const fake = fakeEdge();
     __setForTests({ EdgeTTS: fake.EdgeTTS });
-    await new EdgeTTSEngine().synthesize("Hello there.");
+    const engine = new EdgeTTSEngine();
+    await engine.synthesize("Hi.");
+    await engine.synthesize("word ".repeat(36).trim()); // about 180 characters: one piece of a call's answer
+    await engine.synthesize("word ".repeat(1000).trim()); // the most the speech route takes
+    const [short, piece, long] = fake.calls.map((c) => c.timeout);
+    assert.ok(short <= 10_000, `a short sentence is given ${short} ms`);
+    assert.ok(piece > short && piece < 30_000, `a 180-character piece is given ${piece} ms`);
+    assert.equal(long, 30_000);
+    // A limit a test sets is used as it is.
     __setForTests({ EdgeTTS: fake.EdgeTTS, timeoutMs: 1234 });
-    await new EdgeTTSEngine().synthesize("Hello again.");
-    assert.deepEqual(fake.calls.map((c) => c.timeout), [30_000, 1234]);
+    await engine.synthesize("Hello again.");
+    assert.equal(fake.calls.at(-1).timeout, 1234);
   });
 
-  it("the real node-edge-tts keeps that limit instead of its own 10 s, and its audio comes back whole", async () => {
+  it("the real node-edge-tts keeps the engine's limit instead of its own 10 s, and its audio comes back whole", async () => {
     const made = [];
     class Recording extends RealEdgeTTS {
       constructor(opts) { super(opts); made.push(this); }
     }
+    const text = "word ".repeat(200).trim();
+    const fake = fakeEdge();
+    __setForTests({ EdgeTTS: fake.EdgeTTS });
+    await new EdgeTTSEngine().synthesize(text);
     const sock = fakeSocket();
     __setForTests({ EdgeTTS: Recording });
-    const out = await withSocket(sock, () => new EdgeTTSEngine().synthesize("Hello there."));
+    const out = await withSocket(sock, () => new EdgeTTSEngine().synthesize(text));
     assert.equal(made.length, 1);
-    assert.equal(made[0].timeout, 30_000);
+    assert.ok(made[0].timeout > 10_000, `node-edge-tts was given ${made[0].timeout} ms`);
+    assert.equal(made[0].timeout, fake.calls[0].timeout);
     assert.equal(out.contentType, "audio/mpeg");
     assert.deepEqual(out.audio, Buffer.alloc(400, 7));
     // A good attempt leaves the connection to node-edge-tts, which closes it itself.
@@ -230,6 +250,48 @@ describe("Edge TTS gives node-edge-tts the engine's own time limit", () => {
     await assert.rejects(withSocket(sock, () => new EdgeTTSEngine().synthesize("Hello.")), /timed out/);
     assert.equal(sock.sockets.length, 3);
     for (const s of sock.sockets) assert.equal(s.terminated, true, "a timed-out attempt left its connection open");
+    assert.deepEqual(leftovers(), []);
+  });
+
+  it("gives up on an attempt at once when its connection drops part-way, and tries again", async () => {
+    const sock = fakeSocket({ answer: "drop" });
+    __setForTests({ retryDelayMs: 0, timeoutMs: 2000 });
+    const t = Date.now();
+    await assert.rejects(withSocket(sock, () => new EdgeTTSEngine().synthesize("Hello.")), /lost its connection/);
+    const took = Date.now() - t;
+    assert.equal(sock.sockets.length, 3);
+    assert.ok(took < 1500, `three dropped attempts took ${took} ms, as if each waited for its limit`);
+    for (const s of sock.sockets) assert.equal(s.terminated, true, "a dropped attempt left its connection open");
+    assert.deepEqual(leftovers(), []);
+  });
+
+  it("speaks when the connection closes just after the whole reply has come", async () => {
+    const sock = fakeSocket({ answer: "end-then-close" });
+    __setForTests({ retryDelayMs: 0, timeoutMs: 2000 });
+    const out = await withSocket(sock, () => new EdgeTTSEngine().synthesize("Hello."));
+    assert.deepEqual(out.audio, Buffer.alloc(400, 7));
+    assert.equal(sock.sockets.length, 1);
+    assert.deepEqual(leftovers(), []);
+  });
+
+  it("has node-edge-tts close the audio file of an attempt that failed part-way", async () => {
+    // node-edge-tts opens its file with fs.createWriteStream and keeps it to itself.
+    const streams = [];
+    const realCreate = fs.createWriteStream;
+    fs.createWriteStream = (...args) => { const st = realCreate(...args); streams.push(st); return st; };
+    try {
+      const sock = fakeSocket({ answer: "drop" });
+      __setForTests({ retryDelayMs: 0, timeoutMs: 2000 });
+      await assert.rejects(withSocket(sock, () => new EdgeTTSEngine().synthesize("Hello.")), /lost its connection/);
+      const hung = fakeSocket({ answer: "never" });
+      __setForTests({ retryDelayMs: 0, timeoutMs: 50 });
+      await assert.rejects(withSocket(hung, () => new EdgeTTSEngine().synthesize("Hello.")), /timed out/);
+    } finally {
+      fs.createWriteStream = realCreate;
+    }
+    assert.equal(streams.length, 6);
+    await new Promise((r) => setTimeout(r, 100));
+    for (const st of streams) assert.equal(st.closed, true, `${st.path} was left open`);
     assert.deepEqual(leftovers(), []);
   });
 

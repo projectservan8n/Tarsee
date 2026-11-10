@@ -60,6 +60,7 @@ const MAX_ATTACHMENTS = 5;
 const RATE_LIMIT_MAX = 6;
 const RATE_LIMIT_WINDOW_MS = 10 * 60_000;
 const HISTORY_WINDOW = 15;
+const RESEND_TRIES = 5; // tries at mailing a command's answer before it is given up on
 
 /**
  * @param {object} config
@@ -73,10 +74,11 @@ const HISTORY_WINDOW = 15;
  * @param {import('better-sqlite3').Database} db
  * @param {object} [opts] - chatStream: the model stream (ai/router.js chatStream when left out). ImapFlow: the IMAP
  *   client class, and smtpTransport: a nodemailer transport ({verify, sendMail, close}) used instead of one made from
- *   config.smtp. Tests pass stand-ins for the last two, so nothing reaches a mail server.
+ *   config.smtp. Tests pass stand-ins for the last two, so nothing reaches a mail server. resendAfterMs: how long
+ *   after a command's answer couldn't be mailed the inbox is looked at again to mail it (a minute).
  * @returns {Promise<{stop: Function, sendMessage: Function, sendNew: Function}>}
  */
-export async function createEmailBot(rawConfig, db, { chatStream: streamChat = chatStream, ImapFlow: ImapClient = ImapFlow, smtpTransport = null } = {}) {
+export async function createEmailBot(rawConfig, db, { chatStream: streamChat = chatStream, ImapFlow: ImapClient = ImapFlow, smtpTransport = null, resendAfterMs = 60_000 } = {}) {
   const cfg = normalizeConfig(rawConfig);
   const convStore = new ConversationStore(db);
   const settingsStore = new SettingsStore(db);
@@ -182,6 +184,12 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
   let line = Promise.resolve();
   const taken = new Set(); // UIDs fetched and not yet marked seen, so a later look at the inbox doesn't take them again
   const unmarked = new Set(); // UIDs handled whose \Seen flag couldn't be set: set on the next look
+  // A command's answer that couldn't be mailed (the SMTP server turned it away for now, say): uid → { reply, tries }.
+  // Its mail stays unseen, and the answer is mailed on the next look at the inbox (one comes resendAfterMs later)
+  // without running the command again: a /stop run again would find nothing left to stop. After RESEND_TRIES tries
+  // it is given up on, and the mail marked seen.
+  const unsent = new Map();
+  let resendTimer = null;
 
   /**
    * Fetch any UNSEEN messages in INBOX and handle them. Each is marked seen once it has been handled, so mail that a
@@ -201,9 +209,11 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
       for (const uid of uids || []) {
         if (taken.has(uid)) continue; // in line or being handled
         taken.add(uid);
+        if (unsent.has(uid)) { fetched.push({ uid, mail: null, now: true }); continue; } // handled: its answer is to mail
         try {
           const { content } = await client.download(uid, undefined, { uid: true });
-          fetched.push({ uid, mail: await simpleParser(content) });
+          const mail = await simpleParser(content);
+          fetched.push({ uid, mail, now: answersAtOnce(mail) });
         } catch (err) {
           console.warn("[email] fetch error for uid", uid, err?.message);
           // Mark as seen regardless — we don't want infinite retry on a
@@ -215,17 +225,59 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
       lock.release();
     }
 
-    await Promise.all(fetched.map(({ uid, mail }) => {
+    await Promise.all(fetched.map(({ uid, mail, now }) => {
       const handle = async () => {
         // Stopped while it waited: left unseen, so the channel handles it when it starts again.
         if (shuttingDown) return;
-        try { await handleInbound(mail); } catch (e) { console.warn("[email] handleInbound error:", e?.message); }
-        await markSeen(uid);
+        let done = true;
+        try {
+          done = mail ? (await handleInbound(mail, uid)) !== false : await mailCommandAnswer(uid);
+        } catch (e) {
+          console.warn("[email] handleInbound error:", e?.message);
+        }
+        if (done) return markSeen(uid);
+        // Its answer is still to be mailed: unseen, for the next look at the inbox.
+        taken.delete(uid);
+        lookAgainLater();
       };
-      if (answersAtOnce(mail)) return handle();
+      if (now) return handle();
       line = line.then(handle);
       return line;
     }));
+  }
+
+  /**
+   * Mail a command's answer (`reply`, or the one kept for this mail when it couldn't be mailed before). Resolves to
+   * false when it can't be mailed now: it is kept, and the mail stays unseen to be tried again. True once it has been
+   * mailed, or given up on after RESEND_TRIES tries.
+   */
+  async function mailCommandAnswer(uid, reply = unsent.get(uid)?.reply) {
+    if (!reply) return true; // nothing kept for it: nothing left to mail
+    const tries = (unsent.get(uid)?.tries || 0) + 1;
+    try {
+      await sendReply(reply);
+      unsent.delete(uid);
+      return true;
+    } catch (err) {
+      if (uid == null || tries >= RESEND_TRIES) {
+        unsent.delete(uid);
+        console.warn(`[email] could not mail the answer to a command (uid ${uid}), giving up after ${tries} tr${tries === 1 ? "y" : "ies"}: ${err?.message}`);
+        return true;
+      }
+      unsent.set(uid, { reply, tries });
+      console.warn(`[email] could not mail the answer to a command (uid ${uid}), trying again later: ${err?.message}`);
+      return false;
+    }
+  }
+
+  /** Look at the inbox again in resendAfterMs, for the answers still to be mailed (once, however many wait). */
+  function lookAgainLater() {
+    if (resendTimer || shuttingDown) return;
+    resendTimer = setTimeout(() => {
+      resendTimer = null;
+      pollNew().catch((e) => console.warn("[email] pollNew error:", e?.message));
+    }, resendAfterMs);
+    resendTimer.unref?.();
   }
 
   /** Whether a mail is one of the commands answered at once: for Tarsee (it @mentions it) and starting with one. */
@@ -247,9 +299,10 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
   }
 
   /**
-   * Main inbound handler. Parsed `mail` is the mailparser result.
+   * Main inbound handler. Parsed `mail` is the mailparser result, `uid` its UID in the inbox. Resolves to false when
+   * the mail must stay unseen: it was a command whose answer couldn't be mailed yet (see mailCommandAnswer).
    */
-  async function handleInbound(mail) {
+  async function handleInbound(mail, uid) {
     const fromAddr = mail.from?.value?.[0]?.address?.toLowerCase().trim();
     if (!fromAddr) return;
 
@@ -352,11 +405,14 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
 
     // Process commands ("/something") before engaging the AI. __PLAYBOOK__
     // sentinel responses are forwarded to the AI as the user's turn instead
-    // of being mailed back verbatim.
+    // of being mailed back verbatim. Any other command is answered here and never reaches the AI, even when it fails
+    // or its answer can't be mailed: the command was sent to Tarsee, not as a message for the AI (on the fast path
+    // that turn would also run alongside the reply being written).
     let aiPromptOverride = null;
     if (stripped.startsWith("/")) {
+      let cmdResult;
       try {
-        const cmdResult = await processCommand(stripped, {
+        cmdResult = await processCommand(stripped, {
           settingsStore, convStore,
           conversationId: convId,
           platform: "email", // was missing — platform-gated commands misrouted
@@ -365,21 +421,14 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
           owner: false,
           db,                // was missing — /clear silently no-op'd
         });
-        if (cmdResult?.handled) {
-          const playbook = extractPlaybookPrompt(cmdResult);
-          if (playbook) {
-            aiPromptOverride = playbook;
-          } else {
-            await sendReply({
-              incoming: mail,
-              bodyText: cmdResult.response,
-              replyAll,
-            });
-            return;
-          }
-        }
       } catch (err) {
         console.warn("[email] command handler error:", err?.message);
+        cmdResult = { handled: true, response: "Sorry, that command failed. Try again?" };
+      }
+      if (cmdResult?.handled) {
+        const playbook = extractPlaybookPrompt(cmdResult);
+        if (playbook) aiPromptOverride = playbook;
+        else return mailCommandAnswer(uid, { incoming: mail, bodyText: cmdResult.response, replyAll });
       }
     }
 
@@ -564,6 +613,7 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
     stop: async () => {
       shuttingDown = true;
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (resendTimer) clearTimeout(resendTimer); // an answer still to mail: its mail is unseen, for the next start
       try { await client?.logout(); } catch {}
       try { smtp.close(); } catch {}
     },

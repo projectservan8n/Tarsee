@@ -64,14 +64,24 @@ export async function createTelegramBot(config, db, opts = {}) {
   // that reply had ended, too late to stop anything. Now the poll loop never waits: each update gets in line here
   // and is handled in the order it came, one at a time, as before. Only the commands meant for that moment or that
   // change nothing (/stop, /help, /version: lib/commands.js answeredAtOnce) skip the line and are answered at once.
+  // An album takes one place in line, when its first photo comes (see takeAlbumPhoto). Once the channel is stopped,
+  // what still waits in line is dropped without being answered, and the log says so (a reply already running ends
+  // as it would have).
   let line = Promise.resolve();
+  let stopped = false;
+  const inLine = new Set(); // what waits in line and hasn't started: { chat }, for the log when the channel stops
   const botError = (err) => console.error("[telegram] bot error:", err?.message || err);
   /** Run fn now or after everything in line, counted in health() until it ends; its errors are logged, never thrown. */
-  function handleUpdate(fn, { now = false } = {}) {
+  function handleUpdate(ctx, fn, { now = false } = {}) {
     _handlerActive++;
-    const run = () => Promise.resolve().then(fn).catch(botError).finally(() => { _handlerActive--; });
-    if (now) run();
-    else line = line.then(run);
+    const run = () => {
+      if (stopped) { _handlerActive--; return; } // dropped: stop() said so in the log
+      return Promise.resolve().then(fn).catch(botError).finally(() => { _handlerActive--; });
+    };
+    if (now) { run(); return; }
+    const waiting = { chat: ctx.chat?.id };
+    inLine.add(waiting);
+    line = line.then(() => { inLine.delete(waiting); return run(); });
   }
 
   bot.use((ctx, next) => {
@@ -85,9 +95,14 @@ export async function createTelegramBot(config, db, opts = {}) {
       _seenOrder.push(uid);
       if (_seenOrder.length > 1000) _seenUpdates.delete(_seenOrder.shift());
     }
+    if (stopped) {
+      console.warn(`[telegram] the channel is stopped: update ${uid} from chat ${ctx.chat?.id} dropped without an answer`);
+      return;
+    }
     _updatesReceived++;
     _lastUpdateAt = Date.now();
-    handleUpdate(() => next(), { now: answersAtOnce(ctx) });
+    if (ctx.message?.media_group_id && ctx.message.photo) return takeAlbumPhoto(ctx);
+    handleUpdate(ctx, () => next(), { now: answersAtOnce(ctx) });
   });
 
   /**
@@ -606,11 +621,56 @@ ${sendFileHint("telegram")}`,
     return text;
   }
 
-  // --- Photo handler with multi-image batching ---
-  // Telegram sends media groups as separate messages with same media_group_id.
-  // Buffer them and process together after a short delay.
-  const mediaGroupBuffer = new Map(); // media_group_id → { ctx, images[], caption, timer }
+  // --- Photo albums ---
+  // Telegram sends an album as one message per photo, each with the album's media_group_id, one right after another.
+  // They are answered as one message. The album takes its place in line when its first photo comes, and each photo's
+  // download starts as it comes, side by side. The album is complete ALBUM_GAP_MS after its last photo came, however
+  // long the downloads take (a far server can take longer than that for each); its turn then waits for them all.
+  const ALBUM_GAP_MS = 500;
+  const albums = new Map(); // media_group_id → { ctx, parts: Promise<image block|null>[], caption, timer, complete, close }
 
+  /** A photo of an album, as it comes (not in line): its download starts, and the album waits ALBUM_GAP_MS for the next. */
+  function takeAlbumPhoto(ctx) {
+    // A chat off the allowlist is dropped before anything is downloaded, as a voice message is.
+    if (!chatAllowed(ctx)) return;
+    const groupId = ctx.message.media_group_id;
+    let album = albums.get(groupId);
+    if (!album) {
+      album = { ctx, parts: [], caption: "", timer: null };
+      album.complete = new Promise((resolve) => { album.close = resolve; });
+      albums.set(groupId, album);
+      handleUpdate(ctx, () => answerAlbum(album));
+    }
+    const photos = ctx.message.photo;
+    album.parts.push(downloadTelegramFile(photos[photos.length - 1].file_id).then(
+      ({ data, mediaType }) => ({ type: "image", source: { type: "base64", media_type: mediaType, data } }),
+      (err) => { console.error("[telegram] photo download error:", err.message); return null; },
+    ));
+    if (ctx.message.caption) album.caption = ctx.message.caption;
+    clearTimeout(album.timer);
+    album.timer = setTimeout(() => { albums.delete(groupId); album.close(); }, ALBUM_GAP_MS);
+  }
+
+  /** An album's turn in line: once it is complete and every photo is downloaded, it is answered as one message. */
+  async function answerAlbum(album) {
+    await album.complete;
+    const results = await Promise.all(album.parts);
+    if (stopped) {
+      console.warn(`[telegram] the channel is stopped: an album from chat ${album.ctx.chat?.id} dropped without an answer`);
+      return;
+    }
+    const images = results.filter(Boolean);
+    const failed = results.length - images.length;
+    if (failed > 0) {
+      await album.ctx.reply(failed === 1 ? "Failed to process image." : `Failed to process ${failed} of the ${results.length} images.`).catch(() => {});
+    }
+    if (images.length === 0) return;
+    const text = album.caption
+      || (images.length === 1 ? "Please analyze this image." : `Please analyze these ${images.length} images.`);
+    await handleMessage(album.ctx, text, null, images);
+  }
+
+  // --- A photo on its own (an album's photos are taken in takeAlbumPhoto) ---
   bot.on("photo", async (ctx) => {
     try {
       const photos = ctx.message.photo;
@@ -618,29 +678,7 @@ ${sendFileHint("telegram")}`,
       const { data, mediaType } = await downloadTelegramFile(largest.file_id);
       const attachment = { type: "image", source: { type: "base64", media_type: mediaType, data } };
       const caption = ctx.message.caption || "";
-      const groupId = ctx.message.media_group_id;
-
-      if (groupId) {
-        // Part of a media group — buffer it
-        if (!mediaGroupBuffer.has(groupId)) {
-          mediaGroupBuffer.set(groupId, { ctx, images: [], caption: "", timer: null });
-        }
-        const group = mediaGroupBuffer.get(groupId);
-        group.images.push(attachment);
-        if (caption) group.caption = caption;
-
-        // Reset timer — process 500ms after last photo in group arrives
-        clearTimeout(group.timer);
-        group.timer = setTimeout(() => {
-          mediaGroupBuffer.delete(groupId);
-          const text = group.caption || `Please analyze these ${group.images.length} images.`;
-          // In line like any message, so it never runs alongside another one's reply.
-          handleUpdate(() => handleMessage(group.ctx, text, null, group.images));
-        }, 500);
-      } else {
-        // Single photo — process immediately
-        await handleMessage(ctx, caption || "Please analyze this image.", null, [attachment]);
-      }
+      await handleMessage(ctx, caption || "Please analyze this image.", null, [attachment]);
     } catch (err) {
       console.error("[telegram] photo handler error:", err.message);
       await ctx.reply("Failed to process image.").catch(() => {});
@@ -787,6 +825,11 @@ ${sendFileHint("telegram")}`,
   // On a cold boot we drop whatever queued while the container was down. When
   // the health monitor relaunches a STUCK poller those queued updates are real
   // messages the wedged poller failed to pull, so we deliver them instead.
+  //
+  // launch asks Telegram one more thing (deleteWebhook) before it starts polling, so the channel can be stopped before
+  // there is any polling to stop. Polling then never starts: started, it would take every message while dropping it.
+  const startPolling = bot.startPolling.bind(bot);
+  bot.startPolling = (...args) => (stopped ? Promise.resolve() : startPolling(...args));
   bot.launch({ dropPendingUpdates: !opts.deliverPending }).catch((err) => {
     console.error("[telegram] bot.launch error (polling will retry):", err.message);
   });
@@ -816,8 +859,21 @@ ${sendFileHint("telegram")}`,
   console.log(`[telegram] bot started`);
 
   return {
+    /**
+     * Stop polling. What still waits in line (and an album still coming) is dropped without being answered, and the
+     * log says which chats it came from; a reply already running ends as it would have. Twice is fine.
+     */
     stop: async () => {
-      bot.stop("Tarsee shutdown");
+      if (stopped) return;
+      stopped = true;
+      for (const album of albums.values()) { clearTimeout(album.timer); album.close(); }
+      albums.clear();
+      if (inLine.size > 0) {
+        const chats = [...new Set([...inLine].map((w) => w.chat))].join(", ");
+        console.warn(`[telegram] the channel is stopped: ${inLine.size} message${inLine.size === 1 ? "" : "s"} still waiting in line dropped without an answer (chat ${chats})`);
+        inLine.clear();
+      }
+      if (bot.polling) bot.stop("Tarsee shutdown"); // none yet: startPolling above won't start it now
     },
     /** Who it connected as, for Settings → Channels: @username, or null until Telegram has said. */
     get identity() {

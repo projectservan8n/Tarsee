@@ -87,7 +87,7 @@ const Chat = {
       this._loadPick({ fresh: true });
     });
 
-    // Diagram node clicks: iframes post a message when a node is clicked
+    // Diagram node clicks: a click on a node puts its question in the message box (never sent from there)
     this._initDiagramListener();
 
     // Auto-resize textarea + command palette trigger
@@ -2248,7 +2248,11 @@ const Chat = {
   _typingIndicatorTimeout: null,
 
   /**
-   * A click on a diagram's node asks about that node, and only a diagram Tarsee drew can send one. A diagram is at
+   * A click on a diagram's node puts a question about that node in the message box, and nothing is sent: the AI chose
+   * those words (and they may be one of the chat's commands, which run as the owner), so the owner reads them and
+   * presses Send, as with dictation. They go in at the caret, added to a draft, and the files waiting to go with the
+   * message stay where they are. Each node shows its words before any click (lib/diagram-renderer.js).
+   * Only a diagram Tarsee drew can put them there. A diagram is at
    * /diagram/<id>/: a page the server draws itself from the diagram's data on every request, whose CSP lets one script
    * run, Tarsee's own, the same for every diagram (lib/canvas.js, lib/diagram-renderer.js). Nothing the AI writes runs
    * there, neither through create_canvas nor as a file it puts in the workspace. A canvas (/canvas/<id>/) is a page the
@@ -2259,7 +2263,7 @@ const Chat = {
    *   - the message is a node click's exact shape, { type: "tarsee:diagram-click", diagramId, nodeId, label, sublabel,
    *     question?, click }, every field checked, and it names that iframe's diagram;
    *   - a person just clicked: the browser says so (navigator.userActivation, for a few seconds after a click), so a
-   *     message nobody clicked for is never sent;
+   *     message nobody clicked for never fills the box;
    *   - once per click: click is the page's count of its clicks (1, 2, 3, ...), and each one is taken once.
    */
   _initDiagramListener() {
@@ -2301,11 +2305,41 @@ const Chat = {
       lastClick.set(frame, click);
       const text = custom || (more ? `Tell me more about: ${name}. ${more}` : `Tell me more about: ${name}`);
 
-      // The normal send path: send() queues it while a reply is still coming.
-      this.elements.messageInput.value = text;
-      this.elements.sendBtn.disabled = false;
-      this.send();
+      // Into the box, for the owner to read and send. Never sent from here.
+      this.insertIntoBox(text);
     });
+  },
+
+  /**
+   * Words into the message box at the caret, added to what is typed (a selection stays: they go after it), with a space
+   * either side where one is needed, as dictation puts them (js/voice.js). Nothing is sent, and the files waiting to go
+   * with the message stay. The box gets the focus; on a phone without the keyboard popping up, until the box is tapped.
+   */
+  insertIntoBox(words) {
+    const input = this.elements.messageInput;
+    const value = input.value;
+    const at = Math.min(Number.isInteger(input.selectionEnd) ? input.selectionEnd : value.length, value.length);
+    const before = value.slice(0, at);
+    const after = value.slice(at);
+    const lead = before && !/\s$/.test(before) ? " " : "";
+    const trail = after && !/^[\s.,!?;:)]/.test(after) ? " " : "";
+    input.value = before + lead + words + trail + after;
+    const caret = (before + lead + words).length;
+    const phone = window.matchMedia?.("(pointer: coarse)").matches;
+    if (phone && document.activeElement !== input) {
+      // inputmode=none: focused, with no keyboard. A tap on the box (or leaving it) brings the keyboard back.
+      input.setAttribute("inputmode", "none");
+      const restore = () => {
+        input.removeAttribute("inputmode");
+        input.removeEventListener("pointerdown", restore);
+        input.removeEventListener("blur", restore);
+      };
+      input.addEventListener("pointerdown", restore);
+      input.addEventListener("blur", restore);
+    }
+    input.focus({ preventScroll: true });
+    input.setSelectionRange(caret, caret);
+    input.dispatchEvent(new Event("input", { bubbles: true }));   // Send turns on, the box grows to fit
   },
 
   _initTypingSocket() {
@@ -2970,8 +3004,10 @@ const Chat = {
     };
     text = text.replace(/<a\s+[^>]*href=["'](?:https?:\/\/[^\s/"']+)?\/(canvas|diagram)\/([a-z0-9-]+)\/?["'][^>]*>[\s\S]*?<\/a>/gi, (_m, kind, id) => placeEmbed(kind.toLowerCase(), id));
     text = text.replace(/(?:https?:\/\/[^\s/)]+)?\/canvas\/([a-z0-9-]+)\/?(?=[\s)\]."',;:!?]|$)/g, (_m, id) => placeEmbed("canvas", id));
-    // A diagram's address on its own, not the end of a longer path (docs/diagram/flow.png is not one).
-    text = text.replace(/(?<![\w./-])(?:https?:\/\/[^\s/)]+)?\/diagram\/([a-z0-9-]+)\/?(?=[\s)\]."',;:!?]|$)/g, (_m, id) => placeEmbed("diagram", id));
+    // A diagram's address on its own: Tarsee's own, as a path (/diagram/<id>/) or with this page's origin in front. Not
+    // the end of a longer path (docs/diagram/flow.png), and not another site's address (https://example.com/diagram/x/),
+    // which stays a link: what comes before the path is a whole site, and only this page's own counts.
+    text = text.replace(/(?<![\w./\-\]:@%~])(https?:\/\/[^\s/)]+)?\/diagram\/([a-z0-9-]+)\/?(?=[\s)\]."',;:!?]|$)/g, (m, site, id) => (!site || isOwnSite(site) ? placeEmbed("diagram", id) : m));
 
     // Thinking / reasoning: folded.
     text = text.replace(/<(thinking|antThinking|antml:thinking|reasoning)>([\s\S]*?)<\/\1>/g, (_m, tag, content) => token(renderThinkingBlock(tag.includes("thinking") || tag.includes("Thinking") ? "Thinking" : "Reasoning", content.trim())));
@@ -2998,6 +3034,15 @@ function escapeHtml(text) {
 /** Only http(s), mailto and same-site relative links are rendered as links. */
 function safeHref(url) {
   return Core.safeHref(url);
+}
+
+/** Whether `site`, a scheme and host as written in a message ("https://host:port"), is this page's own origin. */
+function isOwnSite(site) {
+  try {
+    return new URL(site).origin === window.location.origin;
+  } catch {
+    return false;
+  }
 }
 
 /**

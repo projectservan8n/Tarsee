@@ -7,6 +7,9 @@
 //    change nothing) is read and answered at once, while any other message still waits its turn. Typed in the
 //    dashboard's chat, /stop also cancels what the dashboard sent that waits behind the reply, as its Stop button does,
 //    and with the Live view off it is sent at once instead of waiting in the tab's queue behind the reply.
+//    Taking messages that way must not break what came with it: a Telegram album is still one message however long
+//    its photos take to download; a stopped Telegram channel answers nothing still waiting in its line; and a command
+//    mailed back whose answer the SMTP server turns away is never sent to the AI instead.
 //  - /theme sent from Telegram, Discord, Slack, WhatsApp or email answers in plain words: a theme is how the dashboard
 //    looks, so it is picked there. Only the dashboard's chat gets the __SET_THEME__ marker its page reads.
 //  - Settings > Automation > Session Reset's "Manual" option names a command that exists and starts a fresh session
@@ -243,19 +246,29 @@ function stoppableThenAnswers(answer) {
 
 /**
  * A Telegram Bot API on 127.0.0.1 that the real bot (Telegraf) long-polls: it keeps what it is sent, and hands out the
- * updates a test queues, each once, as soon as the bot next asks.
+ * updates a test queues, each once, as soon as the bot next asks. It serves photos too: a file's bytes are
+ * "image <file id>", sent after api.fileDelay[file id] ms. api.delay[method]: ms a Bot API method takes to answer.
  */
 async function fakeBotApi() {
-  const api = { calls: [], pending: [], nextUpdate: 1, nextMessage: 100 };
+  const api = { calls: [], pending: [], nextUpdate: 1, nextMessage: 100, delay: {}, fileDelay: {} };
   const server = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const c of req) chunks.push(c);
+    if (req.url.startsWith("/file/")) {
+      const fileId = path.basename(req.url, ".jpg");
+      await sleep(api.fileDelay[fileId] || 0);
+      res.writeHead(200, { "content-type": "image/jpeg" });
+      res.end(`image ${fileId}`);
+      return;
+    }
     const method = req.url.split("/").pop();
     const raw = Buffer.concat(chunks).toString("utf8");
     const fields = raw && /json/.test(req.headers["content-type"] || "") ? JSON.parse(raw) : {};
     api.calls.push({ method, fields });
+    if (api.delay[method]) await sleep(api.delay[method]);
     let result = true;
     if (method === "getMe") result = { id: 1, is_bot: true, first_name: "Tarsee", username: "test_bot" };
+    else if (method === "getFile") result = { file_id: fields.file_id, file_unique_id: fields.file_id, file_size: 16, file_path: `photos/${fields.file_id}.jpg` };
     else if (method === "getUpdates") {
       // A long poll, kept short: it answers as soon as there is an update, else after 100 ms with none.
       for (let i = 0; i < 10 && api.pending.length === 0; i++) await sleep(10);
@@ -278,6 +291,24 @@ async function fakeBotApi() {
         chat: group ? { id: chatId, type: "group", title: "The group" } : { id: chatId, type: "private", first_name: "Sam" },
         from: { id: from, is_bot: false, first_name: "Sam" },
         text,
+      },
+    });
+  };
+  /** A photo in a private chat; `album`: its media_group_id, as Telegram sends each photo of an album on its own. */
+  api.photo = (chatId, fileId, { album = null, caption = null } = {}) => {
+    api.pending.push({
+      update_id: api.nextUpdate++,
+      message: {
+        message_id: api.nextMessage++,
+        date: 0,
+        chat: { id: chatId, type: "private", first_name: "Sam" },
+        from: { id: 42, is_bot: false, first_name: "Sam" },
+        photo: [
+          { file_id: `${fileId}-small`, file_unique_id: `${fileId}-small`, width: 90, height: 60 },
+          { file_id: fileId, file_unique_id: fileId, width: 900, height: 600 },
+        ],
+        ...(album ? { media_group_id: album } : {}),
+        ...(caption ? { caption } : {}),
       },
     });
   };
@@ -382,6 +413,124 @@ describe("/stop on Telegram, which takes a chat's messages one at a time (the re
     assert.deepEqual(api.said(905), [], "the chat off the allowlist is ignored");
     assert.ok(live.activeTurnFor(conv), "and its /stop stopped nothing");
   });
+
+  // An album is one message per photo, all with one media_group_id. Taken one at a time, each photo's download held
+  // up the next, and the album was cut into one reply per photo whenever a download took longer than the 500 ms the
+  // album waits for its next photo.
+  it("an album whose photos each take longer than 500 ms to download is one message, its photos in order", async () => {
+    chats.add(906);
+    api.fileDelay = { a1: 1100, a2: 600, a3: 800 };
+    const calls = engine.calls.length;
+    api.photo(906, "a1", { album: "album-906", caption: "what are these?" });
+    api.photo(906, "a2", { album: "album-906" });
+    api.photo(906, "a3", { album: "album-906" });
+    assert.ok(await until(() => engine.calls.length > calls, 6000), "the album is answered");
+    await sleep(1000);
+    const turns = engine.calls.slice(calls);
+    assert.equal(turns.length, 1, `one reply, not one per photo: ${JSON.stringify(turns.map((t) => t.prompt))}`);
+    assert.deepEqual(imagesOf(turns[0]), ["image a1", "image a2", "image a3"]);
+    assert.match(turns[0].prompt, /what are these\?/);
+  });
+
+  it("...and so is one whose photos come in separate fetches, each download slower than the gap between them", async () => {
+    chats.add(907);
+    api.fileDelay = { b1: 800, b2: 800, b3: 800 };
+    const calls = engine.calls.length;
+    api.photo(907, "b1", { album: "album-907" });
+    await sleep(150);
+    api.photo(907, "b2", { album: "album-907" });
+    await sleep(150);
+    api.photo(907, "b3", { album: "album-907" });
+    assert.ok(await until(() => engine.calls.length > calls, 6000), "the album is answered");
+    await sleep(1000);
+    const turns = engine.calls.slice(calls);
+    assert.equal(turns.length, 1, `one reply, not one per photo: ${JSON.stringify(turns.map((t) => t.prompt))}`);
+    assert.deepEqual(imagesOf(turns[0]), ["image b1", "image b2", "image b3"]);
+    assert.match(turns[0].prompt, /Please analyze these 3 images\./);
+  });
+
+  it("an album sent while a reply runs waits its turn, and is still one message", async () => {
+    stoppableThenAnswers("Nice photos.");
+    const conv = await startReply(908);
+    api.fileDelay = { c1: 700, c2: 700 };
+    api.photo(908, "c1", { album: "album-908" });
+    api.photo(908, "c2", { album: "album-908" });
+    await sleep(1500);
+    assert.equal(engine.calls.length, 1, "no second reply runs alongside the first");
+    api.send(908, "/stop");
+    assert.ok(await until(() => !live.activeTurnFor(conv) && engine.calls.length === 2, 3000), "the album has its turn once the reply is over");
+    await sleep(800);
+    assert.equal(engine.calls.length, 2, "one turn for the album");
+    assert.deepEqual(imagesOf(engine.calls[1]), ["image c1", "image c2"]);
+    assert.ok(await until(() => api.said(908).includes("Nice photos.")), JSON.stringify(api.said(908)));
+  });
+});
+
+/** The pictures a turn was given, as the words the fake Bot API serves them as ("image <file id>"), in order. */
+function imagesOf(call) {
+  const last = [...(call.messages || [])].reverse().find((m) => m.role === "user");
+  return (Array.isArray(last?.content) ? last.content : [])
+    .filter((b) => b.type === "image")
+    .map((b) => Buffer.from(b.source.data, "base64").toString("utf8"));
+}
+
+/** Calls fn with every console.warn line written meanwhile (they still reach the console). */
+async function withWarnings(fn) {
+  const warned = [];
+  const warn = console.warn;
+  console.warn = (...args) => { warned.push(args.map(String).join(" ")); warn(...args); };
+  try { return await fn(warned); } finally { console.warn = warn; }
+}
+
+describe("stopping the Telegram channel (the real bot, a Bot API on 127.0.0.1)", () => {
+  it("drops the messages still waiting in line without answering them, and says so in the log", async () => {
+    const api = await fakeBotApi();
+    const { createTelegramBot } = await import("../src/channels/telegram.js");
+    const bot = await createTelegramBot({ token: "123456:test-token-not-real" }, db, { apiRoot: api.url });
+    const convOf = (chatId) => settings.get(`channel_conv.telegram:${chatId}`);
+    try {
+      await withWarnings(async (warned) => {
+        api.send(911, "write me a long essay");
+        assert.ok(await until(() => engine.calls.length === 1 && convOf(911) && live.activeTurnFor(convOf(911))), "the reply is running");
+        api.send(912, "hello from another chat");
+        api.photo(913, "d1", { album: "album-913" });
+        api.photo(913, "d2", { album: "album-913" });
+        assert.ok(await until(() => bot.health().handlerActive >= 3), `two wait behind the reply: ${bot.health().handlerActive}`);
+        await bot.stop();
+        const said = warned.find((w) => /stopped/i.test(w) && /2 messages/.test(w));
+        assert.ok(said, `the log says what was dropped: ${JSON.stringify(warned)}`);
+        assert.match(said, /912/);
+        assert.match(said, /913/);
+        stopTurns(convOf(911));
+        assert.ok(await until(() => bot.health().handlerActive === 0, 3000), "nothing is left in line");
+        await sleep(800);
+        assert.equal(engine.calls.length, 1, "nothing that waited ran an AI turn");
+        assert.deepEqual(api.said(912), [], "nor was it answered");
+        assert.deepEqual(api.said(913), []);
+        assert.equal(convOf(912), null, "nor taken into a chat");
+      });
+      await bot.stop(); // twice is fine
+    } finally {
+      stopTurns(convOf(911));
+      api.close();
+    }
+  });
+
+  it("a channel stopped before its polling has begun never begins it", async () => {
+    const api = await fakeBotApi();
+    api.delay.deleteWebhook = 400; // launch asks this just before it starts polling
+    const { createTelegramBot } = await import("../src/channels/telegram.js");
+    const bot = await createTelegramBot({ token: "123456:test-token-not-real" }, db, { apiRoot: api.url });
+    try {
+      await bot.stop();
+      api.send(914, "hello");
+      await sleep(900);
+      assert.equal(api.calls.filter((c) => c.method === "getUpdates").length, 0, "it never asked Telegram for messages");
+      assert.equal(engine.calls.length, 0);
+    } finally {
+      api.close();
+    }
+  });
 });
 
 /** Stands in for imapflow's ImapFlow, mailbox lock and all: one holder at a time, the next waits for release(). */
@@ -447,9 +596,22 @@ describe("/stop by email, where mail is handled one at a time (the real channel,
   beforeEach(async () => {
     LockingImap.inbox = [];
     threads.length = 0;
-    smtp = { sent: [], async verify() { return true; }, async sendMail(m) { this.sent.push(m); return { messageId: `<sent-${this.sent.length}@test>` }; }, close() {} };
+    // refuse(mail): true for a mail the server turns away for now, as nodemailer reports an SMTP 421.
+    smtp = {
+      sent: [], refused: [], refuse: () => false,
+      async verify() { return true; },
+      async sendMail(m) {
+        if (this.refuse(m)) {
+          this.refused.push(m);
+          throw Object.assign(new Error("Message failed: 421 4.7.0 Try again later"), { code: "EMESSAGE", responseCode: 421 });
+        }
+        this.sent.push(m);
+        return { messageId: `<sent-${this.sent.length}@test>` };
+      },
+      close() {},
+    };
     const { createEmailBot } = await import("../src/channels/email.js");
-    bot = await createEmailBot(EMAIL, db, { ImapFlow: LockingImap, smtpTransport: smtp });
+    bot = await createEmailBot(EMAIL, db, { ImapFlow: LockingImap, smtpTransport: smtp, resendAfterMs: 400 });
   });
   afterEach(async () => {
     const idle = await until(() => {
@@ -493,6 +655,46 @@ describe("/stop by email, where mail is handled one at a time (the real channel,
     await sleep(200);
     assert.equal(smtp.sent.length, sent, "no mail is answered twice");
     assert.equal(engine.calls.length, 2);
+  });
+
+  // A command's answer that couldn't be mailed used to send the command to the AI as a message, and on the fast path
+  // that turn ran alongside the reply being written.
+  it("a /stop whose answer the SMTP server turns away (421) never goes to the AI: the mail stays unseen, and its answer is mailed on the next try", async () => {
+    await withWarnings(async (warned) => {
+      smtp.refuse = (m) => String(m.text).trim() === STOPPED && smtp.refused.length === 0;
+      const first = arrives("@tarsee write me a long essay");
+      assert.ok(await until(() => convOf(first) && live.activeTurnFor(convOf(first))), "the reply is running");
+      const conv = convOf(first);
+      arrives("/stop @tarsee", { thread: first });
+      const stopMail = LockingImap.inbox.at(-1);
+      assert.ok(await until(() => smtp.refused.length === 1, 2000), "the answer was turned away");
+      assert.equal(stopMail.seen, false, "the /stop is kept unseen, to be tried again");
+      await sleep(150);
+      assert.equal(engine.calls.length, 1, "the /stop is not sent to the AI instead");
+      assert.ok(await until(() => !live.activeTurnFor(conv), 2000), "the reply was stopped all the same");
+      assert.ok(warned.some((w) => /could not mail/.test(w) && /421/.test(w)), `the log says so: ${JSON.stringify(warned)}`);
+      assert.ok(await until(() => mailed().includes(STOPPED), 3000), `the answer is mailed on the next try: ${JSON.stringify(mailed())}`);
+      assert.ok(await until(() => stopMail.seen), "and then the /stop is marked seen");
+      await sleep(300);
+      assert.equal(engine.calls.length, 1, "the /stop never reached the AI");
+      assert.equal(mailed().filter((t) => t === STOPPED).length, 1, "its answer is mailed once");
+      assert.ok(!mailed().some((t) => /Nothing is running/.test(t)), "the command is not run again, its answer is sent again");
+      assert.equal(convs.getRecentMessages(conv, 50).filter((m) => /\/stop/.test(m.content)).length, 1, "the /stop is in the thread once");
+    });
+  });
+
+  it("an answer that can never be mailed is given up on after a few tries, and the mail is marked seen; the AI is never asked", async () => {
+    await withWarnings(async (warned) => {
+      smtp.refuse = (m) => /Tarsee Commands/.test(String(m.text));
+      arrives("/help @tarsee", { subject: "Help" });
+      const help = LockingImap.inbox.at(-1);
+      assert.ok(await until(() => help.seen, 6000), `marked seen in the end: ${smtp.refused.length} tries`);
+      assert.equal(smtp.refused.length, 5, "five tries");
+      assert.ok(warned.some((w) => /giving up/.test(w)), JSON.stringify(warned));
+      await sleep(600);
+      assert.equal(smtp.refused.length, 5, "then no more");
+      assert.equal(engine.calls.length, 0, "the /help never reached the AI");
+    });
   });
 });
 

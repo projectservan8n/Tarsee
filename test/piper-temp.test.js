@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
+import express from "express";
 
 // As in edge-tts-temp.test.js: point the system temp folder at a throwaway one,
 // so the test can see every file Piper leaves behind. os.tmpdir() reads these on
@@ -16,28 +19,34 @@ process.env.TMPDIR = TMP;
 process.env.TEMP = TMP;
 process.env.TMP = TMP;
 process.env.TARSEE_DATA_DIR = path.join(WORK, "data");
+process.env.TARSEE_STATE_DIR = path.join(WORK, "state");
+process.env.TARSEE_WORKSPACE_DIR = path.join(WORK, "state", "workspace");
 
 const VOICES = path.join(WORK, "data", "piper-voices");
 const LOG = path.join(WORK, "calls.jsonl");
+const ENDS = path.join(WORK, "ends.jsonl");
 const FAKE = path.join(WORK, "fake-piper.mjs");
 
 // A stand-in for the piper program: no model, no audio engine. It reads the text
-// on its input, logs what it was asked, creates the output file (as the real one
-// does before the audio is ready), then behaves as FAKE_PIPER_MODE says.
+// on its input, logs what it was asked and when it started, creates the output
+// file (as the real one does before the audio is ready), then behaves as
+// FAKE_PIPER_MODE says, or as "mode=<name> " at the start of the text says for
+// that run alone. A run that writes its audio logs when it ended, too.
 fs.writeFileSync(FAKE, `
 import fs from "node:fs";
+const started = Date.now();
 const args = process.argv.slice(2);
 const arg = (name) => args[args.indexOf(name) + 1];
 const out = arg("--output_file");
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
+const text = Buffer.concat(chunks).toString("utf8");
 const existedBefore = fs.existsSync(out);
 fs.writeFileSync(out, Buffer.alloc(0));
 fs.appendFileSync(process.env.FAKE_PIPER_LOG, JSON.stringify({
-  pid: process.pid, out, model: arg("--model"), args, existedBefore,
-  text: Buffer.concat(chunks).toString("utf8"),
+  pid: process.pid, out, model: arg("--model"), args, existedBefore, text, started,
 }) + "\\n");
-const mode = process.env.FAKE_PIPER_MODE || "ok";
+const mode = /^mode=(\\w+) /.exec(text)?.[1] || process.env.FAKE_PIPER_MODE || "ok";
 if (mode === "hang") setInterval(() => {}, 1000);
 else if (mode === "fail") { process.stderr.write("Loading the voice...\\nUnable to load the voice model\\n"); process.exit(3); }
 else if (mode === "empty") fs.writeFileSync(out, Buffer.alloc(10));
@@ -45,9 +54,11 @@ else if (mode === "none") fs.rmSync(out);
 else {
   await new Promise((r) => setTimeout(r, Number(process.env.FAKE_PIPER_DELAY_MS || 0)));
   fs.writeFileSync(out, Buffer.alloc(400, 7));
+  fs.appendFileSync(process.env.FAKE_PIPER_ENDS, JSON.stringify({ pid: process.pid, ended: Date.now() }) + "\\n");
 }
 `);
 process.env.FAKE_PIPER_LOG = LOG;
+process.env.FAKE_PIPER_ENDS = ENDS;
 const COMMAND = [process.execPath, FAKE];
 
 fs.mkdirSync(VOICES, { recursive: true });
@@ -59,7 +70,44 @@ for (const id of ["alpha", "beta"]) {
 const { PiperTTSEngine, deletePiperVoice, __setForTests } = await import("../src/voice/piper-engine.js");
 
 const leftovers = () => fs.readdirSync(TMP);
-const calls = () => (fs.existsSync(LOG) ? fs.readFileSync(LOG, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+const lines = (file) => (fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean) : []);
+const calls = () => lines(LOG).map((l) => JSON.parse(l));
+const ends = () => new Map(lines(ENDS).map((l) => JSON.parse(l)).map((e) => [e.pid, e.ended]));
+
+/**
+ * What Node's spawn hands back when there are no file handles left (EMFILE or
+ * ENFILE): a child with no input or output streams, whose "error" event comes on
+ * the next tick, followed by "close".
+ */
+function spawnWithNoHandlesLeft(bin) {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => false;
+  process.nextTick(() => {
+    child.exitCode = -24;
+    child.emit("error", Object.assign(new Error(`spawn ${bin} EMFILE`), { code: "EMFILE", errno: -24, syscall: `spawn ${bin}` }));
+    child.emit("close", -24, null);
+  });
+  return child;
+}
+
+/**
+ * Node's own spawn, except that the child's "close" (all of its output closed)
+ * comes `ms` after its "exit". That is what happens on Linux when a process
+ * Piper started still holds Piper's error output open after Piper has gone.
+ * (On Windows such a process does not keep the pipe open, so it is staged here.)
+ */
+const spawnHeldOpen = (ms) => (...args) => {
+  const child = spawn(...args);
+  const emit = child.emit.bind(child);
+  child.emit = (event, ...rest) => {
+    if (event !== "close") return emit(event, ...rest);
+    setTimeout(() => emit(event, ...rest), ms).unref();
+    return true;
+  };
+  return child;
+};
 
 /** Every file Piper was given sat in the temp folder and is gone, and nothing else was left there. */
 function assertTidy() {
@@ -81,7 +129,7 @@ describe("Piper keeps its audio in the system temp folder", () => {
   before(() => { assert.equal(os.tmpdir(), TMP, "the test could not move the temp folder"); });
   beforeEach(() => {
     for (const f of leftovers()) fs.rmSync(path.join(TMP, f), { force: true, recursive: true });
-    fs.rmSync(LOG, { force: true });
+    for (const f of [LOG, ENDS]) fs.rmSync(f, { force: true });
     delete process.env.FAKE_PIPER_MODE;
     delete process.env.FAKE_PIPER_DELAY_MS;
     __setForTests({ command: COMMAND });
@@ -129,6 +177,65 @@ describe("Piper keeps its audio in the system temp folder", () => {
     assert.ok(ticks >= 5, `the server stood still while Piper ran (${ticks} ticks)`);
     const files = calls().map((c) => c.out);
     assert.equal(new Set(files).size, 3, `files clashed: ${files.join(", ")}`);
+    assertTidy();
+  });
+
+  it("runs one Piper at a time, in the order the sentences were asked for, and each one's limit starts when it starts", async () => {
+    // A call asks for every sentence of an answer at once. Each run here takes
+    // well under the limit, and all four together well over it.
+    process.env.FAKE_PIPER_DELAY_MS = "600";
+    __setForTests({ command: COMMAND, timeoutMs: 2000 });
+    const engine = new PiperTTSEngine("alpha");
+    const texts = ["One.", "Two.", "Three.", "Four."];
+    const results = await Promise.all(texts.map((t) => engine.synthesize(t)));
+    for (const r of results) assert.equal(r.audio.length, 400);
+    const runs = calls().sort((x, y) => x.started - y.started);
+    const ended = ends();
+    for (let i = 1; i < runs.length; i++) {
+      assert.ok(runs[i].started >= ended.get(runs[i - 1].pid), `"${runs[i].text}" started while "${runs[i - 1].text}" was still running`);
+    }
+    assert.deepEqual(runs.map((c) => c.text), texts);
+    assertTidy();
+  });
+
+  it("lets the next Piper run once one is stopped or fails", async () => {
+    __setForTests({ command: COMMAND, timeoutMs: 1500 });
+    const engine = new PiperTTSEngine("alpha");
+    const [hung, second, failed, fourth] = await Promise.allSettled([
+      engine.synthesize("mode=hang One."),
+      engine.synthesize("Two."),
+      engine.synthesize("mode=fail Three."),
+      engine.synthesize("Four."),
+    ]);
+    assert.match(String(hung.reason?.message), /took longer than 1.5 s/);
+    assert.equal(second.value?.audio.length, 400);
+    assert.match(String(failed.reason?.message), /exit code 3/);
+    assert.equal(fourth.value?.audio.length, 400);
+    assert.equal(calls().length, 4);
+    assertTidy();
+  });
+
+  it("says Piper could not run, and keeps the server up, when no file handles are left to start it", async () => {
+    __setForTests({ command: COMMAND, spawn: spawnWithNoHandlesLeft });
+    await assert.rejects(new PiperTTSEngine("alpha").synthesize("Hello."), /Piper could not run: spawn .* EMFILE/);
+    assert.deepEqual(leftovers(), []);
+    // Its turn is free again.
+    __setForTests({ command: COMMAND });
+    assert.equal((await new PiperTTSEngine("alpha").synthesize("Hello again.")).audio.length, 400);
+    assertTidy();
+  });
+
+  it("answers as soon as Piper has gone, even while a process it started still holds its error output open", async () => {
+    __setForTests({ command: COMMAND, timeoutMs: 1500, spawn: spawnHeldOpen(3000) });
+    const engine = new PiperTTSEngine("alpha");
+    let t = Date.now();
+    const out = await engine.synthesize("Hello.");
+    assert.deepEqual(out.audio, Buffer.alloc(400, 7));
+    assert.ok(Date.now() - t < 1500, `a Piper that worked took ${Date.now() - t} ms to answer`);
+    // A Piper that failed is reported as failed, with what it said, not as too slow.
+    t = Date.now();
+    await assert.rejects(engine.synthesize("mode=fail Hello."), /exit code 3.*Unable to load the voice model/);
+    assert.ok(Date.now() - t < 1500, `a Piper that failed took ${Date.now() - t} ms to answer`);
     assertTidy();
   });
 
@@ -197,20 +304,58 @@ describe("Piper is found on the PATH on every system", () => {
 });
 
 describe("Deleting a Piper voice stays inside the voices folder", () => {
+  const outside = path.join(WORK, "data", "outside");
+  const refused = ["../outside", "..\\outside", outside];
+  let server;
+  let base;
+  before(async () => {
+    const { voiceRouter } = await import("../src/routes/voice.js");
+    const app = express();
+    app.use("/api/voice", voiceRouter);
+    server = await new Promise((r) => { const x = app.listen(0, "127.0.0.1", () => r(x)); });
+    base = `http://127.0.0.1:${server.address().port}/api/voice/piper-voices`;
+  });
+  after(() => new Promise((r) => server.close(r)));
+  beforeEach(() => {
+    fs.writeFileSync(`${outside}.onnx`, "x");
+    fs.writeFileSync(`${outside}.onnx.json`, "{}");
+  });
+  const outsideIsThere = () => {
+    assert.equal(fs.existsSync(`${outside}.onnx`), true, "a file outside the voices folder was deleted");
+    assert.equal(fs.existsSync(`${outside}.onnx.json`), true, "a file outside the voices folder was deleted");
+  };
+
   it("deletes both files of a voice", () => {
     fs.writeFileSync(path.join(VOICES, "gamma.onnx"), "x");
     fs.writeFileSync(path.join(VOICES, "gamma.onnx.json"), "{}");
-    deletePiperVoice("gamma");
+    assert.equal(deletePiperVoice("gamma"), true);
     assert.equal(fs.existsSync(path.join(VOICES, "gamma.onnx")), false);
     assert.equal(fs.existsSync(path.join(VOICES, "gamma.onnx.json")), false);
   });
 
   it("refuses an id that leads out of the voices folder", () => {
-    const outside = path.join(WORK, "data", "outside");
-    fs.writeFileSync(`${outside}.onnx`, "x");
-    fs.writeFileSync(`${outside}.onnx.json`, "{}");
-    for (const id of ["../outside", "..\\outside", outside]) deletePiperVoice(id);
-    assert.equal(fs.existsSync(`${outside}.onnx`), true, "a file outside the voices folder was deleted");
-    assert.equal(fs.existsSync(`${outside}.onnx.json`), true, "a file outside the voices folder was deleted");
+    for (const id of refused) assert.equal(deletePiperVoice(id), false, `"${id}" was not refused`);
+    outsideIsThere();
+  });
+
+  it("answers ok over HTTP when a voice is deleted", async () => {
+    fs.writeFileSync(path.join(VOICES, "delta.onnx"), "x");
+    fs.writeFileSync(path.join(VOICES, "delta.onnx.json"), "{}");
+    const r = await fetch(`${base}/delta`, { method: "DELETE" });
+    assert.equal(r.status, 200);
+    assert.deepEqual(await r.json(), { ok: true });
+    assert.equal(fs.existsSync(path.join(VOICES, "delta.onnx")), false);
+    assert.equal(fs.existsSync(path.join(VOICES, "delta.onnx.json")), false);
+  });
+
+  it("answers 400 over HTTP, with the reason in plain words, when the name is refused", async () => {
+    for (const id of refused) {
+      const r = await fetch(`${base}/${encodeURIComponent(id)}`, { method: "DELETE" });
+      assert.equal(r.status, 400, `"${id}" answered ${r.status}`);
+      const body = await r.json();
+      assert.equal(body.ok, undefined);
+      assert.match(String(body.error), /not the name of a Piper voice/);
+    }
+    outsideIsThere();
   });
 });

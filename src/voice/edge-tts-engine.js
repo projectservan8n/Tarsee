@@ -11,32 +11,46 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 const MAX_RETRIES = 3;
-const TTS_TIMEOUT = 30_000; // 30s per attempt — longer text needs more time
+// Each attempt's limit fits its sentence: a base for connecting and a short
+// sentence, and more for each character, since a longer one streams for longer.
+// A short sentence that stalls fails fast, and no attempt waits more than 30 s.
+const TTS_BASE_MS = 8_000;
+const TTS_PER_CHAR_MS = 20;
+const TTS_TIMEOUT = 30_000;
 const RETRY_DELAY = 500; // times the attempt number
 
-// Swapped only by tests: the EdgeTTS class (null loads node-edge-tts) and the waits.
+// Swapped only by tests: the EdgeTTS class (null loads node-edge-tts) and the
+// waits (a time limit set here is used for every sentence, whatever its length).
 let _EdgeTTS = null;
-let _timeoutMs = TTS_TIMEOUT;
+let _timeoutMs = null;
 let _retryDelayMs = RETRY_DELAY;
 
 /** Tests only: use a fake EdgeTTS class and shorter waits. No arguments puts the real ones back. */
 export function __setForTests({ EdgeTTS, timeoutMs, retryDelayMs } = {}) {
   _EdgeTTS = EdgeTTS || null;
-  _timeoutMs = timeoutMs ?? TTS_TIMEOUT;
+  _timeoutMs = timeoutMs ?? null;
   _retryDelayMs = retryDelayMs ?? RETRY_DELAY;
 }
 
 /**
- * node-edge-tts never closes its WebSocket when an attempt fails or times out,
- * and a connection that opens after the attempt gave up would still create the
- * audio file in the temp folder. This wraps the library's connect step (a
- * private method, so only when it is there) so that the attempt can close its
- * connection, and a connection that opens too late is closed before any file is
- * made. Returns end(failed): call it once the attempt is over.
+ * What node-edge-tts leaves undone, which this sees to by wrapping the library's
+ * connect step (a private method, so only when it is there):
+ * - it never notices the connection dropping part-way through a reply, so only
+ *   a timer would end the attempt;
+ * - it never closes its WebSocket when an attempt fails or times out, and keeps
+ *   that attempt's audio file open, with no way given to close it;
+ * - a connection that opens after the attempt gave up would still create the
+ *   audio file in the temp folder.
+ * Returns `lost`, which rejects as soon as the connection closes or fails before
+ * the whole reply has come, and end(failed): call it once the attempt is over.
  */
 function trackConnection(tts) {
   let socket = null;
   let over = false;
+  let complete = false; // the reply's end-of-turn message has come
+  let drop;
+  const lost = new Promise((_, reject) => { drop = reject; });
+  lost.catch(() => {}); // nothing waits on it once the attempt is over
   const connect = typeof tts._connectWebSocket === "function" ? tts._connectWebSocket.bind(tts) : null;
   if (connect) {
     tts._connectWebSocket = async () => {
@@ -46,15 +60,47 @@ function trackConnection(tts) {
         throw new Error("Edge TTS connected after the attempt was over");
       }
       socket = ws;
+      watch(ws);
       return ws;
     };
   }
-  return (failed) => {
+  function watch(ws) {
+    if (typeof ws.on !== "function") return;
+    ws.on("message", (data, isBinary) => {
+      if (!isBinary && String(data).includes("Path:turn.end")) complete = true;
+    });
+    ws.on("close", (code) => {
+      if (!over && !complete) drop(new Error(`Edge TTS lost its connection part-way through the reply (close code ${code})`));
+    });
+    ws.on("error", (err) => {
+      if (!over && !complete) drop(new Error(`Edge TTS connection failed: ${err?.message || err}`));
+    });
+  }
+  const end = (failed) => {
     over = true;
-    // A good attempt's connection is closed by node-edge-tts itself.
-    if (failed && socket) closeSocket(socket);
+    // A good attempt's connection, and its file, are closed by node-edge-tts itself.
+    if (failed && socket) {
+      closeSocket(socket);
+      if (!complete) endReply(socket);
+    }
     socket = null;
   };
+  return { lost, end };
+}
+
+/** How long one attempt to speak `text` may take. */
+function limitFor(text) {
+  return _timeoutMs ?? Math.min(TTS_TIMEOUT, TTS_BASE_MS + text.length * TTS_PER_CHAR_MS);
+}
+
+/**
+ * node-edge-tts closes the attempt's audio file (and stops its own timer) only
+ * when the reply's end-of-turn message comes. For an attempt that failed before
+ * it came, hand the library that message, so the file is closed now rather than
+ * left open until Tarsee restarts.
+ */
+function endReply(ws) {
+  try { ws.emit?.("message", Buffer.from("Path:turn.end\r\n\r\n"), false); } catch { /* nothing left to end */ }
 }
 
 function closeSocket(ws) {
@@ -113,6 +159,7 @@ export class EdgeTTSEngine extends TTSEngine {
 
     const EdgeTTS = _EdgeTTS || (await import("node-edge-tts")).EdgeTTS;
     const voice = voiceId || this.defaultVoice;
+    const limit = limitFor(text);
 
     // Retry loop — Edge TTS WebSocket can drop
     let lastError;
@@ -121,18 +168,20 @@ export class EdgeTTSEngine extends TTSEngine {
       // own for every attempt, so two sentences spoken at once never share a file.
       const tmpFile = path.join(os.tmpdir(), `tarsee-edge-tts-${crypto.randomUUID()}.mp3`);
       let timer;
-      let endAttempt = () => {};
+      let tracked = null;
       let failed = true;
       try {
         // node-edge-tts gives up after its own timeout, 10 s unless told
-        // otherwise, which would cut off a long reply well before this
-        // engine's limit. Give it the same limit.
-        const t = new EdgeTTS({ voice, timeout: _timeoutMs });
-        endAttempt = trackConnection(t);
+        // otherwise, which would cut off a long reply before this engine's
+        // limit. Give it the same limit.
+        const t = new EdgeTTS({ voice, timeout: limit });
+        tracked = trackConnection(t);
         await Promise.race([
           t.ttsPromise(text, tmpFile),
+          // A connection that drops part-way ends the attempt at once, so the next one starts.
+          tracked.lost,
           new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error(`TTS timed out (attempt ${attempt}/${MAX_RETRIES})`)), _timeoutMs);
+            timer = setTimeout(() => reject(new Error(`TTS timed out after ${limit / 1000} s (attempt ${attempt}/${MAX_RETRIES})`)), limit);
           }),
         ]);
 
@@ -147,7 +196,7 @@ export class EdgeTTSEngine extends TTSEngine {
         console.warn(`[edge-tts] attempt ${attempt}/${MAX_RETRIES} failed: ${lastError.message}`);
       } finally {
         clearTimeout(timer);
-        endAttempt(failed);
+        tracked?.end(failed);
         try { fs.rmSync(tmpFile, { force: true }); } catch { /* ignore */ }
       }
       if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, _retryDelayMs * attempt));

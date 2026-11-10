@@ -14,14 +14,20 @@ import crypto from "node:crypto";
 
 const VOICES_DIR = path.join(process.env.TARSEE_DATA_DIR || process.env.TARSEE_STATE_DIR || "/data/tarsee", "piper-voices");
 const PIPER_TIMEOUT = 15_000;
+// Once Piper has gone: how long a failed one's last words on its error output
+// are waited for. Once one is stopped: how long it is given to be gone.
+const LAST_WORDS_MS = 500;
+const KILL_WAIT_MS = 2_000;
 
 // Swapped only by tests: the program run as Piper (its first entry; the rest go
-// before Piper's own arguments) and the time limit.
+// before Piper's own arguments), the time limit, and the spawn that starts it.
 let _command = null;
 let _timeoutMs = PIPER_TIMEOUT;
+let _spawn = spawn;
 
-/** Tests only: run another program as Piper, with a shorter limit. No arguments puts the real ones back. */
-export function __setForTests({ command, timeoutMs } = {}) {
+/** Tests only: run another program as Piper, with a shorter limit or another spawn. No arguments puts the real ones back. */
+export function __setForTests({ command, timeoutMs, spawn: spawnFn } = {}) {
+  _spawn = spawnFn || spawn;
   _command = command?.length ? command : null;
   _timeoutMs = timeoutMs ?? PIPER_TIMEOUT;
 }
@@ -57,48 +63,92 @@ function piperProgram() {
  * Runs Piper with the text on its input and waits for it to finish, without
  * blocking the server: a long sentence can take seconds, and a voice call has
  * to keep going meanwhile. A Piper that runs past the limit is stopped, and this
- * waits until it is gone, so the file it was writing can be deleted.
+ * waits until it is gone (though never for ever), so the file it was writing can
+ * be deleted. Whatever goes wrong comes back as an Error in plain words.
  */
 function runPiper({ bin, args }, input, timeoutMs) {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawn(bin, args, { stdio: ["pipe", "ignore", "pipe"], windowsHide: true });
+      child = _spawn(bin, args, { stdio: ["pipe", "ignore", "pipe"], windowsHide: true });
     } catch (err) {
       reject(new Error(`Piper could not run: ${err.message}`));
       return;
     }
     let stderr = "";
+    let exited = null; // how Piper itself ended, once it has
     let timedOut = false;
     let done = false;
+    const timers = [];
+    const later = (ms, fn) => { timers.push(setTimeout(fn, ms)); };
     const finish = (err) => {
       if (done) return;
       done = true;
-      clearTimeout(timer);
+      for (const t of timers) clearTimeout(t);
       if (err) reject(err);
       else resolve();
     };
     const tooLong = () => new Error(`Piper took longer than ${timeoutMs / 1000} s and was stopped`);
-    const timer = setTimeout(() => {
+    const outcome = ({ code, signal }) => {
+      if (code === 0) return null;
+      const said = stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop();
+      const how = code === null ? `stopped by ${signal}` : `exit code ${code}`;
+      return new Error(`Piper failed (${how})${said ? `: ${said}` : ""}`);
+    };
+
+    // First of all, so that a Piper that cannot start (no such program, or no
+    // file handles left) is an error returned here, never one that stops the server.
+    child.on("error", (err) => finish(new Error(`Piper could not run: ${err.message}`)));
+    if (!child.stdin || !child.stderr) {
+      // With no file handles left, Node gives the child no input or output, and
+      // sends the reason with the "error" event, which comes before this does.
+      setImmediate(() => finish(new Error("Piper could not run: no file handles were left to start it")));
+      return;
+    }
+
+    later(timeoutMs, () => {
+      // Piper had finished, and only its error output was still open.
+      if (exited) return finish(outcome(exited));
       timedOut = true;
       child.kill("SIGKILL");
-    }, timeoutMs);
+      // Wait for it to be gone, but not for ever: the next sentence is waiting its turn.
+      later(KILL_WAIT_MS, () => finish(tooLong()));
+    });
 
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => { stderr = (stderr + chunk).slice(-4000); });
     // Piper can quit before it has read all the text; its exit code says why.
     child.stdin.on("error", () => {});
-    child.on("error", (err) => finish(new Error(`Piper could not run: ${err.message}`)));
-    child.on("exit", () => { if (timedOut) finish(tooLong()); });
+    child.on("exit", (code, signal) => {
+      exited = { code, signal };
+      if (timedOut) return finish(tooLong());
+      // Piper is gone, and so is its hold on the audio file. Its error output
+      // closes with it, unless a process it started still holds it open: success
+      // needs nothing more from it, and a failure's last words are waited for briefly.
+      if (code === 0) return finish();
+      later(LAST_WORDS_MS, () => finish(outcome(exited)));
+    });
     child.on("close", (code, signal) => {
       if (timedOut) return finish(tooLong());
-      if (code === 0) return finish();
-      const said = stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop();
-      const how = code === null ? `stopped by ${signal}` : `exit code ${code}`;
-      finish(new Error(`Piper failed (${how})${said ? `: ${said}` : ""}`));
+      finish(outcome(exited || { code, signal }));
     });
     child.stdin.end(input);
   });
+}
+
+// Piper loads its voice model again for every sentence and keeps the CPU busy
+// while it speaks, and a call asks for every sentence of an answer at once. Run
+// side by side, each would take several times as long, they would finish
+// together (so the first one is heard late), and on a small server all of them
+// would run past the limit. So they take turns, in the order they were asked
+// for, and each one's limit starts with its turn. This chain is the turn: one
+// Piper runs at a time, and one that fails or is stopped frees it like any other.
+let turn = Promise.resolve();
+
+function inTurn(task) {
+  const run = turn.then(task);
+  turn = run.catch(() => {});
+  return run;
 }
 
 export class PiperTTSEngine extends TTSEngine {
@@ -195,10 +245,10 @@ export class PiperTTSEngine extends TTSEngine {
     try {
       // Pipe text to piper via stdin, output to wav file
       // --sentence_silence adds natural pauses between sentences
-      await runPiper({
+      await inTurn(() => runPiper({
         bin: program.bin,
         args: [...program.args, "--model", modelPath, "--output_file", tmpOut, "--sentence_silence", "0.3"],
-      }, text, _timeoutMs);
+      }, text, _timeoutMs));
 
       let audio;
       try {
