@@ -430,14 +430,38 @@ export function getProvider(idOrAlias) {
   return id ? PROVIDERS[id] : null;
 }
 
+/** Providers this install doesn't offer, decided once at boot (lib/boot-fixups.js): see localAiHiddenHere. */
+const hidden = new Set();
+
+/** Set the providers this install doesn't offer (replacing any set before). */
+export function hideProviders(ids = []) {
+  hidden.clear();
+  for (const id of ids) { const n = normalizeProviderId(id); if (n) hidden.add(n); }
+}
+
+/**
+ * Whether Local AI is left out on this install: on Railway (RAILWAY_PROJECT_ID), which has no GPUs, a model server
+ * would have to run somewhere else, so it isn't offered there, unless an address is already set (TARSEE_LOCAL_AI_URL,
+ * say a model server the owner runs as another Railway service, or one saved in Settings > AI), so a setup that works
+ * keeps working. Self-hosted installs (Docker on the owner's own machine, npm start) always offer it.
+ */
+export function localAiHiddenHere({ env = process.env, store = null } = {}) {
+  if (!String(env?.RAILWAY_PROJECT_ID || "").trim()) return false;
+  if (String(env?.TARSEE_LOCAL_AI_URL || "").trim()) return false;
+  let saved = null;
+  try { saved = store?.get?.("ai.local.baseUrl"); } catch { saved = null; }
+  return !(typeof saved === "string" && saved.trim());
+}
+
 /** Whether a provider is switched on: only these can be selected anywhere. */
 export function isShipped(idOrAlias) {
-  return !!getProvider(idOrAlias)?.shipped;
+  const p = getProvider(idOrAlias);
+  return !!p?.shipped && !hidden.has(p.id);
 }
 
 /** The switched-on providers, in table order. */
 export function shippedProviders() {
-  return PROVIDER_IDS.map((id) => PROVIDERS[id]).filter((p) => p.shipped);
+  return PROVIDER_IDS.map((id) => PROVIDERS[id]).filter((p) => p.shipped && !hidden.has(p.id));
 }
 
 // --- Which provider, and the keys-only switch ---

@@ -241,14 +241,13 @@ Settings > AI has an optional **Backup if the default AI can't answer**. When th
 
 ## Local AI on Railway
 
-`localhost` on Railway means Tarsee's own container, so a Local AI there needs its own service:
+Local AI is meant for Tarsee on your own hardware (Docker on your own machine, or `npm start`). Railway has no GPUs, so a Tarsee on Railway doesn't offer Local AI: the setup wizard and Settings > AI leave it out. To use a model server you run yourself, give Tarsee its address in the Railway variable `TARSEE_LOCAL_AI_URL`, and Local AI appears:
 
-1. In the same Railway project, add a service that runs your AI server (for example from the `ollama/ollama` image), with a volume for its models.
-2. Make it listen on all addresses (for Ollama, the variable `OLLAMA_HOST=0.0.0.0`) and pull a model into it.
-3. In Tarsee, use the service's private address: `http://<service-name>.railway.internal:<port>/v1`, for example `http://ollama.railway.internal:11434/v1`. Private networking stays inside your project, so the server needs no public address and no key.
-4. Click **Test**, then **Verify** the model you want.
+1. Run your AI server somewhere Tarsee can reach. In the same Railway project, that is a service that runs it (for example from the `ollama/ollama` image), with a volume for its models, listening on all addresses (for Ollama, the variable `OLLAMA_HOST=0.0.0.0`), with a model pulled into it. Or a server on your own machine, reached through a public address protected by a key.
+2. Set `TARSEE_LOCAL_AI_URL` on Tarsee's service: the private address `http://<service-name>.railway.internal:<port>/v1`, for example `http://ollama.railway.internal:11434/v1` (private networking stays inside your project, so it needs no public address and no key), or your public address, with its key in `TARSEE_LOCAL_AI_KEY`.
+3. Redeploy, open Settings > AI, click **Test** on Local AI, then **Verify** the model you want.
 
-A model that needs a GPU will be slow on Railway's CPUs; a server on your own machine, reached through a public address protected by a key, is the other option.
+A model that needs a GPU will be slow on Railway's CPUs. An address saved in Settings before this rule came in keeps working.
 
 ## Set up with Railway variables only
 

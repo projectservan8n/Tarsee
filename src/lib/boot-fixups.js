@@ -17,12 +17,14 @@
  * src/server.js calls runBootFixups once, right after it makes the settings store (test/server-boot.test.js).
  */
 import { sweepTurnLeftovers } from "./turn-leftovers.js";
+import { hideProviders, localAiHiddenHere } from "../ai/provider-registry.js";
 
 /**
  * Run every boot fixup. Returns what each did: { settings: { placeholderKey, baseUrls, voiceKeys, emptySecrets }
- * (each step's own result, null for one that failed), leftovers: { pictures, verify } }. Never throws.
+ * (each step's own result, null for one that failed), leftovers: { pictures, verify }, hidden: the AIs this install
+ * doesn't offer (Local AI on Railway with no address: provider-registry.js localAiHiddenHere) }. Never throws.
  */
-export function runBootFixups({ settingsStore, stateDir, tmpDir, now } = {}) {
+export function runBootFixups({ settingsStore, stateDir, tmpDir, now, env = process.env } = {}) {
   const step = (what, fn) => {
     try {
       return fn();
@@ -42,5 +44,11 @@ export function runBootFixups({ settingsStore, stateDir, tmpDir, now } = {}) {
   if (leftovers.pictures || leftovers.verify) {
     console.log(`[boot] removed what stopped turns left behind: ${leftovers.pictures} picture folder(s), ${leftovers.verify} Verify workspace(s)`);
   }
-  return { settings, leftovers };
+  const hidden = step("[boot] which AIs this install offers", () => {
+    const ids = localAiHiddenHere({ env, store: settingsStore }) ? ["local"] : [];
+    hideProviders(ids);
+    if (ids.length) console.log("[ai] Local AI isn't offered on Railway (it has no GPUs). To use a model server you run elsewhere, set TARSEE_LOCAL_AI_URL to its address.");
+    return ids;
+  }) || [];
+  return { settings, leftovers, hidden };
 }
