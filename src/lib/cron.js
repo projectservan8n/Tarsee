@@ -25,7 +25,12 @@ import config from "../config/env.js";
  *
  * A task that asks the AI (no `action`) has no seconds field and runs at most once every MIN_PROMPT_GAP_MINUTES
  * (promptScheduleProblem), checked when it is made: tasks saved before the rule keep running as they are. A run still
- * going when the task's next time comes is skipped, not stacked (scheduleJob, noOverlap).
+ * going when the task's next time comes is skipped, not stacked, even when the task's timer was made again meanwhile
+ * (runScheduled).
+ *
+ * Every saved task has its own id, never used before by another (newJobId); two saved by an older version with one id
+ * are told apart when the scheduler starts (giveEachTaskItsOwnId). No schedule reaches node-cron before
+ * unsafeScheduleProblem has passed it: node-cron hangs on some.
  */
 
 let _db = null;
@@ -82,6 +87,7 @@ let _channelManager = null;
 const activeJobs = new Map(); // id → cron.ScheduledTask
 const jobState = new Map();   // id → { lastRun, lastStatus, lastError, consecutiveErrors }
 const runsGoing = new Map();  // id → how many runs of it are going right now (the "Running" state)
+const runInProgress = new Set(); // ids of tasks whose scheduled run is going: a time that comes meanwhile is skipped
 
 const JOB_TIMEOUT_MS = BACKGROUND_DEFAULTS.TIMEOUT_MS; // hard wall-clock cap per job
 const MAX_CONSECUTIVE_ERRORS = 5; // Auto-disable after this many failures
@@ -114,10 +120,110 @@ export function promptScheduleProblem(schedule) {
   const parts = text ? text.split(/\s+/).length : 0;
   if (parts === 6) return `"${text}" has a seconds part. ${rule}: use 5 parts (minute hour day month weekday), like "0 9 * * *" for 9 AM every day.`;
   if (parts !== 5) return `"${text}" has ${parts} parts. ${rule}: use 5 (minute hour day month weekday), like "0 9 * * *" for 9 AM every day.`;
+  const unsafe = unsafeScheduleProblem(text);
+  if (unsafe) return unsafe;
   if (!cron.validate(text)) return `Invalid cron schedule: ${text}`;
   const gap = closestRuns(text);
   if (gap >= MIN_PROMPT_GAP_MINUTES) return null;
   return `"${text}" runs ${gap === 1 ? "1 minute" : `${gap} minutes`} apart. ${rule}: "*/${MIN_PROMPT_GAP_MINUTES} * * * *" is the most often.`;
+}
+
+/** The longest schedule Tarsee hands node-cron. A real one is 5 short parts; the cap keeps unsafeScheduleProblem quick. */
+const MAX_SCHEDULE_LENGTH = 1000;
+/** No part of a schedule holds more numbers than this: seconds and minutes go from 0 to 59. */
+const MOST_NUMBERS_IN_A_PART = 60;
+/** node-cron's names, which it turns into numbers in this order: full names first, then short ones. */
+const MONTH_NAMES = [
+  ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"],
+  ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"],
+];
+const WEEKDAY_NAMES = [
+  ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
+  ["sun", "mon", "tue", "wed", "thu", "fri", "sat"],
+];
+/** What node-cron puts for the first "*" of each part: seconds, minutes, hours, days, months, weekdays. */
+const STAR_RANGES = ["0-59", "0-59", "0-23", "1-31", "1-12", "0-6"];
+
+/**
+ * Why node-cron can't be handed this schedule at all, in plain words for the owner or the model; null when it can
+ * (whether node-cron takes it is then cron.validate's call). Nothing here calls cron.validate or cron.schedule before
+ * this has passed the schedule.
+ *
+ * node-cron 4.2.1 reads a schedule by writing out every number of each range ("1-5", and the "0-59" a "*" stands for)
+ * one step at a time, before it checks anything. A step of 0 ("*\/0") never moves on, so that never ends: it fills the
+ * memory until the server falls over. A range of billions ("0-99999999999") does much the same. In the weekday part
+ * it first turns the first "7" it finds into "0" (both mean Sunday) and day names into numbers ("sun" is 0), so "*\/7",
+ * "0-6/7" or "*\/sun" there become a step of 0 too. This reads the schedule as node-cron does, step by step
+ * (pattern/convertion in node-cron), but counts the numbers of a range before writing them out, so it can't hang. A
+ * step under 1 is refused wherever it is: node-cron reads "5/0" as 5, and "*\/-1" as every minute, never what was meant.
+ */
+export function unsafeScheduleProblem(schedule) {
+  if (typeof schedule !== "string") return `A schedule is written as text, like "0 9 * * *" for 9 AM every day.`;
+  const text = schedule.trim();
+  if (schedule.length > MAX_SCHEDULE_LENGTH) {
+    return `That schedule is ${schedule.length} characters long, far too long for one: a schedule is 5 short parts, like "0 9 * * *" for 9 AM every day.`;
+  }
+  const parts = schedule.replace(/\s{2,}/g, " ").trim().split(" ");
+  if (parts.length === 5) parts.unshift("0");
+  // node-cron stops at the missing month part, before it writes out any range, and just says no.
+  if (parts.length < 6) return null;
+  const weekdayAsWritten = parts[5];
+  parts[4] = numbersForNames(parts[4], MONTH_NAMES, 1);
+  parts[5] = numbersForNames(parts[5].replace("7", "0"), WEEKDAY_NAMES, 0);
+  STAR_RANGES.forEach((range, i) => { parts[i] = parts[i].replace("*", range); });
+
+  for (let i = 0; i < parts.length; i++) {
+    const step = stepUnder1(parts[i]);
+    if (step === null) continue;
+    if (i === 5 && stepUnder1(weekdayAsWritten) === null) {
+      return `"${text}": the weekday part "${weekdayAsWritten}" works out to a step of ${step}, because 7 and "sun" both mean Sunday, which is day 0 to the scheduler. A step must be 1 or more; for Sundays only, write 0, like "0 9 * * 0".`;
+    }
+    return `"${text}" has a step of ${step}: the number after "/" is how far to move on each time, so it must be 1 or more, like "*/15" in the minute part for every 15 minutes.`;
+  }
+  for (const part of parts) {
+    const range = rangeTooBig(part);
+    if (range) {
+      return `"${text}" has the range "${range}", far bigger than any part of a schedule can be: minutes go up to 59, hours to 23, days to 31, months to 12 and weekdays to 7.`;
+    }
+  }
+  return null;
+}
+
+/** A part with node-cron's names turned into its numbers: each name, in the order given, becomes its place plus `first`. */
+function numbersForNames(part, lists, first) {
+  let read = part;
+  for (const names of lists) names.forEach((name, i) => { read = read.replace(new RegExp(name, "gi"), String(i + first)); });
+  return read;
+}
+
+/** The first step under 1 in a part ("/0", "/-1"; node-cron reads a step's digits, so "/0.5" is "/0"), else null. */
+function stepUnder1(part) {
+  for (const [, digits] of part.matchAll(/\/(-?\d+)/g)) {
+    const step = parseInt(digits, 10);
+    if (step < 1) return step === 0 ? 0 : step;   // -0 is a step of 0
+  }
+  return null;
+}
+
+/**
+ * The first range in a part that node-cron couldn't write out (more numbers than a part holds, a number too big to
+ * count up to, or a step under 1), else null. Ranges are taken one at a time as node-cron takes them, each written out
+ * in its place, since that can make the next one.
+ */
+function rangeTooBig(part) {
+  const RANGE = /(\d+)-(\d+)(\/(\d+)|)/;
+  let read = part;
+  // Each turn takes the one "-" of a range away, so this ends.
+  for (let m = RANGE.exec(read); m; m = RANGE.exec(read)) {
+    const step = parseInt(m[4] || "1", 10);
+    const [first, last] = [parseInt(m[1], 10), parseInt(m[2], 10)].sort((a, b) => a - b);
+    if (!(step >= 1) || !Number.isSafeInteger(first) || !Number.isSafeInteger(last)) return m[0];
+    if (Math.floor((last - first) / step) + 1 > MOST_NUMBERS_IN_A_PART) return m[0];
+    const numbers = [];
+    for (let n = first; n <= last; n += step) numbers.push(n);
+    read = read.replace(new RegExp(m[0], "i"), numbers.join());
+  }
+  return null;
 }
 
 /**
@@ -216,18 +322,47 @@ export function setCronChannelManager(channelManager) {
 }
 
 /**
- * Load and start all enabled cron jobs. A task waiting for the owner's OK gets no timer.
+ * Load and start all enabled cron jobs (at boot, and whenever every timer is made again). A task waiting for the
+ * owner's OK gets no timer. Saved tasks that share an id get their own first (giveEachTaskItsOwnId), while no timer is
+ * left to point at the wrong one. A task that can't be scheduled is logged and skipped: the others still start, and so
+ * does Tarsee.
  */
 export function startCronScheduler() {
   stopCronScheduler();
   const jobs = loadCronJobs();
+  if (giveEachTaskItsOwnId(jobs)) saveCronJobs(jobs);
 
   for (const job of jobs) {
     if (!shouldRun(job)) continue;
-    scheduleJob(job);
+    try {
+      scheduleJob(job);
+    } catch (err) {
+      console.warn(`[cron] Task ${job.id} gets no timer: ${err.message}`);
+    }
   }
 
   console.log(`[cron] Started ${activeJobs.size} job(s)`);
+}
+
+/**
+ * Older versions made a task's id from "cron_" and the first 12 letters of its name, and never checked it was free,
+ * so an install can hold two saved tasks with one id. Then only one of them kept a timer, while both showed as on,
+ * and Pause or Delete took the wrong one's timer. The first keeps the id; each later one gets a new one (the old id and
+ * a time stamp). Changes the list in place; true when it changed anything, for the caller to save it once.
+ */
+function giveEachTaskItsOwnId(jobs) {
+  const seen = new Set();
+  let changed = false;
+  for (const job of jobs) {
+    if (seen.has(job.id)) {
+      const old = job.id;
+      job.id = uniqueId(jobs, typeof old === "string" && old ? old : "cron");
+      console.warn(`[cron] Two saved tasks had the id ${old}: the later one is now ${job.id}`);
+      changed = true;
+    }
+    seen.add(job.id);
+  }
+  return changed;
 }
 
 /**
@@ -244,8 +379,10 @@ export function stopCronScheduler() {
  * Schedule a single job.
  */
 function scheduleJob(job) {
-  if (!cron.validate(job.schedule)) {
-    console.warn(`[cron] Invalid schedule for job ${job.id}: ${job.schedule}`);
+  // Checked before node-cron sees it: a task saved with a schedule node-cron hangs on would otherwise stop the boot.
+  const unsafe = unsafeScheduleProblem(job.schedule);
+  if (unsafe || !cron.validate(job.schedule)) {
+    console.warn(`[cron] Task ${job.id} gets no timer: ${unsafe || `invalid schedule ${job.schedule}`}`);
     return;
   }
   // Never two timers for one task: the second would be one nothing could stop.
@@ -260,10 +397,11 @@ function scheduleJob(job) {
   //
   // The callback returns the run, retries included, so node-cron knows when it ends: its runner awaits what the
   // callback returns, and with noOverlap a time that comes while the run is still going is skipped. The callback used
-  // to return nothing, so every tick started another paid run on top of the last.
-  const task = cron.schedule(job.schedule, () => runScheduled(job), { timezone: config.TIMEZONE, noOverlap: true });
+  // to return nothing, so every tick started another paid run on top of the last. noOverlap knows only this timer,
+  // though: runScheduled covers a run that an earlier timer of the task started.
+  const timer = cron.schedule(job.schedule, () => runScheduled(job, timer), { timezone: config.TIMEZONE, noOverlap: true });
 
-  activeJobs.set(job.id, task);
+  activeJobs.set(job.id, timer);
 }
 
 /** Stop a task's timer, if it has one (a run already going finishes). */
@@ -274,9 +412,25 @@ function unscheduleJob(id) {
   activeJobs.delete(id);
 }
 
-/** One scheduled run of a task: the promise node-cron waits on. A task paused meanwhile gets no more retries. */
-function runScheduled(job) {
-  return runCronJobWithRetry(job, { stillOn: () => activeJobs.has(job.id) }).then(() => {
+/**
+ * One time of a task coming, from its timer: the run node-cron waits on.
+ *
+ * Skipped, and logged, while a run of the task is still going: a scheduled one (runInProgress), even one an earlier
+ * timer of the task started (switching a task off and on, or startCronScheduler, makes a new timer, and node-cron's
+ * noOverlap knows only its own), or one the owner started by hand. Otherwise two paid runs of one task would overlap.
+ *
+ * The run belongs to this timer: once it is no longer the task's (the owner paused or deleted the task, even if they
+ * switched it on again, or every timer was made again), the run isn't started and gets no more retries. The task's
+ * new timer starts the next run, at its next time.
+ */
+function runScheduled(job, timer) {
+  if (activeJobs.get(job.id) !== timer) return undefined;
+  if (runInProgress.has(job.id) || runsGoing.has(job.id)) {
+    console.log(`[cron] Task "${job.id}" is still running from an earlier time: this time is skipped`);
+    return undefined;
+  }
+  runInProgress.add(job.id);
+  return runCronJobWithRetry(job, { stillOn: () => activeJobs.get(job.id) === timer }).then(() => {
     // Auto-delete one-time jobs after they fire
     if (job.once) {
       console.log(`[cron] One-time job "${job.id}" completed, removing`);
@@ -284,12 +438,14 @@ function runScheduled(job) {
     }
   }).catch((err) => {
     console.error(`[cron] Job ${job.id} fatal error:`, err.message);
+  }).finally(() => {
+    runInProgress.delete(job.id);
   });
 }
 
 /**
  * Run a cron job with retry and timeout. opts.stillOn: asked before each retry; false (the owner paused or deleted the
- * task meanwhile) ends it there, so a paused task never starts another paid run.
+ * task meanwhile, even if they switched it on again) ends it there, so a paused run never starts another paid try.
  */
 export function runCronJobWithRetry(job, opts = {}) {
   return tracked(job.id, () => runWithRetry(job, opts));
@@ -479,7 +635,8 @@ async function runOnce(job) {
 }
 
 /**
- * Load cron jobs from settings DB.
+ * Load cron jobs from settings DB. An entry that isn't a task at all (not an object) is left out, so it can't stop
+ * the boot or the list.
  */
 export function loadCronJobs() {
   if (!_settingsStore) return [];
@@ -487,7 +644,7 @@ export function loadCronJobs() {
     const raw = _settingsStore.get("cron.jobs");
     if (!raw) return [];
     const jobs = typeof raw === "string" ? JSON.parse(raw) : raw;
-    return Array.isArray(jobs) ? jobs : [];
+    return Array.isArray(jobs) ? jobs.filter((j) => j && typeof j === "object" && !Array.isArray(j)) : [];
   } catch {
     return [];
   }
@@ -509,12 +666,17 @@ function saveCronJobs(jobs) {
  * switched off and waiting for the owner's OK (awaitingOwner), with no timer until the owner switches it on: a caller
  * that doesn't say the owner made a task never starts paid runs. conversationId: the chat the AI made it in.
  *
- * A task that asks the AI (no action) must pass promptScheduleProblem. A direct action can't be schedule_task.
+ * A task that asks the AI (no action) must pass promptScheduleProblem. A direct action can't be schedule_task. Any
+ * schedule must pass unsafeScheduleProblem before node-cron sees it.
+ *
+ * id: a fixed id the caller finds its own task by later (the morning briefing's cron_briefingam), taken only when no
+ * saved task has it. Otherwise the task gets a new one (newJobId).
  */
-export function addCronJob({ schedule, prompt, channel = "web:default", enabled = true, name, action, once = false, createdBy = "ai", conversationId = null }) {
-  if (typeof schedule !== "string" || !cron.validate(schedule)) {
-    throw new Error(`Invalid cron schedule: ${schedule}`);
-  }
+export function addCronJob({ schedule, prompt, channel = "web:default", enabled = true, name, action, once = false, createdBy = "ai", conversationId = null, id: fixedId = null }) {
+  if (typeof schedule !== "string") throw new Error(`Invalid cron schedule: ${schedule}`);
+  const unsafe = unsafeScheduleProblem(schedule);
+  if (unsafe) throw new Error(unsafe);
+  if (!cron.validate(schedule)) throw new Error(`Invalid cron schedule: ${schedule}`);
   if (action?.tool === "schedule_task") {
     throw new Error("A task can't schedule more tasks: only the owner sets up scheduled tasks.");
   }
@@ -525,7 +687,7 @@ export function addCronJob({ schedule, prompt, channel = "web:default", enabled 
 
   const byOwner = createdBy === "owner";
   const jobs = loadCronJobs();
-  const id = newJobId(jobs, name);
+  const id = typeof fixedId === "string" && fixedId && !jobs.some((j) => j.id === fixedId) ? fixedId : newJobId(jobs, name);
   const newJob = { id, schedule, prompt: prompt || "", channel, enabled: byOwner ? enabled !== false : false, createdBy: byOwner ? "owner" : "ai" };
   if (!byOwner) newJob.awaitingOwner = true;
   if (!byOwner && conversationId) newJob.conversationId = conversationId;
@@ -542,13 +704,29 @@ export function addCronJob({ schedule, prompt, channel = "web:default", enabled 
   return newJob;
 }
 
-/** A task id from its name (cron_<letters and digits>), else from the time; with _2, _3... when it is taken. */
+/**
+ * A new task's id: cron_ and the first 12 letters and digits of its name, then a time stamp (cron_dailyreport_mhs0k2x1).
+ * The stamp means an id freed by a deleted or one-time task never goes to a different one: its runs, Pause and Delete,
+ * and its use in the token counts all go by the id.
+ */
 function newJobId(jobs, name) {
   const slug = name ? String(name).toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12) : "";
-  const base = slug ? `cron_${slug}` : `cron_${Date.now().toString(36)}`;
-  let id = base;
-  for (let n = 2; jobs.some((j) => j.id === id); n++) id = `${base}_${n}`;
+  return uniqueId(jobs, slug ? `cron_${slug}` : "cron");
+}
+
+/** base_<time stamp>, taken by no task in jobs. */
+function uniqueId(jobs, base) {
+  const taken = new Set(jobs.map((j) => j.id));
+  let id;
+  do id = `${base}_${timeStamp()}`; while (taken.has(id));
   return id;
+}
+
+let lastStamp = 0;
+/** The time in milliseconds, in letters and digits; never the same twice in a run of Tarsee, even within a millisecond. */
+function timeStamp() {
+  lastStamp = Math.max(Date.now(), lastStamp + 1);
+  return lastStamp.toString(36);
 }
 
 /**

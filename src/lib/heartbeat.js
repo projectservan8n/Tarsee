@@ -4,12 +4,16 @@ import config from "../config/env.js";
 import { getHeartbeatContext, appendDailyLog } from "./workspace-files.js";
 import { buildSystemPromptParts } from "./build-system-prompt.js";
 import { runBackgroundTurn, resolveBackgroundModel, defaultAiReadiness, overBudgetWarning } from "./background-turn.js";
+import { gateAutomation, upgradeApproval, automationStatus } from "./automation-approval.js";
 
 /**
  * Heartbeat system — periodically runs HEARTBEAT.md tasks through the AI.
  *
  * - Default interval: 30 minutes
  * - Skips if HEARTBEAT.md is empty (zero API cost)
+ * - Runs only text the owner has OK'd (lib/automation-approval.js): the AI can write HEARTBEAT.md in any chat, and
+ *   without this a paid turn would start every 30 minutes on its say-so. A change made outside Settings waits for
+ *   the owner's OK (Settings > Automation shows it, with Let it run).
  * - HEARTBEAT_OK response token = suppress output (save noise)
  * - State tracked in memory/heartbeat-state.json
  */
@@ -58,15 +62,21 @@ export async function runHeartbeat(reason = "scheduled") {
     return { skipped: true, reason: "Previous heartbeat still running" };
   }
 
-  const heartbeatContent = getHeartbeatContext();
-
-  if (!heartbeatContent) {
+  if (!getHeartbeatContext()) {
     return { skipped: true, reason: "HEARTBEAT.md is empty" };
   }
 
   if (!_settingsStore || !_db) {
     return { skipped: true, reason: "Not initialized" };
   }
+
+  // Only text the owner has OK'd runs, and what is sent is that text (lib/automation-approval.js). Checked before
+  // anything else is asked of the AI. A change made outside Settings is logged once and shown in Settings.
+  const gate = gateAutomation(_settingsStore, "HEARTBEAT.md");
+  if (!gate.run) {
+    return { skipped: true, reason: gate.empty ? "HEARTBEAT.md is empty" : gate.reason, ...(gate.waiting ? { waitingForOwner: true } : {}) };
+  }
+  const heartbeatContent = gate.prompt;
 
   // Skipped quietly while the default AI can't take a turn (every 30 minutes, a failure would only be noise); the
   // reason names the AI and what to fix (/heartbeat shows it).
@@ -175,6 +185,14 @@ export function startHeartbeat({ db, settingsStore, channelManager = null, inter
   _settingsStore = settingsStore;
   if (channelManager) _channelManager = channelManager;
 
+  // The first start of this version: the HEARTBEAT.md already here counts as the owner's, once, so an existing
+  // install keeps running as before. At boot, before any chat could have changed it.
+  try {
+    upgradeApproval(settingsStore, "HEARTBEAT.md");
+  } catch (err) {
+    console.warn("[heartbeat] could not note the owner's OK for HEARTBEAT.md:", err.message);
+  }
+
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
   }
@@ -205,9 +223,17 @@ export function stopHeartbeat() {
  */
 export function getHeartbeatStatus() {
   const state = loadState();
+  let waitingForOwner = false;
+  try {
+    waitingForOwner = !!_settingsStore && automationStatus(_settingsStore, "HEARTBEAT.md").waiting;
+  } catch {
+    // the status is only for display
+  }
   return {
     running: !!heartbeatTimer,
     ...state,
+    // HEARTBEAT.md changed outside Settings and won't run until the owner OKs it (Settings > Automation).
+    waitingForOwner,
   };
 }
 

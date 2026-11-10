@@ -694,6 +694,7 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
           prompt: BRIEFING_PROMPT,
           channel: "web:default",
           name: "briefingam",
+          id: BRIEFING_ID, // its own fixed id, which off and time find it by
           createdBy: "owner", // typed by the owner (ownerOnly)
         });
         return `Morning briefing enabled — runs daily at **${hour}:00**\n\nChange time: \`/briefing time <hour>\`\nDisable: \`/briefing off\``;
@@ -723,6 +724,7 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
             prompt: BRIEFING_PROMPT,
             channel: "web:default",
             name: "briefingam",
+            id: BRIEFING_ID,
             createdBy: "owner",
             enabled: existing.enabled !== false,
           });

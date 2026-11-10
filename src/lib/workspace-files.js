@@ -198,9 +198,10 @@ export function getBootstrapContext() {
  * in UTC). Later the defaults stopped naming one AI: they said "powered by
  * Claude", named Claude Code's own tools (Bash, Read/Write/Edit/Grep/Glob,
  * mcp__tarsee__*) and the agent team's Claude models, none of which hold on
- * another AI. Existing workspaces keep their seeded files, so on boot the exact
- * old default lines are replaced with the new ones. A line the owner changed
- * no longer matches and is left alone. Returns the files it updated.
+ * another AI. Existing workspaces keep their seeded files, so on boot each line
+ * that is still exactly an old default line, the whole line, is replaced with
+ * the new one. A line the owner changed or added words to no longer matches and
+ * is left alone. Returns the files it updated.
  * test/workspace-defaults.test.js keeps each old default as a fixture.
  */
 // The tool lines of the default CLAUDE.md. A new line replaces the old one whole, so the swap runs once.
@@ -290,6 +291,31 @@ const DEFAULT_UPGRADES = {
   ],
 };
 
+/**
+ * `text` with each run of whole lines that reads `from` (one line, or several joined by \n) replaced by `to`. A line
+ * matches only whole, its own ending (CRLF or LF) aside: a line the owner added words to, before or after the old
+ * default, is theirs and stays. The new lines keep the file's endings: a CRLF file stays CRLF.
+ */
+function swapWholeLines(text, from, to) {
+  const want = from.split("\n");
+  const lines = text.split("\n"); // a CRLF file's lines keep their \r here
+  const bare = (line) => (line.endsWith("\r") ? line.slice(0, -1) : line);
+  const out = [];
+  for (let i = 0; i < lines.length;) {
+    if (i + want.length <= lines.length && want.every((w, k) => bare(lines[i + k]) === w)) {
+      const cr = lines[i].endsWith("\r") ? "\r" : "";
+      const lastCr = lines[i + want.length - 1].endsWith("\r") ? "\r" : "";
+      const news = to.split("\n");
+      news.forEach((line, k) => out.push(line + (k === news.length - 1 ? lastCr : cr)));
+      i += want.length;
+    } else {
+      out.push(lines[i]);
+      i += 1;
+    }
+  }
+  return out.join("\n");
+}
+
 export function upgradeDefaultWorkspaceFiles(dir = config.WORKSPACE_DIR) {
   const updated = [];
   for (const [name, swaps] of Object.entries(DEFAULT_UPGRADES)) {
@@ -297,7 +323,8 @@ export function upgradeDefaultWorkspaceFiles(dir = config.WORKSPACE_DIR) {
     let text;
     try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
     let next = text;
-    for (const [from, to] of swaps) if (next.includes(from)) next = next.split(from).join(to);
+    // (The first line only: in a CRLF file a block of lines never holds `from`, joined by \n, as it is.)
+    for (const [from, to] of swaps) if (next.includes(from.split("\n")[0])) next = swapWholeLines(next, from, to);
     if (next === text) continue;
     try {
       fs.writeFileSync(file, next, "utf8");

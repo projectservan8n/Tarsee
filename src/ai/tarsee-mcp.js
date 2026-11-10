@@ -115,12 +115,19 @@ export function createTarseeMcp(ctx, opts = {}) {
             args: z.record(z.string(), z.any()).describe("Tool arguments (e.g. {channel:'telegram', message:'Hello!'})"),
           }).optional().describe("Direct tool action — instant, no AI needed. Use for simple notifications."),
         },
+        // A task that was not saved (no prompt or action, a refusal, a bad schedule, the 15-minute rule, Tool
+        // Permissions) comes back marked isError, MCP's own failure mark: each engine passes it on (Claude Code as the
+        // tool_result's is_error, Codex as a failed call), and the chat bots show a cross, not a tick and "Task saved,
+        // waiting for your OK" (lib/tool-status.js). Only lib/tools.js's saved answer counts as saved; anything else,
+        // even an answer worded in a way nobody planned for, is marked.
         async (args) => {
           if (!args.prompt && !args.action) {
-            return { content: [{ type: "text", text: "Error: Either 'prompt' or 'action' is required." }] };
+            return { isError: true, content: [{ type: "text", text: "Error: Either 'prompt' or 'action' is required. Nothing was saved." }] };
           }
           const result = await executeTool("schedule_task", args, ctx);
-          return { content: [{ type: "text", text: result }] };
+          // lib/tools.js's answer starts so when, and only when, addCronJob saved the task.
+          const saved = typeof result === "string" && result.startsWith("Saved the task ");
+          return saved ? { content: [{ type: "text", text: result }] } : { isError: true, content: [{ type: "text", text: result }] };
         }
       ),
 

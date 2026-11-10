@@ -354,7 +354,11 @@ const Settings = {
       const statusEl = document.getElementById(statusId);
       const autoSave = debounce(async () => {
         if (statusEl) { statusEl.textContent = "Saving..."; statusEl.className = "save-status saving"; }
-        const ok = await this.saveWorkspaceFile(name, el.value, true);
+        // What the owner types here is theirs, so saving HEARTBEAT.md or BOOT.md OKs that text to run
+        // (routes/automation-approval.js). Only this input event gets here: the page loading a file doesn't.
+        const content = el.value;
+        const ok = await this.saveWorkspaceFile(name, content, true);
+        if (ok && this.AUTOMATION_FILES[name]) await this.approveAutomationFile(name, content, "editor");
         if (statusEl) {
           statusEl.textContent = ok ? "Saved" : "Save failed";
           statusEl.className = ok ? "save-status saved" : "save-status error";
@@ -2953,6 +2957,7 @@ const Settings = {
         // ignore
       }
     }
+    await this.loadAutomationApproval();
   },
 
   async saveWorkspaceFile(name, content, silent = false) {
@@ -2970,6 +2975,117 @@ const Settings = {
       App.showToast(`${name}: ${err.message}`, "error");
       return false;
     }
+  },
+
+  // --- HEARTBEAT.md and BOOT.md: the owner's OK (routes/automation-approval.js) ---
+  // Both run the AI on their own, and each run is paid for, so they run only text the owner has OK'd: what they type
+  // in the editor, or a change made elsewhere (most likely by the AI in a chat) once they click its note's button.
+  AUTOMATION_FILES: {
+    "HEARTBEAT.md": { element: "heartbeatMd", button: "Let it run", runs: "every 30 minutes", done: "HEARTBEAT.md will run every 30 minutes." },
+    "BOOT.md": { element: "bootMd", button: "Run at each restart", runs: "when Tarsee restarts", done: "BOOT.md will run when Tarsee restarts." },
+  },
+  _automationShown: {}, // file name → the text its note shows, which is what its button OKs
+
+  async loadAutomationApproval() {
+    try {
+      const data = await API.json("/api/automation-approval");
+      for (const file of data.files || []) this.renderAutomationApproval(file);
+    } catch (err) {
+      console.warn("[settings] couldn't check HEARTBEAT.md and BOOT.md for changes made outside Settings:", err.message);
+    }
+  },
+
+  /** The note above a file's editor, shown while the file changed outside Settings and waits for the owner's OK. */
+  renderAutomationApproval(file) {
+    const spec = this.AUTOMATION_FILES[file?.name];
+    const editor = spec && this.elements[spec.element];
+    if (!editor) return;
+    const name = file.name;
+    const group = editor.closest(".form-group") || editor;
+    let note = group.parentElement?.querySelector(`[data-automation-note="${name}"]`);
+    if (!note) {
+      note = document.createElement("div");
+      note.dataset.automationNote = name;
+      note.className = "mb-3";
+      note.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-automation-approve]");
+        if (btn) this.approveFromNote(name, btn);
+      });
+      group.before(note);
+    }
+    if (!file.waiting) {
+      note.hidden = true;
+      note.innerHTML = "";
+      delete this._automationShown[name];
+      return;
+    }
+    this._automationShown[name] = file.text;
+    const esc = (s) => this._esc(s);
+    note.hidden = false;
+    note.innerHTML = `<div class="memory-item cron-job" role="status">`
+      + `<span class="memory-badge cron-state cron-state-waiting">Waiting for your OK</span>`
+      + `<div class="memory-content">`
+      + `<div class="cron-when"><strong>Changed outside Settings, waiting for your OK</strong></div>`
+      + `<div class="cron-note">Something other than this page changed ${esc(name)}, most likely the AI in a chat. Tarsee won't run it, or spend anything on it, until you OK it. This is what would run ${esc(spec.runs)}:</div>`
+      + `<div class="cron-prompt">${esc(file.text)}</div>`
+      + `</div>`
+      + `<button type="button" class="btn btn-sm btn-primary cron-toggle" data-automation-approve="${esc(name)}">${esc(spec.button)}</button>`
+      + `</div>`;
+  },
+
+  async approveFromNote(name, btn) {
+    const text = this._automationShown[name];
+    if (typeof text !== "string") return;
+    btn.disabled = true;
+    const ok = await this.approveAutomationFile(name, text, "button");
+    btn.disabled = false;
+    if (!ok) return;
+    App.showToast(this.AUTOMATION_FILES[name].done, "success");
+    // The editor shows what now runs, unless the owner is typing in it.
+    const editor = this.elements[this.AUTOMATION_FILES[name].element];
+    if (editor && document.activeElement !== editor) editor.value = text;
+  },
+
+  /**
+   * The owner's OK for `text`: the text the editor just saved (via "editor"), or the text a note showed. Returns
+   * whether it was OK'd. When the file changed since (409), nothing is OK'd and the note shows the new text.
+   */
+  async approveAutomationFile(name, text, via) {
+    try {
+      const { status, data } = await this._ownerPost("/api/automation-approval/approve", { name, text, via });
+      if (data?.file) this.renderAutomationApproval(data.file);
+      if (status === 409) {
+        App.showToast(data.error || `${name} changed again: read the new text above its editor.`, "error");
+        return false;
+      }
+      if (status < 200 || status >= 300) throw new Error(data?.error || `HTTP ${status}`);
+      return true;
+    } catch (err) {
+      App.showToast(`${name} wasn't OK'd to run: ${err.message}`, "error");
+      return false;
+    }
+  },
+
+  /**
+   * A POST only the owner's signed-in dashboard may make, so it goes without the API token that js/api.js adds to
+   * every other request: the server refuses the token here (routes/automation-approval.js). The session cookie and
+   * the CSRF token only; a CSRF token that has run out is fetched fresh, once.
+   */
+  async _ownerPost(url, body) {
+    const send = (csrf) => fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(csrf ? { "X-CSRF-Token": csrf } : {}) },
+      body: JSON.stringify(body),
+    });
+    let res = await send(API.getCsrfToken() || await API.refreshCsrf());
+    if (res.status === 403) {
+      const why = await res.clone().json().catch(() => ({}));
+      if (/CSRF token/i.test(why.error || "")) res = await send(await API.refreshCsrf());
+    }
+    const data = await res.json().catch(() => ({}));
+    return { status: res.status, data };
   },
 
   // --- Session Reset ---
@@ -3009,17 +3125,32 @@ const Settings = {
     if (!list) return;
     try {
       const data = await API.json("/api/settings/cron");
+      const jobs = data.jobs || [];
       // Drawn by js/cron-core.js, which escapes everything a task holds (a prompt the AI wrote is only text).
-      list.innerHTML = CronCore.listHtml(data.jobs || []);
+      list.innerHTML = CronCore.listHtml(jobs);
+      // What each row shows of its task, from this very draw. Switch on sends it (seen), so the server switches on only
+      // the task the owner looked at: one that changed since gets 409, and the list is drawn again.
+      const shown = new Map(jobs.map((job) => [String(job.id), CronCore.seenOf(job)]));
 
       // Switch on (a waiting task: the owner's OK) and Pause.
       list.querySelectorAll("[data-cron-toggle]").forEach((btn) => {
         btn.addEventListener("click", async () => {
+          const id = btn.dataset.cronToggle;
           const enabled = btn.dataset.cronEnabled === "true";
           btn.disabled = true;
           try {
-            await API.json(`/api/settings/cron/${encodeURIComponent(btn.dataset.cronToggle)}`, { method: "PATCH", body: { enabled } });
-            App.showToast(enabled ? "Task switched on" : "Task paused", "success");
+            const res = await API.request(`/api/settings/cron/${encodeURIComponent(id)}`, {
+              method: "PATCH",
+              body: enabled ? { enabled, seen: shown.get(id) } : { enabled },
+            });
+            const answer = await res.json().catch(() => ({}));
+            if (res.ok) {
+              App.showToast(enabled ? "Task switched on" : "Task paused", "success");
+            } else {
+              App.showToast(answer.error || `The task wasn't changed (HTTP ${res.status})`, "error");
+              // The sign-in ran out and the page went on with the API token, which can't switch a task on.
+              if (answer.needsSignIn) window.dispatchEvent(new CustomEvent("tarsee:auth-required"));
+            }
           } catch (err) {
             App.showToast(err.message, "error");
           }
@@ -3051,14 +3182,20 @@ const Settings = {
       return;
     }
     try {
-      await API.json("/api/settings/cron", {
+      const added = await API.json("/api/settings/cron", {
         method: "POST",
         body: { schedule, prompt },
       });
       this.elements.cronScheduleInput.value = "";
       this.elements.cronPromptInput.value = "";
       this.loadCronJobs();
-      App.showToast("Task added and switched on", "success");
+      if (added.awaitingOwner) {
+        // Sent with only the API token (the sign-in ran out), so the server kept it switched off.
+        App.showToast("Task added, switched off: it waits for your OK in the list above. Sign in again to switch it on.", "info");
+        window.dispatchEvent(new CustomEvent("tarsee:auth-required"));
+      } else {
+        App.showToast("Task added and switched on", "success");
+      }
     } catch (err) {
       App.showToast(err.message, "error");
     }

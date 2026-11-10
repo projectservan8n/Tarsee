@@ -31,7 +31,10 @@ const { createFakeEngine } = await import("./fakes/fake-engine.js");
 const cron = await import("../src/lib/cron.js");
 const heartbeat = await import("../src/lib/heartbeat.js");
 const { runBootChecklist } = await import("../src/lib/boot-runner.js");
-const { writeWorkspaceFile } = await import("../src/lib/workspace-files.js");
+const { writeWorkspaceFile: writeFile } = await import("../src/lib/workspace-files.js");
+const { isAutomationFile, approveText } = await import("../src/lib/automation-approval.js");
+// HEARTBEAT.md and BOOT.md run only text the owner OK'd (test/heartbeat-approval.test.js); here each is the owner's.
+const writeWorkspaceFile = (name, content) => { writeFile(name, content); if (isAutomationFile(name)) approveText(settings, name, content, "editor"); };
 const { defaultAiReadiness, runBackgroundTurn } = await import("../src/lib/background-turn.js");
 const { setCatalogModels } = await import("../src/ai/provider-registry.js");
 const { forgetLocalModelsRead } = await import("../src/ai/provider-models.js");

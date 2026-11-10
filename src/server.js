@@ -22,6 +22,7 @@ import { authRouter } from "./routes/auth-routes.js";
 import { chatRouter } from "./routes/chat.js";
 import { voiceRouter } from "./routes/voice.js";
 import { settingsRouter } from "./routes/settings.js";
+import { automationApprovalRouter } from "./routes/automation-approval.js";
 import { adminRouter } from "./routes/admin.js";
 import { filesRouter } from "./routes/files.js";
 import { debugRouter } from "./routes/debug.js";
@@ -182,6 +183,8 @@ app.use("/api/auth", authRouter);
 app.use("/api/chat", requireAuth, csrfProtect, chatRouter);
 app.use("/api/voice", requireAuth, csrfProtect, voiceRouter);
 app.use("/api/settings", requireAuth, csrfProtect, settingsRouter);
+// The owner's OK for HEARTBEAT.md and BOOT.md, which run the AI on their own: the OK itself is session-only.
+app.use("/api/automation-approval", requireAuth, csrfProtect, automationApprovalRouter);
 app.use("/api/admin", requireAuth, csrfProtect, adminRouter);
 app.use("/api/files", requireAuth, csrfProtect, filesRouter);
 app.use("/api/debug", requireAuth, csrfProtect, debugRouter);

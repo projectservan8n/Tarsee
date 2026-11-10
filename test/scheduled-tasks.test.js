@@ -9,14 +9,20 @@
 //   - a scheduled run, a webhook's run, the heartbeat and BOOT.md can't schedule more, on either engine;
 //   - a task that asks the AI runs at most once every 15 minutes, with no seconds field; a task saved before keeps
 //     running;
-//   - a run still going when its next time comes is skipped, not stacked.
+//   - a run still going when its next time comes is skipped, not stacked, even when the task's timer was made again
+//     meanwhile (switched off and on, or every timer re-made); a run paused meanwhile isn't tried again;
+//   - every saved task has its own id: two that share one (older versions could save that) each keep their own
+//     timer, and an id is never used again for a different task;
+//   - a schedule node-cron can't read without hanging (a step of 0) is refused before node-cron sees it.
 // Engines are scripted (test/fakes/fake-engine.js); nothing leaves the machine.
 import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Worker } from "node:worker_threads";
 import express from "express";
+import nodeCron from "node-cron";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tarsee-scheduled-tasks-"));
 process.env.TARSEE_STATE_DIR = tmp;
@@ -46,7 +52,10 @@ const { settingsRouter } = await import("../src/routes/settings.js");
 const cron = await import("../src/lib/cron.js");
 const heartbeat = await import("../src/lib/heartbeat.js");
 const { runBootChecklist } = await import("../src/lib/boot-runner.js");
-const { writeWorkspaceFile } = await import("../src/lib/workspace-files.js");
+const { writeWorkspaceFile: writeFile } = await import("../src/lib/workspace-files.js");
+const { isAutomationFile, approveText } = await import("../src/lib/automation-approval.js");
+// HEARTBEAT.md and BOOT.md run only text the owner OK'd (test/heartbeat-approval.test.js); here each is the owner's.
+const writeWorkspaceFile = (name, content) => { writeFile(name, content); if (isAutomationFile(name)) approveText(settings, name, content, "editor"); };
 await import("../src/public/js/cron-core.js");
 const CronCore = globalThis.CronCore;
 
@@ -106,6 +115,8 @@ before(async () => {
   const app = express();
   app.use(express.json());
   app.set("db", db);
+  // The owner's signed-in dashboard, as sessionAuth marks it. What the API token can't do: test/cron-approval.test.js.
+  app.use((req, _res, next) => { req.auth = { authenticated: true, method: "session" }; next(); });
   app.use("/api/settings", settingsRouter);
   await new Promise((r) => { server = app.listen(0, "127.0.0.1", r); });
   base = `http://127.0.0.1:${server.address().port}`;
@@ -205,7 +216,8 @@ describe("the owner switches a task on and off", () => {
     await callInProcess(chatCtx(), "tarsee_schedule_task", { schedule: "0 9 * * 1", prompt: "Plan the week", name: "Week" });
     const { id } = jobNamed("Week");
 
-    let res = await api("PATCH", `/cron/${id}`, { enabled: true });
+    // Switch on says what the owner's row showed (CronCore.seenOf), so only that task is switched on.
+    let res = await api("PATCH", `/cron/${id}`, { enabled: true, seen: CronCore.seenOf(jobNamed("Week")) });
     assert.equal(res.status, 200);
     let body = await res.json();
     assert.equal(body.job.enabled, true);
@@ -224,7 +236,7 @@ describe("the owner switches a task on and off", () => {
 
     cron.startCronScheduler();
     assert.equal(statusOf(id).scheduled, false, "a restart keeps it off");
-    await api("PATCH", `/cron/${id}`, { enabled: true });
+    await api("PATCH", `/cron/${id}`, { enabled: true, seen: CronCore.seenOf(jobNamed("Week")) });
     cron.startCronScheduler();
     assert.equal(statusOf(id).scheduled, true, "and on");
   });
@@ -497,6 +509,244 @@ describe("a run still going when the next time comes", () => {
     while (statusOf("cron_flaky").running && Date.now() < deadline + 8000) await sleep(100);
     assert.equal(statusOf("cron_flaky").running, false, "the run ended");
     assert.equal(engine.calls.length, 1, "and was not tried again once paused");
+  });
+});
+
+describe("a run still going when the task's timer is made again", () => {
+  it("switched off and on, or every timer re-made (as /briefing off does): still one run at a time", { timeout: 20_000 }, async () => {
+    let active = 0;
+    let most = 0;
+    let starts = 0;
+    engine = createFakeEngine([async () => {
+      starts++;
+      active++;
+      most = Math.max(most, active);
+      await sleep(3500);
+      active--;
+      return answer("tick");
+    }]);
+    registerEngine("claude-code", engine);
+    const logs = [];
+    const log = console.log;
+    console.log = (...args) => { logs.push(args.join(" ")); };
+    try {
+      // Every second (saved before the frequency rule), and each run takes 3.5 seconds.
+      settings.set("cron.jobs", JSON.stringify([{ id: "cron_slow", schedule: "* * * * * *", prompt: "tick", channel: "web:default", enabled: true, createdBy: "owner" }]));
+      cron.startCronScheduler();
+      const deadline = Date.now() + 8000;
+      while (!starts && Date.now() < deadline) await sleep(20);
+      assert.equal(starts, 1, "the task ran");
+      cron.startCronScheduler();                       // every timer made again
+      await sleep(1100);
+      cron.setCronJobEnabled("cron_slow", false);      // paused and switched on again
+      cron.setCronJobEnabled("cron_slow", true);
+      await sleep(1100);
+      cron.stopCronScheduler();                        // before the run ends, so no tick may start a run legitimately
+      while (active && Date.now() < deadline + 8000) await sleep(50);
+    } finally {
+      console.log = log;
+    }
+    assert.equal(most, 1, "never two runs of the task at once");
+    assert.equal(starts, 1, "the times that came while it ran were skipped");
+    assert.ok(logs.some((l) => /cron_slow.*still running.*skipped/i.test(l)), `a skipped time is logged: ${logs.join(" | ")}`);
+  });
+
+  it("paused and switched on again while a failed run waits to retry: that run isn't tried again", { timeout: 25_000 }, async () => {
+    engine = createFakeEngine([[{ type: "error", message: "The AI broke." }, { type: "done", stopReason: "error" }]]);
+    registerEngine("claude-code", engine);
+    settings.set("cron.jobs", JSON.stringify([{ id: "cron_flaky2", schedule: "* * * * * *", prompt: "tick", channel: "web:default", enabled: true, createdBy: "owner" }]));
+    cron.startCronScheduler();
+    const deadline = Date.now() + 8000;
+    while (!engine.calls.length && Date.now() < deadline) await sleep(50);
+    assert.equal(engine.calls.length, 1, "the first try ran, and failed");
+    cron.setCronJobEnabled("cron_flaky2", false);    // the retry waits 5 seconds
+    // Back on, at a time that won't come while the test runs: any later try could only be the paused run's retry.
+    settings.set("cron.jobs", JSON.stringify(cron.loadCronJobs().map((j) => ({ ...j, schedule: "* * 29 2 *" }))));
+    cron.setCronJobEnabled("cron_flaky2", true);
+    while (statusOf("cron_flaky2").running && Date.now() < deadline + 12_000) await sleep(100);
+    assert.equal(statusOf("cron_flaky2").running, false, "the run ended");
+    assert.equal(engine.calls.length, 1, "and was not tried again");
+    assert.equal(statusOf("cron_flaky2").scheduled, true, "the task is on, for its next time");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+
+describe("every saved task has its own id", () => {
+  // Older versions made an id from "cron_" and the first 12 letters of the name, and never checked it was free.
+  const twins = (a, b) => settings.set("cron.jobs", JSON.stringify([
+    { id: "cron_dailyreport", channel: "web:default", enabled: true, createdBy: "owner", ...a },
+    { id: "cron_dailyreport", channel: "web:default", enabled: true, createdBy: "owner", ...b },
+  ]));
+
+  it("two saved with one id each keep their own timer: both run", { timeout: 20_000 }, async () => {
+    twins({ schedule: "* * * * * *", prompt: "first copy" }, { schedule: "* * * * * *", prompt: "second copy" });
+    cron.startCronScheduler();
+    const ran = () => new Set(engine.calls.map((c) => c.prompt.split("\n\n").pop()));
+    const deadline = Date.now() + 8000;
+    while (ran().size < 2 && Date.now() < deadline) await sleep(50);
+    cron.stopCronScheduler();
+    while (cron.getCronStatus().jobs.some((j) => j.running) && Date.now() < deadline + 5000) await sleep(50);
+    assert.deepEqual([...ran()].sort(), ["first copy", "second copy"]);
+  });
+
+  it("the first keeps the id and the later one gets a new one, saved once; both show on; pausing one leaves the other on", () => {
+    twins({ schedule: "* * 29 2 *", prompt: "a" }, { schedule: "0 0 29 2 *", prompt: "b" });
+    let saves = 0;
+    const set = settings.set;
+    settings.set = function (key, value) {
+      if (key === "cron.jobs") saves++;
+      return set.call(this, key, value);
+    };
+    try {
+      cron.startCronScheduler();
+      cron.startCronScheduler();
+    } finally {
+      delete settings.set;
+    }
+    const [a, b] = cron.loadCronJobs();
+    assert.equal(a.id, "cron_dailyreport", "the first keeps its id");
+    assert.match(b.id, /^cron_dailyreport_\w+$/, "the later one, a new one");
+    assert.deepEqual([a.prompt, b.prompt], ["a", "b"]);
+    assert.equal(saves, 1, "the new id is saved once, and kept after that");
+    assert.equal(cron.getCronStatus().activeJobs, 2);
+    for (const { id } of [a, b]) assert.deepEqual([statusOf(id).state, statusOf(id).scheduled], ["on", true], id);
+
+    cron.setCronJobEnabled(b.id, false);
+    assert.deepEqual([statusOf(a.id).state, statusOf(a.id).scheduled], ["on", true], "pausing one leaves the other on");
+    assert.deepEqual([statusOf(b.id).state, statusOf(b.id).scheduled], ["off", false]);
+    cron.setCronJobEnabled(a.id, false);
+    cron.setCronJobEnabled(b.id, true);
+    assert.deepEqual([statusOf(a.id).scheduled, statusOf(b.id).scheduled], [false, true], "and the other way round");
+    assert.equal(cron.removeCronJob(a.id), true);
+    assert.deepEqual(cron.loadCronJobs().map((j) => j.id), [b.id], "deleting one leaves the other");
+    assert.equal(statusOf(b.id).scheduled, true);
+  });
+
+  it("an id freed by a deleted task never goes to a different one", () => {
+    const a = cron.addCronJob({ schedule: "0 9 * * *", prompt: "Report to the team", name: "Daily report", createdBy: "owner" });
+    assert.match(a.id, /^cron_dailyreport_\w+$/, "still says what it is");
+    cron.removeCronJob(a.id);
+    const b = cron.addCronJob({ schedule: "0 18 * * *", prompt: "Something else", name: "Daily report", createdBy: "owner" });
+    assert.notEqual(b.id, a.id);
+    const ids = new Set();
+    for (let i = 0; i < 20; i++) {
+      const job = cron.addCronJob({ schedule: "0 9 * * *", prompt: "x" });
+      ids.add(job.id);
+      cron.removeCronJob(job.id);
+    }
+    assert.equal(ids.size, 20, "unnamed ones too, even made in the same moment");
+  });
+
+  it("the morning briefing keeps its own id, so /briefing time and /briefing off still find it", async () => {
+    try {
+      assert.match(await owner("/briefing on"), /enabled/i);
+      assert.deepEqual(cron.loadCronJobs().map((j) => j.id), ["cron_briefingam"]);
+      assert.match(await owner("/briefing time 7"), /7:00/);
+      assert.deepEqual(cron.loadCronJobs().map((j) => [j.id, j.schedule]), [["cron_briefingam", "0 7 * * *"]]);
+      assert.match(await owner("/briefing off"), /disabled/i);
+      assert.equal(cron.loadCronJobs().length, 0);
+    } finally {
+      settings.delete("briefing.hour");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+
+describe("a schedule with a step of 0 can't take the server down", () => {
+  // node-cron 4.2.1 writes out every number of a range one step at a time before it checks anything, so a step of 0
+  // never ends: it fills the memory until the server falls over. In the weekday part it first reads the first 7 as 0
+  // (both are Sunday), so "*/7" and "0-6/7" there are a step of 0 too.
+  const HANGS = ["*/0 * * * *", "0 9 * * */7", "0 9 * * 0-6/7"];
+  const FINE = ["*/5 * * * *", "0 9 * * 1-5", "0 0 * * 7"];
+
+  // Tarsee's cron code, in a worker with little memory and a time limit: a schedule that reached node-cron unchecked
+  // fails the test in a few seconds instead of filling the test run's memory.
+  const WORKER = `
+const { parentPort, workerData } = require("node:worker_threads");
+(async () => {
+  const cron = await import(workerData.cronUrl);
+  const saved = new Map();
+  cron.initCron({ db: {}, settingsStore: { get: (k) => saved.get(k) ?? null, set: (k, v) => saved.set(k, v), delete: (k) => saved.delete(k) } });
+  const made = {};
+  for (const s of workerData.schedules) {
+    const r = { prompt: cron.promptScheduleProblem(s) };
+    try { cron.addCronJob({ schedule: s, action: { tool: "send_message", args: { message: "hi" } } }); r.added = true; } catch (e) { r.added = e.message; }
+    made[s] = r;
+  }
+  saved.set("cron.jobs", JSON.stringify(workerData.schedules.map((schedule, i) => ({ id: "cron_saved" + i, schedule, prompt: "x", enabled: true, createdBy: "owner" }))));
+  cron.startCronScheduler();
+  const scheduled = Object.fromEntries(cron.getCronStatus().jobs.map((j) => [j.schedule, j.scheduled]));
+  cron.stopCronScheduler();
+  parentPort.postMessage({ made, scheduled });
+})().catch((e) => parentPort.postMessage({ crashed: String((e && e.stack) || e) }));
+`;
+  function inWorker(schedules) {
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(WORKER, {
+        eval: true,
+        workerData: { cronUrl: new URL("../src/lib/cron.js", import.meta.url).href, schedules },
+        resourceLimits: { maxOldGenerationSizeMb: 256 },
+      });
+      const end = (fn, value) => {
+        clearTimeout(timer);
+        worker.terminate();
+        fn(value);
+      };
+      const timer = setTimeout(() => end(reject, new Error("no answer after 15 seconds: a schedule reached node-cron unchecked")), 15_000);
+      worker.once("message", (m) => end(resolve, m));
+      worker.once("error", (e) => end(reject, e));
+    });
+  }
+
+  it("making one is refused in plain words (the AI's tool, the form, /cron add), and one saved before is skipped at boot", { timeout: 30_000 }, async () => {
+    const out = await inWorker([...HANGS, ...FINE]);
+    assert.equal(out.crashed, undefined, out.crashed);
+    for (const s of HANGS) {
+      const { prompt, added } = out.made[s];
+      assert.match(prompt, /step of 0/, `${s}: ${prompt}`);
+      assert.equal(added, prompt, `${s}: addCronJob refuses it the same way, for a direct-action task too`);
+      assert.equal(out.scheduled[s], false, `${s}: saved before, it gets no timer, and the boot goes on`);
+    }
+    assert.match(out.made["0 9 * * */7"].prompt, /weekday part.*7.*Sunday/s);
+    assert.match(out.made["*/5 * * * *"].prompt, /5 minutes apart/, "only the usual frequency rule");
+    for (const s of ["0 9 * * 1-5", "0 0 * * 7"]) assert.equal(out.made[s].prompt, null, s);
+    for (const s of FINE) {
+      assert.equal(out.made[s].added, true, s);
+      assert.equal(out.scheduled[s], true, `${s}: saved before, it runs`);
+    }
+  });
+
+  it("the check reads the schedule as node-cron does, without writing anything out", () => {
+    const check = cron.unsafeScheduleProblem;
+    assert.equal(typeof check, "function");
+    for (const [s, words] of [
+      ...HANGS.map((s) => [s, /step of 0/]),
+      ["0 9 * * */sun", /weekday part.*step of 0/s],     // "sun" is day 0 to node-cron
+      ["0 9 * * */70", /weekday part.*step of 0/s],      // the first 7 becomes 0: "*/00"
+      ["0 9 * * 1-5/0", /step of 0/],
+      ["0-59/00 * * * *", /step of 0/],
+      ["*/0.5 * * * *", /step of 0/],                    // node-cron reads the step's digits, "0"
+      ["5/0 * * * *", /step of 0/],                      // no hang, but a step of 0 is never meant
+      ["*/-1 * * * *", /step of -1/],
+      ["0 9 * * * * 1-2/0", /step of 0/],                // node-cron writes out a seventh part's ranges too
+      ["0-99999999999 * * * *", /range "0-99999999999"/],
+      ["99999999999999999999-99999999999999999999 * * * *", /range/],
+      [`${"1,".repeat(600)}2 * * * *`, /characters long/],
+      [42, /text/],
+    ]) {
+      const started = Date.now();
+      const problem = check(s);
+      assert.ok(Date.now() - started < 500, `${s}: quick`);
+      assert.match(String(problem), words, `${s}: ${problem}`);
+      assert.doesNotMatch(String(problem), /node-cron|regex|NaN|undefined/, "plain words");
+    }
+    for (const s of [...FINE, "*/15 * * * *", "0,15,30,45 * * * *", "59-0 * * * *", "* * 29 2 *", "0 */2 * * *", "0  9 * * *", "* * * * * *", "0 9 * * sun", "0 9 * jan-mar mon-fri", "0 9 * * 0-7", "*/90 * * * *", "0 9 * * 1-7/2"]) {
+      assert.equal(check(s), null, s);
+      assert.equal(nodeCron.validate(s), true, `${s} is one node-cron takes`);
+    }
+    assert.equal(check("not a schedule"), null, "anything else is node-cron's to judge: it says no without hanging");
   });
 });
 

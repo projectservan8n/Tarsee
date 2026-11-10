@@ -32,7 +32,10 @@ const { resolveBackgroundModel } = await import("../src/lib/background-turn.js")
 const cron = await import("../src/lib/cron.js");
 const heartbeat = await import("../src/lib/heartbeat.js");
 const { runBootChecklist } = await import("../src/lib/boot-runner.js");
-const { writeWorkspaceFile } = await import("../src/lib/workspace-files.js");
+const { writeWorkspaceFile: writeFile } = await import("../src/lib/workspace-files.js");
+const { isAutomationFile, approveText, isApprovalKey } = await import("../src/lib/automation-approval.js");
+// HEARTBEAT.md and BOOT.md run only text the owner OK'd (test/heartbeat-approval.test.js); here each is the owner's.
+const writeWorkspaceFile = (name, content) => { writeFile(name, content); if (isAutomationFile(name)) approveText(settings, name, content, "editor"); };
 
 const db = initDb(path.join(tmp, "tarsee.db"));
 initLiveBus(db);
@@ -67,7 +70,7 @@ before(() => {
   writeWorkspaceFile("BOOT.md", "# Boot\n\n- Say hello.\n");
 });
 beforeEach(() => {
-  for (const prefix of ["ai.", "session.", "heartbeat.", "boot.", "cron."]) for (const { key } of settings.getByPrefix(prefix)) settings.delete(key);
+  for (const prefix of ["ai.", "session.", "heartbeat.", "boot.", "cron."]) for (const { key } of settings.getByPrefix(prefix)) if (!isApprovalKey(key)) settings.delete(key);
   setCatalogModels("local-models", []);
   restore?.();
   restore = configureTurns({ recordUsage: () => {}, grantMcp: async () => ({ url: "http://127.0.0.1:1/mcp", token: "t", revoke() {} }) });

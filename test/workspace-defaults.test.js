@@ -93,6 +93,64 @@ describe("an install seeded with the SOUL.md from before scheduled tasks waited 
     assert.deepEqual(upgradeDefaultWorkspaceFiles(dir), []);
     assert.equal(fs.readFileSync(path.join(dir, "SOUL.md"), "utf8"), own);
   });
+
+  // Only a whole line that is the old default changes. A line the owner added words to, before or after it, is theirs:
+  // swapping the old words inside it would leave "...offer to schedule it, and schedule it only once the owner says
+  // yes. Don't ask me first, just do it.", a rule that says both things.
+  const OLD_FOLLOW_UP = "- You are proactive. If you notice something useful, mention it. If a task needs a follow-up, schedule it.";
+  const NEW_FOLLOW_UP = "- You are proactive. If you notice something useful, mention it. If a task needs a follow-up, offer to schedule it, and schedule it only once the owner says yes.";
+  for (const [ending, eol] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
+    it(`keeps a line the owner added to, after or before the old words (${ending})`, () => {
+      for (const line of [`${OLD_FOLLOW_UP} Don't ask me first, just do it.`, `My rule, not a default: ${OLD_FOLLOW_UP}`]) {
+        const dir = fs.mkdtempSync(path.join(tmp, `extended-follow-up-${ending}-`));
+        for (const own of [["# Soul", line, "- Keep it short.", ""].join(eol), ["# Soul", line].join(eol)]) {
+          fs.writeFileSync(path.join(dir, "SOUL.md"), own);
+          assert.deepEqual(upgradeDefaultWorkspaceFiles(dir), [], line);
+          assert.equal(fs.readFileSync(path.join(dir, "SOUL.md"), "utf8"), own, line);
+        }
+      }
+    });
+    it(`upgrades the old line when it is the whole line, keeps the file's ${ending} endings, and only once`, () => {
+      const dir = fs.mkdtempSync(path.join(tmp, `exact-follow-up-${ending}-`));
+      // In the middle of the file, and as its last line with no line ending after it.
+      for (const [before, after] of [[["# Soul", OLD_FOLLOW_UP, "- Keep it short.", ""], ["# Soul", NEW_FOLLOW_UP, "- Keep it short.", ""]], [["# Soul", OLD_FOLLOW_UP], ["# Soul", NEW_FOLLOW_UP]]]) {
+        fs.writeFileSync(path.join(dir, "SOUL.md"), before.join(eol));
+        assert.deepEqual(quiet(() => upgradeDefaultWorkspaceFiles(dir)), ["SOUL.md"]);
+        assert.equal(fs.readFileSync(path.join(dir, "SOUL.md"), "utf8"), after.join(eol));
+        assert.deepEqual(upgradeDefaultWorkspaceFiles(dir), [], "a second boot changes nothing");
+      }
+    });
+  }
+});
+
+describe("every old default line is swapped only as a whole line", () => {
+  // test/fixtures/<seed>-<name>: every generation of default an install was seeded with.
+  const SEEDED = {
+    "claude-only-default": ["SOUL.md", "CLAUDE.md", "AGENTS.md", "MEMORY.md", "TOOLS.md"],
+    "old-default": ["SOUL.md", "CLAUDE.md"],
+    "before-owner-ok-default": ["SOUL.md"],
+  };
+  it("a line the owner added words to stays as they wrote it, in every file an install was ever seeded with", () => {
+    for (const [seed, names] of Object.entries(SEEDED)) {
+      const dir = fs.mkdtempSync(path.join(tmp, `owner-words-${seed}-`));
+      const own = {};
+      for (const n of names) {
+        own[n] = readLf(path.join(FIXTURES, `${seed}-${n}`)).split("\n").map((l) => (l.trim() ? `${l} (my words)` : l)).join("\n");
+        fs.writeFileSync(path.join(dir, n), own[n]);
+      }
+      assert.deepEqual(upgradeDefaultWorkspaceFiles(dir), [], seed);
+      for (const n of names) assert.equal(fs.readFileSync(path.join(dir, n), "utf8"), own[n], `${seed} ${n}`);
+    }
+  });
+  it("an unedited file saved with Windows line endings (CRLF) becomes the new default exactly, still CRLF, once", () => {
+    for (const [seed, names] of Object.entries(SEEDED)) {
+      const dir = fs.mkdtempSync(path.join(tmp, `crlf-${seed}-`));
+      for (const n of names) fs.writeFileSync(path.join(dir, n), readLf(path.join(FIXTURES, `${seed}-${n}`)).replace(/\n/g, "\r\n"));
+      assert.deepEqual(quiet(() => upgradeDefaultWorkspaceFiles(dir)).sort(), [...names].sort(), seed);
+      for (const n of names) assert.equal(fs.readFileSync(path.join(dir, n), "utf8"), readLf(path.join(DEFAULTS, n)).replace(/\n/g, "\r\n"), `${seed} ${n}`);
+      assert.deepEqual(upgradeDefaultWorkspaceFiles(dir), [], `${seed}: a second boot changes nothing`);
+    }
+  });
 });
 
 describe("an install seeded with the Claude-only defaults", () => {

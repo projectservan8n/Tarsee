@@ -2275,13 +2275,58 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
   background: var(--danger-subtle);
 }
 
-/* Settings → Automation → Scheduled tasks (js/cron-core.js) */
+/* Settings → Automation → Scheduled tasks (js/cron-core.js). A task is a row: its state badge, what it does (when it
+   runs, the whole prompt or the action, who made it), then Switch on or Pause, and Delete. In a row narrower than about
+   520px (a phone, or a tablet with both sidebars open) the badge and buttons left the prompt a word a line, so there
+   what it does takes the row's whole width, and the badge and buttons get a line of their own under it. The row
+   measures itself (a container query), so this holds wherever the list sits. */
+.cron-job {
+  container: cron-task / inline-size;
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
+
 .cron-job .memory-content {
   min-width: 0;
 }
 
 .cron-job .cron-toggle {
   flex-shrink: 0;
+}
+
+@container cron-task (max-width: 520px) {
+  .cron-job .memory-content {
+    order: -1;
+    flex: 1 0 100%;
+  }
+
+  .cron-job .cron-state,
+  .cron-job .memory-delete {
+    align-self: center;
+  }
+
+  .cron-job .cron-toggle {
+    margin-left: auto;
+  }
+
+  /* Delete shows without a mouse to hover with, and is big enough to tap. */
+  .cron-job .memory-delete {
+    opacity: 1;
+    min-width: var(--space-8);
+    min-height: var(--space-8);
+  }
+}
+
+@media (hover: none) {
+  .cron-job .memory-delete {
+    opacity: 1;
+  }
+}
+
+/* A long id or schedule wraps instead of running out of the row. */
+.cron-when,
+.cron-who {
+  overflow-wrap: anywhere;
 }
 
 .cron-prompt {

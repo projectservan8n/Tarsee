@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { Router } from "express";
+import { validateSessionFromRequest } from "../middleware/auth.js";
+import { csrfProtect } from "../middleware/security.js";
 import { SettingsStore, isAiKeySlot, isEmptySetting, OLD_VOICE_KEY } from "../db/settings.js";
 import { getProvider, isShipped, shippedProviders, checkKeySlot } from "../ai/provider-registry.js";
 import { providerStatus, activeTarget, credentialPresence } from "../ai/provider-status.js";
@@ -9,6 +12,7 @@ import { readWorkspaceFile, writeWorkspaceFile, hasBootstrapFile, deleteBootstra
 import { initTTSEngine } from "../voice/engine-registry.js";
 import { redactSecretFields, isSecretKey } from "../lib/vault.js";
 import { brandStatus, saveBrandIcon, resetBrandIcon, decodeBase64 } from "../lib/brand-icon.js";
+import { isApprovalKey } from "../lib/automation-approval.js";
 
 export const settingsRouter = Router();
 
@@ -425,6 +429,18 @@ settingsRouter.post("/general", (req, res) => {
     return res.status(400).json({ error: "Save AI keys in Settings > AI." });
   }
 
+  // The owner's OK for HEARTBEAT.md and BOOT.md is given only from the dashboard's own session
+  // (routes/automation-approval.js); written here, the API token could OK what the AI wrote.
+  if (isApprovalKey(key)) {
+    return res.status(400).json({ error: "OK HEARTBEAT.md and BOOT.md in Settings > Automation." });
+  }
+
+  // The saved scheduled tasks change only through /cron below, which keeps the owner's OK: written here, the API token
+  // could save a task switched on that the owner never saw, and it would start with Tarsee's next restart.
+  if (key === "cron.jobs") {
+    return res.status(400).json({ error: "Add, switch on or delete scheduled tasks in Settings > Automation > Scheduled tasks." });
+  }
+
   // Enum-shaped settings — defend the API even though the UI dropdown
   // already constrains the input. Anyone can hit /api/settings/general.
   if (key.endsWith(".mention_mode") && value !== "required" && value !== "off") {
@@ -513,19 +529,72 @@ settingsRouter.get("/cron", async (_req, res) => {
 });
 
 /**
+ * Who asks to switch a scheduled task on, or to add one switched on:
+ *   "owner"       the owner's own dashboard: signed in (the session cookie), with the page's CSRF token.
+ *   "stale-page"  signed in, but the page's CSRF token has run out (the dashboard fetches a fresh one and asks again).
+ *   "token"       anything else, the API token alone above all.
+ * The API token is never enough. Tarsee saves it in the state folder (api.token) unless TARSEE_API_TOKEN is set, and the
+ * AI's shell runs as the same user, so with the token alone the AI could OK the task it has just scheduled. The
+ * dashboard sends the token too (js/api.js), and sessionAuth names a request by its token first (req.auth.method
+ * "bearer"), so a token request is checked here for the sign-in and the CSRF token, which csrfProtect skips for it. A
+ * request let in by the sign-in alone ("session") has passed both (server.js mounts this router behind requireAuth and
+ * csrfProtect). With no req.auth at all, nobody signed in.
+ */
+function whoIsAsking(req) {
+  if (req.auth?.method === "session") return "owner";
+  if (req.auth?.method !== "bearer" || !validateSessionFromRequest(req)) return "token";
+  return hasPageCsrfToken(req) ? "owner" : "stale-page";
+}
+
+/** Whether a request carries the page's CSRF token: csrfProtect's own check, run as for a signed-in request. */
+function hasPageCsrfToken(req) {
+  let passed = false;
+  const asSignedIn = { auth: { method: "session" }, method: req.method, headers: req.headers };
+  const refused = { status: () => ({ json: () => {} }) };
+  try {
+    csrfProtect(asSignedIn, refused, () => { passed = true; });
+  } catch {
+    // a token that isn't one Tarsee made
+  }
+  return passed;
+}
+
+// "CSRF token" in it: js/api.js then fetches a fresh token and sends the request once more.
+const STALE_PAGE = "This page's security check (its CSRF token) has run out. Reload the page, then try again.";
+
+const tokenCantSwitchOn = (id) => `Only you can switch a scheduled task on, signed in to your dashboard: the API token can't, because the AI can read it. Switch it on in Settings > Automation > Scheduled tasks, or with /cron on ${id} from your own chat.`;
+
+/**
+ * Whether a task is still the one the owner's row showed (CronCore.seenOf in js/cron-core.js): its schedule, and its
+ * prompt or, for a task that runs a tool directly, its action.
+ */
+function sameAsSeen(job, seen) {
+  if (!seen || typeof seen !== "object" || seen.schedule !== job.schedule) return false;
+  if (job.action?.tool) return isDeepStrictEqual(seen.action, job.action);
+  return seen.action == null && seen.prompt === (job.prompt ?? "");
+}
+
+/**
  * POST /api/settings/cron
- * Add a new cron job: the owner's, from the form in Settings > Automation > Scheduled tasks, so it is switched on.
- * Body: { schedule, prompt, channel?, enabled? }
+ * Add a task. Body: { schedule, prompt, channel?, enabled? }
+ * From the owner's dashboard (the form in Settings > Automation > Scheduled tasks) it is the owner's, switched on. With
+ * the API token alone it may be the AI's (whoIsAsking), so it is saved as one the AI made: switched off and waiting for
+ * the owner's OK, whatever enabled says, with a note saying so.
  */
 settingsRouter.post("/cron", async (req, res) => {
   const { schedule, prompt, channel, enabled } = req.body || {};
   if (!schedule || !prompt) {
     return res.status(400).json({ error: "schedule and prompt are required" });
   }
+  const who = whoIsAsking(req);
+  if (who === "stale-page") return res.status(403).json({ error: STALE_PAGE });
   try {
     const { addCronJob } = await import("../lib/cron.js");
-    const job = addCronJob({ schedule, prompt, channel, enabled: enabled !== false, createdBy: "owner" });
-    res.status(201).json(job);
+    if (who === "owner") {
+      return res.status(201).json(addCronJob({ schedule, prompt, channel, enabled: enabled !== false, createdBy: "owner" }));
+    }
+    const job = addCronJob({ schedule, prompt, channel, createdBy: "ai" });
+    res.status(201).json({ ...job, note: `Added switched off: a task added with the API token waits for the owner's OK in Settings > Automation > Scheduled tasks (or /cron on ${job.id} from the owner's own chat).` });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -533,18 +602,41 @@ settingsRouter.post("/cron", async (req, res) => {
 
 /**
  * PATCH /api/settings/cron/:id
- * Switch a task on or off (the Switch on and Pause buttons). Body: { enabled: true | false }.
- * Switching on a task the AI made is the owner's OK: it stops waiting, and gets its timer.
+ * Switch a task on or off (the Switch on and Pause buttons). Body: { enabled: true | false, seen? }.
+ * Pausing only stops runs: anyone signed in or with the API token may. Switching on is the owner's OK (a task the AI
+ * made stops waiting and gets its timer), so it takes:
+ *   - the owner's dashboard (whoIsAsking): the API token alone gets 403, with needsSignIn (the dashboard then asks the
+ *     owner to sign in again: its sign-in ran out and it went on with the token);
+ *   - seen: what the owner's row showed (CronCore.seenOf): { schedule, prompt }, or { schedule, action }. A task that no
+ *     longer matches it (changed where it is saved after the list was drawn) gets 409, and the page draws the list
+ *     again; a switch-on without it gets 400.
  */
 settingsRouter.patch("/cron/:id", async (req, res) => {
-  const enabled = req.body?.enabled;
+  const { enabled, seen } = req.body || {};
+  const id = req.params.id;
   if (typeof enabled !== "boolean") {
     return res.status(400).json({ error: "enabled must be true or false" });
   }
+  if (enabled) {
+    const who = whoIsAsking(req);
+    if (who === "stale-page") return res.status(403).json({ error: STALE_PAGE });
+    if (who !== "owner") return res.status(403).json({ error: tokenCantSwitchOn(id), needsSignIn: true });
+  }
   try {
-    const { setCronJobEnabled } = await import("../lib/cron.js");
-    const job = setCronJobEnabled(req.params.id, enabled);
-    if (!job) return res.status(404).json({ error: `No scheduled task ${req.params.id}` });
+    const { loadCronJobs, setCronJobEnabled } = await import("../lib/cron.js");
+    if (enabled) {
+      const saved = loadCronJobs().find((j) => j.id === id);
+      if (!saved) return res.status(404).json({ error: `No scheduled task ${id}` });
+      if (seen == null) {
+        return res.status(400).json({ error: "Tarsee can't tell which version of this task you looked at. Reload the page, look at the task again, then switch it on." });
+      }
+      if (!sameAsSeen(saved, seen)) {
+        return res.status(409).json({ error: "This task changed after your list was drawn: when it runs or what it does is different now. Look at it again, then switch it on if you still want it." });
+      }
+    }
+    // Nothing waits between the check and this: both read and write the saved tasks synchronously.
+    const job = setCronJobEnabled(id, enabled);
+    if (!job) return res.status(404).json({ error: `No scheduled task ${id}` });
     res.json({ ok: true, job });
   } catch (err) {
     res.status(500).json({ error: err.message });
