@@ -4,7 +4,8 @@
  *
  *   <root>/models/phonon-31m-en   gradium/phonon-31m-en, q8 weights (Apache-2.0)
  *   <root>/catalog                English voices of gradium/phonon-voices (Apache-2.0)
- *   <root>/venv                   only on machines whose python3 lacks ptts
+ *   <root>/venv                   only on machines whose python3 lacks ptts; made from the Python
+ *                                 speech-to-text uses (python-runtime.js), Windows included
  *   <root>/install.json           written last: the install finished
  *
  * <root> is DATA_DIR/tts/phonon, or TARSEE_PHONON_DIR.
@@ -26,15 +27,16 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
-import { execFile } from "node:child_process";
-import { pipeline } from "node:stream/promises";
-import { Readable, Transform } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
   phononPaths, phononInstalled, phononThreads, canImportPtts, resetPhononAvailability,
 } from "./phonon-engine.js";
 import { enginePreference } from "./engine-registry.js";
+import { downloadFile, acquireLock, writeFileAtomic, describeFetchError, guardedFetch, OFFICIAL_HOSTS } from "./install-common.js";
+import { ensureBasePython, runPython, describePython } from "./python-runtime.js";
+
+// The download and lock helpers are shared with the other installers (install-common.js); the tests import them here.
+export { downloadFile, acquireLock };
 
 export const PTTS_VERSION = "0.4.2";
 const HF = "https://huggingface.co";
@@ -65,9 +67,7 @@ export const PHONON_VOICES = {
 // About 64.5 MB of weights, 6 MB of voices and a few small files. Only used to
 // show progress; nothing depends on it being exact.
 const APPROX_TOTAL_BYTES = 72_000_000;
-const DOWNLOAD_ATTEMPTS = 3;
 const STALL_MS = 60_000;
-const LOCK_STALE_MS = 2 * 60 * 60_000;
 
 export function hfUrl(repo, revision, file) {
   return `${HF}/${repo}/resolve/${revision}/${file.split("/").map(encodeURIComponent).join("/")}`;
@@ -135,6 +135,8 @@ export async function checkPhononInstall() {
  * opts.model, opts.voices  replace PHONON_MODEL / PHONON_VOICES (tests)
  * opts.retryDelayMs   pause before retrying a failed download (tests shorten it)
  * opts.ensureRuntime  async () => void, makes `import ptts` work (tests replace it)
+ * opts.allowPythonDownload  with no usable Python here, download Tarsee's own (the owner clicked Install or Retry)
+ * opts.pin            replaces python-runtime.js STANDALONE_PYTHON (tests)
  * opts.smokeTest      async (paths) => string, a real synthesis (tests replace it)
  * opts.onProgress     (status) => void, on every chunk downloaded
  * opts.onInstalled    async () => void, after success (re-initialises the TTS engine)
@@ -149,7 +151,8 @@ export function installPhonon(opts = {}) {
 }
 
 async function runInstall(opts) {
-  const fetchImpl = opts.fetch || globalThis.fetch;
+  // Hugging Face (and its CDN) over https, nothing else, redirects included.
+  const fetchImpl = guardedFetch([OFFICIAL_HOSTS.huggingface], opts.fetch || globalThis.fetch);
   const model = opts.model || PHONON_MODEL;
   const voicesSrc = opts.voices || PHONON_VOICES;
   const retryDelayMs = opts.retryDelayMs ?? 1000;
@@ -171,7 +174,19 @@ async function runInstall(opts) {
     log(`installing into ${root}`);
 
     // 1. The Python runtime.
-    await (opts.ensureRuntime || ensureRuntime)(log);
+    await (opts.ensureRuntime || ensureRuntime)(log, {
+      allowPythonDownload: opts.allowPythonDownload,
+      fetch: opts.fetch,
+      pin: opts.pin,
+      retryDelayMs,
+      // Tarsee's own Python, when it has to be downloaded first: counted in the progress too.
+      onPythonProgress: ({ bytesDone, bytesTotal }) => {
+        _status.file = `Python (${Math.round(bytesDone / 1e6)} of ${Math.round(bytesTotal / 1e6)} MB)`;
+        _status.bytesTotal = APPROX_TOTAL_BYTES + bytesTotal;
+        _status.bytesDone = bytesDone;
+        opts.onProgress?.(getPhononInstallStatus());
+      },
+    });
 
     // 2. The model.
     _status.phase = "model";
@@ -282,188 +297,69 @@ function safeJoin(dir, rel) {
   return dest.startsWith(path.resolve(dir) + path.sep) ? dest : null;
 }
 
-function sha256File(file) {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash("sha256");
-    fs.createReadStream(file)
-      .on("data", (c) => hash.update(c))
-      .on("error", reject)
-      .on("end", () => resolve(hash.digest("hex")));
-  });
-}
-
-function writeFileAtomic(file, data) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, data);
-  fs.renameSync(tmp, file);
-}
-
-/**
- * Stream url to dest through a sha256, then rename into place. A file already
- * there is kept when it matches its hash (or has no published hash: files only
- * ever appear complete, by rename). Retries a few times; a stalled transfer is
- * aborted after STALL_MS without data.
- */
-export async function downloadFile({ url, dest, sha256, fetchImpl = globalThis.fetch, progress = () => {}, attempts = DOWNLOAD_ATTEMPTS, retryDelayMs = 1000 }) {
-  if (fs.existsSync(dest)) {
-    const size = fs.statSync(dest).size;
-    if (size > 0 && (!sha256 || (await sha256File(dest)) === sha256)) {
-      progress(size);
-      return "kept";
-    }
-    fs.rmSync(dest, { force: true });
-  }
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-
-  let lastErr;
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    const tmp = `${dest}.part`;
-    const ac = new AbortController();
-    let stall = null;
-    const armStall = () => {
-      clearTimeout(stall);
-      stall = setTimeout(() => ac.abort(new Error(`no data for ${STALL_MS / 1000}s`)), STALL_MS);
-      stall.unref?.();
-    };
-    let counted = 0;
-    try {
-      armStall();
-      const res = await fetchImpl(url, { redirect: "follow", signal: ac.signal });
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status} for ${path.basename(dest)}`);
-      const hash = crypto.createHash("sha256");
-      const meter = new Transform({
-        transform(chunk, _enc, cb) {
-          armStall();
-          hash.update(chunk);
-          counted += chunk.length;
-          progress(chunk.length);
-          cb(null, chunk);
-        },
-      });
-      await pipeline(Readable.fromWeb(res.body), meter, fs.createWriteStream(tmp));
-      // A compressed response's Content-Length is not the size of what we read.
-      const expected = Number(res.headers?.get?.("content-length"));
-      if (!res.headers?.get?.("content-encoding") && expected > 0 && counted !== expected) {
-        throw new Error(`${path.basename(dest)} was cut short (${counted} of ${expected} bytes)`);
-      }
-      const got = hash.digest("hex");
-      if (sha256 && got !== sha256) {
-        throw Object.assign(new Error(`${path.basename(dest)} does not match its published sha256`), { code: "HASH_MISMATCH" });
-      }
-      fs.renameSync(tmp, dest);
-      return got;
-    } catch (err) {
-      lastErr = describeFetchError(err, url);
-      progress(-counted);
-      fs.rmSync(tmp, { force: true });
-      if (attempt < attempts) await new Promise((r) => setTimeout(r, retryDelayMs * attempt));
-    } finally {
-      clearTimeout(stall);
-    }
-  }
-  throw lastErr;
-}
-
-/** fetch's own "fetch failed" says nothing; name the host and the cause instead. */
-function describeFetchError(err, url) {
-  if (err?.message !== "fetch failed") return err;
-  const host = (() => { try { return new URL(url).host; } catch { return "the download server"; } })();
-  const cause = err.cause?.code || err.cause?.message || "network error";
-  return Object.assign(new Error(`could not reach ${host} (${cause})`), { cause: err });
-}
-
-// ── Lock ─────────────────────────────────────────────────────────────────
-
-// Lock files this process holds right now.
-const _heldLocks = new Set();
-
-/** Take <root>/.install.lock or throw (code LOCKED). Returns the release function. */
-export function acquireLock(root) {
-  const file = path.join(root, ".install.lock");
-  for (let i = 0; i < 2; i++) {
-    try {
-      fs.writeFileSync(file, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), { flag: "wx" });
-      _heldLocks.add(file);
-      return () => {
-        _heldLocks.delete(file);
-        try { fs.unlinkSync(file); } catch { /* already gone */ }
-      };
-    } catch (err) {
-      if (err.code !== "EEXIST") throw err;
-      if (!lockIsStale(file)) {
-        throw Object.assign(new Error("another Phonon install is already running"), { code: "LOCKED" });
-      }
-      fs.rmSync(file, { force: true });
-    }
-  }
-  throw Object.assign(new Error("could not take the Phonon install lock"), { code: "LOCKED" });
-}
-
-function lockIsStale(file) {
-  let info;
-  try {
-    info = JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    // Unreadable: stale unless it was created a moment ago (being written).
-    try { return Date.now() - fs.statSync(file).mtimeMs > 10_000; } catch { return true; }
-  }
-  if (info.pid === process.pid) {
-    // Ours and held: a live lock. Ours but not held: left over from an earlier
-    // container that ran with the same pid (common for PID 1-ish processes).
-    return !_heldLocks.has(file);
-  }
-  const age = Date.now() - Date.parse(info.startedAt);
-  if (!(age < LOCK_STALE_MS)) return true;
-  try { process.kill(info.pid, 0); return false; } catch (err) { return err.code !== "EPERM"; }
-}
-
 // ── Python runtime ───────────────────────────────────────────────────────
 
-function run(cmd, args, { timeout = 120_000, env, lines = 3 } = {}) {
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout, env: env || process.env, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) {
-        const detail = String(stderr || err.message).trim().split("\n").slice(-lines).join(" ").trim();
-        return reject(Object.assign(new Error(detail || err.message), { code: err.code }));
-      }
-      resolve({ stdout: String(stdout), stderr: String(stderr) });
-    });
-  });
+/** Run a Python (a path or a command) through python-runtime.js; the error is its last `lines` lines of output. */
+async function run(python, args, { timeout = 120_000, env, lines = 3 } = {}) {
+  const ref = typeof python === "string" ? { cmd: python, args: [] } : python;
+  try {
+    return await runPython(ref, args, { timeout, env });
+  } catch (err) {
+    const detail = String(err.stderr || "").trim().split(/\r?\n/).slice(-lines).join(" ").trim();
+    throw Object.assign(new Error(detail || err.message), { code: err.code });
+  }
 }
 
 /**
  * Make `import ptts` work. The Docker image installs ptts for python3, so this
  * is normally a no-op. Elsewhere it creates <root>/venv and pip-installs the
  * pinned ptts there (a prebuilt wheel; its only dependency is numpy).
+ *
+ * The venv is made from the same Python speech-to-text uses (python-runtime.js):
+ * one found on this computer (on Windows, the py launcher), else Tarsee's own
+ * CPython, which is downloaded only when opts.allowPythonDownload (the owner
+ * clicked Install or Retry; the background install on boot never downloads it).
  */
-async function ensureRuntime(log) {
+async function ensureRuntime(log, opts = {}) {
   let p = phononPaths();
   if (await canImportPtts(p.python)) return;
   if (process.env.TARSEE_PHONON_PYTHON?.trim()) {
     throw new Error(`TARSEE_PHONON_PYTHON (${p.python}) cannot import ptts. Install it there: ${p.python} -m pip install ptts==${PTTS_VERSION}`);
   }
-  const venvHelp = `Install Python 3.9+ with the venv module (Debian/Ubuntu: apt install python3-venv), or install the runtime yourself: pip install ptts==${PTTS_VERSION}`;
 
   // A venv left half made (no pip) by an earlier failed attempt is rebuilt.
   if (fs.existsSync(p.venvPython)) {
-    try { await run(p.venvPython, ["-m", "pip", "--version"]); } catch { fs.rmSync(p.venv, { recursive: true, force: true }); }
+    try { await run(p.venvPython, ["-I", "-m", "pip", "--version"]); } catch { fs.rmSync(p.venv, { recursive: true, force: true }); }
   }
   if (!fs.existsSync(p.venvPython)) {
-    log(`python3 has no ptts: creating a private venv at ${p.venv}`);
+    let base;
     try {
-      await run("python3", ["-m", "venv", p.venv]);
-      await run(path.join(p.venv, "bin", "python"), ["-m", "pip", "--version"]);
+      base = await ensureBasePython({
+        allowDownload: !!opts.allowPythonDownload,
+        fetch: opts.fetch,
+        pin: opts.pin,
+        retryDelayMs: opts.retryDelayMs,
+        log,
+        onProgress: opts.onPythonProgress,
+      });
+    } catch (err) {
+      throw new Error(`Could not set up Python for Phonon: ${err.message}`);
+    }
+    log(`${p.python} has no ptts: creating a private venv at ${p.venv} with ${describePython(base)} (Python ${base.version})`);
+    try {
+      await run(base, ["-I", "-m", "venv", p.venv], { timeout: 180_000 });
+      await run(p.venvPython, ["-I", "-m", "pip", "--version"]);
     } catch (err) {
       fs.rmSync(p.venv, { recursive: true, force: true });
-      const why = err.code === "ENOENT" ? "python3 was not found" : err.message;
-      throw new Error(`Could not create a Python venv for Phonon (${why}). ${venvHelp}`);
+      throw new Error(`Could not create a Python venv for Phonon with ${describePython(base)} (${err.message}). Install Python 3.9+ with the venv module (Debian/Ubuntu: apt install python3-venv), or install the runtime yourself: pip install ptts==${PTTS_VERSION}`);
     }
   }
   log(`installing ptts ${PTTS_VERSION} into ${p.venv}`);
   try {
-    await run(path.join(p.venv, "bin", "python"),
-      ["-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--quiet", `ptts==${PTTS_VERSION}`],
+    // From pypi.org only (--isolated ignores pip settings that point elsewhere), ready-made builds only.
+    await run(p.venvPython,
+      ["-I", "-m", "pip", "--isolated", "install", "--disable-pip-version-check", "--no-input", "--quiet",
+        "--only-binary=:all:", "--index-url", "https://pypi.org/simple", `ptts==${PTTS_VERSION}`],
       { timeout: 600_000 });
   } catch (err) {
     throw new Error(`pip could not install ptts ${PTTS_VERSION}: ${err.message}`);

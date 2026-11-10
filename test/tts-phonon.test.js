@@ -20,8 +20,15 @@ const {
   PhononTTSEngine, phononInstalled, phononPaths, speedToDelta, clampSpeed, findVoice, DEFAULT_VOICE, SPEED_MAX, SPEED_MIN,
 } = await import("../src/voice/phonon-engine.js");
 const {
-  installPhonon, downloadFile, acquireLock, autoInstallPhonon, getPhononInstallStatus, checkPhononInstall, hfUrl,
+  installPhonon, downloadFile, acquireLock, autoInstallPhonon, getPhononInstallStatus, checkPhononInstall, hfUrl, PTTS_VERSION,
 } = await import("../src/voice/phonon-install.js");
+const { resetPhononAvailability } = await import("../src/voice/phonon-engine.js");
+const {
+  __setForTests: setPythonForTests, venvInterpreter, interpreterIn, pythonHome, pythonTarget, standaloneDir, standaloneReady, STANDALONE_PYTHON,
+} = await import("../src/voice/python-runtime.js");
+const { fakePython, fakeInterpreter } = await import("./fakes/fake-python.js");
+const { fakeDownloadHost } = await import("./fakes/fake-download-host.js");
+const { makeTarGz } = await import("./fakes/tar.js");
 
 /** A settings store with just get/set, as initTTSEngine uses it. */
 function store(values = {}) {
@@ -496,6 +503,81 @@ describe("Phonon installer", () => {
     } finally {
       if (prev === undefined) delete process.env.TARSEE_PHONON_AUTO_INSTALL; else process.env.TARSEE_PHONON_AUTO_INSTALL = prev;
     }
+  });
+});
+
+// ── Phonon's Python: the one speech-to-text uses (python-runtime.js) ─────
+
+describe("Phonon's Python runtime", () => {
+  let dir;
+  let py;
+  const cand = (cmd, args = []) => ({ cmd, args, source: "system", label: [cmd, ...args].join(" ") });
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(TMP, "phonon-py-"));
+    process.env.TARSEE_PHONON_DIR = dir;
+    py = fakePython(path.join(dir, "fake"));
+    resetPhononAvailability();
+    fs.rmSync(pythonHome(), { recursive: true, force: true });
+  });
+  afterEach(() => {
+    process.env.TARSEE_PHONON_DIR = path.join(TMP, "phonon-none");
+    setPythonForTests();
+    resetPhononAvailability();
+  });
+  const smoke = { smokeTest: async () => "ok", log: () => {}, retryDelayMs: 1 };
+
+  it("the venv's python is where this OS puts it (Scripts\\python.exe on Windows)", () => {
+    const p = phononPaths();
+    assert.equal(p.venvPython, venvInterpreter(p.venv));
+  });
+
+  it("no python3 with ptts: the venv is made from the Python found here (the py launcher on Windows), and pip installs the pinned ptts from pypi.org only", async () => {
+    py.set({ pythons: { "py -3.12": { version: "3.12.1" } }, pip: { mode: "ok", delayMs: 1 } });
+    setPythonForTests({ spawn: py.spawn, candidates: [cand("py", ["-3.12"])] });
+    const { fetch } = fakeHub(hubFiles());
+    const status = await installPhonon({ ...smoke, fetch, model: MODEL, voices: VOICES });
+    assert.equal(status.state, "installed");
+    const p = phononPaths();
+    assert.equal(p.python, p.venvPython, "Phonon now runs on its venv");
+    const calls = py.calls();
+    const venv = calls.find((c) => c.args?.includes("venv"));
+    assert.equal(venv.cmd, "py");
+    assert.deepEqual(venv.args.slice(0, 1), ["-3.12"]);
+    assert.equal(venv.args.at(-1), p.venv);
+    const pip = calls.find((c) => c.args?.includes("install"));
+    assert.equal(pip.cmd, p.venvPython);
+    assert.ok(pip.args.includes(`ptts==${PTTS_VERSION}`));
+    for (const flag of ["--isolated", "--only-binary=:all:"]) assert.ok(pip.args.includes(flag), flag);
+    assert.equal(pip.args[pip.args.indexOf("--index-url") + 1], "https://pypi.org/simple");
+    assert.equal((await checkPhononInstall()).state, "installed");
+  });
+
+  it("no Python at all: the background install on boot fails in plain words; Install (a click) downloads Tarsee's own Python first", async () => {
+    py.set({ pythons: {}, pip: { mode: "ok", delayMs: 1 } });
+    setPythonForTests({ spawn: py.spawn, candidates: [cand("python3")] });
+    const hub = hubFiles();
+    await assert.rejects(installPhonon({ ...smoke, fetch: fakeHub(hub).fetch, model: MODEL, voices: VOICES }), (err) => {
+      assert.match(err.message, /No Python 3\.9 or newer/);
+      assert.doesNotMatch(err.message, /python3 was not found|ENOENT/);
+      return true;
+    });
+    assert.equal(getPhononInstallStatus().state, "failed");
+
+    const target = pythonTarget();
+    const exeRel = path.relative("X", interpreterIn("X")).split(path.sep).join("/");
+    const archive = makeTarGz([{ name: `python/${exeRel}`, body: fakeInterpreter("3.12.16"), mode: 0o755 }]);
+    const pin = { ...STANDALONE_PYTHON, sha256: { [target.triple]: sha(archive) } };
+    const name = `cpython-${pin.version}+${pin.tag}-${target.triple}-install_only.tar.gz`;
+    const dl = `https://github.com/${pin.repo}/releases/download/${pin.tag}/${encodeURIComponent(name)}`;
+    const host = fakeDownloadHost({
+      [`https://api.github.com/repos/${pin.repo}/releases/tags/${pin.tag}`]: { json: { assets: [{ name, size: archive.length, digest: `sha256:${sha(archive)}`, browser_download_url: dl }] } },
+      [dl]: { body: archive },
+      ...Object.fromEntries(Object.entries(hub).map(([u, b]) => [u, { body: b }])),
+    });
+    const status = await installPhonon({ ...smoke, fetch: host.fetch, model: MODEL, voices: VOICES, allowPythonDownload: true, pin });
+    assert.equal(status.state, "installed");
+    assert.ok(standaloneReady(pin), "Tarsee's own Python, shared with speech-to-text");
+    assert.equal(py.calls().find((c) => c.args?.includes("venv")).cmd, interpreterIn(standaloneDir(pin)));
   });
 });
 

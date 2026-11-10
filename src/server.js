@@ -258,6 +258,15 @@ initTTSEngine(settingsStore).catch((err) => {
 import { autoInstallPhonon } from "./voice/phonon-install.js";
 autoInstallPhonon(settingsStore, { onInstalled: () => initTTSEngine(settingsStore) });
 
+// --- Speech-to-text: one line on whether it works out of the box ---
+// faster-whisper and its Python, and which model transcribes (the Docker image ships base.en). Where it is missing,
+// Settings > Voice > Speech-to-text installs it. Off the request path; never throws.
+import { sttBootLine } from "./voice/stt-install.js";
+import { stopSttWorker } from "./voice/stt-handler.js";
+sttBootLine(settingsStore)
+  .then((line) => console.log(line))
+  .catch((err) => console.warn("[stt] could not check speech-to-text:", err.message));
+
 // --- Auth profiles ---
 import { initAuthProfiles } from "./lib/auth-profiles.js";
 initAuthProfiles(settingsStore);
@@ -445,6 +454,7 @@ setTimeout(() => hookRegistry.emit("boot:ready"), 2000);
 function shutdown(signal) {
   console.log(`[tarsee] ${signal} received, shutting down...`);
   stopTTSEngine();
+  stopSttWorker();
   stopHeartbeat();
   saveBootContext(db); // Persist context before shutdown
   stopAutoSummarize();

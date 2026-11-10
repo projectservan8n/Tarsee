@@ -35,6 +35,22 @@ export async function runDoctor() {
     checks.push({ name: "ffmpeg", status: "warn", detail: "Not installed (audio processing limited)" });
   }
 
+  // Speech-to-text: faster-whisper, the Python it runs on, and a model on disk
+  try {
+    const { getSttStatus, resolveSttModel } = await import("../voice/stt-install.js");
+    const s = await getSttStatus();
+    if (!s.runtime.ready) {
+      checks.push({ name: "Speech-to-text", status: "warn", detail: "faster-whisper is not installed (Settings > Voice > Speech-to-text installs it)" });
+    } else {
+      const m = resolveSttModel(s.current);
+      checks.push(m.missing
+        ? { name: "Speech-to-text", status: "warn", detail: `faster-whisper ${s.runtime.fasterWhisper}, but no model is downloaded (Settings > Voice > Speech-to-text)` }
+        : { name: "Speech-to-text", status: "pass", detail: `faster-whisper ${s.runtime.fasterWhisper} on Python ${s.runtime.python?.version}, model ${m.name} (${m.source === "image" ? "in the image" : m.dir})` });
+    }
+  } catch (err) {
+    checks.push({ name: "Speech-to-text", status: "warn", detail: `Could not check (${err.message})` });
+  }
+
   // Disk space
   try {
     const os = await import("node:os");

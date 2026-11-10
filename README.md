@@ -151,7 +151,9 @@ Set `TARSEE_AI_PROVIDER` to `claude`, `anthropic`, `chatgpt`, `openai`, `openrou
 - **Live tool status** — shows "Reading file...", "Running command...", "Calculating..." instead of generic "Thinking..."
 - **Spacebar shortcut** — hold space to talk, Space+C to cancel.
 - **Drag to cancel** — slide away from the orb or mic button to discard recording.
-- **Local speech-to-text** — faster-whisper (CTranslate2, 4x faster than OpenAI whisper). Configurable models: tiny.en / base.en / small.en. No API key. Runs on CPU.
+- **Local speech-to-text** — faster-whisper (CTranslate2, 4x faster than OpenAI whisper). Models: tiny.en / base.en / small.en, and tiny / base / small for many languages. No API key. Runs on CPU, in one warm worker that keeps the model loaded.
+- **Works out of the box** — the Docker image ships faster-whisper and the base.en model (outside the `/data` volume, so it is never hidden), and checks at build time that it loads. Other models download from Settings > Voice > Speech-to-text, each with a progress bar and a Delete button, from the official Systran models on Hugging Face (pinned revisions, every file's size and hash checked), onto the volume, so they survive redeploys.
+- **One-click install without Docker** — on Windows, macOS or Linux, Settings > Voice > Speech-to-text has an **Install faster-whisper** button: it uses a Python 3.9+ found on the computer, or downloads a standalone Python ([python-build-standalone](https://github.com/astral-sh/python-build-standalone), pinned, sha256-checked) into Tarsee's state folder, then installs the pinned faster-whisper from pypi.org into its own folder. Phonon's install uses the same Python, so Phonon works on Windows too.
 - **Local text-to-speech by default** — [Phonon](https://huggingface.co/gradium/phonon-31m-en), Gradium's open 31M model, runs on the server's CPU through one warm worker: no API key, no per-character cost, 25 English voices (Toby by default) and a speed setting. Peso amounts ("₱2,500", "PHP 2,500") are read as pesos; reading a bare "P2,500" that way is an opt-in setting.
 - **Downloads itself** — the model and voices (about 70 MB) go to the data volume, not the image. On first boot Tarsee fetches them in the background from pinned Hugging Face revisions, checking the weights' sha256; Settings > Voice shows the progress and has an **Install Phonon** button (and Retry if it fails). Turn the automatic download off with `TARSEE_PHONON_AUTO_INSTALL=0`, or run `node src/voice/phonon-install.js` from a terminal.
 - **Free fallback** — Microsoft Edge TTS (19 voices, 3 retries, markdown stripping, no API key) speaks while Phonon downloads, and for any sentence Phonon fails; after three failures in a row Phonon is skipped for five minutes. Tarsee never falls back to a paid engine on its own: ElevenLabs and Piper are used only when you pick them (or Auto) in Settings > Voice. An install that already has an ElevenLabs key but never saved an engine keeps ElevenLabs; pick Phonon in Settings > Voice to switch.
@@ -426,7 +428,9 @@ Self-hosted IMAP/SMTP works too — pick `Custom` and fill in your host/port.
 | `TARSEE_AUTO_UPDATE_CLI` | No | off | Set `1` to install the latest Claude Code CLI on every boot (adds up to ~60s to each boot). Chat turns keep running the Agent SDK's own copy, so the Terminal's `claude` and the turns then differ (the boot log says so). Off, the image keeps the version pinned in the Dockerfile (`CLAUDE_CODE_VERSION`). |
 | `TARSEE_PHONON_AUTO_INSTALL` | No | on | Set `0` to stop Tarsee downloading Phonon's model in the background on boot when Phonon is the voice engine. The Install Phonon button in Settings > Voice still works. |
 | `TARSEE_PHONON_DIR` | No | `<data dir>/tts/phonon` | Where Phonon's model, voices and (if needed) Python venv live. On Railway that is `/data/tarsee/data/tts/phonon`, on the volume. |
-| `TARSEE_PHONON_PYTHON` | No | `python3` | Python interpreter with the `ptts` package for Phonon's worker. Without it Tarsee uses `python3`, or a private venv it creates under `TARSEE_PHONON_DIR` when `python3` lacks `ptts`. |
+| `TARSEE_PHONON_PYTHON` | No | `python3` | Python interpreter with the `ptts` package for Phonon's worker. Without it Tarsee uses `python3`, or a private venv it creates under `TARSEE_PHONON_DIR` when `python3` lacks `ptts` (made from the same Python as speech-to-text: one found on the computer, or Tarsee's own). |
+| `TARSEE_STT_PYTHON` | No | — | A Python with faster-whisper that you manage yourself, for speech-to-text. Without it Tarsee uses its own (Settings > Voice > Speech-to-text > Install faster-whisper, in `<state dir>/python`), or a Python on the computer that has faster-whisper (the Docker image's `python3`). |
+| `TARSEE_WHISPER_BUNDLED_DIR` | No | set by the Docker image | Where the image keeps the speech-to-text models it ships (`/opt/tarsee/whisper-models`, outside the volume). Downloaded models go to `<data dir>/whisper-models` (on Railway, `/data/tarsee/data/whisper-models`, on the volume). |
 | `TARSEE_PHONON_THREADS` | No | up to 4 | CPU threads for Phonon's worker. |
 | `TARSEE_CHANNEL_IDLE_ABORT_MS` | No | `1200000` (20 min) | Abandon a turn after this long with no stream event. Keep finite. |
 | `TARSEE_COMPACT_WINDOW` | No | `180000` | Context size (tokens) at which Claude Code summarizes the older part of a chat and carries on. Every model call re-reads the whole context, so a smaller window means fewer cached tokens per call (measured: about a quarter fewer than at 300k). Accepts `250000`, `150k`, or `off` for the CLI's own (the model's full window); the CLI holds it to 100k–1M. A `CLAUDE_CODE_AUTO_COMPACT_WINDOW` you set yourself is kept when this is unset. The context meter and Token Health measure against this window. |
@@ -517,7 +521,10 @@ src/
     whatsapp.js, slack.js      # (slack-app-manifest.yml: the Slack app)
     websocket.js               # Web UI real-time + cross-device sync
   voice/
-    stt-handler.js             # faster-whisper STT
+    stt-handler.js             # Speech-to-text: faster-whisper worker (stt_worker.py), or the OpenAI Whisper API
+    stt-install.js             # Settings > Voice > Speech-to-text: status, Install faster-whisper, model downloads
+    whisper-models.js          # The pinned Systran models (sizes, hashes); downloads and deletes them
+    python-runtime.js          # Finds a Python, or downloads a standalone one, for faster-whisper and Phonon
     phonon-engine.js           # Default TTS: local Phonon model, warm Python worker
     phonon-install.js          # Downloads Phonon (pinned, sha256-checked) to the volume
     engine-registry.js         # Picks the engine; Edge TTS backs Phonon up

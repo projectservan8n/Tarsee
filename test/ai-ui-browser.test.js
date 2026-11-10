@@ -171,6 +171,25 @@ function fakeApi({ needsSetup = true, needsPersonality = false, active = "claude
       return json(200, { ok: true });
     }
     if (p === "/api/skills") return json(200, { skills: [{ name: "weather", description: "Weather" }] });
+    // Settings → Voice → Speech-to-text (routes/voice.js), when a test gives it a status (state.stt).
+    if (state.stt && p === "/api/voice/stt" && method === "GET") return json(200, state.stt);
+    if (state.stt && p === "/api/voice/stt/install" && method === "POST") {
+      state.stt.job = { kind: "install", model: null, phase: "packages", step: "Downloading faster-whisper's parts: ctranslate2 (19.4 MB)", percent: 42, startedAt: "now" };
+      state.stt.runtime = { ...state.stt.runtime, state: "installing", canInstall: false, summary: "Installing faster-whisper…" };
+      return json(202, { job: state.stt.job });
+    }
+    if (state.stt && p.startsWith("/api/voice/stt/models/") && method === "POST") {
+      const name = decodeURIComponent(p.split("/")[5]);
+      state.stt.job = { kind: "model", model: name, phase: "model", step: `Downloading ${name}`, percent: 30, startedAt: "now" };
+      state.stt.models = state.stt.models.map((m) => (m.name === name ? { ...m, state: "downloading", percent: 30 } : m));
+      return json(202, { job: state.stt.job });
+    }
+    if (state.stt && p.startsWith("/api/voice/stt/models/") && method === "DELETE") {
+      const name = decodeURIComponent(p.split("/")[5]);
+      state.stt.models = state.stt.models.map((m) => (m.name === name ? { ...m, state: "missing", downloaded: false, deletable: false, where: null } : m));
+      return json(200, { removed: [`/data/tarsee/data/whisper-models/${name}`], kept: null });
+    }
+    if (p === "/api/voice/stt-model" && method === "POST") return json(200, { ok: true, model: body?.model, downloading: false });
     if (p === "/api/ai/providers") return json(200, providers());
     if (p === "/api/chat/models") return json(200, chatModels());
     if (p.startsWith("/api/ai/models/")) return json(200, { provider: id, models: MODELS[id] || [], defaultModel: state.cards[id]?.model, note: state.notes[id] ?? null });
@@ -1132,7 +1151,7 @@ describe("the pages in a browser: what they show and save", { skip }, () => {
 
       // Save with the box left empty: the provider and model only; the key is left as it is.
       await page.locator("#saveSTTBtn").click();
-      await page.getByText(/STT: whisper-api/).waitFor();
+      await page.getByText(/Speech-to-text saved: OpenAI Whisper API/).waitFor();
       const keyWrites = () => api.calls.filter((c) => (c.path === "/api/settings/general" && /api_key|apiKey/i.test(String(c.body?.key))) || c.path.startsWith("/api/ai/keys/"));
       assert.deepEqual(keyWrites(), [], "no key written");
       assert.deepEqual(api.calls.filter((c) => c.path === "/api/settings/general").map((c) => c.body), [{ key: "voice.stt_provider", value: "whisper-api" }]);
@@ -1150,6 +1169,119 @@ describe("the pages in a browser: what they show and save", { skip }, () => {
       await page.locator("#saveSTTBtn").click();
       await page.getByText("That isn't a DeepSeek key.").waitFor();
       assert.equal(await keyBox.inputValue(), "not-a-key");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("Settings → Voice → Speech-to-text: faster-whisper's status, Install with progress, and a row per model with Download and Delete", async () => {
+    const { page, api, errors, context } = await openPage({ needsSetup: false });
+    try {
+      const model = (name, size, over = {}) => ({
+        name, description: `${name.endsWith(".en") ? "English only." : "Many languages, found by itself."} Test.`, english: name.endsWith(".en"),
+        multilingual: !name.endsWith(".en"), bytes: 1, size, sizeMB: 1, state: "missing", downloaded: false, where: null, deletable: false,
+        current: false, percent: null, error: null, ...over,
+      });
+      api.state.stt = {
+        provider: "local",
+        current: "base.en",
+        runtime: {
+          state: "not-installed", ready: false, fasterWhisper: null, python: null, source: null, where: null,
+          summary: "Not installed, and there is no Python on this computer. Install downloads Tarsee's own copy of Python (about 47 MB) and faster-whisper (about 120 MB) into Tarsee's folder.",
+          installFolder: "C:\\Users\\someone\\.tarsee\\python", needsPythonDownload: true, canInstall: true, downloadMB: 167, error: null,
+        },
+        models: [
+          model("tiny.en", "78 MB"),
+          model("base.en", "148 MB", { current: true }),
+          model("small.en", "486 MB", { state: "downloaded", downloaded: true, deletable: true, where: "C:\\Users\\someone\\.tarsee\\data\\whisper-models\\small.en" }),
+          model("tiny", "78 MB", { state: "failed", error: "model.bin does not match its published sha256" }),
+          model("base", "148 MB"),
+          model("small", "486 MB"),
+        ],
+        modelsDir: "C:\\Users\\someone\\.tarsee\\data\\whisper-models",
+        job: null,
+      };
+      await page.locator("#aiHeaderChip:not([hidden])").waitFor();
+      await page.evaluate(() => Settings.open());
+      await page.locator('.settings-tab[data-tab="voice"]').click();
+      await page.locator("#sttRuntimeStatus", { hasText: "Not installed" }).waitFor();
+      assert.equal(await page.locator("#openaiKeyGroup").isVisible(), false, "the OpenAI key box is for the OpenAI Whisper API only");
+      const install = page.getByRole("button", { name: "Install faster-whisper" });
+      assert.ok(await install.isVisible());
+      assert.match(await page.locator("#sttInstallHint").textContent(), /about 167 MB \(Python and faster-whisper\)/);
+
+      // A row per model, in plain words: its size, whether it is there, and where.
+      const rows = page.locator(".stt-model-row");
+      assert.equal(await rows.count(), 6);
+      const small = rows.filter({ hasText: "small.en" });
+      assert.match(await small.textContent(), /486 MB/);
+      assert.match(await small.textContent(), /Downloaded/);
+      assert.match(await small.textContent(), /whisper-models\\small\.en/, "where it is");
+      assert.ok(await small.getByRole("button", { name: /Delete small\.en/ }).isVisible());
+      assert.match(await rows.filter({ hasText: "tiny" }).filter({ hasNotText: "tiny.en" }).textContent(), /Download failed: model\.bin does not match/);
+      assert.ok(await page.locator('input[name="sttModel"][value="base.en"]').isChecked(), "the model in use is picked");
+      assert.match(await page.locator("#sttModelsWhere").textContent(), /kept in C:\\Users\\someone/);
+      assert.doesNotMatch(await page.locator("#sttSection").textContent(), /venv|pip install|hf_cache|STT Provider|not downloaded ·/, "no jargon, no run-on line");
+      await page.locator("#sttLocalGroup").scrollIntoViewIfNeeded();
+      await shot(page, "voice-stt-not-installed");
+
+      // Install: progress while it runs, nothing else can start, then ready.
+      await install.click();
+      await page.locator("#sttInstallProgress:not([hidden])").waitFor();
+      assert.equal(api.calls.filter((c) => c.path === "/api/voice/stt/install").length, 1);
+      await page.locator("#sttInstallHint", { hasText: "ctranslate2" }).waitFor();
+      assert.equal(await install.isVisible(), false, "no second install while one runs");
+      assert.equal(await rows.first().getByRole("button", { name: /Download/ }).isDisabled(), true, "one job at a time");
+      await shot(page, "voice-stt-installing");
+      api.state.stt.job = null;
+      api.state.stt.runtime = { ...api.state.stt.runtime, state: "ready", ready: true, canInstall: false, summary: "Ready: faster-whisper 1.2.1 on Python 3.12.16 (Tarsee's own copy, in C:\\Users\\someone\\.tarsee\\python\\stt-venv)." };
+      api.state.stt.models = api.state.stt.models.map((m) => (m.name === "base.en" ? { ...m, state: "downloaded", downloaded: true, deletable: true, where: "C:\\x\\base.en" } : m));
+      await page.locator("#sttRuntimeStatus", { hasText: "Ready: faster-whisper 1.2.1" }).waitFor({ timeout: 5000 });
+      await page.getByText("Speech-to-text is ready.").waitFor();
+      assert.equal(await page.locator("#sttInstallProgress").isVisible(), false);
+
+      // A model's Download, and Delete after a question.
+      await rows.filter({ hasText: "tiny.en" }).getByRole("button", { name: /Download tiny\.en/ }).click();
+      await rows.filter({ hasText: "tiny.en" }).getByText(/Downloading… 30%/).waitFor();
+      api.state.stt.job = null;
+      await small.getByRole("button", { name: /Delete small\.en/ }).click();
+      await answerDialog(page, "Delete");
+      await page.getByText("Deleted small.en.").waitFor();
+      assert.ok(api.calls.some((c) => c.method === "DELETE" && c.path === "/api/voice/stt/models/small.en"));
+      await small.getByText("Not downloaded").waitFor();
+
+      // Another model picked and saved: its name goes to the model route.
+      await page.locator('input[name="sttModel"][value="small"]').check();
+      await page.locator("#saveSTTBtn").click();
+      await page.getByText(/Speech-to-text saved: faster-whisper on this server, small/).waitFor();
+      assert.deepEqual(api.calls.filter((c) => c.path === "/api/voice/stt-model").map((c) => c.body), [{ model: "small" }]);
+      assert.ok(await noSideScroll(page));
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("Settings → Voice → Speech-to-text at phone width: the rows fit, nothing scrolls sideways", async () => {
+    const { page, api, errors, context } = await openPage({ needsSetup: false, width: 375, height: 800 });
+    try {
+      api.state.stt = {
+        provider: "local", current: "base.en", job: null, modelsDir: "/data/tarsee/data/whisper-models",
+        runtime: { state: "ready", ready: true, canInstall: false, summary: "Ready: faster-whisper 1.2.1 on Python 3.11.2 (/usr/bin/python3).", installFolder: "/data/tarsee/python", downloadMB: 120 },
+        models: ["tiny.en", "base.en", "small.en", "tiny", "base", "small"].map((name) => ({
+          name, description: "A model.", size: "148 MB", state: name === "base.en" ? "image" : "missing", downloaded: name === "base.en",
+          where: name === "base.en" ? "/opt/tarsee/whisper-models/base.en" : null, deletable: false, current: name === "base.en",
+        })),
+      };
+      await page.locator("#aiHeaderChip:not([hidden])").waitFor();
+      await page.evaluate(() => Settings.open());
+      await page.locator('.settings-tab[data-tab="voice"]').click();
+      await page.locator(".stt-model-row", { hasText: "Comes with Tarsee" }).waitFor();
+      assert.equal(await page.locator(".stt-model-row", { hasText: "base.en" }).getByRole("button", { name: /Delete/ }).count(), 0, "the image's model can't be deleted");
+      await page.locator("#sttModelList").scrollIntoViewIfNeeded();
+      await shot(page, "voice-stt-phone");
+      assert.ok(await noSideScroll(page), "no sideways scroll at phone width");
       assert.deepEqual(errors, []);
     } finally {
       await context.close();
