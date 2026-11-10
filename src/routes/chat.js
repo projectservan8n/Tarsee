@@ -80,6 +80,9 @@ function contextWindowFor(provider, model) {
 // though they don't bill at the same rate as fresh input.
 function promptTokensFromUsage(u) {
   if (!u) return 0;
+  // The engines' usage sums every call of the turn, so a turn of tool steps counts its prompt again and again: the
+  // last call's prompt (context_input_tokens, when the engine knows it) is how full the context really is.
+  if (Number(u.context_input_tokens) > 0) return Number(u.context_input_tokens);
   return (u.input_tokens || 0)
     + (u.cache_read_input_tokens || 0)
     + (u.cache_creation_input_tokens || 0);

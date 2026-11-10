@@ -1478,6 +1478,26 @@ describe("nothing goes to an AI until the owner sends it", { skip }, () => {
   });
 });
 
+describe("the context meter under the message box", { skip }, () => {
+  it("fills from the turn's done event, with the last call's prompt when the engine knows it, not the calls summed", async () => {
+    const { page, errors, context } = await openPage({ needsSetup: false, ready: ["claude"] });
+    try {
+      await page.locator("#messageInput").waitFor();
+      const meter = (usage) => page.evaluate((u) => {
+        Chat.handleTurnDone({ contextTokens: 32768, usage: u });
+        return { label: document.getElementById("contextLabel").textContent, hidden: document.getElementById("contextMeter").hidden };
+      }, usage);
+      // A tool-using turn on a 32K model: its three calls summed are 90,000 tokens, its last call 12,000.
+      assert.deepEqual(await meter({ input_tokens: 90000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, context_input_tokens: 12000 }), { label: "37%", hidden: false });
+      // An engine that can't tell: the usage as before (here, full).
+      assert.equal((await meter({ input_tokens: 40000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })).label, "100%");
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  });
+});
+
 // Each AI has its own color (tokens.css --ai-*), one per account that pays: the Claude plan and an Anthropic key run
 // the same models but must never look alike.
 describe("each AI looks like itself: its own color, and how it is paid for", { skip }, () => {

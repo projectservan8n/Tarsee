@@ -559,6 +559,20 @@ describe("run(): cost and the turn budget", () => {
     assert.equal(events.find((e) => e.type === "usage").costExact, undefined, "a price-table estimate");
   });
 
+  it("usage says how full the context is: the last call's prompt, not the turn's calls summed (a subagent's left out)", async () => {
+    const sub = (id, usage) => ({ ...msgStart(id, usage), parent_tool_use_id: "toolu_sub" });
+    const q = fakeQuery([init("ANTHROPIC_API_KEY"),
+      msgStart("m1", { input_tokens: 1000, cache_read_input_tokens: 20000 }), msgDelta({ output_tokens: 40 }),
+      sub("s1", { input_tokens: 90000 }),
+      msgStart("m2", { input_tokens: 500, cache_read_input_tokens: 21000, cache_creation_input_tokens: 300 }), msgDelta({ output_tokens: 60 }),
+      result({ usage: { input_tokens: 1500, output_tokens: 100, cache_read_input_tokens: 41000, cache_creation_input_tokens: 300 } })]);
+    const usage = (await collect(runOpts("anthropic", q))).find((e) => e.type === "usage").usage;
+    assert.equal(usage.context_input_tokens, 21800, "the last top-level call: 500 + 21000 + 300");
+    assert.equal(usage.cache_read_input_tokens, 41000, "the billed totals are unchanged");
+    const none = fakeQuery([init("ANTHROPIC_API_KEY"), result()]);
+    assert.equal((await collect(runOpts("anthropic", none))).find((e) => e.type === "usage").usage.context_input_tokens, undefined, "no call seen: not guessed");
+  });
+
   it("OpenRouter: its own streamed usage.cost, summed over the turn", async () => {
     const q = fakeQuery([init(), msgStart("m1", { input_tokens: 5 }), msgDelta({ output_tokens: 3, cost: 0.002 }), msgStart("m2", { input_tokens: 5 }), msgDelta({ output_tokens: 3, cost: 0.0035 }), result({ total_cost_usd: 99 })]);
     const events = await collect(runOpts("openrouter", q));

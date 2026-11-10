@@ -537,6 +537,7 @@ export async function* run(opts = {}) {
   const bareModel = bare(queryOptions.model);
   let reportedCost = 0;        // OpenRouter's usage.cost, summed over the turn's calls
   let reportedAny = false;
+  let lastCallPrompt = 0;      // the last top-level call's prompt: how full the context is (the turn's usage sums calls)
   let lastSession = null;
   const report = (sid) => {
     if (!sid || sid === lastSession) return;
@@ -561,6 +562,12 @@ export async function* run(opts = {}) {
         const raw = message.event.usage?.cost;
         const c = Number(raw);
         if (raw != null && Number.isFinite(c) && c >= 0) { reportedCost += c; reportedAny = true; }
+      }
+      // Each top-level call's prompt, from its message_start (a subagent's calls are its own context, not this one's).
+      if (message.type === "stream_event" && !message.parent_tool_use_id && message.event?.type === "message_start") {
+        const u = message.event.message?.usage;
+        const n = (Number(u?.input_tokens) || 0) + (Number(u?.cache_read_input_tokens) || 0) + (Number(u?.cache_creation_input_tokens) || 0);
+        if (n > 0) lastCallPrompt = n;
       }
 
       // R6: the CLI says which credential it will use before it sends anything.
@@ -664,6 +671,8 @@ export async function* run(opts = {}) {
             output_tokens: message.usage.output_tokens || 0,
             cache_read_input_tokens: message.usage.cache_read_input_tokens || 0,
             cache_creation_input_tokens: message.usage.cache_creation_input_tokens || 0,
+            // How full the context is (routes/chat.js's 95% check, the page's meter): the last call, not the sum.
+            ...(lastCallPrompt > 0 ? { context_input_tokens: lastCallPrompt } : {}),
           } : null;
           const costUsd = turnCost(built.cost, entry.id, message, { reportedAny, reportedCost, store });
           // costExact: the provider's own figure (the Anthropic key's total, OpenRouter's usage.cost), not a price-table

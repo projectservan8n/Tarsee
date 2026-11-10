@@ -439,6 +439,8 @@ const Chat = {
   // count against the context window even though they price differently.
   promptTokensFromUsage(u) {
     if (!u) return 0;
+    // The last call's prompt when the engine knows it: a turn's usage sums its calls (routes/chat.js does the same).
+    if (Number(u.context_input_tokens) > 0) return Number(u.context_input_tokens);
     return (u.input_tokens || 0)
       + (u.cache_read_input_tokens || 0)
       + (u.cache_creation_input_tokens || 0);
@@ -2029,6 +2031,8 @@ const Chat = {
     // Combine with the stashed usage and finalize the meter for this turn.
     if (data?.contextTokens) {
       this._lastContextTokens = data.contextTokens;
+      // The done event carries the turn's usage: this turn's, never a figure left from the turn before.
+      if (data.usage) this._lastUsage = { ...data.usage };
       if (this._lastUsage) {
         this.applyContextMeter(this.promptTokensFromUsage(this._lastUsage), this._lastContextTokens);
       }

@@ -996,6 +996,21 @@ describe("the web chat route (routes/chat.js) through the router", () => {
     return { event: ev, data: data ? JSON.parse(data) : null };
   });
 
+  it("the 95% context check measures the last call's prompt when the engine says it, not the turn's calls summed", async () => {
+    const send = async (usage) => {
+      useEngines({ claude: [[{ type: "text", content: "ok" }, { type: "usage", usage }, { type: "done", stopReason: "end_turn" }]] });
+      const res = await fetch(`${base}/send`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId: newChat("web"), message: "hi" }) });
+      return sse(await res.text()).find((e) => e.event === "done").data;
+    };
+    // A tool-using turn: its calls summed are far past the window, but its last call filled a small part of it.
+    const summed = { input_tokens: 5_000_000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    const small = await send({ ...summed, context_input_tokens: 40_000 });
+    assert.equal(small.checkpointed, false, "no overflow snapshot for a context that isn't full");
+    assert.equal(small.usage.context_input_tokens, 40_000, "the page gets the same figure for its meter");
+    // An engine that can't tell: measured as before, so a really full context is still caught.
+    assert.equal((await send(summed)).checkpointed, true);
+  });
+
   it("streams SSE as before and persists the reply, with the provider and model that ran", async () => {
     useEngines({ claude: [[
       { type: "session", id: "web-raw-1" },

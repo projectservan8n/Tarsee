@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import {
-  run, acquireDeviceGate, refreshStale, sweepTurnProcesses, findRollout, rolloutUsageTotal, pruneCodexRollouts,
+  run, acquireDeviceGate, refreshStale, sweepTurnProcesses, findRollout, rolloutUsageTotal, rolloutLastCallInput, pruneCodexRollouts,
   withTurnContext, instructionsHash, REFRESH_STALE_MS,
 } from "../src/ai/providers/codex.js";
 import { codexConfigGuard } from "../src/ai/engine-env.js";
@@ -270,6 +270,13 @@ describe("a turn's set-up (scripted Codex)", () => {
     const resumed = fakeCodex(cumulative);
     const out = await collect(run(unitOpts(dirs, { Codex: resumed.Codex, store, extra: { sessionHandle: `openai/cx/openai:${thread}` } })));
     assert.deepEqual(of(out, "usage")[0].usage, { input_tokens: 600, cache_read_input_tokens: 900, cache_creation_input_tokens: 0, output_tokens: 20 });
+    // How full the context is: the rollout's last call (its last_token_usage), not the turn's calls summed.
+    fs.appendFileSync(file, JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: total, last_token_usage: { input_tokens: 21000, cached_input_tokens: 20000, output_tokens: 15 } } } }) + "\n");
+    assert.equal(rolloutLastCallInput(file), 21000);
+    const again = fakeCodex(cumulative);
+    const out2 = await collect(run(unitOpts(dirs, { Codex: again.Codex, store, extra: { sessionHandle: `openai/cx/openai:${thread}` } })));
+    assert.equal(of(out2, "usage")[0].usage.context_input_tokens, 21000);
+    assert.equal(rolloutLastCallInput(path.join(dirs.state, "no-such-rollout.jsonl")), null, "no rollout: not guessed");
     // Past the cap (TARSEE_SESSION_JSONL_MAX_MB): fresh, before anything runs.
     fs.appendFileSync(file, "x".repeat(1024 * 1024 + 10) + "\n");
     const capped = fakeCodex(simpleTurn);
@@ -1294,8 +1301,8 @@ describe("the real codex binary against the fake server", { skip: CODEX_THERE ? 
     const second = fake.responses()[1].body;
     assert.ok(messageTexts(second, "user").some((t) => t.includes("first question")), "the first turn is in the thread");
     assert.ok(messageTexts(second, "assistant").some((t) => t.includes("First answer.")) || JSON.stringify(second.input).includes("First answer."));
-    assert.deepEqual(of(out1, "usage")[0].usage, { input_tokens: 900, cache_read_input_tokens: 100, cache_creation_input_tokens: 0, output_tokens: 10 });
-    assert.deepEqual(of(out2, "usage")[0].usage, { input_tokens: 600, cache_read_input_tokens: 900, cache_creation_input_tokens: 0, output_tokens: 20 });
+    assert.deepEqual(of(out1, "usage")[0].usage, { input_tokens: 900, cache_read_input_tokens: 100, cache_creation_input_tokens: 0, output_tokens: 10, context_input_tokens: 1000 });
+    assert.deepEqual(of(out2, "usage")[0].usage, { input_tokens: 600, cache_read_input_tokens: 900, cache_creation_input_tokens: 0, output_tokens: 20, context_input_tokens: 1500 });
   });
 
   it("Stop after three model calls: their usage is counted (from the rollout), and the next turn counts only its own", async () => {
@@ -1310,11 +1317,11 @@ describe("the real codex binary against the fake server", { skip: CODEX_THERE ? 
     const out1 = await collect(one.iter);
     clearInterval(watcher);
     assert.deepEqual(of(out1, "done"), [{ type: "done", stopReason: "aborted" }]);
-    assert.deepEqual(of(out1, "usage").map((u) => u.usage), [{ input_tokens: 30_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1500 }]);
+    assert.deepEqual(of(out1, "usage").map((u) => u.usage), [{ input_tokens: 30_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1500, context_input_tokens: 10_000 }], "billed: the three calls; the context: the last call alone");
     handler = () => ({ text: "Carried on.", usage: { input_tokens: 40_000, cached_input_tokens: 0, output_tokens: 1600 } });
     const out2 = await collect(turn("openrouter", { store, conv: "conv-stop-usage", sessionHandle: one.handles[0] }).iter);
     assert.deepEqual(of(out2, "done"), [{ type: "done", stopReason: "end_turn" }]);
-    assert.deepEqual(of(out2, "usage").map((u) => u.usage), [{ input_tokens: 40_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1600 }], "nothing counted twice");
+    assert.deepEqual(of(out2, "usage").map((u) => u.usage), [{ input_tokens: 40_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1600, context_input_tokens: 40_000 }], "nothing counted twice");
   });
 
   it("a resumed thread keeps the instructions it started with, so changed ones start fresh; a thread Codex can't find is recoverable", async () => {
@@ -1370,7 +1377,8 @@ describe("the real codex binary against the fake server", { skip: CODEX_THERE ? 
       const after = lines.slice(lines.findLastIndex((l) => l.includes("total_token_usage")) + 1).join("\n");
       assert.ok(Buffer.byteLength(after) > 1024 * 1024, `${Buffer.byteLength(after)} bytes after the last total`);
     };
-    const own = (input, output) => [{ input_tokens: input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: output }];
+    // One call a turn: its prompt is how full the context is.
+    const own = (input, output) => [{ input_tokens: input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: output, context_input_tokens: input }];
 
     handler = once({ text: "First answer.", usage: { input_tokens: 10_000, cached_input_tokens: 0, output_tokens: 100 } });
     const one = turn("openrouter", { store, conv });
