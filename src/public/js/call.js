@@ -766,14 +766,20 @@ const Call = {
         this.loadSettings();
       }
     });
+    // Loaded when the Voice tab is shown: when it becomes the tab, or when Settings opens on it.
     const panel = document.querySelector('.settings-tab-panel[data-tab="voice"]');
+    const page = document.getElementById("settingsPage");
     if (panel && typeof MutationObserver !== "undefined") {
-      let wasActive = panel.classList.contains("active");
-      new MutationObserver(() => {
-        const active = panel.classList.contains("active");
-        if (active && !wasActive) this.loadSettings();
-        wasActive = active;
-      }).observe(panel, { attributes: true, attributeFilter: ["class"] });
+      const showing = () => panel.classList.contains("active") && (!page || page.classList.contains("open"));
+      let was = showing();
+      const check = () => {
+        const now = showing();
+        if (now && !was) this.loadSettings();
+        was = now;
+      };
+      const watch = new MutationObserver(check);
+      watch.observe(panel, { attributes: true, attributeFilter: ["class"] });
+      if (page) watch.observe(page, { attributes: true, attributeFilter: ["class"] });
     }
   },
 

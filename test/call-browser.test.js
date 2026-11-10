@@ -507,6 +507,14 @@ describe("a voice call in the browser", { skip }, () => {
       assert.ok(await until(() => api.calls.some((c) => c.method === "PUT" && c.path === "/api/call/settings")));
       assert.deepEqual(api.calls.find((c) => c.method === "PUT" && c.path === "/api/call/settings").body, { channel: "telegram" });
       assert.ok(await noSideScroll(page));
+      // Settings opened again on the Voice tab: the list is read again (a channel may have connected meanwhile).
+      const reads = () => api.calls.filter((c) => c.method === "GET" && c.path === "/api/call/settings").length;
+      const before = reads();
+      await page.evaluate(() => Settings.close());
+      await page.waitForTimeout(100);
+      await page.evaluate(() => Settings.open());
+      assert.ok(await until(() => reads() > before, 3000), "read again on reopening");
+      assert.equal(await select.inputValue(), "telegram", "showing what was saved");
       assert.deepEqual(errors, []);
     } finally {
       await context.close();

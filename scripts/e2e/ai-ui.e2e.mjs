@@ -761,7 +761,7 @@ await step("Settings > AI: Claude plan signs in (placeholder sign-in file), Use 
   check(p.active.provider === "claude" && String(p.active.model || "").toLowerCase().includes(String(pick.v).toLowerCase().replace(/\[1m\]$/, "")), "Settings: the chosen model is saved with the default", { file: "src/routes/ai.js", evidence: JSON.stringify({ chosen: pick.v, active: p.active }) });
   await page.locator("#aiHeaderChip:not([hidden])").waitFor();
   const chipText = await page.locator("#aiHeaderChipText").innerText();
-  check(/^Claude plan/.test(chipText.trim()), "header chip: names the new default", { file: SET, evidence: chipText });
+  check(/^(Default: )?Claude plan/.test(chipText.trim()), "header chip: names the new default", { file: SET, evidence: chipText });
   check((await page.locator("#aiHeaderChip .channel-dot").getAttribute("data-tone")) === "ok", "header chip: green dot when ready", { file: SET });
   await shot(page, "12-settings-claude-default-1280");
   // The composer, right after the default changed: its button and its list.
@@ -869,7 +869,7 @@ await step("header chip opens Settings > AI; Security tab lists the server's too
   await page.locator('.settings-tab-panel[data-tab="ai"].active').waitFor({ timeout: 10_000 });
   check(true, "header chip: opens Settings > AI");
   const chipText = (await page.locator("#aiHeaderChipText").innerText()).trim();
-  check(/^Local AI · e2e-local-model$/.test(chipText), "header chip: the default AI and its model", { file: SET, evidence: chipText });
+  check(/^(Default: )?Local AI · e2e-local-model$/.test(chipText), "header chip: the default AI and its model", { file: SET, evidence: chipText });
   await page.locator('.settings-tab[data-tab="security"]').click();
   await page.locator(".tool-perm-row").first().waitFor({ timeout: 20_000 });
   const server = await (await desk.request.get(`${ORIGIN}/api/admin/tool-registry`)).json();
@@ -914,33 +914,37 @@ await step("the call: Call <name> in the topbar, the real /api/call behind sign-
   check(await page.locator("#voiceModeBtn, #voicePanel, #voiceOrb").count() === 0, "voice mode's button and full-screen orb are gone", { file: "src/public/index.html" });
   const started = await page.evaluate(() => API.json("/api/call/start", { method: "POST", body: {} }).catch((e) => ({ error: e.message })));
   check(started.title === "Calls with Tarsee" && !!started.conversationId, "POST /api/call/start makes the call's chat, Calls with Tarsee", { file: "src/routes/voice-call.js", evidence: JSON.stringify(started) });
-  const noCsrf = await page.evaluate(() => fetch("/api/call/start", { method: "POST", credentials: "same-origin" }).then((r) => r.status));
+  // (From here, not the page: a refused request would be a console error there.)
+  const noCsrf = (await desk.request.post(`${ORIGIN}/api/call/start`, { data: {} })).status();
   check(noCsrf === 403, "/api/call is behind the CSRF check", { file: "src/server.js", evidence: String(noCsrf) });
   const settings = await page.evaluate(() => API.json("/api/call/settings"));
   check(settings.channel === null, "Settings > Voice > Calls: Off by default", { file: "src/lib/voice-call.js", evidence: JSON.stringify(settings) });
   // This machine's speech-to-text through the real route: a short silent WAV.
-  const stt = await page.evaluate(async () => {
-    const view = new DataView(new ArrayBuffer(44 + 3200));
-    const str = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
-    str(0, "RIFF"); view.setUint32(4, 36 + 3200, true); str(8, "WAVE"); str(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true); view.setUint32(24, 16000, true); view.setUint32(28, 32000, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-    str(36, "data"); view.setUint32(40, 3200, true);
-    const r = await SpeechToText.transcribe(new Blob([view.buffer], { type: "audio/wav" }), "probe.wav");
-    return { r, explained: r.ok ? null : SpeechToText.explain(r) };
-  });
-  if (stt.r.ok) note(`speech-to-text is set up on this machine (it heard "${stt.r.text}")`);
-  else check(stt.r.kind === "not-set-up" && /faster-whisper/.test(stt.r.reason) && /isn't set up/.test(stt.explained.title), "no speech-to-text here: the real route's 501 and its reason reach the page", { file: "src/public/js/voice.js", evidence: JSON.stringify(stt) });
+  const wavProbe = Buffer.alloc(44 + 3200);
+  wavProbe.write("RIFF", 0); wavProbe.writeUInt32LE(36 + 3200, 4); wavProbe.write("WAVE", 8); wavProbe.write("fmt ", 12); wavProbe.writeUInt32LE(16, 16);
+  wavProbe.writeUInt16LE(1, 20); wavProbe.writeUInt16LE(1, 22); wavProbe.writeUInt32LE(16000, 24); wavProbe.writeUInt32LE(32000, 28); wavProbe.writeUInt16LE(2, 32);
+  wavProbe.writeUInt16LE(16, 34); wavProbe.write("data", 36); wavProbe.writeUInt32LE(3200, 40);
+  const csrf = (await desk.cookies()).find((c) => c.name === "tarsee_csrf")?.value || "";
+  const sttRes = await desk.request.post(`${ORIGIN}/api/voice/transcribe`, { headers: { "X-CSRF-Token": csrf }, multipart: { audio: { name: "probe.wav", mimeType: "audio/wav", buffer: wavProbe } } });
+  const sttBody = await sttRes.json().catch(() => ({}));
+  if (sttRes.ok()) note(`speech-to-text is set up on this machine (it heard "${sttBody.text}")`);
+  else {
+    const explained = await page.evaluate((r) => SpeechToText.explain(r, { call: { name: "Tarsee" } }), { ok: false, kind: sttRes.status() === 501 ? "not-set-up" : "failed", reason: sttBody.error });
+    check(sttRes.status() === 501 && /faster-whisper/.test(sttBody.error || "") && /isn't set up, so Tarsee can't hear you/.test(explained.title) && explained.settings,
+      "no speech-to-text here: the real route answers 501 with its reason, and the call says so with Settings → Voice", { file: "src/public/js/voice.js", evidence: JSON.stringify({ status: sttRes.status(), sttBody, explained }) });
+  }
   await page.evaluate(async () => { await Settings.open(); Settings.switchTab("voice"); });
   await page.waitForFunction(() => document.querySelectorAll("#callHandoffChannel option").length >= 1, null, { timeout: 10_000 });
   const opts = await page.locator("#callHandoffChannel option").allTextContents();
   check(opts[0] === "Off (it stays in the call's chat)", "Settings > Voice > Calls: Send the answer to, with Off", { file: "src/public/index.html", evidence: JSON.stringify(opts) });
   await shot(page, "18-settings-voice-calls-1280");
   await page.evaluate(() => Settings.close());
-  // No microphone in this browser: the call says so plainly instead of failing quietly.
+  // A microphone the browser refuses (as a phone does when it is denied): the call says so plainly.
+  await page.evaluate(() => { navigator.mediaDevices.getUserMedia = () => Promise.reject(Object.assign(new Error("Permission denied"), { name: "NotAllowedError" })); });
   await page.locator("#callBtn").click();
-  await page.waitForFunction(() => /icrophone|Couldn't start|Listening|Connecting/.test(document.getElementById("callStatus")?.textContent || ""), null, { timeout: 10_000 });
+  await page.waitForFunction(() => /icrophone/.test(document.getElementById("callStatus")?.textContent || ""), null, { timeout: 10_000 }).catch(() => {});
   const status = await page.locator("#callStatus").innerText();
-  check(/icrophone|Listening/.test(status), "the call window opens and says what it is doing (or why the microphone can't be used)", { file: CALL, evidence: status });
+  check(/Microphone access was blocked\. Allow it for this site/.test(status), "the call window opens and says why the microphone can't be used", { file: CALL, evidence: status });
   await shot(page, "19-call-window-1280");
   await page.evaluate(() => (Call.isOn() ? Call.end() : Call.close()));
   await page.evaluate(() => Call.close());
