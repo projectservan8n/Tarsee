@@ -34,6 +34,72 @@ const App = {
     this.showApp();
   },
 
+  /**
+   * POST /api/auth/login, as API.login does, but a refusal keeps its status and Retry-After (in seconds) on the error,
+   * which API.login leaves out: the sign-in screen holds a 429 on screen until it runs out (holdRefusal).
+   */
+  async signIn(password) {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+      credentials: "same-origin",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(data.error || "Login failed");
+      err.status = res.status;
+      err.retryAfter = Number(res.headers.get("Retry-After")) || 0;
+      throw err;
+    }
+    await API.loadApiToken();
+    return data;
+  },
+
+  /**
+   * Signing in refused for a while (429: this place's wait, the tries-a-minute limit, or the pause for everyone): the
+   * server's words and the time left stay on the sign-in screen, the desktop form's line and the PIN pad's, until the
+   * Retry-After runs out. Trying again before then is refused anyway, so the Sign In button and the PIN keys wait too.
+   */
+  holdRefusal(message, seconds) {
+    clearInterval(this._refusalTimer);
+    const until = Date.now() + Math.max(1, Number(seconds) || 30) * 1000;
+    this._refusedUntil = until;
+    const formLine = document.getElementById("loginError");
+    const pinLine = document.getElementById("pinError");
+    const waiting = (on) => {
+      const button = document.querySelector("#loginForm button[type='submit']");
+      if (button) button.disabled = on;
+      document.querySelectorAll(".pin-key[data-digit], #pinDelete").forEach((key) => { key.disabled = on; });
+    };
+    const tick = () => {
+      const left = Math.ceil((until - Date.now()) / 1000);
+      if (left <= 0) {
+        clearInterval(this._refusalTimer);
+        this._refusalTimer = null;
+        this._refusedUntil = 0;
+        if (formLine) { formLine.textContent = ""; formLine.style.display = "none"; }
+        if (pinLine) pinLine.textContent = "";
+        waiting(false);
+        return;
+      }
+      const h = Math.floor(left / 3600);
+      const m = Math.floor((left % 3600) / 60);
+      const s = String(left % 60).padStart(2, "0");
+      const text = `${message} (${h ? `${h}:${String(m).padStart(2, "0")}` : m}:${s} left)`;
+      if (formLine) { formLine.textContent = text; formLine.style.display = "block"; }
+      if (pinLine) pinLine.textContent = text;
+    };
+    waiting(true);
+    tick();
+    this._refusalTimer = setInterval(tick, 1000);
+  },
+
+  /** Whether signing in is refused for a while still (holdRefusal). */
+  refusalHeld() {
+    return Date.now() < (this._refusedUntil || 0);
+  },
+
   showLogin() {
     document.getElementById("loginScreen").style.display = "flex";
     document.getElementById("appScreen").style.display = "none";
@@ -50,6 +116,7 @@ const App = {
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
+      if (this.refusalHeld()) return;   // refused for a while: the line above says how long
       errorEl.style.display = "none";
 
       const password = document.getElementById("loginPassword").value;
@@ -62,16 +129,17 @@ const App = {
         submitBtn.textContent = "Signing in…";
       }
       try {
-        await API.login(password);
+        await this.signIn(password);
         this.afterLogin();
       } catch (err) {
-        errorEl.textContent = err.message;
-        errorEl.style.display = "block";
         if (submitBtn) {
-          submitBtn.disabled = false;
           submitBtn.removeAttribute("aria-busy");
           if (prevLabel) submitBtn.textContent = prevLabel;
         }
+        if (err?.status === 429) { this.holdRefusal(err.message, err.retryAfter); return; }
+        errorEl.textContent = err.message;
+        errorEl.style.display = "block";
+        if (submitBtn) submitBtn.disabled = false;
       }
     });
 
@@ -101,23 +169,29 @@ const App = {
       });
     };
 
-    const shakeAndClear = (msg) => {
-      pinError.textContent = msg || "Wrong PIN";
+    // keepMessage: a refusal for a while (holdRefusal) is on the line, counting down; it clears itself.
+    const shakeAndClear = (msg, { keepMessage = false } = {}) => {
+      if (!keepMessage) pinError.textContent = msg || "Wrong PIN";
       dots.forEach((d) => d.classList.add("error"));
       setTimeout(() => {
         pin = "";
         updateDots();
-        pinError.textContent = "";
+        if (!keepMessage && !this.refusalHeld()) pinError.textContent = "";
       }, 600);
     };
 
     const tryLogin = async () => {
       try {
-        await API.login(pin);
+        await this.signIn(pin);
         this.afterLogin();
       } catch (err) {
         // Say what actually happened: a rate limit or lockout is not a wrong PIN.
         const msg = String(err?.message || "");
+        if (err?.status === 429) {
+          this.holdRefusal(msg, err.retryAfter);
+          shakeAndClear(null, { keepMessage: true });
+          return;
+        }
         shakeAndClear(/too many|locked out|try again/i.test(msg) ? msg : "Wrong PIN");
       }
     };
@@ -125,7 +199,7 @@ const App = {
     // Key buttons
     document.querySelectorAll(".pin-key[data-digit]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        if (pin.length >= 4) return;
+        if (pin.length >= 4 || this.refusalHeld()) return;
         pin += btn.dataset.digit;
         updateDots();
         if (pin.length === 4) {

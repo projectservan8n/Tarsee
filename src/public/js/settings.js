@@ -591,6 +591,7 @@ const Settings = {
     if (tabName === "ai") { this.loadAi(); }
     if (tabName === "voice") { this.refreshAiHeader(); this.loadSTT({ refresh: true }); }   // (draws the OpenAI key's line, drawSttKey)
     if (tabName === "security") { this.loadToolPermissions(); }
+    if (tabName === "keys") { this.loadVaultKeys(); }
     if (tabName === "canvas") { this.loadCanvasGallery(); }
     if (tabName === "audit") { this.loadAuditLog(); }
     if (tabName === "health") { this.loadContextHealth(); }
@@ -2434,18 +2435,31 @@ const Settings = {
     e.emailImapHost.value = cfg.imap?.host || "";
     e.emailImapPort.value = cfg.imap?.port || "";
     e.emailImapUser.value = cfg.imap?.user || "";
-    // Passwords are never returned plaintext — show placeholder only if a pw exists server-side
-    e.emailImapPassword.value = "";
-    e.emailImapPassword.placeholder = cfg.imap?.hasPassword
-      ? "••••••••  (leave blank to keep existing)"
-      : "16-character app password (not your login password)";
     e.emailSmtpHost.value = cfg.smtp?.host || "";
     e.emailSmtpPort.value = cfg.smtp?.port || "";
     e.emailSmtpUser.value = cfg.smtp?.user || "";
-    e.emailSmtpPassword.value = "";
-    e.emailSmtpPassword.placeholder = cfg.smtp?.hasPassword
-      ? "••••••••  (leave blank to keep existing)"
-      : "16-character app password (not your login password)";
+    // Passwords are never returned plaintext. The server a saved one belongs to, as the server compares a save with it
+    // (routes/settings.js): a box's words say when a changed host, port or user needs the password typed again.
+    const savedServer = (s, port) => ({
+      host: String(s?.host || "").trim().toLowerCase(),
+      port: Number(s?.port) || port,
+      user: String(s?.user || "").trim(),
+      hasPassword: !!s?.hasPassword,
+    });
+    this._emailSaved = { imap: savedServer(cfg.imap, 993), smtp: savedServer(cfg.smtp, 465) };
+    for (const side of ["imap", "smtp"]) {
+      const { password } = this._emailBoxes(side);
+      password.value = "";
+      password.removeAttribute("aria-invalid");
+      if (!password.dataset.emailHint) {
+        password.dataset.emailHint = "1";
+        password.addEventListener("input", () => password.removeAttribute("aria-invalid"));
+        for (const box of Object.values(this._emailBoxes(side))) {
+          if (box !== password) box.addEventListener("input", () => this._emailPasswordHint(side));
+        }
+      }
+      this._emailPasswordHint(side);
+    }
 
     e.emailMentionKeyword.value = cfg.mentionKeyword || "@tarsee";
     e.emailReplyAllMarker.value = cfg.replyAllMarker || "[reply-all]";
@@ -2453,9 +2467,354 @@ const Settings = {
 
     const allow = cfg.allowlistFromAddresses;
     e.emailAllowlist.value = Array.isArray(allow) ? allow.join("\n") : (allow || "");
+    // What waits for the owner's OK, and who really sent a mail (with the one-time note, if mail was refused).
+    this.renderEmailWaiting(cfg);
+    this.renderEmailSenderCheck(cfg, settings.find((s) => s.key === "channel.email-sender-note")?.value);
 
     if (e.emailMentionHint) {
       e.emailMentionHint.textContent = e.emailMentionKeyword.value.trim() || "@tarsee";
+    }
+  },
+
+  /** One side's boxes in the email form: { host, port, user, password }. */
+  _emailBoxes(side) {
+    const e = this.elements;
+    return side === "imap"
+      ? { host: e.emailImapHost, port: e.emailImapPort, user: e.emailImapUser, password: e.emailImapPassword }
+      : { host: e.emailSmtpHost, port: e.emailSmtpPort, user: e.emailSmtpUser, password: e.emailSmtpPassword };
+  },
+
+  /**
+   * The password box's words for one side: keep the saved password, or type it again when the host, port or user now
+   * differs from the saved server (a saved password only goes to the server it was saved for), or a new one.
+   */
+  _emailPasswordHint(side) {
+    const saved = this._emailSaved?.[side];
+    const b = this._emailBoxes(side);
+    if (!saved || !b.password) return;
+    // As the server reads a save: an empty box keeps the saved value, and a host in another case is the same.
+    const host = b.host.value.trim().toLowerCase();
+    const port = Number(b.port.value) || (side === "imap" ? 993 : 465);
+    const user = b.user.value.trim();
+    const moved = (host && host !== saved.host) || port !== saved.port || (user && user !== saved.user);
+    b.password.placeholder = !saved.hasPassword
+      ? "16-character app password (not your login password)"
+      : moved
+        ? `Type the ${side.toUpperCase()} app password again: the server changed`
+        : "••••••••  (leave blank to keep existing)";
+  },
+
+  /**
+   * The card at the top of the email form while a change waits for the owner's OK (routes/settings.js): one the AI
+   * asked for in a chat (tarsee_configure_email_channel) or one sent with the API token, which would change who can
+   * reach Tarsee by email or where its mail goes. It shows each part as it is now and as it would be, and, when it
+   * turns email on, the mailbox and the list that would then be in force. Approve OKs the very change it shows
+   * (waitingId); Discard turns it down. None of it is in force until then, and the form shows what is.
+   */
+  renderEmailWaiting(cfg) {
+    const anchor = this.elements.emailEnabled?.closest(".form-group");
+    if (!anchor) return;
+    let card = anchor.parentElement?.querySelector("[data-email-waiting]");
+    if (!card) {
+      card = document.createElement("div");
+      card.dataset.emailWaiting = "";
+      card.className = "mb-3";
+      card.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-email-waiting-answer]");
+        if (btn) this.answerEmailWaiting(btn.dataset.emailWaitingAnswer, btn);
+      });
+      anchor.before(card);
+    }
+    const w = cfg?.waiting;
+    if (!w || typeof w !== "object" || typeof w.id !== "string") {
+      card.hidden = true;
+      card.innerHTML = "";
+      this._emailWaitingShown = null;
+      return;
+    }
+    this._emailWaitingShown = w.id;
+    const esc = (s) => this._esc(s);
+    const server = (s, port) => (s?.host ? `${s.host}:${Number(s.port) || port} as ${s.user || "(no user)"}` : "not set up");
+    const list = (l) => (Array.isArray(l) && l.length ? l.join("\n") : "any sender (the list is empty)");
+    const change = (what, now, next) => `<div class="cron-note"><strong>${esc(what)}</strong></div>`
+      + `<div class="cron-prompt">now:      ${esc(now)}\nwould be: ${esc(next)}</div>`;
+    const context = (what, now) => `<div class="cron-note"><strong>${esc(what)}</strong></div><div class="cron-prompt">${esc(now)}</div>`;
+    const parts = [];
+    if (w.enabled) parts.push(change("Email", "off", "on"));
+    if (w.imap) parts.push(change("IMAP: the mailbox Tarsee reads", server(cfg.imap, 993), server(w.imap, 993)));
+    else if (w.enabled) parts.push(context("IMAP: the mailbox Tarsee would read", server(cfg.imap, 993)));
+    if (w.smtp) parts.push(change("SMTP: where its replies go", server(cfg.smtp, 465), server(w.smtp, 465)));
+    else if (w.enabled) parts.push(context("SMTP: where its replies would go", server(cfg.smtp, 465)));
+    if (Array.isArray(w.allowlistFromAddresses)) parts.push(change("Who can reach Tarsee by email", list(cfg.allowlistFromAddresses), list(w.allowlistFromAddresses)));
+    else if (w.enabled) parts.push(context("Who could reach Tarsee by email", list(cfg.allowlistFromAddresses)));
+    // What Tarsee trusts to say who sent a mail never waits here: the owner sets it, signed in (routes/settings.js). A
+    // record an earlier version left with only that in it has nothing to OK, and the route won't approve it.
+    if (parts.length === 0) {
+      card.hidden = true;
+      card.innerHTML = "";
+      this._emailWaitingShown = null;
+      return;
+    }
+    const by = w.by === "token" ? "something using the API token (it may be the AI)" : "the AI, in a chat";
+    const when = Number.isNaN(Date.parse(w.since)) ? "" : ` on ${new Date(w.since).toLocaleString()}`;
+    card.hidden = false;
+    card.innerHTML = `<div class="memory-item cron-job" role="status">`
+      + `<span class="memory-badge cron-state cron-state-waiting">Waiting for your OK</span>`
+      + `<div class="memory-content">`
+      + `<div class="cron-when"><strong>Email changes waiting for your OK</strong></div>`
+      + `<div class="cron-note">Asked for by ${esc(by)}${esc(when)}. None of this is in force until you approve it: the form below shows what is.</div>`
+      + parts.join("")
+      + `</div>`
+      + `<span class="cron-actions">`
+      + `<button type="button" class="btn btn-sm btn-primary cron-toggle" data-email-waiting-answer="approve">Approve</button>`
+      + `<button type="button" class="btn btn-sm btn-secondary" data-email-waiting-answer="discard">Discard</button>`
+      + `</span></div>`;
+  },
+
+  /**
+   * Approve (the change the card showed) or Discard, then the card as it is now. Once approved, the parts of the form
+   * it changed show what is in force; the rest of the form may hold changes not saved yet, so it stays as it is.
+   */
+  async answerEmailWaiting(answer, btn) {
+    const body = answer === "approve"
+      ? { type: "email", waitingAnswer: "approve", waitingId: this._emailWaitingShown || "" }
+      : { type: "email", waitingAnswer: "discard" };
+    if (btn) btn.disabled = true;
+    let ok = false;
+    try {
+      const res = await API.request("/api/settings/channel", { method: "POST", body });
+      const data = await res.json().catch(() => ({}));
+      ok = res.ok;
+      if (ok) {
+        App.showToast(answer === "approve" ? "Approved: it's in force now." : "Discarded: nothing was changed.", "success");
+      } else {
+        App.showToast(data.error || `Nothing was changed (HTTP ${res.status})`, "error");
+        // The sign-in ran out and the page went on with the API token, which can't OK this: the sign-in screen.
+        if (data.needsSignIn) API.signInAgain(data.error);
+      }
+    } catch (err) {
+      App.showToast(err.message, "error");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+    // A change made after the card was drawn shows now, instead of being approved.
+    try {
+      const settings = (await API.getSettings()).settings;
+      const cfg = settings.find((s) => s.key === "channel.email")?.value || {};
+      if (ok && answer === "approve") this._emailShowInForce(cfg);
+      this.renderEmailWaiting(cfg);
+      this.renderEmailSenderCheck(cfg, settings.find((s) => s.key === "channel.email-sender-note")?.value);
+    } catch { /* keeps what is on screen */ }
+  },
+
+  /** The parts of the form an approval can change, as they are in force now. */
+  _emailShowInForce(cfg) {
+    const e = this.elements;
+    e.emailEnabled.checked = !!cfg.enabled;
+    for (const [side, port] of [["imap", 993], ["smtp", 465]]) {
+      const b = this._emailBoxes(side);
+      b.host.value = cfg[side]?.host || "";
+      b.port.value = cfg[side]?.port || "";
+      b.user.value = cfg[side]?.user || "";
+      this._emailSaved[side] = {
+        host: String(cfg[side]?.host || "").trim().toLowerCase(),
+        port: Number(cfg[side]?.port) || port,
+        user: String(cfg[side]?.user || "").trim(),
+        hasPassword: !!cfg[side]?.hasPassword,
+      };
+      this._emailPasswordHint(side);
+    }
+    e.emailAllowlist.value = (cfg.allowlistFromAddresses || []).join("\n");
+  },
+
+  /**
+   * The mail provider Tarsee knows for an IMAP host, by name, as src/channels/email.js mailProviderOf has them
+   * (test/email-channel-settings.test.js keeps the two lists the same), or null for a server of the owner's own.
+   */
+  _emailProviderOf(imapHost) {
+    const host = String(imapHost || "").trim().toLowerCase().replace(/\.$/, "");
+    const providers = [
+      ["Gmail", /^imap\.(gmail|googlemail)\.com$/],
+      ["Microsoft 365", /^(outlook\.office365\.com|outlook\.office\.com|imap-mail\.outlook\.com)$/],
+      ["iCloud", /^(p\d+-)?imap\.mail\.me\.com$/],
+      ["Fastmail", /^(imap\.fastmail\.com|mail\.messagingengine\.com)$/],
+      ["Yahoo", /^((export\.)?imap\.mail\.yahoo\.com|imap\.aol\.com)$/],
+      ["Zoho", /^imap(pro)?\.zoho\.(com|eu|in|com\.au|jp|com\.cn|sa|ca)$/],
+    ];
+    return providers.find(([, pattern]) => pattern.test(host))?.[0] ?? null;
+  },
+
+  /** Whether two mailboxes ({ host, user }) are the same one, as email.js sameMailbox reads them: host in any case, the same user. */
+  _emailSameMailbox(a, b) {
+    const host = (m) => String(m?.host || "").trim().toLowerCase();
+    const user = (m) => String(m?.user || "").trim();
+    return !!host(a) && !!user(a) && host(a) === host(b) && user(a) === user(b);
+  },
+
+  /** The IMAP mailbox a save would leave: the boxes, or the saved host or user where one is left empty (as the route reads it). */
+  _emailMailboxNow() {
+    const b = this._emailBoxes("imap");
+    const saved = this._emailSaved?.imap || {};
+    return { host: b.host.value.trim() || saved.host || "", user: b.user.value.trim() || saved.user || "" };
+  },
+
+  /**
+   * What the owner trusts to say who sent a mail, for the IMAP mailbox in force (email.js senderCheckFor): nothing when
+   * it was set for another mailbox (host or user), or for a provider Tarsee knows.
+   */
+  _emailSenderCheck(cfg) {
+    const s = cfg?.senderCheck || {};
+    const imap = { host: cfg?.imap?.host, user: cfg?.imap?.user };
+    if (this._emailProviderOf(imap.host) || !this._emailSameMailbox({ host: s.imapHost, user: s.imapUser }, imap)) {
+      return { trustFromLine: false, authservId: "" };
+    }
+    return { trustFromLine: s.trustFromLine === true, authservId: typeof s.authservId === "string" ? s.authservId : "" };
+  },
+
+  /** The "Who really sent it" block, once drawn. */
+  _emailSenderBlock() {
+    return this.elements.emailAllowlist?.closest(".form-group")?.parentElement?.querySelector("[data-email-sender-check]") || null;
+  },
+
+  /**
+   * "Who really sent it", under the allowlist: anyone can write any address on a From line, so Tarsee answers an
+   * address on the list only when the mail provider vouches for it (email.js senderVouched). For a provider Tarsee
+   * knows there is nothing to set. For a mail server of the owner's own: its name in its Authentication-Results line,
+   * typed by the owner, or, if it writes none, "trust the From line" (off unless the owner ticks it), with what that
+   * costs; one or the other. Both are for the exact mailbox they were set for (_emailSenderCheckFollow). Then the
+   * one-time note, if mail was refused for want of either: it never shows a name a mail wrote.
+   */
+  renderEmailSenderCheck(cfg, note) {
+    const allow = this.elements.emailAllowlist;
+    const group = allow?.closest(".form-group");
+    if (!group) return;
+    let block = this._emailSenderBlock();
+    if (!block) {
+      block = document.createElement("div");
+      block.dataset.emailSenderCheck = "";
+      block.innerHTML = `<h4 style="margin-top:18px; margin-bottom:8px;">Who really sent it</h4>`
+        + `<div class="hint mb-3">Anyone can write any address on a mail's From line. So Tarsee answers an address on your list only when your mail provider vouches that the mail really came from it: the provider's own Authentication-Results line must say DMARC, DKIM or SPF passed for that address. Gmail, iCloud, Fastmail, Yahoo, Zoho and Microsoft 365 do this, and Tarsee knows how they write it.</div>`
+        + `<div class="hint mb-3" data-email-sender-known hidden></div>`
+        + `<div data-email-sender-own>`
+        + `<div class="form-group">`
+        + `<label for="settingsEmailAuthservId">Your own mail server's name in its Authentication-Results line</label>`
+        + `<input type="text" id="settingsEmailAuthservId" placeholder="mail.example.com" autocomplete="off" spellcheck="false">`
+        + `<div class="hint">For a mail server of your own that writes this line on every mail it takes in. Type the name yourself, from your server's settings: Tarsee trusts only the topmost such line in a mail, and never a name taken from a mail, as anyone can write such a line into a mail they send.</div>`
+        + `</div><div class="form-group">`
+        + `<label class="checkbox-label"><input type="checkbox" id="settingsEmailTrustFromLine"><span>My mail server doesn't check senders: trust the From line</span></label>`
+        + `<div class="hint" style="color: var(--warning)">Only for a mail server of your own that adds no Authentication-Results line. With this on, anyone who writes an address from your list on the From line can talk to Tarsee by email.</div>`
+        + `</div></div>`
+        + `<div data-email-sender-note hidden></div>`;
+      block.addEventListener("click", (ev) => {
+        if (ev.target.closest("[data-email-sender-note-ok]")) this.dismissEmailSenderNote(ev.target.closest("button"));
+      });
+      group.after(block);
+      // Set by the owner now: for the mailbox the form shows now.
+      const setHere = () => {
+        this._emailTrustFor = this._emailMailboxNow();
+        this._emailSenderCheckFollow();
+      };
+      block.querySelector("#settingsEmailAuthservId").addEventListener("input", setHere);
+      block.querySelector("#settingsEmailTrustFromLine").addEventListener("change", setHere);
+      const imap = this._emailBoxes("imap");
+      for (const box of [imap.host, imap.user]) box?.addEventListener("input", () => this._emailSenderCheckFollow());
+    }
+    const own = this._emailSenderCheck(cfg);
+    block.querySelector("#settingsEmailAuthservId").value = own.authservId;
+    block.querySelector("#settingsEmailTrustFromLine").checked = own.trustFromLine;
+    // Drawn for the mailbox in force; the form's boxes may already show another (an edit not saved yet).
+    this._emailTrustFor = { host: String(cfg?.imap?.host || "").trim().toLowerCase(), user: String(cfg?.imap?.user || "").trim() };
+    this._emailSenderCheckFollow();
+
+    const box = block.querySelector("[data-email-sender-note]");
+    const fresh = note && typeof note === "object" && !note.dismissedAt && !own.trustFromLine
+      && this._emailSameMailbox({ host: note.host, user: note.user }, { host: cfg?.imap?.host, user: cfg?.imap?.user });
+    if (!fresh) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    const esc = (s) => this._esc(s);
+    const when = Number.isNaN(Date.parse(note.at)) ? "" : ` on ${new Date(note.at).toLocaleString()}`;
+    const onList = this._emailNoteFrom(note, cfg);
+    const from = onList ? ` that said it was from <strong>${esc(onList)}</strong>` : "";
+    // Nothing the mail wrote but its From address, and only one on the owner's list: a server name in it, or an
+    // address off the list, is the sender's to make up.
+    const why = note.provider
+      ? `${esc(note.provider)} wrote no Authentication-Results line on it that Tarsee could read, so nothing said who really sent it.`
+        + ` That happens with mail put in the mailbox some other way than ${esc(note.provider)} receiving it, such as an import, a filter or another app signed in to the mailbox. Tarsee won't answer such mail.`
+      : `your mail server (${esc(note.host)}) wrote no Authentication-Results line on top of it that Tarsee knows to trust, so nothing said who really sent it.`
+        + ` Tarsee trusts only a server name you type yourself, never one taken from a mail: anyone can write such a line into a mail they send.`
+        + ` To find your server's name, send this mailbox a mail from another account (Gmail, for example), open it here and show its source (Show original, or View source).`
+        + ` If your server checks senders, the topmost Authentication-Results line is its own, and its name is the word right after the colon: check it against your mail server's own settings (its authserv-id, often its host name), then type it above.`
+        + ` If there is no such line, your server doesn't check senders: tick "trust the From line" above, knowing that anyone who writes an address from your list on the From line can then talk to Tarsee.`
+        + ` Until then Tarsee won't answer such mail.`;
+    box.hidden = false;
+    box.innerHTML = `<div class="memory-item cron-job" role="status">`
+      + `<span class="memory-badge cron-state cron-state-waiting">Mail not answered</span>`
+      + `<div class="memory-content"><div class="cron-note">Tarsee didn't answer mail${from}${esc(when)}: ${why}</div></div>`
+      + `<span class="cron-actions"><button type="button" class="btn btn-sm btn-secondary" data-email-sender-note-ok>OK</button></span></div>`;
+  },
+
+  /**
+   * Keeps "Who really sent it" with the mailbox it was set for (_emailTrustFor): once the form's IMAP host or user is
+   * another mailbox (typed, or a preset), the box is unticked and the name cleared, for the owner to set again if it
+   * applies there; the route drops it the same way. For a provider Tarsee knows there is nothing to set. The name and
+   * the box are one or the other: with a name, Tarsee goes by that server's own verdict.
+   */
+  _emailSenderCheckFollow() {
+    const block = this._emailSenderBlock();
+    if (!block) return;
+    const name = block.querySelector("#settingsEmailAuthservId");
+    const trust = block.querySelector("#settingsEmailTrustFromLine");
+    const now = this._emailMailboxNow();
+    if (!this._emailSameMailbox(now, this._emailTrustFor)) {
+      name.value = "";
+      trust.checked = false;
+      this._emailTrustFor = now;
+    }
+    const provider = this._emailProviderOf(now.host);
+    const known = block.querySelector("[data-email-sender-known]");
+    known.hidden = !provider;
+    known.textContent = provider ? `${provider} checks who sent each mail itself, and Tarsee reads its own Authentication-Results line: there is nothing to set here.` : "";
+    block.querySelector("[data-email-sender-own]").hidden = !!provider;
+    if (provider) {
+      name.value = "";
+      trust.checked = false;
+    }
+    trust.disabled = !!name.value.trim();
+    if (trust.disabled) trust.checked = false;
+    name.disabled = trust.checked;
+  },
+
+  /**
+   * The From address the one-time note may name: only one on the owner's list (cfg.allowlistFromAddresses), in any
+   * case. With no list (any sender), or off it, the address is whatever the sender wrote, and a note saved before
+   * Tarsee knew that may still hold one: then "".
+   */
+  _emailNoteFrom(note, cfg) {
+    const from = typeof note?.from === "string" ? note.from.trim().toLowerCase() : "";
+    const list = Array.isArray(cfg?.allowlistFromAddresses) ? cfg.allowlistFromAddresses : [];
+    return from && list.some((a) => typeof a === "string" && a.trim().toLowerCase() === from) ? from : "";
+  },
+
+  /** The owner's OK on the note: it is hidden for this mailbox, until a change of mailbox or trust (routes/settings.js). */
+  async dismissEmailSenderNote(btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const res = await API.request("/api/settings/channel", { method: "POST", body: { type: "email", senderNote: "dismiss" } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        App.showToast(data.error || `HTTP ${res.status}`, "error");
+        if (data.needsSignIn) API.signInAgain(data.error);
+        return;
+      }
+      const box = this.elements.emailAllowlist?.closest(".form-group")?.parentElement?.querySelector("[data-email-sender-note]");
+      if (box) { box.hidden = true; box.innerHTML = ""; }
+    } catch (err) {
+      App.showToast(err.message, "error");
+    } finally {
+      if (btn) btn.disabled = false;
     }
   },
 
@@ -2473,12 +2832,20 @@ const Settings = {
       yahoo:    { imapHost: "imap.mail.yahoo.com",   imapPort: 993, smtpHost: "smtp.mail.yahoo.com",   smtpPort: 465 },
       custom:   null,
     };
+    // A preset is another server: what the owner trusted under "Who really sent it" doesn't go along, whatever it was.
+    const anotherServer = () => {
+      this._emailTrustFor = null;
+      this._emailSenderCheckFollow();
+    };
     if (name === "custom") {
       this.elements.emailImapHost.value = "";
       this.elements.emailImapPort.value = "";
       this.elements.emailSmtpHost.value = "";
       this.elements.emailSmtpPort.value = "";
       this.elements.emailImapHost.focus();
+      this._emailPasswordHint("imap");
+      this._emailPasswordHint("smtp");
+      anotherServer();
       return;
     }
     const p = presets[name];
@@ -2487,6 +2854,10 @@ const Settings = {
     this.elements.emailImapPort.value = p.imapPort;
     this.elements.emailSmtpHost.value = p.smtpHost;
     this.elements.emailSmtpPort.value = p.smtpPort;
+    // Another provider's servers: the password boxes say if the saved passwords can't go along.
+    this._emailPasswordHint("imap");
+    this._emailPasswordHint("smtp");
+    anotherServer();
   },
 
   async saveEmailChannel() {
@@ -2513,6 +2884,19 @@ const Settings = {
         fromName: e.emailFromName.value.trim(),
         allowlistFromAddresses: parseAddrs(e.emailAllowlist.value),
       };
+      // Who really sent a mail (renderEmailSenderCheck), sent with every save: what the owner set, with the mailbox they
+      // set it for, so the route keeps it for that mailbox only. Nothing trusted for a provider Tarsee knows.
+      const authservId = document.getElementById("settingsEmailAuthservId");
+      const trustFromLine = document.getElementById("settingsEmailTrustFromLine");
+      if (authservId && trustFromLine) {
+        this._emailSenderCheckFollow();
+        const check = { trustFromLine: !!trustFromLine.checked, authservId: authservId.value.trim() };
+        if ((check.trustFromLine || check.authservId) && this._emailTrustFor) {
+          check.imapHost = this._emailTrustFor.host;
+          check.imapUser = this._emailTrustFor.user;
+        }
+        payload.senderCheck = check;
+      }
 
       // Only include passwords if the user typed new ones — empty string means "keep existing"
       const imapPw = e.emailImapPassword.value;
@@ -2520,7 +2904,23 @@ const Settings = {
       if (imapPw) payload.imap.password = imapPw;
       if (smtpPw) payload.smtp.password = smtpPw;
 
-      await API.saveChannel(payload);
+      const res = await API.request("/api/settings/channel", { method: "POST", body: payload });
+      const answer = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // A side whose server changed needs its password typed again (routes/settings.js): say which, and go there.
+        const boxes = (Array.isArray(answer.needsPassword) ? answer.needsPassword : [])
+          .filter((side) => side === "imap" || side === "smtp")
+          .map((side) => {
+            const box = this._emailBoxes(side).password;
+            box.setAttribute("aria-invalid", "true");
+            box.placeholder = `Type the ${side.toUpperCase()} app password again: the server changed`;
+            return box;
+          });
+        boxes[0]?.focus();
+        // The sign-in ran out and the page went on with the API token: the sign-in screen, with the server's words.
+        if (answer.needsSignIn) API.signInAgain(answer.error);
+        throw new Error(answer.error || `HTTP ${res.status}`);
+      }
       if (payload.imap.host) this._markConfigured("email");
 
       // Clear password fields after save so they don't show plaintext in the DOM
@@ -2528,6 +2928,8 @@ const Settings = {
       e.emailSmtpPassword.value = "";
 
       App.showToast(payload.enabled ? "Email saved, connecting…" : "Email saved (off)", "success");
+      // What the save didn't keep, in the route's words ("Who really sent it" set for another mailbox).
+      if (typeof answer.note === "string" && answer.note) App.showToast(answer.note, "warning");
       this.showChannelStatus("email", { wait: payload.enabled });
 
       // The saved-password placeholders ("leave blank to keep existing") come from the server's hasPassword flags.
@@ -3763,6 +4165,192 @@ const Settings = {
         }
       });
     });
+  },
+
+  // --- Keys (Settings > Keys) ---
+
+  /**
+   * Settings > Keys: the vault's keys by name, with when each was saved (GET /api/settings/keys, routes/vault-keys.js),
+   * and a form to add a key or replace one's value. Each row has Replace (its name goes in the form) and Delete (after
+   * a question). No value is ever on the page: the server sends none, and the value box is emptied once saved and
+   * never filled. Tarsee's own keys (the Railway token) are marked: the AI never gets them, and only here can they be
+   * replaced or deleted. Every request goes as the signed-in owner, without the API token (_vaultKeysRequest).
+   */
+  _vaultKeys: [],
+
+  async loadVaultKeys() {
+    const el = document.getElementById("vaultKeysList");
+    if (!el) return;
+    this._wireVaultKeyForm();
+    try {
+      const { status, data } = await this._vaultKeysRequest("GET", "/api/settings/keys");
+      if (status < 200 || status >= 300) throw new Error(data.error || `HTTP ${status}`);
+      this._vaultKeys = Array.isArray(data.keys) ? data.keys : [];
+    } catch (err) {
+      el.textContent = `Couldn't list the keys: ${err.message}`;
+      el.dataset.loaded = "error";
+      return;
+    }
+    this._drawVaultKeys();
+  },
+
+  _drawVaultKeys() {
+    const el = document.getElementById("vaultKeysList");
+    if (!el) return;
+    const esc = (s) => this._esc(s);
+    const when = (iso) => {
+      const d = iso ? new Date(iso) : null;
+      return d && !Number.isNaN(d.getTime()) ? d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+    };
+    if (!this._vaultKeys.length) {
+      el.innerHTML = `<div class="hint">No keys saved yet. Add one below, or give one to the AI in a chat.</div>`;
+    } else {
+      el.innerHTML = this._vaultKeys.map((k) => {
+        const saved = when(k.savedAt);
+        const own = k.serverOnly
+          ? ` <span class="tool-perm-fixed" title="Tarsee itself uses it. The AI can't read it, and only you can replace or delete it, here.">Tarsee's own</span>`
+          : "";
+        const about = [
+          k.description,
+          saved ? `Saved ${saved}` : "",
+          k.serverOnly ? `${k.usedBy ? `${k.usedBy} uses it; ` : ""}the AI never gets it` : "",
+        ].filter(Boolean).join(" · ");
+        return `<div class="tool-perm-row" data-vault-key="${esc(k.name)}" style="flex-wrap:wrap">` +
+          `<div class="tool-perm-name"><span style="font-family:var(--font-mono);overflow-wrap:anywhere">${esc(k.name)}</span>${own}` +
+          `<div class="tool-perm-desc">${esc(about)}</div></div>` +
+          `<div style="display:flex;gap:var(--space-1);flex-shrink:0;margin-left:auto">` +
+          `<button type="button" class="btn btn-sm btn-ghost" data-vault-replace="${esc(k.name)}" aria-label="Replace ${esc(k.name)}">Replace</button>` +
+          `<button type="button" class="btn btn-sm btn-ghost" data-vault-delete="${esc(k.name)}" aria-label="Delete ${esc(k.name)}">Delete</button>` +
+          `</div></div>`;
+      }).join("");
+      el.querySelectorAll("[data-vault-replace]").forEach((b) => b.addEventListener("click", () => this._replaceVaultKey(b.dataset.vaultReplace)));
+      el.querySelectorAll("[data-vault-delete]").forEach((b) => b.addEventListener("click", () => this.deleteVaultKey(b.dataset.vaultDelete)));
+    }
+    el.dataset.loaded = "yes";
+    this._noteVaultKeyName();
+  },
+
+  _wireVaultKeyForm() {
+    const form = document.getElementById("vaultKeyForm");
+    if (!form || form.dataset.wired) return;
+    form.dataset.wired = "1";
+    form.addEventListener("submit", (e) => { e.preventDefault(); this.saveVaultKey(); });
+    document.getElementById("vaultKeyClearBtn")?.addEventListener("click", () => this._clearVaultKeyForm());
+    document.getElementById("vaultKeyName")?.addEventListener("input", () => this._noteVaultKeyName());
+  },
+
+  _clearVaultKeyForm() {
+    for (const id of ["vaultKeyName", "vaultKeyValue", "vaultKeyDescription"]) {
+      const box = document.getElementById(id);
+      if (box) box.value = "";
+    }
+    this._noteVaultKeyName();
+  },
+
+  /** The saved key the form's name is, if any (Tarsee's own in any case, as the server saves it). */
+  _vaultKeyNamed(typed) {
+    const t = String(typed || "").trim();
+    if (!t) return null;
+    return this._vaultKeys.find((k) => k.name === t) || this._vaultKeys.find((k) => k.serverOnly && k.name.toUpperCase() === t.toUpperCase()) || null;
+  },
+
+  /** Under the form: that Save replaces a saved key's value, when the name typed is one. */
+  _noteVaultKeyName() {
+    const note = document.getElementById("vaultKeyFormNote");
+    if (!note) return;
+    const k = this._vaultKeyNamed(document.getElementById("vaultKeyName")?.value);
+    note.textContent = k ? `${k.name} is saved: Save replaces its value${k.serverOnly ? ", and Tarsee uses the new one from then on" : ""}.` : "";
+    note.hidden = !k;
+  },
+
+  /** A row's Replace: its name (and description) in the form, the value box empty and ready. */
+  _replaceVaultKey(name) {
+    const k = this._vaultKeys.find((x) => x.name === name);
+    const nameBox = document.getElementById("vaultKeyName");
+    const valueBox = document.getElementById("vaultKeyValue");
+    const descBox = document.getElementById("vaultKeyDescription");
+    if (!nameBox || !valueBox) return;
+    nameBox.value = name;
+    valueBox.value = "";
+    if (descBox) descBox.value = k?.description || "";
+    this._noteVaultKeyName();
+    valueBox.scrollIntoView?.({ block: "center" });
+    valueBox.focus();
+  },
+
+  async saveVaultKey() {
+    const nameBox = document.getElementById("vaultKeyName");
+    const valueBox = document.getElementById("vaultKeyValue");
+    const descBox = document.getElementById("vaultKeyDescription");
+    const btn = document.getElementById("vaultKeySaveBtn");
+    if (!nameBox || !valueBox || btn?.disabled) return;
+    const name = nameBox.value.trim();
+    if (!name) { App.showToast("Give the key a name first, like STRIPE_SECRET_KEY.", "error"); nameBox.focus(); return; }
+    if (!valueBox.value.trim()) { App.showToast(`Paste the value to save as ${name}.`, "error"); valueBox.focus(); return; }
+    if (btn) { btn.disabled = true; btn.setAttribute("aria-busy", "true"); }
+    try {
+      const { status, data } = await this._vaultKeysRequest("POST", "/api/settings/keys", { name, value: valueBox.value, description: descBox?.value.trim() || "" }, { signIn: true });
+      if (status < 200 || status >= 300) throw new Error(data.error || `HTTP ${status}`);
+      this._clearVaultKeyForm();
+      App.showToast(`${data.replaced ? "Replaced" : "Saved"} ${data.key?.name || name}`, "success");
+      await this.loadVaultKeys();
+    } catch (err) {
+      App.showToast(`${name} wasn't saved: ${err.message}`, "error");
+    } finally {
+      if (btn) { btn.disabled = false; btn.removeAttribute("aria-busy"); }
+    }
+  },
+
+  async deleteVaultKey(name) {
+    const k = this._vaultKeys.find((x) => x.name === name);
+    const ok = await TarseeDialog.ask({
+      title: `Delete the key ${name}?`,
+      text: k?.serverOnly
+        ? `Tarsee itself uses it${k.usedBy ? ` (${k.usedBy})` : ""}, which stops working until you save a new one.`
+        : "Anything that uses it, the AI and its scripts included, can't read it any more.",
+      yes: "Delete",
+      no: "Cancel",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const { status, data } = await this._vaultKeysRequest("DELETE", `/api/settings/keys/${encodeURIComponent(name)}`, undefined, { signIn: true });
+      if (status === 404) App.showToast(`${name} was already gone`, "info");
+      else if (status < 200 || status >= 300) throw new Error(data.error || `HTTP ${status}`);
+      else App.showToast(`Deleted ${name}`, "success");
+    } catch (err) {
+      App.showToast(`${name} wasn't deleted: ${err.message}`, "error");
+    }
+    await this.loadVaultKeys();
+  },
+
+  /**
+   * A request only the owner's signed-in dashboard may make (routes/vault-keys.js), so, as _ownerPost, it goes without
+   * the API token that js/api.js adds to every other request: the sign-in's cookie, and for a change the CSRF token
+   * (fetched fresh once when it has run out). signIn: a change refused for the sign-in shows the sign-in screen with
+   * the server's words; the list only says them where it would be.
+   */
+  async _vaultKeysRequest(method, url, body, { signIn = false } = {}) {
+    const changes = method !== "GET";
+    const send = (csrf) => fetch(url, {
+      method,
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...(changes && csrf ? { "X-CSRF-Token": csrf } : {}) },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    let res = await send(changes ? (API.getCsrfToken() || await API.refreshCsrf()) : null);
+    if (changes && res.status === 403) {
+      const why = await res.clone().json().catch(() => ({}));
+      if (/CSRF token/i.test(why.error || "")) res = await send(await API.refreshCsrf());
+    }
+    const data = (await res.json().catch(() => null)) || {};
+    if (res.status === 401 || data.needsSignIn) {
+      // No cookie at all (a browser that dropped it): the sign-in this page opened with has run out all the same.
+      if (!data.needsSignIn) data.error = "Your sign-in has run out. Sign in again, then try once more.";
+      if (signIn) API.signInAgain(data.error);
+    }
+    return { status: res.status, data };
   },
 
   async loadCanvasGallery() {

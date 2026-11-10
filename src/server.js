@@ -8,7 +8,7 @@ import config from "./config/env.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { LIMITS } from "./config/constants.js";
 import { securityHeaders, csrfProtect, generateCsrfCookie } from "./middleware/security.js";
-import { sessionAuth, requireAuth, initSessionStore } from "./middleware/auth.js";
+import { sessionAuth, requireAuth, initSessionStore, trustProxyHop, signInBootNotes } from "./middleware/auth.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { initDb } from "./db/sqlite.js";
 import { initLiveBus } from "./lib/live-bus.js";
@@ -97,6 +97,11 @@ if (config.NODE_ENV === "production" && !config.SETUP_PASSWORD) {
   process.exit(1);
 }
 
+// What Tarsee says about signing in as it starts: a SETUP_PASSWORD shorter than 12 characters, and which proxy may
+// name the client in X-Forwarded-For (TARSEE_TRUSTED_PROXY). After logCapture.install(), so the dashboard's Console
+// shows them too.
+for (const note of signInBootNotes()) console[note.level](note.text);
+
 if (isEncryptionEnabled()) {
   console.log("[tarsee] credential encryption: ENABLED");
 } else {
@@ -130,11 +135,15 @@ app.disable("x-powered-by");
 // proxy's address, so `req.ip` was the SAME value for every visitor on earth.
 // The auth rate limiter and the progressive lockout are both keyed on it, which
 // meant one attacker's failed logins locked out the legitimate operator, and
-// five requests a minute was the budget for all users combined. Trusting one
-// proxy hop makes req.ip the real client address from X-Forwarded-For.
-// Deliberately `1` rather than `true`: trusting the whole chain lets a client
-// forge the header and defeat the limiter it is meant to feed.
-app.set("trust proxy", 1);
+// five requests a minute was the budget for all users combined. But any client
+// can write X-Forwarded-For, so it is believed only from a proxy the owner
+// names (trustProxyHop): off Railway, TARSEE_TRUSTED_PROXY ("loopback" for one
+// on this machine, or its addresses or ranges; by default none, and each
+// connection is its own client); on Railway, the one hop in front that isn't
+// this machine. Never `true`: trusting the whole chain lets a client forge the
+// header and defeat the limiter it is meant to feed. The sign-in limit itself
+// goes by middleware/auth.js signInKey, which uses X-Real-IP on Railway.
+app.set("trust proxy", trustProxyHop);
 
 // Make db available to route handlers via app.get("db")
 app.set("db", db);
@@ -223,6 +232,13 @@ server.listen(config.PORT, "0.0.0.0", () => {
   console.log(`[tarsee] workspace: ${config.WORKSPACE_DIR}`);
   console.log(`[tarsee] database:  ${config.DB_PATH}`);
 });
+
+// --- tarsee_railway: the Terminal's own Claude Code ---
+// With TARSEE_AUTO_UPDATE_CLI=1 the Terminal's claude can be newer than the one engine-env-names.json was made from:
+// its names are read once now, streamed in the background, and tarsee_railway refuses them on Tarsee's own service too
+// (lib/railway-admin.js). Only on Railway, where Tarsee has a service of its own. Never throws.
+import { hereOf as railwayHere, startTerminalCliScan } from "./lib/railway-admin.js";
+if (railwayHere().serviceId) startTerminalCliScan();
 
 // --- Audit log + Settings ---
 const auditLog = new AuditLog(db);

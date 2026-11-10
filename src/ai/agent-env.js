@@ -4,10 +4,13 @@
  * session's transcript, and Claude Code's own checks rightly refuse commands that carry credentials. Ported from
  * TarseeMacOS ("the point of the vault is that the agent can use any key it was given").
  *
- * It gives the agent nothing new: tarsee_get_key already returns any key. So when the owner has set get_key to
- * "always deny" in Settings > Tool Permissions, no key goes in either.
+ * It gives the agent nothing new: tarsee_get_key already returns any key but Tarsee's own. So when the owner has set
+ * get_key to "always deny" in Settings > Tool Permissions, no key goes in either.
  *
  * Every key whose name is an environment variable name in capitals goes in, except:
+ *   - Tarsee's own keys (SERVER_ONLY_KEYS in lib/key-vault.js: RAILWAY_API_TOKEN, which tarsee_railway uses), even
+ *     when TARSEE_AGENT_ENV_KEYS names one, and any key holding the same value as one (in the vault, or in Tarsee's
+ *     environment): with the Railway token a command could skip every limit tarsee_railway keeps
  *   - names already set in Tarsee's own environment (those win)
  *   - Claude's settings and login (CLAUDE_*) and Anthropic API keys (ANTHROPIC_*), which would move the agent off
  *     the Claude subscription onto pay-per-use billing; Codex's (CODEX_*) and OPENAI_BASE_URL, which would change
@@ -21,7 +24,7 @@
  * `env` (engine-env's baseEnv(), say) compares against that one, so it is never answered from, or stored in, that cache.
  * Denying get_key applies at once either way.
  */
-import { getKey, listKeys } from "../lib/key-vault.js";
+import { getKey, listKeys, serverOnlyName, serverOnlyValues } from "../lib/key-vault.js";
 
 export const AGENT_ENV_KEEP_OUT = /^(CLAUDE_|ANTHROPIC_|CODEX_|TARSEE_|NODE_|LD_|DYLD_|NPM_|PYTHON|GIT_|SSL_|BASH_)/;
 const KEEP_OUT_NAMES = new Set(["PATH", "HOME", "USER", "SHELL", "ENV", "PWD", "TMPDIR", "LANG", "TERM",
@@ -34,8 +37,9 @@ const VALUE_MAX_CHARS = 32 * 1024;
 /**
  * { NAME: value } for the agent's environment. names/get/list/now: for tests. env: the environment the vault's names
  * are compared against (default process.env, the only one cached). denied(): true when the owner has denied get_key.
+ * serverEnv: Tarsee's own environment, whose server-only keys count as Tarsee's too (default process.env).
  */
-export function agentVaultEnv({ names, get = getKey, list = () => listKeys().map((k) => k.name), env, now = Date.now(), denied = () => false } = {}) {
+export function agentVaultEnv({ names, get = getKey, list = () => listKeys().map((k) => k.name), env, now = Date.now(), denied = () => false, serverEnv = process.env } = {}) {
   // Only the default call shares the cache: names, the vault and the environment are all the live ones.
   const cachable = names === undefined && get === getKey && env === undefined;
   env ??= process.env;
@@ -44,6 +48,8 @@ export function agentVaultEnv({ names, get = getKey, list = () => listKeys().map
   if (cachable && !blocked && now - cached.at < 60_000) return cached.value;
   const out = {};
   const skipped = [];
+  const ownKept = [];
+  let ownValues = null;   // the server-only keys' values, read once, when a key's value is first compared
   const setting = String(env.TARSEE_AGENT_ENV_KEYS ?? "").trim();
   if (!blocked && setting.toLowerCase() !== "off") {
     let wanted = names;
@@ -51,9 +57,12 @@ export function agentVaultEnv({ names, get = getKey, list = () => listKeys().map
     if (wanted === undefined) { try { wanted = list(); } catch { wanted = []; } }
     for (const raw of wanted) {
       const name = String(raw || "").trim();
+      if (serverOnlyName(name)) { ownKept.push(name); continue; }
       if (!/^[A-Z][A-Z0-9_]*$/.test(name) || AGENT_ENV_KEEP_OUT.test(name) || KEEP_OUT_NAMES.has(name) || env[name]) continue;
       let value = null;
       try { value = String(get(name) || "").trim() || null; } catch { /* vault unavailable */ }
+      // A copy of Tarsee's own key under another name is still Tarsee's own.
+      if (value && (ownValues ??= serverOnlyValues({ get, envs: [env, serverEnv] })).has(value)) { ownKept.push(name); continue; }
       // Linux refuses a single environment string past about 128 KB, and then the agent could not start at all; a
       // value that big (a certificate bundle, a credentials file) is for tarsee_get_key. A NUL can't be in one either.
       if (value && (value.length > VALUE_MAX_CHARS || value.includes("\0"))) { skipped.push(name); continue; }
@@ -63,7 +72,7 @@ export function agentVaultEnv({ names, get = getKey, list = () => listKeys().map
   if (cachable) {
     const had = Object.keys(cached.value).sort().join(",");
     const has = Object.keys(out).sort().join(",");
-    if (had !== has) console.log(`[claude-code] ${Object.keys(out).length} vault key(s) in the agent's environment${blocked ? " (none: get_key is denied in Tool Permissions)" : ""}${skipped.length ? ` (too big or not text, left to tarsee_get_key: ${skipped.join(", ")})` : ""}`);
+    if (had !== has) console.log(`[claude-code] ${Object.keys(out).length} vault key(s) in the agent's environment${blocked ? " (none: get_key is denied in Tool Permissions)" : ""}${skipped.length ? ` (too big or not text, left to tarsee_get_key: ${skipped.join(", ")})` : ""}${ownKept.length ? ` (Tarsee's own, kept out: ${ownKept.join(", ")})` : ""}`);
     // A denied answer isn't kept as fresh: allowing get_key again takes effect on the next turn.
     cached = { at: blocked ? 0 : now, value: out };
   }

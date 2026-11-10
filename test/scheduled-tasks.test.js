@@ -749,7 +749,7 @@ const { parentPort, workerData } = require("node:worker_threads");
   const made = {};
   for (const s of workerData.schedules) {
     const r = { prompt: cron.promptScheduleProblem(s) };
-    try { cron.addCronJob({ schedule: s, action: { tool: "send_message", args: { message: "hi" } } }); r.added = true; } catch (e) { r.added = e.message; }
+    try { cron.addCronJob({ schedule: s, action: { tool: "send_message", args: { channel: "web", message: "hi" } } }); r.added = true; } catch (e) { r.added = e.message; }
     made[s] = r;
   }
   saved.set("cron.jobs", JSON.stringify(workerData.schedules.map((schedule, i) => ({ id: "cron_saved" + i, schedule, prompt: "x", enabled: true, createdBy: "owner" }))));

@@ -605,8 +605,9 @@ chatRouter.post("/send", async (req, res) => {
   const timeline = []; // Track timeline for persistence: [{type:"text",text:""},{type:"tool",name:"",detail:"",input:"",output:"",status:"done"}]
   let lastToolIdx = -1;
   let usage = {};
-  // dashboard: a file the agent hands over goes to this chat, whatever channel it is; messageId: the message answered
-  const toolCtx = { db: req.app.get("db"), settingsStore, conversationId: convId, channelManager: req.app.get("channelManager"), dashboard: true, messageId: savedUser?.id || null };
+  // dashboard: a file the agent hands over goes to this chat, whatever channel it is; messageId: the message answered;
+  // ownerSignedIn: the owner sent it, with their sign-in still on, not the API token alone (lib/key-vault.js ownerTurn)
+  const toolCtx = { db: req.app.get("db"), settingsStore, conversationId: convId, channelManager: req.app.get("channelManager"), dashboard: true, ownerSignedIn: !!liveSessionId(req), messageId: savedUser?.id || null };
   // Snapshot of `req.ip` — read once now, because once the socket closes
   // the `req.ip` getter pulls from a destroyed socket and may return
   // undefined. Audit log calls after `res.close` use this instead.

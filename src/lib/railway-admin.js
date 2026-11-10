@@ -21,15 +21,58 @@
  * ends the turn doing it: the result says so.
  *
  * Secrets: `from_key` names a vault key; its value is read here, sent to Railway and never put in a result, a log line
- * or an error (every text that leaves is scrubbed of it and of the token). Variable values are never read back:
- * list_variables asks Railway for names only.
+ * or an error (every text that leaves is scrubbed of it and of the token). Variable values are never shown:
+ * list_variables asks Railway for names only. The one read of values is a write in an environment that has a Tarsee
+ * service in it, which asks for that Tarsee's variables with their references left in (`unrendered`), keeps only the
+ * names inside `${{ ... }}` and drops the rest (see feedersOfTarsees).
  *
  * Nothing here deletes: no variable, service, environment or project is ever removed, and variables are never replaced
  * wholesale (no `replace`).
  *
+ * Limits, whoever approved_by names (what the AI asks for can come from a web page or a message it read, and the AI's
+ * commands can read the variables of Tarsee's own service once it has been deployed with them):
+ *   - a value with a Railway reference in it (`${{ ... }}`, filled in by Railway from another variable when the service
+ *     deploys) is refused on every service, so no shared secret or other service's secret is pulled in;
+ *   - Tarsee's own keys (SERVER_ONLY_KEYS: its Railway token, its sign-in and encryption secrets) are never copied
+ *     into a service, by from_key, under another vault name, or typed in as value;
+ *   - the limits below hold on every Tarsee service, not only this one's (tarseeServices): Tarsee's own service in any
+ *     environment of its project; any service whose variable names, in any environment of its project, the name being
+ *     set included, hold SETUP_PASSWORD, ENCRYPTION_KEY or a TARSEE_ name; and any service Railway says is deployed
+ *     from a repo or image named like Tarsee's. A second Tarsee has sign-ins, a vault and a Terminal of its own. When
+ *     Railway doesn't give a project's variable names, nothing is set in it;
+ *   - on a Tarsee service only an allowlist is set (selfServiceRefusal): a key or address for the owner's own scripts,
+ *     TZ, and a few of Tarsee's tuning settings. Every other name is refused, so nothing that changes how Railway
+ *     builds or runs Tarsee, how programs or shells start, where files are, who can sign in, or which AI and keys
+ *     Tarsee uses is ever set there. Nor is any name that appears in the shipped code of Tarsee's AI engines or its
+ *     browser library (engine-env-names.json, kept up to date by test/railway-tool-limits.test.js), or in the
+ *     Terminal's own Claude Code (the one running now, read when Tarsee starts), since an engine may read it. Those
+ *     are this Tarsee's programs, so the owner's keys go only on its own service in the environment it runs in, and
+ *     only while TARSEE_AUTO_UPDATE_CLI isn't among its variables (with it, each start installs the newest Claude Code)
+ *     and the Terminal's Claude Code could be read. On every other Tarsee service only TZ and the tuning settings go
+ *     (coreReason). With a deploy or without, so nothing is left for the next redeploy to apply. Each refusal says
+ *     where the owner makes that change instead (Railway's dashboard);
+ *   - a variable that any variable on a Tarsee service is filled in from by a Railway reference the owner made (on
+ *     another service, on that Tarsee's own, through a shared variable, through a chain of them) counts as that
+ *     variable: at that Tarsee's next deploy, whoever starts it, a write to it is a write to the Tarsee under the
+ *     referencing name. So the rules above, and the get_key one below, apply to that name too (feedersOfTarsees).
+ *     Names that differ only in case are different variables, and each one's references are followed. A link the walk
+ *     can't follow (a sealed variable, whose value Railway never shows, or a reference to a service the project doesn't
+ *     have) hides what comes after it, so while one stands between a guarded variable and what fills it, nothing is set
+ *     in that environment, and while any does, no vault key either if get_key is denied. So a redeploy of a Tarsee only
+ *     ever applies changes the owner made;
+ *   - while the owner has denied get_key in Tool Permissions, no vault key goes onto a Tarsee service (from_key), nor
+ *     into a variable one is filled in from: after the next deploy the AI's commands could read it there.
+ * These hold whichever OS user the AI's commands run as: a variable on a Tarsee service reaches its server itself.
+ *
  * Every call returns a plain-English string (never throws) and logs one line: the action, the project, the
  * environment, the service, never a value or a token.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { AUTH_ENV_RE, PROVIDER_KEY_NAMES, TARSEE_SECRETS } from "../ai/engine-env.js";
+
 export const ACTIONS = Object.freeze(["list_projects", "list_variables", "set_variable", "redeploy"]);
 const WRITES = new Set(["set_variable", "redeploy"]);
 
@@ -40,6 +83,17 @@ const TIMEOUT_MS = 12_000;   // per call; a set_variable is up to four of them
 export const TOKEN_KEY = "RAILWAY_API_TOKEN";
 const LABEL = "the owner's Railway account";
 
+/**
+ * Vault keys Tarsee keeps for itself, never copied into a service: its own Railway token (with it a service could read
+ * and change every variable this account reaches, Tarsee's own included), and its sign-in and encryption secrets, in
+ * case one was saved in the vault too.
+ */
+export const SERVER_ONLY_KEYS = Object.freeze([TOKEN_KEY, ...TARSEE_SECRETS, "TARSEE_MCP_TOKEN"]);
+
+/** Railway's reference syntax: `${{ NAME }}`, `${{ shared.NAME }}`, `${{ Service.NAME }}`. */
+const REFERENCE = "${{";
+const REFERENCE_REFUSAL = "a Railway reference (${{ ... }}). Railway fills one in from another variable when the service deploys, and that can be a shared secret or another service's secret, so this tool never sets one. A reference is for the owner to add by hand, in Railway's dashboard (the service's Variables tab).";
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,254}$/;
 
@@ -48,6 +102,12 @@ export const DOCS = Object.freeze({
   projects: "query TarseeProjects { projects(first: 500) { edges { node { id name deletedAt } } } }",
   project: "query TarseeProject($id: String!) { project(id: $id) { id name deletedAt environments { edges { node { id name deletedAt } } } services { edges { node { id name } } } } }",
   variableNames: "query TarseeVariableNames($projectId: String!, $environmentId: String!) { environment(id: $environmentId, projectId: $projectId) { variables(first: 10000) { edges { node { name serviceId isSealed } } } } }",
+  // What each service's deployment in each environment is built from (a repo or an image), to find a Tarsee.
+  serviceSources: "query TarseeServiceSources($id: String!) { project(id: $id) { services { edges { node { id serviceInstances { edges { node { environmentId source { repo image } } } } } } } } }",
+  // A service's variables as { NAME: value } with `${{ ... }}` left in; serviceId left out (not null) gives the
+  // environment's shared ones, as Railway's Manage Variables guide shows. Only ever in an environment with a Tarsee
+  // service in it, and only the references are kept (feedersOfTarsees).
+  unrendered: "query TarseeUnrenderedVariables($projectId: String!, $environmentId: String!, $serviceId: String) { variables(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId, unrendered: true) }",
   upsert: "mutation TarseeVariableUpsert($projectId: String!, $environmentId: String!, $serviceId: String!, $variables: EnvironmentVariables!, $skipDeploys: Boolean) { variableCollectionUpsert(input: { projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId, variables: $variables, skipDeploys: $skipDeploys }) }",
   latestDeployment: "query TarseeLatestDeployment($input: DeploymentListInput!) { deployments(input: $input, first: 1) { edges { node { id status createdAt } } } }",
   redeploy: "mutation TarseeRedeploy($id: String!) { deploymentRedeploy(id: $id) { id } }",
@@ -93,9 +153,12 @@ export function hereOf(env = process.env) {
  * @param {Function} [deps.fetch] defaults to the global fetch
  * @param {Function} [deps.log] one line per call (console.log)
  * @param {number} [deps.timeoutMs]
+ * @param {Function} [deps.getKeyDenied] true when the owner has denied get_key in Settings > Tool Permissions
+ *   (defaults to lib/security-manager.js, the same check agent-env.js makes)
+ * @param {Function} [deps.terminalCli] the Terminal's own Claude Code as read when Tarsee started (terminalCliNames)
  * @returns {Promise<string>}
  */
-export async function railwayAdmin(args = {}, { vault = null, env = process.env, fetch: fetchImpl = globalThis.fetch, log = (line) => console.log(line), timeoutMs = TIMEOUT_MS } = {}) {
+export async function railwayAdmin(args = {}, { vault = null, env = process.env, fetch: fetchImpl = globalThis.fetch, log = (line) => console.log(line), timeoutMs = TIMEOUT_MS, getKeyDenied = getKeyDeniedByPolicy, terminalCli = terminalCliNames } = {}) {
   args = args && typeof args === "object" ? args : {};
   const action = String(args.action ?? "");
   const note = { project: null, env: null, service: null, extra: [], secrets: [], outcomeUnknown: false };
@@ -122,9 +185,11 @@ export async function railwayAdmin(args = {}, { vault = null, env = process.env,
     if (WRITES.has(action)) note.extra.push(`go="${oneLine(args.approved_by).slice(0, 120)}"`);
     const v = vault || await import("./key-vault.js");
     const token = tokenOf(v, env);
-    note.secrets.push(token);
+    // Both copies of the token count as Tarsee's own: the one in use, and the environment's when the vault's wins.
+    const ownTokens = [...new Set([token, String(env?.[TOKEN_KEY] ?? "").trim()])].filter((t) => t.length >= 16);
+    note.secrets.push(token, ...ownTokens);
     const api = (doc, variables) => gql(doc, variables, { token, fetchImpl, timeoutMs });
-    const ctx = { args, v, api, note, here: hereOf(env) };
+    const ctx = { args, v, api, note, ownTokens, here: hereOf(env), getKeyDenied, terminalCli };
     const run = { list_projects: listProjects, list_variables: listVariables, set_variable: setVariable, redeploy }[action];
     const out = await run(ctx);
     logLine("ok");
@@ -136,6 +201,12 @@ export async function railwayAdmin(args = {}, { vault = null, env = process.env,
     logLine(`failed: ${oneLine(text).slice(0, 200)}`);
     return `railway ${action || ""} error: ${text}`.replace(/ {2}/g, " ");
   }
+}
+
+/** Whether the owner has set get_key to "always deny" in Settings > Tool Permissions (server.js loads those at boot). */
+async function getKeyDeniedByPolicy() {
+  const { getSecurityManager } = await import("./security-manager.js");
+  return getSecurityManager().getToolPermission("get_key") === "always_deny";
 }
 
 // ---------------------------------------------------------------- the token
@@ -275,7 +346,811 @@ async function variableNames({ api }, project, env) {
 
 const where = (svc, env, project) => `${svc.name} (service id ${svc.id}) in ${env.name} (environment id ${env.id}), project "${project.name}" (id ${project.id})`;
 const isSelf = (svc, env, here) => !!here.serviceId && svc.id === here.serviceId && (!here.environmentId || env.id === here.environmentId);
+const lower = (x) => String(x ?? "").toLowerCase();
+/** Tarsee's own service in any environment of its project. */
+const isOwnService = (svc, here) => !!here.serviceId && lower(svc.id) === lower(here.serviceId);
 const SELF_RESTART = "This is Tarsee's own service: the deploy restarts Tarsee, which ends the turn that asked for it. Tarsee is back once Railway has deployed it (usually a minute or two).";
+
+// ---------------------------------------------------------------- which services are a Tarsee
+
+/*
+ * Every limit on Tarsee's own service holds on any Tarsee service: a second Tarsee of the owner's, in this project or
+ * another, has sign-ins, a vault and a Terminal of its own, and a variable set on it reaches its start-up script (run
+ * as root), its server and its engines. A service is a Tarsee when:
+ *   - it is Tarsee's own (RAILWAY_SERVICE_ID), in any environment of its project: a service keeps one id in all;
+ *   - its variable names, in any environment of its project, hold SETUP_PASSWORD, ENCRYPTION_KEY or a TARSEE_ name, in
+ *     any case (names only, as list_variables reads them). The name being set counts too: setting one makes the
+ *     service look like a Tarsee, and a Tarsee that lost its SETUP_PASSWORD would start with the AI's;
+ *   - Railway says a deployment of it is built from a repo or image whose name holds "tarsee" (when its API says).
+ * Railway's names must be read for every environment of the project, or nothing is set in it.
+ */
+const TARSEE_MARK = /^(SETUP_PASSWORD|ENCRYPTION_KEY|TARSEE_[A-Z0-9_]*)$/i;
+const TARSEE_SOURCE = /tarsee/i;
+const AUTO_UPDATE_CLI = "TARSEE_AUTO_UPDATE_CLI";
+/** The name part of a repo (owner/name) or an image (registry/owner/name:tag or @digest). */
+const sourceName = (s) => String(s ?? "").trim().split("/").pop().replace(/[@:].*$/, "");
+
+/**
+ * The Tarsee services in `project`, for a write of `name` on `svc` in `env`: { tarsees, names }. tarsees is a Map of
+ * service id (lower case) to { svc, own, why }, why saying in a few words what gives it away. names is `env`'s
+ * variable names (variableNames), for the rest of the write. Fails, saying why, when an environment's names can't be
+ * read.
+ */
+async function tarseeServices(ctx, project, env, svc, name) {
+  const { here } = ctx;
+  const byId = new Map(project.services.map((s) => [lower(s.id), s]));
+  const tarsees = new Map();
+  const mark = (s, why) => { if (s && !tarsees.has(lower(s.id))) tarsees.set(lower(s.id), { svc: s, own: isOwnService(s, here), why }); };
+  for (const s of project.services) if (isOwnService(s, here)) mark(s, "it is Tarsee's own service");
+  let names = null;
+  // The environment written to first, so its marks are the ones named.
+  for (const e of [env, ...project.environments.filter((x) => x.id !== env.id)]) {
+    let list;
+    try {
+      list = await variableNames(ctx, project, e);
+    } catch (err) {
+      const said = err instanceof ApiError ? apiErrorText(err) : err?.message || String(err);
+      fail(`Railway did not give the variable names in ${e.name} of the project "${project.name}" (${said.replace(/\.$/, "")}). Without them this tool can't tell whether a service there is a Tarsee (one whose variables include SETUP_PASSWORD, ENCRYPTION_KEY or a TARSEE_ name gets the limits of Tarsee's own service), so it sets nothing in that project. Try again in a minute; the owner can also make the change by hand in Railway's dashboard.`);
+    }
+    if (e === env) names = list;
+    for (const x of list) if (x.serviceId && TARSEE_MARK.test(x.name)) mark(byId.get(lower(x.serviceId)), `its variables${e === env ? "" : ` in ${e.name}`} include ${x.name}`);
+  }
+  if (TARSEE_MARK.test(name)) mark(svc, `${name}, the name being set, is one of Tarsee's own, and with it the service would look like a Tarsee`);
+  for (const [id, from] of await tarseeSources(ctx, project)) mark(byId.get(id), `Railway says it is deployed from ${from}`);
+  return { tarsees, names };
+}
+
+/**
+ * Service id (lower case) -> "the repo X" or "the image X", for each service Railway says a deployment of is built
+ * from a source named like Tarsee's. Empty when Railway's API doesn't say: the names above are what counts.
+ */
+async function tarseeSources({ api }, project) {
+  const out = new Map();
+  let data;
+  try { data = await api(DOCS.serviceSources, { id: project.id }); } catch { return out; }
+  for (const s of nodes(data?.project?.services)) {
+    for (const inst of nodes(s.serviceInstances)) {
+      for (const kind of ["repo", "image"]) {
+        const from = inst?.source?.[kind];
+        if (typeof from === "string" && TARSEE_SOURCE.test(sourceName(from)) && !out.has(lower(s.id))) out.set(lower(s.id), `the ${kind} ${oneLine(from).slice(0, 200)}`);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Why only TZ and the tuning settings go on the Tarsee service `t` in `env`, or null where the full allowlist holds:
+ * on Tarsee's own service in the environment it runs in, while TARSEE_AUTO_UPDATE_CLI isn't among its variables. Only
+ * there are the programs a variable reaches known (this checkout's engines, the Terminal's Claude Code running now).
+ */
+function coreReason(t, env, names, project, here) {
+  if (!t.own) return `this Tarsee can't see which versions of the AI engines, the browser and Claude Code ${t.svc.name} runs, so it can't tell which names they read`;
+  if (!here.environmentId || lower(env.id) !== lower(here.environmentId)) {
+    const home = project.environments.find((e) => lower(e.id) === lower(here.environmentId))?.name;
+    return `this is Tarsee's own service in ${env.name}, not in ${home ? `${home}, ` : ""}the environment this Tarsee runs in, and there it can run other versions of its AI engines and Claude Code (another branch, or ${AUTO_UPDATE_CLI} set there), so this Tarsee can't tell which names they read`;
+  }
+  if (names.some((x) => lower(x.serviceId) === lower(t.svc.id) && x.name.toUpperCase() === AUTO_UPDATE_CLI)) {
+    return `${AUTO_UPDATE_CLI} is set on Tarsee's own service, so each time it starts it installs the newest Claude Code as the Terminal's claude, and that can read names the one running now (the one Tarsee read) doesn't`;
+  }
+  return null;
+}
+
+/** "Tarsee's own" or "the Tarsee worker's", and where a variable of it goes: "Tarsee's own service" or "worker". */
+const whose = (t) => (t.own ? "Tarsee's own" : `the Tarsee ${t.svc.name}'s`);
+const onIt = (t) => (t.own ? "Tarsee's own service" : t.svc.name);
+/** After a variable's name, why its service counts as a Tarsee (nothing for Tarsee's own). */
+const whyTarsee = (t) => (t.own ? "" : ` (${t.svc.name} counts as a Tarsee: ${t.why})`);
+/** Before a refusal on the Tarsee service `t` itself: why the limits of Tarsee's own service apply there. */
+const asTarsee = (t) => (t.own ? "" : `${t.svc.name} counts as a Tarsee (${t.why}), so this tool treats it as it does Tarsee's own service. `);
+
+// ---------------------------------------------------------------- what may be set on Tarsee's own service
+
+/*
+ * The rule, in plain words: on Tarsee's own service this tool sets only names that are clearly a key or address for the
+ * owner's own scripts, TZ, and a few of Tarsee's settings that only tune it. Everything else is the owner's to set by
+ * hand in Railway's dashboard, because a variable there reaches Railway's build of Tarsee, its start-up script (run as
+ * root), the server, its AI engines and every program they start: it could change how Tarsee is built or runs, how
+ * programs or shells start, where files are, who can sign in, or which AI and keys Tarsee uses. That holds today, when
+ * the AI's commands run as the server's user, and once they run as a user of their own (agent isolation), since the
+ * server and the start-up script still read every variable.
+ *
+ * selfServiceRefusal() checks in this order:
+ *   1. SELF_SERVICE_SETTINGS (TZ and the tuning settings): set, TZ only with a time zone name for its value;
+ *   2. anything else, where the programs the variable reaches aren't known: refused, saying exactly what goes. That
+ *      is every Tarsee service but this one's own in the environment it runs in, and that one too while
+ *      TARSEE_AUTO_UPDATE_CLI is among its variables (coreReason) or the Terminal's Claude Code can't be read;
+ *   3. the families and names below (sign-in, the AI, Tarsee's own keys, the build, the programs and shells, the
+ *      browser, what Tarsee and its engines read): refused, saying why. These come first because some look like a key
+ *      of the owner's (GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY, SELENIUM_REMOTE_URL, GOOGLE_API_KEY);
+ *   4. SCRIPT_KEY: set, unless the name appears in the AI engines' or the browser library's code (inEngineCode) or in
+ *      the Terminal's own Claude Code as it runs now (inTerminalCli);
+ *   5. anything else: refused, with the rule.
+ * test/railway-tool-limits.test.js scans Tarsee's code, its start-up script and its Dockerfile for every variable they
+ * read, re-extracts the engines' names from node_modules, and fails, naming it, when one would get through.
+ */
+
+/** Tarsee's own settings this tool may set on its service: tuning only, none of them switches a protection off. */
+const SELF_TUNING = [
+  "TARSEE_TIMEZONE", "TARSEE_DEFAULT_EFFORT", "TARSEE_COMPACT_WINDOW", "TARSEE_MODEL_CONTEXT_TOKENS",
+  "TARSEE_TOOL_RESULT_MAX_CHARS", "TARSEE_BASH_OUTPUT_MAX_CHARS", "TARSEE_SESSION_JSONL_MAX_MB", "TARSEE_PHONON_THREADS",
+];
+/** The settings this tool may set on Tarsee's own service besides the owner's keys: TZ and the tuning ones. */
+export const SELF_SERVICE_SETTINGS = Object.freeze(["TZ", ...SELF_TUNING]);
+const SETTINGS = new Set(SELF_SERVICE_SETTINGS);
+/** TZ's value: a time zone name (Asia/Manila, UTC, Etc/GMT-8), never a path (glibc reads a time zone file from one). */
+const TZ_VALUE = /^(?!.*\.\.)[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+){0,2}$/;
+/**
+ * A key or address for the owner's own scripts: capitals, digits and underscores, the last word saying what it holds
+ * (SOME_SERVICE_API_KEY, ALERTS_WEBHOOK, STATUS_PAGE_URL). Only once no part of Tarsee is found to read the name.
+ */
+const SCRIPT_KEY_ENDINGS = ["_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_WEBHOOK", "_URL"];
+const SCRIPT_KEY = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:KEY|TOKEN|SECRET|PASSWORD|WEBHOOK|URL)$/;
+
+/** Who can sign in to Tarsee, for how long, and the key its saved secrets are locked with. */
+const SIGN_IN = new Set([...TARSEE_SECRETS, "TARSEE_MCP_TOKEN", "TARSEE_SESSION_MAX_AGE_DAYS", "TARSEE_CSRF_MAX_AGE_HOURS"]);
+/** Which AI answers, with what key or sign-in, and where its turns are sent. AUTH_ENV_RE adds every engine login. */
+const AI_CHOICE = new Set([...PROVIDER_KEY_NAMES, "TARSEE_KEYS_ONLY", "TARSEE_AI_PROVIDER", "TARSEE_AI_MODEL", "TARSEE_LOCAL_AI_URL"]);
+const AI_PREFIX = /^(ANTHROPIC|OPENAI|OPENROUTER|DEEPSEEK|CODEX)_/;
+/** Other keys Tarsee itself reads from its environment; each has a place in Settings. */
+const OWN_KEYS = new Set(["ELEVENLABS_API_KEY", "CAPTCHA_API_KEY"]);
+/**
+ * How Railway builds and runs the service: Railway's own settings (the user it runs as, the Dockerfile it builds) and
+ * its builders', and BuildKit's and Docker's, since every service variable reaches the build: BUILDKIT_SYNTAX alone
+ * hands the whole build to an image of its choosing.
+ */
+const BUILD = /^(RAILWAY|NIXPACKS|RAILPACK|BUILDKIT|BUILDX|DOCKER|COMPOSE)_|^SOURCE_DATE_EPOCH$/;
+/**
+ * What changes which programs run and how, and where files and connections are:
+ *   - where programs and files are looked for, and who a shell thinks it is;
+ *   - how a shell starts: bash's start-up files and options, its prompts (PS0 to PS4 run the $(...) in them), readline's
+ *     keys, its history, the locale, the resolver's files, the terminal database, the pager (the Terminal starts bash
+ *     with Tarsee's own environment);
+ *   - the loader, the runtimes and package managers and where they download from (Node, npm, Python, pip, uv, Hugging
+ *     Face and the rest);
+ *   - git, ssh (git falls back on SSH_ASKPASS for a password), TLS trust, proxies, telemetry, gRPC;
+ *   - the AI engines' own settings (CLAUDE_), and any folder, home, path, program, file or options a variable names.
+ */
+const RUNTIME = new RegExp([
+  "^(PATH|HOME|USER|LOGNAME|SHELL|PWD|OLDPWD|CDPATH|PORT|TMPDIR|TEMP|TMP|EDITOR|VISUAL|PAGER|MANPAGER|MANPATH|BROWSER|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE)$",
+  "^(ENV|BASH_ENV|ZDOTDIR|IFS|PROMPT_COMMAND|SHELLOPTS|BASHOPTS|GLOBIGNORE|PS[0-4]|INPUTRC|TERM|TERMINFO|TERMINFO_DIRS|TERMCAP|LANG|LANGUAGE|LOCPATH|NLSPATH|HOSTALIASES|LOCALDOMAIN|RES_OPTIONS|MAIL|MAILPATH|MAILCHECK)$",
+  "^(HIST|LC_|LESS|BASH_)",
+  "^(NODE_|NPM_|YARN_|PNPM_|BUN_|DENO_|COREPACK_|LD_|DYLD_|GLIBC_|MALLOC_|PYTHON|PIP_|UV_|CONDA_|POETRY_|PIPENV_|VIRTUAL_ENV|PERL|RUBY|GEM_|BUNDLE_|JAVA_|_JAVA_|JDK_|CARGO_|RUSTUP_|RUST_|HF_|HUGGINGFACE_|HUGGING_FACE_|TRANSFORMERS_|TORCH_)",
+  "^(GIT_|SSH_|SSL_|OPENSSL_|GNUTLS_|CURL_|GRPC_|OTEL_|DOTENV_)",
+  "_PROXY$",
+  "^CLAUDE_",
+  "_(DIR|HOME|PATH|BIN|FILE|CONF|CONFIG|OPTIONS|OPTS|PRELOAD)$",
+].join("|"));
+/**
+ * The browser Tarsee drives and its desktop: Playwright's, Puppeteer's and Selenium's settings, Chrome's and Chromium's,
+ * the keys Chromium reads for Google's services (GOOGLE_API_KEY and its GOOGLE_API_KEY_<service> forms,
+ * GOOGLE_DEFAULT_CLIENT_ID and _SECRET, GOOGLE_CLIENT_ID_<client> and GOOGLE_CLIENT_SECRET_<client>, and
+ * GOOGLE_METRICS_SIGNING_KEY: the names of that kind in Playwright's Chromium), fonts, the display and its session bus.
+ * Chromium itself is downloaded when the image is built, outside node_modules, so it isn't in engine-env-names.json.
+ */
+const BROWSER = /^(PLAYWRIGHT_|PUPPETEER_|SELENIUM_|CHROME|CHROMIUM|GOOGLE_API_KEY|GOOGLE_DEFAULT_CLIENT_|GOOGLE_CLIENT_ID_|GOOGLE_CLIENT_SECRET_|GOOGLE_METRICS_SIGNING_KEY$|FONTCONFIG_|DBUS_|GTK_|GDK_|QT_|XDG_|DISPLAY$|WAYLAND_DISPLAY$|XAUTHORITY$)/;
+/**
+ * Names that look like a key for the owner's scripts but that Tarsee, its AI engines (Claude Code, Codex) or a library
+ * it runs read themselves: the GitHub sign-in the engines and gh use, the cloud logins Claude Code can bill through
+ * (AWS for Bedrock, Azure for Foundry) and GitHub's sign-in for a workflow, MCP's and the cloud runners' secrets, web
+ * push's identity, the chat bots' tokens, and the hosts the Agent SDK, Playwright and the chat libraries send to.
+ */
+const READ_BY_TARSEE_PREFIX = /^(GH|GITHUB|ACTIONS|AWS|AZURE|MCP|SELF_HOSTED_RUNNER|CCR|VAPID|CI)_/;
+const READ_BY_TARSEE = new Set([
+  "APP_URL", "SESSION_INGRESS_URL", "BUILD_URL", "JENKINS_URL", "GCM_API_KEY", "ETHEREAL_API_KEY",
+  "DISCORD_TOKEN", "DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_SIGNING_SECRET", "TELEGRAM_BOT_TOKEN",
+]);
+
+/*
+ * The names in the AI engines' and the browser library's code. Claude Code reads most of its settings through typed
+ * lists of names (each read as process.env[name]), much of its CLI is bytecode, and Codex is a compiled program, so no
+ * search for process.env.NAME finds everything they read (VOICE_STREAM_BASE_URL, where voice mode sends the claude.ai
+ * sign-in, is one such). So the rule is blunter: a name that appears as a string anywhere in their shipped code is never
+ * set on Tarsee's own service. engine-env-names.json keeps the ones the allowlist would otherwise let through (every
+ * other name it refuses anyway), extracted from the Claude Agent SDK and its CLI, the Codex SDK and Codex's programs,
+ * and Playwright, for every platform. test/railway-tool-limits.test.js re-extracts them from node_modules and fails,
+ * naming them, when an engine update brings one the list lacks.
+ *
+ * Read once, when this module loads (the server starts it before any AI turn). A list that can't be read refuses every
+ * key-shaped name on Tarsee's own service, since none can be shown not to be an engine's.
+ */
+const ENGINE_NAMES_FILE = new URL("./engine-env-names.json", import.meta.url);
+
+/**
+ * The list's text as { names: Set, runs: [], strings: Set }; throws when it isn't one. strings: the runs the engines'
+ * code holds as one string each that hold a key-shaped name without being one (the Terminal's read counts them whole
+ * too, as the list's own check does).
+ */
+export function parseEngineNames(text) {
+  const data = JSON.parse(text);
+  const strings = (x) => Array.isArray(x) && x.every((s) => typeof s === "string");
+  if (!strings(data?.names) || !data.names.length || !strings(data?.runs)) throw new Error("it has no list of names and runs");
+  if (data.strings !== undefined && !strings(data.strings)) throw new Error("its strings are not a list of strings");
+  return { names: new Set(data.names), runs: data.runs, strings: new Set(data.strings || []) };
+}
+
+let shippedEngineNames;
+try {
+  shippedEngineNames = parseEngineNames(fs.readFileSync(ENGINE_NAMES_FILE, "utf8"));
+} catch (err) {
+  shippedEngineNames = err instanceof Error ? err : new Error(String(err));
+}
+
+/**
+ * Whether the run `run` holds `name`. A native program can keep its strings one after another with nothing between
+ * them (GH_TOKENGITHUB_TOKEN), so a name counts where it starts at the run's start or after any character but an
+ * underscore, and ends at the run's end or before any character but an underscore.
+ */
+export function heldInRun(run, name) {
+  if (!name) return false;
+  for (let i = run.indexOf(name); i !== -1; i = run.indexOf(name, i + 1)) {
+    const end = i + name.length;
+    if ((i === 0 || run[i - 1] !== "_") && (end === run.length || run[end] !== "_")) return true;
+  }
+  return false;
+}
+
+/** Whether `name` appears in the AI engines' or the browser library's code. Throws when the list couldn't be read. */
+export function inEngineCode(name, list = shippedEngineNames) {
+  if (list instanceof Error) throw list;
+  return list.names.has(name) || list.runs.some((run) => heldInRun(run, name));
+}
+
+// ---------------------------------------------------------------- the Terminal's own Claude Code
+
+/*
+ * engine-env-names.json comes from the Claude Code CLI the Agent SDK in node_modules ships, the version the image pins
+ * for the Terminal's claude too. With TARSEE_AUTO_UPDATE_CLI=1 the start-up script installs the latest Claude Code as
+ * the Terminal's claude instead, and a variable on Tarsee's own service reaches that program as well, so a newer one
+ * can read a name the list lacks. So Tarsee reads the Terminal's claude once when it starts (server.js calls
+ * startTerminalCliScan after it listens; a write that needs it before then starts it), streamed in pieces of
+ * SCAN_PIECE so the server keeps answering, the same way test/railway-tool-limits.test.js reads the engines. Its
+ * key-shaped names are refused on Tarsee's own service like the list's. Before each write that needs it, the programs
+ * are looked at again (path, size, times and file id), and read again when one changed. While none of that works (a
+ * read fails, or is still going after its waitMs), only TZ and the tuning settings are set on Tarsee's own service.
+ *
+ * Where the Terminal's claude is (terminalClaudePrograms): /usr/local/bin/claude, where the image installs it and what
+ * the Terminal runs (after agent isolation too, resolved by agent-terminal), each folder on the PATH, and ~/.local/bin
+ * (Claude Code's own installer), each followed to its real file. A file in a Claude Code package brings the package's
+ * native programs with it, so a launcher can't hide the program it starts. The Agent SDK's own copy is left out: the
+ * list has its names. All of it only ever adds names to refuse, and the image's /usr/local is root's.
+ */
+const SCAN_PIECE = 1 << 20;         // 1 MiB a piece: between two, the server answers what is waiting
+const MAX_RUN = 1 << 20;            // no string in a program is this long; a run that is fails the read
+const TERMINAL_WAIT_MS = 30_000;    // how long a write waits for a read in progress (one takes a second or two)
+const RUN_BYTE = new Uint8Array(256);
+for (let c = 0x30; c <= 0x39; c++) RUN_BYTE[c] = 1;
+for (let c = 0x41; c <= 0x5a; c++) RUN_BYTE[c] = 1;
+RUN_BYTE[0x5f] = 1;
+const QUOTE_BYTES = new Set([0x22, 0x27, 0x60]);
+
+/**
+ * The key-shaped names a run holds (up to `limit`), as heldInRun finds them: one may start at the run's start or after
+ * any character but an underscore, and end at its end or before any character but an underscore. The same rule
+ * test/railway-tool-limits.test.js keeps the list's runs by.
+ */
+export function keyNamesInRun(run, limit = Infinity) {
+  const out = new Set();
+  for (const ending of SCRIPT_KEY_ENDINGS) {
+    for (let p = run.indexOf(ending); p !== -1; p = run.indexOf(ending, p + 1)) {
+      const end = p + ending.length;
+      if (end < run.length && run[end] === "_") continue;
+      for (let i = p - 1; i >= 0; i--) {
+        if (run[i] === "_") {
+          if (i === p - 1 || i === 0 || run[i - 1] === "_" || run[i + 1] === "_") break;
+          continue;
+        }
+        if (run[i] >= "A" && run[i] <= "Z" && (i === 0 || run[i - 1] !== "_")) {
+          out.add(run.slice(i, end));
+          if (out.size >= limit) return [...out];
+        }
+      }
+    }
+  }
+  return [...out];
+}
+
+/**
+ * The key-shaped names in a program (any file), read in pieces of `chunkBytes`: never the whole file in memory, and the
+ * server gets a turn between pieces. A run is capitals, digits and underscores one after another. names: the runs that
+ * are one string (between two of the same quote) somewhere in the file and are key-shaped. runs: every other run that
+ * holds a key-shaped name, since a native program can keep its strings one after another with nothing between them
+ * (heldInRun finds a name in one). The same rules test/railway-tool-limits.test.js reads the engines with, so the two
+ * agree. Throws when the file can't be read.
+ */
+export async function scanProgramNames(file, { chunkBytes = SCAN_PIECE } = {}) {
+  const whole = new Set(), inside = new Set();
+  // The runs in buf[0, end) that hold an underscore. buf[0] is the file's first byte, or a byte that is no run's.
+  const scan = (buf, end) => {
+    for (let i = buf.indexOf(0x5f); i !== -1 && i < end; i = buf.indexOf(0x5f, i)) {
+      let a = i, b = i + 1;
+      while (a > 0 && RUN_BYTE[buf[a - 1]]) a--;
+      while (b < end && RUN_BYTE[buf[b]]) b++;
+      const run = buf.toString("latin1", a, b);
+      const set = a > 0 && b < end && QUOTE_BYTES.has(buf[a - 1]) && buf[b] === buf[a - 1] ? whole : inside;
+      if (!set.has(run) && keyNamesInRun(run, 1).length) set.add(run);
+      i = b;
+    }
+  };
+  // What a piece ends with that may go on in the next: the run at its end, and the byte before it (for its quote).
+  let carry = null;
+  for await (const piece of fs.createReadStream(file, { highWaterMark: chunkBytes })) {
+    const buf = carry ? Buffer.concat([carry, piece]) : piece;
+    let cut = buf.length;
+    while (cut > 0 && RUN_BYTE[buf[cut - 1]]) cut--;
+    scan(buf, cut);   // every run before `cut` ends before it, with the byte after it in hand
+    const keep = Math.max(0, cut - 1);
+    if (buf.length - keep > MAX_RUN) throw new Error(`${file} has a run of capitals over ${MAX_RUN} bytes long, which is no program's string`);
+    carry = Buffer.from(buf.subarray(keep));
+  }
+  if (carry) scan(carry, carry.length);   // the last run ends with the file
+  // A run seen as one string somewhere is that string, wherever else it stands.
+  for (const run of whole) inside.delete(run);
+  return { names: new Set([...whole].filter((run) => SCRIPT_KEY.test(run))), runs: [...inside] };
+}
+
+const NOT_THERE = new Set(["ENOENT", "ENOTDIR"]);
+const CLAUDE_CODE_PACKAGE = "@anthropic-ai/claude-code";
+/** This checkout's node_modules/@anthropic-ai, where the Agent SDK and its own Claude Code are. */
+const SDK_SCOPE = fileURLToPath(new URL("../../node_modules/@anthropic-ai/", import.meta.url));
+
+/** The `name` in `dir`/package.json, or null. */
+async function packageNameIn(dir) {
+  const file = path.join(dir, "package.json");
+  try {
+    const st = await fs.promises.stat(file);
+    if (!st.isFile() || st.size > 64 * 1024) return null;
+    return JSON.parse(await fs.promises.readFile(file, "utf8"))?.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The native programs of the Claude Code package `file` is in (its platform packages, nested or beside it), if any. */
+async function packagePrograms(file) {
+  let dir = path.dirname(file);
+  for (let up = 0; up < 3; up++, dir = path.dirname(dir)) {
+    if (await packageNameIn(dir) !== CLAUDE_CODE_PACKAGE) continue;
+    const out = [];
+    for (const scope of [path.join(dir, "node_modules", "@anthropic-ai"), path.dirname(dir)]) {
+      let entries;
+      try {
+        entries = await fs.promises.readdir(scope, { withFileTypes: true });
+      } catch (err) {
+        if (NOT_THERE.has(err?.code)) continue;
+        throw err;
+      }
+      for (const e of entries) {
+        if (e.name.startsWith("claude-code-") && (e.isDirectory() || e.isSymbolicLink())) out.push(path.join(scope, e.name, "claude"), path.join(scope, e.name, "claude.exe"));
+      }
+    }
+    return out;
+  }
+  return [];
+}
+
+/**
+ * The programs the Terminal may run as claude, each as its real file, the Agent SDK's own copy left out (see above).
+ * Throws when a place can't be looked in (a folder it may not read): then no one can say what the Terminal runs.
+ */
+export async function terminalClaudePrograms({ env = process.env, home = os.homedir(), fixedDirs = process.platform === "win32" ? [] : ["/usr/local/bin"] } = {}) {
+  const exes = process.platform === "win32" ? ["claude.exe", "claude"] : ["claude"];
+  const dirs = [...fixedDirs, ...String(env?.PATH ?? env?.Path ?? "").split(path.delimiter), path.join(home, ".local", "bin")].filter((d) => d && path.isAbsolute(d));
+  let sdkScope = null;
+  try { sdkScope = await fs.promises.realpath(SDK_SCOPE); } catch { /* no Agent SDK installed: nothing to leave out */ }
+  const isSdkCopy = (real) => {
+    if (!sdkScope) return false;
+    const rel = path.relative(sdkScope, real);
+    return !!rel && !rel.startsWith("..") && !path.isAbsolute(rel) && /^claude-agent-sdk(?:-[^\\/]+)?[\\/]/.test(rel);
+  };
+  const found = [], seen = new Set();
+  const add = async (file) => {
+    let st;
+    try {
+      st = await fs.promises.stat(file, { bigint: true });
+    } catch (err) {
+      if (NOT_THERE.has(err?.code)) return;
+      throw err;
+    }
+    if (!st.isFile()) return;
+    const real = await fs.promises.realpath(file);
+    if (isSdkCopy(real)) return;
+    // A hard link (npm's install of Claude Code links its native program into bin/) is read once.
+    const id = st.ino ? `${st.dev}:${st.ino}` : real;
+    if (seen.has(id)) return;
+    seen.add(id);
+    found.push(real);
+    for (const more of await packagePrograms(real)) await add(more);
+  };
+  for (const dir of dirs) for (const exe of exes) await add(path.join(dir, exe));
+  return found;
+}
+
+/** The programs as they are now (path, size, times, file id): a read is redone when this changes. Throws for a non-file. */
+async function programsNow(files) {
+  const out = [];
+  for (const file of files) {
+    const st = await fs.promises.stat(file, { bigint: true });
+    if (!st.isFile()) throw new Error(`${file} is not a program file`);
+    out.push(`${file}\0${st.size}\0${st.mtimeNs}\0${st.ctimeNs}\0${st.dev}:${st.ino}`);
+  }
+  return out.sort().join("\n");
+}
+
+/** The read in progress or done: { find, log, waitMs, promise, result }, result an Error when it failed. */
+let terminalScan = null;
+
+/**
+ * Reads the Terminal's own Claude Code (`find` lists its programs) in the background and keeps what it holds for the
+ * writes to come. Called by server.js once Tarsee listens on Railway. Resolves to { files, names, runs }, or to an
+ * Error when it can't be read; never rejects. Logs one line either way.
+ */
+export function startTerminalCliScan({ find = terminalClaudePrograms, log = (line) => console.log(line), waitMs = TERMINAL_WAIT_MS } = {}) {
+  const scan = { find, log, waitMs, started: Date.now(), result: null };
+  scan.promise = readTerminalCli(scan).then((result) => {
+    scan.result = result;
+    return result;
+  });
+  terminalScan = scan;
+  return scan.promise;
+}
+
+async function readTerminalCli({ find, log }) {
+  const started = Date.now();
+  let result;
+  try {
+    const files = [...await find()].map(String);
+    const signature = await programsNow(files);
+    const names = new Set(), runs = new Set();
+    for (const file of files) {
+      const got = await scanProgramNames(file);
+      for (const n of got.names) names.add(n);
+      for (const r of got.runs) runs.add(r);
+    }
+    // A run the engines' code holds as one string somewhere is that string here too, as the list's own check has it
+    // (it reads the Agent SDK's JavaScript, where every run is one, along with the CLI).
+    const list = shippedEngineNames instanceof Error ? null : shippedEngineNames;
+    const known = (run) => !!list && (list.names.has(run) || list.strings.has(run));
+    result = { files, signature, names, runs: [...runs].filter((run) => !known(run)) };
+  } catch (err) {
+    result = err instanceof Error ? err : new Error(String(err));
+  }
+  try { log(terminalLine(result, Date.now() - started)); } catch { /* logging never fails the read */ }
+  return result;
+}
+
+/** The one log line about the read: what it found that engine-env-names.json lacks, or why it couldn't. */
+function terminalLine(result, ms) {
+  if (result instanceof Error) {
+    return `[railway] warning: could not read the Terminal's Claude Code (${result.message}). Until it can, tarsee_railway sets only TZ and the tuning settings on Tarsee's own service; the owner sets anything else there by hand in Railway's dashboard.`;
+  }
+  if (!result.files.length) return "[railway] the Terminal's Claude Code: none besides the Agent SDK's own, whose names engine-env-names.json has";
+  const list = shippedEngineNames instanceof Error ? null : shippedEngineNames;
+  const listedRuns = new Set(list?.runs || []);
+  const lacks = (n) => !list || !inEngineCode(n, list);
+  const fresh = new Set([...result.names].filter(lacks));
+  for (const run of result.runs) if (!listedRuns.has(run)) for (const n of keyNamesInRun(run)) if (lacks(n)) fresh.add(n);
+  const newNames = [...fresh].sort();
+  const what = newNames.length
+    ? `It holds ${newNames.length} key-shaped names engine-env-names.json lacks, now refused on Tarsee's own service too: ${newNames.slice(0, 20).join(", ")}${newNames.length > 20 ? ` and ${newNames.length - 20} more` : ""}.`
+    : "It holds no key-shaped name engine-env-names.json lacks.";
+  return `[railway] the Terminal's Claude Code: read ${result.files.join(", ")} in ${(ms / 1000).toFixed(1)} s. ${what}`;
+}
+
+/** The last read's result, or null (none done yet, or one in progress). */
+const lastTerminalRead = () => terminalScan?.result ?? null;
+
+/**
+ * The Terminal's own Claude Code for a write that needs it: { files, names, runs }, or an Error while it can't be read.
+ * Starts the read when nothing has; reads again when a program changed since, or when the last read failed; and waits
+ * for a read in progress up to its waitMs (an Error after that). Never throws.
+ */
+export async function terminalCliNames() {
+  if (!terminalScan) startTerminalCliScan();
+  const was = terminalScan;
+  if (was.result) {
+    let same = false;
+    if (!(was.result instanceof Error)) {
+      try { same = (await programsNow([...await was.find()].map(String))) === was.result.signature; } catch { same = false; }
+    }
+    if (!same && terminalScan === was) startTerminalCliScan(was);
+  }
+  const scan = terminalScan;
+  if (scan.result) return scan.result;
+  // A read already going for longer than its waitMs is not waited for again.
+  const tooLong = () => new Error(`reading it took longer than ${scan.waitMs >= 1000 ? `${Math.round(scan.waitMs / 1000)} seconds` : `${scan.waitMs} ms`}`);
+  const left = scan.waitMs - (Date.now() - scan.started);
+  if (left <= 0) return tooLong();
+  let timer;
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(tooLong()), left); });
+  try {
+    return await Promise.race([scan.promise, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** ctx.terminalCli()'s answer, an Error when it fails or gives none that can be used. */
+async function terminalNow({ terminalCli }) {
+  try {
+    const got = await terminalCli();
+    if (got instanceof Error || got == null) return got ?? null;
+    if (!Array.isArray(got.files) || !(got.names instanceof Set) || !Array.isArray(got.runs)) return new Error("the read gave no list of names");
+    return got;
+  } catch (err) {
+    return err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+/** Whether `name` appears in the Terminal's own Claude Code as read (terminalCliNames). */
+export function inTerminalCli(name, terminal) {
+  return terminal.names.has(name) || terminal.runs.some((run) => heldInRun(run, name));
+}
+
+const IN_RAILWAY = "Only the owner changes it, by hand in Railway's dashboard (Tarsee's service > Variables).";
+const OWN = "so this tool never sets it on Tarsee's own service.";
+const THE_RULE = `On Tarsee's own service this tool sets only: a key or address for the owner's own scripts, named in capitals and ending in ${SCRIPT_KEY_ENDINGS.slice(0, -1).join(", ")} or ${SCRIPT_KEY_ENDINGS.at(-1)} (for example SOME_SERVICE_API_KEY or ALERTS_WEBHOOK), when no part of Tarsee reads that name itself and it appears nowhere in the code of its AI engines or browser library; TZ, with a time zone name; and Tarsee's tuning settings ${SELF_TUNING.join(", ")}.`;
+
+/**
+ * Why `name` is not set on Tarsee's own service, in plain words with where the owner changes it instead; null when it
+ * may be. The refused families are matched in any case (npm reads npm_config_* in any case); the allowlist only as
+ * written. `value`, when given, is checked too (TZ takes a time zone name only). `engineNames` is the list of names in
+ * the engines' code (the shipped one, or an Error when it couldn't be read). `terminal` is the Terminal's own Claude
+ * Code as read (terminalCliNames: { files, names, runs }, an Error while it can't be read, or null when there is none;
+ * by default the last read). `core`, when given, says why only TZ and the tuning settings go there (coreReason).
+ */
+export function selfServiceRefusal(rawName, value, { engineNames = shippedEngineNames, terminal = lastTerminalRead(), core = null } = {}) {
+  const name = String(rawName ?? "").trim();
+  const upper = name.toUpperCase();
+  if (SETTINGS.has(name)) {
+    if (name === "TZ" && value !== undefined && !TZ_VALUE.test(String(value).trim())) {
+      return `TZ on Tarsee's own service takes a time zone name such as Asia/Manila, UTC or Etc/GMT-8, never a path to a file: with one, every program Tarsee runs would read its time zone from that file. ${IN_RAILWAY}`;
+    }
+    return null;
+  }
+  const unknown = core || (terminal instanceof Error
+    ? `Tarsee could not read the Terminal's Claude Code (${terminal.message}), which can be newer than the one Tarsee ships (${AUTO_UPDATE_CLI}=1 installs the latest when Tarsee starts), so until it can, it can't tell which names that program reads`
+    : null);
+  if (unknown) {
+    return `${name || "That name"} is not set there: ${unknown}. So on that service this tool sets only TZ and the tuning settings (TZ with a time zone name; the tuning settings are ${SELF_TUNING.join(", ")}), with a deploy or without, and no other name, not even a key for the owner's own scripts. Only the owner changes it, by hand in Railway's dashboard (that service's Variables tab).`;
+  }
+  if (SIGN_IN.has(upper)) {
+    return `${name} is part of how Tarsee signs people in or locks its saved keys, ${OWN} ${IN_RAILWAY}`;
+  }
+  if (AI_CHOICE.has(upper) || AUTH_ENV_RE.test(upper) || AI_PREFIX.test(upper)) {
+    return `${name} chooses which AI answers, the key or sign-in it uses, or where its chats are sent, ${OWN} AI keys and the choice of AI belong in Settings > AI; the owner can also change the variable by hand in Railway's dashboard.`;
+  }
+  if (OWN_KEYS.has(upper)) {
+    return `${name} is a key Tarsee itself uses, ${OWN} It belongs in Tarsee's Settings (the voice and captcha keys are saved there); the owner can also set it by hand in Railway's dashboard.`;
+  }
+  if (BUILD.test(upper)) {
+    return `${name} is one of the settings for how Railway builds and runs Tarsee (every variable reaches its build), ${OWN} ${IN_RAILWAY}`;
+  }
+  if (RUNTIME.test(upper)) {
+    return `${name} changes how programs and shells start, which programs Tarsee runs, where its files are, or where its connections go, ${OWN} ${IN_RAILWAY}`;
+  }
+  if (BROWSER.test(upper)) {
+    return `${name} is read by the browser Tarsee drives (Chromium, through Playwright) or by its desktop: it can change which browser runs and how, what it loads, where it connects, or which keys its Google services use, ${OWN} ${IN_RAILWAY}`;
+  }
+  if (READ_BY_TARSEE.has(upper) || READ_BY_TARSEE_PREFIX.test(upper)) {
+    return `${name} is read by Tarsee itself, its AI engines or a program it runs, and setting it would change how Tarsee works, ${OWN} A key for the owner's own scripts needs a name of its own. ${IN_RAILWAY}`;
+  }
+  if (upper.startsWith("TARSEE_")) {
+    return `${name} is one of Tarsee's own settings, and those can switch off a protection or change how Tarsee runs, ${OWN} ${THE_RULE} ${IN_RAILWAY}`;
+  }
+  if (SCRIPT_KEY.test(name)) {
+    let found;
+    try {
+      found = inEngineCode(name, engineNames);
+    } catch (err) {
+      return `Tarsee could not read the list of names in its AI engines' code (src/lib/engine-env-names.json: ${err.message}). Without it, it can't tell whether an engine reads ${name}, so this tool sets no such name on Tarsee's own service. ${IN_RAILWAY}`;
+    }
+    if (found) {
+      return `${name} appears in the code of Tarsee's AI engines or its browser library (the Claude Agent SDK and Claude Code, Codex, Playwright), which may read it from the environment and change how they work, ${OWN} A key for the owner's own scripts needs a name of its own. ${IN_RAILWAY}`;
+    }
+    if (terminal && inTerminalCli(name, terminal)) {
+      return `${name} appears in the code of the Terminal's Claude Code (${terminal.files.join(", ")}), which can be newer than the one Tarsee ships (TARSEE_AUTO_UPDATE_CLI=1 installs the latest when Tarsee starts) and may read it from the environment, ${OWN} A key for the owner's own scripts needs a name of its own. ${IN_RAILWAY}`;
+    }
+    return null;
+  }
+  return `${name || "That name"} is not one of the names this tool sets on Tarsee's own service. ${THE_RULE} Any other name could change how Tarsee is built, starts or runs. ${IN_RAILWAY}`;
+}
+
+/**
+ * Why a variable that `own` on Tarsee's own service is filled in from by a Railway reference is never set, or null: the
+ * reason `own` itself is never set there, since at Tarsee's next deploy a change to the one is a change to the other.
+ * TZ too, which the tool sets only with a time zone name: through a reference it can't check the value TZ would get.
+ * `limits` as for selfServiceRefusal.
+ */
+function refusalThroughReference(own, limits) {
+  if (String(own).trim() === "TZ") {
+    return `TZ on Tarsee's own service takes a time zone name only, and through a reference this tool can't check the value TZ would get. ${IN_RAILWAY}`;
+  }
+  return selfServiceRefusal(own, undefined, limits);
+}
+
+/** Why the vault key `keyName` is never copied into a service, or null. */
+function serverOnlyRefusal(keyName) {
+  const upper = String(keyName ?? "").trim().toUpperCase();
+  if (!SERVER_ONLY_KEYS.includes(upper)) return null;
+  if (upper === TOKEN_KEY) {
+    return `${TOKEN_KEY} is the token Tarsee itself uses to reach Railway: with it a service could read and change every variable this account reaches, Tarsee's own included, so this tool never copies it into a service. If a service needs a Railway token, the owner makes one in Railway (Account Settings > Tokens) and sets it on that service by hand.`;
+  }
+  return `${upper} is one of Tarsee's own secrets (how it signs people in or locks its saved keys), so this tool never copies it into a service. If another service really needs it, the owner sets it there by hand in Railway's dashboard.`;
+}
+
+/** True when `value` has one of Tarsee's own Railway tokens in it. */
+const holdsOwnToken = (value, ownTokens) => ownTokens.some((t) => value.includes(t));
+const TOKEN_ELSEWHERE = "Tarsee's own Railway token, and this tool never copies it into a service. If a service needs a Railway token, the owner makes one in Railway (Account Settings > Tokens) and sets it on that service by hand.";
+
+// ---------------------------------------------------------------- what Tarsee's own variables are filled in from
+
+const SHARED = "shared";
+/**
+ * A service id (or SHARED) and a variable name, as one key, ids and names in any case: what a write to `name`, or a
+ * reference to it, may reach. Railway's docs don't say whether ${{ api_key }} reaches API_KEY, so a slot holds every
+ * variable of that name in any case, and nothing in it is dropped: each one's references are followed.
+ */
+const slot = (key, name) => `${String(key).toLowerCase()}\0${String(name).toUpperCase()}`;
+/** One variable exactly as named (environment variables are case-sensitive): where a walk from Tarsee's own starts. */
+const exactSlot = (key, name) => `${String(key).toLowerCase()}\0=${name}`;
+/** How many variables feedersOfTarsees() looks at before it gives up (and the write with it). */
+const MAX_REFERENCE_STEPS = 10_000;
+
+/**
+ * The references in a value: `${{ NAME }}` (the same service's), `${{ shared.NAME }}`, `${{ Service.NAME }}` (a
+ * service name can hold dots; a variable name can't). [{ service: name or null, variable }].
+ */
+function referencesIn(value) {
+  const out = [];
+  for (const m of String(value ?? "").matchAll(/\$\{\{\s*([^{}]*?)\s*\}\}/g)) {
+    const dot = m[1].lastIndexOf(".");
+    const variable = m[1].slice(dot + 1).trim();
+    if (variable) out.push({ service: dot < 0 ? null : m[1].slice(0, dot).trim(), variable });
+  }
+  return out;
+}
+
+/**
+ * In `env`: what every variable on each Tarsee service there (any name, not only the guarded ones) is filled in from
+ * by Railway references, followed through the variables they point at, on any service (that Tarsee's own included) or
+ * a shared one, to the end of each chain. At that Tarsee's next deploy a change to one of those is a change to the
+ * variable of the Tarsee it fills. `names` is the environment's variables (variableNames: name, service, sealed or
+ * not); `tarsees` is tarseeServices()'s.
+ *
+ * Returns { fed, blind }. fed: a Map of slot(service id or SHARED, NAME) to a Map of the variables on a Tarsee service
+ * it fills ({ tid, own }: the Tarsee's id in lower case, the variable's name). blind: the links that can't be followed
+ * ({ tid, own, name, key, direct, service }), after which `own` could be filled in from any variable in the
+ * environment:
+ *   - a sealed variable (`own` itself included, direct when it is the sealed one): Railway never gives a sealed
+ *     variable's value back, so a reference in one can't be followed;
+ *   - a reference to a service the project doesn't have (`service`, the name it gives): Railway would look for a service
+ *     of that name, so which variable fills it is unknown.
+ *
+ * A walk starts from each variable of a Tarsee exactly as named, so two that differ only in case are followed each
+ * from its own value. A reference reaches every variable of its name in any case (slot), and the references of each are
+ * followed. `${{ shared.X }}` reaches the shared variables, and a service named shared too.
+ *
+ * Values are read only to find their `${{ ... }}`: each is dropped as soon as its references are taken, and none is
+ * kept, shown or logged. Fails (and with it the write) when Railway can't answer.
+ */
+async function feedersOfTarsees({ api }, project, env, names, tarsees) {
+  const idsByName = new Map();
+  for (const s of project.services) {
+    const n = String(s.name).trim().toLowerCase();
+    idsByName.set(n, [...(idsByName.get(n) || []), s.id]);
+  }
+  // The sealed ones: exactly as named, and the slot each falls in (with the name of the first one there).
+  const sealedExact = new Set();
+  const sealedSlots = new Map();
+  for (const x of names.filter((n) => n.sealed)) {
+    const key = x.serviceId || SHARED;
+    sealedExact.add(exactSlot(key, x.name));
+    if (!sealedSlots.has(slot(key, x.name))) sealedSlots.set(slot(key, x.name), x.name);
+  }
+  // Service id or SHARED -> { exact: Map(name -> refs), any: Map(NAME -> the refs of every variable of that name, in any case) }
+  const loaded = new Map();
+  const load = async (key) => {
+    const k = String(key).toLowerCase();
+    if (!loaded.has(k)) {
+      // Railway's Manage Variables guide: leave serviceId out for the environment's shared variables.
+      const vars = { projectId: project.id, environmentId: env.id, ...(key === SHARED ? {} : { serviceId: key }) };
+      const data = await api(DOCS.unrendered, vars);
+      const got = data?.variables && typeof data.variables === "object" ? data.variables : {};
+      const exact = new Map(), any = new Map();
+      for (const [name, value] of Object.entries(got)) {
+        const refs = referencesIn(value);
+        exact.set(name, refs);
+        const upper = name.toUpperCase();
+        any.set(upper, [...(any.get(upper) || []), ...refs]);
+      }
+      loaded.set(k, { exact, any });
+    }
+    return loaded.get(k);
+  };
+
+  // Each variable of each Tarsee service, exactly as named: { tid, key (its service id as Railway gives it), own }.
+  const roots = [];
+  const rooted = new Set();
+  for (const x of names) {
+    const t = tarsees.get(lower(x.serviceId));
+    if (!t || rooted.has(exactSlot(t.svc.id, x.name))) continue;
+    rooted.add(exactSlot(t.svc.id, x.name));
+    roots.push({ tid: lower(t.svc.id), key: t.svc.id, own: x.name });
+  }
+  const fed = new Map();
+  const blind = [];
+  let steps = 0;
+  for (const { tid, key: rootKey, own: root } of roots) {
+    // The first step is the Tarsee's own variable as named; every later one, a slot a reference reaches.
+    const queue = [{ key: rootKey, name: root, exact: true }];
+    const seen = new Set();
+    while (queue.length) {
+      // Not followed to the end: as unknown as a sealed one.
+      if (++steps > MAX_REFERENCE_STEPS) {
+        fail(`The variables of the Tarsee services in ${env.name} reference other variables too many times over to follow (over ${MAX_REFERENCE_STEPS} steps), so this tool can't tell what they are filled in from, and sets nothing there. The owner makes the change by hand in Railway's dashboard (the service's Variables tab).`);
+      }
+      const { key, name, exact } = queue.shift();
+      const at = exact ? exactSlot(key, name) : slot(key, name);
+      if (seen.has(at)) continue;
+      seen.add(at);
+      const sealedName = exact ? (sealedExact.has(at) ? name : null) : sealedSlots.get(at);
+      if (sealedName != null) {
+        blind.push({ tid, own: root, name: sealedName, key, direct: exact });
+        continue;
+      }
+      const vars = await load(key);
+      // Tarsee's own as named; were Railway's two answers ever to spell it differently, every variable of that name.
+      const refs = (exact && vars.exact.get(name)) || vars.any.get(String(name).toUpperCase()) || [];
+      for (const ref of refs) {
+        let to = [key];
+        if (ref.service != null) {
+          const svcName = ref.service.toLowerCase();
+          to = [...(svcName === SHARED ? [SHARED] : []), ...(idsByName.get(svcName) || [])];
+        }
+        if (!to.length) {
+          blind.push({ tid, own: root, name: ref.variable, key: null, direct: false, service: ref.service });
+          continue;
+        }
+        for (const target of to) {
+          const into = slot(target, ref.variable);
+          if (!fed.has(into)) fed.set(into, new Map());
+          fed.get(into).set(exactSlot(tid, root), { tid, own: root });
+          queue.push({ key: target, name: ref.variable, exact: false });
+        }
+      }
+    }
+  }
+  return { fed, blind };
+}
+
+/**
+ * "Tarsee's own X is sealed", "Tarsee's own X is filled in from Y on Z, which is sealed", or "... from Y on "Z", a
+ * service the project doesn't have", and how many more; "the Tarsee W's X (W counts as a Tarsee: ...)" for another.
+ */
+function blindWhat(blind, project, tarsees) {
+  const label = (key) => (key === SHARED ? "the shared variables" : project.services.find((s) => lower(s.id) === lower(key))?.name || key);
+  const first = blind[0];
+  const t = tarsees.get(first.tid);
+  const who = `${whose(t)} ${first.own}${whyTarsee(t)}`;
+  const what = first.service != null
+    ? `${who} is filled in from ${first.name} on "${first.service}", a service the project "${project.name}" doesn't have`
+    : first.direct ? `${who} is sealed` : `${who} is filled in from ${first.name} on ${label(first.key)}, which is sealed`;
+  const more = blind.length > 1 ? ` (and ${blind.length - 1} more this tool can't follow: ${blind.slice(1, 4).map((b) => b.name).join(", ")}${blind.length > 4 ? ", ..." : ""})` : "";
+  return `${what}${more}`;
+}
+
+/** Why that link can't be followed, in a few words. */
+const blindWhy = (first) => (first.service != null
+  ? "Railway would look for a service of that name, so this tool can't tell which variable fills it"
+  : "Railway never shows its value, so this tool can't see whether it is filled in from another variable by a Railway reference (${{ ... }})");
+
+/** Why nothing is set in this environment while a link the walk can't follow hides what a guarded variable of a Tarsee service is filled in from. */
+function blindRefusal(blind, project, env, tarsees) {
+  const first = blind[0];
+  const t = tarsees.get(first.tid);
+  return `${cap(blindWhat(blind, project, tarsees))}: ${blindWhy(first)}. Any variable in ${env.name} of the project "${project.name}" could be the one that fills it, and changing it would change ${first.own} on ${onIt(t)} at its next deploy, so while that stays so this tool sets nothing there. Only the owner makes this change, by hand in Railway's dashboard (the service's Variables tab). Other environments are not affected by it.`;
+}
 
 // ---------------------------------------------------------------- list_projects
 
@@ -324,7 +1199,7 @@ async function listVariables(ctx) {
 // ---------------------------------------------------------------- set_variable
 
 async function setVariable(ctx) {
-  const { args, v, api, note, here } = ctx;
+  const { args, v, api, note, here, ownTokens } = ctx;
   const name = String(args.name ?? "").trim();
   if (!name) fail("name is required: the variable's name, e.g. ALERTS_WEBHOOK_URL.");
   if (!VAR_NAME.test(name)) fail(`name "${name}" is not a usable variable name: letters, digits and underscores, not starting with a digit.`);
@@ -341,18 +1216,24 @@ async function setVariable(ctx) {
   let value, shown;
   if (hasKey) {
     const keyName = String(args.from_key).trim();
+    note.extra.push(`from_key=${keyName}`);
+    const serverOnly = serverOnlyRefusal(keyName);
+    if (serverOnly) fail(serverOnly);
     let raw = null;
     try { raw = v.getKey(keyName) ?? (keyName !== keyName.toUpperCase() ? v.getKey(keyName.toUpperCase()) : null); } catch (err) { fail(`The vault key ${keyName} could not be read (${err.message}).`); }
     if (raw == null) fail(`The vault has no key named ${keyName}. tarsee_list_keys lists the names.`);
     value = String(raw);
     if (!value) fail(`The vault key ${keyName} is empty, so there is nothing to set.`);
     note.secrets.push(value);
-    note.extra.push(`from_key=${keyName}`);
+    if (holdsOwnToken(value, ownTokens)) fail(`The vault key ${keyName} holds ${TOKEN_ELSEWHERE}`);
+    if (value.includes(REFERENCE)) fail(`The vault key ${keyName} holds ${REFERENCE_REFUSAL}`);
     shown = `from the vault key ${keyName} (masked: ${maskValue(value)}). The value was not shown anywhere.`;
   } else {
     value = String(args.value);
+    if (holdsOwnToken(value, ownTokens)) fail(`That value holds ${TOKEN_ELSEWHERE}`);
+    if (value.includes(REFERENCE)) fail(`That value holds ${REFERENCE_REFUSAL}`);
     const inVault = vaultKeyHolding(v, value);
-    if (inVault) fail(`That value is the vault key ${inVault}. Pass from_key: "${inVault}" instead, so the value never goes through a chat or a command.`);
+    if (inVault) fail(serverOnlyRefusal(inVault) || `That value is the vault key ${inVault}. Pass from_key: "${inVault}" instead, so the value never goes through a chat or a command.`);
     const shape = SECRET_SHAPES.find(([re]) => re.test(value.trim()));
     if (shape) fail(`value looks like a secret (${shape[1]}). Save it in the vault with tarsee_set_key and pass from_key with that key name instead, so it never goes through a chat or a command.`);
     note.extra.push("value=plain");
@@ -364,7 +1245,41 @@ async function setVariable(ctx) {
   const project = await resolveProject(ctx);
   const env = resolveEnv(project, args, note, here);
   const svc = resolveService(project, args, note, here);
-  const before = (await variableNames(ctx, project, env)).find((x) => x.serviceId === svc.id && x.name === name);
+  // The Tarsee services in this project, from the names of every environment of it (nothing is set without them).
+  const { tarsees, names } = await tarseeServices(ctx, project, env, svc, name);
+  // Each one's limits: only TZ and the tuning settings, or (on Tarsee's own service where it runs, without
+  // TARSEE_AUTO_UPDATE_CLI) the full allowlist, with the Terminal's own Claude Code as it runs now (read when Tarsee
+  // started, again if it changed since; while it can't be read, only TZ and the tuning settings there too).
+  const limits = new Map([...tarsees].map(([tid, t]) => [tid, { core: coreReason(t, env, names, project, here) }]));
+  if ([...limits.values()].some((l) => !l.core)) {
+    const terminal = await terminalNow(ctx);
+    for (const l of limits.values()) if (!l.core) l.terminal = terminal;
+  }
+  // With deploy: false too: a refused name left waiting on a Tarsee service would be applied by its next deploy.
+  const target = tarsees.get(lower(svc.id));
+  if (target) {
+    const why = selfServiceRefusal(name, value, limits.get(lower(svc.id)));
+    if (why) fail(`${asTarsee(target)}${why}`);
+    if (hasKey) await refuseWhileGetKeyDenied(ctx, `${asTarsee(target)}${GET_KEY_ON_OWN}`);
+  }
+  // A variable one of a Tarsee's is filled in from counts as that one: at that Tarsee's next deploy the change reaches
+  // it, under its name. So the same rules apply, under that name. And while a link the walk can't follow (a sealed
+  // variable, a service the project doesn't have) hides what one of its variables is filled in from: nothing in this
+  // environment if that one is guarded, and no vault key while get_key is denied.
+  if (names.some((x) => tarsees.has(lower(x.serviceId)))) {
+    const { fed, blind } = await feedersOfTarsees(ctx, project, env, names, tarsees);
+    // Every variable of a Tarsee this one fills, in any case, but itself: a twin that differs only in case is another one.
+    const fills = [...(fed.get(slot(svc.id, name))?.values() || [])].filter((f) => !(f.tid === lower(svc.id) && f.own === name));
+    for (const f of fills) {
+      const why = refusalThroughReference(f.own, limits.get(f.tid));
+      if (why) fail(`${cap(filledFrom(f, tarsees, name, svc))}, so setting ${name} would set ${f.own} on ${onIt(tarsees.get(f.tid))} at its next deploy. ${why}`);
+    }
+    const guarded = blind.filter((b) => refusalThroughReference(b.own, limits.get(b.tid)));
+    if (guarded.length) fail(blindRefusal(guarded, project, env, tarsees));
+    if (hasKey && fills.length) await refuseWhileGetKeyDenied(ctx, getKeyThroughReference(fills[0], tarsees, name, svc));
+    if (hasKey && blind.length) await refuseWhileGetKeyDenied(ctx, getKeyWhileBlind(blind, project, env, tarsees));
+  }
+  const before = names.find((x) => x.serviceId === svc.id && x.name === name);
 
   let ok;
   try {
@@ -387,6 +1302,42 @@ async function setVariable(ctx) {
       : `deploy: no (deploy: false). ${svc.name} keeps the old value until its next deploy; redeploy starts one.`,
     deploy && isSelf(svc, env, here) ? SELF_RESTART : null,
   ].filter(Boolean).join("\n");
+}
+
+/**
+ * from_key where it would reach Tarsee's own service while the owner has denied get_key: that denial keeps the vault's
+ * keys out of the AI's reach (none goes into its commands' environment, agent-env.js), and a key set on Tarsee's own
+ * service, or into a variable one of its variables is filled in from, would reach them at the next deploy. Refused with
+ * `deniedText` when denied, and refused too when Tarsee can't tell.
+ */
+async function refuseWhileGetKeyDenied({ getKeyDenied }, deniedText) {
+  let denied;
+  try {
+    denied = !!(await getKeyDenied());
+  } catch (err) {
+    fail(`Tarsee could not tell whether get_key is denied in Settings > Tool Permissions (${err?.message || err}), so no vault key goes where it would reach Tarsee's own service: once deployed there, the AI's commands could read it. The owner can set it by hand in Railway's dashboard (the service's Variables tab).`);
+  }
+  if (denied) fail(deniedText);
+}
+
+const GET_KEY_DENIED = "get_key is denied in Settings > Tool Permissions, which keeps the vault's keys out of the AI's reach";
+const GET_KEY_STILL = "a plain value, and from_key onto a variable no Tarsee service is filled in from, still work";
+const GET_KEY_ON_OWN = `${GET_KEY_DENIED}, and a vault key set on Tarsee's own service would reach the AI's commands at the next deploy. So while it is denied, from_key onto Tarsee's own service is refused. The owner can set it by hand in Railway's dashboard (Tarsee's service > Variables); ${GET_KEY_STILL}.`;
+
+/** "Tarsee's own X is filled in from Y on Z by a Railway reference (${{ ... }})", or the same for another Tarsee. */
+function filledFrom(f, tarsees, name, svc) {
+  const t = tarsees.get(f.tid);
+  return `${whose(t)} ${f.own}${whyTarsee(t)} is filled in from ${name} on ${svc.name} by a Railway reference (\${{ ... }})`;
+}
+
+/** Why from_key into a variable one on a Tarsee service is filled in from is refused while get_key is denied. */
+function getKeyThroughReference(f, tarsees, name, svc) {
+  return `${GET_KEY_DENIED}. ${cap(filledFrom(f, tarsees, name, svc))}, so a vault key set there would reach ${onIt(tarsees.get(f.tid))} as ${f.own} at its next deploy, and the AI's commands with it. So while get_key is denied, from_key into a variable a Tarsee service is filled in from is refused. The owner can set it by hand in Railway's dashboard (the service's Variables tab); ${GET_KEY_STILL}.`;
+}
+
+/** Why from_key anywhere in this environment is refused while get_key is denied and a link the walk can't follow hides a reference. */
+function getKeyWhileBlind(blind, project, env, tarsees) {
+  return `${GET_KEY_DENIED}, and ${blindWhat(blind, project, tarsees)}: ${blindWhy(blind[0])}. It could be filled in from this variable, and a vault key set here could reach ${onIt(tarsees.get(blind[0].tid))} at its next deploy. So while get_key is denied, from_key anywhere in ${env.name} of the project "${project.name}" is refused. The owner can set it by hand in Railway's dashboard (the service's Variables tab); plain values and other environments still work.`;
 }
 
 /** The vault key whose value is exactly this one, if any (only to point at from_key; nothing is shown). */

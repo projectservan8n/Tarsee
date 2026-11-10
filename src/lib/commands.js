@@ -1079,7 +1079,7 @@ artifact. Just confirm.`;
     description: "Scheduled tasks: list them, add one, switch one on or off, run or remove one",
     usage: "/cron [list|add|on|off|run|remove]",
     ownerOnly: true,
-    handler: async (args) => {
+    handler: async (args, ctx = {}) => {
       try {
         const { getCronStatus, addCronJob, removeCronJob, runCronJob, loadCronJobs, setCronJobEnabled } = await import("./cron.js");
 
@@ -1090,11 +1090,72 @@ artifact. Just confirm.`;
           }
           const STATE = { waiting: "waiting for your OK", running: "running", on: "on", off: "off" };
           const WHO = { ai: "made by the AI in a chat", owner: "made by you" };
+          const SETTINGS = "Settings > Automation > Scheduled tasks";
           const lines = ["**Scheduled tasks**", ""];
+          // What the AI wrote (a task's schedule, the tool and args it runs directly, the start of its prompt) is shown
+          // in a code span, where no chat draws markdown (channels/telegram.js keeps code spans as written too), so the
+          // owner sees what /cron on switches on. Only set_key's value and a mailbox password are masked (lib/cron.js
+          // shownDirectAction). It is written as Settings writes it (js/cron-core.js argsText and visible: what would
+          // look blank or reorder the line as its escape), with each backtick as its escape too (backslash, u0060), so
+          // nothing ends the span, and left to right as it runs (between LRO and PDF, with no bidi control left inside
+          // to undo it).
+          // A chat bot's message has a limit, and the channel splits a longer one: between lines when every line fits
+          // (lib/discord-format.js splitMessageFenceSafe on Discord and Slack; Telegram and WhatsApp cut at the last
+          // line break past half their limit). Discord's is 2,000 characters, WhatsApp's 4,000, and Telegram's 4,096
+          // once written as HTML, so a line there stays under 2,048 with its tags. So on a chat bot each task's line
+          // holds at most LINE_MAX characters, counted as Telegram's HTML writes them (& as 5, < and > as 4), and the
+          // list splits between tasks only. What doesn't fit is cut, and the line says so after the span: "[cut: N
+          // more characters, see them whole in Settings > ...]". The dashboard's chat has no limit: it shows all.
+          await import("../public/js/cron-core.js");
+          const { argsText, visible } = globalThis.CronCore;
+          const whole = ctx.platform === "web";
+          const LINE_MAX = 1950;
+          const SCHEDULE_SHOWN = 100;   // a schedule is 5 short parts: one an older version saved padded out is cut
+          const TOOL_SHOWN = 64;
+          const PROMPT_SHOWN = 60;
+          const ticked = `${String.fromCharCode(92)}u0060`;
+          const json = (v) => argsText(v).replace(/`/g, ticked);
+          const text = (v) => visible(String(v ?? "")).replace(/`/g, ticked);
+          const span = (shown) => `\`\u{202D}${shown}\u{202C}\``;
+          const plain = (v) => typeof v === "string" && /^[A-Za-z0-9_]+$/.test(v);
+          const cost = (c) => (c === "&" ? 5 : c === "<" || c === ">" ? 4 : c.length);
+          const htmlLength = (s) => Array.from(s).reduce((n, c) => n + cost(c), 0);
+          const cutNote = (more) => ` [cut: ${more.toLocaleString("en-US")} more characters, see them whole in ${SETTINGS}]`;
+          /** The start of `shown` in a code span, at most `most` of it as htmlLength counts, and what was cut after it. */
+          const cut = (shown, most) => {
+            const all = Array.from(shown);
+            let n = 0;
+            for (let used = 0; n < all.length && used + cost(all[n]) <= most; n++) used += cost(all[n]);
+            return n === all.length ? span(shown) : `${span(all.slice(0, n).join(""))}${cutNote(all.length - n)}`;
+          };
+          const shownIn = (shown, most) => (whole ? span(shown) : cut(shown, most));
+          // A task that asks the AI: the start of its prompt on one line, made visible, and where the rest is.
+          const asks = (prompt) => {
+            const flat = Array.from(visible(String(prompt || "").replace(/\s+/g, " ").trim()));
+            const start = span(flat.slice(0, PROMPT_SHOWN).join("").replace(/`/g, ticked));
+            if (flat.length <= PROMPT_SHOWN) return start;
+            return `${start}... (the whole prompt, ${flat.length.toLocaleString("en-US")} characters, is in ${SETTINGS})`;
+          };
           for (const j of status.jobs) {
-            const what = j.action?.tool ? `runs ${j.action.tool} directly, no AI` : String(j.prompt || "").slice(0, 60);
+            const id = plain(j.id) ? `**${j.id}**` : shownIn(text(j.id), TOOL_SHOWN);
+            const head = `- ${id} [${STATE[j.state] || j.state}] ${shownIn(text(j.schedule), SCHEDULE_SHOWN)} — `;
             const who = WHO[j.createdBy] ? ` · ${WHO[j.createdBy]}` : "";
-            lines.push(`- **${j.id}** [${STATE[j.state] || j.state}] \`${j.schedule}\` — ${what}${who}`);
+            if (!j.actionShown) {
+              lines.push(`${head}${asks(j.prompt)}${who}`);
+              continue;
+            }
+            const { tool, args, problem } = j.actionShown;
+            const none = args === undefined || (args && typeof args === "object" && !Array.isArray(args) && Object.keys(args).length === 0);
+            const runs = `${head}runs ${plain(tool) ? tool : shownIn(json(tool), TOOL_SHOWN)} directly, no AI`;
+            const rest = `${problem ? ` · won't run as it is (${SETTINGS} says why)` : ""}${who}`;
+            if (none) {
+              lines.push(`${runs}${rest}`);
+              continue;
+            }
+            const shown = json(args);
+            const full = `${runs}, with ${span(shown)}${rest}`;
+            if (whole || htmlLength(full) <= LINE_MAX) lines.push(full);
+            else lines.push(`${runs}, with ${cut(shown, LINE_MAX - htmlLength(`${runs}, with ${span("")}${cutNote(Array.from(shown).length)}${rest}`))}${rest}`);
           }
           lines.push("", "Switch one on with `/cron on <id>`, or pause one with `/cron off <id>`.");
           lines.push(`On: ${status.activeJobs}/${status.totalJobs}`);

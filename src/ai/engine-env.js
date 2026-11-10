@@ -6,7 +6,8 @@
  * a third-party gateway, a stray ANTHROPIC_API_KEY moving plan turns onto metered billing, a Railway provider key
  * reaching the agent's shell. So every environment is built the same way (R2):
  *
- *   base  = the server's env minus every credential name, Tarsee's own secrets and the Railway provider keys
+ *   base  = the server's env minus every credential name, Tarsee's own secrets, the Railway provider keys and
+ *           Tarsee's own keys (the Railway token, SERVER_ONLY_KEY_NAMES, and any variable holding its value)
  *   env   = base + the vault's keys (so scripts read them by name) + the cost savers (Claude Code only)
  *   env   = env minus every credential name again (a vault entry can't re-add one)
  *   env   = env + this provider's credential block, and nothing else
@@ -97,10 +98,46 @@ export function isAuthEnvName(name) {
 const SECRET_NAMES = new Set(TARSEE_SECRETS);
 const RAILWAY_KEY_NAMES = new Set(PROVIDER_KEY_NAMES);
 
-/** True for a name R2 strips from the server's environment before anything is merged in. */
-function isBaseStripped(name, extra) {
+/**
+ * Tarsee's own keys: SERVER_ONLY_KEYS in lib/key-vault.js, written out here so this module loads neither the vault nor
+ * config (test/server-only-keys.test.js keeps the two lists the same). RAILWAY_API_TOKEN is the token tarsee_railway
+ * reaches Railway with: with it, one call to Railway from the AI's shell would skip every limit that tool keeps. Set as
+ * a variable where Tarsee runs (Railway's Variables tab), it is still stripped from every engine's environment, and so
+ * from the exec tool's (lib/tools.js), in any case; so is any variable holding the same value. railway-admin.js reads
+ * it from the server's own environment, which this never changes.
+ */
+export const SERVER_ONLY_KEY_NAMES = Object.freeze(["RAILWAY_API_TOKEN"]);
+const SERVER_ONLY_NAMES = new Set(SERVER_ONLY_KEY_NAMES);
+
+/** The vault's server-only keys' values: lib/key-vault.js hands this over when it loads (this module never imports it). */
+let vaultServerOnlyValues = () => [];
+export function setServerOnlyValuesSource(read) {
+  vaultServerOnlyValues = typeof read === "function" ? read : () => [];
+}
+
+/**
+ * The server-only keys' values, trimmed (8 characters or more, as key-vault's serverOnlyValues takes them): the env's
+ * own, under the name in any case, and the vault's.
+ */
+function serverOnlyValuesIn(env) {
+  const out = new Set();
+  const add = (v) => {
+    const value = typeof v === "string" ? v.trim() : "";
+    if (value.length >= 8) out.add(value);
+  };
+  for (const [k, v] of Object.entries(env)) if (SERVER_ONLY_NAMES.has(k.toUpperCase())) add(v);
+  try { for (const v of vaultServerOnlyValues() || []) add(v); } catch { /* the vault can't be read: the names still go */ }
+  return out;
+}
+
+/**
+ * True for a variable R2 strips from the server's environment before anything is merged in: by its name, or, holding
+ * a server-only key's value (ownValues: serverOnlyValuesIn), whatever its name, since a copy is still Tarsee's own.
+ */
+function isBaseStripped(name, value, extra, ownValues) {
   const upper = String(name).toUpperCase();
-  return AUTH_ENV_RE.test(upper) || SECRET_NAMES.has(upper) || RAILWAY_KEY_NAMES.has(upper) || extra.has(upper);
+  if (AUTH_ENV_RE.test(upper) || SECRET_NAMES.has(upper) || RAILWAY_KEY_NAMES.has(upper) || SERVER_ONLY_NAMES.has(upper) || extra.has(upper)) return true;
+  return ownValues.size > 0 && ownValues.has(String(value ?? "").trim());
 }
 
 /** The Claude plan: public id claude, stored as claude-code. */
@@ -151,14 +188,17 @@ function cleanLayer(obj) {
 }
 
 /**
- * R2's first step: the server's env minus credentials, Tarsee's secrets, the Railway provider keys and any stripNames.
+ * R2's first step: the server's env minus credentials, Tarsee's secrets, the Railway provider keys, Tarsee's own keys
+ * (SERVER_ONLY_KEY_NAMES, and any variable holding one's value) and any stripNames.
  * Also what agentVaultEnv() should compare against (its `env` option), so a vault key that shares a name with a
  * stripped Railway variable (OPENAI_API_KEY, say) still reaches scripts instead of being skipped as "already set".
  */
 export function baseEnv(env = process.env, stripNames = []) {
   const extra = new Set(stripNames.filter(Boolean).map((n) => String(n).toUpperCase()));
+  const clean = cleanLayer(env);
+  const ownValues = serverOnlyValuesIn(clean);
   const base = {};
-  for (const [k, v] of Object.entries(cleanLayer(env))) if (!isBaseStripped(k, extra)) base[k] = v;
+  for (const [k, v] of Object.entries(clean)) if (!isBaseStripped(k, v, extra, ownValues)) base[k] = v;
   return base;
 }
 

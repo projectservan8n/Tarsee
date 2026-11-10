@@ -552,6 +552,9 @@ const EMAIL_CONFIG = {
   imap: { host: "127.0.0.1", port: 1, user: "tarsee@example.com", password: "test-password-not-real" },
   smtp: { host: "127.0.0.1", port: 1, user: "tarsee@example.com", password: "test-password-not-real" },
   allowlistFromAddresses: ["sam@example.com"],
+  // These mails carry no Authentication-Results line, as from a server that checks nothing: the owner's "trust the
+  // From line" lets them in, set for this exact mailbox (who really sent a mail is test/email-sender-check.test.js).
+  senderCheck: { imapHost: "127.0.0.1", imapUser: "tarsee@example.com", trustFromLine: true },
 };
 
 describe("email", () => {

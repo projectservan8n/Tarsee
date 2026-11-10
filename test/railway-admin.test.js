@@ -18,7 +18,10 @@ process.env.TARSEE_DATA_DIR = path.join(tmp, "data");
 process.env.TARSEE_WORKSPACE_DIR = path.join(tmp, "workspace");
 process.env.ENCRYPTION_KEY = "railway-admin-test-encryption-key-0123456789";
 for (const k of ["RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_ENVIRONMENT_ID", "RAILWAY_SERVICE_ID"]) delete process.env[k];
-const { railwayAdmin, ACTIONS, DOCS, API_URL, TOKEN_KEY, maskValue, hereOf } = await import("../src/lib/railway-admin.js");
+const { railwayAdmin, ACTIONS, DOCS, API_URL, TOKEN_KEY, maskValue, hereOf, startTerminalCliScan } = await import("../src/lib/railway-admin.js");
+// The Terminal's own Claude Code, which Tarsee reads when it starts: none here, so no test reads the claude installed
+// on the machine it runs on (test/railway-tool-limits.test.js covers that read).
+await startTerminalCliScan?.({ find: async () => [], log: () => {} });
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = fs.readFileSync(path.join(here, "../src/lib/railway-admin.js"), "utf8");
@@ -111,6 +114,12 @@ function railway({ fail = null } = {}) {
           if (had) had.value = value; else list.push({ name, serviceId: v.serviceId, isSealed: false, value });
         }
         return reply(200, { data: { variableCollectionUpsert: true } });
+      }
+      case "TarseeUnrenderedVariables": {
+        // A write in Tarsee's own project reads Tarsee's variables, references left in, to keep what fills its own
+        // settings unchanged (test/railway-tool-limits.test.js). A sealed one's value never comes back.
+        const list = (acct.variables[v.environmentId] || []).filter((x) => x.serviceId === (v.serviceId ?? null) && !x.isSealed);
+        return reply(200, { data: { variables: Object.fromEntries(list.map((x) => [x.name, x.value])) } });
       }
       case "TarseeLatestDeployment":
         return reply(200, { data: { deployments: edges(acct.deployments[`${v.input.environmentId}/${v.input.serviceId}`] || []) } });
@@ -230,9 +239,9 @@ describe("on Railway: Tarsee's own project, environment and service by default",
     assert.match(re.out, new RegExp(`^Asked Railway to redeploy tarsee \\(service id ${S_TARSEE}\\)`));
     assert.deepEqual(re.rw.calls.at(-1).body.variables, { id: D_TARSEE });
     assert.match(re.out, /This is Tarsee's own service: the deploy restarts Tarsee, which ends the turn that asked for it\./);
-    const set = await run({ action: "set_variable", name: "LOG_LEVEL", value: "debug", approved_by: GO }, { env: ON_RAILWAY });
-    assert.match(set.out, /restarts Tarsee/);
-    const quiet = await run({ action: "set_variable", name: "LOG_LEVEL", value: "debug", deploy: false, approved_by: GO }, { env: ON_RAILWAY });
+    const set = await run({ action: "set_variable", name: "STATUS_PAGE_URL", value: "https://status.example.com", approved_by: GO }, { env: ON_RAILWAY });
+    assert.match(set.out, /restarts Tarsee/, set.out);
+    const quiet = await run({ action: "set_variable", name: "STATUS_PAGE_URL", value: "https://status.example.com", deploy: false, approved_by: GO }, { env: ON_RAILWAY });
     assert.ok(!/restarts Tarsee/.test(quiet.out), "no deploy, no restart");
     const other = await run({ action: "redeploy", project: "Acme", service: "watchdog", approved_by: GO }, { env: ON_RAILWAY });
     assert.ok(!/restarts Tarsee/.test(other.out), "another service is not Tarsee");
@@ -328,6 +337,17 @@ describe("set_variable with from_key: the value goes to Railway and nowhere else
     for (const secret of [HOOK, "wh-SECRET", TOKEN]) assert.ok(!text.includes(secret), `no ${secret.slice(0, 12)} in the result or the log`);
     assert.equal(lines.length, 1);
     assert.equal(lines[0], `[railway] set_variable project="Acme" (${P_ACME}) env="production" (${E_PROD}) service="watchdog" (${S_WATCH}) go="${GO}" name=ALERTS_WEBHOOK_URL from_key=ALERTS_WEBHOOK deploy=yes ok`);
+  });
+
+  it("to find a Tarsee among its services, a write reads the names of every live environment of the project, never a value", async () => {
+    // test/railway-tool-limits.test.js has what a Tarsee found that way gets.
+    const { out, rw } = await run({ action: "set_variable", project: "Acme", service: "watchdog", name: "ALERTS_WEBHOOK_URL", from_key: "ALERTS_WEBHOOK", approved_by: GO });
+    assert.match(out, /^Set ALERTS_WEBHOOK_URL on watchdog/, out);
+    const named = rw.calls.filter((c) => c.op === "TarseeVariableNames").map((c) => c.body.variables.environmentId);
+    assert.deepEqual([...new Set(named)].sort(), [E_PROD, E_STAGE].sort(), "production and Staging; pr-12 was deleted");
+    assert.ok(rw.calls.every((c) => c.body.query === DOCS.serviceSources || c.op !== "TarseeServiceSources"), "what each service is deployed from, in the tool's own document");
+    assert.ok(rw.calls.some((c) => c.op === "TarseeServiceSources"), "and Railway is asked what each service is deployed from");
+    assert.ok(!rw.calls.some((c) => c.op === "TarseeUnrenderedVariables" || /\bvalue\b/.test(c.body.query)), "no value is asked for: no service there is a Tarsee");
   });
 
   it("deploy: false sets it with skipDeploys and says it takes effect on the next deploy", async () => {
@@ -547,14 +567,50 @@ describe("wording", () => {
     assert.ok(!SRC.includes("\u2014"), "src/lib/railway-admin.js");
   });
 
-  it("the default TOOLS.md has a Railway section", () => {
-    const tools = fs.readFileSync(path.join(here, "../src/workspace-defaults/TOOLS.md"), "utf8");
+  it("the default TOOLS.md has a Railway section (read with either line ending: a Windows checkout has CRLF)", () => {
+    const tools = fs.readFileSync(path.join(here, "../src/workspace-defaults/TOOLS.md"), "utf8").replace(/\r\n/g, "\n");
     assert.match(tools, /## Railway \(projects, variables, redeploys\)\n- List projects, services and variable names, set a variable or redeploy with tarsee_railway\./);
     assert.match(tools, /pass set_variable from_key \(the vault key name\)/);
     assert.match(tools, /approved_by/);
     assert.match(tools, /Redeploying Tarsee's own service restarts it/);
     const section = tools.slice(tools.indexOf("## Railway"));
     assert.ok(!section.includes("\u2014"));
+    // The limits, in the same words the tool's description uses.
+    assert.match(section, /On Tarsee's own service it sets only/);
+    assert.match(section, /ending in _KEY, _TOKEN, _SECRET, _PASSWORD, _WEBHOOK or _URL/);
+    assert.match(section, /TZ/);
+    assert.match(section, /Railway's dashboard/);
+    assert.match(section, /sealed/);
+    assert.match(section, /get_key/);
+    // Round 3: the names in the AI engines' code, and references followed from every variable on Tarsee's service.
+    assert.match(section, /appears nowhere in its AI engines' code/);
+    assert.match(section, /A variable one of Tarsee's own variables is filled in from by a Railway reference counts as that variable/);
+    assert.match(section, /onto Tarsee's own service, or into a variable it is filled in from, while get_key is denied/);
+    // Round 4: the Terminal's own Claude Code, which TARSEE_AUTO_UPDATE_CLI=1 can make newer, and a reference to a
+    // service the project doesn't have.
+    assert.match(section, /the Terminal's own claude program/);
+    assert.match(section, /TARSEE_AUTO_UPDATE_CLI=1/);
+    assert.match(section, /only TZ and the tuning settings/);
+    assert.match(section, /a service the project doesn't have/);
+    // Round 5: any Tarsee service gets the limits, and the claude read is the one running now.
+    assert.match(section, /Any Tarsee service gets the same limits/);
+    assert.match(section, /SETUP_PASSWORD, ENCRYPTION_KEY or a TARSEE_ name/);
+    assert.match(section, /the one running now/);
+    assert.match(section, /while TARSEE_AUTO_UPDATE_CLI is among its variables/);
+    assert.match(section, /If Railway doesn't give a project's variable names, nothing is set there/);
+  });
+
+  it("config/env.js seeds the same Railway section as the default TOOLS.md", () => {
+    // From the heading to the next heading, the end of env.js's template (a backtick) or the end of the file.
+    const section = (text) => {
+      const t = text.replace(/\r\n/g, "\n");
+      const rest = t.slice(t.indexOf("## Railway (projects"));
+      const end = rest.search(/\n(?:## |`)/);
+      return (end < 0 ? rest : rest.slice(0, end)).trimEnd();
+    };
+    const fromFile = section(fs.readFileSync(path.join(here, "../src/workspace-defaults/TOOLS.md"), "utf8"));
+    assert.ok(fromFile.length > 100, fromFile);
+    assert.equal(section(fs.readFileSync(path.join(here, "../src/config/env.js"), "utf8")), fromFile);
   });
 });
 
@@ -565,7 +621,7 @@ describe("the real vault (here a temporary one) and tools.js", () => {
   let realFetch;
   before(async () => {
     const { setKey } = await import("../src/lib/key-vault.js");
-    setKey("RAILWAY_API_TOKEN", TOKEN, "test token");
+    setKey("RAILWAY_API_TOKEN", TOKEN, "test token", { owner: true });   // as the owner saves it, in Settings > Keys
     setKey("ALERTS_WEBHOOK", HOOK, "test webhook");
     realFetch = globalThis.fetch;
   });
