@@ -36,7 +36,8 @@ const TARSEE = {
   tarsee_pdf_read: [(i) => `Reading ${pdfBase(i)}…`, (i) => `Read ${pdfBase(i)}`, (i) => `Reading ${pdfBase(i)} failed`],
   tarsee_write_file: [(i) => `Writing ${fileBase(i.filename)}…`, (i) => `Wrote ${fileBase(i.filename)}`, (i) => `Writing ${fileBase(i.filename)} failed`],
   tarsee_list_files: ["Listing files…", "Files listed", "Listing files failed"],
-  tarsee_schedule_task: ["Scheduling a task…", "Task scheduled", "Scheduling the task failed"],
+  // A task the AI schedules is saved paused, until the owner switches it on (lib/cron.js).
+  tarsee_schedule_task: ["Scheduling a task…", "Task saved, waiting for your OK", "Scheduling the task failed"],
   tarsee_create_canvas: ["Making a canvas…", "Canvas made", "Making the canvas failed"],
   tarsee_create_diagram: ["Drawing a diagram…", "Diagram drawn", "Drawing the diagram failed"],
   tarsee_datetime: ["Checking the time…", "Time checked", "Checking the time failed"],

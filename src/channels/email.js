@@ -321,6 +321,9 @@ export async function createEmailBot(rawConfig, db, { chatStream: streamChat = c
           settingsStore, convStore,
           conversationId: convId,
           platform: "email", // was missing — platform-gated commands misrouted
+          // Never the owner, for the owner's commands (/cron, /briefing, /webhook: lib/commands.js): a From address,
+          // allowlisted or not, is easy to fake.
+          owner: false,
           db,                // was missing — /clear silently no-op'd
         });
         if (cmdResult?.handled) {

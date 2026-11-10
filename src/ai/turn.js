@@ -447,7 +447,8 @@ export function stopTurns(conversationId) {
  *   messages            the chat's messages, the turn's prompt last (role "user"; a string or content blocks)
  *   provider, model     the caller's own choice (a model may be a ref, "deepseek:deepseek-flash"); see resolveTarget
  *   effort              this message's thinking effort (/think, !think)
- *   background          unattended work (crons, the heartbeat): the background model, a lower turn ceiling
+ *   background          unattended work (crons, the heartbeat): the background model, a lower turn ceiling, and a
+ *                       tool context marked with its source (toolCtx.background = liveSource)
  *   systemPrompt | systemParts {stable, volatile}
  *   toolCtx             {db, settingsStore, conversationId, channelManager, messageId, ...} for Tarsee's tools
  *   sessionId           the chat's stored session handle (bare for the Claude plan, tagged for the rest)
@@ -461,6 +462,10 @@ export function stopTurns(conversationId) {
  */
 export async function* runTurn(opts = {}) {
   opts = { ...opts };
+  // Unattended work (a scheduled task's or a webhook's run, the heartbeat, BOOT.md) says so to Tarsee's tools, by its
+  // source: both engines hand the tools this context (Claude Code's in-process MCP server gets it as it is, Codex's
+  // grant copies it), and schedule_task refuses in it (lib/tools.js), so background work never schedules more.
+  if (opts.background && !opts.toolCtx?.background) opts.toolCtx = { ...(opts.toolCtx || {}), background: opts.liveSource || "background" };
   if (opts.thinkingSummaries == null) opts.thinkingSummaries = opts.liveSource === "web";
   const liveConv = opts.liveDisabled ? null : (opts.liveConversationId || opts.toolCtx?.conversationId || null);
   // (A turn that waited behind another in its conversation says so to the agent, once. Not a subagent's turn, which

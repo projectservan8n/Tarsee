@@ -673,6 +673,16 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
     return config.allowedChannels?.length > 0 ? parseAllowlist(config.allowedChannels) : parseAllowlist(settingsStore.get("allowlist.slack"));
   }
 
+  /**
+   * Whether a Slack user is the owner, for the owner's commands (/cron, /briefing, /webhook: lib/commands.js): their
+   * own user id is on the allowlist. A listed channel lets its members talk to the bot, not manage it; with no
+   * allowlist anyone in the workspace can talk to it, so nobody counts.
+   */
+  function senderIsOwner(userId) {
+    const list = allowlistNow();
+    return list.length > 0 && !!userId && list.includes(String(userId));
+  }
+
   // ── messages ──────────────────────────────────────────────────────────
 
   async function handleMessage(event, { teamId }) {
@@ -712,7 +722,7 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
         running.stop();
         return;
       }
-      const cmdResult = await processCommand(content, { settingsStore, convStore, conversationId: existingConvId, platform: "slack", db });
+      const cmdResult = await processCommand(content, { settingsStore, convStore, conversationId: existingConvId, platform: "slack", owner: senderIsOwner(event.user), db });
       if (cmdResult.handled) {
         const playbook = extractPlaybookPrompt(cmdResult);
         if (playbook) aiPromptOverride = playbook;
@@ -801,7 +811,7 @@ export async function createSlackBot(config, db, { slackApiUrl = null, chatStrea
           await tell(`In Slack every thread is its own conversation, so \`${line}\` works inside one: reply in the thread with \`@${botHandle} ${line}\`.`);
           return;
         }
-        cmdResult = await processCommand(line, { settingsStore, convStore, conversationId: null, platform: "slack", db });
+        cmdResult = await processCommand(line, { settingsStore, convStore, conversationId: null, platform: "slack", owner: senderIsOwner(command.user_id), db });
         playbook = extractPlaybookPrompt(cmdResult);
         if (cmdResult.handled && !playbook) {
           const answer = stripCommandSentinel(cmdResult.response);

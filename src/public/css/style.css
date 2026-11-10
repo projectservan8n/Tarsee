@@ -2253,6 +2253,53 @@ select.ai-input option { background: var(--bg-elevated); color: var(--text); }
   background: var(--danger-subtle);
 }
 
+/* Settings → Automation → Scheduled tasks (js/cron-core.js) */
+.cron-job .memory-content {
+  min-width: 0;
+}
+
+.cron-job .cron-toggle {
+  flex-shrink: 0;
+}
+
+.cron-prompt {
+  margin-top: var(--space-1);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cron-what,
+.cron-args {
+  overflow-wrap: anywhere;
+}
+
+.cron-what {
+  margin-top: var(--space-1);
+}
+
+.cron-who,
+.cron-note {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.cron-state-waiting {
+  background: var(--warning-subtle);
+  color: var(--warning);
+}
+
+.cron-state-running {
+  background: var(--success-subtle);
+  color: var(--success);
+}
+
+.cron-state-off {
+  background: var(--bg-surface-hover);
+  color: var(--text-muted);
+}
+
 
 /* ==========================================================================
    20. Skills

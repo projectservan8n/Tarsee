@@ -543,6 +543,8 @@ const COMMANDS = {
   webhook: {
     description: "Manage webhook triggers (external events → AI)",
     usage: "/webhook [add <id> <prompt>|remove <id>|list]",
+    // It prints the API token, which reaches every route (switching on scheduled tasks included).
+    ownerOnly: true,
     handler: async (args, ctx) => {
       const settingsStore = ctx.settingsStore;
       if (!settingsStore) return "Settings not available.";
@@ -657,6 +659,7 @@ Do NOT send without my explicit approval. Ask which account to send from.`;
   briefing: {
     description: "Morning briefing — trigger now, or schedule daily",
     usage: "/briefing [on|off|time <0-23>]",
+    ownerOnly: true,
     handler: (args, ctx) => {
       const settingsStore = ctx.settingsStore;
       if (!settingsStore) return "Settings not available.";
@@ -691,6 +694,7 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
           prompt: BRIEFING_PROMPT,
           channel: "web:default",
           name: "briefingam",
+          createdBy: "owner", // typed by the owner (ownerOnly)
         });
         return `Morning briefing enabled — runs daily at **${hour}:00**\n\nChange time: \`/briefing time <hour>\`\nDisable: \`/briefing off\``;
       }
@@ -719,6 +723,8 @@ Keep it concise — 5-10 bullet points max. Be direct and useful.`;
             prompt: BRIEFING_PROMPT,
             channel: "web:default",
             name: "briefingam",
+            createdBy: "owner",
+            enabled: existing.enabled !== false,
           });
           return `Briefing time changed to **${hour}:00** daily.`;
         }
@@ -1068,23 +1074,28 @@ artifact. Just confirm.`;
   },
 
   cron: {
-    description: "Manage scheduled cron jobs",
-    usage: "/cron [list|add|remove|run|status]",
+    description: "Scheduled tasks: list them, add one, switch one on or off, run or remove one",
+    usage: "/cron [list|add|on|off|run|remove]",
+    ownerOnly: true,
     handler: async (args) => {
       try {
-        const { getCronStatus, addCronJob, removeCronJob, runCronJob, loadCronJobs } = await import("./cron.js");
+        const { getCronStatus, addCronJob, removeCronJob, runCronJob, loadCronJobs, setCronJobEnabled } = await import("./cron.js");
 
         if (!args || args === "list" || args === "status") {
           const status = getCronStatus();
           if (status.jobs.length === 0) {
-            return "No cron jobs configured. Use `/cron add \"0 9 * * *\" Your prompt here` to add one.";
+            return "No scheduled tasks yet. Add one in Settings > Automation > Scheduled tasks, or with `/cron add \"0 9 * * *\" Your prompt here`.";
           }
-          const lines = ["**Cron Jobs**", ""];
+          const STATE = { waiting: "waiting for your OK", running: "running", on: "on", off: "off" };
+          const WHO = { ai: "made by the AI in a chat", owner: "made by you" };
+          const lines = ["**Scheduled tasks**", ""];
           for (const j of status.jobs) {
-            const badge = j.running ? "running" : j.enabled ? "enabled" : "disabled";
-            lines.push(`- **${j.id}** [${badge}] \`${j.schedule}\` — ${j.prompt.slice(0, 60)}`);
+            const what = j.action?.tool ? `runs ${j.action.tool} directly, no AI` : String(j.prompt || "").slice(0, 60);
+            const who = WHO[j.createdBy] ? ` · ${WHO[j.createdBy]}` : "";
+            lines.push(`- **${j.id}** [${STATE[j.state] || j.state}] \`${j.schedule}\` — ${what}${who}`);
           }
-          lines.push("", `Active: ${status.activeJobs}/${status.totalJobs}`);
+          lines.push("", "Switch one on with `/cron on <id>`, or pause one with `/cron off <id>`.");
+          lines.push(`On: ${status.activeJobs}/${status.totalJobs}`);
           return lines.join("\n");
         }
 
@@ -1094,8 +1105,21 @@ artifact. Just confirm.`;
           if (!match) {
             return 'Usage: `/cron add "0 9 * * *" Good morning summary`';
           }
-          const job = addCronJob({ schedule: match[1], prompt: match[2] });
-          return `Cron job created: **${job.id}** — \`${job.schedule}\``;
+          // Typed by the owner (ownerOnly), so it is theirs and switched on.
+          const job = addCronJob({ schedule: match[1], prompt: match[2], createdBy: "owner" });
+          return `Scheduled task created and switched on: **${job.id}** — \`${job.schedule}\``;
+        }
+
+        const onOff = /^(on|off)(?:\s+(\S+))?$/i.exec(args);
+        if (onOff) {
+          const on = onOff[1].toLowerCase() === "on";
+          const id = onOff[2];
+          if (!id) return `Usage: \`/cron ${on ? "on" : "off"} <id>\` (\`/cron list\` shows the ids)`;
+          const job = setCronJobEnabled(id, on);
+          if (!job) return `No scheduled task ${id}. \`/cron list\` shows the ids.`;
+          return on
+            ? `Switched on **${id}**: it runs at \`${job.schedule}\`.`
+            : `Paused **${id}**: it won't run until you switch it on again (\`/cron on ${id}\`).`;
         }
 
         if (args.startsWith("remove ")) {
@@ -1114,7 +1138,7 @@ artifact. Just confirm.`;
           return `**Cron result:**\n\n${result.response?.slice(0, 2000) || "(empty)"}${result.warning ? `\n\n_${result.warning}_` : ""}`;
         }
 
-        return 'Usage: `/cron list|add|remove|run|status`';
+        return 'Usage: `/cron list|add|on <id>|off <id>|run <id>|remove <id>`';
       } catch (err) {
         return `Cron error: ${err.message}`;
       }
@@ -1219,9 +1243,54 @@ export async function processCommand(message, ctx = {}) {
   if (!cmd) {
     return { handled: false }; // Not a known command — treat as normal message
   }
+  if (cmd.ownerOnly && !fromOwner(ctx)) {
+    return { handled: true, response: notTheOwner(cmdName, ctx) };
+  }
 
   const response = await cmd.handler(args, ctx);
   return { handled: true, response };
+}
+
+/**
+ * Whether a command comes from the owner, for the owner's commands (ownerOnly: /cron, /briefing, /webhook). They set
+ * up work that runs the AI with nobody asking at the time, and /webhook shows the API token, so someone the owner let
+ * talk to the bot (a group, a server channel, or anyone at all when a platform has no allowlist) must not use them.
+ *
+ *   platform "web"   the dashboard (its chat and its WebSocket): behind the owner's login, so the owner.
+ *   owner: true      a chat platform's own word for it (channels/*.js): the sender's own user id (on WhatsApp, their
+ *                    number) is on that platform's allowlist. A listed group or channel lets its members talk to the
+ *                    bot, not manage it; with no allowlist anyone can talk to it, so nobody there counts; email never
+ *                    says it, since a From address is easy to fake.
+ * Anything else is not the owner: a caller that says nothing is refused.
+ */
+function fromOwner(ctx) {
+  return ctx.platform === "web" || ctx.owner === true;
+}
+
+const OWNER_ID_ON = {
+  telegram: "your own Telegram user ID",
+  discord: "your own Discord user ID",
+  slack: "your own Slack user ID",
+  whatsapp: "your own WhatsApp number",
+};
+
+const OWNER_ONLY_WHY = {
+  cron: "scheduled tasks run the AI with nobody asking at the time, and each run can cost money",
+  briefing: "the briefing runs the AI and can be scheduled every day, and each run can cost money",
+  webhook: "it shows Tarsee's API token and sets up webhooks that run the AI",
+};
+
+/** What someone who isn't the owner gets for an owner's command. */
+function notTheOwner(cmdName, ctx) {
+  const why = OWNER_ONLY_WHY[cmdName] || "it changes what Tarsee does on its own";
+  const where = cmdName === "webhook"
+    ? "Use it in the dashboard's chat"
+    : "Use Settings > Automation > Scheduled tasks on the dashboard, or this command in the dashboard's chat";
+  const lead = `Only the owner can use /${cmdName}: ${why}.`;
+  if (ctx.platform === "email") return `${lead} That can't be done by email, since a sender's address is easy to fake. ${where}.`;
+  const id = OWNER_ID_ON[ctx.platform];
+  if (id) return `${lead} ${where}. If you are the owner, put ${id} on the allowlist in Settings > Channels, and you can use it here.`;
+  return `${lead} ${where}.`;
 }
 
 /**

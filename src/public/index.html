@@ -798,18 +798,19 @@
             </div>
 
             <div class="settings-section">
-              <h3>Cron Jobs</h3>
+              <h3>Scheduled tasks</h3>
+              <div class="hint mb-3">Tasks that run on their own at the times you set. Each run of a task that asks the AI is paid for, so a task the AI sets up in a chat waits here, switched off, until you switch it on.</div>
               <div id="cronJobsList" class="mb-3"></div>
               <div class="form-group">
                 <label>Schedule (cron expression)</label>
                 <input type="text" id="cronScheduleInput" placeholder="0 9 * * * (= 9 AM daily)" spellcheck="false">
-                <div class="hint">Standard cron: minute hour day month weekday. Use <a href="https://crontab.guru" target="_blank" rel="noopener noreferrer">crontab.guru</a> for help.</div>
+                <div class="hint">Standard cron: minute hour day month weekday. A task that asks the AI runs at most once every 15 minutes (<code>*/15 * * * *</code>). Use <a href="https://crontab.guru" target="_blank" rel="noopener noreferrer">crontab.guru</a> for help.</div>
               </div>
               <div class="form-group">
                 <label>Prompt</label>
                 <input type="text" id="cronPromptInput" placeholder="Give me a morning summary">
               </div>
-              <button class="btn btn-primary btn-sm" id="addCronBtn">Add Cron Job</button>
+              <button class="btn btn-primary btn-sm" id="addCronBtn">Add task</button>
             </div>
 
             <div class="settings-section">
@@ -1230,6 +1231,7 @@
   <script src="/js/console.js"></script>
   <script src="/js/channel-guides-core.js"></script>   <!-- how to connect each chat platform (Settings and the setup wizard) -->
   <script src="/js/provider-guides-core.js"></script>   <!-- how to set up each AI (Settings → AI and the setup wizard) -->
+  <script src="/js/cron-core.js"></script>   <!-- the Scheduled tasks list with no page (Settings → Automation) -->
   <script src="/js/settings.js"></script>
   <script src="/js/brand-icon.js"></script>
   <script src="/js/setup.js"></script>

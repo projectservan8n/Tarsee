@@ -410,6 +410,8 @@ chatRouter.post("/send", async (req, res) => {
       conversationId: convId,
       channelManager: req.app.get("channelManager"),
       db: req.app.get("db"),
+      // The dashboard's chat, behind the owner's login: the owner's commands (/cron, /briefing, /webhook) work here.
+      platform: "web",
     });
 
     if (cmdResult.handled) {

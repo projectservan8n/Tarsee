@@ -246,6 +246,10 @@ export async function createDiscordBot(config, db, { Client: DiscordClient = Cli
         convStore,
         conversationId: existingConvId,
         platform: "discord",
+        // The owner, for the owner's commands (/cron, /briefing, /webhook: lib/commands.js): the author's own user id is
+        // on the allowlist. A listed channel lets its members talk to the bot, not manage it; with no allowlist anyone
+        // can talk to it, so nobody counts.
+        owner: allowedIds.length > 0 && allowedIds.map(String).includes(String(message.author.id)),
         db, // was missing — /clear silently no-op'd
       });
 

@@ -68,6 +68,31 @@ describe("the default workspace files work on any AI", () => {
     assert.match(soul, /tarsee_\* tools/);
     assert.match(soul, /grep/i);
   });
+  it("SOUL.md says to offer a follow-up and schedule it only once the owner says yes (every run can be a paid turn)", () => {
+    const soul = fs.readFileSync(path.join(DEFAULTS, "SOUL.md"), "utf8");
+    assert.ok(soul.includes("If a task needs a follow-up, offer to schedule it, and schedule it only once the owner says yes."), soul);
+    assert.doesNotMatch(soul, /If a task needs a follow-up, schedule it\./);
+  });
+});
+
+describe("an install seeded with the SOUL.md from before scheduled tasks waited for the owner", () => {
+  it("gets the new follow-up line, and nothing else changes, once", () => {
+    const dir = workspaceFrom("before-owner-ok", { "SOUL.md": "before-owner-ok-default-SOUL.md" });
+    const old = readLf(path.join(dir, "SOUL.md"));
+    assert.deepEqual(quiet(() => upgradeDefaultWorkspaceFiles(dir)), ["SOUL.md"]);
+    const now = readLf(path.join(dir, "SOUL.md"));
+    assert.equal(now, readLf(path.join(DEFAULTS, "SOUL.md")));
+    const changed = now.split("\n").filter((line, i) => line !== old.split("\n")[i]);
+    assert.deepEqual(changed, ["- You are proactive. If you notice something useful, mention it. If a task needs a follow-up, offer to schedule it, and schedule it only once the owner says yes."]);
+    assert.deepEqual(upgradeDefaultWorkspaceFiles(dir), [], "a second boot changes nothing");
+  });
+  it("keeps the line when the owner wrote their own", () => {
+    const dir = fs.mkdtempSync(path.join(tmp, "own-follow-up-"));
+    const own = "# Soul\n- You are proactive. If a task needs a follow-up, schedule it without asking, my rule.\n";
+    fs.writeFileSync(path.join(dir, "SOUL.md"), own);
+    assert.deepEqual(upgradeDefaultWorkspaceFiles(dir), []);
+    assert.equal(fs.readFileSync(path.join(dir, "SOUL.md"), "utf8"), own);
+  });
 });
 
 describe("an install seeded with the Claude-only defaults", () => {

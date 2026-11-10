@@ -26,6 +26,7 @@ const appGlobals = {
   Live: "readonly",         // js/live.js
   ModelPickerCore: "readonly", // js/model-picker-core.js
   Console: "readonly",      // js/console.js
+  CronCore: "readonly",     // js/cron-core.js
   FileManager: "readonly",  // js/files.js
   Settings: "readonly",     // js/settings.js
   Setup: "readonly",        // js/setup.js

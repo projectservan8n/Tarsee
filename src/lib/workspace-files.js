@@ -241,6 +241,10 @@ const DEFAULT_UPGRADES = {
       "- MEMORY.md grows long: grep it for the topic at hand (`grep -n -i \"term\" MEMORY.md`) or use search_memories. Never read it whole."],
     ["- Use mcp__tarsee__* tools for platform actions. Never use Bash for scheduling or messaging.",
       "- Use the tarsee_* tools for platform actions. Never use the shell for scheduling or messaging."],
+    // Every default before scheduled tasks waited for the owner's OK said to schedule a follow-up outright: each run of
+    // a task can be a paid turn, so the agent offers and the owner decides.
+    ["- You are proactive. If you notice something useful, mention it. If a task needs a follow-up, schedule it.",
+      "- You are proactive. If you notice something useful, mention it. If a task needs a follow-up, offer to schedule it, and schedule it only once the owner says yes."],
   ],
   "AGENTS.md": [
     ["- **Coder** (Opus) — Code, debugging, architecture, scripts.",
@@ -303,7 +307,7 @@ export function upgradeDefaultWorkspaceFiles(dir = config.WORKSPACE_DIR) {
       console.warn(`[workspace] could not update ${name}: ${err.message}`);
     }
   }
-  if (updated.length) console.log(`[workspace] updated the default instructions in ${updated.join(", ")} (grep MEMORY.md, never read it whole; send files as attachments; Slack; wording that fits any AI)`);
+  if (updated.length) console.log(`[workspace] updated the default instructions in ${updated.join(", ")} (grep MEMORY.md, never read it whole; send files as attachments; Slack; wording that fits any AI; offer a follow-up, schedule it only once the owner says yes)`);
   return updated;
 }
 

@@ -514,7 +514,7 @@ settingsRouter.get("/cron", async (_req, res) => {
 
 /**
  * POST /api/settings/cron
- * Add a new cron job.
+ * Add a new cron job: the owner's, from the form in Settings > Automation > Scheduled tasks, so it is switched on.
  * Body: { schedule, prompt, channel?, enabled? }
  */
 settingsRouter.post("/cron", async (req, res) => {
@@ -524,10 +524,30 @@ settingsRouter.post("/cron", async (req, res) => {
   }
   try {
     const { addCronJob } = await import("../lib/cron.js");
-    const job = addCronJob({ schedule, prompt, channel, enabled });
+    const job = addCronJob({ schedule, prompt, channel, enabled: enabled !== false, createdBy: "owner" });
     res.status(201).json(job);
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * PATCH /api/settings/cron/:id
+ * Switch a task on or off (the Switch on and Pause buttons). Body: { enabled: true | false }.
+ * Switching on a task the AI made is the owner's OK: it stops waiting, and gets its timer.
+ */
+settingsRouter.patch("/cron/:id", async (req, res) => {
+  const enabled = req.body?.enabled;
+  if (typeof enabled !== "boolean") {
+    return res.status(400).json({ error: "enabled must be true or false" });
+  }
+  try {
+    const { setCronJobEnabled } = await import("../lib/cron.js");
+    const job = setCronJobEnabled(req.params.id, enabled);
+    if (!job) return res.status(404).json({ error: `No scheduled task ${req.params.id}` });
+    res.json({ ok: true, job });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

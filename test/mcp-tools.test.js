@@ -73,4 +73,18 @@ describe("tarsee MCP server", () => {
     assert.equal(args.type, "object");
     await client.close();
   });
+
+  it("schedule_task says to schedule only when the owner asks, and that a task starts paused until the owner switches it on", async () => {
+    // Every run of a scheduled task can be a paid turn on the AI, so the owner decides: lib/cron.js saves the AI's
+    // tasks paused, and the description tells the model so before it calls the tool.
+    const { client } = await connect();
+    const listed = await client.listTools();
+    const { description } = listed.tools.find((t) => t.name === "tarsee_schedule_task");
+    assert.match(description, /Only schedule a task when the owner asks for one/);
+    assert.match(description, /starts paused/);
+    assert.match(description, /until the owner switches it on/);
+    assert.match(description, /\/cron on <id>/);
+    assert.match(description, /at most once every 15 minutes/);
+    await client.close();
+  });
 });

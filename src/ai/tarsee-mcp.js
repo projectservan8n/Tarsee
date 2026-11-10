@@ -96,12 +96,12 @@ export function createTarseeMcp(ctx, opts = {}) {
 
       tool(
         "tarsee_schedule_task",
-        `Schedule a task using cron syntax. Supports one-time and recurring. For simple notifications, use action (direct, instant). For complex tasks, use prompt (AI session).\n\nEXAMPLES:\n- One-time reminder: schedule='30 12 7 4 *', once=true, action={tool:'send_message', args:{channel:'telegram', message:'Meeting now!'}}\n- Daily recurring: schedule='0 8 * * *', action={tool:'send_message', args:{channel:'telegram', message:'Good morning!'}}\n- Complex: schedule='0 8 * * 1', prompt='Check calendar and summarize the week'\n\nALWAYS prefer action over prompt for send_message tasks. Set once=true for one-time reminders (auto-deletes after firing). Cron expressions are interpreted in ${config.TIMEZONE} — call tarsee_datetime to confirm the current local time before scheduling.`,
+        `Schedule a task using cron syntax. Supports one-time and recurring. For simple notifications, use action (direct, instant). For complex tasks, use prompt (AI session).\n\nOnly schedule a task when the owner asks for one, or has said yes when you offered: every run of a prompt task is a paid turn on the AI. A task you schedule starts paused, and won't run until the owner switches it on, in Settings > Automation > Scheduled tasks or by sending /cron on <id>. Say so when you save one, with its id. You can't schedule tasks while running a scheduled task, the heartbeat or BOOT.md.\n\nEXAMPLES:\n- One-time reminder: schedule='30 12 7 4 *', once=true, action={tool:'send_message', args:{channel:'telegram', message:'Meeting now!'}}\n- Daily recurring: schedule='0 8 * * *', action={tool:'send_message', args:{channel:'telegram', message:'Good morning!'}}\n- Complex: schedule='0 8 * * 1', prompt='Check calendar and summarize the week'\n\nALWAYS prefer action over prompt for send_message tasks. Set once=true for one-time reminders (auto-deletes after firing). A prompt task runs at most once every 15 minutes (5-part schedules, no seconds). Cron expressions are interpreted in ${config.TIMEZONE} — call tarsee_datetime to confirm the current local time before scheduling.`,
         {
           schedule: z.string().describe(`Cron expression. Format: 'min hour day month weekday'. Interpreted in ${config.TIMEZONE}.`),
           name: z.string().optional().describe("Human-friendly name"),
           once: z.boolean().optional().describe("If true, job auto-deletes after firing once. Use for one-time reminders."),
-          prompt: z.string().optional().describe("AI prompt for complex tasks (spawns full Claude session)"),
+          prompt: z.string().optional().describe("AI prompt for complex tasks (each run is a full, paid AI session)"),
           action: z.object({
             tool: z.string().describe("Tool to execute directly (e.g. 'send_message')"),
             // MUST pass a key schema. zod 4 removed the single-argument form:
