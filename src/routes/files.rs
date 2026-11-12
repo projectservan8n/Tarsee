@@ -785,7 +785,7 @@ mod tests {
         assert_eq!(res.json()["content"], "x");
         let root = http::post_json(&router, "/delete", &json!({ "path": own.to_string_lossy() })).await;
         assert_eq!(root.json(), json!({"error": "Cannot delete root directory"}));
-        assert_eq!(allowed_roots(&t.app), [own.clone()]);
+        assert_eq!(allowed_roots(&t.app), vec![own]);
     }
 
     #[tokio::test]

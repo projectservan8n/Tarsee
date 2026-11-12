@@ -335,9 +335,9 @@ fn colour_case(color_type: u8, depth: u32) {
             (img.width as usize, img.height as usize, img.data.len()),
             (width, height, width * height * 4)
         );
-        for y in 0..height {
-            for x in 0..width {
-                assert_eq!(pixel(&img, x, y), want(&px[y][x]), "filter {filters:?}, pixel {x},{y}");
+        for (y, row) in px.iter().enumerate() {
+            for (x, p) in row.iter().enumerate() {
+                assert_eq!(pixel(&img, x, y), want(p), "filter {filters:?}, pixel {x},{y}");
             }
         }
     }

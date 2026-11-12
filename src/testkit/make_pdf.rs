@@ -248,9 +248,9 @@ fn write_pdf(
         }
         out.extend_from_slice(b"endobj\n");
     };
-    for n in 1..=count {
+    for (n, obj) in objects.iter().enumerate().take(count + 1).skip(1) {
         if !in_obj_stm.contains(&n) {
-            write_obj(&mut out, &mut offsets, n, &objects[n]);
+            write_obj(&mut out, &mut offsets, n, obj);
         }
     }
 
@@ -299,12 +299,12 @@ fn write_pdf(
         rows[i * 7 + 5..i * 7 + 7].copy_from_slice(&b.to_be_bytes());
     };
     row(0, 0, 0, 0xffff);
-    for n in 1..=xref_num {
+    for (n, offset) in offsets.iter().enumerate().take(xref_num + 1).skip(1) {
         if in_obj_stm.contains(&n) {
             let index = packed.iter().position(|&p| p == n).unwrap_or(0);
             row(n, 2, stm_num as u32, index as u16);
         } else {
-            row(n, 1, offsets[n] as u32, 0);
+            row(n, 1, *offset as u32, 0);
         }
     }
     out.extend_from_slice(

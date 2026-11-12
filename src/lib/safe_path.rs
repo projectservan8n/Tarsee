@@ -7,7 +7,7 @@
 //! drive-relative `C:foo` on Windows lands under the root when the root is on that drive). [`fs_error_message`]
 //! writes a file error the way Node's `fs` wrote it, for the messages the routes send back.
 
-use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
+use std::path::{Component, MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path, PathBuf};
 
 /// Names that must never be readable or writable through a file API, even when they sit inside an allowed root.
 ///
@@ -65,7 +65,7 @@ fn segment_name(s: &str) -> String {
         .char_indices()
         .filter(|(_, c)| is_line_terminator(*c))
         .map(|(i, c)| i + c.len_utf8())
-        .last()
+        .next_back()
         .unwrap_or(0);
     let cut = match lower[after_last_break..].find(':') {
         Some(at) => &lower[..after_last_break + at],
@@ -250,7 +250,7 @@ pub fn normalize_path(path: &Path) -> PathBuf {
     }
     let mut parts: Vec<String> = std::iter::repeat_n("..".to_string(), ups).collect();
     parts.extend(segments);
-    let tail = parts.join(&MAIN_SEPARATOR.to_string());
+    let tail = parts.join(MAIN_SEPARATOR_STR);
     let text = format!("{head}{tail}");
     if text.is_empty() {
         PathBuf::from(".")
@@ -294,7 +294,7 @@ pub fn relative_path(from: &Path, to: &Path) -> String {
         parts.push("..".to_string());
     }
     parts.extend(b[common..].iter().cloned());
-    parts.join(&MAIN_SEPARATOR.to_string())
+    parts.join(MAIN_SEPARATOR_STR)
 }
 
 /// A file system error written the way Node's `fs` wrote it: `ENOENT: no such file or directory, open '<path>'`.

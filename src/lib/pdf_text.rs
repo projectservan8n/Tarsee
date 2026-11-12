@@ -1322,7 +1322,7 @@ async fn download(u: &url::Url, options: &FetchPdfOptions) -> Result<Downloaded,
         .headers()
         .get("content-length")
         .and_then(|v| v.to_str().ok())
-        .map(|v| js_number_from_str(v));
+        .map(js_number_from_str);
     if declared.is_some_and(|n| n > max_bytes as f64) {
         return Err(too_big());
     }
@@ -1470,14 +1470,13 @@ fn parse_name(s: &[u8], i: usize) -> (String, usize) {
     let mut out = Vec::with_capacity(raw.len());
     let mut k = 0;
     while k < raw.len() {
-        if raw[k] == b'#' {
-            if let Some(pair) = raw.get(k + 1..k + 3)
-                && pair.iter().all(u8::is_ascii_hexdigit)
-            {
-                out.push(u8::from_str_radix(&latin1(pair), 16).unwrap_or(0));
-                k += 3;
-                continue;
-            }
+        if raw[k] == b'#'
+            && let Some(pair) = raw.get(k + 1..k + 3)
+            && pair.iter().all(u8::is_ascii_hexdigit)
+        {
+            out.push(u8::from_str_radix(&latin1(pair), 16).unwrap_or(0));
+            k += 3;
+            continue;
         }
         out.push(raw[k]);
         k += 1;
@@ -1678,19 +1677,19 @@ fn parse_value(s: &[u8], i: usize, refs: bool, depth: usize) -> Result<(V, usize
         let (name, j) = parse_name(s, i);
         return Ok((V::Name(name), j));
     }
-    if matches!(c, b'+' | b'-' | b'.') || c.is_ascii_digit() {
-        if let Some(end) = match_num(s, i) {
-            let text = latin1(&s[i..end]);
-            let v: f64 = text.parse().unwrap_or(f64::NAN);
-            i = end;
-            if refs
-                && text.bytes().all(|b| b.is_ascii_digit())
-                && let Some(after) = match_ref(s, i)
-            {
-                return Ok((V::Ref(v), after));
-            }
-            return Ok((V::Num(if v.is_finite() { v } else { 0.0 }), i));
+    if (matches!(c, b'+' | b'-' | b'.') || c.is_ascii_digit())
+        && let Some(end) = match_num(s, i)
+    {
+        let text = latin1(&s[i..end]);
+        let v: f64 = text.parse().unwrap_or(f64::NAN);
+        i = end;
+        if refs
+            && text.bytes().all(|b| b.is_ascii_digit())
+            && let Some(after) = match_ref(s, i)
+        {
+            return Ok((V::Ref(v), after));
         }
+        return Ok((V::Num(if v.is_finite() { v } else { 0.0 }), i));
     }
     let mut j = i;
     while j < s.len() && !is_delim(s[j]) {
@@ -2145,15 +2144,13 @@ impl<'b> PdfDoc<'b> {
                     leading = -num(stack.get(1));
                     do_move(&mut tm, &mut out, size, num(stack.first()), num(stack.get(1)));
                 }
-                "Tm" => {
-                    if stack.len() >= 6 {
-                        let last6 = &stack[stack.len() - 6..];
-                        for (k, v) in last6.iter().enumerate() {
-                            tm[k] = num(Some(v));
-                        }
-                        let (e, f) = (tm[4], tm[5]);
-                        move_to(&mut tm, &mut out, size, e, f);
+                "Tm" if stack.len() >= 6 => {
+                    let last6 = &stack[stack.len() - 6..];
+                    for (k, v) in last6.iter().enumerate() {
+                        tm[k] = num(Some(v));
                     }
+                    let (e, f) = (tm[4], tm[5]);
+                    move_to(&mut tm, &mut out, size, e, f);
                 }
                 "T*" => do_move(&mut tm, &mut out, size, 0.0, -leading),
                 "Tj" => show(&mut out, &font, stack.first()),
@@ -2264,8 +2261,7 @@ impl<'b> PdfDoc<'b> {
                         V::Name(glyph) => {
                             let u = glyph_text(&glyph[1..]);
                             if let Some(u) = u
-                                && code >= 0.0
-                                && code < 256.0
+                                && (0.0..256.0).contains(&code)
                                 && code.fract() == 0.0
                             {
                                 enc[code as usize] = u;
@@ -2447,7 +2443,10 @@ fn parse_cmap(t: &[u8]) -> CMap {
         for m in RANGE_RE.captures_iter(body) {
             let lo = hex_value(m.get(1).map_or(&[][..], |x| x.as_bytes())).unwrap_or(f64::NAN);
             let hi = hex_value(m.get(2).map_or(&[][..], |x| x.as_bytes())).unwrap_or(f64::NAN);
-            if !(hi >= lo) {
+            if !matches!(
+                hi.partial_cmp(&lo),
+                Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+            ) {
                 continue;
             }
             if let Some(units) = m.get(3) {
@@ -2760,7 +2759,8 @@ const GLYPHS: &[(&str, &str)] = &[
 
 /// The combining accents of `glyphText`, and for each the letters that compose with it into one character
 /// (what `.normalize("NFC")` gives; a letter not listed stays as the letter and the combining accent).
-const ACCENTS: &[(&str, u16, &[(u8, u16)])] = &[
+type Composed = &'static [(u8, u16)];
+const ACCENTS: &[(&str, u16, Composed)] = &[
     (
         "acute",
         0x0301,
