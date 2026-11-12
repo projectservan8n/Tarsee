@@ -889,7 +889,7 @@ mod tests {
         assert_eq!(d.decode(&monkey[1..3]), "");
         assert_eq!(d.decode(&[monkey[3], b'b']), "🐒b");
         assert_eq!(d.decode(&[0xFF, b'c', 0xC3]), "\u{FFFD}c");
-        assert_eq!(d.decode(&[0xA9]), "©");
+        assert_eq!(d.decode(&[0xA9]), "é");
         assert_eq!(d.decode(&[0xE2, 0x82]), "");
         assert_eq!(d.finish(), "\u{FFFD}");
         assert_eq!(d.finish(), "");
