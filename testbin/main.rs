@@ -7,6 +7,7 @@
 //! This is the only place besides `src/main.rs` and `src/env.rs` that reads the real environment: a stand-in is a
 //! separate process, and the environment it was started with is exactly what a test wants to look at.
 
+mod browser_guard;
 mod echo;
 
 fn main() {
@@ -19,6 +20,7 @@ fn main() {
         });
     let code = match role.as_deref() {
         Some("echo") => echo::main(),
+        Some("browser-guard") => browser_guard::main(),
         other => {
             eprintln!("tarsee-testbin: no such role: {}", other.unwrap_or("(none)"));
             64
