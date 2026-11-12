@@ -30,9 +30,8 @@ use serde_json::{Map, Value, json};
 use tokio::sync::Mutex as Queue;
 use tokio::task::AbortHandle;
 
-use crate::lib::discord_format::js_text::trim;
 use crate::lib::slack_format::{SLACK_MAX_MARKDOWN, close_fence, open_fence};
-use crate::util::js::{now_ms, utf16_len};
+use crate::util::js::{now_ms, trim, utf16_len};
 
 /// An error from a Slack Web API call. `code` is Slack's own error code when Slack answered `{ ok: false, error }`
 /// ("ratelimited", "feature_disabled"...), else `None` (the connection failed, the answer was not JSON...).

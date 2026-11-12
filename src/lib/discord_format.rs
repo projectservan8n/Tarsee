@@ -26,15 +26,15 @@ use regex::{Captures, Regex};
 use crate::util::js::utf16_len;
 
 pub mod js_text {
-    //! JavaScript's regular-expression and string behaviour that the formatters of this package depend on.
+    //! JavaScript's regular expressions, for the formatters of this package. (JavaScript's `trim` and whitespace are
+    //! `util::js::trim` and `util::js::is_whitespace`.)
     //!
-    //! JavaScript's `\s` (and `String.prototype.trim`) is a fixed set of characters that differs from Rust's
-    //! `char::is_whitespace` in two places: U+FEFF is whitespace in JavaScript and U+0085 is not. JavaScript's `.`
-    //! (without the `s` flag) stops at four line terminators, not only `\n`. `\d`, `\w` and `\b` are ASCII-only
-    //! without the `u` flag. [`translate`] turns a JavaScript pattern into a Rust one with exactly those meanings, so
-    //! the patterns below can be written as the Node code wrote them.
+    //! JavaScript's `\s` is the set `util::js::is_whitespace` tests: U+FEFF is in it and U+0085 is not, unlike Rust's.
+    //! JavaScript's `.` (without the `s` flag) stops at four line terminators, not only `\n`. `\d`, `\w` and `\b` are
+    //! ASCII-only without the `u` flag. [`translate`] turns a JavaScript pattern into a Rust one with exactly those
+    //! meanings, so the patterns below can be written as the Node code wrote them.
 
-    /// The characters of JavaScript's `\s`, as members of a character class.
+    /// The characters of JavaScript's `\s` (`util::js::is_whitespace`), as members of a character class.
     pub const WS_MEMBERS: &str =
         r"\t\n\x0B\x0C\r \x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}";
 
@@ -43,33 +43,9 @@ pub mod js_text {
         format!("[{WS_MEMBERS}]")
     }
 
-    /// Whether `c` is whitespace to JavaScript (`\s`, and what `trim` removes).
-    pub fn is_ws(c: char) -> bool {
-        matches!(
-            c,
-            '\t' | '\n' | '\x0B' | '\x0C' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
-                ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
-        )
-    }
-
     /// Whether `c` ends a line to JavaScript (what `.` does not match, and where `^`/`$` match with the `m` flag).
     pub fn is_line_terminator(c: char) -> bool {
         matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
-    }
-
-    /// `s.trim()`.
-    pub fn trim(s: &str) -> &str {
-        s.trim_matches(is_ws)
-    }
-
-    /// `s.trimStart()`.
-    pub fn trim_start(s: &str) -> &str {
-        s.trim_start_matches(is_ws)
-    }
-
-    /// `s.trimEnd()`.
-    pub fn trim_end(s: &str) -> &str {
-        s.trim_end_matches(is_ws)
     }
 
     /// A JavaScript pattern (the text between the slashes, no `u` or `s` flag) as a Rust pattern with the same
@@ -164,7 +140,8 @@ pub mod js_text {
     }
 }
 
-use js_text::{re, trim, trim_end};
+use crate::util::js::{is_whitespace, trim, trim_end, trim_start};
+use js_text::re;
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -956,7 +933,7 @@ fn bare(line: &str) -> bool {
 
 /// `/^\s*>(?!>>)/.test(line)`: a ">" after the leading whitespace, not the first of ">>>".
 fn starts_quote(line: &str) -> bool {
-    js_text::trim_start(line)
+    trim_start(line)
         .strip_prefix('>')
         .is_some_and(|rest| !rest.starts_with(">>"))
 }
@@ -967,10 +944,10 @@ fn quoted(line: &str) -> bool {
 
 /// `line.replace(/^(\s*)>(?=[^\s>])/, "$1> ")`: the missing space after a leading ">".
 fn space_after_quote_mark(line: &str) -> String {
-    let rest = js_text::trim_start(line);
+    let rest = trim_start(line);
     let indent = &line[..line.len() - rest.len()];
     match rest.strip_prefix('>') {
-        Some(after) if after.chars().next().is_some_and(|c| !js_text::is_ws(c) && c != '>') => {
+        Some(after) if after.chars().next().is_some_and(|c| !is_whitespace(c) && c != '>') => {
             format!("{indent}> {after}")
         }
         _ => line.to_string(),
@@ -1036,7 +1013,7 @@ struct OpenFence {
 /// text on it that is not a fence.
 fn has_content(chunk: &str) -> bool {
     chunk.split(js_text::is_line_terminator).any(|line| {
-        let t = js_text::trim_start(line);
+        let t = trim_start(line);
         !t.is_empty() && !t.starts_with("```") && !t.starts_with("~~~")
     })
 }

@@ -304,7 +304,7 @@ fn an_unmatched_backtick_run_in_a_cell_forces_a_longer_fence() {
     let out = format_tables_for_discord("| a | b |\n|---|---|\n| ``` | 2 |");
     let opener = out.split('\n').next().unwrap();
     assert!(opener.len() >= 4, "fence must outrun the content: {opener:?}");
-    assert!(js_text::trim_end(&out).ends_with(opener), "closing fence must match");
+    assert!(trim_end(&out).ends_with(opener), "closing fence must match");
 }
 
 // splitMessageFenceSafe
@@ -384,7 +384,7 @@ fn dangling_fence_in_the_input_is_closed_on_output() {
     let chunks = split_message_fence_safe(&format!("```\n{}", "y".repeat(3000)), 2000);
     let last = chunks.last().unwrap();
     assert!(
-        js_text::trim_end(last).ends_with("```"),
+        trim_end(last).ends_with("```"),
         "{}",
         crate::util::js::utf16_tail(last, 20)
     );
@@ -443,7 +443,7 @@ fn a_reply_whose_table_grows_when_drawn_reaches_discord_whole_drawn_first_then_s
             .unwrap()
             .replace_all(&clean, "");
         let clean = Regex::new(r"\n{3,}").unwrap().replace_all(&clean, "\n\n");
-        format_for_discord(js_text::trim(&clean))
+        format_for_discord(trim(&clean))
     };
     let rows: Vec<String> = (0..20)
         .map(|i| format!("| Row {} | lead {i} | closed {i} | {} | note {i} |", i + 1, i * 7))
@@ -477,7 +477,18 @@ fn javascript_patterns_keep_their_javascript_meaning() {
     // [\s\S] is any character, [ inside a class is literal.
     assert!(js_text::re(r"^[\s\S]$").is_match("\n"));
     assert!(js_text::re(r"^[[\]]+$").is_match("[]"));
-    assert_eq!(js_text::trim("\u{FEFF} x \u{85}"), "x \u{85}");
+}
+
+/// The `\s` of the translated patterns is the foundation's JavaScript whitespace, character for character.
+#[test]
+fn the_pattern_whitespace_is_the_foundations_javascript_whitespace() {
+    let ws = js_text::re(r"^\s$");
+    let not_ws = js_text::re(r"^\S$");
+    for c in (0..=0x10FFFFu32).filter_map(char::from_u32) {
+        let text = c.to_string();
+        assert_eq!(ws.is_match(&text), is_whitespace(c), "U+{:04X}", c as u32);
+        assert_eq!(not_ws.is_match(&text), !is_whitespace(c), "U+{:04X}", c as u32);
+    }
 }
 
 // ---------------------------------------------------------------------------

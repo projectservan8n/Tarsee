@@ -11,10 +11,10 @@ use std::sync::LazyLock;
 
 use regex::{Captures, Regex};
 
-use crate::lib::discord_format::js_text::{self, re, trim};
+use crate::lib::discord_format::js_text::{self, re};
 use crate::lib::discord_format::split_message_fence_safe;
 use crate::lib::reaction_parser::parse_reactions;
-use crate::util::js::utf16_len;
+use crate::util::js::{trim, utf16_len};
 
 /// Most markdown one message or stream takes: Slack's cap is 12,000; the rest is room for a closing fence.
 pub const SLACK_MAX_MARKDOWN: usize = 11_000;
