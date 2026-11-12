@@ -637,9 +637,16 @@ pub fn parse_identity_file(app: &App, content: Option<&str>) -> Map<String, Valu
     }
     for caps in IDENTITY_LINE.captures_iter(&raw) {
         let key = js_collapse_spaces(&trim(&caps[1]).to_lowercase(), "_");
-        result.insert(key, Value::String(trim(&caps[2]).to_string()));
+        // `result[key] = value` on a plain object: "__proto__" sets the prototype and is never an own key.
+        if key != "__proto__" {
+            result.insert(key, Value::String(trim(&caps[2]).to_string()));
+        }
     }
-    result
+    // A JavaScript object lists keys that look like array indexes first, in number order.
+    jstext::js_key_order(&result)
+        .into_iter()
+        .map(|k| (k.clone(), result[k].clone()))
+        .collect()
 }
 
 /// Forgets every cached file.
@@ -1544,5 +1551,73 @@ mod tests {
             serde_json::json!({"a": "- **B:** c", "c": "d"})
         );
         assert!(parse_identity_file(&t, Some("")).is_empty());
+        // Checked against Node: number-like labels first, and no __proto__.
+        assert_eq!(
+            Value::Object(parse_identity_file(
+                &t,
+                Some("- **Name:** a\n- **2:** two\n- **1:** one\n- **__proto__:** x\n- **Vibe:** v")
+            ))
+            .to_string(),
+            r#"{"1":"one","2":"two","name":"a","vibe":"v"}"#
+        );
+    }
+
+    #[test]
+    fn a_plain_name_is_one_name_and_nothing_else() {
+        for name in ["SOUL.md", "my-skill", "a b", "..x", "x.."] {
+            assert!(is_plain_name(name), "{name}");
+        }
+        let absolute = if cfg!(windows) { r"C:\Windows" } else { "/etc" };
+        for name in ["", ".", "..", "a/b", "a\\b", "/abs", absolute, "nul\0x"] {
+            assert!(!is_plain_name(name), "{name:?}");
+        }
+        #[cfg(windows)]
+        for name in ["C:", "c:x", r"\\server\share"] {
+            assert!(!is_plain_name(name), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn a_workspace_file_name_is_joined_as_node_joined_it_and_never_leaves_the_workspace() {
+        let t = test_app();
+        let ws = t.config().workspace_dir.clone();
+        let outside = tmp_dir();
+        let target = outside.path().join("victim.md");
+        std::fs::write(&target, "keep me").unwrap();
+        // An absolute name stays under the workspace, as path.join kept it (on Windows the drive's colon then makes
+        // a name the system refuses, as it refused Node's).
+        let absolute = target.to_string_lossy().to_string();
+        let written = write_workspace_file(&t, &absolute, "inside");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep me");
+        assert!(crate::lib::safe_path::join_path(&ws, &absolute).starts_with(&ws));
+        if cfg!(unix) {
+            written.unwrap();
+            assert_eq!(read_workspace_file(&t, &absolute), "inside");
+        }
+        // `..` out of the workspace is refused (the JS followed it).
+        let up = "../escaped.md";
+        assert_eq!(
+            write_workspace_file(&t, up, "x").unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert!(append_workspace_file(&t, up, "x").is_err());
+        assert_eq!(read_workspace_file(&t, "../escaped.md"), "");
+        assert!(!t.path().join("escaped.md").exists());
+        // `..` that stays inside is fine.
+        write_workspace_file(&t, "memory/../NOTES.md", "ok").unwrap();
+        assert_eq!(std::fs::read_to_string(ws.join("NOTES.md")).unwrap(), "ok");
+    }
+
+    #[test]
+    fn the_memory_path_shown_to_the_model_is_tidied_as_path_join_tidied_it() {
+        let dir = tmp_dir();
+        let messy = format!("{}/./ws//", dir.path().display());
+        let t = test_app_with_env([("TARSEE_WORKSPACE_DIR", messy.as_str())]);
+        std::fs::write(t.config().workspace_dir.join("MEMORY.md"), "# Memory\n- fact\n").unwrap();
+        let ctx = get_bootstrap_context(&t, None);
+        let tidy = crate::util::node_path::normalize(&dir.path().join("ws").join("MEMORY.md"));
+        let pointer = format!("Your long-term memory is in `{}`", tidy.display());
+        assert!(ctx.contains(&pointer), "{pointer}\n{ctx}");
+        assert!(!pointer.contains("//") && !pointer.contains("/./") && !pointer.contains("\\\\"));
     }
 }

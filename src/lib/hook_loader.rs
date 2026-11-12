@@ -150,7 +150,9 @@ impl ProgramHook {
             .spawn()
             .map_err(|err| anyhow::anyhow!("could not start {}: {err}", self.manifest.command))?;
 
-        let input = serde_json::to_vec(&json!({ "event": self.event, "data": data }))?;
+        // One line: the JSON and a line end, so a script can read it with `read -r line`.
+        let mut input = serde_json::to_vec(&json!({ "event": self.event, "data": data }))?;
+        input.push(b'\n');
         let stdin = child.stdin.take();
         let write = async move {
             if let Some(mut stdin) = stdin {

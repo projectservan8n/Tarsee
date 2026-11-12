@@ -10,7 +10,6 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 
 use crate::env::Env;
-use crate::lib::workspace_files::jstext::js_string;
 use crate::net::fetch::{Fetch, FetchError, FetchRequest};
 use crate::util::js::{trim, truthy};
 
@@ -78,8 +77,9 @@ where
                     let Ok(data) = serde_json::from_str::<Value>(data) else {
                         continue;
                     };
-                    if let Some(content) = data.get("content").filter(|c| truthy(c)) {
-                        write!(out, "{}", js_string(Some(content)))?;
+                    // process.stdout.write threw for anything but text, and the event was skipped.
+                    if let Some(Value::String(content)) = data.get("content").filter(|c| truthy(c)) {
+                        write!(out, "{content}")?;
                         out.flush()?;
                     }
                 }
@@ -122,7 +122,7 @@ mod tests {
             "http://localhost:3000/api/chat/send",
             Answer::sse([
                 "event: start\ndata: {\"type\":\"start\"}\n\n",
-                "data: {\"content\":\"Hel\"}\n\ndata: {\"content\":\"lo!\"}\n\ndata: not json\n\ndata: {\"done\":true}\n\n",
+                "data: {\"content\":\"Hel\"}\n\ndata: {\"content\":123}\n\ndata: {\"content\":{\"a\":1}}\n\ndata: {\"content\":\"lo!\"}\n\ndata: not json\n\ndata: {\"done\":true}\n\n",
             ]),
         );
         let shown = chat(&env, fetch.clone(), "  \n  hi there \n/quit\nnot sent\n").await;
