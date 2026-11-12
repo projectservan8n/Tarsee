@@ -127,6 +127,13 @@ impl LiveBus {
 
 The schema is `src/db/sqlite.rs`. A new table or column is a new migration there, never an edit to an old one.
 
+### Shipped files (`Config::assets_dir`)
+
+The Node code found the browser UI, the bundled skills, the workspace defaults, the translations and the Python
+workers next to its own source files (`path.join(__dirname, "..", "skills")`). A compiled program has no source
+folder, so these come from `app.config()`: `public_dir()`, `bundled_skills_dir()`, `workspace_defaults_dir()`,
+`i18n_dir()`, `voice_scripts_dir()`. Never build such a path from the source tree yourself.
+
 ### `Settings` (`src/db/settings.rs`)
 
 Where a Node function took `store`, `settings` or `settingsStore` and only read or wrote settings, the Rust function

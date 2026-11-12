@@ -32,6 +32,10 @@ pub struct Config {
     pub claude_default_model: String,
     /// IANA zone the agent reasons in for "today", "tomorrow at 9" and cron.
     pub timezone: String,
+    /// The folder holding what ships with Tarsee besides the program: `public/` (the browser UI), `skills/`,
+    /// `workspace-defaults/`, `i18n/` and `voice/` (the Python workers). New in the Rust version: the Node code found
+    /// these next to its own source files. See [`resolve_assets_dir`].
+    pub assets_dir: PathBuf,
 }
 
 impl Config {
@@ -107,6 +111,7 @@ impl Config {
             claude_workspace_dir,
             claude_default_model,
             timezone: resolve_timezone(env),
+            assets_dir: resolve_assets_dir(env),
         }
     }
 
@@ -120,6 +125,31 @@ impl Config {
 
     pub fn memory_dir(&self) -> PathBuf {
         self.workspace_dir.join("memory")
+    }
+
+    /// The browser UI files (the Node `src/public`).
+    pub fn public_dir(&self) -> PathBuf {
+        self.assets_dir.join("public")
+    }
+
+    /// The skills that ship with Tarsee (the Node `src/skills`), copied into the workspace when installed.
+    pub fn bundled_skills_dir(&self) -> PathBuf {
+        self.assets_dir.join("skills")
+    }
+
+    /// The shipped versions of the workspace files (the Node `src/workspace-defaults`).
+    pub fn workspace_defaults_dir(&self) -> PathBuf {
+        self.assets_dir.join("workspace-defaults")
+    }
+
+    /// The translations (the Node `src/i18n`).
+    pub fn i18n_dir(&self) -> PathBuf {
+        self.assets_dir.join("i18n")
+    }
+
+    /// The Python speech workers (`stt_worker.py`, `phonon_worker.py`; the Node `src/voice`).
+    pub fn voice_scripts_dir(&self) -> PathBuf {
+        self.assets_dir.join("voice")
     }
 }
 
@@ -159,6 +189,25 @@ fn resolve_state_dir(env: &Env) -> PathBuf {
     }
     home_dir(env).join(".tarsee")
 }
+
+/// Where the shipped files are: `TARSEE_ASSETS_DIR` when set; else an `assets` folder beside the program (how a
+/// release is laid out); else the source tree this program was built from (a development build and the tests).
+pub fn resolve_assets_dir(env: &Env) -> PathBuf {
+    if let Some(dir) = env.trimmed("TARSEE_ASSETS_DIR") {
+        return PathBuf::from(dir);
+    }
+    let beside_program = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("assets")));
+    if let Some(dir) = beside_program.filter(|dir| dir.is_dir()) {
+        return dir;
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(ASSETS_IN_SOURCE_TREE)
+}
+
+/// The assets folder inside the repository. While the Node sources are still in place this is `src`, where the
+/// Node version kept `public/`, `skills/` and the rest.
+const ASSETS_IN_SOURCE_TREE: &str = "src";
 
 /// `TARSEE_API_TOKEN`, else the token saved in `api.token`, else a new one (saved for next time).
 fn resolve_api_token(env: &Env, state_dir: &Path) -> String {
@@ -424,6 +473,27 @@ mod tests {
         assert_eq!(Config::load(&env).timezone, "Europe/Berlin");
         env.set("TARSEE_TIMEZONE", "Mars/Olympus_Mons");
         assert_eq!(Config::load(&env).timezone, "UTC");
+    }
+
+    #[test]
+    fn the_shipped_files_are_found_in_the_source_tree_or_where_the_environment_says() {
+        let dir = tmp_dir();
+        let env = env_in(dir.path());
+        let config = Config::load(&env);
+        assert!(
+            config.public_dir().join("index.html").is_file(),
+            "{:?}",
+            config.public_dir()
+        );
+        assert!(config.bundled_skills_dir().is_dir());
+        assert!(config.workspace_defaults_dir().join("SOUL.md").is_file());
+        assert!(config.i18n_dir().join("en.json").is_file());
+        assert!(config.voice_scripts_dir().join("stt_worker.py").is_file());
+        env.set(
+            "TARSEE_ASSETS_DIR",
+            dir.path().join("elsewhere").to_string_lossy().to_string(),
+        );
+        assert_eq!(Config::load(&env).assets_dir, dir.path().join("elsewhere"));
     }
 
     #[test]
