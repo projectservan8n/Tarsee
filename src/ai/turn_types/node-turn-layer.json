@@ -1,0 +1,86 @@
+{
+ "plainTurn": [
+  {"type":"route","provider":"claude","engine":"claude-code","model":"sonnet","label":"Claude Sonnet","providerLabel":"Claude plan","effort":"medium","vendor":"claude","streaming":true,"backup":false},
+  {"type":"thinking","status":"start"},
+  {"type":"thinking","status":"stop"},
+  {"type":"text","content":"Hello"},
+  {"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}},
+  {"type":"tool_result","id":"t1","ok":true,"result":"a\nb"},
+  {"type":"text","content":" there"},
+  {"type":"usage","usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4,"context_input_tokens":17}},
+  {"type":"done","stopReason":"end_turn"}
+ ],
+ "refusal": [
+  {"type":"text","content":"\"API keys only\" is switched on, so Tarsee won't use your Claude plan. Choose an AI that uses an API key in Settings > AI."},
+  {"type":"error","message":"\"API keys only\" is switched on, so Tarsee won't use your Claude plan. Choose an AI that uses an API key in Settings > AI.","subtype":"blocked-keys-only","recoverable":false},
+  {"type":"done","stopReason":"blocked-keys-only"}
+ ],
+ "noDone": [
+  {"type":"route","provider":"claude","engine":"claude-code","model":"sonnet","label":"Claude Sonnet","providerLabel":"Claude plan","effort":"medium","vendor":"claude","streaming":true,"backup":false},
+  {"type":"text","content":"partial"},
+  {"type":"text","content":" words"},
+  {"type":"error","message":"The AI stopped without finishing its reply. Try again.","recoverable":false,"code":null},
+  {"type":"done","stopReason":"error"}
+ ],
+ "badEnd": [
+  {"type":"route","provider":"claude","engine":"claude-code","model":"sonnet","label":"Claude Sonnet","providerLabel":"Claude plan","effort":"medium","vendor":"claude","streaming":true,"backup":false},
+  {"type":"error","message":"Claude Sonnet stopped with an error. Try again.","subtype":"error","recoverable":false,"code":null},
+  {"type":"done","stopReason":"error"}
+ ],
+ "authExpired": [
+  {"type":"route","provider":"claude","engine":"claude-code","model":"sonnet","label":"Claude Sonnet","providerLabel":"Claude plan","effort":"medium","vendor":"claude","streaming":true,"backup":false},
+  {"type":"text","content":"Claude's sign-in has expired."},
+  {"type":"error","message":"Claude's sign-in has expired. Settings > AI shows how to sign in again.","subtype":"auth-expired","recoverable":false,"code":"auth"},
+  {"type":"done","stopReason":"auth-expired"}
+ ],
+ "crash": [
+  {"type":"route","provider":"claude","engine":"claude-code","model":"sonnet","label":"Claude Sonnet","providerLabel":"Claude plan","effort":"medium","vendor":"claude","streaming":true,"backup":false},
+  {"type":"error","message":"spawn claude ENOENT","code":null},
+  {"type":"done","stopReason":"error"}
+ ],
+ "endsOnTool": [
+  {"type":"route","provider":"claude","engine":"claude-code","model":"sonnet","label":"Claude Sonnet","providerLabel":"Claude plan","effort":"medium","vendor":"claude","streaming":true,"backup":false},
+  {"type":"tool_use","id":"t1","name":"Bash","input":{}},
+  {"type":"error","message":"The AI stopped halfway through using a tool. This is a fault in Tarsee, not in your message; try again.","subtype":"tool_use","recoverable":false,"code":null},
+  {"type":"done","stopReason":"error"}
+ ],
+ "engineError": [
+  {"type":"route","provider":"claude","engine":"claude-code","model":"sonnet","label":"Claude Sonnet","providerLabel":"Claude plan","effort":"medium","vendor":"claude","streaming":true,"backup":false},
+  {"type":"text","content":"Half "},
+  {"type":"text","content":"an answer"},
+  {"type":"error","message":"Your credit balance is too low.","code":"billing","status":402,"state":"out-of-credit","subtype":"error_during_execution"},
+  {"type":"done","stopReason":"error"}
+ ],
+ "backup": [
+  {"type":"route","provider":"claude","engine":"claude-code","model":"sonnet","label":"Claude Sonnet","providerLabel":"Claude plan","effort":"medium","vendor":"claude","streaming":true,"backup":false},
+  {"type":"route","provider":"deepseek","engine":"claude-code","model":"deepseek-flash","label":"DeepSeek Flash","providerLabel":"DeepSeek","effort":"low","vendor":"deepseek","streaming":true,"backup":true},
+  {"type":"text","content":"_DeepSeek Flash answered: the Claude plan is unavailable (out of credit)._\n\n"},
+  {"type":"text","content":"Here's the answer."},
+  {"type":"done","stopReason":"end_turn"}
+ ],
+ "budget": [
+  {"type":"route","provider":"deepseek","engine":"claude-code","model":"deepseek-flash","label":"DeepSeek Flash","providerLabel":"DeepSeek","effort":"low","vendor":"deepseek","streaming":true,"backup":false},
+  {"type":"text","content":"Working"},
+  {"type":"text","content":"…"},
+  {"type":"error","subtype":"error_max_budget_usd","message":"Stopped after reaching this task's spending limit of $0.05 (about $0.60 so far, estimated).","recoverable":false},
+  {"type":"done","stopReason":"error_max_budget_usd"}
+ ],
+ "overBudget": [
+  {"type":"route","provider":"openai","engine":"codex","model":"gpt-6.1-sol","label":"GPT-6.1 Sol","providerLabel":"OpenAI API key","effort":"medium","vendor":"openai","streaming":false,"backup":false},
+  {"type":"text","content":"Done."},
+  {"type":"usage","usage":{"input_tokens":4000000,"output_tokens":1000000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}},
+  {"type":"done","stopReason":"end_turn","overBudget":true,"ceilingUsd":1,"spentUsd":18}
+ ],
+ "reportedCost": [
+  {"type":"route","provider":"openrouter","engine":"claude-code","model":"~anthropic/claude-sonnet-latest","label":"~anthropic/claude-sonnet-latest","providerLabel":"OpenRouter","effort":"medium","vendor":"anthropic","streaming":true,"backup":false},
+  {"type":"usage","usage":{"input_tokens":10,"output_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"costUsd":0.0042,"costExact":true},
+  {"type":"text","content":"ok"},
+  {"type":"weather","sky":"clear"},
+  {"type":"done","stopReason":"end_turn","engineNote":"kept"}
+ ],
+ "verifyCodex": [
+  {"type":"route","provider":"openrouter","engine":"codex","model":"meta-llama/llama-4-maverick","label":"meta-llama/llama-4-maverick","providerLabel":"OpenRouter","effort":"max","vendor":"meta-llama","streaming":false,"backup":false},
+  {"type":"text","content":"Done."},
+  {"type":"done","stopReason":"end_turn"}
+ ]
+}

@@ -1,0 +1,123 @@
+// Captures the events the two Node engines really yield (providers/claude-code.js run() with the SDK's query stubbed,
+// providers/codex-events.js for Codex), as JSON, for the Rust tests of src/ai/turn_types.rs.
+// node capture-engines.mjs <main checkout> <state dir>
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const [root, stateDir] = process.argv.slice(2);
+const src = (rel) => pathToFileURL(path.join(root, rel)).href;
+fs.rmSync(stateDir, { recursive: true, force: true });
+fs.mkdirSync(path.join(stateDir, "workspace"), { recursive: true });
+process.env.TARSEE_STATE_DIR = path.join(stateDir, "state");
+process.env.TARSEE_WORKSPACE_DIR = path.join(stateDir, "workspace");
+
+const realLog = console.log;
+console.log = () => {};
+console.warn = () => {};
+console.error = () => {};
+
+const { run } = await import(src("src/ai/providers/claude-code.js"));
+const cx = await import(src("src/ai/providers/codex-events.js"));
+
+const out = {};
+let n = 0;
+function dirs() {
+  n += 1;
+  const d = { stateDir: path.join(stateDir, `s${n}`), homeDir: path.join(stateDir, `h${n}`), cwd: path.join(stateDir, `w${n}`) };
+  for (const v of Object.values(d)) fs.mkdirSync(v, { recursive: true });
+  return d;
+}
+const KEYS = { anthropic: "sk-ant-api03-" + "test-key-anthropic-AAAAAAAAAAAA", deepseek: "sk-" + "testdeepseekkey000000000001", openrouter: "sk-or-v1-" + "testopenrouterkey0001" };
+const resolveModel = (m) => ({ fable: "claude-fable-test", opus: "claude-opus-test", sonnet: "claude-sonnet-test", haiku: "claude-haiku-test" })[m] || m;
+const fakeQuery = (script) => ({ options }) => (async function* () {
+  for (const m of script) {
+    if (options.abortController?.signal.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    yield m;
+  }
+})();
+function runOpts(providerId, script, extra = {}) {
+  const d = dirs();
+  return {
+    target: { providerId, model: extra.model },
+    messages: [{ role: "user", content: "hello there" }],
+    systemPrompt: "SYS",
+    ...extra,
+    deps: { query: fakeQuery(script), env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot }, stateDir: d.stateDir, homeDir: d.homeDir, cwd: d.cwd, key: KEYS[providerId], mcpServer: null, vaultEnv: {}, resolveModel, isTranscriptOverCap: () => false },
+  };
+}
+async function collect(opts) { const list = []; for await (const e of run(opts)) list.push(e); return list; }
+
+const init = (apiKeySource = "none") => ({ type: "system", subtype: "init", apiKeySource, session_id: "sess-1", mcp_servers: [{ name: "tarsee", status: "connected" }] });
+const delta = (text) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } } });
+const assistant = (content, extra = {}) => ({ type: "assistant", parent_tool_use_id: null, message: { content }, ...extra });
+const userResult = (id, text, isError = false) => ({ type: "user", parent_tool_use_id: null, message: { content: [{ type: "tool_result", tool_use_id: id, content: text, is_error: isError }] } });
+const result = (extra = {}) => ({ type: "result", subtype: "success", is_error: false, result: "", session_id: "sess-1", usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 2, cache_creation_input_tokens: 1 }, total_cost_usd: 0.0123, modelUsage: {}, ...extra });
+const msgStart = (id, usage) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_start", message: { id, usage } } });
+const msgDelta = (usage) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage } });
+const blockStart = (index, type) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_start", index, content_block: { type } } });
+const thinkDelta = (index, thinking) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_delta", index, delta: { type: "thinking_delta", thinking } } });
+const blockStop = (index) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_stop", index } });
+
+// Claude Code on the Anthropic key: thinking, a tool round, live steps, the usage with its exact cost, done.
+out.claudeToolRound = await collect(runOpts("anthropic", [
+  init("ANTHROPIC_API_KEY"),
+  msgStart("msg_1", { input_tokens: 100, cache_read_input_tokens: 20, cache_creation_input_tokens: 5, output_tokens: 1 }),
+  blockStart(0, "thinking"), thinkDelta(0, "The person wants the time."), blockStop(0),
+  assistant([{ type: "text", text: "Let me check." }, { type: "tool_use", id: "tu1", name: "mcp__tarsee__tarsee_datetime", input: { format: "date" } }]),
+  msgDelta({ output_tokens: 40 }),
+  userResult("tu1", "Monday, 9 November 2026"),
+  delta("It is Monday."),
+  { type: "system", subtype: "api_retry", attempt: 1, max_retries: 10, retry_delay_ms: 2000, error_status: 529, error: "server_error" },
+  result({ result: "It is Monday." }),
+], { thinkingSummaries: true }));
+
+// A sign-in that ran out, a key that was turned down, the turn limit, the SDK's own budget stop, no credit.
+out.claudeAuthExpired = await collect(runOpts("claude", [init(), assistant([{ type: "text", text: "Failed to authenticate. API Error: 401" }], { error: "authentication_failed" }), result({ is_error: true, result: "Failed to authenticate. API Error: 401" })]));
+out.claudeKeyRejected = await collect(runOpts("deepseek", [init(), assistant([{ type: "text", text: "API Error: 401 {\"error\":{\"message\":\"Authentication Fails\"}}" }], { error: "authentication_failed" }), result({ is_error: true, result: "API Error: 401" })]));
+out.claudeMaxTurns = await collect(runOpts("claude", [init(), delta("Working"), result({ subtype: "error_max_turns", num_turns: 12, errors: [] })]));
+out.claudeBudget = await collect(runOpts("claude", [init(), result({ subtype: "error_max_budget_usd", errors: [] })]));
+out.claudeBilling = await collect(runOpts("anthropic", [init("ANTHROPIC_API_KEY"), assistant([{ type: "text", text: "API Error: 402 Your credit balance is too low" }], { error: "billing_error" }), result({ is_error: true, result: "Your credit balance is too low" })]));
+out.claudeWrongKeySource = await collect(runOpts("deepseek", [init("/login managed key"), delta("never")]));
+out.claudeNoResponse = await collect(runOpts("claude", []));
+out.claudeSessionLost = await collect(runOpts("claude", [init(), result({ is_error: true, result: "API Error: 400 previous_message_id must be the id from a prior message" })], { sessionId: "raw-old" }));
+// OpenRouter: the provider's own cost on message_delta, exact.
+out.claudeOpenRouterCost = await collect(runOpts("openrouter", [
+  init(), msgStart("m1", { input_tokens: 50, output_tokens: 1 }), delta("Hi"), msgDelta({ output_tokens: 9, cost: 0.00042 }), result({ result: "Hi", total_cost_usd: 0 }),
+], { model: "anthropic/claude-sonnet-5.5" }));
+
+// Codex: its SDK's events mapped (codex-events.js).
+const state = cx.createCodexEventState({ providerId: "openai", model: "gpt-6.1-sol" });
+const codex = [];
+for (const ev of [
+  { type: "thread.started", thread_id: "0198c000-0000-7000-8000-000000000001" },
+  { type: "turn.started" },
+  { type: "item.started", item: { id: "r1", type: "reasoning" } },
+  { type: "item.completed", item: { id: "r1", type: "reasoning", text: "Listing the folder first." } },
+  { type: "item.started", item: { id: "c1", type: "command_execution", command: "/bin/bash -lc 'ls -la'", status: "in_progress" } },
+  { type: "item.completed", item: { id: "c1", type: "command_execution", command: "/bin/bash -lc 'ls -la'", aggregated_output: "a\nb\n", exit_code: 0, status: "completed" } },
+  { type: "item.completed", item: { id: "m1", type: "mcp_tool_call", server: "tarsee", tool: "tarsee_datetime", arguments: { format: "date" }, status: "completed", result: { content: [{ type: "text", text: "Monday" }] } } },
+  { type: "item.completed", item: { id: "f1", type: "file_change", status: "completed", changes: [{ path: "notes.md", kind: "add" }, { path: "old.md", kind: "delete" }] } },
+  { type: "item.started", item: { id: "t1", type: "todo_list", items: [{ text: "Look", completed: true }, { text: "Answer", completed: false }] } },
+  { type: "item.completed", item: { id: "w1", type: "web_search", query: "tarsier habitat" } },
+  { type: "error", message: "Reconnecting... 2/5 (unexpected status 503 Service Unavailable: upstream)" },
+  { type: "item.completed", item: { id: "e1", type: "error", message: "The sandbox is read-only here." } },
+  { type: "item.completed", item: { id: "a1", type: "agent_message", text: "Two files." } },
+  { type: "item.completed", item: { id: "a2", type: "agent_message", text: "Done." } },
+  { type: "turn.completed", usage: { input_tokens: 1200, cached_input_tokens: 200, output_tokens: 80, reasoning_output_tokens: 10 } },
+]) codex.push(...cx.mapCodexEvent(ev, state));
+out.codexTurn = codex;
+
+const failed = cx.createCodexEventState({ providerId: "openai", model: "gpt-6.1-sol" });
+out.codexAuthFailed = cx.mapCodexEvent({ type: "turn.failed", error: { message: "unexpected status 401 Unauthorized: Incorrect API key provided" } }, failed);
+const lost = cx.createCodexEventState({ providerId: "openai" });
+out.codexSessionLost = cx.finishCodexEvents(lost, { error: new Error("Codex Exec exited with code 1: Error: thread/resume failed: no rollout found for thread id 0198c000") });
+const limit = cx.createCodexEventState({ providerId: "openai" });
+cx.mapCodexEvent({ type: "item.started", item: { id: "c9", type: "command_execution", command: "sleep 99" } }, limit);
+out.codexMaxTurns = cx.finishCodexEvents(limit, { maxTurns: 12 });
+out.codexAborted = cx.finishCodexEvents(cx.createCodexEventState({ providerId: "openai" }), { aborted: true });
+out.codexSilent = cx.finishCodexEvents(cx.createCodexEventState({ providerId: "openai" }), {});
+out.codexRolloutUsage = cx.usageEvents(cx.createCodexEventState({ providerId: "openai", baseline: { input_tokens: 1000, cached_input_tokens: 0, output_tokens: 10 } }), { input_tokens: 1500, cached_input_tokens: 100, output_tokens: 60 });
+
+realLog(JSON.stringify(out, null, 1));
+process.exit(0);

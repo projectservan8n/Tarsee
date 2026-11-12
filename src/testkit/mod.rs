@@ -6,12 +6,22 @@
 //! - [`FakeFetch`] is the stubbed `fetch` the Node tests built by hand: it answers by URL prefix and records every
 //!   request.
 //! - [`http`] calls an axum `Router` directly, without a socket.
+//! - The stand-ins for what the packages of the port call through an interface (`docs/rust-port/INTERFACES.md`):
+//!   [`FakeEngine`] (a scripted agent engine, the port of `test/fakes/fake-engine.js`), [`FakeTurnRunner`] (a
+//!   scripted turn layer: what the Node channel tests passed as `chatStream`), [`FakeTools`] (the agent's tools),
+//!   [`FakeChannels`] and [`FakeChannel`] (the channel manager and one bot) and [`FakeCommands`] (chat commands).
+//!   Each records what it was asked and answers from what the test scripted.
 //!
 //! Stand-ins for the programs Tarsee starts (claude, codex, python, piper) are in the `tarsee-testbin` binary
 //! (`testbin/`), which integration tests (`tests/it/`) find through `support::testbin()`.
 
 pub mod captured_logs;
+pub mod fake_channels;
+pub mod fake_commands;
+pub mod fake_engine;
 pub mod fake_fetch;
+pub mod fake_tools;
+pub mod fake_turn;
 pub mod http;
 pub mod memory_settings;
 
@@ -22,7 +32,12 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 pub use captured_logs::CapturedLogs;
+pub use fake_channels::{BotCall, ChannelCall, FakeChannel, FakeChannels};
+pub use fake_commands::{CommandCall, FakeCommands};
+pub use fake_engine::{EngineCall, FakeEngine, Script, ScriptItem};
 pub use fake_fetch::{Answer, FakeFetch, FetchCall};
+pub use fake_tools::{FakeTools, ToolCall};
+pub use fake_turn::FakeTurnRunner;
 pub use memory_settings::MemorySettings;
 
 use crate::app::App;

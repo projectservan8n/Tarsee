@@ -1,5 +1,6 @@
 //! `src/channels/`: the Rust port of the Node folder of the same name.
 
+pub mod api;
 pub mod discord;
 pub mod email;
 pub mod manager;

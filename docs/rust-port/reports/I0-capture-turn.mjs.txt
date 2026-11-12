@@ -1,0 +1,170 @@
+// Captures the events the Node turn layer (src/ai/turn.js runTurn) really yields, as JSON lines, for the Rust
+// tests of src/ai/turn_types.rs. Run from anywhere: node capture-turn.mjs <main checkout> <state dir>
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const [root, stateDir] = process.argv.slice(2);
+const src = (rel) => pathToFileURL(path.join(root, rel)).href;
+
+fs.rmSync(stateDir, { recursive: true, force: true });
+fs.mkdirSync(path.join(stateDir, "workspace", "memory"), { recursive: true });
+process.env.TARSEE_STATE_DIR = stateDir;
+process.env.TARSEE_WORKSPACE_DIR = path.join(stateDir, "workspace");
+process.env.TARSEE_DATA_DIR = path.join(stateDir, "data");
+for (const name of ["TARSEE_AI_PROVIDER", "TARSEE_AI_MODEL", "TARSEE_KEYS_ONLY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "TARSEE_LOCAL_AI_URL", "TARSEE_LOCAL_AI_KEY"]) delete process.env[name];
+process.env.CLAUDE_CODE_OAUTH_TOKEN = "test-canary-claude-oauth-token";
+
+const realLog = console.log;
+console.log = () => {};
+console.warn = () => {};
+console.error = () => {};
+
+const { initDb } = await import(src("src/db/sqlite.js"));
+const { SettingsStore } = await import(src("src/db/settings.js"));
+const { ConversationStore } = await import(src("src/db/conversations.js"));
+const live = await import(src("src/lib/live-bus.js"));
+const turn = await import(src("src/ai/turn.js"));
+const { createFakeEngine } = await import(src("test/fakes/fake-engine.js"));
+const { runTurn, registerEngine, configureTurns } = turn;
+
+const db = initDb(path.join(stateDir, "tarsee.db"));
+live.initLiveBus(db);
+const settings = new SettingsStore(db);
+const convs = new ConversationStore(db);
+const DEEPSEEK_KEY = "sk-" + "testcanarydeepseek0000000000";
+const OPENAI_KEY = "sk-proj-" + "testcanaryopenai00000000000";
+
+const out = {};
+async function collect(gen) { const list = []; for await (const e of gen) list.push(e); return list; }
+const user = (content) => ({ role: "user", content });
+const ok = (text = "Done.") => [{ type: "text", content: text }, { type: "done", stopReason: "end_turn" }];
+const ctx = () => ({ db, settingsStore: settings, conversationId: convs.create({ title: "chat" }).id });
+function engines({ claude = [ok()], codex = [ok()] } = {}) {
+  registerEngine("claude-code", createFakeEngine(claude));
+  registerEngine("codex", createFakeEngine(codex));
+}
+function reset() {
+  for (const prefix of ["ai.", "session."]) for (const { key } of settings.getByPrefix(prefix)) settings.delete(key);
+}
+let restore = configureTurns({ grantMcp: async () => ({ url: "http://127.0.0.1:1/mcp", token: "test-mcp-token", revoke() {} }), recordUsage: () => {} });
+
+// 1. A whole turn on the default AI: route, text, thinking, tool_use, tool_result, usage, done. Steps never reach the caller.
+reset();
+engines({ claude: [[
+  { type: "session", id: "raw-1" },
+  { type: "thinking", status: "start" },
+  { type: "thinking", status: "stop" },
+  { type: "text", content: "Hello" },
+  { type: "step", kind: "tool_start", id: "t1", name: "Bash", rawName: "Bash", summary: "List files", input: "ls" },
+  { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } },
+  { type: "tool_result", id: "t1", ok: true, result: "a\nb" },
+  { type: "step", kind: "tool_end", id: "t1", ok: true, preview: "a\nb" },
+  { type: "text", content: " there" },
+  { type: "usage", usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4, context_input_tokens: 17 } },
+  { type: "done", stopReason: "end_turn" },
+]] });
+out.plainTurn = await collect(runTurn({ messages: [user("hi")], toolCtx: ctx(), sessionId: null, liveSource: "web" }));
+
+// 2. A refusal: text, error, done (API keys only).
+reset();
+settings.set("ai.keysOnly", true);
+out.refusal = await collect(runTurn({ messages: [user("hi")], toolCtx: ctx() }));
+
+// 3. An engine that forgets its done; one that ends badly without saying why; a sign-in that ran out; a crash.
+reset();
+engines({ claude: [[{ type: "text", content: "partial" }, { type: "text", content: " words" }]] });
+out.noDone = await collect(runTurn({ messages: [user("hi")], toolCtx: ctx() }));
+engines({ claude: [[{ type: "done", stopReason: "error" }]] });
+out.badEnd = await collect(runTurn({ messages: [user("hi")], toolCtx: ctx() }));
+engines({ claude: [[{ type: "text", content: "Claude's sign-in has expired." }, { type: "done", stopReason: "auth-expired" }]] });
+out.authExpired = await collect(runTurn({ messages: [user("hi")], toolCtx: ctx() }));
+reset();
+engines({ claude: [[{ type: "throw", message: "spawn claude ENOENT" }]] });
+out.crash = await collect(runTurn({ messages: [user("hi")], toolCtx: ctx() }));
+engines({ claude: [[{ type: "tool_use", id: "t1", name: "Bash", input: {} }, { type: "done", stopReason: "tool_use" }]] });
+out.endsOnTool = await collect(runTurn({ messages: [user("hi")], toolCtx: ctx() }));
+
+// 4. An engine's own error, as the Claude engine gives it (recoverable, code, status, state, subtype), after output.
+reset();
+engines({ claude: [[
+  { type: "text", content: "Half " }, { type: "text", content: "an answer" },
+  { type: "error", message: "Your credit balance is too low.", recoverable: true, code: "billing", status: 402, state: "out-of-credit", subtype: "error_during_execution" },
+  { type: "done", stopReason: "error" },
+]] });
+out.engineError = await collect(runTurn({ messages: [user("hi")], toolCtx: ctx(), sessionId: "raw-old" }));
+
+// 5. The backup model answers: a second route with backup true, and the italic line.
+reset();
+settings.set("ai.deepseek.apiKey", DEEPSEEK_KEY);
+settings.set("ai.backupModel", "deepseek:deepseek-flash");
+engines({ claude: [
+  [{ type: "error", message: "Your credit balance is too low.", code: "billing" }, { type: "done", stopReason: "error" }],
+  [{ type: "session", id: "ds-backup" }, ...ok("Here's the answer.")],
+] });
+out.backup = await collect(runTurn({ messages: [user("hi")], toolCtx: ctx() }));
+
+// 6. The spend ceiling mid-turn (an AI whose engine keeps none): error_max_budget_usd.
+reset();
+settings.set("ai.deepseek.apiKey", DEEPSEEK_KEY);
+engines({ claude: [[
+  { type: "text", content: "Working" }, { type: "text", content: "…" },
+  { type: "step", kind: "usage", input: 0, cacheRead: 0, cacheWrite: 0, output: 1_000_000, total: 1_000_000, calls: 1 },
+  { type: "wait" },
+]] });
+out.budget = await collect(runTurn({ provider: "deepseek", messages: [user("go")], toolCtx: ctx(), maxBudgetUsd: 0.05 }));
+
+// 7. A Codex turn that finished over its ceiling: the done carries overBudget, ceilingUsd and spentUsd.
+reset();
+settings.set("ai.openai.apiKey", OPENAI_KEY);
+engines({ codex: [[
+  { type: "session", id: "thread-1" },
+  { type: "text", content: "Done." },
+  { type: "usage", usage: { input_tokens: 4_000_000, output_tokens: 1_000_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+  { type: "done", stopReason: "end_turn" },
+]] });
+out.overBudget = await collect(runTurn({ provider: "openai", messages: [user("go")], toolCtx: ctx(), maxBudgetUsd: 1 }));
+
+// 8. A cost the provider reports, and one it says is its own figure; a done that carries more than its reason.
+reset();
+settings.set("ai.openrouter.apiKey", "sk-or-v1-" + "testcanaryopenrouter0000");
+engines({ claude: [[
+  { type: "usage", usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, costUsd: 0.0042, costExact: true },
+  { type: "text", content: "ok" },
+  { type: "weather", sky: "clear" },
+  { type: "done", stopReason: "end_turn", engineNote: "kept" },
+]] });
+out.reportedCost = await collect(runTurn({ provider: "openrouter", messages: [user("go")], toolCtx: ctx() }));
+
+// 9. Verification mode on Codex: the route says streaming false.
+reset();
+settings.set("ai.openrouter.apiKey", "sk-or-v1-" + "testcanaryopenrouter0000");
+engines();
+out.verifyCodex = await collect(runTurn({ verify: true, engine: "codex", effort: "max", model: "openrouter:meta-llama/llama-4-maverick", messages: [user("hi")], toolCtx: { db, settingsStore: settings, conversationId: null } }));
+
+// 10. The Target a turn runs on (resolveTarget), as the engines get it.
+reset();
+const calls = [];
+const eng = createFakeEngine([ok()]);
+registerEngine("claude-code", eng);
+await collect(runTurn({ messages: [user("hi")], toolCtx: ctx(), systemParts: { stable: "SOUL", volatile: "\n\n## Today" }, liveSource: "telegram" }));
+const call = eng.calls[0];
+out.engineOptions = {
+  target: call.target, model: call.model, effort: call.effort ?? null, systemPrompt: call.systemPrompt, systemParts: call.systemParts,
+  media: call.media, sessionHandle: call.sessionHandle, sessionId: call.sessionId, maxTurns: call.maxTurns,
+  maxBudgetUsd: call.maxBudgetUsd ?? null, thinkingSummaries: call.thinkingSummaries, queuedNote: call.queuedNote,
+  turnIdIsString: typeof call.turnId === "string", mcp: call.mcp ?? null, mcpGrant: call.mcpGrant ?? null,
+  liveSource: call.liveSource, background: call.background, cwd: call.cwd ?? null, keys: Object.keys(call).sort(),
+};
+settings.set("ai.openai.apiKey", OPENAI_KEY);
+const cx = createFakeEngine([ok()]);
+registerEngine("codex", cx);
+await collect(runTurn({ provider: "openai", messages: [user("hi")], toolCtx: ctx() }));
+out.codexEngineOptions = { target: cx.calls[0].target, mcp: cx.calls[0].mcp, mcpGrant: cx.calls[0].mcpGrant, toolCtxKeys: Object.keys(cx.calls[0].toolCtx).sort() };
+
+restore();
+registerEngine("claude-code", null);
+registerEngine("codex", null);
+db.close();
+realLog(JSON.stringify(out, null, 1));
+process.exit(0);

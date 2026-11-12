@@ -1,0 +1,130 @@
+{
+ "claudeToolRound": [
+  {"type":"step","kind":"usage","calls":1,"input":100,"cacheRead":20,"cacheWrite":5,"output":1,"total":126,"outTps":null,"nowTps":null},
+  {"type":"thinking","status":"start"},
+  {"type":"step","kind":"thinking","text":"The person wants the time."},
+  {"type":"thinking","status":"stop"},
+  {"type":"step","kind":"text","text":"Let me check."},
+  {"type":"step","kind":"tool_start","id":"tu1","name":"tarsee_datetime","rawName":"mcp__tarsee__tarsee_datetime","summary":"date","input":"{\n  \"format\": \"date\"\n}"},
+  {"type":"tool_use","id":"tu1","name":"mcp__tarsee__tarsee_datetime","input":{"format":"date"}},
+  {"type":"step","kind":"usage","calls":1,"input":100,"cacheRead":20,"cacheWrite":5,"output":40,"total":165,"outTps":null,"nowTps":null},
+  {"type":"step","kind":"tool_end","id":"tu1","ok":true,"preview":"Monday, 9 November 2026"},
+  {"type":"tool_result","id":"tu1","ok":true,"result":"Monday, 9 November 2026"},
+  {"type":"text","content":"It is Monday."},
+  {"type":"step","kind":"status","text":"Claude's API answered 529 (server error). Trying again in 2s (attempt 1 of 10)."},
+  {"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":2,"cache_creation_input_tokens":1,"context_input_tokens":125},"costUsd":0.0123,"costExact":true},
+  {"type":"done","stopReason":"end_turn"}
+ ],
+ "claudeAuthExpired": [
+  {"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":2,"cache_creation_input_tokens":1}},
+  {"type":"text","content":"**Claude's sign-in has expired**, so I can't reach the model right now. This isn't a network problem, and retrying won't fix it.\n\nOpen the Terminal in the Tarsee dashboard (the `>_` button at the top), run `claude auth login` and follow the link it prints. Then send your message again."},
+  {"type":"error","message":"**Claude's sign-in has expired**, so I can't reach the model right now. This isn't a network problem, and retrying won't fix it.\n\nOpen the Terminal in the Tarsee dashboard (the `>_` button at the top), run `claude auth login` and follow the link it prints. Then send your message again.","recoverable":false,"code":"expired","status":401,"state":"sign-in-expired"},
+  {"type":"done","stopReason":"auth-expired"}
+ ],
+ "claudeKeyRejected": [
+  {"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":2,"cache_creation_input_tokens":1}},
+  {"type":"text","content":"**Your DeepSeek key was rejected.** Update it in Settings > AI or the Railway variable DEEPSEEK_API_KEY."},
+  {"type":"error","message":"**Your DeepSeek key was rejected.** Update it in Settings > AI or the Railway variable DEEPSEEK_API_KEY.","recoverable":false,"code":"auth","status":401,"state":"error"},
+  {"type":"done","stopReason":"auth-expired"}
+ ],
+ "claudeMaxTurns": [
+  {"type":"text","content":"Working"},
+  {"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":2,"cache_creation_input_tokens":1}},
+  {"type":"error","message":"Stopped after hitting the turn limit (12 turns). The task needs to be broken into smaller steps.","recoverable":false,"subtype":"error_max_turns","code":"max_turns"},
+  {"type":"done","stopReason":"max_turns"}
+ ],
+ "claudeBudget": [
+  {"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":2,"cache_creation_input_tokens":1}},
+  {"type":"error","message":"Stopped after hitting the configured spend ceiling for this task.","recoverable":false,"subtype":"error_max_budget_usd","code":"budget"},
+  {"type":"done","stopReason":"budget"}
+ ],
+ "claudeBilling": [
+  {"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":2,"cache_creation_input_tokens":1},"costUsd":0.0123,"costExact":true},
+  {"type":"error","message":"**Anthropic is out of credit.** Your Anthropic credit has run out. Add credit in the Anthropic Console. (https://platform.claude.com/settings/billing)","recoverable":false,"code":"billing","status":402,"state":"out-of-credit"},
+  {"type":"done","stopReason":"error"}
+ ],
+ "claudeWrongKeySource": [
+  {"type":"error","message":"Tarsee stopped this turn: Claude Code was about to use an Anthropic Console key saved by a Terminal /login in this provider's folder instead of the DeepSeek key Tarsee gave it. Nothing was sent. Check Settings > AI, and remove any key a Terminal /login saved.","recoverable":false,"code":"credential-isolation"},
+  {"type":"done","stopReason":"error"}
+ ],
+ "claudeNoResponse": [
+  {"type":"error","message":"**Claude ran into a problem:** Claude Code returned no response.","recoverable":false,"code":"unknown"},
+  {"type":"done","stopReason":"error"}
+ ],
+ "claudeSessionLost": [
+  {"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":2,"cache_creation_input_tokens":1}},
+  {"type":"error","message":"**The earlier conversation couldn't be picked up again**, so I'm starting a fresh one.","recoverable":true,"code":"session","status":400},
+  {"type":"done","stopReason":"error"}
+ ],
+ "claudeOpenRouterCost": [
+  {"type":"step","kind":"usage","calls":1,"input":50,"cacheRead":0,"cacheWrite":0,"output":1,"total":51,"outTps":null,"nowTps":null},
+  {"type":"text","content":"Hi"},
+  {"type":"step","kind":"usage","calls":1,"input":50,"cacheRead":0,"cacheWrite":0,"output":9,"total":59,"outTps":null,"nowTps":null},
+  {"type":"usage","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":2,"cache_creation_input_tokens":1,"context_input_tokens":50},"costUsd":0.00042,"costExact":true},
+  {"type":"done","stopReason":"end_turn"}
+ ],
+ "codexTurn": [
+  {"type":"thinking","status":"start"},
+  {"type":"step","kind":"thinking","text":"Listing the folder first."},
+  {"type":"thinking","status":"stop"},
+  {"type":"tool_use","id":"c1","name":"Bash","input":{"command":"ls -la"}},
+  {"type":"step","kind":"tool_start","id":"c1","name":"Bash","rawName":"Bash","summary":"ls -la","input":"ls -la"},
+  {"type":"tool_result","id":"c1","ok":true,"result":"a\nb\n"},
+  {"type":"step","kind":"tool_end","id":"c1","ok":true,"preview":"a\nb"},
+  {"type":"tool_use","id":"m1","name":"mcp__tarsee__tarsee_datetime","input":{"format":"date"}},
+  {"type":"step","kind":"tool_start","id":"m1","name":"tarsee_datetime","rawName":"mcp__tarsee__tarsee_datetime","summary":"date","input":"{\n  \"format\": \"date\"\n}"},
+  {"type":"tool_result","id":"m1","ok":true,"result":"Monday"},
+  {"type":"step","kind":"tool_end","id":"m1","ok":true,"preview":"Monday"},
+  {"type":"tool_use","id":"f1:0","name":"Write","input":{"file_path":"notes.md"}},
+  {"type":"step","kind":"tool_start","id":"f1:0","name":"Write","rawName":"Write","summary":"notes.md","input":"{\n  \"file_path\": \"notes.md\"\n}"},
+  {"type":"tool_use","id":"f1:1","name":"Edit","input":{"file_path":"old.md","change":"delete"}},
+  {"type":"step","kind":"tool_start","id":"f1:1","name":"Edit","rawName":"Edit","summary":"old.md","input":"{\n  \"file_path\": \"old.md\",\n  \"change\": \"delete\"\n}"},
+  {"type":"tool_result","id":"f1:0","ok":true,"result":"Added notes.md"},
+  {"type":"step","kind":"tool_end","id":"f1:0","ok":true,"preview":"Added notes.md"},
+  {"type":"tool_result","id":"f1:1","ok":true,"result":"Deleted old.md"},
+  {"type":"step","kind":"tool_end","id":"f1:1","ok":true,"preview":"Deleted old.md"},
+  {"type":"tool_use","id":"t1#1","name":"TodoWrite","input":{"todos":[{"content":"Look","status":"completed","activeForm":"Look"},{"content":"Answer","status":"pending","activeForm":"Answer"}]}},
+  {"type":"step","kind":"tool_start","id":"t1#1","name":"TodoWrite","rawName":"TodoWrite","summary":"updating the task list","input":"{\n  \"todos\": [\n    {\n      \"content\": \"Look\",\n      \"status\": \"completed\",\n      \"activeForm\": \"Look\"\n    },\n    {\n      \"content\": \"Answer\",\n      \"status\": \"pending\",\n      \"activeForm\": \"Answer\"\n    }\n  ]\n}"},
+  {"type":"tool_result","id":"t1#1","ok":true,"result":"The task list was updated."},
+  {"type":"step","kind":"tool_end","id":"t1#1","ok":true,"preview":"The task list was updated."},
+  {"type":"tool_use","id":"w1","name":"WebSearch","input":{"query":"tarsier habitat"}},
+  {"type":"step","kind":"tool_start","id":"w1","name":"WebSearch","rawName":"WebSearch","summary":"tarsier habitat","input":"{\n  \"query\": \"tarsier habitat\"\n}"},
+  {"type":"tool_result","id":"w1","ok":true,"result":""},
+  {"type":"step","kind":"tool_end","id":"w1","ok":true,"preview":""},
+  {"type":"step","kind":"status","text":"OpenAI API key answered 503 Service Unavailable. Trying again (2 of 5)."},
+  {"type":"step","kind":"status","text":"The sandbox is read-only here."},
+  {"type":"text","content":"Two files."},
+  {"type":"step","kind":"text","text":"Two files."},
+  {"type":"text","content":"\n\nDone."},
+  {"type":"step","kind":"text","text":"Done."},
+  {"type":"usage","usage":{"input_tokens":1000,"cache_read_input_tokens":200,"cache_creation_input_tokens":0,"output_tokens":80}},
+  {"type":"step","kind":"usage","input":1000,"cacheRead":200,"cacheWrite":0,"output":80,"total":1280,"calls":null,"outTps":null,"nowTps":null},
+  {"type":"done","stopReason":"end_turn"}
+ ],
+ "codexAuthFailed": [
+  {"type":"text","content":"**Your OpenAI key was rejected.** Update it in Settings > AI or the Railway variable OPENAI_API_KEY."},
+  {"type":"error","message":"**Your OpenAI key was rejected.** Update it in Settings > AI or the Railway variable OPENAI_API_KEY.","code":"auth","subtype":"auth-expired","recoverable":false},
+  {"type":"done","stopReason":"auth-expired"}
+ ],
+ "codexSessionLost": [
+  {"type":"error","message":"**The earlier conversation couldn't be picked up again**, so I'm starting a fresh one.","code":"session","subtype":"session","recoverable":true},
+  {"type":"done","stopReason":"error"}
+ ],
+ "codexMaxTurns": [
+  {"type":"tool_result","id":"c9","ok":false,"result":"Stopped: the turn limit was reached."},
+  {"type":"step","kind":"tool_end","id":"c9","ok":false,"preview":"Stopped: the turn limit was reached."},
+  {"type":"error","subtype":"error_max_turns","code":"max_turns","recoverable":false,"message":"Stopped after 12 tool steps, the limit for this task. The task needs to be broken into smaller steps."},
+  {"type":"done","stopReason":"max_turns"}
+ ],
+ "codexAborted": [
+  {"type":"done","stopReason":"aborted"}
+ ],
+ "codexSilent": [
+  {"type":"error","code":"unknown","recoverable":false,"message":"OpenAI API key stopped without finishing its reply. Try again."},
+  {"type":"done","stopReason":"error"}
+ ],
+ "codexRolloutUsage": [
+  {"type":"usage","usage":{"input_tokens":400,"cache_read_input_tokens":100,"cache_creation_input_tokens":0,"output_tokens":50}},
+  {"type":"step","kind":"usage","input":400,"cacheRead":100,"cacheWrite":0,"output":50,"total":550,"calls":null,"outTps":null,"nowTps":null}
+ ]
+}
