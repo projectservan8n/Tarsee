@@ -18,12 +18,14 @@
 pub mod captured_logs;
 pub mod fake_channels;
 pub mod fake_commands;
+pub mod fake_download_host;
 pub mod fake_engine;
 pub mod fake_fetch;
 pub mod fake_tools;
 pub mod fake_turn;
 pub mod http;
 pub mod memory_settings;
+pub mod tar;
 
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
