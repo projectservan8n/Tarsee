@@ -10,6 +10,7 @@
 //! Stand-ins for the programs Tarsee starts (claude, codex, python, piper) are in the `tarsee-testbin` binary
 //! (`testbin/`), which integration tests (`tests/it/`) find through `support::testbin()`.
 
+pub mod codex_homes;
 pub mod fake_fetch;
 pub mod http;
 pub mod memory_settings;

@@ -629,11 +629,7 @@ fn non_empty(value: &Option<String>) -> Option<&str> {
 /// The model pins of a gateway turn, by variable name, in the order the JS checked them.
 type Pins = Vec<(&'static str, String)>;
 
-fn gateway_pins(
-    entry: &ProviderEntry,
-    id: &str,
-    opts: &ClaudeEnvOpts,
-) -> Result<(f64, Pins), EngineEnvError> {
+fn gateway_pins(entry: &ProviderEntry, id: &str, opts: &ClaudeEnvOpts) -> Result<(f64, Pins), EngineEnvError> {
     let label = label_of(entry, id);
     let pick = |own: &Option<String>, theirs: &Option<String>| own.clone().or_else(|| theirs.clone());
     let tiers = Tiers {
@@ -971,7 +967,7 @@ pub fn home_for(provider_id: &str, engine: &str, opts: &HomeOpts) -> Result<Path
             .unwrap_or_else(os_homedir);
         return Ok(node_join(&home_dir, &[".claude"]));
     }
-    let state = opts.state_dir.as_deref().map(trimmed_path).unwrap_or_default();
+    let state = opts.state_dir.as_deref().map(js_trim_path).unwrap_or_default();
     if state.as_os_str().is_empty() {
         return Err(TypeError(format!(
             "engine-env: stateDir (config.STATE_DIR) is required for {id}'s {} home",
@@ -1601,7 +1597,7 @@ pub(crate) fn path_string(path: &Path) -> String {
 }
 
 /// `String(path).trim()` as a path: surrounding whitespace off a path that is text.
-fn trimmed_path(path: &Path) -> PathBuf {
+pub(crate) fn js_trim_path(path: &Path) -> PathBuf {
     match path.to_str() {
         Some(text) => PathBuf::from(js_trim(text)),
         None => path.to_path_buf(),

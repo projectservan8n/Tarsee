@@ -3005,6 +3005,7 @@ dependencies = [
  "http-body-util",
  "iana-time-zone",
  "lettre",
+ "libc",
  "log",
  "mail-parser",
  "mime_guess",

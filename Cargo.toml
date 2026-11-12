@@ -78,6 +78,10 @@ url = "2.5.8"
 uuid = { version = "1.29.2", features = ["v4"] }
 which = "8.0.6"
 
+# Signals to a program Tarsee started and to its process group (SIGTERM, then SIGKILL), as the Node code sent them.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
 [profile.dev]
 debug = "line-tables-only"
 
