@@ -235,6 +235,13 @@ text identical, including the `[tag]` prefix: people grep their logs for it.
      `util::js::now_iso()`. `Date.now()` is `util::js::now_ms()`.
    - `setTimeout`/`setInterval` are tokio tasks; keep the handle so the matching `stopX` can end it. Use
      `tokio::time`, so tests can pause and advance time (`#[tokio::test(start_paused = true)]`).
+   - **A promise runs whether or not anyone waits for it; a future does not.** In Node, `const p = refresh()` starts
+     the work and it finishes even if every caller goes away. A Rust future does nothing until it is awaited and
+     stops where it is the moment it is dropped (a client disconnects, a `select!` takes the other branch, a
+     timeout fires). Work that must finish whoever is waiting (a refresh several callers share, a turn, a save,
+     anything Node started without `await`) runs in a task of its own (`tokio::spawn`), and callers wait on its
+     handle or a channel. A shared future (`futures::future::Shared`) is not enough: it only advances while some
+     caller polls it. Test it: start the work, drop the caller, and check the work still completes.
    - `AbortSignal` is `tokio_util::sync::CancellationToken`. `EventEmitter` is `tokio::sync::broadcast`. An async
      generator is a `Stream` (often simplest as a `tokio::sync::mpsc` receiver).
    - `child_process.spawn` is `tokio::process::Command`. Build its environment explicitly from the `Env`; never let
