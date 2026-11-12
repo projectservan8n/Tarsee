@@ -147,7 +147,7 @@ fn client_key(req: &Request) -> String {
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(','))
-        .map(|v| v.trim().to_string())
+        .map(|v| crate::voice::speech_text::js_trim(v).to_string())
         .rfind(|v| !v.is_empty());
     if let Some(ip) = forwarded {
         return ip;
@@ -385,7 +385,7 @@ async fn read_form(app: &App, req: Request, rules: FormRules<'_>) -> Result<Form
     let Some(content_type) = content_type else {
         return Err(ApiError::internal("Missing Content-Type"));
     };
-    let media = content_type.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    let media = crate::voice::speech_text::js_trim(content_type.split(';').next().unwrap_or("")).to_ascii_lowercase();
     if media == "application/x-www-form-urlencoded" {
         let body = read_body(req.into_body(), usize::MAX).await?.unwrap_or_default();
         let fields = url::form_urlencoded::parse(&body).into_owned().collect();
