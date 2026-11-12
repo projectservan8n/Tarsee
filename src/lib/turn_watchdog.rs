@@ -237,6 +237,10 @@ mod tests {
         assert!(!signal.is_cancelled() && !watch.idled());
         // Then silence. It is looked at every quarter of the limit, so it is noticed within 1250 ms.
         tokio::time::sleep(ms(1000)).await;
+        // (the look that falls on this very moment has been taken)
+        for _ in 0..5 {
+            tokio::task::yield_now().await;
+        }
         assert!(!signal.is_cancelled(), "a second exactly is not over the limit");
         tokio::time::sleep(ms(251)).await;
         assert!(signal.is_cancelled());

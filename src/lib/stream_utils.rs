@@ -264,13 +264,21 @@ mod tests {
             .await
             .unwrap();
         let mut seen = Vec::new();
-        let mut chunk = [0u8; 1024];
         let has = |seen: &[u8], text: &str| String::from_utf8_lossy(seen).contains(text);
-        while !has(&seen, "data: {\"id\":\"c1\"}\n\n") {
-            let n = socket.read(&mut chunk).await.unwrap();
-            assert!(n > 0, "the connection closed early");
-            seen.extend_from_slice(&chunk[..n]);
+        // Reads until `text` has come. (The limit is only so that a wrong frame fails the test instead of hanging
+        // it: nothing here waits for time to pass.)
+        async fn read_until(socket: &mut tokio::net::TcpStream, seen: &mut Vec<u8>, text: &str) {
+            let mut chunk = [0u8; 1024];
+            while !String::from_utf8_lossy(seen).contains(text) {
+                let read = tokio::time::timeout(std::time::Duration::from_secs(20), socket.read(&mut chunk)).await;
+                let n = read
+                    .unwrap_or_else(|_| panic!("{text:?} never came; got {:?}", String::from_utf8_lossy(seen)))
+                    .unwrap();
+                assert!(n > 0, "the connection closed early");
+                seen.extend_from_slice(&chunk[..n]);
+            }
         }
+        read_until(&mut socket, &mut seen, "data: {\"id\":\"c1\"}\n\n").await;
         let so_far = String::from_utf8_lossy(&seen).to_lowercase();
         assert!(so_far.starts_with("http/1.1 200 ok\r\n"), "{so_far}");
         for header in [
@@ -288,11 +296,7 @@ mod tests {
         );
         go_on.send(()).unwrap();
         // The end of a chunked response.
-        while !has(&seen, "\r\n0\r\n\r\n") {
-            let n = socket.read(&mut chunk).await.unwrap();
-            assert!(n > 0, "the connection closed early");
-            seen.extend_from_slice(&chunk[..n]);
-        }
+        read_until(&mut socket, &mut seen, "\r\n0\r\n\r\n").await;
         assert!(has(&seen, "event: done\ndata: {\"conversationId\":\"c1\"}\n\n"));
         writer.await.unwrap();
         server.abort();
