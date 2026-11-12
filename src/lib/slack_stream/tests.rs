@@ -680,6 +680,34 @@ fn reads_slacks_error_code_off_a_thrown_error() {
     assert_eq!(slack_error_code(wrapped.as_ref()), Some("missing_scope"));
 }
 
+/// Context added around a Slack error (as package H2 may add) does not hide its code.
+#[test]
+fn the_code_is_found_under_added_context() {
+    let err = anyhow::Error::new(SlackApiError::platform("ratelimited")).context("while posting");
+    assert_eq!(slack_error_code(err.as_ref()), Some("ratelimited"));
+    let twice = anyhow::Error::new(SlackApiError::platform("stopped_by_user"))
+        .context("while appending")
+        .context("in the reply stream");
+    assert_eq!(slack_error_code(twice.as_ref()), Some("stopped_by_user"));
+    let result: anyhow::Result<()> = Err(SlackApiError::platform("missing_scope").into());
+    let with_context = anyhow::Context::context(result, "starting the stream").unwrap_err();
+    assert_eq!(slack_error_code(with_context.as_ref()), Some("missing_scope"));
+
+    /// An error type of its own that keeps the Slack error as its source.
+    #[derive(Debug, thiserror::Error)]
+    #[error("upload failed")]
+    struct Upload(#[source] SlackApiError);
+    assert_eq!(
+        slack_error_code(&Upload(SlackApiError::platform("not_in_channel"))),
+        Some("not_in_channel")
+    );
+    assert_eq!(slack_error_code(&Upload(SlackApiError::other("timeout"))), None);
+    assert_eq!(
+        slack_error_code(anyhow::anyhow!("no slack error").context("x").as_ref()),
+        None
+    );
+}
+
 // The same scenarios through the Node code and this one.
 
 /// Runs one scenario of [`NODE_SCENARIOS`] and checks every call and the end state against what the Node code did.
