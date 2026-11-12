@@ -1095,3 +1095,13 @@ fn private_addresses_answer_as_node_answered_for_every_spelling() {
         assert_eq!(is_private_address(ip), *want, "{ip:?}");
     }
 }
+
+#[test]
+fn absolute_is_what_node_called_absolute() {
+    assert!(node_is_absolute("/x"));
+    assert!(!node_is_absolute("x/y"));
+    assert!(!node_is_absolute(""));
+    assert_eq!(node_is_absolute("\x"), cfg!(windows));
+    assert_eq!(node_is_absolute("C:\x"), cfg!(windows));
+    assert!(!node_is_absolute("C:x"));
+}

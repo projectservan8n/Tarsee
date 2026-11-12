@@ -849,6 +849,17 @@ fn real_path(path: &Path) -> std::io::Result<PathBuf> {
     Ok(real)
 }
 
+/// `path.isAbsolute`: on Windows a path that starts at the root of the current drive (`\x`) counts too.
+fn node_is_absolute(p: &str) -> bool {
+    let b = p.as_bytes();
+    if cfg!(windows) {
+        matches!(b.first(), Some(b'/' | b'\\'))
+            || (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'/' | b'\\'))
+    } else {
+        b.first() == Some(&b'/')
+    }
+}
+
 /// A workspace path, checked: its real path, or why it can't be read.
 fn locate(config: &Config, where_: &str) -> Result<PathBuf, String> {
     let mut roots: Vec<PathBuf> = Vec::new();
@@ -861,7 +872,7 @@ fn locate(config: &Config, where_: &str) -> Result<PathBuf, String> {
             roots.push(resolved);
         }
     }
-    let candidates: Vec<PathBuf> = if Path::new(where_).is_absolute() {
+    let candidates: Vec<PathBuf> = if node_is_absolute(where_) {
         vec![resolve_path(Path::new(""), where_)]
     } else {
         roots.iter().map(|r| resolve_path(r, where_)).collect()
