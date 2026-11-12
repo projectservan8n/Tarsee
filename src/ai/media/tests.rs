@@ -363,7 +363,9 @@ async fn keeps_the_chats_pictures_with_the_conversation_note_media_blocks_and_po
     let uploads = fresh_uploads(&t);
     let kept = uploads.join("chat-1-0-image.png");
     std::fs::write(&kept, png()).unwrap();
-    let calls: Arc<Mutex<Vec<(String, Vec<Value>, Option<String>, String)>>> = Arc::default();
+    // What note_media_blocks was asked: the conversation, the blocks, the message, where it came from.
+    type Asked = (String, Vec<Value>, Option<String>, String);
+    let calls: Arc<Mutex<Vec<Asked>>> = Arc::default();
     let (seen, kept_path) = (calls.clone(), path_text(&kept));
     let note_media_blocks: NoteMediaBlocksFn = Arc::new(move |conv, blocks, message_id, via| {
         seen.lock().push((

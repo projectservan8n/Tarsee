@@ -202,14 +202,17 @@ pub struct Adapted {
 /// message did. Here the turn makes one of these and hands it to every [`adapt_media`] call for its message
 /// (`MediaContext::saved_blocks`): a block is known again by its place in the message and its bytes.
 #[derive(Debug, Clone, Default)]
-pub struct SavedBlocks(Arc<Mutex<HashMap<(usize, [u8; 32]), SavedMedia>>>);
+pub struct SavedBlocks(Arc<Mutex<HashMap<BlockKey, SavedMedia>>>);
+
+/// A block of the turn's message: its place in the message, and the SHA-256 of its bytes.
+type BlockKey = (usize, [u8; 32]);
 
 impl SavedBlocks {
     pub fn new() -> Self {
         Self::default()
     }
 
-    fn key(index: usize, bytes: &[u8]) -> (usize, [u8; 32]) {
+    fn key(index: usize, bytes: &[u8]) -> BlockKey {
         (index, Sha256::digest(bytes).into())
     }
 }
