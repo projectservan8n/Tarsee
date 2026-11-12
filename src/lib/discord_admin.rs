@@ -708,7 +708,7 @@ static WHITESPACE_RUN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(&format!("{JS_WHITESPACE}+")).expect("the whitespace pattern"));
 
 /// `String(s).replace(/\s+/g, " ").trim()`.
-fn one_line(text: &str) -> String {
+pub(crate) fn one_line(text: &str) -> String {
     js_trim(&WHITESPACE_RUN.replace_all(text, " ")).to_string()
 }
 
