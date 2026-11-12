@@ -1101,7 +1101,7 @@ fn absolute_is_what_node_called_absolute() {
     assert!(node_is_absolute("/x"));
     assert!(!node_is_absolute("x/y"));
     assert!(!node_is_absolute(""));
-    assert_eq!(node_is_absolute("\x"), cfg!(windows));
-    assert_eq!(node_is_absolute("C:\x"), cfg!(windows));
+    assert_eq!(node_is_absolute(r"\x"), cfg!(windows));
+    assert_eq!(node_is_absolute(r"C:\x"), cfg!(windows));
     assert!(!node_is_absolute("C:x"));
 }
