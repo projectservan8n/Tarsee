@@ -6,3 +6,4 @@
 mod support;
 
 mod foundation;
+mod pdf_text;
