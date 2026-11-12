@@ -1172,3 +1172,42 @@ fn strings_are_compared_whole() {
     assert!(!safe_compare("abcd", "abc"));
     assert!(!safe_compare("", "a"));
 }
+
+#[test]
+fn a_header_sent_more_than_once_reads_as_node_read_it() {
+    use axum::http::header::{CONTENT_TYPE, USER_AGENT};
+    let sent = headers(&[
+        ("content-type", "application/json"),
+        ("content-type", "text/plain"),
+        ("user-agent", "one"),
+        ("user-agent", "two"),
+        ("cookie", "a=1"),
+        ("cookie", "b=2"),
+        ("x-forwarded-for", "198.51.100.1"),
+        ("x-forwarded-for", "203.0.113.9"),
+        ("x-csrf-token", "t"),
+        ("x-csrf-token", "t"),
+    ]);
+    // Node keeps the first of these.
+    assert_eq!(node_header(&sent, &CONTENT_TYPE).as_deref(), Some("application/json"));
+    assert_eq!(node_header(&sent, &USER_AGENT).as_deref(), Some("one"));
+    // Cookies are one list; everything else is joined with a comma.
+    assert_eq!(node_header(&sent, &COOKIE).as_deref(), Some("a=1; b=2"));
+    assert_eq!(
+        node_header(&sent, &X_FORWARDED_FOR).as_deref(),
+        Some("198.51.100.1, 203.0.113.9")
+    );
+    assert_eq!(
+        node_header(&sent, &HeaderName::from_static("x-csrf-token")).as_deref(),
+        Some("t, t")
+    );
+    assert_eq!(node_header(&sent, &AUTHORIZATION), None);
+
+    // Bytes outside ASCII are read one character each (Latin-1), as Node read header bytes.
+    let mut raw = HeaderMap::new();
+    raw.insert("x-raw", HeaderValue::from_bytes(&[b'p', 0xC3, 0xA4, b's']).unwrap());
+    assert_eq!(
+        node_header(&raw, &HeaderName::from_static("x-raw")).as_deref(),
+        Some("p\u{C3}\u{A4}s")
+    );
+}

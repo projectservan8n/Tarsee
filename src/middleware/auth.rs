@@ -173,14 +173,36 @@ pub(crate) fn env_number_or(app: &App, name: &str, fallback: f64) -> f64 {
     }
 }
 
+/// The request headers of which Node keeps only the first when one is sent more than once.
+const FIRST_ONE_ONLY: [&str; 18] = [
+    "age",
+    "authorization",
+    "content-length",
+    "content-type",
+    "etag",
+    "expires",
+    "from",
+    "host",
+    "if-modified-since",
+    "if-unmodified-since",
+    "last-modified",
+    "location",
+    "max-forwards",
+    "proxy-authorization",
+    "referer",
+    "retry-after",
+    "server",
+    "user-agent",
+];
+
 /// A request header as Node gave it in `req.headers`: the bytes read as Latin-1, and several headers of one name
-/// joined (", " for most, "; " for `cookie`), except those of which Node keeps only the first (`authorization`
-/// among them).
+/// joined (", " for most, "; " for `cookie`), except those of which Node keeps only the first (`authorization` and
+/// `content-type` among them).
 pub(crate) fn node_header(headers: &HeaderMap, name: &HeaderName) -> Option<String> {
     let latin1 = |value: &HeaderValue| value.as_bytes().iter().map(|&byte| byte as char).collect::<String>();
     let mut values = headers.get_all(name).iter();
     let first = latin1(values.next()?);
-    if *name == AUTHORIZATION {
+    if FIRST_ONE_ONLY.contains(&name.as_str()) {
         return Some(first);
     }
     let separator = if *name == COOKIE { "; " } else { ", " };
