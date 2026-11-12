@@ -138,6 +138,7 @@ fn env_lookup(env: &Env, name: &str) -> Option<String> {
 }
 
 /// The same lookup in a child's environment.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn env_map_lookup<'a>(env: &'a EnvMap, name: &str) -> Option<&'a str> {
     if cfg!(windows) {
         env.iter()
@@ -292,7 +293,8 @@ pub fn strip_ansi(text: &str) -> String {
 static QUOTE_AFTER_BACKSLASHES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(\\*)""#).expect("a quoting pattern"));
 static TRAILING_BACKSLASHES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\\+)$").expect("a quoting pattern"));
 
-/// An argument quoted the way a Windows program reads its command line.
+/// An argument quoted the way a Windows program reads its command line. (Used on Windows only; tested everywhere.)
+#[cfg_attr(not(windows), allow(dead_code))]
 fn win_arg(arg: &str) -> String {
     if !arg.is_empty() && !arg.chars().any(|c| is_js_space(c) || c == '"') {
         return arg.to_string();
@@ -378,6 +380,8 @@ pub async fn kill_tree(child: &mut Child, grace: Duration) {
     let cap = tokio::time::Instant::now() + grace + Duration::from_secs(3);
     #[cfg(windows)]
     {
+        // Windows' own program. It keeps the server's environment, as in the JS: started with none it fails (it needs
+        // the system's own variables), and it runs for an instant and starts nothing.
         let started = Command::new("taskkill")
             .args(["/pid", &pid.to_string(), "/T", "/F"])
             .stdin(Stdio::null())
