@@ -11,10 +11,10 @@ use std::sync::LazyLock;
 
 use regex::{Captures, Regex};
 
-use crate::lib::discord_format::js_text::{self, re, trim};
+use crate::lib::discord_format::js_text::{self, re};
 use crate::lib::discord_format::split_message_fence_safe;
 use crate::lib::reaction_parser::parse_reactions;
-use crate::util::js::utf16_len;
+use crate::util::js::{trim, utf16_len};
 
 /// Most markdown one message or stream takes: Slack's cap is 12,000; the rest is room for a closing fence.
 pub const SLACK_MAX_MARKDOWN: usize = 11_000;
@@ -252,7 +252,10 @@ pub fn split_for_slack(text: &str, max_len: usize) -> Vec<String> {
         .collect()
 }
 
-static FENCE_LINE: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*(```+)(.*)$"));
+// The Node pattern was `^\s*(```+)(.*)$`, where `.` does not match "\r": in text with CRLF line endings no fence was
+// seen, so a block was neither closed at the end of a message nor opened again in the next. Fixed in the Rust
+// version: a fence line may end in "\r".
+static FENCE_LINE: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*(```+)(.*)\r?$"));
 
 /// The opening line of a code fence still open at the end of the text ("```js"), or `None` when none is.
 pub fn open_fence(text: &str) -> Option<String> {
@@ -747,7 +750,8 @@ mod tests {
         ("  \n\n\n  spaced  \n\n\n  ", "spaced"),
     ];
 
-    /// Text, then what `openFence` and `closeFence` printed, in the Node code.
+    /// Text, then what `openFence` and `closeFence` printed, in the Node code. The CRLF input of the first version of
+    /// this table is in `node_bugs_fixed_a_crlf_fence_is_a_fence`.
     const NODE_FENCES: &[(&str, Option<&str>, &str)] = &[
         ("", None, ""),
         ("```", Some("```"), "```\n```"),
@@ -760,7 +764,6 @@ mod tests {
         ("text ``` inline", None, "text ``` inline"),
         ("```a\n```b\n```c", Some("```c"), "```a\n```b\n```c\n```"),
         ("\u{a0}```x\u{a0}", Some("```x"), "\u{a0}```x\u{a0}\n```"),
-        ("```\r\ncode\r\n", None, "```\r\ncode\r\n"),
         (
             "```js\ncode\n```\n```py\n",
             Some("```py"),
@@ -829,6 +832,28 @@ mod tests {
             10,
             &["aaaaaaaaaa", "aaaaaaaaaa", "aaaaaaaaaa"],
         ),
-        ("😀😀😀😀😀😀😀😀", 5, &["😀😀😀😀😀", "😀😀😀"]),
     ];
+
+    // Node bugs fixed in the Rust version (docs/rust-port/reports/E1.md).
+
+    /// The Node code printed `["😀😀😀😀😀", "😀😀😀"]` (10 and 6 units at a limit of 5).
+    #[test]
+    fn node_bugs_fixed_no_piece_is_over_the_limit_with_emoji() {
+        assert_eq!(
+            split_for_slack("😀😀😀😀😀😀😀😀", 5),
+            vec!["😀😀", "😀😀", "😀😀", "😀😀"]
+        );
+    }
+
+    /// The Node code printed `None` and left the block open: a fence line ending in "\r" was not a fence.
+    #[test]
+    fn node_bugs_fixed_a_crlf_fence_is_a_fence() {
+        assert_eq!(open_fence("```\r\ncode\r\n").as_deref(), Some("```"));
+        assert_eq!(close_fence("```\r\ncode\r\n"), "```\r\ncode\r\n```");
+        assert_eq!(open_fence("intro\r\n```py\r\nx = 1\r\n").as_deref(), Some("```py"));
+        assert_eq!(close_fence("```py\r\nx = 1"), "```py\r\nx = 1\n```");
+        assert_eq!(open_fence("```js\r\ncode\r\n```\r\nmore"), None);
+        // Only a "\r" at the end of the line: one inside it still keeps the line from being a fence, as before.
+        assert_eq!(open_fence("```a\rb"), None);
+    }
 }

@@ -9,7 +9,7 @@
 
 use serde_json::Value;
 
-use crate::util::js::{number_to_string, utf16_len, utf16_truncate};
+use crate::util::js::{number_to_string, trim, utf16_len, utf16_truncate};
 
 /// The two names a turn's route event carries, as these notes read them (`route.label`, `route.providerLabel`).
 /// Implemented for the event as JSON; the turn layer's own route type implements it too.
@@ -67,7 +67,7 @@ pub fn turn_error_note<R: RouteLabels + ?Sized>(
     } else {
         message
     };
-    let said = clip(message.trim(), 600);
+    let said = clip(trim(message), 600);
     format!(
         "{}{} ran into a problem: {said}\n\nTry again — if it keeps happening, {} and try fresh.",
         if opts.plain { "" } else { "⚠️ " },
@@ -101,7 +101,7 @@ pub fn error_still_to_say(answer: &str, message: &str) -> bool {
     if message.is_empty() {
         return false;
     }
-    !answer.contains(message.trim())
+    !answer.contains(trim(message))
 }
 
 /// What a person can do about a voice note that wasn't transcribed: the transcriber's own words when it says what to
@@ -111,7 +111,7 @@ pub fn stt_problem(code: Option<&str>, message: &str) -> Option<String> {
     if !matches!(code, Some("stt-unavailable" | "stt-failed")) {
         return None;
     }
-    let said = message.trim();
+    let said = trim(message);
     if said.is_empty() { None } else { Some(said.to_string()) }
 }
 
@@ -227,6 +227,28 @@ mod tests {
         assert!(!error_still_to_say("abc", " b "));
         assert!(error_still_to_say("abc", "z"));
         assert!(error_still_to_say("", "z"));
+    }
+
+    /// JavaScript's trim takes off a byte order mark (U+FEFF) and keeps U+0085; Rust's `str::trim` does the opposite.
+    /// The expected values were printed by the Node code.
+    #[test]
+    fn messages_are_trimmed_as_javascript_trims_them() {
+        assert_eq!(
+            turn_error_note(
+                Some(&json!({ "providerLabel": "Codex" })),
+                "\u{FEFF}bom\u{FEFF}",
+                TurnErrorOptions::default()
+            ),
+            "⚠️ Codex ran into a problem: bom\n\nTry again — if it keeps happening, /clear and try fresh."
+        );
+        assert_eq!(
+            turn_error_note(NONE, "x\u{85}", TurnErrorOptions::default()),
+            "⚠️ The AI ran into a problem: x\u{85}\n\nTry again — if it keeps happening, /clear and try fresh."
+        );
+        assert!(!error_still_to_say("abc", "\u{FEFF}b"));
+        assert!(error_still_to_say("x", "\u{85}"));
+        assert_eq!(stt_problem(Some("stt-unavailable"), "\u{FEFF}"), None);
+        assert_eq!(stt_problem(Some("stt-failed"), "\u{85}").as_deref(), Some("\u{85}"));
     }
 
     #[test]

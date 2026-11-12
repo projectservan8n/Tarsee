@@ -26,15 +26,15 @@ use regex::{Captures, Regex};
 use crate::util::js::utf16_len;
 
 pub mod js_text {
-    //! JavaScript's regular-expression and string behaviour that the formatters of this package depend on.
+    //! JavaScript's regular expressions, for the formatters of this package. (JavaScript's `trim` and whitespace are
+    //! `util::js::trim` and `util::js::is_whitespace`.)
     //!
-    //! JavaScript's `\s` (and `String.prototype.trim`) is a fixed set of characters that differs from Rust's
-    //! `char::is_whitespace` in two places: U+FEFF is whitespace in JavaScript and U+0085 is not. JavaScript's `.`
-    //! (without the `s` flag) stops at four line terminators, not only `\n`. `\d`, `\w` and `\b` are ASCII-only
-    //! without the `u` flag. [`translate`] turns a JavaScript pattern into a Rust one with exactly those meanings, so
-    //! the patterns below can be written as the Node code wrote them.
+    //! JavaScript's `\s` is the set `util::js::is_whitespace` tests: U+FEFF is in it and U+0085 is not, unlike Rust's.
+    //! JavaScript's `.` (without the `s` flag) stops at four line terminators, not only `\n`. `\d`, `\w` and `\b` are
+    //! ASCII-only without the `u` flag. [`translate`] turns a JavaScript pattern into a Rust one with exactly those
+    //! meanings, so the patterns below can be written as the Node code wrote them.
 
-    /// The characters of JavaScript's `\s`, as members of a character class.
+    /// The characters of JavaScript's `\s` (`util::js::is_whitespace`), as members of a character class.
     pub const WS_MEMBERS: &str =
         r"\t\n\x0B\x0C\r \x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}";
 
@@ -43,33 +43,9 @@ pub mod js_text {
         format!("[{WS_MEMBERS}]")
     }
 
-    /// Whether `c` is whitespace to JavaScript (`\s`, and what `trim` removes).
-    pub fn is_ws(c: char) -> bool {
-        matches!(
-            c,
-            '\t' | '\n' | '\x0B' | '\x0C' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
-                ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
-        )
-    }
-
     /// Whether `c` ends a line to JavaScript (what `.` does not match, and where `^`/`$` match with the `m` flag).
     pub fn is_line_terminator(c: char) -> bool {
         matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
-    }
-
-    /// `s.trim()`.
-    pub fn trim(s: &str) -> &str {
-        s.trim_matches(is_ws)
-    }
-
-    /// `s.trimStart()`.
-    pub fn trim_start(s: &str) -> &str {
-        s.trim_start_matches(is_ws)
-    }
-
-    /// `s.trimEnd()`.
-    pub fn trim_end(s: &str) -> &str {
-        s.trim_end_matches(is_ws)
     }
 
     /// A JavaScript pattern (the text between the slashes, no `u` or `s` flag) as a Rust pattern with the same
@@ -164,7 +140,8 @@ pub mod js_text {
     }
 }
 
-use js_text::{re, trim, trim_end};
+use crate::util::js::{is_whitespace, trim, trim_end, trim_start};
+use js_text::re;
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -339,7 +316,10 @@ fn pad_to(s: &str, width: usize, align: Align) -> String {
 const MASK_OPEN: &str = "\u{0}MDT";
 const MASK_CLOSE: &str = "\u{0}";
 
-static FENCE_OF: LazyLock<Regex> = LazyLock::new(|| re(r"^(\s*)(`{3,}|~{3,})(.*)$"));
+// The Node pattern was `^(\s*)(`{3,}|~{3,})(.*)$`, where `.` does not match "\r": a fence line of text with CRLF
+// line endings ("```js\r") was not a fence, so such text was split with its fences unbalanced and a table inside such
+// a fence was redrawn. Fixed in the Rust version: a fence line may end in "\r", which is not part of its info string.
+static FENCE_OF: LazyLock<Regex> = LazyLock::new(|| re(r"^(\s*)(`{3,}|~{3,})(.*)\r?$"));
 static UNMASK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x00MDT([0-9]+)\x00").expect("the unmask pattern"));
 
 struct FenceLine<'a> {
@@ -956,7 +936,7 @@ fn bare(line: &str) -> bool {
 
 /// `/^\s*>(?!>>)/.test(line)`: a ">" after the leading whitespace, not the first of ">>>".
 fn starts_quote(line: &str) -> bool {
-    js_text::trim_start(line)
+    trim_start(line)
         .strip_prefix('>')
         .is_some_and(|rest| !rest.starts_with(">>"))
 }
@@ -967,10 +947,10 @@ fn quoted(line: &str) -> bool {
 
 /// `line.replace(/^(\s*)>(?=[^\s>])/, "$1> ")`: the missing space after a leading ">".
 fn space_after_quote_mark(line: &str) -> String {
-    let rest = js_text::trim_start(line);
+    let rest = trim_start(line);
     let indent = &line[..line.len() - rest.len()];
     match rest.strip_prefix('>') {
-        Some(after) if after.chars().next().is_some_and(|c| !js_text::is_ws(c) && c != '>') => {
+        Some(after) if after.chars().next().is_some_and(|c| !is_whitespace(c) && c != '>') => {
             format!("{indent}> {after}")
         }
         _ => line.to_string(),
@@ -1036,7 +1016,7 @@ struct OpenFence {
 /// text on it that is not a fence.
 fn has_content(chunk: &str) -> bool {
     chunk.split(js_text::is_line_terminator).any(|line| {
-        let t = js_text::trim_start(line);
+        let t = trim_start(line);
         !t.is_empty() && !t.starts_with("```") && !t.starts_with("~~~")
     })
 }
@@ -1053,6 +1033,12 @@ fn has_content(chunk: &str) -> bool {
 /// Also fixes two adjacent bugs in the original:
 ///  - continuation chunks no longer start with a stray leading "\n"
 ///  - hard cuts happen on code-point boundaries, so an astral char (😀) can't be split into lone surrogates
+///
+/// The Rust version also fixes two bugs the Node version had: a hard cut took `max_len` code points, so a line with
+/// emoji made a piece over the limit (Discord refuses it), and fences in CRLF text were not recognised. No piece is
+/// longer than `max_len` UTF-16 units: where nothing else fits (a fence's language tag about as long as the limit,
+/// or a limit of a few characters) a piece is cut at the limit even through a fence. Only a single character wider
+/// than the limit itself (an emoji with a limit of 1) still makes a piece of its own.
 pub fn split_message_fence_safe(text: &str, max_len: usize) -> Vec<String> {
     if utf16_len(text) <= max_len {
         return vec![text.to_string()];
@@ -1103,10 +1089,10 @@ pub fn split_message_fence_safe(text: &str, max_len: usize) -> Vec<String> {
         // whether we owe a closing fence.
         let m = fence_of(raw_line);
 
-        // Hard-split a single over-long line, on CODE POINTS, so an astral char can never be cleaved into lone
+        // Hard-split a single over-long line between characters, so an astral char can never be cleaved into lone
         // surrogates — the original splitMessage's `slice(0, maxLen)` does exactly that and Discord renders U+FFFD
-        // or rejects the message. (A piece is `budget` code points, as in the Node code, which can be more than
-        // `budget` UTF-16 units.)
+        // or rejects the message. A piece is at most `budget` UTF-16 units (the Node code took `budget` code points,
+        // which with emoji is more than `budget` units).
         let budget = max
             - reserve(&open_fence)
             - if open_fence.is_some() {
@@ -1115,10 +1101,8 @@ pub fn split_message_fence_safe(text: &str, max_len: usize) -> Vec<String> {
                 0
             };
         let pieces: Vec<String> = if (utf16_len(raw_line) as i64) > budget {
-            // A budget of zero or less made the Node code loop for ever; one code point at a time ends.
-            let per = budget.max(1) as usize;
-            let cps: Vec<char> = raw_line.chars().collect();
-            cps.chunks(per).map(|c| c.iter().collect()).collect()
+            // A budget of zero or less made the Node code loop for ever; one character at a time ends.
+            cut_by_units(raw_line, budget)
         } else {
             vec![raw_line.to_string()]
         };
@@ -1168,7 +1152,40 @@ pub fn split_message_fence_safe(text: &str, max_len: usize) -> Vec<String> {
 
     // A chunk that is nothing but a re-opened + closed fence carries no content; dropping it avoids posting an empty
     // black box.
-    chunks.into_iter().filter(|c| has_content(c)).collect()
+    let chunks = chunks.into_iter().filter(|c| has_content(c));
+    // Nothing over the limit, ever: a chunk that is still too long (only where the limit leaves no room for a
+    // reopened fence) is cut at the limit. A piece of nothing but whitespace would be refused as an empty message.
+    chunks
+        .flat_map(|c| {
+            if utf16_len(&c) as i64 > max {
+                cut_by_units(&c, max)
+            } else {
+                vec![c]
+            }
+        })
+        .filter(|c| !trim(c).is_empty())
+        .collect()
+}
+
+/// `text` in pieces of at most `max_units` UTF-16 units, cut between characters; each piece has at least one
+/// character, so a character wider than the limit is a piece of its own.
+fn cut_by_units(text: &str, max_units: i64) -> Vec<String> {
+    let mut pieces = Vec::new();
+    let mut piece = String::new();
+    let mut units = 0i64;
+    for c in text.chars() {
+        let width = c.len_utf16() as i64;
+        if !piece.is_empty() && units + width > max_units {
+            pieces.push(std::mem::take(&mut piece));
+            units = 0;
+        }
+        piece.push(c);
+        units += width;
+    }
+    if !piece.is_empty() {
+        pieces.push(piece);
+    }
+    pieces
 }
 
 #[cfg(test)]

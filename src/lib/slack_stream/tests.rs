@@ -680,6 +680,34 @@ fn reads_slacks_error_code_off_a_thrown_error() {
     assert_eq!(slack_error_code(wrapped.as_ref()), Some("missing_scope"));
 }
 
+/// Context added around a Slack error (as package H2 may add) does not hide its code.
+#[test]
+fn the_code_is_found_under_added_context() {
+    let err = anyhow::Error::new(SlackApiError::platform("ratelimited")).context("while posting");
+    assert_eq!(slack_error_code(err.as_ref()), Some("ratelimited"));
+    let twice = anyhow::Error::new(SlackApiError::platform("stopped_by_user"))
+        .context("while appending")
+        .context("in the reply stream");
+    assert_eq!(slack_error_code(twice.as_ref()), Some("stopped_by_user"));
+    let result: anyhow::Result<()> = Err(SlackApiError::platform("missing_scope").into());
+    let with_context = anyhow::Context::context(result, "starting the stream").unwrap_err();
+    assert_eq!(slack_error_code(with_context.as_ref()), Some("missing_scope"));
+
+    /// An error type of its own that keeps the Slack error as its source.
+    #[derive(Debug, thiserror::Error)]
+    #[error("upload failed")]
+    struct Upload(#[source] SlackApiError);
+    assert_eq!(
+        slack_error_code(&Upload(SlackApiError::platform("not_in_channel"))),
+        Some("not_in_channel")
+    );
+    assert_eq!(slack_error_code(&Upload(SlackApiError::other("timeout"))), None);
+    assert_eq!(
+        slack_error_code(anyhow::anyhow!("no slack error").context("x").as_ref()),
+        None
+    );
+}
+
 // The same scenarios through the Node code and this one.
 
 /// Runs one scenario of [`NODE_SCENARIOS`] and checks every call and the end state against what the Node code did.
@@ -888,6 +916,49 @@ async fn emoji_already_in_a_stream_count_two_units_each() {
     s.text("abcdef").await;
     s.finish().await;
     assert_eq!(native_messages(&client), vec!["😀😀😀abcd", "ef"]);
+}
+
+/// A Node bug fixed in the Rust version: a fence line ending in "\r" (CRLF text) was not seen, so a code block was
+/// left open at a rollover and the next message showed the rest as plain text. Now it is closed and opened again.
+#[tokio::test(start_paused = true)]
+async fn node_bugs_fixed_a_crlf_code_block_is_closed_and_reopened_in_the_next_message() {
+    let code: String = (0..10).map(|i| format!("x{i}();\r\n")).collect();
+    let text = format!("```js\r\n{code}```\r\nDone.");
+
+    let client = FakeSlack::new();
+    let c = TestClock::new();
+    let mut o = opts(&client, &c);
+    o.max_stream_chars = 60;
+    let s = SlackReplyStream::new(o);
+    for line in text.split_inclusive('\n') {
+        c.advance(1500);
+        s.text(line).await;
+    }
+    s.finish().await;
+    let messages = native_messages(&client);
+    assert!(messages.len() >= 2);
+    for msg in &messages {
+        assert_eq!(fence_lines(msg) % 2, 0, "unbalanced: {msg:?}");
+    }
+    assert!(messages[1].starts_with("```js\n"), "{:?}", messages[1]);
+
+    let edit = FakeSlack::new();
+    let mut o = opts(&edit, &c);
+    o.native = false;
+    o.max_message_chars = 60;
+    let s = SlackReplyStream::new(o);
+    for line in text.split_inclusive('\n') {
+        c.advance(2000);
+        s.text(line).await;
+    }
+    s.finish().await;
+    let msgs = final_messages(&edit);
+    assert!(msgs.len() >= 2);
+    for m in &msgs {
+        assert!(utf16_len(m) <= 60);
+        assert_eq!(fence_lines(m) % 2, 0, "unbalanced: {m:?}");
+    }
+    assert!(msgs[1].starts_with("```js\n"), "{:?}", msgs[1]);
 }
 
 /// Scenarios run through the Node `SlackReplyStream` with a recording client: the scenario, every call it made

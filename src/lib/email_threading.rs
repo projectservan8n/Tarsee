@@ -9,7 +9,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::lib::discord_format::js_text::{re, trim};
+use crate::lib::discord_format::js_text::re;
+use crate::util::js::trim;
 
 /// Cap to keep outbound headers reasonable.
 const MAX_REFERENCES: usize = 10;

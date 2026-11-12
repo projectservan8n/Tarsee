@@ -176,7 +176,7 @@ fn latest_message_at(db: Option<&Db>, conversation_id: &str) -> String {
 pub fn resolve_chat_target(args: ResolveChatTarget<'_>) -> Option<ResolvedChatTarget> {
     let conversation_id = args.conversation_id.filter(|c| !c.is_empty());
     if !args.channel_id.is_empty() {
-        let given = crate::lib::discord_format::js_text::trim(args.channel_id).to_string();
+        let given = crate::util::js::trim(args.channel_id).to_string();
         // The current chat's own id given back: keep its forum topic.
         let here = match (args.settings, conversation_id) {
             (Some(settings), Some(conv)) => chats_of(args.channel, settings)

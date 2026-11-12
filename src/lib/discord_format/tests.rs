@@ -304,7 +304,7 @@ fn an_unmatched_backtick_run_in_a_cell_forces_a_longer_fence() {
     let out = format_tables_for_discord("| a | b |\n|---|---|\n| ``` | 2 |");
     let opener = out.split('\n').next().unwrap();
     assert!(opener.len() >= 4, "fence must outrun the content: {opener:?}");
-    assert!(js_text::trim_end(&out).ends_with(opener), "closing fence must match");
+    assert!(trim_end(&out).ends_with(opener), "closing fence must match");
 }
 
 // splitMessageFenceSafe
@@ -354,9 +354,9 @@ fn no_lone_surrogates_on_a_hard_cut() {
     assert!(chunks.len() > 1);
     assert_eq!(chunks.concat().matches('😀').count(), 50);
     assert_eq!(chunks.concat().matches('x').count(), 1999);
-    // A hard cut takes 2000 code points, as the Node code does, so the first piece is 2001 UTF-16 units (Node
-    // printed [2001, 98]). Listed in the report as a Node bug, kept.
-    assert_eq!(chunks.iter().map(|c| utf16_len(c)).collect::<Vec<_>>(), vec![2001, 98]);
+    // The Node code's hard cut took 2000 code points, so its first piece was 2001 UTF-16 units ([2001, 98]), which
+    // Discord refuses. Fixed in the Rust version: the cut counts units and falls between characters.
+    assert_eq!(chunks.iter().map(|c| utf16_len(c)).collect::<Vec<_>>(), vec![1999, 100]);
 }
 
 #[test]
@@ -384,7 +384,7 @@ fn dangling_fence_in_the_input_is_closed_on_output() {
     let chunks = split_message_fence_safe(&format!("```\n{}", "y".repeat(3000)), 2000);
     let last = chunks.last().unwrap();
     assert!(
-        js_text::trim_end(last).ends_with("```"),
+        trim_end(last).ends_with("```"),
         "{}",
         crate::util::js::utf16_tail(last, 20)
     );
@@ -443,7 +443,7 @@ fn a_reply_whose_table_grows_when_drawn_reaches_discord_whole_drawn_first_then_s
             .unwrap()
             .replace_all(&clean, "");
         let clean = Regex::new(r"\n{3,}").unwrap().replace_all(&clean, "\n\n");
-        format_for_discord(js_text::trim(&clean))
+        format_for_discord(trim(&clean))
     };
     let rows: Vec<String> = (0..20)
         .map(|i| format!("| Row {} | lead {i} | closed {i} | {} | note {i} |", i + 1, i * 7))
@@ -477,7 +477,18 @@ fn javascript_patterns_keep_their_javascript_meaning() {
     // [\s\S] is any character, [ inside a class is literal.
     assert!(js_text::re(r"^[\s\S]$").is_match("\n"));
     assert!(js_text::re(r"^[[\]]+$").is_match("[]"));
-    assert_eq!(js_text::trim("\u{FEFF} x \u{85}"), "x \u{85}");
+}
+
+/// The `\s` of the translated patterns is the foundation's JavaScript whitespace, character for character.
+#[test]
+fn the_pattern_whitespace_is_the_foundations_javascript_whitespace() {
+    let ws = js_text::re(r"^\s$");
+    let not_ws = js_text::re(r"^\S$");
+    for c in (0..=0x10FFFFu32).filter_map(char::from_u32) {
+        let text = c.to_string();
+        assert_eq!(ws.is_match(&text), is_whitespace(c), "U+{:04X}", c as u32);
+        assert_eq!(not_ws.is_match(&text), !is_whitespace(c), "U+{:04X}", c as u32);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -676,18 +687,10 @@ const NODE_DISPLAY_WIDTH: &[(&str, usize)] = &[
     ("⭐x", 3),
 ];
 
-/// Inputs, the limit, and the pieces `splitMessageFenceSafe` printed, in the Node code.
+/// Inputs, the limit, and the pieces `splitMessageFenceSafe` printed, in the Node code. Four inputs of the first
+/// version of this table, where the Node code broke (pieces over the limit with emoji, CRLF fences), are in
+/// `node_bugs_fixed_*` below, with what the Rust version makes instead.
 const NODE_SPLIT: &[(&str, usize, &[&str])] = &[
-    (
-        "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
-        21,
-        &["😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀", "😀😀😀😀😀😀😀😀😀"],
-    ),
-    (
-        "ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀",
-        20,
-        &["ab😀ab😀ab😀ab😀ab😀ab😀ab", "😀ab😀ab😀ab😀ab😀ab😀"],
-    ),
     (
         "日本語のテキスト0\n日本語のテキスト1\n日本語のテキスト2\n日本語のテキスト3\n日本語のテキスト4\n日本語のテキスト5\n日本語のテキスト6\n日本語のテキスト7\n日本語のテキスト8\n日本語のテキスト9\n日本語のテキスト10\n日本語のテキスト11",
         30,
@@ -722,16 +725,6 @@ const NODE_SPLIT: &[(&str, usize, &[&str])] = &[
             "after",
         ],
     ),
-    (
-        "```\r\ncode line\r\nl0 xxxxxxxx\nl1 xxxxxxxx\nl2 xxxxxxxx\nl3 xxxxxxxx\nl4 xxxxxxxx\nl5 xxxxxxxx\r\n```\r\n",
-        30,
-        &[
-            "```\r\ncode line\r\nl0 xxxxxxxx",
-            "l1 xxxxxxxx\nl2 xxxxxxxx",
-            "l3 xxxxxxxx\nl4 xxxxxxxx",
-            "l5 xxxxxxxx\r\n```\r\n",
-        ],
-    ),
     ("a\n\n\n\nb\n\n\n\nc\n\n\n\nd", 6, &["a\n\n\n\nb", "\n\n\nc\n\n", "\nd"]),
     (
         "  ```js\nl0 xxxxxx\nl1 xxxxxx\nl2 xxxxxx\nl3 xxxxxx\nl4 xxxxxx\nl5 xxxxxx\nl6 xxxxxx\nl7 xxxxxx\n  ```\ntail",
@@ -742,14 +735,6 @@ const NODE_SPLIT: &[(&str, usize, &[&str])] = &[
             "```js\nl3 xxxxxx\nl4 xxxxxx\n```",
             "```js\nl5 xxxxxx\nl6 xxxxxx\n```",
             "```js\nl7 xxxxxx\n  ```\ntail",
-        ],
-    ),
-    (
-        "```\n😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
-        25,
-        &[
-            "```\n😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\n```",
-            "```\n😀😀😀😀😀😀😀😀😀😀😀😀😀\n```",
         ],
     ),
     ("xxxxxxxxxx", 10, &["xxxxxxxxxx"]),
@@ -902,4 +887,176 @@ fn a_budget_of_nothing_still_ends_and_keeps_every_character() {
     let input = format!("  \n```\n  \n```\n{}", "z".repeat(8));
     let chunks = split_message_fence_safe(&input, 6);
     assert_eq!(chunks.concat().matches('z').count(), 8);
+}
+
+// ---------------------------------------------------------------------------
+// Node bugs fixed in the Rust version (docs/rust-port/reports/E1.md, "Node bugs fixed in the Rust version").
+// ---------------------------------------------------------------------------
+
+/// The Node code's hard cut took `budget` code points, so emoji made pieces over the limit: it printed
+/// `[42, 18]` units at 21 for the first input, `[25, 19]` at 20 for the second, `[42, 34]` at 25 for the third.
+#[test]
+fn node_bugs_fixed_no_piece_is_over_the_limit_with_emoji_at_the_cut() {
+    let cases: &[(&str, usize, &[&str])] = &[
+        (
+            "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+            21,
+            &["😀😀😀😀😀😀😀😀😀😀", "😀😀😀😀😀😀😀😀😀😀", "😀😀😀😀😀😀😀😀😀😀"],
+        ),
+        (
+            "ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀",
+            20,
+            &["ab😀ab😀ab😀ab😀ab😀", "ab😀ab😀ab😀ab😀ab😀", "ab😀ab😀"],
+        ),
+        (
+            "```\n😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+            25,
+            &[
+                "```\n😀😀😀😀😀😀😀😀\n```",
+                "```\n😀😀😀😀😀😀😀😀\n```",
+                "```\n😀😀😀😀😀😀😀😀\n```",
+                "```\n😀😀😀😀😀😀\n```",
+            ],
+        ),
+    ];
+    for (input, max, expected) in cases {
+        let pieces = split_message_fence_safe(input, *max);
+        assert_eq!(pieces, *expected, "{input:?} at {max}");
+        assert!(pieces.iter().all(|p| utf16_len(p) <= *max));
+    }
+}
+
+/// Where no reopened fence fits (a limit of a few characters), the Node code looped until it ran out of memory; the
+/// pieces are now cut at the limit, so none is over it, and nothing is lost.
+#[test]
+fn node_bugs_fixed_a_limit_too_small_for_a_fence_still_keeps_every_piece_within_it() {
+    for (input, max) in [
+        ("a\n```\n\n\n```\nb", 6usize),
+        ("  \n```\n  \n```\nzzzzzzzz", 6),
+        ("```js\n😀😀😀", 5),
+    ] {
+        let pieces = split_message_fence_safe(input, max);
+        assert!(
+            pieces.iter().all(|p| utf16_len(p) <= max),
+            "{input:?} at {max}: {pieces:?}"
+        );
+        let letters = |s: &str| s.chars().filter(|c| c.is_alphabetic() || *c == '😀').count();
+        assert!(
+            pieces.iter().map(|p| letters(p)).sum::<usize>() >= letters(input),
+            "{input:?}: {pieces:?}"
+        );
+    }
+    // A character wider than the limit is a piece of its own: the one thing that cannot fit.
+    assert_eq!(split_message_fence_safe("😀😀", 1), vec!["😀", "😀"]);
+}
+
+/// The Node code did not see a fence line that ends in "\r" (CRLF text), so it split the block without closing and
+/// reopening it: it printed `["```\r\ncode line\r\nl0 xxxxxxxx", "l1 xxxxxxxx\nl2 xxxxxxxx", ...]`.
+#[test]
+fn node_bugs_fixed_crlf_fences_are_fences_when_splitting() {
+    let input =
+        "```\r\ncode line\r\nl0 xxxxxxxx\nl1 xxxxxxxx\nl2 xxxxxxxx\nl3 xxxxxxxx\nl4 xxxxxxxx\nl5 xxxxxxxx\r\n```\r\n";
+    assert_eq!(
+        split_message_fence_safe(input, 30),
+        vec![
+            "```\r\ncode line\r\n```",
+            "```\nl0 xxxxxxxx\n```",
+            "```\nl1 xxxxxxxx\n```",
+            "```\nl2 xxxxxxxx\n```",
+            "```\nl3 xxxxxxxx\n```",
+            "```\nl4 xxxxxxxx\n```",
+            "```\nl5 xxxxxxxx\r\n```\r\n",
+        ]
+    );
+    // The language tag is carried over without the "\r".
+    let lines: String = (0..20).map(|i| format!("let v{i} = {i};\r\n")).collect();
+    let pieces = split_message_fence_safe(&format!("```rust\r\n{lines}```\r\nafter"), 60);
+    assert!(pieces.len() > 2);
+    for p in &pieces {
+        assert!(utf16_len(p) <= 60);
+        assert_eq!(fence_lines(p) % 2, 0, "{p:?}");
+    }
+    assert!(pieces[1].starts_with("```rust\n"), "{:?}", pieces[1]);
+}
+
+/// The same fix keeps a table or a quote inside a CRLF fence as it was (the Node code redrew the table inside the
+/// block).
+#[test]
+fn node_bugs_fixed_a_table_inside_a_crlf_fence_is_left_alone() {
+    let table = "```\r\n| a | b |\r\n|---|---|\r\n| 1 | 2 |\r\n```";
+    assert_eq!(format_tables_for_discord(table), table);
+    let quote = "```\r\n>quoted code\r\n>\r\n```\r\n>outside";
+    assert_eq!(
+        format_quotes_for_discord(quote),
+        "```\r\n>quoted code\r\n>\r\n```\r\n> outside"
+    );
+}
+
+/// Generated replies (emoji, flags, ZWJ families, CJK, long words, code blocks, CRLF or LF) at many limits: no piece
+/// is ever over the limit, every piece closes the fences it opens, and no character of the text is lost.
+#[test]
+fn no_piece_is_over_the_limit_and_fences_stay_balanced_on_generated_replies() {
+    let mut seed: u64 = 0x005e_ede1;
+    let mut next = |n: u64| {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (seed >> 33) % n
+    };
+    let words = [
+        "word",
+        "日本語",
+        "😀",
+        "🇵🇭",
+        "👨‍👩‍👧",
+        "é",
+        "テキスト",
+        "x",
+        "🐒🐒🐒",
+        "a-b",
+    ];
+    let content = |s: &str| -> String {
+        s.split('\n')
+            .filter(|l| !trim_start(l).starts_with("```"))
+            .flat_map(|l| l.chars())
+            .filter(|c| !is_whitespace(*c))
+            .collect()
+    };
+    for round in 0..400 {
+        let eol = if next(2) == 0 { "\n" } else { "\r\n" };
+        let mut lines: Vec<String> = Vec::new();
+        let mut in_fence = false;
+        for _ in 0..next(40) + 1 {
+            match next(10) {
+                0 if !in_fence => {
+                    lines.push(format!("```{}", ["", "js", "py"][next(3) as usize]));
+                    in_fence = true;
+                }
+                0 => {
+                    lines.push("```".into());
+                    in_fence = false;
+                }
+                1 => lines.push(words[next(10) as usize].repeat(next(60) as usize + 1)),
+                _ => {
+                    let n = next(8) + 1;
+                    lines.push((0..n).map(|_| words[next(10) as usize]).collect::<Vec<_>>().join(" "));
+                }
+            }
+        }
+        // A text that fits is returned as it is, so the generated one closes its block (a dangling fence in the
+        // input is `dangling_fence_in_the_input_is_closed_on_output`).
+        if in_fence {
+            lines.push("```".into());
+        }
+        let text = lines.join(eol);
+        let max = [20usize, 25, 33, 40, 64, 100, 2000][next(7) as usize];
+        let pieces = split_message_fence_safe(&text, max);
+        for p in &pieces {
+            assert!(
+                utf16_len(p) <= max,
+                "round {round}: a piece of {} at {max}: {p:?}",
+                utf16_len(p)
+            );
+            assert_eq!(fence_lines(p) % 2, 0, "round {round}: unbalanced at {max}: {p:?}");
+        }
+        assert_eq!(content(&pieces.join("\n")), content(&text), "round {round} at {max}");
+    }
 }

@@ -10,8 +10,8 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::{Map, Value};
 
-use crate::lib::discord_format::js_text::{re, trim};
-use crate::util::js::truthy;
+use crate::lib::discord_format::js_text::re;
+use crate::util::js::{trim, truthy};
 
 static REACT_PATTERN: LazyLock<Regex> = LazyLock::new(|| re(r"\[react:\s*([^\]]+)\]"));
 static BUTTONS_PATTERN: LazyLock<Regex> = LazyLock::new(|| re(r"\[buttons:\s*(\[[\s\S]*?\])\]"));
