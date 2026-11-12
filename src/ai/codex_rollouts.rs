@@ -68,7 +68,9 @@ fn sweep(dir: &Path, depth: u32, cutoff: f64, removed: &mut usize) {
     };
     for entry in entries.flatten() {
         let Ok(kind) = entry.file_type() else { continue };
-        let name = entry.file_name();
+        // The name as Node read it (not UTF-8 decoded with U+FFFD): such a name then names no file, so it is
+        // neither swept into nor removed, as in the JS.
+        let name = entry.file_name().to_string_lossy().into_owned();
         let path = dir.join(&name);
         if kind.is_dir() && depth > 0 {
             sweep(&path, depth - 1, cutoff, removed);
@@ -77,7 +79,7 @@ fn sweep(dir: &Path, depth: u32, cutoff: f64, removed: &mut usize) {
             if empty {
                 let _ = std::fs::remove_dir(&path);
             }
-        } else if kind.is_file() && is_rollout_name(&name.to_string_lossy()) {
+        } else if kind.is_file() && is_rollout_name(&name) {
             let old = std::fs::metadata(&path)
                 .ok()
                 .and_then(|meta| mtime_ms(&meta))
@@ -164,6 +166,41 @@ mod tests {
             ..opts
         };
         assert_eq!(prune_codex_rollouts(&later), 1, "the fresh one once it is old");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rollout_whose_name_isnt_utf8_stays_as_in_the_js() {
+        // Node read the name with U+FFFD in it, and that name is no file: the stat failed and the rollout stayed.
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = tmp_dir();
+        let now = crate::util::js::now_ms();
+        let day = tmp
+            .path()
+            .join("home")
+            .join("sessions")
+            .join("2026")
+            .join("10")
+            .join("01");
+        std::fs::create_dir_all(&day).unwrap();
+        let odd = day.join(std::ffi::OsStr::from_bytes(b"rollout-\xff-x.jsonl"));
+        std::fs::write(&odd, "{}\n").unwrap();
+        let at = SystemTime::UNIX_EPOCH + Duration::from_millis((now - 40 * DAY) as u64);
+        std::fs::File::options()
+            .write(true)
+            .open(&odd)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+        let plain = rollout(&day, "rollout-2026-10-01T00-00-00-aaa.jsonl", 40, now);
+        let opts = PruneRolloutsOpts {
+            homes: vec![tmp.path().join("home")],
+            max_age_days: 30.0,
+            now,
+        };
+        assert_eq!(prune_codex_rollouts(&opts), 1);
+        assert!(odd.exists(), "the one Node couldn't name stays");
+        assert!(!plain.exists());
     }
 
     #[test]

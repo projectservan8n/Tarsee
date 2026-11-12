@@ -53,7 +53,9 @@ use crate::env::Env;
 /// when that is set (`.cargo/config.toml` points it into `target/`), else the system temp folder.
 pub fn tmp_dir() -> TempDir {
     // The one read of the real environment outside `main`: where tests may write.
-    let base = std::env::var_os("TARSEE_TEST_TMP").map(PathBuf::from);
+    // Normalised: cargo hands the folder over with mixed separators on Windows (`...\target/test-tmp`), and a test
+    // that compares a path under it with one the app normalised would fail on the spelling alone.
+    let base = std::env::var_os("TARSEE_TEST_TMP").map(|dir| crate::util::node_path::normalize(&PathBuf::from(dir)));
     match base {
         Some(base) => {
             std::fs::create_dir_all(&base).expect("the test temp folder could not be made");

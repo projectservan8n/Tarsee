@@ -21,18 +21,15 @@ use regex::Regex;
 pub const JS_SPACE: &str =
     "\t\n\u{0B}\u{0C}\r \u{A0}\u{1680}\u{2000}-\u{200A}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}";
 
-/// Whether JavaScript counts `c` as whitespace (`s`, `trim()`, `parseInt`).
+/// Whether JavaScript counts `c` as whitespace (`\s`, `trim()`, `parseInt`): `util::js::is_whitespace`, kept under
+/// this name for the code that already calls it.
 pub fn is_js_space(c: char) -> bool {
-    matches!(
-        c,
-        '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
-    )
+    crate::util::js::is_whitespace(c)
 }
 
-/// `text.trim()`.
+/// `text.trim()`: `util::js::trim`, kept under this name for the code that already calls it.
 pub fn js_trim(text: &str) -> &str {
-    text.trim_matches(is_js_space)
+    crate::util::js::trim(text)
 }
 
 // The same emoji class as edge-tts-engine.js. The ZWJ and variation selectors are bare members on purpose: this
@@ -265,5 +262,10 @@ mod tests {
         assert_eq!(js_trim("\u{85}a"), "\u{85}a");
         assert_eq!(collapse_spaces("a \t b\u{2028}c"), "a b\u{2028}c");
         assert_eq!(strip_emoji("hi 🐒!"), "hi !");
+        // The regex class says the same as the foundation's whitespace, character by character.
+        let class = Regex::new(&format!("^[{JS_SPACE}]$")).unwrap();
+        for c in (0u32..0x1_0000).filter_map(char::from_u32) {
+            assert_eq!(class.is_match(&c.to_string()), is_js_space(c), "U+{:04X}", c as u32);
+        }
     }
 }

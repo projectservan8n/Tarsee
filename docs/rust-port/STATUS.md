@@ -11,18 +11,20 @@ agent checked it against the Node code and its findings are fixed or parked belo
 | Package | State | Slot | Commits | Tests after merge | Notes |
 |---|---|---|---|---|---|
 | F0 | merged | - | 9956468..fe6015b | 96 | Foundation, by the lead |
-| I0 | merged | - | 7957ca6 | 591 | Interfaces and fakes; `INTERFACES.md`. Every event shape checked against 152 events captured from the Node code |
-| A1 | running | s2 | | | |
-| A2 | merged | - | 74e0e4f | 728 | 106 of 109 cases; 3 wait for B1, G2, G3. `engine_env::ProviderEntry` to be built from A1 |
-| B1 | merged | - | 1649cf7 | 1020 | 36 of 36 cases. Stored secrets, sessions and CSRF tokens checked both ways against the Node code |
+| I0 | reviewed | - | 7957ca6, fixes 38a6adb | 1562 | Interfaces and fakes; `INTERFACES.md`. Review: 1 important, 4 minor, all addressed |
+| A1 | merged | - | 92f9739 | 1562 | 161 of 181 cases; 12 wait for later packages, 8 test Node-only mechanisms. Review running |
+| A3 | running | s2 | | | |
+| A5 | running | s10 | | | |
+| A2 | merged, fixes running | - | 74e0e4f | 728 | 106 of 109 cases. Review: 3 important, 8 minor; 2 tests fail on Linux |
+| B1 | merged, fixes running | - | 1649cf7 | 1020 | 36 of 36 cases. Review: nothing critical or important in the package; 2 minor |
 | B2 | merged | - | 7094777 | 875 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases; the rest wait for R4, W1, S3, S4 |
-| C1 | merged | - | 9dd5372 | 213 | 32 of 32 cases |
+| C1 | merged, fixes running | - | 9dd5372 | 213 | 32 of 32 cases. Review: 1 critical, 4 important, 22 minor |
 | D1 | merged | - | 48bb9ff | 1180 | 59 of 68 cases; 4 wait for S3, 5 are browser tests (W1) |
 | V2 | running | s9 | | | |
 | T1 | running | s4 | | | |
-| W1a | running | s10 | | | The browser test harness and the unit tests of the browser files |
-| E1 | merged | - | 55fa65f | 395 | 128 of 128 cases |
-| V1 | merged | - | dbb96bb | 591 | 42 of 42 cases |
+| W1a | merged | - | fcfc2ba | 1328 | 116 of 141 cases of the browser files run in a real browser (`cargo test --test ui`); 25 wait for A1, A4, R2 |
+| E1 | reviewed | - | 55fa65f, fixes 96f4ac4 | 1573 | 128 of 128 cases. Review: faithful, 2 minor, addressed; two Node bugs fixed |
+| V1 | merged, fixes running | - | dbb96bb | 591 | 42 of 42 cases. Review: 2 critical, 3 important, 7 minor |
 
 ## Rulings
 
@@ -87,13 +89,14 @@ Decisions the lead made on the owner's behalf, in order. Each says what it costs
 
 ## Node bugs fixed in the Rust version
 
-To be fixed in each package's fix round (none is fixed yet):
+Fixed (in the list below, marked "done") or being fixed in each package's fix round:
 
 - B2 `routes/files`: `POST /api/files/delete` can delete the whole workspace when `TARSEE_WORKSPACE_DIR` is not
   written in its normal form (a trailing slash, `..`), because the root check compares text; `rename` has a prefix
   check without a path separator.
 - C1 `lib/skills-engine`: a skill name in install, uninstall and setup can reach outside the skills folders.
-- E1 `lib/discord-format`: the hard cut can make a 2001-unit piece when the line has emoji, which Discord refuses.
+- done: E1 `lib/discord-format`: a piece of a split message can no longer be over the limit when the line has emoji;
+  code fences in text with CRLF line endings are recognised (also in the Slack stream).
 - B1 `middleware/security`: a CSRF token with a signature of the wrong length answers 500 instead of 403.
 
 ## Node oddities ported as they are
@@ -101,6 +104,19 @@ To be fixed in each package's fix round (none is fixed yet):
 Listed in each package report. The ones that touch security, for the owner to decide (the unmerged PR #11 covers
 some): `http://[::ffff:127.0.0.1]/` passes the private-address check; `checkUrlSafety` lets loopback and private
 names through; a `write_file` call with a non-text file name skips the tool policy.
+
+## What the reviews found that applies everywhere
+
+Each became a rule in `DESIGN.md` and, where possible, a fix in the foundation:
+
+- Rust's `Path::join` replaces the base when the piece is absolute; Node's `path.join` stays under it. (C1: a skill
+  name could delete a folder outside the skills area.)
+- JavaScript's `trim` and `\s` differ from Rust's on U+0085 and U+FEFF. (V1: a damaged archive header accepted; the
+  foundation: an `ENCRYPTION_KEY` with a byte order mark derived a different key.)
+- On Windows an environment variable's name matches in any case. (V1: programs never found on the `Path`.)
+- Arithmetic on a number read from a file or the network must be checked. (V1: an overflow in the archive reader.)
+- `(?i)` in a Rust pattern folds a few characters JavaScript's `/i` does not.
+- `serde_json` parsed long decimals one unit off until `float_roundtrip` was switched on.
 
 ## Linux
 

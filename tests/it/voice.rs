@@ -291,3 +291,40 @@ async fn whisper_from_an_older_build_or_missing_altogether() {
     let err = transcribe(&bad_ffmpeg.t, b"x", None).await.unwrap_err();
     assert!(err.to_string().starts_with("Command failed: ffmpeg -i "), "{err}");
 }
+
+// ── Fix round 1 ──────────────────────────────────────────────────────────
+
+/// On Windows the variable is usually spelled `Path`: programs are still found, as Node found them.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_program_is_found_on_a_path_spelled_in_any_case() {
+    let bin = tmp_dir();
+    testbin_as(bin.path(), "piper");
+    let env = tarsee::Env::from_pairs([("Path", bin.path().to_string_lossy().to_string())]);
+    assert!(tarsee::voice::tts_interface::find_program(&env, "piper").is_some());
+    let t = test_app_with_env([("Path", bin.path().to_string_lossy().to_string())]);
+    save_piper_voice(t.env(), b"m", b"{}", "amy").unwrap();
+    assert!(PiperTtsEngine::new(t.env(), None).is_available().await);
+}
+
+/// A program out of time gets SIGTERM on Unix, the signal Node sent, not SIGKILL.
+#[tokio::test]
+async fn a_program_out_of_time_is_asked_to_stop() {
+    let mut child = tokio::process::Command::new(crate::support::testbin())
+        .env("TARSEE_TESTBIN_ROLE", "echo")
+        .env("TARSEE_TESTBIN_SLEEP_MS", "10000")
+        .stdout(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let started = std::time::Instant::now();
+    tarsee::voice::tts_interface::terminate(&mut child);
+    let status = child.wait().await.unwrap();
+    assert!(!status.success());
+    assert!(started.elapsed() < Duration::from_secs(5));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(status.signal(), Some(libc::SIGTERM));
+    }
+}

@@ -220,6 +220,12 @@ text identical, including the `[tag]` prefix: people grep their logs for it.
      it expected a relative path. Never `remove_dir_all`, write or copy to a path built from such a piece without
      that check, and test it with an absolute name and with `..`. Node's `path.join` also normalises its result
      (`a/../b`, doubled and trailing separators); Rust's does not, so compare paths as paths, not as text.
+   - **File names on Windows.** Node hands every path to Windows in the literal form (`\\\\?\\C:\\...`), so a name
+     means what it says. Rust's `std::fs` does not, and Windows then drops trailing dots and spaces from the last
+     name and turns `nul`, `con`, `com1` into devices: `data.db.` opens `data.db`, and `...` is the folder
+     itself. A check on the name as written then passes for a different file than the one opened (a reviewed
+     package let `delete "..."` remove the whole workspace). Every file operation on a path holding a name from
+     outside goes through `util::node_path::to_namespaced(&path)`, for the check and the operation alike.
    - `text.trim()` is `util::js::trim(text)`, not `str::trim`: JavaScript trims U+FEFF (a byte order mark) and
      not U+0085; Rust does the opposite. The same two characters differ in `\s`.
    - On Windows an environment variable's name matches whatever its case (`Path`). `Env` does that for `get`,

@@ -26,21 +26,22 @@
 //! Like the JS, which worked on a copy of `process.env`, every builder works on `env.snapshot()` of the [`Env`] it is
 //! given, never on the real process environment.
 
+mod js_json;
+
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use regex::Regex;
 use serde::Serialize;
 
 pub use super::context_limits::EnvMap;
-use super::context_limits::{
-    JS_DOT_CLASS, JS_SPACE_CLASS, cost_saver_env, js_number, js_round, js_trim, js_trim_start,
-};
+use super::context_limits::{JS_DOT_CLASS, JS_SPACE_CLASS, cost_saver_env, js_number, js_round};
 use crate::env::Env;
-use crate::util::js::number_to_string;
+use crate::util::js::{number_to_string, trim as js_trim, trim_start as js_trim_start};
+use crate::util::node_path::{join as node_join, normalize as normalize_path};
 
 /// The pattern of [`AUTH_ENV_RE`].
 pub const AUTH_ENV_PATTERN: &str = concat!(
@@ -788,6 +789,7 @@ pub fn claude_env_for<'a>(
         None => home_for(
             &id,
             CLAUDE_CODE,
+            env,
             &HomeOpts {
                 state_dir: opts.state_dir.clone(),
                 home_dir: opts.home_dir.clone(),
@@ -882,6 +884,7 @@ pub fn codex_env_for<'a>(provider: impl Into<ProviderRef<'a>>, opts: &CodexEnvOp
         None => home_for(
             &id,
             CODEX,
+            &opts.env,
             &HomeOpts {
                 state_dir: opts.state_dir.clone(),
                 home_dir: None,
@@ -943,7 +946,8 @@ pub struct HomeOpts {
     /// `config.state_dir`: required for every home but the plan's. There is no default, because only the
     /// configuration knows where the state folder really is, a Railway volume included.
     pub state_dir: Option<PathBuf>,
-    /// The user's home folder, for the plan's home; `None` means `os.homedir()` (the process's own).
+    /// The user's home folder, for the plan's home; `None` means the home of the `Env` given to [`home_for`] (the
+    /// JS `os.homedir()`).
     pub home_dir: Option<PathBuf>,
 }
 
@@ -953,7 +957,10 @@ pub struct HomeOpts {
 /// - anthropic, deepseek, openrouter: `<state_dir>/.claude-home-<id>` (CLAUDE_CONFIG_DIR)
 /// - chatgpt on Codex: `<state_dir>/.codex-home` (Codex's own device sign-in)
 /// - every other Codex turn: `<state_dir>/.codex-home-keys`
-pub fn home_for(provider_id: &str, engine: &str, opts: &HomeOpts) -> Result<PathBuf, EngineEnvError> {
+///
+/// `env` is the server's environment (`app.env()`); it gives only the plan's home folder when `home_dir` is unset,
+/// never a state folder (TARSEE_STATE_DIR in it is not a default).
+pub fn home_for(provider_id: &str, engine: &str, env: &Env, opts: &HomeOpts) -> Result<PathBuf, EngineEnvError> {
     let id = canonical_id(provider_id);
     if home_key(&id, engine).is_none() {
         let message = format!("{provider_id} doesn't run on {engine}.");
@@ -964,8 +971,8 @@ pub fn home_for(provider_id: &str, engine: &str, opts: &HomeOpts) -> Result<Path
             .home_dir
             .clone()
             .filter(|dir| !dir.as_os_str().is_empty())
-            .unwrap_or_else(os_homedir);
-        return Ok(node_join(&home_dir, &[".claude"]));
+            .unwrap_or_else(|| crate::config::env::home_dir(env));
+        return Ok(node_join(&home_dir, ".claude"));
     }
     let state = opts.state_dir.as_deref().map(js_trim_path).unwrap_or_default();
     if state.as_os_str().is_empty() {
@@ -976,15 +983,15 @@ pub fn home_for(provider_id: &str, engine: &str, opts: &HomeOpts) -> Result<Path
         .into());
     }
     if engine == CLAUDE_CODE {
-        return Ok(node_join(&state, &[&format!(".claude-home-{id}")]));
+        return Ok(node_join(&state, format!(".claude-home-{id}")));
     }
     Ok(node_join(
         &state,
-        &[if id == "chatgpt" {
+        if id == "chatgpt" {
             ".codex-home"
         } else {
             ".codex-home-keys"
-        }],
+        },
     ))
 }
 
@@ -1038,20 +1045,38 @@ static LOGIN_KEY_TEXT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(r#""primaryApiKey"[{s}]*:[{s}]*"[{s}]*[^"{s}]"#)).expect("a login-key pattern")
 });
 
+static UNICODE_ESCAPE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\\u([0-9A-Fa-f]{4})").expect("a unicode-escape pattern"));
+
+/// The text with its `\uXXXX` escapes written out (a surrogate one as U+FFFD), so a key name spelled with escapes
+/// reads as the name.
+fn unescape_unicode(text: &str) -> String {
+    UNICODE_ESCAPE
+        .replace_all(text, |c: &regex::Captures<'_>| {
+            u32::from_str_radix(&c[1], 16)
+                .ok()
+                .and_then(char::from_u32)
+                .unwrap_or('\u{FFFD}')
+                .to_string()
+        })
+        .into_owned()
+}
+
 /// Whether a Claude Code global config file holds a Console key saved by `/login` (primaryApiKey). The CLI writes
 /// this file on every run, so only a stored key counts. A file that isn't JSON is searched as text, so a torn write
 /// can't hide one; a file that is there but can't be read counts as holding one (fail closed).
+///
+/// The JSON is read as `JSON.parse` reads it (`js_json`), so this decides as the Node version did on every file it
+/// could parse. On a file it can't, the text is searched as the JS searched it and, failing closed, once more with its
+/// `\uXXXX` escapes written out, so a torn file can't hide a key behind an escaped name either.
 fn holds_login_key(file: &Path, read_file: ReadFile<'_>) -> bool {
     let text = match read_file(file) {
         Ok(text) => text,
         Err(err) => return !is_missing(&err),
     };
-    match serde_json::from_str::<serde_json::Value>(strip_bom(&text)) {
-        Ok(json) => json
-            .get("primaryApiKey")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|key| !js_trim(key).is_empty()),
-        Err(_) => LOGIN_KEY_TEXT.is_match(&text),
+    match js_json::parse(strip_bom(&text)) {
+        Some(json) => matches!(json.member("primaryApiKey"), Some(js_json::Value::Str(key)) if !js_json::is_blank(key)),
+        None => LOGIN_KEY_TEXT.is_match(&text) || LOGIN_KEY_TEXT.is_match(&unescape_unicode(&text)),
     }
 }
 
@@ -1108,7 +1133,7 @@ pub fn home_isolation_refusal(home: &Path, opts: &IsolationOpts<'_>) -> Option<I
     let exists: &dyn Fn(&Path) -> bool = opts.exists.unwrap_or(&real_exists);
     let read_file: ReadFile<'_> = opts.read_file.unwrap_or(&read_text);
 
-    let file = node_join(home, &[sign_in]);
+    let file = node_join(home, sign_in);
     if exists(&file) {
         let message = format!(
             "{} is a sign-in file in a folder meant only for an API key. Tarsee won't start this turn while it is there; delete it (or sign in from the Terminal without pointing at this folder).",
@@ -1122,7 +1147,7 @@ pub fn home_isolation_refusal(home: &Path, opts: &IsolationOpts<'_>) -> Option<I
     }
     if key_claude_home {
         for config in [".config.json", ".claude.json"] {
-            let config_file = node_join(home, &[config]);
+            let config_file = node_join(home, config);
             if !holds_login_key(&config_file, read_file) {
                 continue;
             }
@@ -1154,12 +1179,12 @@ pub fn setting_sources_for(provider_id: &str) -> Vec<&'static str> {
 /// The settings files a Claude Code turn would load: the home's settings.json always (the agent's Bash can write
 /// it), then <workspace>/.claude/settings.json for "project" and settings.local.json for "local".
 pub fn settings_files_for(setting_sources: &[&str], home: &Path, workspace: &Path) -> Vec<PathBuf> {
-    let mut files = vec![node_join(home, &["settings.json"])];
+    let mut files = vec![node_join(home, "settings.json")];
     if setting_sources.contains(&"project") {
-        files.push(node_join(workspace, &[".claude", "settings.json"]));
+        files.push(node_join(workspace, Path::new(".claude").join("settings.json")));
     }
     if setting_sources.contains(&"local") {
-        files.push(node_join(workspace, &[".claude", "settings.local.json"]));
+        files.push(node_join(workspace, Path::new(".claude").join("settings.local.json")));
     }
     files
 }
@@ -1232,20 +1257,25 @@ pub fn settings_file_guard(paths: &[PathBuf], read_file: Option<ReadFile<'_>>) -
                 continue;
             }
         };
-        let Ok(json) = serde_json::from_str::<serde_json::Value>(strip_bom(&text)) else {
+        // Read as JSON.parse reads it (a lone surrogate, a number beyond f64 and any depth are fine).
+        let Some(json) = js_json::parse(strip_bom(&text)) else {
             files.push(GuardFile::unreadable(file));
             continue;
         };
-        let Some(object) = json.as_object() else { continue };
+        if !matches!(json, js_json::Document::Object(_)) {
+            continue;
+        }
         let mut entries = Vec::new();
-        if let Some(env) = object.get("env").and_then(serde_json::Value::as_object) {
+        if let Some(js_json::Value::Object(names)) = json.member("env") {
             entries.extend(
-                env.keys()
+                names
+                    .iter()
+                    .map(|name| js_json::to_text(name))
                     .filter(|name| is_auth_env_name(name))
                     .map(|name| format!("env.{name}")),
             );
         }
-        if object.contains_key("apiKeyHelper") {
+        if json.member("apiKeyHelper").is_some() {
             entries.push("apiKeyHelper".to_string());
         }
         if !entries.is_empty() {
@@ -1316,9 +1346,9 @@ fn codex_allowed(name: &str) -> bool {
 /// loads, and Codex reads a .env only from its home (checked against the pinned binary: one in the workspace or the
 /// process's folder is not loaded).
 pub fn codex_config_files_for(home: &Path, workspace: Option<&Path>) -> Vec<PathBuf> {
-    let mut files = vec![node_join(home, &["config.toml"]), node_join(home, &[".env"])];
+    let mut files = vec![node_join(home, "config.toml"), node_join(home, ".env")];
     if let Some(workspace) = workspace.filter(|w| !w.as_os_str().is_empty()) {
-        files.push(node_join(workspace, &[".codex", "config.toml"]));
+        files.push(node_join(workspace, Path::new(".codex").join("config.toml")));
     }
     files
 }
@@ -1399,9 +1429,18 @@ static TOML_BLANK: LazyLock<Regex> = LazyLock::new(|| {
 static TOML_HEADER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(&format!(r"^[{JS_SPACE_CLASS}]*(\[\[?)({JS_DOT_CLASS}*)$")).expect("a header pattern"));
 
-/// `text.split(/\r?\n/)`.
+/// `text.split(/\r?\n/)`: a CR goes only with the line feed after it, so a last line ending in a lone CR keeps it
+/// (and then fails the strict reader, as in the JS).
 fn toml_lines(text: &str) -> impl Iterator<Item = &str> {
-    text.split('\n').map(|line| line.strip_suffix('\r').unwrap_or(line))
+    let mut pieces = text.split('\n').peekable();
+    std::iter::from_fn(move || {
+        let piece = pieces.next()?;
+        Some(if pieces.peek().is_some() {
+            piece.strip_suffix('\r').unwrap_or(piece)
+        } else {
+            piece
+        })
+    })
 }
 
 /// The root names (each root key's or table's first segment) a config.toml sets, read line by line and strictly:
@@ -1585,12 +1624,6 @@ pub fn codex_config_guard(paths: &[PathBuf], read_file: Option<ReadFile<'_>>) ->
 
 // --- Paths, as Node's `path` module spells them --------------------------------------------------------------------
 
-/// `os.homedir()`: the process's own home folder (HOME, or USERPROFILE on Windows). Callers that have the app pass
-/// `config::env::home_dir(app.env())` as `home_dir` instead.
-fn os_homedir() -> PathBuf {
-    crate::config::env::home_dir(&Env::new())
-}
-
 /// The path as a string for an environment variable.
 pub(crate) fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
@@ -1602,43 +1635,6 @@ pub(crate) fn js_trim_path(path: &Path) -> PathBuf {
         Some(text) => PathBuf::from(js_trim(text)),
         None => path.to_path_buf(),
     }
-}
-
-/// `path.normalize`: `.` dropped, `..` taken back lexically, the platform's separators.
-pub(crate) fn normalize_path(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    let mut normal = 0usize;
-    for component in path.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir => out.push(component),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if normal > 0 {
-                    out.pop();
-                    normal -= 1;
-                } else if !out.has_root() {
-                    out.push("..");
-                }
-            }
-            Component::Normal(part) => {
-                out.push(part);
-                normal += 1;
-            }
-        }
-    }
-    if out.as_os_str().is_empty() {
-        out.push(".");
-    }
-    out
-}
-
-/// `path.join(base, ...parts)`.
-pub(crate) fn node_join(base: &Path, parts: &[&str]) -> PathBuf {
-    let mut joined = base.to_path_buf();
-    for part in parts {
-        joined.push(part);
-    }
-    normalize_path(&joined)
 }
 
 /// `path.resolve(path)`: absolute against the process's working folder, then normalized.

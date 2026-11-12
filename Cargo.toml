@@ -84,7 +84,6 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7.1", features = ["fs"] }
 url = "2.5.8"
 uuid = { version = "1.29.2", features = ["v4"] }
-webpki-roots = "1.0.12"
 which = "8.0.6"
 
 # Tests pause and advance tokio's clock (#[tokio::test(start_paused = true)]), which needs this feature. Kept out
@@ -92,12 +91,13 @@ which = "8.0.6"
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["test-util"] }
 
-# Whether another process still holds an install lock (`process.kill(pid, 0)` in the Node version).
+# Whether another process still holds an install lock (`process.kill(pid, 0)` in the Node version), and the free
+# memory `tarsee doctor` reports (`os.freemem()`).
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
 [profile.dev]
 debug = "line-tables-only"

@@ -195,12 +195,15 @@ async fn a_command_past_its_time_limit_is_killed_and_says_so() {
 #[tokio::test]
 async fn output_past_the_cap_is_cut_and_the_program_still_runs_to_the_end() {
     let tmp = tmp_dir();
-    let words = "x".repeat(300_000);
+    // 300,000 bytes, made by the stand-in itself: no single environment value is large.
     let r = run_codex(
         &testbin(),
         &["models"],
         &RunCodexOpts {
-            env: echo_env(&[("TARSEE_TESTBIN_STDERR", &words)]),
+            env: echo_env(&[
+                ("TARSEE_TESTBIN_STDERR", "xxxxxxxxxx"),
+                ("TARSEE_TESTBIN_STDERR_REPEAT", "30000"),
+            ]),
             cwd: Some(tmp.path().to_path_buf()),
             max_bytes: 1000,
             ..RunCodexOpts::default()
@@ -243,13 +246,20 @@ fn which_codex_is_found_on_the_path_of_the_environment_given() {
     );
 }
 
-/// The real codex, when a test run names one in TARSEE_TEST_CODEX (the JS ran the pinned `@openai/codex` binary when
-/// it was installed). With none named there is nothing more to check.
+/// The real codex (the JS ran the pinned `@openai/codex` binary whenever it was installed). The Rust build uses the
+/// codex on the machine, so this runs only when asked for, with the program's path given when the tests are built
+/// (read at compile time, as `support::testbin()` is, never from the environment of the running test):
+///
+/// ```text
+/// TARSEE_TEST_CODEX=/path/to/codex cargo test --test it -- --ignored the_real_codex
+/// ```
 #[tokio::test]
+#[ignore = "needs a real codex: build the tests with TARSEE_TEST_CODEX=<path> and run with --ignored"]
 async fn the_real_codex_takes_the_base_args_and_answers_login_status_in_its_own_words() {
-    let Some(real) = std::env::var_os("TARSEE_TEST_CODEX").map(PathBuf::from) else {
-        return;
+    let Some(path) = option_env!("TARSEE_TEST_CODEX") else {
+        panic!("TARSEE_TEST_CODEX was not set when the tests were built: set it to the codex program and build again");
     };
+    let real = PathBuf::from(path);
     let tmp = tmp_dir();
     let home = tmp.path().join("pinned-status-home");
     std::fs::create_dir(&home).unwrap();

@@ -36,6 +36,37 @@ pub fn join(base: &Path, piece: impl AsRef<Path>) -> PathBuf {
     normalize(&base.join(piece))
 }
 
+/// `path.toNamespacedPath(p)`: on Windows, an absolute path in the form the system takes literally
+/// (`\\?\C:\dir\name`); the path itself everywhere else, and for a relative path.
+///
+/// Node's file functions pass every path this way, so a name means exactly what it says. Rust's `std::fs` passes
+/// paths as they are, and Windows then rewrites the last name: it drops trailing dots and spaces (`data.db.` opens
+/// `data.db`, `...` opens the folder itself) and turns `nul`, `con`, `com1` and friends into devices. A check made
+/// on the name as written then passes for a file that is not the one opened. **Every file operation on a path that
+/// contains a name from outside the program (a request, a tool argument, an archive, a chat platform) goes through
+/// this function**, for the check and for the operation alike.
+pub fn to_namespaced(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let text = path.to_string_lossy();
+        if text.starts_with(r"\\?\") || text.starts_with(r"\\.\") || !path.is_absolute() {
+            return path.to_path_buf();
+        }
+        // The literal form takes no `.`, no `..` and no forward slashes: normalise first.
+        let normal = normalize(path);
+        let normal = normal.to_string_lossy();
+        match normal.strip_prefix(r"\\") {
+            // \\server\share\x becomes \\?\UNC\server\share\x
+            Some(unc) => PathBuf::from(format!(r"\\?\UNC\{unc}")),
+            None => PathBuf::from(format!(r"\\?\{normal}")),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_path_buf()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,6 +99,60 @@ mod tests {
         assert_eq!(n("/.."), "/");
         #[cfg(windows)]
         assert_eq!(n("C:\\a\\..\\..\\b"), "C:/b");
+    }
+
+    #[test]
+    fn a_relative_path_is_left_alone() {
+        assert_eq!(to_namespaced(Path::new("a/b.")), PathBuf::from("a/b."));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn elsewhere_a_path_is_already_literal() {
+        assert_eq!(to_namespaced(Path::new("/data/name. ")), PathBuf::from("/data/name. "));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_an_absolute_path_gets_the_literal_form() {
+        assert_eq!(
+            to_namespaced(Path::new(r"C:\data\a.txt.")),
+            PathBuf::from(r"\\?\C:\data\a.txt.")
+        );
+        assert_eq!(
+            to_namespaced(Path::new("C:/data/x/../nul")),
+            PathBuf::from(r"\\?\C:\data\nul")
+        );
+        assert_eq!(
+            to_namespaced(Path::new(r"\\server\share\f ")),
+            PathBuf::from(r"\\?\UNC\server\share\f ")
+        );
+        assert_eq!(
+            to_namespaced(Path::new(r"\\?\C:\already")),
+            PathBuf::from(r"\\?\C:\already")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_the_literal_form_names_the_file_as_written() {
+        let dir = crate::testkit::tmp_dir();
+        std::fs::write(dir.path().join("data.db"), "secret").unwrap();
+        // As written, the system drops the trailing dot and opens data.db.
+        assert!(dir.path().join("data.db.").exists());
+        // The literal form does not: there is no file named "data.db.".
+        assert!(!to_namespaced(&dir.path().join("data.db.")).exists());
+        assert!(to_namespaced(&dir.path().join("data.db")).exists());
+        // "..." is the folder itself as written, and nothing at all in the literal form.
+        assert!(dir.path().join("...").is_dir());
+        assert!(!to_namespaced(&dir.path().join("...")).exists());
+        // A device name is an ordinary name in the literal form.
+        std::fs::write(to_namespaced(&dir.path().join("nul")), "kept").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(to_namespaced(&dir.path().join("nul"))).unwrap(),
+            "kept"
+        );
+        std::fs::remove_file(to_namespaced(&dir.path().join("nul"))).unwrap();
     }
 
     #[test]
