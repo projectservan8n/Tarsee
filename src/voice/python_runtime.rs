@@ -1309,6 +1309,20 @@ mod tests {
     }
 
     #[test]
+    fn path_is_found_in_any_case_on_windows_and_lines_trim_as_javascript_does() {
+        let env: BTreeMap<String, String> = [("Path".to_string(), "C:\\bin".to_string())].into_iter().collect();
+        assert_eq!(path_variable(&env).is_some(), cfg!(windows));
+        let env: BTreeMap<String, String> = [("PATH".to_string(), "/bin".to_string())].into_iter().collect();
+        assert_eq!(path_variable(&env).map(String::as_str), Some("/bin"));
+        // U+0085 stays (not JavaScript whitespace), U+FEFF goes (it is).
+        assert_eq!(last_lines("\u{feff}a\u{feff}\n\u{85}b\u{85}\n", 3), "a \u{85}b\u{85}");
+        assert_eq!(js_number(&serde_json::json!(" 12 ")), 12.0);
+        assert!(js_number(&serde_json::json!("\u{85}12")).is_nan());
+        assert_eq!(js_number(&serde_json::json!("0x10")), 16.0);
+        assert!(js_number(&serde_json::json!("inf")).is_nan());
+    }
+
+    #[test]
     fn the_test_hook_is_kept_in_the_app_and_taken_out_again() {
         let t = test_app();
         set_for_tests(

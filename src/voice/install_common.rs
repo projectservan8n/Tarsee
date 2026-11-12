@@ -1319,6 +1319,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn numbers_read_as_javascript_s_number_reads_them() {
+        for (text, want) in [
+            ("", 0.0),
+            ("  42 ", 42.0),
+            ("\u{feff}7", 7.0),
+            ("1e3", 1000.0),
+            (".5", 0.5),
+            ("5.", 5.0),
+            ("+3", 3.0),
+            ("-2", -2.0),
+            ("0x1F", 31.0),
+            ("0b101", 5.0),
+            ("0o17", 15.0),
+            ("Infinity", f64::INFINITY),
+            ("-Infinity", f64::NEG_INFINITY),
+        ] {
+            assert_eq!(js_number_text(text), want, "{text:?}");
+        }
+        for text in ["inf", "nan", "infinity", "1_000", "12px", "0x", "-0x10", "\u{85}1", "1 2"] {
+            assert!(js_number_text(text).is_nan(), "{text:?}");
+        }
+        assert_eq!(js_number(None), 0.0, "Number(null)");
+    }
+
+    #[tokio::test]
     async fn sha256_file_is_the_files_sha256() {
         let dir = tmp_dir();
         let file = dir.path().join("f");
