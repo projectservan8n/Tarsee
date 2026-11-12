@@ -9,6 +9,7 @@
 
 mod echo;
 mod fake_python;
+mod pdftotext;
 mod speech;
 mod thread_dbs_sweep;
 
@@ -27,6 +28,7 @@ fn main() {
         Some("ffmpeg") => speech::ffmpeg(),
         Some("whisper-cli" | "main") => speech::whisper_cli(),
         Some("thread-dbs-sweep") => thread_dbs_sweep::main(),
+        Some("pdftotext") => pdftotext::main(),
         other => {
             eprintln!("tarsee-testbin: no such role: {}", other.unwrap_or("(none)"));
             64

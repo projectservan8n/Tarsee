@@ -12,6 +12,7 @@ mod fake_python;
 mod foundation;
 mod hooks;
 mod interfaces;
+mod pdf_text;
 mod python_runtime;
 mod run_cmd;
 mod voice;
