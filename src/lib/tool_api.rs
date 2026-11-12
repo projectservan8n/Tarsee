@@ -57,6 +57,9 @@ pub struct ToolContext {
     pub turn_id: Option<String>,
     /// The AI the turn runs on, added by the Codex tools' grant with `turn_id`.
     pub provider: Option<String>,
+    /// True on the turns of a Verify probe (`ai/verify-model.js` `toolCtxFor`), which also carry no conversation
+    /// and no message. Nothing reads it today.
+    pub verify: bool,
 }
 
 impl ToolContext {
@@ -163,12 +166,12 @@ mod tests {
 
     /// The Node tool context's own keys (`routes/chat.js`: `{ db, settingsStore, conversationId, channelManager,
     /// dashboard: true, messageId }`; the Codex grant adds `turnId` and `provider`; `ai/turn.js` adds
-    /// `background`), without the four the `App` now holds.
+    /// `background`; `ai/verify-model.js` adds `verify`), without the four the `App` now holds.
     #[test]
     fn the_context_reads_and_writes_the_node_keys() {
         let ctx: ToolContext = serde_json::from_value(json!({
             "conversationId": "c1", "messageId": "m1", "dashboard": true, "background": "cron",
-            "turnId": "t1", "provider": "openai"
+            "turnId": "t1", "provider": "openai", "verify": true
         }))
         .unwrap();
         assert_eq!(ctx.conversation_id.as_deref(), Some("c1"));
@@ -177,12 +180,13 @@ mod tests {
         assert_eq!(ctx.background.as_deref(), Some("cron"));
         assert_eq!(ctx.turn_id.as_deref(), Some("t1"));
         assert_eq!(ctx.provider.as_deref(), Some("openai"));
+        assert!(ctx.verify);
         assert_eq!(ctx.channel, None);
         assert_eq!(
             serde_json::to_value(ToolContext::for_conversation("c1")).unwrap(),
             json!({
                 "conversationId": "c1", "messageId": null, "dashboard": false, "background": null,
-                "channel": null, "turnId": null, "provider": null
+                "channel": null, "turnId": null, "provider": null, "verify": false
             })
         );
         assert_eq!(
