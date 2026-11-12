@@ -7,6 +7,30 @@
 
 use chrono::{DateTime, SecondsFormat, Utc};
 
+/// Whether JavaScript counts the character as whitespace (`String.prototype.trim`, and `\s` in a regular
+/// expression). Rust's `char::is_whitespace` differs on two characters: it counts U+0085 (next line), which
+/// JavaScript does not, and it does not count U+FEFF (the byte order mark), which JavaScript does.
+pub fn is_whitespace(c: char) -> bool {
+    c == '\u{FEFF}' || (c != '\u{0085}' && c.is_whitespace())
+}
+
+/// `text.trim()`. Use this, not `str::trim`, wherever the Node code trimmed text that comes from outside (a
+/// message, a header, a file, a setting): the two differ on U+0085 and U+FEFF, and a file that starts with a byte
+/// order mark is common.
+pub fn trim(text: &str) -> &str {
+    text.trim_matches(is_whitespace)
+}
+
+/// `text.trimStart()`.
+pub fn trim_start(text: &str) -> &str {
+    text.trim_start_matches(is_whitespace)
+}
+
+/// `text.trimEnd()`.
+pub fn trim_end(text: &str) -> &str {
+    text.trim_end_matches(is_whitespace)
+}
+
 /// `text.length`: the number of UTF-16 code units.
 pub fn utf16_len(text: &str) -> usize {
     text.encode_utf16().count()
@@ -111,6 +135,17 @@ pub fn truthy(value: &serde_json::Value) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn trim_removes_what_javascript_removes() {
+        assert_eq!(trim("  \t\r\n x y \u{00A0}\u{3000}\u{2028}"), "x y");
+        assert_eq!(trim("\u{FEFF}x\u{FEFF}"), "x");
+        assert_eq!(trim("\u{0085}x\u{0085}"), "\u{0085}x\u{0085}");
+        assert_eq!(trim_start(" \u{FEFF}x "), "x ");
+        assert_eq!(trim_end(" x \u{FEFF}"), " x");
+        assert_eq!(trim(""), "");
+        assert!(is_whitespace('\u{FEFF}') && !is_whitespace('\u{0085}') && is_whitespace(' ') && !is_whitespace('x'));
+    }
 
     #[test]
     fn length_counts_utf16_code_units() {

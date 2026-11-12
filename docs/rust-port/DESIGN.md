@@ -220,6 +220,10 @@ text identical, including the `[tag]` prefix: people grep their logs for it.
      it expected a relative path. Never `remove_dir_all`, write or copy to a path built from such a piece without
      that check, and test it with an absolute name and with `..`. Node's `path.join` also normalises its result
      (`a/../b`, doubled and trailing separators); Rust's does not, so compare paths as paths, not as text.
+   - `text.trim()` is `util::js::trim(text)`, not `str::trim`: JavaScript trims U+FEFF (a byte order mark) and
+     not U+0085; Rust does the opposite. The same two characters differ in `\s`.
+   - On Windows an environment variable's name matches whatever its case (`Path`). `Env` does that for `get`,
+     `set` and `remove`; a `snapshot()` is a plain map, so look names up in the `Env`, not in a snapshot.
    - `||` treats `0`, `""` and `null` alike; `??` does not. Check which one the Node code used.
    - `JSON.stringify(x, null, 2)` is `serde_json::to_string_pretty`. `new Date().toISOString()` is
      `util::js::now_iso()`. `Date.now()` is `util::js::now_ms()`.

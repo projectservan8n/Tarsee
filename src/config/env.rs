@@ -10,8 +10,13 @@ use rand::Rng;
 
 use super::constants::get_recommended_model;
 use crate::env::Env;
+use crate::util::node_path::normalize;
 
 /// The frozen configuration. Field names are the JS ones in snake_case (`config.STATE_DIR` is `config.state_dir`).
+///
+/// The folders are normalised (`a/../b`, a trailing separator: see `util::node_path`), also when they come from the
+/// environment. Node normalised only the ones it joined itself, which let an oddly written `TARSEE_WORKSPACE_DIR`
+/// defeat checks that compare paths.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub port: u16,
@@ -48,15 +53,17 @@ impl Config {
             .and_then(|p| parse_int_prefix(&p))
             .unwrap_or(3000);
 
-        let state_dir = resolve_state_dir(env);
-        let workspace_dir = env
-            .trimmed("TARSEE_WORKSPACE_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| state_dir.join("workspace"));
-        let data_dir = env
-            .trimmed("TARSEE_DATA_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| state_dir.join("data"));
+        let state_dir = normalize(&resolve_state_dir(env));
+        let workspace_dir = normalize(
+            &env.trimmed("TARSEE_WORKSPACE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| state_dir.join("workspace")),
+        );
+        let data_dir = normalize(
+            &env.trimmed("TARSEE_DATA_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| state_dir.join("data")),
+        );
 
         let skills_dir = workspace_dir.join("skills");
         let memory_dir = workspace_dir.join("memory");
@@ -86,10 +93,11 @@ impl Config {
 
         let api_token = resolve_api_token(env, &state_dir);
         let db_path = data_dir.join("tarsee.db");
-        let claude_workspace_dir = env
-            .trimmed("CLAUDE_WORKSPACE_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| workspace_dir.clone());
+        let claude_workspace_dir = normalize(
+            &env.trimmed("CLAUDE_WORKSPACE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| workspace_dir.clone()),
+        );
         let claude_default_model = env
             .trimmed("CLAUDE_DEFAULT_MODEL")
             .unwrap_or_else(|| get_recommended_model().to_string());
@@ -494,6 +502,18 @@ mod tests {
             dir.path().join("elsewhere").to_string_lossy().to_string(),
         );
         assert_eq!(Config::load(&env).assets_dir, dir.path().join("elsewhere"));
+    }
+
+    #[test]
+    fn folders_from_the_environment_are_normalised() {
+        let dir = tmp_dir();
+        let env = env_in(dir.path());
+        let odd = format!("{}/workspace/../ws/", dir.path().to_string_lossy());
+        env.set("TARSEE_WORKSPACE_DIR", odd);
+        let config = Config::load(&env);
+        assert_eq!(config.workspace_dir, dir.path().join("ws"));
+        assert_eq!(config.claude_workspace_dir, dir.path().join("ws"));
+        assert_eq!(config.skills_dir(), dir.path().join("ws").join("skills"));
     }
 
     #[test]
