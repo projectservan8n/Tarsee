@@ -212,6 +212,17 @@ pub fn os_tmpdir(env: &Env) -> PathBuf {
     }
 }
 
+/// Whether `name` is one plain file name, safe to put after a folder: not empty, not `.` or `..`, no `/`, `\` or
+/// `:` (a Windows drive), not absolute. Node's `path.join` kept even an absolute name under its folder; Rust's
+/// `join` would start over from it ("Joining paths" in the design).
+pub fn is_plain_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\', ':', '\0'])
+        && !std::path::Path::new(name).is_absolute()
+}
+
 /// Where a program the engines start is: a path is taken as it is when it exists; a bare name is looked up on the
 /// app's `PATH` (with `PATHEXT` on Windows), as the Node code's `spawn("piper")` found it.
 pub fn find_program(env: &Env, name: &str) -> Option<PathBuf> {
@@ -233,6 +244,23 @@ pub fn program_command(env: &Env, name: &str) -> Option<tokio::process::Command>
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     Some(cmd)
+}
+
+/// `child.kill()`: SIGTERM on Unix, the signal Node sent (`kill()`, and `execFileSync`'s `killSignal` when its time
+/// is up), so the program may clean up; tokio's own kill is SIGKILL. On Windows the process is ended, as Node does.
+pub fn terminate(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            // SAFETY: a signal to a process this code started and has not reaped yet (`id()` is `None` once it
+            // has).
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGTERM);
+            }
+            return;
+        }
+    }
+    let _ = child.start_kill();
 }
 
 /// How [`exec_file`] failed, in the words of Node's `execFileSync`.
@@ -295,7 +323,7 @@ pub async fn exec_file(
             });
         }
         Err(_) => {
-            let _ = child.start_kill();
+            terminate(&mut child);
             let _ = child.wait().await;
             return Err(ExecError::TimedOut(program.to_string()));
         }
@@ -317,6 +345,27 @@ pub async fn exec_file(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn only_a_plain_file_name_is_plain() {
+        for good in ["ggml-base.en.bin", "amy", "a.b", "..x", "x.."] {
+            assert!(is_plain_name(good), "{good}");
+        }
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../x",
+            "a/b",
+            "a\\b",
+            "C:x",
+            "/etc/passwd",
+            "C:\\x\\y",
+            "\\\\server\\share",
+        ] {
+            assert!(!is_plain_name(bad), "{bad}");
+        }
+    }
 
     #[tokio::test]
     async fn a_missing_program_is_enoent_in_node_s_words() {

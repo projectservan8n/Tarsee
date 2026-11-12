@@ -84,7 +84,6 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7.1", features = ["fs"] }
 url = "2.5.8"
 uuid = { version = "1.29.2", features = ["v4"] }
-webpki-roots = "1.0.12"
 which = "8.0.6"
 
 # Tests pause and advance tokio's clock (#[tokio::test(start_paused = true)]), which needs this feature. Kept out

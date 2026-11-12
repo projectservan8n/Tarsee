@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use serde::Serialize;
 
 use super::install_common::{
-    DownloadFile, InstallError, OFFICIAL_HOSTS, download_file, guarded_fetch, write_file_atomic,
+    DownloadFile, InstallError, OFFICIAL_HOSTS, download_file, guarded_fetch, remove_all, write_file_atomic,
 };
 use crate::net::fetch::Fetch;
 use crate::util::js::{now_iso, utf16_truncate};
@@ -421,13 +421,14 @@ pub fn delete_whisper_model(
     let mut removed = Vec::new();
     let own = dirs.models.join(name);
     if own.exists() {
-        let _ = std::fs::remove_dir_all(&own);
+        // A model the speech-to-text worker has open cannot be removed on Windows: that is an error, as it was.
+        remove_all(&own)?;
         removed.push(own);
     }
     for c in &dirs.caches {
         let repo_dir = c.join("hub").join(repo_dir_name(m));
         if repo_dir.exists() {
-            let _ = std::fs::remove_dir_all(&repo_dir);
+            remove_all(&repo_dir)?;
             removed.push(repo_dir);
         }
     }
@@ -853,6 +854,50 @@ mod tests {
         assert_eq!(r.removed, vec![repo_dir.clone()]);
         assert!(!repo_dir.exists());
         assert_eq!(find_whisper_model("tiny.en", &dirs, &fm.catalog), None);
+    }
+
+    /// Fix round 1: a model that cannot be removed (held open by the speech-to-text worker, on Windows) is an
+    /// error, not a model said to be deleted while it is still there.
+    #[test]
+    fn a_model_that_cannot_be_removed_is_an_error() {
+        let base = tmp_dir();
+        let dirs = dirs(&base);
+        let fm = fake_model(None, vec![]);
+        let dir = dirs.models.join("tiny.en");
+        write_model(&dir, &fm.entry, &fm.files, true);
+        #[cfg(windows)]
+        let held = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(dir.join("model.bin"))
+                .unwrap()
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+            // Someone who may write anywhere (root, in a container) can remove it anyway: nothing to check then.
+            if std::fs::write(dir.join("probe"), "x").is_ok() {
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+                return;
+            }
+        }
+        let err = delete_whisper_model("tiny.en", &dirs, &fm.catalog).unwrap_err();
+        assert!(!err.message.is_empty());
+        assert!(dir.join("model.bin").exists(), "it is still there");
+        #[cfg(windows)]
+        drop(held);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(
+            delete_whisper_model("tiny.en", &dirs, &fm.catalog).unwrap().removed,
+            vec![dir.clone()]
+        );
     }
 
     #[test]

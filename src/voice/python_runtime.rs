@@ -27,13 +27,15 @@ use tokio::io::AsyncReadExt;
 
 use super::install_common::Downloader;
 use super::install_common::{
-    DownloadFile, InstallError, OFFICIAL_HOSTS, describe_fetch_error, download_file, guarded_fetch, write_file_atomic,
+    DownloadFile, InstallError, OFFICIAL_HOSTS, describe_fetch_error, download_file, guarded_fetch, js_number_text,
+    remove_all_async, remove_file_force, write_file_atomic,
 };
 use super::tar_extract::extract_tar_gz;
+use super::tts_interface::terminate;
 use crate::app::App;
 use crate::config::Config;
 use crate::net::fetch::{Fetch, FetchRequest};
-use crate::util::js::{now_iso, number_to_string, truthy, utf16_len, utf16_tail, utf16_truncate};
+use crate::util::js::{now_iso, number_to_string, trim, truthy, utf16_len, utf16_tail, utf16_truncate};
 
 /// The Pythons faster-whisper (and its parts: ctranslate2, onnxruntime, PyAV) have builds for: 3.9 to 3.14.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -386,13 +388,23 @@ pub fn python_command(
         launch.program.clone()
     } else {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        which::which_in(&launch.program, launch.env.get("PATH"), cwd).unwrap_or(launch.program.clone())
+        which::which_in(&launch.program, path_variable(&launch.env), cwd).unwrap_or(launch.program.clone())
     };
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(&launch.args).env_clear().envs(&launch.env).kill_on_drop(true);
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     cmd
+}
+
+/// The `PATH` of an environment given as a plain map: on Windows its name may be in any case (`Path`), as the
+/// system and Node's `process.env` take it.
+fn path_variable(env: &BTreeMap<String, String>) -> Option<&String> {
+    if cfg!(windows) {
+        env.iter().find(|(k, _)| k.eq_ignore_ascii_case("PATH")).map(|(_, v)| v)
+    } else {
+        env.get("PATH")
+    }
 }
 
 /// The options of [`spawn_python`]: the environment (the app's when `None`) and the working folder.
@@ -420,7 +432,7 @@ pub fn spawn_python(
 
 /// The last `n` lines with text, trimmed, joined with spaces.
 fn last_lines(text: &str, n: usize) -> String {
-    let lines: Vec<&str> = text.split('\n').map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = text.split('\n').map(trim).filter(|l| !l.is_empty()).collect();
     lines[lines.len().saturating_sub(n)..].join(" ")
 }
 
@@ -637,7 +649,7 @@ pub async fn run_python(
             Ok(status) => status,
             Err(_) => {
                 timed_out = true;
-                let _ = child.start_kill();
+                terminate(&mut child);
                 child.wait().await
             }
         },
@@ -771,14 +783,7 @@ fn js_number(value: &Value) -> f64 {
         Value::Number(n) => n.as_f64().unwrap_or(f64::NAN),
         Value::Bool(b) => f64::from(u8::from(*b)),
         Value::Null => 0.0,
-        Value::String(s) => {
-            let s = s.trim();
-            if s.is_empty() {
-                0.0
-            } else {
-                s.parse().unwrap_or(f64::NAN)
-            }
-        }
+        Value::String(s) => js_number_text(s),
         _ => f64::NAN,
     }
 }
@@ -1115,7 +1120,7 @@ pub async fn download_standalone_python(app: &App, opts: &EnsureOptions) -> Resu
         .progress(&on_bytes);
     spec.size = size;
     if let Err(err) = download_file(&get, spec).await {
-        clean_downloads(&downloads, &file);
+        clean_downloads(&downloads, &file)?;
         return Err(InstallError::new(format!(
             "Downloading Python from GitHub failed: {}.",
             err.message
@@ -1128,7 +1133,7 @@ pub async fn download_standalone_python(app: &App, opts: &EnsureOptions) -> Resu
     let mut partial_name = dir.as_os_str().to_owned();
     partial_name.push(".partial");
     let partial = PathBuf::from(partial_name);
-    let _ = std::fs::remove_dir_all(&partial);
+    remove_all_async(&partial).await?;
     progress("python-unpack", done, total);
     let unpacked = match extract_tar_gz(&file, &partial, 1).await {
         Ok(_) if !interpreter_in(&partial).exists() => Err("it has no Python interpreter in it".to_string()),
@@ -1136,15 +1141,15 @@ pub async fn download_standalone_python(app: &App, opts: &EnsureOptions) -> Resu
         Err(err) => Err(err.message),
     };
     if let Err(why) = unpacked {
-        let _ = std::fs::remove_dir_all(&partial);
-        clean_downloads(&downloads, &file);
+        remove_all_async(&partial).await?;
+        clean_downloads(&downloads, &file)?;
         return Err(InstallError::new(format!(
             "The Python download could not be unpacked: {why}."
         )));
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    remove_all_async(&dir).await?;
     std::fs::rename(&partial, &dir)?;
-    clean_downloads(&downloads, &file);
+    clean_downloads(&downloads, &file)?;
 
     // 5. Run it once (the only thing from a download Tarsee ever runs is this interpreter).
     let own = PythonRef::new(interpreter_in(&dir).to_string_lossy())
@@ -1152,7 +1157,7 @@ pub async fn download_standalone_python(app: &App, opts: &EnsureOptions) -> Resu
         .label(OWN_LABEL);
     let probe = probe_python(app, &own, Duration::from_secs(30)).await;
     if !probe.usable {
-        let _ = std::fs::remove_dir_all(&dir);
+        remove_all_async(&dir).await?;
         return Err(InstallError::new(format!(
             "The downloaded Python did not run ({}).",
             probe.problem.as_deref().unwrap_or("null")
@@ -1178,13 +1183,14 @@ pub async fn download_standalone_python(app: &App, opts: &EnsureOptions) -> Resu
     Ok(probe)
 }
 
-fn clean_downloads(dir: &Path, file: &Path) {
-    let _ = std::fs::remove_file(file);
+fn clean_downloads(dir: &Path, file: &Path) -> std::io::Result<()> {
+    remove_file_force(file)?;
     let mut part = file.as_os_str().to_owned();
     part.push(".part");
-    let _ = std::fs::remove_file(PathBuf::from(part));
+    remove_file_force(&PathBuf::from(part))?;
     // Not empty, or gone: either way it stays as it is.
     let _ = std::fs::remove_dir(dir);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1300,6 +1306,20 @@ mod tests {
             serde_json::to_string(&probe).unwrap(),
             r#"{"cmd":"python3","args":[],"source":"system","label":"python3","found":true,"usable":true,"version":"3.12.1","executable":"/usr/bin/python3","venv":true,"fasterWhisper":null,"problem":null}"#
         );
+    }
+
+    #[test]
+    fn path_is_found_in_any_case_on_windows_and_lines_trim_as_javascript_does() {
+        let env: BTreeMap<String, String> = [("Path".to_string(), "C:\\bin".to_string())].into_iter().collect();
+        assert_eq!(path_variable(&env).is_some(), cfg!(windows));
+        let env: BTreeMap<String, String> = [("PATH".to_string(), "/bin".to_string())].into_iter().collect();
+        assert_eq!(path_variable(&env).map(String::as_str), Some("/bin"));
+        // U+0085 stays (not JavaScript whitespace), U+FEFF goes (it is).
+        assert_eq!(last_lines("\u{feff}a\u{feff}\n\u{85}b\u{85}\n", 3), "a \u{85}b\u{85}");
+        assert_eq!(js_number(&serde_json::json!(" 12 ")), 12.0);
+        assert!(js_number(&serde_json::json!("\u{85}12")).is_nan());
+        assert_eq!(js_number(&serde_json::json!("0x10")), 16.0);
+        assert!(js_number(&serde_json::json!("inf")).is_nan());
     }
 
     #[test]
