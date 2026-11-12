@@ -918,6 +918,49 @@ async fn emoji_already_in_a_stream_count_two_units_each() {
     assert_eq!(native_messages(&client), vec!["😀😀😀abcd", "ef"]);
 }
 
+/// A Node bug fixed in the Rust version: a fence line ending in "\r" (CRLF text) was not seen, so a code block was
+/// left open at a rollover and the next message showed the rest as plain text. Now it is closed and opened again.
+#[tokio::test(start_paused = true)]
+async fn node_bugs_fixed_a_crlf_code_block_is_closed_and_reopened_in_the_next_message() {
+    let code: String = (0..10).map(|i| format!("x{i}();\r\n")).collect();
+    let text = format!("```js\r\n{code}```\r\nDone.");
+
+    let client = FakeSlack::new();
+    let c = TestClock::new();
+    let mut o = opts(&client, &c);
+    o.max_stream_chars = 60;
+    let s = SlackReplyStream::new(o);
+    for line in text.split_inclusive('\n') {
+        c.advance(1500);
+        s.text(line).await;
+    }
+    s.finish().await;
+    let messages = native_messages(&client);
+    assert!(messages.len() >= 2);
+    for msg in &messages {
+        assert_eq!(fence_lines(msg) % 2, 0, "unbalanced: {msg:?}");
+    }
+    assert!(messages[1].starts_with("```js\n"), "{:?}", messages[1]);
+
+    let edit = FakeSlack::new();
+    let mut o = opts(&edit, &c);
+    o.native = false;
+    o.max_message_chars = 60;
+    let s = SlackReplyStream::new(o);
+    for line in text.split_inclusive('\n') {
+        c.advance(2000);
+        s.text(line).await;
+    }
+    s.finish().await;
+    let msgs = final_messages(&edit);
+    assert!(msgs.len() >= 2);
+    for m in &msgs {
+        assert!(utf16_len(m) <= 60);
+        assert_eq!(fence_lines(m) % 2, 0, "unbalanced: {m:?}");
+    }
+    assert!(msgs[1].starts_with("```js\n"), "{:?}", msgs[1]);
+}
+
 /// Scenarios run through the Node `SlackReplyStream` with a recording client: the scenario, every call it made
 /// (method and arguments, in order), and the stream's state at the end. Generated, not typed.
 const NODE_SCENARIOS: &[&str] = &[
