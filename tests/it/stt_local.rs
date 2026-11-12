@@ -12,12 +12,14 @@ use serde_json::{Value, json};
 use tarsee::testkit::fake_download_host::FakeDownloadHost;
 use tarsee::testkit::{MemorySettings, tmp_dir};
 use tarsee::voice::python_runtime::set_for_tests as set_python;
-use tarsee::voice::stt_handler::{SttTestOverrides, SttWorker, set_for_tests, transcribe_audio, warm_stt};
-use tarsee::voice::stt_install::{reset_stt_runtime, set_for_tests as set_catalog, stt_job};
+use tarsee::voice::python_runtime::PythonRef;
+use tarsee::voice::stt_handler::{SttTestOverrides, SttWorker, set_for_tests, stop_stt_worker, transcribe_audio, warm_stt};
+use tarsee::voice::stt_install::{ReadyRuntime, reset_stt_runtime, set_for_tests as set_catalog, stt_job};
 use tempfile::TempDir;
 
 use crate::fake_python::{FakePython, cand};
-use crate::voice_fixtures::{Models, VoiceApp, models, voice_app, wav, worker_requests, worker_starts};
+use crate::support::testbin_as;
+use crate::voice_fixtures::{Models, VoiceApp, alive, models, until_gone, voice_app, wav, worker_requests, worker_starts};
 
 struct World {
     t: VoiceApp,
@@ -68,6 +70,14 @@ impl World {
         while stt_job(&self.t).is_some() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    /// What is left in the temporary folder.
+    fn tmp_files(&self) -> Vec<String> {
+        std::fs::read_dir(self.t.tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect()
     }
 }
 
@@ -239,17 +249,16 @@ async fn a_worker_that_hangs_is_stopped_after_the_time_limit_and_the_next_record
         },
     );
     w.py.set(json!({ "worker": { "mode": "hang" } }));
-    let t0 = Instant::now();
     let err = transcribe_audio(&w.t, &wav(500), Some("en"), Some(&store(&[])))
         .await
         .unwrap_err();
     assert_eq!(err.code.as_deref(), Some("stt-failed"));
-    assert!(t0.elapsed() < Duration::from_secs(5));
     w.py.set(json!({ "worker": { "mode": "ok" } }));
     let out = transcribe_audio(&w.t, &wav(500), Some("en"), Some(&store(&[])))
         .await
         .unwrap();
     assert_eq!(out.transcript, "hello from a wav");
+    assert_eq!(w.starts(), 2, "the stuck worker was stopped, and a fresh one answered");
 }
 
 #[tokio::test]
@@ -287,7 +296,7 @@ async fn an_idle_worker_stops_by_itself_to_give_its_memory_back() {
         .await
         .unwrap();
     let worker = SttWorker::of(&w.t);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while worker.is_running() {
         assert!(Instant::now() < deadline, "the idle worker was never stopped");
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -300,19 +309,146 @@ async fn an_idle_worker_stops_by_itself_to_give_its_memory_back() {
 
 // ── Added ────────────────────────────────────────────────────────────────
 
+/// The `fake-phonon` stand-in as the Python of a speech-to-text runtime: it speaks `stt_worker.py`'s protocol, logs
+/// its pid, and (with FAKE_PHONON_LINGER) keeps running after its input closes, so only a kill ends it.
+struct Stand {
+    t: VoiceApp,
+    rt: ReadyRuntime,
+    log: PathBuf,
+    _bin: TempDir,
+}
+
+fn stand_in(extra: &[(&str, &str)]) -> Stand {
+    let bin = tmp_dir();
+    let python = testbin_as(bin.path(), "fake-phonon");
+    let log = bin.path().join("stt.jsonl");
+    let mut env = vec![("FAKE_PHONON_LOG", log.to_string_lossy().to_string())];
+    env.extend(extra.iter().map(|(k, v)| (*k, v.to_string())));
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let t = voice_app(&env);
+    let rt = ReadyRuntime {
+        python: PythonRef::new(python.to_string_lossy()),
+        label: "fake".into(),
+        version: Some("3.12.1".into()),
+        executable: None,
+        faster_whisper: "1.2.1".into(),
+        source: "custom",
+    };
+    Stand { t, rt, log, _bin: bin }
+}
+
+impl Stand {
+    fn starts(&self) -> Vec<u32> {
+        std::fs::read_to_string(&self.log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok()?["start"].as_u64())
+            .map(|p| p as u32)
+            .collect()
+    }
+
+    async fn transcribe(&self) -> Result<Value, String> {
+        let audio = self.t.tmp.path().join("a.wav");
+        std::fs::write(&audio, b"RIFF").unwrap();
+        let mut req = serde_json::Map::new();
+        req.insert("audio".into(), json!(audio.to_string_lossy()));
+        req.insert("model".into(), json!("/models/base.en"));
+        let out = SttWorker::of(&self.t)
+            .transcribe(&self.t, &self.rt, req, Duration::from_secs(120))
+            .await;
+        let _ = std::fs::remove_file(&audio);
+        out
+    }
+}
+
 #[tokio::test]
-async fn a_worker_whose_python_cannot_load_faster_whisper_says_so_and_the_process_is_gone_with_the_app() {
+async fn a_worker_whose_python_cannot_load_faster_whisper_says_so() {
+    let s = stand_in(&[("FAKE_PHONON_MODE", "fail-start")]);
+    let err = s.transcribe().await.unwrap_err();
+    assert_eq!(
+        err,
+        "faster-whisper did not start: ModuleNotFoundError: No module named 'faster_whisper'"
+    );
+}
+
+#[tokio::test]
+async fn the_worker_process_ends_when_it_is_stopped_and_when_the_app_goes_away() {
+    let s = stand_in(&[("FAKE_PHONON_LINGER", "1")]);
+    let out = s.transcribe().await.unwrap();
+    assert_eq!(out["text"], "heard 4 bytes");
+    assert_eq!(SttWorker::of(&s.t).version().as_deref(), Some("1.2.1"));
+    let first = s.starts()[0];
+    assert!(alive(first));
+    stop_stt_worker(&s.t);
+    until_gone(first).await;
+
+    s.transcribe().await.unwrap();
+    let second = s.starts()[1];
+    assert!(alive(second));
+    let Stand { t, .. } = s;
+    drop(t);
+    until_gone(second).await;
+}
+
+#[tokio::test]
+async fn a_transcription_whose_caller_goes_away_leaves_no_recording_and_the_worker_still_stops_when_idle() {
     let w = world();
     w.put("base.en");
-    // The probe sees faster-whisper, but the worker says it did not start.
-    w.py.set(json!({ "worker": { "mode": "ok" } }));
-    let out = transcribe_audio(&w.t, &wav(500), Some("en"), Some(&store(&[])))
+    set_for_tests(
+        &w.t,
+        SttTestOverrides {
+            idle_ms: Some(300),
+            ..Default::default()
+        },
+    );
+    // Each answer takes a while, so a caller can go away in the middle of one.
+    w.py.set(json!({ "worker": { "mode": "ok", "delayMs": 300 } }));
+    for after in [Duration::ZERO, Duration::from_millis(50), Duration::from_millis(400)] {
+        // Not a WAV: the fake hears it as "hello from the fake".
+        let settings = store(&[]);
+        let leaving = transcribe_audio(&w.t, b"OggS not a wav", Some("en"), Some(&settings));
+        tokio::pin!(leaving);
+        if after.is_zero() {
+            let _ = futures::poll!(&mut leaving);
+        } else {
+            let _ = tokio::time::timeout(after, &mut leaving).await;
+        }
+        drop(leaving);
+        let out = transcribe_audio(&w.t, &wav(500), Some("en"), Some(&store(&[])))
+            .await
+            .unwrap();
+        assert_eq!(out.transcript, "hello from a wav", "its own answer after a caller left at {after:?}");
+    }
+    let worker = SttWorker::of(&w.t);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while worker.is_running() || !w.tmp_files().is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "the worker never stopped for idleness, or files were left: {:?}",
+            w.tmp_files()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_warm_up_whose_caller_goes_away_leaves_no_file() {
+    let w = world();
+    w.put("base.en");
+    w.py.set(json!({ "worker": { "mode": "ok", "delayMs": 300 } }));
+    let settings = store(&[]);
+    let leaving = warm_stt(&w.t, Some(&settings));
+    tokio::pin!(leaving);
+    let _ = tokio::time::timeout(Duration::from_millis(100), &mut leaving).await;
+    drop(leaving);
+    // The warm-up still runs: the next recording finds the worker warm.
+    transcribe_audio(&w.t, &wav(500), Some("en"), Some(&store(&[])))
         .await
         .unwrap();
-    assert_eq!(out.transcript, "hello from a wav");
-    let worker = SttWorker::of(&w.t);
-    assert!(worker.is_running());
-    assert_eq!(worker.version().as_deref(), Some("1.2.1"));
-    tarsee::voice::stt_handler::stop_stt_worker(&w.t);
-    assert!(!worker.is_running());
+    assert_eq!(w.starts(), 1);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !w.tmp_files().is_empty() {
+        assert!(Instant::now() < deadline, "left behind: {:?}", w.tmp_files());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }

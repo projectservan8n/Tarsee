@@ -3,6 +3,7 @@
 //! temporary folder is its own.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use rand::Rng;
 use serde_json::{Value, json};
@@ -243,3 +244,30 @@ pub fn worker_starts(calls: &[Value]) -> usize {
         })
         .count()
 }
+
+/// Whether a process with this id is running.
+pub fn alive(pid: u32) -> bool {
+    if cfg!(windows) {
+        let out = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
+    } else {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    }
+}
+
+pub async fn until_gone(pid: u32) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while alive(pid) {
+        assert!(Instant::now() < deadline, "the worker process {pid} is still running");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+

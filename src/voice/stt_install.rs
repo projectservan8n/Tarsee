@@ -30,10 +30,10 @@ use parking_lot::{Mutex, RwLock};
 use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
-use tokio::sync::{OnceCell, watch};
+use tokio::sync::watch;
 
-use super::install_common::{acquire_lock, write_file_atomic};
-use super::phonon_engine::js_round;
+use super::install_common::{acquire_lock, remove_all_async, write_file_atomic};
+use super::phonon_engine::{SharedTask, js_round, spawn_shared};
 use super::python_runtime::{
     EnsureOptions, LogListener, PythonProbe, PythonProgress, PythonRef, PythonRunError, RunOptions, STANDALONE_PYTHON,
     StandalonePython, TargetQuery, ensure_base_python, find_pythons, node_arch, node_platform, probe_python,
@@ -46,7 +46,7 @@ use super::whisper_models::{
 use crate::app::App;
 use crate::db::settings::Settings;
 use crate::net::fetch::Fetch;
-use crate::util::js::{now_iso, now_ms, number_to_string, utf16_truncate};
+use crate::util::js::{now_iso, now_ms, number_to_string, trim, utf16_truncate};
 
 /// The faster-whisper Tarsee installs (and the Docker image pins: the deploy tests check they agree).
 pub const FASTER_WHISPER_VERSION: &str = "1.2.1";
@@ -63,7 +63,7 @@ pub struct SttInstall {
     /// The models (tests swap in small stand-ins).
     catalog: RwLock<Arc<Vec<WhisperModel>>>,
     /// The Python found, shared by everyone asking until it is reset.
-    runtime: Mutex<Arc<OnceCell<SttRuntime>>>,
+    runtime: Mutex<Option<SharedTask<SttRuntime>>>,
     job: Mutex<Option<Job>>,
     last: Mutex<Last>,
     next_job: AtomicU64,
@@ -73,7 +73,7 @@ impl SttInstall {
     fn of(app: &App) -> Arc<SttInstall> {
         app.get_or_init(|| SttInstall {
             catalog: RwLock::new(Arc::new(WHISPER_MODELS.clone())),
-            runtime: Mutex::new(Arc::new(OnceCell::new())),
+            runtime: Mutex::new(None),
             job: Mutex::new(None),
             last: Mutex::new(Last::default()),
             next_job: AtomicU64::new(1),
@@ -129,7 +129,7 @@ pub fn stt_dirs(app: &App) -> SttDirs {
         .get("TARSEE_WHISPER_BUNDLED_DIR")
         .unwrap_or_default()
         .split(PATH_DELIMITER)
-        .map(|s| super::speech_text::js_trim(s).to_string())
+        .map(|s| trim(s).to_string())
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .collect();
@@ -203,20 +203,31 @@ impl SttRuntime {
 
 /// Forget what was found (after an install, or when Settings asks to look again).
 pub fn reset_stt_runtime(app: &App) {
-    *SttInstall::of(app).runtime.lock() = Arc::new(OnceCell::new());
+    *SttInstall::of(app).runtime.lock() = None;
 }
 
-/// The Python that runs faster-whisper, or why there is none. Cached until [`reset_stt_runtime`] or `refresh`.
+/// The Python that runs faster-whisper, or why there is none. Cached until [`reset_stt_runtime`] or `refresh`. The
+/// look runs in a task of its own (the JS kept the promise): it finishes, and is remembered, even when every caller
+/// has gone.
 pub async fn find_stt_runtime(app: &App, refresh: bool) -> SttRuntime {
-    let cell = {
+    let looking = {
         let svc = SttInstall::of(app);
         let mut slot = svc.runtime.lock();
         if refresh {
-            *slot = Arc::new(OnceCell::new());
+            *slot = None;
         }
-        slot.clone()
+        slot.get_or_insert_with(|| {
+            let app = app.clone();
+            let failed = SttRuntime::NotReady {
+                base: None,
+                custom: false,
+                problem: Some("the look for Python stopped".into()),
+            };
+            spawn_shared(async move { detect_runtime(&app).await }, failed)
+        })
+        .clone()
     };
-    cell.get_or_init(|| detect_runtime(app)).await.clone()
+    looking.await
 }
 
 fn ready_from(probe: &PythonProbe, source: &'static str) -> ReadyRuntime {
@@ -434,7 +445,7 @@ pub fn list_stt_models(app: &App, current: &str) -> Vec<SttModelRow> {
                 where_: hit.as_ref().map(|h| path_text(&h.dir)),
                 deletable: hit.as_ref().is_some_and(|h| h.source != ModelSource::Image),
                 current: m.name == current,
-                percent: job.map(|j| j.percent),
+                percent: job.and_then(|j| j.percent),
                 error: if hit.is_none() && job.is_none() {
                     last_error
                 } else {
@@ -478,7 +489,9 @@ pub struct JobSnapshot {
     pub model: Option<String>,
     pub phase: String,
     pub step: Option<String>,
-    pub percent: i64,
+    /// A whole number below 100; `None` (null) once a share could not be worked out (a download of 0 bytes), as the
+    /// JS NaN stayed NaN.
+    pub percent: Option<i64>,
     pub started_at: String,
 }
 
@@ -494,7 +507,7 @@ struct Job {
     model: Option<String>,
     phase: String,
     step: Option<String>,
-    percent: i64,
+    percent: Option<i64>,
     started_at: String,
     done: JobDone,
 }
@@ -601,10 +614,12 @@ impl Updater {
             job.step = step;
         }
         if let Some(percent) = percent {
-            let floored = percent.floor().min(99.0);
-            if floored.is_finite() {
-                job.percent = job.percent.max(floored as i64);
-            }
+            // `Math.max(job.percent, Math.min(99, Math.floor(percent)))`: a NaN on either side stays NaN.
+            let floored = percent.floor();
+            job.percent = match job.percent {
+                Some(current) if !floored.is_nan() => Some(current.max(floored.min(99.0) as i64)),
+                _ => None,
+            };
         }
     }
 
@@ -662,7 +677,7 @@ where
         model: model.clone(),
         phase: "start".into(),
         step: None,
-        percent: 0,
+        percent: Some(0),
         started_at: now_iso(),
         done: JobDone(rx),
     });
@@ -679,7 +694,7 @@ where
                 model: model.clone(),
                 phase: "start".into(),
                 step: None,
-                percent: 0,
+                percent: Some(0),
                 started_at: now_iso(),
             }),
             done: job.map(|j| j.done.clone()).unwrap_or_else(|| JobDone(tx.subscribe())),
@@ -767,10 +782,10 @@ fn pip_problem(err: &PythonRunError, py_version: &str) -> String {
         .split('\n')
         .map(|l| l.strip_suffix('\r').unwrap_or(l))
         .rev()
-        .find(|l| super::speech_text::js_trim(l).starts_with("ERROR:"));
+        .find(|l| trim(l).starts_with("ERROR:"));
     match line {
         Some(line) => PIP_ERROR_LINE
-            .replace(super::speech_text::js_trim(line), "")
+            .replace(trim(line), "")
             .into_owned(),
         None if !err.message.is_empty() => err.message.clone(),
         None => "pip stopped".into(),
@@ -873,7 +888,8 @@ async fn install_faster_whisper(app: &App, up: &Updater, opts: &SttJobOptions) -
     );
     let venv_py = PythonRef::new(venv_interpreter(&dirs.venv).to_string_lossy()).label("Tarsee's faster-whisper");
     if !Path::new(&venv_py.cmd).exists() || !pip_works(app, &venv_py).await {
-        let _ = std::fs::remove_dir_all(&dirs.venv);
+        // A removal that fails stops the install, as fs.rmSync threw.
+        remove_all_async(&dirs.venv).await.map_err(|err| err.to_string())?;
         let made = async {
             run_python(
                 app,
@@ -890,7 +906,7 @@ async fn install_faster_whisper(app: &App, up: &Updater, opts: &SttJobOptions) -
         }
         .await;
         if let Err(why) = made {
-            let _ = std::fs::remove_dir_all(&dirs.venv);
+            remove_all_async(&dirs.venv).await.map_err(|err| err.to_string())?;
             return Err(format!(
                 "Installing faster-whisper failed: could not make its folder with {} ({why}).",
                 base.label()
@@ -1503,7 +1519,7 @@ mod tests {
             model: Some("tiny".into()),
             phase: "start".into(),
             step: None,
-            percent: 0,
+            percent: Some(0),
             started_at: now_iso(),
             done: JobDone(rx),
         });
@@ -1512,15 +1528,22 @@ mod tests {
             id: 7,
         };
         up.step("a", 40.7);
-        assert_eq!(stt_job(&t).unwrap().percent, 40);
+        assert_eq!(stt_job(&t).unwrap().percent, Some(40));
         up.step("b", 10.0);
-        assert_eq!(stt_job(&t).unwrap().percent, 40);
+        assert_eq!(stt_job(&t).unwrap().percent, Some(40));
+        up.step("c", f64::NEG_INFINITY);
+        assert_eq!(stt_job(&t).unwrap().percent, Some(40));
         up.update(Some("model"), Some(None), Some(250.0));
         let snap = stt_job(&t).unwrap();
-        assert_eq!((snap.percent, snap.step), (99, None));
+        assert_eq!((snap.percent, snap.step), (Some(99), None));
         // Another job's updates change nothing.
-        Updater { svc, id: 8 }.step("other", 1.0);
+        Updater { svc: svc.clone(), id: 8 }.step("other", 1.0);
         assert_eq!(stt_job(&t).unwrap().step, None);
+        // A share that is not a number (0 of 0 bytes) is null from then on, as the JS NaN was.
+        up.step("d", f64::NAN);
+        assert_eq!(stt_job(&t).unwrap().percent, None);
+        up.step("e", 50.0);
+        assert_eq!(serde_json::to_value(stt_job(&t).unwrap()).unwrap()["percent"], Value::Null);
         assert_eq!(
             serde_json::to_value(stt_job(&t).unwrap())
                 .unwrap()
