@@ -2,7 +2,7 @@
 //! cookie, and who the request is. Mounted at `/api/auth`, after `session_auth`.
 
 use axum::extract::State;
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, SET_COOKIE};
+use axum::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, SET_COOKIE, TRANSFER_ENCODING};
 use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -15,7 +15,7 @@ use crate::db::audit::{AuditEntry, AuditLog};
 use crate::error::ApiError;
 use crate::middleware::auth::{
     Auth, AuthAttempts, ClientIp, Clock, RequireAuth, clear_failed_attempts, create_session, destroy_session,
-    live_session_id, node_header, record_failed_attempt, session_cookie_max_age_ms, validate_password,
+    js_number, live_session_id, node_header, record_failed_attempt, session_cookie_max_age_ms, validate_password,
 };
 use crate::middleware::security::{
     CookieError, CookieOptions, clear_cookie, cookie, csrf_cookie, prepend_set_cookie, uncaught_error,
@@ -61,30 +61,117 @@ fn with_cookie(app: &App, mut response: Response, line: Result<String, CookieErr
     }
 }
 
-/// What `express.json()` made of the request's body before the route ran: the parsed JSON (an object or an array),
-/// `None` when the body is not JSON by its content type or is empty, or the 400 or 415 it answered with.
+/// A `Content-Type` header as the `content-type` package (2.1, the one `express.json` used) read it: the media
+/// type in lower case, and the first `charset` parameter as it is written. Space and tab are the only whitespace;
+/// a parameter without `=` is passed over, and so is a quoted value that never closes.
+fn parse_content_type(header: &str) -> (String, Option<String>) {
+    let chars: Vec<char> = header.chars().collect();
+    let len = chars.len();
+    let is_ows = |c: char| c == ' ' || c == '\t';
+    let skip_ows = |mut index: usize| {
+        while index < len && is_ows(chars[index]) {
+            index += 1;
+        }
+        index
+    };
+    let skip_value = |mut index: usize| {
+        while index < len && chars[index] != ';' {
+            index += 1;
+        }
+        index
+    };
+    let trailing_ows = |start: usize, mut end: usize| {
+        while end > start && is_ows(chars[end - 1]) {
+            end -= 1;
+        }
+        end
+    };
+    let text = |start: usize, end: usize| chars[start..end].iter().collect::<String>();
+
+    let type_start = skip_ows(0);
+    let mut index = skip_value(type_start);
+    let media_type = text(type_start, trailing_ows(type_start, index)).to_lowercase();
+
+    // Of a parameter given twice the first counts.
+    let mut charset: Option<String> = None;
+    'parameter: while index < len {
+        index = skip_ows(index + 1); // Skip over ;
+        let key_start = index;
+        while index < len {
+            match chars[index] {
+                ';' => continue 'parameter,
+                '=' => {
+                    let is_charset = text(key_start, trailing_ows(key_start, index)).to_lowercase() == "charset";
+                    index = skip_ows(index + 1);
+                    if index < len && chars[index] == '"' {
+                        index += 1;
+                        let mut value = String::new();
+                        while index < len {
+                            let c = chars[index];
+                            index += 1;
+                            if c == '"' {
+                                index = skip_value(index);
+                                if is_charset && charset.is_none() {
+                                    charset = Some(std::mem::take(&mut value));
+                                }
+                                break;
+                            }
+                            if c == '\\' && index < len {
+                                value.push(chars[index]);
+                                index += 1;
+                                continue;
+                            }
+                            value.push(c);
+                        }
+                        continue 'parameter;
+                    }
+                    let value_start = index;
+                    index = skip_value(index);
+                    if is_charset && charset.is_none() {
+                        charset = Some(text(value_start, trailing_ows(value_start, index)));
+                    }
+                    continue 'parameter;
+                }
+                _ => index += 1,
+            }
+        }
+    }
+    (media_type, charset)
+}
+
+/// What `express.json()` made of the request's body before the route ran: the parsed JSON (an object or an array;
+/// `{}` for an empty body), `None` when the request has no body or its content type is not `application/json`, or
+/// the 400 or 415 it answered with.
 ///
 /// The Node server parsed every request's body this way before any route. Here the login route does it for itself,
 /// and first of all, so that a body that is not JSON is answered without being counted as a sign-in attempt, as it
 /// was.
 fn json_body(headers: &HeaderMap, body: &Bytes) -> Result<Option<Value>, ApiError> {
-    let content_type = node_header(headers, &CONTENT_TYPE).unwrap_or_default();
-    let mut parts = content_type.split(';');
-    let media_type = parts.next().unwrap_or("").trim().to_ascii_lowercase();
-    if media_type != "application/json" || body.is_empty() {
+    // A request that announces no body is passed by: neither a length nor a transfer encoding.
+    let announced = headers.contains_key(TRANSFER_ENCODING)
+        || node_header(headers, &CONTENT_LENGTH).is_some_and(|length| !js_number(&length).is_nan());
+    if body.is_empty() && !announced {
         return Ok(None);
     }
-    let charset = parts
-        .filter_map(|parameter| parameter.split_once('='))
-        .find(|(name, _)| name.trim().eq_ignore_ascii_case("charset"))
-        .map(|(_, value)| value.trim().trim_matches('"').to_ascii_lowercase());
-    if let Some(charset) = charset
-        && charset != "utf-8"
-    {
+    let (media_type, charset) = parse_content_type(&node_header(headers, &CONTENT_TYPE).unwrap_or_default());
+    if media_type != "application/json" {
+        return Ok(None);
+    }
+    // assert charset per RFC 7159 sec 8.1
+    let charset = charset
+        .map(|charset| charset.to_lowercase())
+        .filter(|charset| !charset.is_empty())
+        .unwrap_or_else(|| "utf-8".to_string());
+    if charset != "utf-8" {
+        // (The Node version also read the other charsets that start with "utf-": utf-16, utf-32, utf-7.)
         return Err(ApiError::new(
             415,
-            format!("unsupported charset \"{}\"", charset.to_ascii_uppercase()),
+            format!("unsupported charset \"{}\"", charset.to_uppercase()),
         ));
+    }
+    if body.is_empty() {
+        // special-case empty json body, as it's a common client-side mistake
+        return Ok(Some(json!({})));
     }
 
     let text = String::from_utf8_lossy(body);
@@ -619,6 +706,126 @@ mod tests {
         );
     }
 
+    /// `express.json` (body-parser 2.4, the `content-type` package 2.1) was sent the same body `{"a":1}` with each
+    /// of these Content-Type headers: whether it parsed the body, passed it by, or refused the charset. A route
+    /// that needs a password shows the three as 200, 400 "Password is required" and 415.
+    #[tokio::test]
+    async fn the_content_type_decides_as_it_did_for_express_json() {
+        let f = fixture();
+        let good = r#"{"password":"1234"}"#;
+        let mut n = 0;
+        let mut ip = || {
+            n += 1;
+            format!("203.0.113.{n}")
+        };
+        let parsed = (200, r#"{"ok":true}"#.to_string());
+        let passed_by = (400, r#"{"error":"Password is required"}"#.to_string());
+        let refused = |charset: &str| (415, format!(r#"{{"error":"unsupported charset \"{charset}\""}}"#));
+
+        for (content_type, expected) in [
+            ("application/json", parsed.clone()),
+            ("application/json ; charset=utf-8", parsed.clone()),
+            ("application/json;charset=utf-8", parsed.clone()),
+            ("APPLICATION/JSON\t; charset=utf-8", parsed.clone()),
+            ("application/json; CHARSET=UTF-8", parsed.clone()),
+            ("application/json; charset = \"utf-8\"", parsed.clone()),
+            ("application/json;\tcharset=utf-8", parsed.clone()),
+            ("application/json; a=b; charset=UTF-8", parsed.clone()),
+            // A parameter that is no parameter is passed over, and an empty charset is no charset.
+            ("application/json; charset", parsed.clone()),
+            ("application/json; charset=", parsed.clone()),
+            ("application/json; charset=\"\"", parsed.clone()),
+            ("application/json; charset=\"utf-8", parsed.clone()),
+            ("application/json;", parsed.clone()),
+            ("application/json; x", parsed.clone()),
+            ("application/json; x=\";charset=latin1\"", parsed.clone()),
+            // Of two charsets the first counts.
+            ("application/json; charset=utf-8; charset=latin1", parsed.clone()),
+            ("application/json; charset=latin1; charset=utf-8", refused("LATIN1")),
+            ("application/json; charset=latin1", refused("LATIN1")),
+            ("application/json; charset=\"latin1\"", refused("LATIN1")),
+            ("application/json; x=\"a;b\"; charset=latin1", refused("LATIN1")),
+            ("application/json;charset=latin1;", refused("LATIN1")),
+            ("application/json;;charset=latin1", refused("LATIN1")),
+            ("application/json; charset=utf8", refused("UTF8")),
+            ("application/json; charset=utf-foo", refused("UTF-FOO")),
+            // Another type, however close.
+            ("application/jsonx", passed_by.clone()),
+            ("application/json/x", passed_by.clone()),
+            ("application/json , text/plain", passed_by.clone()),
+            ("application/vnd.api+json", passed_by.clone()),
+            ("text/plain", passed_by.clone()),
+        ] {
+            let response = f.login_raw(Some(content_type), good, &ip()).await;
+            assert_eq!(body_of(&response), expected, "{content_type:?}");
+        }
+
+        // Bytes outside ASCII after the type are part of it (only space and tab are trimmed).
+        for byte in [0xA0u8, 0x85] {
+            let mut value = b"application/json".to_vec();
+            value.push(byte);
+            let request = axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("x-forwarded-for", ip())
+                .header("content-type", HeaderValue::from_bytes(&value).unwrap())
+                .body(axum::body::Body::from(good))
+                .unwrap();
+            assert_eq!(
+                body_of(&http::send(&f.router, request).await),
+                passed_by,
+                "0x{byte:02X}"
+            );
+        }
+
+        // An empty body that is announced is `{}`, and its charset is still looked at; one that is not announced
+        // is no body at all.
+        let empty = |content_type: &'static str, length: Option<&'static str>, address: String| {
+            let mut request = http::request("POST", "/api/auth/login")
+                .header("x-forwarded-for", address)
+                .header("content-type", content_type);
+            if let Some(length) = length {
+                request = request.header("content-length", length);
+            }
+            http::send(&f.router, request)
+        };
+        assert_eq!(
+            body_of(&empty("application/json; charset=latin1", Some("0"), ip()).await),
+            refused("LATIN1")
+        );
+        assert_eq!(body_of(&empty("application/json", Some("0"), ip()).await), passed_by);
+        assert_eq!(
+            body_of(&empty("application/json; charset=latin1", None, ip()).await),
+            passed_by
+        );
+    }
+
+    #[test]
+    fn a_content_type_header_is_taken_apart_as_the_content_type_package_did() {
+        let parse = |header: &str| {
+            let (media_type, charset) = parse_content_type(header);
+            (media_type, charset.unwrap_or_else(|| "(none)".to_string()))
+        };
+        let of = |media_type: &str, charset: &str| (media_type.to_string(), charset.to_string());
+        assert_eq!(parse(""), of("", "(none)"));
+        assert_eq!(parse("  Application/JSON \t"), of("application/json", "(none)"));
+        assert_eq!(parse("text/html; charset=UTF-8"), of("text/html", "UTF-8"));
+        assert_eq!(
+            parse("text/html ;\t Charset \t=  utf-8  ; x=y"),
+            of("text/html", "utf-8")
+        );
+        assert_eq!(
+            parse("text/html; charset=\"a\\\"b;c\" ignored; x=y"),
+            of("text/html", "a\"b;c")
+        );
+        assert_eq!(parse("text/html; charset=\"open"), of("text/html", "(none)"));
+        assert_eq!(parse("text/html; charset; charset=b"), of("text/html", "b"));
+        assert_eq!(parse("text/html; charset=a; charset=b"), of("text/html", "a"));
+        assert_eq!(parse("text/html; xcharset=a"), of("text/html", "(none)"));
+        assert_eq!(parse("text/html;charset="), of("text/html", ""));
+        assert_eq!(parse("; charset=a"), of("", "a"));
+    }
+
     #[tokio::test]
     async fn without_a_password_set_nobody_can_sign_in() {
         let t = test_app();
@@ -629,6 +836,50 @@ mod tests {
                 500,
                 r#"{"error":"SETUP_PASSWORD not configured. Set it in environment variables."}"#.to_string()
             )
+        );
+    }
+
+    /// What the Node server answered to each of these sign-ins. JavaScript's `trim()`, which the configuration
+    /// applies to SETUP_PASSWORD, removes a byte order mark and keeps a next-line character; Rust's own does the
+    /// opposite.
+    #[tokio::test]
+    async fn a_pin_set_with_a_byte_order_mark_or_a_next_line_character_signs_in_as_under_node() {
+        // SETUP_PASSWORD = "1234" + U+FEFF: the mark is trimmed away and the PIN is 1234.
+        let bom = fixture_with_env(&[("SETUP_PASSWORD", "1234\u{FEFF}")]);
+        assert_eq!(
+            bom.login(json!({ "password": "1234" }), "203.0.113.1").await.status,
+            200
+        );
+        assert_eq!(
+            bom.login(json!({ "password": "1234\u{FEFF}" }), "203.0.113.2")
+                .await
+                .status,
+            401
+        );
+        assert_eq!(
+            bom.login(json!({ "password": "\u{85}1234" }), "203.0.113.3")
+                .await
+                .status,
+            401
+        );
+
+        // SETUP_PASSWORD = U+0085 + "1234": the character is part of the PIN.
+        let nel = fixture_with_env(&[("SETUP_PASSWORD", "\u{85}1234")]);
+        assert_eq!(
+            nel.login(json!({ "password": "1234" }), "203.0.113.1").await.status,
+            401
+        );
+        assert_eq!(
+            nel.login(json!({ "password": "1234\u{FEFF}" }), "203.0.113.2")
+                .await
+                .status,
+            401
+        );
+        assert_eq!(
+            nel.login(json!({ "password": "\u{85}1234" }), "203.0.113.3")
+                .await
+                .status,
+            200
         );
     }
 
@@ -882,7 +1133,7 @@ mod tests {
             )]
         );
         assert!(token.starts_with("1794495254663.") && token.len() == 14 + 64);
-        assert_eq!(Csrf::of(&f.t).verify(&token), Ok(true));
+        assert!(Csrf::of(&f.t).verify(&token));
     }
 
     // --- An install the Node version ran ---

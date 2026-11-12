@@ -1105,3 +1105,94 @@ fn absolute_is_what_node_called_absolute() {
     assert_eq!(node_is_absolute(r"C:\x"), cfg!(windows));
     assert!(!node_is_absolute("C:x"));
 }
+
+/// A two-page PDF whose first page's content is Flate with these `/DecodeParms`.
+fn predictor_pdf(parms: &str) -> Vec<u8> {
+    use std::io::Write;
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(b"BT (first page) Tj ET").unwrap();
+    let first = encoder.finish().unwrap();
+    let second = b"BT (second page) Tj ET";
+    let mut pdf = b"%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] >> endobj\n3 0 obj << /Type /Page /Contents 5 0 R >> endobj\n4 0 obj << /Type /Page /Contents 6 0 R >> endobj\n".to_vec();
+    pdf.extend(
+        format!(
+            "5 0 obj << /Length {} /Filter /FlateDecode /DecodeParms << {parms} >> >>\nstream\n",
+            first.len()
+        )
+        .as_bytes(),
+    );
+    pdf.extend(&first);
+    pdf.extend(b"\nendstream endobj\n");
+    pdf.extend(format!("6 0 obj << /Length {} >>\nstream\n", second.len()).as_bytes());
+    pdf.extend(second);
+    pdf.extend(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n");
+    pdf
+}
+
+/// A predictor that asks for absurd row sizes used to end the process (a refused allocation) or panic (an
+/// overflow). Node read such a page as "" and went on: the answers below are Node's.
+#[test]
+fn a_predictor_asking_for_absurd_sizes_reads_as_an_empty_page() {
+    for parms in [
+        "/Predictor 12 /Columns 1000000000000",
+        "/Predictor 12 /Columns 100000000000000000000",
+        "/Predictor 12 /Colors 1000000 /BitsPerComponent 1000000 /Columns 1000000",
+        "/Predictor 15 /Columns 18446744073709551616",
+        "/Predictor 12 /Columns 50",
+    ] {
+        let r = builtin_pdf_text(&predictor_pdf(parms));
+        assert_eq!(r.error, None, "{parms}");
+        assert_eq!(r.pages, ["", "second page"], "{parms}");
+    }
+    // Sizes that fit still decode (one 16-byte row of zeros: filter 0).
+    let mut data = vec![0u8];
+    data.extend_from_slice(b"abcdefghijklmnop");
+    let parms = V::Dict(HashMap::from([
+        ("Predictor".to_string(), V::Num(12.0)),
+        ("Columns".to_string(), V::Num(16.0)),
+    ]));
+    assert_eq!(predict(data, Some(&parms)).unwrap(), b"abcdefghijklmnop");
+}
+
+/// The same inside an object stream, where the JS failed the whole read: nothing panics or ends the process.
+#[test]
+fn an_object_stream_with_an_absurd_predictor_does_not_end_the_process() {
+    let pdf = make_pdf(&PdfSpec {
+        obj_stm: true,
+        predictor: true,
+        ..spec(&["Packed"])
+    });
+    let text = String::from_utf8_lossy(&pdf).replace("/Columns 16", "/Columns 1000000000000");
+    let bytes: Vec<u8> = text.chars().map(|c| c as u32 as u8).collect();
+    let _ = builtin_pdf_text(&bytes);
+}
+
+/// `ip.trim()` was JavaScript's: U+0085 is not white space to it, a byte order mark is.
+#[test]
+fn the_address_guard_trims_as_javascript_trims() {
+    assert!(is_private_address("\u{85}8.8.8.8"));
+    assert!(is_private_address("8.8.8.8\u{85}"));
+    assert!(!is_private_address("\u{feff}8.8.8.8"));
+    assert!(!is_private_address(" 8.8.8.8\u{a0}"));
+}
+
+/// Node opened files by their literal names: `a.pdf.` is not `a.pdf`, on Windows too.
+#[tokio::test]
+async fn a_name_windows_would_rewrite_names_its_own_file() {
+    let t = app();
+    put(&t, "a.pdf", &make_pdf(&spec(&["The real a"])));
+    let missing = pdf_read(&t, json!({ "path": "uploads/a.pdf." })).await;
+    assert!(missing.starts_with("pdf_read error: there is no file at "), "{missing}");
+    let odd = t.config().workspace_dir.join("uploads").join("a.pdf.");
+    std::fs::write(
+        crate::util::node_path::to_namespaced(&odd),
+        make_pdf(&spec(&["The dotted one"])),
+    )
+    .unwrap();
+    let out = pdf_read(&t, json!({ "path": "uploads/a.pdf." })).await;
+    assert!(out.contains("--- Page 1 ---\nThe dotted one"), "{out}");
+    let real = pdf_read(&t, json!({ "path": "uploads/a.pdf" })).await;
+    assert!(real.contains("The real a"), "{real}");
+    assert!(names_itself(&t.config().workspace_dir.join("uploads").join("a.pdf")));
+    assert_eq!(names_itself(&odd), !cfg!(windows));
+}

@@ -10,6 +10,7 @@
 //! not resolved). The guard against private and local addresses for downloads is in `lib::pdf_text`
 //! (`is_private_address`, `GuardedLookup`).
 
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -183,6 +184,16 @@ pub async fn check_url_safety(url_str: &str, settings: Option<&dyn Settings>, fe
             SafetyLevel::Warning,
         );
     }
+    // Not in the Node version: a fix. An IPv4 address written as IPv6 (`[::ffff:10.0.0.1]`, which the URL parser
+    // writes `[::ffff:a00:1]`) is judged as its IPv4 form; the JS let every such spelling through.
+    if let Some(v4) = ipv4_mapped(&hostname)
+        && v4 != Ipv4Addr::LOCALHOST
+    {
+        return UrlSafety::refused(
+            format!("Raw IP address: {hostname} — likely phishing or C2"),
+            SafetyLevel::Warning,
+        );
+    }
 
     // Block suspicious TLDs
     let tld = format!(".{}", labels.last().copied().unwrap_or(""));
@@ -222,6 +233,12 @@ pub async fn check_url_safety(url_str: &str, settings: Option<&dyn Settings>, fe
     }
 
     UrlSafety::safe()
+}
+
+/// The IPv4 address an IPv6 literal host (`[::ffff:a.b.c.d]` in any spelling) carries, if it is one.
+fn ipv4_mapped(hostname: &str) -> Option<Ipv4Addr> {
+    let inner = hostname.strip_prefix('[')?.strip_suffix(']')?;
+    inner.parse::<Ipv6Addr>().ok()?.to_ipv4_mapped()
 }
 
 /// Check URL against Google Safe Browsing API. The error is the message the JS threw.
@@ -329,6 +346,32 @@ mod tests {
         assert_eq!(check("https://\u{430}pple.com/").await, UrlSafety::safe());
         // IPv6 is not a raw IPv4 address.
         assert_eq!(check("http://[::1]/").await, UrlSafety::safe());
+    }
+
+    /// Fixed in the Rust version: an IPv4 address written as IPv6 is judged as its IPv4 form (the JS let every
+    /// such spelling through). The loopback stays allowed, as 127.0.0.1 is: this check lets it through on purpose.
+    #[tokio::test]
+    async fn an_ipv4_address_written_as_ipv6_is_judged_as_its_ipv4_form() {
+        for (url, shown) in [
+            ("http://[::ffff:10.0.0.1]/", "[::ffff:a00:1]"),
+            ("http://[::ffff:a00:1]/", "[::ffff:a00:1]"),
+            ("http://[0:0:0:0:0:ffff:192.168.1.1]/", "[::ffff:c0a8:101]"),
+            ("http://[::FFFF:169.254.169.254]/latest", "[::ffff:a9fe:a9fe]"),
+            ("http://[::ffff:93.184.216.34]/", "[::ffff:5db8:d822]"),
+        ] {
+            assert_eq!(
+                check(url).await,
+                refused(
+                    &format!("Raw IP address: {shown} — likely phishing or C2"),
+                    SafetyLevel::Warning
+                ),
+                "{url}"
+            );
+        }
+        assert_eq!(check("http://[::ffff:127.0.0.1]:3000/").await, UrlSafety::safe());
+        assert_eq!(check("http://[2606:4700::1111]/").await, UrlSafety::safe());
+        assert_eq!(ipv4_mapped("[::ffff:7f00:1]"), Some(Ipv4Addr::LOCALHOST));
+        assert_eq!(ipv4_mapped("10.0.0.1"), None);
     }
 
     #[tokio::test]
