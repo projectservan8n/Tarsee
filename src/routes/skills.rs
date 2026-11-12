@@ -1,1 +1,504 @@
-//! Port of `src/routes/skills.js`. Not ported yet: work package C1 (docs/rust-port/PLAN.md).
+//! Port of `src/routes/skills.js`: the skills routes (`/api/skills`, mounted behind sign-in and the CSRF check in
+//! `server.rs`).
+//!
+//! Express matched `GET`, `PUT` and `DELETE /:name` for any name, `install`, `uninstall` and `setup` included; axum
+//! picks the fixed path first and would answer 405 there, so those three paths carry the `:name` handlers too.
+
+use std::fs;
+
+use axum::Router;
+use axum::body::Bytes;
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use axum::{Json, routing::MethodRouter};
+use serde_json::{Value, json};
+
+use crate::app::App;
+use crate::error::{ApiError, ApiResult};
+use crate::lib::skills_engine::{
+    SkillError, get_all_skills_with_status, get_custom_skills_dir, get_skill_content, install_skill, invalidate_cache,
+    scan_skills, uninstall_skill,
+};
+use crate::lib::workspace_files::jstext::js_string;
+use crate::util::js::{number_to_string, truthy};
+
+pub fn router() -> Router<App> {
+    Router::new()
+        .route("/", get(list).post(create))
+        .route("/install", by_name("install").post(install))
+        .route("/uninstall", by_name("uninstall").post(uninstall))
+        .route("/setup", by_name("setup").post(setup))
+        .route("/{name}", get(get_one).put(update).delete(remove))
+}
+
+/// `GET`, `PUT` and `DELETE /:name` for a path that is also a fixed route.
+fn by_name(name: &'static str) -> MethodRouter<App> {
+    get(move |state| get_one(state, Path(name.to_string())))
+        .put(move |state, headers, body| update(state, Path(name.to_string()), headers, body))
+        .delete(move |state| remove(state, Path(name.to_string())))
+}
+
+/// GET / — every shipped skill with whether it is installed.
+async fn list(State(app): State<App>) -> ApiResult {
+    Ok(Json(json!({ "skills": get_all_skills_with_status(&app) })))
+}
+
+/// The installed skill's name from `{ name }`, as `installSkill(name)` received it.
+fn name_arg(name: &Value) -> Result<&str, String> {
+    name.as_str().ok_or_else(|| path_type_error(name))
+}
+
+/// POST /install — installs a skill (copies it from the shipped ones into the workspace). Body: `{ name }`.
+async fn install(State(app): State<App>, headers: HeaderMap, body: Bytes) -> ApiResult {
+    let body = express_json_body(&headers, &body)?.unwrap_or_else(|| json!({}));
+    let name = body.get("name").cloned().unwrap_or(Value::Null);
+    if !truthy(&name) {
+        return Err(ApiError::bad_request("Skill name required"));
+    }
+    name_arg(&name)
+        .and_then(|n| install_skill(&app, n).map_err(|e| e.to_string()))
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(json!({ "ok": true, "name": name, "installed": true })))
+}
+
+/// POST /uninstall — removes an installed skill from the workspace. Body: `{ name }`.
+async fn uninstall(State(app): State<App>, headers: HeaderMap, body: Bytes) -> ApiResult {
+    let body = express_json_body(&headers, &body)?.unwrap_or_else(|| json!({}));
+    let name = body.get("name").cloned().unwrap_or(Value::Null);
+    if !truthy(&name) {
+        return Err(ApiError::bad_request("Skill name required"));
+    }
+    name_arg(&name)
+        .and_then(|n| uninstall_skill(&app, n).map_err(|e| e.to_string()))
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(json!({ "ok": true, "name": name, "installed": false })))
+}
+
+/// POST /setup — installs several skills at once (onboarding). Body: `{ install: string[] }`.
+async fn setup(State(app): State<App>, headers: HeaderMap, body: Bytes) -> ApiResult {
+    let body = express_json_body(&headers, &body)?.unwrap_or_else(|| json!({}));
+    let Some(Value::Array(names)) = body.get("install") else {
+        return Err(ApiError::bad_request("install array required"));
+    };
+    let mut installed = Vec::new();
+    let mut failed = Vec::new();
+    for name in names {
+        let done = name.as_str().is_some_and(|n| install_skill(&app, n).is_ok());
+        if done {
+            installed.push(name.clone());
+        } else {
+            failed.push(name.clone());
+        }
+    }
+    Ok(Json(json!({ "ok": true, "installed": installed, "failed": failed })))
+}
+
+/// GET /:name — an installed skill's whole SKILL.md.
+async fn get_one(State(app): State<App>, Path(name): Path<String>) -> ApiResult {
+    let skill = get_skill_content(&app, &name).ok_or_else(|| ApiError::not_found("Skill not found"))?;
+    Ok(Json(serde_json::to_value(skill).unwrap_or(Value::Null)))
+}
+
+/// POST / — creates a custom skill. Body: `{ name, description, content }`.
+async fn create(State(app): State<App>, headers: HeaderMap, body: Bytes) -> Result<Response, ApiError> {
+    let Some(body) = express_json_body(&headers, &body)? else {
+        return Err(unhandled_error(
+            &app,
+            "Cannot destructure property 'name' of 'req.body' as it is undefined.",
+        ));
+    };
+    let name = body.get("name").cloned().unwrap_or(Value::Null);
+    let description = body.get("description");
+    let content = body.get("content");
+
+    if !truthy(&name) || !content.is_some_and(truthy) {
+        return Err(ApiError::bad_request("Name and content are required"));
+    }
+
+    // RegExp.test turns the name into text first.
+    let name_text = js_string(Some(&name));
+    let valid = name_text
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && name_text
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !valid {
+        return Err(ApiError::bad_request(
+            "Invalid name. Use lowercase letters, numbers, and hyphens only.",
+        ));
+    }
+    let Some(name) = name.as_str() else {
+        return Err(unhandled_error(&app, &path_type_error(&name)));
+    };
+
+    let skill_dir = get_custom_skills_dir(&app).join(name);
+    if skill_dir.exists() {
+        return Err(ApiError::conflict("Skill already exists. Use PUT to update."));
+    }
+
+    let description = match description {
+        Some(d) if truthy(d) => js_string(Some(d)),
+        _ => String::new(),
+    };
+    let md = format!(
+        "---\nname: {name}\ndescription: {description}\n---\n\n{}",
+        js_string(content)
+    );
+    let written = fs::create_dir_all(&skill_dir).and_then(|()| fs::write(skill_dir.join("SKILL.md"), md));
+    if let Err(err) = written {
+        return Err(ApiError::internal(err.to_string()));
+    }
+    invalidate_cache(&app);
+    Ok((StatusCode::CREATED, Json(json!({ "ok": true, "name": name }))).into_response())
+}
+
+/// PUT /:name — updates a custom skill. Body: `{ description?, content? }`.
+async fn update(State(app): State<App>, Path(name): Path<String>, headers: HeaderMap, body: Bytes) -> ApiResult {
+    let Some(body) = express_json_body(&headers, &body)? else {
+        return Err(unhandled_error(
+            &app,
+            "Cannot destructure property 'description' of 'req.body' as it is undefined.",
+        ));
+    };
+
+    let skill_path = get_custom_skills_dir(&app).join(&name).join("SKILL.md");
+    if !skill_path.exists() {
+        return Err(ApiError::not_found(
+            "Custom skill not found (built-in skills are read-only)",
+        ));
+    }
+
+    let existing = get_skill_content(&app, &name);
+    // A field left out keeps what is there; one sent as null becomes "null", as the JS template wrote it.
+    let new_desc = match body.get("description") {
+        Some(d) => js_string(Some(d)),
+        None => existing.as_ref().map(|e| e.description.clone()).unwrap_or_default(),
+    };
+    let new_content = match body.get("content") {
+        Some(c) => js_string(Some(c)),
+        None => existing.as_ref().map(|e| e.content.clone()).unwrap_or_default(),
+    };
+
+    let md = format!("---\nname: {name}\ndescription: {new_desc}\n---\n\n{new_content}");
+    fs::write(&skill_path, md).map_err(|err| ApiError::internal(err.to_string()))?;
+    invalidate_cache(&app);
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// DELETE /:name — deletes a custom skill.
+async fn remove(State(app): State<App>, Path(name): Path<String>) -> ApiResult {
+    let skill_dir = get_custom_skills_dir(&app).join(&name);
+    if !skill_dir.exists() {
+        return Err(ApiError::not_found("Skill not found"));
+    }
+
+    // Prevent deleting built-in skills
+    let built_in = scan_skills(&app)
+        .iter()
+        .find(|s| s.name == name)
+        .is_some_and(|s| s.source == "built-in");
+    if built_in {
+        return Err(ApiError::forbidden("Cannot delete built-in skills"));
+    }
+
+    let removed = if skill_dir.is_dir() {
+        fs::remove_dir_all(&skill_dir)
+    } else {
+        fs::remove_file(&skill_dir)
+    };
+    removed.map_err(|err| ApiError::internal(err.to_string()))?;
+    invalidate_cache(&app);
+    Ok(Json(json!({ "ok": true })))
+}
+
+impl From<SkillError> for ApiError {
+    fn from(err: SkillError) -> Self {
+        ApiError::bad_request(err.to_string())
+    }
+}
+
+/// The request body as `express.json()` left it in `req.body`: parsed when the content type is JSON (an empty body
+/// is `{}`), `None` (`undefined`) otherwise. A body that is not JSON is a 400, as body-parser answered (the message
+/// is serde's, not V8's).
+pub(crate) fn express_json_body(headers: &HeaderMap, body: &[u8]) -> Result<Option<Value>, ApiError> {
+    let is_json = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"));
+    if !is_json {
+        return Ok(None);
+    }
+    if body.is_empty() {
+        return Ok(Some(json!({})));
+    }
+    // body-parser's strict mode: only an object or an array.
+    let first = body.iter().find(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'));
+    if !matches!(first, Some(b'{') | Some(b'[')) {
+        return Err(ApiError::bad_request(format!(
+            "Unexpected token '{}', \"{}\" is not valid JSON",
+            first.map(|b| char::from(*b)).unwrap_or(' '),
+            String::from_utf8_lossy(body)
+        )));
+    }
+    serde_json::from_slice(body)
+        .map(Some)
+        .map_err(|err| ApiError::bad_request(err.to_string()))
+}
+
+/// What Node's `path.join` threw for a name that is not text (`ERR_INVALID_ARG_TYPE`).
+pub(crate) fn path_type_error(value: &Value) -> String {
+    let received = match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => format!("type boolean ({b})"),
+        Value::Number(n) => format!("type number ({})", number_to_string(n.as_f64().unwrap_or(0.0))),
+        Value::String(s) => format!("type string ('{s}')"),
+        Value::Array(_) => "an instance of Array".to_string(),
+        Value::Object(_) => "an instance of Object".to_string(),
+    };
+    format!("The \"path\" argument must be of type string. Received {received}")
+}
+
+/// An error the Node route did not catch, as the global error handler (`middleware/error-handler.js`) answered it:
+/// a 500 that names no detail in production.
+pub(crate) fn unhandled_error(app: &App, message: &str) -> ApiError {
+    log::error!("[error] {}", crate::lib::redact::redact_secrets(message));
+    let mut body = json!({ "error": "Internal server error" });
+    if app.env().get("NODE_ENV").as_deref() != Some("production") {
+        body["detail"] = Value::String(crate::lib::redact::redact_secrets(message));
+    }
+    ApiError::with_body(500, body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testkit::http::{self, request};
+    use crate::testkit::{TestApp, test_app};
+
+    fn app() -> (TestApp, Router) {
+        let t = test_app();
+        let router = router().with_state(t.app.clone());
+        (t, router)
+    }
+
+    fn write_skill(t: &TestApp, folder: &str, text: &str) {
+        let dir = get_custom_skills_dir(t).join(folder);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), text).unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_list_has_every_shipped_skill_with_its_install_state() {
+        let (t, router) = app();
+        install_skill(&t, "diagram").unwrap();
+        let res = http::get(&router, "/").await;
+        assert_eq!(res.status, 200);
+        let skills = res.json()["skills"].as_array().unwrap().clone();
+        assert!(skills.len() > 5);
+        let diagram = skills.iter().find(|s| s["name"] == "diagram").unwrap();
+        assert_eq!(
+            diagram.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["name", "description", "source", "installed"]
+        );
+        assert_eq!(
+            (diagram["source"].clone(), diagram["installed"].clone()),
+            (json!("built-in"), json!(true))
+        );
+        assert!(
+            skills
+                .iter()
+                .filter(|s| s["name"] != "diagram")
+                .all(|s| s["installed"] == false)
+        );
+    }
+
+    #[tokio::test]
+    async fn install_and_uninstall_answer_and_refuse_as_before() {
+        let (t, router) = app();
+        let res = http::post_json(&router, "/install", &json!({"name": "diagram"})).await;
+        assert_eq!(
+            (res.status, res.json()),
+            (200, json!({"ok": true, "name": "diagram", "installed": true}))
+        );
+        assert!(get_custom_skills_dir(&t).join("diagram").is_dir());
+
+        let res = http::post_json(&router, "/install", &json!({})).await;
+        assert_eq!((res.status, res.json()), (400, json!({"error": "Skill name required"})));
+        let res = http::send(&router, request("POST", "/install")).await;
+        assert_eq!((res.status, res.json()), (400, json!({"error": "Skill name required"})));
+        let res = http::post_json(&router, "/install", &json!({"name": "nope"})).await;
+        assert_eq!(
+            (res.status, res.json()),
+            (400, json!({"error": "Skill \"nope\" not found"}))
+        );
+        let res = http::post_json(&router, "/install", &json!({"name": 7})).await;
+        assert_eq!(
+            (res.status, res.json()),
+            (
+                400,
+                json!({"error": "The \"path\" argument must be of type string. Received type number (7)"})
+            )
+        );
+
+        let res = http::post_json(&router, "/uninstall", &json!({"name": "diagram"})).await;
+        assert_eq!(
+            (res.status, res.json()),
+            (200, json!({"ok": true, "name": "diagram", "installed": false}))
+        );
+        assert!(!get_custom_skills_dir(&t).join("diagram").exists());
+        let res = http::post_json(&router, "/uninstall", &json!({"name": ""})).await;
+        assert_eq!((res.status, res.json()), (400, json!({"error": "Skill name required"})));
+    }
+
+    #[tokio::test]
+    async fn setup_installs_each_and_says_which_failed() {
+        let (t, router) = app();
+        let res = http::post_json(&router, "/setup", &json!({"install": ["diagram", "nope", 3]})).await;
+        assert_eq!(
+            (res.status, res.json()),
+            (
+                200,
+                json!({"ok": true, "installed": ["diagram"], "failed": ["nope", 3]})
+            )
+        );
+        assert!(get_custom_skills_dir(&t).join("diagram").is_dir());
+        let res = http::post_json(&router, "/setup", &json!({"install": "diagram"})).await;
+        assert_eq!(
+            (res.status, res.json()),
+            (400, json!({"error": "install array required"}))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_custom_skill_is_created_read_updated_and_deleted() {
+        let (t, router) = app();
+        let res = http::post_json(
+            &router,
+            "/",
+            &json!({"name": "my-skill", "description": "Does a thing.", "content": "# Steps\n1. go"}),
+        )
+        .await;
+        assert_eq!((res.status, res.json()), (201, json!({"ok": true, "name": "my-skill"})));
+        let path = get_custom_skills_dir(&t).join("my-skill").join("SKILL.md");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "---\nname: my-skill\ndescription: Does a thing.\n---\n\n# Steps\n1. go"
+        );
+
+        let res = http::get(&router, "/my-skill").await;
+        assert_eq!(
+            (res.status, res.json()),
+            (
+                200,
+                json!({
+                    "name": "my-skill", "description": "Does a thing.", "source": "installed",
+                    "content": "\n# Steps\n1. go",
+                    "frontmatter": {"name": "my-skill", "description": "Does a thing."}
+                })
+            )
+        );
+
+        let res = http::post_json(&router, "/", &json!({"name": "my-skill", "content": "again"})).await;
+        assert_eq!(
+            (res.status, res.json()),
+            (409, json!({"error": "Skill already exists. Use PUT to update."}))
+        );
+
+        let res = http::put_json(&router, "/my-skill", &json!({"content": "new body"})).await;
+        assert_eq!((res.status, res.json()), (200, json!({"ok": true})));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "---\nname: my-skill\ndescription: Does a thing.\n---\n\nnew body"
+        );
+        let res = http::put_json(&router, "/my-skill", &json!({"description": null})).await;
+        assert_eq!(res.status, 200);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            // The kept body starts with the blank line the last write put after the frontmatter, so each update that
+            // keeps the content adds one (the Node code does the same).
+            "---\nname: my-skill\ndescription: null\n---\n\n\nnew body"
+        );
+        let res = http::put_json(&router, "/other", &json!({})).await;
+        assert_eq!(
+            (res.status, res.json()),
+            (
+                404,
+                json!({"error": "Custom skill not found (built-in skills are read-only)"})
+            )
+        );
+
+        let res = http::delete(&router, "/my-skill").await;
+        assert_eq!((res.status, res.json()), (200, json!({"ok": true})));
+        assert!(!path.exists());
+        let res = http::delete(&router, "/my-skill").await;
+        assert_eq!((res.status, res.json()), (404, json!({"error": "Skill not found"})));
+        let res = http::get(&router, "/my-skill").await;
+        assert_eq!((res.status, res.json()), (404, json!({"error": "Skill not found"})));
+    }
+
+    #[tokio::test]
+    async fn a_new_skill_needs_a_name_content_and_a_plain_name() {
+        let (_t, router) = app();
+        for body in [
+            json!({"name": "x"}),
+            json!({"content": "x"}),
+            json!({"name": "", "content": "x"}),
+        ] {
+            let res = http::post_json(&router, "/", &body).await;
+            assert_eq!(
+                (res.status, res.json()),
+                (400, json!({"error": "Name and content are required"}))
+            );
+        }
+        for name in ["My-Skill", "-lead", "a_b", "a/b"] {
+            let res = http::post_json(&router, "/", &json!({"name": name, "content": "x"})).await;
+            assert_eq!(
+                (res.status, res.json()),
+                (
+                    400,
+                    json!({"error": "Invalid name. Use lowercase letters, numbers, and hyphens only."})
+                ),
+                "{name}"
+            );
+        }
+        // No JSON body at all: the JS destructured undefined, which the error handler answered.
+        let res = http::send(&router, request("POST", "/")).await;
+        assert_eq!(res.status, 500);
+        assert_eq!(res.json()["error"], "Internal server error");
+    }
+
+    #[tokio::test]
+    async fn the_fixed_paths_still_reach_a_skill_of_that_name() {
+        let (t, router) = app();
+        write_skill(&t, "setup", "---\nname: setup\ndescription: d\n---\nbody");
+        let res = http::get(&router, "/setup").await;
+        assert_eq!((res.status, res.json()["name"].clone()), (200, json!("setup")));
+        let res = http::put_json(&router, "/setup", &json!({"content": "b2"})).await;
+        assert_eq!(res.status, 200);
+        let res = http::delete(&router, "/setup").await;
+        assert_eq!(res.status, 200);
+        assert_eq!(http::get(&router, "/install").await.status, 404);
+    }
+
+    #[test]
+    fn a_body_is_parsed_only_when_it_says_json() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(express_json_body(&headers, b"{\"a\":1}").unwrap(), None);
+        headers.insert(header::CONTENT_TYPE, "application/json; charset=utf-8".parse().unwrap());
+        assert_eq!(express_json_body(&headers, b"").unwrap(), Some(json!({})));
+        assert_eq!(express_json_body(&headers, b" [1]").unwrap(), Some(json!([1])));
+        assert_eq!(
+            express_json_body(&headers, b"\"x\"").unwrap_err().status,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            express_json_body(&headers, b"{oops").unwrap_err().status,
+            StatusCode::BAD_REQUEST
+        );
+    }
+}
