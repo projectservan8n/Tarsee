@@ -211,6 +211,15 @@ text identical, including the `[tag]` prefix: people grep their logs for it.
      use `util::js::utf16_len`, `utf16_truncate`, `utf16_slice`.
    - `\d`, `\w` and `\b` are ASCII-only in JavaScript regexes without the `u` flag. In the `regex` crate write
      `[0-9]`, `[A-Za-z0-9_]` and `(?-u:\b)`. Lookaheads, lookbehinds and backreferences need `fancy_regex`.
+   - **Joining paths.** Node's `path.join(base, name)` always stays under `base` unless `name` has `..`. Rust's
+     `base.join(name)` THROWS `base` AWAY when `name` is absolute (`/data`, `C:\\x`, `\\\\server\\share`): the result
+     is `name` itself. So a name that Node turned into a harmless "not found" can become a path anywhere on the
+     disk in Rust. Every path piece that comes from outside the program (a request, a tool argument, a setting, a
+     name inside an archive, a file name from a chat platform) is checked before it is joined: one plain name
+     (no separators, not `.` or `..`, not absolute) where the Node code expected a name, or `lib::safe_path` where
+     it expected a relative path. Never `remove_dir_all`, write or copy to a path built from such a piece without
+     that check, and test it with an absolute name and with `..`. Node's `path.join` also normalises its result
+     (`a/../b`, doubled and trailing separators); Rust's does not, so compare paths as paths, not as text.
    - `||` treats `0`, `""` and `null` alike; `??` does not. Check which one the Node code used.
    - `JSON.stringify(x, null, 2)` is `serde_json::to_string_pretty`. `new Date().toISOString()` is
      `util::js::now_iso()`. `Date.now()` is `util::js::now_ms()`.
