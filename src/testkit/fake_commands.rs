@@ -13,6 +13,7 @@
 //! }));
 //! // ... deliver "/cron list" to the channel under test ...
 //! assert_eq!(commands.calls()[0].ctx.platform.as_deref(), Some("telegram"));
+//! assert!(commands.calls()[0].ctx.channel_manager.is_none());   // only the web chat's POST /send hands it over
 //! ```
 //!
 //! It finds the command the way the real one does: the first word after the slash, in lower case. A message with no
@@ -142,14 +143,16 @@ impl CommandHandler for FakeCommands {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::channels::api::{ChannelStatus, channel_manager};
     use crate::lib::command_api::{extract_playbook_prompt, get_command_list, process_command};
-    use crate::testkit::test_app;
+    use crate::testkit::{FakeChannels, test_app};
 
     fn from(platform: &str, owner: bool) -> CommandContext {
         CommandContext {
             conversation_id: Some("conv-1".into()),
             platform: Some(platform.into()),
             owner,
+            ..Default::default()
         }
     }
 
@@ -230,6 +233,36 @@ mod tests {
                 .to_string(),
             "the handler threw"
         );
+    }
+
+    /// What a test of a caller asserts: the web chat's `POST /send` hands the channel manager over, a chat channel
+    /// and the WebSocket do not (`routes/chat.js` against `channels/*.js`).
+    #[tokio::test]
+    async fn the_recorded_context_says_whether_the_caller_handed_over_the_channel_manager() {
+        let t = test_app();
+        let commands = FakeCommands::install(&t.app);
+        commands.respond_with("status", |call| {
+            Ok(CommandResult::handled(match &call.ctx.channel_manager {
+                Some(manager) => format!("{} channels", manager.get_status().len()),
+                None => "no channels line".to_string(),
+            }))
+        });
+        let channels = FakeChannels::install(&t.app);
+        channels.set_status("telegram", ChannelStatus::running(Some("@test_bot")));
+
+        let from_a_channel = from("telegram", true);
+        let from_the_web_chat = from("web", false).with_channel_manager(channel_manager(&t.app));
+        let said = |ctx: CommandContext| {
+            let app = t.app.clone();
+            async move { process_command(&app, "/status", &ctx).await.unwrap().response.unwrap() }
+        };
+        assert_eq!(said(from_a_channel).await, "no channels line");
+        assert_eq!(said(from_the_web_chat).await, "1 channels");
+
+        let calls = commands.calls();
+        assert!(calls[0].ctx.channel_manager.is_none());
+        assert!(calls[1].ctx.channel_manager.is_some());
+        assert_ne!(calls[0].ctx, calls[1].ctx);
     }
 
     #[tokio::test]

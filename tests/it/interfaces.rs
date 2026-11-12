@@ -37,10 +37,12 @@ async fn handle_message(app: &App, text: &str, stored_session: Arc<Mutex<Option<
     let mut outcome = Outcome::default();
     let mut prompt = text.to_string();
     if text.starts_with('/') {
+        // (A chat channel hands a command no channel manager; only the web chat's POST /send does.)
         let ctx = CommandContext {
             conversation_id: Some("conv-1".into()),
             platform: Some("telegram".into()),
             owner: false,
+            ..Default::default()
         };
         let result = process_command(app, text, &ctx).await?;
         if result.handled {
@@ -83,7 +85,7 @@ async fn handle_message(app: &App, text: &str, stored_session: Arc<Mutex<Option<
             TurnEvent::Error(error) => outcome.error = Some(error.message),
             TurnEvent::Usage(usage) => {
                 let u = usage.usage;
-                outcome.tokens_in = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens;
+                outcome.tokens_in = u.input() + u.cache_read() + u.cache_creation();
             }
             TurnEvent::Done(done) => {
                 outcome.stop_reason = done.reason().map(str::to_string);
@@ -351,7 +353,7 @@ async fn send_through_channel(app: &App, channel: &str, chat_id: &str, message: 
 }
 
 #[tokio::test]
-async fn whatever_needs_the_channel_manager_asks_the_app_for_it() {
+async fn a_tool_asks_the_app_for_the_channel_manager() {
     let t = test_app();
     assert_eq!(
         send_through_channel(&t.app, "telegram", "42", "Done").await,
@@ -387,6 +389,52 @@ async fn whatever_needs_the_channel_manager_asks_the_app_for_it() {
     assert_eq!(
         serde_json::to_value(&status).unwrap(),
         json!({"telegram": {"status": "running", "error": null, "identity": "@test_bot", "inviteUrl": null, "warning": null}})
+    );
+}
+
+/// A command is not a tool: it has the channel manager only when its caller handed it over. Of the seven callers
+/// of `processCommand` only `routes/chat.js` does, so `/status` shows its channels line there and nowhere else.
+#[tokio::test]
+async fn a_command_gets_the_channel_manager_from_its_caller_not_from_the_app() {
+    let t = test_app();
+    let channels = FakeChannels::install(&t.app);
+    channels.set_status("telegram", ChannelStatus::running(Some("@test_bot")));
+    let commands = FakeCommands::install(&t.app);
+    // As lib/commands.js does: `if (ctx.channelManager) { ...getStatus()... }`.
+    commands.respond_with("status", |call| {
+        let mut lines = vec!["**Tarsee Status**".to_string()];
+        if let Some(manager) = &call.ctx.channel_manager {
+            let said: Vec<String> = manager
+                .get_status()
+                .iter()
+                .map(|(kind, status)| format!("{kind}: {}", status.status.as_str()))
+                .collect();
+            lines.push(format!("📡 **Channels:** {}", said.join(" · ")));
+        }
+        Ok(tarsee::lib::command_api::CommandResult::handled(lines.join("\n")))
+    });
+
+    // A chat channel (and the dashboard's WebSocket): the context as they build it.
+    let from_telegram = CommandContext {
+        conversation_id: Some("conv-1".into()),
+        platform: Some("telegram".into()),
+        owner: true,
+        ..Default::default()
+    };
+    let said = process_command(&t.app, "/status", &from_telegram).await.unwrap();
+    assert_eq!(said.response.as_deref(), Some("**Tarsee Status**"));
+
+    // The web chat's POST /send: `channelManager: req.app.get("channelManager")`.
+    let from_the_web_chat = CommandContext {
+        conversation_id: Some("conv-1".into()),
+        platform: Some("web".into()),
+        channel_manager: channel_manager(&t.app),
+        ..Default::default()
+    };
+    let said = process_command(&t.app, "/status", &from_the_web_chat).await.unwrap();
+    assert_eq!(
+        said.response.as_deref(),
+        Some("**Tarsee Status**\n📡 **Channels:** telegram: running")
     );
 }
 

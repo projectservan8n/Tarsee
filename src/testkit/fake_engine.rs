@@ -464,34 +464,41 @@ mod tests {
         assert!(stream.next().await.is_none(), "and nothing after its done");
     }
 
-    #[tokio::test]
+    /// On tokio's paused clock: a minute of sleep takes no real time, and the clock says how long it was.
+    #[tokio::test(start_paused = true)]
     async fn sleep_waits_that_long_or_ends_aborted_when_stopped_first() {
         let t = test_app();
-        let engine = FakeEngine::new([
-            script(
-                json!([{"type": "sleep", "ms": 40}, {"type": "text", "content": "awake"}, {"type": "done", "stopReason": "end_turn"}]),
-            ),
-            // (A minute: this test would hang that long if the stop did not end the sleep.)
-            script(json!([{"type": "sleep", "ms": 60_000}, {"type": "text", "content": "never"}])),
-        ]);
+        let engine = FakeEngine::new([script(
+            json!([{"type": "sleep", "ms": 60_000}, {"type": "text", "content": "awake"}, {"type": "done", "stopReason": "end_turn"}]),
+        )]);
+        let minute = Duration::from_secs(60);
+        let second = Duration::from_secs(1);
 
-        let started = std::time::Instant::now();
+        // Left alone, it sleeps its whole minute and goes on.
+        let started = tokio::time::Instant::now();
         assert_eq!(
             events(engine.run(&t.app, opts("hi"))).await,
             [TurnEvent::text("awake"), TurnEvent::done("end_turn")]
         );
-        assert!(
-            started.elapsed() >= Duration::from_millis(40),
-            "it slept: {:?}",
-            started.elapsed()
-        );
+        let slept = started.elapsed();
+        assert!(slept >= minute && slept < minute + second, "it slept {slept:?}");
 
+        // Stopped five seconds in, it ends aborted then, not at the minute, and says nothing more.
         let run = opts("hi");
         let stop = run.signal.clone();
         let mut stream = engine.run(&t.app, run);
         assert!(stream.next().now_or_never().is_none(), "asleep");
-        stop.cancel();
+        let started = tokio::time::Instant::now();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            stop.cancel();
+        });
         assert_eq!(stream.next().await.unwrap().unwrap(), TurnEvent::done("aborted"));
+        let slept = started.elapsed();
+        assert!(
+            slept >= 5 * second && slept < 6 * second,
+            "it was stopped after {slept:?}"
+        );
         assert!(stream.next().await.is_none());
     }
 

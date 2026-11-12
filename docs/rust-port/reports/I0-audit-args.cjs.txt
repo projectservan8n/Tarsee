@@ -1,0 +1,106 @@
+// For every exported function that takes one of the shared handles (db, settingsStore, store, channelManager,
+// convStore, auditLog) through an object or a context argument: which call sites pass which of them.
+// node audit-args.cjs <repo root>
+const fs = require("fs");
+const path = require("path");
+const root = process.argv[2];
+const HANDLES = ["db", "settingsStore", "store", "channelManager", "convStore", "auditLog"];
+const files = [];
+(function walk(dir) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) { if (!/public|skills|workspace-defaults|i18n/.test(e.name)) walk(p); }
+    else if (e.name.endsWith(".js")) files.push(p);
+  }
+})(path.join(root, "src"));
+const text = Object.fromEntries(files.map((f) => [f, fs.readFileSync(f, "utf8")]));
+const rel = (f) => path.relative(root, f).split(path.sep).join("/");
+
+// balanced scan from an opening bracket index; returns the index after the closing one
+function closeOf(s, i) {
+  const open = s[i];
+  const close = { "(": ")", "{": "}", "[": "]" }[open];
+  let depth = 0;
+  for (let j = i; j < s.length; j++) {
+    const c = s[j];
+    if (c === '"' || c === "'" || c === "`") { const q = c; j++; while (j < s.length && s[j] !== q) { if (s[j] === "\\") j++; j++; } continue; }
+    if (c === "/" && s[j + 1] === "/") { while (j < s.length && s[j] !== "\n") j++; continue; }
+    if (c === "/" && s[j + 1] === "*") { j = s.indexOf("*/", j) + 1; continue; }
+    if (c === open) depth++;
+    else if (c === close) { depth--; if (depth === 0) return j + 1; }
+  }
+  return -1;
+}
+function topLevelSplit(s) {
+  const out = [];
+  let depth = 0;
+  let cur = "";
+  for (let j = 0; j < s.length; j++) {
+    const c = s[j];
+    if (c === '"' || c === "'" || c === "`") {
+      const q = c; cur += c; j++;
+      while (j < s.length && s[j] !== q) { if (s[j] === "\\") { cur += s[j]; j++; } cur += s[j]; j++; }
+      cur += q; continue;
+    }
+    if (c === "/" && s[j + 1] === "/") { while (j < s.length && s[j] !== "\n") j++; continue; }
+    if ("({[".includes(c)) depth++;
+    if (")}]".includes(c)) depth--;
+    if (c === "," && depth === 0) { out.push(cur); cur = ""; continue; }
+    cur += c;
+  }
+  if (cur.trim()) out.push(cur);
+  return out.map((x) => x.trim()).filter(Boolean);
+}
+function keysOfLiteral(lit) {
+  return topLevelSplit(lit.slice(1, -1)).map((part) => {
+    if (part.startsWith("...")) return part.replace(/\s+/g, " ").slice(0, 40);
+    const m = /^([A-Za-z_$][\w$]*)\s*(:|$)/.exec(part) || /^["']([^"']+)["']\s*:/.exec(part);
+    return m ? m[1] : part.slice(0, 20);
+  });
+}
+
+const fns = [];
+for (const [f, s] of Object.entries(text)) {
+  const re = /export\s+(?:async\s+)?function\*?\s+([A-Za-z_$][\w$]*)\s*\(/g;
+  let m;
+  while ((m = re.exec(s))) {
+    const open = m.index + m[0].length - 1;
+    const end = closeOf(s, open);
+    const params = s.slice(open + 1, end - 1);
+    const bodyOpen = s.indexOf("{", end);
+    const bodyEnd = closeOf(s, bodyOpen);
+    const body = s.slice(bodyOpen, bodyEnd);
+    const viaParams = HANDLES.filter((h) => new RegExp("\\b" + h + "\\b").test(params));
+    const ctxNames = topLevelSplit(params).map((p) => (/^([A-Za-z_$][\w$]*)/.exec(p) || [])[1]).filter((n) => n && /^(ctx|opts|options|deps|context|toolCtx)$/.test(n));
+    const viaCtx = HANDLES.filter((h) => ctxNames.some((n) => new RegExp("\\b" + n + "\\??\\." + h + "\\b").test(body)));
+    const handles = [...new Set([...viaParams, ...viaCtx])];
+    if (handles.length) fns.push({ name: m[1], file: rel(f), handles });
+  }
+}
+for (const fn of fns) {
+  const sites = [];
+  for (const [f, s] of Object.entries(text)) {
+    const re = new RegExp("(?<![\\w$.])" + fn.name + "\\s*\\(", "g");
+    let m;
+    while ((m = re.exec(s))) {
+      const before = s.slice(Math.max(0, m.index - 30), m.index);
+      if (/function\*?\s+$/.test(before)) continue;
+      const lineStart = s.lastIndexOf("\n", m.index) + 1;
+      if (/^\s*(\*|\/\/)/.test(s.slice(lineStart, m.index))) continue;
+      const open = m.index + m[0].length - 1;
+      const end = closeOf(s, open);
+      if (end < 0) continue;
+      const args = topLevelSplit(s.slice(open + 1, end - 1));
+      const line = s.slice(0, m.index).split("\n").length;
+      const shown = args.map((a) => (a.startsWith("{") ? "{" + keysOfLiteral(a).join(", ") + "}" : a.replace(/\s+/g, " ").slice(0, 30)));
+      sites.push({ at: rel(f) + ":" + line, shown });
+    }
+  }
+  if (sites.length < 2) continue;
+  const present = (site, h) => site.shown.some((a) => a.startsWith("{") && new RegExp("(^|[{ ,])" + h + "(,|}|$)").test(a));
+  const varying = fn.handles.filter((h) => { const n = sites.filter((x) => present(x, h)).length; return n > 0 && n < sites.length; });
+  const nonLiteral = sites.some((x) => !x.shown.some((a) => a.startsWith("{")));
+  if (!varying.length && !nonLiteral) continue;
+  console.log("\n## " + fn.name + " (" + fn.file + ") takes: " + fn.handles.join(", ") + (varying.length ? "   VARIES: " + varying.join(", ") : ""));
+  for (const x of sites) console.log("   " + x.at + "  (" + x.shown.join(" | ") + ")");
+}
