@@ -31,6 +31,12 @@ doc = false
 name = "it"
 path = "tests/it/main.rs"
 
+# The browser UI's tests (tests/ui/<area>.rs): its files run in a real browser, and read as text. A binary of its own
+# so that nothing else in the suite needs a browser.
+[[test]]
+name = "ui"
+path = "tests/ui/main.rs"
+
 [dependencies]
 aes-gcm = "0.11.1"
 anyhow = "1.0.104"
