@@ -253,18 +253,16 @@ impl Shell {
                     libc::kill(pid, libc::SIGHUP);
                 }
                 let ended = self.ended.clone();
-                let _ = std::thread::Builder::new()
-                    .name("terminal-kill".into())
-                    .spawn(move || {
-                        if !ended.wait(HANGUP_GRACE) {
-                            // SAFETY: as above.
-                            unsafe {
-                                if libc::kill(-pid, libc::SIGKILL) != 0 {
-                                    libc::kill(pid, libc::SIGKILL);
-                                }
+                let _ = std::thread::Builder::new().name("terminal-kill".into()).spawn(move || {
+                    if !ended.wait(HANGUP_GRACE) {
+                        // SAFETY: as above.
+                        unsafe {
+                            if libc::kill(-pid, libc::SIGKILL) != 0 {
+                                libc::kill(pid, libc::SIGKILL);
                             }
                         }
-                    });
+                    }
+                });
             }
             None => self.kill_child(),
         }

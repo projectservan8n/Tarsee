@@ -33,6 +33,9 @@ const TOKEN: &str = "wh-token-SECRET-0123456789abcdefWXYZ";
 const GO: &str = "Alex in #client-prod: make #client-alerts and a webhook for the watchdog";
 const AVATAR: &str = "https://cdn.discordapp.com/avatars/bot.png";
 
+/// An overwrite edit as the stand-in saw it: the target, its kind and the flags set.
+type OverwriteSet = (String, OverwriteKind, Vec<(u64, Option<bool>)>);
+
 /// What the tool asked Discord to do, in order.
 #[derive(Debug, Clone, PartialEq)]
 enum Call {
@@ -143,7 +146,10 @@ fn world(opts: Opts) -> World {
         seen(prod, true),
         seen(channel(GEN, "general", GUILD_TEXT, Some(G), None, 0), false),
         seen(channel(VOICE, "Standup", GUILD_VOICE, Some(G), None, 1), false),
-        seen(channel(THREAD, "deploy notes", PUBLIC_THREAD, Some(G), Some(PROD), 0), false),
+        seen(
+            channel(THREAD, "deploy notes", PUBLIC_THREAD, Some(G), Some(PROD), 0),
+            false,
+        ),
         Channel {
             position: None,
             ..channel(DM_ID, "", DM, None, None, 0)
@@ -210,7 +216,7 @@ impl World {
             .expect("a channel.create call")
     }
 
-    fn overwrite_sets(&self) -> Vec<(String, OverwriteKind, Vec<(u64, Option<bool>)>)> {
+    fn overwrite_sets(&self) -> Vec<OverwriteSet> {
         self.calls()
             .into_iter()
             .filter_map(|c| match c {
@@ -268,7 +274,14 @@ impl DiscordClient for World {
         if let Some(err) = &self.create_error {
             return Err(err.clone());
         }
-        let mut made = channel(NEW, &request.name, request.kind, Some(guild_id), request.parent_id.as_deref(), 9);
+        let mut made = channel(
+            NEW,
+            &request.name,
+            request.kind,
+            Some(guild_id),
+            request.parent_id.as_deref(),
+            9,
+        );
         made.everyone_permissions = Some(VIEW_CHANNEL);
         made.bot_permissions = Some(self.bot_perms);
         self.channels.lock().push(made.clone());
@@ -368,9 +381,7 @@ impl WebhookVault for FakeVault {
     }
 
     fn set_key(&self, name: &str, value: &str, description: &str) -> anyhow::Result<()> {
-        self.keys
-            .lock()
-            .insert(name.into(), (value.into(), description.into()));
+        self.keys.lock().insert(name.into(), (value.into(), description.into()));
         Ok(())
     }
 }
@@ -436,11 +447,17 @@ async fn a_channel_id_even_a_thread_picks_its_server_when_the_bot_is_in_two() {
     assert_eq!(resolve_guild(&w, &json!({"channel_id": PROD})).await.unwrap().id, G);
     assert_eq!(resolve_guild(&w, &json!({"channel_id": THREAD})).await.unwrap().id, G);
     assert_eq!(
-        resolve_guild(&w, &json!({"channel_id": format!("<#{OTHER}>")})).await.unwrap().id,
+        resolve_guild(&w, &json!({"channel_id": format!("<#{OTHER}>")}))
+            .await
+            .unwrap()
+            .id,
         G2
     );
     assert_eq!(
-        resolve_guild(&w, &json!({"guild_id": G2, "channel_id": PROD})).await.unwrap().id,
+        resolve_guild(&w, &json!({"guild_id": G2, "channel_id": PROD}))
+            .await
+            .unwrap()
+            .id,
         G2,
         "guild_id wins"
     );
@@ -458,7 +475,12 @@ async fn two_servers_and_nothing_to_tell_them_apart_it_asks_naming_both_and_does
         two_servers: true,
         ..Default::default()
     });
-    let ran = run(&t, &w, json!({"action": "create_channel", "name": "x", "approved_by": GO})).await;
+    let ran = run(
+        &t,
+        &w,
+        json!({"action": "create_channel", "name": "x", "approved_by": GO}),
+    )
+    .await;
     assert_match(
         &ran.out,
         r"error: The bot is in 2 servers, so say which: pass guild_id, or channel_id",
@@ -576,20 +598,30 @@ async fn private_hidden_from_everyone_and_the_bot_the_listed_users_and_roles_let
         assert!(x.allow & CONNECT == 0, "no voice permissions on a text channel");
     }
     assert_eq!(list.len(), 5);
-    assert_match(&ran.out, r#"^Made #client-alerts \(text channel\) in the server "Acme Server""#);
+    assert_match(
+        &ran.out,
+        r#"^Made #client-alerts \(text channel\) in the server "Acme Server""#,
+    );
     assert!(ran.out.contains(&format!("id: {NEW}")));
-    assert!(ran.out.contains(
-        "who can see it: private: only the bot, Sam, Alex, @Ops, and anyone with Administrator, can see it"
-    ));
-    assert!(ran.out.contains(&format!("link: https://discord.com/channels/{G}/{NEW}")));
+    assert!(
+        ran.out.contains(
+            "who can see it: private: only the bot, Sam, Alex, @Ops, and anyone with Administrator, can see it"
+        )
+    );
+    assert!(
+        ran.out
+            .contains(&format!("link: https://discord.com/channels/{G}/{NEW}"))
+    );
     assert!(ran.out.contains(&format!("<#{NEW}>")));
     assert_eq!(
         ran.out,
         [
-            "Made #client-alerts (text channel) in the server \"Acme Server\" (server id 200000000000000001).".to_string(),
+            "Made #client-alerts (text channel) in the server \"Acme Server\" (server id 200000000000000001)."
+                .to_string(),
             format!("id: {NEW}"),
             format!("category: Clients (id {CAT})"),
-            "who can see it: private: only the bot, Sam, Alex, @Ops, and anyone with Administrator, can see it".to_string(),
+            "who can see it: private: only the bot, Sam, Alex, @Ops, and anyone with Administrator, can see it"
+                .to_string(),
             format!("link: https://discord.com/channels/{G}/{NEW}"),
             format!("mention it in chat as <#{NEW}>"),
         ]
@@ -627,15 +659,29 @@ async fn a_user_who_is_not_in_the_server_or_a_role_that_does_not_exist_stops_it_
         args
     };
     assert_match(
-        &run(&t, &w, base(json!({"private": true, "allow_user_ids": ["399999999999999999"]}))).await.out,
+        &run(
+            &t,
+            &w,
+            base(json!({"private": true, "allow_user_ids": ["399999999999999999"]})),
+        )
+        .await
+        .out,
         r#"user 399999999999999999 is not a member of the server "Acme Server".*Nothing was made"#,
     );
     assert_match(
-        &run(&t, &w, base(json!({"private": true, "allow_role_ids": ["499999999999999999"]}))).await.out,
+        &run(
+            &t,
+            &w,
+            base(json!({"private": true, "allow_role_ids": ["499999999999999999"]})),
+        )
+        .await
+        .out,
         r"no role with id 499999999999999999",
     );
     assert_match(
-        &run(&t, &w, base(json!({"private": true, "allow_role_ids": [G]}))).await.out,
+        &run(&t, &w, base(json!({"private": true, "allow_role_ids": [G]})))
+            .await
+            .out,
         r"that is @everyone",
     );
     assert_match(
@@ -691,7 +737,13 @@ async fn copy_and_private_together_is_refused_with_neither_a_channel_in_a_catego
         json!({"action": "create_channel", "name": "x", "parent_id": CAT, "approved_by": GO}),
     )
     .await;
-    let mut ids: Vec<String> = w.created().permission_overwrites.unwrap().into_iter().map(|o| o.id).collect();
+    let mut ids: Vec<String> = w
+        .created()
+        .permission_overwrites
+        .unwrap()
+        .into_iter()
+        .map(|o| o.id)
+        .collect();
     ids.sort();
     assert_eq!(ids, [G, OPS]);
     assert!(
@@ -704,7 +756,12 @@ async fn copy_and_private_together_is_refused_with_neither_a_channel_in_a_catego
 async fn outside_any_category_with_no_privacy_asked_no_overwrites_public() {
     let t = test_app();
     let w = world(Opts::default());
-    let ran = run(&t, &w, json!({"action": "create_channel", "name": "Lobby Chat", "approved_by": GO})).await;
+    let ran = run(
+        &t,
+        &w,
+        json!({"action": "create_channel", "name": "Lobby Chat", "approved_by": GO}),
+    )
+    .await;
     let o = w.created();
     assert_eq!(o.permission_overwrites, None);
     assert_eq!(o.parent_id, None);
@@ -833,7 +890,9 @@ async fn saves_the_full_url_under_save_as_key_and_returns_the_id_the_key_and_a_m
     assert_match(&description, r"Purpose: uptime watchdog alerts\.");
     assert!(!ran.out.contains(TOKEN), "the token is not in the result");
     assert!(
-        !Regex::new(r"webhooks/[0-9]+/[A-Za-z0-9-]{8,}").unwrap().is_match(&ran.out),
+        !Regex::new(r"webhooks/[0-9]+/[A-Za-z0-9-]{8,}")
+            .unwrap()
+            .is_match(&ran.out),
         "no full URL in the result"
     );
     assert!(ran.out.contains(&format!("webhook id: {HOOK}")));
@@ -935,7 +994,10 @@ async fn reveal_true_is_the_only_way_the_full_url_comes_back_and_it_is_still_sav
         &vault,
     )
     .await;
-    assert!(ran.out.contains(&format!("https://discord.com/api/webhooks/{HOOK}/{TOKEN}")));
+    assert!(
+        ran.out
+            .contains(&format!("https://discord.com/api/webhooks/{HOOK}/{TOKEN}"))
+    );
     assert!(ran.out.contains("do not post it in chat"));
     assert!(vault.has_key("W_HOOK"));
 }
@@ -1016,7 +1078,12 @@ async fn a_vault_that_cannot_be_written_says_the_webhook_exists_and_still_does_n
 #[tokio::test]
 async fn list_webhooks_names_and_ids_only_no_token_no_url() {
     let t = test_app();
-    let ran = run(&t, &world(Opts::default()), json!({"action": "list_webhooks", "channel_id": PROD})).await;
+    let ran = run(
+        &t,
+        &world(Opts::default()),
+        json!({"action": "list_webhooks", "channel_id": PROD}),
+    )
+    .await;
     assert_eq!(
         ran.out,
         "Webhooks in #client-prod (id 500000000000000002), server \"Acme Server\" (server id 200000000000000001). URLs are secrets and are not listed:\n- Old Hook (webhook id 600000000000000005), incoming, made by alex"
@@ -1024,7 +1091,13 @@ async fn list_webhooks_names_and_ids_only_no_token_no_url() {
     assert!(!ran.out.contains("old-SECRET-token"));
     assert!(!ran.out.contains("/api/webhooks/"));
     assert_match(
-        &run(&t, &world(Opts::default()), json!({"action": "list_webhooks", "channel_id": GEN})).await.out,
+        &run(
+            &t,
+            &world(Opts::default()),
+            json!({"action": "list_webhooks", "channel_id": GEN}),
+        )
+        .await
+        .out,
         r"has no webhooks",
     );
 }
@@ -1124,8 +1197,14 @@ async fn permission_overwrites_for_a_user_and_a_role_allow_deny_reset_and_clear(
         channel: PROD.into(),
         target: MODS.into()
     }));
-    assert!(ran.out.contains("- Sam: allowed View Channel, Send Messages, Read Message History"));
-    assert!(ran.out.contains("- @Ops: denied Send Messages; reset View Channel to the default"));
+    assert!(
+        ran.out
+            .contains("- Sam: allowed View Channel, Send Messages, Read Message History")
+    );
+    assert!(
+        ran.out
+            .contains("- @Ops: denied Send Messages; reset View Channel to the default")
+    );
     assert!(ran.out.contains("- removed the permission overwrite for @Mods"));
     assert!(
         !w.calls().iter().any(|c| matches!(c, Call::Edit(..))),
@@ -1144,7 +1223,12 @@ async fn private_true_hides_it_from_everyone_and_keeps_the_bot_and_the_listed_pe
     )
     .await;
     let sets = w.overwrite_sets();
-    let set_of = |id: &str| sets.iter().find(|(t, _, _)| t == id).map(|(_, _, s)| s.clone()).unwrap();
+    let set_of = |id: &str| {
+        sets.iter()
+            .find(|(t, _, _)| t == id)
+            .map(|(_, _, s)| s.clone())
+            .unwrap()
+    };
     assert_eq!(set_of(G), vec![(VIEW_CHANNEL, Some(false))]);
     assert!(set_of(BOT).contains(&(VIEW_CHANNEL, Some(true))));
     assert!(set_of(SAM).contains(&(VIEW_CHANNEL, Some(true))));
@@ -1261,7 +1345,9 @@ async fn no_manage_webhooks_create_webhook_is_refused_and_nothing_goes_in_the_va
     assert!(vault.keys.lock().is_empty());
     assert!(w.calls().is_empty());
     assert_match(
-        &run(&t, &w, json!({"action": "list_webhooks", "channel_id": GEN})).await.out,
+        &run(&t, &w, json!({"action": "list_webhooks", "channel_id": GEN}))
+            .await
+            .out,
         r"missing the Manage Webhooks permission",
     );
 }
@@ -1318,7 +1404,10 @@ async fn when_discord_itself_says_missing_permissions_50013_the_error_names_the_
         r#"missing a permission it needs in #general in the server "Acme Server" .*\(Manage Webhooks\)"#,
     );
     let w3 = world(Opts {
-        hook_error: Some(DiscordError::new(Some(30007), "Maximum number of webhooks reached (15)")),
+        hook_error: Some(DiscordError::new(
+            Some(30007),
+            "Maximum number of webhooks reached (15)",
+        )),
         ..Default::default()
     });
     assert_match(
@@ -1366,7 +1455,13 @@ async fn anything_not_in_the_list_is_refused_deletes_by_name_included_and_nothin
 fn the_actions_are_the_five_none_of_them_a_delete() {
     assert_eq!(
         ACTIONS,
-        ["list_channels", "create_channel", "edit_channel", "create_webhook", "list_webhooks"]
+        [
+            "list_channels",
+            "create_channel",
+            "edit_channel",
+            "create_webhook",
+            "list_webhooks"
+        ]
     );
     let deleting = Regex::new("delete|remove|purge|prune|kick|ban").unwrap();
     for action in ACTIONS {
@@ -1387,7 +1482,10 @@ fn source_code() -> String {
 #[test]
 fn the_module_never_calls_a_delete_except_clearing_one_permission_overwrite() {
     let code = source_code();
-    let deletes = Regex::new(r"\.\s*delete[A-Za-z_]*\s*\(").unwrap().find_iter(&code).count();
+    let deletes = Regex::new(r"\.\s*delete[A-Za-z_]*\s*\(")
+        .unwrap()
+        .find_iter(&code)
+        .count();
     let overwrite_clears = code.matches(".delete_permission_overwrite(").count();
     assert_eq!(
         deletes, overwrite_clears,
@@ -1402,10 +1500,7 @@ fn the_module_never_calls_a_delete_except_clearing_one_permission_overwrite() {
     // The trait itself has no other way to remove anything.
     let trait_methods = Regex::new(r"async fn (delete|remove)[A-Za-z_]*").unwrap();
     assert_eq!(
-        trait_methods
-            .find_iter(&code)
-            .map(|m| m.as_str())
-            .collect::<Vec<_>>(),
+        trait_methods.find_iter(&code).map(|m| m.as_str()).collect::<Vec<_>>(),
         ["async fn delete_permission_overwrite"]
     );
 }
@@ -1415,7 +1510,12 @@ async fn every_action_run_end_to_end_leaves_no_delete_behind() {
     let t = test_app();
     let w = world(Opts::default());
     run(&t, &w, json!({"action": "list_channels"})).await;
-    run(&t, &w, json!({"action": "create_channel", "name": "a", "private": true, "approved_by": GO})).await;
+    run(
+        &t,
+        &w,
+        json!({"action": "create_channel", "name": "a", "private": true, "approved_by": GO}),
+    )
+    .await;
     run(
         &t,
         &w,
@@ -1645,12 +1745,18 @@ fn the_permissions_are_worked_out_as_discord_js_did() {
         member_channel_permissions(G, SAM, false, &[G], &[everyone | ADMINISTRATOR], &overwrites),
         ALL_PERMISSIONS
     );
-    assert_eq!(role_channel_permissions(G, G, everyone, everyone, &overwrites), SEND_MESSAGES);
+    assert_eq!(
+        role_channel_permissions(G, G, everyone, everyone, &overwrites),
+        SEND_MESSAGES
+    );
     assert_eq!(
         role_channel_permissions(G, OPS, 0, everyone, &overwrites),
         VIEW_CHANNEL | SEND_MESSAGES
     );
-    assert_eq!(member_permissions(false, &[everyone, MANAGE_ROLES]), everyone | MANAGE_ROLES);
+    assert_eq!(
+        member_permissions(false, &[everyone, MANAGE_ROLES]),
+        everyone | MANAGE_ROLES
+    );
     assert_eq!(member_permissions(true, &[]), ALL_PERMISSIONS);
     assert!(has_permission(ADMINISTRATOR, MANAGE_WEBHOOKS));
     assert!(!has_permission(VIEW_CHANNEL, MANAGE_WEBHOOKS));
@@ -1663,7 +1769,10 @@ fn the_permissions_are_worked_out_as_discord_js_did() {
         ),
         (CONNECT | SEND_MESSAGES, VIEW_CHANNEL)
     );
-    assert_eq!(apply_overwrite_set(None, &[(VIEW_CHANNEL, Some(true))]), (VIEW_CHANNEL, 0));
+    assert_eq!(
+        apply_overwrite_set(None, &[(VIEW_CHANNEL, Some(true))]),
+        (VIEW_CHANNEL, 0)
+    );
 }
 
 #[test]
@@ -1697,7 +1806,10 @@ fn key_names_from_awkward_text() {
     assert_eq!(key_name_from("\u{FEFF}x y\u{FEFF}"), "X_Y");
     assert_eq!(key_name_from(&format!("{}_tail", "a".repeat(63))), "A".repeat(63));
     assert_eq!(mask_webhook_url("7", ""), "https://discord.com/api/webhooks/7/****");
-    assert_eq!(mask_webhook_url("7", "ab🐒"), "https://discord.com/api/webhooks/7/****ab🐒");
+    assert_eq!(
+        mask_webhook_url("7", "ab🐒"),
+        "https://discord.com/api/webhooks/7/****ab🐒"
+    );
 }
 
 // ---------------------------------------------------------------- the real vault, the agent's words, redaction
@@ -1755,11 +1867,17 @@ fn the_turns_tool_list_names_it_and_a_new_workspaces_agents_md_and_tools_md_carr
         )
         .unwrap()
     };
-    for (what, text) in [("TOOLS.md", shipped("TOOLS.md")), ("defaults TOOLS.md", default("TOOLS.md"))] {
+    for (what, text) in [
+        ("TOOLS.md", shipped("TOOLS.md")),
+        ("defaults TOOLS.md", default("TOOLS.md")),
+    ] {
         assert!(text.contains("## Discord admin (channels, webhooks)"), "{what}");
         assert!(text.contains("never pull DISCORD_BOT_TOKEN from the vault"), "{what}");
     }
-    for (what, text) in [("AGENTS.md", shipped("AGENTS.md")), ("defaults AGENTS.md", default("AGENTS.md"))] {
+    for (what, text) in [
+        ("AGENTS.md", shipped("AGENTS.md")),
+        ("defaults AGENTS.md", default("AGENTS.md")),
+    ] {
         assert!(text.contains("## Approvals"), "{what}");
         assert!(text.contains("## Keys: check the vault every time"), "{what}");
     }
@@ -1783,12 +1901,18 @@ async fn the_log_line_names_the_action_server_and_channel_and_never_a_secret() {
     assert_eq!(
         ran.lines,
         // Cut at 200 characters.
-        ["[discord-admin] nope guild=- channel=- failed: Unknown action \"nope\". This tool does: list_channels, create_channel, edit_channel, create_webhook, list_webhooks. It never deletes anything: deleting a channel or a webhook is something the owner doe"]
+        [
+            "[discord-admin] nope guild=- channel=- failed: Unknown action \"nope\". This tool does: list_channels, create_channel, edit_channel, create_webhook, list_webhooks. It never deletes anything: deleting a channel or a webhook is something the owner doe"
+        ]
     );
     let ran = run(&t, &w, json!({})).await;
     assert!(ran.lines[0].starts_with("[discord-admin] (no action) guild=- channel=- failed: Unknown action \"\"."));
     // An empty action leaves a double space, which the answer closes up.
-    assert!(ran.out.starts_with("discord_admin error: Unknown action \"\"."), "{}", ran.out);
+    assert!(
+        ran.out.starts_with("discord_admin error: Unknown action \"\"."),
+        "{}",
+        ran.out
+    );
     // Logged by default with log::info!.
     let logs = crate::testkit::CapturedLogs::start();
     discord_admin(&t.app, &json!({"action": "list_channels"}), DiscordAdminDeps::new(&w)).await;
@@ -1835,7 +1959,11 @@ async fn other_refusals_from_discord_in_plain_words() {
         ..note
     };
     assert_eq!(
-        discord_error_text(&DiscordError::new(Some(50013), "Missing Permissions"), "edit_channel", &poor),
+        discord_error_text(
+            &DiscordError::new(Some(50013), "Missing Permissions"),
+            "edit_channel",
+            &poor
+        ),
         "Discord refused: the bot is missing a permission it needs in the server \"Acme Server\" (server id 200000000000000001) (Manage Channels and Manage Permissions (Manage Roles)). The access being set also hands out Manage Permissions (Manage Roles), which the bot's role does not have, and Discord only lets a bot hand out permissions it has itself. Discord said: \"Missing Permissions\". Ask the owner to give the bot's role that permission (Server Settings > Roles), or to do this by hand. Nothing more was changed."
     );
 }

@@ -13,9 +13,7 @@ use serde_json::{Value, json};
 use tarsee::App;
 use tarsee::db::audit::AuditLog;
 use tarsee::testkit::{TestApp, test_app_with_env, tmp_dir};
-use tarsee::websocket::terminal_handler::{
-    cleanup_all_terminals, get_active_terminal_count, shell, terminal_upgrade,
-};
+use tarsee::websocket::terminal_handler::{cleanup_all_terminals, get_active_terminal_count, shell, terminal_upgrade};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
@@ -28,9 +26,24 @@ const WAIT: Duration = Duration::from_secs(60);
 fn system_env() -> Vec<(String, String)> {
     let names: &[&str] = if cfg!(windows) {
         &[
-            "Path", "PATHEXT", "SystemRoot", "SystemDrive", "windir", "ComSpec", "TEMP", "TMP", "ProgramData",
-            "ProgramFiles", "ProgramFiles(x86)", "ALLUSERSPROFILE", "LOCALAPPDATA", "APPDATA", "PSModulePath",
-            "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS",
+            "Path",
+            "PATHEXT",
+            "SystemRoot",
+            "SystemDrive",
+            "windir",
+            "ComSpec",
+            "TEMP",
+            "TMP",
+            "ProgramData",
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ALLUSERSPROFILE",
+            "LOCALAPPDATA",
+            "APPDATA",
+            "PSModulePath",
+            "NUMBER_OF_PROCESSORS",
+            "PROCESSOR_ARCHITECTURE",
+            "OS",
         ]
     } else {
         &["PATH"]
@@ -175,7 +188,10 @@ impl Term {
             if message["type"] == kind || (kind == "close" && message.get("close").is_some()) {
                 return message;
             }
-            assert!(message["type"] == "data", "waiting for {kind} the terminal sent {message}");
+            assert!(
+                message["type"] == "data",
+                "waiting for {kind} the terminal sent {message}"
+            );
         }
     }
 }
@@ -266,11 +282,16 @@ async fn a_shell_runs_commands_resizes_and_is_gone_with_what_it_started_when_the
 
     // A command, its output, and where it ran.
     let pid_value = if cfg!(windows) { "$PID" } else { "$$" };
-    term.input(&say("sum", if cfg!(windows) { "(40 + 2)" } else { "$((40+2))" })).await;
+    term.input(&say("sum", if cfg!(windows) { "(40 + 2)" } else { "$((40+2))" }))
+        .await;
     assert_eq!(term.wait_for(r"sum=([0-9]+)").await, "42");
     term.input(&say("pid", pid_value)).await;
     let shell_pid: u32 = term.wait_for(r"pid=([0-9]+)").await.parse().unwrap();
-    let here = if cfg!(windows) { "(Get-Location).Path" } else { "\"$(pwd)\"" };
+    let here = if cfg!(windows) {
+        "(Get-Location).Path"
+    } else {
+        "\"$(pwd)\""
+    };
     term.input(&say("cwd", here)).await;
     let ran_in = term.wait_for(r"cwd=([^\r\n]+)").await;
     assert_eq!(
@@ -278,9 +299,16 @@ async fn a_shell_runs_commands_resizes_and_is_gone_with_what_it_started_when_the
         std::fs::canonicalize(&cwd).unwrap()
     );
     // The environment the shell was given.
-    let term_var = if cfg!(windows) { "$env:TERM + \"/\" + $env:COLORTERM" } else { "\"$TERM/$COLORTERM\"" };
+    let term_var = if cfg!(windows) {
+        "$env:TERM + \"/\" + $env:COLORTERM"
+    } else {
+        "\"$TERM/$COLORTERM\""
+    };
     term.input(&say("vars", term_var)).await;
-    assert_eq!(term.wait_for(r"vars=([^\r\n]+)").await.trim(), "xterm-256color/truecolor");
+    assert_eq!(
+        term.wait_for(r"vars=([^\r\n]+)").await.trim(),
+        "xterm-256color/truecolor"
+    );
 
     // Text outside ASCII both ways.
     term.input(&say("word", "\"ñé🐒\"")).await;
@@ -290,7 +318,10 @@ async fn a_shell_runs_commands_resizes_and_is_gone_with_what_it_started_when_the
     term.send(json!({"type": "resize", "cols": 100, "rows": 40})).await;
     // Columns by rows in PowerShell; `stty size` gives rows, then columns.
     let (size, want) = if cfg!(windows) {
-        ("$Host.UI.RawUI.WindowSize.Width + \"x\" + $Host.UI.RawUI.WindowSize.Height", "100x40")
+        (
+            "$Host.UI.RawUI.WindowSize.Width + \"x\" + $Host.UI.RawUI.WindowSize.Height",
+            "100x40",
+        )
     } else {
         ("\"$(stty size | tr ' ' x)\"", "40x100")
     };
@@ -350,7 +381,10 @@ async fn a_shell_runs_commands_resizes_and_is_gone_with_what_it_started_when_the
         assert_eq!(actions[2].1, json!({"terminalId": terminal_id, "exitCode": 1}));
     } else {
         // SIGHUP, as node-pty sent.
-        assert_eq!(actions[2].1, json!({"terminalId": terminal_id, "exitCode": 0, "signal": 1}));
+        assert_eq!(
+            actions[2].1,
+            json!({"terminalId": terminal_id, "exitCode": 0, "signal": 1})
+        );
     }
 }
 
@@ -456,7 +490,10 @@ async fn cleanup_all_terminals_ends_every_shell_and_each_browser_is_told() {
 async fn a_shell_that_cannot_start_is_an_error_message_and_a_1011_close() {
     // No folder to find the shell in.
     let empty = tmp_dir();
-    let mut env = vec![("CLAUDE_WORKSPACE_DIR".to_string(), empty.path().to_string_lossy().into_owned())];
+    let mut env = vec![(
+        "CLAUDE_WORKSPACE_DIR".to_string(),
+        empty.path().to_string_lossy().into_owned(),
+    )];
     for name in ["PATH", "Path"] {
         env.push((name.to_string(), empty.path().to_string_lossy().into_owned()));
     }
@@ -464,9 +501,9 @@ async fn a_shell_that_cannot_start_is_an_error_message_and_a_1011_close() {
     let router = Router::new()
         .route(
             "/terminal",
-            any(|State(app): State<App>, upgrade: WebSocketUpgrade| async move {
-                terminal_upgrade(app, upgrade, None)
-            }),
+            any(
+                |State(app): State<App>, upgrade: WebSocketUpgrade| async move { terminal_upgrade(app, upgrade, None) },
+            ),
         )
         .with_state(t.app.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -479,7 +516,10 @@ async fn a_shell_that_cannot_start_is_an_error_message_and_a_1011_close() {
     let value: Value = serde_json::from_str(first.to_text().unwrap()).unwrap();
     assert_eq!(value["type"], "error");
     assert!(
-        value["message"].as_str().unwrap().starts_with("Failed to spawn shell: "),
+        value["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Failed to spawn shell: "),
         "{value}"
     );
     match tokio::time::timeout(WAIT, ws.next()).await.unwrap() {

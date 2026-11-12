@@ -56,7 +56,8 @@ pub const TOKEN_KEY: &str = "RAILWAY_API_TOKEN";
 const LABEL: &str = "the owner's Railway account";
 
 static UUID: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$").expect("the UUID pattern")
+    Regex::new("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+        .expect("the UUID pattern")
 });
 static VAR_NAME: LazyLock<Regex> =
     LazyLock::new(|| Regex::new("^[A-Za-z_][A-Za-z0-9_]{0,254}$").expect("the variable name pattern"));
@@ -105,11 +106,7 @@ static SECRET_SHAPES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
         ),
         shape(r"(?i-u:hooks\.slack\.com/services/)", "a Slack webhook URL"),
         shape(
-            &format!(
-                "^[a-zA-Z][a-zA-Z0-9+.-]*://{}+:{}+@",
-                not_space(":@/"),
-                not_space("@/")
-            ),
+            &format!("^[a-zA-Z][a-zA-Z0-9+.-]*://{}+:{}+@", not_space(":@/"), not_space("@/")),
             "a URL with a password in it",
         ),
         shape("-----BEGIN [A-Z ]*PRIVATE KEY-----", "a private key"),
@@ -160,6 +157,9 @@ pub fn here_of(env: &Env) -> Here {
 
 // ---------------------------------------------------------------- the vault
 
+/// Every key with its value (`None` for one that cannot be decrypted), in the vault's order.
+pub type KeyValues = Vec<(String, Option<String>)>;
+
 /// Where the token and `from_key` values come from: the key vault (`lib/key-vault.js`), or a stand-in in tests.
 pub trait RailwayVault: Send + Sync {
     /// The key's value; `None` when there is none. An error is the vault failing to read it.
@@ -167,7 +167,7 @@ pub trait RailwayVault: Send + Sync {
 
     /// Every key with its value, in the vault's order (`getAllKeysDecrypted`), used only to point a value that is a
     /// key's at `from_key`. `None`: the vault cannot list them (the JS vault without that function).
-    fn get_all_keys_decrypted(&self) -> Option<anyhow::Result<Vec<(String, Option<String>)>>> {
+    fn get_all_keys_decrypted(&self) -> Option<anyhow::Result<KeyValues>> {
         None
     }
 }
@@ -180,7 +180,7 @@ impl RailwayVault for AppVault<'_> {
         Ok(key_vault::get_key(self.0, name)?)
     }
 
-    fn get_all_keys_decrypted(&self) -> Option<anyhow::Result<Vec<(String, Option<String>)>>> {
+    fn get_all_keys_decrypted(&self) -> Option<anyhow::Result<KeyValues>> {
         Some(Ok(key_vault::get_all_keys_decrypted(self.0)))
     }
 }
@@ -333,7 +333,11 @@ impl Ctx<'_> {
 pub async fn railway_admin(app: &App, args: &Value, deps: RailwayDeps<'_>) -> String {
     let empty = Value::Object(Default::default());
     // `args && typeof args === "object" ? args : {}`
-    let args = if args.is_object() || args.is_array() { args } else { &empty };
+    let args = if args.is_object() || args.is_array() {
+        args
+    } else {
+        &empty
+    };
     let action = js_string_or_empty(args.get("action"));
     let mut note = Note::default();
     let app_vault = AppVault(app);
@@ -365,7 +369,11 @@ pub async fn railway_admin(app: &App, args: &Value, deps: RailwayDeps<'_>) -> St
         Some(x) => format!("\"{}\" ({})", x.name, x.id),
         None => "-".to_string(),
     };
-    let shown = if action.is_empty() { "(no action)" } else { action.as_str() };
+    let shown = if action.is_empty() {
+        "(no action)"
+    } else {
+        action.as_str()
+    };
     let extra = if note.extra.is_empty() {
         String::new()
     } else {
@@ -464,7 +472,13 @@ fn whole_seconds(timeout: Duration) -> u128 {
     (timeout.as_millis() + 500) / 1000
 }
 
-async fn gql(fetch: &dyn Fetch, token: &str, query: &str, variables: Value, timeout: Duration) -> Result<Value, ApiError> {
+async fn gql(
+    fetch: &dyn Fetch,
+    token: &str,
+    query: &str,
+    variables: Value,
+    timeout: Duration,
+) -> Result<Value, ApiError> {
     let request = FetchRequest::post(API_URL)
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {token}"))
@@ -816,9 +830,7 @@ fn where_of(svc: &Named, env: &Named, project: &Project) -> String {
 
 fn is_self(svc: &Named, env: &Named, here: &Here) -> bool {
     match &here.service_id {
-        Some(service) => {
-            svc.id == *service && here.environment_id.as_ref().is_none_or(|e| env.id == *e)
-        }
+        Some(service) => svc.id == *service && here.environment_id.as_ref().is_none_or(|e| env.id == *e),
         None => false,
     }
 }
@@ -1151,7 +1163,8 @@ async fn redeploy(ctx: &Ctx<'_>, note: &mut Note) -> Step<String> {
 /// is what `localeCompare` used: whitespace, punctuation, symbols, digits, then letters with each small letter
 /// before its capital. Letters share a weight with their other case; the case decides only between names that are
 /// otherwise equal.
-const ICU_ASCII_ORDER: &str = "\t\n\x0B\x0C\r _-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$0123456789aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ";
+const ICU_ASCII_ORDER: &str =
+    "\t\n\x0B\x0C\r _-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$0123456789aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ";
 
 /// Latin-1 letters with an accent: their letter, and the accent's place after the plain letter as ICU orders
 /// accents (acute, grave, circumflex, ring, diaeresis, tilde, cedilla).

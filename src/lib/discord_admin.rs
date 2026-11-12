@@ -471,8 +471,12 @@ pub trait DiscordClient: Send + Sync {
     ) -> Result<(), DiscordError>;
 
     /// `channel.permissionOverwrites.delete(target, reason)`: the one removal this tool makes.
-    async fn delete_permission_overwrite(&self, channel_id: &str, target_id: &str, reason: &str)
-    -> Result<(), DiscordError>;
+    async fn delete_permission_overwrite(
+        &self,
+        channel_id: &str,
+        target_id: &str,
+        reason: &str,
+    ) -> Result<(), DiscordError>;
 
     /// `channel.fetchWebhooks()`.
     async fn fetch_webhooks(&self, channel_id: &str) -> Result<Vec<Webhook>, DiscordError>;
@@ -796,7 +800,10 @@ pub async fn discord_admin(app: &App, args: &Value, deps: DiscordAdminDeps<'_>) 
             };
             let outcome = format!("failed: {}", utf16_truncate(&one_line(&text), 200));
             let shown = if action.is_empty() { "" } else { action.as_str() };
-            (outcome, format!("discord_admin {shown} error: {text}").replace("  ", " "))
+            (
+                outcome,
+                format!("discord_admin {shown} error: {text}").replace("  ", " "),
+            )
         }
     };
     let guild = note
@@ -809,7 +816,11 @@ pub async fn discord_admin(app: &App, args: &Value, deps: DiscordAdminDeps<'_>) 
         .as_ref()
         .map(|c| format!("#{} ({})", c.name, c.id))
         .unwrap_or_else(|| "-".to_string());
-    let shown = if action.is_empty() { "(no action)" } else { action.as_str() };
+    let shown = if action.is_empty() {
+        "(no action)"
+    } else {
+        action.as_str()
+    };
     let line = format!("[discord-admin] {shown} guild={guild} channel={channel} {outcome}");
     match deps.log {
         Some(log) => log(&line),
@@ -943,7 +954,10 @@ fn missing_perms(guild: &Guild, channel: Option<&Channel>, bits: &[u64]) -> Vec<
     let Some(permissions) = permissions else {
         return Vec::new();
     };
-    bits.iter().copied().filter(|b| !has_permission(permissions, *b)).collect()
+    bits.iter()
+        .copied()
+        .filter(|b| !has_permission(permissions, *b))
+        .collect()
 }
 
 fn require_perms(guild: &Guild, channel: Option<&Channel>, bits: &[u64], what: &str) -> Step<()> {
@@ -1010,7 +1024,10 @@ async fn resolve_guild_step(client: &dyn DiscordClient, args: &Value) -> Step<Gu
         }
         return match client.fetch_guild(&id).await {
             Some(guild) => Ok(guild),
-            None => fail(format!("The bot is not in a server with id {id}. {}", servers_list(client))),
+            None => fail(format!(
+                "The bot is not in a server with id {id}. {}",
+                servers_list(client)
+            )),
         };
     }
     for field in ["channel_id", "parent_id", "near_channel_id", "copy_permissions_from"] {
@@ -1021,7 +1038,10 @@ async fn resolve_guild_step(client: &dyn DiscordClient, args: &Value) -> Step<Gu
         let channel = fetch_channel(client, value, field).await?;
         return match guild_of(client, &channel).await {
             Some(guild) => Ok(guild),
-            None => fail(format!("{field} {} is a direct message, not a channel in a server.", channel.id)),
+            None => fail(format!(
+                "{field} {} is a direct message, not a channel in a server.",
+                channel.id
+            )),
         };
     }
     let mut all = client.guilds();
@@ -1239,7 +1259,10 @@ async fn private_overwrites(
     for raw in user_ids {
         let id = js_trim(&strip_mention(&js_string(raw), &["<@!", "<@"])).to_string();
         if !SNOWFLAKE.is_match(&id) {
-            return fail(format!("allow_user_ids: \"{}\" is not a Discord user id.", js_string(raw)));
+            return fail(format!(
+                "allow_user_ids: \"{}\" is not a Discord user id.",
+                js_string(raw)
+            ));
         }
         if id == ctx.bot_id {
             continue;
@@ -1261,7 +1284,10 @@ async fn private_overwrites(
     for raw in role_ids {
         let id = js_trim(&strip_mention(&js_string(raw), &["<@&"])).to_string();
         if !SNOWFLAKE.is_match(&id) {
-            return fail(format!("allow_role_ids: \"{}\" is not a Discord role id.", js_string(raw)));
+            return fail(format!(
+                "allow_role_ids: \"{}\" is not a Discord role id.",
+                js_string(raw)
+            ));
         }
         let Some(found) = role(guild, &id) else {
             return fail(format!(
@@ -1392,7 +1418,10 @@ async fn create_channel(ctx: &Ctx<'_>, note: &mut Note) -> Step<String> {
         same_guild(&guild, &src, "copy_permissions_from")?;
         let copied = keep_bot_access(ctx, &guild, src.overwrites.clone(), kind);
         let which = if is_private(&src) { ", which is private" } else { "" };
-        (Some(copied), format!("the same access as #{} (copied){which}", src.name))
+        (
+            Some(copied),
+            format!("the same access as #{} (copied){which}", src.name),
+        )
     } else if is_set(args, "private") {
         let (specs, privacy) = private_overwrites(ctx, &guild, kind, user_ids, role_ids).await?;
         (Some(specs.iter().map(OverwriteSpec::bits).collect()), privacy)
@@ -1825,7 +1854,11 @@ async fn edit_channel(ctx: &Ctx<'_>, note: &mut Note) -> Step<String> {
     let now_name = note.channel.as_ref().map(|c| c.name.clone()).unwrap_or_default();
     let mut out = vec![format!(
         "Edited {}{now_name} (id {}) in the server {}:",
-        if ch.kind == GUILD_CATEGORY { "the category " } else { "#" },
+        if ch.kind == GUILD_CATEGORY {
+            "the category "
+        } else {
+            "#"
+        },
         ch.id,
         guild_label(&guild)
     )];
@@ -1958,7 +1991,11 @@ async fn create_webhook(ctx: &Ctx<'_>, vault: &dyn WebhookVault, note: &mut Note
     let token = match hook.token.as_deref() {
         Some(token) if !hook.id.is_empty() && !token.is_empty() => token.to_string(),
         _ => {
-            let id = if hook.id.is_empty() { "unknown" } else { hook.id.as_str() };
+            let id = if hook.id.is_empty() {
+                "unknown"
+            } else {
+                hook.id.as_str()
+            };
             return fail(format!(
                 "Discord made a webhook but sent back no token, so there is no URL to save (webhook id {id})."
             ));

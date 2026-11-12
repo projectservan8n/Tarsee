@@ -228,7 +228,10 @@ impl Railway {
             }
             "TarseeVariableNames" => {
                 let Some(list) = v["environmentId"].as_str().and_then(|e| acct["variables"].get(e)) else {
-                    return Answer::json(200, json!({"errors": [{"message": "Environment not found"}], "data": null}));
+                    return Answer::json(
+                        200,
+                        json!({"errors": [{"message": "Environment not found"}], "data": null}),
+                    );
                 };
                 // Only what the document asks for: names, never values.
                 let wants_value = Regex::new(r"\bvalue\b").unwrap().is_match(&query);
@@ -256,9 +259,14 @@ impl Railway {
                     .as_array_mut()
                     .unwrap();
                 for (name, value) in v["variables"].as_object().unwrap() {
-                    match list.iter_mut().find(|x| x["name"] == *name && x["serviceId"] == v["serviceId"]) {
+                    match list
+                        .iter_mut()
+                        .find(|x| x["name"] == *name && x["serviceId"] == v["serviceId"])
+                    {
                         Some(had) => had["value"] = value.clone(),
-                        None => list.push(json!({"name": name, "serviceId": v["serviceId"], "isSealed": false, "value": value})),
+                        None => list.push(
+                            json!({"name": name, "serviceId": v["serviceId"], "isSealed": false, "value": value}),
+                        ),
                     }
                 }
                 Answer::json(200, json!({"data": {"variableCollectionUpsert": true}}))
@@ -319,8 +327,12 @@ impl RailwayVault for FakeVault {
         Ok(self.keys.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()))
     }
 
-    fn get_all_keys_decrypted(&self) -> Option<anyhow::Result<Vec<(String, Option<String>)>>> {
-        Some(Ok(self.keys.iter().map(|(k, v)| (k.clone(), Some(v.clone()))).collect()))
+    fn get_all_keys_decrypted(&self) -> Option<anyhow::Result<KeyValues>> {
+        Some(Ok(self
+            .keys
+            .iter()
+            .map(|(k, v)| (k.clone(), Some(v.clone())))
+            .collect()))
     }
 }
 
@@ -388,22 +400,12 @@ impl Ran {
     }
 }
 
+#[derive(Default)]
 struct With<'a> {
     rw: Option<Railway>,
     vault: Option<&'a dyn RailwayVault>,
     env: Option<Env>,
     timeout: Option<Duration>,
-}
-
-impl Default for With<'_> {
-    fn default() -> Self {
-        With {
-            rw: None,
-            vault: None,
-            env: None,
-            timeout: None,
-        }
-    }
 }
 
 /// Runs the tool with its log lines kept, so a test can check they carry no secret. Off Railway unless `env` says
@@ -450,9 +452,7 @@ fn assert_match(text: &str, pattern: &str) {
 
 fn merged(base: &Value, extra: Value) -> Value {
     let mut args = base.clone();
-    args.as_object_mut()
-        .unwrap()
-        .extend(extra.as_object().unwrap().clone());
+    args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
     args
 }
 
@@ -499,7 +499,10 @@ async fn with_project_its_environments_and_services_with_ids_deleted_environment
         &ran.out,
         &format!(r#"^Project "Acme" \(id {}\) in the owner's Railway account:"#, p_acme()),
     );
-    assert_match(&ran.out, r"Environments \(2\):\n- production \(id [0-9a-f-]+\)\n- Staging");
+    assert_match(
+        &ran.out,
+        r"Environments \(2\):\n- production \(id [0-9a-f-]+\)\n- Staging",
+    );
     assert!(ran.out.contains(&format!("- watchdog (id {})", s_watch())));
     assert!(!ran.out.contains("pr-12"));
     assert_eq!(ran.ops(), ["TarseeProjects", "TarseeProject"]);
@@ -590,7 +593,10 @@ async fn a_vault_that_cannot_be_read_says_so() {
         },
     )
     .await;
-    assert!(ran.out.contains("The vault key RAILWAY_API_TOKEN could not be read (bad decrypt)"));
+    assert!(
+        ran.out
+            .contains("The vault key RAILWAY_API_TOKEN could not be read (bad decrypt)")
+    );
     assert!(ran.calls.is_empty());
 }
 
@@ -625,7 +631,10 @@ async fn list_projects_marks_tarsees_own_project_environment_and_service() {
         },
     )
     .await;
-    assert!(all.out.contains(&format!("- Tarsee (id {}) (Tarsee runs here)", p_tarsee())));
+    assert!(
+        all.out
+            .contains(&format!("- Tarsee (id {}) (Tarsee runs here)", p_tarsee()))
+    );
     let one = run_with(
         &t,
         json!({"action": "list_projects", "project": "tarsee"}),
@@ -695,9 +704,11 @@ async fn redeploying_tarsee_itself_or_setting_a_variable_on_it_with_a_deploy_say
         &format!(r"^Asked Railway to redeploy tarsee \(service id {}\)", s_tarsee()),
     );
     assert_eq!(re.calls.last().unwrap().variables, json!({"id": d_tarsee()}));
-    assert!(re.out.contains(
-        "This is Tarsee's own service: the deploy restarts Tarsee, which ends the turn that asked for it."
-    ));
+    assert!(
+        re.out.contains(
+            "This is Tarsee's own service: the deploy restarts Tarsee, which ends the turn that asked for it."
+        )
+    );
     let set = run_with(
         &t,
         json!({"action": "set_variable", "name": "LOG_LEVEL", "value": "debug", "approved_by": GO}),
@@ -767,9 +778,14 @@ async fn an_id_the_token_cannot_see_says_so_plainly() {
 }
 
 #[tokio::test]
-async fn the_environment_is_production_unless_named_a_name_in_any_case_or_an_id_works_a_missing_one_lists_the_choices() {
+async fn the_environment_is_production_unless_named_a_name_in_any_case_or_an_id_works_a_missing_one_lists_the_choices()
+{
     let t = test_app();
-    let prod = run(&t, json!({"action": "list_variables", "project": "Acme", "service": "watchdog"})).await;
+    let prod = run(
+        &t,
+        json!({"action": "list_variables", "project": "Acme", "service": "watchdog"}),
+    )
+    .await;
     assert_eq!(prod.calls.last().unwrap().variables["environmentId"], json!(e_prod()));
     let stage = run(
         &t,
@@ -832,9 +848,11 @@ async fn a_service_by_name_or_id_missing_doubled_or_not_given_each_say_so_with_t
     .await;
     assert!(by_id.out.contains("Worker has no deployment in production yet"));
     let none = run(&t, json!({"action": "list_variables", "project": "Acme"})).await;
-    assert!(none.out.contains(
-        "service is required: the service's name or id in the project \"Acme\". Services there: watchdog"
-    ));
+    assert!(
+        none.out.contains(
+            "service is required: the service's name or id in the project \"Acme\". Services there: watchdog"
+        )
+    );
     for r in [&missing, &doubled, &by_id] {
         assert!(r.writes().is_empty());
     }
@@ -853,7 +871,11 @@ async fn no_project_at_all_and_not_on_railway_is_refused() {
 #[tokio::test]
 async fn the_services_names_sealed_marked_and_the_environments_shared_names_values_are_not_even_asked_for() {
     let t = test_app();
-    let ran = run(&t, json!({"action": "list_variables", "project": "Acme", "service": "watchdog"})).await;
+    let ran = run(
+        &t,
+        json!({"action": "list_variables", "project": "Acme", "service": "watchdog"}),
+    )
+    .await;
     assert_eq!(
         ran.out,
         format!(
@@ -869,7 +891,10 @@ async fn the_services_names_sealed_marked_and_the_environments_shared_names_valu
     }
     let q = &ran.calls.last().unwrap().query;
     assert_eq!(q, DOCS.variable_names);
-    assert!(!Regex::new(r"\bvalue\b").unwrap().is_match(q), "the names query asks for no value");
+    assert!(
+        !Regex::new(r"\bvalue\b").unwrap().is_match(q),
+        "the names query asks for no value"
+    );
 }
 
 #[tokio::test]
@@ -929,7 +954,11 @@ async fn railway_gets_the_vault_value_the_result_says_what_was_set_with_a_masked
     );
     assert_eq!(mask_value(&hook()), "http...9xyz");
     for secret in [hook().as_str(), "wh-SECRET", TOKEN] {
-        assert!(!ran.text.contains(secret), "no {} in the result or the log", &secret[..12]);
+        assert!(
+            !ran.text.contains(secret),
+            "no {} in the result or the log",
+            &secret[..12]
+        );
     }
     assert_eq!(ran.lines.len(), 1);
     assert_eq!(
@@ -966,7 +995,10 @@ async fn a_variable_that_is_already_there_is_replaced_and_the_result_says_so_sea
         json!({"action": "set_variable", "project": "Acme", "service": "watchdog", "name": "DATABASE_URL", "from_key": "ALERTS_WEBHOOK", "approved_by": GO}),
     )
     .await;
-    assert!(ran.out.contains("It replaced the value DATABASE_URL had (it was sealed)."));
+    assert!(
+        ran.out
+            .contains("It replaced the value DATABASE_URL had (it was sealed).")
+    );
 }
 
 #[tokio::test]
@@ -1131,7 +1163,11 @@ fn base() -> Value {
 #[tokio::test]
 async fn both_or_neither_is_refused_before_anything_is_sent() {
     let t = test_app();
-    let both = run(&t, merged(&base(), json!({"from_key": "ALERTS_WEBHOOK", "value": "on"}))).await;
+    let both = run(
+        &t,
+        merged(&base(), json!({"from_key": "ALERTS_WEBHOOK", "value": "on"})),
+    )
+    .await;
     assert_match(
         &both.out,
         r"Pass the value one way only: from_key .* or value .*, not both\. Nothing was changed\.$",
@@ -1155,7 +1191,10 @@ async fn a_plain_value_is_set_as_given_and_shown_with_railways_usual_deploy() {
         r#"^Set FEATURE_FLAG on web .*\nvalue: "on" \(plain value\)\nFEATURE_FLAG is a new variable on web\.\ndeploy: yes\."#,
     );
     assert_match(&ran.lines[0], r"name=FEATURE_FLAG value=plain deploy=yes ok$");
-    assert!(!ran.lines[0].contains("\"on\""), "even a plain value stays out of the log");
+    assert!(
+        !ran.lines[0].contains("\"on\""),
+        "even a plain value stays out of the log"
+    );
 }
 
 #[tokio::test]
@@ -1184,10 +1223,7 @@ async fn a_value_shaped_like_a_secret_is_refused() {
             "a URL with a password in it",
         ),
         (key, "an API key or token"),
-        (
-            "-----BEGIN RSA PRIVATE KEY-----\nabc".to_string(),
-            "a private key",
-        ),
+        ("-----BEGIN RSA PRIVATE KEY-----\nabc".to_string(), "a private key"),
     ] {
         let ran = run(&t, merged(&base(), json!({"value": value}))).await;
         assert!(
@@ -1272,7 +1308,12 @@ async fn redeploys_the_services_latest_deployment_in_the_environment_and_gives_t
     .await;
     assert_eq!(
         ran.ops(),
-        ["TarseeProjects", "TarseeProject", "TarseeLatestDeployment", "TarseeRedeploy"]
+        [
+            "TarseeProjects",
+            "TarseeProject",
+            "TarseeLatestDeployment",
+            "TarseeRedeploy"
+        ]
     );
     assert_eq!(
         ran.calls[2].variables,
@@ -1649,17 +1690,81 @@ async fn with_no_vault_given_the_token_and_the_from_key_value_come_from_the_key_
 fn names_sort_as_local_compare_sorts_them() {
     // Node's own order for these (`[...].sort((a, b) => a.localeCompare(b))`).
     let mut names = vec![
-        "web", "Web", "WEB", "web-2", "web_2", "web 2", "web2", "Worker", "worker", "A_B", "AB", "A-B", "a_b", "Ab",
-        "ab", "_x", "x", "X_Y", "x_y", "Z", "é", "e", "E", "ä", "b", "DATABASE_URL", "LOG_LEVEL", "SHARED_REGION",
-        "PORT", "api", "Api", "APIs", "API_KEY", "APIKEY", "api-key",
+        "web",
+        "Web",
+        "WEB",
+        "web-2",
+        "web_2",
+        "web 2",
+        "web2",
+        "Worker",
+        "worker",
+        "A_B",
+        "AB",
+        "A-B",
+        "a_b",
+        "Ab",
+        "ab",
+        "_x",
+        "x",
+        "X_Y",
+        "x_y",
+        "Z",
+        "é",
+        "e",
+        "E",
+        "ä",
+        "b",
+        "DATABASE_URL",
+        "LOG_LEVEL",
+        "SHARED_REGION",
+        "PORT",
+        "api",
+        "Api",
+        "APIs",
+        "API_KEY",
+        "APIKEY",
+        "api-key",
     ];
     names.sort_by(|a, b| locale_compare(a, b));
     assert_eq!(
         names,
         [
-            "_x", "ä", "a_b", "A_B", "A-B", "ab", "Ab", "AB", "api", "Api", "API_KEY", "api-key", "APIKEY", "APIs", "b",
-            "DATABASE_URL", "e", "E", "é", "LOG_LEVEL", "PORT", "SHARED_REGION", "web", "Web", "WEB", "web 2", "web_2",
-            "web-2", "web2", "worker", "Worker", "x", "x_y", "X_Y", "Z",
+            "_x",
+            "ä",
+            "a_b",
+            "A_B",
+            "A-B",
+            "ab",
+            "Ab",
+            "AB",
+            "api",
+            "Api",
+            "API_KEY",
+            "api-key",
+            "APIKEY",
+            "APIs",
+            "b",
+            "DATABASE_URL",
+            "e",
+            "E",
+            "é",
+            "LOG_LEVEL",
+            "PORT",
+            "SHARED_REGION",
+            "web",
+            "Web",
+            "WEB",
+            "web 2",
+            "web_2",
+            "web-2",
+            "web2",
+            "worker",
+            "Worker",
+            "x",
+            "x_y",
+            "X_Y",
+            "Z",
         ]
     );
     assert_eq!(locale_compare("Twin", "twin"), Ordering::Greater);
@@ -1716,7 +1821,10 @@ async fn by_default_the_line_is_logged_and_the_apps_environment_gives_the_token(
         },
     )
     .await;
-    assert!(out.starts_with("Railway projects in the owner's Railway account (4):"), "{out}");
+    assert!(
+        out.starts_with("Railway projects in the owner's Railway account (4):"),
+        "{out}"
+    );
     assert_eq!(logs.infos(), ["[railway] list_projects project=- env=- service=- ok"]);
     // Input that is not an object is no action.
     let out = railway_admin(&t.app, &json!("list_projects"), RailwayDeps::default()).await;
