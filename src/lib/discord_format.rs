@@ -88,6 +88,7 @@ pub mod js_text {
     /// meaning: `\s`, `\S`, `\d`, `\w`, `\b` and `.` as JavaScript reads them, `[\s\S]` as any character, `\uXXXX` as
     /// that character, `\/` as `/`, and `[`, `~` and `&` inside a class taken literally, as JavaScript takes them.
     /// Flags are written into the result by the caller. `\b` becomes `(?-u:\b)`, which only the `regex` crate reads.
+    /// A pattern JavaScript would refuse comes out as one the `regex` crate refuses too (or reads literally).
     pub fn translate(js: &str) -> String {
         let chars: Vec<char> = js.chars().collect();
         let mut out = String::new();
@@ -96,7 +97,10 @@ pub mod js_text {
         while i < chars.len() {
             let c = chars[i];
             if c == '\\' {
-                let next = *chars.get(i + 1).expect("a pattern does not end in a backslash");
+                let Some(&next) = chars.get(i + 1) else {
+                    out.push('\\');
+                    break;
+                };
                 i += 2;
                 match (next, in_class) {
                     ('s', false) => out.push_str(&ws()),
@@ -110,12 +114,22 @@ pub mod js_text {
                     ('W', false) => out.push_str("[^A-Za-z0-9_]"),
                     ('b', false) => out.push_str(r"(?-u:\b)"),
                     ('B', false) => out.push_str(r"(?-u:\B)"),
-                    ('S' | 'D' | 'W' | 'b' | 'B', true) => panic!("{js}: \\{next} inside a class is not translated"),
+                    ('S', true) => out.push_str(&format!("[^{WS_MEMBERS}]")),
+                    ('D', true) => out.push_str("[^0-9]"),
+                    ('W', true) => out.push_str("[^A-Za-z0-9_]"),
+                    // Inside a class JavaScript reads \b as backspace and \B as a plain "B".
+                    ('b', true) => out.push_str(r"\x08"),
+                    ('B', true) => out.push('B'),
                     ('/', _) => out.push('/'),
                     ('u', _) => {
-                        let hex: String = chars[i..i + 4].iter().collect();
-                        i += 4;
-                        out.push_str(&format!("\\x{{{hex}}}"));
+                        // `\uXXXX` is that character; without four hex digits it is a plain "u" (no `u` flag).
+                        let hex: String = chars.iter().skip(i).take(4).collect();
+                        if hex.len() == 4 && hex.chars().all(|h| h.is_ascii_hexdigit()) {
+                            i += 4;
+                            out.push_str(&format!("\\x{{{hex}}}"));
+                        } else {
+                            out.push('u');
+                        }
                     }
                     (other, _) => {
                         out.push('\\');
