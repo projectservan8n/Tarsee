@@ -29,7 +29,11 @@ pub type ToolOutput = String;
 /// The Node object also carried `db`, `settingsStore`, `channelManager` and `auditLog`. Those are the app's own
 /// (`app.db()`, the settings store, `channels::api::channel_manager(app)`, the audit log), so a turn's tools reach the
 /// same ones whoever started the turn. That is what `setToolsChannelManager` did for the channel manager: a Telegram
-/// turn built its context without one and still had to reach Telegram.
+/// turn built its context without one and still had to reach Telegram (`executeTool` fell back to the app's).
+///
+/// This holds for a tool context only. A chat command, the system prompt and the diagnostics have the channel
+/// manager only when their own caller handed it over: `lib::command_api::CommandContext::channel_manager`, and
+/// `docs/rust-port/INTERFACES.md`, "Rules for all of them".
 ///
 /// The turn layer (`ai/turn.rs`) reads the conversation from here too: the chat's pick, its session, the live
 /// timeline and Stop all go by `conversation_id`.

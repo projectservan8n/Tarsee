@@ -354,37 +354,96 @@ fn a_usage_carries_the_cost_when_the_engine_knows_it() {
         panic!("not a usage: {inside:?}")
     };
     assert_eq!(usage.usage.extra.get("cost"), Some(&json!(0.002)));
-    assert_eq!(usage.usage.cache_read_input_tokens, 0);
+    assert_eq!(
+        usage.usage.cache_read_input_tokens, None,
+        "a count nobody sent is not there"
+    );
+    assert_eq!(
+        usage.usage.cache_read(),
+        0,
+        "and reads as 0, as `usage.cache_read_input_tokens || 0` did"
+    );
 }
 
-/// `usage = { ...usage, ...event.usage }`, as every caller of a turn gathers it (`routes/chat.js`, the channels).
+/// `usage = { ...usage, ...event.usage }`, as every caller of a turn gathers it (`routes/chat.js`,
+/// `channels/websocket.js`, the five channels), with what they store from it:
+/// `tokensIn = (input + cache_read + cache_creation) || null`, `tokensOut = usage.output_tokens ?? null`. Each
+/// expected text is what Node's own spread gave for the same events.
 #[test]
 fn a_caller_gathers_the_turns_usage_as_node_spreads_it() {
-    let mut gathered = serde_json::Map::new();
-    assert_eq!(
-        Value::Object(gathered.clone()).to_string(),
-        "{}",
-        "a turn with no usage event leaves {{}}"
-    );
+    let text = |usage: &Usage| serde_json::to_string(usage).unwrap();
+    let prompt = |usage: &Usage| usage.input() + usage.cache_read() + usage.cache_creation();
+    let usage_of = |node: Value| serde_json::from_value::<Usage>(node).unwrap();
 
-    Usage {
+    // A turn with no usage event leaves {}.
+    let mut gathered = Usage::default();
+    assert_eq!(text(&gathered), "{}");
+    assert_eq!((prompt(&gathered), gathered.output_tokens), (0, None));
+
+    // The scripted usage of test/channel-turns.test.js and test/slack-bot.test.js names two counts: the other two
+    // are not made up.
+    gathered.merge(&usage_of(json!({"input_tokens": 12, "output_tokens": 3})));
+    assert_eq!(text(&gathered), r#"{"input_tokens":12,"output_tokens":3}"#);
+    assert_eq!((prompt(&gathered), gathered.output_tokens), (12, Some(3)));
+
+    // A whole usage, as the engines send it.
+    let mut gathered = Usage::default();
+    gathered.merge(&Usage {
         context_input_tokens: Some(40_000),
         ..Usage::new(10, 2, 3, 4)
-    }
-    .merge_into(&mut gathered);
+    });
     assert_eq!(
-        Value::Object(gathered.clone()).to_string(),
+        text(&gathered),
         r#"{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4,"context_input_tokens":40000}"#
     );
+    assert_eq!((prompt(&gathered), gathered.output_tokens), (17, Some(2)));
 
-    // A later event's counts replace the earlier ones; what only the earlier one had stays where it was.
-    let mut later = Usage::new(100, 20, 0, 0);
-    later.extra.insert("cost".into(), json!(0.002));
-    later.merge_into(&mut gathered);
+    // A later event's counts replace the earlier ones; what only the earlier one had stays.
+    gathered.merge(&usage_of(json!({
+        "input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "cost": 0.002
+    })));
     assert_eq!(
-        Value::Object(gathered).to_string(),
+        text(&gathered),
         r#"{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":40000,"cost":0.002}"#
     );
+
+    // A later event that names one count changes that one.
+    gathered.merge(&usage_of(json!({"output_tokens": 7})));
+    assert_eq!(
+        text(&gathered),
+        r#"{"input_tokens":100,"output_tokens":7,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":40000,"cost":0.002}"#
+    );
+    assert_eq!((prompt(&gathered), gathered.output_tokens), (100, Some(7)));
+
+    // Only the input: no output count to store (`usage.output_tokens ?? null`).
+    let mut gathered = Usage::default();
+    gathered.merge(&usage_of(json!({"input_tokens": 5})));
+    assert_eq!(text(&gathered), r#"{"input_tokens":5}"#);
+    assert_eq!(
+        (prompt(&gathered), gathered.output_tokens, gathered.output()),
+        (5, None, 0)
+    );
+}
+
+/// What an engine sends has all four counts, a zero written as a zero.
+#[test]
+fn a_usage_from_an_engine_has_all_four_counts() {
+    let usage = Usage::new(1000, 80, 0, 0);
+    assert_eq!(
+        serde_json::to_string(&usage).unwrap(),
+        r#"{"input_tokens":1000,"output_tokens":80,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}"#
+    );
+    assert_eq!(
+        (
+            usage.input(),
+            usage.output(),
+            usage.cache_read(),
+            usage.cache_creation()
+        ),
+        (1000, 80, 0, 0)
+    );
+    assert_eq!(usage.cache_read_input_tokens, Some(0));
+    assert_eq!(serde_json::to_string(&Usage::default()).unwrap(), "{}");
 }
 
 #[test]
@@ -409,6 +468,9 @@ fn what_fits_no_variant_is_kept_as_it_is_and_reading_never_fails() {
         json!({"type": "tool_result", "id": "t1", "ok": "yes"}),
         json!({"type": "usage", "usage": "none"}),
         json!({"type": "usage", "usage": {"input_tokens": -1}}),
+        // (A count that is null is not a count: the event is kept whole rather than losing the field.)
+        json!({"type": "usage", "usage": {"input_tokens": 5, "output_tokens": null}}),
+        json!({"type": "usage", "usage": {"input_tokens": 1.5}}),
         json!({"type": "done", "stopReason": 7}),
         json!({"type": "error", "message": {"text": "x"}}),
         json!({"content": "no type"}),
@@ -488,12 +550,35 @@ fn a_scripted_event_with_fields_left_out_still_reads_as_its_variant() {
         ),
         ("DeepSeek Flash", None, false, false)
     );
+    // Written back, the fields it left out are there with nothing in them (the turn layer's own routes always
+    // have all nine).
+    assert_eq!(
+        serde_json::to_string(&TurnEvent::Route(route)).unwrap(),
+        r#"{"type":"route","provider":"deepseek","engine":"claude-code","model":"deepseek-v4-flash","label":"DeepSeek Flash","providerLabel":"DeepSeek API key","effort":null,"vendor":null,"streaming":false,"backup":false}"#
+    );
+    // The text fields of a route that names nothing read, and write back, as "".
+    assert_eq!(
+        serde_json::to_string(&TurnEvent::from_value(json!({"type": "route"}))).unwrap(),
+        r#"{"type":"route","provider":"","engine":null,"model":null,"label":"","providerLabel":"","effort":null,"vendor":null,"streaming":false,"backup":false}"#
+    );
 
     let usage = TurnEvent::from_value(json!({"type": "usage", "usage": {"input_tokens": 12, "output_tokens": 3}}));
     let TurnEvent::Usage(usage) = usage else {
         panic!("not a usage: {usage:?}")
     };
-    assert_eq!(usage.usage, Usage::new(12, 3, 0, 0));
+    // The counts it left out are not there, and are not written back.
+    assert_eq!(
+        usage.usage,
+        Usage {
+            input_tokens: Some(12),
+            output_tokens: Some(3),
+            ..Default::default()
+        }
+    );
+    assert_eq!(
+        serde_json::to_string(&TurnEvent::Usage(usage)).unwrap(),
+        r#"{"type":"usage","usage":{"input_tokens":12,"output_tokens":3}}"#
+    );
 
     let error = TurnEvent::from_value(
         json!({"type": "error", "message": "The session could not be resumed.", "recoverable": true}),

@@ -227,8 +227,10 @@ fn without_type<T: DeserializeOwned>(value: &Value) -> Option<T> {
 /// `{ type: "route", provider, engine, model, label, providerLabel, effort, vendor, streaming, backup }`
 /// (`ai/turn.js` `routeEvent`).
 ///
-/// Every field is always written, `null` where there is none. Reading is lenient (a field left out reads as none or
-/// false), because tests script partial ones.
+/// The turn layer always sets every field, and every field is always written: `null` where `engine`, `model`,
+/// `effort` or `vendor` is none. Reading is lenient, because tests script partial ones: a field left out reads as
+/// `""` (`provider`, `label`, `providerLabel`), none (the four above) or false (`streaming`, `backup`), and is
+/// written back that way, not left out again.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RouteEvent {
@@ -349,25 +351,41 @@ pub struct UsageEvent {
     pub extra: Map<String, Value>,
 }
 
-/// A turn's token counts, in the Messages API's names. Callers merge the usage events of a turn
-/// (`usage = { ...usage, ...event.usage }`) and store or send the result.
+/// A turn's token counts, in the Messages API's names.
+///
+/// Each count is `None` when the object did not have it, and is left out again when written: both engines always
+/// send all four (so does [`Usage::new`]), but a scripted usage may name only some, and what a caller gathers from
+/// it must not gain counts nobody sent. [`Usage::default`] is `{}`. Read a count the way the Node code did, with
+/// [`Usage::input`] and the others (`usage.input_tokens || 0`), or as the `Option` it is
+/// (`usage.output_tokens ?? null`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Usage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_input_tokens: u64,
-    pub cache_creation_input_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub output_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub cache_read_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub cache_creation_input_tokens: Option<u64>,
     /// How full the context is: the last model call's prompt, not the turn's calls summed (`routes/chat.js`'s 95%
     /// check and the page's meter read it). Left out when the engine cannot tell.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     pub context_input_tokens: Option<u64>,
     /// Anything else an engine put there (the turn layer also reads a `cost_usd` or `cost` from here).
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
+/// A count that is there: a whole number. One that is `null` or anything else does not fit, so the event it is in
+/// is kept as it is ([`TurnEvent::Other`]) instead of losing the field.
+fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u64>, D::Error> {
+    u64::deserialize(deserializer).map(Some)
+}
+
 impl Usage {
+    /// All four counts, as an engine reports them.
     pub fn new(
         input_tokens: u64,
         output_tokens: u64,
@@ -375,24 +393,52 @@ impl Usage {
         cache_creation_input_tokens: u64,
     ) -> Self {
         Usage {
-            input_tokens,
-            output_tokens,
-            cache_read_input_tokens,
-            cache_creation_input_tokens,
+            input_tokens: Some(input_tokens),
+            output_tokens: Some(output_tokens),
+            cache_read_input_tokens: Some(cache_read_input_tokens),
+            cache_creation_input_tokens: Some(cache_creation_input_tokens),
             context_input_tokens: None,
             extra: Map::new(),
         }
     }
 
-    /// `usage = { ...usage, ...event.usage }`: writes this usage's fields over what a caller has gathered so far.
-    /// Every caller of a turn keeps its usage this way, starting from `{}`: a later event's counts replace the
-    /// earlier ones, a field only an earlier event had (`context_input_tokens`) stays, and a turn with no usage
+    /// `usage.input_tokens || 0`.
+    pub fn input(&self) -> u64 {
+        self.input_tokens.unwrap_or(0)
+    }
+
+    /// `usage.output_tokens || 0`.
+    pub fn output(&self) -> u64 {
+        self.output_tokens.unwrap_or(0)
+    }
+
+    /// `usage.cache_read_input_tokens || 0`.
+    pub fn cache_read(&self) -> u64 {
+        self.cache_read_input_tokens.unwrap_or(0)
+    }
+
+    /// `usage.cache_creation_input_tokens || 0`.
+    pub fn cache_creation(&self) -> u64 {
+        self.cache_creation_input_tokens.unwrap_or(0)
+    }
+
+    /// `usage = { ...usage, ...event.usage }`: takes over every field `later` has and keeps the rest. Every caller
+    /// of a turn gathers its usage this way, starting from `Usage::default()` (`{}`): a later event's counts replace
+    /// the earlier ones, a field only an earlier event had (`context_input_tokens`) stays, and a turn with no usage
     /// event leaves `{}`.
-    pub fn merge_into(&self, gathered: &mut Map<String, Value>) {
-        if let Ok(Value::Object(fields)) = serde_json::to_value(self) {
-            for (name, value) in fields {
-                gathered.insert(name, value);
+    pub fn merge(&mut self, later: &Usage) {
+        fn take(mine: &mut Option<u64>, theirs: Option<u64>) {
+            if theirs.is_some() {
+                *mine = theirs;
             }
+        }
+        take(&mut self.input_tokens, later.input_tokens);
+        take(&mut self.output_tokens, later.output_tokens);
+        take(&mut self.cache_read_input_tokens, later.cache_read_input_tokens);
+        take(&mut self.cache_creation_input_tokens, later.cache_creation_input_tokens);
+        take(&mut self.context_input_tokens, later.context_input_tokens);
+        for (name, value) in &later.extra {
+            self.extra.insert(name.clone(), value.clone());
         }
     }
 }

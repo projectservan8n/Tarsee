@@ -1,0 +1,51 @@
+// What the Node code answers depending on which handles its caller passed: lib/self-heal.js runDiagnostics (the
+// three contexts it gets), lib/commands.js /status and /doctor (with and without a channel manager), and
+// lib/build-system-prompt.js (the Channels section). node probe-per-caller.mjs <checkout> <state dir>
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const [root, stateDir] = process.argv.slice(2);
+const src = (rel) => pathToFileURL(path.join(root, rel)).href;
+fs.rmSync(stateDir, { recursive: true, force: true });
+fs.mkdirSync(path.join(stateDir, "workspace", "memory"), { recursive: true });
+process.env.TARSEE_STATE_DIR = stateDir;
+process.env.TARSEE_WORKSPACE_DIR = path.join(stateDir, "workspace");
+process.env.TARSEE_DATA_DIR = path.join(stateDir, "data");
+process.env.CLAUDE_CODE_OAUTH_TOKEN = "test-canary-claude-oauth-token";
+const log = console.log;
+console.log = () => {}; console.warn = () => {}; console.error = () => {};
+const { initDb } = await import(src("src/db/sqlite.js"));
+const { SettingsStore } = await import(src("src/db/settings.js"));
+const { ConversationStore } = await import(src("src/db/conversations.js"));
+const { runDiagnostics } = await import(src("src/lib/self-heal.js"));
+const { processCommand } = await import(src("src/lib/commands.js"));
+const { buildSystemPromptParts } = await import(src("src/lib/build-system-prompt.js"));
+const db = initDb(path.join(stateDir, "tarsee.db"));
+const settingsStore = new SettingsStore(db);
+const convStore = new ConversationStore(db);
+const channelManager = { getStatus: () => ({ telegram: { status: "running" }, slack: { status: "error", error: "token refused" } }) };
+const out = {};
+const checks = (list) => list.map((d) => d.check + ":" + d.status + (d.check === "ai_provider" || d.check === "channels" ? " (" + d.detail + ")" : ""));
+const only = (list) => checks(list).filter((c) => /^(ai_provider|channels)/.test(c));
+out.diagnostics = {
+  healthRoute: only(await runDiagnostics({ db, settingsStore, channelManager })),
+  debugConsole: only(await runDiagnostics({ db, channelManager })),
+  doctorFromAChannel: only(await runDiagnostics({ settingsStore, convStore, conversationId: null, platform: "telegram", owner: false, db })),
+  doctorFromTheWebChat: only(await runDiagnostics({ settingsStore, convStore, conversationId: null, channelManager, db, platform: "web" })),
+};
+const lineOf = (text, mark) => String(text).split("\n").find((l) => l.includes(mark)) || null;
+const fromChannel = { settingsStore, convStore, conversationId: null, platform: "telegram", owner: false, db };
+const fromWebChat = { settingsStore, convStore, conversationId: null, channelManager, db, platform: "web" };
+out.status = {
+  fromAChannel: lineOf((await processCommand("/status", fromChannel)).response, "Channels"),
+  fromTheWebChat: lineOf((await processCommand("/status", fromWebChat)).response, "Channels"),
+};
+out.doctor = {
+  fromAChannel: lineOf((await processCommand("/doctor", fromChannel)).response, "channels"),
+  fromTheWebChat: lineOf((await processCommand("/doctor", fromWebChat)).response, "channels"),
+};
+const prompt = (extra) => { const p = buildSystemPromptParts({ settingsStore, db, conversationId: null, messageCount: 0, ...extra }); return (p.stable + p.volatile).includes("**Channels:**"); };
+out.promptHasChannelsSection = { withoutAManager: prompt({}), withAManager: prompt({ channelManager }) };
+db.close();
+log(JSON.stringify(out, null, 1));
+process.exit(0);

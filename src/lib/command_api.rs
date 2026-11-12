@@ -9,7 +9,8 @@
 //!
 //! ```ignore
 //! if text.starts_with('/') {
-//!     let result = process_command(&app, &text, &CommandContext { platform: Some("telegram".into()), owner, conversation_id }).await?;
+//!     let ctx = CommandContext { platform: Some("telegram".into()), owner, conversation_id, ..Default::default() };
+//!     let result = process_command(&app, &text, &ctx).await?;
 //!     if result.handled {
 //!         match extract_playbook_prompt(&result).filter(|playbook| !playbook.is_empty()) {
 //!             Some(playbook) => ai_prompt_override = Some(playbook),          // the AI gets the playbook as the user's turn
@@ -25,16 +26,17 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::app::App;
+use crate::channels::api::ChannelApi;
 
-/// What a caller says about where a command came from: the Node `ctx` of `processCommand`, without what now comes
-/// from the `App`.
+/// What a caller hands a command: the Node `ctx` of `processCommand`.
 ///
-/// The Node object also carried `settingsStore`, `convStore`, `db` and `channelManager` (all the app's own now).
-/// `lib/commands.js` reads four more that no caller in `src/` passes: `clearConversation` and `abortController`
-/// (hooks nobody supplies), and `ai` and `autoSummarize` (its own tests' seams). Those stay inside
-/// `lib/commands.rs`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+/// The Node object also carried `settingsStore`, `convStore` and `db`. Every caller passed all three, so they are
+/// the app's own now. **The channel manager is not like them**: one caller passed it and six did not, and two
+/// commands answer differently for it, so it stays a field here ([`CommandContext::channel_manager`]).
+///
+/// `lib/commands.js` reads three more that no caller in `src/` passes: `clearConversation` and `abortController`
+/// (hooks nobody supplies) and `ai` (its own tests' seam). Those stay inside `lib/commands.rs`.
+#[derive(Clone, Default)]
 pub struct CommandContext {
     /// The chat the command was typed in. `None` when there is none yet (a Slack slash command, a first message).
     pub conversation_id: Option<String>,
@@ -45,7 +47,55 @@ pub struct CommandContext {
     /// on that platform's allowlist. The owner's commands (`/cron`, `/briefing`, `/webhook`) need it, or the
     /// dashboard. Email never says it: a From address is easy to fake.
     pub owner: bool,
+    /// The channel manager, when the caller hands it over: the Node `ctx.channelManager`.
+    ///
+    /// Only the web chat's `POST /api/chat/send` does (`routes/chat.js`: `channelManager:
+    /// req.app.get("channelManager")`, here `channel_manager: channels::api::channel_manager(app)`). Telegram,
+    /// Discord, Slack, WhatsApp, email and the dashboard's WebSocket do not, and leave it `None`.
+    ///
+    /// `/status` shows its "Channels" line and `/doctor` checks the channels only when it is there
+    /// (`lib/commands.js` `if (ctx.channelManager)`, `lib/self-heal.js` `runDiagnostics(ctx)`). So a command reads
+    /// the manager from here and never from the app, where there always is one. (`/send` hands its context to the
+    /// `send_message` tool, and a tool does reach the app's manager: `lib/tool_api.rs`.)
+    pub channel_manager: Option<Arc<dyn ChannelApi>>,
 }
+
+impl CommandContext {
+    /// The context with this channel manager, or without one: `{ ...ctx, channelManager }`.
+    pub fn with_channel_manager(mut self, channel_manager: Option<Arc<dyn ChannelApi>>) -> Self {
+        self.channel_manager = channel_manager;
+        self
+    }
+}
+
+impl std::fmt::Debug for CommandContext {
+    /// The manager shows as whether one was handed over.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommandContext")
+            .field("conversation_id", &self.conversation_id)
+            .field("platform", &self.platform)
+            .field("owner", &self.owner)
+            .field("channel_manager", &self.channel_manager.is_some())
+            .finish()
+    }
+}
+
+impl PartialEq for CommandContext {
+    /// Two contexts are the same when they say the same and hold the very same channel manager (or none).
+    fn eq(&self, other: &Self) -> bool {
+        let same_manager = match (&self.channel_manager, &other.channel_manager) {
+            (None, None) => true,
+            (Some(mine), Some(theirs)) => Arc::ptr_eq(mine, theirs),
+            _ => false,
+        };
+        same_manager
+            && self.conversation_id == other.conversation_id
+            && self.platform == other.platform
+            && self.owner == other.owner
+    }
+}
+
+impl Eq for CommandContext {}
 
 /// What a command gave back: `{ handled, response? }`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,9 +213,11 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::testkit::test_app;
+    use crate::channels::api::{ChannelState, ChannelStatus, channel_manager};
+    use crate::testkit::{FakeChannels, test_app};
 
-    /// Knows one command, `/hello`, and refuses `/cron` to anyone but the owner.
+    /// Knows `/hello`, refuses `/cron` to anyone but the owner, and answers `/status` with the channels line
+    /// `lib/commands.js` adds `if (ctx.channelManager)`.
     struct Tiny;
 
     #[async_trait]
@@ -184,6 +236,18 @@ mod tests {
                     CommandResult::handled("No scheduled tasks yet.")
                 }
                 "/cron" => CommandResult::handled("Only the owner can use /cron"),
+                "/status" => {
+                    let mut lines = vec!["**Tarsee Status**".to_string()];
+                    if let Some(manager) = &ctx.channel_manager {
+                        let channels: Vec<String> = manager
+                            .get_status()
+                            .iter()
+                            .map(|(kind, status)| format!("{kind}: {}", status.status.as_str()))
+                            .collect();
+                        lines.push(format!("📡 **Channels:** {}", channels.join(" · ")));
+                    }
+                    CommandResult::handled(lines.join("\n"))
+                }
                 "/boom" => anyhow::bail!("the handler threw"),
                 _ => CommandResult::not_handled(),
             })
@@ -321,23 +385,96 @@ mod tests {
         assert_eq!(extract_playbook_prompt(&CommandResult::handled("__PLAYBOOK__ x")), None);
     }
 
+    /// `lib/commands.js` `/status`, run in Node with the context a chat channel builds and with the one
+    /// `routes/chat.js` builds, against a manager whose Telegram runs and whose Slack failed: no channels line, and
+    /// `📡 **Channels:** telegram: running · slack: error`.
+    #[tokio::test]
+    async fn a_command_has_the_channel_manager_only_when_its_caller_handed_it_over() {
+        let t = test_app();
+        install_command_handler(&t.app, Arc::new(Tiny));
+        // The app has a channel manager all along: that is not what decides it.
+        let channels = FakeChannels::install(&t.app);
+        channels.set_status("telegram", ChannelStatus::bare(ChannelState::Running));
+        channels.set_status("slack", ChannelStatus::bare(ChannelState::Error));
+
+        // Telegram, Discord, Slack, WhatsApp, email and the WebSocket: no manager in the context.
+        let from_a_channel = CommandContext {
+            conversation_id: Some("conv-1".into()),
+            platform: Some("telegram".into()),
+            owner: true,
+            ..Default::default()
+        };
+        assert!(from_a_channel.channel_manager.is_none());
+        let said = process_command(&t.app, "/status", &from_a_channel)
+            .await
+            .unwrap()
+            .response
+            .unwrap();
+        assert_eq!(said, "**Tarsee Status**", "no channels line");
+
+        // routes/chat.js: `channelManager: req.app.get("channelManager")`.
+        let from_the_web_chat = CommandContext {
+            conversation_id: Some("conv-1".into()),
+            platform: Some("web".into()),
+            channel_manager: channel_manager(&t.app),
+            ..Default::default()
+        };
+        let said = process_command(&t.app, "/status", &from_the_web_chat)
+            .await
+            .unwrap()
+            .response
+            .unwrap();
+        assert_eq!(
+            said,
+            "**Tarsee Status**\n📡 **Channels:** telegram: running · slack: error"
+        );
+
+        // The web chat before the app has a manager (`req.app.get("channelManager")` is undefined): none either.
+        let early = test_app();
+        install_command_handler(&early.app, Arc::new(Tiny));
+        let ctx = CommandContext::default().with_channel_manager(channel_manager(&early.app));
+        assert_eq!(
+            process_command(&early.app, "/status", &ctx)
+                .await
+                .unwrap()
+                .response
+                .unwrap(),
+            "**Tarsee Status**"
+        );
+    }
+
     /// The contexts the channels and the web chat build (`channels/*.js`, `routes/chat.js`).
     #[test]
-    fn the_context_reads_the_node_keys_and_says_nothing_by_default() {
-        let ctx: CommandContext =
-            serde_json::from_value(json!({"conversationId": "c1", "platform": "discord", "owner": true})).unwrap();
-        assert_eq!(
-            ctx,
-            CommandContext {
-                conversation_id: Some("c1".into()),
-                platform: Some("discord".into()),
-                owner: true
-            }
-        );
+    fn a_context_says_nothing_by_default_and_two_are_the_same_only_with_the_same_manager() {
         let silent = CommandContext::default();
         assert_eq!(
-            (silent.conversation_id, silent.platform, silent.owner),
+            (silent.conversation_id.clone(), silent.platform.clone(), silent.owner),
             (None, None, false)
         );
+        assert!(silent.channel_manager.is_none());
+
+        let discord = CommandContext {
+            conversation_id: Some("c1".into()),
+            platform: Some("discord".into()),
+            owner: true,
+            ..Default::default()
+        };
+        assert_eq!(discord, discord.clone());
+        assert_ne!(discord, silent);
+
+        let manager: Arc<dyn ChannelApi> = FakeChannels::new();
+        let other: Arc<dyn ChannelApi> = FakeChannels::new();
+        let with = discord.clone().with_channel_manager(Some(manager.clone()));
+        assert_ne!(
+            with, discord,
+            "handing the manager over is part of what the caller said"
+        );
+        assert_eq!(with, discord.clone().with_channel_manager(Some(manager)));
+        assert_ne!(with, discord.clone().with_channel_manager(Some(other)));
+        assert_eq!(with.clone().with_channel_manager(None), discord);
+
+        // It shows whether a manager was handed over, not the manager.
+        assert!(format!("{discord:?}").contains("channel_manager: false"));
+        assert!(format!("{with:?}").contains("channel_manager: true"));
     }
 }
