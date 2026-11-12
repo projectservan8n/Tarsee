@@ -1,0 +1,458 @@
+// Captures what the Node MCP endpoint (src/ai/mcp-http.js + tarsee-mcp.js) answers, byte for byte.
+// Run: node capture.mjs <main checkout> <out dir> [timezone]
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const [root, outDir, tz] = process.argv.slice(2);
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tarsee-s4-capture-"));
+process.env.TARSEE_STATE_DIR = tmp;
+process.env.TARSEE_WORKSPACE_DIR = path.join(tmp, "workspace");
+process.env.TARSEE_DATA_DIR = path.join(tmp, "data");
+delete process.env.TARSEE_TOOL_RESULT_MAX_CHARS;
+if (tz) process.env.TARSEE_TIMEZONE = tz; else delete process.env.TARSEE_TIMEZONE;
+delete process.env.TZ;
+
+const imp = (rel) => import(pathToFileURL(path.join(root, rel)).href);
+const { initDb } = await imp("src/db/sqlite.js");
+const { SettingsStore } = await imp("src/db/settings.js");
+const { getSecurityManager } = await imp("src/lib/security-manager.js");
+const mcp = await imp("src/ai/mcp-http.js");
+const config = (await imp("src/config/env.js")).default;
+
+fs.mkdirSync(process.env.TARSEE_WORKSPACE_DIR, { recursive: true });
+const db = initDb(path.join(tmp, "tarsee.db"));
+const settings = new SettingsStore(db);
+for (const t of ["calculator", "remember", "read_file", "datetime", "list_files"]) getSecurityManager(settings).setToolPermission(t, "always_allow");
+
+const endpoint = await mcp.startMcpHttp();
+const grant = mcp.grantTurn({ db, settingsStore: settings, conversationId: "conv-capture" }, { turnId: "turn-capture" });
+
+function raw({ method = "POST", urlPath = "/mcp", token = grant.token, host, headers = {}, body, noAccept = false, noContentType = false, chunked, bodyBytes }) {
+  if (bodyBytes) body = bodyBytes;
+  return new Promise((resolve, reject) => {
+    const h = {};
+    if (!noContentType && body != null) h["content-type"] = "application/json";
+    if (!noAccept) h.accept = "application/json, text/event-stream";
+    Object.assign(h, headers);
+    if (token) h.authorization = `Bearer ${token}`;
+    if (host) h.host = host;
+    if (body != null) h["content-length"] = Buffer.byteLength(body);
+    const req = http.request({ host: "127.0.0.1", port: endpoint.port, method, path: urlPath, headers: h, agent: false }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => resolve({ status: res.statusCode, rawHeaders: res.rawHeaders, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+    req.on("error", (err) => (err.code === "EPIPE" || err.code === "ECONNRESET" ? resolve({ error: err.code }) : reject(err)));
+    if (chunked != null) { req.write(chunked.slice(0, 10)); req.end(chunked.slice(10)); }
+    else if (body != null) req.end(body); else req.end();
+  });
+}
+
+let toolsJson = null;
+const out = { timezone: config.TIMEZONE, port: "<port>", cases: {} };
+const scrub = (r) => {
+  if (!r.rawHeaders) return r;
+  const headers = [];
+  for (let i = 0; i < r.rawHeaders.length; i += 2) {
+    const name = r.rawHeaders[i];
+    let value = r.rawHeaders[i + 1];
+    if (/^date$/i.test(name)) value = "<date>";
+    headers.push([name, value]);
+  }
+  // The temp folder inside a body (a JSON text: its backslashes are escaped once, or twice where a tool's text
+  // quotes a path inside JSON), and the tool list (kept once, in its own fixture).
+  let body = r.body;
+  const esc = JSON.stringify(tmp).slice(1, -1);
+  body = body.split(JSON.stringify(esc).slice(1, -1)).join("<tmp>");
+  body = body.split(esc).join("<tmp>");
+  if (toolsJson && body.includes(toolsJson)) body = body.split(toolsJson).join('"<tools>"');
+  return { status: r.status, headers, body };
+};
+async function cap(name, req) {
+  const body = req.bodyBytes ? undefined : req.body === undefined ? undefined : (typeof req.body === "string" ? req.body : JSON.stringify(req.body));
+  const r = await raw({ ...req, body });
+  out.cases[name] = { request: { method: req.method || "POST", path: req.urlPath || "/mcp", headers: req.headers || {}, body: body ?? null, ...(req.bodyBytes ? { bodyBase64: req.bodyBytes.toString("base64") } : {}), ...(req.chunked ? { chunked: req.chunked } : {}), ...(req.noAccept ? { noAccept: true } : {}), ...(req.noContentType ? { noContentType: true } : {}), ...(req.token === null ? { noToken: true } : {}), ...(typeof req.token === "string" ? { wrongToken: true } : {}), ...(req.host ? { host: req.host } : {}) }, response: scrub(r) };
+  return r;
+}
+
+const INIT = (v, extra = {}) => ({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: v, capabilities: {}, clientInfo: { name: "raw", version: "1.0.0" }, ...extra } });
+const call = (id, name, args, extra = {}) => ({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args, ...extra } });
+
+// --- initialize
+for (const v of ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07", "1999-01-01", "2026-01-01"]) await cap(`initialize ${v}`, { body: INIT(v) });
+await cap("initialize no params", { body: { jsonrpc: "2.0", id: 1, method: "initialize" } });
+await cap("initialize no protocolVersion", { body: { jsonrpc: "2.0", id: 1, method: "initialize", params: { capabilities: {}, clientInfo: { name: "raw", version: "1.0.0" } } } });
+await cap("initialize no clientInfo", { body: { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } } });
+await cap("initialize no capabilities", { body: { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", clientInfo: { name: "raw", version: "1.0.0" } } } });
+await cap("initialize protocolVersion number", { body: { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 5, capabilities: {}, clientInfo: { name: "raw", version: "1.0.0" } } } });
+await cap("initialize string id", { body: { ...INIT("2025-06-18"), id: "abc" } });
+await cap("initialize id 0", { body: { ...INIT("2025-06-18"), id: 0 } });
+await cap("initialize id null", { body: { ...INIT("2025-06-18"), id: null } });
+await cap("initialize id float", { body: '{"jsonrpc":"2.0","id":1.5,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"raw","version":"1.0.0"}}}' });
+await cap("initialize with mcp-protocol-version header", { body: INIT("2025-06-18"), headers: { "mcp-protocol-version": "2025-06-18" } });
+await cap("initialize with bad mcp-protocol-version header", { body: INIT("2025-06-18"), headers: { "mcp-protocol-version": "1999-01-01" } });
+
+// --- notifications
+await cap("notifications/initialized", { body: { jsonrpc: "2.0", method: "notifications/initialized" } });
+await cap("notifications/cancelled", { body: { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 1 } } });
+await cap("notification unknown", { body: { jsonrpc: "2.0", method: "notifications/whatever" } });
+await cap("notification without jsonrpc", { body: { method: "notifications/initialized" } });
+await cap("notification batch", { body: [{ jsonrpc: "2.0", method: "notifications/initialized" }, { jsonrpc: "2.0", method: "notifications/cancelled" }] });
+await cap("empty batch", { body: [] });
+
+// --- ping, tools/list
+await cap("ping", { body: { jsonrpc: "2.0", id: 2, method: "ping" } });
+await cap("ping with params", { body: { jsonrpc: "2.0", id: 2, method: "ping", params: {} } });
+const list = await raw({ body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list" }) });
+toolsJson = JSON.stringify(JSON.parse(list.body).result.tools);
+if (!list.body.includes(toolsJson)) throw new Error("the tool list does not round-trip");
+await cap("tools/list", { body: { jsonrpc: "2.0", id: 3, method: "tools/list" } });
+await cap("tools/list with params", { body: { jsonrpc: "2.0", id: 3, method: "tools/list", params: {} } });
+await cap("tools/list with cursor", { body: { jsonrpc: "2.0", id: 3, method: "tools/list", params: { cursor: "abc" } } });
+await cap("tools/list with protocol header 2025-06-18", { body: { jsonrpc: "2.0", id: 3, method: "tools/list" }, headers: { "mcp-protocol-version": "2025-06-18" } });
+await cap("tools/list with bad protocol header", { body: { jsonrpc: "2.0", id: 3, method: "tools/list" }, headers: { "mcp-protocol-version": "1999-01-01" } });
+await cap("tools/list with session header", { body: { jsonrpc: "2.0", id: 3, method: "tools/list" }, headers: { "mcp-session-id": "abc" } });
+
+// --- other methods
+for (const m of ["resources/list", "prompts/list", "resources/templates/list", "logging/setLevel", "completion/complete", "nope/nope", "tools/nope", "notifications/initialized"]) {
+  await cap(`method ${m}`, { body: { jsonrpc: "2.0", id: 4, method: m } });
+}
+await cap("method with params {}", { body: { jsonrpc: "2.0", id: 4, method: "resources/list", params: {} } });
+
+// --- malformed requests
+await cap("not json", { body: "{not json" });
+await cap("empty body", { body: "" });
+await cap("json null", { body: "null" });
+await cap("json string", { body: '"hello"' });
+await cap("json number", { body: "5" });
+await cap("json true", { body: "true" });
+await cap("empty object", { body: {} });
+await cap("no jsonrpc", { body: { id: 1, method: "ping" } });
+await cap("jsonrpc 1.0", { body: { jsonrpc: "1.0", id: 1, method: "ping" } });
+await cap("no method", { body: { jsonrpc: "2.0", id: 1 } });
+await cap("method number", { body: { jsonrpc: "2.0", id: 1, method: 5 } });
+await cap("id object", { body: { jsonrpc: "2.0", id: {}, method: "ping" } });
+await cap("id true", { body: { jsonrpc: "2.0", id: true, method: "ping" } });
+await cap("params array", { body: { jsonrpc: "2.0", id: 1, method: "ping", params: [1] } });
+await cap("params string", { body: { jsonrpc: "2.0", id: 1, method: "tools/list", params: "x" } });
+await cap("params null", { body: { jsonrpc: "2.0", id: 1, method: "tools/list", params: null } });
+await cap("a response sent as a request", { body: { jsonrpc: "2.0", id: 1, result: {} } });
+await cap("an error sent as a request", { body: { jsonrpc: "2.0", id: 1, error: { code: -1, message: "x" } } });
+await cap("extra top-level field", { body: { jsonrpc: "2.0", id: 1, method: "ping", extra: 1 } });
+await cap("bom then json", { body: "﻿" + JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) });
+await cap("whitespace around json", { body: "  \n" + JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) + "\n " });
+await cap("duplicate keys", { body: '{"jsonrpc":"2.0","id":1,"method":"nope","method":"ping"}' });
+
+// --- batches
+await cap("batch of two requests", { body: [{ jsonrpc: "2.0", id: 1, method: "ping" }, { jsonrpc: "2.0", id: 2, method: "tools/list" }] });
+await cap("batch of one request", { body: [{ jsonrpc: "2.0", id: 1, method: "ping" }] });
+await cap("batch request and notification", { body: [{ jsonrpc: "2.0", id: 1, method: "ping" }, { jsonrpc: "2.0", method: "notifications/initialized" }] });
+await cap("batch with initialize", { body: [INIT("2025-06-18"), { jsonrpc: "2.0", id: 2, method: "ping" }] });
+await cap("batch with an invalid member", { body: [{ jsonrpc: "2.0", id: 1, method: "ping" }, { nope: 1 }] });
+await cap("batch of two calls", { body: [call(1, "tarsee_calculator", { expression: "1+1" }), call(2, "tarsee_calculator", { expression: "2+2" })] });
+
+// --- headers
+await cap("no accept header", { body: { jsonrpc: "2.0", id: 1, method: "ping" }, noAccept: true });
+await cap("accept json only", { body: { jsonrpc: "2.0", id: 1, method: "ping" }, headers: { accept: "application/json" } });
+await cap("accept sse only", { body: { jsonrpc: "2.0", id: 1, method: "ping" }, headers: { accept: "text/event-stream" } });
+await cap("accept star", { body: { jsonrpc: "2.0", id: 1, method: "ping" }, headers: { accept: "*/*" } });
+await cap("accept upper case", { body: { jsonrpc: "2.0", id: 1, method: "ping" }, headers: { accept: "APPLICATION/JSON, TEXT/EVENT-STREAM" } });
+await cap("content-type text/plain", { body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }), headers: { "content-type": "text/plain" } });
+await cap("content-type with charset", { body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }), headers: { "content-type": "application/json; charset=utf-8" } });
+await cap("content-type upper case", { body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }), headers: { "content-type": "Application/JSON" } });
+await cap("no content-type", { body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }), noContentType: true });
+await cap("notification no accept", { body: { jsonrpc: "2.0", method: "notifications/initialized" }, noAccept: true });
+await cap("notification text/plain", { body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }), headers: { "content-type": "text/plain" } });
+
+// --- methods and paths
+await cap("GET", { method: "GET" });
+await cap("GET with sse accept", { method: "GET", headers: { accept: "text/event-stream" } });
+await cap("DELETE", { method: "DELETE" });
+await cap("PUT", { method: "PUT", body: "{}" });
+await cap("OPTIONS", { method: "OPTIONS" });
+await cap("HEAD", { method: "HEAD" });
+await cap("POST /", { urlPath: "/", body: INIT("2025-06-18") });
+await cap("POST /mcp/", { urlPath: "/mcp/", body: INIT("2025-06-18") });
+await cap("POST /mcp?x=1", { urlPath: "/mcp?x=1", body: { jsonrpc: "2.0", id: 1, method: "ping" } });
+await cap("POST /MCP", { urlPath: "/MCP", body: INIT("2025-06-18") });
+await cap("POST //mcp", { urlPath: "//mcp", body: { jsonrpc: "2.0", id: 1, method: "ping" } });
+await cap("POST /mcp#frag", { urlPath: "/mcp#frag", body: { jsonrpc: "2.0", id: 1, method: "ping" } });
+await cap("POST /x/../mcp", { urlPath: "/x/../mcp", body: { jsonrpc: "2.0", id: 1, method: "ping" } });
+await cap("POST /%6dcp", { urlPath: "/%6dcp", body: { jsonrpc: "2.0", id: 1, method: "ping" } });
+await cap("GET /", { method: "GET", urlPath: "/" });
+
+// --- who may call
+await cap("no token", { token: null, body: INIT("2025-06-18") });
+await cap("wrong token", { token: Buffer.alloc(32, 7).toString("base64url"), body: INIT("2025-06-18") });
+await cap("no token GET", { token: null, method: "GET" });
+await cap("no token wrong path", { token: null, urlPath: "/", body: INIT("2025-06-18") });
+await cap("foreign host", { host: "evil.example", body: INIT("2025-06-18") });
+await cap("localhost host", { host: `localhost:${endpoint.port}`, body: { jsonrpc: "2.0", id: 1, method: "ping" } });
+await cap("LOCALHOST host upper", { host: `LOCALHOST:${endpoint.port}`, body: { jsonrpc: "2.0", id: 1, method: "ping" } });
+await cap("foreign origin", { headers: { origin: "https://evil.example" }, body: INIT("2025-06-18") });
+await cap("own origin", { headers: { origin: `http://127.0.0.1:${endpoint.port}` }, body: { jsonrpc: "2.0", id: 1, method: "ping" } });
+await cap("localhost origin", { headers: { origin: `http://localhost:${endpoint.port}` }, body: { jsonrpc: "2.0", id: 1, method: "ping" } });
+await cap("origin upper case", { headers: { origin: `HTTP://127.0.0.1:${endpoint.port}` }, body: { jsonrpc: "2.0", id: 1, method: "ping" } });
+await cap("empty origin", { headers: { origin: "" }, body: { jsonrpc: "2.0", id: 1, method: "ping" } });
+await cap("foreign host no token", { token: null, host: "evil.example", body: INIT("2025-06-18") });
+for (const [name, value] of [["lower bearer", `bearer ${grant.token}`], ["BEARER", `BEARER ${grant.token}`], ["two spaces", `Bearer  ${grant.token}`], ["tab", `Bearer\t${grant.token}`], ["trailing space", `Bearer ${grant.token} `], ["leading space", ` Bearer ${grant.token}`], ["no scheme", grant.token], ["basic", `Basic ${grant.token}`], ["extra word", `Bearer ${grant.token} x`], ["no space", `Bearer${grant.token}`]]) {
+  await cap(`authorization ${name}`, { token: null, headers: { authorization: value }, body: { jsonrpc: "2.0", id: 1, method: "ping" } });
+}
+
+// --- tools/call
+await cap("call ok", { body: call(10, "tarsee_calculator", { expression: "6 * 7" }) });
+await cap("call ok string id", { body: call("x-1", "tarsee_calculator", { expression: "6 * 7" }) });
+await cap("call with _meta", { body: call(10, "tarsee_calculator", { expression: "6 * 7" }, { _meta: { progressToken: "p1" } }) });
+await cap("call unknown tool", { body: call(11, "tarsee_nope", {}) });
+await cap("call unprefixed tool", { body: call(11, "calculator", { expression: "1" }) });
+await cap("call no name", { body: { jsonrpc: "2.0", id: 12, method: "tools/call", params: { arguments: {} } } });
+await cap("call name number", { body: { jsonrpc: "2.0", id: 12, method: "tools/call", params: { name: 5, arguments: {} } } });
+await cap("call no params", { body: { jsonrpc: "2.0", id: 12, method: "tools/call" } });
+await cap("call no arguments (required field)", { body: { jsonrpc: "2.0", id: 13, method: "tools/call", params: { name: "tarsee_calculator" } } });
+await cap("call no arguments (no fields)", { body: { jsonrpc: "2.0", id: 13, method: "tools/call", params: { name: "tarsee_list_files" } } });
+await cap("call arguments null (no fields)", { body: { jsonrpc: "2.0", id: 13, method: "tools/call", params: { name: "tarsee_list_files", arguments: null } } });
+await cap("call arguments array", { body: { jsonrpc: "2.0", id: 13, method: "tools/call", params: { name: "tarsee_list_files", arguments: [] } } });
+await cap("call arguments string", { body: { jsonrpc: "2.0", id: 13, method: "tools/call", params: { name: "tarsee_list_files", arguments: "x" } } });
+await cap("call extra field (no fields tool)", { body: call(13, "tarsee_list_files", { extra: 1 }) });
+// input checking
+await cap("missing required", { body: call(20, "tarsee_calculator", {}) });
+await cap("wrong type", { body: call(21, "tarsee_calculator", { expression: 5 }) });
+await cap("null for required", { body: call(21, "tarsee_calculator", { expression: null }) });
+await cap("null for optional", { body: call(21, "tarsee_datetime", { timezone: null }) });
+await cap("enum not in list", { body: call(22, "tarsee_datetime", { format: "nope" }) });
+await cap("enum wrong type", { body: call(22, "tarsee_datetime", { format: 5 }) });
+await cap("extra field", { body: call(23, "tarsee_calculator", { expression: "1 + 1", extra: true }) });
+await cap("two missing", { body: call(24, "tarsee_send_message", {}) });
+await cap("missing and wrong", { body: call(24, "tarsee_send_message", { channel: "nope", message: 5 }) });
+await cap("nested wrong type", { body: call(25, "tarsee_configure_email_channel", { imap: { port: "993" } }) });
+await cap("nested not object", { body: call(25, "tarsee_configure_email_channel", { imap: "x" }) });
+await cap("nested extra field", { body: call(25, "tarsee_schedule_task", { schedule: "0 8 * * *", action: { tool: "x", args: {}, more: 1 } }) });
+await cap("array item wrong type", { body: call(26, "tarsee_configure_email_channel", { allowlistFromAddresses: ["a@b.c", 5] }) });
+await cap("array not array", { body: call(26, "tarsee_configure_email_channel", { allowlistFromAddresses: "a@b.c" }) });
+await cap("array of objects item missing", { body: call(27, "tarsee_create_diagram", { title: "t", nodes: [{ id: "a", label: "A", kind: "trigger" }, { id: "b" }], edges: [] }) });
+await cap("array of objects enum", { body: call(27, "tarsee_create_diagram", { title: "t", nodes: [{ id: "a", label: "A", kind: "zzz" }], edges: [{ from: "a" }] }) });
+await cap("union string ok is not reached", { body: call(28, "tarsee_send_email_thread", { to: 5, subject: "s", body: "b" }) });
+await cap("union array item wrong", { body: call(28, "tarsee_send_email_thread", { to: ["a@b.c", 5], subject: "s", body: "b" }) });
+await cap("union object", { body: call(28, "tarsee_send_email_thread", { to: {}, subject: "s", body: "b" }) });
+await cap("union null", { body: call(28, "tarsee_send_email_thread", { to: null, subject: "s", body: "b" }) });
+await cap("union optional wrong", { body: call(28, "tarsee_send_email_thread", { to: "a@b.c", cc: 5, subject: "s", body: "b" }) });
+await cap("number as string", { body: call(29, "tarsee_web_search", { query: "q", num_results: "5" }) });
+await cap("boolean as string", { body: call(29, "tarsee_web_fetch", { url: "u", raw: "true" }) });
+await cap("number NaN-ish", { body: '{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{"name":"tarsee_web_search","arguments":{"query":"q","num_results":1e999}}}' });
+await cap("number float ok", { body: call(29, "tarsee_pdf_read", { path: "nope.pdf", max_chars: 1.5 }) });
+await cap("record not object", { body: call(30, "tarsee_schedule_task", { schedule: "0 8 * * *", action: { tool: "x", args: "nope" } }) });
+await cap("record array", { body: call(30, "tarsee_schedule_task", { schedule: "0 8 * * *", action: { tool: "x", args: [] } }) });
+await cap("record null", { body: call(30, "tarsee_schedule_task", { schedule: "0 8 * * *", action: { tool: "x", args: null } }) });
+await cap("record missing", { body: call(30, "tarsee_schedule_task", { schedule: "0 8 * * *", action: { tool: "x" } }) });
+await cap("schedule neither prompt nor action", { body: call(31, "tarsee_schedule_task", { schedule: "0 8 * * *" }) });
+await cap("schedule empty prompt", { body: call(31, "tarsee_schedule_task", { schedule: "0 8 * * *", prompt: "" }) });
+await cap("string with wrong type bool", { body: call(32, "tarsee_calculator", { expression: true }) });
+await cap("string with array", { body: call(32, "tarsee_calculator", { expression: ["x"] }) });
+await cap("string with object", { body: call(32, "tarsee_calculator", { expression: {} }) });
+await cap("bool with number", { body: call(32, "tarsee_web_fetch", { url: "u", raw: 1 }) });
+await cap("number with bool", { body: call(32, "tarsee_web_search", { query: "q", num_results: true }) });
+await cap("number with null", { body: call(32, "tarsee_web_search", { query: "q", num_results: null }) });
+await cap("number with object", { body: call(32, "tarsee_web_search", { query: "q", num_results: {} }) });
+await cap("number with array", { body: call(32, "tarsee_web_search", { query: "q", num_results: [] }) });
+await cap("object with array", { body: call(32, "tarsee_configure_email_channel", { imap: [] }) });
+await cap("object with null", { body: call(32, "tarsee_configure_email_channel", { imap: null }) });
+await cap("object with number", { body: call(32, "tarsee_configure_email_channel", { imap: 5 }) });
+await cap("array with object", { body: call(32, "tarsee_configure_email_channel", { allowlistFromAddresses: {} }) });
+await cap("array with null", { body: call(32, "tarsee_configure_email_channel", { allowlistFromAddresses: null }) });
+await cap("enum with null", { body: call(32, "tarsee_datetime", { format: null }) });
+await cap("enum with object", { body: call(32, "tarsee_datetime", { format: {} }) });
+await cap("deep path", { body: call(33, "tarsee_discord_admin", { action: "edit_channel", permissions: [{ target: "everyone", allow: ["ViewChannel", 5], target_type: "bot" }] }) });
+await cap("proto key", { body: '{"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"tarsee_calculator","arguments":{"expression":"1+1","__proto__":{"x":1}}}}' });
+await cap("call after valid: remember", { body: call(40, "tarsee_remember", { content: "The canary fact is teal-42", category: "fact" }) });
+await cap("call datetime iso", { body: call(41, "tarsee_datetime", { format: "iso", date: "2026-04-17" }) });
+
+// --- round 2
+await cap("tools/list cursor number", { body: { jsonrpc: "2.0", id: 3, method: "tools/list", params: { cursor: 5 } } });
+await cap("tools/list extra param", { body: { jsonrpc: "2.0", id: 3, method: "tools/list", params: { more: 5 } } });
+await cap("call with task {}", { body: call(50, "tarsee_calculator", { expression: "6 * 7" }, { task: {} }) });
+await cap("call with task ttl", { body: call(50, "tarsee_calculator", { expression: "6 * 7" }, { task: { ttl: 5 } }) });
+await cap("call with task number", { body: call(50, "tarsee_calculator", { expression: "6 * 7" }, { task: 5 }) });
+await cap("call with task ttl string", { body: call(50, "tarsee_calculator", { expression: "6 * 7" }, { task: { ttl: "x" } }) });
+await cap("call unknown tool with task", { body: call(50, "tarsee_nope", {}, { task: {} }) });
+await cap("_meta number", { body: { jsonrpc: "2.0", id: 51, method: "ping", params: { _meta: 5 } } });
+await cap("_meta null", { body: { jsonrpc: "2.0", id: 51, method: "ping", params: { _meta: null } } });
+await cap("_meta array", { body: { jsonrpc: "2.0", id: 51, method: "ping", params: { _meta: [] } } });
+await cap("_meta empty", { body: { jsonrpc: "2.0", id: 51, method: "ping", params: { _meta: {} } } });
+await cap("_meta extra keys", { body: { jsonrpc: "2.0", id: 51, method: "ping", params: { _meta: { anything: [1] }, other: 1 } } });
+await cap("_meta progressToken object", { body: { jsonrpc: "2.0", id: 51, method: "ping", params: { _meta: { progressToken: {} } } } });
+await cap("_meta progressToken float", { body: '{"jsonrpc":"2.0","id":51,"method":"ping","params":{"_meta":{"progressToken":1.5}}}' });
+await cap("_meta progressToken int", { body: { jsonrpc: "2.0", id: 51, method: "ping", params: { _meta: { progressToken: 7 } } } });
+await cap("_meta related task", { body: { jsonrpc: "2.0", id: 51, method: "ping", params: { _meta: { "io.modelcontextprotocol/related-task": { taskId: "t1" } } } } });
+await cap("_meta related task bad", { body: { jsonrpc: "2.0", id: 51, method: "ping", params: { _meta: { "io.modelcontextprotocol/related-task": { taskId: 5 } } } } });
+await cap("_meta related task not object", { body: { jsonrpc: "2.0", id: 51, method: "ping", params: { _meta: { "io.modelcontextprotocol/related-task": "t1" } } } });
+await cap("notification _meta number", { body: { jsonrpc: "2.0", method: "notifications/initialized", params: { _meta: 5 } } });
+await cap("id big int", { body: '{"jsonrpc":"2.0","id":9007199254740993,"method":"ping"}' });
+await cap("id max safe int", { body: '{"jsonrpc":"2.0","id":9007199254740991,"method":"ping"}' });
+await cap("id min safe int", { body: '{"jsonrpc":"2.0","id":-9007199254740991,"method":"ping"}' });
+await cap("id 1.0", { body: '{"jsonrpc":"2.0","id":1.0,"method":"ping"}' });
+await cap("id 1e2", { body: '{"jsonrpc":"2.0","id":1e2,"method":"ping"}' });
+await cap("id -1", { body: '{"jsonrpc":"2.0","id":-1,"method":"ping"}' });
+await cap("id -0", { body: '{"jsonrpc":"2.0","id":-0,"method":"ping"}' });
+await cap("id 1e999", { body: '{"jsonrpc":"2.0","id":1e999,"method":"ping"}' });
+await cap("id empty string", { body: { jsonrpc: "2.0", id: "", method: "ping" } });
+await cap("id unicode string", { body: { jsonrpc: "2.0", id: "ключ-\u{1F412}", method: "ping" } });
+await cap("method empty string", { body: { jsonrpc: "2.0", id: 1, method: "" } });
+await cap("method PING upper", { body: { jsonrpc: "2.0", id: 1, method: "PING" } });
+await cap("key order id first", { body: '{"id":7,"method":"ping","jsonrpc":"2.0"}' });
+for (const m of ["ping", "tools/list", "initialize", "nope"]) await cap(m + " with task {}", { body: { jsonrpc: "2.0", id: 52, method: m, params: m === "initialize" ? { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "raw", version: "1.0.0" }, task: {} } : { task: {} } } });
+await cap("ping with task number", { body: { jsonrpc: "2.0", id: 52, method: "ping", params: { task: 5 } } });
+await cap("call with task null", { body: call(50, "tarsee_calculator", { expression: "6 * 7" }, { task: null }) });
+await cap("call with task array", { body: call(50, "tarsee_calculator", { expression: "6 * 7" }, { task: [] }) });
+await cap("call with task extra key", { body: call(50, "tarsee_calculator", { expression: "6 * 7" }, { task: { more: 1 } }) });
+// initialize, malformed
+const init2 = (params) => ({ jsonrpc: "2.0", id: 1, method: "initialize", params });
+const ok = { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "raw", version: "1.0.0" } };
+await cap("initialize params {}", { body: init2({}) });
+await cap("initialize capabilities number", { body: init2({ ...ok, capabilities: 5 }) });
+await cap("initialize capabilities null", { body: init2({ ...ok, capabilities: null }) });
+await cap("initialize capabilities array", { body: init2({ ...ok, capabilities: [] }) });
+await cap("initialize capabilities unknown key", { body: init2({ ...ok, capabilities: { whatever: 5 } }) });
+await cap("initialize roots number", { body: init2({ ...ok, capabilities: { roots: 5 } }) });
+await cap("initialize roots listChanged string", { body: init2({ ...ok, capabilities: { roots: { listChanged: "x" } } }) });
+await cap("initialize sampling number", { body: init2({ ...ok, capabilities: { sampling: 5 } }) });
+await cap("initialize sampling context number", { body: init2({ ...ok, capabilities: { sampling: { context: 5 } } }) });
+await cap("initialize experimental number", { body: init2({ ...ok, capabilities: { experimental: 5 } }) });
+await cap("initialize experimental member number", { body: init2({ ...ok, capabilities: { experimental: { x: 5 } } }) });
+await cap("initialize elicitation number", { body: init2({ ...ok, capabilities: { elicitation: 5 } }) });
+await cap("initialize elicitation {}", { body: init2({ ...ok, capabilities: { elicitation: {} } }) });
+await cap("initialize tasks number", { body: init2({ ...ok, capabilities: { tasks: 5 } }) });
+await cap("initialize extensions number", { body: init2({ ...ok, capabilities: { extensions: 5 } }) });
+await cap("initialize full capabilities", { body: init2({ ...ok, capabilities: { experimental: { a: {} }, sampling: { context: {}, tools: {} }, elicitation: { form: { applyDefaults: true }, url: {} }, roots: { listChanged: true }, tasks: { list: {}, cancel: {}, requests: { sampling: { createMessage: {} }, elicitation: { create: {} } } }, extensions: { "x/y": {} } } }) });
+await cap("initialize clientInfo number", { body: init2({ ...ok, clientInfo: 5 }) });
+await cap("initialize clientInfo {}", { body: init2({ ...ok, clientInfo: {} }) });
+await cap("initialize clientInfo name number", { body: init2({ ...ok, clientInfo: { name: 5, version: "1" } }) });
+await cap("initialize clientInfo no version", { body: init2({ ...ok, clientInfo: { name: "x" } }) });
+await cap("initialize clientInfo title number", { body: init2({ ...ok, clientInfo: { name: "x", version: "1", title: 5 } }) });
+await cap("initialize clientInfo icons number", { body: init2({ ...ok, clientInfo: { name: "x", version: "1", icons: 5 } }) });
+await cap("initialize clientInfo icons bad item", { body: init2({ ...ok, clientInfo: { name: "x", version: "1", icons: [{ src: "a", theme: "blue" }, 5] } }) });
+await cap("initialize clientInfo full", { body: init2({ ...ok, clientInfo: { name: "x", version: "1", title: "T", websiteUrl: "https://example.com", description: "d", icons: [{ src: "a", mimeType: "image/png", sizes: ["1x1"], theme: "dark" }], extra: 1 } }) });
+await cap("initialize clientInfo websiteUrl number", { body: init2({ ...ok, clientInfo: { name: "x", version: "1", websiteUrl: 5, description: 5 } }) });
+await cap("initialize everything wrong", { body: init2({ protocolVersion: 5, capabilities: 5, clientInfo: 5 }) });
+await cap("initialize empty protocolVersion", { body: init2({ ...ok, protocolVersion: "" }) });
+await cap("initialize with extra params", { body: init2({ ...ok, more: { a: 1 }, _meta: { progressToken: "p" } }) });
+await cap("initialize invalid with bad protocol header", { body: init2({}), headers: { "mcp-protocol-version": "1999-01-01" } });
+// batches
+await cap("batch duplicate ids", { body: [{ jsonrpc: "2.0", id: 1, method: "ping" }, { jsonrpc: "2.0", id: 1, method: "nope" }] });
+await cap("batch ids 1 and '1'", { body: [{ jsonrpc: "2.0", id: 1, method: "ping" }, { jsonrpc: "2.0", id: "1", method: "nope" }] });
+await cap("batch of 100", { body: Array.from({ length: 100 }, (_, i) => ({ jsonrpc: "2.0", id: i, method: "ping" })) });
+await cap("batch of 101", { body: Array.from({ length: 101 }, (_, i) => ({ jsonrpc: "2.0", id: i, method: "ping" })) });
+await cap("batch of 101 notifications", { body: Array.from({ length: 101 }, () => ({ jsonrpc: "2.0", method: "notifications/initialized" })) });
+await cap("batch with invalid initialize", { body: [{ jsonrpc: "2.0", id: 1, method: "initialize" }, { jsonrpc: "2.0", id: 2, method: "ping" }] });
+await cap("batch response then request", { body: [{ jsonrpc: "2.0", id: 9, result: {} }, { jsonrpc: "2.0", id: 2, method: "ping" }] });
+await cap("nested batch", { body: [[{ jsonrpc: "2.0", id: 1, method: "ping" }]] });
+await cap("batch error and ok order", { body: [{ jsonrpc: "2.0", id: "b", method: "nope" }, { jsonrpc: "2.0", id: "a", method: "ping" }, call("c", "tarsee_calculator", { expression: "1+1" })] });
+await cap("batch notification with id-less garbage", { body: [{ jsonrpc: "2.0", method: "x", params: 5, extra: 1 }] });
+await cap("batch bad protocol header", { body: [{ jsonrpc: "2.0", id: 1, method: "ping" }], headers: { "mcp-protocol-version": "nope" } });
+await cap("notification bad protocol header", { body: { jsonrpc: "2.0", method: "notifications/initialized" }, headers: { "mcp-protocol-version": "nope" } });
+await cap("response bad protocol header", { body: { jsonrpc: "2.0", id: 1, result: {} }, headers: { "mcp-protocol-version": "nope" } });
+await cap("response no accept", { body: { jsonrpc: "2.0", id: 1, result: {} }, noAccept: true });
+await cap("empty protocol header", { body: { jsonrpc: "2.0", id: 1, method: "ping" }, headers: { "mcp-protocol-version": "" } });
+// accept and content-type forms
+await cap("accept with q", { body: { jsonrpc: "2.0", id: 1, method: "ping" }, headers: { accept: "application/json;q=0.9, text/event-stream;q=0.1" } });
+await cap("accept reversed", { body: { jsonrpc: "2.0", id: 1, method: "ping" }, headers: { accept: "text/event-stream,application/json" } });
+await cap("accept as substrings", { body: { jsonrpc: "2.0", id: 1, method: "ping" }, headers: { accept: "xapplication/jsonx-text/event-streamx" } });
+for (const [name, ct] of [
+  ["semicolon only", "application/json;"], ["empty charset", "application/json; charset="], ["param holds json", "text/plain; a=application/json"],
+  ["doubled", "application/json, application/json"], ["upper with quoted param", 'APPLICATION/JSON ; charset="utf-8"'], ["quoted comma", 'application/json; a="x,y"'],
+  ["bad param with comma", "application/json; bad, x"], ["bad param no comma", "application/json; bad x"], ["jsonx", "application/jsonx"],
+  ["json-rpc", "application/json-rpc"], ["vnd+json", "application/vnd.api+json"], ["two params", "application/json; charset=utf-8; a=b"],
+  ["space before semicolon", "application/json ;charset=utf-8"], ["trailing comma", "application/json,"], ["leading comma", ",application/json"],
+  ["tab inside", "application/json;\tcharset=utf-8"], ["quoted escape", 'application/json; a="x\\"y"'], ["quoted then junk", 'application/json; a="x" y'],
+  ["upper", "APPLICATION/JSON"], ["latin1 in quoted", 'application/json; a="é"'],
+]) {
+  await cap("content-type " + name, { body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }), headers: { "content-type": ct } });
+}
+await cap("chunked body", { headers: { "content-type": "application/json", "transfer-encoding": "chunked" }, chunked: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) });
+await cap("invalid utf-8 in a string", { bodyBytes: Buffer.concat([Buffer.from('{"jsonrpc":"2.0","id":"a'), Buffer.from([0xff, 0xfe]), Buffer.from('","method":"ping"}')]), headers: { "content-type": "application/json" } });
+await cap("lone surrogate escape id", { body: '{"jsonrpc":"2.0","id":"a\\ud83d","method":"ping"}' });
+await cap("lone surrogate in arguments", { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tarsee_calculator","arguments":{"expression":"1+1 \\ud83d"}}}' });
+await cap("deep nesting 200", { body: '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":' + "[".repeat(200) + "]".repeat(200) + "}}" });
+
+// --- long results (spill)
+const ws = process.env.TARSEE_WORKSPACE_DIR;
+const lines = Array.from({ length: 900 }, (_, i) => "- line " + i + ": the owner's notes go on for a while here").join("\n");
+fs.writeFileSync(path.join(ws, "MEMORY.md"), "# Memory\n" + lines + "\nEND-OF-MEMORY-CANARY\n");
+const spill = {};
+async function capSpill(name, req, file) {
+  const r = await cap(name, req);
+  const parsed = JSON.parse(r.body);
+  const text = (Array.isArray(parsed) ? parsed[0] : parsed).result?.content?.[0]?.text ?? "";
+  const m = /saved in full to (.+?\.txt)/.exec(text);
+  let saved = null;
+  if (m) {
+    const whole = fs.readFileSync(m[1], "utf8");
+    saved = { file: m[1].split(tmp).join("<tmp>").replace(/-[0-9a-f]{6}\.txt$/, "-<hex>.txt"), sameAsTheFile: whole === fs.readFileSync(path.join(ws, file), "utf8"), length: whole.length };
+  }
+  spill[name] = saved;
+  out.cases[name].response.body = out.cases[name].response.body.replace(/-[0-9a-f]{6}\.txt/g, "-<hex>.txt");
+}
+await capSpill("spill ascii", { body: call(60, "tarsee_read_file", { filename: "MEMORY.md" }) }, "MEMORY.md");
+await capSpill("spill ascii again", { body: call(61, "tarsee_read_file", { filename: "MEMORY.md" }) }, "MEMORY.md");
+fs.writeFileSync(path.join(ws, "USER.md"), "x" + "\u{1F412}".repeat(7000));
+await capSpill("spill emoji cut", { body: call(62, "tarsee_read_file", { filename: "USER.md" }) }, "USER.md");
+fs.writeFileSync(path.join(ws, "TOOLS.md"), "é".repeat(12000));
+await cap("exactly at the limit", { body: call(63, "tarsee_read_file", { filename: "TOOLS.md" }) });
+out.cases["exactly at the limit"].response.bodyLength = out.cases["exactly at the limit"].response.body.length;
+out.cases["exactly at the limit"].response.body = "<12000 times U+00E9 as the result's text>";
+fs.writeFileSync(path.join(ws, "AGENTS.md"), "é".repeat(12001));
+await capSpill("one over the limit", { body: call(64, "tarsee_read_file", { filename: "AGENTS.md" }) }, "AGENTS.md");
+process.env.TARSEE_TOOL_RESULT_MAX_CHARS = "1000";
+fs.writeFileSync(path.join(ws, "SOUL.md"), "0123456789".repeat(150));
+await capSpill("spill at a limit of 1000", { body: call(65, "tarsee_read_file", { filename: "SOUL.md" }) }, "SOUL.md");
+fs.writeFileSync(path.join(ws, "HEARTBEAT.md"), "0123456789".repeat(100));
+await cap("at a limit of 1000 exactly", { body: call(65, "tarsee_read_file", { filename: "HEARTBEAT.md" }) });
+process.env.TARSEE_TOOL_RESULT_MAX_CHARS = "1234567.4";
+fs.writeFileSync(path.join(ws, "IDENTITY.md"), "ab".repeat(700000));
+await capSpill("spill at a limit of 1234567.4", { body: call(66, "tarsee_read_file", { filename: "IDENTITY.md" }) }, "IDENTITY.md");
+process.env.TARSEE_TOOL_RESULT_MAX_CHARS = "999";
+await cap("a limit of 999 is the default", { body: call(66, "tarsee_read_file", { filename: "HEARTBEAT.md" }) });
+process.env.TARSEE_TOOL_RESULT_MAX_CHARS = "1000.6";
+await capSpill("spill at a limit of 1000.6", { body: call(66, "tarsee_read_file", { filename: "HEARTBEAT.md" }) }, "HEARTBEAT.md");
+delete process.env.TARSEE_TOOL_RESULT_MAX_CHARS;
+// a batch: one long, one short
+await capSpill("spill in a batch", { body: [call(67, "tarsee_read_file", { filename: "MEMORY.md" }), call(68, "tarsee_calculator", { expression: "1+1" })] }, "MEMORY.md");
+// the folder can't be made: a file is in its place
+const odd = "blocked/..\\turn id!";
+const g2 = mcp.grantTurn({ db, settingsStore: settings, conversationId: "conv-capture" }, { turnId: odd });
+fs.writeFileSync(path.join(tmp, "tool-output", "blocked_turn_id"), "in the way");
+const blockedBody = JSON.stringify(call(69, "tarsee_read_file", { filename: "MEMORY.md" }));
+const blocked = await raw({ token: g2.token, body: blockedBody });
+out.cases["spill that can't be saved"] = { request: { method: "POST", path: "/mcp", headers: {}, body: blockedBody }, response: scrub(blocked), turnId: odd, inTheWay: "blocked_turn_id" };
+g2.revoke();
+out.spill = spill;
+out.toolOutput = fs.readdirSync(path.join(tmp, "tool-output")).sort().map((d) => { const p = path.join(tmp, "tool-output", d); return fs.statSync(p).isDirectory() ? { dir: d, files: fs.readdirSync(p).map((f) => f.replace(/-[0-9a-f]{6}\.txt$/, "-<hex>.txt")).sort() } : { file: d }; });
+
+fs.mkdirSync(outDir, { recursive: true });
+// One case a line; the headers a client can't see the difference of (Date, Connection) left out.
+delete out.cases["spill at a limit of 1234567.4"];
+delete out.spill["spill at a limit of 1234567.4"];
+const port = String(endpoint.port);
+const caseLines = Object.entries(out.cases).map(([name, c]) => {
+  const request = { ...c.request };
+  if (request.host) request.host = request.host.replaceAll(port, "<port>");
+  if (request.headers?.origin) request.headers = { ...request.headers, origin: request.headers.origin.replaceAll(port, "<port>") };
+  const response = { ...c.response, headers: (c.response.headers || []).filter(([k]) => !/^(date|connection)$/i.test(k)) };
+  const { request: _r, response: _s, ...rest } = c;
+  return JSON.stringify({ name, request, response, ...rest });
+});
+let text = `{"timezone":${JSON.stringify(out.timezone)},"spill":${JSON.stringify(out.spill)},"toolOutput":${JSON.stringify(out.toolOutput)},"cases":[\n${caseLines.join(",\n")}\n]}\n`;
+text = text.replaceAll(grant.token, "<token>");
+if (text.includes(tmp) || text.includes(tmp.replaceAll("\\", "\\\\"))) throw new Error("the temp folder is still in the capture");
+if (text.includes(g2.token)) throw new Error("a token is still in the capture");
+const tzName = (tz || "default").replaceAll("/", "_");
+fs.writeFileSync(path.join(outDir, `node-endpoint-${tzName}.json`), text);
+fs.writeFileSync(path.join(outDir, `node-tools-list-${tzName}.json`), toolsJson + "\n");
+console.log("cases:", Object.keys(out.cases).length, "timezone:", config.TIMEZONE, "tools:", JSON.parse(list.body).result.tools.length);
+grant.revoke();
+await mcp.stopMcpHttp();
+db.close();
+try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {}
+process.exit(0);

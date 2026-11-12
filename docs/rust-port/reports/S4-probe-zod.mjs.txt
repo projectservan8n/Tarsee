@@ -1,0 +1,101 @@
+// What zod (through the Agent SDK's MCP server) makes of schema shapes: the JSON Schema on the wire, and what a
+// handler receives. Driven with raw JSON-RPC (the SDK's own client re-orders keys when it parses a result).
+import fs from "node:fs";
+import path from "node:path";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+
+const root = process.argv[2];
+const req = createRequire(path.join(root, "package.json"));
+const imp = (spec) => import(pathToFileURL(req.resolve(spec)).href);
+const { createSdkMcpServer, tool } = await imp("@anthropic-ai/claude-agent-sdk");
+const { z } = await imp("zod");
+const { InMemoryTransport } = await imp("@modelcontextprotocol/sdk/inMemory.js");
+
+const echo = async (args) => ({ content: [{ type: "text", text: JSON.stringify(args) }] });
+const tools = [
+  tool("combos", "d", {
+    s_plain: z.string(),
+    s_desc: z.string().describe("D"),
+    s_opt: z.string().optional(),
+    s_opt_desc: z.string().optional().describe("D"),
+    s_desc_opt: z.string().describe("D").optional(),
+    s_desc_opt_desc: z.string().describe("D1").optional().describe("D2"),
+    n_desc_opt: z.number().describe("D").optional(),
+    e_plain: z.enum(["a", "b"]),
+    e_opt_desc: z.enum(["a", "b"]).optional().describe("D"),
+    e_desc_opt: z.enum(["a", "b"]).describe("D").optional(),
+    a_opt_desc: z.array(z.string()).optional().describe("D"),
+    a_desc_opt: z.array(z.string()).describe("D").optional(),
+    a_item_desc: z.array(z.string().describe("I")).optional(),
+    o_opt_desc: z.object({ x: z.string() }).optional().describe("D"),
+    o_desc_opt: z.object({ x: z.string() }).describe("D").optional(),
+    o_empty: z.object({}).optional(),
+    o_all_opt: z.object({ x: z.string().optional() }).optional(),
+    u_desc: z.union([z.string(), z.array(z.string())]).describe("D").optional(),
+    u_opt_desc: z.union([z.string(), z.array(z.string())]).optional().describe("D"),
+    r_plain: z.record(z.string(), z.any()).optional(),
+    r_desc: z.record(z.string(), z.any()).describe("D").optional(),
+    r_opt_desc: z.record(z.string(), z.any()).optional().describe("D"),
+    b_desc: z.boolean().describe("D").optional(),
+  }, echo),
+  tool("strip", "d", {
+    a: z.string().optional(),
+    b: z.object({ x: z.string().optional(), y: z.number().optional() }).optional(),
+    c: z.array(z.object({ k: z.string() })).optional(),
+    r: z.record(z.string(), z.any()).optional(),
+    u: z.union([z.string(), z.array(z.string())]).optional(),
+    n: z.number().optional(),
+    f: z.boolean().optional(),
+  }, echo),
+  tool("none", "d", {}, echo),
+  tool("single", "d", { only: z.enum(["a"]) }, echo),
+];
+const server = createSdkMcpServer({ name: "probe", version: "1.0.0", tools });
+const [a, b] = InMemoryTransport.createLinkedPair();
+await server.instance.connect(b);
+const waiting = new Map();
+a.onmessage = (m) => { const w = waiting.get(m.id); if (w) { waiting.delete(m.id); w(m); } };
+await a.start();
+let id = 0;
+const rpc = (method, params) => new Promise((resolve) => {
+  const i = ++id;
+  waiting.set(i, resolve);
+  a.send({ jsonrpc: "2.0", id: i, method, ...(params === undefined ? {} : { params }) });
+});
+await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "p", version: "1" } });
+const listed = (await rpc("tools/list")).result.tools;
+const out = { tools: listed, calls: [] };
+async function call(name, args) {
+  const r = await rpc("tools/call", { name, arguments: args });
+  out.calls.push({ tool: name, arguments: args, result: r.result ?? null, error: r.error ?? null });
+}
+const J = (text) => JSON.parse(text);
+await call("strip", { zzz: 1, n: 5, a: "x", extra: true });
+await call("strip", { u: ["b", "a"], r: { z: 1, a: { deep: [1, { k: null }] }, "": 0 }, c: [{ k: "v", drop: 1 }, { extra: 2, k: "w" }], b: { y: 1, more: 2, x: "s" } });
+await call("strip", { b: {}, c: [], r: {}, u: "s" });
+await call("strip", { n: 1.5 });
+await call("strip", {});
+await call("none", {});
+await call("none", { a: 1 });
+await call("strip", { c: [{}, "s", null, [1], 5, true] });
+await call("strip", { b: { x: 1, y: "s" } });
+await call("strip", { u: [] });
+await call("strip", { u: [[]] });
+await call("strip", { u: ["a", 1, "b", null, {}] });
+await call("strip", { u: true });
+await call("strip", { n: null, a: null, f: null });
+await call("strip", { r: { a: 1 }, b: { x: "1" }, a: "first" });
+await call("strip", { r: J('{"__proto__": 1, "a": 2, "b": {"__proto__": {"x": 1}, "c": 3}}') });
+await call("strip", J('{"b": {"__proto__": 5, "x": "s"}, "c": [{"__proto__": 1, "k": "v"}]}'));
+await call("strip", { a: 1, b: "x", c: "y", r: 1, u: 1, n: "x", f: "no" });
+await call("strip", { f: false, n: 0, a: "" });
+await call("combos", {});
+await call("combos", { s_plain: "p", s_desc: "d", e_plain: "c" });
+await call("combos", { e_plain: "b", s_desc: "d", s_plain: "p", u_desc: ["x"], o_desc_opt: { x: "y", z: 1 } });
+await call("single", { only: "b" });
+await call("single", { only: "a" });
+await call("single", {});
+fs.writeFileSync(process.argv[3], JSON.stringify(out) + String.fromCharCode(10));
+console.log(out.tools.length, out.calls.length);
+process.exit(0);
