@@ -85,18 +85,14 @@ async fn setup(State(app): State<App>, headers: HeaderMap, body: Bytes) -> ApiRe
     let mut installed = Vec::new();
     let mut failed = Vec::new();
     for name in names {
-        let done = name
-            .as_str()
-            .is_some_and(|n| install_skill(&app, n).is_ok());
+        let done = name.as_str().is_some_and(|n| install_skill(&app, n).is_ok());
         if done {
             installed.push(name.clone());
         } else {
             failed.push(name.clone());
         }
     }
-    Ok(Json(
-        json!({ "ok": true, "installed": installed, "failed": failed }),
-    ))
+    Ok(Json(json!({ "ok": true, "installed": installed, "failed": failed })))
 }
 
 /// GET /:name — an installed skill's whole SKILL.md.
@@ -309,15 +305,26 @@ mod tests {
             diagram.as_object().unwrap().keys().collect::<Vec<_>>(),
             ["name", "description", "source", "installed"]
         );
-        assert_eq!((diagram["source"].clone(), diagram["installed"].clone()), (json!("built-in"), json!(true)));
-        assert!(skills.iter().filter(|s| s["name"] != "diagram").all(|s| s["installed"] == false));
+        assert_eq!(
+            (diagram["source"].clone(), diagram["installed"].clone()),
+            (json!("built-in"), json!(true))
+        );
+        assert!(
+            skills
+                .iter()
+                .filter(|s| s["name"] != "diagram")
+                .all(|s| s["installed"] == false)
+        );
     }
 
     #[tokio::test]
     async fn install_and_uninstall_answer_and_refuse_as_before() {
         let (t, router) = app();
         let res = http::post_json(&router, "/install", &json!({"name": "diagram"})).await;
-        assert_eq!((res.status, res.json()), (200, json!({"ok": true, "name": "diagram", "installed": true})));
+        assert_eq!(
+            (res.status, res.json()),
+            (200, json!({"ok": true, "name": "diagram", "installed": true}))
+        );
         assert!(get_custom_skills_dir(&t).join("diagram").is_dir());
 
         let res = http::post_json(&router, "/install", &json!({})).await;
@@ -325,7 +332,10 @@ mod tests {
         let res = http::send(&router, request("POST", "/install")).await;
         assert_eq!((res.status, res.json()), (400, json!({"error": "Skill name required"})));
         let res = http::post_json(&router, "/install", &json!({"name": "nope"})).await;
-        assert_eq!((res.status, res.json()), (400, json!({"error": "Skill \"nope\" not found"})));
+        assert_eq!(
+            (res.status, res.json()),
+            (400, json!({"error": "Skill \"nope\" not found"}))
+        );
         let res = http::post_json(&router, "/install", &json!({"name": 7})).await;
         assert_eq!(
             (res.status, res.json()),
@@ -336,7 +346,10 @@ mod tests {
         );
 
         let res = http::post_json(&router, "/uninstall", &json!({"name": "diagram"})).await;
-        assert_eq!((res.status, res.json()), (200, json!({"ok": true, "name": "diagram", "installed": false})));
+        assert_eq!(
+            (res.status, res.json()),
+            (200, json!({"ok": true, "name": "diagram", "installed": false}))
+        );
         assert!(!get_custom_skills_dir(&t).join("diagram").exists());
         let res = http::post_json(&router, "/uninstall", &json!({"name": ""})).await;
         assert_eq!((res.status, res.json()), (400, json!({"error": "Skill name required"})));
@@ -348,11 +361,17 @@ mod tests {
         let res = http::post_json(&router, "/setup", &json!({"install": ["diagram", "nope", 3]})).await;
         assert_eq!(
             (res.status, res.json()),
-            (200, json!({"ok": true, "installed": ["diagram"], "failed": ["nope", 3]}))
+            (
+                200,
+                json!({"ok": true, "installed": ["diagram"], "failed": ["nope", 3]})
+            )
         );
         assert!(get_custom_skills_dir(&t).join("diagram").is_dir());
         let res = http::post_json(&router, "/setup", &json!({"install": "diagram"})).await;
-        assert_eq!((res.status, res.json()), (400, json!({"error": "install array required"})));
+        assert_eq!(
+            (res.status, res.json()),
+            (400, json!({"error": "install array required"}))
+        );
     }
 
     #[tokio::test]
@@ -425,7 +444,11 @@ mod tests {
     #[tokio::test]
     async fn a_new_skill_needs_a_name_content_and_a_plain_name() {
         let (_t, router) = app();
-        for body in [json!({"name": "x"}), json!({"content": "x"}), json!({"name": "", "content": "x"})] {
+        for body in [
+            json!({"name": "x"}),
+            json!({"content": "x"}),
+            json!({"name": "", "content": "x"}),
+        ] {
             let res = http::post_json(&router, "/", &body).await;
             assert_eq!(
                 (res.status, res.json()),
@@ -469,7 +492,13 @@ mod tests {
         headers.insert(header::CONTENT_TYPE, "application/json; charset=utf-8".parse().unwrap());
         assert_eq!(express_json_body(&headers, b"").unwrap(), Some(json!({})));
         assert_eq!(express_json_body(&headers, b" [1]").unwrap(), Some(json!([1])));
-        assert_eq!(express_json_body(&headers, b"\"x\"").unwrap_err().status, StatusCode::BAD_REQUEST);
-        assert_eq!(express_json_body(&headers, b"{oops").unwrap_err().status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            express_json_body(&headers, b"\"x\"").unwrap_err().status,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            express_json_body(&headers, b"{oops").unwrap_err().status,
+            StatusCode::BAD_REQUEST
+        );
     }
 }

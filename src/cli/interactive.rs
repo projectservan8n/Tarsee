@@ -71,9 +71,13 @@ where
         match reply {
             Ok(text) => {
                 for event in text.split('\n') {
-                    let Some(data) = event.strip_prefix("data: ") else { continue };
+                    let Some(data) = event.strip_prefix("data: ") else {
+                        continue;
+                    };
                     // A line that is not JSON is skipped.
-                    let Ok(data) = serde_json::from_str::<Value>(data) else { continue };
+                    let Ok(data) = serde_json::from_str::<Value>(data) else {
+                        continue;
+                    };
                     if let Some(content) = data.get("content").filter(|c| truthy(c)) {
                         write!(out, "{}", js_string(Some(content)))?;
                         out.flush()?;
@@ -131,7 +135,10 @@ mod tests {
         assert_eq!(calls[0].method, "POST");
         assert_eq!(calls[0].header("authorization"), Some("Bearer tok"));
         assert_eq!(calls[0].header("content-type"), Some("application/json"));
-        assert_eq!(calls[0].json(), json!({"message": "hi there", "channelKey": "cli:interactive"}));
+        assert_eq!(
+            calls[0].json(),
+            json!({"message": "hi there", "channelKey": "cli:interactive"})
+        );
     }
 
     #[tokio::test]

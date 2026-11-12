@@ -72,10 +72,7 @@ fn try_save(app: &App) -> anyhow::Result<()> {
         let mut entry = Map::new();
         entry.insert("title".into(), c.get("title").cloned().unwrap_or(Value::Null));
         entry.insert("model".into(), c.get("model").cloned().unwrap_or(Value::Null));
-        entry.insert(
-            "updatedAt".into(),
-            c.get("updated_at").cloned().unwrap_or(Value::Null),
-        );
+        entry.insert("updatedAt".into(), c.get("updated_at").cloned().unwrap_or(Value::Null));
         entry.insert("lastUserMessage".into(), Value::String(utf16_truncate(&last_user, 300)));
         entry.insert(
             "lastAssistantResponse".into(),
@@ -147,10 +144,7 @@ fn boot_context_summary_at(app: &App, now: i64) -> String {
             summary += &format!("\n- User: \"{}\"", utf16_truncate(&js_string(Some(user)), 150));
         }
         if let Some(reply) = conv.get("lastAssistantResponse").filter(|v| truthy(v)) {
-            summary += &format!(
-                "\n- You replied: \"{}\"",
-                utf16_truncate(&js_string(Some(reply)), 150)
-            );
+            summary += &format!("\n- You replied: \"{}\"", utf16_truncate(&js_string(Some(reply)), 150));
         }
     }
 
@@ -214,8 +208,7 @@ mod tests {
         add_message(&t, "c", "assistant", "plain reply", &format!("{today} 00:00:03"));
 
         save_boot_context(&t);
-        let saved: Value =
-            serde_json::from_str(&fs::read_to_string(context_file(&t)).unwrap()).unwrap();
+        let saved: Value = serde_json::from_str(&fs::read_to_string(context_file(&t)).unwrap()).unwrap();
         assert_eq!(saved["todayMessages"], 2);
         assert!(saved["savedAt"].as_str().unwrap().ends_with('Z'));
         assert_eq!(
@@ -230,7 +223,11 @@ mod tests {
             ])
         );
         // Written as JSON.stringify(context, null, 2) wrote it.
-        assert!(fs::read_to_string(context_file(&t)).unwrap().starts_with("{\n  \"savedAt\": "));
+        assert!(
+            fs::read_to_string(context_file(&t))
+                .unwrap()
+                .starts_with("{\n  \"savedAt\": ")
+        );
     }
 
     #[test]

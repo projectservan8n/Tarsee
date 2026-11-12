@@ -81,9 +81,8 @@ struct SkillsCache {
     scanned: Mutex<Option<(Vec<Skill>, Instant)>>,
 }
 
-static FRONTMATTER: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?s)\A---\r?\n(.*?)\r?\n---\r?\n?(.*)\z").expect("the frontmatter pattern")
-});
+static FRONTMATTER: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?s)\A---\r?\n(.*?)\r?\n---\r?\n?(.*)\z").expect("the frontmatter pattern"));
 
 /// Parses the simple YAML frontmatter of a SKILL.md (`key: value` lines; name and description are the ones used).
 /// Without frontmatter the first `# ` heading names the skill.
@@ -411,9 +410,11 @@ mod tests {
     #[test]
     fn a_skill_that_names_itself_differently_from_its_folder_shows_the_folder() {
         let t = prompt_audit_app();
-        assert!(get_skills_prompt_context(&t).contains(
-            "- **Gmail Helper** (folder `gmail-helper`): Read and send Gmail with the stored app password."
-        ));
+        assert!(
+            get_skills_prompt_context(&t).contains(
+                "- **Gmail Helper** (folder `gmail-helper`): Read and send Gmail with the stored app password."
+            )
+        );
     }
 
     // --- the rest of the module ---
@@ -423,7 +424,11 @@ mod tests {
         let t = test_app();
         assert_eq!(get_skills_prompt_context(&t), "", "no skill installed, no section");
         invalidate_cache(&t);
-        skill(&t, "one", "---\nname: one\ndescription: Does one thing well, every single time.\n---\n");
+        skill(
+            &t,
+            "one",
+            "---\nname: one\ndescription: Does one thing well, every single time.\n---\n",
+        );
         let custom = get_custom_skills_dir(&t).display().to_string();
         let built = get_built_in_skills_dir(&t).display().to_string();
         assert_eq!(
@@ -436,7 +441,9 @@ mod tests {
 
     #[test]
     fn frontmatter_is_read_line_by_line_with_quotes_taken_off() {
-        let parsed = parse_frontmatter("---\r\nname: \"quoted\"\r\ndescription: 'It: works'\r\nno colon\r\n: empty key\r\nname2:x\r\n---\r\nThe body\nhere");
+        let parsed = parse_frontmatter(
+            "---\r\nname: \"quoted\"\r\ndescription: 'It: works'\r\nno colon\r\n: empty key\r\nname2:x\r\n---\r\nThe body\nhere",
+        );
         assert_eq!(
             Value::Object(parsed.frontmatter),
             json!({"name": "quoted", "description": "It: works", "name2": "x"})
@@ -456,10 +463,7 @@ mod tests {
         );
         assert_eq!(parsed.body, "Intro\n# My  Great\tSkill \r\nText");
         assert_eq!(
-            parse_frontmatter("no heading")
-                .frontmatter
-                .get("name")
-                .cloned(),
+            parse_frontmatter("no heading").frontmatter.get("name").cloned(),
             Some(json!("unnamed"))
         );
     }
@@ -480,7 +484,10 @@ mod tests {
             [("alpha", "a-skill", ""), ("b-skill", "b-skill", "B")]
         );
         assert_eq!(found[0].source, "installed");
-        assert_eq!(found[0].path, get_custom_skills_dir(&t).join("a-skill").join("SKILL.md"));
+        assert_eq!(
+            found[0].path,
+            get_custom_skills_dir(&t).join("a-skill").join("SKILL.md")
+        );
         skill(&t, "c-skill", "# C\n");
         assert_eq!(scan_skills(&t).len(), 2, "cached");
         invalidate_cache(&t);
@@ -495,12 +502,19 @@ mod tests {
     fn a_shipped_skill_installs_and_uninstalls() {
         let t = test_app();
         let all = get_all_skills_with_status(&t);
-        let diagram = all.iter().find(|s| s.name == "diagram").expect("the diagram skill ships");
+        let diagram = all
+            .iter()
+            .find(|s| s.name == "diagram")
+            .expect("the diagram skill ships");
         assert!(!diagram.installed);
         assert_eq!(diagram.source, "built-in");
         install_skill(&t, "diagram").unwrap();
         assert!(get_custom_skills_dir(&t).join("diagram").join("SKILL.md").is_file());
-        assert!(get_all_skills_with_status(&t).iter().any(|s| s.name == "diagram" && s.installed));
+        assert!(
+            get_all_skills_with_status(&t)
+                .iter()
+                .any(|s| s.name == "diagram" && s.installed)
+        );
         let content = get_skill_content(&t, "diagram").unwrap();
         assert_eq!(content.source, "installed");
         assert_eq!(content.frontmatter["name"], "diagram");
@@ -532,7 +546,10 @@ mod tests {
             ),
             SKILL_PROMPT_DESC_MAX,
         );
-        assert!(utf16_len(&long) <= SKILL_PROMPT_DESC_MAX + 1 && long.ends_with('…'), "{long}");
+        assert!(
+            utf16_len(&long) <= SKILL_PROMPT_DESC_MAX + 1 && long.ends_with('…'),
+            "{long}"
+        );
         // Checked against Node.
         assert_eq!(
             long,
@@ -547,6 +564,9 @@ mod tests {
         assert_eq!(short_skill_description("  Many\n\n  spaces.  ", 140), "Many spaces.");
         assert_eq!(short_skill_description("abcdefghij, klmnop", 12), "abcdefghij…");
         assert_eq!(short_skill_description("abcdefghijklmnop", 12), "abcdefghijkl…");
-        assert_eq!(short_skill_description("e.g. this is not the end of it", 140), "e.g. this is not the end of it");
+        assert_eq!(
+            short_skill_description("e.g. this is not the end of it", 140),
+            "e.g. this is not the end of it"
+        );
     }
 }

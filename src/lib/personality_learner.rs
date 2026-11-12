@@ -71,7 +71,11 @@ mod tests {
         assert_eq!(get_learning_hint(&t, "other", 0), "");
         assert_eq!(get_learning_hint(&t, "other", 30), LEARNING_HINT);
         clear_counter(&t, "c");
-        assert_eq!(get_learning_hint(&t, "c", 20), LEARNING_HINT, "a cleared counter starts again");
+        assert_eq!(
+            get_learning_hint(&t, "c", 20),
+            LEARNING_HINT,
+            "a cleared counter starts again"
+        );
         assert!(LEARNING_HINT.starts_with("\n\n[Internal note: This is your periodic memory check."));
         assert!(LEARNING_HINT.ends_with("Only save genuinely new information.]"));
     }

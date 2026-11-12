@@ -26,15 +26,14 @@ pub struct RealSystem;
 impl ServiceSystem for RealSystem {
     fn run(&mut self, command: &str) -> anyhow::Result<String> {
         let output = if cfg!(windows) {
-            std::process::Command::new("cmd").args(["/d", "/s", "/c", command]).output()?
+            std::process::Command::new("cmd")
+                .args(["/d", "/s", "/c", command])
+                .output()?
         } else {
             std::process::Command::new("/bin/sh").args(["-c", command]).output()?
         };
         if !output.status.success() {
-            anyhow::bail!(
-                "Command failed: {command}\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            anyhow::bail!("Command failed: {command}\n{}", String::from_utf8_lossy(&output.stderr));
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
@@ -81,12 +80,7 @@ pub fn is_installed(env: &Env) -> bool {
     is_installed_with(&mut RealSystem, current_platform(), env)
 }
 
-pub fn install_with(
-    system: &mut dyn ServiceSystem,
-    platform: &str,
-    program: &Path,
-    env: &Env,
-) -> anyhow::Result<()> {
+pub fn install_with(system: &mut dyn ServiceSystem, platform: &str, program: &Path, env: &Env) -> anyhow::Result<()> {
     let program = program.display().to_string();
     match platform {
         "linux" => install_systemd(system, &program),
@@ -274,7 +268,11 @@ mod tests {
         uninstall_with(&mut system, "linux", &Env::new()).unwrap();
         assert_eq!(
             system.ran,
-            ["systemctl stop tarsee", "systemctl disable tarsee", "systemctl daemon-reload"]
+            [
+                "systemctl stop tarsee",
+                "systemctl disable tarsee",
+                "systemctl daemon-reload"
+            ]
         );
         assert_eq!(system.removed, ["/etc/systemd/system/tarsee.service"]);
         assert!(is_installed_with(&mut Recorder::default(), "linux", &Env::new()));
@@ -295,7 +293,11 @@ mod tests {
         assert!(system.written[0].1.contains(
             "<key>ProgramArguments</key><array><string>/usr/local/bin/tarsee</string><string>start</string></array>"
         ));
-        assert!(system.written[0].1.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist"));
+        assert!(
+            system.written[0]
+                .1
+                .starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist")
+        );
         assert_eq!(system.ran, [format!("launchctl load {plist}")]);
         let mut system = Recorder::default();
         uninstall_with(&mut system, "darwin", &env).unwrap();
@@ -341,7 +343,13 @@ mod tests {
         };
         assert!(install_with(&mut failing, "linux", Path::new(PROGRAM), &Env::new()).is_err());
         assert_eq!(failing.ran, ["systemctl daemon-reload"], "enable is not reached");
-        let expected = if cfg!(windows) { "win32" } else if cfg!(target_os = "macos") { "darwin" } else { "linux" };
+        let expected = if cfg!(windows) {
+            "win32"
+        } else if cfg!(target_os = "macos") {
+            "darwin"
+        } else {
+            "linux"
+        };
         if cfg!(any(windows, target_os = "macos", target_os = "linux")) {
             assert_eq!(current_platform(), expected);
         }

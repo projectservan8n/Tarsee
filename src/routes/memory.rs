@@ -1,13 +1,13 @@
 //! Port of `src/routes/memory.js`: the memory routes (`/api/memory`, mounted behind sign-in and the CSRF check in
 //! `server.rs`).
 
+use axum::Json;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Path, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get};
-use axum::Json;
 use serde_json::{Value, json};
 
 use crate::app::App;
@@ -56,9 +56,7 @@ async fn list(State(app): State<App>, RawQuery(query): RawQuery) -> ApiResult {
     let store = MemoryStore::new(&app);
     let limit = limit_of(query_param(&query, "limit"), 50, 200);
     let category = query_param(&query, "category").filter(|c| !c.is_empty());
-    let memories = store
-        .list(limit, category.as_deref())
-        .map_err(|e| db_error(&app, e))?;
+    let memories = store.list(limit, category.as_deref()).map_err(|e| db_error(&app, e))?;
     let total = store.count().map_err(|e| db_error(&app, e))?;
     Ok(Json(json!({ "memories": memories, "total": total })))
 }
@@ -86,9 +84,7 @@ async fn add(State(app): State<App>, headers: HeaderMap, body: Bytes) -> Result<
 
 /// DELETE /:id — deletes a memory.
 async fn remove(State(app): State<App>, Path(id): Path<String>) -> ApiResult {
-    let deleted = MemoryStore::new(&app)
-        .delete(&id)
-        .map_err(|e| db_error(&app, e))?;
+    let deleted = MemoryStore::new(&app).delete(&id).map_err(|e| db_error(&app, e))?;
     if !deleted {
         return Err(ApiError::not_found("Memory not found"));
     }
@@ -122,14 +118,22 @@ mod tests {
     #[tokio::test]
     async fn memories_are_added_listed_searched_and_deleted() {
         let (t, router) = app();
-        let res = http::post_json(&router, "/", &json!({"content": "  Likes green tea  ", "category": "taste"})).await;
+        let res = http::post_json(
+            &router,
+            "/",
+            &json!({"content": "  Likes green tea  ", "category": "taste"}),
+        )
+        .await;
         assert_eq!(res.status, 201);
         let made = res.json();
         assert_eq!(
             made.as_object().unwrap().keys().collect::<Vec<_>>(),
             ["id", "category", "content"]
         );
-        assert_eq!((made["category"].clone(), made["content"].clone()), (json!("taste"), json!("Likes green tea")));
+        assert_eq!(
+            (made["category"].clone(), made["content"].clone()),
+            (json!("taste"), json!("Likes green tea"))
+        );
         let res = http::post_json(&router, "/", &json!({"content": "Uses Rust", "conversationId": "c1"})).await;
         assert_eq!(res.json()["category"], "preference");
 
@@ -140,7 +144,14 @@ mod tests {
         assert_eq!(memories.len(), 2);
         assert_eq!(
             memories[0].as_object().unwrap().keys().collect::<Vec<_>>(),
-            ["id", "category", "content", "source_conversation_id", "created_at", "updated_at"]
+            [
+                "id",
+                "category",
+                "content",
+                "source_conversation_id",
+                "created_at",
+                "updated_at"
+            ]
         );
         let res = http::get(&router, "/?category=taste&limit=abc").await;
         assert_eq!(res.json()["memories"].as_array().unwrap().len(), 1);
@@ -152,7 +163,10 @@ mod tests {
         assert_eq!(res.status, 200);
         let found = res.json()["memories"].as_array().unwrap().clone();
         assert_eq!(found.len(), 1);
-        assert_eq!((found[0]["content"].clone(), found[0]["score"].clone()), (json!("Likes green tea"), json!(2)));
+        assert_eq!(
+            (found[0]["content"].clone(), found[0]["score"].clone()),
+            (json!("Likes green tea"), json!(2))
+        );
 
         let id = made["id"].as_str().unwrap();
         let res = http::delete(&router, &format!("/{id}")).await;
@@ -189,7 +203,10 @@ mod tests {
         assert_eq!(limit_of(Some("500".into()), 50, 200), 200);
         assert_eq!(limit_of(Some("12abc".into()), 50, 200), 12);
         assert_eq!(limit_of(Some("-5".into()), 50, 200), -5);
-        assert_eq!(query_param(&Some("limit=5&limit=7".into()), "limit").as_deref(), Some("5,7"));
+        assert_eq!(
+            query_param(&Some("limit=5&limit=7".into()), "limit").as_deref(),
+            Some("5,7")
+        );
         assert_eq!(query_param(&Some("q=a+b%21".into()), "q").as_deref(), Some("a b!"));
     }
 }

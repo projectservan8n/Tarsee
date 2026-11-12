@@ -56,7 +56,8 @@ mod tests {
     fn markers_are_saved_and_taken_out_of_the_reply() {
         let t = test_app();
         let logs = CapturedLogs::start();
-        let reply = "Sure, noted.\n\n[remember:  The owner's dog is called Bantay ]\n\n\n\nAnything else? [REMEMBER: ok]";
+        let reply =
+            "Sure, noted.\n\n[remember:  The owner's dog is called Bantay ]\n\n\n\nAnything else? [REMEMBER: ok]";
         let cleaned = extract_and_save_memories(&t, reply, Some("conv-9"));
         assert_eq!(cleaned, "Sure, noted.\n\nAnything else?");
         let saved = MemoryStore::new(&t).list(50, None).unwrap();
@@ -64,7 +65,10 @@ mod tests {
         assert_eq!(saved[0].content, "The owner's dog is called Bantay");
         assert_eq!(saved[0].category, "learned");
         assert_eq!(saved[0].source_conversation_id.as_deref(), Some("conv-9"));
-        assert_eq!(logs.infos(), ["[memory] Auto-saved: \"The owner's dog is called Bantay\""]);
+        assert_eq!(
+            logs.infos(),
+            ["[memory] Auto-saved: \"The owner's dog is called Bantay\""]
+        );
         assert!(
             std::fs::read_to_string(t.config().workspace_dir.join("MEMORY.md"))
                 .unwrap()
@@ -75,10 +79,16 @@ mod tests {
     #[test]
     fn text_without_markers_is_left_as_it_is() {
         let t = test_app();
-        assert_eq!(extract_and_save_memories(&t, "  plain\n\n\n\ntext  ", None), "  plain\n\n\n\ntext  ");
+        assert_eq!(
+            extract_and_save_memories(&t, "  plain\n\n\n\ntext  ", None),
+            "  plain\n\n\n\ntext  "
+        );
         assert_eq!(extract_and_save_memories(&t, "", None), "");
         // A marker does not run across lines.
-        assert_eq!(extract_and_save_memories(&t, "[REMEMBER: a\nb]", None), "[REMEMBER: a\nb]");
+        assert_eq!(
+            extract_and_save_memories(&t, "[REMEMBER: a\nb]", None),
+            "[REMEMBER: a\nb]"
+        );
         assert_eq!(MemoryStore::new(&t).count().unwrap(), 0);
     }
 }

@@ -146,7 +146,11 @@ mod tests {
         assert_eq!(peek_checkpoint(config), None);
         assert_eq!(read_and_archive_checkpoint(config), None);
 
-        fs::write(checkpoint_file_path(config), "## Handoff\nWas fixing the email channel.").unwrap();
+        fs::write(
+            checkpoint_file_path(config),
+            "## Handoff\nWas fixing the email channel.",
+        )
+        .unwrap();
         assert!(has_checkpoint(config));
         assert_eq!(
             peek_checkpoint(config).as_deref(),
@@ -174,12 +178,12 @@ mod tests {
         );
         assert_eq!(
             logs.infos(),
-            [format!("[checkpoint] consumed and archived → {}", archived[0].path.display())]
+            [format!(
+                "[checkpoint] consumed and archived → {}",
+                archived[0].path.display()
+            )]
         );
-        assert_eq!(
-            checkpoint_file_path(config),
-            config.workspace_dir.join("CHECKPOINT.md")
-        );
+        assert_eq!(checkpoint_file_path(config), config.workspace_dir.join("CHECKPOINT.md"));
     }
 
     #[test]
@@ -205,7 +209,12 @@ mod tests {
             .as_millis() as f64;
         assert!((first.mtime - expected).abs() < 1.0);
         assert_eq!(
-            serde_json::to_value(first).unwrap().as_object().unwrap().keys().collect::<Vec<_>>(),
+            serde_json::to_value(first)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
             ["name", "path", "size", "mtime"]
         );
     }

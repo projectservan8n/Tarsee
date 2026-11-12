@@ -87,10 +87,7 @@ pub fn init_agent_registry(app: &App, settings: Arc<dyn Settings>) -> anyhow::Re
     });
     // Seed defaults if no agents exist.
     if get_agents(app).is_empty() {
-        settings.set(
-            REGISTRY_KEY,
-            Value::String(Value::Array(default_agents()).to_string()),
-        )?;
+        settings.set(REGISTRY_KEY, Value::String(Value::Array(default_agents()).to_string()))?;
     }
     ensure_agent_workspaces(app);
     Ok(())
@@ -112,7 +109,10 @@ pub fn ensure_agent_workspaces(app: &App) {
             let name = js_string(agent.get("name"));
             let mem = dir.join("MEMORY.md");
             if !mem.exists() {
-                std::fs::write(&mem, format!("# {name} Memory\n\nTask history and learned knowledge.\n"))?;
+                std::fs::write(
+                    &mem,
+                    format!("# {name} Memory\n\nTask history and learned knowledge.\n"),
+                )?;
             }
             let soul = dir.join("SOUL.md");
             if !soul.exists() {
@@ -174,8 +174,7 @@ pub fn get_agent(app: &App, id_or_nickname: &str) -> Option<Value> {
     let wanted = id_or_nickname.to_lowercase();
     get_agents(app).into_iter().find(|a| {
         a.get("id").and_then(Value::as_str) == Some(id_or_nickname)
-            || a
-                .get("nickname")
+            || a.get("nickname")
                 .and_then(Value::as_str)
                 .is_some_and(|n| !n.is_empty() && n.to_lowercase() == wanted)
     })
@@ -277,7 +276,9 @@ mod tests {
         assert_eq!(agents[3]["model"], "haiku");
         assert_eq!(
             agents[0].as_object().unwrap().keys().collect::<Vec<_>>(),
-            ["id", "name", "nickname", "model", "prompt", "tools", "color", "icon", "status"]
+            [
+                "id", "name", "nickname", "model", "prompt", "tools", "color", "icon", "status"
+            ]
         );
     }
 
@@ -294,16 +295,22 @@ mod tests {
     #[test]
     fn starting_seeds_only_an_empty_list_and_makes_each_workspace() {
         let (t, settings) = started(None);
-        assert_eq!(settings.get(REGISTRY_KEY), None, "the defaults stand in; nothing is written");
+        assert_eq!(
+            settings.get(REGISTRY_KEY),
+            None,
+            "the defaults stand in; nothing is written"
+        );
         let base = get_agents_base_dir(t.env());
         assert_eq!(base, t.path().join("agents"));
         assert_eq!(
             std::fs::read_to_string(base.join("coder").join("MEMORY.md")).unwrap(),
             "# Coder Memory\n\nTask history and learned knowledge.\n"
         );
-        assert!(std::fs::read_to_string(base.join("quick").join("SOUL.md"))
-            .unwrap()
-            .starts_with("# Quick\n\nYou are a fast assistant"));
+        assert!(
+            std::fs::read_to_string(base.join("quick").join("SOUL.md"))
+                .unwrap()
+                .starts_with("# Quick\n\nYou are a fast assistant")
+        );
 
         let (_t, settings) = started(Some(json!("[]")));
         let seeded = settings.get(REGISTRY_KEY).unwrap();
@@ -341,11 +348,17 @@ mod tests {
         );
         upsert_agent(&t, json!({"id": "coder", "name": "Dev", "model": "fable", "extra": 1})).unwrap();
         let coder = get_agent(&t, "coder").unwrap();
-        assert_eq!((coder["name"].clone(), coder["model"].clone(), coder["extra"].clone()), (json!("Dev"), json!("fable"), json!(1)));
+        assert_eq!(
+            (coder["name"].clone(), coder["model"].clone(), coder["extra"].clone()),
+            (json!("Dev"), json!("fable"), json!(1))
+        );
         assert_eq!(coder["color"], "#4caf50", "the other fields stay");
         upsert_agent(&t, json!({"id": "ops", "name": "Ops", "model": "m"})).unwrap();
         assert_eq!(ids(&get_agents(&t)), ["coder", "researcher", "writer", "quick", "ops"]);
-        assert!(settings.get(REGISTRY_KEY).unwrap().is_string(), "saved as JSON text, as the JS did");
+        assert!(
+            settings.get(REGISTRY_KEY).unwrap().is_string(),
+            "saved as JSON text, as the JS did"
+        );
         assert!(remove_agent(&t, "researcher").unwrap());
         assert_eq!(ids(&get_agents(&t)), ["coder", "writer", "quick", "ops"]);
     }
@@ -370,7 +383,13 @@ mod tests {
         let env = Env::from_pairs([("HOME", "/home/someone")]);
         assert_eq!(get_agents_base_dir(&env), PathBuf::from("/home/someone").join("agents"));
         env.set("TARSEE_STATE_DIR", "/srv/tarsee");
-        assert_eq!(get_agent_workspace(&env, "coder"), PathBuf::from("/srv/tarsee").join("agents").join("coder"));
-        assert_eq!(get_agents_base_dir(&Env::new()), PathBuf::from("/data/tarsee").join("agents"));
+        assert_eq!(
+            get_agent_workspace(&env, "coder"),
+            PathBuf::from("/srv/tarsee").join("agents").join("coder")
+        );
+        assert_eq!(
+            get_agents_base_dir(&Env::new()),
+            PathBuf::from("/data/tarsee").join("agents")
+        );
     }
 }

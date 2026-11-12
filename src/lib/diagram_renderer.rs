@@ -70,8 +70,17 @@ fn kind_style(kind: Option<&Value>) -> &'static KindStyle {
         "decision" => &DECISION,
         "output" => &OUTPUT,
         "note" => &NOTE,
-        "constructor" | "__defineGetter__" | "__defineSetter__" | "hasOwnProperty" | "__lookupGetter__"
-        | "__lookupSetter__" | "isPrototypeOf" | "propertyIsEnumerable" | "toString" | "valueOf" | "__proto__"
+        "constructor"
+        | "__defineGetter__"
+        | "__defineSetter__"
+        | "hasOwnProperty"
+        | "__lookupGetter__"
+        | "__lookupSetter__"
+        | "isPrototypeOf"
+        | "propertyIsEnumerable"
+        | "toString"
+        | "valueOf"
+        | "__proto__"
         | "toLocaleString" => &INHERITED,
         _ => &PROCESSING,
     }
@@ -558,7 +567,8 @@ mod tests {
 
     #[test]
     fn nodes_without_edges_sit_in_one_centred_row() {
-        let html = render_diagram_html(&json!({"title": "T", "nodes": [{"id": "a"}, {"id": "b"}], "edges": []})).unwrap();
+        let html =
+            render_diagram_html(&json!({"title": "T", "nodes": [{"id": "a"}, {"id": "b"}], "edges": []})).unwrap();
         assert!(html.contains("style=\"left:120px;top:40px;width:260px;height:80px;background:#4a3d7a"));
         assert!(html.contains("style=\"left:420px;top:40px;"));
         assert!(html.contains(".stage { position: relative; width: 800px; height: 400px;"));
@@ -574,8 +584,14 @@ mod tests {
             render_diagram_html(&spec)
         };
         // Checked against Node.
-        assert_eq!(with(json!({"legend": "x"})).unwrap_err(), "legend.map is not a function");
-        assert_eq!(with(json!({"legend": {"length": 1}})).unwrap_err(), "legend.map is not a function");
+        assert_eq!(
+            with(json!({"legend": "x"})).unwrap_err(),
+            "legend.map is not a function"
+        );
+        assert_eq!(
+            with(json!({"legend": {"length": 1}})).unwrap_err(),
+            "legend.map is not a function"
+        );
         assert!(with(json!({"legend": 5})).is_ok());
         assert!(with(json!({"legend": ""})).is_ok());
         assert_eq!(
@@ -602,7 +618,10 @@ mod tests {
 
     #[test]
     fn text_coordinates_are_joined_as_javascript_joined_them() {
-        assert_eq!(JsVal::Str("100".into()).add(&JsVal::Num(130.0)), JsVal::Str("100130".into()));
+        assert_eq!(
+            JsVal::Str("100".into()).add(&JsVal::Num(130.0)),
+            JsVal::Str("100130".into())
+        );
         assert_eq!(JsVal::Bool(true).add(&JsVal::Num(1.0)), JsVal::Num(2.0));
         assert_eq!(string_to_number(" 12.5 "), 12.5);
         assert!(string_to_number("12px").is_nan());

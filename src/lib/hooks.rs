@@ -258,7 +258,11 @@ mod tests {
             |_| async { Ok(json!("third")) },
             HookOptions::named("third"),
         );
-        registry.register("message:received", |_| async { anyhow::bail!("boom") }, HookOptions::default());
+        registry.register(
+            "message:received",
+            |_| async { anyhow::bail!("boom") },
+            HookOptions::default(),
+        );
         let results = registry.emit("message:received", json!({"text": "hi"})).await;
         assert_eq!(
             serde_json::to_value(&results).unwrap(),

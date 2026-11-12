@@ -14,10 +14,7 @@ fn app_with_hook(extra_env: &[(&str, &str)], args: &[&str]) -> TestApp {
     let mut env: Vec<(String, String)> = vec![
         ("TARSEE_TESTBIN_ROLE".into(), "echo".into()),
         ("TARSEE_TESTBIN_READ_STDIN".into(), "1".into()),
-        (
-            "TARSEE_TESTBIN_ECHO_ENV".into(),
-            "HOOK_SECRET,CARGO_PKG_NAME".into(),
-        ),
+        ("TARSEE_TESTBIN_ECHO_ENV".into(), "HOOK_SECRET,CARGO_PKG_NAME".into()),
         ("HOOK_SECRET".into(), "from-the-app".into()),
     ];
     env.extend(extra_env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
@@ -43,7 +40,10 @@ async fn a_program_hook_gets_the_event_on_stdin_in_the_workspace_with_the_apps_e
     let results = HookRegistry::of(&t)
         .emit("message:received", json!({"text": "hello", "channel": "telegram"}))
         .await;
-    let ours = results.iter().find(|r| r.name == "echoer").expect("the program hook ran");
+    let ours = results
+        .iter()
+        .find(|r| r.name == "echoer")
+        .expect("the program hook ran");
     assert_eq!(ours.error, None);
     let said: &Value = ours.result.as_ref().unwrap();
     assert_eq!(said["args"], json!(["one", "two words"]));
@@ -84,9 +84,7 @@ async fn a_program_that_runs_too_long_is_stopped() {
     t.app.set(HookRegistry::with_timeout(Duration::from_millis(500)));
     load_hooks(&t);
     let started = Instant::now();
-    let results = HookRegistry::of(&t)
-        .emit("message:received", json!({}))
-        .await;
+    let results = HookRegistry::of(&t).emit("message:received", json!({})).await;
     assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
     let ours = results.iter().find(|r| r.name == "echoer").unwrap();
     assert_eq!(ours.error.as_deref(), Some("Hook timeout"));

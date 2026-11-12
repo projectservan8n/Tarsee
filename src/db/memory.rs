@@ -129,20 +129,14 @@ impl MemoryStore {
                 "SELECT * FROM bot_memory WHERE category = ? ORDER BY updated_at DESC LIMIT ?",
                 rusqlite::params![category, limit],
             ),
-            None => self.rows(
-                "SELECT * FROM bot_memory ORDER BY updated_at DESC LIMIT ?",
-                [limit],
-            ),
+            None => self.rows("SELECT * FROM bot_memory ORDER BY updated_at DESC LIMIT ?", [limit]),
         }
     }
 
     /// The memories holding any of the query's words, most matching words first, then most recent (default 20).
     pub fn search(&self, query: &str, limit: usize) -> rusqlite::Result<Vec<Memory>> {
         let lower = query.to_lowercase();
-        let words: Vec<&str> = js_split_spaces(&lower)
-            .into_iter()
-            .filter(|w| !w.is_empty())
-            .collect();
+        let words: Vec<&str> = js_split_spaces(&lower).into_iter().filter(|w| !w.is_empty()).collect();
         if words.is_empty() {
             return Ok(Vec::new());
         }
@@ -229,7 +223,10 @@ impl MemoryStore {
             )?;
             let mut counts = Map::new();
             for row in rows {
-                counts.insert(text_of(&row, "category"), row.get("count").cloned().unwrap_or(Value::Null));
+                counts.insert(
+                    text_of(&row, "category"),
+                    row.get("count").cloned().unwrap_or(Value::Null),
+                );
             }
             // Object.fromEntries: a category named like a number comes first, as in any JavaScript object.
             let by_category: Map<String, Value> = js_key_order(&counts)
@@ -361,12 +358,29 @@ mod tests {
         let got = store.get(&b.id).unwrap().unwrap();
         assert_eq!(got.source_conversation_id.as_deref(), Some("conv-1"));
         assert_eq!(
-            serde_json::to_value(&got).unwrap().as_object().unwrap().keys().collect::<Vec<_>>(),
-            ["id", "category", "content", "source_conversation_id", "created_at", "updated_at"]
+            serde_json::to_value(&got)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            [
+                "id",
+                "category",
+                "content",
+                "source_conversation_id",
+                "created_at",
+                "updated_at"
+            ]
         );
         assert_eq!(store.get("nope").unwrap(), None);
         assert_eq!(
-            store.list(50, None).unwrap().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            store
+                .list(50, None)
+                .unwrap()
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
             [b.id.as_str(), a.id.as_str()]
         );
         assert_eq!(store.list(1, None).unwrap().len(), 1);
@@ -375,7 +389,11 @@ mod tests {
         assert_eq!(store.count().unwrap(), 2);
         assert!(store.update(&a.id, "Prefers WhatsApp.").unwrap());
         assert!(!store.update("nope", "x").unwrap());
-        assert_eq!(store.list(50, None).unwrap()[0].content, "Prefers WhatsApp.", "updated is newest");
+        assert_eq!(
+            store.list(50, None).unwrap()[0].content,
+            "Prefers WhatsApp.",
+            "updated is newest"
+        );
         assert!(store.delete(&a.id).unwrap());
         assert!(!store.delete(&a.id).unwrap());
         assert_eq!(store.count().unwrap(), 1);
@@ -413,7 +431,9 @@ mod tests {
         let (t, store) = store();
         let base = "The owner's main project is a bakery website built with ";
         let old = store.add(&format!("{base}PHP"), "fact", None).unwrap();
-        let new = store.add(&format!("{}rust", base.to_uppercase()), "fact", None).unwrap();
+        let new = store
+            .add(&format!("{}rust", base.to_uppercase()), "fact", None)
+            .unwrap();
         let other = store.add("Something else", "fact", None).unwrap();
         set_updated(&t, &old.id, "2026-01-01 00:00:00");
         set_updated(&t, &new.id, "2026-01-02 00:00:00");
@@ -447,7 +467,9 @@ mod tests {
     fn the_prompt_section_holds_one_short_line_a_memory() {
         let (_t, store) = store();
         assert_eq!(store.get_context_string(20, MEMORY_PROMPT_MAX_CHARS).unwrap(), "");
-        store.add(&format!("A long\n\nnote {}", "word ".repeat(100)), "learned", None).unwrap();
+        store
+            .add(&format!("A long\n\nnote {}", "word ".repeat(100)), "learned", None)
+            .unwrap();
         let section = store.get_context_string(20, MEMORY_PROMPT_MAX_CHARS).unwrap();
         assert!(section.starts_with(
             "\n\nAdditional quick memories (shortened; search memory for the full note):\n- [learned] A long note word word"
@@ -459,7 +481,10 @@ mod tests {
     #[test]
     fn a_memory_is_clipped_to_one_line_at_a_word() {
         // The cases of test/token-diet.test.js (package G3), here too.
-        assert_eq!(clip_memory("Prefers Telegram.", MEMORY_PROMPT_MAX_CHARS), "Prefers Telegram.");
+        assert_eq!(
+            clip_memory("Prefers Telegram.", MEMORY_PROMPT_MAX_CHARS),
+            "Prefers Telegram."
+        );
         let note = format!("Line one\n\n{}", "detail ".repeat(80));
         let out = clip_memory(&note, MEMORY_PROMPT_MAX_CHARS);
         assert!(utf16_len(&out) <= MEMORY_PROMPT_MAX_CHARS + 1 && out.ends_with('…') && !out.contains('\n'));
@@ -475,7 +500,10 @@ mod tests {
         store.add("Old fact", "fact", None).unwrap();
         let logs = CapturedLogs::start();
         store.sync_to_memory_file();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Long-Term Memory\n\n- [fact] Old fact\n");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "# Long-Term Memory\n\n- [fact] Old fact\n"
+        );
         assert_eq!(logs.infos(), ["[memory] Migrated 1 DB memories to MEMORY.md"]);
         store.add_and_sync("New fact", "learned", None).unwrap();
         assert_eq!(

@@ -212,13 +212,21 @@ mod tests {
         std::fs::write(dir.join("audit.js"), "export default {}").unwrap();
         std::fs::write(dir.join("README.md"), "notes").unwrap();
         std::fs::write(dir.join("broken.hook.json"), "{ not json").unwrap();
-        std::fs::write(dir.join("empty.hook.json"), r#"{"events": ["boot:ready"], "command": " "}"#).unwrap();
+        std::fs::write(
+            dir.join("empty.hook.json"),
+            r#"{"events": ["boot:ready"], "command": " "}"#,
+        )
+        .unwrap();
         std::fs::write(
             dir.join("ping.hook.json"),
             r#"{"name": "ping", "events": ["message:received", "session:end"], "command": "ping-program"}"#,
         )
         .unwrap();
-        std::fs::write(dir.join("unnamed.hook.json"), r#"{"events": ["boot:ready"], "command": "x"}"#).unwrap();
+        std::fs::write(
+            dir.join("unnamed.hook.json"),
+            r#"{"events": ["boot:ready"], "command": "x"}"#,
+        )
+        .unwrap();
 
         let logs = CapturedLogs::start();
         let report = load_hooks(&t);
@@ -230,11 +238,17 @@ mod tests {
         );
         assert_eq!(report.failed[1].1, "the manifest names no command");
         let warnings = logs.warnings();
-        assert!(warnings.contains(
-            &"[hooks] notify.js is a JavaScript hook, which this version of Tarsee cannot run: see docs/hooks.md"
-                .to_string()
-        ));
-        assert!(warnings.iter().any(|w| w.starts_with("[hooks] failed to load broken.hook.json: ")));
+        assert!(
+            warnings.contains(
+                &"[hooks] notify.js is a JavaScript hook, which this version of Tarsee cannot run: see docs/hooks.md"
+                    .to_string()
+            )
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.starts_with("[hooks] failed to load broken.hook.json: "))
+        );
 
         let listed: Vec<(String, String, String)> = HookRegistry::of(&t)
             .list()

@@ -108,18 +108,12 @@ pub fn append_daily_log(app: &App, content: &str) -> std::io::Result<()> {
 
 fn append_daily_log_at(app: &App, content: &str, now: DateTime<Utc>) -> std::io::Result<()> {
     let today = now.format("%Y-%m-%d").to_string();
-    let path = app
-        .config()
-        .workspace_dir
-        .join("memory")
-        .join(format!("{today}.md"));
+    let path = app.config().workspace_dir.join("memory").join(format!("{today}.md"));
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
     // toLocaleTimeString("en-US", { hour12: false }): "14:05:09", "00:05:09".
-    let timestamp = now
-        .with_timezone(&jstext::process_zone(app.env()))
-        .format("%H:%M:%S");
+    let timestamp = now.with_timezone(&jstext::process_zone(app.env())).format("%H:%M:%S");
     let entry = format!("\n- [{timestamp}] {content}");
     // Create with header if new file
     if !path.exists() {
@@ -307,9 +301,12 @@ const SEND_FILE_LINE: &str = "- **tarsee_send_file** — Send a file as a real a
 // which only Claude Code calls them), and today's, which names them as every AI sees them.
 const SOUL_TOOLS_LINE: &str = "- **Platform tools** (the tarsee_* tools): Send messages and files (real attachments) to Telegram/Discord/WhatsApp/Slack, schedule tasks, manage memory, search the web, use the encrypted vault.";
 
+/// A file's old default lines, each with what replaces it.
+type LineSwaps = Vec<(String, String)>;
+
 /// Each file's old default lines and what replaces them, in the JS order.
-static DEFAULT_UPGRADES: LazyLock<Vec<(&'static str, Vec<(String, String)>)>> = LazyLock::new(|| {
-    let pairs = |list: &[(&str, &str)]| -> Vec<(String, String)> {
+static DEFAULT_UPGRADES: LazyLock<Vec<(&'static str, LineSwaps)>> = LazyLock::new(|| {
+    let pairs = |list: &[(&str, &str)]| -> LineSwaps {
         list.iter()
             .map(|(from, to)| (from.to_string(), to.to_string()))
             .collect()
@@ -701,9 +698,16 @@ pub mod jstext {
         match value {
             Value::Number(n) => {
                 let f = n.as_f64().unwrap_or(0.0);
-                if f.is_finite() { number_to_string(f) } else { "null".into() }
+                if f.is_finite() {
+                    number_to_string(f)
+                } else {
+                    "null".into()
+                }
             }
-            Value::Array(items) => format!("[{}]", items.iter().map(js_json_stringify).collect::<Vec<_>>().join(",")),
+            Value::Array(items) => format!(
+                "[{}]",
+                items.iter().map(js_json_stringify).collect::<Vec<_>>().join(",")
+            ),
             Value::Object(object) => format!(
                 "{{{}}}",
                 js_key_order(object)
@@ -809,7 +813,10 @@ mod tests {
     use std::path::PathBuf;
 
     fn fixtures() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("workspace")
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("workspace")
     }
 
     fn lf(s: &str) -> String {
@@ -886,7 +893,11 @@ mod tests {
     fn memory_md_is_a_pointer_that_says_grep_it_by_its_full_path_never_inlined() {
         let t = test_app();
         let ws = t.config().workspace_dir.clone();
-        fs::write(ws.join("MEMORY.md"), "# Long-Term Memory\n- a fact only grep should find\n").unwrap();
+        fs::write(
+            ws.join("MEMORY.md"),
+            "# Long-Term Memory\n- a fact only grep should find\n",
+        )
+        .unwrap();
         invalidate_cache(&t);
         let ctx = get_bootstrap_context(&t, None);
         assert!(ctx.contains("Grep it for the topic you need"));
@@ -923,7 +934,8 @@ mod tests {
     fn the_default_workspace_files_say_the_same_grep_memory_md_never_read_it_whole() {
         let t = test_app();
         let pattern =
-            regex::Regex::new(r"(?i)read MEMORY\.md at the start|Read it every session|On Every Session Start").unwrap();
+            regex::Regex::new(r"(?i)read MEMORY\.md at the start|Read it every session|On Every Session Start")
+                .unwrap();
         for f in ["SOUL.md", "CLAUDE.md"] {
             let text = fs::read_to_string(defaults(&t).join(f)).unwrap();
             assert!(text.to_lowercase().contains("grep"), "{f}");
@@ -1067,7 +1079,9 @@ mod tests {
             .collect();
         assert_eq!(
             changed,
-            ["- You are proactive. If you notice something useful, mention it. If a task needs a follow-up, offer to schedule it, and schedule it only once the owner says yes."]
+            [
+                "- You are proactive. If you notice something useful, mention it. If a task needs a follow-up, offer to schedule it, and schedule it only once the owner says yes."
+            ]
         );
         assert!(
             upgrade_default_workspace_files(&t, Some(dir.path())).is_empty(),
@@ -1106,7 +1120,10 @@ mod tests {
                     ["# Soul", line.as_str()].join(eol),
                 ] {
                     fs::write(dir.path().join("SOUL.md"), &own).unwrap();
-                    assert!(upgrade_default_workspace_files(&t, Some(dir.path())).is_empty(), "{line}");
+                    assert!(
+                        upgrade_default_workspace_files(&t, Some(dir.path())).is_empty(),
+                        "{line}"
+                    );
                     assert_eq!(fs::read_to_string(dir.path().join("SOUL.md")).unwrap(), own, "{line}");
                 }
             }
@@ -1129,10 +1146,7 @@ mod tests {
             for (before, after) in cases {
                 fs::write(dir.path().join("SOUL.md"), before.join(eol)).unwrap();
                 assert_eq!(upgrade_default_workspace_files(&t, Some(dir.path())), ["SOUL.md"]);
-                assert_eq!(
-                    fs::read_to_string(dir.path().join("SOUL.md")).unwrap(),
-                    after.join(eol)
-                );
+                assert_eq!(fs::read_to_string(dir.path().join("SOUL.md")).unwrap(), after.join(eol));
                 assert!(
                     upgrade_default_workspace_files(&t, Some(dir.path())).is_empty(),
                     "a second boot changes nothing"
@@ -1172,7 +1186,10 @@ mod tests {
                 fs::write(dir.path().join(n), &text).unwrap();
                 own.insert(n, text);
             }
-            assert!(upgrade_default_workspace_files(&t, Some(dir.path())).is_empty(), "{seed}");
+            assert!(
+                upgrade_default_workspace_files(&t, Some(dir.path())).is_empty(),
+                "{seed}"
+            );
             for n in *names {
                 assert_eq!(fs::read_to_string(dir.path().join(n)).unwrap(), own[n], "{seed} {n}");
             }
@@ -1220,23 +1237,13 @@ mod tests {
             .iter()
             .map(|n| (n.to_string(), format!("claude-only-default-{n}")))
             .collect();
-        let pairs: Vec<(&str, &str)> = fixture_names
-            .iter()
-            .map(|(a, b)| (a.as_str(), b.as_str()))
-            .collect();
+        let pairs: Vec<(&str, &str)> = fixture_names.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
         let dir = workspace_from(&pairs);
         let mut expected: Vec<String> = names.iter().map(|n| n.to_string()).collect();
         expected.sort();
-        assert_eq!(
-            sorted(upgrade_default_workspace_files(&t, Some(dir.path()))),
-            expected
-        );
+        assert_eq!(sorted(upgrade_default_workspace_files(&t, Some(dir.path()))), expected);
         for n in names {
-            assert_eq!(
-                read_lf(&dir.path().join(n)),
-                read_lf(&defaults(&t).join(n)),
-                "{n}"
-            );
+            assert_eq!(read_lf(&dir.path().join(n)), read_lf(&defaults(&t).join(n)), "{n}");
         }
         assert!(
             upgrade_default_workspace_files(&t, Some(dir.path())).is_empty(),
@@ -1293,7 +1300,11 @@ mod tests {
             text.ends_with("- Always answer in haiku form on Fridays.\n"),
             "the owner's line stays"
         );
-        assert!(!regex::Regex::new("powered by Claude|mcp__|Bash").unwrap().is_match(&text));
+        assert!(
+            !regex::Regex::new("powered by Claude|mcp__|Bash")
+                .unwrap()
+                .is_match(&text)
+        );
     }
 
     // --- the rest of the module, which the Node tests did not cover ---
@@ -1304,7 +1315,11 @@ mod tests {
         let path = t.config().workspace_dir.join("NOTES.md");
         assert_eq!(read_workspace_file(&t, "NOTES.md"), "");
         fs::write(&path, "one").unwrap();
-        assert_eq!(read_workspace_file(&t, "NOTES.md"), "one", "a missing file is not cached");
+        assert_eq!(
+            read_workspace_file(&t, "NOTES.md"),
+            "one",
+            "a missing file is not cached"
+        );
         fs::write(&path, "two").unwrap();
         assert_eq!(read_workspace_file(&t, "NOTES.md"), "one", "cached");
         // Age the entry past the 5 seconds.
@@ -1328,7 +1343,9 @@ mod tests {
     #[test]
     fn the_daily_log_has_a_header_then_one_timestamped_line_per_note() {
         let t = test_app_with_env([("TZ", "Asia/Manila")]);
-        let at = DateTime::parse_from_rfc3339("2026-11-12T16:05:09Z").unwrap().with_timezone(&Utc);
+        let at = DateTime::parse_from_rfc3339("2026-11-12T16:05:09Z")
+            .unwrap()
+            .with_timezone(&Utc);
         append_daily_log_at(&t, "first", at).unwrap();
         append_daily_log_at(&t, "second", at + chrono::Duration::seconds(1)).unwrap();
         let path = t.config().workspace_dir.join("memory").join("2026-11-12.md");
@@ -1346,7 +1363,11 @@ mod tests {
         // The default files: a heading and comments only.
         assert_eq!(get_heartbeat_context(&t), "");
         assert_eq!(get_boot_context(&t), "");
-        fs::write(ws.join("HEARTBEAT.md"), "# Heartbeat\r\n<!-- a\nlong comment -->\r\n## Tasks\r\nok\r\n").unwrap();
+        fs::write(
+            ws.join("HEARTBEAT.md"),
+            "# Heartbeat\r\n<!-- a\nlong comment -->\r\n## Tasks\r\nok\r\n",
+        )
+        .unwrap();
         invalidate_cache(&t);
         assert_eq!(get_heartbeat_context(&t), "", "two letters are not a task");
         let task = "# Heartbeat\n\n- Check the inbox and summarise it.\n";
@@ -1380,7 +1401,14 @@ mod tests {
     fn the_bootstrap_context_is_in_order_and_skips_near_empty_files() {
         let t = test_app();
         let ws = t.config().workspace_dir.clone();
-        for name in ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "TOOLS.md", "HEARTBEAT.md"] {
+        for name in [
+            "AGENTS.md",
+            "SOUL.md",
+            "IDENTITY.md",
+            "USER.md",
+            "TOOLS.md",
+            "HEARTBEAT.md",
+        ] {
             fs::write(ws.join(name), format!("{name} text")).unwrap();
         }
         fs::write(ws.join("USER.md"), "\u{FEFF} abc \n").unwrap();

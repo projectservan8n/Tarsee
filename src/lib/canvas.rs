@@ -332,7 +332,7 @@ fn gallery(app: &App, dir: &Path) -> Response {
         canvases.push((name, meta.len(), meta.modified().unwrap_or(UNIX_EPOCH)));
     }
     // Newest first; a stable sort.
-    canvases.sort_by(|a, b| b.2.cmp(&a.2));
+    canvases.sort_by_key(|c| std::cmp::Reverse(c.2));
 
     if canvases.is_empty() {
         return html(
@@ -535,7 +535,12 @@ mod tests {
     fn a_page_is_written_with_its_css_and_js_and_listed() {
         let (t, server) = app();
         let served = server
-            .serve("chart", Some("<h1>Sales</h1>"), Some("h1{color:red}"), Some("console.log(1)"))
+            .serve(
+                "chart",
+                Some("<h1>Sales</h1>"),
+                Some("h1{color:red}"),
+                Some("console.log(1)"),
+            )
             .unwrap();
         assert_eq!(
             serde_json::to_value(&served).unwrap(),
@@ -547,7 +552,10 @@ mod tests {
         );
         server.serve("plain", Some("é🐒"), Some(""), None).unwrap();
         assert_eq!(server.get("plain").as_deref(), Some("é🐒"));
-        assert_eq!(server.serve("x", None, None, None).unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            server.serve("x", None, None, None).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
         assert_eq!(
             server.serve("y", None, Some("a{}"), None).unwrap().size,
             utf16_len("<style>a{}</style>\nundefined")
@@ -565,7 +573,10 @@ mod tests {
         assert!(server.delete("chart"));
         assert!(!server.delete("chart"));
         assert_eq!(server.get("chart"), None);
-        assert_eq!(server.get_file_path("a", "b.css"), canvas_dir(t.config()).join("a").join("b.css"));
+        assert_eq!(
+            server.get_file_path("a", "b.css"),
+            canvas_dir(t.config()).join("a").join("b.css")
+        );
     }
 
     #[tokio::test]
@@ -633,9 +644,15 @@ mod tests {
         assert_eq!(res.header("content-security-policy"), Some(CANVAS_CSP));
         let res = call(&t, true, get("/canvas/c1/../../../secret")).await.unwrap();
         assert_eq!((res.status, res.text()), (403, "Forbidden".to_string()));
-        assert!(call(&t, true, get("/canvas/c1/sub")).await.is_none(), "a folder goes on");
+        assert!(
+            call(&t, true, get("/canvas/c1/sub")).await.is_none(),
+            "a folder goes on"
+        );
         let res = call(&t, true, get("/canvas/c1/.env")).await.unwrap();
-        assert_eq!((res.status, res.json()), (404, serde_json::json!({"error": "Not Found"})));
+        assert_eq!(
+            (res.status, res.json()),
+            (404, serde_json::json!({"error": "Not Found"}))
+        );
         let res = call(&t, true, get("/canvas/c1/../c1/index.html")).await.unwrap();
         assert_eq!((res.status, res.text()), (200, "x".to_string()));
     }
@@ -662,7 +679,10 @@ mod tests {
         if cfg!(unix) {
             assert!(page.contains("href=\"/canvas/%3Cimg%20src%3Dx%3E/\""));
             assert!(page.contains("<strong>&lt;img src=x&gt;</strong>"));
-            assert!(page.find("img src").unwrap() < page.find("older").unwrap(), "newest first");
+            assert!(
+                page.find("img src").unwrap() < page.find("older").unwrap(),
+                "newest first"
+            );
         }
     }
 
@@ -695,6 +715,9 @@ mod tests {
         assert_eq!(normalize_path("/a/b/../c/./d"), format!("{sep}a{sep}c{sep}d"));
         assert_eq!(normalize_path("/a/../../x"), format!("{sep}x"));
         assert_eq!(encode_uri_component("a b/é~"), "a%20b%2F%C3%A9~");
-        assert_eq!(escape_html("<a href=\"x\">'&'</a>"), "&lt;a href=&quot;x&quot;&gt;&#39;&amp;&#39;&lt;/a&gt;");
+        assert_eq!(
+            escape_html("<a href=\"x\">'&'</a>"),
+            "&lt;a href=&quot;x&quot;&gt;&#39;&amp;&#39;&lt;/a&gt;"
+        );
     }
 }

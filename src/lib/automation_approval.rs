@@ -75,7 +75,10 @@ pub fn normalize_text(text: &str) -> String {
 
 /// What is stored for an OK'd text. Prefixed, so the settings store never reads it back as a number.
 pub fn text_hash(text: &str) -> String {
-    format!("sha256:{}", hex::encode(Sha256::digest(normalize_text(text).as_bytes())))
+    format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(normalize_text(text).as_bytes()))
+    )
 }
 
 fn is_present(value: Option<Value>) -> bool {
@@ -239,10 +242,7 @@ pub fn gate_automation(
         .get(&format!("{key}.waiting"))
         .and_then(|w| w.get("hash").cloned());
     if waited_hash != Some(Value::String(hash.clone())) {
-        store.set(
-            &format!("{key}.waiting"),
-            json!({ "hash": hash, "since": now_iso() }),
-        )?;
+        store.set(&format!("{key}.waiting"), json!({ "hash": hash, "since": now_iso() }))?;
         say(log, &format!("[{key}] {reason}"));
     }
     Ok(Gate {
@@ -392,7 +392,10 @@ mod tests {
         assert_eq!(again.changed, Some(false));
 
         let gate = gate_automation(&t, &store, "HEARTBEAT.md", Some(&log)).unwrap();
-        assert_eq!(serde_json::to_value(&gate).unwrap(), json!({"run": true, "prompt": TASK}));
+        assert_eq!(
+            serde_json::to_value(&gate).unwrap(),
+            json!({"run": true, "prompt": TASK})
+        );
         let status = automation_status(&t, &store, "HEARTBEAT.md").unwrap();
         assert!(status.approved && !status.waiting);
         assert_eq!(status.approval["by"], "editor");
@@ -409,7 +412,9 @@ mod tests {
         assert!(upgrade_approval(&t, &store, "BOOT.md", Some(&log)).unwrap());
         assert_eq!(
             *logged.borrow(),
-            ["[boot] first start of this version: the BOOT.md already here counts as OK'd by the owner, so it keeps running as before. From now on a change made outside Settings waits for the owner's OK."]
+            [
+                "[boot] first start of this version: the BOOT.md already here counts as OK'd by the owner, so it keeps running as before. From now on a change made outside Settings waits for the owner's OK."
+            ]
         );
         assert_eq!(store.get("boot.approval").unwrap()["by"], "upgrade");
         assert!(!upgrade_approval(&t, &store, "BOOT.md", Some(&log)).unwrap(), "once");
