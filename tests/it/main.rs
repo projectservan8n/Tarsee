@@ -15,4 +15,5 @@ mod interfaces;
 mod pdf_text;
 mod python_runtime;
 mod run_cmd;
+mod terminal;
 mod voice;
