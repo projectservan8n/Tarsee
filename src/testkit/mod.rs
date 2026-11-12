@@ -16,6 +16,7 @@
 //! (`testbin/`), which integration tests (`tests/it/`) find through `support::testbin()`.
 
 pub mod captured_logs;
+pub mod codex_homes;
 pub mod fake_channels;
 pub mod fake_commands;
 pub mod fake_download_host;

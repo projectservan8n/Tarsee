@@ -10,6 +10,7 @@
 mod echo;
 mod fake_python;
 mod speech;
+mod thread_dbs_sweep;
 
 fn main() {
     let role = std::env::var("TARSEE_TESTBIN_ROLE")
@@ -25,6 +26,7 @@ fn main() {
         Some("piper") => speech::piper(),
         Some("ffmpeg") => speech::ffmpeg(),
         Some("whisper-cli" | "main") => speech::whisper_cli(),
+        Some("thread-dbs-sweep") => thread_dbs_sweep::main(),
         other => {
             eprintln!("tarsee-testbin: no such role: {}", other.unwrap_or("(none)"));
             64

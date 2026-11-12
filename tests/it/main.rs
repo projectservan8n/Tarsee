@@ -5,9 +5,14 @@
 
 mod support;
 
+mod claude_cli_env_names;
+mod codex_cli;
+mod codex_thread_dbs;
 mod fake_python;
+mod foundation;
 mod foundation;
 mod hooks;
 mod interfaces;
 mod python_runtime;
+mod run_cmd;
 mod voice;
