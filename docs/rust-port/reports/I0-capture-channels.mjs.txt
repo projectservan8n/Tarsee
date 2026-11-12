@@ -1,0 +1,63 @@
+// What channels/manager.js getStatus() and lib/commands.js really return, for the Rust tests of channels/api.rs
+// and lib/command_api.rs. node capture-channels.mjs <main checkout> <state dir>
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const [root, stateDir] = process.argv.slice(2);
+const src = (rel) => pathToFileURL(path.join(root, rel)).href;
+fs.rmSync(stateDir, { recursive: true, force: true });
+fs.mkdirSync(path.join(stateDir, "workspace"), { recursive: true });
+process.env.TARSEE_STATE_DIR = stateDir;
+process.env.TARSEE_WORKSPACE_DIR = path.join(stateDir, "workspace");
+process.env.TARSEE_DATA_DIR = path.join(stateDir, "data");
+const realLog = console.log;
+console.log = () => {}; console.warn = () => {}; console.error = () => {};
+const { initDb } = await import(src("src/db/sqlite.js"));
+const { SettingsStore } = await import(src("src/db/settings.js"));
+const { ChannelManager } = await import(src("src/channels/manager.js"));
+const { processCommand, extractPlaybookPrompt, getCommandList } = await import(src("src/lib/commands.js"));
+const db = initDb(path.join(stateDir, "tarsee.db"));
+const settings = new SettingsStore(db);
+const out = {};
+
+const mgr = new ChannelManager(db);
+out.statusNothingSetUp = mgr.getStatus();
+settings.set("channel.whatsapp", { enabled: true, token: "test-whapi-token-not-real" });
+mgr.channels.set("telegram", { bot: { identity: "@test_bot" }, type: "telegram", status: "running" });
+mgr.channels.set("slack", { bot: null, type: "slack", status: "error", error: "Slack refused the bot token. Copy it again." });
+mgr.channels.set("discord", { bot: { identity: "tarsee#0001", inviteUrl: "https://discord.com/oauth2/authorize?client_id=1" }, type: "discord", status: "running" });
+mgr.channels.set("email", { bot: null, type: "email", status: "starting" });
+out.status = mgr.getStatus();
+mgr.channels.clear();
+mgr.channels.set("whatsapp", { bot: { identity: null, warning: "Saved, but couldn't check the token with WHAPI (no answer in time)." }, type: "whatsapp", status: "running" });
+out.statusWarning = mgr.getStatus();
+const tryIt = async (fn) => { try { await fn(); return null; } catch (err) { return err.message; } };
+out.errors = {
+  sendMessage: await tryIt(() => mgr.sendMessage("discord", "1", "hi")),
+  sendFile: await tryIt(() => mgr.sendFile("email", "a@b.c", "/tmp/x", "cap")),
+  restart: await tryIt(() => mgr.restart("telegram")),
+  restartEmail: await tryIt(() => mgr.restart("email")),
+};
+
+out.commands = {
+  notACommand: await processCommand("hello", {}),
+  unknown: await processCommand("/nosuchcommand", {}),
+  refused: await processCommand("/cron list", { settingsStore: settings, db, platform: "telegram" }),
+  refusedEmail: await processCommand("/cron list", { settingsStore: settings, db, platform: "email", owner: false }),
+  owner: await processCommand("/cron list", { settingsStore: settings, db, platform: "web" }),
+  empty: await processCommand("", {}),
+};
+out.playbook = {
+  plain: extractPlaybookPrompt({ handled: true, response: "Hello" }),
+  playbook: extractPlaybookPrompt({ handled: true, response: "__PLAYBOOK__\nDo the thing.\nThen stop." }),
+  notHandled: extractPlaybookPrompt({ handled: false, response: "__PLAYBOOK__\nx" }),
+  noResponse: extractPlaybookPrompt({ handled: true }),
+  nothing: extractPlaybookPrompt(null),
+  prefixOnly: extractPlaybookPrompt({ handled: true, response: "__PLAYBOOK__\n" }),
+  noNewline: extractPlaybookPrompt({ handled: true, response: "__PLAYBOOK__ x" }),
+};
+const list = getCommandList();
+out.commandList = { count: list.length, first: list.slice(0, 2), keys: [...new Set(list.flatMap((c) => Object.keys(c)))], categories: [...new Set(list.map((c) => c.category))] };
+db.close();
+realLog(JSON.stringify(out));
+process.exit(0);

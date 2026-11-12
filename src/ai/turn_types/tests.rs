@@ -357,6 +357,36 @@ fn a_usage_carries_the_cost_when_the_engine_knows_it() {
     assert_eq!(usage.usage.cache_read_input_tokens, 0);
 }
 
+/// `usage = { ...usage, ...event.usage }`, as every caller of a turn gathers it (`routes/chat.js`, the channels).
+#[test]
+fn a_caller_gathers_the_turns_usage_as_node_spreads_it() {
+    let mut gathered = serde_json::Map::new();
+    assert_eq!(
+        Value::Object(gathered.clone()).to_string(),
+        "{}",
+        "a turn with no usage event leaves {{}}"
+    );
+
+    Usage {
+        context_input_tokens: Some(40_000),
+        ..Usage::new(10, 2, 3, 4)
+    }
+    .merge_into(&mut gathered);
+    assert_eq!(
+        Value::Object(gathered.clone()).to_string(),
+        r#"{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4,"context_input_tokens":40000}"#
+    );
+
+    // A later event's counts replace the earlier ones; what only the earlier one had stays where it was.
+    let mut later = Usage::new(100, 20, 0, 0);
+    later.extra.insert("cost".into(), json!(0.002));
+    later.merge_into(&mut gathered);
+    assert_eq!(
+        Value::Object(gathered).to_string(),
+        r#"{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"context_input_tokens":40000,"cost":0.002}"#
+    );
+}
+
 #[test]
 fn an_event_of_a_type_tarsee_has_no_name_for_is_kept_whole() {
     let events = scene(NODE_TURN_LAYER, "reportedCost");

@@ -383,6 +383,18 @@ impl Usage {
             extra: Map::new(),
         }
     }
+
+    /// `usage = { ...usage, ...event.usage }`: writes this usage's fields over what a caller has gathered so far.
+    /// Every caller of a turn keeps its usage this way, starting from `{}`: a later event's counts replace the
+    /// earlier ones, a field only an earlier event had (`context_input_tokens`) stays, and a turn with no usage
+    /// event leaves `{}`.
+    pub fn merge_into(&self, gathered: &mut Map<String, Value>) {
+        if let Ok(Value::Object(fields)) = serde_json::to_value(self) {
+            for (name, value) in fields {
+                gathered.insert(name, value);
+            }
+        }
+    }
 }
 
 /// `{ type: "step", kind, ... }`: one line of the dashboard's live timeline, published as it is (without `type`)
