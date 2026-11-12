@@ -24,7 +24,7 @@ fn main() {
         Some("fake-python") => fake_python::main(),
         Some("piper") => speech::piper(),
         Some("ffmpeg") => speech::ffmpeg(),
-        Some("whisper-cli") => speech::whisper_cli(),
+        Some("whisper-cli" | "main") => speech::whisper_cli(),
         other => {
             eprintln!("tarsee-testbin: no such role: {}", other.unwrap_or("(none)"));
             64

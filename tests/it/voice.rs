@@ -5,9 +5,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::Value;
-use tarsee::testkit::{TestApp, test_app_with_env, tmp_dir};
+use tarsee::testkit::{Answer, TestApp, test_app_with_env, tmp_dir};
 use tarsee::voice::piper_engine::{PiperTtsEngine, save_piper_voice, voices_dir};
 use tarsee::voice::tts_interface::{SynthOptions, TtsEngine, exec_file};
+use tarsee::voice::whisper_engine::{Transcript, is_available as whisper_available, models_dir, transcribe};
 use tempfile::TempDir;
 
 use crate::support::testbin_as;
@@ -169,4 +170,124 @@ async fn a_program_that_runs_too_long_is_stopped_in_node_s_words() {
         started.elapsed() < Duration::from_secs(4),
         "it was killed, not waited for"
     );
+}
+
+// ── whisper.cpp ──────────────────────────────────────────────────────────
+
+fn put_model(p: &Programs, name: &str) -> PathBuf {
+    let dir = models_dir(p.t.config());
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(name);
+    std::fs::write(&file, b"ggml").unwrap();
+    file
+}
+
+#[tokio::test]
+async fn whisper_converts_with_ffmpeg_then_transcribes_and_cleans_up() {
+    let p = programs(&["ffmpeg", "whisper-cli"], &[]);
+    let model = put_model(&p, "ggml-base.en.bin");
+    assert!(whisper_available(&p.t).await);
+    let audio = b"OggS-some-audio";
+    let heard = transcribe(&p.t, audio, None).await.unwrap();
+    let wav_size = 4 + audio.len();
+    assert_eq!(
+        heard,
+        Transcript {
+            text: format!("hello from whisper (ggml-base.en.bin, {wav_size} bytes)"),
+            language: "en".into()
+        }
+    );
+
+    let calls: Vec<Value> = p.calls().into_iter().skip(1).collect(); // after is_available's --version
+    assert_eq!(calls[0]["role"], "ffmpeg");
+    let ff: Vec<String> = serde_json::from_value(calls[0]["args"].clone()).unwrap();
+    assert_eq!(ff[0], "-i");
+    let tmp_in = PathBuf::from(&ff[1]);
+    assert_eq!(tmp_in.parent(), Some(p.tmp.path()));
+    let name = tmp_in.file_name().unwrap().to_string_lossy().to_string();
+    assert!(name.starts_with("whisper-in-") && name.ends_with(".audio"), "{name}");
+    assert_eq!(ff[2..8], s(&["-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le"]));
+    let wav = PathBuf::from(&ff[8]);
+    assert_eq!(ff[9], "-y");
+    assert_eq!(
+        calls[1]["args"],
+        serde_json::json!(["--version"]),
+        "the program is looked for"
+    );
+    let w: Vec<String> = serde_json::from_value(calls[2]["args"].clone()).unwrap();
+    assert_eq!(w[0..2], [s(&["-m"])[0].clone(), model.to_string_lossy().to_string()]);
+    assert_eq!(
+        w[2..5],
+        [
+            s(&["-f"])[0].clone(),
+            wav.to_string_lossy().to_string(),
+            "--no-timestamps".into()
+        ]
+    );
+    assert_eq!(w[5], "-t");
+    let threads: usize = w[6].parse().unwrap();
+    assert!((1..=4).contains(&threads));
+    assert!(p.leftovers().is_empty(), "both temporary files are removed");
+}
+
+#[tokio::test]
+async fn whisper_downloads_a_missing_model_first() {
+    let p = programs(&["ffmpeg", "whisper-cli"], &[]);
+    let url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
+    p.t.fetch
+        .respond(url, Answer::bytes(200, "application/octet-stream", vec![1u8; 32]));
+    let heard = transcribe(&p.t, b"x", Some("ggml-tiny.en.bin")).await.unwrap();
+    assert!(heard.text.contains("ggml-tiny.en.bin"), "{}", heard.text);
+    assert_eq!(p.t.fetch.calls_to(url).len(), 1);
+    assert!(models_dir(p.t.config()).join("ggml-tiny.en.bin").exists());
+}
+
+#[tokio::test]
+async fn whisper_failing_says_its_exit_code_and_the_end_of_what_it_printed() {
+    let tail = format!("{}END", "x".repeat(300));
+    let p = programs(
+        &["ffmpeg", "whisper-cli"],
+        &[
+            ("TARSEE_TESTBIN_WHISPER_EXIT", "2"),
+            ("TARSEE_TESTBIN_WHISPER_STDERR", &tail),
+        ],
+    );
+    put_model(&p, "ggml-base.en.bin");
+    let err = transcribe(&p.t, b"x", None).await.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!("Whisper exited with code 2: {}", &tail[tail.len() - 200..])
+    );
+    assert!(p.leftovers().is_empty());
+}
+
+#[tokio::test]
+async fn whisper_from_an_older_build_or_missing_altogether() {
+    let p = programs(&["ffmpeg", "main"], &[]);
+    put_model(&p, "ggml-base.en.bin");
+    assert!(whisper_available(&p.t).await, "`main --help` answers");
+    let heard = transcribe(&p.t, b"x", None).await.unwrap();
+    assert!(heard.text.starts_with("hello from whisper"));
+
+    let none = programs(&["ffmpeg"], &[]);
+    put_model(&none, "ggml-base.en.bin");
+    assert!(!whisper_available(&none.t).await);
+    if !std::path::Path::new("/opt/whisper").exists() {
+        let err = transcribe(&none.t, b"x", None).await.unwrap_err();
+        assert_eq!(err.to_string(), "whisper-cli binary not found. Check Docker build.");
+    }
+
+    let no_ffmpeg = programs(&["whisper-cli"], &[("TARSEE_TESTBIN_FFMPEG_EXIT", "1")]);
+    put_model(&no_ffmpeg, "ggml-base.en.bin");
+    let err = transcribe(&no_ffmpeg.t, b"x", None).await.unwrap_err();
+    assert_eq!(err.to_string(), "spawnSync ffmpeg ENOENT");
+    assert!(
+        no_ffmpeg.leftovers().is_empty(),
+        "the audio written for ffmpeg is removed"
+    );
+
+    let bad_ffmpeg = programs(&["ffmpeg", "whisper-cli"], &[("TARSEE_TESTBIN_FFMPEG_EXIT", "1")]);
+    put_model(&bad_ffmpeg, "ggml-base.en.bin");
+    let err = transcribe(&bad_ffmpeg.t, b"x", None).await.unwrap_err();
+    assert!(err.to_string().starts_with("Command failed: ffmpeg -i "), "{err}");
 }

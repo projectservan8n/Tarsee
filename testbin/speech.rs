@@ -3,8 +3,8 @@
 //! - `piper --model M --output_file O --sentence_silence S`: reads the text on stdin and writes O: "RIFF", then the
 //!   text, then zeros up to `TARSEE_TESTBIN_PIPER_BYTES` bytes (default 1000).
 //! - `ffmpeg -i IN ... OUT -y`: writes OUT as "RIFF" followed by IN's bytes.
-//! - `whisper-cli -m MODEL -f WAV ...`: prints a transcript naming the model file and the size of the wav;
-//!   `whisper-cli --version` prints a version.
+//! - `whisper-cli -m MODEL -f WAV ...` (also as `main`): prints a transcript naming the model file and the size of
+//!   the wav; `--version` or `--help` prints a version and succeeds whatever else the run is set to do.
 //!
 //! Each writes one JSON line `{"role", "args", "stdin"}` to the file `TARSEE_TESTBIN_LOG` when that is set, and
 //! honours, for its own role (PIPER, FFMPEG, WHISPER): `TARSEE_TESTBIN_<ROLE>_EXIT` (exit with this code before doing
@@ -97,12 +97,14 @@ pub fn ffmpeg() -> i32 {
 
 pub fn whisper_cli() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Some(code) = start("whisper-cli", "WHISPER", &args, "") {
-        return code;
-    }
+    // Asked whether it is there: always yes, whatever else this run is set to do.
     if args.iter().any(|a| a == "--version" || a == "--help") {
+        log("whisper-cli", &args, "");
         println!("whisper-cli stand-in 1.0");
         return 0;
+    }
+    if let Some(code) = start("whisper-cli", "WHISPER", &args, "") {
+        return code;
     }
     let model = after(&args, "-m").unwrap_or_default();
     let wav = after(&args, "-f").unwrap_or_default();
