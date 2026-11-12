@@ -374,9 +374,11 @@ async fn claude_codes_own_mcp_client_connects_with_the_token_from_its_environmen
     .await
     .expect("claude did not say what it started with");
     let _ = child.kill().await;
+    let servers = init["mcp_servers"].as_array().unwrap();
+    assert_eq!(servers.len(), 1, "{init}");
     assert_eq!(
-        init["mcp_servers"],
-        json!([{"name": "tarsee", "status": "connected"}]),
+        (&servers[0]["name"], &servers[0]["status"]),
+        (&json!("tarsee"), &json!("connected")),
         "{init}"
     );
     let mut shown: Vec<String> = init["tools"]
