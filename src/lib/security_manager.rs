@@ -522,6 +522,9 @@ mod tests {
             ("pre-sudo-post", true),
             ("résudo", true),
             ("sudoé", true),
+            // A letter outside ASCII is never a match for an ASCII one (the long s, the Kelvin sign).
+            ("pa\u{17f}swd", false),
+            ("m\u{212a}fs", false),
         ] {
             let expected = if dangerous {
                 format!("Potentially dangerous command: {command}")
@@ -738,6 +741,11 @@ mod tests {
             invalid("Path traversal detected")
         );
         assert_eq!(check("write_file", json!({ "filename": "a.md" })), valid());
+        // Two dots anywhere, not only as a folder.
+        assert_eq!(
+            check("write_file", json!({ "filename": "notes..md" })),
+            invalid("Path traversal detected")
+        );
         assert_eq!(check("write_file", json!({})), valid());
         assert_eq!(
             check("exec", json!({ "command": "x".repeat(10_001) })),
