@@ -130,7 +130,10 @@ fn stt_worker(mode: &str) -> i32 {
         let size = std::fs::metadata(req["audio"].as_str().unwrap_or_default())
             .map(|m| m.len())
             .unwrap_or(0);
-        out(&json!({ "id": req["id"], "text": format!("heard {size} bytes"), "language": "en", "duration": 1.0 }).to_string());
+        out(
+            &json!({ "id": req["id"], "text": format!("heard {size} bytes"), "language": "en", "duration": 1.0 })
+                .to_string(),
+        );
     }
     linger();
     0

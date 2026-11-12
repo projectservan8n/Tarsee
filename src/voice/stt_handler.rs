@@ -757,9 +757,7 @@ async fn transcribe_file(
     req.insert("threads".into(), json!(threads()));
     let (app, rt) = (app.clone(), rt.clone());
     let task = tokio::spawn(async move {
-        tokio::fs::write(&tmp, &audio)
-            .await
-            .map_err(|err| err.to_string())?;
+        tokio::fs::write(&tmp, &audio).await.map_err(|err| err.to_string())?;
         let res = SttWorker::of(&app).transcribe(&app, &rt, req, timeout).await;
         // Already gone is fine.
         let _ = tokio::fs::remove_file(&tmp).await;

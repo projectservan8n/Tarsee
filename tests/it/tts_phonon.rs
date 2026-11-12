@@ -8,7 +8,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use futures::FutureExt;
 use serde_json::{Value, json};
@@ -32,7 +31,9 @@ use tempfile::TempDir;
 
 use crate::fake_python::{FakePython, cand};
 use crate::support::testbin_as;
-use crate::voice_fixtures::{VoiceApp, alive, standalone, until_gone, voice_app};
+use crate::voice_fixtures::{
+    VoiceApp, alive, leave_after_first_step, leave_when, standalone, until_empty, until_gone, voice_app,
+};
 
 fn sha(b: &[u8]) -> String {
     hex::encode(Sha256::digest(b))
@@ -428,25 +429,8 @@ async fn without_ptts_the_install_is_not_available() {
     assert_eq!(st.state, "failed");
 }
 
-/// Drops a request after `after` (after its first step when zero), as a client that goes away does.
-async fn leave_after<T>(request: impl std::future::Future<Output = T>, after: Duration) {
-    tokio::pin!(request);
-    if after.is_zero() {
-        let _ = futures::poll!(&mut request);
-    } else {
-        let _ = tokio::time::timeout(after, &mut request).await;
-    }
-}
-
-async fn until_tmp_empty(t: &VoiceApp) {
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !tmp_files(t).is_empty() {
-        assert!(Instant::now() < deadline, "left in the temporary folder: {:?}", tmp_files(t));
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-}
-
-const LEAVE_AT: [Duration; 3] = [Duration::ZERO, Duration::from_millis(50), Duration::from_millis(400)];
+/// Where a caller goes away: at once, or while the worker is speaking its line (it has logged the request).
+const LEAVE_AT: [&str; 2] = ["after its first step", "once the worker has it"];
 
 #[tokio::test]
 async fn a_line_whose_caller_goes_away_still_runs_to_its_end_and_the_next_line_gets_its_own_answer() {
@@ -454,20 +438,28 @@ async fn a_line_whose_caller_goes_away_still_runs_to_its_end_and_the_next_line_g
     // Each answer takes a while, so a caller can go away in the middle of one.
     w.t.env().set("FAKE_PHONON_DELAY_MS", "300");
     let tts = w.engine();
-    for (i, after) in LEAVE_AT.into_iter().enumerate() {
-        leave_after(
-            tts.synthesize(&format!("Dropped {i}."), None, &SynthOptions::default()),
-            after,
-        )
-        .await;
+    for (i, point) in LEAVE_AT.into_iter().enumerate() {
+        until_empty(w.t.tmp.path()).await;
+        let before = w.requests().len();
+        let line = format!("Dropped {i}.");
+        let opts = SynthOptions::default();
+        let leaving = tts.synthesize(&line, None, &opts);
+        match point {
+            "after its first step" => leave_after_first_step(leaving).await,
+            _ => leave_when(leaving, || w.requests().len() > before).await,
+        }
         let kept = format!("Kept {i}.");
         let out = tts.synthesize(&kept, None, &SynthOptions::default()).await.unwrap();
         assert!(
             out.audio[4..].starts_with(kept.as_bytes()),
-            "its own audio after a caller left at {after:?}"
+            "its own audio after a caller left {point}"
         );
     }
-    assert_eq!(w.starts().len(), 1, "one worker throughout: nothing timed out or got mixed up");
+    assert_eq!(
+        w.starts().len(),
+        1,
+        "one worker throughout: nothing timed out or got mixed up"
+    );
     let said: Vec<String> = w
         .requests()
         .iter()
@@ -475,10 +467,10 @@ async fn a_line_whose_caller_goes_away_still_runs_to_its_end_and_the_next_line_g
         .collect();
     assert_eq!(
         said,
-        ["Dropped 0.", "Kept 0.", "Dropped 1.", "Kept 1.", "Dropped 2.", "Kept 2."],
+        ["Dropped 0.", "Kept 0.", "Dropped 1.", "Kept 1."],
         "every line was spoken, in order"
     );
-    until_tmp_empty(&w.t).await;
+    until_empty(w.t.tmp.path()).await;
 }
 
 #[tokio::test]
@@ -487,21 +479,24 @@ async fn a_sentence_whose_client_leaves_is_spoken_to_its_end_and_the_next_reques
     w.t.env().set("FAKE_PHONON_DELAY_MS", "300");
     set_tts_engine(&w.t, Arc::new(w.engine()));
     let router = tarsee::routes::voice::router().with_state(w.t.app.clone());
-    for (i, after) in LEAVE_AT.into_iter().enumerate() {
-        leave_after(
-            http::post_json(&router, "/tts", &json!({ "text": format!("Dropped {i}.") })),
-            after,
-        )
-        .await;
+    for (i, point) in LEAVE_AT.into_iter().enumerate() {
+        until_empty(w.t.tmp.path()).await;
+        let before = w.requests().len();
+        let body = json!({ "text": format!("Dropped {i}.") });
+        let leaving = http::post_json(&router, "/tts", &body);
+        match point {
+            "after its first step" => leave_after_first_step(leaving).await,
+            _ => leave_when(leaving, || w.requests().len() > before).await,
+        }
         let kept = format!("Kept {i}.");
         let res = http::post_json(&router, "/tts", &json!({ "text": kept })).await;
         assert_eq!(res.status, 200, "{}", res.text());
         assert_eq!(res.header("content-type"), Some("audio/wav"));
         assert!(
             res.body[4..].starts_with(kept.as_bytes()),
-            "its own audio after a client left at {after:?}"
+            "its own audio after a client left {point}"
         );
     }
     assert_eq!(w.starts().len(), 1);
-    until_tmp_empty(&w.t).await;
+    until_empty(w.t.tmp.path()).await;
 }

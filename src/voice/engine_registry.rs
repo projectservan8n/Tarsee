@@ -414,7 +414,12 @@ impl FallbackInner {
         fb.synthesize(text, voice.as_deref(), &SynthOptions::default()).await
     }
 
-    async fn synthesize(&self, text: &str, voice_id: Option<&str>, opts: &SynthOptions) -> Result<Synthesized, TtsError> {
+    async fn synthesize(
+        &self,
+        text: &str,
+        voice_id: Option<&str>,
+        opts: &SynthOptions,
+    ) -> Result<Synthesized, TtsError> {
         let skipping = self
             .skip_until
             .lock()

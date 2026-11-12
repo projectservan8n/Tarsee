@@ -784,9 +784,7 @@ fn pip_problem(err: &PythonRunError, py_version: &str) -> String {
         .rev()
         .find(|l| trim(l).starts_with("ERROR:"));
     match line {
-        Some(line) => PIP_ERROR_LINE
-            .replace(trim(line), "")
-            .into_owned(),
+        Some(line) => PIP_ERROR_LINE.replace(trim(line), "").into_owned(),
         None if !err.message.is_empty() => err.message.clone(),
         None => "pip stopped".into(),
     }
@@ -1537,13 +1535,20 @@ mod tests {
         let snap = stt_job(&t).unwrap();
         assert_eq!((snap.percent, snap.step), (Some(99), None));
         // Another job's updates change nothing.
-        Updater { svc: svc.clone(), id: 8 }.step("other", 1.0);
+        Updater {
+            svc: svc.clone(),
+            id: 8,
+        }
+        .step("other", 1.0);
         assert_eq!(stt_job(&t).unwrap().step, None);
         // A share that is not a number (0 of 0 bytes) is null from then on, as the JS NaN was.
         up.step("d", f64::NAN);
         assert_eq!(stt_job(&t).unwrap().percent, None);
         up.step("e", 50.0);
-        assert_eq!(serde_json::to_value(stt_job(&t).unwrap()).unwrap()["percent"], Value::Null);
+        assert_eq!(
+            serde_json::to_value(stt_job(&t).unwrap()).unwrap()["percent"],
+            Value::Null
+        );
         assert_eq!(
             serde_json::to_value(stt_job(&t).unwrap())
                 .unwrap()

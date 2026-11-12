@@ -24,7 +24,9 @@ use tarsee::voice::stt_install::{reset_stt_runtime, set_for_tests as set_catalog
 use tempfile::TempDir;
 
 use crate::fake_python::{FakePython, cand};
-use crate::voice_fixtures::{Models, VoiceApp, models, voice_app, wav};
+use crate::voice_fixtures::{
+    Models, VoiceApp, files_in, leave_after_first_step, leave_when, models, until_empty, voice_app, wav,
+};
 
 /// What the Node test's `app(router, mount)` built: the router behind sign-in and CSRF, and a page that hands out
 /// the CSRF cookie.
@@ -137,13 +139,6 @@ impl World {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
-
-    fn tmp_files(&self) -> Vec<String> {
-        std::fs::read_dir(self.t.tmp.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
-            .collect()
-    }
 }
 
 fn model<'a>(status: &'a Value, name: &str) -> &'a Value {
@@ -244,9 +239,7 @@ async fn a_model_s_download_and_delete_an_unknown_model_is_a_400() {
     assert_eq!(body["kept"], Value::Null);
     let (_, s) = w.call("GET", "/api/voice/stt").await;
     assert_eq!(model(&s, "small")["state"], "missing");
-    let (status, body) = w
-        .call("POST", "/api/voice/stt/models/..%2F..%2Fetc/download")
-        .await;
+    let (status, body) = w.call("POST", "/api/voice/stt/models/..%2F..%2Fetc/download").await;
     assert_eq!(status, 400);
     assert_eq!(body["code"], "UNKNOWN_MODEL");
     assert_eq!(w.call("DELETE", "/api/voice/stt/models/large-v3").await.0, 400);
@@ -286,8 +279,7 @@ fn wav_request(w: &World, who: As, language: Option<&str>) -> TestRequest {
 fn ready_with_a_model(w: &World) {
     w.py.set(json!({ "pythons": { "python3": { "version": "3.11.2", "packages": { "faster-whisper": "1.2.1" } } } }));
     reset_stt_runtime(&w.t);
-    w.models
-        .put(&w.t.path().join("data").join("whisper-models"), "base.en");
+    w.models.put(&w.t.path().join("data").join("whisper-models"), "base.en");
 }
 
 #[tokio::test]
@@ -328,7 +320,10 @@ async fn starting_jobs_is_rate_limited() {
         "{error}"
     );
     // The status itself is not limited.
-    assert_eq!(w.send_to(&limited, "GET", "/api/voice/stt", As::Owner).await.status, 200);
+    assert_eq!(
+        w.send_to(&limited, "GET", "/api/voice/stt", As::Owner).await.status,
+        200
+    );
 }
 
 // ── Added ────────────────────────────────────────────────────────────────
@@ -339,8 +334,15 @@ async fn a_transcription_whose_client_leaves_leaves_no_recording_and_the_next_on
     ready_with_a_model(&w);
     // Each answer takes a while, so a client can go away in the middle of one.
     w.py.set(json!({ "worker": { "mode": "ok", "delayMs": 300 } }));
-    let mut gone = 0;
-    for after in [Duration::ZERO, Duration::from_millis(50), Duration::from_millis(400)] {
+    let tmp = w.t.tmp.path().to_path_buf();
+    let asked = || w.py.calls().iter().filter(|c| c.get("worker").is_some()).count();
+    for point in [
+        "after its first step",
+        "once the recording is on disk",
+        "once the worker has it",
+    ] {
+        until_empty(&tmp).await;
+        let before = asked();
         // Not a WAV: the fake hears it as "hello from the fake".
         let leaving = http::send(
             &w.router,
@@ -348,21 +350,18 @@ async fn a_transcription_whose_client_leaves_leaves_no_recording_and_the_next_on
                 .header("content-type", "audio/ogg")
                 .body(b"OggS not a wav".to_vec()),
         );
-        tokio::pin!(leaving);
-        if after.is_zero() {
-            let _ = futures::poll!(&mut leaving);
-        } else {
-            let _ = tokio::time::timeout(after, &mut leaving).await;
+        match point {
+            "after its first step" => leave_after_first_step(leaving).await,
+            "once the recording is on disk" => leave_when(leaving, || !files_in(&tmp).is_empty()).await,
+            _ => leave_when(leaving, || asked() > before).await,
         }
-        drop(leaving);
-        gone += 1;
         let res = http::send(&w.router, wav_request(&w, As::Owner, Some("en"))).await;
-        assert_eq!(res.status, 200, "after the client left at {after:?}: {}", res.text());
-        assert_eq!(res.json()["text"], "hello from a wav", "its own answer (after {gone} gone)");
+        assert_eq!(res.status, 200, "after the client left {point}: {}", res.text());
+        assert_eq!(
+            res.json()["text"],
+            "hello from a wav",
+            "its own answer after the client left {point}"
+        );
     }
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !w.tmp_files().is_empty() {
-        assert!(Instant::now() < deadline, "left in the temporary folder: {:?}", w.tmp_files());
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    until_empty(&tmp).await;
 }

@@ -32,8 +32,8 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 use self::line_worker::{ExitInfo, Promise, Utf8Stream, WorkerProcess};
-use super::python_runtime::{PythonRef, RunOptions, python_command, run_python, venv_interpreter};
 use super::install_common::js_number_text;
+use super::python_runtime::{PythonRef, RunOptions, python_command, run_python, venv_interpreter};
 use super::speech_text::{PesoOptions, phonon_speech_text};
 use super::tts_interface::{ClonedVoice, SynthOptions, Synthesized, TtsEngine, TtsError, VoiceInfo, os_tmpdir};
 use crate::app::{App, WeakApp};
@@ -1458,5 +1458,50 @@ mod tests {
         assert_eq!(json_number(0.0), json!(0));
         assert_eq!(json_number(-0.15), json!(-0.15));
         assert_eq!(js_round(-2.5), -2.0);
+    }
+
+    #[tokio::test]
+    async fn a_write_to_a_worker_that_has_gone_is_said_as_node_said_it() {
+        let gone: line_worker::Stdin = Arc::new(tokio::sync::Mutex::new(None));
+        let err = line_worker::write_line(&gone, "{}\n").await.unwrap_err();
+        assert_eq!(err.to_string(), "write EPIPE");
+
+        // A real process whose input closed when it ended.
+        let (program, args): (&str, &[&str]) = if cfg!(windows) {
+            ("cmd", &["/c", "exit 0"])
+        } else {
+            ("true", &[])
+        };
+        let mut child = tokio::process::Command::new(program)
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin: line_worker::Stdin = Arc::new(tokio::sync::Mutex::new(child.stdin.take()));
+        child.wait().await.unwrap();
+        // Enough to be past any buffer the pipe has.
+        let line = format!("{}\n", "x".repeat(1 << 20));
+        let err = line_worker::write_line(&stdin, &line).await.unwrap_err();
+        assert_eq!(err.to_string(), "write EPIPE");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_signal_node_names_has_its_name() {
+        use line_worker::signal_name;
+        assert_eq!(signal_name(libc::SIGTERM), Some("SIGTERM"));
+        assert_eq!(signal_name(libc::SIGKILL), Some("SIGKILL"));
+        assert_eq!(
+            signal_name(libc::SIGBUS),
+            Some("SIGBUS"),
+            "a truncated model that is mapped"
+        );
+        assert_eq!(signal_name(libc::SIGABRT), Some("SIGABRT"));
+        assert_eq!(signal_name(libc::SIGIO), Some("SIGIO"));
+        assert_eq!(signal_name(libc::SIGSYS), Some("SIGSYS"));
+        // A number Node has no name for is no signal (null).
+        assert_eq!(signal_name(0), None);
+        assert_eq!(signal_name(200), None);
     }
 }

@@ -182,8 +182,15 @@ async fn installing_phonon_answers_at_once_with_the_run_s_fresh_status_and_a_ret
         // What the JS run had already set before the route answered.
         assert_eq!(first["state"], "installing", "{attempt}");
         assert_eq!(first["phase"], "runtime", "{attempt}: {first}");
-        assert_eq!((first["file"].clone(), first["error"].clone()), (Value::Null, Value::Null));
-        assert_eq!((first["percent"].clone(), first["finishedAt"].clone()), (json!(0), Value::Null), "{attempt}");
+        assert_eq!(
+            (first["file"].clone(), first["error"].clone()),
+            (Value::Null, Value::Null)
+        );
+        assert_eq!(
+            (first["percent"].clone(), first["finishedAt"].clone()),
+            (json!(0), Value::Null),
+            "{attempt}"
+        );
         let at = first["startedAt"].as_str().expect("the run's start time").to_string();
         assert!(crate::util::js::ms_from_iso(&at).is_some(), "{at}");
         started.push(at);
@@ -655,14 +662,21 @@ async fn a_part_is_a_file_when_it_has_a_file_name_or_the_octet_stream_type_as_bu
     // An empty file name is no file name: a field.
     let empty_name = [("name=\"audio\"; filename=\"\"", None, &b"RIFF"[..])];
     let res = post_raw_form(&router, "/transcribe", &empty_name).await;
-    assert_eq!((res.status, res.json()), (400, json!({ "error": "No audio file provided" })));
+    assert_eq!(
+        (res.status, res.json()),
+        (400, json!({ "error": "No audio file provided" }))
+    );
     let named = [("name=\"audio\"; filename=\"a.wav\"", Some("audio/wav"), &b"RIFFxx"[..])];
     let res = post_raw_form(&router, "/transcribe", &named).await;
     assert_eq!(res.json()["text"], "6 bytes");
     // The same rule for a Piper upload.
     let piper = [
         ("name=\"onnx\"", Some("application/octet-stream"), &b"model"[..]),
-        ("name=\"json\"; filename=\"v.onnx.json\"", Some("application/json"), &b"{}"[..]),
+        (
+            "name=\"json\"; filename=\"v.onnx.json\"",
+            Some("application/json"),
+            &b"{}"[..],
+        ),
     ];
     let res = post_raw_form(&router, "/piper-upload", &piper).await;
     assert_eq!(
@@ -798,13 +812,22 @@ async fn a_sentence_or_a_clone_whose_client_leaves_still_runs_to_its_end() {
     });
     set_tts_engine(&t, engine.clone());
 
-    leave_once_reached(http::post_json(&router, "/tts", &json!({ "text": "Hi" })), &engine.reached).await;
+    leave_once_reached(
+        http::post_json(&router, "/tts", &json!({ "text": "Hi" })),
+        &engine.reached,
+    )
+    .await;
     engine.gate.notify_one();
     engine.finished.notified().await;
 
     // A clone's profile is saved all the same.
     let (content_type, body) = form(&[("name", None, b"Mine"), ("audio", Some("a.wav"), b"RIFF")]);
-    let cloning = http::send(&router, request("POST", "/clone").header("content-type", content_type).body(body));
+    let cloning = http::send(
+        &router,
+        request("POST", "/clone")
+            .header("content-type", content_type)
+            .body(body),
+    );
     leave_once_reached(cloning, &engine.reached).await;
     engine.gate.notify_one();
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
