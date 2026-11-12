@@ -8,6 +8,7 @@
 //! - `TARSEE_TESTBIN_STDERR` is written to stderr; `TARSEE_TESTBIN_EXIT` is the exit code (default 0);
 //!   `TARSEE_TESTBIN_SLEEP_MS` waits that long first.
 //! - Every run appends its arguments as one line of JSON to `TARSEE_TESTBIN_LOG`, when that is set.
+//! - `TARSEE_TESTBIN_PDFTOTEXT_FLOOD`: write that many bytes, then hang with stderr open.
 
 use std::io::Write;
 
@@ -35,6 +36,23 @@ pub fn main() -> i32 {
     }
     if code != 0 {
         return code;
+    }
+    // TARSEE_TESTBIN_PDFTOTEXT_FLOOD: write that many bytes to stdout, then wait a minute with stderr still open (a
+    // program stuck writing more than its reader takes).
+    if let Some(bytes) = var("TARSEE_TESTBIN_PDFTOTEXT_FLOOD").and_then(|v| v.parse::<usize>().ok()) {
+        let chunk = vec![b'x'; 64 * 1024];
+        let mut left = bytes;
+        let mut stdout = std::io::stdout();
+        while left > 0 {
+            let n = left.min(chunk.len());
+            if stdout.write_all(&chunk[..n]).is_err() {
+                return 1;
+            }
+            left -= n;
+        }
+        let _ = stdout.flush();
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        return 0;
     }
     // -enc UTF-8 <file> -
     let file = args.get(2).cloned().unwrap_or_default();
