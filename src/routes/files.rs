@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use axum::Router;
 use axum::body::{Body, Bytes};
-use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -48,7 +48,6 @@ pub fn router() -> Router<App> {
         .route("/delete", post(delete))
         .route("/rename", post(rename))
         .route("/download", get(download))
-        .layer(DefaultBodyLimit::max(limits::JSON_BODY_MAX_BYTES))
 }
 
 type Answer = Result<Response, ApiError>;

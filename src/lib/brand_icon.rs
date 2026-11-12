@@ -516,6 +516,12 @@ pub fn encode_png_with(img: &RgbaImage, filter: PngFilter, level: u32) -> anyhow
     if width == 0 || height == 0 || img.data.len() != width * height * 4 {
         anyhow::bail!("encodePng: data is not width x height x 4 bytes");
     }
+    if let PngFilter::Fixed(ft) = filter
+        && ft > 4
+    {
+        // (The JS failed here too: it had no row buffer for a sixth filter.)
+        anyhow::bail!("encodePng: there is no PNG row filter {ft}");
+    }
     let stride = width * 4;
     let mut raw = vec![0u8; height * (stride + 1)];
     let mut trial = vec![vec![0u8; stride]; 5];
@@ -524,8 +530,8 @@ pub fn encode_png_with(img: &RgbaImage, filter: PngFilter, level: u32) -> anyhow
         let prev = (y > 0).then(|| &img.data[(y - 1) * stride..y * stride]);
         let best = match filter {
             PngFilter::Fixed(ft) => {
-                filter_row(ft, cur, prev, &mut trial[usize::from(ft.min(4))]);
-                ft.min(4)
+                filter_row(ft, cur, prev, &mut trial[usize::from(ft)]);
+                ft
             }
             PngFilter::Auto => {
                 let mut best = 0u8;
