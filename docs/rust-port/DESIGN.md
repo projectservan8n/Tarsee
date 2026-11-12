@@ -127,6 +127,12 @@ impl LiveBus {
 
 The schema is `src/db/sqlite.rs`. A new table or column is a new migration there, never an edit to an old one.
 
+### `Settings` (`src/db/settings.rs`)
+
+Where a Node function took `store`, `settings` or `settingsStore` and only read or wrote settings, the Rust function
+takes `&dyn Settings` (`get`, `set`, `delete`, `get_by_prefix`). The real store (`SettingsStore`, package S1)
+implements it over the database; tests pass `testkit::MemorySettings`, as the Node tests passed a plain object.
+
 ### `Fetch` (`src/net/fetch.rs`)
 
 All outgoing HTTP goes through `app.fetch()` (or an `Arc<dyn Fetch>` argument where the Node function took a `fetch`

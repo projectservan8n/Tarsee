@@ -12,6 +12,7 @@
 
 pub mod fake_fetch;
 pub mod http;
+pub mod memory_settings;
 
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 pub use fake_fetch::{Answer, FakeFetch, FetchCall};
+pub use memory_settings::MemorySettings;
 
 use crate::app::App;
 use crate::config::Config;
