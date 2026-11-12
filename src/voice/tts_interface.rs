@@ -235,6 +235,23 @@ pub fn program_command(env: &Env, name: &str) -> Option<tokio::process::Command>
     Some(cmd)
 }
 
+/// `child.kill()`: SIGTERM on Unix, the signal Node sent (`kill()`, and `execFileSync`'s `killSignal` when its time
+/// is up), so the program may clean up; tokio's own kill is SIGKILL. On Windows the process is ended, as Node does.
+pub fn terminate(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            // SAFETY: a signal to a process this code started and has not reaped yet (`id()` is `None` once it
+            // has).
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGTERM);
+            }
+            return;
+        }
+    }
+    let _ = child.start_kill();
+}
+
 /// How [`exec_file`] failed, in the words of Node's `execFileSync`.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ExecError {
@@ -295,7 +312,7 @@ pub async fn exec_file(
             });
         }
         Err(_) => {
-            let _ = child.start_kill();
+            terminate(&mut child);
             let _ = child.wait().await;
             return Err(ExecError::TimedOut(program.to_string()));
         }

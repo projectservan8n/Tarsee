@@ -14,7 +14,7 @@ use anyhow::{Context, anyhow};
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
 
-use super::tts_interface::{exec_file, os_tmpdir, program_command};
+use super::tts_interface::{exec_file, os_tmpdir, program_command, terminate};
 use crate::app::App;
 use crate::config::Config;
 use crate::net::fetch::FetchRequest;
@@ -74,7 +74,9 @@ pub async fn transcribe(app: &App, audio: &[u8], model: Option<&str>) -> anyhow:
     let tmp = os_tmpdir(app.env());
     let tmp_in = tmp.join(format!("whisper-in-{}.audio", now_ms()));
     let tmp_wav = tmp.join(format!("whisper-{}.wav", now_ms()));
-    std::fs::write(&tmp_in, audio).with_context(|| format!("could not write {}", tmp_in.display()))?;
+    tokio::fs::write(&tmp_in, audio)
+        .await
+        .with_context(|| format!("could not write {}", tmp_in.display()))?;
 
     // Convert to 16 kHz mono WAV with ffmpeg
     let converted = exec_file(
@@ -164,7 +166,7 @@ async fn run_whisper(
     let status = match tokio::time::timeout(Duration::from_secs(60), child.wait()).await {
         Ok(status) => status?,
         Err(_) => {
-            let _ = child.start_kill();
+            terminate(&mut child);
             child.wait().await?
         }
     };
@@ -217,7 +219,7 @@ pub async fn download_model(app: &App, model_name: &str) -> anyhow::Result<()> {
         return Err(anyhow!("Model download failed ({}): {url}", res.status));
     }
     let bytes = res.bytes().await?;
-    std::fs::write(&dest, &bytes)?;
+    tokio::fs::write(&dest, &bytes).await?;
     log::info!("[whisper] model saved: {}", dest.display());
     Ok(())
 }
