@@ -996,7 +996,7 @@ fn node_bugs_fixed_a_table_inside_a_crlf_fence_is_left_alone() {
 /// is ever over the limit, every piece closes the fences it opens, and no character of the text is lost.
 #[test]
 fn no_piece_is_over_the_limit_and_fences_stay_balanced_on_generated_replies() {
-    let mut seed: u64 = 0x5eed_e1;
+    let mut seed: u64 = 0x005e_ede1;
     let mut next = |n: u64| {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         (seed >> 33) % n
