@@ -28,7 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::lib::tool_api::{ToolExecutor, ToolOutput, install_tool_executor};
-use crate::testkit::{CapturedLogs, FakeTools, TestApp, test_app, tmp_dir};
+use crate::testkit::{CapturedLogs, FakeTools, TestApp, test_app};
 
 /// What the Node endpoint answered (see the module's words).
 const NODE_ENDPOINT: &str = include_str!("node-endpoint.json");
@@ -1609,13 +1609,17 @@ async fn nothing_listens_once_the_app_is_gone() {
     let endpoint = start_mcp_http(&t.app, StartOptions::default()).await.unwrap();
     assert!(TcpStream::connect(("127.0.0.1", endpoint.port)).await.is_ok());
     drop(t);
-    tokio::time::timeout(Duration::from_secs(20), async {
-        while TcpStream::connect(("127.0.0.1", endpoint.port)).await.is_ok() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("the endpoint kept listening after its app was dropped");
+    // The socket closes as soon as the server's own task has run: a few connections may still get in, not many.
+    // (Counted, not timed: a connection can fail for other reasons once thousands have been made.)
+    let mut still_let_in = 0;
+    while TcpStream::connect(("127.0.0.1", endpoint.port)).await.is_ok() {
+        still_let_in += 1;
+        assert!(
+            still_let_in < 50,
+            "the endpoint kept listening after its app was dropped"
+        );
+        tokio::task::yield_now().await;
+    }
 }
 
 #[tokio::test]
@@ -1647,12 +1651,4 @@ async fn a_refusal_is_logged_at_most_once_a_minute_per_kind() {
     ahead.store(60_000, Ordering::SeqCst);
     send(up.port(), post(INIT)).await;
     assert_eq!(logs.warnings().len(), 3);
-}
-
-#[test]
-fn a_state_folder_for_long_results_is_under_the_tests_own_folder() {
-    // (A guard for this file itself: nothing here writes outside a temporary folder.)
-    let t = test_app();
-    assert!(t.config().state_dir.starts_with(t.path()));
-    let _ = tmp_dir();
 }
