@@ -12,17 +12,17 @@ agent checked it against the Node code and its findings are fixed or parked belo
 |---|---|---|---|---|---|
 | F0 | merged | - | 9956468..fe6015b | 96 | Foundation, by the lead |
 | I0 | reviewed | - | 7957ca6, fixes 38a6adb | 1562 | Interfaces and fakes; `INTERFACES.md`. Review: 1 important, 4 minor, all addressed |
-| A1 | merged, fixes running | - | 92f9739 | 1562 | 161 of 181 cases; 12 wait for later packages, 8 test Node-only mechanisms. Review: 1 important, 5 minor |
+| A1 | merged, fixed | - | 92f9739, fixes d5772a9 | 2016 | 161 of 181 cases. Review: 1 important, 5 minor, all fixed; second review running |
 | A3 | running | s2 | | | |
-| A5 | running | s10 | | | |
+| A5 | merged | - | 2d96d1c | 2016 | 66 of 66 cases. Review running |
 | A2 | reviewed | - | 74e0e4f, fixes 82edd82 | 1723 | 107 of 109 cases (2 wait for G2, G3). Review: 3 important, 8 minor; all 11 confirmed fixed by a second reviewer; passes on Linux |
 | B1 | merged, fixed | - | 1649cf7, fixes 9aa27aa | 1757 | 36 of 36 cases. Review: nothing critical or important in the package; 2 minor, fixed; two Node bugs fixed. Second review running |
-| B2 | merged, fixes running | - | 7094777 | 875 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases. Review: 2 critical, 1 important, 6 minor |
+| B2 | merged, fixed | - | 7094777, fixes a1ce610 | 2016 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases. Review: 2 critical, 1 important, 6 minor, all fixed with five Node bugs; second review running |
 | C1 | merged, fixes running | - | 9dd5372 | 213 | 32 of 32 cases. Review: 1 critical, 4 important, 22 minor |
-| D1 | merged | - | 48bb9ff | 1180 | 59 of 68 cases; 4 wait for S3, 5 are browser tests (W1) |
+| D1 | merged, fixes running | - | 48bb9ff | 1180 | 59 of 68 cases; 4 wait for S3, 5 are browser tests. Review: 1 important, 11 minor; no double lock holder, lost event or deadlock found under stress |
 | V2 | merged, fixes running | - | 7205d05 | 1723 | 69 of 71 cases. Review: 5 important, 13 minor |
 | S4 | running | s3 | | | |
-| T1 | merged | - | 40e4ee7 | 1886 | 102 of 107 cases (5 wait for S3, S4). Review running |
+| T1 | merged, fixes running | - | 40e4ee7 | 1886 | 102 of 107 cases (5 wait for S3, S4). Review: 2 critical, 1 important, 4 minor; the dangerous one patched at once (5e6fc99) |
 | W1a | merged | - | fcfc2ba | 1328 | 116 of 141 cases of the browser files run in a real browser (`cargo test --test ui`); 25 wait for A1, A4, R2 |
 | E1 | reviewed | - | 55fa65f, fixes 96f4ac4 | 1573 | 128 of 128 cases. Review: faithful, 2 minor, addressed; two Node bugs fixed |
 | V1 | reviewed | - | dbb96bb, fixes 64fb45d | 1742 | 42 of 42 cases. Review: 2 critical, 3 important, 7 minor; all 12 confirmed fixed by a second reviewer |
@@ -97,13 +97,14 @@ Decisions the lead made on the owner's behalf, in order. Each says what it costs
 
 Fixed (in the list below, marked "done") or being fixed in each package's fix round:
 
-- B2 `routes/files`: `POST /api/files/delete` can delete the whole workspace when `TARSEE_WORKSPACE_DIR` is not
-  written in its normal form (a trailing slash, `..`), because the root check compares text; `rename` has a prefix
-  check without a path separator.
 - C1 `lib/skills-engine`: a skill name in install, uninstall and setup can reach outside the skills folders.
+- done: B2 `routes/files`: the workspace root can no longer be deleted, however the workspace folder is written; a
+  rename must stay inside the workspace and never lands on a protected name; NTFS stream names (`name.db::$DATA`)
+  are refused; a private address written as IPv6 is judged by its IPv4 form.
+- done: B1 `middleware/security`: a CSRF token with a signature of the wrong length answers 403, not 500; a private
+  address inside an IPv6 one is refused by the security manager.
 - done: E1 `lib/discord-format`: a piece of a split message can no longer be over the limit when the line has emoji;
   code fences in text with CRLF line endings are recognised (also in the Slack stream).
-- B1 `middleware/security`: a CSRF token with a signature of the wrong length answers 500 instead of 403.
 
 ## Node oddities ported as they are
 
@@ -130,6 +131,9 @@ Each became a rule in `DESIGN.md` and, where possible, a fix in the foundation:
   refresh stalled when its caller went away.)
 - An axum handler is dropped when the client disconnects; an Express handler ran to its end. (V2: a speech
   request whose client left stayed pending and broke every later one; recordings were left in the temp folder.)
+- Windows reuses the id of a process that has ended, and a process keeps the id of a parent long gone, so the
+  children of a process cannot be found by parent id alone. (T1: ending a web terminal could have ended unrelated
+  programs; patched at once with a creation-time check, and being replaced by a job object.)
 - Tests that start real programs with time limits can miss them when the machine is busy. They are rerun alone
   before a merge is refused, and are to be made robust in the cleanup.
 
@@ -138,6 +142,12 @@ Each became a rule in `DESIGN.md` and, where possible, a fix in the foundation:
 The branch is built and tested on Linux inside WSL after merges. First run (five packages): everything compiles;
 678 unit tests pass; 2 of 51 integration tests fail (both in A2: output past the size cap), to be fixed in A2's fix
 round. Clippy on the newer compiler there reports 3 warnings (a large error type) to clear in the cleanup.
+
+## Engine protocols
+
+Two specifications are being written and independently checked from captures of the real SDKs: how the Node
+version starts and talks to the `claude` and `codex` programs (`docs/rust-port/engines/`, with fixtures under
+`tests/fixtures/claude-cli/` and `tests/fixtures/codex-cli/`). Packages G1 and G2 are built from them.
 
 ## Follow-ups owed by later packages
 
