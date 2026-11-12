@@ -66,6 +66,7 @@ scrypt = "0.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 serenity = { version = "0.12.5", default-features = false, features = ["client", "gateway", "model", "http", "rustls_backend"] }
+sha1 = "0.11.0"
 sha2 = "0.11.1"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
