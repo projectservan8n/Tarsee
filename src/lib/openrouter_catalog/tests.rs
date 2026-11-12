@@ -965,8 +965,9 @@ async fn a_store_that_cant_save_the_list_does_not_stop_it_being_used() {
 async fn the_list_is_asked_for_again_every_interval_until_it_is_stopped() {
     let s = setup();
     let (gated, mut arrivals) = GatedFetch::before(&s.t);
+    let interval = Duration::from_millis(150);
     let opts = CatalogOptions {
-        interval: Some(Duration::from_millis(20)),
+        interval: Some(interval),
         ..at(now())
     };
     // Each wait below is for the request itself to arrive, however long the machine takes to get there.
@@ -977,11 +978,16 @@ async fn the_list_is_asked_for_again_every_interval_until_it_is_stopped() {
             .expect("the client is gone");
         gated.let_one_through();
     };
+    let started = std::time::Instant::now();
     let mut handle = init_open_router_catalog(&s.t, fresh_store(), opts);
     next_request().await;
     assert_eq!(handle.ready().await.source, CatalogSource::Network);
     // Once for each interval after that, even though the cached list is still fresh.
     next_request().await;
+    assert!(
+        started.elapsed() >= interval,
+        "the first repeat comes a whole interval after boot, not at once"
+    );
     next_request().await;
     assert_eq!(gated.started.load(Ordering::SeqCst), 3);
     handle.stop();
@@ -989,6 +995,27 @@ async fn the_list_is_asked_for_again_every_interval_until_it_is_stopped() {
     let ended = (&mut handle.timer).await;
     assert!(ended.is_err_and(|err| err.is_cancelled()));
     assert_eq!(gated.started.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn the_refreshing_ends_by_itself_once_the_app_is_gone() {
+    let s = setup();
+    let opts = CatalogOptions {
+        interval: Some(Duration::from_millis(10)),
+        ..at(now())
+    };
+    let handle = init_open_router_catalog(&s.t, fresh_store(), opts);
+    handle.ready().await;
+    // The catalog and the registry are still held here; the app itself is not.
+    let Setup { t, catalog, registry } = s;
+    let app = t.app.downgrade();
+    drop(t);
+    assert!(app.upgrade().is_none());
+    let ended = tokio::time::timeout(Duration::from_secs(30), handle.timer)
+        .await
+        .expect("the list went on being asked for after the app had gone");
+    assert!(ended.is_ok(), "the task ended by itself, not by being stopped");
+    drop((catalog, registry));
 }
 
 #[tokio::test]

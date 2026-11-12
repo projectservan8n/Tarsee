@@ -724,6 +724,8 @@ fn a_model_known_only_by_its_id_gets_a_name_from_it() {
     assert_eq!(name_from_slug("~"), "");
     assert_eq!(name_from_slug("été-model"), "Été Model");
     assert_eq!(name_from_slug("🐒-x"), "🐒 X");
+    // A first letter outside the basic plane keeps its case: the JS, which saw only half of it, left it alone.
+    assert_eq!(name_from_slug("𐐨x-y"), "𐐨x Y");
 }
 
 fn choices() -> Vec<Value> {
