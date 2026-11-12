@@ -130,6 +130,12 @@ impl StreamMode {
 /// The current time in milliseconds (`Date.now` by default; tests pass their own clock).
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
+/// Called once when the person presses stop on the streamed message.
+pub type StoppedHandler = Arc<dyn Fn() + Send + Sync>;
+
+/// Called with Slack's code when native streaming will never work in this workspace.
+pub type NativeUnavailableHandler = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// Everything a [`SlackReplyStream`] is made with. [`SlackReplyStreamOptions::new`] fills in the Node defaults.
 pub struct SlackReplyStreamOptions {
     pub client: Arc<dyn SlackClient>,
@@ -150,9 +156,9 @@ pub struct SlackReplyStreamOptions {
     pub max_stream_tasks: usize,
     pub max_message_chars: usize,
     /// Called once when the person presses stop on the streamed message.
-    pub on_stopped_by_user: Option<Arc<dyn Fn() + Send + Sync>>,
+    pub on_stopped_by_user: Option<StoppedHandler>,
     /// Called with Slack's code when native streaming will never work in this workspace.
-    pub on_native_unavailable: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    pub on_native_unavailable: Option<NativeUnavailableHandler>,
 }
 
 impl SlackReplyStreamOptions {
@@ -259,8 +265,8 @@ struct Inner {
     max_stream_chars: i64,
     max_stream_tasks: usize,
     max_message_chars: usize,
-    on_stopped_by_user: Option<Arc<dyn Fn() + Send + Sync>>,
-    on_native_unavailable: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    on_stopped_by_user: Option<StoppedHandler>,
+    on_native_unavailable: Option<NativeUnavailableHandler>,
     native: AtomicBool,
     sent_text: AtomicBool,
     stopped_by_user: AtomicBool,
@@ -306,7 +312,11 @@ impl SlackReplyStream {
 
     /// Native streaming, or editing (once streaming failed, or when it was off from the start).
     pub fn mode(&self) -> StreamMode {
-        if self.inner.is_native() { StreamMode::Native } else { StreamMode::Edit }
+        if self.inner.is_native() {
+            StreamMode::Native
+        } else {
+            StreamMode::Edit
+        }
     }
 
     /// Whether any words reached Slack.
@@ -332,7 +342,11 @@ impl SlackReplyStream {
             return;
         }
         st.pending.push_str(delta);
-        let interval = if inner.is_native() { inner.flush_interval_ms } else { inner.edit_interval_ms };
+        let interval = if inner.is_native() {
+            inner.flush_interval_ms
+        } else {
+            inner.edit_interval_ms
+        };
         let wait = interval - ((inner.now)() - st.last_flush_at);
         if wait <= 0 {
             inner.flush(&mut st).await;
@@ -373,12 +387,18 @@ impl SlackReplyStream {
         }
         if inner.is_native() {
             let status = if ok { "complete" } else { "error" };
-            let result = inner.send_native(&mut st, vec![task(id, title, status, None)], true).await;
+            let result = inner
+                .send_native(&mut st, vec![task(id, title, status, None)], true)
+                .await;
             if inner.native_outcome(&mut st, result).await {
                 return;
             }
         }
-        let line = if ok { format!("✓ _{title}_") } else { format!("❌ _{title}_") };
+        let line = if ok {
+            format!("✓ _{title}_")
+        } else {
+            format!("❌ _{title}_")
+        };
         match st.tool_msgs.remove(id) {
             Some(ts) => inner.update(&ts, &line).await,
             None => {
@@ -420,7 +440,12 @@ impl SlackReplyStream {
         // Status lines of tools that never reported back.
         let unfinished = std::mem::take(&mut st.tool_msgs);
         for (id, ts) in &unfinished.0 {
-            let title = st.open_tasks.get(id).filter(|t| !t.is_empty()).unwrap_or("Tool").to_string();
+            let title = st
+                .open_tasks
+                .get(id)
+                .filter(|t| !t.is_empty())
+                .unwrap_or("Tool")
+                .to_string();
             inner.update(ts, &format!("❌ _{title} — did not finish_")).await;
         }
         st.open_tasks.clear();
@@ -557,7 +582,8 @@ impl Inner {
         {
             self.end_stream(st, Some("processing"), "").await;
         }
-        self.send_native(st, vec![task(id, title, "in_progress", None)], true).await
+        self.send_native(st, vec![task(id, title, "in_progress", None)], true)
+            .await
     }
 
     async fn tick_native(&self, st: &mut State) -> Result<(), SlackApiError> {
@@ -643,13 +669,20 @@ impl Inner {
     /// Send the waiting text (`flush_text`) and these chunks on the current stream, starting one when there is none
     /// and rolling over to a new one before a cap. Fails on a Slack error other than an expired stream.
     async fn send_native(&self, st: &mut State, chunks: Vec<Value>, flush_text: bool) -> Result<(), SlackApiError> {
-        if st.stream.as_ref().is_some_and(|s| (self.now)() - s.started_at >= self.max_stream_ms) {
+        if st
+            .stream
+            .as_ref()
+            .is_some_and(|s| (self.now)() - s.started_at >= self.max_stream_ms)
+        {
             self.end_stream(st, Some("processing"), "").await;
         }
         while flush_text && !st.pending.is_empty() {
-            let prefix = if st.stream.is_some() { String::new() } else { st.reopen.clone() };
-            let room =
-                self.max_stream_chars - st.stream.as_ref().map_or(0, |s| s.chars) - utf16_len(&prefix) as i64;
+            let prefix = if st.stream.is_some() {
+                String::new()
+            } else {
+                st.reopen.clone()
+            };
+            let room = self.max_stream_chars - st.stream.as_ref().map_or(0, |s| s.chars) - utf16_len(&prefix) as i64;
             if room <= 0 {
                 self.end_stream(st, Some("processing"), "").await;
                 continue;
@@ -686,7 +719,11 @@ impl Inner {
     /// One startStream or appendStream call. A stream Slack already ended is replaced by a new one, once.
     async fn append(&self, st: &mut State, chunks: Vec<Value>) -> Result<(), SlackApiError> {
         let starting = st.stream.is_none();
-        let send = if starting { self.opening_chunks(st, &chunks) } else { chunks.clone() };
+        let send = if starting {
+            self.opening_chunks(st, &chunks)
+        } else {
+            chunks.clone()
+        };
         if send.is_empty() {
             return Ok(());
         }
@@ -879,7 +916,9 @@ impl Inner {
         let room = self.max_message_chars as i64 - 6; // room for a closing fence
         while utf16_len(&st.seg_text) > self.max_message_chars {
             let reopened = if st.seg_text.starts_with("```") {
-                st.seg_text.find('\n').map_or(0, |i| utf16_len(&st.seg_text[..i]) as i64 + 1)
+                st.seg_text
+                    .find('\n')
+                    .map_or(0, |i| utf16_len(&st.seg_text[..i]) as i64 + 1)
             } else {
                 0
             };
@@ -935,7 +974,10 @@ impl Inner {
     async fn post(&self, markdown_text: &str) -> Option<String> {
         let args = json!({ "channel": self.channel, "thread_ts": self.thread_ts, "markdown_text": markdown_text });
         let res = self.call("postMessage", args).await?;
-        res.get("ts").and_then(Value::as_str).filter(|ts| !ts.is_empty()).map(str::to_string)
+        res.get("ts")
+            .and_then(Value::as_str)
+            .filter(|ts| !ts.is_empty())
+            .map(str::to_string)
     }
 
     async fn update(&self, ts: &str, markdown_text: &str) {

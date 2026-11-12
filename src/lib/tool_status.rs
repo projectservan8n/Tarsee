@@ -102,9 +102,17 @@ fn tarsee_entry(bare: &str) -> Option<[Label; 3]> {
             Fixed("Notification sent"),
             Fixed("Sending the notification failed"),
         ],
-        "tarsee_web_search" => [Fixed("Web searching…"), Fixed("Web search done"), Fixed("Web search failed")],
+        "tarsee_web_search" => [
+            Fixed("Web searching…"),
+            Fixed("Web search done"),
+            Fixed("Web search failed"),
+        ],
         "tarsee_web_fetch" => [Fixed("Fetching URL…"), Fixed("Fetch done"), Fixed("Fetch failed")],
-        "tarsee_browser" => [Fixed("Using the browser…"), Fixed("Browser done"), Fixed("Browser failed")],
+        "tarsee_browser" => [
+            Fixed("Using the browser…"),
+            Fixed("Browser done"),
+            Fixed("Browser failed"),
+        ],
         "tarsee_remember" => [
             Fixed("Saving a memory…"),
             Fixed("Memory saved"),
@@ -135,7 +143,11 @@ fn tarsee_entry(bare: &str) -> Option<[Label; 3]> {
             Input(|i| format!("Wrote {}", file_base(&field_text(i.get("filename"))))),
             Input(|i| format!("Writing {} failed", file_base(&field_text(i.get("filename"))))),
         ],
-        "tarsee_list_files" => [Fixed("Listing files…"), Fixed("Files listed"), Fixed("Listing files failed")],
+        "tarsee_list_files" => [
+            Fixed("Listing files…"),
+            Fixed("Files listed"),
+            Fixed("Listing files failed"),
+        ],
         // A task the AI schedules is saved paused, until the owner switches it on (lib/cron.rs). The saved words only
         // when the tool's result has no error mark: ai/tarsee_mcp.rs marks every answer where no task was saved (a
         // refusal, a bad schedule, the 15-minute rule), and those say so plainly.
@@ -144,7 +156,11 @@ fn tarsee_entry(bare: &str) -> Option<[Label; 3]> {
             Fixed("Task saved, waiting for your OK"),
             Fixed("Task not saved"),
         ],
-        "tarsee_create_canvas" => [Fixed("Making a canvas…"), Fixed("Canvas made"), Fixed("Making the canvas failed")],
+        "tarsee_create_canvas" => [
+            Fixed("Making a canvas…"),
+            Fixed("Canvas made"),
+            Fixed("Making the canvas failed"),
+        ],
         "tarsee_create_diagram" => [
             Fixed("Drawing a diagram…"),
             Fixed("Diagram drawn"),
@@ -156,16 +172,32 @@ fn tarsee_entry(bare: &str) -> Option<[Label; 3]> {
             Fixed("Checking the time failed"),
         ],
         "tarsee_calculator" => [Fixed("Calculating…"), Fixed("Calculated"), Fixed("Calculation failed")],
-        "tarsee_discord_admin" => [Fixed("Working on Discord…"), Fixed("Discord done"), Fixed("Discord failed")],
-        "tarsee_railway" => [Fixed("Working on Railway…"), Fixed("Railway done"), Fixed("Railway failed")],
+        "tarsee_discord_admin" => [
+            Fixed("Working on Discord…"),
+            Fixed("Discord done"),
+            Fixed("Discord failed"),
+        ],
+        "tarsee_railway" => [
+            Fixed("Working on Railway…"),
+            Fixed("Railway done"),
+            Fixed("Railway failed"),
+        ],
         // The vault: never a key's name, let alone its value.
         "tarsee_get_key" | "tarsee_list_keys" => [
             Fixed("Checking the vault…"),
             Fixed("Vault checked"),
             Fixed("Vault check failed"),
         ],
-        "tarsee_set_key" => [Fixed("Saving a key…"), Fixed("Key saved"), Fixed("Saving the key failed")],
-        "tarsee_delete_key" => [Fixed("Removing a key…"), Fixed("Key removed"), Fixed("Removing the key failed")],
+        "tarsee_set_key" => [
+            Fixed("Saving a key…"),
+            Fixed("Key saved"),
+            Fixed("Saving the key failed"),
+        ],
+        "tarsee_delete_key" => [
+            Fixed("Removing a key…"),
+            Fixed("Key removed"),
+            Fixed("Removing the key failed"),
+        ],
         _ => return None,
     })
 }
@@ -244,49 +276,93 @@ mod tests {
     #[test]
     fn names_tarsees_own_tools_in_words_not_as_mcp_tarsee_tarsee() {
         assert_eq!(
-            tool_status_label("mcp__tarsee__tarsee_send_file", &json!({ "file_path": "/data/report.pdf" })),
+            tool_status_label(
+                "mcp__tarsee__tarsee_send_file",
+                &json!({ "file_path": "/data/report.pdf" })
+            ),
             "Sending report.pdf…"
         );
         assert_eq!(
-            tool_done_label("mcp__tarsee__tarsee_send_file", &json!({ "file_path": "/data/report.pdf" }), false),
+            tool_done_label(
+                "mcp__tarsee__tarsee_send_file",
+                &json!({ "file_path": "/data/report.pdf" }),
+                false
+            ),
             "Sent report.pdf"
         );
         assert_eq!(
-            tool_done_label("mcp__tarsee__tarsee_send_file", &json!({ "file_path": "/data/report.pdf" }), true),
+            tool_done_label(
+                "mcp__tarsee__tarsee_send_file",
+                &json!({ "file_path": "/data/report.pdf" }),
+                true
+            ),
             "Sending report.pdf failed"
         );
-        assert_eq!(tool_status_label("mcp__tarsee__tarsee_send_message", &json!({})), "Sending a message…");
-        assert_eq!(tool_done_label("mcp__tarsee__tarsee_send_message", &json!({}), false), "Message sent");
+        assert_eq!(
+            tool_status_label("mcp__tarsee__tarsee_send_message", &json!({})),
+            "Sending a message…"
+        );
+        assert_eq!(
+            tool_done_label("mcp__tarsee__tarsee_send_message", &json!({}), false),
+            "Message sent"
+        );
         assert_eq!(
             tool_status_label("mcp__tarsee__tarsee_web_search", &json!({ "query": "secret plans" })),
             "Web searching…"
         );
         assert_eq!(
-            tool_status_label("mcp__tarsee__tarsee_web_fetch", &json!({ "url": "https://x.test/?token=abc" })),
+            tool_status_label(
+                "mcp__tarsee__tarsee_web_fetch",
+                &json!({ "url": "https://x.test/?token=abc" })
+            ),
             "Fetching URL…"
         );
-        assert_eq!(tool_status_label("mcp__tarsee__tarsee_remember", &json!({ "content": "x" })), "Saving a memory…");
-        assert_eq!(tool_done_label("mcp__tarsee__tarsee_remember", &json!({}), false), "Memory saved");
+        assert_eq!(
+            tool_status_label("mcp__tarsee__tarsee_remember", &json!({ "content": "x" })),
+            "Saving a memory…"
+        );
+        assert_eq!(
+            tool_done_label("mcp__tarsee__tarsee_remember", &json!({}), false),
+            "Memory saved"
+        );
         assert_eq!(
             tool_status_label("mcp__tarsee__tarsee_search_memories_deep", &json!({})),
             "Searching memories…"
         );
         assert_eq!(
-            tool_status_label("mcp__tarsee__tarsee_read_file", &json!({ "filename": "memory/2026-04-05.md" })),
+            tool_status_label(
+                "mcp__tarsee__tarsee_read_file",
+                &json!({ "filename": "memory/2026-04-05.md" })
+            ),
             "Reading 2026-04-05.md…"
         );
         assert_eq!(
-            tool_done_label("mcp__tarsee__tarsee_write_file", &json!({ "filename": "MEMORY.md" }), false),
+            tool_done_label(
+                "mcp__tarsee__tarsee_write_file",
+                &json!({ "filename": "MEMORY.md" }),
+                false
+            ),
             "Wrote MEMORY.md"
         );
-        assert_eq!(tool_status_label("mcp__tarsee__tarsee_schedule_task", &json!({})), "Scheduling a task…");
-        assert_eq!(tool_status_label("mcp__tarsee__tarsee_browser", &json!({})), "Using the browser…");
+        assert_eq!(
+            tool_status_label("mcp__tarsee__tarsee_schedule_task", &json!({})),
+            "Scheduling a task…"
+        );
+        assert_eq!(
+            tool_status_label("mcp__tarsee__tarsee_browser", &json!({})),
+            "Using the browser…"
+        );
     }
 
     #[test]
     fn never_shows_a_keys_name_or_value() {
         let leak = Regex::new(r"STRIPE|sk_live|mcp__|tarsee_").unwrap();
-        for name in ["tarsee_get_key", "tarsee_set_key", "tarsee_delete_key", "tarsee_list_keys"] {
+        for name in [
+            "tarsee_get_key",
+            "tarsee_set_key",
+            "tarsee_delete_key",
+            "tarsee_list_keys",
+        ] {
             let input = json!({ "key": "STRIPE_SECRET", "value": format!("sk_{}_123", "live") });
             let full = format!("mcp__tarsee__{name}");
             for label in [
@@ -301,9 +377,18 @@ mod tests {
 
     #[test]
     fn shows_any_other_mcp_tool_by_its_own_name_without_the_mcp_server_prefix() {
-        assert_eq!(tool_status_label("mcp__github__list_pull_requests", &json!({})), "Running list pull requests…");
-        assert_eq!(tool_done_label("mcp__github__list_pull_requests", &json!({}), false), "list pull requests done");
-        assert_eq!(tool_done_label("mcp__github__list_pull_requests", &json!({}), true), "list pull requests failed");
+        assert_eq!(
+            tool_status_label("mcp__github__list_pull_requests", &json!({})),
+            "Running list pull requests…"
+        );
+        assert_eq!(
+            tool_done_label("mcp__github__list_pull_requests", &json!({}), false),
+            "list pull requests done"
+        );
+        assert_eq!(
+            tool_done_label("mcp__github__list_pull_requests", &json!({}), true),
+            "list pull requests failed"
+        );
     }
 
     #[test]
@@ -313,7 +398,11 @@ mod tests {
             "Writing notes.txt…"
         );
         assert_eq!(
-            tool_done_label("Read", &json!({ "file_path": "C:\\Users\\me\\workspace\\notes.txt" }), false),
+            tool_done_label(
+                "Read",
+                &json!({ "file_path": "C:\\Users\\me\\workspace\\notes.txt" }),
+                false
+            ),
             "Read notes.txt"
         );
         assert_eq!(
@@ -329,7 +418,11 @@ mod tests {
             "Reading q3 report.pdf…"
         );
         assert_eq!(
-            tool_done_label("mcp__tarsee__tarsee_pdf_read", &json!({ "path": "C:\\work\\deck.pdf" }), false),
+            tool_done_label(
+                "mcp__tarsee__tarsee_pdf_read",
+                &json!({ "path": "C:\\work\\deck.pdf" }),
+                false
+            ),
             "Read deck.pdf"
         );
         assert_eq!(
@@ -350,7 +443,10 @@ mod tests {
 
     #[test]
     fn keeps_the_built_in_tools_words() {
-        assert_eq!(tool_status_label("Bash", &json!({ "command": "cat .env" })), "Running command…");
+        assert_eq!(
+            tool_status_label("Bash", &json!({ "command": "cat .env" })),
+            "Running command…"
+        );
         assert_eq!(tool_done_label("Bash", &json!({}), false), "Command done");
         assert_eq!(tool_done_label("Bash", &json!({}), true), "Command failed");
         assert_eq!(tool_status_label("SomethingNew", &json!({})), "Running SomethingNew…");
@@ -360,27 +456,78 @@ mod tests {
     /// scripted turn there (a Bash that worked, a Read that failed). The Telegram bot itself is H1's.
     #[test]
     fn the_running_done_and_failed_lines_of_the_channel_tool_status_turn() {
-        assert_eq!(tool_status_label("Bash", &json!({ "command": "ls" })), "Running command…");
-        assert_eq!(tool_done_label("Bash", &json!({ "command": "ls" }), false), "Command done");
-        assert_eq!(tool_done_label("Read", &json!({ "file_path": "/x/missing.md" }), true), "Read missing.md");
+        assert_eq!(
+            tool_status_label("Bash", &json!({ "command": "ls" })),
+            "Running command…"
+        );
+        assert_eq!(
+            tool_done_label("Bash", &json!({ "command": "ls" }), false),
+            "Command done"
+        );
+        assert_eq!(
+            tool_done_label("Read", &json!({ "file_path": "/x/missing.md" }), true),
+            "Read missing.md"
+        );
     }
 
     /// The expected text was printed by the Node code (`src/lib/tool-status.js`) for the same calls.
     #[test]
     fn awkward_names_and_inputs_match_the_node_output() {
         let cases: Vec<(&str, Value, bool, &str, &str)> = vec![
-            ("mcp__my_server__do_thing", json!({}), false, "Running do thing…", "do thing done"),
+            (
+                "mcp__my_server__do_thing",
+                json!({}),
+                false,
+                "Running do thing…",
+                "do thing done",
+            ),
             ("mcp__a_b_c__x_y", json!({}), true, "Running x y…", "x y failed"),
-            ("mcp__tarsee__tarsee_send_file", json!({ "file_path": "dir/" }), false, "Sending file…", "Sent file"),
-            ("mcp__tarsee__tarsee_send_file", Value::Null, true, "Sending file…", "Sending file failed"),
-            ("tarsee_send_file", json!({ "file_path": 42 }), false, "Sending 42…", "Sent 42"),
+            (
+                "mcp__tarsee__tarsee_send_file",
+                json!({ "file_path": "dir/" }),
+                false,
+                "Sending file…",
+                "Sent file",
+            ),
+            (
+                "mcp__tarsee__tarsee_send_file",
+                Value::Null,
+                true,
+                "Sending file…",
+                "Sending file failed",
+            ),
+            (
+                "tarsee_send_file",
+                json!({ "file_path": 42 }),
+                false,
+                "Sending 42…",
+                "Sent 42",
+            ),
             ("Read", json!({}), false, "Reading file…", "Read file"),
-            ("Read", json!({ "file_path": ["a", "b/c.txt"] }), false, "Reading c.txt…", "Read c.txt"),
-            ("Edit", json!({ "file_path": { "x": 1 } }), true, "Editing [object Object]…", "Edited [object Object]"),
+            (
+                "Read",
+                json!({ "file_path": ["a", "b/c.txt"] }),
+                false,
+                "Reading c.txt…",
+                "Read c.txt",
+            ),
+            (
+                "Edit",
+                json!({ "file_path": { "x": 1 } }),
+                true,
+                "Editing [object Object]…",
+                "Edited [object Object]",
+            ),
             ("mcp__", json!({}), false, "Running mcp  …", "mcp   done"),
             ("mcp____x", json!({}), false, "Running mcp    x…", "mcp    x done"),
             ("", json!({}), false, "Running …", " done"),
-            ("constructor", json!({}), false, "Running constructor…", "constructor done"),
+            (
+                "constructor",
+                json!({}),
+                false,
+                "Running constructor…",
+                "constructor done",
+            ),
             ("TodoWrite", json!({}), true, "Updating todo list…", "Todos updated"),
             (
                 "mcp__tarsee__tarsee_pdf_read",
@@ -389,7 +536,13 @@ mod tests {
                 "Reading y.pdf…",
                 "Read y.pdf",
             ),
-            ("mcp__tarsee__tarsee_pdf_read", json!({}), false, "Reading file…", "Read file"),
+            (
+                "mcp__tarsee__tarsee_pdf_read",
+                json!({}),
+                false,
+                "Reading file…",
+                "Read file",
+            ),
         ];
         for (name, input, is_error, running, done) in cases {
             assert_eq!(tool_status_label(name, &input), running, "{name} {input}");

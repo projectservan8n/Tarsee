@@ -138,7 +138,10 @@ fn alignment_separator_row_is_consumed_and_respected() {
     let out = format_tables_for_discord("| L | R | C |\n|:---|---:|:-:|\n| a | b | c |\n| aaaa | bbbb | cccc |");
     assert!(!out.contains(":---"), "separator row must not survive");
     let right_r = Regex::new(r"^R\s|\sR$| {3}R").unwrap();
-    assert!(out.split('\n').any(|l| right_r.is_match(l) || l.contains("   R")), "{out}");
+    assert!(
+        out.split('\n').any(|l| right_r.is_match(l) || l.contains("   R")),
+        "{out}"
+    );
 }
 
 #[test]
@@ -187,7 +190,10 @@ fn list_mode_preserves_bold_inside_cells() {
 #[test]
 fn emoji_column_stays_aligned() {
     let out = format_tables_for_discord("| S | N |\n|---|---|\n| ✅ | ok |\n| ab | no |");
-    let rows: Vec<&str> = out.split('\n').filter(|l| l.contains("ok") || l.contains("no")).collect();
+    let rows: Vec<&str> = out
+        .split('\n')
+        .filter(|l| l.contains("ok") || l.contains("no"))
+        .collect();
     let first_cell = |l: &str| l.split("  ").next().unwrap_or("").to_string();
     assert_eq!(display_width(&first_cell(rows[0])), display_width(&first_cell(rows[1])));
 }
@@ -208,7 +214,11 @@ fn narrow_table_becomes_a_fenced_grid() {
     let out = format_tables_for_discord("| Env | Status |\n|---|---|\n| prod | green |\n| dev | amber |");
     assert!(out.starts_with("```"), "{out}");
     let lines: Vec<&str> = out.split('\n').collect();
-    let width = lines[1..lines.len() - 1].iter().map(|l| display_width(l)).max().unwrap();
+    let width = lines[1..lines.len() - 1]
+        .iter()
+        .map(|l| display_width(l))
+        .max()
+        .unwrap();
     assert!(width <= MAX_GRID_WIDTH, "width {width}");
 }
 
@@ -328,7 +338,11 @@ fn never_cleaves_a_fence_marker_the_originals_worst_case() {
     let chunks = split_message_fence_safe(&format!("```\n{}\n```", "x".repeat(1994)), 2000);
     let half = Regex::new(r"(^|[^`])``($|[^`])").unwrap();
     for c in &chunks {
-        assert!(!half.is_match(c), "half marker in: {}", crate::util::js::utf16_tail(c, 10));
+        assert!(
+            !half.is_match(c),
+            "half marker in: {}",
+            crate::util::js::utf16_tail(c, 10)
+        );
     }
 }
 
@@ -366,7 +380,11 @@ fn no_chunk_exceeds_max_len_nothing_is_lost() {
 fn dangling_fence_in_the_input_is_closed_on_output() {
     let chunks = split_message_fence_safe(&format!("```\n{}", "y".repeat(3000)), 2000);
     let last = chunks.last().unwrap();
-    assert!(js_text::trim_end(last).ends_with("```"), "{}", crate::util::js::utf16_tail(last, 20));
+    assert!(
+        js_text::trim_end(last).ends_with("```"),
+        "{}",
+        crate::util::js::utf16_tail(last, 20)
+    );
 }
 
 // a real failing example (names changed)
@@ -415,8 +433,12 @@ fn a_fence_opened_near_the_end_of_a_piece_never_pushes_that_piece_past_2000_char
 fn a_reply_whose_table_grows_when_drawn_reaches_discord_whole_drawn_first_then_split() {
     let display_for_discord = |raw: &str| {
         let clean = parse_reactions(raw).clean_text;
-        let clean = Regex::new(r"<tool_call>(?s:.)*?</tool_call>").unwrap().replace_all(&clean, "");
-        let clean = Regex::new(r"<tool_response>(?s:.)*?</tool_response>").unwrap().replace_all(&clean, "");
+        let clean = Regex::new(r"<tool_call>(?s:.)*?</tool_call>")
+            .unwrap()
+            .replace_all(&clean, "");
+        let clean = Regex::new(r"<tool_response>(?s:.)*?</tool_response>")
+            .unwrap()
+            .replace_all(&clean, "");
         let clean = Regex::new(r"\n{3,}").unwrap().replace_all(&clean, "\n\n");
         format_for_discord(js_text::trim(&clean))
     };
@@ -464,38 +486,125 @@ fn javascript_patterns_keep_their_javascript_meaning() {
 const NODE_FORMAT_FOR_DISCORD: &[(&str, &str)] = &[
     ("", ""),
     ("no pipes here > or quotes", "no pipes here > or quotes"),
-    ("- a\n  - b\n    - c | d\n\n1. x\n2. y", "- a\n  - b\n    - c | d\n\n1. x\n2. y"),
-    ("- item\n  | a | b |\n  |---|---|\n  | 1 | 2 |\n- next", "- item\n  ```\n  a  b\n  -  -\n  1  2\n  ```\n- next"),
-    ("| a | b |\n|---|---|\n| `x` | ``y`` |\n| ```` | z |", "`````\na     b\n----  -\nx     y\n````  z\n`````"),
-    ("| Name | Link |\n|---|---|\n| doc | [the (draft) doc](https://x.com/a_(b)) |", "```\nName  Link\n----  ----------------\ndoc   the (draft) doc)\n```"),
-    ("| Name | Link |\n|---|---|\n| doc | [the (draft) doc](https://x.com/a_(b)) needs a sign-off from the finance team before the end of Friday |", "**doc** · Link [the (draft) doc](https://x.com/a_(b)) needs a sign-off from the finance team before the end of Friday"),
-    ("| **_x_** | ***y*** |\n|---|---|\n| __z__ | *w* _v_ |\n| ___q___ | **a *b* c** |", "```\nx  y\n-  -----\nz  w v\nq  a b c\n```"),
-    ("| aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | b |\n|---|---|\n| c | d |", "**c** · b d"),
-    ("| 名前 | 状態 |\n|:-:|--:|\n| 東京 | ✅ |\n| 👨\u{200d}👩\u{200d}👧 family | ⚠\u{fe0f} |\n| ok | ⚠ |", "```\n  名前     状態\n---------  ----\n  東京       ✅\n👨\u{200d}👩\u{200d}👧 family    ⚠\u{fe0f}\n   ok         ⚠\n```"),
-    ("| item | cost |\n|---|---|\n| a | $1,200 |\n| b | 30% |\n| c | -5kg |\n| d | ~ 7 |", "```\nitem    cost\n----  ------\na     $1,200\nb        30%\nc       -5kg\nd        ~ 7\n```"),
-    ("| item | cost |\n|---|---|\n| a | $1,200 |\n| b | n/a |", "```\nitem  cost\n----  ------\na     $1,200\nb     n/a\n```"),
-    ("| a | b | |\n|---|---|---|\n| 1 | 2 | |\n| 3 | | |", "```\na  b\n-  -\n1  2\n3\n```"),
-    ("| a | b |\n|---|---|\n| x _b_c y | _a_ _b_ |\n| _esc_ | snake_case_ |\n| _x_1 | (_y_) |", "```\na         b\n--------  -----------\nx _b_c y  a b\nesc       snake_case_\n_x_1      (y)\n```"),
-    ("| a | b |\n|---|---|\n| *not* | [x](y) |\n| a\\b | |pipe| |", "```\na    b\n---  -  ----\nnot  x\na\\b     pipe\n```"),
-    ("| a | b |\n|---|---|\n| ||secret|| | ~~old~~ |", "```\na  b\n-  -  ------  ---\n      secret  old\n```"),
-    ("| a | b |\r\n|---|---|\r\n| 1 | 2 |\r\n", "```\na  b\n-  -\n1  2\n```\n"),
-    ("| a\u{a0}| b |\n|---|---|\n| \u{feff}1 | 2\u{85} |", "```\na  b\n-  --\n1  2\u{85}\n```"),
-    ("| Day | From | To | Note |\n|---|---|---|---|\n| Mon | n/a | 5 | needs a sign-off from the finance team before the end of Friday |\n| **Tue** | 3 | 4 | — |\n| Wed | - | 9 | TBD |\n| | 1 | 2 | none |", "**Mon** · To 5 · Note needs a sign-off from the finance team before the end of Friday\n**Tue** · From 3 → To 4\n**Wed** · To 9\nFrom 1 → To 2"),
+    (
+        "- a\n  - b\n    - c | d\n\n1. x\n2. y",
+        "- a\n  - b\n    - c | d\n\n1. x\n2. y",
+    ),
+    (
+        "- item\n  | a | b |\n  |---|---|\n  | 1 | 2 |\n- next",
+        "- item\n  ```\n  a  b\n  -  -\n  1  2\n  ```\n- next",
+    ),
+    (
+        "| a | b |\n|---|---|\n| `x` | ``y`` |\n| ```` | z |",
+        "`````\na     b\n----  -\nx     y\n````  z\n`````",
+    ),
+    (
+        "| Name | Link |\n|---|---|\n| doc | [the (draft) doc](https://x.com/a_(b)) |",
+        "```\nName  Link\n----  ----------------\ndoc   the (draft) doc)\n```",
+    ),
+    (
+        "| Name | Link |\n|---|---|\n| doc | [the (draft) doc](https://x.com/a_(b)) needs a sign-off from the finance team before the end of Friday |",
+        "**doc** · Link [the (draft) doc](https://x.com/a_(b)) needs a sign-off from the finance team before the end of Friday",
+    ),
+    (
+        "| **_x_** | ***y*** |\n|---|---|\n| __z__ | *w* _v_ |\n| ___q___ | **a *b* c** |",
+        "```\nx  y\n-  -----\nz  w v\nq  a b c\n```",
+    ),
+    (
+        "| aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | b |\n|---|---|\n| c | d |",
+        "**c** · b d",
+    ),
+    (
+        "| 名前 | 状態 |\n|:-:|--:|\n| 東京 | ✅ |\n| 👨\u{200d}👩\u{200d}👧 family | ⚠\u{fe0f} |\n| ok | ⚠ |",
+        "```\n  名前     状態\n---------  ----\n  東京       ✅\n👨\u{200d}👩\u{200d}👧 family    ⚠\u{fe0f}\n   ok         ⚠\n```",
+    ),
+    (
+        "| item | cost |\n|---|---|\n| a | $1,200 |\n| b | 30% |\n| c | -5kg |\n| d | ~ 7 |",
+        "```\nitem    cost\n----  ------\na     $1,200\nb        30%\nc       -5kg\nd        ~ 7\n```",
+    ),
+    (
+        "| item | cost |\n|---|---|\n| a | $1,200 |\n| b | n/a |",
+        "```\nitem  cost\n----  ------\na     $1,200\nb     n/a\n```",
+    ),
+    (
+        "| a | b | |\n|---|---|---|\n| 1 | 2 | |\n| 3 | | |",
+        "```\na  b\n-  -\n1  2\n3\n```",
+    ),
+    (
+        "| a | b |\n|---|---|\n| x _b_c y | _a_ _b_ |\n| _esc_ | snake_case_ |\n| _x_1 | (_y_) |",
+        "```\na         b\n--------  -----------\nx _b_c y  a b\nesc       snake_case_\n_x_1      (y)\n```",
+    ),
+    (
+        "| a | b |\n|---|---|\n| *not* | [x](y) |\n| a\\b | |pipe| |",
+        "```\na    b\n---  -  ----\nnot  x\na\\b     pipe\n```",
+    ),
+    (
+        "| a | b |\n|---|---|\n| ||secret|| | ~~old~~ |",
+        "```\na  b\n-  -  ------  ---\n      secret  old\n```",
+    ),
+    (
+        "| a | b |\r\n|---|---|\r\n| 1 | 2 |\r\n",
+        "```\na  b\n-  -\n1  2\n```\n",
+    ),
+    (
+        "| a\u{a0}| b |\n|---|---|\n| \u{feff}1 | 2\u{85} |",
+        "```\na  b\n-  --\n1  2\u{85}\n```",
+    ),
+    (
+        "| Day | From | To | Note |\n|---|---|---|---|\n| Mon | n/a | 5 | needs a sign-off from the finance team before the end of Friday |\n| **Tue** | 3 | 4 | — |\n| Wed | - | 9 | TBD |\n| | 1 | 2 | none |",
+        "**Mon** · To 5 · Note needs a sign-off from the finance team before the end of Friday\n**Tue** · From 3 → To 4\n**Wed** · To 9\nFrom 1 → To 2",
+    ),
     ("| only |\n|---|\n| a |\n| **b** |", "```\nonly\n----\na\nb\n```"),
-    ("| only |\n|---|\n| wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww |\n| |", "- wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\n- "),
-    ("| Key | | Value |\n|---|---|---|\n| a | x | needs a sign-off from the finance team before the end of Friday |", "**a** — x · Value needs a sign-off from the finance team before the end of Friday"),
-    ("intro\n\u{0}MDT0\u{0}\n| a | b |\n|---|---|\n| 1 | 2 |", "intro\n\n```\na  b\n-  -\n1  2\n```"),
-    ("````\n```\n| a | b |\n|---|---|\n```\n````\n| c | d |\n|---|---|\n| 3 | 4 |", "````\n```\n| a | b |\n|---|---|\n```\n````\n```\nc  d\n-  -\n3  4\n```"),
-    ("a | b\n--- | ---\n1 | 2\nnot | a row?", "```\na    b\n---  ------\n1    2\nnot  a row?\n```"),
+    (
+        "| only |\n|---|\n| wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww |\n| |",
+        "- wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\n- ",
+    ),
+    (
+        "| Key | | Value |\n|---|---|---|\n| a | x | needs a sign-off from the finance team before the end of Friday |",
+        "**a** — x · Value needs a sign-off from the finance team before the end of Friday",
+    ),
+    (
+        "intro\n\u{0}MDT0\u{0}\n| a | b |\n|---|---|\n| 1 | 2 |",
+        "intro\n\n```\na  b\n-  -\n1  2\n```",
+    ),
+    (
+        "````\n```\n| a | b |\n|---|---|\n```\n````\n| c | d |\n|---|---|\n| 3 | 4 |",
+        "````\n```\n| a | b |\n|---|---|\n```\n````\n```\nc  d\n-  -\n3  4\n```",
+    ),
+    (
+        "a | b\n--- | ---\n1 | 2\nnot | a row?",
+        "```\na    b\n---  ------\n1    2\nnot  a row?\n```",
+    ),
     ("| a | b |\n| : --- : | ---: |\n| 1 | 2 |", "```\na  b\n-  -\n1  2\n```"),
     ("| a |\n|---|---|---|\n| 1 |", "| a |\n|---|---|---|\n| 1 |"),
-    ("| a | b |\n|---|---|\n| 1 | 2 |\n|---|---|\n| 3 | 4 |", "```\na  b\n-  -\n1  2\n```\n|---|---|\n| 3 | 4 |"),
-    ("| a | b |\n|---|---|\n| 1 | 2 |\nafter | text\n\n| c |\n|---|\n| 3 |", "```\na  b\n-  -\n1  2\n```\nafter | text\n\n```\nc\n-\n3\n```"),
-    ("| A | B |\n|---|---|\n| x | y |\nno pipe line\n| p | q |", "```\nA  B\n-  -\nx  y\n```\nno pipe line\n| p | q |"),
-    ("| Before | After |\n|---|---|\n| 1 | 2 |", "```\nBefore  After\n------  -----\n     1      2\n```"),
-    ("| Item | Before | After |\n|---|---|---|\n| Long item name number one | was here | is now there for sure |", "**Long item name number one** · Before was here → After is now there for sure"),
-    ("| Item | Previous | Current |\n|---|---|---|\n| Long item name number one | was here | is now there for sure |", "**Long item name number one** · Previous was here → Current is now there for sure"),
-    ("| Item | BEFORE | ſtart | After |\n|---|---|---|---|\n| Long item name number one | 1 | 2 | is now there for sure ok |", "**Long item name number one** · BEFORE 1 · ſtart 2 · After is now there for sure ok"),
+    (
+        "| a | b |\n|---|---|\n| 1 | 2 |\n|---|---|\n| 3 | 4 |",
+        "```\na  b\n-  -\n1  2\n```\n|---|---|\n| 3 | 4 |",
+    ),
+    (
+        "| a | b |\n|---|---|\n| 1 | 2 |\nafter | text\n\n| c |\n|---|\n| 3 |",
+        "```\na  b\n-  -\n1  2\n```\nafter | text\n\n```\nc\n-\n3\n```",
+    ),
+    (
+        "| A | B |\n|---|---|\n| x | y |\nno pipe line\n| p | q |",
+        "```\nA  B\n-  -\nx  y\n```\nno pipe line\n| p | q |",
+    ),
+    (
+        "| Before | After |\n|---|---|\n| 1 | 2 |",
+        "```\nBefore  After\n------  -----\n     1      2\n```",
+    ),
+    (
+        "| Item | Before | After |\n|---|---|---|\n| Long item name number one | was here | is now there for sure |",
+        "**Long item name number one** · Before was here → After is now there for sure",
+    ),
+    (
+        "| Item | Previous | Current |\n|---|---|---|\n| Long item name number one | was here | is now there for sure |",
+        "**Long item name number one** · Previous was here → Current is now there for sure",
+    ),
+    (
+        "| Item | BEFORE | ſtart | After |\n|---|---|---|---|\n| Long item name number one | 1 | 2 | is now there for sure ok |",
+        "**Long item name number one** · BEFORE 1 · ſtart 2 · After is now there for sure ok",
+    ),
     ("> a\n>\n> b", "> a\n> \u{200b}\n> b"),
     (">no space\n> \n>\n> ok", "> no space\n> \u{200b}\n> ok"),
     ("x\n>\ny", "x\n>\ny"),
@@ -503,10 +612,16 @@ const NODE_FORMAT_FOR_DISCORD: &[(&str, &str)] = &[
     ("> a\n```\n>\n```\n> b", "> a\n```\n>\n```\n> b"),
     (">\n> start\n>", "> start"),
     ("  >indented\n  >\n  > more", "  > indented\n  > \u{200b}\n  > more"),
-    (">\t\ttab\n>\u{a0}nbsp\n>\u{feff}bom", ">\t\ttab\n>\u{a0}nbsp\n>\u{feff}bom"),
+    (
+        ">\t\ttab\n>\u{a0}nbsp\n>\u{feff}bom",
+        ">\t\ttab\n>\u{a0}nbsp\n>\u{feff}bom",
+    ),
     ("> a\n>\n>\n>\n> b\n\n>\n\n> c", "> a\n> \u{200b}\n> b\n\n>\n\n> c"),
     ("> **bold**\n>- list\n>> nested", "> **bold**\n> - list\n>> nested"),
-    ("> quote with table\n| a | b |\n|---|---|\n| 1 | 2 |\n>\n> end", "> quote with table\n```\na  b\n-  -\n1  2\n```\n> end"),
+    (
+        "> quote with table\n| a | b |\n|---|---|\n| 1 | 2 |\n>\n> end",
+        "> quote with table\n```\na  b\n-  -\n1  2\n```\n> end",
+    ),
     ("text with > inside and >> and a>b", "text with > inside and >> and a>b"),
 ];
 
@@ -560,26 +675,142 @@ const NODE_DISPLAY_WIDTH: &[(&str, usize)] = &[
 
 /// Inputs, the limit, and the pieces `splitMessageFenceSafe` printed, in the Node code.
 const NODE_SPLIT: &[(&str, usize, &[&str])] = &[
-    ("😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀", 21, &["😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀", "😀😀😀😀😀😀😀😀😀"]),
-    ("ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀", 20, &["ab😀ab😀ab😀ab😀ab😀ab😀ab", "😀ab😀ab😀ab😀ab😀ab😀"]),
-    ("日本語のテキスト0\n日本語のテキスト1\n日本語のテキスト2\n日本語のテキスト3\n日本語のテキスト4\n日本語のテキスト5\n日本語のテキスト6\n日本語のテキスト7\n日本語のテキスト8\n日本語のテキスト9\n日本語のテキスト10\n日本語のテキスト11", 30, &["日本語のテキスト0\n日本語のテキスト1\n日本語のテキスト2", "日本語のテキスト3\n日本語のテキスト4\n日本語のテキスト5", "日本語のテキスト6\n日本語のテキスト7\n日本語のテキスト8", "日本語のテキスト9\n日本語のテキスト10", "日本語のテキスト11"]),
-    ("```py\nprint(\"😀 0\")\nprint(\"😀 1\")\nprint(\"😀 2\")\nprint(\"😀 3\")\nprint(\"😀 4\")\nprint(\"😀 5\")\nprint(\"😀 6\")\nprint(\"😀 7\")\nprint(\"😀 8\")\nprint(\"😀 9\")\n```", 40, &["```py\nprint(\"😀 0\")\nprint(\"😀 1\")\n```", "```py\nprint(\"😀 2\")\nprint(\"😀 3\")\n```", "```py\nprint(\"😀 4\")\nprint(\"😀 5\")\n```", "```py\nprint(\"😀 6\")\nprint(\"😀 7\")\n```", "```py\nprint(\"😀 8\")\nprint(\"😀 9\")\n```"]),
-    ("~~~\nl0 xxxxx\nl1 xxxxx\nl2 xxxxx\nl3 xxxxx\nl4 xxxxx\nl5 xxxxx\nl6 xxxxx\nl7 xxxxx\nl8 xxxxx\nl9 xxxxx\n~~~\nafter", 30, &["~~~\nl0 xxxxx\nl1 xxxxx\n~~~", "~~~\nl2 xxxxx\nl3 xxxxx\n~~~", "~~~\nl4 xxxxx\nl5 xxxxx\n~~~", "~~~\nl6 xxxxx\nl7 xxxxx\n~~~", "~~~\nl8 xxxxx\nl9 xxxxx\n~~~", "after"]),
-    ("```\r\ncode line\r\nl0 xxxxxxxx\nl1 xxxxxxxx\nl2 xxxxxxxx\nl3 xxxxxxxx\nl4 xxxxxxxx\nl5 xxxxxxxx\r\n```\r\n", 30, &["```\r\ncode line\r\nl0 xxxxxxxx", "l1 xxxxxxxx\nl2 xxxxxxxx", "l3 xxxxxxxx\nl4 xxxxxxxx", "l5 xxxxxxxx\r\n```\r\n"]),
+    (
+        "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+        21,
+        &["😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀", "😀😀😀😀😀😀😀😀😀"],
+    ),
+    (
+        "ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀ab😀",
+        20,
+        &["ab😀ab😀ab😀ab😀ab😀ab😀ab", "😀ab😀ab😀ab😀ab😀ab😀"],
+    ),
+    (
+        "日本語のテキスト0\n日本語のテキスト1\n日本語のテキスト2\n日本語のテキスト3\n日本語のテキスト4\n日本語のテキスト5\n日本語のテキスト6\n日本語のテキスト7\n日本語のテキスト8\n日本語のテキスト9\n日本語のテキスト10\n日本語のテキスト11",
+        30,
+        &[
+            "日本語のテキスト0\n日本語のテキスト1\n日本語のテキスト2",
+            "日本語のテキスト3\n日本語のテキスト4\n日本語のテキスト5",
+            "日本語のテキスト6\n日本語のテキスト7\n日本語のテキスト8",
+            "日本語のテキスト9\n日本語のテキスト10",
+            "日本語のテキスト11",
+        ],
+    ),
+    (
+        "```py\nprint(\"😀 0\")\nprint(\"😀 1\")\nprint(\"😀 2\")\nprint(\"😀 3\")\nprint(\"😀 4\")\nprint(\"😀 5\")\nprint(\"😀 6\")\nprint(\"😀 7\")\nprint(\"😀 8\")\nprint(\"😀 9\")\n```",
+        40,
+        &[
+            "```py\nprint(\"😀 0\")\nprint(\"😀 1\")\n```",
+            "```py\nprint(\"😀 2\")\nprint(\"😀 3\")\n```",
+            "```py\nprint(\"😀 4\")\nprint(\"😀 5\")\n```",
+            "```py\nprint(\"😀 6\")\nprint(\"😀 7\")\n```",
+            "```py\nprint(\"😀 8\")\nprint(\"😀 9\")\n```",
+        ],
+    ),
+    (
+        "~~~\nl0 xxxxx\nl1 xxxxx\nl2 xxxxx\nl3 xxxxx\nl4 xxxxx\nl5 xxxxx\nl6 xxxxx\nl7 xxxxx\nl8 xxxxx\nl9 xxxxx\n~~~\nafter",
+        30,
+        &[
+            "~~~\nl0 xxxxx\nl1 xxxxx\n~~~",
+            "~~~\nl2 xxxxx\nl3 xxxxx\n~~~",
+            "~~~\nl4 xxxxx\nl5 xxxxx\n~~~",
+            "~~~\nl6 xxxxx\nl7 xxxxx\n~~~",
+            "~~~\nl8 xxxxx\nl9 xxxxx\n~~~",
+            "after",
+        ],
+    ),
+    (
+        "```\r\ncode line\r\nl0 xxxxxxxx\nl1 xxxxxxxx\nl2 xxxxxxxx\nl3 xxxxxxxx\nl4 xxxxxxxx\nl5 xxxxxxxx\r\n```\r\n",
+        30,
+        &[
+            "```\r\ncode line\r\nl0 xxxxxxxx",
+            "l1 xxxxxxxx\nl2 xxxxxxxx",
+            "l3 xxxxxxxx\nl4 xxxxxxxx",
+            "l5 xxxxxxxx\r\n```\r\n",
+        ],
+    ),
     ("a\n\n\n\nb\n\n\n\nc\n\n\n\nd", 6, &["a\n\n\n\nb", "\n\n\nc\n\n", "\nd"]),
-    ("  ```js\nl0 xxxxxx\nl1 xxxxxx\nl2 xxxxxx\nl3 xxxxxx\nl4 xxxxxx\nl5 xxxxxx\nl6 xxxxxx\nl7 xxxxxx\n  ```\ntail", 30, &["  ```js\nl0 xxxxxx\n```", "```js\nl1 xxxxxx\nl2 xxxxxx\n```", "```js\nl3 xxxxxx\nl4 xxxxxx\n```", "```js\nl5 xxxxxx\nl6 xxxxxx\n```", "```js\nl7 xxxxxx\n  ```\ntail"]),
-    ("```\n😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀", 25, &["```\n😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\n```", "```\n😀😀😀😀😀😀😀😀😀😀😀😀😀\n```"]),
+    (
+        "  ```js\nl0 xxxxxx\nl1 xxxxxx\nl2 xxxxxx\nl3 xxxxxx\nl4 xxxxxx\nl5 xxxxxx\nl6 xxxxxx\nl7 xxxxxx\n  ```\ntail",
+        30,
+        &[
+            "  ```js\nl0 xxxxxx\n```",
+            "```js\nl1 xxxxxx\nl2 xxxxxx\n```",
+            "```js\nl3 xxxxxx\nl4 xxxxxx\n```",
+            "```js\nl5 xxxxxx\nl6 xxxxxx\n```",
+            "```js\nl7 xxxxxx\n  ```\ntail",
+        ],
+    ),
+    (
+        "```\n😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+        25,
+        &[
+            "```\n😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\n```",
+            "```\n😀😀😀😀😀😀😀😀😀😀😀😀😀\n```",
+        ],
+    ),
     ("xxxxxxxxxx", 10, &["xxxxxxxxxx"]),
     ("xxxxxxxxxx", 3, &["xxx", "xxx", "xxx", "x"]),
-    ("```js\naaaaaaaaaaaaaaaaaaaa\n```", 12, &["```js\naa\n```", "```js\naa\n```", "```js\naa\n```", "```js\naa\n```", "```js\naa\n```", "```js\naa\n```", "```js\naa\n```", "```js\naa\n```", "```js\naa\n```", "```js\naa\n```", "```js\n``\n```", "```js\n`"]),
-    ("```\n```\n```\n```\nl0 xxxxx\nl1 xxxxx\nl2 xxxxx\nl3 xxxxx\nl4 xxxxx", 12, &["l0 xxxxx", "l1 xxxxx", "l2 xxxxx", "l3 xxxxx", "l4 xxxxx"]),
-    ("intro\n```\nl0 xxxx\nl1 xxxx\nl2 xxxx\nl3 xxxx\n```\n```\nl0 xxxx\nl1 xxxx\nl2 xxxx\nl3 xxxx\n```", 25, &["intro\n```\nl0 xxxx\n```", "```\nl1 xxxx\nl2 xxxx\n```", "```\nl3 xxxx\n```\n```\n```", "```\nl0 xxxx\nl1 xxxx\n```", "```\nl2 xxxx\nl3 xxxx\n```"]),
+    (
+        "```js\naaaaaaaaaaaaaaaaaaaa\n```",
+        12,
+        &[
+            "```js\naa\n```",
+            "```js\naa\n```",
+            "```js\naa\n```",
+            "```js\naa\n```",
+            "```js\naa\n```",
+            "```js\naa\n```",
+            "```js\naa\n```",
+            "```js\naa\n```",
+            "```js\naa\n```",
+            "```js\naa\n```",
+            "```js\n``\n```",
+            "```js\n`",
+        ],
+    ),
+    (
+        "```\n```\n```\n```\nl0 xxxxx\nl1 xxxxx\nl2 xxxxx\nl3 xxxxx\nl4 xxxxx",
+        12,
+        &["l0 xxxxx", "l1 xxxxx", "l2 xxxxx", "l3 xxxxx", "l4 xxxxx"],
+    ),
+    (
+        "intro\n```\nl0 xxxx\nl1 xxxx\nl2 xxxx\nl3 xxxx\n```\n```\nl0 xxxx\nl1 xxxx\nl2 xxxx\nl3 xxxx\n```",
+        25,
+        &[
+            "intro\n```\nl0 xxxx\n```",
+            "```\nl1 xxxx\nl2 xxxx\n```",
+            "```\nl3 xxxx\n```\n```\n```",
+            "```\nl0 xxxx\nl1 xxxx\n```",
+            "```\nl2 xxxx\nl3 xxxx\n```",
+        ],
+    ),
     ("", 5, &[""]),
     ("\n\n\n", 2, &[]),
-    ("one ``` inline\nl0 xxxxx\nl1 xxxxx\nl2 xxxxx\nl3 xxxxx\nl4 xxxxx", 15, &["one ``` inline", "l0 xxxxx", "l1 xxxxx", "l2 xxxxx", "l3 xxxxx", "l4 xxxxx"]),
-    ("````\n```\ninner\n```\nl0 xxxx\nl1 xxxx\nl2 xxxx\nl3 xxxx\n````", 20, &["````\n```\ninner\n````", "````\nl0 xxxx\n````", "````\nl1 xxxx\n````", "````\nl2 xxxx\n````", "````\nl3 xxxx\n````"]),
+    (
+        "one ``` inline\nl0 xxxxx\nl1 xxxxx\nl2 xxxxx\nl3 xxxxx\nl4 xxxxx",
+        15,
+        &[
+            "one ``` inline",
+            "l0 xxxxx",
+            "l1 xxxxx",
+            "l2 xxxxx",
+            "l3 xxxxx",
+            "l4 xxxxx",
+        ],
+    ),
+    (
+        "````\n```\ninner\n```\nl0 xxxx\nl1 xxxx\nl2 xxxx\nl3 xxxx\n````",
+        20,
+        &[
+            "````\n```\ninner\n````",
+            "````\nl0 xxxx\n````",
+            "````\nl1 xxxx\n````",
+            "````\nl2 xxxx\n````",
+            "````\nl3 xxxx\n````",
+        ],
+    ),
 ];
-
 
 #[test]
 fn format_for_discord_matches_the_node_output_on_awkward_input() {
@@ -605,7 +836,11 @@ fn display_width_matches_the_node_output() {
 #[test]
 fn split_matches_the_node_output_with_emoji_cjk_and_fences_at_the_cut_points() {
     for (i, (input, max, expected)) in NODE_SPLIT.iter().enumerate() {
-        assert_eq!(split_message_fence_safe(input, *max), *expected, "case {i}: {input:?} at {max}");
+        assert_eq!(
+            split_message_fence_safe(input, *max),
+            *expected,
+            "case {i}: {input:?} at {max}"
+        );
     }
 }
 
@@ -645,7 +880,13 @@ fn ascii_grid_matches_the_node_output_with_explicit_alignment() {
     assert_eq!(
         grid,
         AsciiGrid {
-            lines: s(&["Name  Qty  Note", "----  ---  ----", " a      1     x", " bb    22", " c"]),
+            lines: s(&[
+                "Name  Qty  Note",
+                "----  ---  ----",
+                " a      1     x",
+                " bb    22",
+                " c"
+            ]),
             width: 15,
         }
     );

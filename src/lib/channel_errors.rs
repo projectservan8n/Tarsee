@@ -38,7 +38,10 @@ mod tests {
     #[test]
     fn a_refused_error_keeps_its_message_and_is_marked_refused() {
         let err = refused("The bot token was turned down. Paste a new one in Settings.");
-        assert_eq!(err.to_string(), "The bot token was turned down. Paste a new one in Settings.");
+        assert_eq!(
+            err.to_string(),
+            "The bot token was turned down. Paste a new one in Settings."
+        );
         assert!(err.refused());
         let wrapped = anyhow::Error::new(err.clone());
         assert!(is_refused(&wrapped));

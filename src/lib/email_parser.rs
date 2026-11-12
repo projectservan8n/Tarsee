@@ -24,8 +24,7 @@ pub const DEFAULT_REPLY_ALL_MARKER: &str = "[reply-all]";
 static WROTE_LINE: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*(?i-u:on) .{10,200}(?i-u:wrote):\s*$"));
 static ON_LINE: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*(?i-u:on) .{1,200}$"));
 static AT_OR_COMMA: LazyLock<Regex> = LazyLock::new(|| re(r"\s(at|,)\s"));
-static ORIGINAL_MESSAGE: LazyLock<Regex> =
-    LazyLock::new(|| re(r"^\s*-{2,}\s*(?i-u:original message)\s*-{2,}\s*$"));
+static ORIGINAL_MESSAGE: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*-{2,}\s*(?i-u:original message)\s*-{2,}\s*$"));
 static FROM_HEADER: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*(?i-u:from):\s.+<.+@.+>"));
 static SIGNATURE: LazyLock<Regex> = LazyLock::new(|| re(r"^-- \s*$"));
 static QUOTED: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*>"));
@@ -113,7 +112,7 @@ fn canonicalize(c: char) -> char {
     }
     let mut upper = c.to_uppercase();
     match (upper.next(), upper.next()) {
-        (Some(u), None) if u.len_utf16() == 1 && !(!c.is_ascii() && u.is_ascii()) => u,
+        (Some(u), None) if u.len_utf16() == 1 && (c.is_ascii() || !u.is_ascii()) => u,
         _ => c,
     }
 }
@@ -229,14 +228,18 @@ pub fn is_reply_all(check: ReplyAllCheck<'_>) -> bool {
         if text[at] != '@' {
             return false;
         }
-        let Some(mut i) = keyword_at(&text, at + 1, &kw) else { return false };
+        let Some(mut i) = keyword_at(&text, at + 1, &kw) else {
+            return false;
+        };
         // \s+ : at least one, and all of them (what follows starts with a letter)
         let spaces = text[i..].iter().take_while(|&&c| js_text::is_ws(c)).count();
         if spaces == 0 {
             return false;
         }
         i += spaces;
-        let Some(mut i) = ascii_word_at(&text, i, "reply") else { return false };
+        let Some(mut i) = ascii_word_at(&text, i, "reply") else {
+            return false;
+        };
         // [\s-]? : "all" cannot start with either, so take it when it is there
         if text.get(i).is_some_and(|&c| js_text::is_ws(c) || c == '-') {
             i += 1;
@@ -363,7 +366,10 @@ mod tests {
 
     #[test]
     fn strip_quoted_reply_lines_starting_with_gt_are_dropped() {
-        assert_eq!(strip_quoted_reply("> old content\n> more old content\nnew line"), "new line");
+        assert_eq!(
+            strip_quoted_reply("> old content\n> more old content\nnew line"),
+            "new line"
+        );
     }
 
     #[test]
@@ -382,7 +388,10 @@ mod tests {
 
     #[test]
     fn strip_quoted_reply_crlf_line_endings_are_handled() {
-        assert_eq!(strip_quoted_reply("line 1\r\nline 2\r\n> quoted\r\nline 3"), "line 1\nline 2\nline 3");
+        assert_eq!(
+            strip_quoted_reply("line 1\r\nline 2\r\n> quoted\r\nline 3"),
+            "line 1\nline 2\nline 3"
+        );
     }
 
     /// The Node case also passed `null` and `undefined`; a Rust `&str` is never either.
@@ -404,7 +413,10 @@ mod tests {
     #[test]
     fn has_mention_email_address_looking_tarsee_is_not_a_mention() {
         // Standard bounce — Tarsee's address should not trigger a mention.
-        assert!(!has_mention("send it to alice@tarsee.example.com", DEFAULT_MENTION_KEYWORD));
+        assert!(!has_mention(
+            "send it to alice@tarsee.example.com",
+            DEFAULT_MENTION_KEYWORD
+        ));
         assert!(!has_mention("cc: bot@tarsee.io", DEFAULT_MENTION_KEYWORD));
         // A username with a 'tarsee' substring inside a longer local-part.
         assert!(!has_mention("replied to btarsee@example.com", DEFAULT_MENTION_KEYWORD));
@@ -527,7 +539,10 @@ mod tests {
         let text = html_to_text(html);
         assert!(text.contains("hi @tarsee"), "{text}");
         assert!(text.contains("please & review"), "{text}");
-        assert!(!text.contains('<') && !text.contains('>') && !text.contains("script"), "{text}");
+        assert!(
+            !text.contains('<') && !text.contains('>') && !text.contains("script"),
+            "{text}"
+        );
     }
 
     /// The Node case also passed `null`; a Rust `&str` cannot be null.
@@ -590,9 +605,18 @@ mod tests {
         ("hi\nOn short wrote:\nmore", "hi\nOn short wrote:\nmore"),
         ("hi\nOn 😀😀😀😀😀wrote:\nmore", "hi"),
         ("hi\nOn 😀😀😀😀wrote:\nmore", "hi\nOn 😀😀😀😀wrote:\nmore"),
-        ("hi\nOn xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxwrote:\nmore", "hi\nOn xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxwrote:\nmore"),
-        ("hi\nOn Mon, Jan 1, 2026 at 9:00 AM Alice <alice@example.com>\nwrote:\n> old", "hi\nwrote:"),
-        ("hi\nOn Mon, Jan 1 2026 Alice\nkeep", "hi\nOn Mon, Jan 1 2026 Alice\nkeep"),
+        (
+            "hi\nOn xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxwrote:\nmore",
+            "hi\nOn xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxwrote:\nmore",
+        ),
+        (
+            "hi\nOn Mon, Jan 1, 2026 at 9:00 AM Alice <alice@example.com>\nwrote:\n> old",
+            "hi\nwrote:",
+        ),
+        (
+            "hi\nOn Mon, Jan 1 2026 Alice\nkeep",
+            "hi\nOn Mon, Jan 1 2026 Alice\nkeep",
+        ),
         ("body\n---Original Message---\nold", "body"),
         ("body\n  -- original message --  \nold", "body"),
         ("From: Bob <b@x.io>\nfirst line", "From: Bob <b@x.io>\nfirst line"),
@@ -607,7 +631,10 @@ mod tests {
         ("\u{a0}lead\u{feff}", "lead"),
         ("On Mon, Jan 1 Bob <b@x.io> wrote:", ""),
         ("ſ\nOn x,y wrote:", "ſ\nOn x,y wrote:"),
-        ("Ön Mon, Jan 1 Bob <b@x.io> wrote:\nkept", "Ön Mon, Jan 1 Bob <b@x.io> wrote:\nkept"),
+        (
+            "Ön Mon, Jan 1 Bob <b@x.io> wrote:\nkept",
+            "Ön Mon, Jan 1 Bob <b@x.io> wrote:\nkept",
+        ),
     ];
 
     /// Text, keyword, and what `hasMention` printed, in the Node code.
@@ -695,5 +722,4 @@ mod tests {
         ("<style>unclosed", "unclosed"),
         ("<!-- comment --> after", "after"),
     ];
-
 }

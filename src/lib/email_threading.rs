@@ -133,7 +133,11 @@ pub fn resolve_recipients(incoming: &IncomingMail, reply_all: bool, self_address
     // Honor Reply-To header if it's a single address. Multi-address Reply-To is discarded (rare, malformed). Reply-To
     // always takes precedence over From for the primary recipient when present.
     let primary_reply_to = normalized(incoming.reply_to.as_ref());
-    let Some(primary) = primary_reply_to.filter(|a| !a.is_empty()).or(from_addr).filter(|a| !a.is_empty()) else {
+    let Some(primary) = primary_reply_to
+        .filter(|a| !a.is_empty())
+        .or(from_addr)
+        .filter(|a| !a.is_empty())
+    else {
         return Recipients::default();
     };
 
@@ -146,7 +150,12 @@ pub fn resolve_recipients(incoming: &IncomingMail, reply_all: bool, self_address
 
     // Reply-all: primary + everyone in To + Cc who isn't us or the primary.
     let mut cc: Vec<String> = Vec::new();
-    for address in incoming.to.iter().chain(&incoming.cc).filter_map(|a| normalized(Some(a))) {
+    for address in incoming
+        .to
+        .iter()
+        .chain(&incoming.cc)
+        .filter_map(|a| normalized(Some(a)))
+    {
         // Dedup the cc list.
         if !address.is_empty() && address != me && address != primary && !cc.contains(&address) {
             cc.push(address);
@@ -302,7 +311,11 @@ mod tests {
 
     #[test]
     fn resolve_recipients_matches_the_node_output() {
-        let mailbox = |m: &Mailbox| m.map(|a| MailAddress { address: a.map(str::to_string) });
+        let mailbox = |m: &Mailbox| {
+            m.map(|a| MailAddress {
+                address: a.map(str::to_string),
+            })
+        };
         let list = |l: &[Option<&str>]| {
             l.iter()
                 .map(|a| MailAddress {
@@ -341,25 +354,96 @@ mod tests {
     ];
 
     /// Incoming Message-ID, References, then `buildReplyHeaders`'s inReplyTo and references, in the Node code.
-    const NODE_REPLY_HEADERS: &[(Option<&str>, &[&str], Option<&str>, Option<&str>)] = &[
+    type ReplyHeadersCase = (
+        Option<&'static str>,
+        &'static [&'static str],
+        Option<&'static str>,
+        Option<&'static str>,
+    );
+    const NODE_REPLY_HEADERS: &[ReplyHeadersCase] = &[
         (None, &["<a>"], None, None),
         (Some(""), &["<a>"], None, None),
         (Some("<m>"), &[], Some("<m>"), Some("<m>")),
         (Some(" <m> "), &["<m>", " <m> "], Some(" <m> "), Some("<m>")),
-        (Some("<m>"), &["", "  ", "<r>", "<r>", " <r>"], Some("<m>"), Some("<r> <m>")),
-        (Some("<n>"), &["<m0>", "<m1>", "<m2>", "<m3>", "<m4>", "<m5>", "<m6>", "<m7>", "<m8>", "<m9>", "<m10>", "<m11>"], Some("<n>"), Some("<m0> <m4> <m5> <m6> <m7> <m8> <m9> <m10> <m11> <n>")),
-        (Some("<m5>"), &["<m0>", "<m1>", "<m2>", "<m3>", "<m4>", "<m5>", "<m6>", "<m7>", "<m8>", "<m9>", "<m10>", "<m11>"], Some("<m5>"), Some("<m0> <m3> <m4> <m5> <m6> <m7> <m8> <m9> <m10> <m11>")),
+        (
+            Some("<m>"),
+            &["", "  ", "<r>", "<r>", " <r>"],
+            Some("<m>"),
+            Some("<r> <m>"),
+        ),
+        (
+            Some("<n>"),
+            &[
+                "<m0>", "<m1>", "<m2>", "<m3>", "<m4>", "<m5>", "<m6>", "<m7>", "<m8>", "<m9>", "<m10>", "<m11>",
+            ],
+            Some("<n>"),
+            Some("<m0> <m4> <m5> <m6> <m7> <m8> <m9> <m10> <m11> <n>"),
+        ),
+        (
+            Some("<m5>"),
+            &[
+                "<m0>", "<m1>", "<m2>", "<m3>", "<m4>", "<m5>", "<m6>", "<m7>", "<m8>", "<m9>", "<m10>", "<m11>",
+            ],
+            Some("<m5>"),
+            Some("<m0> <m3> <m4> <m5> <m6> <m7> <m8> <m9> <m10> <m11>"),
+        ),
     ];
 
     /// Incoming addresses (from, reply-to, to, cc; None for a mailbox without an address), reply-all, self, and
     /// what `resolveRecipients` printed (to, cc), in the Node code.
     type Mailbox = Option<Option<&'static str>>;
-    const NODE_RECIPIENTS: &[(Mailbox, Mailbox, &[Option<&str>], &[Option<&str>], bool, &str, &[&str], &[&str])] = &[
-        (Some(Some(" Alice@Example.COM ")), None, &[], &[], false, "me@x", &["alice@example.com"], &[]),
-        (Some(Some("")), Some(Some("r@x")), &[], &[], false, "me@x", &["r@x"], &[]),
-        (Some(Some("f@x")), Some(Some("  ")), &[], &[], false, "me@x", &["f@x"], &[]),
+    type RecipientsCase = (
+        Mailbox,
+        Mailbox,
+        &'static [Option<&'static str>],
+        &'static [Option<&'static str>],
+        bool,
+        &'static str,
+        &'static [&'static str],
+        &'static [&'static str],
+    );
+    const NODE_RECIPIENTS: &[RecipientsCase] = &[
+        (
+            Some(Some(" Alice@Example.COM ")),
+            None,
+            &[],
+            &[],
+            false,
+            "me@x",
+            &["alice@example.com"],
+            &[],
+        ),
+        (
+            Some(Some("")),
+            Some(Some("r@x")),
+            &[],
+            &[],
+            false,
+            "me@x",
+            &["r@x"],
+            &[],
+        ),
+        (
+            Some(Some("f@x")),
+            Some(Some("  ")),
+            &[],
+            &[],
+            false,
+            "me@x",
+            &["f@x"],
+            &[],
+        ),
         (Some(Some("f@x")), Some(None), &[], &[], true, "ME@X", &["f@x"], &[]),
-        (Some(Some("f@x")), None, &[Some("Me@X"), Some("B@x"), None, Some("")], &[Some("b@x "), Some("F@X"), Some("c@x")], true, " me@x ", &["f@x"], &["b@x", "c@x"]),
+        (
+            Some(Some("f@x")),
+            None,
+            &[Some("Me@X"), Some("B@x"), None, Some("")],
+            &[Some("b@x "), Some("F@X"), Some("c@x")],
+            true,
+            " me@x ",
+            &["f@x"],
+            &["b@x", "c@x"],
+        ),
         (Some(None), None, &[], &[], true, "me@x", &[], &[]),
         (Some(Some("İ@x")), None, &[Some("i̇@x")], &[], true, "", &["i̇@x"], &[]),
     ];

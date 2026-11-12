@@ -29,13 +29,15 @@ static SPECIAL_MENTION: LazyLock<Regex> = LazyLock::new(|| re(r"<!(here|channel|
 static LINK: LazyLock<Regex> = LazyLock::new(|| re(r"<((?:https?|mailto):[^|>]+)(?:\|([^>]*))?>"));
 static MAILTO: LazyLock<Regex> = LazyLock::new(|| re(r"^mailto:"));
 
+/// A person's name from their user id, or `None` (their id is shown then).
+pub type UserName<'a> = &'a dyn Fn(&str) -> Option<String>;
+
 /// Who is who, for [`slack_text_to_plain`].
 #[derive(Default, Clone, Copy)]
 pub struct PlainOptions<'a> {
     /// The bot's own user id: its mention is taken out.
     pub bot_user_id: Option<&'a str>,
-    /// A person's name from their user id, or `None` (their id is shown then).
-    pub user_name: Option<&'a dyn Fn(&str) -> Option<String>>,
+    pub user_name: Option<UserName<'a>>,
 }
 
 /// The JS `.replace(/+(?=[,.!?;:])/g, "")`: a run of placeholders right before punctuation goes.
@@ -323,7 +325,11 @@ pub fn close_fence(text: &str) -> String {
         return text.to_string();
     };
     let ticks = fence.len() - fence.trim_start_matches('`').len();
-    format!("{text}{}{}", if text.ends_with('\n') { "" } else { "\n" }, &fence[..ticks])
+    format!(
+        "{text}{}{}",
+        if text.ends_with('\n') { "" } else { "\n" },
+        &fence[..ticks]
+    )
 }
 
 static THEME_SENTINEL: LazyLock<Regex> = LazyLock::new(|| re(r"^__SET_THEME__:[^|]*\|"));
@@ -339,7 +345,7 @@ mod tests {
     //! (`src/lib/slack-format.js`) for the same input (generated, not typed).
     use super::*;
 
-    fn opts<'a>(bot: Option<&'a str>, names: Option<&'a dyn Fn(&str) -> Option<String>>) -> PlainOptions<'a> {
+    fn opts<'a>(bot: Option<&'a str>, names: Option<UserName<'a>>) -> PlainOptions<'a> {
         PlainOptions {
             bot_user_id: bot,
             user_name: names,
@@ -350,8 +356,14 @@ mod tests {
 
     #[test]
     fn drops_the_bots_own_mention_and_keeps_the_words() {
-        assert_eq!(slack_text_to_plain("<@UBOT> what's up?", opts(Some("UBOT"), None)), "what's up?");
-        assert_eq!(slack_text_to_plain("hey <@UBOT|tarsee>, help", opts(Some("UBOT"), None)), "hey, help");
+        assert_eq!(
+            slack_text_to_plain("<@UBOT> what's up?", opts(Some("UBOT"), None)),
+            "what's up?"
+        );
+        assert_eq!(
+            slack_text_to_plain("hey <@UBOT|tarsee>, help", opts(Some("UBOT"), None)),
+            "hey, help"
+        );
     }
 
     #[test]
@@ -379,14 +391,23 @@ mod tests {
     fn unwraps_links_keeping_both_label_and_address_when_they_differ() {
         let none = PlainOptions::default();
         assert_eq!(slack_text_to_plain("<https://a.com>", none), "https://a.com");
-        assert_eq!(slack_text_to_plain("<https://a.com|https://a.com>", none), "https://a.com");
-        assert_eq!(slack_text_to_plain("<https://a.com/x|the docs>", none), "the docs (https://a.com/x)");
+        assert_eq!(
+            slack_text_to_plain("<https://a.com|https://a.com>", none),
+            "https://a.com"
+        );
+        assert_eq!(
+            slack_text_to_plain("<https://a.com/x|the docs>", none),
+            "the docs (https://a.com/x)"
+        );
         assert_eq!(slack_text_to_plain("<mailto:a@b.co|a@b.co>", none), "a@b.co");
     }
 
     #[test]
     fn decodes_slacks_three_html_entities() {
-        assert_eq!(slack_text_to_plain("a &lt;b&gt; &amp; c", PlainOptions::default()), "a <b> & c");
+        assert_eq!(
+            slack_text_to_plain("a &lt;b&gt; &amp; c", PlainOptions::default()),
+            "a <b> & c"
+        );
     }
 
     #[test]
@@ -395,10 +416,20 @@ mod tests {
         let bot = opts(Some("UBOT"), None);
         let py = "fix this:\n```\nif x:\n    if y:\n        z()\n```";
         assert_eq!(slack_text_to_plain(&format!("<@UBOT> {py}"), bot), py);
-        assert_eq!(slack_text_to_plain("run rm -rf ./build && ls -la .", none), "run rm -rf ./build && ls -la .");
+        assert_eq!(
+            slack_text_to_plain("run rm -rf ./build && ls -la .", none),
+            "run rm -rf ./build && ls -la ."
+        );
         assert_eq!(slack_text_to_plain("a ? b : c", none), "a ? b : c");
-        assert_eq!(slack_text_to_plain("key:  value  # two spaces", none), "key:  value  # two spaces");
-        assert_eq!(slack_text_to_plain("ask <@UBOT> now", bot), "ask now", "one space where the mention was");
+        assert_eq!(
+            slack_text_to_plain("key:  value  # two spaces", none),
+            "key:  value  # two spaces"
+        );
+        assert_eq!(
+            slack_text_to_plain("ask <@UBOT> now", bot),
+            "ask now",
+            "one space where the mention was"
+        );
         assert_eq!(
             slack_text_to_plain("cc <@UBOTX> please", bot),
             "cc @UBOTX please",
@@ -438,7 +469,10 @@ mod tests {
     fn accepts_names_as_slack_writes_them_with_or_without_colons() {
         assert_eq!(slack_emoji_name(":tada:").as_deref(), Some("tada"));
         assert_eq!(slack_emoji_name("rocket").as_deref(), Some("rocket"));
-        assert_eq!(slack_emoji_name("thumbsup::skin-tone-3").as_deref(), Some("thumbsup::skin-tone-3"));
+        assert_eq!(
+            slack_emoji_name("thumbsup::skin-tone-3").as_deref(),
+            Some("thumbsup::skin-tone-3")
+        );
     }
 
     #[test]
@@ -510,7 +544,10 @@ mod tests {
 
     #[test]
     fn drops_memory_markers_in_any_case() {
-        assert_eq!(run(&["Noted. [REMEMBER: likes tea]", " Anything else?"]), "Noted.  Anything else?");
+        assert_eq!(
+            run(&["Noted. [REMEMBER: likes tea]", " Anything else?"]),
+            "Noted.  Anything else?"
+        );
         assert_eq!(run(&["[remember: x]ok"]), "ok");
     }
 
@@ -539,7 +576,10 @@ mod tests {
 
     #[test]
     fn drops_the_web_only_theme_sentinel_and_keeps_the_words() {
-        assert_eq!(strip_command_sentinel("__SET_THEME__:dark|Theme set to **dark**."), "Theme set to **dark**.");
+        assert_eq!(
+            strip_command_sentinel("__SET_THEME__:dark|Theme set to **dark**."),
+            "Theme set to **dark**."
+        );
         assert_eq!(strip_command_sentinel("plain reply"), "plain reply");
     }
 
@@ -554,7 +594,11 @@ mod tests {
             _ => None,
         };
         for (i, (text, bot, expected)) in NODE_PLAIN.iter().enumerate() {
-            assert_eq!(slack_text_to_plain(text, opts(*bot, Some(&names))), *expected, "case {i}: {text:?}");
+            assert_eq!(
+                slack_text_to_plain(text, opts(*bot, Some(&names))),
+                *expected,
+                "case {i}: {text:?}"
+            );
         }
     }
 
@@ -624,7 +668,11 @@ mod tests {
         ("<@UBOT>", Some("UBOT"), ""),
         ("<@UBOT>, can you?", Some("UBOT"), ", can you?"),
         ("hey <@UBOT>! and <@UBOT>?", Some("UBOT"), "hey! and?"),
-        ("line one <@UBOT>\n<@UBOT> line two\r\n<@UBOT>\u{2028}end", Some("UBOT"), "line one\nline two\r\n\u{2028}end"),
+        (
+            "line one <@UBOT>\n<@UBOT> line two\r\n<@UBOT>\u{2028}end",
+            Some("UBOT"),
+            "line one\nline two\r\n\u{2028}end",
+        ),
         ("<@UBOT><@UBOT> twice", Some("UBOT"), "twice"),
         ("a\t<@UBOT|tarsee>\tb", Some("UBOT"), "a b"),
         ("mid <@UBOT> <@UBOT> mid", Some("UBOT"), "mid mid"),
@@ -632,12 +680,28 @@ mod tests {
         ("keep \u{e000} placeholder", None, "keep \u{e000} placeholder"),
         ("<@U1> <@U2> <@W3> <@U9|someone>", Some("UBOT"), "@alice @U2 @bob @U9"),
         ("<#C1|> <#G2|private> <#C3>", None, "#C1 #private #C3"),
-        ("<!subteam^S1> <!subteam^S2|> <!subteam^S3|@devs>", None, "@group @group @devs"),
-        ("<!here|here> <!channel> <!everyone|x> <!date^1|x>", None, "@here @channel @everyone <!date^1|x>"),
-        ("<https://a.com/x?y=1&amp;z=2|docs> <mailto:x@y.z> <mailto:x@y.z|mailto:x@y.z> <http://b|> <ftp://c>", None, "docs (https://a.com/x?y=1&z=2) x@y.z x@y.z http://b <ftp://c>"),
+        (
+            "<!subteam^S1> <!subteam^S2|> <!subteam^S3|@devs>",
+            None,
+            "@group @group @devs",
+        ),
+        (
+            "<!here|here> <!channel> <!everyone|x> <!date^1|x>",
+            None,
+            "@here @channel @everyone <!date^1|x>",
+        ),
+        (
+            "<https://a.com/x?y=1&amp;z=2|docs> <mailto:x@y.z> <mailto:x@y.z|mailto:x@y.z> <http://b|> <ftp://c>",
+            None,
+            "docs (https://a.com/x?y=1&z=2) x@y.z x@y.z http://b <ftp://c>",
+        ),
         ("&amp;lt; &lt;&gt; &amp;amp;", None, "&lt; <> &amp;"),
         ("  \u{a0} padded \u{feff} ", None, "padded"),
-        ("code:\n```\n  <@UBOT>  indented\n```", Some("UBOT"), "code:\n```\nindented\n```"),
+        (
+            "code:\n```\n  <@UBOT>  indented\n```",
+            Some("UBOT"),
+            "code:\n```\nindented\n```",
+        ),
         ("<@UBOTX> is not the bot", Some("UBOT"), "@UBOTX is not the bot"),
         ("<@ubot> lower", Some("UBOT"), "<@ubot> lower"),
         ("😀 <@U1> 日本", None, "😀 @alice 日本"),
@@ -672,7 +736,10 @@ mod tests {
         ("", ""),
         ("[react: 👍] hi", "hi"),
         ("a\n\n\n\nb\n\n\nc", "a\n\nb\n\nc"),
-        ("x<tool_call>{\"a\":1}\n</tool_call>y<tool_response>\nok\n</tool_response>z", "xyz"),
+        (
+            "x<tool_call>{\"a\":1}\n</tool_call>y<tool_response>\nok\n</tool_response>z",
+            "xyz",
+        ),
         ("<tool_call>unclosed", "<tool_call>unclosed"),
         ("<TOOL_CALL>x</TOOL_CALL>", "<TOOL_CALL>x</TOOL_CALL>"),
         ("a\r\n\r\n\r\nb", "a\r\n\r\n\r\nb"),
@@ -694,7 +761,11 @@ mod tests {
         ("```a\n```b\n```c", Some("```c"), "```a\n```b\n```c\n```"),
         ("\u{a0}```x\u{a0}", Some("```x"), "\u{a0}```x\u{a0}\n```"),
         ("```\r\ncode\r\n", None, "```\r\ncode\r\n"),
-        ("```js\ncode\n```\n```py\n", Some("```py"), "```js\ncode\n```\n```py\n```"),
+        (
+            "```js\ncode\n```\n```py\n",
+            Some("```py"),
+            "```js\ncode\n```\n```py\n```",
+        ),
     ];
 
     /// Deltas pushed through one `MarkerFilter`: what each push gave, then what `end` gave, in the Node code.
@@ -705,9 +776,27 @@ mod tests {
         (&["[react:x\n", "y]"], &["[react:x\n", "y]"], ""),
         (&["[[react: a]]"], &["[]"], ""),
         (&["a[", "", "b"], &["a", "", "[b"], ""),
-        (&["[REACT: 😀]", "[Remember: 日本]", "[react]"], &["", "", "[react]"], ""),
-        (&["[react: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"], &["", "[react: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"], ""),
-        (&["x [", "remember:", " no close"], &["x ", "", ""], "[remember: no close"),
+        (
+            &["[REACT: 😀]", "[Remember: 日本]", "[react]"],
+            &["", "", "[react]"],
+            "",
+        ),
+        (
+            &[
+                "[react: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+            ],
+            &[
+                "",
+                "[react: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+            ],
+            "",
+        ),
+        (
+            &["x [", "remember:", " no close"],
+            &["x ", "", ""],
+            "[remember: no close",
+        ),
         (&["[r", "[react: q] done"], &["", "[r done"], ""),
         (&["[RE", "ACT", ":", "]"], &["", "", "", ""], ""),
     ];
@@ -735,7 +824,11 @@ mod tests {
     /// Text, limit, and the pieces `splitForSlack` printed, in the Node code.
     const NODE_SPLIT_FOR_SLACK: &[(&str, usize, &[&str])] = &[
         ("", 100, &[]),
-        ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 10, &["aaaaaaaaaa", "aaaaaaaaaa", "aaaaaaaaaa"]),
+        (
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            10,
+            &["aaaaaaaaaa", "aaaaaaaaaa", "aaaaaaaaaa"],
+        ),
         ("😀😀😀😀😀😀😀😀", 5, &["😀😀😀😀😀", "😀😀😀"]),
     ];
 }

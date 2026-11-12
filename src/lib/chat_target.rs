@@ -81,17 +81,30 @@ pub fn chat_target_of(channel: &str, channel_key: &str) -> Option<ChatTarget> {
     let target = match channel {
         "telegram" => ChatTarget {
             chat_id: first.to_string(),
-            thread_id: if part(2) == Some("topic") { part(3).map(str::to_string) } else { None },
+            thread_id: if part(2) == Some("topic") {
+                part(3).map(str::to_string)
+            } else {
+                None
+            },
         },
         // A Discord thread is a channel of its own: messages go to the thread's id.
         "discord" => ChatTarget {
-            chat_id: if part(2) == Some("thread") { part(3).unwrap_or(first) } else { first }.to_string(),
+            chat_id: if part(2) == Some("thread") {
+                part(3).unwrap_or(first)
+            } else {
+                first
+            }
+            .to_string(),
             thread_id: None,
         },
         // A Slack thread is not a channel of its own: messages go to the channel, in the thread named by its ts.
         "slack" => ChatTarget {
             chat_id: first.to_string(),
-            thread_id: if part(2) == Some("thread") { part(3).map(str::to_string) } else { None },
+            thread_id: if part(2) == Some("thread") {
+                part(3).map(str::to_string)
+            } else {
+                None
+            },
         },
         _ => ChatTarget {
             chat_id: parts[1..].join(":"),
@@ -111,7 +124,9 @@ fn chats_of(channel: &str, settings: &dyn Settings) -> Vec<Chat> {
     let mut out = Vec::new();
     for (key, value) in settings.get_by_prefix(&format!("channel_conv.{channel}:")) {
         // a chat whose conversation was cleared
-        let Value::String(conversation_id) = value else { continue };
+        let Value::String(conversation_id) = value else {
+            continue;
+        };
         if conversation_id.is_empty() {
             continue;
         }
@@ -201,7 +216,11 @@ pub fn resolve_chat_target(args: ResolveChatTarget<'_>) -> Option<ResolvedChatTa
     // On Slack every chat is a thread: a message from elsewhere goes to the latest one's channel, not into that thread.
     best.map(|b| ResolvedChatTarget {
         chat_id: b.target.chat_id.clone(),
-        thread_id: if args.channel == "slack" { None } else { b.target.thread_id.clone() },
+        thread_id: if args.channel == "slack" {
+            None
+        } else {
+            b.target.thread_id.clone()
+        },
         how: TargetHow::Latest,
     })
 }
@@ -246,14 +265,26 @@ mod tests {
 
     #[test]
     fn a_channel_key_names_its_chat_and_thread() {
-        assert_eq!(chat_target_of("telegram", "channel_conv.telegram:-100:topic:7"), target("-100", Some("7")));
+        assert_eq!(
+            chat_target_of("telegram", "channel_conv.telegram:-100:topic:7"),
+            target("-100", Some("7"))
+        );
         assert_eq!(chat_target_of("telegram", "telegram:-100:topic:"), target("-100", None));
-        assert_eq!(chat_target_of("telegram", "telegram:-100:thread:7"), target("-100", None));
+        assert_eq!(
+            chat_target_of("telegram", "telegram:-100:thread:7"),
+            target("-100", None)
+        );
         assert_eq!(chat_target_of("discord", "discord:1:thread:2"), target("2", None));
         assert_eq!(chat_target_of("discord", "discord:1:thread"), target("1", None));
-        assert_eq!(chat_target_of("slack", "slack:C1:thread:171.5"), target("C1", Some("171.5")));
+        assert_eq!(
+            chat_target_of("slack", "slack:C1:thread:171.5"),
+            target("C1", Some("171.5"))
+        );
         assert_eq!(chat_target_of("slack", "slack:C1"), target("C1", None));
-        assert_eq!(chat_target_of("whatsapp", "whatsapp:123@c.us:x:y"), target("123@c.us:x:y", None));
+        assert_eq!(
+            chat_target_of("whatsapp", "whatsapp:123@c.us:x:y"),
+            target("123@c.us:x:y", None)
+        );
         assert_eq!(chat_target_of("whatsapp", "whatsapp:a::"), target("a::", None));
         assert_eq!(chat_target_of("slack", "telegram:1"), None);
         assert_eq!(chat_target_of("slack", "slack:"), None);
@@ -286,10 +317,22 @@ mod tests {
             settings: Some(&s),
             db: None,
         };
-        assert_eq!(resolve_chat_target(args(" 200 ", Some("conv-b"))), resolved("200", Some("5"), TargetHow::Given));
-        assert_eq!(resolve_chat_target(args("200", Some("conv-a"))), resolved("200", None, TargetHow::Given));
-        assert_eq!(resolve_chat_target(args("777", None)), resolved("777", None, TargetHow::Given));
-        assert_eq!(resolve_chat_target(args("   ", None)), resolved("", None, TargetHow::Given));
+        assert_eq!(
+            resolve_chat_target(args(" 200 ", Some("conv-b"))),
+            resolved("200", Some("5"), TargetHow::Given)
+        );
+        assert_eq!(
+            resolve_chat_target(args("200", Some("conv-a"))),
+            resolved("200", None, TargetHow::Given)
+        );
+        assert_eq!(
+            resolve_chat_target(args("777", None)),
+            resolved("777", None, TargetHow::Given)
+        );
+        assert_eq!(
+            resolve_chat_target(args("   ", None)),
+            resolved("", None, TargetHow::Given)
+        );
         assert_eq!(
             resolve_chat_target(ResolveChatTarget {
                 channel: "telegram",
@@ -341,7 +384,10 @@ mod tests {
             resolve_chat_target(args("telegram", None, None)),
             resolved("100", None, TargetHow::Latest)
         );
-        assert_eq!(resolve_chat_target(args("discord", None, None)), resolved("10", None, TargetHow::Latest));
+        assert_eq!(
+            resolve_chat_target(args("discord", None, None)),
+            resolved("10", None, TargetHow::Latest)
+        );
         assert_eq!(resolve_chat_target(args("whatsapp", None, Some(t.db()))), None);
         assert_eq!(
             resolve_chat_target(ResolveChatTarget {
@@ -366,7 +412,10 @@ mod tests {
         assert_eq!(of("slack", "C2", Some("2.2")).as_deref(), Some("conv-s2"));
         assert_eq!(of("discord", "10", None).as_deref(), Some("conv-d"));
         assert_eq!(of("telegram", "", None), None);
-        assert_eq!(conversation_of_chat("telegram", &target("100", None).unwrap(), None), None);
+        assert_eq!(
+            conversation_of_chat("telegram", &target("100", None).unwrap(), None),
+            None
+        );
     }
 
     #[test]

@@ -57,8 +57,16 @@ impl Default for TurnErrorOptions<'_> {
 }
 
 /// An error the turn reported, as the channel says it.
-pub fn turn_error_note<R: RouteLabels + ?Sized>(route: Option<&R>, message: &str, opts: TurnErrorOptions<'_>) -> String {
-    let message = if message.is_empty() { "something went wrong" } else { message };
+pub fn turn_error_note<R: RouteLabels + ?Sized>(
+    route: Option<&R>,
+    message: &str,
+    opts: TurnErrorOptions<'_>,
+) -> String {
+    let message = if message.is_empty() {
+        "something went wrong"
+    } else {
+        message
+    };
     let said = clip(message.trim(), 600);
     format!(
         "{}{} ran into a problem: {said}\n\nTry again — if it keeps happening, {} and try fresh.",
@@ -74,7 +82,11 @@ pub fn idle_note<R: RouteLabels + ?Sized>(route: Option<&R>, idle_ms: f64, plain
     // Math.max(1, Math.round(idleMs / 60_000) || 1). `round` rounds a half away from zero where Math.round rounds it
     // up; the two differ only below zero, where the answer is 1 either way. NaN and 0 become 1.
     let rounded = (idle_ms / 60_000.0).round();
-    let minutes = if rounded.is_nan() || rounded == 0.0 { 1.0 } else { rounded.max(1.0) };
+    let minutes = if rounded.is_nan() || rounded == 0.0 {
+        1.0
+    } else {
+        rounded.max(1.0)
+    };
     format!(
         "{}{} stopped responding ({} min idle). Try again — maybe with a smaller ask.",
         if plain { "" } else { "⚠️ " },
@@ -125,7 +137,10 @@ mod tests {
     #[test]
     fn the_ai_is_named_by_its_label_then_its_providers_label_then_the_ai() {
         assert_eq!(ai_name(NONE), "The AI");
-        assert_eq!(ai_name(Some(&json!({ "label": "", "providerLabel": "Claude" }))), "Claude");
+        assert_eq!(
+            ai_name(Some(&json!({ "label": "", "providerLabel": "Claude" }))),
+            "Claude"
+        );
         assert_eq!(
             ai_name(Some(&json!({ "label": "Claude Sonnet", "providerLabel": "Claude" }))),
             "Claude Sonnet"
@@ -191,7 +206,13 @@ mod tests {
             note(Some(&json!({ "providerLabel": "Codex" })), 0.0, true),
             "Codex stopped responding (1 min idle). Try again — maybe with a smaller ask."
         );
-        for (ms, minutes) in [(90_000.0, 2), (150_000.0, 3), (29_999.0, 1), (f64::NAN, 1), (-500_000.0, 1)] {
+        for (ms, minutes) in [
+            (90_000.0, 2),
+            (150_000.0, 3),
+            (29_999.0, 1),
+            (f64::NAN, 1),
+            (-500_000.0, 1),
+        ] {
             assert_eq!(
                 note(None, ms, false),
                 format!("⚠️ The AI stopped responding ({minutes} min idle). Try again — maybe with a smaller ask."),

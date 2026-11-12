@@ -63,7 +63,12 @@ impl FakeSlack {
 
     /// The arguments of every call of `method`.
     fn of(&self, method: &str) -> Vec<Value> {
-        self.calls.lock().iter().filter(|c| c.0 == method).map(|c| c.1.clone()).collect()
+        self.calls
+            .lock()
+            .iter()
+            .filter(|c| c.0 == method)
+            .map(|c| c.1.clone())
+            .collect()
     }
 }
 
@@ -157,10 +162,16 @@ fn final_messages(client: &FakeSlack) -> Vec<String> {
     for (m, a, result) in client.calls() {
         let (ts, text) = match m.as_str() {
             "postMessage" => match result {
-                Some(r) => (r["ts"].as_str().unwrap_or("").to_string(), a["markdown_text"].as_str().unwrap_or("")),
+                Some(r) => (
+                    r["ts"].as_str().unwrap_or("").to_string(),
+                    a["markdown_text"].as_str().unwrap_or(""),
+                ),
                 None => continue,
             },
-            "update" => (a["ts"].as_str().unwrap_or("").to_string(), a["markdown_text"].as_str().unwrap_or("")),
+            "update" => (
+                a["ts"].as_str().unwrap_or("").to_string(),
+                a["markdown_text"].as_str().unwrap_or(""),
+            ),
             _ => continue,
         };
         match last.iter_mut().find(|(t, _)| *t == ts) {
@@ -215,14 +226,27 @@ async fn shows_each_tool_as_a_task_card_that_turns_complete_or_error() {
     let tasks: Vec<Value> = calls.iter().flat_map(|(_, a, _)| task_updates(a)).collect();
     let pairs: Vec<(String, String)> = tasks
         .iter()
-        .map(|t| (t["id"].as_str().unwrap().to_string(), t["status"].as_str().unwrap().to_string()))
+        .map(|t| {
+            (
+                t["id"].as_str().unwrap().to_string(),
+                t["status"].as_str().unwrap().to_string(),
+            )
+        })
         .collect();
-    let want = [("t1", "in_progress"), ("t1", "complete"), ("t2", "in_progress"), ("t2", "error")];
+    let want = [
+        ("t1", "in_progress"),
+        ("t1", "complete"),
+        ("t2", "in_progress"),
+        ("t2", "error"),
+    ];
     assert_eq!(pairs, want.map(|(a, b)| (a.to_string(), b.to_string())));
     assert_eq!(tasks[1]["title"], "Command done");
     // Text written before a tool reaches Slack before the tool's card.
     let first_task = calls.iter().position(|(_, a, _)| !task_updates(a).is_empty()).unwrap();
-    let text_before: String = calls[..=first_task].iter().map(|(_, a, _)| text_of(&a["chunks"])).collect();
+    let text_before: String = calls[..=first_task]
+        .iter()
+        .map(|(_, a, _)| text_of(&a["chunks"]))
+        .collect();
     assert_eq!(text_before, "Checking.");
 }
 
@@ -243,10 +267,16 @@ async fn rolls_over_to_a_new_message_before_slacks_markdown_cap_losing_nothing()
     assert!(client.of("startStream").len() >= 2, "more than one message");
     let stops = client.of("stopStream");
     assert!(
-        stops[..stops.len() - 1].iter().all(|a| a["session_status"] == "processing"),
+        stops[..stops.len() - 1]
+            .iter()
+            .all(|a| a["session_status"] == "processing"),
         "the turn is still going at each rollover"
     );
-    assert_eq!(stops.last().unwrap().get("session_status"), None, "the last stop ends the turn");
+    assert_eq!(
+        stops.last().unwrap().get("session_status"),
+        None,
+        "the last stop ends the turn"
+    );
     assert_eq!(streamed_text(&client), words);
     // No one stream carried more than the cap.
     let mut per_stream = 0;
@@ -288,7 +318,10 @@ async fn closes_a_code_fence_at_a_rollover_and_opens_it_again_in_the_next_messag
     for msg in &messages {
         assert_eq!(fence_lines(msg) % 2, 0, "unbalanced: {msg:?}");
     }
-    assert!(messages[1].starts_with("```js\n"), "the next message reopens the fence with its language");
+    assert!(
+        messages[1].starts_with("```js\n"),
+        "the next message reopens the fence with its language"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -345,7 +378,13 @@ async fn marks_a_tool_still_running_when_the_reply_ends_as_not_finished_instead_
     let card = task_updates(&stop).into_iter().find(|c| c["id"] == "t1");
     let card = card.expect("the stop carries the card's last state");
     assert_eq!(card["status"], "error");
-    assert!(card["details"].as_str().unwrap().to_lowercase().contains("did not finish"));
+    assert!(
+        card["details"]
+            .as_str()
+            .unwrap()
+            .to_lowercase()
+            .contains("did not finish")
+    );
 
     let edit = FakeSlack::new();
     let mut o = opts(&edit, &TestClock::new());
@@ -446,9 +485,25 @@ async fn posts_a_status_line_for_each_tool_and_edits_it_when_the_tool_finishes()
     s.text("Found it.").await;
     s.finish().await;
 
-    let posts: Vec<Value> = client.of("postMessage").iter().map(|p| p["markdown_text"].clone()).collect();
-    assert_eq!(posts, vec![json!("Let me look."), json!("⚙️ _Running command…_"), json!("Found it.")]);
-    assert!(client.of("update").iter().any(|u| u["markdown_text"] == "✓ _Command done_"));
+    let posts: Vec<Value> = client
+        .of("postMessage")
+        .iter()
+        .map(|p| p["markdown_text"].clone())
+        .collect();
+    assert_eq!(
+        posts,
+        vec![
+            json!("Let me look."),
+            json!("⚙️ _Running command…_"),
+            json!("Found it.")
+        ]
+    );
+    assert!(
+        client
+            .of("update")
+            .iter()
+            .any(|u| u["markdown_text"] == "✓ _Command done_")
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -499,7 +554,10 @@ async fn splits_a_long_code_block_across_messages_without_losing_gluing_or_unfen
     for m in &msgs {
         assert!(utf16_len(m) <= 120, "too long: {}", utf16_len(m));
         assert_eq!(fence_lines(m) % 2, 0, "unbalanced fences: {m:?}");
-        assert!(!glued.is_match(&m.replace("```js\n", "")), "a fence glued to code: {m:?}");
+        assert!(
+            !glued.is_match(&m.replace("```js\n", "")),
+            "a fence glued to code: {m:?}"
+        );
     }
     for m in &msgs[1..msgs.len() - 1] {
         assert!(m.starts_with("```js\n"), "a continuation reopens the block: {m:?}");
@@ -525,7 +583,10 @@ async fn shows_a_block_still_being_written_as_closed_so_the_rest_of_the_message_
     c.advance(2000);
     s.text("```\nDone.").await;
     s.finish().await;
-    assert_eq!(client.of("update").last().unwrap()["markdown_text"], "```py\nx = 1\n```\nDone.");
+    assert_eq!(
+        client.of("update").last().unwrap()["markdown_text"],
+        "```py\nx = 1\n```\nDone."
+    );
 }
 
 // SlackReplyStream, when things go wrong part-way
@@ -537,7 +598,14 @@ async fn falling_back_after_a_rollover_keeps_the_code_block_open_and_ends_the_ag
     let mut o = opts(&client, &c);
     o.max_stream_chars = 40;
     let s = SlackReplyStream::new(o);
-    for line in ["```js\n", "const a = 1;\n", "const b = 2;\n", "const c = 3;\n", "const d = 4;\n", "```\n"] {
+    for line in [
+        "```js\n",
+        "const a = 1;\n",
+        "const b = 2;\n",
+        "const c = 3;\n",
+        "const d = 4;\n",
+        "```\n",
+    ] {
         c.advance(1500);
         s.text(line).await;
     }
@@ -549,7 +617,10 @@ async fn falling_back_after_a_rollover_keeps_the_code_block_open_and_ends_the_ag
         .or(client.of("postMessage").last())
         .map(|a| a["markdown_text"].as_str().unwrap().to_string())
         .unwrap();
-    assert!(last.starts_with("```js\n"), "the rest of the block is still code: {last:?}");
+    assert!(
+        last.starts_with("```js\n"),
+        "the rest of the block is still code: {last:?}"
+    );
     assert_eq!(
         client.of("sessionStatus").last().map(|a| a["status"].clone()),
         Some(json!("active")),
@@ -595,10 +666,16 @@ async fn sends_held_text_on_its_own_once_the_interval_passes_without_waiting_for
 /// The Node case also passed `null`; there is no null error in Rust.
 #[test]
 fn reads_slacks_error_code_off_a_thrown_error() {
-    assert_eq!(slack_error_code(&SlackApiError::platform("ratelimited")), Some("ratelimited"));
+    assert_eq!(
+        slack_error_code(&SlackApiError::platform("ratelimited")),
+        Some("ratelimited")
+    );
     assert_eq!(slack_error_code(&std::io::Error::other("boom")), None);
     assert_eq!(slack_error_code(&SlackApiError::other("boom")), None);
-    assert_eq!(SlackApiError::platform("ratelimited").to_string(), "An API error occurred: ratelimited");
+    assert_eq!(
+        SlackApiError::platform("ratelimited").to_string(),
+        "An API error occurred: ratelimited"
+    );
     let wrapped = anyhow::Error::new(SlackApiError::platform("missing_scope"));
     assert_eq!(slack_error_code(wrapped.as_ref()), Some("missing_scope"));
 }
@@ -613,7 +690,10 @@ async fn run_node_scenario(raw: &str) {
     let rules = sc["fail"].clone();
     let client = FakeSlack::failing(move |method, _, count| match &rules[method] {
         Value::String(code) => Some(code.clone()),
-        Value::Object(by_call) => by_call.get(&count.to_string()).and_then(Value::as_str).map(str::to_string),
+        Value::Object(by_call) => by_call
+            .get(&count.to_string())
+            .and_then(Value::as_str)
+            .map(str::to_string),
         _ => None,
     });
     let c = TestClock::new();

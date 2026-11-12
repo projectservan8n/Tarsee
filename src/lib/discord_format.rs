@@ -47,20 +47,8 @@ pub mod js_text {
     pub fn is_ws(c: char) -> bool {
         matches!(
             c,
-            '\t' | '\n'
-                | '\x0B'
-                | '\x0C'
-                | '\r'
-                | ' '
-                | '\u{A0}'
-                | '\u{1680}'
-                | '\u{2000}'..='\u{200A}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202F}'
-                | '\u{205F}'
-                | '\u{3000}'
-                | '\u{FEFF}'
+            '\t' | '\n' | '\x0B' | '\x0C' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
+                ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
         )
     }
 
@@ -226,7 +214,13 @@ const WIDE_RANGES: &[(u32, u32)] = &[
 
 /// Ambiguous-width block (dingbats, misc symbols: ✅ ⚠ ☀ ✈ …). These render narrow as plain text but WIDE when
 /// followed by VS16 (U+FE0F), which is how models emit them as emoji. So width here depends on the next code point.
-const AMBIGUOUS_EMOJI: &[(u32, u32)] = &[(0x2190, 0x21ff), (0x2300, 0x23ff), (0x25a0, 0x27bf), (0x2b00, 0x2bff), (0x2934, 0x2935)];
+const AMBIGUOUS_EMOJI: &[(u32, u32)] = &[
+    (0x2190, 0x21ff),
+    (0x2300, 0x23ff),
+    (0x25a0, 0x27bf),
+    (0x2b00, 0x2bff),
+    (0x2934, 0x2935),
+];
 
 /// The subset of that block with Emoji_Presentation=Yes — always wide, VS16 or not. ✅ ❌ ⚡ ⭐ are extremely common in
 /// model status columns, so getting these wrong misaligns the most-used table shape in Tarsee.
@@ -587,7 +581,11 @@ fn normalize(headers: &[String], aligns: &[Option<Align>], rows: &[Vec<String>])
         .chain([headers.len(), aligns.len(), 1])
         .max()
         .unwrap_or(1);
-    let fit = |r: &[String]| (0..n).map(|k| r.get(k).cloned().unwrap_or_default()).collect::<Vec<_>>();
+    let fit = |r: &[String]| {
+        (0..n)
+            .map(|k| r.get(k).cloned().unwrap_or_default())
+            .collect::<Vec<_>>()
+    };
     Normalized {
         n,
         headers: fit(headers),
@@ -613,7 +611,9 @@ static MD_ESCAPE: LazyLock<Regex> = LazyLock::new(|| re(r"\\([\\`*_{}[\]()#+\-.!
 
 /// The text of whichever of the two alternatives matched.
 fn either_group(c: &Captures) -> String {
-    c.get(1).or_else(|| c.get(2)).map_or(String::new(), |g| g.as_str().to_string())
+    c.get(1)
+        .or_else(|| c.get(2))
+        .map_or(String::new(), |g| g.as_str().to_string())
 }
 
 /// The JS `.replace(/(^|[^\w\\])_([^_\n]+?)_(?!\w)/g, "$1$2")`, matched by hand (the pattern needs a lookahead).
@@ -704,8 +704,7 @@ static EMPTY_CELL: LazyLock<Regex> = LazyLock::new(|| re(r"^(|-|–|—|n\/a|N\/
 // ---------------------------------------------------------------------------
 
 /// A column of pure numbers reads far better right-aligned.
-static NUMERIC: LazyLock<Regex> =
-    LazyLock::new(|| re(r"^[-+±~<>]?\s*[$€£¥]?\d[\d,._]*\s*(%|[a-zA-Z]{1,3})?$"));
+static NUMERIC: LazyLock<Regex> = LazyLock::new(|| re(r"^[-+±~<>]?\s*[$€£¥]?\d[\d,._]*\s*(%|[a-zA-Z]{1,3})?$"));
 
 /// The grid [`to_ascii_grid`] draws: its lines (no fence) and its widest line in display columns.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -774,7 +773,13 @@ pub fn to_ascii_grid(headers: &[String], aligns: &[Option<Align>], rows: &[Vec<S
     let rule: String = keep
         .iter()
         .enumerate()
-        .map(|(k, &c)| format!("{}{}", "-".repeat(widths[c]), if k < keep.len() - 1 { COL_GAP } else { "" }))
+        .map(|(k, &c)| {
+            format!(
+                "{}{}",
+                "-".repeat(widths[c]),
+                if k < keep.len() - 1 { COL_GAP } else { "" }
+            )
+        })
         .collect();
     out.push(trim_end(&rule).to_string());
     for row in &r {
@@ -804,15 +809,19 @@ fn fence(lines: &[String]) -> String {
 /// WHY a special case at all: a before/after delta is THE most common shape in Tarsee's own reports (workload
 /// rebalances, budget diffs) and "Before 37.2h → After 6.4h" reads as a transition where "Before 37.2h · After 6.4h"
 /// reads as two unrelated facts. Narrow, header-name-driven, and easy to delete.
-static TRANSITION_FROM: LazyLock<Regex> =
-    LazyLock::new(|| re(r"^(?i-u:before|from|was|old|prev(?:ious)?|start)$"));
+static TRANSITION_FROM: LazyLock<Regex> = LazyLock::new(|| re(r"^(?i-u:before|from|was|old|prev(?:ious)?|start)$"));
 static TRANSITION_TO: LazyLock<Regex> = LazyLock::new(|| re(r"^(?i-u:after|to|now|new|current|end)$"));
 static PRE_BOLDED: LazyLock<Regex> = LazyLock::new(|| re(r"^\*\*([\s\S]*)\*\*$"));
 
 /// Render rows as readable lines. Exported for reuse by channels that draw in a proportional font with no monospace
 /// option, where padded ASCII is a REGRESSION (a grid there looks worse than raw pipes). `bullet` goes in front of
 /// every line that has more than its label ("" for none).
-pub fn to_labeled_lines(headers: &[String], aligns: &[Option<Align>], rows: &[Vec<String>], bullet: &str) -> Vec<String> {
+pub fn to_labeled_lines(
+    headers: &[String],
+    aligns: &[Option<Align>],
+    rows: &[Vec<String>],
+    bullet: &str,
+) -> Vec<String> {
     let g = normalize(headers, aligns, rows);
     // Headers are labels, not data — strip emphasis so we don't emit "**Before** **6.4h**" and end up with a wall of
     // bold.
@@ -827,7 +836,11 @@ pub fn to_labeled_lines(headers: &[String], aligns: &[Option<Align>], rows: &[Ve
             // Column 0 is the row's identity -> bold it. Strip any existing bold first so a pre-bolded cell doesn't
             // become ****x****.
             let label = PRE_BOLDED.replace(&cells[0], "${1}").into_owned();
-            let head = if label.is_empty() { String::new() } else { format!("**{label}**") };
+            let head = if label.is_empty() {
+                String::new()
+            } else {
+                format!("**{label}**")
+            };
 
             // The arrow must chain off the previously EMITTED header, not H[c-1]: if "Before" was dropped as no-data
             // there is no transition to draw, and "**Sat 1 Aug** → After 7.0h" would read as a lie.
@@ -856,13 +869,21 @@ pub fn to_labeled_lines(headers: &[String], aligns: &[Option<Align>], rows: &[Ve
 
             let mut s = head;
             for (sep, text) in &parts {
-                s = if s.is_empty() { text.clone() } else { format!("{s}{sep}{text}") };
+                s = if s.is_empty() {
+                    text.clone()
+                } else {
+                    format!("{s}{sep}{text}")
+                };
             }
             // Degenerate single-column table: emit a bullet, not a lone bold word.
             if parts.is_empty() && g.n == 1 {
                 s = format!("- {label}");
             }
-            if !bullet.is_empty() && !parts.is_empty() { format!("{bullet}{s}") } else { s }
+            if !bullet.is_empty() && !parts.is_empty() {
+                format!("{bullet}{s}")
+            } else {
+                s
+            }
         })
         .filter(|line| !line.is_empty())
         .collect()
@@ -986,7 +1007,11 @@ pub fn format_quotes_for_discord(text: &str) -> String {
             }
             continue;
         }
-        out.push(if quoted(line) { space_after_quote_mark(line) } else { line.to_string() });
+        out.push(if quoted(line) {
+            space_after_quote_mark(line)
+        } else {
+            line.to_string()
+        });
     }
     unmask_fences(&out.join("\n"), &blocks)
 }
@@ -1042,7 +1067,13 @@ pub fn split_message_fence_safe(text: &str, max_len: usize) -> Vec<String> {
     let mut open_fence: Option<OpenFence> = None;
 
     // `buf.join("\n").length`
-    let joined_len = |buf: &Vec<String>, units: i64| if buf.is_empty() { 0 } else { units + buf.len() as i64 - 1 };
+    let joined_len = |buf: &Vec<String>, units: i64| {
+        if buf.is_empty() {
+            0
+        } else {
+            units + buf.len() as i64 - 1
+        }
+    };
     let reopen_line = |f: &Option<OpenFence>| f.as_ref().map_or(String::new(), |f| format!("{}{}", f.marker, f.info));
     // Chars a chunk must keep free so its closing fence always fits.
     let reserve = |f: &Option<OpenFence>| f.as_ref().map_or(0, |f| f.marker.len() as i64 + 1);
@@ -1078,7 +1109,11 @@ pub fn split_message_fence_safe(text: &str, max_len: usize) -> Vec<String> {
         // `budget` UTF-16 units.)
         let budget = max
             - reserve(&open_fence)
-            - if open_fence.is_some() { utf16_len(&reopen_line(&open_fence)) as i64 + 1 } else { 0 };
+            - if open_fence.is_some() {
+                utf16_len(&reopen_line(&open_fence)) as i64 + 1
+            } else {
+                0
+            };
         let pieces: Vec<String> = if (utf16_len(raw_line) as i64) > budget {
             // A budget of zero or less made the Node code loop for ever; one code point at a time ends.
             let per = budget.max(1) as usize;
