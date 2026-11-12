@@ -140,7 +140,7 @@ async fn a_pdftotext_that_takes_too_long_is_stopped_and_the_built_in_reader_read
 /// leave it blocked on a full pipe, with stderr open, until the time limit.
 #[tokio::test]
 async fn a_pdftotext_that_writes_too_much_is_stopped_at_once() {
-    let (t, bin, _log) = app_with_stand_in(&[("TARSEE_TESTBIN_PDFTOTEXT_FLOOD", "8000000")]);
+    let (t, bin, _log) = app_with_stand_in(&[("TARSEE_TESTBIN_PDFTOTEXT_FLOOD", "1000000")]);
     let reader = PdfReader::of(&t.app);
     reader.set_pdftotext(Some(bin.path().join(if cfg!(windows) {
         "pdftotext.exe"

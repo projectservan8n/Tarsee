@@ -106,15 +106,17 @@ async fn json_body(req: Request) -> Result<Value, ApiError> {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
+    // The header's own white space (RFC 9110's OWS: spaces and tabs), as the `content-type` package read it.
+    let ows = |s: &str| s.trim_matches([' ', '\t']).to_string();
     let mut parts = content_type.split(';');
     let is_json = parts
         .next()
-        .is_some_and(|t| t.trim().eq_ignore_ascii_case("application/json"));
+        .is_some_and(|t| ows(t).eq_ignore_ascii_case("application/json"));
     let charset = parts.find_map(|p| {
         let (k, v) = p.split_once('=')?;
-        k.trim()
+        ows(k)
             .eq_ignore_ascii_case("charset")
-            .then(|| v.trim().trim_matches('"').to_lowercase())
+            .then(|| ows(v).trim_matches('"').to_lowercase())
     });
     if !is_json {
         // Not for express.json: the body stays unread and `req.body` is empty.
