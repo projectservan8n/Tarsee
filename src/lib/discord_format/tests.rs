@@ -354,6 +354,9 @@ fn no_lone_surrogates_on_a_hard_cut() {
     assert!(chunks.len() > 1);
     assert_eq!(chunks.concat().matches('😀').count(), 50);
     assert_eq!(chunks.concat().matches('x').count(), 1999);
+    // A hard cut takes 2000 code points, as the Node code does, so the first piece is 2001 UTF-16 units (Node
+    // printed [2001, 98]). Listed in the report as a Node bug, kept.
+    assert_eq!(chunks.iter().map(|c| utf16_len(c)).collect::<Vec<_>>(), vec![2001, 98]);
 }
 
 #[test]
