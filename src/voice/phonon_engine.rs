@@ -557,14 +557,10 @@ pub(crate) mod line_worker {
                 }
             }
             let status = if stopped {
-                let _ = child.start_kill();
-                child.wait().await
+                end(&mut child).await
             } else {
                 tokio::select! {
-                    _ = killed.cancelled() => {
-                        let _ = child.start_kill();
-                        child.wait().await
-                    }
+                    _ = killed.cancelled() => end(&mut child).await,
                     status = child.wait() => status,
                 }
             };
@@ -577,6 +573,23 @@ pub(crate) mod line_worker {
             on_exit(status.map(|s| ExitInfo::of(&s)).unwrap_or_default());
         });
         WorkerProcess { stdin, kill }
+    }
+
+    /// How long a worker asked to stop (SIGTERM) has before it is killed.
+    const STOP_GRACE: Duration = Duration::from_secs(5);
+
+    /// Ends the worker this code started and holds: `proc.kill()` (SIGTERM on Unix, as Node sent; the process ends on
+    /// Windows), then a kill if it is still there after [`STOP_GRACE`]. Only the process held is touched: its own exit
+    /// takes whatever it started, and no other process is looked up by its id.
+    async fn end(child: &mut Child) -> std::io::Result<std::process::ExitStatus> {
+        crate::voice::tts_interface::terminate(child);
+        match tokio::time::timeout(STOP_GRACE, child.wait()).await {
+            Ok(status) => status,
+            Err(_) => {
+                let _ = child.start_kill();
+                child.wait().await
+            }
+        }
     }
 
     /// Node's words for a program that could not be started: "spawn python3 ENOENT".

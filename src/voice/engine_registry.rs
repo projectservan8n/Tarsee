@@ -338,6 +338,9 @@ fn try_engine(
     .boxed()
 }
 
+/// The spare engine being built, shared by every sentence that waits for it.
+type SpareBuild = SharedTask<Option<Arc<dyn TtsEngine>>>;
+
 /// Builds the spare engine when it is first needed: `None` when it cannot start.
 pub type FallbackMaker = Arc<dyn Fn() -> BoxFuture<'static, Option<Arc<dyn TtsEngine>>> + Send + Sync>;
 
@@ -359,7 +362,7 @@ struct FallbackInner {
     primary: Arc<dyn TtsEngine>,
     make_fallback: FallbackMaker,
     fallback_name: String,
-    fallback: Mutex<Option<SharedTask<Option<Arc<dyn TtsEngine>>>>>,
+    fallback: Mutex<Option<SpareBuild>>,
     fails: Mutex<u32>,
     /// Measured on tokio's clock, so a test can let the pause pass.
     skip_until: Mutex<Option<tokio::time::Instant>>,
