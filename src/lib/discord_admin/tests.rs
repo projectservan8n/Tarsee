@@ -1923,3 +1923,30 @@ async fn a_failed_move_next_to_another_channel_still_reports_the_channel_made() 
     );
     assert!(lines.lock()[0].ends_with("channel=#late (500000000000000099) ok"));
 }
+
+#[tokio::test]
+async fn voice_channels_come_after_text_channels_whatever_their_position() {
+    let t = test_app();
+    let w = world(Opts::default());
+    for c in w.channels.lock().iter_mut() {
+        match c.id.as_str() {
+            VOICE => c.position = Some(0),
+            GEN => c.position = Some(3),
+            _ => {}
+        }
+    }
+    let ran = run(&t, &w, json!({"action": "list_channels"})).await;
+    // Node's answer for the same server.
+    assert_eq!(
+        ran.out,
+        [
+            "Server \"Acme Server\" (server id 200000000000000001): 4 channels. The bot has: Manage Channels yes, Manage Permissions (Manage Roles) yes, Manage Webhooks yes.",
+            "Not in a category:",
+            "  #general (id 500000000000000003): text, position 3, public",
+            "  Standup (id 500000000000000004): voice, position 0, public",
+            "Category Clients (id 500000000000000001): category, position 0, private",
+            "  #client-prod (id 500000000000000002): text, position 0, private",
+        ]
+        .join("\n")
+    );
+}

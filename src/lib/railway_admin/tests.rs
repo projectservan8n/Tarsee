@@ -1722,3 +1722,49 @@ async fn by_default_the_line_is_logged_and_the_apps_environment_gives_the_token(
     let out = railway_admin(&t.app, &json!("list_projects"), RailwayDeps::default()).await;
     assert!(out.starts_with("railway error: Unknown action \"\"."), "{out}");
 }
+
+#[tokio::test]
+async fn a_read_that_railway_refuses_does_not_say_nothing_was_changed() {
+    let t = test_app();
+    let ran = run_with(
+        &t,
+        json!({"action": "list_projects"}),
+        With {
+            rw: Some(failing(Fail {
+                op: "*",
+                status: Some(401),
+                errors: Some(vec!["Not Authorized".into()]),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    // Node's answer.
+    assert_eq!(
+        ran.out,
+        "railway list_projects error: Railway did not accept this with the token for the owner's Railway account (Railway said: \"Not Authorized\"). The token may have been revoked or replaced, it may be a project token (this needs an account or workspace token), or the project may be in a workspace it cannot reach. list_projects shows what it can see; if that fails too, ask the owner for a new token, saved in the vault as RAILWAY_API_TOKEN."
+    );
+}
+
+#[tokio::test]
+async fn tarsees_own_service_in_another_environment_is_not_tarsee() {
+    let t = test_app();
+    // Tarsee runs in an environment of its project that is not the one asked for.
+    let env = Env::from_pairs([
+        ("RAILWAY_PROJECT_ID", p_tarsee()),
+        ("RAILWAY_ENVIRONMENT_ID", id(99)),
+        ("RAILWAY_SERVICE_ID", s_tarsee()),
+    ]);
+    let ran = run_with(
+        &t,
+        json!({"action": "redeploy", "environment": "production", "approved_by": GO}),
+        With {
+            env: Some(env),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(ran.out.starts_with("Asked Railway to redeploy tarsee"), "{}", ran.out);
+    assert!(!ran.out.contains("restarts Tarsee"), "{}", ran.out);
+}

@@ -39,8 +39,12 @@ fn system_env() -> Vec<(String, String)> {
         .iter()
         .filter_map(|name| Some((name.to_string(), std::env::var(name).ok()?)))
         .collect();
-    if cfg!(unix) && env.is_empty() {
-        env.push(("PATH".into(), "/usr/bin:/bin".into()));
+    if cfg!(unix) {
+        if env.is_empty() {
+            env.push(("PATH".into(), "/usr/bin:/bin".into()));
+        }
+        // bash reads keystrokes outside ASCII as such only in a UTF-8 locale.
+        env.push(("LANG".into(), "C.UTF-8".into()));
     }
     env
 }
@@ -284,13 +288,14 @@ async fn a_shell_runs_commands_resizes_and_is_gone_with_what_it_started_when_the
 
     // A resize reaches the shell.
     term.send(json!({"type": "resize", "cols": 100, "rows": 40})).await;
-    let size = if cfg!(windows) {
-        "$Host.UI.RawUI.WindowSize.Width + \"x\" + $Host.UI.RawUI.WindowSize.Height"
+    // Columns by rows in PowerShell; `stty size` gives rows, then columns.
+    let (size, want) = if cfg!(windows) {
+        ("$Host.UI.RawUI.WindowSize.Width + \"x\" + $Host.UI.RawUI.WindowSize.Height", "100x40")
     } else {
-        "\"$(stty size | awk '{print $2 \"x\" $1}')\""
+        ("\"$(stty size | tr ' ' x)\"", "40x100")
     };
     term.input(&say("size", size)).await;
-    assert_eq!(term.wait_for(r"size=([0-9]+x[0-9]+)").await, "100x40");
+    assert_eq!(term.wait_for(r"size=([0-9]+x[0-9]+)").await, want);
 
     // The keepalive.
     term.send(json!({"type": "ping"})).await;
@@ -306,10 +311,25 @@ async fn a_shell_runs_commands_resizes_and_is_gone_with_what_it_started_when_the
     term.input(&child).await;
     let child_pid: u32 = term.wait_for(r"child=([0-9]+)").await.parse().unwrap();
     assert!(running(shell_pid) && running(child_pid));
+    // On Windows also one in a console of its own (a hidden window), which closing the terminal's console does not
+    // end: only ending the shell's process tree does.
+    let mut others = vec![child_pid];
+    if cfg!(windows) {
+        term.input(concat!(
+            "$q = Start-Process -PassThru -WindowStyle Hidden -FilePath ping.exe ",
+            "-ArgumentList '-n','600','127.0.0.1'; Write-Output (\"hidden=\" + $q.Id)\r"
+        ))
+        .await;
+        let hidden: u32 = term.wait_for(r"hidden=([0-9]+)").await.parse().unwrap();
+        assert!(running(hidden));
+        others.push(hidden);
+    }
 
     term.ws.close(None).await.unwrap();
     assert!(gone(shell_pid).await, "the shell is still running");
-    assert!(gone(child_pid).await, "what the shell started is still running");
+    for pid in others {
+        assert!(gone(pid).await, "what the shell started is still running ({pid})");
+    }
     until_closed_count(&server.t.app).await;
     assert_eq!(get_active_terminal_count(&server.t.app), 0);
 
@@ -344,6 +364,8 @@ async fn when_the_shell_exits_the_browser_gets_its_code_and_the_socket_closes_wi
     term.wait_for(r"ready=1").await;
     term.input("exit 3\r").await;
     let exit = term.wait_message("exit").await;
+    // The terminal is no longer counted once its shell has ended, before the socket's close is done.
+    assert_eq!(get_active_terminal_count(&server.t.app), 0);
     if cfg!(windows) {
         assert_eq!(exit, json!({"type": "exit", "exitCode": 3}));
     } else {
