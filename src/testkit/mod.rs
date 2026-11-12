@@ -10,6 +10,7 @@
 //! Stand-ins for the programs Tarsee starts (claude, codex, python, piper) are in the `tarsee-testbin` binary
 //! (`testbin/`), which integration tests (`tests/it/`) find through `support::testbin()`.
 
+pub mod captured_logs;
 pub mod fake_fetch;
 pub mod http;
 pub mod memory_settings;
@@ -20,6 +21,7 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
+pub use captured_logs::CapturedLogs;
 pub use fake_fetch::{Answer, FakeFetch, FetchCall};
 pub use memory_settings::MemorySettings;
 
