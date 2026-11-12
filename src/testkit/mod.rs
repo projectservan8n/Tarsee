@@ -12,6 +12,7 @@
 
 pub mod fake_fetch;
 pub mod http;
+pub mod make_pdf;
 pub mod memory_settings;
 
 use std::ops::Deref;
