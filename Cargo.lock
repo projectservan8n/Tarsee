@@ -3016,6 +3016,7 @@ dependencies = [
  "reqwest 0.13.5",
  "rusqlite",
  "rust-embed",
+ "rustls 0.23.46",
  "scrypt",
  "serde",
  "serde_json",
@@ -3031,6 +3032,7 @@ dependencies = [
  "tower-http 0.7.1",
  "url",
  "uuid",
+ "webpki-roots 1.0.12",
  "which",
  "windows-sys 0.61.2",
 ]
