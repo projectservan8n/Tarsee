@@ -8,6 +8,7 @@
 //! separate process, and the environment it was started with is exactly what a test wants to look at.
 
 mod echo;
+mod thread_dbs_sweep;
 
 fn main() {
     let role = std::env::var("TARSEE_TESTBIN_ROLE")
@@ -19,6 +20,7 @@ fn main() {
         });
     let code = match role.as_deref() {
         Some("echo") => echo::main(),
+        Some("thread-dbs-sweep") => thread_dbs_sweep::main(),
         other => {
             eprintln!("tarsee-testbin: no such role: {}", other.unwrap_or("(none)"));
             64

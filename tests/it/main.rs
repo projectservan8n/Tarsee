@@ -6,5 +6,6 @@
 mod support;
 
 mod codex_cli;
+mod codex_thread_dbs;
 mod foundation;
 mod run_cmd;
