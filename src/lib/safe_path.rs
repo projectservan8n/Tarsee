@@ -1453,7 +1453,20 @@ mod tests {
     fn win32_resolve_relative_and_safe_path_give_nodes_answers() {
         let cwd = cwd();
         let drive = &cwd[..2];
-        let fill = |s: &str| s.replace("<CWD>", &cwd).replace("<DRIVE>", drive);
+        // Two folders above the current one (the root, when the current folder is less than two deep): what a
+        // relative `ws` with `..\..\..` resolves to wherever the tests are run from.
+        let here = Path::new(&cwd);
+        let up2 = here
+            .parent()
+            .map(|up| up.parent().unwrap_or(up))
+            .unwrap_or(here)
+            .to_string_lossy()
+            .into_owned();
+        let fill = |s: &str| {
+            s.replace("<CWD_UP2>", &up2)
+                .replace("<CWD>", &cwd)
+                .replace("<DRIVE>", drive)
+        };
         let cases = node_cases();
         for (root, input, want) in &cases.win32_resolve {
             assert_eq!(

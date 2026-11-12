@@ -15,8 +15,9 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::*;
-use crate::ai::engine_env::{CODEX_CONFIG_ALLOWED, HomeOpts, codex_config_guard, home_for, node_join};
+use crate::ai::engine_env::{CODEX_CONFIG_ALLOWED, HomeOpts, codex_config_guard, home_for};
 use crate::ai::preamble::build_preamble;
+use crate::util::node_path::join as node_join;
 
 const NODE_CASES: &str = include_str!("node-cases.json");
 
@@ -152,9 +153,9 @@ fn openai_the_key_only_as_the_api_key_codex_api_key_in_the_child_openais_host_na
     assert_eq!(o.api_key.as_deref(), key("openai"));
     assert_eq!(
         o.env["CODEX_HOME"],
-        node_join(Path::new(STATE), &[".codex-home-keys"]).to_string_lossy()
+        node_join(Path::new(STATE), ".codex-home-keys").to_string_lossy()
     );
-    assert_eq!(o.home, node_join(Path::new(STATE), &[".codex-home-keys"]));
+    assert_eq!(o.home, node_join(Path::new(STATE), ".codex-home-keys"));
     assert_eq!(o.env["TARSEE_MCP_TOKEN"], MCP_TOKEN);
     assert_eq!(
         o.env.get("CODEX_API_KEY"),
@@ -172,7 +173,7 @@ fn openai_the_key_only_as_the_api_key_codex_api_key_in_the_child_openais_host_na
 fn chatgpt_codexs_own_sign_in_in_codex_home_no_key_at_all_chatgpt_login_only_no_host_of_tarsees() {
     let o = build_with("chatgpt", None, |c| c.account_models = Some(vec![])).unwrap();
     assert_eq!(o.api_key, None);
-    assert_eq!(o.home, node_join(Path::new(STATE), &[".codex-home"]));
+    assert_eq!(o.home, node_join(Path::new(STATE), ".codex-home"));
     assert_eq!(o.env.get("TARSEE_PROVIDER_KEY"), None);
     assert_eq!(o.config["forced_login_method"], "chatgpt");
     assert!(o.config.get("openai_base_url").is_none());
@@ -932,6 +933,7 @@ fn node_build_codex_options_for_every_provider_with_and_without_each_optional_in
             home_for(
                 id,
                 CODEX,
+                &crate::env::Env::new(),
                 &HomeOpts {
                     state_dir: ctx.state_dir.clone(),
                     home_dir: None,
