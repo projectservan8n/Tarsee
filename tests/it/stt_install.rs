@@ -191,9 +191,9 @@ async fn with_a_python_found_here_a_private_folder_for_it_the_pinned_faster_whis
             .any(|j| j.step.as_deref().unwrap_or("").contains("ctranslate2")),
         "the step names what pip is downloading"
     );
-    let pcts: Vec<i64> = seen.iter().map(|j| j.percent).collect();
+    let pcts: Vec<i64> = seen.iter().map(|j| j.percent.expect("a percent")).collect();
     assert!(pcts.windows(2).all(|p| p[1] >= p[0]), "progress only goes up: {pcts:?}");
-    assert!(seen.iter().all(|j| j.percent < 100));
+    assert!(pcts.iter().all(|p| *p < 100));
 
     let calls = w.py.calls();
     let pip = calls
@@ -339,7 +339,7 @@ async fn downloads_one_with_progress_then_deletes_it() {
     let (result, seen) = watch(&w.t, job).await;
     assert!(result.ok, "{:?}", result.error);
     assert!(
-        seen.len() > 2 && seen.iter().any(|j| j.percent > 0 && j.percent < 100),
+        seen.len() > 2 && seen.iter().any(|j| j.percent.is_some_and(|p| p > 0 && p < 100)),
         "{seen:?}"
     );
     let s = get_stt_status(&w.t, false, None).await;

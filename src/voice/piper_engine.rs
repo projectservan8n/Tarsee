@@ -20,6 +20,7 @@ use super::tts_interface::{
     os_tmpdir,
 };
 use crate::env::Env;
+use crate::util::node_path::to_namespaced;
 
 /// The folder the voice models are kept in.
 pub fn voices_dir(env: &Env) -> PathBuf {
@@ -283,8 +284,9 @@ pub fn save_piper_voice(env: &Env, onnx: &[u8], json: &[u8], name: &str) -> std:
     std::fs::create_dir_all(&dir)?;
     // Sanitize name for filesystem
     let safe = safe_name(name);
-    std::fs::write(dir.join(format!("{safe}.onnx")), onnx)?;
-    std::fs::write(dir.join(format!("{safe}.onnx.json")), json)?;
+    // The literal form of the path: on Windows a name such as `nul.onnx` must be a file, not a device.
+    std::fs::write(to_namespaced(&dir.join(format!("{safe}.onnx"))), onnx)?;
+    std::fs::write(to_namespaced(&dir.join(format!("{safe}.onnx.json"))), json)?;
     log::info!(
         "[piper] Saved voice: {safe} ({}MB)",
         (onnx.len() as f64 / 1024.0 / 1024.0 + 0.5).floor()
@@ -303,8 +305,8 @@ pub fn delete_piper_voice(env: &Env, voice_id: &str) {
         return;
     }
     let dir = voices_dir(env);
-    let _ = std::fs::remove_file(dir.join(format!("{voice_id}.onnx")));
-    let _ = std::fs::remove_file(dir.join(format!("{voice_id}.onnx.json")));
+    let _ = std::fs::remove_file(to_namespaced(&dir.join(format!("{voice_id}.onnx"))));
+    let _ = std::fs::remove_file(to_namespaced(&dir.join(format!("{voice_id}.onnx.json"))));
 }
 
 /// A voice model on disk: `{ id, sizeMB, file }`.

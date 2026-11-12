@@ -3,6 +3,7 @@
 //! temporary folder is its own.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use rand::Rng;
 use serde_json::{Value, json};
@@ -242,4 +243,76 @@ pub fn worker_starts(calls: &[Value]) -> usize {
             })
         })
         .count()
+}
+
+/// Whether a process with this id is running.
+pub fn alive(pid: u32) -> bool {
+    if cfg!(windows) {
+        let out = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
+    } else {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    }
+}
+
+pub async fn until_gone(pid: u32) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while alive(pid) {
+        assert!(Instant::now() < deadline, "the worker process {pid} is still running");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Drops a request after its first step, as a client that goes away at once does.
+pub async fn leave_after_first_step<T>(request: impl std::future::Future<Output = T>) {
+    tokio::pin!(request);
+    let _ = futures::poll!(&mut request);
+}
+
+/// Runs a request until `reached()` says it has got that far, then drops it, as a client that goes away in the middle
+/// does. The point is an event (a file on disk, a request the worker logged), never a time, so it is the same on a
+/// slow machine; a request that ends before it gets there fails the test.
+pub async fn leave_when<T>(request: impl std::future::Future<Output = T>, reached: impl Fn() -> bool) {
+    tokio::pin!(request);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        tokio::select! {
+            _ = &mut request => panic!("the request ended before it got that far"),
+            _ = tokio::time::sleep(Duration::from_millis(2)) => {}
+        }
+        if reached() {
+            return;
+        }
+        assert!(Instant::now() < deadline, "the request never got that far");
+    }
+}
+
+/// What is in a folder.
+pub fn files_in(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect()
+}
+
+/// Waits until a folder is empty (120 s at most).
+pub async fn until_empty(dir: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !files_in(dir).is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "left in {}: {:?}",
+            dir.display(),
+            files_in(dir)
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }

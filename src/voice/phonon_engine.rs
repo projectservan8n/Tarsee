@@ -24,18 +24,21 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::FutureExt;
+use futures::future::{BoxFuture, Shared};
 use parking_lot::Mutex;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 use self::line_worker::{ExitInfo, Promise, Utf8Stream, WorkerProcess};
+use super::install_common::js_number_text;
 use super::python_runtime::{PythonRef, RunOptions, python_command, run_python, venv_interpreter};
-use super::speech_text::{PesoOptions, js_trim, phonon_speech_text};
+use super::speech_text::{PesoOptions, phonon_speech_text};
 use super::tts_interface::{ClonedVoice, SynthOptions, Synthesized, TtsEngine, TtsError, VoiceInfo, os_tmpdir};
 use crate::app::{App, WeakApp};
 use crate::env::Env;
-use crate::util::js::{now_ms, number_to_string, truthy, utf16_len, utf16_truncate};
+use crate::util::js::{now_ms, number_to_string, trim, trim_start, truthy, utf16_len, utf16_truncate};
 
 /// A voice of gradium/phonon-voices: `{ id, name }`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -97,49 +100,6 @@ pub(crate) fn js_round(x: f64) -> f64 {
     (x + 0.5).floor()
 }
 
-/// `Number(text)` for a string: surrounding whitespace ignored, empty is 0, hex/octal/binary literals and
-/// "Infinity" read as JavaScript reads them, anything else that is not a decimal number is NaN.
-pub(crate) fn js_number_of_str(text: &str) -> f64 {
-    let t = js_trim(text);
-    if t.is_empty() {
-        return 0.0;
-    }
-    let radix = |prefix: &[&str], radix: u32| {
-        let lower = t.get(..2).map(str::to_ascii_lowercase)?;
-        if !prefix.contains(&lower.as_str()) {
-            return None;
-        }
-        let digits = &t[2..];
-        if digits.is_empty() {
-            return Some(f64::NAN);
-        }
-        Some(
-            u128::from_str_radix(digits, radix)
-                .map(|n| n as f64)
-                .unwrap_or(f64::NAN),
-        )
-    };
-    if let Some(n) = radix(&["0x"], 16)
-        .or_else(|| radix(&["0o"], 8))
-        .or_else(|| radix(&["0b"], 2))
-    {
-        return n;
-    }
-    match t {
-        "Infinity" | "+Infinity" => return f64::INFINITY,
-        "-Infinity" => return f64::NEG_INFINITY,
-        _ => {}
-    }
-    // Rust also reads "inf" and "nan", which JavaScript does not.
-    if !t
-        .chars()
-        .all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
-    {
-        return f64::NAN;
-    }
-    t.parse::<f64>().unwrap_or(f64::NAN)
-}
-
 /// `Number(value)` for a JSON value (a setting).
 pub(crate) fn js_number(value: Option<&Value>) -> f64 {
     match value {
@@ -147,7 +107,7 @@ pub(crate) fn js_number(value: Option<&Value>) -> f64 {
         Some(Value::Null) => 0.0,
         Some(Value::Bool(b)) => f64::from(u8::from(*b)),
         Some(Value::Number(n)) => n.as_f64().unwrap_or(f64::NAN),
-        Some(Value::String(s)) => js_number_of_str(s),
+        Some(Value::String(s)) => js_number_text(s),
         Some(Value::Array(items)) => match items.as_slice() {
             [] => 0.0,
             [one] => js_number(Some(&Value::String(js_template(Some(one))))),
@@ -214,7 +174,7 @@ pub fn speed_to_delta(speed: f64) -> f64 {
 /// A Phonon voice from an id, a bare name ("Toby") or "phonon:toby"; `None` when it is not one.
 pub fn find_voice(want: &str) -> Option<&'static PhononVoice> {
     let lowered = want.to_lowercase();
-    let w = js_trim(&lowered);
+    let w = trim(&lowered);
     let w = w.strip_prefix("phonon:").unwrap_or(w);
     if w.is_empty() {
         return None;
@@ -297,47 +257,59 @@ pub fn phonon_installed(p: &PhononPaths) -> bool {
         && p.worker.exists()
 }
 
+/// Work that runs to its end in a task of its own, whoever waits for it, and whose answer every caller shares (a
+/// JavaScript promise kept in a variable). `failed` is the answer when the task panicked or the runtime ended.
+pub(crate) type SharedTask<T> = Shared<BoxFuture<'static, T>>;
+
+pub(crate) fn spawn_shared<T: Clone + Send + Sync + 'static>(
+    work: impl std::future::Future<Output = T> + Send + 'static,
+    failed: T,
+) -> SharedTask<T> {
+    let task = tokio::spawn(work);
+    async move { task.await.unwrap_or(failed) }.boxed().shared()
+}
+
 /// `python -c "import ptts"` results, per interpreter. Only a finished install gets this far, so the cost is one short
 /// Python run per interpreter.
 #[derive(Default)]
 struct PttsChecks {
-    cells: Mutex<HashMap<String, Arc<tokio::sync::OnceCell<bool>>>>,
+    checks: Mutex<HashMap<String, SharedTask<bool>>>,
 }
 
-/// Whether `python` can import ptts. Cached per interpreter path; callers asking at the same time share one run.
+/// Whether `python` can import ptts. Cached per interpreter path; callers asking at the same time share one run, which
+/// finishes (and is remembered) even when every caller has gone.
 pub async fn can_import_ptts(app: &App, python: &str) -> bool {
-    let cell = app
-        .get_or_init(PttsChecks::default)
-        .cells
-        .lock()
-        .entry(python.to_string())
-        .or_default()
-        .clone();
-    *cell
-        .get_or_init(|| async {
-            let args = ["-I".to_string(), "-c".to_string(), "import ptts".to_string()];
-            run_python(
-                app,
-                &PythonRef::new(python),
-                &args,
-                RunOptions::default().timeout(Duration::from_secs(30)),
-            )
-            .await
-            .is_ok()
-        })
-        .await
+    let check = {
+        let checks = app.get_or_init(PttsChecks::default);
+        let mut checks = checks.checks.lock();
+        checks
+            .entry(python.to_string())
+            .or_insert_with(|| {
+                let (app, python) = (app.clone(), python.to_string());
+                spawn_shared(
+                    async move {
+                        let args = ["-I".to_string(), "-c".to_string(), "import ptts".to_string()];
+                        let opts = RunOptions::default().timeout(Duration::from_secs(30));
+                        run_python(&app, &PythonRef::new(&python), &args, opts).await.is_ok()
+                    },
+                    false,
+                )
+            })
+            .clone()
+    };
+    check.await
 }
 
 /// Forget cached availability (after an install, so the next check sees it).
 pub fn reset_phonon_availability(app: &App) {
     if let Some(checks) = app.get::<PttsChecks>() {
-        checks.cells.lock().clear();
+        checks.checks.lock().clear();
     }
 }
 
 /// `Number.parseInt(text, 10)`: leading whitespace, a sign, then digits; whatever follows them is ignored.
 pub(crate) fn parse_int(text: &str) -> Option<i64> {
-    let t = text.trim_start_matches(super::speech_text::is_js_space);
+    let t = trim_start(text);
     let (sign, rest) = match t.as_bytes().first() {
         Some(b'-') => (-1, &t[1..]),
         Some(b'+') => (1, &t[1..]),
@@ -465,21 +437,53 @@ pub(crate) mod line_worker {
     #[cfg(unix)]
     fn signal_of(status: &std::process::ExitStatus) -> Option<String> {
         use std::os::unix::process::ExitStatusExt;
-        let name = match status.signal()? {
-            1 => "SIGHUP",
-            2 => "SIGINT",
-            3 => "SIGQUIT",
-            4 => "SIGILL",
-            6 => "SIGABRT",
-            8 => "SIGFPE",
-            9 => "SIGKILL",
-            11 => "SIGSEGV",
-            13 => "SIGPIPE",
-            14 => "SIGALRM",
-            15 => "SIGTERM",
-            other => return Some(format!("signal {other}")),
-        };
-        Some(name.to_string())
+        signal_name(status.signal()?).map(str::to_string)
+    }
+
+    /// A signal's name as Node gives it in a child's `exit` event (its `signo_string`, in its order: the first name of
+    /// a number wins). A number Node has no name for gives no signal at all (`null`).
+    #[cfg(unix)]
+    pub(crate) fn signal_name(signo: i32) -> Option<&'static str> {
+        let mut names: Vec<(i32, &'static str)> = vec![
+            (libc::SIGHUP, "SIGHUP"),
+            (libc::SIGINT, "SIGINT"),
+            (libc::SIGQUIT, "SIGQUIT"),
+            (libc::SIGILL, "SIGILL"),
+            (libc::SIGTRAP, "SIGTRAP"),
+            (libc::SIGABRT, "SIGABRT"),
+            (libc::SIGBUS, "SIGBUS"),
+            (libc::SIGFPE, "SIGFPE"),
+            (libc::SIGKILL, "SIGKILL"),
+            (libc::SIGUSR1, "SIGUSR1"),
+            (libc::SIGSEGV, "SIGSEGV"),
+            (libc::SIGUSR2, "SIGUSR2"),
+            (libc::SIGPIPE, "SIGPIPE"),
+            (libc::SIGALRM, "SIGALRM"),
+            (libc::SIGTERM, "SIGTERM"),
+            (libc::SIGCHLD, "SIGCHLD"),
+        ];
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        names.push((libc::SIGSTKFLT, "SIGSTKFLT"));
+        names.extend([
+            (libc::SIGCONT, "SIGCONT"),
+            (libc::SIGSTOP, "SIGSTOP"),
+            (libc::SIGTSTP, "SIGTSTP"),
+            (libc::SIGTTIN, "SIGTTIN"),
+            (libc::SIGTTOU, "SIGTTOU"),
+            (libc::SIGURG, "SIGURG"),
+            (libc::SIGXCPU, "SIGXCPU"),
+            (libc::SIGXFSZ, "SIGXFSZ"),
+            (libc::SIGVTALRM, "SIGVTALRM"),
+            (libc::SIGPROF, "SIGPROF"),
+            (libc::SIGWINCH, "SIGWINCH"),
+            (libc::SIGIO, "SIGIO"),
+        ]);
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        names.push((libc::SIGPWR, "SIGPWR"));
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+        names.push((libc::SIGINFO, "SIGINFO"));
+        names.push((libc::SIGSYS, "SIGSYS"));
+        names.into_iter().find(|(n, _)| *n == signo).map(|(_, name)| name)
     }
 
     #[cfg(not(unix))]
@@ -553,14 +557,10 @@ pub(crate) mod line_worker {
                 }
             }
             let status = if stopped {
-                let _ = child.start_kill();
-                child.wait().await
+                end(&mut child).await
             } else {
                 tokio::select! {
-                    _ = killed.cancelled() => {
-                        let _ = child.start_kill();
-                        child.wait().await
-                    }
+                    _ = killed.cancelled() => end(&mut child).await,
                     status = child.wait() => status,
                 }
             };
@@ -575,6 +575,23 @@ pub(crate) mod line_worker {
         WorkerProcess { stdin, kill }
     }
 
+    /// How long a worker asked to stop (SIGTERM) has before it is killed.
+    const STOP_GRACE: Duration = Duration::from_secs(5);
+
+    /// Ends the worker this code started and holds: `proc.kill()` (SIGTERM on Unix, as Node sent; the process ends on
+    /// Windows), then a kill if it is still there after [`STOP_GRACE`]. Only the process held is touched: its own exit
+    /// takes whatever it started, and no other process is looked up by its id.
+    async fn end(child: &mut Child) -> std::io::Result<std::process::ExitStatus> {
+        crate::voice::tts_interface::terminate(child);
+        match tokio::time::timeout(STOP_GRACE, child.wait()).await {
+            Ok(status) => status,
+            Err(_) => {
+                let _ = child.start_kill();
+                child.wait().await
+            }
+        }
+    }
+
     /// Node's words for a program that could not be started: "spawn python3 ENOENT".
     pub(crate) fn spawn_error_text(program: &str, err: &std::io::Error) -> String {
         match err.kind() {
@@ -585,15 +602,25 @@ pub(crate) mod line_worker {
     }
 
     /// Writes one line to a worker. A write to a worker that just died fails; that is reported, and the worker's
-    /// exit is what the caller hears about.
+    /// exit is what the caller hears about. A closed pipe is said as Node said it: "write EPIPE".
     pub(crate) async fn write_line(stdin: &Stdin, line: &str) -> std::io::Result<()> {
         use tokio::io::AsyncWriteExt;
+        let epipe = || std::io::Error::new(std::io::ErrorKind::BrokenPipe, "write EPIPE");
         let mut guard = stdin.lock().await;
         let Some(pipe) = guard.as_mut() else {
-            return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "write EPIPE"));
+            return Err(epipe());
         };
-        pipe.write_all(line.as_bytes()).await?;
-        pipe.flush().await
+        let written = match pipe.write_all(line.as_bytes()).await {
+            Ok(()) => pipe.flush().await,
+            Err(err) => Err(err),
+        };
+        written.map_err(|err| {
+            if err.kind() == std::io::ErrorKind::BrokenPipe {
+                epipe()
+            } else {
+                err
+            }
+        })
     }
 }
 
@@ -695,7 +722,16 @@ impl PhononWorker {
     /// One synth request: `{ text, voice, duration_delta, out }`; the worker's answer (`{ ok: true, ms }`) or why it
     /// failed.
     pub async fn synth(&self, app: &App, req: Value) -> Result<Value, String> {
-        let inner = &self.inner;
+        // The request, its place in the queue and its answer live in a task of their own, as the JS promise ran to its
+        // end: a caller that goes away (a client that disconnects) must not leave its request pending for the next
+        // request to receive the answer to.
+        let (inner, app) = (self.inner.clone(), app.clone());
+        tokio::spawn(async move { Self::queued_synth(&inner, &app, req).await })
+            .await
+            .unwrap_or_else(|err| Err(format!("Phonon worker stopped ({err})")))
+    }
+
+    async fn queued_synth(inner: &Arc<WorkerInner>, app: &App, req: Value) -> Result<Value, String> {
         let _turn = inner.queue.lock().await;
         let promise = {
             let running = inner.state.lock().proc.is_some();
@@ -808,7 +844,7 @@ impl WorkerInner {
             },
             move |bytes| {
                 let text = errors.push(bytes);
-                let text = js_trim(&text);
+                let text = trim(&text);
                 if !text.is_empty() {
                     log::warn!("[phonon:worker stderr] {}", utf16_truncate(text, 300));
                 }
@@ -880,7 +916,7 @@ impl WorkerInner {
         }
         st.stdout_buf.push_str(chunk);
         while let Some(idx) = st.stdout_buf.find('\n') {
-            let line = js_trim(&st.stdout_buf[..idx]).to_string();
+            let line = trim(&st.stdout_buf[..idx]).to_string();
             st.stdout_buf.drain(..=idx);
             if line.is_empty() {
                 continue;
@@ -1113,31 +1149,38 @@ impl TtsEngine for PhononTtsEngine {
             "duration_delta": json_number(speed_to_delta(speed)),
             "out": tmp_out.to_string_lossy(),
         });
-        let result = async {
-            let res = worker.synth(&app, req).await.map_err(TtsError::new)?;
-            let audio = tokio::fs::read(&tmp_out)
-                .await
-                .map_err(|err| TtsError::new(read_error(&tmp_out, &err)))?;
-            if audio.len() < 100 {
-                return Err(TtsError::new("Phonon generated empty audio"));
+        // The line and the removal of its WAV run to their end in a task of their own (the JS `try/finally` did),
+        // whether or not the caller is still waiting.
+        let line = async move {
+            let result = async {
+                let res = worker.synth(&app, req).await.map_err(TtsError::new)?;
+                let audio = tokio::fs::read(&tmp_out)
+                    .await
+                    .map_err(|err| TtsError::new(read_error(&tmp_out, &err)))?;
+                if audio.len() < 100 {
+                    return Err(TtsError::new("Phonon generated empty audio"));
+                }
+                log::info!(
+                    "[phonon] {} chars, voice={voice}, {}B in {}ms (worker {}ms on {})",
+                    utf16_len(&text),
+                    audio.len(),
+                    now_ms() - t0,
+                    js_template(res.get("ms")),
+                    worker.device()
+                );
+                Ok(Synthesized {
+                    audio: Bytes::from(audio),
+                    content_type: "audio/wav".into(),
+                })
             }
-            log::info!(
-                "[phonon] {} chars, voice={voice}, {}B in {}ms (worker {}ms on {})",
-                utf16_len(&text),
-                audio.len(),
-                now_ms() - t0,
-                js_template(res.get("ms")),
-                worker.device()
-            );
-            Ok(Synthesized {
-                audio: Bytes::from(audio),
-                content_type: "audio/wav".into(),
-            })
-        }
-        .await;
-        // Not written, or already gone: either way there is nothing to remove.
-        let _ = tokio::fs::remove_file(&tmp_out).await;
-        result
+            .await;
+            // Not written, or already gone: either way there is nothing to remove.
+            let _ = tokio::fs::remove_file(&tmp_out).await;
+            result
+        };
+        tokio::spawn(line)
+            .await
+            .unwrap_or_else(|err| Err(TtsError::new(format!("Phonon worker stopped ({err})"))))
     }
 
     async fn list_voices(&self) -> Result<Vec<VoiceInfo>, TtsError> {
@@ -1416,10 +1459,10 @@ mod tests {
 
     #[test]
     fn javascript_numbers_and_templates() {
-        assert_eq!(js_number_of_str(""), 0.0);
-        assert_eq!(js_number_of_str("0b11"), 3.0);
-        assert!(js_number_of_str("1e").is_nan());
-        assert_eq!(js_number_of_str("-Infinity"), f64::NEG_INFINITY);
+        assert_eq!(js_number(Some(&json!(""))), 0.0);
+        assert_eq!(js_number(Some(&json!("0b11"))), 3.0);
+        assert!(js_number(Some(&json!("1e"))).is_nan());
+        assert_eq!(js_number(Some(&json!("-Infinity"))), f64::NEG_INFINITY);
         assert_eq!(js_number(Some(&json!([" 2 "]))), 2.0);
         assert_eq!(js_template(None), "undefined");
         assert_eq!(js_template(Some(&json!(12.0))), "12");
@@ -1428,5 +1471,50 @@ mod tests {
         assert_eq!(json_number(0.0), json!(0));
         assert_eq!(json_number(-0.15), json!(-0.15));
         assert_eq!(js_round(-2.5), -2.0);
+    }
+
+    #[tokio::test]
+    async fn a_write_to_a_worker_that_has_gone_is_said_as_node_said_it() {
+        let gone: line_worker::Stdin = Arc::new(tokio::sync::Mutex::new(None));
+        let err = line_worker::write_line(&gone, "{}\n").await.unwrap_err();
+        assert_eq!(err.to_string(), "write EPIPE");
+
+        // A real process whose input closed when it ended.
+        let (program, args): (&str, &[&str]) = if cfg!(windows) {
+            ("cmd", &["/c", "exit 0"])
+        } else {
+            ("true", &[])
+        };
+        let mut child = tokio::process::Command::new(program)
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin: line_worker::Stdin = Arc::new(tokio::sync::Mutex::new(child.stdin.take()));
+        child.wait().await.unwrap();
+        // Enough to be past any buffer the pipe has.
+        let line = format!("{}\n", "x".repeat(1 << 20));
+        let err = line_worker::write_line(&stdin, &line).await.unwrap_err();
+        assert_eq!(err.to_string(), "write EPIPE");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_signal_node_names_has_its_name() {
+        use line_worker::signal_name;
+        assert_eq!(signal_name(libc::SIGTERM), Some("SIGTERM"));
+        assert_eq!(signal_name(libc::SIGKILL), Some("SIGKILL"));
+        assert_eq!(
+            signal_name(libc::SIGBUS),
+            Some("SIGBUS"),
+            "a truncated model that is mapped"
+        );
+        assert_eq!(signal_name(libc::SIGABRT), Some("SIGABRT"));
+        assert_eq!(signal_name(libc::SIGIO), Some("SIGIO"));
+        assert_eq!(signal_name(libc::SIGSYS), Some("SIGSYS"));
+        // A number Node has no name for is no signal (null).
+        assert_eq!(signal_name(0), None);
+        assert_eq!(signal_name(200), None);
     }
 }
