@@ -797,6 +797,14 @@ fn what_someone_typed_is_matched_to_the_models_that_fit_it_best() {
     assert_eq!(matched("luna", None), (both.clone(), 70));
     assert_eq!(matched("luna", Some("openai")), one("openai:gpt-6-luna", 70));
     assert_eq!(matched("luna", Some("deepseek")), (both, 70));
+    // Two entries of the default AI for the one model are still choices to list.
+    let twice = vec![
+        json!({"provider": "chatgpt", "id": "gpt-6-luna", "name": "GPT-6 Luna"}),
+        json!({"provider": "openai", "id": "gpt-6-luna", "name": "GPT-6 Luna"}),
+        json!({"provider": "openai", "id": "GPT-6-Luna[1m]", "name": "GPT-6 Luna"}),
+    ];
+    assert_eq!(match_models(&twice, "luna", Some("openai")).matches.len(), 3);
+    assert_eq!(match_models(&twice, "luna", Some("chatgpt")).matches, [&twice[0]]);
     // Different models that fit equally stay choices to list, whatever the default AI.
     assert_eq!(matched("flash", Some("deepseek")).0.len(), 2);
 }

@@ -1069,6 +1069,87 @@ mod tests {
     }
 
     #[test]
+    fn a_broad_code_gives_way_to_the_status_and_an_expired_key_is_a_rejected_one() {
+        let kind = |provider: &str, input: EngineFailure<'_>| {
+            let e = classify_engine_error(provider, CC, input);
+            (e.kind, e.status, e.state)
+        };
+        // "authentication_failed" and "rate_limit" are what the engine says of many failures: a status says more.
+        assert_eq!(
+            kind(
+                "deepseek",
+                EngineFailure {
+                    status: Some(402),
+                    code: Some("authentication_failed"),
+                    ..EngineFailure::default()
+                }
+            ),
+            (ErrorKind::Billing, Some(402), Some("out-of-credit"))
+        );
+        assert_eq!(
+            kind(
+                "deepseek",
+                code_message("rate_limit", "API Error: 402 Insufficient Balance")
+            ),
+            (ErrorKind::Billing, Some(402), Some("out-of-credit"))
+        );
+        assert_eq!(
+            kind(
+                "openai",
+                EngineFailure {
+                    status: Some(400),
+                    code: Some("authentication_failed"),
+                    message: Some("It does not exist or you do not have access to it."),
+                    ..EngineFailure::default()
+                }
+            ),
+            (ErrorKind::Model, Some(400), None)
+        );
+        // With no status the code stands; a code that is exact already is not second-guessed by the status.
+        assert_eq!(
+            kind("deepseek", code("authentication_failed")),
+            (ErrorKind::Auth, None, Some("error"))
+        );
+        assert_eq!(
+            kind(
+                "deepseek",
+                EngineFailure {
+                    status: Some(401),
+                    code: Some("billing_error"),
+                    ..EngineFailure::default()
+                }
+            ),
+            (ErrorKind::Billing, Some(401), Some("out-of-credit"))
+        );
+        // "Expired" belongs to the plans: on a key provider it is the key that failed; an AI Tarsee doesn't know
+        // keeps the engine's word.
+        assert_eq!(
+            kind("deepseek", message("token_expired")),
+            (ErrorKind::Auth, None, Some("error"))
+        );
+        assert_eq!(
+            kind("nope", message("token_expired")),
+            (ErrorKind::Expired, None, Some("sign-in-expired"))
+        );
+        assert_eq!(
+            kind(
+                "chatgpt",
+                message("Your access token could not be refreshed because your refresh token was revoked.")
+            ),
+            (ErrorKind::Expired, None, Some("sign-in-expired"))
+        );
+        // Moderation is OpenRouter's 403 only: the same words under another status, or none, are not it.
+        assert_eq!(
+            kind("openrouter", status_message(500, "Your input was flagged")),
+            (ErrorKind::Unavailable, Some(500), None)
+        );
+        assert_eq!(
+            kind("openrouter", message("requires moderation")),
+            (ErrorKind::Unknown, None, None)
+        );
+    }
+
+    #[test]
     fn a_status_below_400_given_by_the_engine_is_read_from_the_words_instead() {
         let e = classify_engine_error("deepseek", None, status_message(200, "HTTP 503 from upstream"));
         assert_eq!((e.kind, e.status, e.engine), (ErrorKind::Unavailable, Some(503), None));

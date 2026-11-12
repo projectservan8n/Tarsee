@@ -170,6 +170,12 @@ fn drops_a_model_once_its_retirement_date_has_passed_and_says_when_one_is_retiri
     let nov_14 = Utc.with_ymd_and_hms(2026, 11, 14, 0, 0, 0).unwrap().timestamp_millis();
     let later = parse_open_router_models(&body(), nov_14).unwrap();
     assert!(by_id(&later, "liquid/lfm-2.5-2.6b:free").is_none());
+    // It is gone from the first moment of its last day (UTC), and there until then.
+    let nov_13 = Utc.with_ymd_and_hms(2026, 11, 13, 0, 0, 0).unwrap().timestamp_millis();
+    let on_the_day = parse_open_router_models(&body(), nov_13).unwrap();
+    assert!(by_id(&on_the_day, "liquid/lfm-2.5-2.6b:free").is_none());
+    let just_before = parse_open_router_models(&body(), nov_13 - 1).unwrap();
+    assert!(by_id(&just_before, "liquid/lfm-2.5-2.6b:free").is_some());
     assert!(by_id(&later, "moonshotai/kimi-k2.5").is_some());
 }
 
@@ -492,11 +498,18 @@ async fn asks_once_when_two_callers_want_the_list_at_the_same_time() {
     let (gated, _arrivals) = GatedFetch::before(&s.t);
     let store = fresh_store();
     // Both callers are waiting before the one request is let through.
-    let (a, b, ()) = tokio::join!(
-        s.catalog.refresh_open_router_catalog(store.clone(), at(now())),
-        s.catalog.refresh_open_router_catalog(store.clone(), at(now())),
-        async { gated.let_one_through() },
-    );
+    // (Only one is let through: were each caller to ask on its own, the second would wait at the gate, and the
+    // time limit here would fail the test instead of leaving it waiting.)
+    let both = async {
+        tokio::join!(
+            s.catalog.refresh_open_router_catalog(store.clone(), at(now())),
+            s.catalog.refresh_open_router_catalog(store.clone(), at(now())),
+            async { gated.let_one_through() },
+        )
+    };
+    let (a, b, ()) = tokio::time::timeout(Duration::from_secs(10), both)
+        .await
+        .expect("the two callers did not share one request");
     assert_eq!(gated.started.load(Ordering::SeqCst), 1);
     assert_eq!(s.t.fetch.calls().len(), 1);
     assert_eq!(a.models.len(), 36);
@@ -532,6 +545,37 @@ async fn keeps_the_last_list_when_openrouter_cant_be_reached_and_says_why() {
     assert_eq!(out.models.len(), 36);
     assert_eq!(out.fetched_at.as_deref(), Some("2026-11-09T12:00:00.000Z"));
     assert_eq!(s.registry.catalog_models("openrouter").len(), 36);
+}
+
+#[tokio::test]
+async fn the_last_list_is_the_stores_cached_one_or_failing_that_the_one_in_hand() {
+    let s = setup();
+    let rows = rows();
+    s.t.fetch.respond(URL, Answer::text(502, "bad gateway"));
+    // A cached list in the store and nothing in hand (a fresh boot whose first request fails).
+    let cached: Arc<dyn Settings> = Arc::new(MemorySettings::from_pairs([(
+        CATALOG_CACHE_KEY,
+        json!({"fetchedAt": js::iso_from_ms(now() - 7 * HOUR), "models": &rows[..4]}),
+    )]));
+    let out = s.catalog.refresh_open_router_catalog(cached.clone(), at(now())).await;
+    assert_eq!((out.source, out.models.len()), (CatalogSource::Stale, 4));
+    assert_eq!(out.fetched_at, Some(js::iso_from_ms(now() - 7 * HOUR)));
+    assert_eq!(s.catalog.open_router_models().len(), 4);
+    // Both: the store's cached list is the one kept, not the one in hand.
+    s.catalog.set_models_for_tests(rows[..9].to_vec());
+    let out = s.catalog.refresh_open_router_catalog(cached, at(now())).await;
+    assert_eq!((out.source, out.models.len()), (CatalogSource::Stale, 4));
+    // A list in hand and nothing cached (a store that could not save it).
+    s.catalog.set_models_for_tests(rows[..9].to_vec());
+    let out = s.catalog.refresh_open_router_catalog(fresh_store(), at(now())).await;
+    assert_eq!(
+        (out.source, out.models.len(), out.fetched_at),
+        (CatalogSource::Stale, 9, None)
+    );
+    assert_eq!(
+        out.error.as_deref(),
+        Some("OpenRouter answered 502 when asked for its model list.")
+    );
 }
 
 #[tokio::test]
@@ -864,14 +908,14 @@ fn with_no_list_loaded_the_sections_are_drawn_from_the_cached_one() {
     assert_eq!(rec.len(), 3);
     assert!(rec.iter().all(|m| !m.listed && m.selectable && m.label == m.id));
     // A list given by the caller stands in for the current one; of two rows with one id the later is the one shown.
-    let second = CatalogModel {
-        label: "Second Copy".to_string(),
+    let copy = |label: &str| CatalogModel {
+        label: label.to_string(),
         id: "~anthropic/claude-sonnet-latest".to_string(),
         ..rows[0].clone()
     };
-    let given = [rows[1].clone(), second];
+    let given = [copy("First Copy"), rows[1].clone(), copy("Second Copy")];
     let sections = s.catalog.open_router_sections(None, "", Some(&given));
-    assert_eq!(section(&sections, "all").models.len(), 2);
+    assert_eq!(section(&sections, "all").models.len(), 3);
     assert_eq!(section(&sections, "recommended").models[0].label, "Second Copy");
 }
 
