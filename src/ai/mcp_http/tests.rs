@@ -187,7 +187,14 @@ impl Conn {
         Conn { stream, port }
     }
 
+    /// Sends one request and reads its answer. An endpoint that never answers fails the test: it does not hang it.
     async fn send(&mut self, raw: &Raw, close: bool) -> Reply {
+        tokio::time::timeout(Duration::from_secs(60), self.exchange(raw, close))
+            .await
+            .unwrap_or_else(|_| panic!("no answer to {} {} within a minute", raw.method, raw.path))
+    }
+
+    async fn exchange(&mut self, raw: &Raw, close: bool) -> Reply {
         // The server may answer a refused upload before it has all of it; that answer is what the test wants.
         let _ = self.stream.write_all(&raw.bytes(self.port, close)).await;
         let mut seen: Vec<u8> = Vec::new();
@@ -1635,7 +1642,9 @@ async fn a_call_runs_to_its_end_when_the_caller_hangs_up_or_the_grant_ends_meanw
         .write_all(&post(&call).token(&grant.token).bytes(endpoint.port, false))
         .await
         .unwrap();
-    gated.started.notified().await;
+    tokio::time::timeout(Duration::from_secs(20), gated.started.notified())
+        .await
+        .expect("the call never reached the tool");
     drop(caller);
     // The turn ends too. (And another request goes all the way round, so the server has seen the caller leave.)
     let token = grant.token.clone();
