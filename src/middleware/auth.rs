@@ -354,12 +354,6 @@ fn session_key(session_id: &str) -> String {
     format!("{HASHED}{}", hex::encode(Sha256::digest(session_id.as_bytes())))
 }
 
-struct Session {
-    created_at: i64,
-    #[allow(dead_code)] // kept with the sign-in as the JS kept it; nothing reads it back yet
-    ip: Option<String>,
-}
-
 /// Runs `sweep` on the service every `period`, first after one `period`, for as long as the service lives
 /// (the JS `setInterval(...).unref()`). Housekeeping timers run outside any request.
 fn spawn_sweeper<T: Send + Sync + 'static>(
@@ -405,8 +399,9 @@ fn ensure_sweeper<T: Send + Sync + 'static>(
 /// or a Railway deploy no longer logs the whole team out. Railway REPLACES the container on every deploy, so
 /// without this every deploy signed everyone out.
 pub struct SessionStore {
-    /// `session_key(id)` to the sign-in.
-    sessions: Mutex<HashMap<String, Session>>,
+    /// `session_key(id)` to when the sign-in was made, in ms. (The JS kept the address beside it and never read it
+    /// back; it is in the table.)
+    sessions: Mutex<HashMap<String, i64>>,
     /// `None` until [`SessionStore::init`]: sign-ins are then kept in memory only.
     db: RwLock<Option<Db>>,
     /// Session lifetime in ms. Override with TARSEE_SESSION_MAX_AGE_DAYS.
@@ -454,9 +449,9 @@ impl SessionStore {
         }
 
         let rows = db
-            .with(|conn| -> rusqlite::Result<Vec<(String, Session)>> {
+            .with(|conn| -> rusqlite::Result<Vec<(String, i64)>> {
                 let mut stmt = conn.prepare(&format!(
-                    "SELECT id, created_at, ip FROM sessions WHERE id LIKE '{HASHED}%'"
+                    "SELECT id, created_at FROM sessions WHERE id LIKE '{HASHED}%'"
                 ))?;
                 let mut rows = stmt.query([])?;
                 let mut found = Vec::new();
@@ -466,8 +461,7 @@ impl SessionStore {
                         ValueRef::Real(ms) => ms as i64,
                         _ => continue,
                     };
-                    let ip = row.get::<_, Option<String>>(2).unwrap_or(None);
-                    found.push((row.get(0)?, Session { created_at, ip }));
+                    found.push((row.get(0)?, created_at));
                 }
                 Ok(found)
             })
@@ -499,13 +493,7 @@ impl SessionStore {
         let session_id = hex::encode(bytes);
         let key = session_key(&session_id);
         let created_at = self.clock.now_ms();
-        self.sessions.lock().insert(
-            key.clone(),
-            Session {
-                created_at,
-                ip: ip.map(String::from),
-            },
-        );
+        self.sessions.lock().insert(key.clone(), created_at);
         if let Some(db) = self.db() {
             let _ = db.with(|conn| {
                 conn.execute(
@@ -536,10 +524,10 @@ impl SessionStore {
         }
         let key = session_key(session_id);
         let mut sessions = self.sessions.lock();
-        let Some(session) = sessions.get(&key) else {
+        let Some(&created_at) = sessions.get(&key) else {
             return false;
         };
-        if (self.clock.now_ms() - session.created_at) as f64 >= self.max_age_ms {
+        if (self.clock.now_ms() - created_at) as f64 >= self.max_age_ms {
             sessions.remove(&key);
             return false;
         }
@@ -551,7 +539,7 @@ impl SessionStore {
         let cutoff = self.clock.now_ms() as f64 - self.max_age_ms;
         self.sessions
             .lock()
-            .retain(|_, session| session.created_at as f64 >= cutoff);
+            .retain(|_, created_at| *created_at as f64 >= cutoff);
         if let Some(db) = self.db() {
             let _ = db.with(|conn| conn.execute("DELETE FROM sessions WHERE created_at < ?", [cutoff]));
         }
