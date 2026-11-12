@@ -37,10 +37,11 @@ pub fn is_running(pid: Option<i64>) -> bool {
     process_exists(pid)
 }
 
+/// `kill -0`, through the shell's own `kill` (a slim container may have no `kill` program).
 #[cfg(unix)]
 fn process_exists(pid: i64) -> bool {
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
+    std::process::Command::new("/bin/sh")
+        .args(["-c", &format!("kill -0 {pid}")])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

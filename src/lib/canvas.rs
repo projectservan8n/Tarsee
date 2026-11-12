@@ -668,13 +668,13 @@ mod tests {
             .write(true)
             .open(canvas_dir(t.config()).join("older").join("index.html"))
             .unwrap();
-        let day = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_794_441_600);
+        let day = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_605_139_200);
         older.set_modified(day).unwrap();
         fs::create_dir_all(canvas_dir(t.config()).join("no-index")).unwrap();
         let res = call(&t, true, get("/canvas//")).await.unwrap();
         assert_eq!(res.status, 200);
         let page = res.text();
-        assert!(page.contains("<a href=\"/canvas/older/\" style=\"display:block;background:#2b2a27;border-radius:8px;padding:16px;margin:8px 0;text-decoration:none;color:#ececec;border:1px solid #3a3935\"><strong>older</strong><br><span style=\"color:#a8a8a0;font-size:12px\">2KB &middot; 11/12/2026</span></a>"));
+        assert!(page.contains("<a href=\"/canvas/older/\" style=\"display:block;background:#2b2a27;border-radius:8px;padding:16px;margin:8px 0;text-decoration:none;color:#ececec;border:1px solid #3a3935\"><strong>older</strong><br><span style=\"color:#a8a8a0;font-size:12px\">2KB &middot; 11/12/2020</span></a>"));
         assert!(!page.contains("no-index"));
         if cfg!(unix) {
             assert!(page.contains("href=\"/canvas/%3Cimg%20src%3Dx%3E/\""));
