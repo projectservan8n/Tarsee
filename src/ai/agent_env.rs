@@ -88,6 +88,12 @@ fn cache_of(app: &App) -> Arc<SharedCache> {
     })
 }
 
+/// Reads one key's value by name: `Ok(None)` when there is no such key, `Err` when the vault cannot be read.
+pub type GetKey<'a> = &'a dyn Fn(&str) -> anyhow::Result<Option<String>>;
+
+/// Lists the names of the keys; `Err` when the vault cannot be read.
+pub type ListKeys<'a> = &'a dyn Fn() -> anyhow::Result<Vec<String>>;
+
 /// What a call may replace (the JS `{ names, get, list, env, now, denied }`). Everything left out is the live
 /// thing: the vault, the app's environment, the time now, and get_key not denied.
 #[derive(Default)]
@@ -95,9 +101,9 @@ pub struct AgentVaultEnvOptions<'a> {
     /// The key names to consider, instead of TARSEE_AGENT_ENV_KEYS or every key of the vault. For tests.
     pub names: Option<Vec<String>>,
     /// Reads a key's value, instead of the vault. For tests.
-    pub get: Option<&'a dyn Fn(&str) -> anyhow::Result<Option<String>>>,
+    pub get: Option<GetKey<'a>>,
     /// Lists the key names, instead of the vault. For tests.
-    pub list: Option<&'a dyn Fn() -> anyhow::Result<Vec<String>>>,
+    pub list: Option<ListKeys<'a>>,
     /// The environment the vault's names are compared against (default: the app's, the only one cached).
     pub env: Option<&'a BTreeMap<String, String>>,
     /// The time, in ms. For tests.
