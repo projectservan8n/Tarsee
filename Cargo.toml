@@ -78,6 +78,11 @@ url = "2.5.8"
 uuid = { version = "1.29.2", features = ["v4"] }
 which = "8.0.6"
 
+# Tests pause and advance tokio's clock (#[tokio::test(start_paused = true)]), which needs this feature. Kept out
+# of the program itself: a dev-dependency's features are not part of a normal build.
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["test-util"] }
+
 [profile.dev]
 debug = "line-tables-only"
 
