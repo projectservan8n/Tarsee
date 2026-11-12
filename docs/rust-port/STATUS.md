@@ -10,7 +10,16 @@ agent checked it against the Node code and its findings are fixed or parked belo
 
 | Package | State | Slot | Commits | Tests after merge | Notes |
 |---|---|---|---|---|---|
-| F0 | merged | - | 9956468 | 96 | Foundation, by the lead |
+| F0 | merged | - | 9956468..fe6015b | 96 | Foundation, by the lead |
+| I0 | running | s1 | | | |
+| A1 | running | s2 | | | |
+| A2 | running | s3 | | | |
+| B1 | running | s4 | | | |
+| B2 | running | s5 | | | |
+| C1 | running | s6 | | | |
+| D1 | running | s7 | | | |
+| E1 | running | s8 | | | |
+| V1 | running | s9 | | | |
 
 ## Rulings
 
