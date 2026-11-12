@@ -1,5 +1,13 @@
-//! A browser tab for one test, in a browser context of its own (its own cookies, storage, cache and permissions),
-//! so tests run in parallel without seeing each other. Closed when dropped.
+//! A browser tab for one test.
+//!
+//! - [`Page::open`] and [`Page::blank`] give a tab in a browser context of its own (its own cookies, storage, cache and
+//!   permissions), closed when the page is dropped: what an end-to-end test wants.
+//! - [`Page::with_scripts`] gives a tab kept from an earlier test, on a blank page of the shared site that loads the
+//!   scripts asked for. A new context costs the browser a new process (about a tenth of a second, and the browser
+//!   makes them one at a time), so the tests of the browser files, which only need a fresh page, share a pool of tabs
+//!   in one context. Between tests a tab leaves its page (so its scripts, timers and workers are gone), has its site's
+//!   localStorage and sessionStorage cleared and its clock set back to UTC. Pooled pages share that context's cookies
+//!   and permissions: a test that sets either uses its own context.
 //!
 //! Every page watches for errors: `console.error` (and failed `console.assert`), uncaught exceptions and unhandled
 //! promise rejections, and the browser's own error lines (a script or picture that failed to load). Each step a test
@@ -7,7 +15,7 @@
 //! them with [`Page::take_errors`] (and can then assert on them).
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use chromiumoxide::cdp::browser_protocol::browser::{
@@ -25,6 +33,7 @@ use chromiumoxide::cdp::js_protocol::runtime::{
 use chromiumoxide::listeners::EventStream;
 use futures::{FutureExt, StreamExt};
 use serde_json::Value;
+use tokio::sync::OnceCell;
 
 use super::browser::{self, Shared, runtime};
 use super::site::Site;
@@ -38,9 +47,30 @@ const POLL_EVERY: Duration = Duration::from_millis(20);
 /// One test's tab.
 pub struct Page {
     cdp: chromiumoxide::Page,
-    context: Option<BrowserContextId>,
+    home: Option<Home>,
     shared: &'static Shared,
-    events: Mutex<Events>,
+    /// (Taken when the page is dropped, to go back to the pool with its tab.)
+    events: Mutex<Option<Events>>,
+}
+
+/// Where a page's tab lives.
+enum Home {
+    /// A browser context of the page's own, closed with it.
+    Own(BrowserContextId),
+    /// The pool's context: the tab goes back to the pool once the test is done with it.
+    Pool(&'static Pool),
+}
+
+/// Tabs kept between tests for [`Page::with_scripts`], in a browser context of their own.
+struct Pool {
+    context: BrowserContextId,
+    idle: Mutex<Vec<Tab>>,
+}
+
+/// A tab, and what it reports.
+struct Tab {
+    cdp: chromiumoxide::Page,
+    events: Events,
 }
 
 struct Events {
@@ -52,13 +82,28 @@ struct Events {
 
 impl Page {
     /// A blank page on the shared site that loads `scripts` in order (file names in `src/public/js/`, or paths from
-    /// the site's root), the way `index.html` loads them.
+    /// the site's root), the way `index.html` loads them, in a tab of the pool (see the module's notes). Returns once
+    /// the page has loaded (its scripts have run).
     pub async fn with_scripts(scripts: &[&str]) -> Page {
-        Page::open(&Site::shared().scripts_page(scripts, "")).await
+        let shared = browser::shared().await;
+        let pool = pool(shared).await;
+        let idle = pool.idle.lock().unwrap_or_else(|e| e.into_inner()).pop();
+        let tab = match idle {
+            Some(tab) => tab,
+            None => new_tab(shared, &pool.context).await.unwrap_or_else(|e| panic!("{e}")),
+        };
+        let page = Page {
+            cdp: tab.cdp,
+            home: Some(Home::Pool(pool)),
+            shared,
+            events: Mutex::new(Some(tab.events)),
+        };
+        page.goto(&Site::shared().scripts_page(scripts, "")).await;
+        page
     }
 
-    /// A new tab at `url`: a page of the shared site, of a test's own [`Site`], or of a running server. Returns once
-    /// the page has loaded (its scripts have run).
+    /// A new tab at `url`, in a browser context of its own: a page of the shared site, of a test's own [`Site`], or of
+    /// a running server. Returns once the page has loaded (its scripts have run).
     pub async fn open(url: &str) -> Page {
         let page = Page::blank().await;
         page.goto(url).await;
@@ -75,40 +120,19 @@ impl Page {
             .create_browser_context(CreateBrowserContextParams::default())
             .await
             .unwrap_or_else(|e| panic!("the browser could not make a context for the test: {e}"));
-        let mut target = CreateTargetParams::new("about:blank");
-        target.browser_context_id = Some(context.clone());
-        let cdp = match shared.browser.new_page(target).await {
-            Ok(cdp) => cdp,
+        let tab = match new_tab(shared, &context).await {
+            Ok(tab) => tab,
             Err(e) => {
                 dispose(shared, context);
-                panic!("the browser could not open a tab for the test: {e}");
+                panic!("{e}");
             }
         };
-        let console = cdp.event_listener::<EventConsoleApiCalled>().await;
-        let exceptions = cdp.event_listener::<EventExceptionThrown>().await;
-        let log = cdp.event_listener::<EventEntryAdded>().await;
-        let (Ok(console), Ok(exceptions), Ok(log)) = (console, exceptions, log) else {
-            dispose(shared, context);
-            panic!("the browser could not report the tab's errors");
-        };
-        let page = Page {
-            cdp,
-            context: Some(context),
+        Page {
+            cdp: tab.cdp,
+            home: Some(Home::Own(context)),
             shared,
-            events: Mutex::new(Events {
-                console,
-                exceptions,
-                log,
-                errors: Vec::new(),
-            }),
-        };
-        page.set_timezone("UTC").await;
-        page.command(
-            SetLocaleOverrideParams::builder().locale("en-US").build(),
-            "set the language",
-        )
-        .await;
-        page
+            events: Mutex::new(Some(tab.events)),
+        }
     }
 
     /// The chromiumoxide page under this one, for whatever this API does not cover (any DevTools Protocol command:
@@ -138,8 +162,9 @@ impl Page {
 
     /// The page's clock reads in `zone` (an IANA name such as `Asia/Manila`).
     pub async fn set_timezone(&self, zone: &str) {
-        self.command(SetTimezoneOverrideParams::new(zone), "set the timezone")
-            .await;
+        set_timezone(&self.cdp, zone)
+            .await
+            .unwrap_or_else(|e| panic!("could not set the timezone to {zone}: {e}"));
     }
 
     // ---------------------------------------------------------------- running JavaScript
@@ -370,7 +395,11 @@ impl Page {
         for name in permissions {
             let mut params = SetPermissionParams::new(PermissionDescriptor::new(*name), PermissionSetting::Granted);
             params.origin = Some(origin.clone());
-            params.browser_context_id = self.context.clone();
+            params.browser_context_id = match &self.home {
+                Some(Home::Own(context)) => Some(context.clone()),
+                Some(Home::Pool(pool)) => Some(pool.context.clone()),
+                None => None,
+            };
             if let Err(e) = self.shared.browser.execute(params).await {
                 panic!("could not allow {name} for {origin}: {e}");
             }
@@ -383,8 +412,13 @@ impl Page {
     /// expects an error calls (then asserts on what it got).
     pub fn take_errors(&self) -> Vec<String> {
         let mut events = self.events.lock().unwrap_or_else(|e| e.into_inner());
-        events.drain();
-        std::mem::take(&mut events.errors)
+        match events.as_mut() {
+            Some(events) => {
+                events.drain();
+                std::mem::take(&mut events.errors)
+            }
+            None => Vec::new(),
+        }
     }
 
     /// Fails the test if the page reported an error the test did not take.
@@ -437,13 +471,124 @@ impl Page {
 
 impl Drop for Page {
     fn drop(&mut self) {
-        if let Some(context) = self.context.take() {
-            dispose(self.shared, context);
+        let failing = std::thread::panicking();
+        let errors = if failing { Vec::new() } else { self.take_errors() };
+        let events = self.events.get_mut().unwrap_or_else(|e| e.into_inner()).take();
+        match (self.home.take(), events) {
+            (Some(Home::Own(context)), _) => dispose(self.shared, context),
+            // (A test that failed may have left its page in any state: its tab is closed, not kept.)
+            (Some(Home::Pool(pool)), Some(events)) if !failing => {
+                let tab = Tab {
+                    cdp: self.cdp.clone(),
+                    events,
+                };
+                runtime().spawn(recycle(pool, tab));
+            }
+            (Some(Home::Pool(_)), _) => {
+                let cdp = self.cdp.clone();
+                runtime().spawn(async move {
+                    let _ = cdp.close().await;
+                });
+            }
+            (None, _) => {}
         }
-        if !std::thread::panicking() {
-            self.check_errors();
+        if !errors.is_empty() {
+            panic!(
+                "the page reported {} error(s) (a test that expects them takes them with take_errors()):\n  - {}",
+                errors.len(),
+                errors.join("\n  - ")
+            );
         }
     }
+}
+
+/// The pool of tabs for [`Page::with_scripts`], made on first use.
+async fn pool(shared: &'static Shared) -> &'static Pool {
+    static POOL: LazyLock<OnceCell<Result<Pool, String>>> = LazyLock::new(OnceCell::new);
+    let made = POOL
+        .get_or_init(|| async {
+            let context = shared
+                .browser
+                .create_browser_context(CreateBrowserContextParams::default())
+                .await
+                .map_err(|e| format!("the browser could not make a context for the tests' tabs: {e}"))?;
+            Ok(Pool {
+                context,
+                idle: Mutex::new(Vec::new()),
+            })
+        })
+        .await;
+    match made {
+        Ok(pool) => pool,
+        Err(message) => panic!("{message}"),
+    }
+}
+
+/// A new tab in `context`, showing `about:blank`, reporting what it logs and throws, its clock in UTC and its language
+/// American English.
+async fn new_tab(shared: &'static Shared, context: &BrowserContextId) -> Result<Tab, String> {
+    let mut target = CreateTargetParams::new("about:blank");
+    target.browser_context_id = Some(context.clone());
+    let cdp = shared
+        .browser
+        .new_page(target)
+        .await
+        .map_err(|e| format!("the browser could not open a tab for the test: {e}"))?;
+    let listened = (
+        cdp.event_listener::<EventConsoleApiCalled>().await,
+        cdp.event_listener::<EventExceptionThrown>().await,
+        cdp.event_listener::<EventEntryAdded>().await,
+    );
+    let (Ok(console), Ok(exceptions), Ok(log)) = listened else {
+        return Err("the browser could not report the tab's errors".to_string());
+    };
+    set_timezone(&cdp, "UTC")
+        .await
+        .map_err(|e| format!("could not set the tab's timezone: {e}"))?;
+    cdp.execute(SetLocaleOverrideParams::builder().locale("en-US").build())
+        .await
+        .map_err(|e| format!("could not set the tab's language: {e}"))?;
+    Ok(Tab {
+        cdp,
+        events: Events {
+            console,
+            exceptions,
+            log,
+            errors: Vec::new(),
+        },
+    })
+}
+
+/// Makes a pool tab ready for the next test and puts it back; one that does not get ready in time is closed.
+async fn recycle(pool: &'static Pool, mut tab: Tab) {
+    let ready = tokio::time::timeout(Duration::from_secs(5), async {
+        // What the page kept for its site, so the next test there starts with none of it.
+        let clear = EvaluateParams::builder()
+            .expression("try { localStorage.clear(); sessionStorage.clear(); } catch {}")
+            .build()
+            .map_err(chromiumoxide::error::CdpError::msg)?;
+        tab.cdp.execute(clear).await?;
+        // Leaving the page ends its scripts, timers and workers.
+        tab.cdp.goto("about:blank").await?;
+        set_timezone(&tab.cdp, "UTC").await
+    })
+    .await;
+    if matches!(ready, Ok(Ok(()))) {
+        // What the page reported on its way out is no business of the next test.
+        tab.events.drain();
+        tab.events.errors.clear();
+        pool.idle.lock().unwrap_or_else(|e| e.into_inner()).push(tab);
+    } else {
+        let _ = tab.cdp.close().await;
+    }
+}
+
+/// Sets a tab's clock to `zone`. (The browser refuses a second override while one is on, so the last is lifted
+/// first.)
+async fn set_timezone(cdp: &chromiumoxide::Page, zone: &str) -> Result<(), chromiumoxide::error::CdpError> {
+    cdp.execute(SetTimezoneOverrideParams::new("")).await?;
+    cdp.execute(SetTimezoneOverrideParams::new(zone)).await?;
+    Ok(())
 }
 
 impl Events {
