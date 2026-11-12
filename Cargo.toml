@@ -78,6 +78,10 @@ url = "2.5.8"
 uuid = { version = "1.29.2", features = ["v4"] }
 which = "8.0.6"
 
+[dev-dependencies]
+# `test-util` lets a test pause and advance the clock (`#[tokio::test(start_paused = true)]`).
+tokio = { version = "1.54.1", features = ["full", "test-util"] }
+
 [profile.dev]
 debug = "line-tables-only"
 
