@@ -223,7 +223,7 @@ fn resolve_api_token(env: &Env, state_dir: &Path) -> String {
     }
     let token_path = state_dir.join("api.token");
     if let Ok(existing) = fs::read_to_string(&token_path) {
-        let existing = existing.trim();
+        let existing = crate::util::js::trim(&existing);
         if !existing.is_empty() {
             return existing.to_string();
         }
