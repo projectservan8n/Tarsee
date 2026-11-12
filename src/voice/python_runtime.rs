@@ -940,6 +940,12 @@ pub struct PythonProgress {
     pub bytes_total: u64,
 }
 
+/// Gets the download's progress.
+pub type ProgressListener = Arc<dyn Fn(PythonProgress) + Send + Sync>;
+
+/// Gets each line an install has to say.
+pub type LogListener = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// The options of [`ensure_base_python`] and [`download_standalone_python`]: `{ allowDownload, fetch, pin,
 /// onProgress, log, retryDelayMs }`.
 #[derive(Clone)]
@@ -949,8 +955,8 @@ pub struct EnsureOptions {
     pub fetch: Option<Arc<dyn Fetch>>,
     /// Replaces [`STANDALONE_PYTHON`] (tests).
     pub pin: Option<StandalonePython>,
-    pub on_progress: Option<Arc<dyn Fn(PythonProgress) + Send + Sync>>,
-    pub log: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    pub on_progress: Option<ProgressListener>,
+    pub log: Option<LogListener>,
     pub retry_delay_ms: u64,
 }
 

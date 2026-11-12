@@ -110,7 +110,7 @@ fn parse_pax(buf: &[u8]) -> HashMap<String, String> {
             break;
         };
         let len = parse_int(&String::from_utf8_lossy(&buf[i..sp]), 10);
-        if !(len > 0.0) {
+        if len.is_nan() || len <= 0.0 {
             break;
         }
         let len = len as usize;
@@ -234,6 +234,9 @@ struct Entry {
     linkname: String,
 }
 
+/// Where an entry's data goes.
+type Sink<'a> = &'a mut dyn FnMut(&[u8]) -> std::io::Result<()>;
+
 /// The decompressed archive, read as it is needed.
 struct Stream<R: Read> {
     src: R,
@@ -281,12 +284,7 @@ impl<R: Read> Stream<R> {
     }
 
     /// The entry's data, to `sink` (None skips it), then its padding.
-    fn read_body(
-        &mut self,
-        size: f64,
-        padded: f64,
-        mut sink: Option<&mut dyn FnMut(&[u8]) -> std::io::Result<()>>,
-    ) -> Result<(), Fail> {
+    fn read_body(&mut self, size: f64, padded: f64, mut sink: Option<Sink<'_>>) -> Result<(), Fail> {
         let mut left = size;
         while left > 0.0 {
             if !self.fill(1.0)? {

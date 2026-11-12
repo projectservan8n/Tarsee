@@ -468,6 +468,7 @@ mod tests {
     }
 
     /// Edge's side: each connection (numbered from 1) follows `plan(n)`.
+    #[allow(clippy::result_large_err)] // the handshake callback's error type is tungstenite's own
     async fn fake_edge(plan: impl Fn(usize) -> Plan + Send + Sync + 'static) -> FakeEdge {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!(
