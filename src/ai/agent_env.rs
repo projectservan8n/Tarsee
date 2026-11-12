@@ -34,8 +34,8 @@ use regex::Regex;
 
 use crate::app::App;
 use crate::lib::key_vault::{get_key, list_keys};
-use crate::middleware::auth::{Clock, js_trim};
-use crate::util::js::utf16_len;
+use crate::middleware::auth::Clock;
+use crate::util::js::{trim, utf16_len};
 
 /// Names that never go into the agent's environment, by how they start.
 pub static AGENT_ENV_KEEP_OUT: LazyLock<Regex> = LazyLock::new(|| {
@@ -145,7 +145,7 @@ pub fn agent_vault_env(app: &App, options: AgentVaultEnvOptions<'_>) -> Arc<BTre
 
     let mut out = BTreeMap::new();
     let mut skipped: Vec<String> = Vec::new();
-    let setting = env.get("TARSEE_AGENT_ENV_KEYS").map_or("", |text| js_trim(text));
+    let setting = env.get("TARSEE_AGENT_ENV_KEYS").map_or("", |text| trim(text));
     if !blocked && setting.to_lowercase() != "off" {
         let wanted: Vec<String> = match names {
             Some(names) => names,
@@ -156,7 +156,7 @@ pub fn agent_vault_env(app: &App, options: AgentVaultEnvOptions<'_>) -> Arc<BTre
             },
         };
         for raw in wanted {
-            let name = js_trim(&raw);
+            let name = trim(&raw);
             if !ENV_NAME.is_match(name)
                 || AGENT_ENV_KEEP_OUT.is_match(name)
                 || KEEP_OUT_NAMES.contains(&name)
@@ -172,7 +172,7 @@ pub fn agent_vault_env(app: &App, options: AgentVaultEnvOptions<'_>) -> Arc<BTre
             let value = read
                 .ok()
                 .flatten()
-                .map(|value| js_trim(&value).to_string())
+                .map(|value| trim(&value).to_string())
                 .filter(|value| !value.is_empty());
             let Some(value) = value else { continue };
             // Linux refuses a single environment string past about 128 KB, and then the agent could not start at

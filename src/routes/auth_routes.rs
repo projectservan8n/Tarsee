@@ -632,6 +632,50 @@ mod tests {
         );
     }
 
+    /// What the Node server answered to each of these sign-ins. JavaScript's `trim()`, which the configuration
+    /// applies to SETUP_PASSWORD, removes a byte order mark and keeps a next-line character; Rust's own does the
+    /// opposite.
+    #[tokio::test]
+    async fn a_pin_set_with_a_byte_order_mark_or_a_next_line_character_signs_in_as_under_node() {
+        // SETUP_PASSWORD = "1234" + U+FEFF: the mark is trimmed away and the PIN is 1234.
+        let bom = fixture_with_env(&[("SETUP_PASSWORD", "1234\u{FEFF}")]);
+        assert_eq!(
+            bom.login(json!({ "password": "1234" }), "203.0.113.1").await.status,
+            200
+        );
+        assert_eq!(
+            bom.login(json!({ "password": "1234\u{FEFF}" }), "203.0.113.2")
+                .await
+                .status,
+            401
+        );
+        assert_eq!(
+            bom.login(json!({ "password": "\u{85}1234" }), "203.0.113.3")
+                .await
+                .status,
+            401
+        );
+
+        // SETUP_PASSWORD = U+0085 + "1234": the character is part of the PIN.
+        let nel = fixture_with_env(&[("SETUP_PASSWORD", "\u{85}1234")]);
+        assert_eq!(
+            nel.login(json!({ "password": "1234" }), "203.0.113.1").await.status,
+            401
+        );
+        assert_eq!(
+            nel.login(json!({ "password": "1234\u{FEFF}" }), "203.0.113.2")
+                .await
+                .status,
+            401
+        );
+        assert_eq!(
+            nel.login(json!({ "password": "\u{85}1234" }), "203.0.113.3")
+                .await
+                .status,
+            200
+        );
+    }
+
     #[tokio::test]
     async fn in_production_the_cookie_is_secure() {
         let f = fixture_with_env(&[("NODE_ENV", "production")]);
@@ -882,7 +926,7 @@ mod tests {
             )]
         );
         assert!(token.starts_with("1794495254663.") && token.len() == 14 + 64);
-        assert_eq!(Csrf::of(&f.t).verify(&token), Ok(true));
+        assert!(Csrf::of(&f.t).verify(&token));
     }
 
     // --- An install the Node version ran ---

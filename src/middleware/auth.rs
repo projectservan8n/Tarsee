@@ -39,6 +39,7 @@ use tokio::time::MissedTickBehavior;
 use crate::app::App;
 use crate::db::Db;
 use crate::error::ApiError;
+use crate::util::js;
 
 // --- The time ---
 
@@ -74,7 +75,7 @@ impl Clock {
     pub fn now_ms(&self) -> i64 {
         match &self.manual {
             Some(now) => now.load(Ordering::SeqCst),
-            None => crate::util::js::now_ms(),
+            None => js::now_ms(),
         }
     }
 
@@ -97,36 +98,15 @@ impl Clock {
 
 // --- JavaScript's reading of text ---
 
-/// What JavaScript counts as whitespace (`\s`, and what `trim()` removes), as a regex class.
+/// What JavaScript counts as whitespace in a regular expression (`\s`), as a class for the `regex` crate: the
+/// characters of `util::js::is_whitespace`. (`\s` there is Unicode's White_Space, which has U+0085 and lacks U+FEFF.)
 pub(crate) const JS_WHITESPACE: &str =
     r"[\t\n\x0B\x0C\r \u{A0}\u{1680}\u{2000}-\u{200A}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}]";
-
-fn is_js_whitespace(c: char) -> bool {
-    matches!(
-        c,
-        '\t'..='\r'
-            | ' '
-            | '\u{A0}'
-            | '\u{1680}'
-            | '\u{2000}'..='\u{200A}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{202F}'
-            | '\u{205F}'
-            | '\u{3000}'
-            | '\u{FEFF}'
-    )
-}
-
-/// `text.trim()`.
-pub(crate) fn js_trim(text: &str) -> &str {
-    text.trim_matches(is_js_whitespace)
-}
 
 /// `Number(text)`: 0 for blank text, NaN for text that is not a number, and JavaScript's number forms otherwise
 /// ("7", " 7 ", "0.5", "1e2", "0x10", "Infinity").
 pub(crate) fn js_number(text: &str) -> f64 {
-    let text = js_trim(text);
+    let text = js::trim(text);
     if text.is_empty() {
         return 0.0;
     }
@@ -336,7 +316,7 @@ pub(crate) fn safe_compare(a: &str, b: &str) -> bool {
 /// Extracts Bearer token from Authorization header.
 fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
     let header = node_header(headers, &AUTHORIZATION).unwrap_or_default();
-    header.strip_prefix("Bearer ").map(|token| js_trim(token).to_string())
+    header.strip_prefix("Bearer ").map(|token| js::trim(token).to_string())
 }
 
 /// Extracts session token from cookie.
@@ -346,7 +326,7 @@ fn extract_session_token(headers: &HeaderMap) -> Option<String> {
     });
     let cookies = node_header(headers, &COOKIE).unwrap_or_default();
     let found = SESSION_COOKIE.captures(&cookies)?;
-    Some(js_trim(&found[1]).to_string())
+    Some(js::trim(&found[1]).to_string())
 }
 
 // --- Active sessions ---
