@@ -1,0 +1,115 @@
+// What the Node adaptMedia (src/ai/media.js) makes of a set of messages, word for word.
+// Run: node capture-media.mjs <main checkout> <out file>
+// Each case names its message by a small description (so the Rust test can build the same message): a PDF by the
+// pages make-pdf.js builds it from, a picture or a sound by its kind (the bytes are fixed), words as they are.
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const [root, outFile] = process.argv.slice(2);
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tarsee-s4-media-"));
+process.env.TARSEE_STATE_DIR = tmp;
+process.env.TARSEE_WORKSPACE_DIR = path.join(tmp, "workspace");
+process.env.TARSEE_DATA_DIR = path.join(tmp, "data");
+const imp = (rel) => import(pathToFileURL(path.join(root, rel)).href);
+const { adaptMedia } = await imp("src/ai/media.js");
+const { __setPdftotextForTests } = await imp("src/lib/pdf-text.js");
+const { makePdf } = await imp("test/fixtures/make-pdf.js");
+__setPdftotextForTests(null);
+
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+const AUDIO = Buffer.from("RIFF fake wav bytes for the test");
+const NOW = 1794472200123;
+const long = (n) => Array.from({ length: n }, (_, i) => `Page ${i + 1}. ${"Long words keep going on this page. ".repeat(40)}`);
+
+/** A block from its description. */
+function block(d) {
+  if (d.text !== undefined) return { type: "text", text: d.text };
+  if ("raw" in d) return d.raw;
+  const source = { type: "base64" };
+  let type;
+  let bytes;
+  if (d.pdf) {
+    // (Long pages are named by their count, so the capture stays small.)
+    const pages = d.pdf.longPages ? long(d.pdf.longPages)
+      : d.pdf.longFirstPage ? ["First. " + "A very long page goes on and on here. ".repeat(d.pdf.longFirstPage), "Second"]
+      : d.pdf.pages;
+    type = "document"; bytes = makePdf({ pages, compress: !!d.pdf.compress }); source.media_type = "application/pdf";
+  }
+  else if (d.notPdf !== undefined) { type = "document"; bytes = Buffer.from(d.notPdf); source.media_type = "application/pdf"; }
+  else if (d.image !== undefined) { type = "image"; bytes = PNG; if (d.image !== null) source.media_type = d.image; }
+  else if (d.audio !== undefined) { type = "audio"; bytes = AUDIO; if (d.audio !== null) source.media_type = d.audio; }
+  if (d.mediaType !== undefined) { if (d.mediaType === null) delete source.media_type; else source.media_type = d.mediaType; }
+  source.data = bytes.toString("base64");
+  if (d.sourceName !== undefined) source.name = d.sourceName;
+  const b = { type, source };
+  if (d.name !== undefined) b.name = d.name;
+  if (d.title !== undefined) b.title = d.title;
+  return b;
+}
+
+const NO_SIGHT = { vision: false, pdf: false };
+const SEES = { vision: true, pdf: false };
+const CLAUDE = { vision: true, pdf: true };
+const cases = [
+  { name: "plain words", content: "just words", caps: SEES, ctx: {} },
+  { name: "a PDF becomes its text and a path", content: [{ pdf: { pages: ["Quarterly revenue grew nine percent", "Costs held flat"], compress: true } }, { text: "What does it say?" }], caps: SEES, ctx: { label: "DeepSeek Flash" } },
+  { name: "a long PDF is cut at a page", content: [{ pdf: { longPages: 40, compress: true } }], caps: SEES, ctx: { label: "DeepSeek Flash" } },
+  { name: "a PDF whose first page is too long is cut short", content: [{ pdf: { longFirstPage: 900, compress: true } }], caps: SEES, ctx: { label: "DeepSeek Flash" } },
+  { name: "a PDF with one page", content: [{ pdf: { pages: ["Only page"] } }], caps: NO_SIGHT, ctx: {} },
+  { name: "a scanned PDF", content: [{ pdf: { pages: [""] } }], caps: SEES, ctx: { label: "DeepSeek Flash" } },
+  { name: "a scanned PDF of two pages", content: [{ pdf: { pages: ["", "  "] } }], caps: SEES, ctx: { label: "DeepSeek Flash" } },
+  { name: "a document that is no PDF", content: [{ notPdf: "hello, not a pdf" }, { text: "?" }], caps: SEES, ctx: { label: "DeepSeek Flash" } },
+  { name: "a PDF stays a PDF for a model that reads them", content: [{ pdf: { pages: ["Native"] } }, { text: "Read this" }], caps: CLAUDE, ctx: { label: "Claude" } },
+  { name: "three long PDFs share the room", content: [{ pdf: { longPages: 40, compress: true }, name: "one" }, { pdf: { longPages: 40, compress: true }, title: "Two.PDF" }, { pdf: { longPages: 3, compress: true }, sourceName: "three.pdf" }, { text: "Compare them" }], caps: SEES, ctx: { label: "DeepSeek Flash" } },
+  { name: "PDF names", content: [{ pdf: { pages: ["a"] }, name: "  ", title: "../../etc/report (final).v2", sourceName: "ignored" }, { pdf: { pages: ["b"] }, name: 5, sourceName: "C:\\Users\\someone\\scan.Pdf" }, { pdf: { pages: ["c"] }, name: "..hidden" }, { pdf: { pages: ["d"] }, name: "ünï cödé 🐒.pdf " }], caps: NO_SIGHT, ctx: {} },
+  { name: "a picture a model can't see", content: [{ image: "image/png" }, { text: "What is this?" }], caps: NO_SIGHT, ctx: { label: "DeepSeek Pro" } },
+  { name: "a picture a model sees", content: [{ image: "image/png" }, { text: "Look" }], caps: SEES, ctx: { label: "DeepSeek Flash" } },
+  { name: "a kind of picture the model can't open", content: [{ image: "image/heic" }], caps: CLAUDE, ctx: { label: "Claude" } },
+  { name: "several pictures are numbered", content: [{ image: "image/png" }, { text: "between" }, { image: "image/jpg" }, { image: "image/tiff" }, { image: "image/x-odd" }], caps: NO_SIGHT, ctx: { label: " Spaced Label " } },
+  { name: "kinds are read loosely", content: [{ image: "IMAGE/JPG; q=1" }, { image: null }, { image: "" }, { image: " image/webp " }, { image: "image/bmp" }], caps: SEES, ctx: { label: "   " } },
+  { name: "a voice note becomes its transcript", content: [{ audio: "audio/wav" }, { text: "(voice)" }], caps: SEES, ctx: { label: "DeepSeek Flash", transcript: " remind me at five " } },
+  { name: "an empty transcript", content: [{ audio: "audio/wav" }], caps: SEES, ctx: { transcript: "  " } },
+  { name: "a transcript that is not there", content: [{ audio: "audio/wav" }], caps: SEES, ctx: { transcript: null } },
+  { name: "a voice note that can't be transcribed", content: [{ audio: "audio/ogg" }, { audio: "audio/x-unknown" }, { audio: null }], caps: CLAUDE, ctx: { transcribeError: " Speech-to-text is unavailable: local transcription is not installed. " } },
+  { name: "a transcriber that fails without a word", content: [{ audio: "AUDIO/MPEG; rate=1" }], caps: SEES, ctx: { transcribeError: "" } },
+  { name: "a model nothing is known about", content: [{ image: "image/png" }, { pdf: { pages: ["Unknown caps"] } }], caps: null, ctx: {} },
+  { name: "what no engine takes is left out", content: [{ text: "" }, { raw: { type: "video", source: { type: "base64", data: "AAAA" } } }, { raw: { type: "image", source: { type: "base64", media_type: "image/png", data: "" } } }, { raw: { type: "document", source: { type: "base64", media_type: "text/plain", data: "aGVsbG8=" } } }, { raw: { type: "image" } }, { raw: null }, { raw: "words" }, { text: "kept" }, { raw: { type: "tool_use", id: "x" } }], caps: CLAUDE, ctx: {} },
+  { name: "only media, nothing said", content: [{ image: "image/gif" }], caps: CLAUDE, ctx: {} },
+  { name: "everything at once", content: [{ text: "First words" }, { image: "image/png" }, { pdf: { pages: ["In the PDF"] }, name: "notes" }, { audio: "audio/mp4" }, { text: "Last words" }], caps: NO_SIGHT, ctx: { label: "Local AI", transcript: "said aloud" } },
+];
+
+const out = [];
+let n = 0;
+for (const c of cases) {
+  const dir = path.join(tmp, `uploads-${++n}`);
+  const content = Array.isArray(c.content) ? c.content.map(block) : c.content;
+  const ctx = { uploadsDir: dir, now: NOW };
+  if (c.ctx.label !== undefined) ctx.label = c.ctx.label;
+  if (c.ctx.transcript !== undefined) ctx.transcribe = async () => ({ transcript: c.ctx.transcript });
+  if (c.ctx.transcribeError !== undefined) ctx.transcribe = async () => { throw new Error(c.ctx.transcribeError); };
+  const r = await adaptMedia(content, c.caps, ctx);
+  const scrub = (t) => String(t).split(dir + path.sep).join("<dir>/");
+  // A long text is kept as its ends, its length (in UTF-16 units) and its SHA-256 (of its UTF-8 bytes).
+  const brief = (t) => (t.length <= 1500 ? t : { head: t.slice(0, 500), tail: t.slice(-300), length: t.length, sha256: crypto.createHash("sha256").update(t, "utf8").digest("hex") });
+  out.push({
+    ...c,
+    result: {
+      text: brief(scrub(r.text)),
+      notes: r.notes.map((t) => brief(scrub(t))),
+      media: r.media.map((m) => ({ type: m.type, media_type: m.source.media_type, bytes: Buffer.from(m.source.data, "base64").length })),
+      contentIsText: typeof r.content === "string",
+      contentBlocks: Array.isArray(r.content) ? r.content.map((b) => b.type) : null,
+      saved: r.saved.map((s) => ({ kind: s.kind, name: s.name, size: s.size, path: scrub(s.path) })),
+      files: fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [],
+    },
+  });
+}
+const text = "[\n" + out.map((c) => JSON.stringify(c)).join(",\n") + "\n]\n";
+if (text.includes(tmp)) throw new Error("the temp folder is still in the capture");
+fs.writeFileSync(outFile, text);
+console.log(out.length, "cases");
+fs.rmSync(tmp, { recursive: true, force: true });
+process.exit(0);
