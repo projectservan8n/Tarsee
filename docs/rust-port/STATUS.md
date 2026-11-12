@@ -11,15 +11,15 @@ agent checked it against the Node code and its findings are fixed or parked belo
 | Package | State | Slot | Commits | Tests after merge | Notes |
 |---|---|---|---|---|---|
 | F0 | merged | - | 9956468..fe6015b | 96 | Foundation, by the lead |
-| I0 | running | s1 | | | |
+| I0 | merged | - | 7957ca6 | 591 | Interfaces and fakes; `INTERFACES.md`. Every event shape checked against 152 events captured from the Node code |
 | A1 | running | s2 | | | |
-| A2 | running | s3 | | | |
+| A2 | merged | - | 74e0e4f | 728 | 106 of 109 cases; 3 wait for B1, G2, G3. `engine_env::ProviderEntry` to be built from A1 |
 | B1 | running | s4 | | | |
 | B2 | running | s5 | | | |
-| C1 | running | s6 | | | |
+| C1 | merged | - | 9dd5372 | 213 | 32 of 32 cases |
 | D1 | running | s7 | | | |
-| E1 | running | s8 | | | |
-| V1 | running | s9 | | | |
+| E1 | merged | - | 55fa65f | 395 | 128 of 128 cases |
+| V1 | merged | - | dbb96bb | 591 | 42 of 42 cases |
 
 ## Rulings
 
@@ -45,6 +45,19 @@ Decisions the lead made on the owner's behalf, in order. Each says what it costs
 7. Ruling: the Claude and Codex engines start the `claude` and `codex` programs directly instead of through the
    Node SDKs (DESIGN.md, decisions 2 to 4) — there are no Rust SDKs — if wrong: none; this is what the SDKs do.
 
+8. Ruling: the tests of the browser files are ported to Rust and run the real files in a real headless browser
+   (`tests/ui`, its own test binary, so the rest of the suite never needs a browser) — the files stay JavaScript,
+   but the project then has one test command — if wrong: the Node tests of those files can be restored from git.
+9. Ruling: two places in the message splitters differ from Node on purpose (package E1): a cut that would split an
+   emoji moves the emoji whole to the next piece, and the fence-safe splitter stops where the Node one looped until
+   it ran out of memory — a Rust string cannot hold half a character, and an endless loop is not behaviour to keep
+   — if wrong: none; both only change output that was broken.
+10. Ruling: the `codex` program is found by an explicit path, then `TARSEE_CODEX_PATH`, then `TARSEE_CODEX_BIN` (the
+    Node name, kept so existing installs work), then the PATH (package A2) — there is no `node_modules` to look in
+    — if wrong: one lookup order to change in `ai/codex_cli.rs`.
+11. Ruling: the system service installed by `daemon/service` runs `tarsee start` instead of `node src/server.js`
+    (package C1) — if wrong: one line.
+
 ## Pre-flight scan
 
 - Packages share no source files: every Rust file is owned by exactly one package (the stub in each file names it).
@@ -59,7 +72,23 @@ Decisions the lead made on the owner's behalf, in order. Each says what it costs
 
 ## Test cases not ported yet
 
-None recorded.
+- A2: `engine-env` R8 (needs the agent vault environment from B1); two exit-cleanup cases of `turn-leftovers`
+  (need G2 and G3).
+- W1a will list the cases of `model-picker-core` and `provider-guides-core` that need A1 and R2.
+
+## Follow-ups owed by later packages
+
+- A1: build `engine_env::ProviderEntry` from the registry; replace the copied values in `src/ai/engine_env/tests.rs`.
+- A4: `routes::skills::unhandled_error` calls the `record_error` of self-heal.
+- Z1: `canvas_middleware(app, signed_in, req)` gets the sign-in state from B1; a `tarsee whisper-models download
+  <model> <folder>` command (`voice::whisper_models::run_download_command`); `server.rs` calls the `install(app)`
+  of each implementing module.
+- H1, H2, H3: channel constructors are `create_<name>_bot(app, config, opts)`; H2 implements
+  `slack_stream::SlackClient`; H3 fills `email_parser::ThreadHeaders` and `email_threading::IncomingMail`.
+- G3: `turn_notes::RouteLabels` for the route event; in Node an `error` event gains its `code` after the turn ends.
+- Cleanup: the JavaScript-behaviour helpers that C1 (`lib::workspace_files::jstext`), E1 (`discord_format::js_text`)
+  and A2 wrote for themselves move to `util::js`.
+- Linux: no package has been compiled or run on Linux yet (the agents had Windows only).
 
 ## Deferred minor findings
 
