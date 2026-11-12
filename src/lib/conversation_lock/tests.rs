@@ -356,7 +356,8 @@ async fn a_turn_whose_slot_has_come_is_no_longer_in_the_queue_stop_it_as_the_run
         live("web", "x"),
         move || async move {
             let id = current_queued_turn().unwrap().turn_id.clone();
-            let removable = remove_queued_turn(&app, &id, Some("q-4"));
+            // (Neither by its id nor on the turn itself.)
+            let removable = remove_queued_turn(&app, &id, Some("q-4")) || current_queued_turn().unwrap().remove();
             reached.notify_one();
             gate.passed().await;
             Ok::<_, Never>(removable)

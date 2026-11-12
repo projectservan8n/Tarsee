@@ -719,6 +719,33 @@ mod tests {
     }
 
     #[test]
+    fn the_agents_file_goes_on_its_turns_reply_only_when_that_reply_came_within_two_hours() {
+        let chat = || {
+            vec![
+                json!({ "id": "u1", "role": "user", "created_at": "2026-10-27 01:00:00" }),
+                json!({ "id": "a1", "role": "assistant", "created_at": "2026-10-27 03:00:00" }),
+            ]
+        };
+        let sent_at = |time: &str| {
+            [FileView {
+                turn_id: Some("t1".into()),
+                after_message_id: Some("u1".into()),
+                ..file("report.pdf", "agent", at(time))
+            }]
+        };
+        // The reply came 1 hour 59 minutes 59 seconds after the file: it is that reply's.
+        let mut soon = chat();
+        place_files(&mut soon, &sent_at("2026-10-27 01:00:01"), true);
+        assert_eq!(names(soon[1].get("files")), ["report.pdf"]);
+        assert_eq!(soon[0].get("filesAfter"), None);
+        // Two hours to the second: a row of its own after the message it followed.
+        let mut late = chat();
+        place_files(&mut late, &sent_at("2026-10-27 01:00:00"), true);
+        assert_eq!(names(late[0].get("filesAfter")), ["report.pdf"]);
+        assert_eq!(late[1].get("files"), None);
+    }
+
+    #[test]
     fn a_time_is_read_from_sqlites_text_an_iso_date_or_milliseconds() {
         assert_eq!(ms_of(&json!("2026-10-27 01:56:34")), 1_793_066_194_000);
         assert_eq!(ms_of(&json!("2026-10-27 01:56")), 1_793_066_160_000);
