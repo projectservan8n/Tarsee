@@ -1,0 +1,33 @@
+[
+  {"title": "Order flow", "diagramId": "diagram-order-flow",
+   "nodes": [
+     {"id": "in", "label": "Order arrives", "sublabel": "webhook", "kind": "trigger", "question": "Where do orders come from?"},
+     {"id": "check", "label": "In stock?", "kind": "decision", "question": "How is stock checked?"},
+     {"id": "ship", "label": "Ship it", "kind": "output"},
+     {"id": "wait", "label": "Back-order", "sublabel": "email the buyer", "kind": "processing"},
+     {"id": "n1", "label": "Runs every minute", "kind": "note"}
+   ],
+   "edges": [{"from": "in", "to": "check"}, {"from": "check", "to": "ship", "label": "yes"}, {"from": "check", "to": "wait", "label": "no"}],
+   "legend": [{"kind": "trigger"}, {"kind": "decision", "label": "Choice"}, {"kind": "output"}, {"kind": "note"}, {"kind": "mystery"}]},
+  {"title": "Fan out",
+   "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}, {"id": "c", "label": "C"}, {"id": "d", "label": "D"}, {"id": "e", "label": "E", "x": 10.5, "y": 33}],
+   "edges": [{"from": "a", "to": "b", "label": "1"}, {"from": "a", "to": "c"}, {"from": "a", "to": "d", "label": "three"}, {"from": "b", "to": "e", "label": "odd"}, {"from": "d", "to": "e"}]},
+  {"title": "Loop <with> \"quotes\" & 'apostrophes'",
+   "nodes": [{"id": "x", "label": "Start"}, {"id": "y", "label": "<b>bold</b>", "sublabel": "a & b"}, {"id": "z", "label": "Back"}],
+   "edges": [{"from": "x", "to": "y"}, {"from": "y", "to": "z"}, {"from": "z", "to": "y", "label": "retry"}, {"from": "y", "to": "ghost"}]},
+  {"nodes": [{"id": 2, "label": "Two", "question": "Second </script><script>alert(1)</script>"}, {"id": 1, "label": "One", "question": "First\u2028line\u2029end"}, {"id": "b", "label": "Bee", "question": {"nested": [1, 2.5, "x"], "10": true}}, {"id": "0", "label": "Zero", "question": 7}],
+   "edges": [{"from": 1, "to": 2}, {"from": "0", "to": "b"}]},
+  {"title": "Odd values",
+   "nodes": [{"id": "s", "label": "x as text", "x": "100", "y": true}, {"id": "t", "label": 42, "kind": "toString", "sublabel": 0}, {"id": "u", "label": "", "kind": ["note"], "x": null}, {"id": "v", "kind": "note", "label": "a note", "question": "ignored? no"}],
+   "edges": [{"from": "s", "to": "t", "label": "joined"}, {"from": "t", "to": "u"}],
+   "legend": []},
+  {"title": "", "nodes": [], "edges": []},
+  {"title": "Wide row and non-ASCII ✓",
+   "nodes": [{"id": "root", "label": "Wurzel – 根"}, {"id": "k1", "label": "🐒 one"}, {"id": "k2", "label": "two"}, {"id": "k3", "label": "three"}, {"id": "k4", "label": "four"}, {"id": "k5", "label": "five", "kind": "output"}],
+   "edges": [{"from": "root", "to": "k1"}, {"from": "root", "to": "k2"}, {"from": "root", "to": "k3"}, {"from": "root", "to": "k4"}, {"from": "root", "to": "k5", "label": "last"}],
+   "legend": [{"kind": "output", "label": "<i>done</i>"}, 5]},
+  {"title": "Duplicates and depth", "diagramId": "",
+   "nodes": [{"id": "a", "label": "first a"}, {"id": "a", "label": "second a", "kind": "note"}, {"id": "b", "label": "B"}, {"id": "c", "label": "C"}],
+   "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "c"}, {"from": "a", "to": "c"}, {"from": "c", "to": "a"}]},
+  {"title": "Only notes", "nodes": [{"id": "n", "kind": "note", "label": "Just a note", "x": -20, "y": 1000}], "edges": [{"from": "n", "to": "n", "label": "self"}]}
+]
