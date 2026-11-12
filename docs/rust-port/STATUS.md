@@ -14,10 +14,13 @@ agent checked it against the Node code and its findings are fixed or parked belo
 | I0 | merged | - | 7957ca6 | 591 | Interfaces and fakes; `INTERFACES.md`. Every event shape checked against 152 events captured from the Node code |
 | A1 | running | s2 | | | |
 | A2 | merged | - | 74e0e4f | 728 | 106 of 109 cases; 3 wait for B1, G2, G3. `engine_env::ProviderEntry` to be built from A1 |
-| B1 | running | s4 | | | |
-| B2 | running | s5 | | | |
+| B1 | merged | - | 1649cf7 | 1020 | 36 of 36 cases. Stored secrets, sessions and CSRF tokens checked both ways against the Node code |
+| B2 | merged | - | 7094777 | 875 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases; the rest wait for R4, W1, S3, S4 |
 | C1 | merged | - | 9dd5372 | 213 | 32 of 32 cases |
-| D1 | running | s7 | | | |
+| D1 | merged | - | 48bb9ff | 1180 | 59 of 68 cases; 4 wait for S3, 5 are browser tests (W1) |
+| V2 | running | s9 | | | |
+| T1 | running | s4 | | | |
+| W1a | running | s10 | | | The browser test harness and the unit tests of the browser files |
 | E1 | merged | - | 55fa65f | 395 | 128 of 128 cases |
 | V1 | merged | - | dbb96bb | 591 | 42 of 42 cases |
 
@@ -58,6 +61,12 @@ Decisions the lead made on the owner's behalf, in order. Each says what it costs
 11. Ruling: the system service installed by `daemon/service` runs `tarsee start` instead of `node src/server.js`
     (package C1) — if wrong: one line.
 
+12. Ruling: a bug the port finds in the Node code that can destroy data or weaken a security check is fixed in the
+    Rust version, with a test, instead of being carried over; every other oddity is ported as it is. Each fix is
+    listed under "Node bugs fixed in the Rust version" below — the owner's standing rule is to fix issues fully,
+    and a rewrite that knowingly ships a way to delete the workspace would be wrong — if wrong: each fix is one
+    small, named change that can be reverted.
+
 ## Pre-flight scan
 
 - Packages share no source files: every Rust file is owned by exactly one package (the stub in each file names it).
@@ -76,6 +85,29 @@ Decisions the lead made on the owner's behalf, in order. Each says what it costs
   (need G2 and G3).
 - W1a will list the cases of `model-picker-core` and `provider-guides-core` that need A1 and R2.
 
+## Node bugs fixed in the Rust version
+
+To be fixed in each package's fix round (none is fixed yet):
+
+- B2 `routes/files`: `POST /api/files/delete` can delete the whole workspace when `TARSEE_WORKSPACE_DIR` is not
+  written in its normal form (a trailing slash, `..`), because the root check compares text; `rename` has a prefix
+  check without a path separator.
+- C1 `lib/skills-engine`: a skill name in install, uninstall and setup can reach outside the skills folders.
+- E1 `lib/discord-format`: the hard cut can make a 2001-unit piece when the line has emoji, which Discord refuses.
+- B1 `middleware/security`: a CSRF token with a signature of the wrong length answers 500 instead of 403.
+
+## Node oddities ported as they are
+
+Listed in each package report. The ones that touch security, for the owner to decide (the unmerged PR #11 covers
+some): `http://[::ffff:127.0.0.1]/` passes the private-address check; `checkUrlSafety` lets loopback and private
+names through; a `write_file` call with a non-text file name skips the tool policy.
+
+## Linux
+
+The branch is built and tested on Linux inside WSL after merges. First run (five packages): everything compiles;
+678 unit tests pass; 2 of 51 integration tests fail (both in A2: output past the size cap), to be fixed in A2's fix
+round. Clippy on the newer compiler there reports 3 warnings (a large error type) to clear in the cleanup.
+
 ## Follow-ups owed by later packages
 
 - A1: build `engine_env::ProviderEntry` from the registry; replace the copied values in `src/ai/engine_env/tests.rs`.
@@ -88,7 +120,11 @@ Decisions the lead made on the owner's behalf, in order. Each says what it costs
 - G3: `turn_notes::RouteLabels` for the route event; in Node an `error` event gains its `code` after the turn ends.
 - Cleanup: the JavaScript-behaviour helpers that C1 (`lib::workspace_files::jstext`), E1 (`discord_format::js_text`)
   and A2 wrote for themselves move to `util::js`.
-- Linux: no package has been compiled or run on Linux yet (the agents had Windows only).
+- Z1: `SessionStore::init(&app)?` and `AuditLog::init(&app)` at boot; serve with
+  `into_make_service_with_connect_info::<SocketAddr>()` so `middleware::auth::client_ip` sees the socket address.
+- R1: run a turn in a spawned task (a closed socket never cancels a turn) inside `scope_queued_turn`.
+- Cleanup: `Config::load` normalises the paths it joins, as Node's `path.join` did; one `express.json()` rule for
+  request bodies; JSON responses say `application/json; charset=utf-8` as Express did.
 
 ## Deferred minor findings
 
