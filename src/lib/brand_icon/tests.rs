@@ -1140,3 +1140,40 @@ fn etags_match_as_node_matched_them() {
     assert!(!etag_matches(None, "\"a\""));
     assert!(!etag_matches(Some(""), "\"a\""));
 }
+
+/// The manifest's body is byte for byte what `JSON.stringify(..., null, 2)` wrote, so its ETag is the Node one: a
+/// browser that cached the manifest under the Node version still gets a 304. (Body and ETag from the Node code.)
+#[tokio::test]
+async fn the_manifest_body_and_etag_are_the_ones_node_made() {
+    let t = test_app();
+    let public = tmp_dir();
+    let base = json!({
+        "name": "Tarsee — test",
+        "icons": [
+            { "src": "/icon-192.png", "sizes": "192x192", "purpose": "any maskable" },
+            { "src": "https://x.example/a.png", "purpose": 5 },
+        ],
+        "shortcuts": [{ "name": "x", "icons": [{ "src": "/icon-32.png?v=1" }] }],
+        "n": [1, 2.5, {}],
+        "e": [],
+        "o": {},
+    });
+    let node_body = "{\n  \"name\": \"Tarsee — test\",\n  \"icons\": [\n    {\n      \"src\": \"/icon-maskable-512.png?v=v%201\",\n      \"sizes\": \"512x512\",\n      \"type\": \"image/png\",\n      \"purpose\": \"maskable\"\n    },\n    {\n      \"src\": \"/icon-192.png?v=v%201\",\n      \"sizes\": \"192x192\",\n      \"purpose\": \"any\"\n    },\n    {\n      \"src\": \"https://x.example/a.png\",\n      \"purpose\": 5\n    }\n  ],\n  \"shortcuts\": [\n    {\n      \"name\": \"x\",\n      \"icons\": [\n        {\n          \"src\": \"/icon-32.png?v=v%201\"\n        }\n      ]\n    }\n  ],\n  \"n\": [\n    1,\n    2.5,\n    {}\n  ],\n  \"e\": [],\n  \"o\": {}\n}";
+    assert_eq!(serde_json::to_string_pretty(&versioned_manifest(&base, "v 1")).unwrap(), node_body);
+
+    // Through the middleware, with the icon's version set to the one above.
+    std::fs::write(public.path().join("manifest.json"), base.to_string()).unwrap();
+    let icons = BrandIcon::of(&t.app);
+    *icons.state.lock() = Some(BrandState {
+        custom: false,
+        version: "v 1".into(),
+        updated_at: None,
+    });
+    let router = Router::new()
+        .fallback(|| async { StatusCode::NOT_FOUND })
+        .layer(from_fn_with_state(manifest_handler(&t.app, public.path()), manifest_middleware));
+    let res = http::get(&router, "/manifest.json").await;
+    assert_eq!(res.text(), node_body);
+    assert_eq!(res.header("etag"), Some("\"m036893de0ae0220d\""));
+    assert_eq!(res.header("content-length"), Some(node_body.len().to_string().as_str()));
+}
