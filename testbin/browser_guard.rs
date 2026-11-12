@@ -124,15 +124,11 @@ fn stop(child: &mut Child) {
     let _ = child.wait();
 }
 
-/// Removes the run folder, `guard.lock` last: should this program be stopped half way, the folder still has its lock
-/// file, unlocked, and the next run removes it. On Windows a file can stay in use for a moment while the browser's last
-/// processes end, so each removal is tried again for a while.
+/// Removes the run folder, `guard.lock` last. On Windows a file can stay in use for a while as the browser's last
+/// processes end (longer on a busy machine), so removing is tried again for up to a minute; what is still there then
+/// stays with `guard.lock`, unlocked, and the next run removes the folder. So does a stop of this program half way.
 fn remove_dir(dir: &Path, lock: File) {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let again = || {
-        std::thread::sleep(Duration::from_millis(100));
-        Instant::now() < deadline
-    };
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let mut left = false;
         for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
@@ -147,10 +143,15 @@ fn remove_dir(dir: &Path, lock: File) {
             };
             left |= removed.is_err();
         }
-        if !left || !again() {
+        if !left {
             break;
         }
+        if Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
     drop(lock);
-    while fs::remove_dir_all(dir).is_err() && dir.exists() && again() {}
+    let _ = fs::remove_file(dir.join("guard.lock"));
+    let _ = fs::remove_dir(dir);
 }

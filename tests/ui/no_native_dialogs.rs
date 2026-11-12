@@ -537,12 +537,11 @@ fn no_js_or_html_file_calls_the_browsers_confirm_alert_or_prompt() {
     files(public, &mut paths);
     let mut found = Vec::new();
     let mut seen = 0;
+    let html_file = Regex::new(r"(?i)\.html?$").expect("regex");
     for path in &paths {
         let src = std::fs::read_to_string(path).expect("a file");
         seen += 1;
-        let html = Regex::new(r"(?i)\.html?$")
-            .expect("regex")
-            .is_match(&path.to_string_lossy());
+        let html = html_file.is_match(&path.to_string_lossy());
         let relative = path
             .strip_prefix(public)
             .expect("under public")

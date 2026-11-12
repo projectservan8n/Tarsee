@@ -433,8 +433,15 @@ impl Page {
     // ---------------------------------------------------------------- errors
 
     /// The errors the page reported since they were last looked at, as text, and forgets them: what a test that
-    /// expects an error calls (then asserts on what it got).
-    pub fn take_errors(&self) -> Vec<String> {
+    /// expects an error calls (then asserts on what it got). Everything the page did before the call is in.
+    pub async fn take_errors(&self) -> Vec<String> {
+        self.flush().await;
+        self.drain_errors()
+    }
+
+    /// The errors the browser has handed over so far, taken. (It hands an event over a little after it arrives, so
+    /// one can come in after the answer to the next command: [`Page::flush`] waits that out.)
+    fn drain_errors(&self) -> Vec<String> {
         let mut events = self.events.lock().unwrap_or_else(|e| e.into_inner());
         match events.as_mut() {
             Some(events) => {
@@ -450,10 +457,15 @@ impl Page {
         if self.errors_allowed.load(Ordering::Relaxed) {
             return;
         }
-        let errors = self.take_errors();
+        let errors = self.drain_errors();
         if !errors.is_empty() {
             panic!("{}", unexpected(&errors));
         }
+    }
+
+    /// A round trip to the page: whatever it reported before now has been handed over by the time it returns.
+    async fn flush(&self) {
+        let _ = self.evaluate("0").await;
     }
 
     /// Says the test expects the page to report errors: from now on they do not fail it, and wait for the test to
@@ -462,11 +474,9 @@ impl Page {
         self.errors_allowed.store(true, Ordering::Relaxed);
     }
 
-    /// Closes the tab, once every error the page reported before now has been looked at (dropping the page does
-    /// the same without that last look).
+    /// Closes the tab, once every error the page reported has been looked at (as dropping the page does).
     pub async fn close(self) {
-        // A round trip: what the page reported before it is in by now.
-        let _ = self.evaluate("0").await;
+        self.flush().await;
         self.check_errors();
     }
 
@@ -503,7 +513,13 @@ impl Drop for Page {
         let errors = if failing || self.errors_allowed.load(Ordering::Relaxed) {
             Vec::new()
         } else {
-            self.take_errors()
+            // The last look: a round trip, waited for here. It needs nothing of the test's runtime (chromiumoxide's
+            // commands run on the shared one, with timers of their own), so blocking this thread for it is safe.
+            let zero = EvaluateParams::builder().expression("0").build().ok();
+            if let Some(zero) = zero {
+                let _ = futures::executor::block_on(self.cdp.execute(zero));
+            }
+            self.drain_errors()
         };
         let events = self.events.get_mut().unwrap_or_else(|e| e.into_inner()).take();
         match (self.home.take(), events) {

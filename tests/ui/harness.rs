@@ -114,18 +114,18 @@ async fn errors_the_page_reports_are_kept_for_the_test_to_take() {
         "the timer to have run",
     )
     .await;
-    let errors = page.take_errors();
+    let errors = page.take_errors().await;
     assert_eq!(errors.len(), 3, "{errors:?}");
     assert!(errors[0].starts_with("console.error: first"), "{errors:?}");
     assert!(errors.iter().any(|e| e.contains("from a timer")), "{errors:?}");
     assert!(errors.iter().any(|e| e.contains("nobody caught me")), "{errors:?}");
-    assert!(page.take_errors().is_empty(), "taken once");
+    assert!(page.take_errors().await.is_empty(), "taken once");
 }
 
 #[tokio::test]
 async fn a_script_that_does_not_load_is_an_error() {
     let page = Page::with_scripts(&["no-such-file.js"]).await;
-    let errors = page.take_errors();
+    let errors = page.take_errors().await;
     assert!(
         errors
             .iter()
@@ -303,6 +303,7 @@ async fn the_network_is_closed_only_the_loopback_answers() {
     );
     assert!(
         page.take_errors()
+            .await
             .iter()
             .all(|e| e.contains("ERR_NAME_NOT_RESOLVED") || e.contains("example.com"))
     );
@@ -367,4 +368,30 @@ fn playwrights_chromium_is_found_newest_revision_first_then_its_headless_shell()
 #[should_panic(expected = "could not open")]
 async fn opening_a_page_that_is_not_there_fails_with_its_address() {
     Page::open(&Site::shared().url("/__ui/no-such-page")).await;
+}
+
+#[tokio::test]
+async fn any_devtools_command_the_api_lacks_goes_through_cdp() {
+    use chromiumoxide::cdp::browser_protocol::emulation::MediaFeature;
+    use chromiumoxide::cdp::browser_protocol::emulation::SetEmulatedMediaParams;
+    let page = Page::open(&Site::shared().page("<p>dark?</p>")).await;
+    let dark = SetEmulatedMediaParams::builder()
+        .features(vec![MediaFeature::new("prefers-color-scheme", "dark")])
+        .build();
+    page.cdp().execute(dark).await.expect("the browser takes the command");
+    assert_eq!(
+        page.eval("matchMedia('(prefers-color-scheme: dark)').matches").await,
+        true
+    );
+}
+
+#[tokio::test]
+#[should_panic(expected = "console.error: just before closing")]
+async fn closing_a_page_looks_at_what_it_reported_last() {
+    let page = Page::with_scripts(&[]).await;
+    page.eval("setTimeout(() => console.error('just before closing'), 0); 0")
+        .await;
+    page.wait_for("new Promise((r) => setTimeout(() => r(true), 10))", "the timer")
+        .await;
+    page.close().await;
 }

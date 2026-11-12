@@ -167,7 +167,7 @@ async fn a_lapsed_session_401_no_version_and_the_page_is_left_as_it_is() {
     let stand = stand_in(StatusCode::UNAUTHORIZED, json!({ "error": "Unauthorized" }));
     let page = page(&stand, true).await;
     // (The browser reports the 401 itself, as it does any request refused.)
-    let errors = page.take_errors();
+    let errors = page.take_errors().await;
     assert!(
         errors.iter().all(|e| e.contains("401")),
         "only the refused request: {errors:?}"

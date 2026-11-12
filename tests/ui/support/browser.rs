@@ -38,8 +38,6 @@ pub fn runtime() -> &'static Runtime {
 /// The running browser.
 pub struct Shared {
     pub browser: Browser,
-    /// The program that was started.
-    pub executable: PathBuf,
     /// The guard, whose stdin this test binary holds open until it ends (never dropped: it is in a static).
     _guard: Child,
 }
@@ -110,11 +108,7 @@ async fn start() -> Result<Shared, String> {
             ));
         }
     };
-    Ok(Shared {
-        browser,
-        executable,
-        _guard: guard,
-    })
+    Ok(Shared { browser, _guard: guard })
 }
 
 /// The browser's command line. Headless, its own profile, nothing it would fetch or show on its own, no throttling of
@@ -322,7 +316,7 @@ pub fn playwright_programs_in(dir: &Path) -> Vec<PathBuf> {
                 Some((revision, entry.path()))
             })
             .collect();
-        revisions.sort_by(|a, b| b.0.cmp(&a.0));
+        revisions.sort_by_key(|r| std::cmp::Reverse(r.0));
         for (_, folder) in revisions {
             found.extend(programs.iter().map(|p| folder.join(p)));
         }
