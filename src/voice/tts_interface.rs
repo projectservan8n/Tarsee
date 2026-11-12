@@ -212,10 +212,139 @@ pub fn os_tmpdir(env: &Env) -> PathBuf {
     }
 }
 
+/// Where a program the engines start is: a path is taken as it is when it exists; a bare name is looked up on the
+/// app's `PATH` (with `PATHEXT` on Windows), as the Node code's `spawn("piper")` found it.
+pub fn find_program(env: &Env, name: &str) -> Option<PathBuf> {
+    let as_path = std::path::Path::new(name);
+    if as_path.components().count() > 1 || as_path.is_absolute() {
+        return as_path.is_file().then(|| as_path.to_path_buf());
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    which::which_in(name, env.get("PATH"), cwd).ok()
+}
+
+/// A program the engines start, set up the way the Node code started one: found on the app's `PATH`, given exactly
+/// the app's environment (never the server's own by accident), and without a console window on Windows. `None`
+/// when the program is not there.
+pub fn program_command(env: &Env, name: &str) -> Option<tokio::process::Command> {
+    let program = find_program(env, name)?;
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.env_clear().envs(env.snapshot()).kill_on_drop(true);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    Some(cmd)
+}
+
+/// How [`exec_file`] failed, in the words of Node's `execFileSync`.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum ExecError {
+    /// "spawnSync <program> ENOENT"
+    #[error("spawnSync {0} ENOENT")]
+    NotFound(String),
+    /// "spawnSync <program> ETIMEDOUT"
+    #[error("spawnSync {0} ETIMEDOUT")]
+    TimedOut(String),
+    /// "Command failed: <program> <args>"; the exit code when there was one.
+    #[error("Command failed: {command}")]
+    Failed { command: String, code: Option<i32> },
+    /// Anything else that stopped it from running.
+    #[error("spawnSync {program} {message}")]
+    Other { program: String, message: String },
+}
+
+/// `execFileSync(program, args, { input, stdio: [input ? "pipe" : "ignore", "ignore", "ignore"], timeout })`: runs
+/// a program to its end with nothing read back, killing it when the time is up.
+pub async fn exec_file(
+    env: &Env,
+    program: &str,
+    args: &[String],
+    input: Option<&[u8]>,
+    timeout: std::time::Duration,
+) -> Result<(), ExecError> {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+
+    let Some(mut cmd) = program_command(env, program) else {
+        return Err(ExecError::NotFound(program.to_string()));
+    };
+    cmd.args(args)
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = cmd.spawn().map_err(|err| match err.kind() {
+        std::io::ErrorKind::NotFound => ExecError::NotFound(program.to_string()),
+        _ => ExecError::Other {
+            program: program.to_string(),
+            message: err.to_string(),
+        },
+    })?;
+    let run = async {
+        if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+            // A program that exits without reading its input is not an error here.
+            let _ = stdin.write_all(input).await;
+            drop(stdin);
+        }
+        child.wait().await
+    };
+    let status = match tokio::time::timeout(timeout, run).await {
+        Ok(Ok(status)) => status,
+        Ok(Err(err)) => {
+            return Err(ExecError::Other {
+                program: program.to_string(),
+                message: err.to_string(),
+            });
+        }
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(ExecError::TimedOut(program.to_string()));
+        }
+    };
+    if status.success() {
+        Ok(())
+    } else {
+        Err(ExecError::Failed {
+            command: std::iter::once(program.to_string())
+                .chain(args.iter().cloned())
+                .collect::<Vec<_>>()
+                .join(" "),
+            code: status.code(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn a_missing_program_is_enoent_in_node_s_words() {
+        let env = Env::from_pairs([("PATH", "")]);
+        assert_eq!(find_program(&env, "no-such-program-here"), None);
+        let err = exec_file(
+            &env,
+            "no-such-program-here",
+            &[],
+            None,
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.to_string(), "spawnSync no-such-program-here ENOENT");
+        assert_eq!(
+            ExecError::Failed {
+                command: "piper --model m".into(),
+                code: Some(1)
+            }
+            .to_string(),
+            "Command failed: piper --model m"
+        );
+        assert_eq!(
+            ExecError::TimedOut("ffmpeg".into()).to_string(),
+            "spawnSync ffmpeg ETIMEDOUT"
+        );
+    }
 
     struct Bare;
 
