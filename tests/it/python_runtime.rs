@@ -77,6 +77,11 @@ async fn the_microsoft_store_shortcut_is_not_a_python() {
     assert!(p.found);
     assert!(!p.usable);
     assert!(p.problem.as_deref().unwrap().contains("Microsoft Store"));
+    // The shortcut's own words mention the Store too; the problem must be the one said in plain words.
+    assert_eq!(
+        p.problem.as_deref(),
+        Some("this is the Microsoft Store shortcut, not Python itself")
+    );
     assert!(find_base_python(&w.t, &pin()).await.is_none());
     // The py launcher asked for a version it doesn't have says "open the Microsoft Store" too: that's "not found".
     w.py.set(json!({ "pythons": { "py -3.13": { "version": "3.13.7" } } }));
