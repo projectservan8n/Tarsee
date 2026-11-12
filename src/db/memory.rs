@@ -1,14 +1,15 @@
 //! Port of `src/db/memory.js`: the persistent memory store for the bot's identity and learned preferences. Memories
 //! survive across conversations and restarts, and are synced to MEMORY.md on the workspace volume.
 
+use rusqlite::types::Value as SqlValue;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::app::App;
 use crate::db::Row;
-use crate::lib::workspace_files::jstext::{js_collapse_spaces, js_key_order, js_split_spaces, js_trim};
+use crate::lib::workspace_files::jstext::{js_collapse_spaces, js_key_order, js_split_spaces};
 use crate::lib::workspace_files::{append_workspace_file, read_workspace_file, write_workspace_file};
-use crate::util::js::utf16_len;
+use crate::util::js::{trim, utf16_len};
 
 /// One row of `bot_memory`, as `SELECT *` gave it (and, from `search`, with its score).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -40,6 +41,105 @@ pub struct MemoryStats {
     pub by_category: Map<String, Value>,
     pub oldest_date: Option<String>,
     pub newest_date: Option<String>,
+}
+
+/// `content.substring(0, 50).toLowerCase().trim()`, in UTF-16 units: a cut through an emoji keeps its half, as
+/// JavaScript does, so two memories that differ only in the emoji the cut lands in stay apart.
+fn duplicate_prefix(content: &str) -> Vec<u16> {
+    let units: Vec<u16> = content.encode_utf16().take(50).collect();
+    // Lower-case the whole characters; a lone half of a pair stays as it is.
+    let mut lowered: Vec<u16> = Vec::with_capacity(units.len());
+    let mut run = String::new();
+    for decoded in char::decode_utf16(units.iter().copied()) {
+        match decoded {
+            Ok(c) => run.push(c),
+            Err(lone) => {
+                lowered.extend(run.to_lowercase().encode_utf16());
+                run.clear();
+                lowered.push(lone.unpaired_surrogate());
+            }
+        }
+    }
+    lowered.extend(run.to_lowercase().encode_utf16());
+    // trim(): JavaScript's whitespace is all in the basic plane, one unit each.
+    let is_space = |u: &u16| char::from_u32(u32::from(*u)).is_some_and(crate::util::js::is_whitespace);
+    let start = lowered.iter().position(|u| !is_space(u)).unwrap_or(lowered.len());
+    let end = lowered.iter().rposition(|u| !is_space(u)).map_or(start, |i| i + 1);
+    lowered[start..end].to_vec()
+}
+
+/// An error better-sqlite3 or the JavaScript around it threw, which the global error handler answered with a 500:
+/// its class ("TypeError", "RangeError", "SqliteError") and message.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{name}: {message}")]
+pub struct JsDbError {
+    pub name: &'static str,
+    pub message: String,
+}
+
+impl JsDbError {
+    fn type_error(message: &str) -> Self {
+        JsDbError {
+            name: "TypeError",
+            message: message.to_string(),
+        }
+    }
+
+    fn range_error(message: &str) -> Self {
+        JsDbError {
+            name: "RangeError",
+            message: message.to_string(),
+        }
+    }
+}
+
+impl From<rusqlite::Error> for JsDbError {
+    fn from(err: rusqlite::Error) -> Self {
+        JsDbError {
+            name: "SqliteError",
+            message: err.to_string(),
+        }
+    }
+}
+
+const BIND_ONLY: &str = "SQLite3 can only bind numbers, strings, bigints, buffers, and null";
+
+/// The parameters better-sqlite3 made of JavaScript values for a statement with `placeholders` `?`s: a number is a
+/// REAL (so 5 is stored in a text column as "5.0"), a string text, null NULL; an array gives its items one by one;
+/// an object gives none (it holds named parameters); anything else is a TypeError. Too many or too few is a
+/// RangeError.
+pub fn bind_js_values(args: &[Value], placeholders: usize) -> Result<Vec<SqlValue>, JsDbError> {
+    let one = |value: &Value| -> Result<SqlValue, JsDbError> {
+        match value {
+            Value::Null => Ok(SqlValue::Null),
+            Value::Number(n) => Ok(SqlValue::Real(n.as_f64().unwrap_or(0.0))),
+            Value::String(text) => Ok(SqlValue::Text(text.clone())),
+            _ => Err(JsDbError::type_error(BIND_ONLY)),
+        }
+    };
+    let mut bound = Vec::with_capacity(placeholders);
+    let mut push = |value: SqlValue| -> Result<(), JsDbError> {
+        if bound.len() == placeholders {
+            return Err(JsDbError::range_error("Too many parameter values were provided"));
+        }
+        bound.push(value);
+        Ok(())
+    };
+    for arg in args {
+        match arg {
+            Value::Array(items) => {
+                for item in items {
+                    push(one(item)?)?;
+                }
+            }
+            Value::Object(_) => {}
+            other => push(one(other)?)?,
+        }
+    }
+    if bound.len() < placeholders {
+        return Err(JsDbError::range_error("Too few parameter values were provided"));
+    }
+    Ok(bound)
 }
 
 /// How much of one memory goes into the system prompt.
@@ -84,6 +184,29 @@ impl MemoryStore {
             .db()
             .with(|conn| crate::db::all(conn, sql, params))
             .map(|rows| rows.iter().map(memory_of).collect())
+    }
+
+    /// Saves a memory from a request whose category and conversation id are any JSON (`POST /api/memory`): bound as
+    /// better-sqlite3 bound them, so a value it refused is the same error. Returns the new id.
+    pub fn add_js(&self, content: &str, category: &Value, conversation_id: &Value) -> Result<String, JsDbError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let params = bind_js_values(
+            &[
+                Value::String(id.clone()),
+                category.clone(),
+                Value::String(content.to_string()),
+                conversation_id.clone(),
+            ],
+            4,
+        )?;
+        self.app.db().with(|conn| {
+            crate::db::run(
+                conn,
+                "INSERT INTO bot_memory (id, category, content, source_conversation_id) VALUES (?, ?, ?, ?)",
+                rusqlite::params_from_iter(params),
+            )
+        })?;
+        Ok(id)
     }
 
     /// Saves a memory (default category "preference").
@@ -134,7 +257,8 @@ impl MemoryStore {
     }
 
     /// The memories holding any of the query's words, most matching words first, then most recent (default 20).
-    pub fn search(&self, query: &str, limit: usize) -> rusqlite::Result<Vec<Memory>> {
+    /// The limit is `slice(0, limit)`'s: a negative one leaves that many off the end.
+    pub fn search(&self, query: &str, limit: i64) -> rusqlite::Result<Vec<Memory>> {
         let lower = query.to_lowercase();
         let words: Vec<&str> = js_split_spaces(&lower).into_iter().filter(|w| !w.is_empty()).collect();
         if words.is_empty() {
@@ -160,7 +284,13 @@ impl MemoryStore {
             .collect();
         // By score, then by recency; a stable sort keeps the query's order for ties.
         scored.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| b.updated_at.cmp(&a.updated_at)));
-        scored.truncate(limit);
+        let len = scored.len() as i64;
+        let keep = if limit < 0 {
+            (len + limit).max(0)
+        } else {
+            limit.min(len)
+        };
+        scored.truncate(keep as usize);
         Ok(scored)
     }
 
@@ -194,8 +324,7 @@ impl MemoryStore {
         let mut seen = std::collections::HashSet::new();
         let mut to_delete = Vec::new();
         for row in all {
-            let start = String::from_utf16_lossy(&row.content.encode_utf16().take(50).collect::<Vec<_>>());
-            let prefix = js_trim(&start.to_lowercase()).to_string();
+            let prefix = duplicate_prefix(&row.content);
             // The list is newest first, so a prefix seen already marks an older row.
             if !seen.insert(prefix) {
                 to_delete.push(row.id);
@@ -311,7 +440,7 @@ impl MemoryStore {
 /// One memory as a single line of at most `max` characters (UTF-16 units, as the JS counted).
 pub fn clip_memory(text: &str, max: usize) -> String {
     let collapsed = js_collapse_spaces(text, " ");
-    let flat = js_trim(&collapsed);
+    let flat = trim(&collapsed);
     if utf16_len(flat) <= max {
         return flat.to_string();
     }
@@ -423,6 +552,9 @@ mod tests {
         );
         assert_eq!(serde_json::to_value(&found[0]).unwrap()["score"], 2);
         assert_eq!(store.search("tea", 1).unwrap().len(), 1);
+        // slice(0, -1): a negative limit leaves that many off the end (checked against Node: 2 of 3).
+        assert_eq!(store.search("tea", -1).unwrap().len(), 2);
+        assert_eq!(store.search("tea", -5).unwrap().len(), 0);
         assert!(store.search("   ", 20).unwrap().is_empty());
     }
 
@@ -442,6 +574,77 @@ mod tests {
         assert!(store.get(&old.id).unwrap().is_none());
         assert!(store.get(&new.id).unwrap().is_some());
         assert_eq!(store.consolidate().unwrap(), 0);
+    }
+
+    #[test]
+    fn a_prefix_cut_through_an_emoji_keeps_its_half_as_javascript_does() {
+        let (t, store) = store();
+        let shared = "x".repeat(49);
+        let smile = store.add(&format!("{shared}😀 smile"), "fact", None).unwrap();
+        let robot = store.add(&format!("{shared}🤖 robot"), "fact", None).unwrap();
+        set_updated(&t, &smile.id, "2026-01-01 00:00:00");
+        set_updated(&t, &robot.id, "2026-01-02 00:00:00");
+        // The 50th unit is the first half of each emoji, and the halves differ: Node removed nothing.
+        assert_eq!(store.consolidate().unwrap(), 0);
+        assert_eq!(store.count().unwrap(), 2);
+        assert_ne!(duplicate_prefix("😀"), duplicate_prefix("🤖"));
+        // Checked against Node: the final sigma, and JavaScript's trim.
+        assert_eq!(
+            duplicate_prefix("  ÉCOLE ΟΔΟΣ  "),
+            "école οδος".encode_utf16().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn values_are_bound_as_better_sqlite3_bound_them() {
+        let text = |s: &str| SqlValue::Text(s.into());
+        let bound = bind_js_values(&[json!("id"), json!(5), json!(["x"]), json!(null)], 4).unwrap();
+        assert_eq!(bound, [text("id"), SqlValue::Real(5.0), text("x"), SqlValue::Null]);
+        // An object holds named parameters, so it gives none here.
+        let bound = bind_js_values(&[json!("id"), json!({"a": 1}), json!("c"), json!([1, 2])], 4).unwrap();
+        assert_eq!(bound, [text("id"), text("c"), SqlValue::Real(1.0), SqlValue::Real(2.0)]);
+        let err = |args: &[Value]| bind_js_values(args, 4).unwrap_err().to_string();
+        // The messages better-sqlite3 gave (checked against Node).
+        assert_eq!(
+            err(&[json!("id"), json!(true), json!("c"), json!(null)]),
+            "TypeError: SQLite3 can only bind numbers, strings, bigints, buffers, and null"
+        );
+        assert_eq!(
+            err(&[json!("id"), json!([[1]]), json!("c"), json!(null)]),
+            "TypeError: SQLite3 can only bind numbers, strings, bigints, buffers, and null"
+        );
+        assert_eq!(
+            err(&[json!("id"), json!({"a": 1}), json!("c"), json!(null)]),
+            "RangeError: Too few parameter values were provided"
+        );
+        assert_eq!(
+            err(&[json!("id"), json!([]), json!("c"), json!(null)]),
+            "RangeError: Too few parameter values were provided"
+        );
+        assert_eq!(
+            err(&[json!("id"), json!([1, 2]), json!("c"), json!(null)]),
+            "RangeError: Too many parameter values were provided"
+        );
+    }
+
+    #[test]
+    fn a_number_category_is_stored_as_a_real_and_a_null_one_is_refused() {
+        let (_t, store) = store();
+        let id = store.add_js("note", &json!(5), &json!(null)).unwrap();
+        assert_eq!(store.get(&id).unwrap().unwrap().category, "5.0");
+        let id = store.add_js("note", &json!(["x"]), &json!(["c"])).unwrap();
+        let row = store.get(&id).unwrap().unwrap();
+        assert_eq!(
+            (row.category.as_str(), row.source_conversation_id.as_deref()),
+            ("x", Some("c"))
+        );
+        assert_eq!(
+            store
+                .add_js("note", &json!([null]), &json!(null))
+                .unwrap_err()
+                .to_string(),
+            "SqliteError: NOT NULL constraint failed: bot_memory.category"
+        );
     }
 
     #[test]

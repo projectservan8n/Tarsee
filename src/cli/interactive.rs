@@ -10,9 +10,9 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 
 use crate::env::Env;
-use crate::lib::workspace_files::jstext::{js_string, js_trim};
+use crate::lib::workspace_files::jstext::js_string;
 use crate::net::fetch::{Fetch, FetchError, FetchRequest};
-use crate::util::js::truthy;
+use crate::util::js::{trim, truthy};
 
 const PROMPT: &str = "you > ";
 
@@ -48,7 +48,7 @@ where
 
     let mut lines = input.lines();
     while let Some(line) = lines.next_line().await? {
-        let msg = js_trim(&line);
+        let msg = trim(&line);
         if msg.is_empty() {
             write!(out, "{PROMPT}")?;
             out.flush()?;

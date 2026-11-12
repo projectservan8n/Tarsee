@@ -29,5 +29,6 @@
   {"title": "Duplicates and depth", "diagramId": "",
    "nodes": [{"id": "a", "label": "first a"}, {"id": "a", "label": "second a", "kind": "note"}, {"id": "b", "label": "B"}, {"id": "c", "label": "C"}],
    "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "c"}, {"from": "a", "to": "c"}, {"from": "c", "to": "a"}]},
-  {"title": "Only notes", "nodes": [{"id": "n", "kind": "note", "label": "Just a note", "x": -20, "y": 1000}], "edges": [{"from": "n", "to": "n", "label": "self"}]}
+  {"title": "Only notes", "nodes": [{"id": "n", "kind": "note", "label": "Just a note", "x": -20, "y": 1000}], "edges": [{"from": "n", "to": "n", "label": "self"}]},
+  {"title": "Inherited kinds", "nodes": [{"id": "a", "label": "A", "kind": "toString"}, {"id": "b", "label": "B", "kind": "__proto__"}], "edges": [{"from": "a", "to": "b"}], "legend": [{"kind": "toString"}, {"kind": "__proto__"}, {"kind": "constructor", "label": ""}, {"kind": "valueOf", "label": "Shown"}]}
 ]

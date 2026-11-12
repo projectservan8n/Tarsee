@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
@@ -18,9 +18,9 @@ use parking_lot::Mutex;
 use serde_json::{Map, Value};
 
 use crate::app::App;
-use crate::util::js::utf16_len;
+use crate::util::js::{trim, utf16_len};
 
-use self::jstext::{js_collapse_spaces, js_trim};
+use self::jstext::js_collapse_spaces;
 
 const CACHE_TTL: Duration = Duration::from_secs(5);
 
@@ -48,6 +48,33 @@ fn cache(app: &App) -> Arc<WorkspaceCache> {
     app.get_or_init(WorkspaceCache::default)
 }
 
+/// Whether a path piece that came from outside the program (a request, a tool argument, a setting, a file) is one
+/// plain name, safe to join to a folder: not empty, not `.` or `..`, no separator (`/` or `\\`), not absolute and no
+/// drive. Rust's `Path::join` replaces the folder with an absolute piece, so a piece is checked before it is joined.
+pub fn is_plain_name(name: &str) -> bool {
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+        return false;
+    }
+    let mut parts = Path::new(name).components();
+    matches!((parts.next(), parts.next()), (Some(Component::Normal(n)), None) if n == name)
+}
+
+/// `path.join(WORKSPACE_DIR, filename)`: joined as Node joined, so an absolute name stays under the workspace. A
+/// name whose `..` leads out of the workspace gives `None` (the Node code followed it out; the callers only pass the
+/// workspace's own files).
+fn workspace_path(app: &App, filename: &str) -> Option<PathBuf> {
+    let workspace = crate::lib::safe_path::normalize_path(&app.config().workspace_dir);
+    let path = crate::lib::safe_path::join_path(&workspace, filename);
+    path.starts_with(&workspace).then_some(path)
+}
+
+fn outside_workspace(filename: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        format!("{filename} is outside the workspace"),
+    )
+}
+
 /// Reads a workspace file ("SOUL.md", "memory/2026-11-12.md"), through a 5 second cache. Empty when it cannot be read.
 pub fn read_workspace_file(app: &App, filename: &str) -> String {
     let cache = cache(app);
@@ -56,7 +83,9 @@ pub fn read_workspace_file(app: &App, filename: &str) -> String {
     {
         return content.clone();
     }
-    let path = app.config().workspace_dir.join(filename);
+    let Some(path) = workspace_path(app, filename) else {
+        return String::new();
+    };
     match fs::read(&path) {
         Ok(bytes) => {
             let content = String::from_utf8_lossy(&bytes).into_owned();
@@ -72,7 +101,7 @@ pub fn read_workspace_file(app: &App, filename: &str) -> String {
 
 /// Writes a workspace file (overwrites), creating its folder. Invalidates its cache entry.
 pub fn write_workspace_file(app: &App, filename: &str, content: &str) -> std::io::Result<()> {
-    let path = app.config().workspace_dir.join(filename);
+    let path = workspace_path(app, filename).ok_or_else(|| outside_workspace(filename))?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
@@ -83,7 +112,7 @@ pub fn write_workspace_file(app: &App, filename: &str, content: &str) -> std::io
 
 /// Appends to a workspace file, creating it and its folder. Invalidates its cache entry.
 pub fn append_workspace_file(app: &App, filename: &str, content: &str) -> std::io::Result<()> {
-    let path = app.config().workspace_dir.join(filename);
+    let path = workspace_path(app, filename).ok_or_else(|| outside_workspace(filename))?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
@@ -253,7 +282,7 @@ pub fn get_bootstrap_context(app: &App, heartbeat_waiting: Option<bool>) -> Stri
         }
 
         let raw = read_workspace_file(app, name);
-        if raw.is_empty() || utf16_len(js_trim(&raw)) < 5 {
+        if raw.is_empty() || utf16_len(trim(&raw)) < 5 {
             continue;
         }
 
@@ -553,7 +582,7 @@ fn runnable_context(content: &str) -> String {
     // conclude there was nothing to do. Worse, it makes the model invent work to justify the turn.
     let without_comments = HTML_COMMENT.replace_all(content, "");
     let significant = strip_heading_lines(&without_comments);
-    if utf16_len(js_trim(&significant)) < 5 {
+    if utf16_len(trim(&significant)) < 5 {
         return String::new();
     }
     truncate_content(content, WORKSPACE_FILE_MAX_BYTES)
@@ -572,7 +601,7 @@ pub fn get_boot_context(app: &App) -> String {
 /// Whether BOOTSTRAP.md exists and has content (first-run detection).
 pub fn has_bootstrap_file(app: &App) -> bool {
     let content = read_workspace_file(app, "BOOTSTRAP.md");
-    !content.is_empty() && utf16_len(js_trim(&content)) > 5
+    !content.is_empty() && utf16_len(trim(&content)) > 5
 }
 
 /// Deletes BOOTSTRAP.md after first-run setup is complete. Already gone is fine.
@@ -607,8 +636,8 @@ pub fn parse_identity_file(app: &App, content: Option<&str>) -> Map<String, Valu
         return result;
     }
     for caps in IDENTITY_LINE.captures_iter(&raw) {
-        let key = js_collapse_spaces(&js_trim(&caps[1]).to_lowercase(), "_");
-        result.insert(key, Value::String(js_trim(&caps[2]).to_string()));
+        let key = js_collapse_spaces(&trim(&caps[1]).to_lowercase(), "_");
+        result.insert(key, Value::String(trim(&caps[2]).to_string()));
     }
     result
 }
@@ -628,7 +657,7 @@ pub mod jstext {
     use serde_json::{Map, Value};
 
     use crate::env::Env;
-    use crate::util::js::number_to_string;
+    use crate::util::js::{number_to_string, trim};
 
     /// The characters of JavaScript's `\s` (and of `trim`), as the inside of a regex character class.
     pub const JS_SPACE_CLASS: &str =
@@ -636,16 +665,6 @@ pub mod jstext {
 
     static SPACES: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new(&format!("[{JS_SPACE_CLASS}]+")).expect("the space pattern"));
-
-    /// Whether JavaScript counts `c` as whitespace (`/\s/`).
-    pub fn is_js_space(c: char) -> bool {
-        (c.is_whitespace() && c != '\u{85}') || c == '\u{FEFF}'
-    }
-
-    /// `s.trim()`.
-    pub fn js_trim(s: &str) -> &str {
-        s.trim_matches(is_js_space)
-    }
 
     /// `s.replace(/\s+/g, with)`.
     pub fn js_collapse_spaces(s: &str, with: &str) -> String {
@@ -723,7 +742,7 @@ pub mod jstext {
     /// `parseInt(text)` (no radix): leading whitespace, a sign, then decimal digits, or hex after `0x`. `None` is
     /// `NaN`.
     pub fn js_parse_int(text: &str) -> Option<i64> {
-        let s = js_trim(text);
+        let s = trim(text);
         let (negative, s) = match s.as_bytes().first() {
             Some(b'-') => (true, &s[1..]),
             Some(b'+') => (false, &s[1..]),
@@ -743,6 +762,73 @@ pub mod jstext {
             return None;
         }
         let value = i64::from_str_radix(&digits[..end], radix).unwrap_or(i64::MAX);
+        Some(if negative { -value } else { value })
+    }
+
+    /// `Number(text)` (and what `<`, `>` and arithmetic do to text): blank is 0, otherwise the whole trimmed text
+    /// must be a number (decimal, `0x`, `0o`, `0b`, or `Infinity`); anything else is NaN.
+    pub fn js_to_number(s: &str) -> f64 {
+        let t = trim(s);
+        if t.is_empty() {
+            return 0.0;
+        }
+        let radix = |prefix: &str, radix: u32| {
+            t.strip_prefix(prefix)
+                .or_else(|| t.strip_prefix(&prefix.to_uppercase()))
+                .map(|digits| {
+                    if digits.is_empty() {
+                        f64::NAN
+                    } else {
+                        u64::from_str_radix(digits, radix).map_or(f64::NAN, |v| v as f64)
+                    }
+                })
+        };
+        if let Some(v) = radix("0x", 16).or_else(|| radix("0o", 8)).or_else(|| radix("0b", 2)) {
+            return v;
+        }
+        match t {
+            "Infinity" | "+Infinity" => return f64::INFINITY,
+            "-Infinity" => return f64::NEG_INFINITY,
+            _ => {}
+        }
+        let valid = t
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
+            && t.chars().any(|c| c.is_ascii_digit());
+        if !valid {
+            return f64::NAN;
+        }
+        t.parse::<f64>().unwrap_or(f64::NAN)
+    }
+
+    /// What Node's `path.join` and the `fs` functions threw for a path argument that is not text
+    /// (`ERR_INVALID_ARG_TYPE`); `None` is `undefined`.
+    pub fn path_type_error(value: Option<&Value>) -> String {
+        let received = match value {
+            None => "undefined".to_string(),
+            Some(Value::Null) => "null".to_string(),
+            Some(Value::Bool(b)) => format!("type boolean ({b})"),
+            Some(Value::Number(n)) => format!("type number ({})", number_to_string(n.as_f64().unwrap_or(0.0))),
+            Some(Value::String(s)) => format!("type string ('{s}')"),
+            Some(Value::Array(_)) => "an instance of Array".to_string(),
+            Some(Value::Object(_)) => "an instance of Object".to_string(),
+        };
+        format!("The \"path\" argument must be of type string. Received {received}")
+    }
+
+    /// `parseInt(text, 10)`: leading whitespace, a sign, then decimal digits; `None` is `NaN`.
+    pub fn js_parse_int_decimal(text: &str) -> Option<i64> {
+        let s = crate::util::js::trim_start(text);
+        let (negative, s) = match s.as_bytes().first() {
+            Some(b'-') => (true, &s[1..]),
+            Some(b'+') => (false, &s[1..]),
+            _ => (false, s),
+        };
+        let end = s.bytes().position(|b| !b.is_ascii_digit()).unwrap_or(s.len());
+        if end == 0 {
+            return None;
+        }
+        let value = s[..end].parse::<i64>().unwrap_or(i64::MAX);
         Some(if negative { -value } else { value })
     }
 
@@ -769,8 +855,8 @@ pub mod jstext {
 
         #[test]
         fn whitespace_is_javascripts() {
-            assert_eq!(js_trim("\u{FEFF} hi \u{A0}\n"), "hi");
-            assert_eq!(js_trim("\u{85}hi"), "\u{85}hi");
+            assert_eq!(trim("\u{FEFF} hi \u{A0}\n"), "hi");
+            assert_eq!(trim("\u{85}hi"), "\u{85}hi");
             assert_eq!(js_collapse_spaces("a \t\n b\u{3000}c", " "), "a b c");
             assert_eq!(js_split_spaces("a  b"), ["a", "b"]);
             assert_eq!(js_split_spaces(""), [""]);

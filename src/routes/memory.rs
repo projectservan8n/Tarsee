@@ -11,11 +11,11 @@ use axum::routing::{delete, get};
 use serde_json::{Value, json};
 
 use crate::app::App;
-use crate::db::memory::MemoryStore;
+use crate::db::memory::{JsDbError, MemoryStore};
 use crate::error::{ApiError, ApiResult};
-use crate::lib::workspace_files::jstext::{js_parse_int, js_string, js_trim};
+use crate::lib::workspace_files::jstext::js_parse_int;
 use crate::routes::skills::{express_json_body, unhandled_error};
-use crate::util::js::truthy;
+use crate::util::js::{trim, truthy};
 
 pub fn router() -> Router<App> {
     Router::new()
@@ -27,17 +27,44 @@ pub fn router() -> Router<App> {
         .route("/{id}", delete(remove))
 }
 
-/// `req.query.<name>` as text: a name given twice was an array, which `parseInt` and the like read as its values
-/// joined by commas.
-fn query_param(query: &Option<String>, name: &str) -> Option<String> {
-    let values: Vec<String> = url::form_urlencoded::parse(query.as_deref().unwrap_or_default().as_bytes())
+/// `req.query.<name>` as Express's query parser gave it: absent, one value, or an array when the name came more than
+/// once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum QueryValue {
+    Absent,
+    One(String),
+    Many(Vec<String>),
+}
+
+impl QueryValue {
+    /// `String(value)`: an array's values joined by commas (what `parseInt` read).
+    fn as_text(&self) -> Option<String> {
+        match self {
+            QueryValue::Absent => None,
+            QueryValue::One(v) => Some(v.clone()),
+            QueryValue::Many(vs) => Some(vs.join(",")),
+        }
+    }
+
+    /// The JS truthiness of the value: an empty string is false, an array always true.
+    fn truthy(&self) -> bool {
+        match self {
+            QueryValue::Absent => false,
+            QueryValue::One(v) => !v.is_empty(),
+            QueryValue::Many(_) => true,
+        }
+    }
+}
+
+fn query_param(query: &Option<String>, name: &str) -> QueryValue {
+    let mut values: Vec<String> = url::form_urlencoded::parse(query.as_deref().unwrap_or_default().as_bytes())
         .filter(|(k, _)| k == name)
         .map(|(_, v)| v.into_owned())
         .collect();
-    if values.is_empty() {
-        None
-    } else {
-        Some(values.join(","))
+    match values.len() {
+        0 => QueryValue::Absent,
+        1 => QueryValue::One(values.remove(0)),
+        _ => QueryValue::Many(values),
     }
 }
 
@@ -47,44 +74,69 @@ fn limit_of(text: Option<String>, fallback: i64, max: i64) -> i64 {
     parsed.unwrap_or(fallback).min(max)
 }
 
-fn db_error(app: &App, err: rusqlite::Error) -> ApiError {
-    unhandled_error(app, &err.to_string())
+/// A database error the route did not catch: the global error handler's 500.
+fn db_error(app: &App, err: JsDbError) -> ApiError {
+    unhandled_error(app, err.name, &err.message)
 }
 
 /// GET / — the memories, newest first. Optional `?category=` and `?limit=` (default 50, at most 200).
 async fn list(State(app): State<App>, RawQuery(query): RawQuery) -> ApiResult {
     let store = MemoryStore::new(&app);
-    let limit = limit_of(query_param(&query, "limit"), 50, 200);
-    let category = query_param(&query, "category").filter(|c| !c.is_empty());
-    let memories = store.list(limit, category.as_deref()).map_err(|e| db_error(&app, e))?;
-    let total = store.count().map_err(|e| db_error(&app, e))?;
+    let limit = limit_of(query_param(&query, "limit").as_text(), 50, 200);
+    let category = match query_param(&query, "category") {
+        QueryValue::One(c) if !c.is_empty() => Some(c),
+        // An array was spread into the statement's parameters: one too many.
+        QueryValue::Many(_) => {
+            return Err(unhandled_error(
+                &app,
+                "RangeError",
+                "Too many parameter values were provided",
+            ));
+        }
+        _ => None,
+    };
+    let memories = store
+        .list(limit, category.as_deref())
+        .map_err(|e| db_error(&app, e.into()))?;
+    let total = store.count().map_err(|e| db_error(&app, e.into()))?;
     Ok(Json(json!({ "memories": memories, "total": total })))
 }
 
 /// POST / — adds a memory. Body: `{ content, category?, conversationId? }`.
+///
+/// `category` and `conversationId` are bound as the JS bound whatever JSON was sent (a number is stored as "5.0",
+/// an array gives its items), and the answer carries them as they were sent.
 async fn add(State(app): State<App>, headers: HeaderMap, body: Bytes) -> Result<Response, ApiError> {
     let body = express_json_body(&headers, &body)?.unwrap_or_else(|| json!({}));
     let content = match body.get("content") {
-        Some(Value::String(text)) if !js_trim(text).is_empty() => js_trim(text).to_string(),
+        Some(Value::String(text)) if !trim(text).is_empty() => trim(text).to_string(),
         _ => return Err(ApiError::bad_request("Content is required")),
     };
-    let category = match body.get("category").filter(|c| truthy(c)) {
-        Some(c) => js_string(Some(c)),
-        None => "preference".to_string(),
-    };
+    let category = body
+        .get("category")
+        .filter(|c| truthy(c))
+        .cloned()
+        .unwrap_or_else(|| Value::String("preference".into()));
     let conversation_id = body
         .get("conversationId")
         .filter(|c| truthy(c))
-        .map(|c| js_string(Some(c)));
-    let memory = MemoryStore::new(&app)
-        .add(&content, &category, conversation_id.as_deref())
+        .cloned()
+        .unwrap_or(Value::Null);
+    let id = MemoryStore::new(&app)
+        .add_js(&content, &category, &conversation_id)
         .map_err(|e| db_error(&app, e))?;
-    Ok((StatusCode::CREATED, Json(memory)).into_response())
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "id": id, "category": category, "content": content })),
+    )
+        .into_response())
 }
 
 /// DELETE /:id — deletes a memory.
 async fn remove(State(app): State<App>, Path(id): Path<String>) -> ApiResult {
-    let deleted = MemoryStore::new(&app).delete(&id).map_err(|e| db_error(&app, e))?;
+    let deleted = MemoryStore::new(&app)
+        .delete(&id)
+        .map_err(|e| db_error(&app, e.into()))?;
     if !deleted {
         return Err(ApiError::not_found("Memory not found"));
     }
@@ -93,13 +145,22 @@ async fn remove(State(app): State<App>, Path(id): Path<String>) -> ApiResult {
 
 /// GET /search — `?q=search+term&limit=20` (at most 100).
 async fn search(State(app): State<App>, RawQuery(query): RawQuery) -> ApiResult {
-    let Some(q) = query_param(&query, "q").filter(|q| !q.is_empty()) else {
+    let q = query_param(&query, "q");
+    if !q.truthy() {
         return Err(ApiError::bad_request("Query param 'q' is required"));
+    }
+    let QueryValue::One(q) = q else {
+        // `?q=a&q=b` is an array, which has no toLowerCase.
+        return Err(unhandled_error(
+            &app,
+            "TypeError",
+            "query.toLowerCase is not a function",
+        ));
     };
-    let limit = limit_of(query_param(&query, "limit"), 20, 100);
+    let limit = limit_of(query_param(&query, "limit").as_text(), 20, 100);
     let memories = MemoryStore::new(&app)
-        .search(&q, usize::try_from(limit).unwrap_or(0))
-        .map_err(|e| db_error(&app, e))?;
+        .search(&q, limit)
+        .map_err(|e| db_error(&app, e.into()))?;
     Ok(Json(json!({ "memories": memories })))
 }
 
@@ -179,6 +240,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn values_that_are_not_text_are_bound_or_refused_as_node_did() {
+        let (t, router) = app();
+        let res = http::post_json(&router, "/", &json!({"content": "n", "category": 5})).await;
+        assert_eq!(res.status, 201);
+        assert_eq!(res.json()["category"], 5, "the answer carries what was sent");
+        let id = res.json()["id"].as_str().unwrap().to_string();
+        assert_eq!(MemoryStore::new(&t).get(&id).unwrap().unwrap().category, "5.0");
+
+        let cases = [
+            (
+                json!({"content": "n", "category": true}),
+                "SQLite3 can only bind numbers, strings, bigints, buffers, and null",
+            ),
+            (
+                json!({"content": "n", "category": {"a": 1}}),
+                "Too few parameter values were provided",
+            ),
+            (
+                json!({"content": "n", "category": [1, 2]}),
+                "Too many parameter values were provided",
+            ),
+            (
+                json!({"content": "n", "conversationId": true}),
+                "SQLite3 can only bind numbers, strings, bigints, buffers, and null",
+            ),
+        ];
+        for (body, detail) in cases {
+            let res = http::post_json(&router, "/", &body).await;
+            assert_eq!(
+                (res.status, res.json()),
+                (500, json!({"error": "Internal server error", "detail": detail})),
+                "{body}"
+            );
+        }
+        let logs = crate::testkit::CapturedLogs::start();
+        let res = http::get(&router, "/search?q=a&q=b").await;
+        assert_eq!(
+            (res.status, res.json()),
+            (
+                500,
+                json!({"error": "Internal server error", "detail": "query.toLowerCase is not a function"})
+            )
+        );
+        assert_eq!(
+            logs.errors(),
+            ["[error] TypeError: query.toLowerCase is not a function"]
+        );
+        let res = http::get(&router, "/?category=a&category=b").await;
+        assert_eq!(
+            (res.status, res.json()),
+            (
+                500,
+                json!({"error": "Internal server error", "detail": "Too many parameter values were provided"})
+            )
+        );
+        assert_eq!(
+            http::get(&router, "/?category=").await.json()["memories"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_negative_search_limit_leaves_results_off_the_end() {
+        let (t, router) = app();
+        let store = MemoryStore::new(&t);
+        for content in ["tea one", "tea two", "tea three"] {
+            store.add(content, "fact", None).unwrap();
+        }
+        let res = http::get(&router, "/search?q=tea&limit=-1").await;
+        assert_eq!(res.json()["memories"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
     async fn bad_requests_are_refused_as_before() {
         let (_t, router) = app();
         for body in [json!({}), json!({"content": "   "}), json!({"content": 5})] {
@@ -204,9 +341,14 @@ mod tests {
         assert_eq!(limit_of(Some("12abc".into()), 50, 200), 12);
         assert_eq!(limit_of(Some("-5".into()), 50, 200), -5);
         assert_eq!(
-            query_param(&Some("limit=5&limit=7".into()), "limit").as_deref(),
+            query_param(&Some("limit=5&limit=7".into()), "limit")
+                .as_text()
+                .as_deref(),
             Some("5,7")
         );
-        assert_eq!(query_param(&Some("q=a+b%21".into()), "q").as_deref(), Some("a b!"));
+        assert_eq!(
+            query_param(&Some("q=a+b%21".into()), "q").as_text().as_deref(),
+            Some("a b!")
+        );
     }
 }

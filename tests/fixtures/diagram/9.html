@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Inherited kinds</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #1a1a1a; color: #ececec; font-family: Poppins, -apple-system, sans-serif; padding: 20px; }
+  .title { font-size: 18px; font-weight: 600; color: #f5a623; margin-bottom: 16px; }
+  .stage { position: relative; width: 800px; height: 400px; margin: 0 auto; }
+  svg.edges { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+  .node { position: absolute; border: 1.5px solid; border-radius: 10px; padding: 14px 18px; cursor: pointer; transition: transform .12s, box-shadow .12s; display: flex; flex-direction: column; justify-content: center; font-size: 14px; }
+  .node:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(245,166,35,.25); border-color: #f5a623 !important; }
+  .node .label { font-weight: 600; }
+  .node .sub { font-size: 12px; opacity: .8; margin-top: 4px; font-weight: 400; }
+  .node.is-note { border-style: dashed; cursor: default; font-style: italic; }
+  .node.is-note:hover { transform: none; box-shadow: none; border-color: inherit !important; }
+  .legend { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; justify-content: center; }
+  .pill { padding: 6px 12px; border-radius: 6px; font-size: 12px; border: 1.5px solid; }
+</style>
+</head>
+<body>
+<div class="title">Inherited kinds</div>
+<div class="stage">
+  <svg class="edges" viewBox="0 0 800 400" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#5a5855"/>
+      </marker>
+    </defs>
+    <path d="M 400 120 C 400 150, 400 150, 400 180" stroke="#5a5855" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  </svg>
+  <div class="node" data-node-id="a" data-label="A" data-sublabel="" style="left:270px;top:40px;width:260px;height:80px;background:undefined;border-color:undefined;color:undefined"><div class="label">A</div></div><div class="node" data-node-id="b" data-label="B" data-sublabel="" style="left:270px;top:180px;width:260px;height:80px;background:undefined;border-color:undefined;color:undefined"><div class="label">B</div></div>
+</div>
+<div class="legend"><div class="pill" style="background:undefined;border-color:undefined;color:undefined"></div><div class="pill" style="background:undefined;border-color:undefined;color:undefined"></div><div class="pill" style="background:undefined;border-color:undefined;color:undefined"></div><div class="pill" style="background:undefined;border-color:undefined;color:undefined">Shown</div></div>
+<script>
+(function() {
+  const questions = {};
+  const diagramId = "Inherited kinds";
+  document.querySelectorAll('.node:not(.is-note)').forEach((el) => {
+    el.addEventListener('click', () => {
+      const nodeId = el.dataset.nodeId;
+      const label = el.dataset.label;
+      const sublabel = el.dataset.sublabel;
+      const question = questions[nodeId];
+      try {
+        window.parent.postMessage({
+          type: 'tarsee:diagram-click',
+          diagramId, nodeId, label, sublabel, question,
+        }, '*');
+      } catch (e) { /* sandboxed */ }
+    });
+  });
+})();
+</script>
+</body>
+</html>

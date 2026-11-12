@@ -1,35 +1,39 @@
 //! Port of `src/lib/canvas.js`: the canvas (A2UI) server. Serves AI-generated HTML/CSS/JS pages from the workspace's
 //! `canvas` folder, at `/canvas/<id>/`.
 //!
-//! The Express middleware becomes [`canvas_middleware`]: it takes a request and either answers it or hands it back
-//! for the next handler. Whether the request is signed in comes from the caller (the session middleware's
-//! `req.auth`, package B1), so `server.rs` wires it as:
+//! The Express middleware is [`canvas_middleware`], an axum middleware: `server.rs` applies it where `server.js`
+//! applied `canvasMiddleware` (after the session middleware, whose `req.auth` it reads as [`Auth`]):
 //!
 //! ```ignore
-//! async fn canvas(State(app): State<App>, req: Request, next: Next) -> Response {
-//!     let signed_in = /* req.auth?.authenticated */;
-//!     match canvas::canvas_middleware(&app, signed_in, req).await {
-//!         Ok(res) => res,
-//!         Err(req) => next.run(req).await,
-//!     }
-//! }
+//! router.layer(axum::middleware::from_fn_with_state(app.clone(), canvas::canvas_middleware))
 //! ```
+//!
+//! A file is sent as Express's `res.sendFile` (the send module) sent it: its type, `Cache-Control: public,
+//! max-age=0`, a weak ETag of its size and time, Last-Modified, conditional and range requests. A page sent as text
+//! carries the weak ETag Express made of its body.
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::io::SeekFrom;
+use std::path::{Component, Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use axum::body::Body;
-use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::extract::{Request, State};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::middleware::Next;
+use axum::response::Response;
+use base64::Engine;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use tower::ServiceExt;
-use tower_http::services::ServeFile;
+use sha1::{Digest, Sha1};
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::app::App;
 use crate::config::Config;
+use crate::lib::safe_path::{join_path, normalize_path};
+use crate::lib::workspace_files::is_plain_name;
 use crate::lib::workspace_files::jstext::{process_zone, read_dir_sorted};
+use crate::middleware::auth::Auth;
 use crate::util::js::{iso_from_ms, utf16_len};
 
 /// The folder the canvases live in (`CANVAS_DIR`).
@@ -59,7 +63,18 @@ pub struct CanvasInfo {
     pub modified: Option<String>,
 }
 
+fn invalid_id(canvas_id: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("Invalid canvas id: {canvas_id}"),
+    )
+}
+
 /// Writes and reads the canvases.
+///
+/// A canvas id must be one plain name (no separators, not `.` or `..`, not absolute). The tools reduce ids to
+/// `[a-z0-9-]` before they get here; the check keeps any other caller inside the canvas folder, which the JS's
+/// `path.join` did not (`..` led out of it).
 #[derive(Debug, Clone)]
 pub struct CanvasServer {
     dir: PathBuf,
@@ -89,6 +104,9 @@ impl CanvasServer {
         css: Option<&str>,
         js: Option<&str>,
     ) -> std::io::Result<ServedCanvas> {
+        if !is_plain_name(canvas_id) {
+            return Err(invalid_id(canvas_id));
+        }
         let dir = self.dir.join(canvas_id);
         fs::create_dir_all(&dir)?;
 
@@ -141,7 +159,7 @@ impl CanvasServer {
                 CanvasInfo {
                     has_index: meta.is_some(),
                     size: meta.as_ref().map_or(0, |m| m.len()),
-                    modified: meta.and_then(|m| m.modified().ok()).map(|t| iso_from_ms(ms_of(t))),
+                    modified: meta.as_ref().map(|m| iso_from_ms(mtime_ms(m))),
                     id,
                 }
             })
@@ -150,15 +168,23 @@ impl CanvasServer {
 
     /// A canvas's page, or `None`.
     pub fn get(&self, canvas_id: &str) -> Option<String> {
+        if !is_plain_name(canvas_id) {
+            return None;
+        }
         fs::read(self.dir.join(canvas_id).join("index.html"))
             .ok()
             .map(|b| String::from_utf8_lossy(&b).into_owned())
     }
 
-    /// Deletes a canvas; false when there was nothing to delete or it could not be.
+    /// Deletes a canvas (a folder with everything in it, or a file); false when there was nothing to delete or it
+    /// could not be.
     pub fn delete(&self, canvas_id: &str) -> bool {
+        if !is_plain_name(canvas_id) {
+            return false;
+        }
         let dir = self.dir.join(canvas_id);
-        let removed = if dir.is_dir() {
+        let is_dir = fs::symlink_metadata(&dir).map(|m| m.is_dir()).unwrap_or(false);
+        let removed = if is_dir {
             fs::remove_dir_all(&dir)
         } else {
             fs::remove_file(&dir)
@@ -166,14 +192,19 @@ impl CanvasServer {
         removed.is_ok()
     }
 
+    /// `path.join(CANVAS_DIR, canvasId, filename)`, joined and tidied as Node did (an absolute piece stays under the
+    /// canvas folder).
     pub fn get_file_path(&self, canvas_id: &str, filename: &str) -> PathBuf {
-        self.dir.join(canvas_id).join(filename)
+        join_path(&self.dir, &format!("{canvas_id}/{filename}"))
     }
 }
 
-fn ms_of(time: SystemTime) -> i64 {
-    time.duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
+/// A file's modification time in whole milliseconds, as Node's `stat.mtime` Date held it (rounded).
+fn mtime_ms(meta: &fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| (d.as_nanos() as f64 / 1e6).round() as i64)
         .unwrap_or(0)
 }
 
@@ -224,54 +255,82 @@ fn apply_canvas_isolation(headers: &mut HeaderMap) {
     headers.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
 }
 
-/// `res.status(status).send(text)`: an HTML answer.
-fn html(status: StatusCode, text: impl Into<String>) -> Response {
-    (
-        status,
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        text.into(),
-    )
-        .into_response()
-}
-
 const SIGN_IN_PAGE: &str = concat!(
     "<!DOCTYPE html><html><body style=\"background:#1a1a1a;color:#ececec;font-family:sans-serif;padding:40px\">",
     "<h1>Sign in required</h1><p>Log in to Tarsee to view this canvas.</p></body></html>"
 );
 
-/// Serves `/canvas/...`: the gallery at `/canvas/`, a canvas's files below it. Answers `Ok(response)`, or hands the
-/// request back (`Err(request)`, the JS `next()`) when it is not a canvas path or names a folder.
+const HTML: &str = "text/html; charset=utf-8";
+const JSON: &str = "application/json; charset=utf-8";
+
+/// The request's method and headers, kept for answering after the request itself has moved on.
+struct Asked {
+    method: Method,
+    headers: HeaderMap,
+}
+
+impl Asked {
+    fn header(&self, name: header::HeaderName) -> Option<&str> {
+        self.headers.get(name).and_then(|v| v.to_str().ok())
+    }
+
+    fn is_get_or_head(&self) -> bool {
+        self.method == Method::GET || self.method == Method::HEAD
+    }
+}
+
+/// What a canvas path came to: an answer, or the request for the next handler (the JS `next()`).
+enum Outcome {
+    Answer(Response),
+    Next(Request),
+}
+
+/// Serves `/canvas/...`: the gallery at `/canvas/`, a canvas's files below it; any other path goes on.
 ///
 /// Canvases are private. They routinely contain whatever the user asked the agent to visualise — revenue
 /// dashboards, customer lists, internal process diagrams — and this runs before any auth, so /canvas/ used to
 /// enumerate and serve every canvas ever generated to anyone who found the URL. It requires the same session or API
-/// token the rest of the app does (`signed_in`); the chat iframe is same-origin and sends the cookie automatically.
-pub async fn canvas_middleware(app: &App, signed_in: bool, req: Request<Body>) -> Result<Response, Request<Body>> {
+/// token the rest of the app does (`req.auth.authenticated`); the chat iframe is same-origin and sends the cookie
+/// automatically.
+///
+/// Every answer from here on carries the canvas isolation headers, including what the next handler answers for a
+/// folder (the JS set them on the response before handing it on).
+pub async fn canvas_middleware(State(app): State<App>, req: Request, next: Next) -> Response {
     // `req.path`: the path as sent, not decoded.
     let path = req.uri().path().to_string();
     let Some(rest) = path.strip_prefix("/canvas/") else {
-        return Err(req);
+        return next.run(req).await;
+    };
+    let asked = Asked {
+        method: req.method().clone(),
+        headers: req.headers().clone(),
     };
 
-    if !signed_in {
-        return Ok(html(StatusCode::UNAUTHORIZED, SIGN_IN_PAGE));
+    if !Auth::of(req.extensions()).authenticated {
+        return express_send(
+            &asked,
+            StatusCode::UNAUTHORIZED,
+            HTML,
+            SIGN_IN_PAGE.into(),
+            HeaderMap::new(),
+        );
     }
 
-    let mut res = match serve_canvas_path(app, rest.to_string(), req).await {
-        Ok(res) => res,
-        Err(req) => return Err(req),
+    let mut res = match serve_canvas_path(&app, rest, &asked, req).await {
+        Outcome::Answer(res) => res,
+        Outcome::Next(req) => next.run(req).await,
     };
     apply_canvas_isolation(res.headers_mut());
-    Ok(res)
+    res
 }
 
-async fn serve_canvas_path(app: &App, rest: String, req: Request<Body>) -> Result<Response, Request<Body>> {
+async fn serve_canvas_path(app: &App, rest: &str, asked: &Asked, req: Request) -> Outcome {
     let dir = canvas_dir(app.config());
     let parts: Vec<&str> = rest.split('/').filter(|p| !p.is_empty()).collect();
 
     // Gallery: /canvas/ with no ID lists every canvas.
     if parts.is_empty() {
-        return Ok(gallery(app, &dir));
+        return Outcome::Answer(gallery(app, &dir, asked));
     }
 
     let canvas_id = parts[0];
@@ -280,64 +339,99 @@ async fn serve_canvas_path(app: &App, rest: String, req: Request<Body>) -> Resul
     } else {
         "index.html".to_string()
     };
-    let base = normalize_path(&dir.to_string_lossy());
-    let file_path = normalize_path(&format!(
-        "{base}{}{canvas_id}{}{filename}",
-        std::path::MAIN_SEPARATOR,
-        std::path::MAIN_SEPARATOR
-    ));
+    // `path.join(CANVAS_DIR, canvasId, filename)`: joined as text, so an absolute piece stays under the folder, and
+    // tidied of `.` and `..`.
+    let base = normalize_path(&dir);
+    let file_path = join_path(&base, &format!("{canvas_id}/{filename}"));
+    // Compared as paths: the JS compared text (`filePath.startsWith(CANVAS_DIR)`), which let `..` reach a sibling
+    // folder whose name starts with "canvas" (workspace/canvas-old).
     if !file_path.starts_with(&base) {
-        return Ok(html(StatusCode::FORBIDDEN, "Forbidden"));
+        return Outcome::Answer(express_send(
+            asked,
+            StatusCode::FORBIDDEN,
+            HTML,
+            "Forbidden".into(),
+            HeaderMap::new(),
+        ));
     }
-    let file_path = PathBuf::from(file_path);
 
     if !file_path.exists() {
-        return Ok(html(StatusCode::NOT_FOUND, "Canvas not found"));
+        return Outcome::Answer(express_send(
+            asked,
+            StatusCode::NOT_FOUND,
+            HTML,
+            "Canvas not found".into(),
+            HeaderMap::new(),
+        ));
+    }
+    // The send module serves no path with a part that starts with a dot (longer than ".": `.git`, `.env`, and a
+    // dotted folder above the workspace, such as `~/.tarsee`), which the error handler answered as a 404.
+    if has_dot_part(&file_path) {
+        return Outcome::Answer(not_found_json(asked));
     }
     if file_path.is_dir() {
         // res.sendFile on a folder goes on to the next handler.
-        return Err(req);
+        return Outcome::Next(req);
     }
-    // A file whose name starts with a dot is not sent (the send module's default), which the error handler
-    // answered as a 404.
-    if file_path
-        .file_name()
-        .is_some_and(|n| n.to_string_lossy().starts_with('.'))
-    {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            axum::Json(serde_json::json!({ "error": "Not Found" })),
-        )
-            .into_response());
-    }
-    Ok(send_file(&file_path, req).await)
+    Outcome::Answer(send_file(&file_path, asked).await)
 }
 
-fn gallery(app: &App, dir: &Path) -> Response {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return html(StatusCode::INTERNAL_SERVER_ERROR, "Error loading gallery");
+/// The send module's `containsDotFile`: a part of the path, longer than one character, that starts with a dot.
+fn has_dot_part(path: &Path) -> bool {
+    path.components().any(|c| match c {
+        Component::Normal(name) => {
+            let name = name.to_string_lossy();
+            name.len() > 1 && name.starts_with('.')
+        }
+        _ => false,
+    })
+}
+
+fn not_found_json(asked: &Asked) -> Response {
+    express_send(
+        asked,
+        StatusCode::NOT_FOUND,
+        JSON,
+        r#"{"error":"Not Found"}"#.into(),
+        HeaderMap::new(),
+    )
+}
+
+fn gallery(app: &App, dir: &Path, asked: &Asked) -> Response {
+    let failed = || {
+        express_send(
+            asked,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            HTML,
+            "Error loading gallery".into(),
+            HeaderMap::new(),
+        )
     };
-    let mut canvases: Vec<(String, u64, SystemTime)> = Vec::new();
-    let mut names: Vec<fs::DirEntry> = entries.filter_map(Result::ok).collect();
-    names.sort_by(|a, b| a.file_name().as_encoded_bytes().cmp(b.file_name().as_encoded_bytes()));
-    for d in names {
+    let Ok(entries) = read_dir_sorted(dir) else {
+        return failed();
+    };
+    let mut canvases: Vec<(String, u64, i64)> = Vec::new();
+    for d in entries {
         let name = d.file_name().to_string_lossy().into_owned();
         let index = dir.join(&name).join("index.html");
         if !d.file_type().map(|t| t.is_dir()).unwrap_or(false) || !index.exists() {
             continue;
         }
         let Ok(meta) = fs::metadata(&index) else {
-            return html(StatusCode::INTERNAL_SERVER_ERROR, "Error loading gallery");
+            return failed();
         };
-        canvases.push((name, meta.len(), meta.modified().unwrap_or(UNIX_EPOCH)));
+        canvases.push((name, meta.len(), mtime_ms(&meta)));
     }
-    // Newest first; a stable sort.
+    // Newest first, by the millisecond (Dates subtracted); a stable sort.
     canvases.sort_by_key(|c| std::cmp::Reverse(c.2));
 
     if canvases.is_empty() {
-        return html(
+        return express_send(
+            asked,
             StatusCode::OK,
-            "<!DOCTYPE html><html><head><title>Canvas Gallery</title><style>body{background:#1a1a1a;color:#ececec;font-family:Poppins,sans-serif;padding:40px;text-align:center}h1{color:#c45a35}p{color:#a8a8a0}</style></head><body><h1>Canvas Gallery</h1><p>No canvases yet. Ask Tarsee to create one!</p></body></html>",
+            HTML,
+            "<!DOCTYPE html><html><head><title>Canvas Gallery</title><style>body{background:#1a1a1a;color:#ececec;font-family:Poppins,sans-serif;padding:40px;text-align:center}h1{color:#c45a35}p{color:#a8a8a0}</style></head><body><h1>Canvas Gallery</h1><p>No canvases yet. Ask Tarsee to create one!</p></body></html>".into(),
+            HeaderMap::new(),
         );
     }
 
@@ -348,7 +442,8 @@ fn gallery(app: &App, dir: &Path) -> Response {
         .iter()
         .map(|(name, size, modified)| {
             // toLocaleDateString(): "11/12/2026", in the process's timezone.
-            let date = DateTime::<Utc>::from(*modified)
+            let date = DateTime::<Utc>::from_timestamp_millis(*modified)
+                .unwrap_or_default()
                 .with_timezone(&zone)
                 .format("%-m/%-d/%Y")
                 .to_string();
@@ -361,11 +456,14 @@ fn gallery(app: &App, dir: &Path) -> Response {
             )
         })
         .collect();
-    html(
+    express_send(
+        asked,
         StatusCode::OK,
+        HTML,
         format!(
             "<!DOCTYPE html><html><head><title>Canvas Gallery</title><style>body{{background:#1a1a1a;color:#ececec;font-family:Poppins,sans-serif;padding:40px;max-width:600px;margin:0 auto}}h1{{color:#c45a35}}a:hover{{border-color:#c45a35!important}}</style></head><body><h1>Canvas Gallery</h1>{items}</body></html>"
         ),
+        HeaderMap::new(),
     )
 }
 
@@ -382,51 +480,122 @@ pub fn encode_uri_component(s: &str) -> String {
     out
 }
 
-/// `path.join` with its lexical clean-up: `.` and empty parts dropped, `..` taking the part before it away (never
-/// above the root), both separators read as separators on Windows.
-fn normalize_path(path: &str) -> String {
-    let sep = std::path::MAIN_SEPARATOR;
-    let is_sep = |c: char| c == '/' || (cfg!(windows) && c == '\\');
-    // The root ("/", "C:\", "\\server\share\") is kept as it is.
-    let (root, rest) = split_root(path, is_sep);
-    let mut parts: Vec<&str> = Vec::new();
-    for part in rest.split(is_sep) {
-        match part {
-            "" | "." => {}
-            ".." => {
-                if parts.last().is_some_and(|p| *p != "..") {
-                    parts.pop();
-                } else if root.is_empty() {
-                    parts.push("..");
-                }
-            }
-            other => parts.push(other),
-        }
-    }
-    format!("{root}{}", parts.join(&sep.to_string()))
+/// The ETag Express put on a body it sent (`etag(body, { weak: true })`): `W/"<length in hex>-<SHA-1, base64, 27
+/// characters>"`.
+pub fn express_etag(body: &[u8]) -> String {
+    let hash = base64::engine::general_purpose::STANDARD.encode(Sha1::digest(body));
+    format!("W/\"{:x}-{}\"", body.len(), &hash[..27])
 }
 
-fn split_root(path: &str, is_sep: impl Fn(char) -> bool) -> (String, &str) {
-    let sep = std::path::MAIN_SEPARATOR;
-    if cfg!(windows) {
-        let bytes = path.as_bytes();
-        if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
-            let rest = &path[2..];
-            let trimmed = rest.trim_start_matches(&is_sep);
-            let root = if trimmed.len() < rest.len() {
-                format!("{}{sep}", &path[..2])
-            } else {
-                path[..2].to_string()
-            };
-            return (root, trimmed);
+/// `res.status(status).send(body)` with this content type, as Express sent it: an ETag of the body (unless `extra`
+/// already has one), a 304 for a GET or HEAD whose copy is still fresh (2xx answers only), no body for HEAD.
+fn express_send(asked: &Asked, status: StatusCode, content_type: &str, body: String, extra: HeaderMap) -> Response {
+    let mut headers = extra;
+    if !headers.contains_key(header::ETAG) {
+        headers.insert(header::ETAG, header_value(&express_etag(body.as_bytes())));
+    }
+    let fresh_ok = asked.is_get_or_head() && (status.is_success() || status == StatusCode::NOT_MODIFIED);
+    if fresh_ok && is_fresh(asked, &headers) {
+        return finish(StatusCode::NOT_MODIFIED, headers, Body::empty());
+    }
+    headers.insert(header::CONTENT_TYPE, header_value(content_type));
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(body.len()));
+    let body = if asked.method == Method::HEAD {
+        Body::empty()
+    } else {
+        Body::from(body)
+    };
+    finish(status, headers, body)
+}
+
+fn finish(status: StatusCode, headers: HeaderMap, body: Body) -> Response {
+    let mut res = Response::new(body);
+    *res.status_mut() = status;
+    *res.headers_mut() = headers;
+    res
+}
+
+/// The fresh module (2.0.0): whether the client's copy is current. If-None-Match decides when it is there; a
+/// `Cache-Control: no-cache` request is never fresh.
+fn is_fresh(asked: &Asked, res_headers: &HeaderMap) -> bool {
+    let modified_since = asked.header(header::IF_MODIFIED_SINCE).filter(|v| !v.is_empty());
+    let none_match = asked.header(header::IF_NONE_MATCH).filter(|v| !v.is_empty());
+    if modified_since.is_none() && none_match.is_none() {
+        return false;
+    }
+    if let Some(cache_control) = asked.header(header::CACHE_CONTROL)
+        && NO_CACHE.is_match(cache_control)
+    {
+        return false;
+    }
+    let res_header = |name: header::HeaderName| res_headers.get(name).and_then(|v| v.to_str().ok());
+    if let Some(none_match) = none_match {
+        if none_match == "*" {
+            return true;
+        }
+        let Some(etag) = res_header(header::ETAG) else {
+            return false;
+        };
+        return parse_token_list(none_match)
+            .iter()
+            .any(|m| *m == etag || format!("W/{etag}") == *m || format!("W/{m}") == etag);
+    }
+    if let Some(modified_since) = modified_since {
+        let last = res_header(header::LAST_MODIFIED).and_then(parse_http_date);
+        let since = parse_http_date(modified_since);
+        return matches!((last, since), (Some(last), Some(since)) if last <= since);
+    }
+    true
+}
+
+static NO_CACHE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(&format!(
+        r"(?:^|,)[{}]*?no-cache[{}]*?(?:,|$)",
+        crate::lib::workspace_files::jstext::JS_SPACE_CLASS,
+        crate::lib::workspace_files::jstext::JS_SPACE_CLASS
+    ))
+    .expect("the no-cache pattern")
+});
+
+/// The fresh module's `parseTokenList`: comma-separated, spaces around each token dropped.
+fn parse_token_list(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut list = Vec::new();
+    let (mut start, mut end) = (0usize, 0usize);
+    for (i, b) in bytes.iter().enumerate() {
+        match b {
+            b' ' => {
+                if start == end {
+                    start = i + 1;
+                    end = i + 1;
+                }
+            }
+            b',' => {
+                list.push(&text[start..end]);
+                start = i + 1;
+                end = i + 1;
+            }
+            _ => end = i + 1,
         }
     }
-    let trimmed = path.trim_start_matches(&is_sep);
-    if trimmed.len() < path.len() {
-        (sep.to_string(), trimmed)
-    } else {
-        (String::new(), path)
-    }
+    list.push(&text[start..end]);
+    list
+}
+
+/// `Date.parse` of an HTTP date ("Thu, 12 Nov 2026 08:30:00 GMT"), in milliseconds.
+fn parse_http_date(text: &str) -> Option<i64> {
+    DateTime::parse_from_rfc2822(text.trim())
+        .ok()
+        .map(|d| d.timestamp_millis())
+        .or_else(|| crate::util::js::ms_from_iso(text))
+}
+
+/// `date.toUTCString()`.
+fn http_date(ms: i64) -> String {
+    DateTime::<Utc>::from_timestamp_millis(ms)
+        .unwrap_or_default()
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string()
 }
 
 /// The Content-Type the send module gave a file (mime-types' `contentType(ext)`).
@@ -460,46 +629,208 @@ fn content_type_of(path: &Path) -> String {
     }
 }
 
-/// `res.sendFile(path)`: the file with its type, `Cache-Control: public, max-age=0`, a weak ETag of its size and
-/// time, Last-Modified, and answers to conditional and range requests, whatever the method.
-async fn send_file(path: &Path, req: Request<Body>) -> Response {
+/// Express's `setCharset(type, "utf-8")`: what `res.json` made of a content type already set.
+fn with_utf8_charset(content_type: &str) -> String {
+    let base = content_type.split(';').next().unwrap_or(content_type).trim();
+    format!("{base}; charset=utf-8")
+}
+
+/// One byte range (`{ start, end }`, both included).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ByteRange {
+    start: u64,
+    end: u64,
+}
+
+/// What range-parser (1.2, `combine: true`) made of a Range header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Ranges {
+    /// Not a range header it could read (-2).
+    Malformed,
+    /// No range inside the file (-1).
+    Unsatisfiable,
+    Some(Vec<ByteRange>),
+}
+
+fn parse_range(size: u64, text: &str) -> Ranges {
+    let Some(eq) = text.find('=') else {
+        return Ranges::Malformed;
+    };
+    let int = |part: &str| crate::lib::workspace_files::jstext::js_parse_int_decimal(part);
+    let size = size as i64;
+    let mut ranges: Vec<(i64, i64, usize)> = Vec::new();
+    for (index, spec) in text[eq + 1..].split(',').enumerate() {
+        let mut bounds = spec.split('-');
+        let start = int(bounds.next().unwrap_or(""));
+        let end = int(bounds.next().unwrap_or(""));
+        let (start, end) = match (start, end) {
+            // -nnn
+            (None, Some(end)) => (size - end, size - 1),
+            // nnn-
+            (Some(start), None) => (start, size - 1),
+            (Some(start), Some(end)) => (start, end.min(size - 1)),
+            (None, None) => continue,
+        };
+        let end = end.min(size - 1);
+        if start > end || start < 0 {
+            continue;
+        }
+        ranges.push((start, end, index));
+    }
+    if ranges.is_empty() {
+        return Ranges::Unsatisfiable;
+    }
+    // combineRanges: overlapping or adjacent ranges merge; the result is in the order of the first of each.
+    ranges.sort_by_key(|r| r.0);
+    let mut combined: Vec<(i64, i64, usize)> = Vec::new();
+    for range in ranges {
+        match combined.last_mut() {
+            Some(current) if range.0 <= current.1 + 1 => {
+                if range.1 > current.1 {
+                    current.1 = range.1;
+                    current.2 = current.2.min(range.2);
+                }
+            }
+            _ => combined.push(range),
+        }
+    }
+    combined.sort_by_key(|r| r.2);
+    Ranges::Some(
+        combined
+            .into_iter()
+            .map(|(start, end, _)| ByteRange {
+                start: start as u64,
+                end: end as u64,
+            })
+            .collect(),
+    )
+}
+
+/// `res.sendFile(path)`, as the send module answered: the file with its type and caching headers; 304 for a fresh
+/// copy; 412 for a failed If-Match or If-Unmodified-Since; 206 for one byte range (several, or a stale If-Range, get
+/// the whole file); 416 for a range outside the file; no body for HEAD. The errors reached the global error handler,
+/// whose JSON kept the file's content type.
+async fn send_file(path: &Path, asked: &Asked) -> Response {
     let meta = match fs::metadata(path) {
         Ok(meta) => meta,
-        Err(_) => return html(StatusCode::NOT_FOUND, "Canvas not found"),
+        Err(_) => return not_found_json(asked),
     };
-    let modified_ms = meta.modified().map(ms_of).unwrap_or(0);
-    let etag = format!("W/\"{:x}-{:x}\"", meta.len(), modified_ms);
+    let size = meta.len();
+    let modified = mtime_ms(&meta);
+    let content_type = content_type_of(path);
 
-    let (mut parts, body) = req.into_parts();
-    if parts.method != Method::HEAD {
-        parts.method = Method::GET;
-    }
-    // If-None-Match decides when it is there (as the `fresh` module does): a match is a 304, a miss is a full
-    // answer whatever If-Modified-Since says.
-    if let Some(wanted) = parts.headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
-        let strip = |t: &str| t.trim().trim_start_matches("W/").to_string();
-        let matches = wanted.trim() == "*" || wanted.split(',').any(|t| strip(t) == strip(&etag));
-        if matches {
-            let mut res = StatusCode::NOT_MODIFIED.into_response();
-            res.headers_mut().insert(header::ETAG, header_value(&etag));
-            return res;
-        }
-        parts.headers.remove(header::IF_MODIFIED_SINCE);
-    }
-
-    let req = Request::from_parts(parts, body);
-    let mut res = match ServeFile::new(path).oneshot(req).await {
-        Ok(res) => res.map(Body::new),
-        Err(_) => return html(StatusCode::NOT_FOUND, "Canvas not found"),
-    };
-    let not_modified = res.status() == StatusCode::NOT_MODIFIED;
-    let headers = res.headers_mut();
-    if !not_modified {
-        headers.insert(header::CONTENT_TYPE, header_value(&content_type_of(path)));
-    }
+    let mut headers = HeaderMap::new();
+    headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=0"));
-    headers.insert(header::ETAG, header_value(&etag));
-    res
+    headers.insert(header::LAST_MODIFIED, header_value(&http_date(modified)));
+    headers.insert(header::ETAG, header_value(&format!("W/\"{size:x}-{modified:x}\"")));
+    headers.insert(header::CONTENT_TYPE, header_value(&content_type));
+
+    let error = |status: StatusCode, message: &str, mut headers: HeaderMap| {
+        headers.remove(header::CONTENT_TYPE);
+        express_send(
+            asked,
+            status,
+            &with_utf8_charset(&content_type),
+            format!(r#"{{"error":"{message}"}}"#),
+            headers,
+        )
+    };
+
+    // Conditional GET.
+    let conditional = [
+        header::IF_MATCH,
+        header::IF_UNMODIFIED_SINCE,
+        header::IF_NONE_MATCH,
+        header::IF_MODIFIED_SINCE,
+    ]
+    .iter()
+    .any(|name| asked.header(name.clone()).is_some_and(|v| !v.is_empty()));
+    if conditional {
+        if precondition_failed(asked, &headers) {
+            return error(StatusCode::PRECONDITION_FAILED, "Precondition Failed", headers);
+        }
+        if is_fresh(asked, &headers) {
+            headers.remove(header::CONTENT_TYPE);
+            return finish(StatusCode::NOT_MODIFIED, headers, Body::empty());
+        }
+    }
+
+    let mut status = StatusCode::OK;
+    let (mut offset, mut len) = (0u64, size);
+    if let Some(range) = asked.header(header::RANGE).filter(|r| BYTES_RANGE.is_match(r)) {
+        let mut ranges = parse_range(size, range);
+        if !range_fresh(asked, &headers) {
+            ranges = Ranges::Malformed;
+        }
+        match ranges {
+            Ranges::Unsatisfiable => {
+                headers.insert(header::CONTENT_RANGE, header_value(&format!("bytes */{size}")));
+                return error(StatusCode::RANGE_NOT_SATISFIABLE, "Range Not Satisfiable", headers);
+            }
+            Ranges::Some(list) if list.len() == 1 => {
+                status = StatusCode::PARTIAL_CONTENT;
+                headers.insert(
+                    header::CONTENT_RANGE,
+                    header_value(&format!("bytes {}-{}/{size}", list[0].start, list[0].end)),
+                );
+                offset = list[0].start;
+                len = list[0].end - list[0].start + 1;
+            }
+            _ => {}
+        }
+    }
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+    if asked.method == Method::HEAD {
+        return finish(status, headers, Body::empty());
+    }
+    let body = match tokio::fs::File::open(path).await {
+        Ok(mut file) => {
+            if file.seek(SeekFrom::Start(offset)).await.is_err() {
+                return not_found_json(asked);
+            }
+            Body::from_stream(tokio_util::io::ReaderStream::new(file.take(len)))
+        }
+        Err(_) => return not_found_json(asked),
+    };
+    finish(status, headers, body)
+}
+
+static BYTES_RANGE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"^ *bytes=").expect("the range pattern"));
+
+/// send's `isPreconditionFailure`.
+fn precondition_failed(asked: &Asked, res_headers: &HeaderMap) -> bool {
+    let etag = res_headers.get(header::ETAG).and_then(|v| v.to_str().ok());
+    if let Some(wanted) = asked.header(header::IF_MATCH).filter(|v| !v.is_empty()) {
+        let Some(etag) = etag else { return true };
+        return wanted != "*"
+            && parse_token_list(wanted)
+                .iter()
+                .all(|m| *m != etag && format!("W/{etag}") != *m && format!("W/{m}") != etag);
+    }
+    if let Some(since) = asked.header(header::IF_UNMODIFIED_SINCE).and_then(parse_http_date) {
+        let last = res_headers
+            .get(header::LAST_MODIFIED)
+            .and_then(|v| v.to_str().ok())
+            .and_then(parse_http_date);
+        return last.is_none_or(|last| last > since);
+    }
+    false
+}
+
+/// send's `isRangeFresh`: an If-Range holding an ETag must hold this one; one holding a date must not be older
+/// than the file.
+fn range_fresh(asked: &Asked, res_headers: &HeaderMap) -> bool {
+    let Some(if_range) = asked.header(header::IF_RANGE).filter(|v| !v.is_empty()) else {
+        return true;
+    };
+    let res_header = |name: header::HeaderName| res_headers.get(name).and_then(|v| v.to_str().ok());
+    if if_range.contains('"') {
+        return res_header(header::ETAG).is_some_and(|etag| if_range.contains(etag));
+    }
+    let last = res_header(header::LAST_MODIFIED).and_then(parse_http_date);
+    matches!((last, parse_http_date(if_range)), (Some(last), Some(since)) if last <= since)
 }
 
 fn header_value(text: &str) -> HeaderValue {
@@ -509,9 +840,10 @@ fn header_value(text: &str) -> HeaderValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::http::TestResponse;
-    use crate::testkit::{TestApp, test_app_with_env};
-    use http_body_util::BodyExt;
+    use crate::testkit::http::{self, TestResponse, request};
+    use crate::testkit::{TestApp, test_app_with_env, tmp_dir};
+    use axum::Router;
+    use std::time::{Duration, SystemTime};
 
     fn app() -> (TestApp, CanvasServer) {
         let t = test_app_with_env([("TZ", "UTC")]);
@@ -519,17 +851,44 @@ mod tests {
         (t, server)
     }
 
-    async fn call(t: &TestApp, signed_in: bool, req: Request<Body>) -> Option<TestResponse> {
-        let res = canvas_middleware(t, signed_in, req).await.ok()?;
-        let status = res.status().as_u16();
-        let headers = res.headers().clone();
-        let body = res.into_body().collect().await.unwrap().to_bytes();
-        Some(TestResponse { status, headers, body })
+    /// The canvas middleware in front of a handler that answers "next", with the session middleware's verdict.
+    fn router(t: &TestApp, signed_in: bool) -> Router {
+        Router::new()
+            .fallback(|| async { "next" })
+            .layer(axum::middleware::from_fn_with_state(t.app.clone(), canvas_middleware))
+            .layer(axum::middleware::from_fn(
+                move |mut req: Request, next: Next| async move {
+                    req.extensions_mut().insert(Auth {
+                        authenticated: signed_in,
+                        ..Auth::default()
+                    });
+                    next.run(req).await
+                },
+            ))
     }
 
-    fn get(path: &str) -> Request<Body> {
-        Request::builder().uri(path).body(Body::empty()).unwrap()
+    async fn get(t: &TestApp, path: &str) -> TestResponse {
+        http::get(&router(t, true), path).await
     }
+
+    async fn get_with(t: &TestApp, path: &str, headers: &[(&str, &str)]) -> TestResponse {
+        let mut req = request("GET", path);
+        for (name, value) in headers {
+            req = req.header(name, value);
+        }
+        http::send(&router(t, true), req).await
+    }
+
+    fn set_time(path: &Path, at: SystemTime) {
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    }
+
+    const DAY: u64 = 1_794_441_600; // 2026-11-12T00:00:00Z
 
     #[test]
     fn a_page_is_written_with_its_css_and_js_and_listed() {
@@ -564,9 +923,8 @@ mod tests {
         let list = server.list();
         let ids: Vec<&str> = list.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(ids, ["chart", "empty", "plain", "x", "y"]);
-        let empty = &list[1];
         assert_eq!(
-            serde_json::to_value(empty).unwrap(),
+            serde_json::to_value(&list[1]).unwrap(),
             serde_json::json!({"id": "empty", "hasIndex": false, "size": 0})
         );
         assert!(list[0].has_index && list[0].modified.as_deref().unwrap().ends_with('Z'));
@@ -579,16 +937,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_canvas_id_must_be_one_plain_name() {
+        let (t, server) = app();
+        let outside = tmp_dir();
+        let absolute = outside.path().join("victim");
+        fs::create_dir_all(&absolute).unwrap();
+        fs::write(absolute.join("index.html"), "keep me").unwrap();
+        let absolute = absolute.to_string_lossy().to_string();
+        for id in [absolute.as_str(), "..", ".", "a/b", "a\\b", ""] {
+            assert_eq!(
+                server.serve(id, Some("x"), None, None).unwrap_err().to_string(),
+                format!("Invalid canvas id: {id}")
+            );
+            assert_eq!(server.get(id), None, "{id}");
+            assert!(!server.delete(id), "{id}");
+        }
+        assert_eq!(
+            fs::read_to_string(outside.path().join("victim").join("index.html")).unwrap(),
+            "keep me"
+        );
+        // A file path is joined as Node joined it: an absolute piece stays under the canvas folder.
+        assert!(
+            server
+                .get_file_path(&absolute, "x")
+                .starts_with(normalize_path(&canvas_dir(t.config())))
+        );
+    }
+
     #[tokio::test]
     async fn only_canvas_paths_are_answered_and_only_when_signed_in() {
         let (t, server) = app();
         server.serve("c1", Some("<p>hi</p>"), None, None).unwrap();
-        assert!(call(&t, true, get("/api/canvas/c1/")).await.is_none());
-        assert!(call(&t, true, get("/canvas")).await.is_none());
-        let res = call(&t, false, get("/canvas/c1/")).await.unwrap();
+        assert_eq!(get(&t, "/api/canvas/c1/").await.text(), "next");
+        assert_eq!(get(&t, "/canvas").await.text(), "next");
+        let res = http::get(&router(&t, false), "/canvas/c1/").await;
         assert_eq!(res.status, 401);
-        assert_eq!(res.header("content-type"), Some("text/html; charset=utf-8"));
+        assert_eq!(res.header("content-type"), Some(HTML));
         assert_eq!(res.text(), SIGN_IN_PAGE);
+        assert_eq!(res.header("etag").unwrap(), express_etag(SIGN_IN_PAGE.as_bytes()));
         assert_eq!(res.header("content-security-policy"), None);
     }
 
@@ -596,8 +983,10 @@ mod tests {
     async fn a_canvas_is_sent_isolated_with_its_type_and_cache_headers() {
         let (t, server) = app();
         server.serve("c1", Some("<p>hi</p>"), None, None).unwrap();
+        let index = canvas_dir(t.config()).join("c1").join("index.html");
+        set_time(&index, UNIX_EPOCH + Duration::from_millis(DAY * 1000 + 123));
         fs::write(canvas_dir(t.config()).join("c1").join("app.js"), "let a = 1;").unwrap();
-        let res = call(&t, true, get("/canvas/c1/")).await.unwrap();
+        let res = get(&t, "/canvas/c1/").await;
         assert_eq!(res.status, 200);
         assert_eq!(res.text(), "<p>hi</p>");
         assert_eq!(res.header("content-type"), Some("text/html; charset=utf-8"));
@@ -606,72 +995,216 @@ mod tests {
         assert_eq!(res.header("cross-origin-resource-policy"), Some("same-origin"));
         assert_eq!(res.header("x-content-type-options"), Some("nosniff"));
         assert_eq!(res.header("cache-control"), Some("public, max-age=0"));
-        let etag = res.header("etag").unwrap().to_string();
-        assert!(etag.starts_with("W/\"9-"), "{etag}");
-        assert!(res.header("last-modified").is_some());
+        assert_eq!(res.header("accept-ranges"), Some("bytes"));
+        assert_eq!(res.header("content-length"), Some("9"));
+        let etag = format!("W/\"9-{:x}\"", DAY * 1000 + 123);
+        assert_eq!(res.header("etag"), Some(etag.as_str()));
+        assert_eq!(res.header("last-modified"), Some("Thu, 12 Nov 2026 00:00:00 GMT"));
 
-        let res = call(&t, true, get("/canvas/c1/app.js")).await.unwrap();
+        let res = get(&t, "/canvas/c1/app.js").await;
         assert_eq!(
             (res.status, res.header("content-type")),
             (200, Some("text/javascript; charset=utf-8"))
         );
 
-        let again = Request::builder()
-            .uri("/canvas/c1/index.html")
-            .header("if-none-match", &etag)
-            .body(Body::empty())
-            .unwrap();
-        let res = call(&t, true, again).await.unwrap();
+        // A fresh copy: 304, with the caching headers, without the content ones.
+        let res = get_with(&t, "/canvas/c1/index.html", &[("if-none-match", &etag)]).await;
         assert_eq!(res.status, 304);
+        assert!(res.body.is_empty());
+        assert_eq!(res.header("etag"), Some(etag.as_str()));
+        assert_eq!(res.header("cache-control"), Some("public, max-age=0"));
+        assert_eq!(res.header("accept-ranges"), Some("bytes"));
+        assert_eq!(res.header("last-modified"), Some("Thu, 12 Nov 2026 00:00:00 GMT"));
+        assert_eq!(res.header("content-type"), None);
         assert_eq!(res.header("content-security-policy"), Some(CANVAS_CSP));
+        let res = get_with(
+            &t,
+            "/canvas/c1/",
+            &[("if-modified-since", "Fri, 13 Nov 2026 00:00:00 GMT")],
+        )
+        .await;
+        assert_eq!(res.status, 304);
+        // A reload asks past the cache.
+        let res = get_with(
+            &t,
+            "/canvas/c1/",
+            &[("if-none-match", &etag), ("cache-control", "no-cache")],
+        )
+        .await;
+        assert_eq!((res.status, res.text()), (200, "<p>hi</p>".to_string()));
+        // If-None-Match decides over If-Modified-Since.
+        let res = get_with(
+            &t,
+            "/canvas/c1/",
+            &[
+                ("if-none-match", "W/\"other\""),
+                ("if-modified-since", "Fri, 13 Nov 2026 00:00:00 GMT"),
+            ],
+        )
+        .await;
+        assert_eq!(res.status, 200);
+        let res = get_with(&t, "/canvas/c1/", &[("if-match", "\"nope\"")]).await;
+        assert_eq!(res.status, 412);
+        assert_eq!(res.text(), r#"{"error":"Precondition Failed"}"#);
+        assert_eq!(res.header("content-type"), Some("text/html; charset=utf-8"));
+        assert_eq!(res.header("etag"), Some(etag.as_str()));
 
-        let post = Request::builder()
-            .method("POST")
-            .uri("/canvas/c1/")
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(call(&t, true, post).await.unwrap().text(), "<p>hi</p>");
+        let post = request("POST", "/canvas/c1/");
+        assert_eq!(http::send(&router(&t, true), post).await.text(), "<p>hi</p>");
+        let head = http::send(&router(&t, true), request("HEAD", "/canvas/c1/")).await;
+        assert_eq!(
+            (head.status, head.body.len(), head.header("content-length")),
+            (200, 0, Some("9"))
+        );
     }
 
     #[tokio::test]
-    async fn missing_escaping_and_folders() {
+    async fn byte_ranges_are_served_as_the_send_module_served_them() {
+        let (t, server) = app();
+        server.serve("c1", Some("<p>hi</p>"), None, None).unwrap();
+        let range = |r: &'static str| {
+            let t = &t;
+            async move { get_with(t, "/canvas/c1/", &[("range", r)]).await }
+        };
+        let res = range("bytes=0-1").await;
+        assert_eq!((res.status, res.text()), (206, "<p".to_string()));
+        assert_eq!(res.header("content-range"), Some("bytes 0-1/9"));
+        assert_eq!(res.header("content-length"), Some("2"));
+        assert_eq!(range("bytes=-2").await.text(), "p>");
+        assert_eq!(range("bytes=5-").await.text(), "</p>");
+        let joined = range("bytes=0-1,1-3").await;
+        assert_eq!((joined.status, joined.text()), (206, "<p>h".to_string()));
+        // Several ranges, or a header that is not bytes=, give the whole file.
+        assert_eq!(range("bytes=0-1,4-5").await.status, 200);
+        assert_eq!(range("items=0-1").await.status, 200);
+        let res = range("bytes=100-").await;
+        assert_eq!(res.status, 416);
+        assert_eq!(res.text(), r#"{"error":"Range Not Satisfiable"}"#);
+        assert_eq!(res.header("content-range"), Some("bytes */9"));
+        let stale = get_with(
+            &t,
+            "/canvas/c1/",
+            &[("range", "bytes=0-1"), ("if-range", "Thu, 01 Jan 1970 00:00:00 GMT")],
+        )
+        .await;
+        assert_eq!(stale.status, 200);
+    }
+
+    #[test]
+    fn ranges_parse_as_range_parser_parsed_them() {
+        // Checked against range-parser 1.2.1 with { combine: true } on a 9-byte file.
+        let r = |start, end| ByteRange { start, end };
+        assert_eq!(parse_range(9, "bytes=0-1"), Ranges::Some(vec![r(0, 1)]));
+        assert_eq!(parse_range(9, "bytes=5-"), Ranges::Some(vec![r(5, 8)]));
+        assert_eq!(parse_range(9, "bytes=-2"), Ranges::Some(vec![r(7, 8)]));
+        assert_eq!(parse_range(9, "bytes=0-1,4-5"), Ranges::Some(vec![r(0, 1), r(4, 5)]));
+        assert_eq!(parse_range(9, "bytes=0-1,1-3"), Ranges::Some(vec![r(0, 3)]));
+        assert_eq!(parse_range(9, "bytes=100-"), Ranges::Unsatisfiable);
+        assert_eq!(parse_range(9, "bytes=x"), Ranges::Unsatisfiable);
+        assert_eq!(parse_range(9, "bytes=3-1,0-0"), Ranges::Some(vec![r(0, 0)]));
+        assert_eq!(parse_range(9, "bytes= 2 - 4"), Ranges::Some(vec![r(2, 4)]));
+        assert_eq!(parse_range(9, "nothing"), Ranges::Malformed);
+        assert_eq!(parse_token_list(" a , b,,c "), ["a", "b", "", "c"]);
+    }
+
+    #[test]
+    fn a_page_sent_as_text_carries_the_etag_express_made() {
+        // Checked against the etag module.
+        assert_eq!(
+            express_etag(b"Canvas not found"),
+            "W/\"10-KPUmzB1vZGbLgUG4gdwHQkMLYFE\""
+        );
+        assert_eq!(express_etag(b""), "W/\"0-2jmj7l5rSw0yVb/vlWAYkK/YBwk\"");
+        assert_eq!(express_etag("é🐒".as_bytes()), "W/\"6-SfZF+hdEG/kNWp1ZTEESZXnTOyc\"");
+        assert_eq!(
+            express_etag(br#"{"error":"Not Found"}"#),
+            "W/\"15-5KajTCx0AJD0xogoSeOjjV2M8K0\""
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_escaping_dot_names_and_folders() {
         let (t, server) = app();
         server.serve("c1", Some("x"), None, None).unwrap();
-        fs::create_dir_all(canvas_dir(t.config()).join("c1").join("sub")).unwrap();
-        fs::write(canvas_dir(t.config()).join("c1").join(".env"), "SECRET=1").unwrap();
-        let res = call(&t, true, get("/canvas/nope/")).await.unwrap();
+        let canvases = canvas_dir(t.config());
+        fs::create_dir_all(canvases.join("c1").join("sub")).unwrap();
+        fs::create_dir_all(canvases.join("c1").join(".git")).unwrap();
+        fs::write(canvases.join("c1").join(".git").join("config"), "secret").unwrap();
+        fs::write(canvases.join("c1").join(".env"), "SECRET=1").unwrap();
+        fs::create_dir_all(canvases.join(".hid")).unwrap();
+        fs::write(canvases.join(".hid").join("index.html"), "hidden").unwrap();
+        let sibling = t.config().workspace_dir.join("canvas-old");
+        fs::create_dir_all(&sibling).unwrap();
+        fs::write(sibling.join("x.html"), "old").unwrap();
+
+        let res = get(&t, "/canvas/nope/").await;
         assert_eq!((res.status, res.text()), (404, "Canvas not found".to_string()));
+        assert_eq!(res.header("etag").unwrap(), express_etag(b"Canvas not found"));
         assert_eq!(res.header("content-security-policy"), Some(CANVAS_CSP));
-        let res = call(&t, true, get("/canvas/c1/../../../secret")).await.unwrap();
+        let res = get(&t, "/canvas/c1/../../../secret").await;
         assert_eq!((res.status, res.text()), (403, "Forbidden".to_string()));
-        assert!(
-            call(&t, true, get("/canvas/c1/sub")).await.is_none(),
-            "a folder goes on"
-        );
-        let res = call(&t, true, get("/canvas/c1/.env")).await.unwrap();
-        assert_eq!(
-            (res.status, res.json()),
-            (404, serde_json::json!({"error": "Not Found"}))
-        );
-        let res = call(&t, true, get("/canvas/c1/../c1/index.html")).await.unwrap();
+        // `..` to a sibling folder whose name starts with "canvas": the JS's text check let it through.
+        let res = get(&t, "/canvas/../canvas-old/x.html").await;
+        assert_eq!((res.status, res.text()), (403, "Forbidden".to_string()));
+        // A folder goes on to the next handler, which answers with the canvas isolation headers on.
+        let res = get(&t, "/canvas/c1/sub").await;
+        assert_eq!(res.text(), "next");
+        assert_eq!(res.header("content-security-policy"), Some(CANVAS_CSP));
+        assert_eq!(res.header("x-content-type-options"), Some("nosniff"));
+        // Any dot-named part: a 404 from the error handler.
+        for path in [
+            "/canvas/c1/.env",
+            "/canvas/c1/.git/config",
+            "/canvas/.hid/",
+            "/canvas/.hid/index.html",
+        ] {
+            let res = get(&t, path).await;
+            assert_eq!(
+                (res.status, res.json()),
+                (404, serde_json::json!({"error": "Not Found"})),
+                "{path}"
+            );
+            assert_eq!(res.header("content-type"), Some(JSON));
+        }
+        let res = get(&t, "/canvas/c1/../c1/index.html").await;
         assert_eq!((res.status, res.text()), (200, "x".to_string()));
+        let res = get(&t, "/canvas/c1/C:/x").await;
+        assert_eq!(res.status, 404);
+    }
+
+    #[tokio::test]
+    async fn under_a_dotted_folder_every_canvas_file_is_refused_as_node_refused_it() {
+        let dir = tmp_dir();
+        let ws = dir.path().join(".dotted").join("ws");
+        let t = test_app_with_env([("TZ", "UTC"), ("TARSEE_WORKSPACE_DIR", ws.to_string_lossy().as_ref())]);
+        CanvasServer::create(t.config())
+            .unwrap()
+            .serve("c1", Some("x"), None, None)
+            .unwrap();
+        for path in ["/canvas/c1/", "/canvas/c1/index.html"] {
+            let res = get(&t, path).await;
+            assert_eq!(
+                (res.status, res.json()),
+                (404, serde_json::json!({"error": "Not Found"})),
+                "{path}"
+            );
+        }
+        assert_eq!(get(&t, "/canvas/").await.status, 200, "the gallery is not a file");
     }
 
     #[tokio::test]
     async fn the_gallery_lists_canvases_newest_first_escaped() {
         let (t, server) = app();
-        let res = call(&t, true, get("/canvas/")).await.unwrap();
+        let res = get(&t, "/canvas/").await;
         assert!(res.text().contains("No canvases yet. Ask Tarsee to create one!"));
         server.serve("older", Some(&"x".repeat(1600)), None, None).unwrap();
         server.serve("<img src=x>", Some("y"), None, None).ok();
-        let older = fs::File::options()
-            .write(true)
-            .open(canvas_dir(t.config()).join("older").join("index.html"))
-            .unwrap();
-        let day = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_605_139_200);
-        older.set_modified(day).unwrap();
+        set_time(
+            &canvas_dir(t.config()).join("older").join("index.html"),
+            UNIX_EPOCH + Duration::from_secs(1_605_139_200),
+        );
         fs::create_dir_all(canvas_dir(t.config()).join("no-index")).unwrap();
-        let res = call(&t, true, get("/canvas//")).await.unwrap();
+        let res = get(&t, "/canvas//").await;
         assert_eq!(res.status, 200);
         let page = res.text();
         assert!(page.contains("<a href=\"/canvas/older/\" style=\"display:block;background:#2b2a27;border-radius:8px;padding:16px;margin:8px 0;text-decoration:none;color:#ececec;border:1px solid #3a3935\"><strong>older</strong><br><span style=\"color:#a8a8a0;font-size:12px\">2KB &middot; 11/12/2020</span></a>"));
@@ -684,6 +1217,29 @@ mod tests {
                 "newest first"
             );
         }
+        // Its ETag is Express's, and a fresh copy is a 304.
+        let etag = res.header("etag").unwrap().to_string();
+        assert_eq!(etag, express_etag(page.as_bytes()));
+        let again = get_with(&t, "/canvas/", &[("if-none-match", &etag)]).await;
+        assert_eq!((again.status, again.body.len()), (304, 0));
+    }
+
+    #[tokio::test]
+    async fn canvases_changed_in_the_same_millisecond_keep_their_name_order() {
+        let (t, server) = app();
+        server.serve("a-first", Some("a"), None, None).unwrap();
+        server.serve("b-second", Some("b"), None, None).unwrap();
+        let base = UNIX_EPOCH + Duration::from_millis(DAY * 1000);
+        set_time(
+            &canvas_dir(t.config()).join("a-first").join("index.html"),
+            base + Duration::from_micros(100),
+        );
+        set_time(
+            &canvas_dir(t.config()).join("b-second").join("index.html"),
+            base + Duration::from_micros(400),
+        );
+        let page = get(&t, "/canvas/").await.text();
+        assert!(page.find("a-first").unwrap() < page.find("b-second").unwrap(), "{page}");
     }
 
     #[tokio::test]
@@ -693,31 +1249,40 @@ mod tests {
         server.serve("b-new", Some("hi\n"), None, None).unwrap();
         fs::create_dir_all(canvas_dir(t.config()).join("no-index")).unwrap();
         let set = |name: &str, secs: u64| {
-            fs::File::options()
-                .write(true)
-                .open(canvas_dir(t.config()).join(name).join("index.html"))
-                .unwrap()
-                .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs))
-                .unwrap();
+            set_time(
+                &canvas_dir(t.config()).join(name).join("index.html"),
+                UNIX_EPOCH + Duration::from_secs(secs),
+            );
         };
-        set("older", 1_794_441_600);
-        set("b-new", 1_794_441_600 + 3600);
+        set("older", DAY);
+        set("b-new", DAY + 3600);
         // What the Node middleware sent for the same folder (TZ=UTC).
         let node = "<!DOCTYPE html><html><head><title>Canvas Gallery</title><style>body{background:#1a1a1a;color:#ececec;font-family:Poppins,sans-serif;padding:40px;max-width:600px;margin:0 auto}h1{color:#c45a35}a:hover{border-color:#c45a35!important}</style></head><body><h1>Canvas Gallery</h1><a href=\"/canvas/b-new/\" style=\"display:block;background:#2b2a27;border-radius:8px;padding:16px;margin:8px 0;text-decoration:none;color:#ececec;border:1px solid #3a3935\"><strong>b-new</strong><br><span style=\"color:#a8a8a0;font-size:12px\">0KB &middot; 11/12/2026</span></a><a href=\"/canvas/older/\" style=\"display:block;background:#2b2a27;border-radius:8px;padding:16px;margin:8px 0;text-decoration:none;color:#ececec;border:1px solid #3a3935\"><strong>older</strong><br><span style=\"color:#a8a8a0;font-size:12px\">2KB &middot; 11/12/2026</span></a></body></html>";
-        let res = call(&t, true, get("/canvas/")).await.unwrap();
+        let res = get(&t, "/canvas/").await;
         assert_eq!(res.text(), node);
-        assert_eq!(res.header("content-type"), Some("text/html; charset=utf-8"));
+        assert_eq!(res.header("content-type"), Some(HTML));
     }
 
     #[test]
-    fn paths_are_cleaned_up_as_path_join_did() {
-        let sep = std::path::MAIN_SEPARATOR;
-        assert_eq!(normalize_path("/a/b/../c/./d"), format!("{sep}a{sep}c{sep}d"));
-        assert_eq!(normalize_path("/a/../../x"), format!("{sep}x"));
+    fn helpers_match_node() {
         assert_eq!(encode_uri_component("a b/é~"), "a%20b%2F%C3%A9~");
         assert_eq!(
             escape_html("<a href=\"x\">'&'</a>"),
             "&lt;a href=&quot;x&quot;&gt;&#39;&amp;&#39;&lt;/a&gt;"
         );
+        assert!(has_dot_part(Path::new("/w/.tarsee/canvas/c1/index.html")));
+        assert!(!has_dot_part(Path::new("/w/tarsee/canvas/c1/index.html")));
+        assert!(!has_dot_part(Path::new("/w/./canvas/c1/index.html")));
+        assert_eq!(with_utf8_charset("image/png"), "image/png; charset=utf-8");
+        assert_eq!(http_date(0), "Thu, 01 Jan 1970 00:00:00 GMT");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_unc_workspace_keeps_its_root() {
+        let base = normalize_path(Path::new(r"\\server\share\ws\canvas"));
+        let file = join_path(&base, "c1/index.html");
+        assert!(file.starts_with(&base), "{file:?}");
+        assert_eq!(file, PathBuf::from(r"\\server\share\ws\canvas\c1\index.html"));
     }
 }

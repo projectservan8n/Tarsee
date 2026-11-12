@@ -5,8 +5,8 @@ use serde_json::Value;
 use crate::app::{App, WeakApp};
 use crate::lib::hooks::{HookOptions, HookRegistry};
 use crate::lib::workspace_files::append_daily_log;
-use crate::lib::workspace_files::jstext::{js_string, js_trim};
-use crate::util::js::truthy;
+use crate::lib::workspace_files::jstext::js_string;
+use crate::util::js::{trim, truthy};
 
 pub const NAME: &str = "session-memory";
 pub const EVENTS: &[&str] = &["session:end"];
@@ -15,8 +15,8 @@ pub const EVENTS: &[&str] = &["session:end"];
 fn more_than_five(count: Option<&Value>) -> bool {
     match count {
         Some(Value::Number(n)) => n.as_f64().is_some_and(|n| n > 5.0),
-        Some(Value::String(s)) => js_trim(s).parse::<f64>().is_ok_and(|n| n > 5.0),
-        Some(Value::Array(_)) | Some(Value::Object(_)) => js_trim(&js_string(count))
+        Some(Value::String(s)) => trim(s).parse::<f64>().is_ok_and(|n| n > 5.0),
+        Some(Value::Array(_)) | Some(Value::Object(_)) => trim(&js_string(count))
             .parse::<f64>()
             .is_ok_and(|n| n > 5.0),
         _ => false,

@@ -3,6 +3,11 @@
 //!
 //! Express matched `GET`, `PUT` and `DELETE /:name` for any name, `install`, `uninstall` and `setup` included; axum
 //! picks the fixed path first and would answer 405 there, so those three paths carry the `:name` handlers too.
+//!
+//! A skill name that reaches a folder (install, uninstall, setup, update, delete) must be one plain name; any other
+//! is answered as a skill that does not exist. The Node version joined whatever it was given (`../x` left the skills
+//! folders), and in Rust an absolute name would have replaced the folder altogether: `DELETE /api/skills/%2Fdata`
+//! removed `/data`. The copies and deletes run off the async runtime (`spawn_blocking`).
 
 use std::fs;
 
@@ -17,12 +22,14 @@ use serde_json::{Value, json};
 
 use crate::app::App;
 use crate::error::{ApiError, ApiResult};
+use crate::lib::safe_path::fs_error_message;
 use crate::lib::skills_engine::{
     SkillError, get_all_skills_with_status, get_custom_skills_dir, get_skill_content, install_skill, invalidate_cache,
-    scan_skills, uninstall_skill,
+    remove_entry, scan_skills, uninstall_skill,
 };
-use crate::lib::workspace_files::jstext::js_string;
-use crate::util::js::{number_to_string, truthy};
+use crate::lib::workspace_files::is_plain_name;
+use crate::lib::workspace_files::jstext::{js_string, path_type_error};
+use crate::util::js::truthy;
 
 pub fn router() -> Router<App> {
     Router::new()
@@ -40,14 +47,23 @@ fn by_name(name: &'static str) -> MethodRouter<App> {
         .delete(move |state| remove(state, Path(name.to_string())))
 }
 
+/// Runs blocking file work (a recursive copy or delete) off the async runtime.
+async fn blocking<T: Send + 'static>(app: &App, work: impl FnOnce() -> T + Send + 'static) -> Result<T, ApiError> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|err| unhandled_error(app, "Error", &err.to_string()))
+}
+
 /// GET / — every shipped skill with whether it is installed.
 async fn list(State(app): State<App>) -> ApiResult {
     Ok(Json(json!({ "skills": get_all_skills_with_status(&app) })))
 }
 
 /// The installed skill's name from `{ name }`, as `installSkill(name)` received it.
-fn name_arg(name: &Value) -> Result<&str, String> {
-    name.as_str().ok_or_else(|| path_type_error(name))
+fn name_arg(name: &Value) -> Result<String, String> {
+    name.as_str()
+        .map(String::from)
+        .ok_or_else(|| path_type_error(Some(name)))
 }
 
 /// POST /install — installs a skill (copies it from the shipped ones into the workspace). Body: `{ name }`.
@@ -57,9 +73,11 @@ async fn install(State(app): State<App>, headers: HeaderMap, body: Bytes) -> Api
     if !truthy(&name) {
         return Err(ApiError::bad_request("Skill name required"));
     }
-    name_arg(&name)
-        .and_then(|n| install_skill(&app, n).map_err(|e| e.to_string()))
-        .map_err(ApiError::bad_request)?;
+    let skill = name_arg(&name).map_err(ApiError::bad_request)?;
+    let worker = app.clone();
+    blocking(&app, move || install_skill(&worker, &skill))
+        .await?
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
     Ok(Json(json!({ "ok": true, "name": name, "installed": true })))
 }
 
@@ -70,8 +88,10 @@ async fn uninstall(State(app): State<App>, headers: HeaderMap, body: Bytes) -> A
     if !truthy(&name) {
         return Err(ApiError::bad_request("Skill name required"));
     }
-    name_arg(&name)
-        .and_then(|n| uninstall_skill(&app, n).map_err(|e| e.to_string()))
+    let skill = name_arg(&name).map_err(ApiError::bad_request)?;
+    let worker = app.clone();
+    blocking(&app, move || uninstall_skill(&worker, &skill))
+        .await?
         .map_err(ApiError::bad_request)?;
     Ok(Json(json!({ "ok": true, "name": name, "installed": false })))
 }
@@ -79,19 +99,24 @@ async fn uninstall(State(app): State<App>, headers: HeaderMap, body: Bytes) -> A
 /// POST /setup — installs several skills at once (onboarding). Body: `{ install: string[] }`.
 async fn setup(State(app): State<App>, headers: HeaderMap, body: Bytes) -> ApiResult {
     let body = express_json_body(&headers, &body)?.unwrap_or_else(|| json!({}));
-    let Some(Value::Array(names)) = body.get("install") else {
+    let Some(Value::Array(names)) = body.get("install").cloned() else {
         return Err(ApiError::bad_request("install array required"));
     };
-    let mut installed = Vec::new();
-    let mut failed = Vec::new();
-    for name in names {
-        let done = name.as_str().is_some_and(|n| install_skill(&app, n).is_ok());
-        if done {
-            installed.push(name.clone());
-        } else {
-            failed.push(name.clone());
+    let worker = app.clone();
+    let (installed, failed) = blocking(&app, move || {
+        let mut installed = Vec::new();
+        let mut failed = Vec::new();
+        for name in names {
+            let done = name.as_str().is_some_and(|n| install_skill(&worker, n).is_ok());
+            if done {
+                installed.push(name);
+            } else {
+                failed.push(name);
+            }
         }
-    }
+        (installed, failed)
+    })
+    .await?;
     Ok(Json(json!({ "ok": true, "installed": installed, "failed": failed })))
 }
 
@@ -106,6 +131,7 @@ async fn create(State(app): State<App>, headers: HeaderMap, body: Bytes) -> Resu
     let Some(body) = express_json_body(&headers, &body)? else {
         return Err(unhandled_error(
             &app,
+            "TypeError",
             "Cannot destructure property 'name' of 'req.body' as it is undefined.",
         ));
     };
@@ -132,9 +158,10 @@ async fn create(State(app): State<App>, headers: HeaderMap, body: Bytes) -> Resu
         ));
     }
     let Some(name) = name.as_str() else {
-        return Err(unhandled_error(&app, &path_type_error(&name)));
+        return Err(unhandled_error(&app, "TypeError", &path_type_error(Some(&name))));
     };
 
+    // The pattern above makes the name one plain name.
     let skill_dir = get_custom_skills_dir(&app).join(name);
     if skill_dir.exists() {
         return Err(ApiError::conflict("Skill already exists. Use PUT to update."));
@@ -148,12 +175,21 @@ async fn create(State(app): State<App>, headers: HeaderMap, body: Bytes) -> Resu
         "---\nname: {name}\ndescription: {description}\n---\n\n{}",
         js_string(content)
     );
-    let written = fs::create_dir_all(&skill_dir).and_then(|()| fs::write(skill_dir.join("SKILL.md"), md));
-    if let Err(err) = written {
-        return Err(ApiError::internal(err.to_string()));
-    }
+    fs::create_dir_all(&skill_dir).map_err(|e| ApiError::internal(fs_error_message(&e, "mkdir", &skill_dir)))?;
+    let file = skill_dir.join("SKILL.md");
+    fs::write(&file, md).map_err(|e| ApiError::internal(fs_error_message(&e, "open", &file)))?;
     invalidate_cache(&app);
     Ok((StatusCode::CREATED, Json(json!({ "ok": true, "name": name }))).into_response())
+}
+
+/// The body of a skill as it was written below its frontmatter. The parse keeps the blank line the write put after
+/// the frontmatter, so writing the kept body back as it was read would add one blank line at each update (the Node
+/// code did): that one line is taken off.
+fn kept_body(content: &str) -> &str {
+    content
+        .strip_prefix("\r\n")
+        .or_else(|| content.strip_prefix('\n'))
+        .unwrap_or(content)
 }
 
 /// PUT /:name — updates a custom skill. Body: `{ description?, content? }`.
@@ -161,15 +197,18 @@ async fn update(State(app): State<App>, Path(name): Path<String>, headers: Heade
     let Some(body) = express_json_body(&headers, &body)? else {
         return Err(unhandled_error(
             &app,
+            "TypeError",
             "Cannot destructure property 'description' of 'req.body' as it is undefined.",
         ));
     };
 
+    let not_found = || ApiError::not_found("Custom skill not found (built-in skills are read-only)");
+    if !is_plain_name(&name) {
+        return Err(not_found());
+    }
     let skill_path = get_custom_skills_dir(&app).join(&name).join("SKILL.md");
     if !skill_path.exists() {
-        return Err(ApiError::not_found(
-            "Custom skill not found (built-in skills are read-only)",
-        ));
+        return Err(not_found());
     }
 
     let existing = get_skill_content(&app, &name);
@@ -180,17 +219,23 @@ async fn update(State(app): State<App>, Path(name): Path<String>, headers: Heade
     };
     let new_content = match body.get("content") {
         Some(c) => js_string(Some(c)),
-        None => existing.as_ref().map(|e| e.content.clone()).unwrap_or_default(),
+        None => existing
+            .as_ref()
+            .map(|e| kept_body(&e.content).to_string())
+            .unwrap_or_default(),
     };
 
     let md = format!("---\nname: {name}\ndescription: {new_desc}\n---\n\n{new_content}");
-    fs::write(&skill_path, md).map_err(|err| ApiError::internal(err.to_string()))?;
+    fs::write(&skill_path, md).map_err(|e| ApiError::internal(fs_error_message(&e, "open", &skill_path)))?;
     invalidate_cache(&app);
     Ok(Json(json!({ "ok": true })))
 }
 
 /// DELETE /:name — deletes a custom skill.
 async fn remove(State(app): State<App>, Path(name): Path<String>) -> ApiResult {
+    if !is_plain_name(&name) {
+        return Err(ApiError::not_found("Skill not found"));
+    }
     let skill_dir = get_custom_skills_dir(&app).join(&name);
     if !skill_dir.exists() {
         return Err(ApiError::not_found("Skill not found"));
@@ -205,12 +250,9 @@ async fn remove(State(app): State<App>, Path(name): Path<String>) -> ApiResult {
         return Err(ApiError::forbidden("Cannot delete built-in skills"));
     }
 
-    let removed = if skill_dir.is_dir() {
-        fs::remove_dir_all(&skill_dir)
-    } else {
-        fs::remove_file(&skill_dir)
-    };
-    removed.map_err(|err| ApiError::internal(err.to_string()))?;
+    blocking(&app, move || remove_entry(&skill_dir))
+        .await?
+        .map_err(ApiError::internal)?;
     invalidate_cache(&app);
     Ok(Json(json!({ "ok": true })))
 }
@@ -250,23 +292,14 @@ pub(crate) fn express_json_body(headers: &HeaderMap, body: &[u8]) -> Result<Opti
         .map_err(|err| ApiError::bad_request(err.to_string()))
 }
 
-/// What Node's `path.join` threw for a name that is not text (`ERR_INVALID_ARG_TYPE`).
-pub(crate) fn path_type_error(value: &Value) -> String {
-    let received = match value {
-        Value::Null => "null".to_string(),
-        Value::Bool(b) => format!("type boolean ({b})"),
-        Value::Number(n) => format!("type number ({})", number_to_string(n.as_f64().unwrap_or(0.0))),
-        Value::String(s) => format!("type string ('{s}')"),
-        Value::Array(_) => "an instance of Array".to_string(),
-        Value::Object(_) => "an instance of Object".to_string(),
-    };
-    format!("The \"path\" argument must be of type string. Received {received}")
-}
-
 /// An error the Node route did not catch, as the global error handler (`middleware/error-handler.js`) answered it:
-/// a 500 that names no detail in production.
-pub(crate) fn unhandled_error(app: &App, message: &str) -> ApiError {
-    log::error!("[error] {}", crate::lib::redact::redact_secrets(message));
+/// a 500 that names no detail in production. `name` is the JavaScript error's class ("TypeError", "RangeError"),
+/// which began the logged stack; the stack's lines themselves were the Node program's and have no counterpart.
+pub(crate) fn unhandled_error(app: &App, name: &str, message: &str) -> ApiError {
+    log::error!(
+        "[error] {}",
+        crate::lib::redact::redact_secrets(&format!("{name}: {message}"))
+    );
     let mut body = json!({ "error": "Internal server error" });
     if app.env().get("NODE_ENV").as_deref() != Some("production") {
         body["detail"] = Value::String(crate::lib::redact::redact_secrets(message));
@@ -419,9 +452,15 @@ mod tests {
         assert_eq!(res.status, 200);
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            // The kept body starts with the blank line the last write put after the frontmatter, so each update that
-            // keeps the content adds one (the Node code does the same).
-            "---\nname: my-skill\ndescription: null\n---\n\n\nnew body"
+            "---\nname: my-skill\ndescription: null\n---\n\nnew body"
+        );
+        // Kept content stays as it is, however many times (the Node code added a blank line each time).
+        for _ in 0..3 {
+            http::put_json(&router, "/my-skill", &json!({"description": "again"})).await;
+        }
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "---\nname: my-skill\ndescription: again\n---\n\nnew body"
         );
         let res = http::put_json(&router, "/other", &json!({})).await;
         assert_eq!(
@@ -467,9 +506,20 @@ mod tests {
             );
         }
         // No JSON body at all: the JS destructured undefined, which the error handler answered.
+        let logs = crate::testkit::CapturedLogs::start();
         let res = http::send(&router, request("POST", "/")).await;
-        assert_eq!(res.status, 500);
-        assert_eq!(res.json()["error"], "Internal server error");
+        assert_eq!(
+            (res.status, res.json()),
+            (
+                500,
+                json!({"error": "Internal server error",
+                       "detail": "Cannot destructure property 'name' of 'req.body' as it is undefined."})
+            )
+        );
+        assert_eq!(
+            logs.errors(),
+            ["[error] TypeError: Cannot destructure property 'name' of 'req.body' as it is undefined."]
+        );
     }
 
     #[tokio::test]
@@ -483,6 +533,108 @@ mod tests {
         let res = http::delete(&router, "/setup").await;
         assert_eq!(res.status, 200);
         assert_eq!(http::get(&router, "/install").await.status, 404);
+    }
+
+    /// Every way a request could name a folder outside the skills folders.
+    fn names_that_are_not_one_plain_name(outside: &std::path::Path) -> Vec<String> {
+        vec![
+            outside.to_string_lossy().to_string(),
+            "..".into(),
+            ".".into(),
+            "../escape".into(),
+            "a/b".into(),
+            "a\\b".into(),
+        ]
+    }
+
+    #[tokio::test]
+    async fn a_skill_name_that_is_a_path_reaches_nothing_outside_the_skills_folders() {
+        let (t, router) = app();
+        let outside = crate::testkit::tmp_dir();
+        let victim = outside.path().join("victim");
+        fs::create_dir_all(&victim).unwrap();
+        fs::write(victim.join("SKILL.md"), "---\nname: victim\n---\nkeep me").unwrap();
+        fs::write(t.path().join("escape"), "keep me too").unwrap();
+        for name in names_that_are_not_one_plain_name(&victim) {
+            let encoded: String = crate::lib::canvas::encode_uri_component(&name);
+            // DELETE /:name answers as for a skill that does not exist.
+            let res = http::delete(&router, &format!("/{encoded}")).await;
+            assert_eq!(
+                (res.status, res.json()),
+                (404, json!({"error": "Skill not found"})),
+                "{name}"
+            );
+            let res = http::put_json(&router, &format!("/{encoded}"), &json!({"content": "x"})).await;
+            assert_eq!(
+                (res.status, res.json()),
+                (
+                    404,
+                    json!({"error": "Custom skill not found (built-in skills are read-only)"})
+                ),
+                "{name}"
+            );
+            let res = http::post_json(&router, "/install", &json!({"name": name})).await;
+            assert_eq!(
+                (res.status, res.json()),
+                (400, json!({"error": format!("Skill \"{name}\" not found")})),
+                "{name}"
+            );
+            let res = http::post_json(&router, "/uninstall", &json!({"name": name})).await;
+            assert_eq!(
+                (res.status, res.json()),
+                (200, json!({"ok": true, "name": name, "installed": false})),
+                "{name}"
+            );
+            let res = http::post_json(&router, "/setup", &json!({"install": [name]})).await;
+            assert_eq!(res.json()["failed"], json!([name]), "{name}");
+        }
+        assert_eq!(
+            fs::read_to_string(victim.join("SKILL.md")).unwrap(),
+            "---\nname: victim\n---\nkeep me"
+        );
+        assert_eq!(fs::read_to_string(t.path().join("escape")).unwrap(), "keep me too");
+        assert!(
+            get_custom_skills_dir(&t).is_dir(),
+            "the skills folder itself is still there"
+        );
+        assert!(t.config().bundled_skills_dir().join("diagram").is_dir());
+        // `/setup` with "" no longer copies every shipped skill into the root of the skills folder.
+        let res = http::post_json(&router, "/setup", &json!({"install": [""]})).await;
+        assert_eq!(res.json()["failed"], json!([""]));
+        assert!(!get_custom_skills_dir(&t).join("diagram").exists());
+    }
+
+    #[tokio::test]
+    async fn a_skill_that_is_a_file_is_uninstalled_and_deleted() {
+        let (t, router) = app();
+        let loose = get_custom_skills_dir(&t).join("loose.md");
+        fs::write(&loose, "x").unwrap();
+        let res = http::post_json(&router, "/uninstall", &json!({"name": "loose.md"})).await;
+        assert_eq!(
+            (res.status, res.json()),
+            (200, json!({"ok": true, "name": "loose.md", "installed": false}))
+        );
+        assert!(!loose.exists());
+        fs::write(&loose, "x").unwrap();
+        let res = http::delete(&router, "/loose.md").await;
+        assert_eq!((res.status, res.json()), (200, json!({"ok": true})));
+        assert!(!loose.exists());
+    }
+
+    #[tokio::test]
+    async fn frontmatter_keys_come_back_in_javascript_object_order() {
+        let (t, router) = app();
+        write_skill(
+            &t,
+            "ordered",
+            "---\nname: ordered\n2: two\n1: one\n__proto__: x\ndescription: d\n---\nbody",
+        );
+        let res = http::get(&router, "/ordered").await;
+        // Checked against Node: number-like keys first, and no __proto__.
+        assert_eq!(
+            res.text(),
+            r#"{"name":"ordered","description":"d","source":"installed","content":"body","frontmatter":{"1":"one","2":"two","name":"ordered","description":"d"}}"#
+        );
     }
 
     #[test]
