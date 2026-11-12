@@ -34,6 +34,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -50,9 +51,13 @@ use crate::app::App;
 use crate::config::Config;
 use crate::db::settings::Settings;
 use crate::env::Env;
-use crate::lib::safe_path::{is_sensitive_path, resolve_path};
+use crate::lib::safe_path::{is_sensitive_path, node_resolve, resolve_path};
 use crate::lib::url_safety::check_url_safety;
-use crate::util::js::{number_to_string, utf16_len, utf16_tail, utf16_truncate};
+use crate::util::js::{
+    is_whitespace as js_space, number_to_string, trim as js_trim, trim_end as js_trim_end, utf16_len, utf16_tail,
+    utf16_truncate,
+};
+use crate::util::node_path::to_namespaced;
 
 /// How much of a PDF's text goes inline into a message for an AI that can't read PDFs (design 4.12).
 pub const PDF_INLINE_CHARS: usize = 30_000;
@@ -73,30 +78,14 @@ const CACHE_MAX_CHARS: usize = 5_000_000;
 
 // ---------------------------------------------------------------- JavaScript text helpers
 
-/// `\s` in a JavaScript regex, and what `trim()` removes.
-fn js_space(c: char) -> bool {
-    matches!(
-        c,
-        '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
-    )
-}
-
+/// `\s` on one UTF-16 unit.
 fn js_space_unit(u: u16) -> bool {
     char::from_u32(u32::from(u)).is_some_and(js_space)
 }
 
 /// `\s` on one byte of text read as Latin-1, as the JS read a PDF.
 fn js_space_byte(b: u8) -> bool {
-    matches!(b, b'\t' | b'\n' | 0x0B | 0x0C | b'\r' | b' ' | 0xA0)
-}
-
-fn js_trim(s: &str) -> &str {
-    s.trim_matches(js_space)
-}
-
-fn js_trim_end(s: &str) -> &str {
-    s.trim_end_matches(js_space)
+    js_space(char::from(b))
 }
 
 /// `Number(value)` for a JSON value (a missing one is NaN).
@@ -259,6 +248,8 @@ pub struct PdfReader {
     pdftotext: Mutex<Pdftotext>,
     /// Oldest first.
     cache: Mutex<Vec<(String, PdfTextResult)>>,
+    /// The most pdftotext may write on either pipe (execFile's `maxBuffer`).
+    max_buffer: AtomicUsize,
 }
 
 impl PdfReader {
@@ -267,7 +258,13 @@ impl PdfReader {
             env,
             pdftotext: Mutex::new(Pdftotext::Unknown),
             cache: Mutex::new(Vec::new()),
+            max_buffer: AtomicUsize::new(PDFTOTEXT_MAX_BUFFER),
         }
+    }
+
+    /// Tests only: a smaller `maxBuffer` than the 64 MB pdftotext may write, so a test need not make 64 MB.
+    pub fn set_max_buffer_for_tests(&self, bytes: usize) {
+        self.max_buffer.store(bytes, Ordering::Relaxed);
     }
 
     /// The app's reader, made on first use.
@@ -302,27 +299,49 @@ impl PdfReader {
         cmd
     }
 
-    /// A program as Node's `execFile` found it: a bare name on the `PATH` of this reader's environment (not the
-    /// server's own, which a test does not control), anything with a folder in it as it is.
+    /// A program as Node's `execFile` found it (libuv's search): anything with a folder in it as it is; a bare name
+    /// in each folder of this reader's own `PATH` (not the server's: a test controls it), on Windows in the current
+    /// folder first and as `.com` or `.exe` (the name as written too when it has an extension), on Unix only where
+    /// it may be run.
     fn find_program(&self, program: &Path) -> Option<PathBuf> {
-        if program.components().count() > 1 || program.is_absolute() {
+        if program.components().count() > 1 || program.has_root() {
             return Some(program.to_path_buf());
         }
-        // On Windows the variable is often spelled "Path".
-        let path = self
-            .env
-            .snapshot()
-            .into_iter()
-            .find(|(name, _)| {
-                if cfg!(windows) {
-                    name.eq_ignore_ascii_case("PATH")
-                } else {
-                    name == "PATH"
-                }
-            })
-            .map(|(_, value)| value)?;
-        let cwd = std::env::current_dir().unwrap_or_default();
-        which::which_in(program, Some(path), cwd).ok()
+        let name = program.to_string_lossy().into_owned();
+        let path = self.env.get("PATH");
+        if cfg!(windows) {
+            let mut dirs: Vec<PathBuf> = vec![std::env::current_dir().unwrap_or_default()];
+            dirs.extend(
+                path.unwrap_or_default()
+                    .split(';')
+                    .map(|d| d.trim_matches('"'))
+                    .filter(|d| !d.is_empty())
+                    .map(PathBuf::from),
+            );
+            let has_ext = Path::new(&name).extension().is_some_and(|e| !e.is_empty());
+            let mut names: Vec<String> = Vec::new();
+            if has_ext {
+                names.push(name.clone());
+            }
+            names.push(format!("{name}.com"));
+            names.push(format!("{name}.exe"));
+            dirs.iter()
+                .flat_map(|dir| names.iter().map(move |n| dir.join(n)))
+                .find(|candidate| candidate.is_file())
+        } else {
+            // execvp's default when PATH is not set
+            let path = path.unwrap_or_else(|| "/bin:/usr/bin".into());
+            path.split(':')
+                .map(|d| {
+                    if d.is_empty() {
+                        PathBuf::from(".")
+                    } else {
+                        PathBuf::from(d)
+                    }
+                })
+                .map(|dir| dir.join(&name))
+                .find(|candidate| is_runnable(candidate))
+        }
     }
 
     async fn pdftotext_bin(&self) -> Option<PathBuf> {
@@ -382,29 +401,42 @@ impl PdfReader {
         })?;
         let mut stdout = child.stdout.take().ok_or("pdftotext gave no output")?;
         let mut stderr = child.stderr.take().ok_or("pdftotext gave no output")?;
-        let read_out = async {
-            let mut out = Vec::new();
-            let mut chunk = vec![0u8; 64 * 1024];
-            loop {
-                let n = stdout.read(&mut chunk).await.map_err(|e| e.to_string())?;
-                if n == 0 {
-                    return Ok(out);
-                }
-                out.extend_from_slice(&chunk[..n]);
-                if out.len() > PDFTOTEXT_MAX_BUFFER {
-                    return Err("stdout maxBuffer length exceeded".to_string());
+        let max_buffer = self.max_buffer.load(Ordering::Relaxed);
+        // Both pipes are read together, and the program is stopped the moment either passes `maxBuffer`, as
+        // execFile stopped it (waiting for the other pipe would leave it blocked on a full one until the time limit).
+        let run = async {
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let (mut out_chunk, mut err_chunk) = (vec![0u8; 64 * 1024], vec![0u8; 8 * 1024]);
+            let (mut out_open, mut err_open) = (true, true);
+            let mut over: Option<&str> = None;
+            while (out_open || err_open) && over.is_none() {
+                tokio::select! {
+                    read = stdout.read(&mut out_chunk), if out_open => match read {
+                        Ok(0) | Err(_) => out_open = false,
+                        Ok(n) => {
+                            out.extend_from_slice(&out_chunk[..n]);
+                            if out.len() > max_buffer {
+                                over = Some("stdout maxBuffer length exceeded");
+                            }
+                        }
+                    },
+                    read = stderr.read(&mut err_chunk), if err_open => match read {
+                        Ok(0) | Err(_) => err_open = false,
+                        Ok(n) => {
+                            err.extend_from_slice(&err_chunk[..n]);
+                            if err.len() > max_buffer {
+                                over = Some("stderr maxBuffer length exceeded");
+                            }
+                        }
+                    },
                 }
             }
-        };
-        let read_err = async {
-            let mut err = Vec::new();
-            let _ = (&mut stderr).take(1024 * 1024).read_to_end(&mut err).await;
-            err
-        };
-        let run = async {
-            let (out, err) = tokio::join!(read_out, read_err);
+            if let Some(message) = over {
+                let _ = child.start_kill();
+                return Ok::<_, String>((Err(message.to_string()), err, None));
+            }
             let status = child.wait().await.map_err(|e| e.to_string())?;
-            Ok::<_, String>((out, err, status))
+            Ok((Ok(out), err, Some(status)))
         };
         let command_line = format!("{} -enc UTF-8 {} -", bin.display(), file.display());
         let (out, err, status) = match tokio::time::timeout(timeout, run).await {
@@ -415,14 +447,14 @@ impl PdfReader {
         let said = || -> Option<String> {
             String::from_utf8_lossy(&err)
                 .split('\n')
-                .map(|l| l.trim_end_matches('\r').trim().to_string())
+                .map(|l| js_trim(l.trim_end_matches('\r')).to_string())
                 .find(|l| !l.is_empty() && !is_syntax_line(l))
         };
         let out = match out {
             Ok(out) => out,
             Err(message) => return Err(said().unwrap_or(message)),
         };
-        if !status.success() {
+        if !status.is_some_and(|s| s.success()) {
             let stderr_text = String::from_utf8_lossy(&err).into_owned();
             return Err(said().unwrap_or(format!("Command failed: {command_line}\n{stderr_text}")));
         }
@@ -510,6 +542,22 @@ impl PdfReader {
             }
         }
         result
+    }
+}
+
+/// A file the system may start (execvp's test): a file, with an execute bit where files have modes.
+fn is_runnable(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.is_file() && meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        meta.is_file()
     }
 }
 
@@ -749,14 +797,18 @@ pub async fn read_pdf_tool(app: &App, input: &Value, settings: Option<&dyn Setti
             Err(error) => return format!("pdf_read error: {error}"),
         };
         name = base_name(&found);
-        match tokio::fs::read(&found).await {
+        match tokio::fs::read(to_namespaced(&found)).await {
             Ok(bytes) => buffer = Bytes::from(bytes),
             Err(err) => {
                 let message = crate::lib::safe_path::fs_error_message(&err, "open", &found);
                 return format!("pdf_read error: {name} could not be opened ({message}).");
             }
         }
-        file = Some(found);
+        // pdftotext opens the name the ordinary way, which on Windows would turn `a.pdf.` into `a.pdf`: such a file
+        // is handed over as the copy pdf_text makes instead.
+        if names_itself(&found) {
+            file = Some(found);
+        }
     }
     if !is_pdf(&buffer) {
         return format!("pdf_read error: {name} isn't a PDF.");
@@ -830,10 +882,20 @@ fn base_name(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// `fs.realpathSync`: the path with every link followed. On Windows the `\\?\` that `canonicalize` puts in front
-/// is taken off again, so the path reads as Node wrote it.
+/// Whether a program given this path opens this very file: on Windows, whether the system's own rewriting of names
+/// (trailing dots and spaces, device names) leaves it as it is.
+fn names_itself(path: &Path) -> bool {
+    if cfg!(windows) {
+        std::path::absolute(path).is_ok_and(|p| p.as_os_str() == path.as_os_str())
+    } else {
+        true
+    }
+}
+
+/// `fs.realpathSync`: the path with every link followed, the name taken literally as Node took it. On Windows the
+/// `\\?\` that `canonicalize` puts in front is taken off again, so the path reads as Node wrote it.
 fn real_path(path: &Path) -> std::io::Result<PathBuf> {
-    let real = std::fs::canonicalize(path)?;
+    let real = std::fs::canonicalize(to_namespaced(path))?;
     #[cfg(windows)]
     {
         let text = real.to_string_lossy();
@@ -873,7 +935,7 @@ fn locate(config: &Config, where_: &str) -> Result<PathBuf, String> {
         }
     }
     let candidates: Vec<PathBuf> = if node_is_absolute(where_) {
-        vec![resolve_path(Path::new(""), where_)]
+        vec![PathBuf::from(node_resolve(&[where_]))]
     } else {
         roots.iter().map(|r| resolve_path(r, where_)).collect()
     };
@@ -904,7 +966,7 @@ fn locate(config: &Config, where_: &str) -> Result<PathBuf, String> {
     if is_sensitive_path(&real) {
         return Err(format!("{} can't be read with this tool.", base_name(&real)));
     }
-    let st = std::fs::metadata(&real).map_err(|err| {
+    let st = std::fs::metadata(to_namespaced(&real)).map_err(|err| {
         format!(
             "{} could not be opened ({}).",
             real.display(),
@@ -978,7 +1040,7 @@ fn url_file_name(url: &str) -> String {
 /// unspecified addresses, IPv4 inside IPv6 (mapped, NAT64, 6to4) by the IPv4 rules. Anything not an IP address is
 /// refused too.
 pub fn is_private_address(ip: &str) -> bool {
-    let lower = ip.trim().to_lowercase();
+    let lower = js_trim(ip).to_lowercase();
     let mut a = lower.as_str();
     a = a.strip_prefix('[').unwrap_or(a);
     a = a.strip_suffix(']').unwrap_or(a);
@@ -2570,6 +2632,13 @@ fn predict(data: Vec<u8>, parms: Option<&V>) -> Result<Vec<u8>, ReadError> {
             "The value of \"size\" is out of range. It must be >= 0 && <= 9007199254740991. Received {}",
             number_to_string(row_len)
         )));
+    }
+    // No whole row fits in the data: nothing comes out, and nothing is allocated on the file's word. (The JS
+    // allocated a row of that size anyway; one it could not allocate threw, and the page read as "", which is also
+    // how an empty stream reads. A size taken from the file never sizes a buffer here: `/Columns 1e12` used to end
+    // the whole process.)
+    if row_len >= data.len() as f64 {
+        return Ok(Vec::new());
     }
     let row_len = row_len as usize;
     let bpp = if bpp.is_finite() { bpp as usize } else { usize::MAX };
