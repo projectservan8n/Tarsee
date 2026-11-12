@@ -150,7 +150,8 @@ const S: &str = r"[\t\n\x0B\x0C\r \u{A0}\u{1680}\u{2000}-\u{200A}\u{2028}\u{2029
 const ANY: &str = r"[^\n\r\u{2028}\u{2029}]";
 
 /// A pattern of plain words with JavaScript's `i` flag: letters match in either case, and only ASCII ones
-/// (`(?i-u:...)`; the regex crate's own `(?i)` would also take "ſ" for "s" and the Kelvin sign for "k").
+/// (`(?i-u:...)`; the regex crate's own `(?i)` would also take the long s, U+017F, for "s" and the Kelvin sign
+/// for "k").
 fn words(alternatives: &str) -> String {
     format!("(?i-u:{alternatives})")
 }

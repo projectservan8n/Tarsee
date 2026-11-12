@@ -759,6 +759,8 @@ fn what_someone_typed_is_matched_to_the_models_that_fit_it_best() {
     assert_eq!(matched("deepseek-flash", None), one("deepseek:deepseek-flash", 100));
     assert_eq!(matched(" DeepSeek Pro ", None), one("deepseek:deepseek-v4-pro", 100));
     assert_eq!(matched("OPENAI:GPT-6.1-SOL", None), one("openai:gpt-6.1-sol", 100));
+    // Claude Code's "[1m]" on the end of what was typed is not part of the name.
+    assert_eq!(matched("DeepSeek-Flash[1M]", None), one("deepseek:deepseek-flash", 100));
     // The last part of a slug.
     assert_eq!(
         matched("claude-sonnet-latest", None),
@@ -835,4 +837,84 @@ fn numbers_are_written_as_javascript_writes_them() {
     assert_eq!(js_number_to_string(0.1 + 0.2), "0.30000000000000004");
     assert_eq!(js_number_to_string(f64::NAN), "NaN");
     assert_eq!(js_number_to_string(-0.0), "0");
+}
+
+/// Three levels, `recommended` marked as the CLI marks it.
+fn three_levels(recommended: &str) -> Value {
+    let mark = |id: &str| if id == recommended { rec() } else { json!({}) };
+    json!({"type": "effort", "effort_options": [
+        effort("low", "Low", json!({})), effort("medium", "Medium", mark("medium")), effort("high", "High", mark("high")),
+    ]})
+}
+
+fn listed(list: &[PickerEntry]) -> Vec<(&str, &str)> {
+    list.iter().map(|e| (e.id.as_str(), e.name.as_str())).collect()
+}
+
+#[test]
+fn only_the_catalogs_main_entry_is_on_top_however_new_an_overflow_one_is() {
+    let catalog = json!({"models": [
+        {"id": "claude-opus-5-5", "name": "Opus 5.5", "section": "main", "thinking": three_levels("medium")},
+        {"id": "claude-opus-9", "name": "Opus 9 preview", "section": "overflow", "thinking": three_levels("high")},
+    ]});
+    let p = picker(Some(&catalog), &[]);
+    assert_eq!(listed(&p.main), [("claude-opus-5-5", "Opus 5.5")]);
+    assert_eq!(listed(&p.more), [("claude-opus-9", "Opus 9 preview")]);
+}
+
+#[test]
+fn a_family_with_no_main_entry_gets_its_newest_on_top_the_first_of_two_equally_new() {
+    // "claude-opus-5-0" and "claude-opus-5" are both version 5.0: the one the catalog lists first is on top.
+    let catalog = json!({"models": [
+        {"id": "claude-opus-5-0", "name": "First", "section": "overflow"},
+        {"id": "claude-opus-5", "name": "Second", "section": "overflow"},
+        {"id": "claude-sonnet-4", "name": "Sonnet 4", "section": "overflow"},
+        {"id": "claude-sonnet-4-6", "name": "Sonnet 4.6", "section": "overflow"},
+    ]});
+    let p = picker(Some(&catalog), &[]);
+    assert_eq!(
+        listed(&p.main),
+        [("claude-opus-5-0", "First"), ("claude-sonnet-4-6", "Sonnet 4.6")]
+    );
+    assert_eq!(
+        listed(&p.more),
+        [("claude-opus-5", "Second"), ("claude-sonnet-4", "Sonnet 4")]
+    );
+    // The same with no catalog at all: the first known of two equally new.
+    let p = picker(None, &["claude-opus-5", "claude-opus-5-0", "claude-haiku-3"]);
+    assert_eq!(
+        listed(&p.main),
+        [("claude-opus-5", "Opus 5"), ("claude-haiku-3", "Haiku 3")]
+    );
+    assert_eq!(listed(&p.more), [("claude-opus-5-0", "Opus 5.0")]);
+}
+
+#[test]
+fn a_known_id_goes_on_top_only_when_it_is_newer_and_takes_its_familys_levels_with_tarsees_default_marked() {
+    // As new as the catalog's own, or older: it stays out.
+    let catalog = json!({"models": [{"id": "claude-opus-5", "name": "Opus 5", "section": "main"}]});
+    let p = picker(Some(&catalog), &["claude-opus-5-0", "claude-opus-4-9"]);
+    assert_eq!(listed(&p.main), [("claude-opus-5", "Opus 5")]);
+    assert!(p.more.is_empty());
+    // Newer: on top, with the levels, the default level and the notice of the one it replaces; which level is
+    // Recommended is not carried over (the CLI said it of the older model), so Tarsee's default is marked.
+    let catalog = json!({"models": [{
+        "id": "claude-fable-5-1", "name": "Fable 5.1", "section": "main", "thinking": three_levels("high"),
+        "runtime": {"family": "fable", "default_effort": "high"}, "notice": {"text": "Careful."},
+    }]});
+    let p = picker(Some(&catalog), &["claude-fable-6"]);
+    assert_eq!(listed(&p.main), [("claude-fable-6", "Fable 6")]);
+    assert_eq!(listed(&p.more), [("claude-fable-5-1", "Fable 5.1")]);
+    let fable = &p.main[0];
+    assert_eq!(recommended(fable), ["medium"]);
+    assert_eq!(fable.default_effort.as_deref(), Some("high"));
+    assert!(
+        fable
+            .note
+            .as_ref()
+            .unwrap()
+            .tip
+            .starts_with("Careful. Fable is included")
+    );
+    assert_eq!(recommended(&p.more[0]), ["high"]);
 }
