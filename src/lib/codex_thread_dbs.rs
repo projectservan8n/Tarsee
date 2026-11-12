@@ -59,6 +59,9 @@ pub struct DirItem {
 /// Lists a folder. The default reads the real one; a test stands in a folder that can't be read.
 pub type ReadDirFn = Arc<dyn Fn(&Path) -> io::Result<Vec<DirItem>> + Send + Sync>;
 
+/// Called with a database's file name, or with a warning's text.
+pub type NameFn = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// The sweep's seams, for tests (the JS tests mocked `fs.readdirSync`, `console.warn` and `Database.prototype.exec`).
 #[derive(Clone, Default)]
 pub struct ThreadDbsDeps {
@@ -66,9 +69,9 @@ pub struct ThreadDbsDeps {
     /// is; an operating-system error in Node's words.
     pub read_dir: Option<ReadDirFn>,
     /// Called with a database's file name just before it is rebuilt (VACUUM).
-    pub before_rebuild: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    pub before_rebuild: Option<NameFn>,
     /// Where warnings go (default: the log, as `console.warn`).
-    pub warn: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    pub warn: Option<NameFn>,
 }
 
 impl ThreadDbsDeps {
