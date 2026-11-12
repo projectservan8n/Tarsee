@@ -30,15 +30,16 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::ai::context_limits::js_number;
-use crate::ai::engine_env::{CLAUDE_CODE, HomeOpts, home_for, resolve_path};
+use crate::ai::engine_env::{CLAUDE_CODE, HomeOpts, home_for};
 use crate::ai::provider_registry::{Engine, PROVIDER_IDS, get_provider, normalize_provider_id};
 use crate::ai::session_handle;
 use crate::app::App;
 use crate::config::env::home_dir;
 use crate::env::Env;
 use crate::lib::model_picker::js_to_fixed;
-use crate::lib::safe_path::join_path;
+use crate::lib::safe_path::{join_path, resolve_path};
 use crate::util::js;
+use crate::util::node_path::to_namespaced;
 
 /// Bytes-per-MB, so the intent is obvious at the call sites.
 const MB: f64 = 1_048_576.0;
@@ -151,13 +152,15 @@ pub fn provider_homes(app: &App, opts: &TranscriptOpts<'_>) -> Vec<ProviderHome>
         };
         // (A state folder that is only spaces has no key homes; the JS threw there.)
         homes.extend(key_home_providers().filter_map(|id| {
-            let home = home_for(id, CLAUDE_CODE, &key_opts).ok()?;
+            let home = home_for(id, CLAUDE_CODE, app.env(), &key_opts).ok()?;
             Some(ProviderHome { provider: id, home })
         }));
     }
 
+    // (path.resolve, on the text alone: two spellings of one folder are one home.)
+    let cwd = std::env::current_dir().unwrap_or_default();
     let mut seen = HashSet::new();
-    homes.retain(|h| seen.insert(resolve_path(&h.home)));
+    homes.retain(|h| seen.insert(resolve_path(&cwd, &h.home.to_string_lossy())));
     homes
 }
 
@@ -196,7 +199,7 @@ pub fn projects_root(app: &App) -> PathBuf {
     let roots = projects_roots(app, &TranscriptOpts::default());
     roots
         .iter()
-        .find(|root| root.exists())
+        .find(|root| to_namespaced(root).exists())
         .or(roots.first())
         .cloned()
         .unwrap_or_else(|| PathBuf::from("/home/node/.claude/projects"))
@@ -271,22 +274,28 @@ pub fn transcript_path(app: &App, session_id: &str, opts: &TranscriptOpts<'_>) -
     for root in roots {
         // Fast path: the slug we expect. Joined as text, the way Node's path.join did: the slug of a Windows folder
         // still holds its drive ("C:\work"), and must stay a name under the root, never a path of its own.
+        // Every check goes to the system in the literal form, as Node's did: the id is a name from outside, and
+        // Windows would otherwise read "nul.jsonl" as a device and drop a folder name's trailing dots.
         let direct = join_path(&join_path(&root, &slug), &file);
-        if direct.exists() {
+        if to_namespaced(&direct).exists() {
             return Some(direct);
         }
 
         // Fallback: scan the project dirs. Keeps working if Claude Code changes its slug rule, which it has done
         // before.
-        let Ok(entries) = std::fs::read_dir(&root) else {
+        let Ok(entries) = std::fs::read_dir(to_namespaced(&root)) else {
             continue; // root does not exist yet
         };
-        for entry in entries.flatten() {
-            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                continue;
-            }
-            let candidate = join_path(&entry.path(), &file);
-            if candidate.exists() {
+        // In name order, as Node's readdir gave them (libuv sorts): when two folders hold the file, the same one wins.
+        let mut folders: Vec<std::ffi::OsString> = entries
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .map(|entry| entry.file_name())
+            .collect();
+        folders.sort_by(|a, b| a.as_encoded_bytes().cmp(b.as_encoded_bytes()));
+        for folder in folders {
+            let candidate = join_path(&join_path(&root, &folder.to_string_lossy()), &file);
+            if to_namespaced(&candidate).exists() {
                 return Some(candidate);
             }
         }
@@ -297,7 +306,7 @@ pub fn transcript_path(app: &App, session_id: &str, opts: &TranscriptOpts<'_>) -
 /// Transcript size in MB (1 decimal), or `None` when there is no transcript. opts: as [`transcript_path`]'s.
 pub fn transcript_size_mb(app: &App, session_id: &str, opts: &TranscriptOpts<'_>) -> Option<f64> {
     let path = transcript_path(app, session_id, opts)?;
-    let size = std::fs::metadata(path).ok()?.len();
+    let size = std::fs::metadata(to_namespaced(&path)).ok()?.len();
     js_to_fixed(size as f64 / MB, 1).parse().ok()
 }
 
@@ -448,6 +457,14 @@ mod tests {
             let by_slug = write_transcript(&home.join(".claude"), "both", &slug, 10);
             assert_eq!(transcript_path(&t, "both", &none).as_ref(), Some(&by_slug));
         }
+        // The same session in two folders the slug doesn't name: the first by name, as Node's sorted listing gave.
+        for folder in ["-m", "-b", "-x"] {
+            write_transcript(&home.join(".claude"), "twice", folder, 10);
+        }
+        assert_eq!(
+            transcript_path(&t, "twice", &none),
+            Some(home.join(".claude").join("projects").join("-b").join("twice.jsonl"))
+        );
         // A file where a project folder should be is skipped; a missing root is no error.
         std::fs::write(home.join(".claude").join("projects").join("stray.jsonl"), "x").unwrap();
         assert_eq!(transcript_path(&t, "stray", &none), None);
@@ -479,6 +496,10 @@ mod tests {
             assert_eq!(transcript_path(&t, id, &none), None, "{id:?}");
             assert_eq!(transcript_size_mb(&t, id, &none), None, "{id:?}");
             assert!(!is_transcript_over_cap(&t, id, Some(-1.0), &none), "{id:?}");
+        }
+        // A device name is a file name like any other (Windows would open the device for "nul.jsonl").
+        for device in ["nul", "con", "aux", "NUL"] {
+            assert_eq!(transcript_path(&t, device, &none), None, "{device}");
         }
         // A drive-relative name (Windows) stays a name under the project folder: it never replaces the path.
         let drive = outside.to_string_lossy().chars().take(2).collect::<String>();

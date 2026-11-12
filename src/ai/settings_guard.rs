@@ -24,18 +24,16 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use serde::{Serialize, Serializer};
-use serde_json::Value;
 
+use super::engine_env::js_json::{JsString, Json, members_in_js_order, parse_document, stringify_pretty, to_text};
 use super::engine_env::{
-    HomeOpts, codex_config_files_for, codex_config_guard, home_for, is_auth_env_name, read_text, resolve_path,
-    setting_sources_for, settings_file_guard, settings_files_for, strip_codex_config,
+    HomeOpts, codex_config_files_for, codex_config_guard, home_for, is_auth_env_name, read_text, setting_sources_for,
+    settings_file_guard, settings_files_for, strip_codex_config,
 };
 use super::provider_registry::{Engine, PROVIDERS, ProviderRegistry};
 use crate::app::App;
 use crate::config::env::home_dir;
-use crate::lib::model_picker::js_number_to_string;
-use crate::lib::safe_path::{fs_error_message, fs_error_message_two};
-use crate::lib::workspace_files::jstext::js_key_order;
+use crate::lib::safe_path::{fs_error_message, fs_error_message_two, resolve_path};
 use crate::util::js;
 
 /// Where the guards look. Everything left out takes the app's own.
@@ -119,9 +117,11 @@ fn options_of(app: &App, opts: &SettingsGuardOpts<'_>) -> Resolved {
     }
 }
 
-/// `path.resolve(file)` as text: what the JS compared two files by.
-fn resolved_text(file: &Path) -> String {
-    resolve_path(file).to_string_lossy().into_owned()
+/// `path.resolve(file)` as text: what the JS compared two files by. Worked out on the text alone, as Node did: the
+/// system is never asked, so a name with a dot or a space after it ("settings.json.") stays a different name.
+fn resolved_text(file: &str) -> String {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    resolve_path(&cwd, file).to_string_lossy().into_owned()
 }
 
 /// Every settings file a shipped provider's turn would refuse right now, once each, with the AIs it stops.
@@ -142,7 +142,7 @@ pub fn settings_guard_findings(app: &App, opts: &SettingsGuardOpts<'_>) -> Vec<G
                 state_dir: Some(o.state_dir.clone()),
                 home_dir: Some(o.home_dir.clone()),
             };
-            let Ok(home) = home_for(p.id, engine.as_str(), &home_opts) else {
+            let Ok(home) = home_for(p.id, engine.as_str(), app.env(), &home_opts) else {
                 continue;
             };
             let (kind, result) = if *engine == Engine::Codex {
@@ -153,7 +153,7 @@ pub fn settings_guard_findings(app: &App, opts: &SettingsGuardOpts<'_>) -> Vec<G
                 (GuardKind::Claude, settings_file_guard(&paths, None))
             };
             for f in result.files {
-                let key = resolved_text(&f.file);
+                let key = resolved_text(&f.file.to_string_lossy());
                 let at = match by_file.iter().position(|(k, _)| *k == key) {
                     Some(at) => at,
                     None => {
@@ -254,10 +254,10 @@ pub fn fix_settings_file(app: &App, file: Option<&str>, opts: &SettingsGuardOpts
             error: "Say which file to fix.".to_string(),
         });
     };
-    let wanted = resolved_text(Path::new(file));
+    let wanted = resolved_text(file);
     let Some(finding) = settings_guard_findings(app, opts)
         .into_iter()
-        .find(|f| resolved_text(&f.file) == wanted)
+        .find(|f| resolved_text(&f.file.to_string_lossy()) == wanted)
     else {
         return Err(FixRefusal {
             status: 404,
@@ -297,76 +297,44 @@ fn change(finding: &GuardFinding) -> Result<FixedFile, String> {
 
 /// A Claude Code settings file without the env entries a credential could come through, and without apiKeyHelper:
 /// the new text and the entries removed.
+///
+/// Read as `JSON.parse` read it and written as `JSON.stringify(json, null, 2)` wrote it (`engine_env/js_json.rs`),
+/// so every file the guard could name comes back as the Node version would have left it: numbers as JavaScript
+/// writes them (1.0 is "1"), each object's members in JavaScript's order, half of a surrogate pair kept as its
+/// escape.
 fn strip_claude_settings(text: &str) -> Result<(String, Vec<String>), String> {
-    let mut json: Value =
-        serde_json::from_str(text.strip_prefix('\u{FEFF}').unwrap_or(text)).map_err(|err| err.to_string())?;
+    let name = |text: &str| -> JsString { text.encode_utf16().collect() };
+    let mut json = parse_document(text.strip_prefix('\u{FEFF}').unwrap_or(text)).ok_or("it isn't valid JSON")?;
     let mut removed = Vec::new();
-    if let Some(object) = json.as_object_mut() {
-        let mut env_is_empty = false;
-        if let Some(env) = object.get_mut("env").and_then(Value::as_object_mut) {
+    if let Json::Object(members) = &mut json {
+        let env_name = name("env");
+        if let Some(at) = members.iter().position(|(n, _)| *n == env_name)
+            && let Json::Object(env) = &mut members[at].1
+        {
             // In the order JavaScript walks an object's keys.
-            let names: Vec<String> = js_key_order(env).into_iter().cloned().collect();
-            for name in names {
-                if is_auth_env_name(&name) {
-                    env.shift_remove(&name);
-                    removed.push(format!("env.{name}"));
-                }
+            let credentials: Vec<JsString> = members_in_js_order(env)
+                .into_iter()
+                .map(|(n, _)| n.clone())
+                .filter(|n| is_auth_env_name(&to_text(n)))
+                .collect();
+            for credential in credentials {
+                env.retain(|(n, _)| *n != credential);
+                removed.push(format!("env.{}", to_text(&credential)));
             }
-            env_is_empty = env.is_empty();
+            if env.is_empty() {
+                members.remove(at);
+            }
         }
-        if env_is_empty {
-            object.shift_remove("env");
-        }
-        if object.shift_remove("apiKeyHelper").is_some() {
+        let helper = name("apiKeyHelper");
+        if members.iter().any(|(n, _)| *n == helper) {
+            members.retain(|(n, _)| *n != helper);
             removed.push("apiKeyHelper".to_string());
         }
     }
     let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
-    let mut out = String::new();
-    write_pretty(&json, 0, &mut out);
+    // (JavaScript's own words for a file nested too deep to write.)
+    let out = stringify_pretty(&json).ok_or("Maximum call stack size exceeded")?;
     Ok((out.split('\n').collect::<Vec<_>>().join(eol) + eol, removed))
-}
-
-/// `JSON.stringify(value, null, 2)`: as `serde_json::to_string_pretty`, but with numbers written as JavaScript
-/// writes them (1.0 is "1") and each object's keys in JavaScript's order (whole-number names first), so a file comes
-/// back exactly as the Node version would have written it.
-fn write_pretty(value: &Value, depth: usize, out: &mut String) {
-    let pad = |depth: usize, out: &mut String| out.push_str(&"  ".repeat(depth));
-    match value {
-        Value::Number(n) => {
-            let number = n.as_f64().unwrap_or(f64::NAN);
-            if number.is_finite() {
-                out.push_str(&js_number_to_string(number));
-            } else {
-                out.push_str("null");
-            }
-        }
-        Value::Array(items) if !items.is_empty() => {
-            out.push_str("[\n");
-            for (i, item) in items.iter().enumerate() {
-                pad(depth + 1, out);
-                write_pretty(item, depth + 1, out);
-                out.push_str(if i + 1 < items.len() { ",\n" } else { "\n" });
-            }
-            pad(depth, out);
-            out.push(']');
-        }
-        Value::Object(object) if !object.is_empty() => {
-            out.push_str("{\n");
-            let keys = js_key_order(object);
-            for (i, key) in keys.iter().enumerate() {
-                pad(depth + 1, out);
-                out.push_str(&Value::String((*key).clone()).to_string());
-                out.push_str(": ");
-                write_pretty(&object[*key], depth + 1, out);
-                out.push_str(if i + 1 < keys.len() { ",\n" } else { "\n" });
-            }
-            pad(depth, out);
-            out.push('}');
-        }
-        // null, true, false, a string, [] and {}.
-        other => out.push_str(&other.to_string()),
-    }
 }
 
 /// `<file><suffix>`, as text put after the file's whole path.
@@ -409,7 +377,7 @@ mod tests {
     //! is the safety; the fix only ever touches a file the guards refuse right now. The JS drove
     //! POST /api/ai/settings-guard/fix; the route is package R2's, so these call the two functions it calls. Every
     //! value here is an obvious fake.
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
     use crate::testkit::{TestApp, test_app};
@@ -714,11 +682,14 @@ theme = \"dark\"\n";
                 .join("settings.json");
         let fixed = p.fix(&roundabout).unwrap();
         assert_eq!(fixed.file, p.workspace_claude);
-        // A name that only starts like a finding, or a folder of one, is nothing.
+        // A name that only starts like a finding, or a folder of one, is nothing; nor is the name with a dot or a
+        // space after it, which Windows itself would open as the same file.
         for near in [
             p.codex_keys.with_extension("toml.bak"),
             p.codex_keys.parent().unwrap().to_path_buf(),
             p.codex_keys.join("config.toml"),
+            p.codex_keys.with_extension("toml."),
+            p.codex_keys.with_extension("toml "),
         ] {
             assert_eq!(p.fix(&near).unwrap_err().status, 404, "{}", near.display());
         }
@@ -766,7 +737,67 @@ theme = \"dark\"\n";
             ("[\n  1\n]\n".to_string(), vec![])
         );
         assert_eq!(strip_claude_settings("{}").unwrap(), ("{}\n".to_string(), vec![]));
-        assert!(strip_claude_settings("{ not json").is_err());
+        assert_eq!(strip_claude_settings("{ not json").unwrap_err(), "it isn't valid JSON");
+    }
+
+    #[test]
+    fn a_file_json_parse_reads_is_fixed_even_where_a_stricter_reader_would_give_up() {
+        // Half of a surrogate pair, a number past the largest double, and nesting past 128 levels: JSON.parse reads
+        // all three, the guard names the file's entries, and the fix must then be able to remove them (Node's
+        // answers, from JSON.stringify(JSON.parse(text), null, 2)).
+        let src = r#"{"apiKeyHelper":"x","half":"\ud83d!","huge":1e400,"minus":-1e400,"zero":-0,"long":123456789012345678901234567890}"#;
+        let (text, removed) = strip_claude_settings(src).unwrap();
+        assert_eq!(removed, ["apiKeyHelper"]);
+        assert_eq!(
+            text,
+            "{\n  \"half\": \"\\ud83d!\",\n  \"huge\": null,\n  \"minus\": null,\n  \"zero\": 0,\n  \"long\": 1.2345678901234568e+29\n}\n"
+        );
+        let deep = format!(
+            "{{\"env\":{{\"ANTHROPIC_BASE_URL\":\"u\"}},\"deep\":{}1{}}}",
+            "[".repeat(200),
+            "]".repeat(200)
+        );
+        let (text, removed) = strip_claude_settings(&deep).unwrap();
+        assert_eq!(removed, ["env.ANTHROPIC_BASE_URL"]);
+        assert!(text.starts_with("{\n  \"deep\": [\n    [\n      ["), "{}", &text[..60]);
+        assert!(!text.contains("ANTHROPIC"));
+        // Past what JavaScript itself can write back, it fails as JavaScript did: the file is left for the owner.
+        let too_deep = format!(
+            "{{\"apiKeyHelper\":1,\"deep\":{}1{}}}",
+            "[".repeat(100_000),
+            "]".repeat(100_000)
+        );
+        assert_eq!(
+            strip_claude_settings(&too_deep).unwrap_err(),
+            "Maximum call stack size exceeded"
+        );
+    }
+
+    #[test]
+    fn a_fix_that_fails_says_why_and_leaves_the_file_as_it_was() {
+        let p = plant();
+        // The guard names apiKeyHelper; the file is nested too deep for the fix to write it back.
+        let text = format!(
+            "{{\"apiKeyHelper\":1,\"deep\":{}1{}}}",
+            "[".repeat(5_000),
+            "]".repeat(5_000)
+        );
+        std::fs::write(&p.workspace_claude, &text).unwrap();
+        let refused = p.fix(&p.workspace_claude).unwrap_err();
+        assert_eq!(refused.status, 500);
+        assert_eq!(
+            refused.error,
+            format!(
+                "Tarsee couldn't change {}: Maximum call stack size exceeded. Edit it by hand in the Terminal.",
+                p.findings()
+                    .iter()
+                    .find(|f| f.kind == GuardKind::Claude && !f.unreadable)
+                    .unwrap()
+                    .file
+                    .display()
+            )
+        );
+        assert_eq!(std::fs::read_to_string(&p.workspace_claude).unwrap(), text);
     }
 
     #[test]
