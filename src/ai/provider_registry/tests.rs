@@ -1590,7 +1590,7 @@ fn a_key_is_read_without_the_space_and_the_one_pair_of_quotes_around_it() {
     assert!(!check_key_slot("anthropic", &format!("{anthropic}\u{85}")).ok);
     assert_eq!(normalize_provider_id("\u{FEFF}DeepSeek\u{2028}"), Some("deepseek"));
     assert_eq!(normalize_provider_id("deepseek\u{85}"), None);
-    assert_eq!(js_trim("\u{FEFF}\t a b \u{3000}\r\n"), "a b");
+    assert_eq!(js::trim("\u{FEFF}\t a b \u{3000}\r\n"), "a b");
     // Only one quote comes off each side.
     assert_eq!(strip_one_quote_each_side("\"\"k'"), "\"k");
     assert_eq!(strip_one_quote_each_side("\""), "");
@@ -2120,6 +2120,46 @@ fn a_slug_has_a_maker_only_when_something_stands_before_its_slash() {
     assert_eq!(open_router_maker("~/x"), None);
     assert_eq!(open_router_maker("auto"), None);
     assert_eq!(open_router_maker(""), None);
+}
+
+#[test]
+fn a_model_name_is_trimmed_as_javascript_trims_it_all_the_way_down() {
+    let reg = ProviderRegistry::new();
+    // U+0085 (next line) is not space to JavaScript, so it stays on the name: "opus" with one at its edge is no
+    // tier word and no model Tarsee knows, and the Claude providers answer with the recommended model. (Rust's own
+    // trim removes it, here or in the model table's lookups, and would answer "opus".)
+    for id in ["claude", "anthropic", "claude-code"] {
+        for name in [
+            "opus\u{85}",
+            "\u{85}haiku",
+            "opus\u{85}[1m]",
+            "claude-opus-5\u{85}",
+            "claude-haiku-4-5\u{85}",
+        ] {
+            assert_eq!(
+                reg.resolve_model_for(id, Some(name), None).as_deref(),
+                Some("sonnet"),
+                "{id} {name:?}"
+            );
+        }
+        // A byte order mark is space to JavaScript, and comes off.
+        assert_eq!(
+            reg.resolve_model_for(id, Some("\u{FEFF}opus\u{FEFF}"), None).as_deref(),
+            Some("opus"),
+            "{id}"
+        );
+    }
+    // The same on a provider that maps the name: not a tier word any more, so an id it does not offer; a claude-*
+    // id still names its tier inside.
+    let deepseek = |name: &str| reg.resolve_model_for("deepseek", Some(name), None);
+    assert_eq!(deepseek("opus\u{85}").as_deref(), Some("deepseek-flash"));
+    assert_eq!(deepseek("\u{85}haiku").as_deref(), Some("deepseek-flash"));
+    assert_eq!(deepseek("opus\u{85}[1m]").as_deref(), Some("deepseek-flash"));
+    assert_eq!(deepseek("claude-opus-5\u{85}").as_deref(), Some("deepseek-v4-pro"));
+    assert_eq!(deepseek("claude-haiku-4-5\u{85}").as_deref(), Some("deepseek-flash"));
+    assert_eq!(deepseek("\u{FEFF}opus\u{FEFF}").as_deref(), Some("deepseek-v4-pro"));
+    assert!(!is_tier_word("opus\u{85}"));
+    assert!(is_tier_word("\u{FEFF}opus"));
 }
 
 #[test]

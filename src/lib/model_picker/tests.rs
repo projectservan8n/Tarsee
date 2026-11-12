@@ -121,7 +121,7 @@ fn from_catalog() -> Picker {
     build_picker(&PickerOptions {
         catalog: Some(&catalog),
         source: Some("test"),
-        fetched_at: Some(1),
+        fetched_at: Some(1.0),
         ..PickerOptions::default()
     })
 }
@@ -136,7 +136,7 @@ fn the_newest_of_each_family_on_top_in_claude_codes_order_opus_fable_sonnet_haik
         p.main.iter().all(|e| e.alias.is_none()),
         "every entry is picked by its exact id"
     );
-    assert_eq!((p.source.as_deref(), p.fetched_at), (Some("test"), Some(1)));
+    assert_eq!((p.source.as_deref(), p.fetched_at), (Some("test"), Some(1.0)));
 }
 
 #[test]
@@ -321,7 +321,8 @@ fn reads_the_object_literal_as_data() {
         m[0]["thinking"]["effort_options"][1]["tooltip"]["content"],
         "Uses × more, it's \"a lot\""
     );
-    assert_eq!(m[1]["x"], Value::Null);
+    // The key is there and holds null (`void 0`): indexing would also give null for a key that had been dropped.
+    assert_eq!(m[1].get("x"), Some(&Value::Null));
     assert_eq!(m[1]["y"], 0.5);
 }
 
@@ -367,7 +368,7 @@ fn the_whole_list_is_the_json_the_node_version_sent() {
         known_ids: &["claude-opus-6"],
         aliases: &["opus", "haiku"],
         source: Some("test"),
-        fetched_at: Some(1),
+        fetched_at: Some(1.0),
         ..PickerOptions::default()
     });
     let want = r#"{"main":[{"id":"claude-opus-6","family":"opus","name":"Opus 6","description":null,"section":"main","efforts":[{"id":"low","name":"Low","recommended":false,"badge":null,"tip":null},{"id":"medium","name":"Medium","recommended":true,"badge":null,"tip":null},{"id":"high","name":"High","recommended":false,"badge":null,"tip":null},{"id":"xhigh","name":"Extra","recommended":false,"badge":null,"tip":null},{"id":"max","name":"Max","recommended":false,"badge":null,"tip":"May use a great many tokens, take long and hit token limits. Use it sparingly, for the hardest tasks."}],"effortNote":"Higher effort means more thorough responses, but takes longer and uses your limits faster.","defaultEffort":null,"alias":"opus"},{"id":"claude-fable-5-1","family":"fable","name":"Fable 5.1","description":"Most capable","section":"main","efforts":[{"id":"low","name":"Low","recommended":false,"badge":null,"tip":null},{"id":"medium","name":"Medium","recommended":false,"badge":null,"tip":null},{"id":"high","name":"High","recommended":true,"badge":null,"tip":null},{"id":"xhigh","name":"Extra","recommended":false,"badge":null,"tip":null},{"id":"max","name":"Max","recommended":false,"badge":null,"tip":null}],"effortNote":"Higher effort means more thorough responses, but takes longer and uses your limits faster.","defaultEffort":"high","note":{"text":"Uses usage credits past your weekly allowance","tip":"Draws down usage faster. Fable is included up to part of the weekly plan limit. Past that it needs usage credits; without them Tarsee answers on the next model down."},"alias":null},{"id":"claude-haiku-4-5","family":"haiku","name":"Haiku 4.5","description":null,"section":"main","efforts":[],"effortNote":null,"defaultEffort":null,"alias":"haiku"}],"more":[],"effortNote":"Higher effort means more thorough responses, but takes longer and uses your limits faster.","defaultEffort":"medium","source":"test","fetchedAt":1}"#;
@@ -627,6 +628,15 @@ fn a_price_reads_as_one_line_and_as_a_cost_tier() {
     );
     assert_eq!(hint(0.0, 0.0).as_deref(), Some("Free"));
     assert_eq!(price_hint(None), None);
+    // From 1e21 up `toFixed` writes the number as `String()` does; just below, every digit.
+    assert_eq!(
+        hint(1e-7, 1e21).as_deref(),
+        Some("$0.00 in · $1e+21 out per million tokens, est.")
+    );
+    assert_eq!(
+        hint(999999999999999900000.0, 1.5e22).as_deref(),
+        Some("$999999999999999868928 in · $1.5e+22 out per million tokens, est.")
+    );
 
     let tier = |input: f64, output: f64| cost_tier(Some(&price(input, output)));
     assert_eq!(tier(0.1, 0.5), Some("$"));
@@ -825,26 +835,47 @@ fn numbers_are_written_as_javascript_writes_them() {
     assert_eq!(js_to_fixed(0.0004, 2), "0.00");
     assert_eq!(js_to_fixed(1234.5, 0), "1235");
     assert_eq!(js_to_fixed(-1.25, 1), "-1.3");
+    // From 1e21 up it is `String(x)`; one double below that, every digit still.
+    assert_eq!(js_to_fixed(1e21, 0), "1e+21");
+    assert_eq!(js_to_fixed(-1e21, 2), "-1e+21");
+    assert_eq!(js_to_fixed(1.5e22, 1), "1.5e+22");
+    assert_eq!(js_to_fixed(999999999999999900000.0, 0), "999999999999999868928");
+    assert_eq!(js_to_fixed(999999999999999900000.0, 2), "999999999999999868928.00");
     // toPrecision, read back as a number.
     assert_eq!(js_to_precision(0.0699, 3), 0.0699);
     assert_eq!(js_to_precision(1.125, 3), 1.13);
     assert_eq!(js_to_precision(999.5, 3), 1000.0);
     assert_eq!(js_to_precision(0.000123456, 3), 0.000123);
     assert_eq!(js_to_precision(2.0, 3), 2.0);
-    // String(number).
-    assert_eq!(js_number_to_string(2.0), "2");
-    assert_eq!(js_number_to_string(0.5), "0.5");
-    assert_eq!(js_number_to_string(0.0699), "0.0699");
-    assert_eq!(js_number_to_string(1234.5), "1234.5");
-    assert_eq!(js_number_to_string(-0.25), "-0.25");
-    assert_eq!(js_number_to_string(1e21), "1e+21");
-    assert_eq!(js_number_to_string(1e-7), "1e-7");
-    assert_eq!(js_number_to_string(1.5e-7), "1.5e-7");
-    assert_eq!(js_number_to_string(0.000001), "0.000001");
-    assert_eq!(js_number_to_string(123456789012345680000.0), "123456789012345680000");
-    assert_eq!(js_number_to_string(0.1 + 0.2), "0.30000000000000004");
-    assert_eq!(js_number_to_string(f64::NAN), "NaN");
-    assert_eq!(js_number_to_string(-0.0), "0");
+}
+
+#[test]
+fn the_time_a_catalog_was_fetched_is_sent_as_it_was_given_fraction_and_all() {
+    // An account catalog with no date of its own is dated by its file's `mtimeMs`, which has a fraction.
+    let catalog = json!({"models": [{"id": "claude-sonnet-5-5", "name": "Sonnet 5.5", "section": "main"}]});
+    let sent = |fetched_at: Option<f64>| {
+        let p = build_picker(&PickerOptions {
+            catalog: Some(&catalog),
+            source: Some("s"),
+            fetched_at,
+            ..PickerOptions::default()
+        });
+        assert_eq!(p.fetched_at, fetched_at);
+        let text = serde_json::to_string(&p).unwrap();
+        text[text.rfind("\"source\"").unwrap()..].to_string()
+    };
+    assert_eq!(
+        sent(Some(1731500000123.4567)),
+        r#""source":"s","fetchedAt":1731500000123.4568}"#
+    );
+    // A whole number of milliseconds has no decimal point, as JavaScript writes it.
+    assert_eq!(
+        sent(Some(1731500000123.0)),
+        r#""source":"s","fetchedAt":1731500000123}"#
+    );
+    assert_eq!(sent(Some(0.5)), r#""source":"s","fetchedAt":0.5}"#);
+    assert_eq!(sent(Some(1.0)), r#""source":"s","fetchedAt":1}"#);
+    assert_eq!(sent(None), r#""source":"s","fetchedAt":null}"#);
 }
 
 /// Three levels, `recommended` marked as the CLI marks it.
