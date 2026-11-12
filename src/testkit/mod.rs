@@ -6,7 +6,6 @@
 //! - [`FakeFetch`] is the stubbed `fetch` the Node tests built by hand: it answers by URL prefix and records every
 //!   request.
 //! - [`http`] calls an axum `Router` directly, without a socket.
-//!
 //! - The stand-ins for what the packages of the port call through an interface (`docs/rust-port/INTERFACES.md`):
 //!   [`FakeEngine`] (a scripted agent engine, the port of `test/fakes/fake-engine.js`), [`FakeTurnRunner`] (a
 //!   scripted turn layer: what the Node channel tests passed as `chatStream`), [`FakeTools`] (the agent's tools),
