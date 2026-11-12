@@ -116,6 +116,14 @@ pub fn number_to_string(n: f64) -> String {
     if n == n.trunc() && n.abs() < 1e21 {
         return format!("{}", n as i128);
     }
+    // JavaScript switches to an exponent at 1e21 and above, and below 1e-6: "1e+21", "1.5e-7".
+    if n.abs() >= 1e21 || n.abs() < 1e-6 {
+        let text = format!("{n:e}");
+        return match text.split_once('e') {
+            Some((mantissa, exponent)) if !exponent.starts_with('-') => format!("{mantissa}e+{exponent}"),
+            _ => text,
+        };
+    }
     format!("{n}")
 }
 
@@ -202,6 +210,11 @@ mod tests {
         assert_eq!(number_to_string(1234567.0), "1234567");
         assert_eq!(number_to_string(0.1 + 0.2), "0.30000000000000004");
         assert_eq!(number_to_string(f64::NAN), "NaN");
+        assert_eq!(number_to_string(1e21), "1e+21");
+        assert_eq!(number_to_string(1.5e300), "1.5e+300");
+        assert_eq!(number_to_string(1e-7), "1e-7");
+        assert_eq!(number_to_string(0.000001), "0.000001");
+        assert_eq!(number_to_string(123456789012345680000.0), "123456789012345680000");
     }
 
     #[test]
