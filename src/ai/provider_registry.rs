@@ -1194,7 +1194,8 @@ impl ProviderRegistry {
                 self.default_for(p, store)
             }
         };
-        out.filter(|model| !model.is_empty() && !(no_claude_ids(p) && is_claude_id(model)))
+        let leaks_claude_id = |model: &str| no_claude_ids(p) && is_claude_id(model);
+        out.filter(|model| !model.is_empty() && !leaks_claude_id(model))
     }
 
     /// A model's context window in tokens (the model's own; the caller applies the auto-compact window). Claude

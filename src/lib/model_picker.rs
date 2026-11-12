@@ -250,7 +250,7 @@ fn effort_from(option: &Value) -> Option<EffortRow> {
         name: truthy_text(option.get("name")).unwrap_or_else(|| effort_label(&id)),
         id,
         recommended,
-        badge: (!badge_text.is_empty() && !recommended).then(|| EffortBadge {
+        badge: (!badge_text.is_empty() && !recommended).then_some(EffortBadge {
             text: badge_text,
             tone: if warning { "warning" } else { "neutral" },
         }),
@@ -758,11 +758,8 @@ pub fn catalog_from_build_text(text: &str) -> anyhow::Result<Option<BuildCatalog
                 .find(|c| c.get("id").and_then(Value::as_str) == Some("cc"))
         });
     let Some(config) = config else { return Ok(None) };
-    if !config
-        .get("models")
-        .and_then(Value::as_array)
-        .is_some_and(|m| !m.is_empty())
-    {
+    let models = config.get("models").and_then(Value::as_array);
+    if models.is_none_or(|models| models.is_empty()) {
         return Ok(None);
     }
     Ok(Some(BuildCatalog {
