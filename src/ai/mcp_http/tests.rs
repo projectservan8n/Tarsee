@@ -368,18 +368,44 @@ async fn starts_by_itself_when_a_turn_asks_for_a_grant_first_and_start_mcp_http_
 async fn several_first_grants_at_once_share_one_server() {
     let t = test_app();
     FakeTools::install(&t.app);
-    let grants = futures::future::join_all((0..8).map(|i| {
-        let app = t.app.clone();
-        async move {
-            grant_turn(&app, ctx_for(&format!("conv-{i}")), GrantOptions::default())
-                .await
-                .unwrap()
-        }
-    }))
-    .await;
+    // Eight turns ask for their grant while the endpoint is still starting (the test holds the door a start goes
+    // through, so all eight are waiting at it together).
+    let service = McpHttp::of(&t.app);
+    let door = service.starting.lock().await;
+    let asking: Vec<_> = (0..8)
+        .map(|i| {
+            let app = t.app.clone();
+            tokio::spawn(async move {
+                grant_turn(&app, ctx_for(&format!("conv-{i}")), GrantOptions::default())
+                    .await
+                    .unwrap()
+            })
+        })
+        .collect();
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(service.endpoint(), None);
+    drop(door);
+    let grants: Vec<Grant> = futures::future::join_all(asking)
+        .await
+        .into_iter()
+        .map(Result::unwrap)
+        .collect();
     let url = &grants[0].url;
-    assert!(grants.iter().all(|grant| &grant.url == url));
+    assert!(
+        grants.iter().all(|grant| &grant.url == url),
+        "more than one server was started"
+    );
     assert_eq!(grant_count(&t.app), 8);
+    for grant in &grants {
+        assert_eq!(
+            send(service.endpoint().unwrap().port, post(INIT).token(&grant.token))
+                .await
+                .status,
+            200
+        );
+    }
 }
 
 // --- tools over streamable HTTP ------------------------------------------------------------------------------------
