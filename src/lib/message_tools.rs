@@ -177,7 +177,7 @@ pub fn message_tools(content: &str) -> Vec<MessageTool> {
             break;
         }
         if let Some(call) = found.get(1) {
-            let j = parse_json_lossy(call.as_str()).filter(|j| truthy(j));
+            let j = parse_json_lossy(call.as_str()).filter(truthy);
             let name = text_or(j.as_ref().and_then(|j| j.get("name")), "tool");
             let input = j
                 .as_ref()

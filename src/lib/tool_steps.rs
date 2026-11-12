@@ -575,11 +575,12 @@ impl StreamWatcher {
             Some("content_block_delta") => {
                 let delta = e.get("delta");
                 let is_thinking = delta.and_then(|d| d.get("type")).and_then(Value::as_str) == Some("thinking_delta");
-                if is_thinking && let Some((_, sofar)) = self.thinking.iter_mut().find(|(k, _)| *k == key) {
-                    if utf16_len(sofar) < THINKING_CHARS {
-                        let more = delta.and_then(|d| d.get("thinking")).filter(|t| truthy(t));
-                        sofar.push_str(&more.map(js_string).unwrap_or_default());
-                    }
+                if is_thinking
+                    && let Some((_, sofar)) = self.thinking.iter_mut().find(|(k, _)| *k == key)
+                    && utf16_len(sofar) < THINKING_CHARS
+                {
+                    let more = delta.and_then(|d| d.get("thinking")).filter(|t| truthy(t));
+                    sofar.push_str(&more.map(js_string).unwrap_or_default());
                 }
                 Vec::new()
             }

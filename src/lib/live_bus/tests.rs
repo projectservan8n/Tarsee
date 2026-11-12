@@ -336,9 +336,9 @@ fn the_functions_by_their_js_names_do_nothing_until_the_bus_is_started() {
 
     init_live_bus(&t.app);
     let evt = publish(&t.app, "c", "turn_start", json!({}), Some("t")).unwrap();
-    assert_eq!(events_since(&t.app, "c", 0, 500), [evt.clone()]);
-    assert_eq!(recent_events(&t.app, "c", 200), [evt.clone()]);
-    assert_eq!(events_for_turn(&t.app, "t"), [evt.clone()]);
+    assert_eq!(events_since(&t.app, "c", 0, 500), std::slice::from_ref(&evt));
+    assert_eq!(recent_events(&t.app, "c", 200), std::slice::from_ref(&evt));
+    assert_eq!(events_for_turn(&t.app, "t"), std::slice::from_ref(&evt));
     assert_eq!(latest_seq(&t.app, Some("c")), evt.seq);
     assert_eq!(active_turn_for(&t.app, "c").unwrap().turn_id.as_deref(), Some("t"));
     assert_eq!(active_turn_list(&t.app).len(), 1);

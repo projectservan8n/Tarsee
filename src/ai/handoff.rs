@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn reads_created_at_as_stored_sqlites_utc_datetime() {
         let stored = json!({ "role": "user", "content": "stored row", "created_at": "2026-11-09 12:00:00" });
-        assert_eq!(since(&[stored.clone()], json!("2026-11-09T12:30:00Z")), "");
+        assert_eq!(since(std::slice::from_ref(&stored), json!("2026-11-09T12:30:00Z")), "");
         assert!(since(&[stored], json!("2026-11-09T11:30:00Z")).contains("stored row"));
     }
 
