@@ -102,7 +102,10 @@ mod tests {
         let t = test_app();
         set_tts_engine(&t, Arc::new(Cloner(Some("v-123"))));
         let made = clone_voice(&t, b"RIFF....", "Me").await.unwrap();
-        assert_eq!(serde_json::to_value(&made).unwrap(), json!({"voiceId": "v-123", "name": "Me"}));
+        assert_eq!(
+            serde_json::to_value(&made).unwrap(),
+            json!({"voiceId": "v-123", "name": "Me"})
+        );
         let data: Vec<u8> = t
             .db()
             .with(|c| c.query_row("SELECT data FROM voice_profiles WHERE id = 'v-123'", [], |r| r.get(0)))
@@ -120,7 +123,12 @@ mod tests {
         let mine = listed.iter().find(|p| p.id == "v-123").unwrap();
         assert_eq!((mine.name.as_str(), mine.engine.as_str()), ("Me", "elevenlabs"));
         assert_eq!(
-            serde_json::to_value(mine).unwrap().as_object().unwrap().keys().collect::<Vec<_>>(),
+            serde_json::to_value(mine)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
             ["id", "name", "engine", "created_at"]
         );
     }
@@ -129,9 +137,15 @@ mod tests {
     async fn no_audio_or_no_name_is_a_400_and_the_stub_says_it_cannot_clone() {
         let t = test_app();
         let err = clone_voice(&t, b"", "Me").await.unwrap_err();
-        assert_eq!((err.message.as_str(), err.status), ("Audio sample is required", Some(400)));
+        assert_eq!(
+            (err.message.as_str(), err.status),
+            ("Audio sample is required", Some(400))
+        );
         let err = clone_voice(&t, b"x", "").await.unwrap_err();
-        assert_eq!((err.message.as_str(), err.status), ("Voice name is required", Some(400)));
+        assert_eq!(
+            (err.message.as_str(), err.status),
+            ("Voice name is required", Some(400))
+        );
         let err = clone_voice(&t, b"x", "Me").await.unwrap_err();
         assert_eq!(err.status, Some(501));
         assert!(list_voice_profiles(t.db()).unwrap().is_empty());

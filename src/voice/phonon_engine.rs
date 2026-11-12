@@ -83,7 +83,14 @@ pub const DEFAULT_VOICE: &str = "toby";
 pub const SPEED_MIN: f64 = 0.85;
 pub const SPEED_MAX: f64 = 1.25;
 pub const DEFAULT_SPEED: f64 = 1.0;
-const SPEED_TO_DELTA: [(f64, f64); 6] = [(0.85, 0.5), (0.9, 0.15), (1.0, 0.0), (1.1, -0.15), (1.2, -0.3), (1.25, -0.45)];
+const SPEED_TO_DELTA: [(f64, f64); 6] = [
+    (0.85, 0.5),
+    (0.9, 0.15),
+    (1.0, 0.0),
+    (1.1, -0.15),
+    (1.2, -0.3),
+    (1.25, -0.45),
+];
 
 /// `Math.round(x)`: halves go up, towards +infinity.
 pub(crate) fn js_round(x: f64) -> f64 {
@@ -106,9 +113,16 @@ pub(crate) fn js_number_of_str(text: &str) -> f64 {
         if digits.is_empty() {
             return Some(f64::NAN);
         }
-        Some(u128::from_str_radix(digits, radix).map(|n| n as f64).unwrap_or(f64::NAN))
+        Some(
+            u128::from_str_radix(digits, radix)
+                .map(|n| n as f64)
+                .unwrap_or(f64::NAN),
+        )
     };
-    if let Some(n) = radix(&["0x"], 16).or_else(|| radix(&["0o"], 8)).or_else(|| radix(&["0b"], 2)) {
+    if let Some(n) = radix(&["0x"], 16)
+        .or_else(|| radix(&["0o"], 8))
+        .or_else(|| radix(&["0b"], 2))
+    {
         return n;
     }
     match t {
@@ -117,7 +131,10 @@ pub(crate) fn js_number_of_str(text: &str) -> f64 {
         _ => {}
     }
     // Rust also reads "inf" and "nan", which JavaScript does not.
-    if !t.chars().all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-')) {
+    if !t
+        .chars()
+        .all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
+    {
         return f64::NAN;
     }
     t.parse::<f64>().unwrap_or(f64::NAN)
@@ -726,10 +743,7 @@ impl PhononWorker {
                 }
                 // A stuck worker is replaced on the next request.
                 inner.stop();
-                Err(format!(
-                    "Phonon synth timed out after {}s",
-                    SYNTH_TIMEOUT.as_secs()
-                ))
+                Err(format!("Phonon synth timed out after {}s", SYNTH_TIMEOUT.as_secs()))
             }
         }
     }
@@ -902,10 +916,7 @@ impl WorkerInner {
             }
             if ready == Some(&Value::Bool(false)) {
                 let error = js_string_or_empty(msg.get("error"));
-                log::warn!(
-                    "[phonon] worker failed to start: {}",
-                    utf16_truncate(&error, 200)
-                );
+                log::warn!("[phonon] worker failed to start: {}", utf16_truncate(&error, 200));
                 st.boot_error = Some(if error.is_empty() {
                     "worker failed to start".into()
                 } else {
@@ -1068,7 +1079,12 @@ impl TtsEngine for PhononTtsEngine {
         Ok(())
     }
 
-    async fn synthesize(&self, text: &str, voice_id: Option<&str>, opts: &SynthOptions) -> Result<Synthesized, TtsError> {
+    async fn synthesize(
+        &self,
+        text: &str,
+        voice_id: Option<&str>,
+        opts: &SynthOptions,
+    ) -> Result<Synthesized, TtsError> {
         if text.is_empty() {
             return Err(TtsError::new("Text is required"));
         }
@@ -1173,10 +1189,17 @@ mod tests {
     #[test]
     fn php_the_programming_language_is_left_alone() {
         let none = PesoOptions::default();
-        assert_eq!(speak_pesos("Upgrade to PHP 8.3 first", none), "Upgrade to PHP 8.3 first");
+        assert_eq!(
+            speak_pesos("Upgrade to PHP 8.3 first", none),
+            "Upgrade to PHP 8.3 first"
+        );
         assert_eq!(speak_pesos("runs on PHP 7", none), "runs on PHP 7");
         assert_eq!(speak_pesos("PHP 5.6.40 is old", none), "PHP 5.6.40 is old");
-        assert_eq!(speak_pesos("PHP 8 pesos", none), "8 pesos", "with the word pesos it is money");
+        assert_eq!(
+            speak_pesos("PHP 8 pesos", none),
+            "8 pesos",
+            "with the word pesos it is money"
+        );
         assert_eq!(speak_pesos("PHP 500", none), "500 pesos");
     }
 
@@ -1324,7 +1347,10 @@ mod tests {
         assert!(p.uses_venv);
         assert_eq!(p.python, p.venv_python.to_string_lossy());
 
-        let t = test_app_with_env([("TARSEE_PHONON_DIR", " /x/phonon "), ("TARSEE_PHONON_PYTHON", "/opt/py")]);
+        let t = test_app_with_env([
+            ("TARSEE_PHONON_DIR", " /x/phonon "),
+            ("TARSEE_PHONON_PYTHON", "/opt/py"),
+        ]);
         let p = phonon_paths(&t);
         assert_eq!(p.root, PathBuf::from("/x/phonon"));
         assert_eq!((p.python.as_str(), p.uses_venv), ("/opt/py", false));
@@ -1363,10 +1389,7 @@ mod tests {
     async fn nothing_to_say_is_refused_before_any_worker_starts() {
         let t = test_app();
         let engine = PhononTtsEngine::new(&t, None, PhononOptions::default());
-        let err = engine
-            .synthesize("", None, &SynthOptions::default())
-            .await
-            .unwrap_err();
+        let err = engine.synthesize("", None, &SynthOptions::default()).await.unwrap_err();
         assert_eq!(err.message, "Text is required");
         let err = engine
             .synthesize("```code```", None, &SynthOptions::default())

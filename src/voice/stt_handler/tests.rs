@@ -56,7 +56,10 @@ async fn no_paid_call_when_a_key_is_only_in_the_environment_and_local_is_not_ins
         err.message,
         "Speech-to-text is unavailable: local transcription (faster-whisper) is not installed on this server. Install it in Settings > Voice > Speech-to-text (one click), or choose the paid \"OpenAI Whisper API\" there."
     );
-    assert!(t.fetch.calls().is_empty(), "the paid Whisper API was called without the owner choosing it");
+    assert!(
+        t.fetch.calls().is_empty(),
+        "the paid Whisper API was called without the owner choosing it"
+    );
 }
 
 #[tokio::test]
@@ -96,9 +99,14 @@ async fn the_whisper_api_when_the_owner_chose_it_with_the_request_openai_expects
         "https://api.openai.com/v1/audio/transcriptions",
         Answer::json(200, json!({"text": "from the paid api"})),
     );
-    let out = transcribe_audio(&t, AUDIO, Some("en-US"), Some(&store(Some("whisper-api"), Some(&key()))))
-        .await
-        .unwrap();
+    let out = transcribe_audio(
+        &t,
+        AUDIO,
+        Some("en-US"),
+        Some(&store(Some("whisper-api"), Some(&key()))),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         out,
         SttResult {
@@ -110,12 +118,13 @@ async fn the_whisper_api_when_the_owner_chose_it_with_the_request_openai_expects
     let calls = t.fetch.calls();
     assert_eq!(calls.len(), 1);
     let call = &calls[0];
-    assert_eq!((call.method.as_str(), call.url.as_str()), ("POST", "https://api.openai.com/v1/audio/transcriptions"));
+    assert_eq!(
+        (call.method.as_str(), call.url.as_str()),
+        ("POST", "https://api.openai.com/v1/audio/transcriptions")
+    );
     assert_eq!(call.header("authorization"), Some(format!("Bearer {}", key()).as_str()));
     let content_type = call.header("content-type").unwrap();
-    let boundary = content_type
-        .strip_prefix("multipart/form-data; boundary=")
-        .unwrap();
+    let boundary = content_type.strip_prefix("multipart/form-data; boundary=").unwrap();
     assert!(boundary.starts_with("----TarseeSTTBoundary"));
     let b = boundary;
     assert_eq!(
@@ -130,10 +139,8 @@ async fn the_whisper_api_when_the_owner_chose_it_with_the_request_openai_expects
 async fn the_chosen_whisper_api_is_called_once_not_again_when_it_fails_and_local_is_not_installed() {
     let t = test_app();
     with_local(&t, LocalTranscriber::available(false));
-    t.fetch.respond(
-        "https://api.openai.com/",
-        Answer::text(500, "upstream error"),
-    );
+    t.fetch
+        .respond("https://api.openai.com/", Answer::text(500, "upstream error"));
     let err = transcribe_audio(&t, AUDIO, Some("en"), Some(&store(Some("whisper-api"), Some(&key()))))
         .await
         .unwrap_err();
@@ -149,7 +156,8 @@ async fn the_chosen_whisper_api_is_called_once_not_again_when_it_fails_and_local
 async fn falls_back_to_free_local_transcription_when_the_chosen_whisper_api_fails() {
     let t = test_app();
     with_local(&t, local_words());
-    t.fetch.respond("https://api.openai.com/", Answer::text(429, "rate limited"));
+    t.fetch
+        .respond("https://api.openai.com/", Answer::text(429, "rate limited"));
     let out = transcribe_audio(&t, AUDIO, Some("en"), Some(&store(Some("whisper-api"), Some(&key()))))
         .await
         .unwrap();
@@ -176,11 +184,21 @@ async fn a_local_answer_in_the_owner_s_words_keeps_its_status_and_gains_the_paid
     let t = test_app();
     with_local(
         &t,
-        LocalTranscriber::available(true).answering(Err(stt_error("No speech model is downloaded yet.", 503, "stt-unavailable"))),
+        LocalTranscriber::available(true).answering(Err(stt_error(
+            "No speech model is downloaded yet.",
+            503,
+            "stt-unavailable",
+        ))),
     );
-    let err = transcribe_audio(&t, AUDIO, None, Some(&store(None, None))).await.unwrap_err();
-    assert_eq!((err.message.as_str(), err.status), ("No speech model is downloaded yet.", Some(503)));
-    t.fetch.respond("https://api.openai.com/", Answer::connect_error("down"));
+    let err = transcribe_audio(&t, AUDIO, None, Some(&store(None, None)))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (err.message.as_str(), err.status),
+        ("No speech model is downloaded yet.", Some(503))
+    );
+    t.fetch
+        .respond("https://api.openai.com/", Answer::connect_error("down"));
     let err = transcribe_audio(&t, AUDIO, None, Some(&store(Some("whisper-api"), Some(&key()))))
         .await
         .unwrap_err();

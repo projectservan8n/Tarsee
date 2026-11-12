@@ -461,10 +461,7 @@ pub struct JobDone(watch::Receiver<Option<JobOutcome>>);
 impl JobDone {
     pub async fn wait(mut self) -> JobOutcome {
         match self.0.wait_for(Option::is_some).await {
-            Ok(outcome) => outcome.clone().unwrap_or(JobOutcome {
-                ok: false,
-                error: None,
-            }),
+            Ok(outcome) => outcome.clone().unwrap_or(JobOutcome { ok: false, error: None }),
             Err(_) => JobOutcome {
                 ok: false,
                 error: Some("the job stopped".into()),
@@ -772,7 +769,9 @@ fn pip_problem(err: &PythonRunError, py_version: &str) -> String {
         .rev()
         .find(|l| super::speech_text::js_trim(l).starts_with("ERROR:"));
     match line {
-        Some(line) => PIP_ERROR_LINE.replace(super::speech_text::js_trim(line), "").into_owned(),
+        Some(line) => PIP_ERROR_LINE
+            .replace(super::speech_text::js_trim(line), "")
+            .into_owned(),
         None if !err.message.is_empty() => err.message.clone(),
         None => "pip stopped".into(),
     }
@@ -799,7 +798,13 @@ pub fn start_stt_install(app: &App, opts: SttJobOptions) -> Result<StartedJob, S
         app,
         "install",
         None,
-        |up| up.update(Some("python"), Some(Some("Looking for Python on this computer".into())), Some(1.0)),
+        |up| {
+            up.update(
+                Some("python"),
+                Some(Some("Looking for Python on this computer".into())),
+                Some(1.0),
+            )
+        },
         move |app, up| async move { install_faster_whisper(&app, &up, &opts).await },
     )
 }
@@ -814,18 +819,21 @@ async fn install_faster_whisper(app: &App, up: &Updater, opts: &SttJobOptions) -
     std::fs::create_dir_all(&dirs.home).map_err(|err| err.to_string())?;
 
     // 1. A Python to build on.
-    up.update(Some("python"), Some(Some("Looking for Python on this computer".into())), Some(1.0));
-    let version = opts
-        .pin
-        .as_ref()
-        .unwrap_or(&STANDALONE_PYTHON)
-        .version
-        .clone();
+    up.update(
+        Some("python"),
+        Some(Some("Looking for Python on this computer".into())),
+        Some(1.0),
+    );
+    let version = opts.pin.as_ref().unwrap_or(&STANDALONE_PYTHON).version.clone();
     let progress = up.clone();
     let on_progress = Arc::new(move |p: PythonProgress| {
         let mb = |n: u64| number_to_string(js_round(n as f64 / 1e6));
         if p.phase == "python-unpack" {
-            progress.update(Some("python"), Some(Some(format!("Unpacking Python {version}"))), Some(24.0));
+            progress.update(
+                Some("python"),
+                Some(Some(format!("Unpacking Python {version}"))),
+                Some(24.0),
+            );
         } else {
             let short = version.split('.').take(2).collect::<Vec<_>>().join(".");
             progress.update(
@@ -858,7 +866,11 @@ async fn install_faster_whisper(app: &App, up: &Updater, opts: &SttJobOptions) -
     log(&format!("using {} (Python {base_version}{exe})", base.label()));
 
     // 2. A private folder for faster-whisper (a venv), made again if an earlier try left it without pip.
-    up.update(Some("venv"), Some(Some("Making a private folder for faster-whisper".into())), Some(25.0));
+    up.update(
+        Some("venv"),
+        Some(Some("Making a private folder for faster-whisper".into())),
+        Some(25.0),
+    );
     let venv_py = PythonRef::new(venv_interpreter(&dirs.venv).to_string_lossy()).label("Tarsee's faster-whisper");
     if !Path::new(&venv_py.cmd).exists() || !pip_works(app, &venv_py).await {
         let _ = std::fs::remove_dir_all(&dirs.venv);
@@ -930,12 +942,19 @@ async fn install_faster_whisper(app: &App, up: &Updater, opts: &SttJobOptions) -
             lines.step("Installing faster-whisper's parts", 72.0);
         }
     });
-    run_python(app, &venv_py, &pip_args, pip)
-        .await
-        .map_err(|err| format!("Installing faster-whisper failed: {}.", pip_problem(&err, &base_version)))?;
+    run_python(app, &venv_py, &pip_args, pip).await.map_err(|err| {
+        format!(
+            "Installing faster-whisper failed: {}.",
+            pip_problem(&err, &base_version)
+        )
+    })?;
 
     // 4. It loads.
-    up.update(Some("check"), Some(Some("Checking faster-whisper works".into())), Some(76.0));
+    up.update(
+        Some("check"),
+        Some(Some("Checking faster-whisper works".into())),
+        Some(76.0),
+    );
     reset_stt_runtime(app);
     let probe = probe_python(app, &venv_py, Duration::from_secs(120)).await;
     let Some(fw) = probe.faster_whisper.clone() else {
@@ -1321,7 +1340,6 @@ pub async fn stt_boot_line(app: &App, settings: Option<&dyn Settings>) -> String
     )
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1339,10 +1357,21 @@ mod tests {
 
     #[test]
     fn pip_s_failures_are_said_in_plain_words() {
-        let full = run_error("", "ERROR: Could not install packages due to an OSError: [Errno 28] No space left on device", "x");
+        let full = run_error(
+            "",
+            "ERROR: Could not install packages due to an OSError: [Errno 28] No space left on device",
+            "x",
+        );
         assert_eq!(pip_problem(&full, "3.11.4"), "the disk is full");
-        let offline = run_error("WARNING: Retrying ... NewConnectionError(...getaddrinfo failed')", "ERROR: No matching distribution found for faster-whisper==1.2.1", "x");
-        assert_eq!(pip_problem(&offline, "3.11.4"), "could not reach pypi.org (check the internet connection)");
+        let offline = run_error(
+            "WARNING: Retrying ... NewConnectionError(...getaddrinfo failed')",
+            "ERROR: No matching distribution found for faster-whisper==1.2.1",
+            "x",
+        );
+        assert_eq!(
+            pip_problem(&offline, "3.11.4"),
+            "could not reach pypi.org (check the internet connection)"
+        );
         let no_wheel = run_error("", "ERROR: No matching distribution found for ctranslate2<5,>=4.0", "x");
         assert_eq!(
             pip_problem(&no_wheel, "3.11.4"),
@@ -1360,7 +1389,10 @@ mod tests {
             timed_out: true,
             ..run_error("", "", "x")
         };
-        assert_eq!(pip_problem(&slow, "3"), "it took more than 20 minutes (a slow connection?)");
+        assert_eq!(
+            pip_problem(&slow, "3"),
+            "it took more than 20 minutes (a slow connection?)"
+        );
     }
 
     #[test]
@@ -1368,7 +1400,10 @@ mod tests {
         let dl = PIP_DOWNLOADING
             .captures("  Downloading ctranslate2-4.8.5-cp312-cp312-win_amd64.whl (19.4 MB)")
             .unwrap();
-        assert_eq!((&dl[1], dl.get(2).map(|m| m.as_str())), ("ctranslate2", Some("19.4 MB")));
+        assert_eq!(
+            (&dl[1], dl.get(2).map(|m| m.as_str())),
+            ("ctranslate2", Some("19.4 MB"))
+        );
         let dl = PIP_DOWNLOADING
             .captures("  Downloading faster_whisper-1.2.1-py3-none-any.whl")
             .unwrap();
@@ -1396,7 +1431,10 @@ mod tests {
         // TARSEE_STATE_DIR is set, TARSEE_DATA_DIR is not: the old cache is <state>/whisper-models/hf_cache.
         assert_eq!(
             d.caches,
-            [d.models.join("hf_cache"), t.path().join("whisper-models").join("hf_cache")]
+            [
+                d.models.join("hf_cache"),
+                t.path().join("whisper-models").join("hf_cache")
+            ]
         );
         let delim = PATH_DELIMITER.to_string();
         let data = t.path().join("data").to_string_lossy().to_string();
@@ -1441,7 +1479,9 @@ mod tests {
     #[test]
     fn an_unknown_model_is_refused_with_the_names_there_are() {
         let t = test_app();
-        let err = start_model_download(&t, "../../etc", SttJobOptions::default()).err().unwrap();
+        let err = start_model_download(&t, "../../etc", SttJobOptions::default())
+            .err()
+            .unwrap();
         assert_eq!(err.status, Some(400));
         assert_eq!(err.code.as_deref(), Some("UNKNOWN_MODEL"));
         assert_eq!(
@@ -1467,7 +1507,10 @@ mod tests {
             started_at: now_iso(),
             done: JobDone(rx),
         });
-        let up = Updater { svc: svc.clone(), id: 7 };
+        let up = Updater {
+            svc: svc.clone(),
+            id: 7,
+        };
         up.step("a", 40.7);
         assert_eq!(stt_job(&t).unwrap().percent, 40);
         up.step("b", 10.0);
@@ -1479,7 +1522,12 @@ mod tests {
         Updater { svc, id: 8 }.step("other", 1.0);
         assert_eq!(stt_job(&t).unwrap().step, None);
         assert_eq!(
-            serde_json::to_value(stt_job(&t).unwrap()).unwrap().as_object().unwrap().keys().collect::<Vec<_>>(),
+            serde_json::to_value(stt_job(&t).unwrap())
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
             ["kind", "model", "phase", "step", "percent", "startedAt"]
         );
     }

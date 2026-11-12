@@ -51,7 +51,10 @@ impl FakeTts {
     }
 
     fn built_with(&self) -> Option<String> {
-        self.built_with_voice.lock().clone().expect("the engine was never built")
+        self.built_with_voice
+            .lock()
+            .clone()
+            .expect("the engine was never built")
     }
 }
 
@@ -69,7 +72,12 @@ impl TtsEngine for FakeTts {
         self.speeds.lock().push(speed);
     }
 
-    async fn synthesize(&self, text: &str, voice_id: Option<&str>, _opts: &SynthOptions) -> Result<Synthesized, TtsError> {
+    async fn synthesize(
+        &self,
+        text: &str,
+        voice_id: Option<&str>,
+        _opts: &SynthOptions,
+    ) -> Result<Synthesized, TtsError> {
         self.calls.lock().push((text.to_string(), voice_id.map(str::to_string)));
         if let Some(err) = self.fail.lock().clone() {
             return Err(err);
@@ -86,7 +94,9 @@ impl TtsEngine for FakeTts {
 }
 
 fn store(values: &[(&str, Value)]) -> Arc<dyn Settings> {
-    Arc::new(MemorySettings::from_pairs(values.iter().map(|(k, v)| (k.to_string(), v.clone()))))
+    Arc::new(MemorySettings::from_pairs(
+        values.iter().map(|(k, v)| (k.to_string(), v.clone())),
+    ))
 }
 
 /// Loaders for every engine, recording which were consulted and with which voice.
@@ -141,16 +151,29 @@ async fn phonon_is_the_default_for_everything_a_saved_elevenlabs_key_alone_doesn
     let with_key = store(&[("voice.elevenlabs.apiKey", json!("sk_test"))]);
     assert_eq!(engine_preference(Some(&*with_key)), "phonon", "a key is not a choice");
     t.env().set("ELEVENLABS_API_KEY", "sk_env");
-    assert_eq!(api_key(Some(&*store(&[])), t.env(), "elevenlabs").as_deref(), Some("sk_env"));
-    assert_eq!(engine_preference(Some(&*store(&[]))), "phonon", "nor is one in the environment");
+    assert_eq!(
+        api_key(Some(&*store(&[])), t.env(), "elevenlabs").as_deref(),
+        Some("sk_env")
+    );
+    assert_eq!(
+        engine_preference(Some(&*store(&[]))),
+        "phonon",
+        "nor is one in the environment"
+    );
     let elevenlabs = FakeTts::new("elevenlabs");
     let (phonon, edge) = (FakeTts::new("phonon"), FakeTts::new("edge-tts"));
     let (opts, l) = loaders(&[("phonon", &phonon), ("edge-tts", &edge), ("elevenlabs", &elevenlabs)]);
     init_tts_engine(&t, Some(with_key), opts).await;
     assert_eq!(get_tts_engine(&t).name(), "phonon");
-    assert!(!used(&l).contains(&"elevenlabs".to_string()), "ElevenLabs isn't even built");
+    assert!(
+        !used(&l).contains(&"elevenlabs".to_string()),
+        "ElevenLabs isn't even built"
+    );
     // Picking it in Settings > Voice is what makes it speak.
-    let picked = store(&[("voice.elevenlabs.apiKey", json!("sk_test")), ("voice.engine", json!("elevenlabs"))]);
+    let picked = store(&[
+        ("voice.elevenlabs.apiKey", json!("sk_test")),
+        ("voice.engine", json!("elevenlabs")),
+    ]);
     assert_eq!(engine_preference(Some(&*picked)), "elevenlabs");
 }
 
@@ -158,8 +181,17 @@ async fn phonon_is_the_default_for_everything_a_saved_elevenlabs_key_alone_doesn
 async fn phonon_not_installed_yet_edge_tts_speaks_with_its_own_default_voice() {
     let t = test_app();
     let edge = FakeTts::new("edge-tts");
-    let (phonon, el, piper) = (FakeTts::unavailable("phonon"), FakeTts::new("elevenlabs"), FakeTts::new("piper"));
-    let (opts, l) = loaders(&[("phonon", &phonon), ("edge-tts", &edge), ("elevenlabs", &el), ("piper", &piper)]);
+    let (phonon, el, piper) = (
+        FakeTts::unavailable("phonon"),
+        FakeTts::new("elevenlabs"),
+        FakeTts::new("piper"),
+    );
+    let (opts, l) = loaders(&[
+        ("phonon", &phonon),
+        ("edge-tts", &edge),
+        ("elevenlabs", &el),
+        ("piper", &piper),
+    ]);
     init_tts_engine(&t, Some(store(&[("voice.defaultVoiceId", json!("toby"))])), opts).await;
     assert!(is(&t, &edge));
     assert_eq!(used(&l), ["phonon", "edge-tts"]);
@@ -171,7 +203,12 @@ async fn phonon_not_installed_yet_edge_tts_keeps_an_edge_voice_the_user_picked()
     let t = test_app();
     let edge = FakeTts::new("edge-tts");
     let (opts, _) = loaders(&[("edge-tts", &edge)]);
-    init_tts_engine(&t, Some(store(&[("voice.defaultVoiceId", json!("en-GB-SoniaNeural"))])), opts).await;
+    init_tts_engine(
+        &t,
+        Some(store(&[("voice.defaultVoiceId", json!("en-GB-SoniaNeural"))])),
+        opts,
+    )
+    .await;
     assert_eq!(edge.built_with().as_deref(), Some("en-GB-SoniaNeural"));
 }
 
@@ -182,7 +219,11 @@ async fn never_falls_back_to_elevenlabs_it_costs_money_even_with_phonon_and_edge
     let (opts, l) = loaders(&[("elevenlabs", &el)]);
     init_tts_engine(&t, Some(store(&[])), opts).await;
     assert_eq!(get_tts_engine(&t).name(), "stub");
-    assert!(!used(&l).contains(&"elevenlabs".to_string()), "consulted: {:?}", used(&l));
+    assert!(
+        !used(&l).contains(&"elevenlabs".to_string()),
+        "consulted: {:?}",
+        used(&l)
+    );
 }
 
 #[tokio::test]
@@ -199,10 +240,17 @@ async fn a_picked_engine_that_can_t_start_never_falls_through_to_elevenlabs_even
             map[0] = ("edge-tts", &edge);
         }
         let (opts, l) = loaders(&map);
-        let settings = store(&[("voice.engine", json!(pick)), ("voice.elevenlabs.apiKey", json!("sk_test"))]);
+        let settings = store(&[
+            ("voice.engine", json!(pick)),
+            ("voice.elevenlabs.apiKey", json!("sk_test")),
+        ]);
         init_tts_engine(&t, Some(settings), opts).await;
         assert_ne!(get_tts_engine(&t).name(), "elevenlabs", "{pick} picked");
-        assert!(!used(&l).contains(&"elevenlabs".to_string()), "{pick}: consulted {:?}", used(&l));
+        assert!(
+            !used(&l).contains(&"elevenlabs".to_string()),
+            "{pick}: consulted {:?}",
+            used(&l)
+        );
     }
 }
 
@@ -283,7 +331,11 @@ async fn the_newest_init_wins_when_several_overlap_a_burst_of_settings_saves() {
     let first_opts = InitOptions {
         loaders: HashMap::from([("piper".to_string(), slow_piper)]),
     };
-    let mut first = Box::pin(init_tts_engine(&t, Some(store(&[("voice.engine", json!("piper"))])), first_opts));
+    let mut first = Box::pin(init_tts_engine(
+        &t,
+        Some(store(&[("voice.engine", json!("piper"))])),
+        first_opts,
+    ));
     // It starts (and takes its turn number) before the second, as the JS call did, then waits on the slow loader.
     assert!(futures::poll!(&mut first).is_pending());
     let (opts, _) = loaders(&[("edge-tts", &newer)]);
@@ -316,7 +368,11 @@ async fn a_failed_phonon_sentence_is_spoken_by_edge_tts_without_phonon_s_voice_i
         .unwrap();
     assert_eq!(text(&out), "edge-tts:Hello there.");
     assert_eq!(edge.calls()[0].1, None, "Edge would fail on the voice \"toby\"");
-    assert_eq!(get_tts_engine(&t).name(), "phonon", "still Phonon: it is tried again next time");
+    assert_eq!(
+        get_tts_engine(&t).name(),
+        "phonon",
+        "still Phonon: it is tried again next time"
+    );
 }
 
 #[tokio::test]
@@ -427,18 +483,31 @@ fn fallback_voice_for_only_keeps_edge_voice_ids() {
 async fn without_loaders_the_real_engines_are_built_from_the_settings() {
     let t = test_app();
     // Edge TTS is always there.
-    init_tts_engine(&t, Some(store(&[("voice.engine", json!("edge-tts"))])), InitOptions::default()).await;
+    init_tts_engine(
+        &t,
+        Some(store(&[("voice.engine", json!("edge-tts"))])),
+        InitOptions::default(),
+    )
+    .await;
     assert_eq!(get_tts_engine(&t).name(), "edge-tts");
     // ElevenLabs with no key can't start: the free ones of the auto order speak (Phonon isn't installed, Piper isn't
     // on this PATH).
-    init_tts_engine(&t, Some(store(&[("voice.engine", json!("elevenlabs"))])), InitOptions::default()).await;
+    init_tts_engine(
+        &t,
+        Some(store(&[("voice.engine", json!("elevenlabs"))])),
+        InitOptions::default(),
+    )
+    .await;
     assert_eq!(get_tts_engine(&t).name(), "edge-tts");
     // With the key saved (and ElevenLabs taking it) it speaks.
     t.fetch.respond(
         "https://api.elevenlabs.io/v1/user",
         crate::testkit::Answer::json(200, json!({})),
     );
-    let settings = store(&[("voice.engine", json!("elevenlabs")), ("ai.elevenlabs.apiKey", json!(" 'k-test' "))]);
+    let settings = store(&[
+        ("voice.engine", json!("elevenlabs")),
+        ("ai.elevenlabs.apiKey", json!(" 'k-test' ")),
+    ]);
     init_tts_engine(&t, Some(settings), InitOptions::default()).await;
     assert_eq!(get_tts_engine(&t).name(), "elevenlabs");
     let asked = t.fetch.calls_to("https://api.elevenlabs.io/v1/user");
@@ -477,7 +546,16 @@ async fn the_registry_starts_with_the_stub_and_stops_the_engine_in_use() {
 #[test]
 fn the_preference_is_trimmed_and_only_text_counts() {
     assert_eq!(engine_preference(None), "phonon");
-    assert_eq!(engine_preference(Some(&*store(&[("voice.engine", json!("  piper "))]))), "piper");
-    assert_eq!(engine_preference(Some(&*store(&[("voice.engine", json!("   "))]))), "phonon");
-    assert_eq!(engine_preference(Some(&*store(&[("voice.engine", json!(3))]))), "phonon");
+    assert_eq!(
+        engine_preference(Some(&*store(&[("voice.engine", json!("  piper "))]))),
+        "piper"
+    );
+    assert_eq!(
+        engine_preference(Some(&*store(&[("voice.engine", json!("   "))]))),
+        "phonon"
+    );
+    assert_eq!(
+        engine_preference(Some(&*store(&[("voice.engine", json!(3))]))),
+        "phonon"
+    );
 }

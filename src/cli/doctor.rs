@@ -111,8 +111,20 @@ fn in_playwright_build(dir: &Path) -> Option<PathBuf> {
         &[&["chrome-win64", "chrome.exe"], &["chrome-win", "chrome.exe"]]
     } else if cfg!(target_os = "macos") {
         &[
-            &["chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"],
-            &["chrome-mac-x64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"],
+            &[
+                "chrome-mac-arm64",
+                "Google Chrome for Testing.app",
+                "Contents",
+                "MacOS",
+                "Google Chrome for Testing",
+            ],
+            &[
+                "chrome-mac-x64",
+                "Google Chrome for Testing.app",
+                "Contents",
+                "MacOS",
+                "Google Chrome for Testing",
+            ],
             &["chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"],
         ]
     } else {
@@ -169,8 +181,18 @@ pub fn find_browser(env: &Env) -> Option<PathBuf> {
         for var in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
             if let Some(base) = env.trimmed(var) {
                 let base = PathBuf::from(base);
-                known.push(base.join("Google").join("Chrome").join("Application").join("chrome.exe"));
-                known.push(base.join("Microsoft").join("Edge").join("Application").join("msedge.exe"));
+                known.push(
+                    base.join("Google")
+                        .join("Chrome")
+                        .join("Application")
+                        .join("chrome.exe"),
+                );
+                known.push(
+                    base.join("Microsoft")
+                        .join("Edge")
+                        .join("Application")
+                        .join("msedge.exe"),
+                );
                 known.push(base.join("Chromium").join("Application").join("chrome.exe"));
             }
         }
@@ -255,7 +277,11 @@ pub async fn doctor_checks(app: &App) -> Vec<Check> {
     ));
 
     // SQLite
-    checks.push(check("SQLite", Pass, format!("SQLite {} (built in)", rusqlite::version())));
+    checks.push(check(
+        "SQLite",
+        Pass,
+        format!("SQLite {} (built in)", rusqlite::version()),
+    ));
 
     // A browser for the browser tool (the Node version checked for the Playwright package here)
     checks.push(match find_browser(env) {
@@ -394,18 +420,39 @@ mod tests {
         let names: Vec<&str> = checks.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(
             names,
-            ["Tarsee", "SQLite", "Browser", "ffmpeg", "Speech-to-text", "Memory", "ENCRYPTION_KEY", "SETUP_PASSWORD"]
+            [
+                "Tarsee",
+                "SQLite",
+                "Browser",
+                "ffmpeg",
+                "Speech-to-text",
+                "Memory",
+                "ENCRYPTION_KEY",
+                "SETUP_PASSWORD"
+            ]
         );
         let by = |name: &str| checks.iter().find(|c| c.name == name).unwrap().clone();
-        assert_eq!(by("Tarsee").detail, format!("v{} ({} {})", crate::VERSION, node_platform(), node_arch()));
+        assert_eq!(
+            by("Tarsee").detail,
+            format!("v{} ({} {})", crate::VERSION, node_platform(), node_arch())
+        );
         assert!(by("SQLite").detail.starts_with("SQLite 3."), "{:?}", by("SQLite"));
-        assert_eq!(by("ffmpeg"), check("ffmpeg", CheckStatus::Warn, "Not installed (audio processing limited)"));
+        assert_eq!(
+            by("ffmpeg"),
+            check("ffmpeg", CheckStatus::Warn, "Not installed (audio processing limited)")
+        );
         assert_eq!(
             by("Speech-to-text").detail,
             "faster-whisper is not installed (Settings > Voice > Speech-to-text installs it)"
         );
-        assert_eq!(by("ENCRYPTION_KEY"), check("ENCRYPTION_KEY", CheckStatus::Warn, "Not set (credentials unencrypted)"));
-        assert_eq!(by("SETUP_PASSWORD"), check("SETUP_PASSWORD", CheckStatus::Warn, "Not set (open access)"));
+        assert_eq!(
+            by("ENCRYPTION_KEY"),
+            check("ENCRYPTION_KEY", CheckStatus::Warn, "Not set (credentials unencrypted)")
+        );
+        assert_eq!(
+            by("SETUP_PASSWORD"),
+            check("SETUP_PASSWORD", CheckStatus::Warn, "Not set (open access)")
+        );
         assert!(by("Memory").detail.ends_with("MB free"), "{:?}", by("Memory"));
         let mut out = Vec::new();
         run_doctor(&t, &mut out).await.unwrap();
@@ -426,7 +473,10 @@ mod tests {
         assert_eq!(find_browser(t.env()), Some(chrome.clone()));
         let checks = doctor_checks(&t).await;
         let by = |name: &str| checks.iter().find(|c| c.name == name).unwrap().clone();
-        assert_eq!(by("Browser"), check("Browser", CheckStatus::Pass, chrome.display().to_string()));
+        assert_eq!(
+            by("Browser"),
+            check("Browser", CheckStatus::Pass, chrome.display().to_string())
+        );
         assert_eq!(by("ENCRYPTION_KEY"), check("ENCRYPTION_KEY", CheckStatus::Pass, "Set"));
         assert_eq!(by("SETUP_PASSWORD"), check("SETUP_PASSWORD", CheckStatus::Pass, "Set"));
     }
@@ -452,7 +502,10 @@ mod tests {
         let env = Env::from_pairs([
             ("PLAYWRIGHT_BROWSERS_PATH", dir.path().to_string_lossy().to_string()),
             ("PATH", String::new()),
-            ("TARSEE_CHROMIUM_PATH", dir.path().join("missing").to_string_lossy().to_string()),
+            (
+                "TARSEE_CHROMIUM_PATH",
+                dir.path().join("missing").to_string_lossy().to_string(),
+            ),
         ]);
         assert_eq!(find_browser(&env), Some(newest));
     }

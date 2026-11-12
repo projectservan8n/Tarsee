@@ -114,7 +114,11 @@ fn apply_voice_speed(settings: Option<&dyn Settings>, engine: &Arc<dyn TtsEngine
     if engine.name() != "phonon" {
         return;
     }
-    let sp = js_number(Some(&settings.and_then(|s| s.get("voice.phonon.speed")).unwrap_or(Value::Null)));
+    let sp = js_number(Some(
+        &settings
+            .and_then(|s| s.get("voice.phonon.speed"))
+            .unwrap_or(Value::Null),
+    ));
     if sp.is_finite() && sp > 0.0 {
         engine.set_speed(sp);
         log::info!("[voice] phonon speaking rate set to {}x", number_to_string(sp));
@@ -186,7 +190,15 @@ pub async fn init_tts_engine(app: &App, settings: Option<Arc<dyn Settings>>, opt
         let next = preferred_fallback(&engine_pref);
         if let Some(next) = next {
             let voice = fallback_voice_for(next, default_voice.as_deref());
-            let fb = try_engine(app.clone(), next.to_string(), settings.clone(), voice, loaders.clone(), false).await;
+            let fb = try_engine(
+                app.clone(),
+                next.to_string(),
+                settings.clone(),
+                voice,
+                loaders.clone(),
+                false,
+            )
+            .await;
             if let Some(fb) = fb {
                 log::warn!("[voice] {engine_pref} is not available yet, {next} speaks instead");
                 return choose(fb);
@@ -202,7 +214,15 @@ pub async fn init_tts_engine(app: &App, settings: Option<Arc<dyn Settings>>, opt
     }
 
     for name in rest {
-        let engine = try_engine(app.clone(), name.to_string(), settings.clone(), None, loaders.clone(), false).await;
+        let engine = try_engine(
+            app.clone(),
+            name.to_string(),
+            settings.clone(),
+            None,
+            loaders.clone(),
+            false,
+        )
+        .await;
         if let Some(engine) = engine {
             return choose(engine);
         }
@@ -223,17 +243,25 @@ pub(crate) fn api_key(settings: Option<&dyn Settings>, env: &Env, id: &str) -> O
         let t = js_trim(t);
         (!t.is_empty()).then(|| t.to_string())
     };
-    let saved = settings.and_then(|s| s.get(&format!("ai.{id}.apiKey"))).and_then(|v| match v {
-        Value::Null => None,
-        Value::String(s) => clean(&s),
-        other => clean(&super::phonon_engine::js_template(Some(&other))),
-    });
+    let saved = settings
+        .and_then(|s| s.get(&format!("ai.{id}.apiKey")))
+        .and_then(|v| match v {
+            Value::Null => None,
+            Value::String(s) => clean(&s),
+            other => clean(&super::phonon_engine::js_template(Some(&other))),
+        });
     if saved.is_some() {
         return saved;
     }
     let name: String = format!("{}_API_KEY", id.to_uppercase())
         .chars()
-        .map(|c| if c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     env.get(&name).and_then(|v| clean(&v))
 }
@@ -247,7 +275,8 @@ fn builtin_engine(
 ) -> Option<Arc<dyn TtsEngine>> {
     match name {
         "elevenlabs" => {
-            let key = api_key(settings, app.env(), "elevenlabs").or_else(|| setting_text(settings, "voice.elevenlabs.apiKey"))?;
+            let key = api_key(settings, app.env(), "elevenlabs")
+                .or_else(|| setting_text(settings, "voice.elevenlabs.apiKey"))?;
             Some(Arc::new(ElevenLabsTtsEngine::new(
                 app.fetch(),
                 Some(key),
@@ -259,9 +288,14 @@ fn builtin_engine(
         "edge-tts" => Some(Arc::new(EdgeTtsEngine::new(default_voice.as_deref()))),
         "phonon" => {
             let bare = settings.and_then(|s| s.get("voice.phonon.barePeso"));
-            let bare_peso = matches!(bare, Some(Value::Bool(true))) || bare.as_ref().and_then(Value::as_str) == Some("true");
+            let bare_peso =
+                matches!(bare, Some(Value::Bool(true))) || bare.as_ref().and_then(Value::as_str) == Some("true");
             let voice = setting_text(settings, "voice.phonon.voice");
-            Some(Arc::new(PhononTtsEngine::new(app, voice.as_deref(), PhononOptions { bare_peso })))
+            Some(Arc::new(PhononTtsEngine::new(
+                app,
+                voice.as_deref(),
+                PhononOptions { bare_peso },
+            )))
         }
         _ => None,
     }
@@ -275,7 +309,10 @@ fn active_log(name: &str, engine: &Arc<dyn TtsEngine>, default_voice: Option<&st
         "edge-tts" => "Edge TTS active (Microsoft, free)".into(),
         "phonon" => format!(
             "Phonon TTS active (local 31M model by Gradium, voice: {}; Edge TTS is its fallback)",
-            engine.default_voice().filter(|v| !v.is_empty()).unwrap_or_else(|| "default".into())
+            engine
+                .default_voice()
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "default".into())
         ),
         other => format!("{other} TTS active"),
     }
@@ -391,7 +428,12 @@ impl FallbackTtsEngine {
         fb
     }
 
-    async fn fallback_synth(&self, fb: &Arc<dyn TtsEngine>, text: &str, voice_id: Option<&str>) -> Result<Synthesized, TtsError> {
+    async fn fallback_synth(
+        &self,
+        fb: &Arc<dyn TtsEngine>,
+        text: &str,
+        voice_id: Option<&str>,
+    ) -> Result<Synthesized, TtsError> {
         let voice = fallback_voice_for(&self.fallback_name, voice_id);
         fb.synthesize(text, voice.as_deref(), &SynthOptions::default()).await
     }
@@ -407,7 +449,12 @@ impl TtsEngine for FallbackTtsEngine {
         self.primary.default_voice()
     }
 
-    async fn synthesize(&self, text: &str, voice_id: Option<&str>, opts: &SynthOptions) -> Result<Synthesized, TtsError> {
+    async fn synthesize(
+        &self,
+        text: &str,
+        voice_id: Option<&str>,
+        opts: &SynthOptions,
+    ) -> Result<Synthesized, TtsError> {
         let skipping = self
             .skip_until
             .lock()

@@ -105,7 +105,10 @@ async fn install_202_with_the_job_progress_in_the_status_then_ready_a_second_job
     assert_eq!(body["job"]["kind"], "install");
     let (status, busy) = w.call("POST", "/stt/models/tiny/download").await;
     assert_eq!(status, 409);
-    assert!(busy["error"].as_str().unwrap().contains("installing faster-whisper"), "{busy}");
+    assert!(
+        busy["error"].as_str().unwrap().contains("installing faster-whisper"),
+        "{busy}"
+    );
     assert_eq!(busy["code"], "BUSY");
     let (_, during) = w.get("/stt").await;
     assert_eq!(during["runtime"]["state"], "installing");
@@ -165,7 +168,9 @@ async fn choosing_a_model_that_isn_t_downloaded_starts_its_download() {
     assert_eq!(s["current"], "tiny.en");
     assert_eq!(model(&s, "tiny.en")["state"], "downloaded");
     assert_eq!(
-        http::post_json(&w.router, "/stt-model", &json!({ "model": "huge" })).await.status,
+        http::post_json(&w.router, "/stt-model", &json!({ "model": "huge" }))
+            .await
+            .status,
         400
     );
 }

@@ -94,8 +94,14 @@ async fn transcribes_a_short_wav_with_the_model_folder_and_english_for_an_englis
     assert_eq!(req["language"], "en");
     let audio = req["audio"].as_str().unwrap();
     assert!(audio.ends_with(".wav"), "{audio}");
-    assert!(!PathBuf::from(audio).exists(), "the recording's temporary file is removed");
-    assert!(PathBuf::from(audio).starts_with(w.t.tmp.path()), "in the temporary folder");
+    assert!(
+        !PathBuf::from(audio).exists(),
+        "the recording's temporary file is removed"
+    );
+    assert!(
+        PathBuf::from(audio).starts_with(w.t.tmp.path()),
+        "in the temporary folder"
+    );
 
     transcribe_audio(&w.t, &wav(500), Some("en"), Some(&store(&[])))
         .await
@@ -107,9 +113,14 @@ async fn transcribes_a_short_wav_with_the_model_folder_and_english_for_an_englis
 async fn a_model_for_many_languages_finds_the_language_itself() {
     let w = world();
     w.put("small");
-    let out = transcribe_audio(&w.t, &wav(500), Some("en"), Some(&store(&[("voice.stt_model", "small")])))
-        .await
-        .unwrap();
+    let out = transcribe_audio(
+        &w.t,
+        &wav(500),
+        Some("en"),
+        Some(&store(&[("voice.stt_model", "small")])),
+    )
+    .await
+    .unwrap();
     assert_eq!(out.provider, "faster-whisper (small)");
     assert_eq!(w.requests()[0]["language"], Value::Null);
 }
@@ -118,12 +129,12 @@ async fn a_model_for_many_languages_finds_the_language_itself() {
 async fn the_chosen_model_not_downloaded_the_closest_one_on_disk_transcribes_and_the_chosen_one_downloads() {
     let w = world();
     w.put("base.en");
-    let host = FakeDownloadHost::new(
-        w.models
-            .files("small.en")
-            .iter()
-            .map(|(n, b)| (w.models.url("small.en", n), tarsee::testkit::fake_download_host::Route::body(b.clone()))),
-    );
+    let host = FakeDownloadHost::new(w.models.files("small.en").iter().map(|(n, b)| {
+        (
+            w.models.url("small.en", n),
+            tarsee::testkit::fake_download_host::Route::body(b.clone()),
+        )
+    }));
     w.t.app.set_fetch(host.clone());
     let settings = store(&[("voice.stt_model", "small.en")]);
     let out = transcribe_audio(&w.t, &wav(500), Some("en"), Some(&settings))
@@ -149,7 +160,11 @@ async fn no_model_on_disk_at_all_a_503_that_says_one_is_downloading() {
         .await
         .unwrap_err();
     assert_eq!(err.status, Some(503));
-    assert_eq!(err.code.as_deref(), Some("stt-unavailable"), "channels pass this message on");
+    assert_eq!(
+        err.code.as_deref(),
+        Some("stt-unavailable"),
+        "channels pass this message on"
+    );
     assert!(err.message.contains("downloading base.en"), "{err}");
     w.until_idle().await;
 }
@@ -171,7 +186,8 @@ async fn a_model_whose_download_just_failed_isn_t_downloaded_again_on_every_reco
         .unwrap_err();
     assert_eq!(err.status, Some(503));
     assert!(
-        err.message.contains("Download one in Settings > Voice > Speech-to-text"),
+        err.message
+            .contains("Download one in Settings > Voice > Speech-to-text"),
         "{err}"
     );
     assert_eq!(host.requests().len(), asked, "not tried again straight away");
@@ -198,7 +214,11 @@ async fn a_worker_that_crashes_is_started_again_for_the_next_recording() {
     let err = transcribe_audio(&w.t, &wav(500), Some("en"), Some(&store(&[])))
         .await
         .unwrap_err();
-    assert_eq!((err.code.as_deref(), err.status), (Some("stt-failed"), Some(500)), "{err}");
+    assert_eq!(
+        (err.code.as_deref(), err.status),
+        (Some("stt-failed"), Some(500)),
+        "{err}"
+    );
     w.py.set(json!({ "worker": { "mode": "ok" } }));
     let out = transcribe_audio(&w.t, &wav(500), Some("en"), Some(&store(&[])))
         .await
@@ -236,7 +256,10 @@ async fn a_worker_that_hangs_is_stopped_after_the_time_limit_and_the_next_record
 async fn warm_stt_loads_the_model_ahead_of_the_first_recording_a_call_opening() {
     let w = world();
     w.put("base.en");
-    assert_eq!(warm_stt(&w.t, Some(&store(&[]))).await, json!({ "ok": true, "model": "base.en" }));
+    assert_eq!(
+        warm_stt(&w.t, Some(&store(&[]))).await,
+        json!({ "ok": true, "model": "base.en" })
+    );
     assert_eq!(w.starts(), 1);
     transcribe_audio(&w.t, &wav(500), Some("en"), Some(&store(&[])))
         .await

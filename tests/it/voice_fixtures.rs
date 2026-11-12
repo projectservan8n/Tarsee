@@ -4,7 +4,6 @@
 
 use std::path::Path;
 
-
 use rand::Rng;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -12,9 +11,7 @@ use tarsee::testkit::fake_download_host::Route;
 use tarsee::testkit::tar::{TarEntry, make_tar_gz};
 use tarsee::testkit::{TestApp, test_app_with_env, tmp_dir};
 use tarsee::voice::install_common::git_blob_sha1;
-use tarsee::voice::python_runtime::{
-    STANDALONE_PYTHON, StandalonePython, TargetQuery, interpreter_in, python_target,
-};
+use tarsee::voice::python_runtime::{STANDALONE_PYTHON, StandalonePython, TargetQuery, interpreter_in, python_target};
 use tarsee::voice::whisper_models::{MODEL_MARKER, ModelFile, WHISPER_MODELS, WhisperModel, model_file_url};
 use tempfile::TempDir;
 
@@ -58,10 +55,13 @@ pub fn voice_app(extra: &[(&str, &str)]) -> VoiceApp {
     }
 }
 
+/// A model's files: (name, bytes).
+type ModelFiles = Vec<(String, Vec<u8>)>;
+
 /// Small stand-ins for the six models, and their files.
 pub struct Models {
     pub catalog: Vec<WhisperModel>,
-    files: Vec<(String, Vec<(String, Vec<u8>)>)>,
+    files: Vec<(String, ModelFiles)>,
 }
 
 /// `model_size(name)`: the size of each model's model.bin.
@@ -69,7 +69,7 @@ pub fn models(model_size: impl Fn(&str) -> usize, config: impl Fn(&str) -> Strin
     let mut catalog = Vec::new();
     let mut files = Vec::new();
     for m in WHISPER_MODELS.iter() {
-        let these: Vec<(String, Vec<u8>)> = vec![
+        let these: ModelFiles = vec![
             ("config.json".into(), config(&m.name).into_bytes()),
             ("model.bin".into(), random_bytes(model_size(&m.name))),
             ("tokenizer.json".into(), b"{}\n".to_vec()),
@@ -115,7 +115,10 @@ impl Models {
         let mut out = Vec::new();
         for (name, files) in &self.files {
             for (n, b) in files {
-                out.push((self.url(name, n), Route::body(b.clone()).chunk(chunk).delay_ms(delay_ms)));
+                out.push((
+                    self.url(name, n),
+                    Route::body(b.clone()).chunk(chunk).delay_ms(delay_ms),
+                ));
             }
         }
         out
@@ -179,9 +182,10 @@ fn exe_rel() -> String {
 
 pub fn standalone() -> Standalone {
     let target = python_target(&TargetQuery::current()).unwrap();
-    let archive = make_tar_gz(&[
-        TarEntry::file(&format!("python/{}", exe_rel()), fake_interpreter("3.12.16", json!({}))).mode(0o755),
-    ]);
+    let archive =
+        make_tar_gz(&[
+            TarEntry::file(&format!("python/{}", exe_rel()), fake_interpreter("3.12.16", json!({}))).mode(0o755),
+        ]);
     let mut pin = STANDALONE_PYTHON.clone();
     pin.sha256 = [(target.clone(), sha(&archive))].into_iter().collect();
     let asset = format!("cpython-{}+{}-{}-install_only.tar.gz", pin.version, pin.tag, target);
@@ -214,11 +218,13 @@ impl Standalone {
                     "browser_download_url": self.dl,
                 }] })),
             ),
-            (self.dl.clone(), Route::body(self.archive.clone()).chunk(256).delay_ms(1)),
+            (
+                self.dl.clone(),
+                Route::body(self.archive.clone()).chunk(256).delay_ms(1),
+            ),
         ]
     }
 }
-
 
 /// The worker requests the fake Python recorded.
 pub fn worker_requests(calls: &[Value]) -> Vec<Value> {
@@ -230,9 +236,10 @@ pub fn worker_starts(calls: &[Value]) -> usize {
     calls
         .iter()
         .filter(|c| {
-            c["args"]
-                .as_array()
-                .is_some_and(|a| a.iter().any(|x| x.as_str().is_some_and(|s| s.ends_with("stt_worker.py"))))
+            c["args"].as_array().is_some_and(|a| {
+                a.iter()
+                    .any(|x| x.as_str().is_some_and(|s| s.ends_with("stt_worker.py")))
+            })
         })
         .count()
 }

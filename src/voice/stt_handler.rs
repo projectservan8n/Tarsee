@@ -201,7 +201,15 @@ impl SttInner {
             "-u".to_string(),
             worker.to_string_lossy().into_owned(),
         ];
-        let spawned = spawn_python(app, &rt.python, &args, SpawnOptions { env: Some(env), cwd: None });
+        let spawned = spawn_python(
+            app,
+            &rt.python,
+            &args,
+            SpawnOptions {
+                env: Some(env),
+                cwd: None,
+            },
+        );
         let child = match spawned {
             Ok(child) => child,
             Err(err) => {
@@ -243,9 +251,12 @@ impl SttInner {
             },
             move |exit: ExitInfo| {
                 if let Some(inner) = on_exit.upgrade() {
-                    let how = exit
-                        .signal
-                        .unwrap_or_else(|| format!("exit code {}", exit.code.map(|c| c.to_string()).unwrap_or_else(|| "null".into())));
+                    let how = exit.signal.unwrap_or_else(|| {
+                        format!(
+                            "exit code {}",
+                            exit.code.map(|c| c.to_string()).unwrap_or_else(|| "null".into())
+                        )
+                    });
                     inner.exit(generation, &format!("stopped ({how})"), false);
                 }
             },
@@ -487,9 +498,8 @@ pub struct SttTestOverrides {
 }
 
 pub fn set_for_tests(app: &App, overrides: SttTestOverrides) {
-    let empty = overrides.local.is_none()
-        && overrides.timeout_ms.unwrap_or(0) == 0
-        && overrides.idle_ms.unwrap_or(0) == 0;
+    let empty =
+        overrides.local.is_none() && overrides.timeout_ms.unwrap_or(0) == 0 && overrides.idle_ms.unwrap_or(0) == 0;
     if empty {
         app.remove::<SttTestOverrides>();
     } else {
@@ -727,7 +737,11 @@ pub async fn warm_stt(app: &App, settings: Option<&dyn Settings>) -> Value {
     req.insert("model".into(), json!(model.dir.to_string_lossy()));
     req.insert(
         "language".into(),
-        if model.name.ends_with(".en") { json!("en") } else { Value::Null },
+        if model.name.ends_with(".en") {
+            json!("en")
+        } else {
+            Value::Null
+        },
     );
     req.insert("threads".into(), json!(threads()));
     let res = SttWorker::of(app)
@@ -802,7 +816,11 @@ async fn transcribe_whisper_api(
         message,
         api_status: None,
     };
-    let res = app.fetch().fetch(request).await.map_err(|err| failed(err.to_string()))?;
+    let res = app
+        .fetch()
+        .fetch(request)
+        .await
+        .map_err(|err| failed(err.to_string()))?;
     if !res.ok() {
         let status = res.status;
         let text = res.text().await.unwrap_or_default();
@@ -866,10 +884,7 @@ pub async fn transcribe_audio(
                 Ok(result) => return Ok(result),
                 Err(err) => {
                     log::warn!("[stt] Whisper API failed, trying local: {}", err.message);
-                    let status = err
-                        .api_status
-                        .map(|s| format!(" (HTTP {s})"))
-                        .unwrap_or_default();
+                    let status = err.api_status.map(|s| format!(" (HTTP {s})")).unwrap_or_default();
                     paid_problem = Some(format!("The OpenAI Whisper API failed{status}"));
                     fix = "The server log has the details.".into();
                     install_fix = fix.clone();

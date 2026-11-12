@@ -7,7 +7,8 @@
 //!
 //! FAKE_PHONON_MODE changes the worker: "fail-start" (`{ready: false, error}`, then exit 1), "crash" (exit 3 on the
 //! first request), "error" (`{ok: false, error: "boom"}`), "silent" (never says it is ready). Each start (with its
-//! pid) and each request is appended as a JSON line to FAKE_PHONON_LOG when that is set.
+//! pid) and each request is appended as a JSON line to FAKE_PHONON_LOG when that is set. With FAKE_PHONON_LINGER set
+//! it keeps running after its input closes, so only a kill ends it.
 
 use std::io::{BufRead, Write};
 
@@ -41,7 +42,9 @@ pub fn main() -> i32 {
         eprintln!("fake phonon: nothing to do for {args:?}");
         return 2;
     }
-    log(&json!({ "start": std::process::id(), "threads": std::env::var("PHONON_THREADS").ok(), "offline": std::env::var("HF_HUB_OFFLINE").ok() }));
+    log(
+        &json!({ "start": std::process::id(), "threads": std::env::var("PHONON_THREADS").ok(), "offline": std::env::var("HF_HUB_OFFLINE").ok() }),
+    );
     out("loading the model...");
     eprintln!("a warning on stderr");
     match mode.as_str() {
@@ -74,6 +77,10 @@ pub fn main() -> i32 {
             continue;
         }
         out(&json!({ "ok": true, "ms": 5 }).to_string());
+    }
+    // A worker that does not notice its input closing: only killing it ends it.
+    if std::env::var_os("FAKE_PHONON_LINGER").is_some() {
+        std::thread::sleep(std::time::Duration::from_secs(60));
     }
     0
 }

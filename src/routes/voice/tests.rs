@@ -76,7 +76,9 @@ fn app() -> (TestApp, Router) {
 }
 
 fn with_store(t: &TestApp, pairs: &[(&str, Value)]) -> Arc<MemorySettings> {
-    let store = Arc::new(MemorySettings::from_pairs(pairs.iter().map(|(k, v)| (k.to_string(), v.clone()))));
+    let store = Arc::new(MemorySettings::from_pairs(
+        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())),
+    ));
     let dynamic: Arc<dyn Settings> = store.clone();
     t.app.set(dynamic);
     store
@@ -103,11 +105,19 @@ fn form(parts: &[(&str, Option<&str>, &[u8])]) -> (String, Vec<u8>) {
 
 async fn post_form(router: &Router, path: &str, parts: &[(&str, Option<&str>, &[u8])]) -> TestResponse {
     let (content_type, body) = form(parts);
-    http::send(router, request("POST", path).header("content-type", content_type).body(body)).await
+    http::send(
+        router,
+        request("POST", path).header("content-type", content_type).body(body),
+    )
+    .await
 }
 
 async fn post_raw(router: &Router, path: &str, content_type: &str, body: impl Into<Body>) -> TestResponse {
-    http::send(router, request("POST", path).header("content-type", content_type).body(body)).await
+    http::send(
+        router,
+        request("POST", path).header("content-type", content_type).body(body),
+    )
+    .await
 }
 
 // ── Phonon ───────────────────────────────────────────────────────────────
@@ -124,10 +134,19 @@ async fn phonon_s_settings_with_its_voices_and_install_status() {
     );
     assert_eq!(body["active"], false);
     assert_eq!(body["voices"].as_array().unwrap().len(), 25);
-    assert_eq!(body["voices"][0], json!({ "id": "toby", "name": "Toby (British male, adult)" }));
-    assert_eq!((body["voice"].clone(), body["speed"].clone()), (json!("toby"), json!(1)));
-    assert_eq!(res.text().contains("\"speed\":1,"), true, "1, not 1.0: {}", res.text());
-    assert_eq!((body["speedMin"].clone(), body["speedMax"].clone()), (json!(0.85), json!(1.25)));
+    assert_eq!(
+        body["voices"][0],
+        json!({ "id": "toby", "name": "Toby (British male, adult)" })
+    );
+    assert_eq!(
+        (body["voice"].clone(), body["speed"].clone()),
+        (json!("toby"), json!(1))
+    );
+    assert!(res.text().contains("\"speed\":1,"), "1, not 1.0: {}", res.text());
+    assert_eq!(
+        (body["speedMin"].clone(), body["speedMax"].clone()),
+        (json!(0.85), json!(1.25))
+    );
     assert_eq!(body["barePeso"], false);
 
     with_store(
@@ -229,16 +248,28 @@ async fn text_to_speech_answers_with_the_audio_and_its_type_and_length() {
     let (t, router) = app();
     let engine = Fake::new("edge-tts");
     set_tts_engine(&t, engine.clone());
-    let res = http::post_json(&router, "/tts", &json!({ "text": "Hello", "voiceId": "en-US-AvaNeural" })).await;
+    let res = http::post_json(
+        &router,
+        "/tts",
+        &json!({ "text": "Hello", "voiceId": "en-US-AvaNeural" }),
+    )
+    .await;
     assert_eq!(res.status, 200);
     assert_eq!(res.header("content-type"), Some("audio/mpeg"));
     assert_eq!(res.header("content-length"), Some("10"));
     assert_eq!(res.text(), "RIFF:Hello");
-    assert_eq!(engine.said.lock()[0], ("Hello".to_string(), Some("en-US-AvaNeural".to_string())));
+    assert_eq!(
+        engine.said.lock()[0],
+        ("Hello".to_string(), Some("en-US-AvaNeural".to_string()))
+    );
 
     for body in [json!({}), json!({ "text": "" }), json!({ "text": 5 })] {
         let res = http::post_json(&router, "/tts", &body).await;
-        assert_eq!((res.status, res.json()), (400, json!({ "error": "Text is required" })), "{body}");
+        assert_eq!(
+            (res.status, res.json()),
+            (400, json!({ "error": "Text is required" })),
+            "{body}"
+        );
     }
     // 2,501 emoji are 5,002 characters to JavaScript.
     let res = http::post_json(&router, "/tts", &json!({ "text": "🐒".repeat(2501) })).await;
@@ -307,13 +338,21 @@ async fn transcribe_takes_the_audio_as_the_body_or_as_a_form_s_audio_file() {
     let want = json!({ "text": "hello", "language": "en", "provider": "faster-whisper (base.en)" });
     let res = post_raw(&router, "/transcribe", "audio/wav", b"RIFF....".to_vec()).await;
     assert_eq!((res.status, res.json()), (200, want.clone()));
-    let res = post_form(&router, "/transcribe", &[("other", Some("x.txt"), b"x"), ("audio", Some("a.webm"), b"OggS")]).await;
+    let res = post_form(
+        &router,
+        "/transcribe",
+        &[("other", Some("x.txt"), b"x"), ("audio", Some("a.webm"), b"OggS")],
+    )
+    .await;
     assert_eq!((res.status, res.json()), (200, want.clone()));
     let res = post_raw(&router, "/stt", "audio/wav", b"RIFF".to_vec()).await;
     assert_eq!((res.status, res.json()), (200, want));
 
     let res = post_form(&router, "/transcribe", &[("audio", None, b"not a file")]).await;
-    assert_eq!((res.status, res.json()), (400, json!({ "error": "No audio file provided" })));
+    assert_eq!(
+        (res.status, res.json()),
+        (400, json!({ "error": "No audio file provided" }))
+    );
     let res = post_raw(&router, "/transcribe", "audio/wav", Vec::new()).await;
     assert_eq!((res.status, res.json()), (400, json!({ "error": "Empty audio" })));
 }
@@ -328,7 +367,10 @@ async fn audio_over_25_mb_is_a_413() {
     let res = post_form(&router, "/transcribe", &[("audio", Some("a.wav"), &big)]).await;
     assert_eq!((res.status, res.json()), (413, json!({ "error": "Audio too large" })));
     let res = post_form(&router, "/clone", &[("audio", Some("a.wav"), &big)]).await;
-    assert_eq!((res.status, res.json()), (413, json!({ "error": "Audio sample too large (max 25MB)" })));
+    assert_eq!(
+        (res.status, res.json()),
+        (413, json!({ "error": "Audio sample too large (max 25MB)" }))
+    );
     // Exactly the limit is fine.
     let res = post_raw(&router, "/stt", "audio/wav", vec![0u8; limits::VOICE_SAMPLE_MAX_BYTES]).await;
     assert_eq!(res.status, 200);
@@ -346,7 +388,12 @@ async fn a_transcription_error_answers_with_its_status() {
     );
     let res = post_raw(&router, "/transcribe", "audio/wav", b"RIFF".to_vec()).await;
     assert_eq!(res.status, 501);
-    assert!(res.json()["error"].as_str().unwrap().starts_with("Speech-to-text is unavailable"));
+    assert!(
+        res.json()["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("Speech-to-text is unavailable")
+    );
 }
 
 #[tokio::test]
@@ -355,12 +402,19 @@ async fn choosing_a_model_needs_one_of_the_real_names() {
     let res = http::post_json(&router, "/stt-model", &json!({ "model": "huge" })).await;
     assert_eq!(
         (res.status, res.json()),
-        (400, json!({ "error": "Invalid model. Valid: tiny.en, base.en, small.en, tiny, base, small" }))
+        (
+            400,
+            json!({ "error": "Invalid model. Valid: tiny.en, base.en, small.en, tiny, base, small" })
+        )
     );
     let res = http::post_json(&router, "/stt-model", &json!({ "model": "tiny" })).await;
-    assert_eq!(res.status, 500, "no settings store: what Express's error handler answered");
+    assert_eq!(
+        res.status, 500,
+        "no settings store: what Express's error handler answered"
+    );
     let store = with_store(&t, &[]);
-    t.fetch.respond("https://huggingface.co/", crate::testkit::Answer::text(404, "no"));
+    t.fetch
+        .respond("https://huggingface.co/", crate::testkit::Answer::text(404, "no"));
     let res = http::post_json(&router, "/stt-model", &json!({ "model": "tiny" })).await;
     assert_eq!(res.json(), json!({ "ok": true, "model": "tiny", "downloading": true }));
     assert_eq!(store.get("voice.stt_model"), Some(json!("tiny")));
@@ -376,12 +430,12 @@ async fn the_installer_routes_are_rate_limited_per_address() {
         max: 2,
         window: Duration::from_secs(60),
     });
-    assert!(limiter.check("1.2.3.4").is_ok());
-    assert!(limiter.check("1.2.3.4").is_ok());
-    let refused = limiter.check("1.2.3.4").unwrap_err();
+    assert!(limiter.check("1.2.3.4").is_none());
+    assert!(limiter.check("1.2.3.4").is_none());
+    let refused = limiter.check("1.2.3.4").unwrap();
     assert_eq!(refused.status(), 429);
     assert_eq!(refused.headers().get("retry-after").unwrap(), "60");
-    assert!(limiter.check("5.6.7.8").is_ok(), "another address has its own count");
+    assert!(limiter.check("5.6.7.8").is_none(), "another address has its own count");
 
     let req = |xff: Option<&str>| {
         let mut b = axum::http::Request::builder().uri("/");
@@ -402,10 +456,17 @@ async fn a_piper_voice_is_uploaded_listed_and_deleted_and_only_by_a_plain_id() {
     let res = post_form(
         &router,
         "/piper-upload",
-        &[("name", None, b"  My Voice "), ("onnx", Some("m.onnx"), b"model"), ("json", Some("m.onnx.json"), b"{}")],
+        &[
+            ("name", None, b"  My Voice "),
+            ("onnx", Some("m.onnx"), b"model"),
+            ("json", Some("m.onnx.json"), b"{}"),
+        ],
     )
     .await;
-    assert_eq!((res.status, res.json()), (201, json!({ "id": "my-voice", "name": "My Voice" })));
+    assert_eq!(
+        (res.status, res.json()),
+        (201, json!({ "id": "my-voice", "name": "My Voice" }))
+    );
     let listed = http::get(&router, "/piper-voices").await.json();
     assert_eq!(listed["voices"][0]["id"], "my-voice");
 
@@ -414,39 +475,65 @@ async fn a_piper_voice_is_uploaded_listed_and_deleted_and_only_by_a_plain_id() {
     std::fs::write(&outside, "keep").unwrap();
     for id in ["..%2Foutside", "%2E%2E", "C%3A%5Cx", "%2Fetc%2Fx"] {
         let res = http::delete(&router, &format!("/piper-voices/{id}")).await;
-        assert_eq!((res.status, res.json()), (400, json!({ "error": "Invalid voice id" })), "{id}");
+        assert_eq!(
+            (res.status, res.json()),
+            (400, json!({ "error": "Invalid voice id" })),
+            "{id}"
+        );
     }
     assert!(outside.exists());
 
     let res = http::delete(&router, "/piper-voices/my-voice").await;
     assert_eq!(res.json(), json!({ "ok": true }));
-    assert_eq!(http::get(&router, "/piper-voices").await.json(), json!({ "voices": [] }));
+    assert_eq!(
+        http::get(&router, "/piper-voices").await.json(),
+        json!({ "voices": [] })
+    );
 
     let res = post_form(&router, "/piper-upload", &[("onnx", Some("m.onnx"), b"model")]).await;
-    assert_eq!((res.status, res.json()), (400, json!({ "error": "Missing .onnx.json file (field: 'json')" })));
+    assert_eq!(
+        (res.status, res.json()),
+        (400, json!({ "error": "Missing .onnx.json file (field: 'json')" }))
+    );
     let res = post_raw(&router, "/piper-upload", "application/json", b"{}".to_vec()).await;
     assert_eq!(
         (res.status, res.json()),
         (500, json!({ "error": "Unsupported content type: application/json" }))
     );
     let res = http::send(&router, request("POST", "/piper-upload")).await;
-    assert_eq!((res.status, res.json()), (500, json!({ "error": "Missing Content-Type" })));
+    assert_eq!(
+        (res.status, res.json()),
+        (500, json!({ "error": "Missing Content-Type" }))
+    );
 }
 
 #[tokio::test]
 async fn a_voice_is_cloned_from_a_form_or_from_the_raw_audio() {
     let (t, router) = app();
     set_tts_engine(&t, Fake::new("elevenlabs"));
-    let res = post_form(&router, "/clone", &[("name", None, b" Mine "), ("audio", Some("a.wav"), b"RIFF")]).await;
-    assert_eq!((res.status, res.json()), (201, json!({ "voiceId": "clone-Mine", "name": "Mine" })));
+    let res = post_form(
+        &router,
+        "/clone",
+        &[("name", None, b" Mine "), ("audio", Some("a.wav"), b"RIFF")],
+    )
+    .await;
+    assert_eq!(
+        (res.status, res.json()),
+        (201, json!({ "voiceId": "clone-Mine", "name": "Mine" }))
+    );
     let res = post_form(&router, "/clone", &[("audio", Some("a.wav"), b"RIFF")]).await;
     assert_eq!(res.json()["name"], "Custom Voice");
     let res = post_form(&router, "/clone", &[("name", None, b"x")]).await;
-    assert_eq!((res.status, res.json()), (400, json!({ "error": "No audio file provided" })));
+    assert_eq!(
+        (res.status, res.json()),
+        (400, json!({ "error": "No audio file provided" }))
+    );
 
     let res = http::send(
         &router,
-        request("POST", "/clone?name=Query").header("x-voice-name", "Header").body(b"RIFF".to_vec()),
+        request("POST", "/clone?name=Query")
+            .header("x-voice-name", "Header")
+            .body(b"RIFF".to_vec()),
     )
     .await;
     assert_eq!(res.json(), json!({ "voiceId": "clone-Header", "name": "Header" }));
@@ -455,9 +542,15 @@ async fn a_voice_is_cloned_from_a_form_or_from_the_raw_audio() {
     let res = http::send(&router, request("POST", "/clone").body(b"RIFF".to_vec())).await;
     assert_eq!(res.json()["name"], "Custom Voice");
     let res = http::send(&router, request("POST", "/clone?name=a&name=b").body(b"RIFF".to_vec())).await;
-    assert_eq!((res.status, res.json()), (400, json!({ "error": "Voice name is required" })));
+    assert_eq!(
+        (res.status, res.json()),
+        (400, json!({ "error": "Voice name is required" }))
+    );
     let res = http::send(&router, request("POST", "/clone").body(Vec::<u8>::new())).await;
-    assert_eq!((res.status, res.json()), (400, json!({ "error": "Audio sample is required" })));
+    assert_eq!(
+        (res.status, res.json()),
+        (400, json!({ "error": "Audio sample is required" }))
+    );
 }
 
 #[test]

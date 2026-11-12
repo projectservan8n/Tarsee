@@ -32,8 +32,8 @@ use crate::util::js::{truthy, utf16_len};
 use crate::voice::clone_handler::{clone_voice, list_voice_profiles};
 use crate::voice::engine_registry::{InitOptions, api_key, can_warm, get_tts_engine, init_tts_engine};
 use crate::voice::phonon_engine::{
-    DEFAULT_SPEED, DEFAULT_VOICE, SPEED_MAX, SPEED_MIN, VOICES, clamp_speed, clamp_speed_value,
-    find_voice_value, js_string_or_empty, reset_phonon_availability,
+    DEFAULT_SPEED, DEFAULT_VOICE, SPEED_MAX, SPEED_MIN, VOICES, clamp_speed, clamp_speed_value, find_voice_value,
+    js_string_or_empty, reset_phonon_availability,
 };
 use crate::voice::phonon_install::{InstallOptions, check_phonon_install, get_phonon_install_status, install_phonon};
 use crate::voice::piper_engine::{delete_piper_voice, list_piper_voices, save_piper_voice};
@@ -110,7 +110,7 @@ impl Limiter {
     }
 
     /// Counts this try; a 429 that says how long to wait when the address is over its limit.
-    fn check(&self, key: &str) -> Result<(), Response> {
+    fn check(&self, key: &str) -> Option<Response> {
         let t = Instant::now();
         let window = self.limits.window;
         let mut hits = self.hits.lock();
@@ -127,14 +127,14 @@ impl Limiter {
             if let Ok(value) = HeaderValue::from_str(&retry.to_string()) {
                 res.headers_mut().insert(header::RETRY_AFTER, value);
             }
-            return Err(res);
+            return Some(res);
         }
         recent.push(t);
         hits.insert(key.to_string(), recent);
         if hits.len() > 1000 {
             hits.retain(|_, v| v.last().is_some_and(|last| t.duration_since(*last) < window));
         }
-        Ok(())
+        None
     }
 }
 
@@ -168,8 +168,7 @@ fn send_job_error(err: SttJobError) -> Response {
 /// /api/voice/stt/...: the status, Install faster-whisper, a model's Download and Delete, and warming the worker.
 /// `limits`: how many installer actions an address may start (default 20 per 10 minutes).
 pub fn create_stt_router(limits: Limits) -> Router<App> {
-    stt_routes(Router::new(), "", Arc::new(Limiter::new(limits)))
-        .layer(DefaultBodyLimit::disable())
+    stt_routes(Router::new(), "", Arc::new(Limiter::new(limits))).layer(DefaultBodyLimit::disable())
 }
 
 /// The speech-to-text routes under `base` ("" when mounted on their own). Under `/stt` itself, `POST` is the raw
@@ -226,7 +225,7 @@ async fn stt_status(State(app): State<App>, RawQuery(query): RawQuery) -> Respon
 
 /// POST /api/voice/stt/install: Install (or Try again) faster-whisper in the background; GET reports progress.
 async fn stt_install(State(app): State<App>, limiter: Arc<Limiter>, req: Request) -> Response {
-    if let Err(res) = limiter.check(&client_key(&req)) {
+    if let Some(res) = limiter.check(&client_key(&req)) {
         return res;
     }
     match start_stt_install(&app, Default::default()) {
@@ -245,8 +244,13 @@ async fn stt_install(State(app): State<App>, limiter: Arc<Limiter>, req: Request
 }
 
 /// POST /api/voice/stt/models/:name/download: download one model in the background.
-async fn model_download(State(app): State<App>, Path(name): Path<String>, limiter: Arc<Limiter>, req: Request) -> Response {
-    if let Err(res) = limiter.check(&client_key(&req)) {
+async fn model_download(
+    State(app): State<App>,
+    Path(name): Path<String>,
+    limiter: Arc<Limiter>,
+    req: Request,
+) -> Response {
+    if let Some(res) = limiter.check(&client_key(&req)) {
         return res;
     }
     match start_model_download(&app, &name, Default::default()) {
@@ -256,8 +260,13 @@ async fn model_download(State(app): State<App>, Path(name): Path<String>, limite
 }
 
 /// DELETE /api/voice/stt/models/:name: delete a downloaded model (never the one that comes with the image).
-async fn model_delete(State(app): State<App>, Path(name): Path<String>, limiter: Arc<Limiter>, req: Request) -> Response {
-    if let Err(res) = limiter.check(&client_key(&req)) {
+async fn model_delete(
+    State(app): State<App>,
+    Path(name): Path<String>,
+    limiter: Arc<Limiter>,
+    req: Request,
+) -> Response {
+    if let Some(res) = limiter.check(&client_key(&req)) {
         return res;
     }
     // It may have the model open (Windows won't delete an open file).
@@ -309,7 +318,7 @@ async fn json_body(headers: &HeaderMap, body: Body) -> Result<Value, ApiError> {
         return Err(ApiError::new(413, "request entity too large"));
     };
     Ok(express_json_body(headers, &bytes)?
-        .filter(|v| truthy(v))
+        .filter(truthy)
         .unwrap_or_else(|| json!({})))
 }
 
@@ -328,7 +337,10 @@ async fn choose_stt_model(State(app): State<App>, headers: HeaderMap, body: Body
         }
     };
     let Some(store) = settings_store(&app) else {
-        return Err(unhandled_error(&app, "Cannot read properties of undefined (reading 'set')"));
+        return Err(unhandled_error(
+            &app,
+            "Cannot read properties of undefined (reading 'set')",
+        ));
     };
     store
         .set("voice.stt_model", json!(model))
@@ -373,12 +385,7 @@ async fn read_form(app: &App, req: Request, rules: FormRules<'_>) -> Result<Form
     let Some(content_type) = content_type else {
         return Err(ApiError::internal("Missing Content-Type"));
     };
-    let media = content_type
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
+    let media = content_type.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
     if media == "application/x-www-form-urlencoded" {
         let body = read_body(req.into_body(), usize::MAX).await?.unwrap_or_default();
         let fields = url::form_urlencoded::parse(&body).into_owned().collect();
@@ -658,7 +665,10 @@ async fn tts(State(app): State<App>, headers: HeaderMap, body: Body) -> Response
         engine.name(),
         voice_id.as_deref().unwrap_or("default")
     );
-    match engine.synthesize(&text, voice_id.as_deref(), &SynthOptions::default()).await {
+    match engine
+        .synthesize(&text, voice_id.as_deref(), &SynthOptions::default())
+        .await
+    {
         Ok(out) => audio_response(out.audio, &out.content_type),
         Err(err) => {
             log::error!("[tts] error: {}", err.message);
@@ -692,7 +702,10 @@ async fn tts_stream(State(app): State<App>, headers: HeaderMap, body: Body) -> R
 
     if !engine.can_stream() {
         // Fallback to non-streaming
-        return match engine.synthesize(&text, voice_id.as_deref(), &SynthOptions::default()).await {
+        return match engine
+            .synthesize(&text, voice_id.as_deref(), &SynthOptions::default())
+            .await
+        {
             Ok(out) => audio_response(out.audio, &out.content_type),
             Err(err) => failed(err.message),
         };
@@ -791,7 +804,9 @@ async fn transcribe(State(app): State<App>, req: Request) -> Response {
 
 const SAMPLE_TOO_LARGE: &str = "Audio sample too large (max 25MB)";
 
-fn cloned_answer(result: Result<crate::voice::tts_interface::ClonedVoice, crate::voice::tts_interface::TtsError>) -> Response {
+fn cloned_answer(
+    result: Result<crate::voice::tts_interface::ClonedVoice, crate::voice::tts_interface::TtsError>,
+) -> Response {
     match result {
         Ok(made) => (StatusCode::CREATED, Json(json!(made))).into_response(),
         Err(err) => ApiError::new(err.status.unwrap_or(500), err.message).into_response(),
@@ -829,10 +844,7 @@ async fn clone(State(app): State<App>, RawQuery(query): RawQuery, req: Request) 
                 return err.into_response();
             }
         };
-        log::info!(
-            "[voice] clone request: name=\"{name}\" audioSize={} bytes",
-            audio.len()
-        );
+        log::info!("[voice] clone request: name=\"{name}\" audioSize={} bytes", audio.len());
         let result = clone_voice(&app, &audio, &name).await;
         if let Err(err) = &result {
             log::error!("[voice] clone error: {}", err.message);

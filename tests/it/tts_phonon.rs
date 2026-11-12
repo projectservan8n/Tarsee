@@ -77,8 +77,14 @@ fn hub_routes() -> Vec<(String, Route)> {
         (hf_url(&m.repo, &m.revision, "config.json"), Route::body("{}")),
         (hf_url(&m.repo, &m.revision, "model.q8.gguf"), Route::body("weights")),
         (hf_url(&v.repo, &v.revision, "voices.jsonl"), Route::body(list)),
-        (hf_url(&v.repo, &v.revision, "voices/toby.safetensors"), Route::body("toby")),
-        (hf_url(&v.repo, &v.revision, "voices/zoey.safetensors"), Route::body("zoey")),
+        (
+            hf_url(&v.repo, &v.revision, "voices/toby.safetensors"),
+            Route::body("toby"),
+        ),
+        (
+            hf_url(&v.repo, &v.revision, "voices/zoey.safetensors"),
+            Route::body("zoey"),
+        ),
         (hf_url(&v.repo, &v.revision, "README.md"), Route::body("# voices")),
     ]
 }
@@ -226,7 +232,11 @@ async fn speaks_a_line_through_the_real_worker_and_stops_cleanly() {
     let out = out.unwrap();
     assert_eq!(out.content_type, "audio/wav");
     assert_eq!(&out.audio[..4], b"RIFF");
-    assert!(out.audio.len() > 24_000, "a second or more of 24 kHz audio ({} bytes)", out.audio.len());
+    assert!(
+        out.audio.len() > 24_000,
+        "a second or more of 24 kHz audio ({} bytes)",
+        out.audio.len()
+    );
 }
 
 // ── Added: the worker's protocol, against a stand-in ─────────────────────
@@ -324,6 +334,8 @@ fn tmp_files(t: &VoiceApp) -> Vec<String> {
 #[tokio::test]
 async fn a_line_is_spoken_by_the_worker_which_stays_warm_and_ends_when_stopped() {
     let w = installed("ok");
+    // It would carry on with its input closed: only a kill ends it.
+    w.t.env().set("FAKE_PHONON_LINGER", "1");
     let tts = w.engine();
     assert!(tts.is_available().await);
     let out = tts
@@ -343,7 +355,10 @@ async fn a_line_is_spoken_by_the_worker_which_stays_warm_and_ends_when_stopped()
     assert!(Path::new(req["out"].as_str().unwrap()).starts_with(w.t.tmp.path()));
     assert!(tmp_files(&w.t).is_empty(), "the wav is removed");
     let start = &w.lines()[0];
-    assert_eq!((start["threads"].clone(), start["offline"].clone()), (json!("2"), json!("1")));
+    assert_eq!(
+        (start["threads"].clone(), start["offline"].clone()),
+        (json!("2"), json!("1"))
+    );
 
     tts.set_speed(1.1);
     tts.synthesize("Faster.", Some("Zoey"), &SynthOptions::default())
@@ -353,7 +368,10 @@ async fn a_line_is_spoken_by_the_worker_which_stays_warm_and_ends_when_stopped()
         .await
         .unwrap();
     let reqs = w.requests();
-    assert_eq!((reqs[1]["voice"].clone(), reqs[1]["duration_delta"].clone()), (json!("Zoey"), json!(-0.15)));
+    assert_eq!(
+        (reqs[1]["voice"].clone(), reqs[1]["duration_delta"].clone()),
+        (json!("Zoey"), json!(-0.15))
+    );
     assert_eq!(reqs[2]["duration_delta"], json!(-0.45));
     let starts = w.starts();
     assert_eq!(starts.len(), 1, "one worker for every line");
@@ -368,19 +386,17 @@ async fn a_line_is_spoken_by_the_worker_which_stays_warm_and_ends_when_stopped()
 #[tokio::test]
 async fn the_worker_process_ends_when_the_app_goes_away() {
     let w = installed("ok");
+    // It would carry on with its input closed: only a kill ends it.
+    w.t.env().set("FAKE_PHONON_LINGER", "1");
     let tts = w.engine();
-    tts.synthesize("Hello.", None, &SynthOptions::default())
-        .await
-        .unwrap();
+    tts.synthesize("Hello.", None, &SynthOptions::default()).await.unwrap();
     let pid = w.starts()[0];
     assert!(alive(pid));
     let Worker { t, log: _, _bin } = w;
     drop(t);
     until_gone(pid).await;
     assert!(
-        tts.synthesize("Anyone?", None, &SynthOptions::default())
-            .await
-            .is_err(),
+        tts.synthesize("Anyone?", None, &SynthOptions::default()).await.is_err(),
         "the engine outlived its app"
     );
 }
@@ -406,14 +422,9 @@ async fn a_worker_that_crashes_fails_that_line_and_the_next_line_gets_a_fresh_on
         .synthesize("Hello.", None, &SynthOptions::default())
         .await
         .unwrap_err();
-    assert!(
-        err.message.starts_with("Phonon worker died (code=3 signal="),
-        "{err}"
-    );
+    assert!(err.message.starts_with("Phonon worker died (code=3 signal="), "{err}");
     w.t.env().set("FAKE_PHONON_MODE", "ok");
-    tts.synthesize("Again.", None, &SynthOptions::default())
-        .await
-        .unwrap();
+    tts.synthesize("Again.", None, &SynthOptions::default()).await.unwrap();
     assert_eq!(w.starts().len(), 2);
 }
 

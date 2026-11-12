@@ -35,11 +35,11 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 // The download and lock helpers are shared with the other installers (`install_common`); the tests import them here.
-pub use super::install_common::{acquire_lock, download_file};
+use super::engine_registry::engine_preference;
 use super::install_common::{
     DownloadFile, Downloader, InstallError, OFFICIAL_HOSTS, describe_fetch_error, guarded_fetch, write_file_atomic,
 };
-use super::engine_registry::engine_preference;
+pub use super::install_common::{acquire_lock, download_file};
 use super::phonon_engine::{
     PhononPaths, can_import_ptts, js_round, js_template, phonon_installed, phonon_paths, phonon_threads,
     reset_phonon_availability,
@@ -530,7 +530,11 @@ fn safe_join(dir: &Path, rel: Option<&Value>) -> Option<PathBuf> {
 }
 
 /// The English voices of the pinned catalog.
-async fn fetch_voice_list(get: &dyn Downloader, src: &PhononVoices, catalog: &Path) -> Result<Vec<VoiceEntry>, InstallError> {
+async fn fetch_voice_list(
+    get: &dyn Downloader,
+    src: &PhononVoices,
+    catalog: &Path,
+) -> Result<Vec<VoiceEntry>, InstallError> {
     let url = hf_url(&src.repo, &src.revision, "voices.jsonl");
     let res = get
         .get(FetchRequest::get(url.clone()).timeout(STALL))
@@ -590,12 +594,19 @@ async fn run(
     let mut opts = RunOptions::default().timeout(timeout);
     opts.env = env;
     run_python(app, python, &args, opts).await.map_err(|err| {
-        let all: Vec<&str> = js_trim(&err.stderr).split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l)).collect();
+        let all: Vec<&str> = js_trim(&err.stderr)
+            .split('\n')
+            .map(|l| l.strip_suffix('\r').unwrap_or(l))
+            .collect();
         let detail = all[all.len().saturating_sub(lines)..].join(" ");
         let detail = js_trim(&detail);
         InstallError {
             code: err.code.clone(),
-            ..InstallError::new(if detail.is_empty() { err.message.clone() } else { detail.to_string() })
+            ..InstallError::new(if detail.is_empty() {
+                err.message.clone()
+            } else {
+                detail.to_string()
+            })
         }
     })
 }
@@ -624,9 +635,16 @@ pub async fn ensure_runtime(app: &App, log: &LogListener, opts: &RuntimeOptions)
     let venv = p.venv.to_string_lossy().into_owned();
     // A venv left half made (no pip) by an earlier failed attempt is rebuilt.
     if p.venv_python.exists()
-        && run(app, &venv_python, &["-I", "-m", "pip", "--version"], RUN_TIMEOUT, None, 3)
-            .await
-            .is_err()
+        && run(
+            app,
+            &venv_python,
+            &["-I", "-m", "pip", "--version"],
+            RUN_TIMEOUT,
+            None,
+            3,
+        )
+        .await
+        .is_err()
     {
         let _ = std::fs::remove_dir_all(&p.venv);
     }
@@ -649,8 +667,24 @@ pub async fn ensure_runtime(app: &App, log: &LogListener, opts: &RuntimeOptions)
             base.version.as_deref().unwrap_or("")
         ));
         let made = async {
-            run(app, &base.python, &["-I", "-m", "venv", &venv], Duration::from_secs(180), None, 3).await?;
-            run(app, &venv_python, &["-I", "-m", "pip", "--version"], RUN_TIMEOUT, None, 3).await
+            run(
+                app,
+                &base.python,
+                &["-I", "-m", "venv", &venv],
+                Duration::from_secs(180),
+                None,
+                3,
+            )
+            .await?;
+            run(
+                app,
+                &venv_python,
+                &["-I", "-m", "pip", "--version"],
+                RUN_TIMEOUT,
+                None,
+                3,
+            )
+            .await
         }
         .await;
         if let Err(err) = made {
@@ -779,9 +813,7 @@ pub fn auto_install_phonon(app: &App, settings: Option<&dyn Settings>, opts: Aut
         "[phonon] Phonon is the voice engine but is not installed yet: downloading it in the background (Edge TTS speaks until it is ready; TARSEE_PHONON_AUTO_INSTALL=0 turns this off)"
     );
     let install: InstallFn = opts.install.unwrap_or_else(|| {
-        Arc::new(|app: App, opts: InstallOptions| {
-            async move { install_phonon(&app, opts).await.map(|_| ()) }.boxed()
-        })
+        Arc::new(|app: App, opts: InstallOptions| async move { install_phonon(&app, opts).await.map(|_| ()) }.boxed())
     });
     let app = app.clone();
     let on_installed = opts.on_installed;
@@ -818,11 +850,7 @@ pub async fn run_install_command(app: &App) -> i32 {
             let mut shown = shown.lock();
             if s.percent >= *shown + 10 {
                 *shown = s.percent - s.percent % 10;
-                log::info!(
-                    "[phonon] {} {}%",
-                    s.phase.as_deref().unwrap_or("null"),
-                    s.percent
-                );
+                log::info!("[phonon] {} {}%", s.phase.as_deref().unwrap_or("null"), s.percent);
             }
         })),
         ..Default::default()

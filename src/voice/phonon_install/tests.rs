@@ -52,8 +52,14 @@ fn hub(over: &[(String, String)]) -> Arc<FakeDownloadHost> {
         (hf_url(&m.repo, &m.revision, "config.json"), "{}".to_string()),
         (hf_url(&m.repo, &m.revision, "model.q8.gguf"), "weights".to_string()),
         (hf_url(&v.repo, &v.revision, "voices.jsonl"), voice_list()),
-        (hf_url(&v.repo, &v.revision, "voices/toby.safetensors"), "toby".to_string()),
-        (hf_url(&v.repo, &v.revision, "voices/zoey.safetensors"), "zoey".to_string()),
+        (
+            hf_url(&v.repo, &v.revision, "voices/toby.safetensors"),
+            "toby".to_string(),
+        ),
+        (
+            hf_url(&v.repo, &v.revision, "voices/zoey.safetensors"),
+            "zoey".to_string(),
+        ),
         (hf_url(&v.repo, &v.revision, "README.md"), "# voices".to_string()),
     ];
     for (url, body) in over {
@@ -114,7 +120,10 @@ async fn download_file_keeps_a_file_whose_sha256_matches_and_rejects_one_that_do
     .unwrap_err();
     assert!(err.has_code("HASH_MISMATCH"), "{err}");
     assert!(!bad.exists(), "nothing is renamed into place");
-    assert!(!dir.join("m").join("other.bin.part").exists(), "the partial file is removed");
+    assert!(
+        !dir.join("m").join("other.bin.part").exists(),
+        "the partial file is removed"
+    );
 }
 
 #[tokio::test]
@@ -155,12 +164,20 @@ async fn installs_the_model_and_only_the_english_voices_then_marks_it_installed(
     let p = phonon_paths(&t);
     assert!(phonon_installed(&p));
     assert!(p.marker.exists());
-    assert_eq!(std::fs::read_to_string(p.model.join("model.q8.gguf")).unwrap(), "weights");
+    assert_eq!(
+        std::fs::read_to_string(p.model.join("model.q8.gguf")).unwrap(),
+        "weights"
+    );
     let catalog: Vec<String> = std::fs::read_to_string(p.catalog.join("voices.jsonl"))
         .unwrap()
         .trim()
         .split('\n')
-        .map(|l| serde_json::from_str::<Value>(l).unwrap()["name"].as_str().unwrap().to_string())
+        .map(|l| {
+            serde_json::from_str::<Value>(l).unwrap()["name"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
         .collect();
     assert_eq!(catalog, ["Toby", "Zoey"]);
     assert!(p.catalog.join("voices").join("toby.safetensors").exists());
@@ -179,7 +196,10 @@ async fn a_tampered_model_fails_the_install_status_failed_no_marker_and_a_retry_
     assert_eq!(st.state, "failed");
     assert!(st.error.as_deref().unwrap().contains("sha256"));
     assert!(!phonon_paths(&t).marker.exists());
-    assert!(!dir.join(".install.lock").exists(), "the lock is released after a failure");
+    assert!(
+        !dir.join(".install.lock").exists(),
+        "the lock is released after a failure"
+    );
 
     let good = hub(&[]);
     install_phonon(&t, fake_runtime(&good)).await.unwrap();
@@ -222,7 +242,11 @@ async fn files_on_disk_with_no_usable_python_runtime_read_as_failed_so_retry_can
         "TARSEE_PHONON_PYTHON",
         dir.join("no-such-python").to_string_lossy().to_string(),
     );
-    assert_eq!(get_phonon_install_status(&t).state, "installed", "the files are all there");
+    assert_eq!(
+        get_phonon_install_status(&t).state,
+        "installed",
+        "the files are all there"
+    );
     let st = check_phonon_install(&t).await;
     assert_eq!(st.state, "failed");
     assert_eq!(st.percent, 0);
@@ -258,10 +282,18 @@ async fn the_lock_keeps_a_second_installer_out_and_a_stale_lock_is_taken_over() 
 
     let lock = dir.join(".install.lock");
     // Left by a process that is gone.
-    std::fs::write(&lock, json!({ "pid": (1u64 << 22) + 12345, "startedAt": now_iso() }).to_string()).unwrap();
+    std::fs::write(
+        &lock,
+        json!({ "pid": (1u64 << 22) + 12345, "startedAt": now_iso() }).to_string(),
+    )
+    .unwrap();
     acquire_lock(&t, &dir, None).unwrap().release();
     // Left by an earlier container that had this same pid.
-    std::fs::write(&lock, json!({ "pid": std::process::id(), "startedAt": now_iso() }).to_string()).unwrap();
+    std::fs::write(
+        &lock,
+        json!({ "pid": std::process::id(), "startedAt": now_iso() }).to_string(),
+    )
+    .unwrap();
     acquire_lock(&t, &dir, None).unwrap().release();
 
     // Held by a live process: the install fails with LOCKED.
@@ -287,7 +319,8 @@ async fn the_lock_keeps_a_second_installer_out_and_a_stale_lock_is_taken_over() 
 async fn a_voice_list_naming_a_path_outside_the_catalog_is_refused() {
     let (t, dir) = phonon_app();
     let v = voices();
-    let evil = json!({ "name": "Evil", "filename": "../../escape.sh", "language": "en", "locale": "en-us" }).to_string();
+    let evil =
+        json!({ "name": "Evil", "filename": "../../escape.sh", "language": "en", "locale": "en-us" }).to_string();
     let host = hub(&[(hf_url(&v.repo, &v.revision, "voices.jsonl"), evil)]);
     let err = install_phonon(&t, fake_runtime(&host)).await.unwrap_err();
     assert!(err.message.contains("unsafe file"), "{err}");
@@ -312,15 +345,28 @@ async fn the_background_install_on_boot_only_for_phonon_only_when_missing_once_a
         on_installed,
         delay: Duration::ZERO,
     };
-    let store = |pairs: &[(&str, &str)]| MemorySettings::from_pairs(pairs.iter().map(|(k, v)| (k.to_string(), json!(v))));
+    let store =
+        |pairs: &[(&str, &str)]| MemorySettings::from_pairs(pairs.iter().map(|(k, v)| (k.to_string(), json!(v))));
 
     t.env().set("TARSEE_PHONON_AUTO_INSTALL", "0");
     assert!(!auto_install_phonon(&t, Some(&store(&[])), opts(None)));
     t.env().remove("TARSEE_PHONON_AUTO_INSTALL");
-    assert!(!auto_install_phonon(&t, Some(&store(&[("voice.engine", "edge-tts")])), opts(None)));
-    assert!(!auto_install_phonon(&t, Some(&store(&[("voice.engine", "auto")])), opts(None)));
+    assert!(!auto_install_phonon(
+        &t,
+        Some(&store(&[("voice.engine", "edge-tts")])),
+        opts(None)
+    ));
+    assert!(!auto_install_phonon(
+        &t,
+        Some(&store(&[("voice.engine", "auto")])),
+        opts(None)
+    ));
     let on_installed: OnInstalled = Arc::new(|| async { Ok(()) }.boxed());
-    assert!(auto_install_phonon(&t, Some(&store(&[])), opts(Some(on_installed.clone()))));
+    assert!(auto_install_phonon(
+        &t,
+        Some(&store(&[])),
+        opts(Some(on_installed.clone()))
+    ));
     assert!(
         !auto_install_phonon(&t, Some(&store(&[("voice.engine", "phonon")])), opts(None)),
         "one attempt per boot"
@@ -375,14 +421,29 @@ async fn progress_moves_while_downloading_and_the_status_names_the_file() {
     install_phonon(&t, opts).await.unwrap();
     let seen = seen.lock();
     assert!(seen.iter().all(|s| s.state == "installing"));
-    assert!(seen.iter().any(|s| s.phase.as_deref() == Some("model") && s.file.as_deref() == Some("model.q8.gguf")));
+    assert!(
+        seen.iter()
+            .any(|s| s.phase.as_deref() == Some("model") && s.file.as_deref() == Some("model.q8.gguf"))
+    );
     assert!(seen.iter().any(|s| s.phase.as_deref() == Some("voices")));
     let status = serde_json::to_value(get_phonon_install_status(&t)).unwrap();
     assert_eq!(
         status.as_object().unwrap().keys().collect::<Vec<_>>(),
-        ["state", "installed", "phase", "file", "percent", "error", "startedAt", "finishedAt"]
+        [
+            "state",
+            "installed",
+            "phase",
+            "file",
+            "percent",
+            "error",
+            "startedAt",
+            "finishedAt"
+        ]
     );
-    assert_eq!((status["phase"].clone(), status["file"].clone()), (Value::Null, Value::Null));
+    assert_eq!(
+        (status["phase"].clone(), status["file"].clone()),
+        (Value::Null, Value::Null)
+    );
 }
 
 #[tokio::test]
@@ -394,6 +455,8 @@ async fn a_python_override_that_cannot_import_ptts_says_how_to_install_it_there(
     let err = ensure_runtime(&t, &log, &RuntimeOptions::default()).await.unwrap_err();
     assert_eq!(
         err.message,
-        format!("TARSEE_PHONON_PYTHON ({python}) cannot import ptts. Install it there: {python} -m pip install ptts==0.4.2")
+        format!(
+            "TARSEE_PHONON_PYTHON ({python}) cannot import ptts. Install it there: {python} -m pip install ptts==0.4.2"
+        )
     );
 }
