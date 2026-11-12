@@ -51,9 +51,17 @@ fn stand_in(status: StatusCode, body: Value) -> Stand {
     }
 }
 
-/// The stand-in page: its icon links and pictures, and js/brand-icon.js. `signIn`: fire "tarsee:signed-in", as app.js
+/// How the stand-in page is opened: signed in or not, and whether the browser will report the answer as refused.
+#[derive(PartialEq)]
+enum Session {
+    None,
+    Good,
+    Lapsed,
+}
+
+/// The stand-in page: its icon links and pictures, and js/brand-icon.js. Signed in: "tarsee:signed-in" fired, as app.js
 /// does once there is a session (after a listener notes every "tarsee:icon-changed").
-async fn page(stand: &Stand, sign_in: bool) -> Page {
+async fn page(stand: &Stand, session: Session) -> Page {
     let base = stand.site.base();
     let html = format!(
         r#"<!doctype html>
@@ -78,7 +86,11 @@ async fn page(stand: &Stand, sign_in: bool) -> Page {
     let page = Page::open(&stand.site.page(html)).await;
     page.eval("window.heard = []; addEventListener('tarsee:icon-changed', (e) => heard.push(e.detail)); 0")
         .await;
-    if sign_in {
+    if session == Session::Lapsed {
+        // (The browser reports a refused request as an error of its own, whenever the answer comes.)
+        page.allow_errors();
+    }
+    if session != Session::None {
         page.eval("dispatchEvent(new CustomEvent('tarsee:signed-in')); 0").await;
         // The page has had its answer once the browser has the whole response (its timing entry is there).
         page.wait_for(
@@ -108,7 +120,7 @@ fn asked(stand: &Stand) -> Vec<String> {
 #[tokio::test]
 async fn before_sign_in_nothing_is_asked_there_is_no_version_and_the_addresses_stay_as_they_are() {
     let stand = stand_in(StatusCode::OK, json!({ "custom": false, "version": "d1" }));
-    let page = page(&stand, false).await;
+    let page = page(&stand, Session::None).await;
     assert!(asked(&stand).is_empty());
     assert!(page.is_null("TarseeBrand.version").await);
     assert_eq!(
@@ -129,7 +141,7 @@ async fn signed_in_the_version_from_get_api_settings_brand_icon_on_every_icon_ad
         StatusCode::OK,
         json!({ "custom": true, "version": "def456", "updatedAt": "2026-01-01T00:00:00.000Z" }),
     );
-    let page = page(&stand, true).await;
+    let page = page(&stand, Session::Good).await;
     assert_eq!(asked(&stand), ["/api/settings/brand-icon"]);
     assert_eq!(page.eval("TarseeBrand.version").await, "def456");
     let src = |address: &'static str| {
@@ -165,8 +177,7 @@ async fn signed_in_the_version_from_get_api_settings_brand_icon_on_every_icon_ad
 #[tokio::test]
 async fn a_lapsed_session_401_no_version_and_the_page_is_left_as_it_is() {
     let stand = stand_in(StatusCode::UNAUTHORIZED, json!({ "error": "Unauthorized" }));
-    let page = page(&stand, true).await;
-    // (The browser reports the 401 itself, as it does any request refused.)
+    let page = page(&stand, Session::Lapsed).await;
     let errors = page.take_errors().await;
     assert!(
         errors.iter().all(|e| e.contains("401")),

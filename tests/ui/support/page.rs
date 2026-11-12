@@ -11,9 +11,10 @@
 //!
 //! Every page watches for errors: `console.error` (and failed `console.assert`), uncaught exceptions and unhandled
 //! promise rejections, and the browser's own error lines (a script or picture that failed to load). Each step a test
-//! takes first checks that none came since the last, and so does dropping the page. A test that expects errors either
-//! takes them with [`Page::take_errors`] before its next step, or says so up front with [`Page::allow_errors`]; either
-//! way it can then assert on what it took.
+//! takes first checks that none came since the last, and so does dropping the page. A test that expects errors
+//! says so with [`Page::allow_errors`] before the step that brings them, then takes them with [`Page::take_errors`]
+//! and asserts on them. (One the step itself reports, such as a `console.error` it runs, can also just be taken
+//! before the next step; one that comes on its own time, such as a refused request's answer, needs `allow_errors`.)
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
