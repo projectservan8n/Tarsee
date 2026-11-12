@@ -22,17 +22,9 @@ pub const CODEX_IMAGE_DIR_NAME: &str = "tarsee-codex";
 const IMAGE_FOLDER_PREFIX: &str = "tarsee-images-";
 const MAX_AGE_MS: i64 = 3_600_000;
 
-/// An environment variable as the platform looks it up: any case on Windows, exactly elsewhere; empty is unset.
+/// An environment variable as the platform looks it up (`Env` matches any case on Windows); empty is unset.
 fn lookup(env: &Env, name: &str) -> Option<String> {
-    let value = if cfg!(windows) {
-        env.snapshot()
-            .into_iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v)
-    } else {
-        env.get(name)
-    };
-    value.filter(|v| !v.is_empty())
+    env.get(name).filter(|v| !v.is_empty())
 }
 
 /// `os.tmpdir()` from the given environment: TEMP, TMP, else <SystemRoot>\temp on Windows; TMPDIR, TMP, TEMP, else
