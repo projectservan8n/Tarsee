@@ -15,3 +15,6 @@ mod interfaces;
 mod python_runtime;
 mod run_cmd;
 mod voice;
+mod stt_install;
+mod stt_local;
+mod voice_fixtures;

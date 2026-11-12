@@ -33,7 +33,7 @@ use serde_json::Value;
 use tokio::sync::{OnceCell, watch};
 
 use super::install_common::{acquire_lock, write_file_atomic};
-use super::phonon_engine::{js_round, js_string_or_empty};
+use super::phonon_engine::js_round;
 use super::python_runtime::{
     EnsureOptions, LogListener, PythonProbe, PythonProgress, PythonRef, PythonRunError, RunOptions, STANDALONE_PYTHON,
     StandalonePython, TargetQuery, ensure_base_python, find_pythons, node_arch, node_platform, probe_python,
@@ -770,9 +770,9 @@ fn pip_problem(err: &PythonRunError, py_version: &str) -> String {
         .split('\n')
         .map(|l| l.strip_suffix('\r').unwrap_or(l))
         .rev()
-        .find(|l| l.trim().starts_with("ERROR:"));
+        .find(|l| super::speech_text::js_trim(l).starts_with("ERROR:"));
     match line {
-        Some(line) => PIP_ERROR_LINE.replace(line.trim(), "").into_owned(),
+        Some(line) => PIP_ERROR_LINE.replace(super::speech_text::js_trim(line), "").into_owned(),
         None if !err.message.is_empty() => err.message.clone(),
         None => "pip stopped".into(),
     }
@@ -1321,10 +1321,6 @@ pub async fn stt_boot_line(app: &App, settings: Option<&dyn Settings>) -> String
     )
 }
 
-/// `String(store.get(key) || "")` for a setting read as text.
-pub(crate) fn setting_string(settings: Option<&dyn Settings>, key: &str) -> String {
-    js_string_or_empty(settings.and_then(|s| s.get(key)).as_ref())
-}
 
 #[cfg(test)]
 mod tests {
