@@ -300,6 +300,15 @@ pub fn relative_path(from: &Path, to: &Path) -> String {
 /// A file system error written the way Node's `fs` wrote it: `ENOENT: no such file or directory, open '<path>'`.
 /// Errors Node had no code for keep Rust's own text.
 pub fn fs_error_message(err: &std::io::Error, syscall: &str, path: &Path) -> String {
+    node_fs_error(err, syscall, &format!("'{}'", path.display()))
+}
+
+/// [`fs_error_message`] for a call with two paths: `ENOENT: no such file or directory, rename '<a>' -> '<b>'`.
+pub fn fs_error_message_two(err: &std::io::Error, syscall: &str, from: &Path, to: &Path) -> String {
+    node_fs_error(err, syscall, &format!("'{}' -> '{}'", from.display(), to.display()))
+}
+
+fn node_fs_error(err: &std::io::Error, syscall: &str, paths: &str) -> String {
     use std::io::ErrorKind as K;
     let known = match err.kind() {
         K::NotFound => Some(("ENOENT", "no such file or directory")),
@@ -320,7 +329,7 @@ pub fn fs_error_message(err: &std::io::Error, syscall: &str, path: &Path) -> Str
         _ => None,
     };
     match known {
-        Some((code, text)) => format!("{code}: {text}, {syscall} '{}'", path.display()),
+        Some((code, text)) => format!("{code}: {text}, {syscall} {paths}"),
         None => err.to_string(),
     }
 }
