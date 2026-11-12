@@ -152,7 +152,7 @@ async fn phonon_is_the_default_for_everything_a_saved_elevenlabs_key_alone_doesn
     assert_eq!(engine_preference(Some(&*with_key)), "phonon", "a key is not a choice");
     t.env().set("ELEVENLABS_API_KEY", "sk_env");
     assert_eq!(
-        api_key(Some(&*store(&[])), t.env(), "elevenlabs").as_deref(),
+        get_api_key(&*store(&[]), t.env(), "elevenlabs").as_deref(),
         Some("sk_env")
     );
     assert_eq!(
@@ -517,16 +517,23 @@ async fn without_loaders_the_real_engines_are_built_from_the_settings() {
     assert_eq!(get_tts_engine(&t).name(), "edge-tts");
 }
 
-#[test]
-fn an_api_key_is_the_saved_one_else_the_environment_s_cleaned_of_quotes() {
-    let env = Env::from_pairs([("OPENAI_API_KEY", " \"env-key\" "), ("ELEVENLABS_API_KEY", "  ")]);
-    let saved = store(&[("ai.openai.apiKey", json!("saved-key"))]);
-    assert_eq!(api_key(Some(&*saved), &env, "openai").as_deref(), Some("saved-key"));
-    assert_eq!(api_key(Some(&*store(&[])), &env, "openai").as_deref(), Some("env-key"));
-    assert_eq!(api_key(None, &env, "openai").as_deref(), Some("env-key"));
-    assert_eq!(api_key(None, &env, "elevenlabs"), None);
-    let blank = store(&[("ai.openai.apiKey", json!("''"))]);
-    assert_eq!(api_key(Some(&*blank), &Env::new(), "openai"), None);
+#[tokio::test]
+async fn elevenlabs_takes_its_key_from_the_settings_store_and_never_without_one() {
+    let t = test_app();
+    t.env().set("ELEVENLABS_API_KEY", " \"k-env\" ");
+    t.fetch.respond(
+        "https://api.elevenlabs.io/v1/user",
+        crate::testkit::Answer::json(200, json!({})),
+    );
+    let pick = || store(&[("voice.engine", json!("elevenlabs"))]);
+    // With a store, the environment's key counts (`getApiKey`), cleaned of its quotes.
+    init_tts_engine(&t, Some(pick()), InitOptions::default()).await;
+    assert_eq!(get_tts_engine(&t).name(), "elevenlabs");
+    let asked = t.fetch.calls_to("https://api.elevenlabs.io/v1/user");
+    assert_eq!(asked[0].header("xi-api-key"), Some("k-env"));
+    // With no store there is no key at all (`settingsStore?.getApiKey?.()`): ElevenLabs is not built.
+    assert!(builtin_engine(&t, "elevenlabs", None, None).is_none());
+    assert!(builtin_engine(&t, "elevenlabs", Some(&*pick()), None).is_some());
 }
 
 #[tokio::test]

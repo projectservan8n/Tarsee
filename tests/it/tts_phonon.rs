@@ -8,13 +8,14 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use futures::FutureExt;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tarsee::testkit::fake_download_host::{FakeDownloadHost, Route};
+use tarsee::testkit::http;
 use tarsee::testkit::tmp_dir;
+use tarsee::voice::engine_registry::set_tts_engine;
 use tarsee::voice::phonon_engine::{
     PhononOptions, PhononTtsEngine, PhononWorker, phonon_installed, phonon_paths, stop_phonon_worker,
 };
@@ -30,7 +31,9 @@ use tempfile::TempDir;
 
 use crate::fake_python::{FakePython, cand};
 use crate::support::testbin_as;
-use crate::voice_fixtures::{VoiceApp, standalone, voice_app};
+use crate::voice_fixtures::{
+    VoiceApp, alive, leave_after_first_step, leave_when, standalone, until_empty, until_gone, voice_app,
+};
 
 fn sha(b: &[u8]) -> String {
     hex::encode(Sha256::digest(b))
@@ -298,32 +301,6 @@ impl Worker {
     }
 }
 
-/// Whether a process with this id is running.
-fn alive(pid: u32) -> bool {
-    if cfg!(windows) {
-        let out = std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
-    } else {
-        std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stderr(std::process::Stdio::null())
-            .status()
-            .unwrap()
-            .success()
-    }
-}
-
-async fn until_gone(pid: u32) {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while alive(pid) {
-        assert!(Instant::now() < deadline, "the worker process {pid} is still running");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
 fn tmp_files(t: &VoiceApp) -> Vec<String> {
     std::fs::read_dir(t.tmp.path())
         .unwrap()
@@ -450,4 +427,76 @@ async fn without_ptts_the_install_is_not_available() {
     assert!(!w.engine().is_available().await);
     let st = check_phonon_install(&w.t).await;
     assert_eq!(st.state, "failed");
+}
+
+/// Where a caller goes away: at once, or while the worker is speaking its line (it has logged the request).
+const LEAVE_AT: [&str; 2] = ["after its first step", "once the worker has it"];
+
+#[tokio::test]
+async fn a_line_whose_caller_goes_away_still_runs_to_its_end_and_the_next_line_gets_its_own_answer() {
+    let w = installed("ok");
+    // Each answer takes a while, so a caller can go away in the middle of one.
+    w.t.env().set("FAKE_PHONON_DELAY_MS", "300");
+    let tts = w.engine();
+    for (i, point) in LEAVE_AT.into_iter().enumerate() {
+        until_empty(w.t.tmp.path()).await;
+        let before = w.requests().len();
+        let line = format!("Dropped {i}.");
+        let opts = SynthOptions::default();
+        let leaving = tts.synthesize(&line, None, &opts);
+        match point {
+            "after its first step" => leave_after_first_step(leaving).await,
+            _ => leave_when(leaving, || w.requests().len() > before).await,
+        }
+        let kept = format!("Kept {i}.");
+        let out = tts.synthesize(&kept, None, &SynthOptions::default()).await.unwrap();
+        assert!(
+            out.audio[4..].starts_with(kept.as_bytes()),
+            "its own audio after a caller left {point}"
+        );
+    }
+    assert_eq!(
+        w.starts().len(),
+        1,
+        "one worker throughout: nothing timed out or got mixed up"
+    );
+    let said: Vec<String> = w
+        .requests()
+        .iter()
+        .map(|r| r["text"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        said,
+        ["Dropped 0.", "Kept 0.", "Dropped 1.", "Kept 1."],
+        "every line was spoken, in order"
+    );
+    until_empty(w.t.tmp.path()).await;
+}
+
+#[tokio::test]
+async fn a_sentence_whose_client_leaves_is_spoken_to_its_end_and_the_next_request_hears_its_own() {
+    let w = installed("ok");
+    w.t.env().set("FAKE_PHONON_DELAY_MS", "300");
+    set_tts_engine(&w.t, Arc::new(w.engine()));
+    let router = tarsee::routes::voice::router().with_state(w.t.app.clone());
+    for (i, point) in LEAVE_AT.into_iter().enumerate() {
+        until_empty(w.t.tmp.path()).await;
+        let before = w.requests().len();
+        let body = json!({ "text": format!("Dropped {i}.") });
+        let leaving = http::post_json(&router, "/tts", &body);
+        match point {
+            "after its first step" => leave_after_first_step(leaving).await,
+            _ => leave_when(leaving, || w.requests().len() > before).await,
+        }
+        let kept = format!("Kept {i}.");
+        let res = http::post_json(&router, "/tts", &json!({ "text": kept })).await;
+        assert_eq!(res.status, 200, "{}", res.text());
+        assert_eq!(res.header("content-type"), Some("audio/wav"));
+        assert!(
+            res.body[4..].starts_with(kept.as_bytes()),
+            "its own audio after a client left {point}"
+        );
+    }
+    assert_eq!(w.starts().len(), 1);
+    until_empty(w.t.tmp.path()).await;
 }

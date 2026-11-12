@@ -37,7 +37,8 @@ use serde_json::{Value, json};
 // The download and lock helpers are shared with the other installers (`install_common`); the tests import them here.
 use super::engine_registry::engine_preference;
 use super::install_common::{
-    DownloadFile, Downloader, InstallError, OFFICIAL_HOSTS, describe_fetch_error, guarded_fetch, write_file_atomic,
+    DownloadFile, Downloader, InstallError, OFFICIAL_HOSTS, describe_fetch_error, guarded_fetch, remove_all_async,
+    remove_file_force, write_file_atomic,
 };
 pub use super::install_common::{acquire_lock, download_file};
 use super::phonon_engine::{
@@ -48,12 +49,12 @@ use super::python_runtime::{
     EnsureOptions, LogListener, PythonProgress, PythonRef, RunOptions, RunOutput, StandalonePython, describe_python,
     ensure_base_python, run_python,
 };
-use super::speech_text::js_trim;
 use super::whisper_models::encode_uri_component;
 use crate::app::App;
 use crate::db::settings::Settings;
 use crate::net::fetch::{Fetch, FetchRequest};
-use crate::util::js::{now_iso, number_to_string, utf16_truncate};
+use crate::util::js::{now_iso, number_to_string, trim, utf16_truncate};
+use crate::util::node_path::to_namespaced;
 
 pub const PTTS_VERSION: &str = "0.4.2";
 const HF: &str = "https://huggingface.co";
@@ -291,6 +292,17 @@ pub fn install_phonon(app: &App, opts: InstallOptions) -> InstallRun {
         return run.clone();
     }
     let id = svc.next_run.fetch_add(1, Ordering::SeqCst);
+    // What the JS run did before its first pause: the status starts afresh, so the answer to the click that started
+    // it (and a Retry after a failure) already says "runtime", with this run's start time.
+    *svc.status.lock() = Progress {
+        phase: Some("runtime".into()),
+        file: None,
+        bytes_done: 0,
+        bytes_total: APPROX_TOTAL_BYTES,
+        error: None,
+        started_at: Some(now_iso()),
+        finished_at: None,
+    };
     let (app, mine) = (app.clone(), svc.clone());
     let task = tokio::spawn(async move {
         let result = run_install(&app, &opts).await;
@@ -336,15 +348,6 @@ async fn run_install(app: &App, opts: &InstallOptions) -> Result<(), InstallErro
             st.bytes_done = st.bytes_done.saturating_add(n).max(0);
         }
         report();
-    };
-    *svc.status.lock() = Progress {
-        phase: Some("runtime".into()),
-        file: None,
-        bytes_done: 0,
-        bytes_total: APPROX_TOTAL_BYTES,
-        error: None,
-        started_at: Some(now_iso()),
-        finished_at: None,
     };
     let set = |phase: Option<&str>, file: Option<Option<String>>| {
         let mut st = svc.status.lock();
@@ -411,7 +414,10 @@ async fn run_install(app: &App, opts: &InstallOptions) -> Result<(), InstallErro
         let voices = fetch_voice_list(&get, &voices_src, &p.catalog).await?;
         for v in &voices {
             set(None, Some(Some(v.filename.clone())));
-            let mut spec = DownloadFile::new(hf_url(&voices_src.repo, &voices_src.revision, &v.filename), &v.dest)
+            // The name came from the voice list: written literally, as Node wrote it (no trailing dots dropped, no
+            // device names on Windows).
+            let dest = to_namespaced(&v.dest);
+            let mut spec = DownloadFile::new(hf_url(&voices_src.repo, &voices_src.revision, &v.filename), dest)
                 .retry_delay_ms(retry_delay_ms)
                 .progress(&progress);
             spec.sha256 = v.sha256.clone();
@@ -444,8 +450,9 @@ async fn run_install(app: &App, opts: &InstallOptions) -> Result<(), InstallErro
             Err(err) => {
                 // The model files without a published hash could not be verified: drop them so a retry fetches them
                 // again instead of failing the same way.
+                // A removal that fails is the error then, as fs.rmSync threw.
                 for f in model.files.iter().filter(|f| f.sha256.is_none()) {
-                    let _ = std::fs::remove_file(p.model.join(&f.name));
+                    remove_file_force(&p.model.join(&f.name))?;
                 }
                 return Err(err);
             }
@@ -549,7 +556,7 @@ async fn fetch_voice_list(
     let text = res.text().await.map_err(InstallError::from_fetch)?;
     let mut voices = Vec::new();
     for line in text.split('\n') {
-        if js_trim(line).is_empty() {
+        if trim(line).is_empty() {
             continue;
         }
         let Ok(d) = serde_json::from_str::<Value>(line) else {
@@ -570,7 +577,7 @@ async fn fetch_voice_list(
             filename: d["filename"].as_str().unwrap_or_default().to_string(),
             dest,
             sha256: d.get("sha256").and_then(Value::as_str).map(str::to_string),
-            line: js_trim(line).to_string(),
+            line: trim(line).to_string(),
         });
     }
     if voices.is_empty() {
@@ -594,12 +601,12 @@ async fn run(
     let mut opts = RunOptions::default().timeout(timeout);
     opts.env = env;
     run_python(app, python, &args, opts).await.map_err(|err| {
-        let all: Vec<&str> = js_trim(&err.stderr)
+        let all: Vec<&str> = trim(&err.stderr)
             .split('\n')
             .map(|l| l.strip_suffix('\r').unwrap_or(l))
             .collect();
         let detail = all[all.len().saturating_sub(lines)..].join(" ");
-        let detail = js_trim(&detail);
+        let detail = trim(&detail);
         InstallError {
             code: err.code.clone(),
             ..InstallError::new(if detail.is_empty() {
@@ -646,7 +653,7 @@ pub async fn ensure_runtime(app: &App, log: &LogListener, opts: &RuntimeOptions)
         .await
         .is_err()
     {
-        let _ = std::fs::remove_dir_all(&p.venv);
+        remove_all_async(&p.venv).await?;
     }
     if !p.venv_python.exists() {
         let ensure = EnsureOptions {
@@ -688,7 +695,7 @@ pub async fn ensure_runtime(app: &App, log: &LogListener, opts: &RuntimeOptions)
         }
         .await;
         if let Err(err) = made {
-            let _ = std::fs::remove_dir_all(&p.venv);
+            remove_all_async(&p.venv).await?;
             return Err(InstallError::new(format!(
                 "Could not create a Python venv for Phonon with {named} ({}). Install Python 3.9+ with the venv module (Debian/Ubuntu: apt install python3-venv), or install the runtime yourself: pip install ptts=={PTTS_VERSION}",
                 err.message
@@ -759,7 +766,7 @@ pub async fn smoke_test(app: &App, p: &PhononPaths) -> Result<String, InstallErr
         1,
     )
     .await
-    .map(|out| js_trim(&out.stdout).to_string())
+    .map(|out| trim(&out.stdout).to_string())
     .map_err(|err| InstallError::new(format!("the downloaded model did not load: {}", err.message)))
 }
 
@@ -799,7 +806,7 @@ pub fn auto_install_phonon(app: &App, settings: Option<&dyn Settings>, opts: Aut
         return false;
     }
     let switch = app.env().get("TARSEE_PHONON_AUTO_INSTALL").unwrap_or_default();
-    if OFF.is_match(js_trim(&switch)) {
+    if OFF.is_match(trim(&switch)) {
         return false;
     }
     if engine_preference(settings) != "phonon" {

@@ -22,6 +22,7 @@
 //! kills the process too.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -32,21 +33,19 @@ use serde_json::{Map, Value, json};
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 
-use super::engine_registry::api_key;
 use super::phonon_engine::line_worker::{self, ExitInfo, Promise, WorkerProcess};
 use super::phonon_engine::{available_parallelism, js_round, js_string_or_empty, js_template};
 use super::python_runtime::{SpawnOptions, spawn_python};
-use super::speech_text::js_trim;
 use super::stt_install::{
     MODEL_RETRY_PAUSE, ReadyRuntime, ResolvedModel, SttModelRow, chosen_model, find_stt_runtime, list_stt_models,
     model_failed_recently, resolve_stt_model, start_model_download, stt_provider,
 };
 use super::tts_interface::os_tmpdir;
-use super::whisper_models::{WHISPER_MODELS, model_bytes};
+use super::whisper_models::{FoundModel, WHISPER_MODELS, model_bytes};
 use crate::app::App;
-use crate::db::settings::Settings;
+use crate::db::settings::{Settings, get_api_key};
 use crate::net::fetch::FetchRequest;
-use crate::util::js::{now_ms, number_to_string, truthy, utf16_len, utf16_tail, utf16_truncate};
+use crate::util::js::{now_ms, number_to_string, trim, truthy, utf16_len, utf16_tail, utf16_truncate};
 
 const BOOT_TIMEOUT: Duration = Duration::from_secs(90);
 const IDLE: Duration = Duration::from_secs(10 * 60);
@@ -59,7 +58,7 @@ pub fn reset_stt_model_cache() {}
 /// The last line with text.
 fn last_line(text: &str) -> String {
     text.split('\n')
-        .map(|l| js_trim(l.strip_suffix('\r').unwrap_or(l)))
+        .map(|l| trim(l.strip_suffix('\r').unwrap_or(l)))
         .rfind(|l| !l.is_empty())
         .unwrap_or("")
         .to_string()
@@ -159,12 +158,19 @@ impl SttWorker {
         req: Map<String, Value>,
         timeout: Duration,
     ) -> Result<Value, String> {
-        let inner = &self.inner;
-        let _turn = inner.queue.lock().await;
-        inner.clear_idle();
-        let result = inner.run_one(app, rt, req, timeout).await;
-        inner.arm_idle(idle_for(app));
-        result
+        // The request, its answer and the idle timer armed after it live in a task of their own, as the JS promise
+        // chain ran to its end: a caller that goes away (a client that disconnects) leaves the queue as it would have
+        // been, and the worker still stops when it has been idle.
+        let (inner, app, rt) = (self.inner.clone(), app.clone(), rt.clone());
+        let task = tokio::spawn(async move {
+            let _turn = inner.queue.lock().await;
+            inner.clear_idle();
+            let result = inner.run_one(&app, &rt, req, timeout).await;
+            inner.arm_idle(idle_for(&app));
+            result
+        });
+        task.await
+            .unwrap_or_else(|err| Err(format!("the speech-to-text worker stopped ({err})")))
     }
 
     /// Stops the worker (before a model is deleted, after an install, at shutdown). The next transcription starts it
@@ -290,7 +296,7 @@ impl SttInner {
         }
         st.buf.push_str(chunk);
         while let Some(i) = st.buf.find('\n') {
-            let line = js_trim(&st.buf[..i]).to_string();
+            let line = trim(&st.buf[..i]).to_string();
             st.buf.drain(..=i);
             if line.is_empty() {
                 continue;
@@ -656,21 +662,11 @@ async fn transcribe_local(app: &App, audio: &[u8], settings: Option<&dyn Setting
     }
     let english = model.name.ends_with(".en");
     let tmp = os_tmpdir(app.env()).join(format!("tarsee-stt-{}{}", random_hex(6), audio_ext(audio)));
-    tokio::fs::write(&tmp, audio)
+    let timeout = timeout_for(app, &model.name, audio.len());
+    let res = transcribe_file(app, rt, tmp, audio.to_vec(), &model, timeout)
         .await
-        .map_err(|err| SttError::plain(err.to_string()))?;
-    let mut req = Map::new();
-    req.insert("audio".into(), json!(tmp.to_string_lossy()));
-    req.insert("model".into(), json!(model.dir.to_string_lossy()));
-    req.insert("language".into(), if english { json!("en") } else { Value::Null });
-    req.insert("threads".into(), json!(threads()));
-    let res = SttWorker::of(app)
-        .transcribe(app, rt, req, timeout_for(app, &model.name, audio.len()))
-        .await;
-    // Already gone is fine.
-    let _ = tokio::fs::remove_file(&tmp).await;
-    let res = res.map_err(SttError::plain)?;
-    let text = js_trim(&js_string_or_empty(res.get("text"))).to_string();
+        .map_err(SttError::plain)?;
+    let text = trim(&js_string_or_empty(res.get("text"))).to_string();
     let more = if utf16_len(&text) > 80 { "..." } else { "" };
     let duration = match res.get("duration") {
         None | Some(Value::Null) => "?".to_string(),
@@ -729,9 +725,24 @@ pub async fn warm_stt(app: &App, settings: Option<&dyn Settings>) -> Value {
         }
     };
     let tmp = os_tmpdir(app.env()).join(format!("tarsee-stt-warm-{}.wav", random_hex(6)));
-    if let Err(err) = tokio::fs::write(&tmp, silence_wav()).await {
-        return json!({ "ok": false, "error": err.to_string() });
+    let timeout = timeout_for(app, &model.name, 0);
+    match transcribe_file(app, rt, tmp, silence_wav(), &model, timeout).await {
+        Ok(_) => json!({ "ok": true, "model": model.name }),
+        Err(error) => json!({ "ok": false, "error": error }),
     }
+}
+
+/// Writes a recording to `tmp`, has the worker transcribe it with `model`, and removes it again, all in a task of its
+/// own (the JS `try/finally`): the recording never stays behind, whether or not the caller is still waiting. Fails
+/// with the worker's words, or why the file could not be written.
+async fn transcribe_file(
+    app: &App,
+    rt: &ReadyRuntime,
+    tmp: PathBuf,
+    audio: Vec<u8>,
+    model: &FoundModel,
+    timeout: Duration,
+) -> Result<Value, String> {
     let mut req = Map::new();
     req.insert("audio".into(), json!(tmp.to_string_lossy()));
     req.insert("model".into(), json!(model.dir.to_string_lossy()));
@@ -744,15 +755,16 @@ pub async fn warm_stt(app: &App, settings: Option<&dyn Settings>) -> Value {
         },
     );
     req.insert("threads".into(), json!(threads()));
-    let res = SttWorker::of(app)
-        .transcribe(app, rt, req, timeout_for(app, &model.name, 0))
-        .await;
-    // Gone already is fine.
-    let _ = tokio::fs::remove_file(&tmp).await;
-    match res {
-        Ok(_) => json!({ "ok": true, "model": model.name }),
-        Err(error) => json!({ "ok": false, "error": error }),
-    }
+    let (app, rt) = (app.clone(), rt.clone());
+    let task = tokio::spawn(async move {
+        tokio::fs::write(&tmp, &audio).await.map_err(|err| err.to_string())?;
+        let res = SttWorker::of(&app).transcribe(&app, &rt, req, timeout).await;
+        // Already gone is fine.
+        let _ = tokio::fs::remove_file(&tmp).await;
+        res
+    });
+    task.await
+        .unwrap_or_else(|err| Err(format!("the speech-to-text worker stopped ({err})")))
 }
 
 async fn local_available(app: &App) -> bool {
@@ -873,7 +885,8 @@ pub async fn transcribe_audio(
     let mut fix = CHOOSE_PAID.to_string();
     let mut install_fix = INSTALL_OR_PAID.to_string();
     if provider == Value::String("whisper-api".into()) {
-        match api_key(settings, app.env(), "openai") {
+        // `settingsStore?.getApiKey?.("openai")`: no store, no key.
+        match settings.and_then(|s| get_api_key(s, app.env(), "openai")) {
             None => {
                 paid_problem =
                     Some("Speech-to-text is set to the OpenAI Whisper API, but no OpenAI API key is saved".into());
