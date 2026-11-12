@@ -113,8 +113,9 @@ pub fn number_to_string(n: f64) -> String {
     if n.is_infinite() {
         return if n > 0.0 { "Infinity".into() } else { "-Infinity".into() };
     }
-    if n == n.trunc() && n.abs() < 1e21 {
-        return format!("{}", n as i128);
+    if n == 0.0 {
+        // Also for negative zero: `String(-0)` is "0".
+        return "0".into();
     }
     // JavaScript switches to an exponent at 1e21 and above, and below 1e-6: "1e+21", "1.5e-7".
     if n.abs() >= 1e21 || n.abs() < 1e-6 {
@@ -210,6 +211,8 @@ mod tests {
         assert_eq!(number_to_string(1234567.0), "1234567");
         assert_eq!(number_to_string(0.1 + 0.2), "0.30000000000000004");
         assert_eq!(number_to_string(f64::NAN), "NaN");
+        assert_eq!(number_to_string(-0.0), "0");
+        assert_eq!(number_to_string(9007199254740993.0), "9007199254740992");
         assert_eq!(number_to_string(1e21), "1e+21");
         assert_eq!(number_to_string(1.5e300), "1.5e+300");
         assert_eq!(number_to_string(1e-7), "1e-7");
