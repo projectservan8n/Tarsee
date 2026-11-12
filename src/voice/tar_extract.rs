@@ -731,64 +731,82 @@ mod tests {
         assert_eq!(r.dirs, 0, "the stripped top folder is not counted");
     }
 
-    fn refused_cases() -> Vec<(&'static str, Vec<TarEntry>)> {
-        vec![
-            (
-                "a path out of the folder",
-                vec![TarEntry::file("python/../../escape.txt", "x")],
-            ),
-            ("an absolute path", vec![TarEntry::file("/etc/escape.txt", "x")]),
-            ("a Windows drive path", vec![TarEntry::file("C:/escape.txt", "x")]),
-            (
-                "a symlink pointing out",
-                vec![TarEntry::symlink("python/link", "../../../outside")],
-            ),
-            (
-                "an absolute symlink",
-                vec![TarEntry::symlink("python/link", "/etc/passwd")],
-            ),
-            (
-                "a file written through a symlink",
-                vec![
-                    TarEntry::dir("python/sub/"),
-                    TarEntry::symlink("python/up", "sub"),
-                    TarEntry::file("python/up/x.txt", "x"),
-                ],
-            ),
-            (
-                "two symlinks that together lead out",
-                vec![
-                    TarEntry::dir("python/a/"),
-                    TarEntry::symlink("python/a/x", ".."),
-                    TarEntry::symlink("python/a/l", "x/../.."),
-                ],
-            ),
-            (
-                "a damaged header",
-                vec![TarEntry::file("python/x.txt", "x").bad_checksum()],
-            ),
-        ]
+    /// The Node file's loop of refusals: each archive is refused, and nothing is left behind. Gives the message.
+    async fn refuses(entries: &[TarEntry]) -> String {
+        let archives = tmp_dir();
+        let file = write(archives.path(), "bad.tar.gz", entries);
+        let parent = tmp_dir();
+        let dest = parent.path().join("out");
+        let err = extract_tar_gz(&file, &dest, 1).await.unwrap_err();
+        assert!(err.message.to_lowercase().contains("archive"), "{err}");
+        assert!(err.has_code("BAD_ARCHIVE"), "{err}");
+        assert!(!dest.exists(), "the half-made folder is removed");
+        assert_eq!(
+            std::fs::read_dir(parent.path()).unwrap().count(),
+            0,
+            "nothing next to it either"
+        );
+        assert!(!parent.path().join("escape.txt").exists());
+        assert!(!archives.path().join("escape.txt").exists());
+        err.message
     }
 
     #[tokio::test]
-    async fn refuses_each_bad_archive_and_leaves_nothing_behind() {
-        let archives = tmp_dir();
-        for (i, (what, entries)) in refused_cases().into_iter().enumerate() {
-            let file = write(archives.path(), &format!("bad-{i}.tar.gz"), &entries);
-            let parent = tmp_dir();
-            let dest = parent.path().join("out");
-            let err = extract_tar_gz(&file, &dest, 1).await.unwrap_err();
-            assert!(err.message.to_lowercase().contains("archive"), "{what}: {err}");
-            assert!(err.has_code("BAD_ARCHIVE"), "{what}: {err}");
-            assert!(!dest.exists(), "{what}: the half-made folder is removed");
-            assert_eq!(
-                std::fs::read_dir(parent.path()).unwrap().count(),
-                0,
-                "{what}: nothing next to it either"
-            );
-            assert!(!parent.path().join("escape.txt").exists(), "{what}");
-            assert!(!archives.path().join("escape.txt").exists(), "{what}");
-        }
+    async fn refuses_a_path_out_of_the_folder_and_leaves_nothing_behind() {
+        refuses(&[TarEntry::file("python/../../escape.txt", "x")]).await;
+    }
+
+    #[tokio::test]
+    async fn refuses_an_absolute_path_and_leaves_nothing_behind() {
+        refuses(&[TarEntry::file("/etc/escape.txt", "x")]).await;
+    }
+
+    #[tokio::test]
+    async fn refuses_a_windows_drive_path_and_leaves_nothing_behind() {
+        refuses(&[TarEntry::file("C:/escape.txt", "x")]).await;
+    }
+
+    #[tokio::test]
+    async fn refuses_a_symlink_pointing_out_and_leaves_nothing_behind() {
+        refuses(&[TarEntry::symlink("python/link", "../../../outside")]).await;
+    }
+
+    #[tokio::test]
+    async fn refuses_an_absolute_symlink_and_leaves_nothing_behind() {
+        refuses(&[TarEntry::symlink("python/link", "/etc/passwd")]).await;
+    }
+
+    #[tokio::test]
+    async fn refuses_a_file_written_through_a_symlink_and_leaves_nothing_behind() {
+        let why = refuses(&[
+            TarEntry::dir("python/sub/"),
+            TarEntry::symlink("python/up", "sub"),
+            TarEntry::file("python/up/x.txt", "x"),
+        ])
+        .await;
+        assert_eq!(why, "the archive names up twice");
+    }
+
+    #[tokio::test]
+    async fn refuses_two_symlinks_that_together_lead_out_and_leaves_nothing_behind() {
+        let why = refuses(&[
+            TarEntry::dir("python/a/"),
+            TarEntry::symlink("python/a/x", ".."),
+            TarEntry::symlink("python/a/l", "x/../.."),
+        ])
+        .await;
+        // Where links can be made, the chain is followed and found to lead out; where they cannot (Windows without
+        // the right), a link to a folder cannot be copied either.
+        assert!(
+            why == "the archive has links that lead outside its folder: a/l"
+                || why == "the archive has a link this computer can't make: a/x",
+            "{why}"
+        );
+    }
+
+    #[tokio::test]
+    async fn refuses_a_damaged_header_and_leaves_nothing_behind() {
+        refuses(&[TarEntry::file("python/x.txt", "x").bad_checksum()]).await;
     }
 
     #[tokio::test]
