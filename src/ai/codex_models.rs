@@ -99,7 +99,7 @@ pub struct AccountModel {
 }
 
 /// `String(value)` for a truthy JSON value (an array is its members joined by commas).
-fn js_string(value: &Value) -> String {
+pub(crate) fn js_string(value: &Value) -> String {
     match value {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
