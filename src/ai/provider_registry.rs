@@ -1003,7 +1003,7 @@ pub static AI_PROVIDERS: LazyLock<AiProviders> = LazyLock::new(|| {
 
 /// The public id for a provider id or alias ("claude-code" is the Claude plan), or `None`.
 pub fn normalize_provider_id(id_or_alias: &str) -> Option<&'static str> {
-    let k = id_or_alias.trim().to_lowercase();
+    let k = js_trim(id_or_alias).to_lowercase();
     if k.is_empty() {
         return None;
     }
@@ -1028,14 +1028,14 @@ pub fn get_provider(id_or_alias: &str) -> Option<&'static Provider> {
 /// AI), so a setup that works keeps working. Self-hosted installs (Docker on the owner's own machine, a local
 /// build) always offer it.
 pub fn local_ai_hidden_here(env: &Env, store: Option<&dyn Settings>) -> bool {
-    if env.trimmed("RAILWAY_PROJECT_ID").is_none() {
+    if env_text(env, "RAILWAY_PROJECT_ID").is_none() {
         return false;
     }
-    if env.trimmed("TARSEE_LOCAL_AI_URL").is_some() {
+    if env_text(env, "TARSEE_LOCAL_AI_URL").is_some() {
         return false;
     }
     let saved = store.and_then(|s| s.get("ai.local.baseUrl"));
-    !matches!(saved, Some(Value::String(url)) if !url.trim().is_empty())
+    !matches!(saved, Some(Value::String(url)) if !js_trim(&url).is_empty())
 }
 
 // --- Which provider, and the keys-only switch ---
@@ -1048,7 +1048,7 @@ pub fn active_provider_id_with(
     is_shipped: impl Fn(&str) -> bool,
 ) -> &'static str {
     let chosen =
-        non_empty(read_setting(store, "ai.activeProvider").as_ref()).or_else(|| env.trimmed("TARSEE_AI_PROVIDER"));
+        non_empty(read_setting(store, "ai.activeProvider").as_ref()).or_else(|| env_text(env, "TARSEE_AI_PROVIDER"));
     let Some(chosen) = chosen else { return "claude" };
     match normalize_provider_id(&chosen) {
         Some(id) if is_shipped(id) => id,
@@ -1172,7 +1172,7 @@ impl ProviderRegistry {
         store: Option<&dyn Settings>,
     ) -> Option<String> {
         let p = get_provider(id_or_alias)?;
-        let raw = model_or_tier.unwrap_or("").trim();
+        let raw = js_trim(model_or_tier.unwrap_or(""));
         if p.catalog == "claude" {
             return Some(resolve_claude(raw));
         }
@@ -1265,7 +1265,7 @@ impl ProviderRegistry {
         if p.catalog == "claude" {
             return all();
         }
-        let id = strip_context_suffix(model.unwrap_or("").trim());
+        let id = strip_context_suffix(js_trim(model.unwrap_or("")));
         let verified = (!id.is_empty())
             .then(|| verified_models(p.id, store).remove(id))
             .flatten();
@@ -1310,7 +1310,7 @@ impl ProviderRegistry {
                 streaming: true,
             });
         }
-        let id = strip_context_suffix(model.unwrap_or("").trim());
+        let id = strip_context_suffix(js_trim(model.unwrap_or("")));
         let engine = engine_for(p.id, Some(id), store);
         let entry = self.find_model(p, Some(id));
         let maker = if p.id == "openrouter" {
@@ -1402,7 +1402,7 @@ impl ProviderRegistry {
     pub fn claude_list_price(&self, model: &str) -> Option<ModelPrice> {
         static PINNED_VERSION: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"-([0-9]+)-([0-9]+)$").expect("the pinned version pattern"));
-        let lower = model.trim().to_lowercase();
+        let lower = js_trim(model).to_lowercase();
         let id = strip_context_suffix(&lower);
         if id.is_empty() {
             return None;
@@ -1577,7 +1577,7 @@ impl ProviderRegistry {
     }
 
     fn find_model(&self, p: &'static Provider, model: Option<&str>) -> Option<ModelEntry> {
-        let id = strip_context_suffix(model.unwrap_or("").trim());
+        let id = strip_context_suffix(js_trim(model.unwrap_or("")));
         if id.is_empty() {
             return None;
         }
@@ -1638,7 +1638,7 @@ pub fn verified_models(id_or_alias: &str, store: Option<&dyn Settings>) -> Map<S
 /// Whether a model name is a tier word (fable, opus, sonnet, haiku, top, mid, small; "[1m]" or not), not a model
 /// id.
 pub fn is_tier_word(raw: &str) -> bool {
-    tier_word(strip_context_suffix(raw.trim())).is_some()
+    tier_word(strip_context_suffix(js_trim(raw))).is_some()
 }
 
 /// The engine that runs a model on a provider:
@@ -1652,7 +1652,7 @@ pub fn engine_for(id_or_alias: &str, model: Option<&str>, store: Option<&dyn Set
     if p.engines.len() == 1 {
         return Some(p.engines[0]);
     }
-    let id = strip_context_suffix(model.unwrap_or("").trim());
+    let id = strip_context_suffix(js_trim(model.unwrap_or("")));
     let verified = (!id.is_empty())
         .then(|| verified_models(p.id, store).remove(id))
         .flatten();
@@ -1675,7 +1675,7 @@ pub fn engine_for(id_or_alias: &str, model: Option<&str>, store: Option<&dyn Set
 pub fn vendor_for(id_or_alias: &str, model: Option<&str>) -> Option<String> {
     let p = get_provider(id_or_alias)?;
     if p.id == "openrouter" {
-        let maker: String = open_router_maker(model.unwrap_or("").trim())
+        let maker: String = open_router_maker(js_trim(model.unwrap_or("")))
             .unwrap_or_default()
             .chars()
             .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
@@ -1742,7 +1742,7 @@ pub fn check_key_slot(id_or_alias: &str, key: &str) -> KeySlotCheck {
     if p.kind == ProviderKind::Subscription {
         return refuse(format!("The {} signs in; it takes no API key.", p.label));
     }
-    let k = strip_one_quote_each_side(key.trim());
+    let k = strip_one_quote_each_side(js_trim(key));
     if k.is_empty() {
         return refuse("Paste a key first.".to_string());
     }
@@ -1901,7 +1901,7 @@ fn family_version(rest: &str) -> Option<f64> {
 
 /// One model of a runtime catalog, from what it was given; `None` for an entry without an id.
 fn runtime_entry(m: &Value) -> Option<ModelEntry> {
-    let id = m.get("id")?.as_str()?.trim();
+    let id = js_trim(m.get("id")?.as_str()?);
     if id.is_empty() {
         return None;
     }
@@ -1939,7 +1939,7 @@ fn normalize_price(p: Option<&Value>) -> Option<ModelPrice> {
     let num = |name: &str| -> Option<f64> {
         let n = match p.get(name)? {
             Value::Number(n) => n.as_f64()?,
-            Value::String(text) if !text.trim().is_empty() => js_to_number(text),
+            Value::String(text) if !js_trim(text).is_empty() => js_to_number(text),
             _ => return None,
         };
         (n.is_finite() && n >= 0.0).then_some(n)
@@ -1954,6 +1954,29 @@ fn normalize_price(p: Option<&Value>) -> Option<ModelPrice> {
     ))
 }
 
+/// JavaScript's whitespace: what `text.trim()` removes and `\s` matches. Rust's own `trim` differs by two
+/// characters: it leaves a byte order mark (U+FEFF), which JavaScript removes (one can ride in front of a pasted
+/// key), and it removes U+0085, which JavaScript leaves.
+pub(crate) fn is_js_space(c: char) -> bool {
+    matches!(
+        c,
+        '\t' | '\n' | '\u{B}' | '\u{C}' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
+    )
+}
+
+/// `text.trim()`, as JavaScript trims.
+pub(crate) fn js_trim(text: &str) -> &str {
+    text.trim_matches(is_js_space)
+}
+
+/// `String(env.NAME || "").trim()`, or `None` when nothing is left.
+fn env_text(env: &Env, name: &str) -> Option<String> {
+    let value = env.get(name)?;
+    let text = js_trim(&value);
+    (!text.is_empty()).then(|| text.to_string())
+}
+
 /// `store?.get?.(key) ?? null`.
 fn read_setting(store: Option<&dyn Settings>, key: &str) -> Option<Value> {
     store?.get(key).filter(|v| !v.is_null())
@@ -1962,7 +1985,6 @@ fn read_setting(store: Option<&dyn Settings>, key: &str) -> Option<Value> {
 /// A setting that holds JSON: the settings store hands it back parsed, a plain string is parsed here.
 fn read_json(store: Option<&dyn Settings>, key: &str) -> Option<Value> {
     match read_setting(store, key)? {
-        Value::String(text) if text.is_empty() => None,
         Value::String(text) => serde_json::from_str(&text).ok(),
         v @ (Value::Object(_) | Value::Array(_)) => Some(v),
         _ => None,
@@ -1971,7 +1993,7 @@ fn read_json(store: Option<&dyn Settings>, key: &str) -> Option<Value> {
 
 /// The text of a string that is not blank, trimmed.
 fn non_empty(v: Option<&Value>) -> Option<String> {
-    let text = v?.as_str()?.trim();
+    let text = js_trim(v?.as_str()?);
     (!text.is_empty()).then(|| text.to_string())
 }
 
@@ -1980,7 +2002,7 @@ fn non_empty(v: Option<&Value>) -> Option<String> {
 pub(crate) fn positive_int(v: Option<&Value>) -> Option<u64> {
     let n = match v? {
         Value::Number(n) => n.as_f64()?,
-        Value::String(text) => js_to_number(text.trim()),
+        Value::String(text) => js_to_number(text),
         _ => return None,
     };
     (n.is_finite() && n > 0.0).then(|| (n + 0.5).floor() as u64)
@@ -1991,14 +2013,7 @@ pub(crate) fn js_to_number(text: &str) -> f64 {
     static DECIMAL: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$").expect("the decimal pattern")
     });
-    let is_space = |c: char| {
-        matches!(
-            c,
-            '\t' | '\n' | '\u{B}' | '\u{C}' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
-                ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
-        )
-    };
-    let text = text.trim_matches(is_space);
+    let text = js_trim(text);
     if text.is_empty() {
         return 0.0;
     }
@@ -2027,7 +2042,7 @@ pub(crate) fn js_to_number(text: &str) -> f64 {
 const TRUE_WORDS: &[&str] = &["1", "true", "yes", "on"];
 
 fn is_true_word(text: &str) -> bool {
-    TRUE_WORDS.contains(&text.trim().to_lowercase().as_str())
+    TRUE_WORDS.contains(&js_trim(text).to_lowercase().as_str())
 }
 
 /// `v === true || v === 1`, or one of the words for yes.

@@ -41,10 +41,6 @@ fn key(parts: &[&str]) -> String {
     parts.concat()
 }
 
-fn efforts(ids: &[&str]) -> Vec<String> {
-    ids.iter().map(|e| e.to_string()).collect()
-}
-
 /// `{ in, out, cacheRead, cacheWrite }`.
 fn rates(input: f64, output: f64, cache_read: f64, cache_write: f64) -> ModelPrice {
     ModelPrice::flat(input, output, cache_read, cache_write)
@@ -1158,6 +1154,13 @@ fn only_lists_effort_ids_tarsee_knows() {
         ["low", "medium", "high", "xhigh"]
     );
     assert!(reg.efforts_for("local", Some("llama3.1:8b"), None).is_empty());
+    // A model its table does not list yet takes the provider's own levels.
+    assert_eq!(
+        reg.efforts_for("deepseek", Some("deepseek-next"), None),
+        ["low", "high", "max"]
+    );
+    assert_eq!(reg.efforts_for("openai", Some("gpt-next"), None), EFFORT_IDS);
+    assert_eq!(reg.efforts_for("chatgpt", None, None), EFFORT_IDS);
 }
 
 // --- capsFor ---
@@ -1581,6 +1584,13 @@ fn a_key_is_read_without_the_space_and_the_one_pair_of_quotes_around_it() {
         check_key_slot("anthropic", "no-such-shape").message.as_deref(),
         Some("This doesn't look like an Anthropic API key.")
     );
+    // Space is what JavaScript counts as space: a byte order mark in front of a pasted key comes off (Rust's own
+    // trim would leave it), and U+0085, which JavaScript does not count, stays.
+    assert!(check_key_slot("anthropic", &format!("\u{FEFF}{anthropic}\u{A0}")).ok);
+    assert!(!check_key_slot("anthropic", &format!("{anthropic}\u{85}")).ok);
+    assert_eq!(normalize_provider_id("\u{FEFF}DeepSeek\u{2028}"), Some("deepseek"));
+    assert_eq!(normalize_provider_id("deepseek\u{85}"), None);
+    assert_eq!(js_trim("\u{FEFF}\t a b \u{3000}\r\n"), "a b");
     // Only one quote comes off each side.
     assert_eq!(strip_one_quote_each_side("\"\"k'"), "\"k");
     assert_eq!(strip_one_quote_each_side("\""), "");
@@ -1895,6 +1905,221 @@ fn the_table_rows_carry_the_prices_and_deepseeks_peak_hours() {
         (opus.tier.as_deref(), opus.context, opus.price),
         (Some("opus"), Some(1_000_000), None)
     );
+}
+
+#[test]
+fn a_provider_without_the_asked_tier_answers_with_the_next_one_below_then_the_nearest_above() {
+    let reg = ProviderRegistry::new();
+    let resolve = |t: &str| reg.resolve_model_for("chatgpt", Some(t), None);
+    // Only the two top tiers are on the account: a small job goes to the nearer of them, not the dearest.
+    reg.set_catalog_models(
+        "chatgpt-models",
+        &[
+            json!({"id": "biggest", "tier": "fable"}),
+            json!({"id": "big", "tier": "opus"}),
+        ],
+    )
+    .unwrap();
+    assert_eq!(resolve("haiku").as_deref(), Some("big"));
+    assert_eq!(resolve("sonnet").as_deref(), Some("big"));
+    assert_eq!(resolve("opus").as_deref(), Some("big"));
+    assert_eq!(resolve("fable").as_deref(), Some("biggest"));
+    assert_eq!(step_order("sonnet"), ["sonnet", "haiku", "opus", "fable"]);
+    assert_eq!(step_order("fable"), ["fable", "opus", "sonnet", "haiku"]);
+}
+
+#[test]
+fn a_catalogs_own_default_is_the_default_wherever_it_stands_in_the_list() {
+    let reg = ProviderRegistry::new();
+    reg.set_catalog_models(
+        "chatgpt-models",
+        &[
+            json!({"id": "first"}),
+            json!({"id": "flagged", "default": true}),
+            json!({"id": "last"}),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        reg.resolve_model_for("chatgpt", Some(""), None).as_deref(),
+        Some("flagged")
+    );
+    assert_eq!(
+        reg.resolve_model_for("chatgpt", Some("not-on-the-account"), None)
+            .as_deref(),
+        Some("flagged")
+    );
+    // No tier names a model there either, so a tier word is the default too.
+    assert_eq!(
+        reg.resolve_model_for("chatgpt", Some("opus"), None).as_deref(),
+        Some("flagged")
+    );
+}
+
+#[test]
+fn local_ai_takes_any_id_until_its_servers_list_is_in_and_never_a_claude_one() {
+    let reg = ProviderRegistry::new();
+    assert_eq!(
+        reg.resolve_model_for("local", Some("llama3.1:8b"), None).as_deref(),
+        Some("llama3.1:8b"),
+        "before the list is in, the engine says if it is unknown"
+    );
+    reg.set_catalog_models("local-models", &[json!({"id": "mistral:7b"})])
+        .unwrap();
+    assert_eq!(
+        reg.resolve_model_for("local", Some("llama3.1:8b"), None).as_deref(),
+        Some("mistral:7b"),
+        "once it is in, only what the server lists"
+    );
+    // A Claude id saved as the card's model is passed over for what the server lists.
+    let claude_chosen = store([("ai.local.model", json!("claude-opus-5"))]);
+    assert_eq!(
+        reg.resolve_model_for("local", Some(""), Some(&claude_chosen))
+            .as_deref(),
+        Some("mistral:7b")
+    );
+    assert_eq!(
+        reg.resolve_model_for("local", Some("opus"), Some(&claude_chosen))
+            .as_deref(),
+        Some("mistral:7b")
+    );
+}
+
+#[test]
+fn the_dearest_and_the_cheapest_of_several_verified_models_are_the_makers_top_and_small_tiers() {
+    let reg = ProviderRegistry::new();
+    reg.set_catalog_models(
+        "openrouter",
+        &[
+            json!({"id": "google/default", "price": {"in": 2, "out": 12}}),
+            json!({"id": "google/dear", "price": {"in": 5, "out": 40}}),
+            json!({"id": "google/dearest", "price": {"in": 9, "out": 60}}),
+            json!({"id": "google/dearest-too", "price": {"in": 9, "out": 60}}),
+            json!({"id": "google/cheap", "price": {"in": 1, "out": 2.5}}),
+            json!({"id": "google/cheapest", "price": {"in": 0.1, "out": 1}}),
+            json!({"id": "google/same", "price": {"in": 2, "out": 12}}),
+            json!({"id": "google/unpriced"}),
+        ],
+    )
+    .unwrap();
+    let codex = json!({"engine": "codex"});
+    let s = store([
+        ("ai.openrouter.model", json!("google/default")),
+        (
+            "ai.openrouter.verified",
+            json!({
+                "google/default": codex, "google/dear": codex, "google/dearest": codex, "google/dearest-too": codex,
+                "google/cheap": codex, "google/cheapest": codex, "google/same": codex, "google/unpriced": codex,
+                "other/maker": codex,
+            }),
+        ),
+    ]);
+    let resolve = |t: &str| reg.resolve_model_for("openrouter", Some(t), Some(&s));
+    assert_eq!(
+        resolve("opus").as_deref(),
+        Some("google/dearest"),
+        "the first of two equally dear"
+    );
+    assert_eq!(resolve("fable").as_deref(), Some("google/dearest"));
+    assert_eq!(resolve("sonnet").as_deref(), Some("google/default"));
+    assert_eq!(resolve("haiku").as_deref(), Some("google/cheapest"));
+    // A default with no price in the catalog: nothing can be ranked, so every tier is the default.
+    let unpriced = store([
+        ("ai.openrouter.model", json!("google/unpriced")),
+        (
+            "ai.openrouter.verified",
+            json!({"google/unpriced": codex, "google/dear": codex, "google/cheap": codex}),
+        ),
+    ]);
+    for t in TIER_WORDS {
+        assert_eq!(
+            reg.resolve_model_for("openrouter", Some(t), Some(&unpriced)).as_deref(),
+            Some("google/unpriced"),
+            "{t}"
+        );
+    }
+}
+
+#[test]
+fn a_plan_has_no_price_per_token_even_when_its_list_carries_one() {
+    let reg = ProviderRegistry::new();
+    reg.set_catalog_models(
+        "chatgpt-models",
+        &[json!({"id": "gpt-6-luna", "price": {"in": 0.1, "out": 0.5}})],
+    )
+    .unwrap();
+    assert_eq!(
+        reg.price_for("chatgpt", Some("gpt-6-luna"), Some(at(9, 2, 0)), None),
+        None
+    );
+}
+
+#[test]
+fn codex_on_openai_and_openrouters_openai_models_see_images_unless_the_catalog_says_otherwise() {
+    let reg = ProviderRegistry::new();
+    assert!(
+        reg.caps_for("openrouter", Some("openai/gpt-6.1-sol"), None)
+            .unwrap()
+            .vision
+    );
+    assert!(
+        reg.caps_for("openrouter", Some("anthropic/claude-sonnet-5"), None)
+            .unwrap()
+            .vision
+    );
+    assert!(
+        !reg.caps_for("openrouter", Some("meta-llama/llama-4-maverick"), None)
+            .unwrap()
+            .vision
+    );
+    assert!(reg.caps_for("chatgpt", Some("gpt-6-luna"), None).unwrap().vision);
+    assert!(!reg.caps_for("local", Some("llama3.1:8b"), None).unwrap().vision);
+    // Native PDFs need both a Claude model and Claude Code: an anthropic/* model verified on Codex gets the text.
+    let on_codex = store([(
+        "ai.openrouter.verified",
+        json!({"anthropic/claude-sonnet-5": {"engine": "codex"}}),
+    )]);
+    let c = reg
+        .caps_for("openrouter", Some("anthropic/claude-sonnet-5"), Some(&on_codex))
+        .unwrap();
+    assert!(!c.pdf && !c.streaming);
+}
+
+#[test]
+fn the_keys_only_setting_is_on_for_true_1_and_the_words_for_yes_and_nothing_else() {
+    for off in [
+        json!(2),
+        json!(-1),
+        json!(0.5),
+        json!([true]),
+        json!({"on": true}),
+        json!("2"),
+        json!("no"),
+    ] {
+        assert!(
+            !keys_only(Some(&store([("ai.keysOnly", off.clone())])), &no_env()),
+            "{off}"
+        );
+    }
+    for on in [json!(1.0), json!(" YES "), json!("on")] {
+        assert!(
+            keys_only(Some(&store([("ai.keysOnly", on.clone())])), &no_env()),
+            "{on}"
+        );
+    }
+}
+
+#[test]
+fn a_slug_has_a_maker_only_when_something_stands_before_its_slash() {
+    assert_eq!(
+        open_router_maker("~Anthropic/claude-sonnet-latest").as_deref(),
+        Some("anthropic")
+    );
+    assert_eq!(open_router_maker("a/b/c").as_deref(), Some("a"));
+    assert_eq!(open_router_maker("/leading-slash"), None);
+    assert_eq!(open_router_maker("~/x"), None);
+    assert_eq!(open_router_maker("auto"), None);
+    assert_eq!(open_router_maker(""), None);
 }
 
 #[test]

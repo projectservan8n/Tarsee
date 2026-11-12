@@ -26,7 +26,7 @@ use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::ai::provider_registry::{ModelPrice, PeakWindow};
+use crate::ai::provider_registry::{ModelPrice, PeakWindow, js_trim};
 use crate::util::js;
 
 /// The families in the order Claude Code shows them.
@@ -101,12 +101,13 @@ fn truthy_text(value: Option<&Value>) -> Option<String> {
 }
 
 /// A picker id taken apart: "claude-opus-5-5" as the id, the family, the version and the name "Opus 5.5".
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PickerId {
     pub id: String,
     pub family: String,
-    /// Major and minor; no minor counts as 0.
-    pub version: (u64, u64),
+    /// Major and minor; no minor counts as 0. The major is a double, as `Number(...)` made it in the JS, so a
+    /// major of any length still compares as it did there.
+    pub version: (f64, u32),
     pub name: String,
 }
 
@@ -122,7 +123,7 @@ pub fn parse_picker_id(raw: &str) -> Option<PickerId> {
     let family = &m[1];
     let major = &m[2];
     // Number("05") is 5: the minor is written back as a number, the major as it was typed.
-    let minor: Option<u64> = m.get(3).map(|digits| digits.as_str().parse().unwrap_or(0));
+    let minor: Option<u32> = m.get(3).map(|digits| digits.as_str().parse().unwrap_or(0));
     let (id_minor, name_minor) = match minor {
         Some(minor) => (format!("-{minor}"), format!(".{minor}")),
         None => (String::new(), String::new()),
@@ -130,14 +131,14 @@ pub fn parse_picker_id(raw: &str) -> Option<PickerId> {
     Some(PickerId {
         id: format!("claude-{family}-{major}{id_minor}"),
         family: family.to_string(),
-        version: (major.parse().unwrap_or(u64::MAX), minor.unwrap_or(0)),
+        version: (major.parse().unwrap_or(f64::INFINITY), minor.unwrap_or(0)),
         name: format!("{} {major}{name_minor}", cap(family)),
     })
 }
 
 /// Which of two versions is the newer: `Greater` when `a` is.
-fn newer(a: (u64, u64), b: (u64, u64)) -> Ordering {
-    a.cmp(&b)
+fn newer(a: (f64, u32), b: (f64, u32)) -> Ordering {
+    a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal).then(a.1.cmp(&b.1))
 }
 
 fn family_rank(family: &str) -> usize {
@@ -207,7 +208,7 @@ pub struct Picker {
 struct Draft {
     id: String,
     family: String,
-    version: (u64, u64),
+    version: (f64, u32),
     name: String,
     description: Option<String>,
     section: &'static str,
@@ -970,7 +971,7 @@ pub fn name_from_slug(id: &str) -> String {
 /// no space around it.
 fn norm_word(s: &str) -> String {
     let lower = s.to_lowercase();
-    lower.strip_suffix("[1m]").unwrap_or(&lower).trim().to_string()
+    js_trim(lower.strip_suffix("[1m]").unwrap_or(&lower)).to_string()
 }
 
 fn tokens_of(s: &str) -> Vec<String> {
@@ -1210,3 +1211,6 @@ pub(crate) fn js_number_to_string(x: f64) -> String {
     };
     if x < 0.0 { format!("-{body}") } else { body }
 }
+
+#[cfg(test)]
+mod tests;
