@@ -10,6 +10,8 @@ Read, in this order:
 
 1. `docs/rust-port/DESIGN.md`, all of it.
 2. Your package's section in `docs/rust-port/PLAN.md`.
+   Then `docs/rust-port/INTERFACES.md`, if your package starts a turn, runs a tool, handles a command or sends to
+   a channel (or implements any of those).
 3. The foundation: `src/app.rs`, `src/env.rs`, `src/error.rs`, `src/db/mod.rs`, `src/db/settings.rs`,
    `src/net/fetch.rs`, `src/util/js.rs`, `src/testkit/` (all files), `testbin/main.rs`, `tests/it/support.rs`. They
    are short. Then skim `src/lib/redact.rs` and `src/config/env.rs` to see what a finished port looks like.

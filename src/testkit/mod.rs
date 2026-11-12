@@ -107,6 +107,7 @@ pub fn test_app() -> TestApp {
 
 /// A test app whose environment also has `extra` (which wins over the defaults).
 pub fn test_app_with_env<K: Into<String>, V: Into<String>>(extra: impl IntoIterator<Item = (K, V)>) -> TestApp {
+    crate::net::install_crypto_provider();
     let dir = tmp_dir();
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).expect("the test home folder could not be made");

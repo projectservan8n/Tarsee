@@ -147,6 +147,17 @@ argument). Never build a `reqwest::Client` in a module: tests could not see or s
 protocols `Fetch` cannot carry (WebSockets, IMAP, SMTP); those take their address from a setting or argument a test
 can point at a local fake.
 
+### TLS (`net::install_crypto_provider`)
+
+`main` and `testkit::test_app()` choose the TLS cryptography backend once for the process. A test that opens a
+secure connection without a test app calls `tarsee::net::install_crypto_provider()` first.
+
+### Interfaces between packages (`docs/rust-port/INTERFACES.md`)
+
+The turn, the engines, the tools, the commands and the channels call each other through traits stored in the
+`App`. `INTERFACES.md` says who implements, calls and installs each one, with examples. Read it before porting
+anything that starts a turn, runs a tool, handles a command or sends to a channel.
+
 ### Logging (`src/lib/log_capture.rs`)
 
 `console.log(...)` is `log::info!(...)`, `console.warn` is `log::warn!`, `console.error` is `log::error!`. Keep the
