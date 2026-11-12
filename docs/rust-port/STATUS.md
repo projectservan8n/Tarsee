@@ -16,13 +16,13 @@ agent checked it against the Node code and its findings are fixed or parked belo
 | A3 | running | s2 | | | |
 | A5 | running | s10 | | | |
 | A2 | reviewed | - | 74e0e4f, fixes 82edd82 | 1723 | 107 of 109 cases (2 wait for G2, G3). Review: 3 important, 8 minor; all 11 confirmed fixed by a second reviewer; passes on Linux |
-| B1 | merged, fixes running | - | 1649cf7 | 1020 | 36 of 36 cases. Review: nothing critical or important in the package; 2 minor |
+| B1 | merged, fixed | - | 1649cf7, fixes 9aa27aa | 1757 | 36 of 36 cases. Review: nothing critical or important in the package; 2 minor, fixed; two Node bugs fixed. Second review running |
 | B2 | merged, fixes running | - | 7094777 | 875 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases. Review: 2 critical, 1 important, 6 minor |
 | C1 | merged, fixes running | - | 9dd5372 | 213 | 32 of 32 cases. Review: 1 critical, 4 important, 22 minor |
 | D1 | merged | - | 48bb9ff | 1180 | 59 of 68 cases; 4 wait for S3, 5 are browser tests (W1) |
-| V2 | merged | - | 7205d05 | 1723 | 69 of 71 cases (2 belong to the server wiring, Z1). Review running |
+| V2 | merged, fixes running | - | 7205d05 | 1723 | 69 of 71 cases. Review: 5 important, 13 minor |
 | S4 | running | s3 | | | |
-| T1 | running | s4 | | | |
+| T1 | merged | - | 40e4ee7 | 1886 | 102 of 107 cases (5 wait for S3, S4). Review running |
 | W1a | merged | - | fcfc2ba | 1328 | 116 of 141 cases of the browser files run in a real browser (`cargo test --test ui`); 25 wait for A1, A4, R2 |
 | E1 | reviewed | - | 55fa65f, fixes 96f4ac4 | 1573 | 128 of 128 cases. Review: faithful, 2 minor, addressed; two Node bugs fixed |
 | V1 | reviewed | - | dbb96bb, fixes 64fb45d | 1742 | 42 of 42 cases. Review: 2 critical, 3 important, 7 minor; all 12 confirmed fixed by a second reviewer |
@@ -128,6 +128,8 @@ Each became a rule in `DESIGN.md` and, where possible, a fix in the foundation:
   merged.) `util::node_path::to_namespaced`.
 - A Node promise runs whether or not anyone waits for it; a Rust future stops when it is dropped. (A1: a shared
   refresh stalled when its caller went away.)
+- An axum handler is dropped when the client disconnects; an Express handler ran to its end. (V2: a speech
+  request whose client left stayed pending and broke every later one; recordings were left in the temp folder.)
 - Tests that start real programs with time limits can miss them when the machine is busy. They are rerun alone
   before a merge is refused, and are to be made robust in the cleanup.
 
@@ -151,6 +153,10 @@ round. Clippy on the newer compiler there reports 3 warnings (a large error type
   and A2 wrote for themselves move to `util::js`.
 - Z1: `SessionStore::init(&app)?` and `AuditLog::init(&app)` at boot; serve with
   `into_make_service_with_connect_info::<SocketAddr>()` so `middleware::auth::client_ip` sees the socket address.
+- Z1: what Express did to every response, done once for the whole server: `application/json; charset=utf-8`, the
+  weak `ETag` with the 304 answer on a fresh GET, a trailing slash treated as none, and paths matched in any case
+  where that can be done without changing the case of a parameter. `/terminal` is wired after the sign-in check.
+  The settings store is stored in the App also as `Arc<dyn Settings>` (the voice routes read it that way).
 - R1: run a turn in a spawned task (a closed socket never cancels a turn) inside `scope_queued_turn`.
 - Cleanup: `Config::load` normalises the paths it joins, as Node's `path.join` did; one `express.json()` rule for
   request bodies; JSON responses say `application/json; charset=utf-8` as Express did.

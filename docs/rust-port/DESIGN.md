@@ -250,6 +250,13 @@ text identical, including the `[tag]` prefix: people grep their logs for it.
    Express router had (relative to where `server.js` mounted it), and handlers take `State(app): State<App>`.
    Middleware (`requireAuth`, `csrfProtect`) is applied where `server.js` applied it, in `server.rs`; a route file
    applies only what the Node route file applied itself.
+    **A handler stops when the client leaves.** Express ran a handler to its end even after the browser closed the
+    connection. axum drops the handler's future at its next `.await`. Whatever must happen regardless (removing a
+    temporary file, taking a request off a pending list, answering a worker, finishing a turn, saving) is done in a
+    task of its own (`tokio::spawn`) or by a guard that cleans up when dropped, never by code after an `.await` in
+    the handler. Test each such handler by dropping its future half way.
+    What Express did to every response is done once, in `server.rs` (package Z1), not in each route: the
+    `; charset=utf-8` on JSON, the weak `ETag` and the 304 answer, a trailing slash treated as none.
 10. **Async.** The server runs on tokio. Never block the runtime: file and process work that can take long goes
     through `tokio::fs`, `tokio::process` or `spawn_blocking`. Short synchronous database calls are fine.
 11. **Platforms.** The server runs on Linux in Docker and on Windows and macOS for local use, as the Node version
