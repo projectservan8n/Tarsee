@@ -30,11 +30,12 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::app::App;
 use crate::config::Config;
-use crate::lib::safe_path::{join_path, normalize_path};
+use crate::lib::safe_path::{is_inside, node_join, same_path};
 use crate::lib::workspace_files::is_plain_name;
 use crate::lib::workspace_files::jstext::{process_zone, read_dir_sorted};
 use crate::middleware::auth::Auth;
 use crate::util::js::{iso_from_ms, utf16_len};
+use crate::util::node_path::to_namespaced;
 
 /// The folder the canvases live in (`CANVAS_DIR`).
 pub fn canvas_dir(config: &Config) -> PathBuf {
@@ -107,7 +108,8 @@ impl CanvasServer {
         if !is_plain_name(canvas_id) {
             return Err(invalid_id(canvas_id));
         }
-        let dir = self.dir.join(canvas_id);
+        // The literal path: on Windows an id `nul` or `chart.` names a folder of that name.
+        let dir = to_namespaced(&self.dir.join(canvas_id));
         fs::create_dir_all(&dir)?;
 
         let css = css.filter(|c| !c.is_empty());
@@ -155,7 +157,7 @@ impl CanvasServer {
             .filter(|d| d.file_type().map(|t| t.is_dir()).unwrap_or(false))
             .map(|d| {
                 let id = d.file_name().to_string_lossy().into_owned();
-                let meta = fs::metadata(self.dir.join(&id).join("index.html")).ok();
+                let meta = fs::metadata(to_namespaced(&self.dir.join(&id).join("index.html"))).ok();
                 CanvasInfo {
                     has_index: meta.is_some(),
                     size: meta.as_ref().map_or(0, |m| m.len()),
@@ -171,7 +173,7 @@ impl CanvasServer {
         if !is_plain_name(canvas_id) {
             return None;
         }
-        fs::read(self.dir.join(canvas_id).join("index.html"))
+        fs::read(to_namespaced(&self.dir.join(canvas_id).join("index.html")))
             .ok()
             .map(|b| String::from_utf8_lossy(&b).into_owned())
     }
@@ -182,7 +184,7 @@ impl CanvasServer {
         if !is_plain_name(canvas_id) {
             return false;
         }
-        let dir = self.dir.join(canvas_id);
+        let dir = to_namespaced(&self.dir.join(canvas_id));
         let is_dir = fs::symlink_metadata(&dir).map(|m| m.is_dir()).unwrap_or(false);
         let removed = if is_dir {
             fs::remove_dir_all(&dir)
@@ -195,7 +197,7 @@ impl CanvasServer {
     /// `path.join(CANVAS_DIR, canvasId, filename)`, joined and tidied as Node did (an absolute piece stays under the
     /// canvas folder).
     pub fn get_file_path(&self, canvas_id: &str, filename: &str) -> PathBuf {
-        join_path(&self.dir, &format!("{canvas_id}/{filename}"))
+        PathBuf::from(node_join(&[&self.dir.to_string_lossy(), canvas_id, filename]))
     }
 }
 
@@ -341,11 +343,10 @@ async fn serve_canvas_path(app: &App, rest: &str, asked: &Asked, req: Request) -
     };
     // `path.join(CANVAS_DIR, canvasId, filename)`: joined as text, so an absolute piece stays under the folder, and
     // tidied of `.` and `..`.
-    let base = normalize_path(&dir);
-    let file_path = join_path(&base, &format!("{canvas_id}/{filename}"));
+    let file_path = PathBuf::from(node_join(&[&dir.to_string_lossy(), canvas_id, &filename]));
     // Compared as paths: the JS compared text (`filePath.startsWith(CANVAS_DIR)`), which let `..` reach a sibling
     // folder whose name starts with "canvas" (workspace/canvas-old).
-    if !file_path.starts_with(&base) {
+    if !(same_path(&dir, &file_path) || is_inside(&dir, &file_path)) {
         return Outcome::Answer(express_send(
             asked,
             StatusCode::FORBIDDEN,
@@ -355,7 +356,9 @@ async fn serve_canvas_path(app: &App, rest: &str, asked: &Asked, req: Request) -
         ));
     }
 
-    if !file_path.exists() {
+    // Every file call takes the literal path (as Node's did): on Windows `index.html.` is not `index.html`.
+    let literal = to_namespaced(&file_path);
+    if !literal.exists() {
         return Outcome::Answer(express_send(
             asked,
             StatusCode::NOT_FOUND,
@@ -369,11 +372,11 @@ async fn serve_canvas_path(app: &App, rest: &str, asked: &Asked, req: Request) -
     if has_dot_part(&file_path) {
         return Outcome::Answer(not_found_json(asked));
     }
-    if file_path.is_dir() {
+    if literal.is_dir() {
         // res.sendFile on a folder goes on to the next handler.
         return Outcome::Next(req);
     }
-    Outcome::Answer(send_file(&file_path, asked).await)
+    Outcome::Answer(send_file(&file_path, &literal, asked).await)
 }
 
 /// The send module's `containsDotFile`: a part of the path, longer than one character, that starts with a dot.
@@ -413,7 +416,7 @@ fn gallery(app: &App, dir: &Path, asked: &Asked) -> Response {
     let mut canvases: Vec<(String, u64, i64)> = Vec::new();
     for d in entries {
         let name = d.file_name().to_string_lossy().into_owned();
-        let index = dir.join(&name).join("index.html");
+        let index = to_namespaced(&dir.join(&name).join("index.html"));
         if !d.file_type().map(|t| t.is_dir()).unwrap_or(false) || !index.exists() {
             continue;
         }
@@ -710,8 +713,10 @@ fn parse_range(size: u64, text: &str) -> Ranges {
 /// copy; 412 for a failed If-Match or If-Unmodified-Since; 206 for one byte range (several, or a stale If-Range, get
 /// the whole file); 416 for a range outside the file; no body for HEAD. The errors reached the global error handler,
 /// whose JSON kept the file's content type.
-async fn send_file(path: &Path, asked: &Asked) -> Response {
-    let meta = match fs::metadata(path) {
+/// `path` names the file (its type comes from its extension); `literal` is the same path in the form the system
+/// takes literally, which every file call uses.
+async fn send_file(path: &Path, literal: &Path, asked: &Asked) -> Response {
+    let meta = match fs::metadata(literal) {
         Ok(meta) => meta,
         Err(_) => return not_found_json(asked),
     };
@@ -784,7 +789,7 @@ async fn send_file(path: &Path, asked: &Asked) -> Response {
     if asked.method == Method::HEAD {
         return finish(status, headers, Body::empty());
     }
-    let body = match tokio::fs::File::open(path).await {
+    let body = match tokio::fs::File::open(literal).await {
         Ok(mut file) => {
             if file.seek(SeekFrom::Start(offset)).await.is_err() {
                 return not_found_json(asked);
@@ -961,7 +966,7 @@ mod tests {
         assert!(
             server
                 .get_file_path(&absolute, "x")
-                .starts_with(normalize_path(&canvas_dir(t.config())))
+                .starts_with(crate::util::node_path::normalize(&canvas_dir(t.config())))
         );
     }
 
@@ -1173,6 +1178,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_canvas_name_means_what_it_says_dots_spaces_and_device_names_included() {
+        let (t, server) = app();
+        server.serve("c1", Some("first"), None, None).unwrap();
+        // On Windows `c1.` and `c1 ` would open `c1`, `index.html.` the page itself, `...` the canvas folder.
+        for path in [
+            "/canvas/c1./",
+            "/canvas/c1%20/",
+            "/canvas/c1/index.html.",
+            "/canvas/.../",
+            "/canvas/nul/",
+        ] {
+            let res = get(&t, path).await;
+            assert_eq!(
+                (res.status, res.text()),
+                (404, "Canvas not found".to_string()),
+                "{path}"
+            );
+        }
+        for id in ["c1.", "c1 "] {
+            assert_eq!(server.get(id), None, "{id:?}");
+            assert!(!server.delete(id), "{id:?}");
+        }
+        assert_eq!(server.get("c1").as_deref(), Some("first"));
+        // A canvas may be named `nul`: a folder of that name, written, read, served and deleted as such.
+        server.serve("nul", Some("not a device"), None, None).unwrap();
+        assert_eq!(server.get("nul").as_deref(), Some("not a device"));
+        assert_eq!(get(&t, "/canvas/nul/").await.text(), "not a device");
+        assert!(server.delete("nul"));
+        assert_eq!(server.get("nul"), None);
+        assert_eq!(server.get("c1").as_deref(), Some("first"));
+    }
+
+    #[tokio::test]
     async fn under_a_dotted_folder_every_canvas_file_is_refused_as_node_refused_it() {
         let dir = tmp_dir();
         let ws = dir.path().join(".dotted").join("ws");
@@ -1280,9 +1318,9 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_unc_workspace_keeps_its_root() {
-        let base = normalize_path(Path::new(r"\\server\share\ws\canvas"));
-        let file = join_path(&base, "c1/index.html");
-        assert!(file.starts_with(&base), "{file:?}");
+        let base = PathBuf::from(r"\\server\share\ws\canvas");
+        let file = PathBuf::from(node_join(&[&base.to_string_lossy(), "c1", "index.html"]));
+        assert!(is_inside(&base, &file), "{file:?}");
         assert_eq!(file, PathBuf::from(r"\\server\share\ws\canvas\c1\index.html"));
     }
 }

@@ -87,7 +87,7 @@ pub fn load_hooks(app: &App) -> HookLoadReport {
 }
 
 fn read_manifest(path: &Path) -> Result<HookManifest, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let text = std::fs::read_to_string(crate::util::node_path::to_namespaced(path)).map_err(|e| e.to_string())?;
     let manifest: HookManifest = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     if manifest.command.trim().is_empty() {
         return Err("the manifest names no command".into());

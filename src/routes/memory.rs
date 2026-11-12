@@ -14,7 +14,7 @@ use crate::app::App;
 use crate::db::memory::{JsDbError, MemoryStore};
 use crate::error::{ApiError, ApiResult};
 use crate::lib::workspace_files::jstext::js_parse_int;
-use crate::routes::skills::{express_json_body, unhandled_error};
+use crate::routes::skills::{express_json_body, unhandled_error_named};
 use crate::util::js::{trim, truthy};
 
 pub fn router() -> Router<App> {
@@ -76,7 +76,7 @@ fn limit_of(text: Option<String>, fallback: i64, max: i64) -> i64 {
 
 /// A database error the route did not catch: the global error handler's 500.
 fn db_error(app: &App, err: JsDbError) -> ApiError {
-    unhandled_error(app, err.name, &err.message)
+    unhandled_error_named(app, err.name, &err.message)
 }
 
 /// GET / — the memories, newest first. Optional `?category=` and `?limit=` (default 50, at most 200).
@@ -87,7 +87,7 @@ async fn list(State(app): State<App>, RawQuery(query): RawQuery) -> ApiResult {
         QueryValue::One(c) if !c.is_empty() => Some(c),
         // An array was spread into the statement's parameters: one too many.
         QueryValue::Many(_) => {
-            return Err(unhandled_error(
+            return Err(unhandled_error_named(
                 &app,
                 "RangeError",
                 "Too many parameter values were provided",
@@ -151,7 +151,7 @@ async fn search(State(app): State<App>, RawQuery(query): RawQuery) -> ApiResult 
     }
     let QueryValue::One(q) = q else {
         // `?q=a&q=b` is an array, which has no toLowerCase.
-        return Err(unhandled_error(
+        return Err(unhandled_error_named(
             &app,
             "TypeError",
             "query.toLowerCase is not a function",

@@ -30,6 +30,7 @@ use crate::lib::skills_engine::{
 use crate::lib::workspace_files::is_plain_name;
 use crate::lib::workspace_files::jstext::{js_string, path_type_error};
 use crate::util::js::truthy;
+use crate::util::node_path::to_namespaced;
 
 pub fn router() -> Router<App> {
     Router::new()
@@ -47,11 +48,55 @@ fn by_name(name: &'static str) -> MethodRouter<App> {
         .delete(move |state| remove(state, Path(name.to_string())))
 }
 
-/// Runs blocking file work (a recursive copy or delete) off the async runtime.
-async fn blocking<T: Send + 'static>(app: &App, work: impl FnOnce() -> T + Send + 'static) -> Result<T, ApiError> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .map_err(|err| unhandled_error(app, "Error", &err.to_string()))
+/// Holds the file work requests start until a test lets it go (never present outside tests), so a test can leave a
+/// request half way and see the work finish.
+#[derive(Default)]
+pub(crate) struct HeldWork {
+    entered: std::sync::atomic::AtomicBool,
+    released: parking_lot::Mutex<bool>,
+    wake: parking_lot::Condvar,
+}
+
+impl HeldWork {
+    fn wait(&self) {
+        self.entered.store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut released = self.released.lock();
+        while !*released {
+            self.wake.wait(&mut released);
+        }
+    }
+
+    /// Whether some work has started and is being held.
+    #[cfg(test)]
+    pub(crate) fn entered(&self) -> bool {
+        self.entered.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn release(&self) {
+        *self.released.lock() = true;
+        self.wake.notify_all();
+    }
+}
+
+/// Runs a request's file work, start to end, in a task of its own: Express ran a handler to its end even when the
+/// browser went away, while axum drops a handler at its next `.await`, so work done in the handler itself could stop
+/// half way (a skill half copied, a cache left stale). The task also keeps the blocking copies and deletes off the
+/// async runtime. The handler only waits for the answer.
+async fn in_own_task<T: Send + 'static>(
+    app: &App,
+    work: impl FnOnce(App) -> T + Send + 'static,
+) -> Result<T, ApiError> {
+    let worker = app.clone();
+    let held = app.get::<HeldWork>();
+    tokio::task::spawn_blocking(move || {
+        if let Some(held) = held {
+            held.wait();
+        }
+        work(worker)
+    })
+    .await
+    .map_err(|err| unhandled_error(app, &err.to_string()))
 }
 
 /// GET / — every shipped skill with whether it is installed.
@@ -74,8 +119,7 @@ async fn install(State(app): State<App>, headers: HeaderMap, body: Bytes) -> Api
         return Err(ApiError::bad_request("Skill name required"));
     }
     let skill = name_arg(&name).map_err(ApiError::bad_request)?;
-    let worker = app.clone();
-    blocking(&app, move || install_skill(&worker, &skill))
+    in_own_task(&app, move |app| install_skill(&app, &skill))
         .await?
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     Ok(Json(json!({ "ok": true, "name": name, "installed": true })))
@@ -89,8 +133,7 @@ async fn uninstall(State(app): State<App>, headers: HeaderMap, body: Bytes) -> A
         return Err(ApiError::bad_request("Skill name required"));
     }
     let skill = name_arg(&name).map_err(ApiError::bad_request)?;
-    let worker = app.clone();
-    blocking(&app, move || uninstall_skill(&worker, &skill))
+    in_own_task(&app, move |app| uninstall_skill(&app, &skill))
         .await?
         .map_err(ApiError::bad_request)?;
     Ok(Json(json!({ "ok": true, "name": name, "installed": false })))
@@ -102,12 +145,11 @@ async fn setup(State(app): State<App>, headers: HeaderMap, body: Bytes) -> ApiRe
     let Some(Value::Array(names)) = body.get("install").cloned() else {
         return Err(ApiError::bad_request("install array required"));
     };
-    let worker = app.clone();
-    let (installed, failed) = blocking(&app, move || {
+    let (installed, failed) = in_own_task(&app, move |app| {
         let mut installed = Vec::new();
         let mut failed = Vec::new();
         for name in names {
-            let done = name.as_str().is_some_and(|n| install_skill(&worker, n).is_ok());
+            let done = name.as_str().is_some_and(|n| install_skill(&app, n).is_ok());
             if done {
                 installed.push(name);
             } else {
@@ -129,7 +171,7 @@ async fn get_one(State(app): State<App>, Path(name): Path<String>) -> ApiResult 
 /// POST / — creates a custom skill. Body: `{ name, description, content }`.
 async fn create(State(app): State<App>, headers: HeaderMap, body: Bytes) -> Result<Response, ApiError> {
     let Some(body) = express_json_body(&headers, &body)? else {
-        return Err(unhandled_error(
+        return Err(unhandled_error_named(
             &app,
             "TypeError",
             "Cannot destructure property 'name' of 'req.body' as it is undefined.",
@@ -157,15 +199,9 @@ async fn create(State(app): State<App>, headers: HeaderMap, body: Bytes) -> Resu
             "Invalid name. Use lowercase letters, numbers, and hyphens only.",
         ));
     }
-    let Some(name) = name.as_str() else {
-        return Err(unhandled_error(&app, "TypeError", &path_type_error(Some(&name))));
+    let Some(name) = name.as_str().map(String::from) else {
+        return Err(unhandled_error_named(&app, "TypeError", &path_type_error(Some(&name))));
     };
-
-    // The pattern above makes the name one plain name.
-    let skill_dir = get_custom_skills_dir(&app).join(name);
-    if skill_dir.exists() {
-        return Err(ApiError::conflict("Skill already exists. Use PUT to update."));
-    }
 
     let description = match description {
         Some(d) if truthy(d) => js_string(Some(d)),
@@ -175,10 +211,22 @@ async fn create(State(app): State<App>, headers: HeaderMap, body: Bytes) -> Resu
         "---\nname: {name}\ndescription: {description}\n---\n\n{}",
         js_string(content)
     );
-    fs::create_dir_all(&skill_dir).map_err(|e| ApiError::internal(fs_error_message(&e, "mkdir", &skill_dir)))?;
-    let file = skill_dir.join("SKILL.md");
-    fs::write(&file, md).map_err(|e| ApiError::internal(fs_error_message(&e, "open", &file)))?;
-    invalidate_cache(&app);
+    let made = name.clone();
+    in_own_task(&app, move |app| {
+        // The pattern above makes the name one plain name; every call takes the literal path (on Windows a skill
+        // named `nul` is a folder of that name, as Node made it).
+        let skill_dir = get_custom_skills_dir(&app).join(&made);
+        if to_namespaced(&skill_dir).exists() {
+            return Err(ApiError::conflict("Skill already exists. Use PUT to update."));
+        }
+        fs::create_dir_all(to_namespaced(&skill_dir))
+            .map_err(|e| ApiError::internal(fs_error_message(&e, "mkdir", &skill_dir)))?;
+        let file = skill_dir.join("SKILL.md");
+        fs::write(to_namespaced(&file), md).map_err(|e| ApiError::internal(fs_error_message(&e, "open", &file)))?;
+        invalidate_cache(&app);
+        Ok(())
+    })
+    .await??;
     Ok((StatusCode::CREATED, Json(json!({ "ok": true, "name": name }))).into_response())
 }
 
@@ -195,65 +243,75 @@ fn kept_body(content: &str) -> &str {
 /// PUT /:name — updates a custom skill. Body: `{ description?, content? }`.
 async fn update(State(app): State<App>, Path(name): Path<String>, headers: HeaderMap, body: Bytes) -> ApiResult {
     let Some(body) = express_json_body(&headers, &body)? else {
-        return Err(unhandled_error(
+        return Err(unhandled_error_named(
             &app,
             "TypeError",
             "Cannot destructure property 'description' of 'req.body' as it is undefined.",
         ));
     };
+    let description = body.get("description").cloned();
+    let content = body.get("content").cloned();
 
-    let not_found = || ApiError::not_found("Custom skill not found (built-in skills are read-only)");
-    if !is_plain_name(&name) {
-        return Err(not_found());
-    }
-    let skill_path = get_custom_skills_dir(&app).join(&name).join("SKILL.md");
-    if !skill_path.exists() {
-        return Err(not_found());
-    }
+    in_own_task(&app, move |app| {
+        let not_found = || ApiError::not_found("Custom skill not found (built-in skills are read-only)");
+        if !is_plain_name(&name) {
+            return Err(not_found());
+        }
+        let skill_path = get_custom_skills_dir(&app).join(&name).join("SKILL.md");
+        if !to_namespaced(&skill_path).exists() {
+            return Err(not_found());
+        }
 
-    let existing = get_skill_content(&app, &name);
-    // A field left out keeps what is there; one sent as null becomes "null", as the JS template wrote it.
-    let new_desc = match body.get("description") {
-        Some(d) => js_string(Some(d)),
-        None => existing.as_ref().map(|e| e.description.clone()).unwrap_or_default(),
-    };
-    let new_content = match body.get("content") {
-        Some(c) => js_string(Some(c)),
-        None => existing
-            .as_ref()
-            .map(|e| kept_body(&e.content).to_string())
-            .unwrap_or_default(),
-    };
+        let existing = get_skill_content(&app, &name);
+        // A field left out keeps what is there; one sent as null becomes "null", as the JS template wrote it.
+        let new_desc = match &description {
+            Some(d) => js_string(Some(d)),
+            None => existing.as_ref().map(|e| e.description.clone()).unwrap_or_default(),
+        };
+        let new_content = match &content {
+            Some(c) => js_string(Some(c)),
+            None => existing
+                .as_ref()
+                .map(|e| kept_body(&e.content).to_string())
+                .unwrap_or_default(),
+        };
 
-    let md = format!("---\nname: {name}\ndescription: {new_desc}\n---\n\n{new_content}");
-    fs::write(&skill_path, md).map_err(|e| ApiError::internal(fs_error_message(&e, "open", &skill_path)))?;
-    invalidate_cache(&app);
+        let md = format!("---\nname: {name}\ndescription: {new_desc}\n---\n\n{new_content}");
+        fs::write(to_namespaced(&skill_path), md)
+            .map_err(|e| ApiError::internal(fs_error_message(&e, "open", &skill_path)))?;
+        invalidate_cache(&app);
+        Ok(())
+    })
+    .await??;
     Ok(Json(json!({ "ok": true })))
 }
 
 /// DELETE /:name — deletes a custom skill.
 async fn remove(State(app): State<App>, Path(name): Path<String>) -> ApiResult {
-    if !is_plain_name(&name) {
-        return Err(ApiError::not_found("Skill not found"));
-    }
-    let skill_dir = get_custom_skills_dir(&app).join(&name);
-    if !skill_dir.exists() {
-        return Err(ApiError::not_found("Skill not found"));
-    }
+    in_own_task(&app, move |app| {
+        if !is_plain_name(&name) {
+            return Err(ApiError::not_found("Skill not found"));
+        }
+        let skill_dir = get_custom_skills_dir(&app).join(&name);
+        // The literal path: on Windows `...` is not the skills folder, nor `a.` the skill `a`.
+        if !to_namespaced(&skill_dir).exists() {
+            return Err(ApiError::not_found("Skill not found"));
+        }
 
-    // Prevent deleting built-in skills
-    let built_in = scan_skills(&app)
-        .iter()
-        .find(|s| s.name == name)
-        .is_some_and(|s| s.source == "built-in");
-    if built_in {
-        return Err(ApiError::forbidden("Cannot delete built-in skills"));
-    }
+        // Prevent deleting built-in skills
+        let built_in = scan_skills(&app)
+            .iter()
+            .find(|s| s.name == name)
+            .is_some_and(|s| s.source == "built-in");
+        if built_in {
+            return Err(ApiError::forbidden("Cannot delete built-in skills"));
+        }
 
-    blocking(&app, move || remove_entry(&skill_dir))
-        .await?
-        .map_err(ApiError::internal)?;
-    invalidate_cache(&app);
+        remove_entry(&skill_dir).map_err(ApiError::internal)?;
+        invalidate_cache(&app);
+        Ok(())
+    })
+    .await??;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -293,13 +351,23 @@ pub(crate) fn express_json_body(headers: &HeaderMap, body: &[u8]) -> Result<Opti
 }
 
 /// An error the Node route did not catch, as the global error handler (`middleware/error-handler.js`) answered it:
-/// a 500 that names no detail in production. `name` is the JavaScript error's class ("TypeError", "RangeError"),
-/// which began the logged stack; the stack's lines themselves were the Node program's and have no counterpart.
-pub(crate) fn unhandled_error(app: &App, name: &str, message: &str) -> ApiError {
+/// a 500 that names no detail in production.
+pub(crate) fn unhandled_error(app: &App, message: &str) -> ApiError {
+    log::error!("[error] {}", crate::lib::redact::redact_secrets(message));
+    internal_error_body(app, message)
+}
+
+/// [`unhandled_error`] for an error whose JavaScript class is known ("TypeError", "RangeError"): the logged stack
+/// began `<name>: <message>`. The stack's lines themselves were the Node program's and have no counterpart.
+pub(crate) fn unhandled_error_named(app: &App, name: &str, message: &str) -> ApiError {
     log::error!(
         "[error] {}",
         crate::lib::redact::redact_secrets(&format!("{name}: {message}"))
     );
+    internal_error_body(app, message)
+}
+
+fn internal_error_body(app: &App, message: &str) -> ApiError {
     let mut body = json!({ "error": "Internal server error" });
     if app.env().get("NODE_ENV").as_deref() != Some("production") {
         body["detail"] = Value::String(crate::lib::redact::redact_secrets(message));
@@ -310,8 +378,39 @@ pub(crate) fn unhandled_error(app: &App, name: &str, message: &str) -> ApiError 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::http::{self, request};
+    use crate::testkit::http::{self, TestRequest, request};
     use crate::testkit::{TestApp, test_app};
+    use std::time::{Duration, Instant};
+    use tower::ServiceExt;
+
+    /// Sends a request and leaves once its file work has started, as a browser that closes the page; then lets the
+    /// work go on.
+    async fn start_then_leave(t: &TestApp, router: &Router, req: TestRequest) {
+        let held = t.app.set(HeldWork::default());
+        let mut call = Box::pin(router.clone().oneshot(req.build()));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !held.entered() {
+            assert!(
+                futures::poll!(call.as_mut()).is_pending(),
+                "the request finished before its work began"
+            );
+            assert!(Instant::now() < deadline, "the request never reached its work");
+            tokio::task::yield_now().await;
+        }
+        drop(call);
+        t.app.remove::<HeldWork>();
+        held.release();
+    }
+
+    /// Waits until `done` holds (the thing itself, not a fixed time), for at most 10 seconds: generous for work of
+    /// milliseconds, and well inside the skills cache's 30, so a stale cache cannot pass for an invalidated one.
+    async fn wait_for(what: &str, done: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !done() {
+            assert!(Instant::now() < deadline, "{what} never happened");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
 
     fn app() -> (TestApp, Router) {
         let t = test_app();
@@ -635,6 +734,108 @@ mod tests {
             res.text(),
             r#"{"name":"ordered","description":"d","source":"installed","content":"body","frontmatter":{"1":"one","2":"two","name":"ordered","description":"d"}}"#
         );
+    }
+
+    #[tokio::test]
+    async fn work_a_request_started_finishes_when_the_browser_leaves() {
+        let (t, router) = app();
+        let skills = get_custom_skills_dir(&t);
+
+        start_then_leave(
+            &t,
+            &router,
+            request("POST", "/install").json(&json!({"name": "diagram"})),
+        )
+        .await;
+        wait_for("the install", || {
+            get_all_skills_with_status(&t)
+                .iter()
+                .any(|s| s.name == "diagram" && s.installed)
+        })
+        .await;
+        assert_eq!(
+            fs::read_to_string(skills.join("diagram").join("SKILL.md")).unwrap(),
+            fs::read_to_string(t.config().bundled_skills_dir().join("diagram").join("SKILL.md")).unwrap(),
+            "copied whole"
+        );
+
+        let create = request("POST", "/").json(&json!({"name": "mine", "content": "body"}));
+        start_then_leave(&t, &router, create).await;
+        wait_for("the new skill", || scan_skills(&t).iter().any(|s| s.name == "mine")).await;
+
+        let put = request("PUT", "/mine").json(&json!({"content": "changed"}));
+        start_then_leave(&t, &router, put).await;
+        wait_for("the update", || {
+            get_skill_content(&t, "mine").is_some_and(|s| s.content == "\nchanged")
+        })
+        .await;
+
+        start_then_leave(&t, &router, request("DELETE", "/mine")).await;
+        wait_for("the delete", || {
+            !skills.join("mine").exists() && scan_skills(&t).iter().all(|s| s.name != "mine")
+        })
+        .await;
+
+        start_then_leave(
+            &t,
+            &router,
+            request("POST", "/uninstall").json(&json!({"name": "diagram"})),
+        )
+        .await;
+        wait_for("the uninstall", || {
+            !skills.join("diagram").exists() && scan_skills(&t).iter().all(|s| s.name != "diagram")
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_name_means_what_it_says_dots_spaces_and_device_names_included() {
+        let (t, router) = app();
+        let skills = get_custom_skills_dir(&t);
+        for folder in ["a", "b"] {
+            write_skill(&t, folder, &format!("---\nname: {folder}\n---\nkeep"));
+        }
+        install_skill(&t, "diagram").unwrap();
+        // On Windows `a.` and `b ` would open `a` and `b`, `...` the skills folder itself, `nul` a device.
+        for name in ["a.", "b ", "...", "nul"] {
+            let encoded = crate::lib::canvas::encode_uri_component(name);
+            let res = http::delete(&router, &format!("/{encoded}")).await;
+            assert_eq!(
+                (res.status, res.json()),
+                (404, json!({"error": "Skill not found"})),
+                "{name:?}"
+            );
+            let res = http::put_json(&router, &format!("/{encoded}"), &json!({"content": "x"})).await;
+            assert_eq!(res.status, 404, "{name:?}");
+        }
+        let res = http::post_json(&router, "/install", &json!({"name": "diagram."})).await;
+        assert_eq!(
+            (res.status, res.json()),
+            (400, json!({"error": "Skill \"diagram.\" not found"}))
+        );
+        let res = http::post_json(&router, "/uninstall", &json!({"name": "diagram."})).await;
+        assert_eq!(res.status, 200);
+        for (folder, text) in [("a", "keep"), ("b", "keep")] {
+            assert!(
+                fs::read_to_string(skills.join(folder).join("SKILL.md"))
+                    .unwrap()
+                    .ends_with(text),
+                "{folder}"
+            );
+        }
+        assert!(
+            skills.join("diagram").join("SKILL.md").is_file(),
+            "`diagram.` is not `diagram`"
+        );
+
+        // A skill may be named `nul`: it is a folder of that name, as Node made it.
+        let res = http::post_json(&router, "/", &json!({"name": "nul", "content": "device-free"})).await;
+        assert_eq!(res.status, 201);
+        assert!(to_namespaced(&skills.join("nul").join("SKILL.md")).is_file());
+        assert_eq!(http::get(&router, "/nul").await.json()["content"], "\ndevice-free");
+        let res = http::delete(&router, "/nul").await;
+        assert_eq!(res.status, 200);
+        assert!(!to_namespaced(&skills.join("nul")).exists());
     }
 
     #[test]

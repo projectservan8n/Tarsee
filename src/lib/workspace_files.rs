@@ -18,7 +18,9 @@ use parking_lot::Mutex;
 use serde_json::{Map, Value};
 
 use crate::app::App;
+use crate::lib::safe_path::{is_inside, node_join};
 use crate::util::js::{trim, utf16_len};
+use crate::util::node_path::to_namespaced;
 
 use self::jstext::js_collapse_spaces;
 
@@ -61,11 +63,12 @@ pub fn is_plain_name(name: &str) -> bool {
 
 /// `path.join(WORKSPACE_DIR, filename)`: joined as Node joined, so an absolute name stays under the workspace. A
 /// name whose `..` leads out of the workspace gives `None` (the Node code followed it out; the callers only pass the
-/// workspace's own files).
+/// workspace's own files). The path comes in the literal form Node handed to the system (`to_namespaced`), so on
+/// Windows `SOUL.md.` is not `SOUL.md` and `nul` is a file, not a device.
 fn workspace_path(app: &App, filename: &str) -> Option<PathBuf> {
-    let workspace = crate::lib::safe_path::normalize_path(&app.config().workspace_dir);
-    let path = crate::lib::safe_path::join_path(&workspace, filename);
-    path.starts_with(&workspace).then_some(path)
+    let workspace = &app.config().workspace_dir;
+    let path = PathBuf::from(node_join(&[&workspace.to_string_lossy(), filename]));
+    is_inside(workspace, &path).then(|| to_namespaced(&path))
 }
 
 fn outside_workspace(filename: &str) -> std::io::Error {
@@ -1589,7 +1592,10 @@ mod tests {
         let absolute = target.to_string_lossy().to_string();
         let written = write_workspace_file(&t, &absolute, "inside");
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep me");
-        assert!(crate::lib::safe_path::join_path(&ws, &absolute).starts_with(&ws));
+        assert!(is_inside(
+            &ws,
+            Path::new(&node_join(&[&ws.to_string_lossy(), &absolute]))
+        ));
         if cfg!(unix) {
             written.unwrap();
             assert_eq!(read_workspace_file(&t, &absolute), "inside");
@@ -1606,6 +1612,30 @@ mod tests {
         // `..` that stays inside is fine.
         write_workspace_file(&t, "memory/../NOTES.md", "ok").unwrap();
         assert_eq!(std::fs::read_to_string(ws.join("NOTES.md")).unwrap(), "ok");
+    }
+
+    #[test]
+    fn a_workspace_file_name_means_what_it_says_dots_spaces_and_device_names_included() {
+        let t = test_app();
+        write_workspace_file(&t, "SOUL.md", "the soul").unwrap();
+        // On Windows `SOUL.md.` and `SOUL.md ` would write SOUL.md itself, and `nul` would go to a device.
+        for name in ["SOUL.md.", "SOUL.md ", "nul"] {
+            write_workspace_file(&t, name, &format!("written as {name:?}")).unwrap();
+            invalidate_cache(&t);
+            assert_eq!(
+                read_workspace_file(&t, name),
+                format!("written as {name:?}"),
+                "{name:?}"
+            );
+        }
+        // `...` is a name too, never the workspace folder itself.
+        let dots = write_workspace_file(&t, "...", "dots");
+        invalidate_cache(&t);
+        if dots.is_ok() {
+            assert_eq!(read_workspace_file(&t, "..."), "dots");
+        }
+        assert_eq!(read_workspace_file(&t, "SOUL.md"), "the soul");
+        assert!(t.config().workspace_dir.join("SOUL.md").is_file());
     }
 
     #[test]

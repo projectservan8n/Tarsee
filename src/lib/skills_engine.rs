@@ -18,6 +18,7 @@ use crate::lib::safe_path::{fs_error_message, fs_error_message_two};
 use crate::lib::workspace_files::is_plain_name;
 use crate::lib::workspace_files::jstext::{js_collapse_spaces, js_key_order, read_dir_sorted};
 use crate::util::js::{trim, utf16_len};
+use crate::util::node_path::to_namespaced;
 
 const CACHE_TTL: Duration = Duration::from_secs(30);
 
@@ -168,11 +169,13 @@ fn scan_directory(dir: &Path, source: &str) -> Vec<Skill> {
         }
         let folder = entry.file_name().to_string_lossy().into_owned();
         let skill_md = dir.join(&folder).join("SKILL.md");
-        if !skill_md.exists() {
+        if !to_namespaced(&skill_md).exists() {
             continue;
         }
         // Skip corrupted skill files.
-        let Ok(bytes) = fs::read(&skill_md) else { continue };
+        let Ok(bytes) = fs::read(to_namespaced(&skill_md)) else {
+            continue;
+        };
         let ParsedSkill { frontmatter, .. } = parse_frontmatter(&String::from_utf8_lossy(&bytes));
         let name = frontmatter_text(&frontmatter, "name");
         skills.push(Skill {
@@ -227,29 +230,34 @@ pub fn install_skill(app: &App, name: &str) -> Result<(), SkillError> {
     }
     let src_dir = get_built_in_skills_dir(app).join(name);
     let dest_dir = get_custom_skills_dir(app).join(name);
-    if !src_dir.exists() {
+    // Every call takes the literal path (on Windows `diagram.` is not `diagram`, nor `nul` a device); messages name
+    // the path as written.
+    if !to_namespaced(&src_dir).exists() {
         return Err(SkillError::NotFound(name.to_string()));
     }
-    fs::create_dir_all(&dest_dir).map_err(|e| SkillError::Io(fs_error_message(&e, "mkdir", &dest_dir)))?;
+    fs::create_dir_all(to_namespaced(&dest_dir))
+        .map_err(|e| SkillError::Io(fs_error_message(&e, "mkdir", &dest_dir)))?;
     copy_dir(&src_dir, &dest_dir)?;
     invalidate_cache(app);
     Ok(())
 }
 
 fn copy_dir(src: &Path, dest: &Path) -> Result<(), SkillError> {
-    let entries = read_dir_sorted(src).map_err(|e| SkillError::Io(fs_error_message(&e, "scandir", src)))?;
+    let entries =
+        read_dir_sorted(&to_namespaced(src)).map_err(|e| SkillError::Io(fs_error_message(&e, "scandir", src)))?;
     for entry in entries {
-        let src_path = entry.path();
+        let src_path = src.join(entry.file_name());
         let dest_path = dest.join(entry.file_name());
         let is_dir = entry
             .file_type()
             .map_err(|e| SkillError::Io(fs_error_message(&e, "lstat", &src_path)))?
             .is_dir();
         if is_dir {
-            fs::create_dir_all(&dest_path).map_err(|e| SkillError::Io(fs_error_message(&e, "mkdir", &dest_path)))?;
+            fs::create_dir_all(to_namespaced(&dest_path))
+                .map_err(|e| SkillError::Io(fs_error_message(&e, "mkdir", &dest_path)))?;
             copy_dir(&src_path, &dest_path)?;
         } else {
-            fs::copy(&src_path, &dest_path)
+            fs::copy(to_namespaced(&src_path), to_namespaced(&dest_path))
                 .map_err(|e| SkillError::Io(fs_error_message_two(&e, "copyfile", &src_path, &dest_path)))?;
         }
     }
@@ -273,14 +281,15 @@ pub fn uninstall_skill(app: &App, name: &str) -> Result<(), String> {
 /// `fs.rmSync(path, { recursive: true })` after `fs.existsSync(path)`: a folder with everything in it, or a file (a
 /// link is removed, not what it points to). Nothing there is fine. The error is Node's message.
 pub fn remove_entry(path: &Path) -> Result<(), String> {
-    if !path.exists() {
+    let literal = to_namespaced(path);
+    if !literal.exists() {
         return Ok(());
     }
-    let is_dir = fs::symlink_metadata(path).map(|m| m.is_dir()).unwrap_or(false);
+    let is_dir = fs::symlink_metadata(&literal).map(|m| m.is_dir()).unwrap_or(false);
     let removed = if is_dir {
-        fs::remove_dir_all(path)
+        fs::remove_dir_all(&literal)
     } else {
-        fs::remove_file(path)
+        fs::remove_file(&literal)
     };
     removed.map_err(|e| fs_error_message(&e, "rm", path))
 }
@@ -300,7 +309,7 @@ pub fn get_skills_list(app: &App) -> Vec<SkillSummary> {
 /// The whole SKILL.md of an installed skill, by name.
 pub fn get_skill_content(app: &App, name: &str) -> Option<SkillContent> {
     let skill = scan_skills(app).into_iter().find(|s| s.name == name)?;
-    let bytes = fs::read(&skill.path).ok()?;
+    let bytes = fs::read(to_namespaced(&skill.path)).ok()?;
     let ParsedSkill { frontmatter, body } = parse_frontmatter(&String::from_utf8_lossy(&bytes));
     Some(SkillContent {
         name: skill.name,

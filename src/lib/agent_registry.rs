@@ -122,7 +122,8 @@ pub fn ensure_agent_workspaces(app: &App) -> anyhow::Result<()> {
         if !is_plain_name(&id) {
             continue;
         }
-        let dir = base.join(&id);
+        // The literal path: on Windows an id `nul` or `coder.` names a folder of that name.
+        let dir = node_path::to_namespaced(&base.join(&id));
         let made = std::fs::create_dir_all(&dir).and_then(|()| {
             let name = js_string(agent.get("name"));
             let mem = dir.join("MEMORY.md");
@@ -457,6 +458,22 @@ mod tests {
         );
         assert!(remove_agent(&t, "researcher").unwrap());
         assert_eq!(ids(&get_agents(&t)), ["coder", "writer", "quick", "ops"]);
+    }
+
+    #[test]
+    fn an_agent_folder_name_means_what_it_says() {
+        let (t, _) = started(Some(json!([
+            {"id": "coder", "name": "Coder", "prompt": "First."},
+            {"id": "coder.", "name": "Dotted", "prompt": "Second."},
+            {"id": "nul", "name": "Device", "prompt": "Third."},
+        ])));
+        let base = get_agents_base_dir(t.env());
+        // On Windows `coder.` would have been `coder`, and `nul` a device.
+        let soul =
+            |id: &str| std::fs::read_to_string(node_path::to_namespaced(&base.join(id).join("SOUL.md"))).unwrap();
+        assert_eq!(soul("coder"), "# Coder\n\nFirst.\n");
+        assert_eq!(soul("coder."), "# Dotted\n\nSecond.\n");
+        assert_eq!(soul("nul"), "# Device\n\nThird.\n");
     }
 
     #[test]
