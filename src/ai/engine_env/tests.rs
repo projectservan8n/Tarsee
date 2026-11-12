@@ -35,25 +35,25 @@ fn slot(pattern: &str, message: &str) -> WrongSlot {
 
 fn claude_token() -> WrongSlot {
     slot(
-        "(?i)^sk-ant-oat",
+        "(?i-u)^sk-ant-oat",
         "This is a Claude sign-in token, not an API key. Create an API key in the Anthropic Console instead.",
     )
 }
 fn anthropic_key() -> WrongSlot {
     slot(
-        "(?i)^sk-ant-",
+        "(?i-u)^sk-ant-",
         "This is an Anthropic key. Paste it in the Anthropic API key card.",
     )
 }
 fn openrouter_key() -> WrongSlot {
     slot(
-        "(?i)^sk-or-",
+        "(?i-u)^sk-or-",
         "This is an OpenRouter key. Paste it in the OpenRouter card.",
     )
 }
 fn openai_key() -> WrongSlot {
     slot(
-        "(?i:^sk-(proj|svcacct|admin)-|^sk-[a-z0-9]{20}t3blbkfj[a-z0-9]{20}$)",
+        "(?i-u:^sk-(proj|svcacct|admin)-|^sk-[a-z0-9]{20}t3blbkfj[a-z0-9]{20}$)",
         "This is an OpenAI key. Paste it in the OpenAI API key card.",
     )
 }
@@ -93,8 +93,13 @@ fn claude_models() -> Vec<EntryModel> {
         ("haiku", 2e5),
         ("fable", 1e6),
         ("claude-fable-5-1", 1e6),
+        ("claude-fable-5", 1e6),
         ("claude-opus-5", 1e6),
+        ("claude-opus-4-8", 1e6),
+        ("claude-opus-4-7", 1e6),
+        ("claude-opus-4-6", 1e6),
         ("claude-sonnet-5", 1e6),
+        ("claude-sonnet-4-6", 1e6),
         ("claude-haiku-4-5", 2e5),
     ])
 }
@@ -1469,11 +1474,11 @@ fn home_for_names_each_home() {
         ..HomeOpts::default()
     };
     assert_eq!(
-        home_for("claude", CLAUDE_CODE, &with_home).unwrap(),
+        home_for("claude", CLAUDE_CODE, &Env::new(), &with_home).unwrap(),
         node_home.join(".claude")
     );
     assert_eq!(
-        home_for("claude-code", CLAUDE_CODE, &with_home).unwrap(),
+        home_for("claude-code", CLAUDE_CODE, &Env::new(), &with_home).unwrap(),
         node_home.join(".claude")
     );
     let with_state = HomeOpts {
@@ -1482,17 +1487,17 @@ fn home_for_names_each_home() {
     };
     for id in ["anthropic", "deepseek", "openrouter"] {
         assert_eq!(
-            home_for(id, CLAUDE_CODE, &with_state).unwrap(),
+            home_for(id, CLAUDE_CODE, &Env::new(), &with_state).unwrap(),
             state().join(format!(".claude-home-{id}"))
         );
     }
     assert_eq!(
-        home_for("chatgpt", CODEX, &with_state).unwrap(),
+        home_for("chatgpt", CODEX, &Env::new(), &with_state).unwrap(),
         state().join(".codex-home")
     );
     for id in ["openai", "openrouter", "deepseek", "local"] {
         assert_eq!(
-            home_for(id, CODEX, &with_state).unwrap(),
+            home_for(id, CODEX, &Env::new(), &with_state).unwrap(),
             state().join(".codex-home-keys")
         );
     }
@@ -1507,11 +1512,13 @@ fn a_key_home_needs_the_callers_state_folder_there_is_no_default_to_guess_wrong_
         ("openai", CODEX),
     ] {
         assert!(
-            home_for(id, engine, &HomeOpts::default()).unwrap_err().is_type_error(),
+            home_for(id, engine, &Env::new(), &HomeOpts::default())
+                .unwrap_err()
+                .is_type_error(),
             "{id}/{engine}"
         );
         assert!(
-            home_for(id, engine, &home_opts(Some("  "), None))
+            home_for(id, engine, &Env::new(), &home_opts(Some("  "), None))
                 .unwrap_err()
                 .is_type_error(),
             "{id}/{engine} blank"
@@ -1519,6 +1526,14 @@ fn a_key_home_needs_the_callers_state_folder_there_is_no_default_to_guess_wrong_
     }
     // TARSEE_STATE_DIR in the environment is not a default either.
     let with_state_var = env_of(&[("PATH", "/bin"), ("TARSEE_STATE_DIR", "/data/tarsee")]);
+    for (id, engine) in [("deepseek", CLAUDE_CODE), ("chatgpt", CODEX)] {
+        assert!(
+            home_for(id, engine, &with_state_var, &HomeOpts::default())
+                .unwrap_err()
+                .is_type_error(),
+            "{id}/{engine}: TARSEE_STATE_DIR is not a default"
+        );
+    }
     let err = claude_env_for(
         &p("deepseek"),
         &ClaudeEnvOpts {
@@ -1574,13 +1589,13 @@ fn home_for_refuses_a_provider_on_an_engine_it_doesnt_run_on() {
         ("deepseek", "other"),
     ] {
         assert_eq!(
-            code_of(home_for(id, engine, &opts)),
+            code_of(home_for(id, engine, &Env::new(), &opts)),
             Some(CredentialCode::WrongEngine),
             "{id}/{engine}"
         );
     }
     assert_eq!(
-        home_for("Nobody", CODEX, &opts).unwrap_err().to_string(),
+        home_for("Nobody", CODEX, &Env::new(), &opts).unwrap_err().to_string(),
         "Nobody doesn't run on codex."
     );
 }
@@ -1772,7 +1787,7 @@ fn the_isolation_check_uses_the_given_exists_and_read_file_and_a_file_it_cant_re
         },
     )
     .unwrap();
-    assert_eq!(refusal.file, node_join(&home, &[".config.json"]), "fail closed");
+    assert_eq!(refusal.file, node_join(&home, ".config.json"), "fail closed");
     let missing = |_: &Path| -> io::Result<String> { Err(io::Error::from(io::ErrorKind::NotFound)) };
     assert_eq!(
         home_isolation_refusal(
@@ -2319,7 +2334,7 @@ fn node_paths_normalize_join_and_resolve_as_node_does() {
     assert_eq!(normalize_path(Path::new("../a/..")), PathBuf::from(".."));
     assert_eq!(normalize_path(Path::new("")), PathBuf::from("."));
     assert_eq!(
-        node_join(Path::new("x"), &[".claude", "settings.json"]),
+        node_join(Path::new("x"), Path::new(".claude").join("settings.json")),
         Path::new("x").join(".claude").join("settings.json")
     );
     let resolved = resolve_path(Path::new("rel/home"));
@@ -2329,4 +2344,290 @@ fn node_paths_normalize_join_and_resolve_as_node_does() {
         resolve_path(Path::new("x/.claude-home-a/.")).file_name().unwrap(),
         ".claude-home-a"
     );
+}
+
+// --- Fix round 1 -------------------------------------------------------------------------------------------------
+
+/// The isolation check on a `.claude.json` with this text in a key home (no sign-in file, no `.config.json`).
+fn login_key_check(text: &str) -> Option<CredentialCode> {
+    let missing = |_: &Path| -> io::Result<String> { Err(io::Error::from(io::ErrorKind::NotFound)) };
+    let read = |file: &Path| -> io::Result<String> {
+        if file.ends_with(".claude.json") {
+            Ok(text.to_string())
+        } else {
+            missing(file)
+        }
+    };
+    let nothing = |_: &Path| false;
+    home_isolation_refusal(
+        Path::new("/v/.claude-home-deepseek"),
+        &IsolationOpts {
+            exists: Some(&nothing),
+            read_file: Some(&read),
+            ..IsolationOpts::default()
+        },
+    )
+    .map(|r| r.code)
+}
+
+#[test]
+fn the_login_key_check_reads_the_file_as_json_parse_does_where_serde_would_refuse_it() {
+    let refused = Some(CredentialCode::CredentialIsolation);
+    // Node's answers for each text (engine-env.js homeIsolationRefusal, run on the same texts).
+    let key = format!("sk-ant-{}", "k");
+    let cases: Vec<(String, Option<CredentialCode>)> = vec![
+        // A key name spelled with an escape, beside what serde can't read: a lone surrogate, a number beyond f64,
+        // nesting past 128.
+        (format!(r#"{{"x":"\ud800","primaryApiKey":"{key}"}}"#), refused),
+        (r#"{"x":1e400,"primaryApiKey":"k"}"#.to_string(), refused),
+        (
+            format!(
+                r#"{{"a":{}1{},"primaryApiKey":"k"}}"#,
+                "[".repeat(5000),
+                "]".repeat(5000)
+            ),
+            refused,
+        ),
+        // A blank key beside a huge number lets the turn run, as in Node.
+        (r#"{"x":1e400,"primaryApiKey":" "}"#.to_string(), None),
+        // The last of two keys counts; only a string counts; a top-level array holds no key.
+        (r#"{"primaryApiKey":"k","primaryApiKey":" "}"#.to_string(), None),
+        (r#"{"primaryApiKey":" ","primaryApiKey":"k"}"#.to_string(), refused),
+        (r#"{"primaryApiKey":5}"#.to_string(), None),
+        (r#"[{"primaryApiKey":"k"}]"#.to_string(), None),
+        // A torn file is searched as text.
+        (format!(r#"{{"primaryApiKey": "{key}", "#), refused),
+    ];
+    for (text, want) in cases {
+        assert_eq!(login_key_check(&text), want, "{text:.80}");
+    }
+}
+
+#[test]
+fn a_torn_file_cant_hide_a_key_behind_an_escaped_name_failing_closed_where_node_let_it_through() {
+    // Node let this turn run (its text search needs the literal name); the Rust refuses it.
+    let torn = format!(r#"{{"primaryApiKey": "sk-ant-{}", "#, "x");
+    assert_eq!(login_key_check(&torn), Some(CredentialCode::CredentialIsolation));
+    assert_eq!(login_key_check(r#"{"other": "x", "#), None);
+}
+
+fn settings_guard_on(text: &str) -> GuardResult {
+    let read = |_: &Path| -> io::Result<String> { Ok(text.to_string()) };
+    settings_file_guard(&[PathBuf::from("/v/settings.json")], Some(&read))
+}
+
+#[test]
+fn the_settings_guard_reads_numbers_beyond_f64_surrogates_and_any_depth_as_json_parse_does() {
+    let file = PathBuf::from("/v/settings.json");
+    assert!(settings_guard_on(r#"{"a":1e309}"#).ok);
+    assert!(settings_guard_on(r#"{"a":-1e400}"#).ok);
+    assert_eq!(
+        settings_guard_on(r#"{"env":{"ANTHROPIC_X":1e999}}"#).files,
+        [GuardFile::entries(&file, &["env.ANTHROPIC_X"])]
+    );
+    assert_eq!(
+        settings_guard_on(r#"{"env":{"ANTHROPIC_\ud800":"x","OK":"\ud800"}}"#).files,
+        [GuardFile::entries(&file, &["env.ANTHROPIC_\u{FFFD}"])],
+        "(Node names it with its lone surrogate, which Rust text writes as U+FFFD)"
+    );
+    let deep = format!(
+        r#"{{"env":{{"CLAUDE_CONFIG_DIR":{}{}}},"apiKeyHelper":null}}"#,
+        "[".repeat(5000),
+        "]".repeat(5000)
+    );
+    assert_eq!(
+        settings_guard_on(&deep).files,
+        [GuardFile::entries(&file, &["env.CLAUDE_CONFIG_DIR", "apiKeyHelper"])]
+    );
+    // The last "env" counts; its names are listed once, where they first appear.
+    assert!(settings_guard_on(r#"{"env":{"ANTHROPIC_X":1},"env":{}}"#).ok);
+    assert_eq!(
+        settings_guard_on(r#"{"env":{},"env":{"CODEX_HOME":1,"anthropic_y":2,"CODEX_HOME":3}}"#).files,
+        [GuardFile::entries(&file, &["env.CODEX_HOME", "env.anthropic_y"])]
+    );
+    assert!(settings_guard_on(r#"{"env":["ANTHROPIC_X"]}"#).ok);
+}
+
+fn codex_guard_on(text: &str) -> GuardResult {
+    let read = |_: &Path| -> io::Result<String> { Ok(text.to_string()) };
+    codex_config_guard(&[PathBuf::from("/v/config.toml")], Some(&read))
+}
+
+#[test]
+fn a_last_line_ending_in_a_lone_cr_keeps_it_as_the_js_split_kept_it() {
+    let unreadable = [GuardFile::unreadable("/v/config.toml")];
+    for text in [
+        "[tui]\r",
+        "# c\r",
+        "model = 1\n# c\r",
+        "model = 1\r\r\n[tui]\r",
+        "[mcp_servers]\r",
+    ] {
+        assert_eq!(codex_guard_on(text).files, unreadable, "{text:?}");
+    }
+    assert!(codex_guard_on("model = 1\r").ok);
+    assert!(
+        codex_guard_on("model = 1\r\n[tui]\r\n").ok,
+        "a CR before a line feed goes with it"
+    );
+    assert_eq!(strip_codex_config("model=1\r").unwrap().text, "model=1\r");
+}
+
+#[test]
+fn the_plans_home_comes_from_the_environment_given_never_the_process() {
+    let home = normalize_path(Path::new("/srv/some-user"));
+    let home_text = home.to_string_lossy().to_string();
+    let env = env_of(&[("HOME", &home_text), ("USERPROFILE", &home_text)]);
+    assert_eq!(
+        home_for("claude", CLAUDE_CODE, &env, &HomeOpts::default()).unwrap(),
+        home.join(".claude")
+    );
+    let explicit = normalize_path(Path::new("/home/node"));
+    assert_eq!(
+        home_for(
+            "claude",
+            CLAUDE_CODE,
+            &env,
+            &HomeOpts {
+                home_dir: Some(explicit.clone()),
+                ..HomeOpts::default()
+            }
+        )
+        .unwrap(),
+        explicit.join(".claude"),
+        "an explicit home_dir wins"
+    );
+}
+
+#[test]
+fn numbers_from_1e21_up_are_written_with_an_exponent_as_javascript_writes_them() {
+    let env = claude_env_for(
+        &p("openrouter"),
+        &ClaudeEnvOpts {
+            env: Env::new(),
+            cost_saver: Some(EnvMap::new()),
+            state_dir: Some(state()),
+            key: key("openrouter"),
+            context_tokens: Some(1e22),
+            ..ClaudeEnvOpts::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "1e+22");
+}
+
+#[test]
+fn a_wrong_slot_pattern_folds_ascii_only_as_javascripts_i_without_u_does() {
+    // Node accepts both keys: `/^sk-ant-/i` doesn't take "ſ" for "s", and the OpenAI pattern doesn't take the Kelvin
+    // sign for "k". Rust's `(?i)` would fold both; A1 translates `/.../i` as `(?i-u)`.
+    let long_s = "\u{17F}k-ant-api03-x";
+    assert_eq!(
+        checked_provider_key(&p("openai"), Some(long_s)).unwrap().as_deref(),
+        Some(long_s)
+    );
+    let kelvin = format!("sk-{}t3blbkfj{}", "\u{212A}".repeat(20), "a".repeat(20));
+    assert_eq!(
+        checked_provider_key(&p("deepseek"), Some(&kelvin)).unwrap(),
+        Some(kelvin.clone())
+    );
+    assert!(
+        Regex::new("(?i)^sk-ant-").unwrap().is_match(long_s),
+        "what `(?i)` would have done"
+    );
+    // ASCII case still folds.
+    assert_eq!(
+        code_of(checked_provider_key(
+            &p("openai"),
+            Some(&format!("SK-ANT-{}", "api03-x"))
+        )),
+        Some(CredentialCode::BadKey)
+    );
+}
+
+// --- R8: the vault never puts Codex settings or Tarsee's own secrets in the agent's environment ---------------------
+
+#[test]
+fn r8_keeps_codex_openai_base_url_encryption_key_and_setup_password_out_the_rest_still_reach_scripts() {
+    use crate::ai::agent_env::{AGENT_ENV_KEEP_OUT, AgentVaultEnvOptions, agent_vault_env};
+    let t = crate::testkit::test_app();
+    let vault: BTreeMap<&str, String> = BTreeMap::from([
+        ("CODEX_API_KEY", format!("sk-{}", "test-canary-1")),
+        ("CODEX_HOME", "/evil".to_string()),
+        ("OPENAI_BASE_URL", "http://canary.invalid".to_string()),
+        ("ENCRYPTION_KEY", format!("sk-{}", "test-canary-2")),
+        ("SETUP_PASSWORD", format!("sk-{}", "test-canary-3")),
+        ("SCRIPT_KEY", "ok".to_string()),
+        ("OPENAI_API_KEY", format!("sk-{}", "test-script")),
+    ]);
+    let get = |name: &str| -> anyhow::Result<Option<String>> { Ok(vault.get(name).cloned()) };
+    let list = || -> anyhow::Result<Vec<String>> { Ok(vault.keys().map(|k| k.to_string()).collect()) };
+    let empty = BTreeMap::new();
+    let env = agent_vault_env(
+        &t.app,
+        AgentVaultEnvOptions {
+            get: Some(&get),
+            list: Some(&list),
+            env: Some(&empty),
+            ..AgentVaultEnvOptions::default()
+        },
+    );
+    assert_eq!(
+        *env,
+        map(&[
+            ("SCRIPT_KEY", "ok"),
+            ("OPENAI_API_KEY", &format!("sk-{}", "test-script"))
+        ])
+    );
+    assert!(AGENT_ENV_KEEP_OUT.is_match("CODEX_ANYTHING"));
+}
+
+#[test]
+fn base_env_is_what_the_vault_compares_against_through_the_agent_vault_env() {
+    // The half of "baseEnv is what the vault compares against" that needed package B1.
+    use crate::ai::agent_env::{AgentVaultEnvOptions, agent_vault_env};
+    let t = crate::testkit::test_app();
+    let server = env_of(&[
+        ("PATH", "/bin"),
+        ("OPENAI_API_KEY", &format!("sk-{}", "test-canary-railway")),
+        ("ENCRYPTION_KEY", &format!("sk-{}", "test-canary-enc")),
+    ]);
+    let vault: BTreeMap<&str, String> =
+        BTreeMap::from([("OPENAI_API_KEY", format!("sk-{}", "test-vault-for-scripts"))]);
+    let get = |name: &str| -> anyhow::Result<Option<String>> { Ok(vault.get(name).cloned()) };
+    let list = || -> anyhow::Result<Vec<String>> { Ok(vault.keys().map(|k| k.to_string()).collect()) };
+    let base = base_env(&server, &[]);
+    let vault_env = agent_vault_env(
+        &t.app,
+        AgentVaultEnvOptions {
+            get: Some(&get),
+            list: Some(&list),
+            env: Some(&base),
+            ..AgentVaultEnvOptions::default()
+        },
+    );
+    let env = codex_env_for(
+        &p("chatgpt"),
+        &CodexEnvOpts {
+            env: server.clone(),
+            vault_env: (*vault_env).clone(),
+            state_dir: Some(state()),
+            mcp_token: Some(MCP.into()),
+            ..CodexEnvOpts::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(env["OPENAI_API_KEY"], format!("sk-{}", "test-vault-for-scripts"));
+    assert_eq!(canary_values(&env), Vec::<String>::new());
+    // Compared against the server's own environment instead, the vault's copy would be skipped as already set.
+    let snapshot = server.snapshot();
+    let against_server = agent_vault_env(
+        &t.app,
+        AgentVaultEnvOptions {
+            get: Some(&get),
+            list: Some(&list),
+            env: Some(&snapshot),
+            ..AgentVaultEnvOptions::default()
+        },
+    );
+    assert!(against_server.is_empty());
 }

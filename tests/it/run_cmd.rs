@@ -32,7 +32,8 @@ async fn a_command_runs_to_the_end_with_its_code_and_both_streams() {
             ..RunCmdOpts::default()
         },
     )
-    .await;
+    .await
+    .unwrap();
     assert_eq!(r.code, 3);
     assert!(r.output.contains("on stderr\n"), "{}", r.output);
     let line = r.output.lines().find(|l| l.starts_with('{')).unwrap();
@@ -47,17 +48,21 @@ async fn a_command_runs_to_the_end_with_its_code_and_both_streams() {
 
 #[tokio::test]
 async fn output_past_the_cap_is_cut_once_with_a_note() {
-    let big = "y".repeat(200_000);
+    // 200,000 bytes, made by the stand-in itself: no single environment value is large.
     let r = run_cmd(
         &program(),
         &["big"],
         &RunCmdOpts {
-            env: echo_env(&[("TARSEE_TESTBIN_STDERR", &big)]),
+            env: echo_env(&[
+                ("TARSEE_TESTBIN_STDERR", "yyyyyyyyyy"),
+                ("TARSEE_TESTBIN_STDERR_REPEAT", "20000"),
+            ]),
             max_output_bytes: Some(2048),
             ..RunCmdOpts::default()
         },
     )
-    .await;
+    .await
+    .unwrap();
     assert_eq!(r.code, 0);
     assert_eq!(r.output.matches("\n... (output truncated at 2KB)\n").count(), 1);
     assert!(r.output.len() < 2048 + 64, "{}", r.output.len());
@@ -74,7 +79,8 @@ async fn a_command_past_its_timeout_is_code_124_with_a_note() {
             ..RunCmdOpts::default()
         },
     )
-    .await;
+    .await
+    .unwrap();
     assert_eq!(r.code, 124);
     assert!(r.output.ends_with("\n[timeout after 1s]\n"), "{}", r.output);
     assert!(

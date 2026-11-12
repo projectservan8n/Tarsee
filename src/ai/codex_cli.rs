@@ -34,11 +34,10 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 
-use super::context_limits::is_js_space;
 use super::engine_env::{EnvMap, TypeError, base_env, js_trim_path, resolve_path};
 use crate::env::Env;
-use crate::lib::run_cmd::node_error_code;
-use crate::util::js::number_to_string;
+use crate::lib::run_cmd::spawn_error_code;
+use crate::util::js::{is_whitespace, number_to_string};
 
 pub const CODEX_BASE_ARGS: [&str; 6] = [
     "-c",
@@ -125,19 +124,7 @@ fn node_arch() -> &'static str {
     }
 }
 
-/// An environment variable by name, as Windows looks it up (any case) or as the rest do (exactly).
-fn env_lookup(env: &Env, name: &str) -> Option<String> {
-    if cfg!(windows) {
-        env.snapshot()
-            .into_iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v)
-    } else {
-        env.get(name)
-    }
-}
-
-/// The same lookup in a child's environment.
+/// A variable of a child's environment (a plain map, so not `Env`'s lookup): any case on Windows, exactly elsewhere.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn env_map_lookup<'a>(env: &'a EnvMap, name: &str) -> Option<&'a str> {
     if cfg!(windows) {
@@ -204,8 +191,8 @@ impl which::sys::Sys for EnvPathSys {
 /// `codex` on the environment's PATH (with its PATHEXT on Windows), or `None`.
 fn codex_on_path(env: &Env) -> Option<PathBuf> {
     let sys = EnvPathSys {
-        path: env_lookup(env, "PATH").map(OsString::from),
-        path_ext: env_lookup(env, "PATHEXT").map(OsString::from),
+        path: env.get("PATH").map(OsString::from),
+        path_ext: env.get("PATHEXT").map(OsString::from),
     };
     which::WhichConfig::new_with_sys(sys)
         .system_cwd(false)
@@ -296,7 +283,7 @@ static TRAILING_BACKSLASHES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\\
 /// An argument quoted the way a Windows program reads its command line. (Used on Windows only; tested everywhere.)
 #[cfg_attr(not(windows), allow(dead_code))]
 fn win_arg(arg: &str) -> String {
-    if !arg.is_empty() && !arg.chars().any(|c| is_js_space(c) || c == '"') {
+    if !arg.is_empty() && !arg.chars().any(|c| is_whitespace(c) || c == '"') {
         return arg.to_string();
     }
     let quoted = QUOTE_AFTER_BACKSLASHES.replace_all(arg, r#"$1$1\""#);
@@ -510,11 +497,14 @@ pub struct CodexRun {
     pub timed_out: bool,
 }
 
-fn spawn_failure(err: &io::Error) -> CodexCliError {
-    if matches!(err.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied) {
+/// `spawnFailure`: ENOENT or EACCES (no codex there, or not one that can run) is codex-missing; any other failure,
+/// with Node's code for it (EPERM for a program Windows won't start), is spawn-failed.
+fn spawn_failure(bin: &Path, err: &io::Error) -> CodexCliError {
+    let code = spawn_error_code(bin, err);
+    if matches!(code, Some("ENOENT" | "EACCES")) {
         return CodexCliError::missing();
     }
-    let why = node_error_code(err).map_or_else(|| err.to_string(), str::to_string);
+    let why = code.map_or_else(|| err.to_string(), str::to_string);
     CodexCliError::new(CodexCliCode::SpawnFailed, format!("Codex couldn't start ({why})."))
 }
 
@@ -529,7 +519,7 @@ pub async fn run_codex<S: AsRef<str>>(bin: &Path, args: &[S], opts: &RunCodexOpt
             cwd: opts.cwd.clone(),
         },
     )
-    .map_err(|err| spawn_failure(&err))?;
+    .map_err(|err| spawn_failure(bin, &err))?;
     let stdout = collect_text(child.stdout.take(), opts.max_bytes);
     let stderr = collect_text(child.stderr.take(), opts.max_bytes);
     drop(child.stdin.take());
@@ -546,7 +536,7 @@ pub async fn run_codex<S: AsRef<str>>(bin: &Path, args: &[S], opts: &RunCodexOpt
             }
         }
     };
-    let status = status.map_err(|err| spawn_failure(&err))?;
+    let status = status.map_err(|err| spawn_failure(bin, &err))?;
     // The JS waited for "close": the program gone and both of its streams ended.
     let streams = async { (stdout.finish().await, stderr.finish().await) };
     tokio::pin!(streams);
@@ -732,6 +722,33 @@ mod tests {
             "\"cli_auth_credentials_store=\\\"file\\\"\""
         );
         assert_eq!(win_arg("tab\there"), "\"tab\there\"");
+    }
+
+    #[test]
+    fn a_start_that_fails_is_codex_missing_only_for_enoent_and_eacces_as_in_node() {
+        let file = Path::new("codex.exe");
+        let missing = io::Error::from(io::ErrorKind::NotFound);
+        assert_eq!(spawn_failure(file, &missing).code, CodexCliCode::CodexMissing);
+        // A program Windows won't start is EPERM there (Node: spawn throws EPERM, "Codex couldn't start (EPERM).").
+        let denied = io::Error::from(io::ErrorKind::PermissionDenied);
+        let err = spawn_failure(file, &denied);
+        assert_eq!(err.code, CodexCliCode::SpawnFailed);
+        assert_eq!(err.message, "Codex couldn't start (EPERM).");
+        // A folder on Windows is not found (libuv looks for a file).
+        let tmp = tmp_dir();
+        let expected = if cfg!(windows) {
+            CodexCliCode::CodexMissing
+        } else {
+            CodexCliCode::SpawnFailed
+        };
+        assert_eq!(spawn_failure(tmp.path(), &denied).code, expected);
+        #[cfg(unix)]
+        {
+            let eacces = io::Error::from_raw_os_error(libc::EACCES);
+            assert_eq!(spawn_failure(file, &eacces).code, CodexCliCode::CodexMissing);
+            let too_big = io::Error::from_raw_os_error(libc::E2BIG);
+            assert_eq!(spawn_failure(file, &too_big).message, "Codex couldn't start (E2BIG).");
+        }
     }
 
     #[test]

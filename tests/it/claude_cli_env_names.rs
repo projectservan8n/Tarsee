@@ -6,8 +6,8 @@
 //! belongs on.
 //!
 //! The Node version scanned the CLI the Agent SDK installed in node_modules. The Rust build starts the `claude` on
-//! the machine (design decision 2), so the scan runs on the binary named by TARSEE_TEST_CLAUDE_CLI; with none named it
-//! has nothing to scan, as the JS skipped when the SDK's binary wasn't installed.
+//! the machine (design decision 2), so the scan is an `#[ignore]`d test run on purpose, with the binary's path given
+//! in TARSEE_TEST_CLAUDE_CLI when the tests are built. Run it after every CLI update.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -232,12 +232,21 @@ fn claude_names(file: &Path, chunk: usize, overlap: usize) -> BTreeSet<String> {
     names
 }
 
+/// Runs only when asked for, with the CLI's path given when the tests are built (read at compile time, as
+/// `support::testbin()` is, never from the environment of the running test):
+///
+/// ```text
+/// TARSEE_TEST_CLAUDE_CLI=/path/to/claude cargo test --test it -- --ignored every_credential_shaped
+/// ```
 #[test]
+#[ignore = "needs a Claude Code CLI binary: build the tests with TARSEE_TEST_CLAUDE_CLI=<path> and run with --ignored"]
 fn every_credential_shaped_claude_name_the_cli_knows_is_stripped_or_reviewed_as_not_a_provider_credential() {
-    let Some(cli) = std::env::var_os("TARSEE_TEST_CLAUDE_CLI") else {
-        return; // no CLI binary named for this run
+    let Some(path) = option_env!("TARSEE_TEST_CLAUDE_CLI") else {
+        panic!(
+            "TARSEE_TEST_CLAUDE_CLI was not set when the tests were built: set it to the claude program and build again"
+        );
     };
-    let cli = Path::new(&cli);
+    let cli = Path::new(path);
     let reviewed = reviewed_not_stripped();
     let names: Vec<String> = claude_names(cli, 16 * 1024 * 1024, 512)
         .into_iter()
