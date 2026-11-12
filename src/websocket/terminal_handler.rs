@@ -279,8 +279,42 @@ impl Shell {
     }
 }
 
+/// When a process was created, as the system's own 64-bit time stamp; `None` when it cannot be asked (the process
+/// is gone, or it is one this program may not look at).
+#[cfg(windows)]
+fn process_created_at(pid: u32) -> Option<u64> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: a handle opened, used and closed here; the four out-parameters are plain structs on this stack.
+    let ok = unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let ok = GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) != 0;
+        CloseHandle(handle);
+        ok
+    };
+    ok.then(|| (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+}
+
+/// Whether `child`, which the system lists with `parent`'s id as its parent, really is its child: it must have been
+/// created after it. Windows reuses the id of a process that has ended, and a process keeps the id of a parent
+/// long gone; without this check, a shell that happens to get such an id would "own" a stranger (the desktop's own
+/// processes are among those whose parent has ended). A process whose creation time cannot be read is never taken.
+#[cfg(windows)]
+fn is_really_child(child_created: Option<u64>, parent_created: Option<u64>) -> bool {
+    matches!((child_created, parent_created), (Some(child), Some(parent)) if child >= parent)
+}
+
 /// Terminates every process under `root` (children first) and then `root`, from a snapshot of the system's
-/// processes and their parents.
+/// processes and their parents. Only real descendants are taken: see [`is_really_child`].
 #[cfg(windows)]
 fn kill_process_tree(root: u32) {
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
@@ -307,18 +341,21 @@ fn kill_process_tree(root: u32) {
             CloseHandle(snapshot);
         }
     }
-    let mut tree = vec![root];
+    let mut tree = vec![(root, process_created_at(root))];
     let mut i = 0;
     while i < tree.len() {
-        let parent = tree[i];
+        let (parent, parent_created) = tree[i];
         for &(pid, ppid) in &parents {
-            if ppid == parent && pid != 0 && !tree.contains(&pid) {
-                tree.push(pid);
+            if ppid == parent && pid != 0 && !tree.iter().any(|(known, _)| *known == pid) {
+                let created = process_created_at(pid);
+                if is_really_child(created, parent_created) {
+                    tree.push((pid, created));
+                }
             }
         }
         i += 1;
     }
-    for pid in tree.into_iter().rev() {
+    for (pid, _) in tree.into_iter().rev() {
         // SAFETY: a handle opened, used and closed here; a process already gone makes OpenProcess fail.
         unsafe {
             let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
@@ -806,6 +843,23 @@ fn pty_size(cols: &Value, rows: &Value) -> Result<(u16, u16), String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn a_process_is_a_child_only_if_it_was_created_after_its_parent() {
+        use super::{is_really_child, process_created_at};
+        // A stranger that only carries a reused parent id is older than the "parent".
+        assert!(!is_really_child(Some(100), Some(200)));
+        assert!(is_really_child(Some(200), Some(100)));
+        assert!(is_really_child(Some(100), Some(100)));
+        // What cannot be checked is never taken.
+        assert!(!is_really_child(None, Some(100)));
+        assert!(!is_really_child(Some(100), None));
+        assert!(!is_really_child(None, None));
+        // This process has a creation time; a process id that is not in use has none.
+        assert!(process_created_at(std::process::id()).is_some());
+        assert!(process_created_at(u32::MAX - 3).is_none());
+    }
+
     use super::*;
     use crate::testkit::{test_app, test_app_with_env};
 
