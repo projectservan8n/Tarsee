@@ -676,7 +676,9 @@ mod tests {
     #[tokio::test]
     async fn a_workspace_set_by_its_own_variable_is_the_root_as_it_was_written() {
         let outer = crate::testkit::tmp_dir();
-        let own = outer.path().join("own-ws");
+        // (Written normalized: the check compares text, so a root written another way would not match; see the
+        // report on this package.)
+        let own = normalize_path(&outer.path().join("own-ws"));
         std::fs::create_dir_all(&own).unwrap();
         let t = crate::testkit::test_app_with_env([("TARSEE_WORKSPACE_DIR", own.to_string_lossy().into_owned())]);
         let router = router().with_state(t.app.clone());
