@@ -12,15 +12,15 @@ agent checked it against the Node code and its findings are fixed or parked belo
 |---|---|---|---|---|---|
 | F0 | merged | - | 9956468..fe6015b | 96 | Foundation, by the lead |
 | I0 | reviewed | - | 7957ca6, fixes 38a6adb | 1562 | Interfaces and fakes; `INTERFACES.md`. Review: 1 important, 4 minor, all addressed |
-| A1 | merged, fixed | - | 92f9739, fixes d5772a9 | 2016 | 161 of 181 cases. Review: 1 important, 5 minor, all fixed; second review running |
+| A1 | reviewed | - | 92f9739, fixes d5772a9 | 2016 | 161 of 181 cases. Review: 1 important, 5 minor; all confirmed fixed by a second reviewer |
 | A3 | running | s2 | | | |
 | A5 | merged | - | 2d96d1c | 2016 | 66 of 66 cases. Review running |
 | A2 | reviewed | - | 74e0e4f, fixes 82edd82 | 1723 | 107 of 109 cases (2 wait for G2, G3). Review: 3 important, 8 minor; all 11 confirmed fixed by a second reviewer; passes on Linux |
 | B1 | merged, fixed | - | 1649cf7, fixes 9aa27aa | 1757 | 36 of 36 cases. Review: nothing critical or important in the package; 2 minor, fixed; two Node bugs fixed. Second review running |
-| B2 | merged, fixed | - | 7094777, fixes a1ce610 | 2016 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases. Review: 2 critical, 1 important, 6 minor, all fixed with five Node bugs; second review running |
+| B2 | reviewed | - | 7094777, fixes a1ce610 | 2016 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases. Review: 2 critical, 1 important, 6 minor, all fixed with five Node bugs; confirmed by a second reviewer, who attacked the files route with 87 hostile paths |
 | C1 | merged, fixes running | - | 9dd5372 | 213 | 32 of 32 cases. Review: 1 critical, 4 important, 22 minor |
 | D1 | merged, fixes running | - | 48bb9ff | 1180 | 59 of 68 cases; 4 wait for S3, 5 are browser tests. Review: 1 important, 11 minor; no double lock holder, lost event or deadlock found under stress |
-| V2 | merged, fixes running | - | 7205d05 | 1723 | 69 of 71 cases. Review: 5 important, 13 minor |
+| V2 | merged, fixed | - | 7205d05, fixes merged | 2031 | 71 of 71 cases. Review: 5 important, 13 minor; 15 fixed, 3 belong to the server-wide wiring (Z1) |
 | S4 | running | s3 | | | |
 | T1 | merged, fixes running | - | 40e4ee7 | 1886 | 102 of 107 cases (5 wait for S3, S4). Review: 2 critical, 1 important, 4 minor; the dangerous one patched at once (5e6fc99) |
 | W1a | merged | - | fcfc2ba | 1328 | 116 of 141 cases of the browser files run in a real browser (`cargo test --test ui`); 25 wait for A1, A4, R2 |
@@ -173,4 +173,15 @@ version starts and talks to the `claude` and `codex` programs (`docs/rust-port/e
 
 ## Deferred minor findings
 
-None recorded.
+For the final cleanup; none blocks a package.
+
+- B2 `lib/url_safety`: only the `::ffff:a.b.c.d` spelling of IPv4 inside IPv6 is judged by its IPv4 form; the
+  compatible, NAT64 and 6to4 spellings still pass (Node let every IPv6 literal through, so this is not worse).
+- B2 `routes/files` rename on Windows: a folder renamed onto an existing file replaces the file and answers 200;
+  Node's rename refused. It stays inside the workspace.
+- V1/V2/A2 tests that start real programs with time limits: make each wait on the event itself.
+- The JavaScript-behaviour helpers still private to packages (`js_to_fixed`, `js_to_precision`, `js_json_stringify`,
+  `js_string`, `js_stringify`, `Clock`, `node_header`) move to `util::js`.
+- The conversion from a registry provider to the engine environment's entry lives in `codex_options.rs`; it belongs
+  beside the registry.
+- Clippy on the newest compiler reports a few warnings the pinned one does not.

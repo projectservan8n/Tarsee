@@ -562,6 +562,8 @@ cases must be ported with them, and the packages that must be merged first.
   - `test/provider-base-url.test.js` (116)
   - `test/readiness.test.js` (301)
   - `test/scheduled-tasks.test.js` (952) (also reads the browser files)
+  - `test/brand-icon.test.js`: the four cases of the settings routes for the icon, listed under "For package R4" in
+    `docs/rust-port/reports/B2.md`
   - `test/settings-key-leftovers.test.js` (147)
   - `test/settings-redact-toggle.test.js` (86)
   - `test/skills-dir.test.js` (46)
