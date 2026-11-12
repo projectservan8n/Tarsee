@@ -212,6 +212,17 @@ pub fn os_tmpdir(env: &Env) -> PathBuf {
     }
 }
 
+/// Whether `name` is one plain file name, safe to put after a folder: not empty, not `.` or `..`, no `/`, `\` or
+/// `:` (a Windows drive), not absolute. Node's `path.join` kept even an absolute name under its folder; Rust's
+/// `join` would start over from it ("Joining paths" in the design).
+pub fn is_plain_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\', ':', '\0'])
+        && !std::path::Path::new(name).is_absolute()
+}
+
 /// Where a program the engines start is: a path is taken as it is when it exists; a bare name is looked up on the
 /// app's `PATH` (with `PATHEXT` on Windows), as the Node code's `spawn("piper")` found it.
 pub fn find_program(env: &Env, name: &str) -> Option<PathBuf> {
@@ -334,6 +345,27 @@ pub async fn exec_file(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn only_a_plain_file_name_is_plain() {
+        for good in ["ggml-base.en.bin", "amy", "a.b", "..x", "x.."] {
+            assert!(is_plain_name(good), "{good}");
+        }
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../x",
+            "a/b",
+            "a\\b",
+            "C:x",
+            "/etc/passwd",
+            "C:\\x\\y",
+            "\\\\server\\share",
+        ] {
+            assert!(!is_plain_name(bad), "{bad}");
+        }
+    }
 
     #[tokio::test]
     async fn a_missing_program_is_enoent_in_node_s_words() {

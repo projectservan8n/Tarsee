@@ -1337,7 +1337,9 @@ mod tests {
         ] {
             assert_eq!(js_number_text(text), want, "{text:?}");
         }
-        for text in ["inf", "nan", "infinity", "1_000", "12px", "0x", "-0x10", "\u{85}1", "1 2"] {
+        for text in [
+            "inf", "nan", "infinity", "1_000", "12px", "0x", "-0x10", "\u{85}1", "1 2",
+        ] {
             assert!(js_number_text(text).is_nan(), "{text:?}");
         }
         assert_eq!(js_number(None), 0.0, "Number(null)");

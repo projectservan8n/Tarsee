@@ -16,7 +16,8 @@ use serde_json::Value;
 
 use super::speech_text::clean_speech_text;
 use super::tts_interface::{
-    ClonedVoice, SynthOptions, Synthesized, TtsEngine, TtsError, VoiceInfo, exec_file, find_program, os_tmpdir,
+    ClonedVoice, SynthOptions, Synthesized, TtsEngine, TtsError, VoiceInfo, exec_file, find_program, is_plain_name,
+    os_tmpdir,
 };
 use crate::env::Env;
 
@@ -296,6 +297,11 @@ pub fn save_piper_voice(env: &Env, onnx: &[u8], json: &[u8], name: &str) -> std:
 
 /// Deletes a Piper voice model.
 pub fn delete_piper_voice(env: &Env, voice_id: &str) {
+    // The id comes from the request's URL. Node joined it unchecked, so "../x" deleted x.onnx beside the voices
+    // folder; only a plain name is taken here, anything else deletes nothing.
+    if !is_plain_name(voice_id) {
+        return;
+    }
     let dir = voices_dir(env);
     let _ = std::fs::remove_file(dir.join(format!("{voice_id}.onnx")));
     let _ = std::fs::remove_file(dir.join(format!("{voice_id}.onnx.json")));
@@ -414,6 +420,23 @@ mod tests {
         delete_piper_voice(&env, "rosa");
         delete_piper_voice(&env, "never-there");
         assert_eq!(list_piper_voices(&env).len(), 2);
+    }
+
+    #[test]
+    fn a_voice_id_that_is_not_a_plain_name_deletes_nothing() {
+        let dir = tmp_dir();
+        let env = env_in(dir.path());
+        save_piper_voice(&env, b"m", b"{}", "amy").unwrap();
+        // Files beside the voices folder that a "../" id would have reached.
+        std::fs::write(dir.path().join("outside.onnx"), b"keep").unwrap();
+        let absolute = dir.path().join("abs");
+        std::fs::write(absolute.with_extension("onnx"), b"keep").unwrap();
+        delete_piper_voice(&env, "../outside");
+        delete_piper_voice(&env, &absolute.to_string_lossy());
+        assert!(dir.path().join("outside.onnx").exists());
+        assert!(absolute.with_extension("onnx").exists());
+        delete_piper_voice(&env, "amy");
+        assert!(list_piper_voices(&env).is_empty());
     }
 
     #[test]
