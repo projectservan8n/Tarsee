@@ -14,6 +14,7 @@ pub mod fake_download_host;
 pub mod fake_fetch;
 pub mod http;
 pub mod memory_settings;
+pub mod tar;
 
 use std::ops::Deref;
 use std::path::{Path, PathBuf};

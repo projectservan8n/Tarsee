@@ -287,9 +287,15 @@ mod tests {
             .into_stream()
             .collect()
             .await;
-        assert_eq!(pieces.iter().map(|p| p.as_ref().unwrap().len()).collect::<Vec<_>>(), [4, 4, 2]);
+        assert_eq!(
+            pieces.iter().map(|p| p.as_ref().unwrap().len()).collect::<Vec<_>>(),
+            [4, 4, 2]
+        );
 
-        let res = host.fetch(FetchRequest::get("https://h.test/r").no_redirects()).await.unwrap();
+        let res = host
+            .fetch(FetchRequest::get("https://h.test/r").no_redirects())
+            .await
+            .unwrap();
         assert_eq!((res.status, res.header("location")), (302, Some("https://h.test/a")));
         assert!(!host.requests()[1].follow_redirects);
 
@@ -305,9 +311,24 @@ mod tests {
         assert_eq!(pieces[0].as_ref().unwrap().len() + pieces[1].as_ref().unwrap().len(), 5);
         assert!(matches!(pieces[2], Err(FetchError::Body(_))));
 
-        assert_eq!(host.fetch(FetchRequest::get("https://h.test/d")).await.unwrap().status, 500);
-        assert_eq!(host.fetch(FetchRequest::get("https://h.test/d")).await.unwrap().status, 200);
-        assert_eq!(host.fetch(FetchRequest::get("https://h.test/none")).await.unwrap().status, 404);
-        assert_eq!((host.hits("https://h.test/d"), host.hits("https://h.test/never")), (2, 0));
+        assert_eq!(
+            host.fetch(FetchRequest::get("https://h.test/d")).await.unwrap().status,
+            500
+        );
+        assert_eq!(
+            host.fetch(FetchRequest::get("https://h.test/d")).await.unwrap().status,
+            200
+        );
+        assert_eq!(
+            host.fetch(FetchRequest::get("https://h.test/none"))
+                .await
+                .unwrap()
+                .status,
+            404
+        );
+        assert_eq!(
+            (host.hits("https://h.test/d"), host.hits("https://h.test/never")),
+            (2, 0)
+        );
     }
 }

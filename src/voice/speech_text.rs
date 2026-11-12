@@ -18,11 +18,16 @@ use fancy_regex::Regex as FancyRegex;
 use regex::Regex;
 
 /// The characters JavaScript's `\s` matches and `trim()` removes, for use inside a character class.
-pub const JS_SPACE: &str = "\t\n\u{0B}\u{0C}\r \u{A0}\u{1680}\u{2000}-\u{200A}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}";
+pub const JS_SPACE: &str =
+    "\t\n\u{0B}\u{0C}\r \u{A0}\u{1680}\u{2000}-\u{200A}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}";
 
-fn is_js_space(c: char) -> bool {
-    matches!(c, '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'..='\u{200A}'
-        | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}')
+/// Whether JavaScript counts `c` as whitespace (`s`, `trim()`, `parseInt`).
+pub fn is_js_space(c: char) -> bool {
+    matches!(
+        c,
+        '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
+    )
 }
 
 /// `text.trim()`.
@@ -236,7 +241,11 @@ mod tests {
             ("₱\u{a0}5", "5 pesos", "5 pesos"),
         ] {
             assert_eq!(speak_pesos(input, PesoOptions::default()), plain, "{input:?}");
-            assert_eq!(speak_pesos(input, PesoOptions { bare_peso: true }), bare, "{input:?} (bare P)");
+            assert_eq!(
+                speak_pesos(input, PesoOptions { bare_peso: true }),
+                bare,
+                "{input:?} (bare P)"
+            );
         }
     }
 

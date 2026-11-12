@@ -142,8 +142,7 @@ pub fn is_official_url(url: &str, sources: &[OfficialHost]) -> bool {
     let host = parsed.host_str().unwrap_or("").to_lowercase();
     sources.iter().any(|s| {
         s.hosts.contains(&host.as_str())
-            || s
-                .suffixes
+            || s.suffixes
                 .iter()
                 .any(|suf| host.ends_with(suf) && host.len() > suf.len())
     })
@@ -225,7 +224,10 @@ impl Downloader for GuardedFetch {
                 .map(|u| u.to_string())
                 .map_err(|err| InstallError::new(format!("Invalid URL: {err}")))?;
         }
-        Err(InstallError::new(format!("too many redirects from {}", host_of(&first))))
+        Err(InstallError::new(format!(
+            "too many redirects from {}",
+            host_of(&first)
+        )))
     }
 }
 
@@ -406,7 +408,10 @@ fn js_number(text: Option<&str>) -> f64 {
 /// the Content-Length), the `sha256`, and the `git_sha1` (git's blob hash, which needs `size`). A file already at
 /// dest that passes the same checks is kept without a download ([`Downloaded::Kept`]). Retries a few times; a
 /// transfer with no data for 60s is aborted.
-pub async fn download_file<D: Downloader + ?Sized>(fetch: &D, spec: DownloadFile<'_>) -> Result<Downloaded, InstallError> {
+pub async fn download_file<D: Downloader + ?Sized>(
+    fetch: &D,
+    spec: DownloadFile<'_>,
+) -> Result<Downloaded, InstallError> {
     if spec.git_sha1.is_some() && spec.size.is_none() {
         return Err(InstallError::new("downloadFile: a git hash needs the file's size"));
     }
@@ -450,7 +455,10 @@ pub async fn download_file<D: Downloader + ?Sized>(fetch: &D, spec: DownloadFile
 }
 
 fn stalled(stall: Duration) -> InstallError {
-    InstallError::new(format!("no data for {}s", number_to_string(stall.as_millis() as f64 / 1000.0)))
+    InstallError::new(format!(
+        "no data for {}s",
+        number_to_string(stall.as_millis() as f64 / 1000.0)
+    ))
 }
 
 async fn try_download<D: Downloader + ?Sized>(
@@ -466,7 +474,11 @@ async fn try_download<D: Downloader + ?Sized>(
     if !res.ok() {
         return Err(InstallError {
             http_status: Some(res.status),
-            ..InstallError::new(format!("{} answered HTTP {} for {name}", host_of(&spec.url), res.status))
+            ..InstallError::new(format!(
+                "{} answered HTTP {} for {name}",
+                host_of(&spec.url),
+                res.status
+            ))
         });
     }
     let content_length = res.header("content-length").map(str::to_string);
@@ -652,7 +664,10 @@ pub fn acquire_lock(app: &App, root: &Path, what: Option<&str>) -> Result<Instal
             Err(err) => return Err(err.into()),
         }
     }
-    Err(InstallError::with_code(format!("could not take the {what} lock"), "LOCKED"))
+    Err(InstallError::with_code(
+        format!("could not take the {what} lock"),
+        "LOCKED",
+    ))
 }
 
 fn lock_is_stale(file: &Path, held: &HeldLocks) -> bool {
@@ -678,7 +693,10 @@ fn lock_is_stale(file: &Path, held: &HeldLocks) -> bool {
         // pid (common for PID 1-ish processes).
         return !held.holds(file);
     }
-    let started = info.get("startedAt").and_then(serde_json::Value::as_str).and_then(ms_from_iso);
+    let started = info
+        .get("startedAt")
+        .and_then(serde_json::Value::as_str)
+        .and_then(ms_from_iso);
     let fresh = started.is_some_and(|started| now_ms() - started < LOCK_STALE_MS);
     if !fresh {
         return true;
@@ -757,14 +775,23 @@ mod tests {
 
     #[test]
     fn knows_hugging_faces_and_githubs_hosts_https_only() {
-        assert!(is_official_url("https://huggingface.co/Systran/x/resolve/r/model.bin", HF));
-        assert!(is_official_url("https://us.aws.cdn.hf.co/xet-bridge-us/abc", HF), "Hugging Face's CDN");
+        assert!(is_official_url(
+            "https://huggingface.co/Systran/x/resolve/r/model.bin",
+            HF
+        ));
+        assert!(
+            is_official_url("https://us.aws.cdn.hf.co/xet-bridge-us/abc", HF),
+            "Hugging Face's CDN"
+        );
         assert!(is_official_url("https://cdn-lfs.huggingface.co/repos/x", HF));
         assert!(!is_official_url("http://huggingface.co/x", HF), "never plain http");
         assert!(!is_official_url("https://huggingface.co.evil.example/x", HF));
         assert!(!is_official_url("https://evilhf.co/x", HF));
         assert!(
-            !is_official_url("https://github.com/astral-sh/python-build-standalone/releases/download/x", HF),
+            !is_official_url(
+                "https://github.com/astral-sh/python-build-standalone/releases/download/x",
+                HF
+            ),
             "each installer names its hosts"
         );
         assert!(is_official_url(
@@ -785,27 +812,59 @@ mod tests {
     #[tokio::test]
     async fn follows_a_redirect_to_the_cdn_and_refuses_one_anywhere_else_before_sending_anything_there() {
         let host = FakeDownloadHost::new([
-            ("https://huggingface.co/a", Route::redirect("https://us.aws.cdn.hf.co/xet/a")),
+            (
+                "https://huggingface.co/a",
+                Route::redirect("https://us.aws.cdn.hf.co/xet/a"),
+            ),
             ("https://us.aws.cdn.hf.co/xet/a", Route::body("ok")),
             ("https://huggingface.co/b", Route::redirect("https://evil.example/b")),
-            ("https://huggingface.co/c", Route::redirect("http://cdn-lfs.huggingface.co/c")),
+            (
+                "https://huggingface.co/c",
+                Route::redirect("http://cdn-lfs.huggingface.co/c"),
+            ),
             ("https://huggingface.co/d", Route::redirect("/api/resolve-cache/d")),
             ("https://huggingface.co/api/resolve-cache/d", Route::body("relative")),
-            ("https://huggingface.co/loop", Route::redirect("https://huggingface.co/loop")),
+            (
+                "https://huggingface.co/loop",
+                Route::redirect("https://huggingface.co/loop"),
+            ),
         ]);
         let get = guarded_fetch(HF, host.clone());
         let res = get.get(FetchRequest::get("https://huggingface.co/a")).await.unwrap();
         assert_eq!(res.text().await.unwrap(), "ok");
-        assert!(!host.requests()[0].follow_redirects, "redirects are never followed blindly");
+        assert!(
+            !host.requests()[0].follow_redirects,
+            "redirects are never followed blindly"
+        );
 
-        let err = get.get(FetchRequest::get("https://huggingface.co/b")).await.unwrap_err();
-        assert!(err.has_code("HOST_REFUSED") && err.message.contains("evil.example"), "{err}");
-        assert_eq!(host.hits("https://evil.example/b"), 0, "nothing was sent to the other host");
-        let err = get.get(FetchRequest::get("https://huggingface.co/c")).await.unwrap_err();
+        let err = get
+            .get(FetchRequest::get("https://huggingface.co/b"))
+            .await
+            .unwrap_err();
+        assert!(
+            err.has_code("HOST_REFUSED") && err.message.contains("evil.example"),
+            "{err}"
+        );
+        assert_eq!(
+            host.hits("https://evil.example/b"),
+            0,
+            "nothing was sent to the other host"
+        );
+        let err = get
+            .get(FetchRequest::get("https://huggingface.co/c"))
+            .await
+            .unwrap_err();
         assert!(err.has_code("HOST_REFUSED"));
         let res = get.get(FetchRequest::get("https://huggingface.co/d")).await.unwrap();
-        assert_eq!(res.text().await.unwrap(), "relative", "a relative Location stays on the host");
-        let err = get.get(FetchRequest::get("https://huggingface.co/loop")).await.unwrap_err();
+        assert_eq!(
+            res.text().await.unwrap(),
+            "relative",
+            "a relative Location stays on the host"
+        );
+        let err = get
+            .get(FetchRequest::get("https://huggingface.co/loop"))
+            .await
+            .unwrap_err();
         assert!(err.message.contains("redirect"), "{err}");
         let err = get.get(FetchRequest::get("https://example.com/x")).await.unwrap_err();
         assert!(err.has_code("HOST_REFUSED"));
@@ -884,7 +943,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(err.message.contains("cut off") && err.message.contains("huggingface.co"), "{err}");
+        assert!(
+            err.message.contains("cut off") && err.message.contains("huggingface.co"),
+            "{err}"
+        );
         assert_eq!(
             err.message,
             "the download from huggingface.co was cut off (other side closed)"
@@ -919,7 +981,11 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.message.contains("size") || err.message.contains("bytes"), "{err}");
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0, "nothing is left behind");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "nothing is left behind"
+        );
     }
 
     #[tokio::test]
@@ -975,9 +1041,16 @@ mod tests {
         let progress = |d: i64| {
             seen.fetch_add(d, Ordering::SeqCst);
         };
-        assert_eq!(download_file(&*host, spec().progress(&progress)).await.unwrap(), Downloaded::Kept);
+        assert_eq!(
+            download_file(&*host, spec().progress(&progress)).await.unwrap(),
+            Downloaded::Kept
+        );
         assert_eq!(host.hits("https://huggingface.co/f"), 0);
-        assert_eq!(seen.load(Ordering::SeqCst), body.len() as i64, "a kept file counts as done");
+        assert_eq!(
+            seen.load(Ordering::SeqCst),
+            body.len() as i64,
+            "a kept file counts as done"
+        );
         std::fs::write(&dest, &body[..10]).unwrap();
         download_file(&*host, spec()).await.unwrap();
         assert_eq!(host.hits("https://huggingface.co/f"), 1);
@@ -1024,11 +1097,14 @@ mod tests {
         assert!(err.has_code("HOST_REFUSED"), "a refusal keeps its code");
         assert_eq!(host.hits("https://evil.example/x"), 0);
         assert!(
-            download_file(&*host, DownloadFile::new("https://huggingface.co/x", dir.path().join("g")).git_sha1("ab"))
-                .await
-                .unwrap_err()
-                .message
-                .contains("needs the file's size")
+            download_file(
+                &*host,
+                DownloadFile::new("https://huggingface.co/x", dir.path().join("g")).git_sha1("ab")
+            )
+            .await
+            .unwrap_err()
+            .message
+            .contains("needs the file's size")
         );
     }
 
@@ -1039,7 +1115,9 @@ mod tests {
             ("https://huggingface.co/short", Route::body("abc").content_length("10")),
             (
                 "https://huggingface.co/gz",
-                Route::body("abc").content_length("10").header("content-encoding", "gzip"),
+                Route::body("abc")
+                    .content_length("10")
+                    .header("content-encoding", "gzip"),
             ),
         ]);
         let err = download_file(
@@ -1049,10 +1127,17 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.message, "s was cut short (3 of 10 bytes)");
-        let got = download_file(&*host, DownloadFile::new("https://huggingface.co/gz", dir.path().join("g")))
-            .await
-            .unwrap();
-        assert_eq!(got, Downloaded::Fetched(sha(b"abc")), "a compressed answer's length is not the file's");
+        let got = download_file(
+            &*host,
+            DownloadFile::new("https://huggingface.co/gz", dir.path().join("g")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            got,
+            Downloaded::Fetched(sha(b"abc")),
+            "a compressed answer's length is not the file's"
+        );
     }
 
     #[tokio::test]
@@ -1062,7 +1147,11 @@ mod tests {
             "https://huggingface.co/slow",
             Route::body(vec![0u8; 100]).chunk(10).delay_ms(400),
         )]);
-        assert_eq!(DownloadFile::new("u", "d").stall, Duration::from_secs(60), "a minute, as in Node");
+        assert_eq!(
+            DownloadFile::new("u", "d").stall,
+            Duration::from_secs(60),
+            "a minute, as in Node"
+        );
         assert_eq!(stalled(STALL).message, "no data for 60s");
         let err = download_file(
             &*host,
@@ -1082,7 +1171,10 @@ mod tests {
         let dir = tmp_dir();
         let release = acquire_lock(&t, dir.path(), Some("speech-to-text install")).unwrap();
         let err = acquire_lock(&t, dir.path(), Some("speech-to-text install")).unwrap_err();
-        assert!(err.has_code("LOCKED") && err.message.contains("speech-to-text install"), "{err}");
+        assert!(
+            err.has_code("LOCKED") && err.message.contains("speech-to-text install"),
+            "{err}"
+        );
         release.release();
         acquire_lock(&t, dir.path(), None).unwrap().release();
     }
@@ -1103,8 +1195,11 @@ mod tests {
         assert!(!file.exists(), "dropping the lock releases it");
 
         // Our pid, but not held by us: left over from an earlier run with the same pid.
-        std::fs::write(&file, serde_json::json!({"pid": std::process::id(), "startedAt": now_iso()}).to_string())
-            .unwrap();
+        std::fs::write(
+            &file,
+            serde_json::json!({"pid": std::process::id(), "startedAt": now_iso()}).to_string(),
+        )
+        .unwrap();
         acquire_lock(&t, dir.path(), None).unwrap().release();
         // Older than two hours.
         std::fs::write(&file, r#"{"pid": 1, "startedAt": "2020-01-01T00:00:00.000Z"}"#).unwrap();
@@ -1126,12 +1221,23 @@ mod tests {
 
         // A live process that is not this one.
         let mut child = std::process::Command::new(if cfg!(windows) { "ping" } else { "sleep" })
-            .args(if cfg!(windows) { vec!["-n", "30", "127.0.0.1"] } else { vec!["30"] })
+            .args(if cfg!(windows) {
+                vec!["-n", "30", "127.0.0.1"]
+            } else {
+                vec!["30"]
+            })
             .stdout(std::process::Stdio::null())
             .spawn()
             .unwrap();
-        std::fs::write(&file, serde_json::json!({"pid": child.id(), "startedAt": now_iso()}).to_string()).unwrap();
-        assert!(acquire_lock(&t, dir.path(), None).unwrap_err().has_code("LOCKED"), "a live owner keeps it");
+        std::fs::write(
+            &file,
+            serde_json::json!({"pid": child.id(), "startedAt": now_iso()}).to_string(),
+        )
+        .unwrap();
+        assert!(
+            acquire_lock(&t, dir.path(), None).unwrap_err().has_code("LOCKED"),
+            "a live owner keeps it"
+        );
         child.kill().unwrap();
         child.wait().unwrap();
         acquire_lock(&t, dir.path(), None).unwrap().release();
@@ -1161,8 +1267,14 @@ mod tests {
     fn describe_fetch_error_names_the_host_and_passes_other_errors_through() {
         let url = "https://github.com/x";
         let e = |err: FetchError| describe_fetch_error(&InstallError::from_fetch(err), url).message;
-        assert_eq!(e(FetchError::Connect(String::new())), "could not reach github.com (network error)");
-        assert_eq!(e(FetchError::Body("reset".into())), "the download from github.com was cut off (reset)");
+        assert_eq!(
+            e(FetchError::Connect(String::new())),
+            "could not reach github.com (network error)"
+        );
+        assert_eq!(
+            e(FetchError::Body("reset".into())),
+            "the download from github.com was cut off (reset)"
+        );
         assert_eq!(
             e(FetchError::Timeout),
             "the download from github.com stopped (the request timed out)"

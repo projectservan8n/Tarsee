@@ -234,7 +234,11 @@ mod tests {
         let engine: std::sync::Arc<dyn TtsEngine> = std::sync::Arc::new(Bare);
         assert_eq!(engine.name(), "base");
         assert_eq!(
-            engine.synthesize("hi", None, &SynthOptions::default()).await.unwrap_err().message,
+            engine
+                .synthesize("hi", None, &SynthOptions::default())
+                .await
+                .unwrap_err()
+                .message,
             "Not implemented"
         );
         assert_eq!(

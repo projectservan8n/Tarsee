@@ -21,7 +21,12 @@ impl TtsEngine for StubTtsEngine {
         "stub"
     }
 
-    async fn synthesize(&self, _text: &str, _voice_id: Option<&str>, _opts: &SynthOptions) -> Result<Synthesized, TtsError> {
+    async fn synthesize(
+        &self,
+        _text: &str,
+        _voice_id: Option<&str>,
+        _opts: &SynthOptions,
+    ) -> Result<Synthesized, TtsError> {
         Err(TtsError::with_status(
             "TTS engine not configured. Add ElevenLabs key in Settings > Voice, or select Edge TTS (free).",
             501,
@@ -52,7 +57,10 @@ mod tests {
     async fn every_request_is_a_501_that_says_what_to_set_up() {
         let stub = StubTtsEngine::new();
         assert_eq!(stub.name(), "stub");
-        let err = stub.synthesize("hello", None, &SynthOptions::default()).await.unwrap_err();
+        let err = stub
+            .synthesize("hello", None, &SynthOptions::default())
+            .await
+            .unwrap_err();
         assert_eq!(err.status, Some(501));
         assert!(err.message.contains("Edge TTS (free)"));
         let err = stub.clone_voice(b"RIFF", "me").await.unwrap_err();
