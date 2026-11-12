@@ -1,0 +1,164 @@
+// Captures what the Node Codex options (src/ai/providers/codex-options.js) give, as JSON, for the Rust tests of
+// src/ai/providers/codex_options.rs (src/ai/providers/codex_options/node-cases.json): buildCodexOptions for every
+// provider, with and without each optional input, and the helpers on many inputs. Every key here is an obvious fake.
+// node A5-capture-options.mjs <main checkout> <out file>
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const [root, outFile] = process.argv.slice(2);
+const co = await import(pathToFileURL(path.join(root, "src/ai/providers/codex-options.js")).href);
+
+const STATE = "/state";
+const WS = "/ws";
+const MCP = { url: "http://127.0.0.1:45678/mcp", token: "mcp-test-token-0123456789abcdef" };
+const KEYS = { openai: "sk-test-canary-own-openai-key", openrouter: "sk-or-v1-testcanaryownopenrouterkey", deepseek: "sk-testcanaryowndeepseekkey0001", local: "sk-test-canary-own-local-key" };
+const SERVER = {
+  PATH: "/usr/bin", HOME: "/home/node", LANG: "C.UTF-8",
+  OPENAI_API_KEY: "sk-test-canary-railway-openai", OPENROUTER_API_KEY: "sk-or-v1-testcanaryrailway", DEEPSEEK_API_KEY: "sk-testcanaryrailwaydeepseek",
+  TARSEE_LOCAL_AI_KEY: "sk-test-canary-railway-local", CODEX_API_KEY: "sk-test-canary-codex-api-key", CODEX_HOME: "/canary/home",
+  CODEX_ACCESS_TOKEN: "sk-test-canary-access", OPENAI_BASE_URL: "http://canary.invalid/v1", ANTHROPIC_API_KEY: "sk-ant-api03-testcanary",
+  ENCRYPTION_KEY: "sk-test-canary-enc", TARSEE_PROVIDER_KEY: "sk-test-canary-provider-key", TARSEE_MCP_TOKEN: "sk-test-canary-mcp",
+  TARSEE_CHATGPT_ACCESS_TOKEN: "sk-test-canary-chatgpt",
+};
+const VAULT = { SCRIPT_KEY: "script-key-from-the-vault" };
+const BRIDGE = { url: "http://127.0.0.1:45999/t/bridge-test-turn-01234/v1", token: "bridge-test-token-0123456789abcdefABCDEF" };
+const LIST = [{ id: "gpt-6-luna", default: true, efforts: ["low", "medium"] }, { id: "gpt-6-luna-mini", efforts: ["low"] }, { id: "gpt-6-open" }, { id: "gpt-6-none", efforts: [] }, null, { id: 5 }];
+
+function base(id) {
+  return {
+    env: SERVER, vaultEnv: VAULT, stateDir: STATE, workspace: WS, mcp: MCP, key: KEYS[id], developerInstructions: "You are Tarsee.",
+    localUrl: id === "local" ? "http://ollama.internal:11434/v1" : undefined, localBridge: id === "local" ? BRIDGE : undefined, platform: "linux",
+  };
+}
+
+// Each case: a name, the target, and what changes in ctx (null: the input is left out).
+const variants = [
+  ["base", {}, {}],
+  ["model and effort", { model: "m", effort: "high" }, {}],
+  ["effort in odd case", { model: "m", effort: "  XHigh " }, {}],
+  ["unknown effort", { model: "m", effort: "turbo" }, {}],
+  ["model default", { model: " Default " }, {}],
+  ["model padded", { model: "  gpt-6-luna  ", effort: "medium" }, { accountModels: LIST }],
+  ["listed model with efforts", { model: "gpt-6-luna", effort: "high" }, { accountModels: LIST }],
+  ["listed model without efforts", { model: "gpt-6-open", effort: "max" }, { accountModels: LIST }],
+  ["listed model with empty efforts", { model: "gpt-6-none", effort: "max" }, { accountModels: LIST }],
+  ["unlisted model", { model: "gpt-6.1-sol", effort: "low" }, { accountModels: LIST }],
+  ["empty list", { model: "gpt-6-luna" }, { accountModels: [] }],
+  ["thinking summaries", {}, { thinkingSummaries: true }],
+  ["context", {}, { contextTokens: 32_000 }],
+  ["context rounded", {}, { contextTokens: 1234.6 }],
+  ["context zero", {}, { contextTokens: 0 }],
+  ["compact window", {}, { contextTokens: 400_000, compactWindow: 180_000 }],
+  ["compact window odd", {}, { contextTokens: 10_000, compactWindow: 1000.5 }],
+  ["compact off", {}, { env: { ...SERVER, TARSEE_COMPACT_WINDOW: "off" } }],
+  ["compact 250k", {}, { env: { ...SERVER, TARSEE_COMPACT_WINDOW: "250k" } }],
+  ["compact nonsense", {}, { env: { ...SERVER, TARSEE_COMPACT_WINDOW: "nonsense" } }],
+  ["turn mark", {}, { turnMark: "turn-mark-1" }],
+  ["skills folder", {}, { skillsDir: "/app/skills" }],
+  ["attribution", {}, { appTitle: "My\r\nTarsee\0 ", referer: " https://example.com\n" }],
+  ["blank attribution", {}, { appTitle: " \n ", referer: "" }],
+  ["key in quotes", {}, { key: "  'sk-test-quoted-key-0123456789'  " }],
+  ["key in double quotes", {}, { key: "\"sk-test-dquoted-key-0123456789\"" }],
+  ["no key", {}, { key: "" }],
+  ["no grant", {}, { mcp: null }],
+  ["grant with no url", {}, { mcp: { url: "", token: "t" } }],
+  ["grant with no token", {}, { mcp: { url: "http://127.0.0.1:1/mcp", token: "" } }],
+  ["no workspace", {}, { workspace: "" }],
+  ["padded workspace", {}, { workspace: "  /ws  " }],
+  ["no local address", {}, { localUrl: "" }],
+  ["local address not http", {}, { localUrl: "ftp://x/v1" }],
+  ["no bridge", {}, { localBridge: null }],
+  ["bridge with no token", {}, { localBridge: { url: BRIDGE.url } }],
+  ["no local key", {}, { key: null }],
+  ["windows limit", {}, { developerInstructions: "y".repeat(40 * 1024), platform: "win32" }],
+  ["linux limit", {}, { developerInstructions: "y".repeat(40 * 1024), platform: "linux" }],
+  ["no instructions", {}, { developerInstructions: null }],
+  ["test hosts", {}, { env: { ...SERVER, NODE_ENV: "test", TARSEE_TEST_BASE_URL_CHATGPT: "http://127.0.0.1:9/", TARSEE_TEST_BASE_URL_OPENROUTER: "http://localhost:7/v1", TARSEE_TEST_BASE_URL_OPENAI: "http://127.0.0.1:8/v1", TARSEE_TEST_BASE_URL_DEEPSEEK: "http://127.0.0.1:6", TARSEE_TEST_BASE_URL_LOCAL: "http://127.0.0.1:5/v1" } }],
+  ["test hosts not in a test", {}, { env: { ...SERVER, TARSEE_TEST_BASE_URL_CHATGPT: "http://127.0.0.1:9", TARSEE_TEST_BASE_URL_OPENROUTER: "http://localhost:7/v1" } }],
+  ["home named outright", {}, { home: "/elsewhere/home" }],
+  ["no state folder", {}, { stateDir: "" }],
+  ["a vault key named like a stripped one", {}, { vaultEnv: { OPENAI_API_KEY: "vault-openai-key-for-scripts", SCRIPT_KEY: "s" } }],
+];
+const providers = ["chatgpt", "openai", "openrouter", "deepseek", "local", "anthropic", "claude", "nope", "", "OpenAI", "Local", " openrouter "];
+
+/** A long text as its digest and size, so the file stays small: the Rust test hashes its own the same way. */
+const digest = (text) => ({ sha256: crypto.createHash("sha256").update(text, "utf8").digest("hex"), bytes: Buffer.byteLength(text) });
+const LONG = 1000;
+const short = (text) => (typeof text === "string" && text.length > LONG ? digest(text) : text);
+
+function errorOf(err) {
+  return { name: err?.constructor?.name, code: err?.code ?? null, message: String(err?.message ?? err) };
+}
+
+const builds = [];
+for (const provider of providers) {
+  for (const [name, target, change] of variants) {
+    // The other spellings of an id only once each.
+    if (provider !== provider.trim().toLowerCase() && name !== "base") continue;
+    const id = provider.trim().toLowerCase();
+    const ctx = { ...base(id), ...change };
+    for (const [k, v] of Object.entries(change)) if (v === null) delete ctx[k];
+    // What the case changes in the base context (null: left out); the Rust test builds the base context itself.
+    const input = { provider, target, change: { ...change, ...("developerInstructions" in change ? { developerInstructions: short(change.developerInstructions) } : {}) } };
+    try {
+      const o = co.buildCodexOptions({ providerId: provider, engine: "codex", ...target }, ctx);
+      const { home, ...rest } = o;
+      const env = { ...rest.env };
+      delete env.CODEX_HOME;
+      const config = { ...rest.config, developer_instructions: short(rest.config.developer_instructions) };
+      const args = co.configArgs(o.config).map((a) => (a.length > LONG ? digest(a) : a));
+      // The flattened arguments for a few of them (the config itself is compared key by key, in order, for all).
+      const withArgs = ["base", "model and effort", "attribution", "test hosts", "context", "compact off"].includes(name);
+      builds.push({ name, input, out: { ...rest, env, config }, home, codexHome: o.env.CODEX_HOME, ...(withArgs ? { args } : {}) });
+    } catch (err) {
+      builds.push({ name, input, error: errorOf(err) });
+    }
+  }
+}
+
+const efforts = [];
+for (const e of ["low", "medium", "high", "xhigh", "max", " High ", "MAX", "turbo", "", null, 5, "minimal", "none"]) {
+  for (const allowed of [null, [], ["low", "medium"], ["max"], "max", [5, "low"]]) efforts.push([e, allowed, co.codexEffort(e, allowed) ?? null]);
+}
+const models = [];
+for (const provider of ["chatgpt", "ChatGPT", "openai", "local", "nope"]) {
+  for (const model of ["gpt-6-luna", "gpt-6-luna-mini", " gpt-6-luna ", "default", "DEFAULT", "", null, 5, "gpt-6.1-sol"]) {
+    for (const accountModels of [undefined, [], LIST, "nope"]) {
+      models.push([provider, model, accountModels ?? null, co.codexModelFor(provider, model, { accountModels }) ?? null]);
+    }
+  }
+}
+
+const configs = [
+  { a: { b: "x", c: 2 }, d: [true, "y"], e: {} },
+  { "dotted.key": { "with space": "v", ok_key: [1.5, -0, 1e21, { "q\"k": "z\n" }] } },
+  {}, { n: null }, { a: [null] }, { s: " \u0001é🐒" }, { arr: [], obj: { inner: {} } },
+];
+const configArgs = configs.map((c) => { try { return [c, co.configArgs(c)]; } catch (err) { return [c, errorOf(err)]; } });
+
+const caps = [];
+const preamble = "# Preamble\n\n## Memory\nUse remember for durable facts.\n" + "Tool notes line.\n".repeat(40);
+const claudeMd = "## Workspace instructions (CLAUDE.md)\n\n" + "Keep the workspace tidy and log what you do.\n".repeat(150);
+const files = "<!-- SOUL.md -->\n" + "I am calm and precise, and I say so when I don't know.\n".repeat(150);
+const memories = "\n\nAdditional quick memories (shortened; search memory for the full note):\n" + Array.from({ length: 300 }, (_, i) => `- [fact] remembered fact number ${i} about the owner's projects`).join("\n");
+const rest = "\n\n## Skills\n- pdf: make PDF files\n\nThis conversation's own prompt: answer in French.\n\nYou are talking on Telegram. Send a file with send_file, as an attachment.";
+const texts = [
+  [preamble, claudeMd, files + memories + rest].join("\n\n"),
+  [preamble, claudeMd, files.repeat(6) + memories + rest].join("\n\n"),
+  "😀".repeat(5000) + "end", "x".repeat(10_000) + "😀", "short", "é".repeat(3000) + "\n" + "日本".repeat(2000),
+  "start\r\nAdditional quick memories x\n- [a] one\n- [b] two\n\n\n\nend " + "z".repeat(500),
+  "start Additional quick memories x\n- [a] one\n- [b] two\nend " + "z".repeat(500),
+  "Additional quick memories at the very start\n- [a] " + "a".repeat(200) + "\n- [b] b\nafter",
+  "no newline in the tail " + "w".repeat(3000) + "\nlast line",
+  "line\n".repeat(2000),
+];
+for (const [n, text] of texts.entries()) {
+  for (const max of [1000, 1001, 200, 208, 209, 300, 24 * 1024, 4096, 600, 50, 0]) caps.push([n, max, digest(co.capInstructions(text, max))]);
+}
+
+// The texts themselves are made again by the Rust test, the same way.
+const all = { builds, efforts, models, configArgs, caps };
+// One case a line, so a change shows as a change to that case.
+fs.writeFileSync(outFile, `{\n${Object.entries(all).map(([k, v]) => `${JSON.stringify(k)}: [\n${v.map((x) => JSON.stringify(x)).join(",\n")}\n]`).join(",\n")}\n}\n`);
