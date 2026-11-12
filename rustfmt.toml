@@ -1,0 +1,2 @@
+# Lines up to 120 columns, like the comments carried over from the Node sources.
+max_width = 120

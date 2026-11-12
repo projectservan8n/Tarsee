@@ -52,3 +52,6 @@ tarsee-migration/
 # Python bytecode (src/voice/stt_worker.py, phonon worker)
 __pycache__/
 *.pyc
+
+# Rust build output
+/target/

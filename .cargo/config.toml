@@ -1,0 +1,3 @@
+# Tests keep their temporary files inside target/, next to the build, instead of the system temp folder.
+[env]
+TARSEE_TEST_TMP = { value = "target/test-tmp", relative = true }

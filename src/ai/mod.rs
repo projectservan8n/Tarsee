@@ -1,0 +1,28 @@
+//! `src/ai/`: the Rust port of the Node folder of the same name.
+
+pub mod agent_env;
+pub mod codex_cli;
+pub mod codex_device_login;
+pub mod codex_models;
+pub mod codex_rollouts;
+pub mod context_limits;
+pub mod engine_env;
+pub mod engine_errors;
+pub mod handoff;
+pub mod local_bridge;
+pub mod mcp_http;
+pub mod media;
+pub mod model_ref;
+pub mod preamble;
+pub mod provider_models;
+pub mod provider_probes;
+pub mod provider_registry;
+pub mod provider_status;
+pub mod providers;
+pub mod router;
+pub mod session_handle;
+pub mod settings_guard;
+pub mod spend;
+pub mod tarsee_mcp;
+pub mod turn;
+pub mod verify_model;

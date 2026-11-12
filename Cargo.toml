@@ -1,0 +1,92 @@
+[package]
+name = "tarsee"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.90"
+description = "Tarsee: AI gateway and chat platform with voice calls, multi-provider support, and channel integrations"
+homepage = "https://github.com/projectservan8n/Tarsee"
+repository = "https://github.com/projectservan8n/Tarsee"
+license-file = "LICENSE"
+publish = false
+default-run = "tarsee"
+
+[lib]
+name = "tarsee"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tarsee"
+path = "src/main.rs"
+
+# Stand-ins for the programs Tarsee starts (claude, codex, python, piper, ...). Tests only; never shipped:
+# the Docker image builds `--bin tarsee`.
+[[bin]]
+name = "tarsee-testbin"
+path = "testbin/main.rs"
+test = false
+doc = false
+
+# Every integration test lives in this one binary (tests/it/<area>.rs), so the crate links once, not once per file.
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+
+[dependencies]
+aes-gcm = "0.11.1"
+anyhow = "1.0.104"
+async-imap = { version = "0.12.0", default-features = false, features = ["runtime-tokio"] }
+async-trait = "0.1.92"
+axum = { version = "0.8.9", features = ["ws", "multipart", "macros"] }
+base64 = "0.23.1"
+bytes = "1.12.1"
+chromiumoxide = { version = "0.9.1", default-features = false, features = ["bytes"] }
+chrono = "0.4.45"
+chrono-tz = "0.10.4"
+clap = { version = "4.6.7", features = ["derive"] }
+croner = "4.0.3"
+fancy-regex = "0.20.2"
+flate2 = "1.1.11"
+futures = "0.3.34"
+hex = "0.4.3"
+hmac = "0.13.0"
+http-body-util = "0.1"
+iana-time-zone = "0.1.65"
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls", "hostname"] }
+log = "0.4.35"
+mail-parser = "0.11.9"
+mime_guess = "2.0.5"
+parking_lot = "0.13.0"
+portable-pty = "0.9.0"
+rand = "0.10.3"
+regex = "1.13.1"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "stream", "multipart", "gzip", "query", "form"] }
+rusqlite = { version = "0.42.0", features = ["bundled"] }
+rust-embed = "8.14.0"
+scrypt = "0.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+serenity = { version = "0.12.5", default-features = false, features = ["client", "gateway", "model", "http", "rustls_backend"] }
+sha2 = "0.11.1"
+tempfile = "3.27.0"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["full"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
+tokio-util = { version = "0.7", features = ["io", "codec"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.7.1", features = ["fs"] }
+url = "2.5.8"
+uuid = { version = "1.29.2", features = ["v4"] }
+which = "8.0.6"
+
+[profile.dev]
+debug = "line-tables-only"
+
+# Dependencies are built once and optimised: password hashing, SQLite and regexes are too slow to test otherwise.
+[profile.dev.package."*"]
+debug = false
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 16
+strip = true

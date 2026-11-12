@@ -2,3 +2,11 @@ entrypoint.sh text eol=lf
 # The fake codex launchers the tests start through a POSIX shell: a CRLF shebang would break them on Linux or WSL.
 test/fixtures/fake-codex/codex text eol=lf
 test/fixtures/fake-codex-login/codex text eol=lf
+# The Rust port: LF everywhere, on every system. A file read with include_str! or compared in a test must be the
+# same bytes on Windows and Linux.
+*.rs text eol=lf
+*.toml text eol=lf
+Cargo.lock text eol=lf
+tests/** text eol=lf
+testbin/** text eol=lf
+docs/rust-port/** text eol=lf
