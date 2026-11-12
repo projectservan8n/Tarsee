@@ -8,7 +8,7 @@
 //! surrogate stays), lets a later duplicate member win as JavaScript does, and keeps only what the guards look at:
 //! the top-level object's members and, one level down, a string's text or an object's member names.
 
-use crate::lib::model_picker::js_number_to_string;
+use crate::util::js::number_to_string;
 
 /// A JavaScript string: UTF-16 code units, a lone surrogate included.
 pub(crate) type JsString = Vec<u16>;
@@ -582,7 +582,7 @@ pub(crate) fn stringify_pretty(value: &Json) -> Option<String> {
             match value {
                 Json::Null => out.push_str("null"),
                 Json::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-                Json::Number(n) if n.is_finite() => out.push_str(&js_number_to_string(*n)),
+                Json::Number(n) if n.is_finite() => out.push_str(&number_to_string(*n)),
                 Json::Number(_) => out.push_str("null"),
                 Json::Str(units) => quote(units, &mut out),
                 Json::Array(_) if members.is_empty() => out.push_str("[]"),

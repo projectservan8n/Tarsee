@@ -55,7 +55,6 @@ use super::engine_env::{EnvMap, TypeError, codex_config_files_for, codex_config_
 use super::provider_registry::ProviderRegistry;
 use crate::app::App;
 use crate::env::Env;
-use crate::lib::model_picker::js_number_to_string;
 use crate::lib::run_cmd::spawn_error_code;
 use crate::util::js;
 
@@ -103,7 +102,7 @@ pub(crate) fn js_string(value: &Value) -> String {
     match value {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
-        Value::Number(n) => js_number_to_string(n.as_f64().unwrap_or(f64::NAN)),
+        Value::Number(n) => js::number_to_string(n.as_f64().unwrap_or(f64::NAN)),
         Value::String(text) => text.clone(),
         Value::Object(_) => "[object Object]".to_string(),
         Value::Array(items) => items
@@ -699,15 +698,25 @@ pub async fn list_account_models(app: &App, opts: &AccountModelsOpts) -> Result<
 /// default. Call it at boot, after a sign-in, after a sign-out, and when the picker is opened (the five-minute
 /// memory above keeps that cheap). Takes [`list_account_models`]' options; gives [`read_account_models`]' answer.
 pub async fn sync_chatgpt_catalog(app: &App, opts: &AccountModelsOpts) -> Result<AccountModelsResult, TypeError> {
-    let result = read_account_models(app, opts).await?;
-    let rows: Vec<Value> = result
-        .models
-        .iter()
-        .map(|model| serde_json::to_value(model).unwrap_or(Value::Null))
-        .collect();
-    // ("chatgpt-models" is a runtime catalog: this cannot fail.)
-    let _ = ProviderRegistry::of(app).set_catalog_models("chatgpt-models", &rows);
-    Ok(result)
+    require_codex_home(&opts.codex_home)?;
+    // A task of its own, as the JS call went on by itself: the catalog takes the answer whether or not the caller
+    // that asked for the sync is still there.
+    let (app, opts) = (app.clone(), opts.clone());
+    let synced = tokio::spawn(async move {
+        let result = read_account_models(&app, &opts).await?;
+        let rows: Vec<Value> = result
+            .models
+            .iter()
+            .map(|model| serde_json::to_value(model).unwrap_or(Value::Null))
+            .collect();
+        // ("chatgpt-models" is a runtime catalog: this cannot fail.)
+        let _ = ProviderRegistry::of(&app).set_catalog_models("chatgpt-models", &rows);
+        Ok(result)
+    });
+    // (A task gone without an answer: the server is shutting down.)
+    synced
+        .await
+        .unwrap_or_else(|_| Ok(AccountModelsResult::failed(ModelsReason::Error)))
 }
 
 #[cfg(test)]

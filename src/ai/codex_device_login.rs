@@ -50,7 +50,6 @@ use super::engine_env::js_json::{Json, is_blank, parse_document};
 use super::engine_env::{EnvMap, TypeError, codex_config_files_for, codex_config_guard, ensure_home, read_text};
 use crate::app::App;
 use crate::env::Env;
-use crate::lib::model_picker::js_number_to_string;
 use crate::lib::redact::redact_secrets;
 use crate::lib::run_cmd::{node_error_code, spawn_error_code};
 use crate::util::js;
@@ -466,7 +465,7 @@ fn js_string(value: &Json, depth: usize) -> String {
     match value {
         Json::Null => "null".to_string(),
         Json::Bool(b) => b.to_string(),
-        Json::Number(n) => js_number_to_string(*n),
+        Json::Number(n) => js::number_to_string(*n),
         Json::Str(_) => value.as_text().unwrap_or_default(),
         Json::Object(_) => "[object Object]".to_string(),
         Json::Array(_) if depth == 0 => String::new(),
@@ -809,7 +808,20 @@ impl Default for LoginStatusOpts {
 /// method is chatgpt, api, none, or other for a sign-in Tarsee doesn't use (an access token, a cloud account).
 pub async fn login_status(app: &App, opts: &LoginStatusOpts) -> Result<LoginStatus, TypeError> {
     let env = opts.env.clone().unwrap_or_else(|| app.env().clone());
-    login_status_in(&env, opts).await
+    if !opts.cli {
+        return login_status_in(&env, opts).await;
+    }
+    // A task of its own, as the JS call went on by itself: the codex it starts is waited for (and stopped at its
+    // time limit) whether or not the caller is still there.
+    let opts = opts.clone();
+    let asked = tokio::spawn(async move { login_status_in(&env, &opts).await });
+    asked.await.unwrap_or_else(|_| {
+        // The task is gone without an answer (the server is shutting down): nothing was checked.
+        Ok(LoginStatus {
+            checked: Some(false),
+            ..LoginStatus::default()
+        })
+    })
 }
 
 /// [`login_status`] with the server's environment given.
@@ -1564,10 +1576,23 @@ pub struct LogoutResult {
 /// `{ok}` or `{ok:false, error}`.
 pub async fn logout(app: &App, opts: &LogoutOpts) -> Result<LogoutResult, TypeError> {
     let home = require_codex_home(&opts.codex_home)?;
-    cancel_device_login(app, &home).await?;
+    // A task of its own, as the JS call went on by itself: a sign-out that has begun ends with auth.json gone
+    // whether or not the caller is still there.
+    let (app, opts) = (app.clone(), opts.clone());
+    let signed_out = tokio::spawn(async move { sign_out(&app, home, &opts).await });
+    Ok(signed_out.await.unwrap_or_else(|_| LogoutResult {
+        // The task is gone without an answer (the server is shutting down).
+        ok: false,
+        error: Some("Couldn't remove the saved ChatGPT sign-in (the sign-out was interrupted).".to_string()),
+    }))
+}
+
+/// The sign-out itself, for a home that is named.
+async fn sign_out(app: &App, home: PathBuf, opts: &LogoutOpts) -> LogoutResult {
+    let _ = cancel_device_login(app, &home).await;
     let done = LogoutResult { ok: true, error: None };
     if !home.exists() {
-        return Ok(done);
+        return done;
     }
     let env = opts.env.clone().unwrap_or_else(|| app.env().clone());
     let guard = codex_config_guard(&codex_config_files_for(&home, Some(&home)), None);
@@ -1599,13 +1624,13 @@ pub async fn logout(app: &App, opts: &LogoutOpts) -> Result<LogoutResult, TypeEr
             Err(err) => Err(node_error_code(&err).map_or_else(|| err.to_string(), str::to_string)),
         }
     };
-    Ok(match removed {
+    match removed {
         Ok(()) => done,
         Err(why) => LogoutResult {
             ok: false,
             error: Some(format!("Couldn't remove the saved ChatGPT sign-in ({why}).")),
         },
-    })
+    }
 }
 
 #[cfg(test)]

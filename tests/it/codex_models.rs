@@ -520,3 +520,23 @@ async fn a_question_goes_on_when_the_caller_that_asked_has_gone_and_each_app_kee
     listed(&s, &opts(&s)).await;
     assert_eq!(s.calls().len(), 3);
 }
+
+#[tokio::test]
+async fn a_sync_whose_caller_has_gone_still_fills_the_catalog() {
+    let s = models_scenario(&[("FAKE_CODEX_MODELS", "late"), ("FAKE_CODEX_DELAY_MS", "300")], true);
+    let registry = ProviderRegistry::of(&s.t);
+    let caller = {
+        let (app, o) = (s.t.app.clone(), opts(&s));
+        tokio::spawn(async move { sync_chatgpt_catalog(&app, &o).await })
+    };
+    s.pid_when_written().await;
+    assert!(registry.catalog_models("chatgpt-models").is_empty());
+    caller.abort();
+    let _ = caller.await;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while registry.catalog_models("chatgpt-models").len() != 2 {
+        assert!(Instant::now() < deadline, "the catalog was never filled");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(s.calls().len(), 1);
+}

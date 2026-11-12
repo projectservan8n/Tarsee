@@ -37,9 +37,15 @@ use crate::app::App;
 use crate::config::env::home_dir;
 use crate::env::Env;
 use crate::lib::model_picker::js_to_fixed;
-use crate::lib::safe_path::{join_path, resolve_path};
+use crate::lib::safe_path::{node_dirname, node_join, node_resolve};
 use crate::util::js;
 use crate::util::node_path::to_namespaced;
+
+/// `path.join(base, piece)`, worked out on the text as Node did: a piece that is a path of its own (the slug of a
+/// Windows folder, a name with a drive in it) is still only more names under `base`, never a path that replaces it.
+pub(crate) fn join_path(base: &Path, piece: &str) -> PathBuf {
+    PathBuf::from(node_join(&[&base.to_string_lossy(), piece]))
+}
 
 /// Bytes-per-MB, so the intent is obvious at the call sites.
 const MB: f64 = 1_048_576.0;
@@ -160,7 +166,7 @@ pub fn provider_homes(app: &App, opts: &TranscriptOpts<'_>) -> Vec<ProviderHome>
     // (path.resolve, on the text alone: two spellings of one folder are one home.)
     let cwd = std::env::current_dir().unwrap_or_default();
     let mut seen = HashSet::new();
-    homes.retain(|h| seen.insert(resolve_path(&cwd, &h.home.to_string_lossy())));
+    homes.retain(|h| seen.insert(node_resolve(&[&cwd.to_string_lossy(), &h.home.to_string_lossy()])));
     homes
 }
 
@@ -190,7 +196,7 @@ pub fn projects_roots(app: &App, opts: &TranscriptOpts<'_>) -> Vec<PathBuf> {
 pub fn claude_homes(app: &App, opts: &TranscriptOpts<'_>) -> Vec<PathBuf> {
     projects_roots(app, opts)
         .into_iter()
-        .map(|root| root.parent().map(Path::to_path_buf).unwrap_or(root))
+        .map(|root| PathBuf::from(node_dirname(&root.to_string_lossy())))
         .collect()
 }
 

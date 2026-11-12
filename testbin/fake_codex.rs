@@ -23,9 +23,10 @@
 //!                           stderr-error       an error line on stderr, then wait forever
 //!                         FAKE_CODEX_DELAY_MS (default 300) is how long "the person" takes to sign in;
 //!                         FAKE_CODEX_MINUTES is how long the code is said to last (the capture says 15).
-//!   login status         from $CODEX_HOME/auth.json, on stderr as the real CLI does (FAKE_CODEX_STATUS: "hang"
-//!                         never answers, "garbled" answers with words that say nothing)
-//!   logout                deletes auth.json
+//!   login status          from $CODEX_HOME/auth.json, on stderr as the real CLI does (FAKE_CODEX_STATUS: "hang"
+//!                         writes its pid and never answers, "garbled" answers with words that say nothing)
+//!   logout                deletes auth.json (after FAKE_CODEX_LOGOUT_MS, when set; FAKE_CODEX_LOGOUT=keep fails
+//!                         and leaves the file)
 //!   app-server            JSON-RPC over stdio (initialize, account/read, model/list); FAKE_CODEX_ACCOUNT
 //!                         (chatgpt | none | apikey | expired) and FAKE_CODEX_MODELS pick it:
 //!                           live            the account's own list, in two pages, cached in models_cache.json
@@ -216,7 +217,10 @@ fn device_login() -> i32 {
 
 fn login_status() -> i32 {
     match var("FAKE_CODEX_STATUS").as_deref() {
-        Some("hang") => forever(),
+        Some("hang") => {
+            write_pid();
+            forever()
+        }
         Some("garbled") => {
             err("Something else entirely\n");
             return 0;
@@ -252,6 +256,13 @@ fn login_status() -> i32 {
 }
 
 fn logout() -> i32 {
+    if let Some(ms) = var("FAKE_CODEX_LOGOUT_MS").and_then(|v| v.parse().ok()) {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+    if var("FAKE_CODEX_LOGOUT").as_deref() == Some("keep") {
+        err("Could not log out\n");
+        return 1;
+    }
     if !auth_file().exists() {
         err("Not logged in\n");
         return 0;

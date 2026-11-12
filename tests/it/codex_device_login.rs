@@ -1091,3 +1091,47 @@ async fn logout_with_no_home_or_no_codex_still_ends_signed_out_and_says_when_it_
         json!({ "ok": false, "error": "Couldn't remove the saved ChatGPT sign-in (ERR_FS_EISDIR)." })
     );
 }
+
+/// Waits until `ready` says so (a file appearing, a process starting): on the thing itself, with a limit.
+async fn until(what: &str, ready: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !ready() {
+        assert!(Instant::now() < deadline, "still waiting: {what}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_sign_out_that_has_begun_finishes_when_its_caller_has_gone() {
+    // `codex logout` takes a while and then fails to remove the file: Tarsee removes it itself afterwards.
+    let s = scenario(&[("FAKE_CODEX_LOGOUT_MS", "600"), ("FAKE_CODEX_LOGOUT", "keep")]);
+    write_chatgpt_auth(&s.home, ChatgptAuth::default());
+    let caller = {
+        let (app, opts) = (s.t.app.clone(), s.logout_opts());
+        tokio::spawn(async move { logout(&app, &opts).await })
+    };
+    until("codex logout to start", || !s.calls_with("logout").is_empty()).await;
+    assert!(s.home.join("auth.json").exists(), "codex is still at it");
+    // The caller leaves (a request whose client went away).
+    caller.abort();
+    let _ = caller.await;
+    until("the sign-in file to go", || !s.home.join("auth.json").exists()).await;
+}
+
+#[tokio::test]
+async fn a_status_check_whose_caller_has_gone_still_stops_the_codex_it_started_at_its_time_limit() {
+    let s = scenario(&[("FAKE_CODEX_STATUS", "hang")]);
+    write_chatgpt_auth(&s.home, ChatgptAuth::default());
+    let caller = {
+        let app = s.t.app.clone();
+        let opts = LoginStatusOpts {
+            timeout: Duration::from_millis(1500),
+            ..s.status_opts()
+        };
+        tokio::spawn(async move { login_status(&app, &opts).await })
+    };
+    let pid = s.pid_when_written().await;
+    caller.abort();
+    let _ = caller.await;
+    assert!(gone_soon(pid).await, "the codex that was asked is not left running");
+}

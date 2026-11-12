@@ -45,8 +45,7 @@ use super::provider_registry::{
 use crate::app::App;
 use crate::db::settings::{KeyWithSource, Settings, get_key_with_source, key_hint};
 use crate::env::Env;
-use crate::lib::claude_transcript::{TranscriptOpts, claude_homes as transcript_claude_homes};
-use crate::lib::safe_path::join_path;
+use crate::lib::claude_transcript::{TranscriptOpts, claude_homes as transcript_claude_homes, join_path};
 use crate::lib::vault::{is_encrypted, is_encryption_enabled};
 use crate::util::js;
 use crate::util::node_path::{join as node_join, to_namespaced};
