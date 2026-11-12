@@ -813,7 +813,7 @@ fn listing(dir: &Path) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn keeps_its_files_in_the_data_folder_and_starts_with_the_default_icon() {
+async fn keeps_its_files_in_data_dir_brand_which_is_the_tests_own_folder() {
     let t = test_app();
     let icons = BrandIcon::of(&t.app);
     icons.reset_brand_icon().await.unwrap();
@@ -823,7 +823,12 @@ async fn keeps_its_files_in_the_data_folder_and_starts_with_the_default_icon() {
         icons.brand_dir().display()
     );
     assert_eq!(icons.brand_dir(), t.config().data_dir.join("brand"));
-    // the default icon at first: its version from icon-512.png
+}
+
+#[tokio::test]
+async fn the_default_icon_at_first_its_version_from_icon_512_png() {
+    let t = test_app();
+    BrandIcon::of(&t.app).reset_brand_icon().await.unwrap();
     assert_eq!(
         brand_status(&t.app),
         BrandStatus {
