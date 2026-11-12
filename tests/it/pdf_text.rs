@@ -60,12 +60,19 @@ async fn pdftotext_on_the_path_reads_a_copy_split_into_pages_without_windows_lin
     let copy = PathBuf::from(&runs[1][2]);
     assert_eq!(copy.file_name().unwrap(), "in.pdf");
     assert!(
-        copy.parent().unwrap().file_name().unwrap().to_string_lossy().starts_with("tarsee-pdf-")
+        copy.parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("tarsee-pdf-")
     );
     assert!(!copy.exists(), "the temporary copy is removed");
 
     // The same bytes again come from the cache: no new run.
-    let again = PdfReader::of(&t.app).pdf_text(Bytes::from(pdf), PdfTextOptions::default()).await;
+    let again = PdfReader::of(&t.app)
+        .pdf_text(Bytes::from(pdf), PdfTextOptions::default())
+        .await;
     assert_eq!(again, r);
     assert_eq!(crate::pdf_text::runs(&log).len(), 2);
 }
@@ -95,7 +102,10 @@ async fn a_failing_pdftotext_leaves_the_pdf_to_the_built_in_reader() {
         ("TARSEE_TESTBIN_STDERR", "Syntax Warning: odd\nI/O Error: broken\n"),
     ]);
     let r = PdfReader::of(&t.app)
-        .pdf_text(Bytes::from(make_pdf(&PdfSpec::pages(&["Read anyway"]))), PdfTextOptions::default())
+        .pdf_text(
+            Bytes::from(make_pdf(&PdfSpec::pages(&["Read anyway"]))),
+            PdfTextOptions::default(),
+        )
         .await;
     assert_eq!(r.reader, Some(ReaderKind::Builtin));
     assert_eq!(r.pages, ["Read anyway"]);
@@ -106,7 +116,11 @@ async fn a_pdftotext_that_takes_too_long_is_stopped_and_the_built_in_reader_read
     let (t, _bin, _log) = app_with_stand_in(&[("TARSEE_TESTBIN_SLEEP_MS", "20000")]);
     let reader = PdfReader::of(&t.app);
     // (-v would sleep too: the stand-in is named for this run directly.)
-    reader.set_pdftotext(Some(_bin.path().join(if cfg!(windows) { "pdftotext.exe" } else { "pdftotext" })));
+    reader.set_pdftotext(Some(_bin.path().join(if cfg!(windows) {
+        "pdftotext.exe"
+    } else {
+        "pdftotext"
+    })));
     let started = std::time::Instant::now();
     let r = reader
         .pdf_text(
@@ -165,7 +179,10 @@ async fn uses_pdftotext_when_it_is_installed() {
     assert_eq!(r.pages.len(), 2);
     assert!(r.pages[0].contains("Read by poppler"), "{:?}", r.pages);
     assert!(r.pages[1].contains("Second page"), "{:?}", r.pages);
-    assert!(!r.pages.join("").contains('\r'), "Windows line ends are kept out of the text");
+    assert!(
+        !r.pages.join("").contains('\r'),
+        "Windows line ends are kept out of the text"
+    );
 }
 
 #[tokio::test]

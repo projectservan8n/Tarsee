@@ -101,7 +101,11 @@ fn png_predict(raw: &[u8], cols: usize) -> Vec<u8> {
             let cur = i32::from(src[r * cols + x]);
             let a = if x > 0 { i32::from(src[r * cols + x - 1]) } else { 0 };
             let b = if r > 0 { i32::from(src[(r - 1) * cols + x]) } else { 0 };
-            let c = if r > 0 && x > 0 { i32::from(src[(r - 1) * cols + x - 1]) } else { 0 };
+            let c = if r > 0 && x > 0 {
+                i32::from(src[(r - 1) * cols + x - 1])
+            } else {
+                0
+            };
             let p = match kind {
                 1 => a,
                 2 => b,
@@ -222,7 +226,13 @@ fn stream(dict: &str, data: &[u8], f: Filters) -> Obj {
 
 /// Write objects (index = object number; `[0]` unused) as a PDF. `in_obj_stm`: object numbers to pack into one
 /// object stream (PDF 1.5, with a cross-reference stream); streams can't be packed.
-fn write_pdf(objects: &[Obj], root: usize, in_obj_stm: &BTreeSet<usize>, filters: Filters, trailer_extra: &str) -> Vec<u8> {
+fn write_pdf(
+    objects: &[Obj],
+    root: usize,
+    in_obj_stm: &BTreeSet<usize>,
+    filters: Filters,
+    trailer_extra: &str,
+) -> Vec<u8> {
     let version = if in_obj_stm.is_empty() { "1.4" } else { "1.5" };
     let mut out: Vec<u8> = format!("%PDF-{version}\n").into_bytes();
     out.extend_from_slice(&[b'%', 0xE2, 0xE3, 0xCF, 0xD3, b'\n']);
@@ -390,14 +400,18 @@ pub fn make_pdf(spec: &PdfSpec) -> Vec<u8> {
         let descendant = add(
             &mut objects,
             Obj {
-                dict: format!("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /TestFont /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {descriptor} 0 R /DW 500 >>"),
+                dict: format!(
+                    "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /TestFont /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {descriptor} 0 R /DW 500 >>"
+                ),
                 stream: None,
             },
         );
         add(
             &mut objects,
             Obj {
-                dict: format!("<< /Type /Font /Subtype /Type0 /BaseFont /TestFont /Encoding /Identity-H /DescendantFonts [{descendant} 0 R] /ToUnicode {to_unicode} 0 R >>"),
+                dict: format!(
+                    "<< /Type /Font /Subtype /Type0 /BaseFont /TestFont /Encoding /Identity-H /DescendantFonts [{descendant} 0 R] /ToUnicode {to_unicode} 0 R >>"
+                ),
                 stream: None,
             },
         )
@@ -446,7 +460,9 @@ pub fn make_pdf(spec: &PdfSpec) -> Vec<u8> {
         add(
             &mut objects,
             stream(
-                &format!("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 {font} 0 R >> >>"),
+                &format!(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 {font} 0 R >> >>"
+                ),
                 &latin1(&body),
                 filters,
             ),
@@ -468,9 +484,7 @@ pub fn make_pdf(spec: &PdfSpec) -> Vec<u8> {
             None => body,
         };
         let content = add(&mut objects, stream("", &latin1(&body), filters));
-        let xres = xobj
-            .map(|x| format!(" /XObject << /X1 {x} 0 R >>"))
-            .unwrap_or_default();
+        let xres = xobj.map(|x| format!(" /XObject << /X1 {x} 0 R >>")).unwrap_or_default();
         kids.push(add(
             &mut objects,
             Obj {
@@ -485,7 +499,11 @@ pub fn make_pdf(spec: &PdfSpec) -> Vec<u8> {
     };
     let kid_refs: Vec<String> = kids.iter().map(|k| format!("{k} 0 R")).collect();
     objects[pages_node] = Obj {
-        dict: format!("<< /Type /Pages /Kids [{}] /Count {} >>", kid_refs.join(" "), kids.len()),
+        dict: format!(
+            "<< /Type /Pages /Kids [{}] /Count {} >>",
+            kid_refs.join(" "),
+            kids.len()
+        ),
         stream: None,
     };
 
@@ -521,7 +539,11 @@ mod tests {
         let table = text.split("xref\n").nth(1).unwrap();
         for (n, line) in table.lines().skip(2).take(5).enumerate() {
             let offset: usize = line[..10].parse().unwrap();
-            assert!(pdf[offset..].starts_with(format!("{} 0 obj", n + 1).as_bytes()), "object {}", n + 1);
+            assert!(
+                pdf[offset..].starts_with(format!("{} 0 obj", n + 1).as_bytes()),
+                "object {}",
+                n + 1
+            );
         }
     }
 

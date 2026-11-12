@@ -458,11 +458,17 @@ mod tests {
         // Node kept the drive as the path wrote it, and compared the text: "c:" is not under "C:".
         assert_eq!(resolve_path(root, "c:sub").to_string_lossy(), "c:\\data\\ws\\sub");
         assert_eq!(safe_path("c:sub", &[root]), Err(SafePathError::Outside));
-        assert_eq!(join_path(Path::new("C:\\ws\\sub"), "C:foo"), PathBuf::from("C:\\ws\\sub\\C:foo"));
+        assert_eq!(
+            join_path(Path::new("C:\\ws\\sub"), "C:foo"),
+            PathBuf::from("C:\\ws\\sub\\C:foo")
+        );
         assert_eq!(relative_path(Path::new("C:\\ws"), Path::new("c:\\WS\\a\\b")), "a\\b");
         assert_eq!(relative_path(Path::new("C:\\ws"), Path::new("D:\\x")), "D:\\x");
         assert_eq!(safe_path("D:\\data\\ws\\x", &[root]), Err(SafePathError::Outside));
-        assert_eq!(safe_path("\\\\?\\C:\\data\\ws\\x", &[root]), Err(SafePathError::Outside));
+        assert_eq!(
+            safe_path("\\\\?\\C:\\data\\ws\\x", &[root]),
+            Err(SafePathError::Outside)
+        );
     }
 
     #[cfg(unix)]
@@ -485,10 +491,19 @@ mod tests {
         let ws = base.join("ws");
         assert_eq!(join_path(&ws.join("a"), ".."), ws);
         assert_eq!(join_path(&ws, "x/../y"), ws.join("y"));
-        assert_eq!(relative_path(&ws, &ws.join("a").join("b")), format!("a{MAIN_SEPARATOR}b"));
+        assert_eq!(
+            relative_path(&ws, &ws.join("a").join("b")),
+            format!("a{MAIN_SEPARATOR}b")
+        );
         assert_eq!(relative_path(&ws, &ws), "");
-        assert_eq!(relative_path(&ws.join("a"), &ws.join("b")), format!("..{MAIN_SEPARATOR}b"));
-        assert_eq!(normalize_path(Path::new("a/../../b")), PathBuf::from(format!("..{MAIN_SEPARATOR}b")));
+        assert_eq!(
+            relative_path(&ws.join("a"), &ws.join("b")),
+            format!("..{MAIN_SEPARATOR}b")
+        );
+        assert_eq!(
+            normalize_path(Path::new("a/../../b")),
+            PathBuf::from(format!("..{MAIN_SEPARATOR}b"))
+        );
         assert_eq!(normalize_path(Path::new("./")), PathBuf::from("."));
     }
 

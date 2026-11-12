@@ -77,20 +77,8 @@ const CACHE_MAX_CHARS: usize = 5_000_000;
 fn js_space(c: char) -> bool {
     matches!(
         c,
-        '\t' | '\n'
-            | '\u{0B}'
-            | '\u{0C}'
-            | '\r'
-            | ' '
-            | '\u{A0}'
-            | '\u{1680}'
-            | '\u{2000}'..='\u{200A}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{202F}'
-            | '\u{205F}'
-            | '\u{3000}'
-            | '\u{FEFF}'
+        '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
     )
 }
 
@@ -139,9 +127,9 @@ fn js_number_from_str(text: &str) -> f64 {
             if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
                 return f64::NAN;
             }
-            return digits
-                .chars()
-                .fold(0.0, |acc, c| acc * f64::from(radix) + f64::from(c.to_digit(radix).unwrap_or(0)));
+            return digits.chars().fold(0.0, |acc, c| {
+                acc * f64::from(radix) + f64::from(c.to_digit(radix).unwrap_or(0))
+            });
         }
     }
     match t {
@@ -149,7 +137,9 @@ fn js_number_from_str(text: &str) -> f64 {
         "-Infinity" => return f64::NEG_INFINITY,
         _ => {}
     }
-    let valid = t.chars().all(|c| c.is_ascii_digit() || matches!(c, '+' | '-' | '.' | 'e' | 'E'))
+    let valid = t
+        .chars()
+        .all(|c| c.is_ascii_digit() || matches!(c, '+' | '-' | '.' | 'e' | 'E'))
         && t.chars().any(|c| c.is_ascii_digit());
     if !valid {
         return f64::NAN;
@@ -323,7 +313,13 @@ impl PdfReader {
             .env
             .snapshot()
             .into_iter()
-            .find(|(name, _)| if cfg!(windows) { name.eq_ignore_ascii_case("PATH") } else { name == "PATH" })
+            .find(|(name, _)| {
+                if cfg!(windows) {
+                    name.eq_ignore_ascii_case("PATH")
+                } else {
+                    name == "PATH"
+                }
+            })
             .map(|(_, value)| value)?;
         let cwd = std::env::current_dir().unwrap_or_default();
         which::which_in(program, Some(path), cwd).ok()
@@ -641,7 +637,9 @@ pub fn parse_page_range(spec: &Value, count: usize) -> Result<PageRange, String>
         first
     };
     if first < 1.0 || last < first {
-        return Err(format!("\"{shown}\" isn't a range of pages: pages count from 1, e.g. 2-5."));
+        return Err(format!(
+            "\"{shown}\" isn't a range of pages: pages count from 1, e.g. 2-5."
+        ));
     }
     if first > count_f {
         return Err(format!(
@@ -675,7 +673,11 @@ pub fn fit_pages(pages: &[String], first: usize, max_chars: usize) -> FittedPage
     let mut partial = false;
     for (k, page) in pages.iter().enumerate() {
         let n = first + k;
-        let body = if page.is_empty() { "(no text on this page)" } else { page.as_str() };
+        let body = if page.is_empty() {
+            "(no text on this page)"
+        } else {
+            page.as_str()
+        };
         let block = format!("--- Page {n} ---\n{body}\n\n");
         let block_len = utf16_len(&block);
         if text_len + block_len <= max_chars {
@@ -706,10 +708,12 @@ pub fn fit_pages(pages: &[String], first: usize, max_chars: usize) -> FittedPage
 /// (credentials, keys, databases), is refused. An http(s) address is downloaded when it is public. `settings`
 /// holds the Safe Browsing key for the address check.
 pub async fn read_pdf_tool(app: &App, input: &Value, settings: Option<&dyn Settings>) -> String {
-    let where_ = ["path", "file_path", "source", "url"].iter().find_map(|key| match input.get(*key) {
-        Some(Value::String(s)) if !js_trim(s).is_empty() => Some(js_trim(s).to_string()),
-        _ => None,
-    });
+    let where_ = ["path", "file_path", "source", "url"]
+        .iter()
+        .find_map(|key| match input.get(*key) {
+            Some(Value::String(s)) if !js_trim(s).is_empty() => Some(js_trim(s).to_string()),
+            _ => None,
+        });
     let Some(where_) = where_ else {
         return "pdf_read error: 'path' is required: a PDF in the workspace (e.g. uploads/report.pdf) or a web address."
             .into();
@@ -770,7 +774,10 @@ pub async fn read_pdf_tool(app: &App, input: &Value, settings: Option<&dyn Setti
     if r.pages.is_empty() {
         return format!(
             "pdf_read error: {name} could not be read: {}.",
-            r.error.as_deref().filter(|e| !e.is_empty()).unwrap_or("no pages were found in it")
+            r.error
+                .as_deref()
+                .filter(|e| !e.is_empty())
+                .unwrap_or("no pages were found in it")
         );
     }
     let total = r.pages.len();
@@ -868,7 +875,10 @@ fn locate(config: &Config, where_: &str) -> Result<PathBuf, String> {
     let Some(real) = candidates.iter().find_map(|c| real_path(c).ok()) else {
         return Err(format!("there is no file at {}.", first.display()));
     };
-    let real_roots: Vec<PathBuf> = roots.iter().map(|r| real_path(r).unwrap_or_else(|_| r.clone())).collect();
+    let real_roots: Vec<PathBuf> = roots
+        .iter()
+        .map(|r| real_path(r).unwrap_or_else(|_| r.clone()))
+        .collect();
     let real_text = real.to_string_lossy();
     let inside = real_roots.iter().any(|r| {
         let r = r.to_string_lossy();
@@ -1375,7 +1385,8 @@ fn prop<'a>(value: Option<&'a V>, key: &str) -> Option<&'a V> {
     let found = match value? {
         V::Dict(d) => d.get(key),
         V::Arr(items) => {
-            let canonical = !key.is_empty() && (key == "0" || !key.starts_with('0')) && key.bytes().all(|b| b.is_ascii_digit());
+            let canonical =
+                !key.is_empty() && (key == "0" || !key.starts_with('0')) && key.bytes().all(|b| b.is_ascii_digit());
             if canonical {
                 key.parse::<usize>().ok().and_then(|i| items.get(i))
             } else {
@@ -1633,7 +1644,10 @@ fn parse_value(s: &[u8], i: usize, refs: bool, depth: usize) -> Result<(V, usize
                 i = k;
             }
         }
-        let stop = s[i + 1..].iter().position(|&b| b == b'>').map_or(s.len(), |p| i + 1 + p);
+        let stop = s[i + 1..]
+            .iter()
+            .position(|&b| b == b'>')
+            .map_or(s.len(), |p| i + 1 + p);
         let mut h: Vec<u8> = s[i + 1..stop].iter().copied().filter(u8::is_ascii_hexdigit).collect();
         if h.len() % 2 == 1 {
             h.push(b'0');
@@ -1669,7 +1683,8 @@ fn parse_value(s: &[u8], i: usize, refs: bool, depth: usize) -> Result<(V, usize
             let text = latin1(&s[i..end]);
             let v: f64 = text.parse().unwrap_or(f64::NAN);
             i = end;
-            if refs && text.bytes().all(|b| b.is_ascii_digit())
+            if refs
+                && text.bytes().all(|b| b.is_ascii_digit())
                 && let Some(after) = match_ref(s, i)
             {
                 return Ok((V::Ref(v), after));
@@ -1829,9 +1844,13 @@ impl<'b> PdfDoc<'b> {
         while last <= s.len() {
             let Some(caps) = OBJ_RE.captures_at(s, last) else { break };
             let whole = caps.get(0).map_or(0..0, |m| m.range());
-            let num: f64 = latin1(caps.get(1).map_or(&[][..], |m| m.as_bytes())).parse().unwrap_or(f64::NAN);
+            let num: f64 = latin1(caps.get(1).map_or(&[][..], |m| m.as_bytes()))
+                .parse()
+                .unwrap_or(f64::NAN);
             last = whole.end;
-            let Ok((value, i)) = parse_value(s, whole.end, true, 0) else { continue };
+            let Ok((value, i)) = parse_value(s, whole.end, true, 0) else {
+                continue;
+            };
             let i = skip_ws(s, i);
             let mut entry = Entry { value, stream: None };
             if s.len() >= i && s[i..].starts_with(b"stream") {
@@ -1917,7 +1936,9 @@ impl<'b> PdfDoc<'b> {
         let mut pairs = Vec::new();
         let mut k = 0.0;
         while k < count {
-            let (Some(a), Some(b)) = (numbers.next(), numbers.next()) else { break };
+            let (Some(a), Some(b)) = (numbers.next(), numbers.next()) else {
+                break;
+            };
             pairs.push((a, b));
             k += 1.0;
         }
@@ -2269,17 +2290,17 @@ fn find(s: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     if from > s.len() {
         return None;
     }
-    s[from..].windows(needle.len()).position(|w| w == needle).map(|p| p + from)
+    s[from..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|p| p + from)
 }
 
 /// `/\sEI(?=\s|$)/g` from `from`: where the white space before "EI" is.
 fn find_inline_end(s: &[u8], from: usize) -> Option<usize> {
     let mut p = from;
     while p + 3 <= s.len() {
-        if js_space_byte(s[p])
-            && &s[p + 1..p + 3] == b"EI"
-            && (p + 3 == s.len() || js_space_byte(s[p + 3]))
-        {
+        if js_space_byte(s[p]) && &s[p + 1..p + 3] == b"EI" && (p + 3 == s.len() || js_space_byte(s[p + 3])) {
             return Some(p);
         }
         p += 1;
@@ -2637,9 +2658,9 @@ fn ascii85(data: &[u8]) -> Vec<u8> {
 /// WinAnsiEncoding: Latin-1 with Windows' characters in 0x80-0x9F. Most simple fonts read right with it.
 static WIN_ANSI: LazyLock<[u16; 256]> = LazyLock::new(|| {
     const WIN_ANSI_80: [u16; 32] = [
-        0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152,
-        0x008d, 0x017d, 0x008f, 0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122,
-        0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
+        0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008d,
+        0x017d, 0x008f, 0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a,
+        0x0153, 0x009d, 0x017e, 0x0178,
     ];
     let mut table = [0u16; 256];
     for (c, slot) in table.iter_mut().enumerate() {
@@ -2740,14 +2761,226 @@ const GLYPHS: &[(&str, &str)] = &[
 /// The combining accents of `glyphText`, and for each the letters that compose with it into one character
 /// (what `.normalize("NFC")` gives; a letter not listed stays as the letter and the combining accent).
 const ACCENTS: &[(&str, u16, &[(u8, u16)])] = &[
-    ("acute", 0x0301, &[(b'A', 0xC1), (b'C', 0x106), (b'E', 0xC9), (b'G', 0x1F4), (b'I', 0xCD), (b'K', 0x1E30), (b'L', 0x139), (b'M', 0x1E3E), (b'N', 0x143), (b'O', 0xD3), (b'P', 0x1E54), (b'R', 0x154), (b'S', 0x15A), (b'U', 0xDA), (b'W', 0x1E82), (b'Y', 0xDD), (b'Z', 0x179), (b'a', 0xE1), (b'c', 0x107), (b'e', 0xE9), (b'g', 0x1F5), (b'i', 0xED), (b'k', 0x1E31), (b'l', 0x13A), (b'm', 0x1E3F), (b'n', 0x144), (b'o', 0xF3), (b'p', 0x1E55), (b'r', 0x155), (b's', 0x15B), (b'u', 0xFA), (b'w', 0x1E83), (b'y', 0xFD), (b'z', 0x17A)]),
-    ("grave", 0x0300, &[(b'A', 0xC0), (b'E', 0xC8), (b'I', 0xCC), (b'N', 0x1F8), (b'O', 0xD2), (b'U', 0xD9), (b'W', 0x1E80), (b'Y', 0x1EF2), (b'a', 0xE0), (b'e', 0xE8), (b'i', 0xEC), (b'n', 0x1F9), (b'o', 0xF2), (b'u', 0xF9), (b'w', 0x1E81), (b'y', 0x1EF3)]),
-    ("circumflex", 0x0302, &[(b'A', 0xC2), (b'C', 0x108), (b'E', 0xCA), (b'G', 0x11C), (b'H', 0x124), (b'I', 0xCE), (b'J', 0x134), (b'O', 0xD4), (b'S', 0x15C), (b'U', 0xDB), (b'W', 0x174), (b'Y', 0x176), (b'Z', 0x1E90), (b'a', 0xE2), (b'c', 0x109), (b'e', 0xEA), (b'g', 0x11D), (b'h', 0x125), (b'i', 0xEE), (b'j', 0x135), (b'o', 0xF4), (b's', 0x15D), (b'u', 0xFB), (b'w', 0x175), (b'y', 0x177), (b'z', 0x1E91)]),
-    ("tilde", 0x0303, &[(b'A', 0xC3), (b'E', 0x1EBC), (b'I', 0x128), (b'N', 0xD1), (b'O', 0xD5), (b'U', 0x168), (b'V', 0x1E7C), (b'Y', 0x1EF8), (b'a', 0xE3), (b'e', 0x1EBD), (b'i', 0x129), (b'n', 0xF1), (b'o', 0xF5), (b'u', 0x169), (b'v', 0x1E7D), (b'y', 0x1EF9)]),
-    ("dieresis", 0x0308, &[(b'A', 0xC4), (b'E', 0xCB), (b'H', 0x1E26), (b'I', 0xCF), (b'O', 0xD6), (b'U', 0xDC), (b'W', 0x1E84), (b'X', 0x1E8C), (b'Y', 0x178), (b'a', 0xE4), (b'e', 0xEB), (b'h', 0x1E27), (b'i', 0xEF), (b'o', 0xF6), (b't', 0x1E97), (b'u', 0xFC), (b'w', 0x1E85), (b'x', 0x1E8D), (b'y', 0xFF)]),
-    ("ring", 0x030A, &[(b'A', 0xC5), (b'U', 0x16E), (b'a', 0xE5), (b'u', 0x16F), (b'w', 0x1E98), (b'y', 0x1E99)]),
-    ("cedilla", 0x0327, &[(b'C', 0xC7), (b'D', 0x1E10), (b'E', 0x228), (b'G', 0x122), (b'H', 0x1E28), (b'K', 0x136), (b'L', 0x13B), (b'N', 0x145), (b'R', 0x156), (b'S', 0x15E), (b'T', 0x162), (b'c', 0xE7), (b'd', 0x1E11), (b'e', 0x229), (b'g', 0x123), (b'h', 0x1E29), (b'k', 0x137), (b'l', 0x13C), (b'n', 0x146), (b'r', 0x157), (b's', 0x15F), (b't', 0x163)]),
-    ("caron", 0x030C, &[(b'A', 0x1CD), (b'C', 0x10C), (b'D', 0x10E), (b'E', 0x11A), (b'G', 0x1E6), (b'H', 0x21E), (b'I', 0x1CF), (b'K', 0x1E8), (b'L', 0x13D), (b'N', 0x147), (b'O', 0x1D1), (b'R', 0x158), (b'S', 0x160), (b'T', 0x164), (b'U', 0x1D3), (b'Z', 0x17D), (b'a', 0x1CE), (b'c', 0x10D), (b'd', 0x10F), (b'e', 0x11B), (b'g', 0x1E7), (b'h', 0x21F), (b'i', 0x1D0), (b'j', 0x1F0), (b'k', 0x1E9), (b'l', 0x13E), (b'n', 0x148), (b'o', 0x1D2), (b'r', 0x159), (b's', 0x161), (b't', 0x165), (b'u', 0x1D4), (b'z', 0x17E)]),
+    (
+        "acute",
+        0x0301,
+        &[
+            (b'A', 0xC1),
+            (b'C', 0x106),
+            (b'E', 0xC9),
+            (b'G', 0x1F4),
+            (b'I', 0xCD),
+            (b'K', 0x1E30),
+            (b'L', 0x139),
+            (b'M', 0x1E3E),
+            (b'N', 0x143),
+            (b'O', 0xD3),
+            (b'P', 0x1E54),
+            (b'R', 0x154),
+            (b'S', 0x15A),
+            (b'U', 0xDA),
+            (b'W', 0x1E82),
+            (b'Y', 0xDD),
+            (b'Z', 0x179),
+            (b'a', 0xE1),
+            (b'c', 0x107),
+            (b'e', 0xE9),
+            (b'g', 0x1F5),
+            (b'i', 0xED),
+            (b'k', 0x1E31),
+            (b'l', 0x13A),
+            (b'm', 0x1E3F),
+            (b'n', 0x144),
+            (b'o', 0xF3),
+            (b'p', 0x1E55),
+            (b'r', 0x155),
+            (b's', 0x15B),
+            (b'u', 0xFA),
+            (b'w', 0x1E83),
+            (b'y', 0xFD),
+            (b'z', 0x17A),
+        ],
+    ),
+    (
+        "grave",
+        0x0300,
+        &[
+            (b'A', 0xC0),
+            (b'E', 0xC8),
+            (b'I', 0xCC),
+            (b'N', 0x1F8),
+            (b'O', 0xD2),
+            (b'U', 0xD9),
+            (b'W', 0x1E80),
+            (b'Y', 0x1EF2),
+            (b'a', 0xE0),
+            (b'e', 0xE8),
+            (b'i', 0xEC),
+            (b'n', 0x1F9),
+            (b'o', 0xF2),
+            (b'u', 0xF9),
+            (b'w', 0x1E81),
+            (b'y', 0x1EF3),
+        ],
+    ),
+    (
+        "circumflex",
+        0x0302,
+        &[
+            (b'A', 0xC2),
+            (b'C', 0x108),
+            (b'E', 0xCA),
+            (b'G', 0x11C),
+            (b'H', 0x124),
+            (b'I', 0xCE),
+            (b'J', 0x134),
+            (b'O', 0xD4),
+            (b'S', 0x15C),
+            (b'U', 0xDB),
+            (b'W', 0x174),
+            (b'Y', 0x176),
+            (b'Z', 0x1E90),
+            (b'a', 0xE2),
+            (b'c', 0x109),
+            (b'e', 0xEA),
+            (b'g', 0x11D),
+            (b'h', 0x125),
+            (b'i', 0xEE),
+            (b'j', 0x135),
+            (b'o', 0xF4),
+            (b's', 0x15D),
+            (b'u', 0xFB),
+            (b'w', 0x175),
+            (b'y', 0x177),
+            (b'z', 0x1E91),
+        ],
+    ),
+    (
+        "tilde",
+        0x0303,
+        &[
+            (b'A', 0xC3),
+            (b'E', 0x1EBC),
+            (b'I', 0x128),
+            (b'N', 0xD1),
+            (b'O', 0xD5),
+            (b'U', 0x168),
+            (b'V', 0x1E7C),
+            (b'Y', 0x1EF8),
+            (b'a', 0xE3),
+            (b'e', 0x1EBD),
+            (b'i', 0x129),
+            (b'n', 0xF1),
+            (b'o', 0xF5),
+            (b'u', 0x169),
+            (b'v', 0x1E7D),
+            (b'y', 0x1EF9),
+        ],
+    ),
+    (
+        "dieresis",
+        0x0308,
+        &[
+            (b'A', 0xC4),
+            (b'E', 0xCB),
+            (b'H', 0x1E26),
+            (b'I', 0xCF),
+            (b'O', 0xD6),
+            (b'U', 0xDC),
+            (b'W', 0x1E84),
+            (b'X', 0x1E8C),
+            (b'Y', 0x178),
+            (b'a', 0xE4),
+            (b'e', 0xEB),
+            (b'h', 0x1E27),
+            (b'i', 0xEF),
+            (b'o', 0xF6),
+            (b't', 0x1E97),
+            (b'u', 0xFC),
+            (b'w', 0x1E85),
+            (b'x', 0x1E8D),
+            (b'y', 0xFF),
+        ],
+    ),
+    (
+        "ring",
+        0x030A,
+        &[
+            (b'A', 0xC5),
+            (b'U', 0x16E),
+            (b'a', 0xE5),
+            (b'u', 0x16F),
+            (b'w', 0x1E98),
+            (b'y', 0x1E99),
+        ],
+    ),
+    (
+        "cedilla",
+        0x0327,
+        &[
+            (b'C', 0xC7),
+            (b'D', 0x1E10),
+            (b'E', 0x228),
+            (b'G', 0x122),
+            (b'H', 0x1E28),
+            (b'K', 0x136),
+            (b'L', 0x13B),
+            (b'N', 0x145),
+            (b'R', 0x156),
+            (b'S', 0x15E),
+            (b'T', 0x162),
+            (b'c', 0xE7),
+            (b'd', 0x1E11),
+            (b'e', 0x229),
+            (b'g', 0x123),
+            (b'h', 0x1E29),
+            (b'k', 0x137),
+            (b'l', 0x13C),
+            (b'n', 0x146),
+            (b'r', 0x157),
+            (b's', 0x15F),
+            (b't', 0x163),
+        ],
+    ),
+    (
+        "caron",
+        0x030C,
+        &[
+            (b'A', 0x1CD),
+            (b'C', 0x10C),
+            (b'D', 0x10E),
+            (b'E', 0x11A),
+            (b'G', 0x1E6),
+            (b'H', 0x21E),
+            (b'I', 0x1CF),
+            (b'K', 0x1E8),
+            (b'L', 0x13D),
+            (b'N', 0x147),
+            (b'O', 0x1D1),
+            (b'R', 0x158),
+            (b'S', 0x160),
+            (b'T', 0x164),
+            (b'U', 0x1D3),
+            (b'Z', 0x17D),
+            (b'a', 0x1CE),
+            (b'c', 0x10D),
+            (b'd', 0x10F),
+            (b'e', 0x11B),
+            (b'g', 0x1E7),
+            (b'h', 0x21F),
+            (b'i', 0x1D0),
+            (b'j', 0x1F0),
+            (b'k', 0x1E9),
+            (b'l', 0x13E),
+            (b'n', 0x148),
+            (b'o', 0x1D2),
+            (b'r', 0x159),
+            (b's', 0x161),
+            (b't', 0x165),
+            (b'u', 0x1D4),
+            (b'z', 0x17E),
+        ],
+    ),
 ];
 
 /// A glyph name's text (as UTF-16 units), or `None` for a name it doesn't know.

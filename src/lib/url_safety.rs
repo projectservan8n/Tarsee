@@ -81,15 +81,15 @@ const TRUSTED_DOMAINS: &[&str] = &[
 /// parser lower-cases them and writes other scripts as punycode), so `(?i)` matches what the JS `/i` matched.
 static SUSPICIOUS_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
-        r"(?i)g[o0]{2}gle",                 // g00gle, gooogle
-        r"(?i)faceb[o0]{2}k",               // faceb00k
-        r"(?i)amaz[o0]n",                   // amaz0n
-        r"(?i)paypa[l1]",                   // paypa1
-        r"(?i)m[i1]cr[o0]s[o0]ft",          // micr0soft
-        r"(?i)app[l1]e\.",                  // app1e
-        r"(?i)l[o0]gin|s[i1]gn[i1]n",       // login pages with letter swaps
-        r"(?i)secure.*update.*account",     // phishing pattern
-        r"(?i)verify.*identity.*confirm",   // phishing pattern
+        r"(?i)g[o0]{2}gle",               // g00gle, gooogle
+        r"(?i)faceb[o0]{2}k",             // faceb00k
+        r"(?i)amaz[o0]n",                 // amaz0n
+        r"(?i)paypa[l1]",                 // paypa1
+        r"(?i)m[i1]cr[o0]s[o0]ft",        // micr0soft
+        r"(?i)app[l1]e\.",                // app1e
+        r"(?i)l[o0]gin|s[i1]gn[i1]n",     // login pages with letter swaps
+        r"(?i)secure.*update.*account",   // phishing pattern
+        r"(?i)verify.*identity.*confirm", // phishing pattern
     ]
     .iter()
     .map(|p| Regex::new(p).expect("a suspicious-domain pattern"))
@@ -310,12 +310,18 @@ mod tests {
     async fn raw_ip_addresses_warn_except_loopback() {
         assert_eq!(
             check("http://93.184.216.34/x").await,
-            refused("Raw IP address: 93.184.216.34 — likely phishing or C2", SafetyLevel::Warning)
+            refused(
+                "Raw IP address: 93.184.216.34 — likely phishing or C2",
+                SafetyLevel::Warning
+            )
         );
         // The URL parser writes other IPv4 forms in dotted decimal first, as `new URL` did.
         assert_eq!(
             check("http://0x5d.0xb8.0xd8.0x22/").await,
-            refused("Raw IP address: 93.184.216.34 — likely phishing or C2", SafetyLevel::Warning)
+            refused(
+                "Raw IP address: 93.184.216.34 — likely phishing or C2",
+                SafetyLevel::Warning
+            )
         );
         assert_eq!(check("http://127.0.0.1:3000/").await, UrlSafety::safe());
         assert_eq!(check("http://2130706433/").await, UrlSafety::safe());
@@ -353,7 +359,10 @@ mod tests {
                 SafetyLevel::Warning
             )
         );
-        assert_eq!(check(&format!("https://{}.example.org/", "a".repeat(30))).await, UrlSafety::safe());
+        assert_eq!(
+            check(&format!("https://{}.example.org/", "a".repeat(30))).await,
+            UrlSafety::safe()
+        );
         assert_eq!(check("https://example.org/").await, UrlSafety::safe());
     }
 
@@ -361,10 +370,8 @@ mod tests {
     async fn safe_browsing_is_asked_only_with_a_key_and_its_threat_blocks() {
         let t = test_app();
         let base = "https://safebrowsing.googleapis.com/v4/threatMatches:find";
-        t.fetch.respond(
-            base,
-            Answer::json(200, json!({"matches": [{"threatType": "MALWARE"}]})),
-        );
+        t.fetch
+            .respond(base, Answer::json(200, json!({"matches": [{"threatType": "MALWARE"}]})));
         // No key: never asked.
         assert_eq!(
             check_url_safety("https://example.org/", None, &*t.fetch()).await,
@@ -379,8 +386,14 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].url, format!("{base}?key=test-key"));
         assert_eq!(calls[0].method, "POST");
-        assert_eq!(calls[0].json()["threatInfo"]["threatEntries"], json!([{"url": "https://example.org/a"}]));
-        assert_eq!(calls[0].json()["client"], json!({"clientId": "tarsee", "clientVersion": "1.0"}));
+        assert_eq!(
+            calls[0].json()["threatInfo"]["threatEntries"],
+            json!([{"url": "https://example.org/a"}])
+        );
+        assert_eq!(
+            calls[0].json()["client"],
+            json!({"clientId": "tarsee", "clientVersion": "1.0"})
+        );
 
         // No matches: safe. A failing API: safe (it only warns). A trusted domain: not asked at all.
         t.fetch.respond(base, Answer::json(200, json!({})));

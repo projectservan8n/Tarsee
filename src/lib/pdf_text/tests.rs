@@ -60,7 +60,10 @@ async fn pdf_read(t: &TestApp, input: Value) -> String {
 
 #[test]
 fn reads_each_pages_lines_in_order() {
-    let r = builtin_pdf_text(&make_pdf(&spec(&["Hello world\nSecond line (with parens)", "Page two text"])));
+    let r = builtin_pdf_text(&make_pdf(&spec(&[
+        "Hello world\nSecond line (with parens)",
+        "Page two text",
+    ])));
     assert_eq!(r.error, None);
     assert_eq!(r.pages, ["Hello world\nSecond line (with parens)", "Page two text"]);
 }
@@ -101,7 +104,10 @@ fn undoes_asciihex_and_ascii85_over_flate() {
 
 #[test]
 fn undoes_png_predictors_in_content_and_in_object_streams() {
-    let pages = ["Predicted rows of text that run past sixteen bytes", "More predicted text"];
+    let pages = [
+        "Predicted rows of text that run past sixteen bytes",
+        "More predicted text",
+    ];
     let r = builtin_pdf_text(&make_pdf(&PdfSpec {
         predictor: true,
         ..spec(&pages)
@@ -192,7 +198,10 @@ async fn falls_back_to_the_built_in_reader_when_pdftotext_is_not_installed() {
     let reader = PdfReader::of(&t.app);
     reader.set_pdftotext(None);
     let r = reader
-        .pdf_text(Bytes::from(make_pdf(&spec(&["Fallback works"]))), PdfTextOptions::default())
+        .pdf_text(
+            Bytes::from(make_pdf(&spec(&["Fallback works"]))),
+            PdfTextOptions::default(),
+        )
         .await;
     assert_eq!(r.reader, Some(ReaderKind::Builtin));
     assert_eq!(r.pages, ["Fallback works"]);
@@ -215,7 +224,12 @@ async fn falls_back_to_the_built_in_reader_when_pdftotext_cant_run() {
 async fn without_pdftotext_on_the_path_the_built_in_reader_is_used() {
     // The test app's environment has no PATH, so looking for pdftotext finds nothing.
     let t = test_app();
-    let r = pdf_text(&t.app, Bytes::from(make_pdf(&spec(&["Looked for"]))), PdfTextOptions::default()).await;
+    let r = pdf_text(
+        &t.app,
+        Bytes::from(make_pdf(&spec(&["Looked for"]))),
+        PdfTextOptions::default(),
+    )
+    .await;
     assert_eq!(r.reader, Some(ReaderKind::Builtin));
     assert_eq!(r.pages, ["Looked for"]);
 }
@@ -225,7 +239,9 @@ async fn not_a_pdf_has_no_reader_and_a_locked_one_says_why() {
     let t = test_app();
     let reader = PdfReader::of(&t.app);
     reader.set_pdftotext(None);
-    let r = reader.pdf_text(Bytes::from_static(b"plain words"), PdfTextOptions::default()).await;
+    let r = reader
+        .pdf_text(Bytes::from_static(b"plain words"), PdfTextOptions::default())
+        .await;
     assert_eq!(
         r,
         PdfTextResult {
@@ -250,7 +266,9 @@ async fn a_pdf_read_before_comes_from_the_cache_and_the_cache_keeps_six() {
     let reader = PdfReader::of(&t.app);
     reader.set_pdftotext(None);
     let first = make_pdf(&spec(&["Cached"]));
-    reader.pdf_text(Bytes::from(first.clone()), PdfTextOptions::default()).await;
+    reader
+        .pdf_text(Bytes::from(first.clone()), PdfTextOptions::default())
+        .await;
     assert_eq!(reader.cache.lock().len(), 1);
     for n in 0..6 {
         let other = make_pdf(&spec(&[&format!("Other {n}")]));
@@ -299,7 +317,10 @@ fn refuses_pages_that_are_not_there_or_not_page_numbers() {
         err(json!("abc")),
         "\"abc\" isn't a page or a range of pages: use 3, 2-5, or 6- for page 6 to the end."
     );
-    assert_eq!(err(json!("5-2")), "\"5-2\" isn't a range of pages: pages count from 1, e.g. 2-5.");
+    assert_eq!(
+        err(json!("5-2")),
+        "\"5-2\" isn't a range of pages: pages count from 1, e.g. 2-5."
+    );
     assert_eq!(
         err(json!(2.5)),
         "\"2.5\" isn't a page or a range of pages: use 3, 2-5, or 6- for page 6 to the end."
@@ -318,7 +339,11 @@ fn fit_pages_stops_at_a_page_edge_and_cuts_only_a_first_page_too_long() {
     assert!(!fit.partial);
     assert_eq!(
         fit.text,
-        format!("--- Page 4 ---\n{}\n\n--- Page 5 ---\n{}", "a".repeat(30), "b".repeat(30))
+        format!(
+            "--- Page 4 ---\n{}\n\n--- Page 5 ---\n{}",
+            "a".repeat(30),
+            "b".repeat(30)
+        )
     );
     let all = fit_pages(&pages, 1, 1000);
     assert!(all.text.ends_with("--- Page 3 ---\n(no text on this page)"));
@@ -350,7 +375,11 @@ async fn reads_a_pdf_in_the_uploads_folder_by_a_workspace_relative_or_absolute_p
 #[tokio::test]
 async fn reads_only_the_pages_asked_for() {
     let t = app();
-    put(&t, "three.pdf", &make_pdf(&spec(&["First page", "Second page", "Third page"])));
+    put(
+        &t,
+        "three.pdf",
+        &make_pdf(&spec(&["First page", "Second page", "Third page"])),
+    );
     let two = pdf_read(&t, json!({ "path": "uploads/three.pdf", "pages": "2" })).await;
     assert!(two.contains("pages 2-2 of 3"), "{two}");
     assert!(two.contains("Second page"));
@@ -359,7 +388,10 @@ async fn reads_only_the_pages_asked_for() {
     let second = rest.find("Second page").unwrap();
     assert!(rest[second..].contains("Third page"), "{rest}");
     let none = pdf_read(&t, json!({ "path": "uploads/three.pdf", "pages": "8" })).await;
-    assert!(none.starts_with("pdf_read error: ") && none.contains("3 pages"), "{none}");
+    assert!(
+        none.starts_with("pdf_read error: ") && none.contains("3 pages"),
+        "{none}"
+    );
 }
 
 #[tokio::test]
@@ -437,13 +469,26 @@ async fn refuses_a_file_outside_the_workspace_a_protected_name_a_non_pdf_and_a_m
     std::fs::create_dir_all(&outside).unwrap();
     std::fs::write(outside.join("doc.pdf"), make_pdf(&spec(&["Outside"]))).unwrap();
     let abs = pdf_read(&t, json!({ "path": outside.join("doc.pdf").to_string_lossy() })).await;
-    assert!(abs.starts_with("pdf_read error: ") && abs.contains("outside the workspace"), "{abs}");
+    assert!(
+        abs.starts_with("pdf_read error: ") && abs.contains("outside the workspace"),
+        "{abs}"
+    );
     let rel = pdf_read(&t, json!({ "path": "../outside/doc.pdf" })).await;
-    assert!(rel.starts_with("pdf_read error: ") && rel.contains("outside the workspace"), "{rel}");
+    assert!(
+        rel.starts_with("pdf_read error: ") && rel.contains("outside the workspace"),
+        "{rel}"
+    );
 
-    std::fs::write(t.config().workspace_dir.join(".credentials.json"), make_pdf(&spec(&["Nope"]))).unwrap();
+    std::fs::write(
+        t.config().workspace_dir.join(".credentials.json"),
+        make_pdf(&spec(&["Nope"])),
+    )
+    .unwrap();
     let protected = pdf_read(&t, json!({ "path": ".credentials.json" })).await;
-    assert_eq!(protected, "pdf_read error: .credentials.json can't be read with this tool.");
+    assert_eq!(
+        protected,
+        "pdf_read error: .credentials.json can't be read with this tool."
+    );
 
     put(&t, "notes.txt", b"plain words");
     assert_eq!(
@@ -467,7 +512,11 @@ async fn a_link_inside_the_workspace_that_leads_out_is_refused() {
     let outside = t.path().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
     std::fs::write(outside.join("doc.pdf"), make_pdf(&spec(&["Outside"]))).unwrap();
-    std::os::unix::fs::symlink(outside.join("doc.pdf"), t.config().workspace_dir.join("uploads/link.pdf")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.join("doc.pdf"),
+        t.config().workspace_dir.join("uploads/link.pdf"),
+    )
+    .unwrap();
     let out = pdf_read(&t, json!({ "path": "uploads/link.pdf" })).await;
     assert!(out.contains("outside the workspace"), "{out}");
 }
@@ -490,16 +539,29 @@ async fn server() -> Server {
     let doc = body.clone();
     let seen = hits.clone();
     let router = Router::new()
-        .route("/doc.pdf", get(move || async move { ([("content-type", "application/pdf")], doc).into_response() }))
-        .route("/hop", get(|| async { (StatusCode::FOUND, [(LOCATION, "/doc.pdf")]).into_response() }))
+        .route(
+            "/doc.pdf",
+            get(move || async move { ([("content-type", "application/pdf")], doc).into_response() }),
+        )
+        .route(
+            "/hop",
+            get(|| async { (StatusCode::FOUND, [(LOCATION, "/doc.pdf")]).into_response() }),
+        )
         .route(
             "/to-private",
             get(move || async move {
-                (StatusCode::FOUND, [(LOCATION, format!("http://127.0.0.1:{port}/doc.pdf"))]).into_response()
+                (
+                    StatusCode::FOUND,
+                    [(LOCATION, format!("http://127.0.0.1:{port}/doc.pdf"))],
+                )
+                    .into_response()
             }),
         )
         .route("/huge", get(|| async { vec![0x41u8; 4096].into_response() }))
-        .route("/loop", get(|| async { (StatusCode::MOVED_PERMANENTLY, [(LOCATION, "/loop")]).into_response() }))
+        .route(
+            "/loop",
+            get(|| async { (StatusCode::MOVED_PERMANENTLY, [(LOCATION, "/loop")]).into_response() }),
+        )
         .layer(axum::middleware::from_fn(
             move |req: axum::extract::Request, next: axum::middleware::Next| {
                 let seen = seen.clone();
@@ -545,7 +607,10 @@ async fn refuses_a_loopback_or_private_address_and_sends_it_nothing() {
     assert!(s.hits.lock().is_empty(), "a refused address was still asked");
     // A name that resolves to loopback is refused by the guarded lookup, before any connection.
     let out = pdf_read(&t, json!({ "path": format!("http://localhost:{}/doc.pdf", s.port) })).await;
-    assert!(out.starts_with("pdf_read error: ") && out.contains("private or local"), "{out}");
+    assert!(
+        out.starts_with("pdf_read error: ") && out.contains("private or local"),
+        "{out}"
+    );
     assert!(s.hits.lock().is_empty());
 }
 
@@ -597,11 +662,20 @@ fn ipv4_inside_ipv6_zones_brackets_and_non_addresses_follow_the_ipv4_rules() {
     ] {
         assert!(is_private_address(ip), "{ip}");
     }
-    for ip in ["64:ff9b::808:808", "2002:808:808::", "::ffff:8.8.8.8", "[2606:4700::1]", "192.0.2.1"] {
+    for ip in [
+        "64:ff9b::808:808",
+        "2002:808:808::",
+        "::ffff:8.8.8.8",
+        "[2606:4700::1]",
+        "192.0.2.1",
+    ] {
         assert!(!is_private_address(ip), "{ip}");
     }
     assert_eq!(expand6("1::"), Some(vec![1, 0, 0, 0, 0, 0, 0, 0]));
-    assert_eq!(expand6("::ffff:1.2.3.4"), Some(vec![0, 0, 0, 0, 0, 0xffff, 0x102, 0x304]));
+    assert_eq!(
+        expand6("::ffff:1.2.3.4"),
+        Some(vec![0, 0, 0, 0, 0, 0xffff, 0x102, 0x304])
+    );
     assert_eq!(expand6("1:2:3:4:5:6:7:8:9"), None);
 }
 
@@ -627,7 +701,10 @@ async fn the_guarded_lookup_refuses_a_name_with_any_private_address() {
         mixed.message,
         "that address is on a private or local network (b.example), which this tool doesn't read from"
     );
-    let none = GuardedLookup::new(Answers(vec![])).lookup("c.example").await.unwrap_err();
+    let none = GuardedLookup::new(Answers(vec![]))
+        .lookup("c.example")
+        .await
+        .unwrap_err();
     assert_eq!(none.code, "EPRIVATE");
 }
 
@@ -705,7 +782,10 @@ async fn refuses_too_many_redirects_a_bad_status_and_what_is_not_http() {
 
 #[test]
 fn a_downloaded_pdf_is_named_after_its_address() {
-    assert_eq!(url_file_name("https://example.org/files/My%20Report%20(v2).pdf"), "My Report (v2).pdf");
+    assert_eq!(
+        url_file_name("https://example.org/files/My%20Report%20(v2).pdf"),
+        "My Report (v2).pdf"
+    );
     assert_eq!(url_file_name("https://example.org/a/b%C3%A9?x=1"), "b_");
     assert_eq!(url_file_name("https://example.org/"), "document.pdf");
     assert_eq!(url_file_name("https://example.org/%E0%A4%A"), "document.pdf");
@@ -729,7 +809,8 @@ async fn a_blocked_address_is_refused_before_it_is_fetched() {
 /// The zlib stream Node's `deflateSync` makes of "Hello there, this is some text to compress. " x 20.
 const NODE_DEFLATED: &str = "789cf348cdc9c95728c9482d4ad55128c9c82c56c82c5628cecf4d552849ad285128c95748cecf2d284a2d2ed653f018553baa76542d456a0183663b38";
 /// The same as raw deflate (`deflateRawSync`).
-const NODE_RAW: &str = "f348cdc9c95728c9482d4ad55128c9c82c56c82c5628cecf4d552849ad285128c95748cecf2d284a2d2ed653f018553baa76542d456a01";
+const NODE_RAW: &str =
+    "f348cdc9c95728c9482d4ad55128c9c82c56c82c5628cecf4d552849ad285128c95748cecf2d284a2d2ed653f018553baa76542d456a01";
 
 #[test]
 fn inflate_reads_what_node_read_whole_cut_off_raw_or_trailed() {
@@ -798,7 +879,11 @@ fn the_cmap_and_glyph_names_read_as_the_js_read_them() {
     assert_eq!(cmap_lookup(&cmap, 0x21), Some(vec![]));
     assert_eq!(cmap_lookup(&cmap, 0x13), None);
     let wrap = parse_cmap(b"beginbfrange <00> <05> <FFFE> endbfrange");
-    assert_eq!(cmap_lookup(&wrap, 3), Some(vec![0x0001]), "a unit past FFFF wraps, as fromCharCode did");
+    assert_eq!(
+        cmap_lookup(&wrap, 3),
+        Some(vec![0x0001]),
+        "a unit past FFFF wraps, as fromCharCode did"
+    );
 
     let g = |n: &str| glyph_text(n).map(|u| String::from_utf16_lossy(&u));
     assert_eq!(g("quoteright").as_deref(), Some("’"));
@@ -809,7 +894,11 @@ fn the_cmap_and_glyph_names_read_as_the_js_read_them() {
     assert_eq!(g("u110000"), None);
     assert_eq!(g("eacute").as_deref(), Some("é"));
     assert_eq!(g("Ntilde").as_deref(), Some("Ñ"));
-    assert_eq!(g("qacute").as_deref(), Some("q\u{301}"), "no composed form: the letter and the accent");
+    assert_eq!(
+        g("qacute").as_deref(),
+        Some("q\u{301}"),
+        "no composed form: the letter and the accent"
+    );
     assert_eq!(g("nosuchglyph"), None);
     assert_eq!(WIN_ANSI[0x80], 0x20AC);
     assert_eq!(WIN_ANSI[0x9F], 0x0178);
@@ -832,7 +921,9 @@ fn a_damaged_file_without_a_page_tree_still_gives_its_pages_by_number() {
     let pdf = b"%PDF-1.4\n9 0 obj << /Type /Page /Contents 8 0 R >> endobj\n8 0 obj << /Length 22 >>\nstream\nBT (second) Tj ET     \nendstream endobj\n3 0 obj << /Type /Page /Contents 4 0 R >> endobj\n4 0 obj << >>\nstream\nBT (first) Tj ET\nendstream endobj\n";
     assert_eq!(pages_of(builtin_pdf_text(pdf)), ["first", "second"]);
     assert_eq!(
-        builtin_pdf_text(b"%PDF-1.4\n1 0 obj << /Type /Font >> endobj\n").error.as_deref(),
+        builtin_pdf_text(b"%PDF-1.4\n1 0 obj << /Type /Font >> endobj\n")
+            .error
+            .as_deref(),
         Some("no pages were found in it")
     );
 }

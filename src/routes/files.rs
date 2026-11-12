@@ -350,7 +350,10 @@ async fn rename(State(app): State<App>, req: Request) -> Answer {
     // Validate new path is still within allowed roots (a prefix of the text, as the JS checked)
     let roots = allowed_roots(&app);
     let new_text = new_path.to_string_lossy();
-    if !roots.iter().any(|root| new_text.starts_with(root.to_string_lossy().as_ref())) {
+    if !roots
+        .iter()
+        .any(|root| new_text.starts_with(root.to_string_lossy().as_ref()))
+    {
         return Err(ApiError::bad_request("New name resolves outside allowed directory"));
     }
 
@@ -427,11 +430,7 @@ mod tests {
         assert_eq!(res.status, 200);
         let mut items = res.json()["items"].as_array().unwrap().clone();
         items.sort_by_key(|i| i["name"].as_str().unwrap().to_string());
-        assert_eq!(
-            res.json()["path"],
-            "proj",
-            "the path as it was asked for"
-        );
+        assert_eq!(res.json()["path"], "proj", "the path as it was asked for");
         assert_eq!(
             Value::Array(items),
             json!([
@@ -443,7 +442,13 @@ mod tests {
         let root = http::get(&router, "/ls").await;
         assert_eq!(root.status, 200);
         assert_eq!(root.json()["path"], ".");
-        assert!(root.json()["items"].as_array().unwrap().iter().any(|i| i["name"] == "proj"));
+        assert!(
+            root.json()["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["name"] == "proj")
+        );
         assert_eq!(http::get(&router, "/ls?path=").await.json()["path"], ".");
     }
 
@@ -452,15 +457,24 @@ mod tests {
         let (t, router) = site();
         std::fs::write(ws(&t).join("f.txt"), "x").unwrap();
         let outside = http::get(&router, "/ls?path=..").await;
-        assert_eq!((outside.status, outside.json()), (400, json!({"error": "Path outside allowed directories"})));
+        assert_eq!(
+            (outside.status, outside.json()),
+            (400, json!({"error": "Path outside allowed directories"}))
+        );
         let missing = http::get(&router, "/ls?path=nope").await;
-        assert_eq!((missing.status, missing.json()), (404, json!({"error": "Path not found"})));
+        assert_eq!(
+            (missing.status, missing.json()),
+            (404, json!({"error": "Path not found"}))
+        );
         let file = http::get(&router, "/ls?path=f.txt").await;
         assert_eq!((file.status, file.json()), (400, json!({"error": "Not a directory"})));
         let twice = http::get(&router, "/ls?path=a&path=b").await;
         assert_eq!((twice.status, twice.json()), (400, json!({"error": "Invalid path"})));
         let protected = http::get(&router, "/ls?path=.codex").await;
-        assert_eq!((protected.status, protected.json()), (400, json!({"error": "Path is not accessible"})));
+        assert_eq!(
+            (protected.status, protected.json()),
+            (400, json!({"error": "Path is not accessible"}))
+        );
     }
 
     #[cfg(unix)]
@@ -493,19 +507,28 @@ mod tests {
         );
         // Bytes that are not UTF-8 read as U+FFFD, as Node's utf8 decoding did.
         std::fs::write(ws(&t).join("bin"), [b'a', 0xff, b'b']).unwrap();
-        assert_eq!(http::get(&router, "/read?path=bin").await.json()["content"], "a\u{fffd}b");
+        assert_eq!(
+            http::get(&router, "/read?path=bin").await.json()["content"],
+            "a\u{fffd}b"
+        );
     }
 
     #[tokio::test]
     async fn read_refuses_no_path_a_folder_a_missing_file_and_a_big_one() {
         let (t, router) = site();
-        assert_eq!(http::get(&router, "/read").await.json(), json!({"error": "Path required"}));
+        assert_eq!(
+            http::get(&router, "/read").await.json(),
+            json!({"error": "Path required"})
+        );
         assert_eq!(http::get(&router, "/read?path=").await.status, 400);
         std::fs::create_dir_all(ws(&t).join("d")).unwrap();
         let folder = http::get(&router, "/read?path=d").await;
         assert_eq!((folder.status, folder.json()), (400, json!({"error": "Not a file"})));
         let missing = http::get(&router, "/read?path=missing.txt").await;
-        assert_eq!((missing.status, missing.json()), (404, json!({"error": "File not found"})));
+        assert_eq!(
+            (missing.status, missing.json()),
+            (404, json!({"error": "File not found"}))
+        );
         std::fs::write(ws(&t).join("big.txt"), vec![b'x'; 2 * 1024 * 1024 + 600]).unwrap();
         let big = http::get(&router, "/read?path=big.txt").await;
         assert_eq!(
@@ -519,8 +542,16 @@ mod tests {
     #[tokio::test]
     async fn write_makes_the_folders_and_writes_the_text() {
         let (t, router) = site();
-        let res = http::post_json(&router, "/write", &json!({ "path": "a/b/c.txt", "content": "hi there" })).await;
-        assert_eq!((res.status, res.json()), (200, json!({ "ok": true, "path": "a/b/c.txt" })));
+        let res = http::post_json(
+            &router,
+            "/write",
+            &json!({ "path": "a/b/c.txt", "content": "hi there" }),
+        )
+        .await;
+        assert_eq!(
+            (res.status, res.json()),
+            (200, json!({ "ok": true, "path": "a/b/c.txt" }))
+        );
         assert_eq!(std::fs::read_to_string(ws(&t).join("a/b/c.txt")).unwrap(), "hi there");
         let empty = http::post_json(&router, "/write", &json!({ "path": "empty.txt", "content": "" })).await;
         assert_eq!(empty.status, 200);
@@ -534,9 +565,18 @@ mod tests {
             let router = router.clone();
             async move { http::post_json(&router, "/write", &body).await }
         };
-        assert_eq!(post(json!({ "content": "x" })).await.json(), json!({"error": "Path required"}));
-        assert_eq!(post(json!({ "path": "x.txt" })).await.json(), json!({"error": "Content required"}));
-        assert_eq!(post(json!({ "path": 5, "content": "x" })).await.json(), json!({"error": "Invalid path"}));
+        assert_eq!(
+            post(json!({ "content": "x" })).await.json(),
+            json!({"error": "Path required"})
+        );
+        assert_eq!(
+            post(json!({ "path": "x.txt" })).await.json(),
+            json!({"error": "Content required"})
+        );
+        assert_eq!(
+            post(json!({ "path": 5, "content": "x" })).await.json(),
+            json!({"error": "Invalid path"})
+        );
         assert_eq!(
             post(json!({ "path": "../x.txt", "content": "x" })).await.json(),
             json!({"error": "Path outside allowed directories"})
@@ -557,18 +597,27 @@ mod tests {
         let null = post(json!({ "path": "n.txt", "content": null })).await;
         assert!(null.json()["error"].as_str().unwrap().ends_with("Received null"));
         // A body that is not JSON is an empty body; JSON that is not an object or array is refused.
-        let form = http::send(&router, request("POST", "/write").header("content-type", "text/plain").body("path=x"))
-            .await;
+        let form = http::send(
+            &router,
+            request("POST", "/write")
+                .header("content-type", "text/plain")
+                .body("path=x"),
+        )
+        .await;
         assert_eq!((form.status, form.json()), (400, json!({"error": "Path required"})));
         let bare = http::send(
             &router,
-            request("POST", "/write").header("content-type", "application/json").body("\"x\""),
+            request("POST", "/write")
+                .header("content-type", "application/json")
+                .body("\"x\""),
         )
         .await;
         assert_eq!(bare.status, 400);
         let broken = http::send(
             &router,
-            request("POST", "/write").header("content-type", "application/json").body("{\"path\":"),
+            request("POST", "/write")
+                .header("content-type", "application/json")
+                .body("{\"path\":"),
         )
         .await;
         assert_eq!(broken.status, 400);
@@ -581,10 +630,15 @@ mod tests {
         let big = vec![b' '; limits::JSON_BODY_MAX_BYTES + 1];
         let res = http::send(
             &router,
-            request("POST", "/write").header("content-type", "application/json").body(big),
+            request("POST", "/write")
+                .header("content-type", "application/json")
+                .body(big),
         )
         .await;
-        assert_eq!((res.status, res.json()), (413, json!({"error": "request entity too large"})));
+        assert_eq!(
+            (res.status, res.json()),
+            (413, json!({"error": "request entity too large"}))
+        );
     }
 
     #[tokio::test]
@@ -593,12 +647,24 @@ mod tests {
         let res = http::post_json(&router, "/mkdir", &json!({ "path": "x/y/z" })).await;
         assert_eq!((res.status, res.json()), (200, json!({ "ok": true, "path": "x/y/z" })));
         assert!(ws(&t).join("x/y/z").is_dir());
-        assert_eq!(http::post_json(&router, "/mkdir", &json!({ "path": "x/y/z" })).await.status, 200);
-        assert_eq!(http::post_json(&router, "/mkdir", &json!({})).await.json(), json!({"error": "Path required"}));
+        assert_eq!(
+            http::post_json(&router, "/mkdir", &json!({ "path": "x/y/z" }))
+                .await
+                .status,
+            200
+        );
+        assert_eq!(
+            http::post_json(&router, "/mkdir", &json!({})).await.json(),
+            json!({"error": "Path required"})
+        );
         std::fs::write(ws(&t).join("file"), "").unwrap();
         let clash = http::post_json(&router, "/mkdir", &json!({ "path": "file" })).await;
         assert_eq!(clash.status, 500);
-        assert!(clash.json()["error"].as_str().unwrap().contains("mkdir"), "{}", clash.json());
+        assert!(
+            clash.json()["error"].as_str().unwrap().contains("mkdir"),
+            "{}",
+            clash.json()
+        );
     }
 
     #[tokio::test]
@@ -616,11 +682,20 @@ mod tests {
         assert_eq!(post(json!({ "path": "dir" })).await.json(), json!({ "ok": true }));
         assert!(!ws(&t).join("dir").exists());
         let missing = post(json!({ "path": "dir" })).await;
-        assert_eq!((missing.status, missing.json()), (404, json!({"error": "Path not found"})));
+        assert_eq!(
+            (missing.status, missing.json()),
+            (404, json!({"error": "Path not found"}))
+        );
         let root = post(json!({ "path": ws(&t).to_string_lossy() })).await;
-        assert_eq!((root.status, root.json()), (400, json!({"error": "Cannot delete root directory"})));
+        assert_eq!(
+            (root.status, root.json()),
+            (400, json!({"error": "Cannot delete root directory"}))
+        );
         assert!(ws(&t).is_dir());
-        assert_eq!(post(json!({ "path": "" })).await.json(), json!({"error": "Path required"}));
+        assert_eq!(
+            post(json!({ "path": "" })).await.json(),
+            json!({"error": "Path required"})
+        );
     }
 
     #[tokio::test]
@@ -644,14 +719,22 @@ mod tests {
         // A new name that climbs out of the workspace is refused.
         std::fs::write(ws(&t).join("top.txt"), "x").unwrap();
         let out = post(json!({ "path": "top.txt", "newName": "../escaped.txt" })).await;
-        assert_eq!((out.status, out.json()), (400, json!({"error": "New name resolves outside allowed directory"})));
+        assert_eq!(
+            (out.status, out.json()),
+            (400, json!({"error": "New name resolves outside allowed directory"}))
+        );
         assert!(ws(&t).join("top.txt").exists());
         // A number is a name too (String(newName)).
         let numbered = post(json!({ "path": "top.txt", "newName": 42 })).await;
         assert_eq!(numbered.json(), json!({ "ok": true, "newPath": "42" }));
         let missing = post(json!({ "path": "nope.txt", "newName": "x" })).await;
         assert_eq!(missing.status, 500);
-        assert!(missing.json()["error"].as_str().unwrap().starts_with("ENOENT: no such file or directory, rename '"));
+        assert!(
+            missing.json()["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("ENOENT: no such file or directory, rename '")
+        );
     }
 
     #[tokio::test]
@@ -661,16 +744,31 @@ mod tests {
         let res = http::get(&router, &format!("/download?path={}", q("My Report (v2) é.txt"))).await;
         assert_eq!(res.status, 200);
         assert_eq!(res.text(), "contents here");
-        assert_eq!(res.header("content-disposition"), Some("attachment; filename=\"My_Report_(v2)__.txt\""));
+        assert_eq!(
+            res.header("content-disposition"),
+            Some("attachment; filename=\"My_Report_(v2)__.txt\"")
+        );
         assert_eq!(res.header("content-length"), Some("13"));
         assert_eq!(res.header("content-type"), None);
-        assert_eq!(http::get(&router, "/download").await.json(), json!({"error": "Path required"}));
+        assert_eq!(
+            http::get(&router, "/download").await.json(),
+            json!({"error": "Path required"})
+        );
         let missing = http::get(&router, "/download?path=gone.bin").await;
-        assert_eq!((missing.status, missing.json()), (404, json!({"error": "File not found"})));
+        assert_eq!(
+            (missing.status, missing.json()),
+            (404, json!({"error": "File not found"}))
+        );
         std::fs::create_dir_all(ws(&t).join("d")).unwrap();
-        assert_eq!(http::get(&router, "/download?path=d").await.json(), json!({"error": "Not a file"}));
+        assert_eq!(
+            http::get(&router, "/download?path=d").await.json(),
+            json!({"error": "Not a file"})
+        );
         let secret = http::get(&router, &format!("/download?path={}", q("sub/.credentials.json"))).await;
-        assert_eq!((secret.status, secret.json()), (400, json!({"error": "Path is not accessible"})));
+        assert_eq!(
+            (secret.status, secret.json()),
+            (400, json!({"error": "Path is not accessible"}))
+        );
     }
 
     #[tokio::test]
@@ -696,6 +794,9 @@ mod tests {
         std::fs::write(t.path().join("notes.txt"), "outside").unwrap();
         let abs = t.path().join("notes.txt");
         let res = http::get(&router, &format!("/read?path={}", q(&abs.to_string_lossy()))).await;
-        assert_eq!((res.status, res.json()), (400, json!({"error": "Path outside allowed directories"})));
+        assert_eq!(
+            (res.status, res.json()),
+            (400, json!({"error": "Path outside allowed directories"}))
+        );
     }
 }

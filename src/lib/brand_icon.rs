@@ -309,9 +309,7 @@ pub fn decode_png_with_limit(buf: &[u8], max_pixels: u64) -> Result<RgbaImage, B
         return Err(refuse("The PNG file has an unknown interlace method."));
     }
     if u64::from(width) * u64::from(height) > max_pixels {
-        return Err(refuse(format!(
-            "The PNG file is too big ({width} by {height} pixels)."
-        )));
+        return Err(refuse(format!("The PNG file is too big ({width} by {height} pixels).")));
     }
 
     let mut palette: Option<&[u8]> = None;
@@ -366,14 +364,10 @@ pub fn decode_png_with_limit(buf: &[u8], max_pixels: u64) -> Result<RgbaImage, B
     let bpp = (bits_per_pixel >> 3).max(1);
     let expected = height * (stride + 1);
     let Some(raw) = inflate_strict(&idat, expected) else {
-        return Err(refuse(
-            "The PNG file is damaged (its picture data will not unpack).",
-        ));
+        return Err(refuse("The PNG file is damaged (its picture data will not unpack)."));
     };
     if raw.len() < expected {
-        return Err(refuse(
-            "The PNG file is cut short (its picture data ends early).",
-        ));
+        return Err(refuse("The PNG file is cut short (its picture data ends early)."));
     }
     let px = unfilter(&raw, height, stride, bpp)?;
 
@@ -872,20 +866,8 @@ pub struct ImageKind {
 fn js_space(c: char) -> bool {
     matches!(
         c,
-        '\t' | '\n'
-            | '\u{0B}'
-            | '\u{0C}'
-            | '\r'
-            | ' '
-            | '\u{A0}'
-            | '\u{1680}'
-            | '\u{2000}'..='\u{200A}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{202F}'
-            | '\u{205F}'
-            | '\u{3000}'
-            | '\u{FEFF}'
+        '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
     )
 }
 
@@ -896,13 +878,22 @@ pub fn sniff_image_type(buf: &[u8]) -> Option<ImageKind> {
         return None;
     }
     if is_png(buf) {
-        return Some(ImageKind { ext: "png", mime: "image/png" });
+        return Some(ImageKind {
+            ext: "png",
+            mime: "image/png",
+        });
     }
     if buf.len() >= 3 && buf[0] == 0xff && buf[1] == 0xd8 && buf[2] == 0xff {
-        return Some(ImageKind { ext: "jpg", mime: "image/jpeg" });
+        return Some(ImageKind {
+            ext: "jpg",
+            mime: "image/jpeg",
+        });
     }
     if buf.len() >= 12 && &buf[0..4] == b"RIFF" && &buf[8..12] == b"WEBP" {
-        return Some(ImageKind { ext: "webp", mime: "image/webp" });
+        return Some(ImageKind {
+            ext: "webp",
+            mime: "image/webp",
+        });
     }
     if !buf.contains(&0) {
         // `/<svg[\s>/]/i` on the text
@@ -916,7 +907,10 @@ pub fn sniff_image_type(buf: &[u8]) -> Option<ImageKind> {
                 && (js_space(w[4]) || w[4] == '>' || w[4] == '/')
         });
         if found {
-            return Some(ImageKind { ext: "svg", mime: "image/svg+xml" });
+            return Some(ImageKind {
+                ext: "svg",
+                mime: "image/svg+xml",
+            });
         }
     }
     None
@@ -932,7 +926,10 @@ pub fn decode_base64(text: &str) -> Option<Vec<u8>> {
         && let Some(comma) = body.find(',')
     {
         let head = &body[..comma];
-        if head.len() >= 7 && head.is_char_boundary(head.len() - 7) && head[head.len() - 7..].eq_ignore_ascii_case(";base64") {
+        if head.len() >= 7
+            && head.is_char_boundary(head.len() - 7)
+            && head[head.len() - 7..].eq_ignore_ascii_case(";base64")
+        {
             body = &body[comma + 1..];
         }
     }
@@ -941,11 +938,17 @@ pub fn decode_base64(text: &str) -> Option<Vec<u8>> {
     let padding = body.len() - digits.len();
     let valid = !digits.is_empty()
         && padding <= 2
-        && digits.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/');
+        && digits
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/');
     if !valid {
         return None;
     }
-    let usable = if digits.len() % 4 == 1 { &digits[..digits.len() - 1] } else { digits };
+    let usable = if digits.len() % 4 == 1 {
+        &digits[..digits.len() - 1]
+    } else {
+        digits
+    };
     let engine = base64::engine::GeneralPurpose::new(
         &base64::alphabet::STANDARD,
         base64::engine::GeneralPurposeConfig::new()
@@ -1125,7 +1128,8 @@ impl BrandIcon {
                         Some(Value::String(v)) => v.clone(),
                         _ => String::new(),
                     };
-                    let well_formed = version.len() == 12 && version.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+                    let well_formed =
+                        version.len() == 12 && version.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
                     if well_formed && whole {
                         let updated_at = match meta.get("updatedAt") {
                             Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
@@ -1137,7 +1141,9 @@ impl BrandIcon {
                             updated_at,
                         };
                     } else if truthy(&meta) {
-                        log::warn!("[brand-icon] brand.json is there but the icons are not all there: using the default icon");
+                        log::warn!(
+                            "[brand-icon] brand.json is there but the icons are not all there: using the default icon"
+                        );
                     }
                 }
                 Err(err) => log::warn!("[brand-icon] could not read brand.json: {err}"),
@@ -1273,7 +1279,10 @@ impl BrandIcon {
                 "originalType": match &orig { Some((kind, _, _)) => json!(kind.mime), None => kept("originalType") },
                 "background": background,
             });
-            write_atomic(&dir.join("brand.json"), format!("{}\n", serde_json::to_string_pretty(&meta)?).as_bytes())?;
+            write_atomic(
+                &dir.join("brand.json"),
+                format!("{}\n", serde_json::to_string_pretty(&meta)?).as_bytes(),
+            )?;
             Ok((version, updated_at))
         })
         .await??;
@@ -1387,7 +1396,13 @@ fn value(text: &str) -> HeaderValue {
 
 /// The response for a body the client may already have: 304 when the ETag matches, else 200 with the body (none
 /// for HEAD) and its length.
-fn send_cached(method: &Method, request_etag: Option<&str>, mut headers: HeaderMap, etag: &str, body: Bytes) -> Response {
+fn send_cached(
+    method: &Method,
+    request_etag: Option<&str>,
+    mut headers: HeaderMap,
+    etag: &str,
+    body: Bytes,
+) -> Response {
     headers.insert(header::ETAG, value(etag));
     let (status, body) = if etag_matches(request_etag, etag) {
         (StatusCode::NOT_MODIFIED, Body::empty())

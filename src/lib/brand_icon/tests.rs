@@ -67,8 +67,19 @@ fn filter_rows(rows: &[Vec<u8>], bpp: usize, filters: &[u8]) -> Vec<u8> {
             };
             let p = a + b - c;
             let (pa, pb, pc) = ((p - a).abs(), (p - b).abs(), (p - c).abs());
-            let pred = [0, a, b, (a + b) >> 1, if pa <= pb && pa <= pc { a } else if pb <= pc { b } else { c }]
-                [usize::from(f)];
+            let pred = [
+                0,
+                a,
+                b,
+                (a + b) >> 1,
+                if pa <= pb && pa <= pc {
+                    a
+                } else if pb <= pc {
+                    b
+                } else {
+                    c
+                },
+            ][usize::from(f)];
             out.push(((i32::from(row[i]) - pred) & 255) as u8);
         }
         prev = Some(row);
@@ -188,7 +199,11 @@ fn every_pixel(img: &RgbaImage, test: impl Fn([u8; 4]) -> bool) -> bool {
 fn refused(buf: &[u8], words: &[&str]) {
     let err = decode_png(buf).unwrap_err();
     assert_eq!(err.status(), 400);
-    assert!(words.iter().any(|w| err.0.contains(w)), "{} (wanted one of {words:?})", err.0);
+    assert!(
+        words.iter().any(|w| err.0.contains(w)),
+        "{} (wanted one of {words:?})",
+        err.0
+    );
 }
 
 // ---------------------------------------------------------------- decoding
@@ -205,7 +220,12 @@ fn crc32_is_the_standard_one() {
 fn rgba_8_bit_from_its_own_encoder_with_each_filter_and_the_automatic_choice_back_as_it_went_in() {
     let mut rnd = Rnd::new();
     let img = rgba_image(7, 5, |_, _| {
-        [rnd.next(256) as u8, rnd.next(256) as u8, rnd.next(256) as u8, rnd.next(256) as u8]
+        [
+            rnd.next(256) as u8,
+            rnd.next(256) as u8,
+            rnd.next(256) as u8,
+            rnd.next(256) as u8,
+        ]
     });
     for filter in [
         PngFilter::Fixed(0),
@@ -219,7 +239,14 @@ fn rgba_8_bit_from_its_own_encoder_with_each_filter_and_the_automatic_choice_bac
         assert_eq!((back.width, back.height), (7, 5));
         assert_eq!(back.data, img.data, "filter {filter:?}");
     }
-    assert!(encode_png(&RgbaImage { width: 2, height: 2, data: vec![0; 3] }).is_err());
+    assert!(
+        encode_png(&RgbaImage {
+            width: 2,
+            height: 2,
+            data: vec![0; 3]
+        })
+        .is_err()
+    );
 }
 
 /// Every colour type at every bit depth it allows, through every filter (three rows, so Up, Average and Paeth
@@ -228,10 +255,13 @@ fn colour_case(color_type: u8, depth: u32) {
     let mut rnd = Rnd::new();
     let (width, height) = (9usize, 3usize);
     let ch = channels(color_type).unwrap() as usize;
-    let max = if color_type == 3 { 255.min((1u32 << depth) - 1) } else { (1u32 << depth) - 1 };
+    let max = if color_type == 3 {
+        255.min((1u32 << depth) - 1)
+    } else {
+        (1u32 << depth) - 1
+    };
     let colours = if color_type == 3 { max + 1 } else { 0 };
-    let palette: Option<Vec<u8>> =
-        (color_type == 3).then(|| (0..colours * 3).map(|_| rnd.next(256) as u8).collect());
+    let palette: Option<Vec<u8>> = (color_type == 3).then(|| (0..colours * 3).map(|_| rnd.next(256) as u8).collect());
     // (fewer than the colours: the rest opaque)
     let trns: Option<Vec<u8>> =
         (color_type == 3).then(|| (0..(colours >> 1).max(1)).map(|_| rnd.next(256) as u8).collect());
@@ -273,7 +303,12 @@ fn colour_case(color_type: u8, depth: u32) {
                 let pal = palette.as_ref().unwrap();
                 let t = trns.as_ref().unwrap();
                 let i = p[0] as usize;
-                [pal[i * 3], pal[i * 3 + 1], pal[i * 3 + 2], if i < t.len() { t[i] } else { 255 }]
+                [
+                    pal[i * 3],
+                    pal[i * 3 + 1],
+                    pal[i * 3 + 2],
+                    if i < t.len() { t[i] } else { 255 },
+                ]
             }
             4 => {
                 let g = to8(p[0], depth);
@@ -347,7 +382,10 @@ fn trns_one_gray_or_one_rgb_colour_is_see_through() {
         ..Png::default()
     }))
     .unwrap();
-    assert_eq!([pixel(&gray, 0, 0)[3], pixel(&gray, 1, 0)[3], pixel(&gray, 2, 0)[3]], [255, 0, 255]);
+    assert_eq!(
+        [pixel(&gray, 0, 0)[3], pixel(&gray, 1, 0)[3], pixel(&gray, 2, 0)[3]],
+        [255, 0, 255]
+    );
     let gray16 = decode_png(&make_png(Png {
         width: 2,
         color_type: 0,
@@ -464,8 +502,14 @@ fn picture_data_that_unpacks_to_too_much_or_too_little_is_refused() {
     short.extend(mk_chunk("IEND", &[]));
     refused(&short, &["ends early"]);
     let header = read_png_header(&long).unwrap();
-    assert_eq!((header.width, header.height, header.bit_depth, header.color_type), (1, 1, 8, 2));
-    assert_eq!(read_png_header(&SIG).unwrap_err().0, "The PNG file has no proper header.");
+    assert_eq!(
+        (header.width, header.height, header.bit_depth, header.color_type),
+        (1, 1, 8, 2)
+    );
+    assert_eq!(
+        read_png_header(&SIG).unwrap_err().0,
+        "The PNG file has no proper header."
+    );
 }
 
 // ---------------------------------------------------------------- resizing, ICO, the set
@@ -488,7 +532,13 @@ fn a_flat_colour_stays_exactly_that_colour_at_every_size_down_and_up() {
 #[test]
 fn a_checkerboard_averages_to_the_middle_gray_a_part_covered_pixel_counts_by_the_part_covered() {
     let checker = |n| {
-        rgba_image(n, n, |x, y| if (x + y) % 2 == 1 { [255, 255, 255, 255] } else { [0, 0, 0, 255] })
+        rgba_image(n, n, |x, y| {
+            if (x + y) % 2 == 1 {
+                [255, 255, 255, 255]
+            } else {
+                [0, 0, 0, 255]
+            }
+        })
     };
     assert_eq!(pixel(&resize_rgba(&checker(2), 1, 1), 0, 0), [128, 128, 128, 255]);
     assert!(every_pixel(&resize_rgba(&checker(8), 4, 4), |p| p == [128, 128, 128, 255]));
@@ -561,7 +611,14 @@ fn favicon_ico_an_icon_header_three_entries_16_32_48_of_32_bits_each_pointing_at
     for (i, n) in [16u32, 32, 48].into_iter().enumerate() {
         let e = 6 + 16 * i;
         assert_eq!(
-            [u16::from(ico[e]), u16::from(ico[e + 1]), u16::from(ico[e + 2]), u16::from(ico[e + 3]), u16le(e + 4), u16le(e + 6)],
+            [
+                u16::from(ico[e]),
+                u16::from(ico[e + 1]),
+                u16::from(ico[e + 2]),
+                u16::from(ico[e + 3]),
+                u16le(e + 4),
+                u16le(e + 6)
+            ],
             [n as u16, n as u16, 0, 0, 1, 32]
         );
         let (size, offset) = (u32le(e + 8), u32le(e + 12));
@@ -582,11 +639,18 @@ fn the_home_screen_and_maskable_icons_are_fully_opaque_the_plain_ones_keep_their
     let (transparent, full_bleed) = sets();
     for set in [&transparent, &full_bleed] {
         for name in ["apple-touch-icon.png", "icon-maskable-512.png"] {
-            assert!(every_pixel(&decode_png(set.file(name).unwrap()).unwrap(), |p| p[3] == 255), "{name}");
+            assert!(
+                every_pixel(&decode_png(set.file(name).unwrap()).unwrap(), |p| p[3] == 255),
+                "{name}"
+            );
         }
     }
     for name in ["icon-16.png", "icon-32.png", "icon-192.png", "icon-512.png"] {
-        assert_eq!(pixel(&decode_png(transparent.file(name).unwrap()).unwrap(), 0, 0)[3], 0, "{name}");
+        assert_eq!(
+            pixel(&decode_png(transparent.file(name).unwrap()).unwrap(), 0, 0)[3],
+            0,
+            "{name}"
+        );
     }
 }
 
@@ -623,7 +687,11 @@ fn the_default_set_in_the_public_folder_has_the_16_and_maskable_icons_made_from_
     for name in ["icon-16.png", "icon-maskable-512.png"] {
         let committed = decode_png(&std::fs::read(public.join(name)).unwrap()).unwrap();
         let fresh = decode_png(made.file(name).unwrap()).unwrap();
-        assert_eq!((committed.width, committed.height), (fresh.width, fresh.height), "{name}");
+        assert_eq!(
+            (committed.width, committed.height),
+            (fresh.width, fresh.height),
+            "{name}"
+        );
         assert!(committed.data == fresh.data, "{name}: the same pixels");
     }
     let maskable = decode_png(&std::fs::read(public.join("icon-maskable-512.png")).unwrap()).unwrap();
@@ -635,8 +703,14 @@ fn the_default_set_in_the_public_folder_has_the_16_and_maskable_icons_made_from_
 #[test]
 fn knows_a_png_jpeg_webp_and_svg_by_their_bytes_and_nothing_else() {
     let kind = |b: &[u8]| sniff_image_type(b);
-    assert_eq!(kind(&encode_png(&flat(2, [1, 2, 3, 4])).unwrap()).map(|k| k.ext), Some("png"));
-    assert_eq!(kind(&[0xff, 0xd8, 0xff, 0xdb, 1, 2]).map(|k| k.mime), Some("image/jpeg"));
+    assert_eq!(
+        kind(&encode_png(&flat(2, [1, 2, 3, 4])).unwrap()).map(|k| k.ext),
+        Some("png")
+    );
+    assert_eq!(
+        kind(&[0xff, 0xd8, 0xff, 0xdb, 1, 2]).map(|k| k.mime),
+        Some("image/jpeg")
+    );
     assert_eq!(kind(b"RIFF\x10\0\0\0WEBPVP8 ").map(|k| k.ext), Some("webp"));
     assert_eq!(
         kind(b"<?xml version=\"1.0\"?>\n<!-- hi -->\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>").map(|k| k.ext),
@@ -644,7 +718,11 @@ fn knows_a_png_jpeg_webp_and_svg_by_their_bytes_and_nothing_else() {
     );
     assert_eq!(kind(b"<html><body>svg</body></html>"), None);
     assert_eq!(kind(b"GIF89a"), None);
-    assert_eq!(kind(&[0x3c, 0x73, 0x76, 0x67, 0x20, 0]), None, "text with a NUL in it is not an SVG");
+    assert_eq!(
+        kind(&[0x3c, 0x73, 0x76, 0x67, 0x20, 0]),
+        None,
+        "text with a NUL in it is not an SVG"
+    );
     assert_eq!(kind(b"<SVG>").map(|k| k.ext), Some("svg"));
     assert_eq!(kind(b""), None);
 }
@@ -653,8 +731,17 @@ fn knows_a_png_jpeg_webp_and_svg_by_their_bytes_and_nothing_else() {
 fn base64_with_or_without_a_data_start_anything_else_is_none() {
     let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
     assert_eq!(decode_base64(&b64(b"hi there")), Some(b"hi there".to_vec()));
-    assert_eq!(decode_base64(&format!("data:image/png;base64,{}", b64(b"abc"))), Some(b"abc".to_vec()));
-    for bad in [json!(null), json!(42), json!(""), json!("not base64 at all!"), json!("%%%%")] {
+    assert_eq!(
+        decode_base64(&format!("data:image/png;base64,{}", b64(b"abc"))),
+        Some(b"abc".to_vec())
+    );
+    for bad in [
+        json!(null),
+        json!(42),
+        json!(""),
+        json!("not base64 at all!"),
+        json!("%%%%"),
+    ] {
         assert_eq!(decode_base64_value(&bad), None, "{bad}");
     }
     // As Buffer.from decodes: no padding needed, white space ignored, a lone last character dropped.
@@ -670,7 +757,10 @@ fn base64_with_or_without_a_data_start_anything_else_is_none() {
 fn the_version_goes_on_this_sites_addresses_only_in_place_of_any_query() {
     assert_eq!(with_version("/icon-32.png", "abc"), "/icon-32.png?v=abc");
     assert_eq!(with_version("/icon-32.png?v=old#x", "abc"), "/icon-32.png?v=abc");
-    assert_eq!(with_version("https://cdn.example/icon.png", "abc"), "https://cdn.example/icon.png");
+    assert_eq!(
+        with_version("https://cdn.example/icon.png", "abc"),
+        "https://cdn.example/icon.png"
+    );
     assert_eq!(with_version("//cdn.example/icon.png", "abc"), "//cdn.example/icon.png");
     assert_eq!(with_version("/x", "a b/é"), "/x?v=a%20b%2F%C3%A9");
 }
@@ -698,7 +788,8 @@ fn default_version(t: &TestApp) -> String {
     format!("d{}", &hex::encode(Sha256::digest(&bytes))[..11])
 }
 
-const SVG: &[u8] = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><circle cx=\"5\" cy=\"5\" r=\"4\"/></svg>";
+const SVG: &[u8] =
+    b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><circle cx=\"5\" cy=\"5\" r=\"4\"/></svg>";
 const JPEG: &[u8] = &[0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1];
 
 fn upload(master: Vec<u8>) -> BrandUpload {
@@ -726,7 +817,11 @@ async fn keeps_its_files_in_the_data_folder_and_starts_with_the_default_icon() {
     let t = test_app();
     let icons = BrandIcon::of(&t.app);
     icons.reset_brand_icon().await.unwrap();
-    assert!(icons.brand_dir().starts_with(t.path()), "{}", icons.brand_dir().display());
+    assert!(
+        icons.brand_dir().starts_with(t.path()),
+        "{}",
+        icons.brand_dir().display()
+    );
     assert_eq!(icons.brand_dir(), t.config().data_dir.join("brand"));
     // the default icon at first: its version from icon-512.png
     assert_eq!(
@@ -772,13 +867,29 @@ async fn a_save_makes_every_icon_keeps_the_master_and_the_original_and_writes_br
     let meta = read_meta(&icons);
     // its real type, by its bytes; the name without its folders or control characters
     assert_eq!(
-        [&meta["version"], &meta["updatedAt"], &meta["originalName"], &meta["originalType"]],
-        [&json!(s.version), &json!(s.updated_at), &json!("Logo final.jpg"), &json!("image/jpeg")]
+        [
+            &meta["version"],
+            &meta["updatedAt"],
+            &meta["originalName"],
+            &meta["originalType"]
+        ],
+        [
+            &json!(s.version),
+            &json!(s.updated_at),
+            &json!("Logo final.jpg"),
+            &json!("image/jpeg")
+        ]
     );
     assert_eq!(meta["background"], "#1ea05a");
     let text = std::fs::read_to_string(dir.join("brand.json")).unwrap();
-    assert!(text.starts_with("{\n  \"version\": ") && text.ends_with("}\n"), "{text}");
-    assert!(listing(&dir).iter().all(|f| !f.contains(".tmp-")), "no half-written files left");
+    assert!(
+        text.starts_with("{\n  \"version\": ") && text.ends_with("}\n"),
+        "{text}"
+    );
+    assert!(
+        listing(&dir).iter().all(|f| !f.contains(".tmp-")),
+        "no half-written files left"
+    );
 }
 
 #[tokio::test]
@@ -813,13 +924,17 @@ async fn a_new_save_with_an_svg_original_replaces_the_jpeg_one() {
     assert_eq!(read_meta(&icons)["originalType"], "image/svg+xml");
     assert_eq!(icons.icon_version(), s.version);
     // A save without an original keeps the one before in brand.json.
-    icons.save_brand_icon(upload(master_png(80, [1, 1, 1, 255]))).await.unwrap();
+    icons
+        .save_brand_icon(upload(master_png(80, [1, 1, 1, 255])))
+        .await
+        .unwrap();
     assert_eq!(read_meta(&icons)["originalName"], "mark.svg");
     assert!(dir.join("original.svg").exists());
 }
 
 #[tokio::test]
-async fn refuses_a_master_that_is_not_a_png_not_square_too_small_too_big_interlaced_or_an_original_that_is_not_a_picture() {
+async fn refuses_a_master_that_is_not_a_png_not_square_too_small_too_big_interlaced_or_an_original_that_is_not_a_picture()
+ {
     let t = test_app();
     let icons = BrandIcon::of(&t.app);
     let before = icons.brand_status();
@@ -831,8 +946,18 @@ async fn refuses_a_master_that_is_not_a_png_not_square_too_small_too_big_interla
     }
     refused(&icons, upload(JPEG.to_vec()), "must be a PNG").await;
     refused(&icons, BrandUpload::default(), "No icon").await;
-    refused(&icons, upload(encode_png(&rgba_image(64, 65, |_, _| [0, 0, 0, 255])).unwrap()), "square").await;
-    refused(&icons, upload(encode_png(&flat(63, [0, 0, 0, 255])).unwrap()), "too small").await;
+    refused(
+        &icons,
+        upload(encode_png(&rgba_image(64, 65, |_, _| [0, 0, 0, 255])).unwrap()),
+        "square",
+    )
+    .await;
+    refused(
+        &icons,
+        upload(encode_png(&flat(63, [0, 0, 0, 255])).unwrap()),
+        "too small",
+    )
+    .await;
     let mut huge = SIG.to_vec();
     huge.extend(ihdr(2049, 2049, 8, 6, 0));
     huge.extend(mk_chunk("IEND", &[]));
@@ -857,7 +982,12 @@ async fn refuses_a_master_that_is_not_a_png_not_square_too_small_too_big_interla
             data,
         }),
     };
-    refused(&icons, with_original(b"just words".to_vec(), "x.txt"), "not a PNG, JPEG, WebP or SVG").await;
+    refused(
+        &icons,
+        with_original(b"just words".to_vec(), "x.txt"),
+        "not a PNG, JPEG, WebP or SVG",
+    )
+    .await;
     let mut big = JPEG.to_vec();
     big.extend(vec![0u8; ORIGINAL_MAX_BYTES]);
     refused(&icons, with_original(big, "big.jpg"), "too big").await;
@@ -869,7 +999,10 @@ async fn refuses_a_master_that_is_not_a_png_not_square_too_small_too_big_interla
 async fn survives_a_restart_read_again_from_brand_json_and_falls_back_to_the_default_if_its_icons_went_missing() {
     let t = test_app();
     let icons = BrandIcon::of(&t.app);
-    icons.save_brand_icon(upload(master_png(128, [30, 160, 90, 255]))).await.unwrap();
+    icons
+        .save_brand_icon(upload(master_png(128, [30, 160, 90, 255])))
+        .await
+        .unwrap();
     let s = icons.brand_status();
     icons.forget_state();
     assert_eq!(icons.brand_status(), s);
@@ -921,8 +1054,14 @@ async fn two_saves_at_once_one_after_the_other_and_the_last_one_wins() {
     let t = test_app();
     let icons = BrandIcon::of(&t.app);
     let (a, b) = (master_png(80, [1, 2, 3, 255]), master_png(80, [4, 5, 6, 255]));
-    let (sa, sb) = tokio::join!(icons.save_brand_icon(upload(a.clone())), icons.save_brand_icon(upload(b.clone())));
-    assert_eq!((sa.unwrap().version, sb.unwrap().version), (version_of(&a), version_of(&b)));
+    let (sa, sb) = tokio::join!(
+        icons.save_brand_icon(upload(a.clone())),
+        icons.save_brand_icon(upload(b.clone()))
+    );
+    assert_eq!(
+        (sa.unwrap().version, sb.unwrap().version),
+        (version_of(&a), version_of(&b))
+    );
     assert_eq!(icons.icon_version(), version_of(&b));
     assert_eq!(std::fs::read(icons.brand_dir().join("master.png")).unwrap(), b);
     icons.reset_brand_icon().await.unwrap();
@@ -939,7 +1078,11 @@ fn site(t: &TestApp) -> (Router, tempfile::TempDir) {
         std::fs::write(public.path().join(&p[1..]), format!("DEFAULT {p}")).unwrap();
     }
     std::fs::write(public.path().join("other.png"), "OTHER").unwrap();
-    std::fs::copy(t.config().public_dir().join("manifest.json"), public.path().join("manifest.json")).unwrap();
+    std::fs::copy(
+        t.config().public_dir().join("manifest.json"),
+        public.path().join("manifest.json"),
+    )
+    .unwrap();
     let not_found = tower::service_fn(|_req: Request| async {
         Ok::<_, std::convert::Infallible>((StatusCode::NOT_FOUND, "Not Found").into_response())
     });
@@ -954,7 +1097,10 @@ fn site(t: &TestApp) -> (Router, tempfile::TempDir) {
                 .or_insert(HeaderValue::from_static("public, max-age=300"));
             res
         }))
-        .layer(from_fn_with_state(manifest_handler(&t.app, public.path()), manifest_middleware))
+        .layer(from_fn_with_state(
+            manifest_handler(&t.app, public.path()),
+            manifest_middleware,
+        ))
         .layer(from_fn_with_state(t.app.clone(), brand_icon_middleware));
     (router, public)
 }
@@ -977,14 +1123,20 @@ async fn no_upload_the_default_files_still_asked_for_again_each_time_no_cache() 
     assert_eq!(res.header("cache-control"), Some("no-cache"));
     let other = http::get(&router, "/other.png").await;
     assert_eq!(other.text(), "OTHER");
-    assert_eq!(other.header("cache-control"), Some("public, max-age=300"), "other files are not its business");
+    assert_eq!(
+        other.header("cache-control"),
+        Some("public, max-age=300"),
+        "other files are not its business"
+    );
 }
 
 #[tokio::test]
 async fn an_upload_served_in_place_of_the_defaults_at_every_address_whatever_the_query_with_its_type_and_etag() {
     let t = test_app();
     let (router, _public) = site(&t);
-    let s = save_brand_icon(&t.app, upload(master_png(128, [30, 160, 90, 255]))).await.unwrap();
+    let s = save_brand_icon(&t.app, upload(master_png(128, [30, 160, 90, 255])))
+        .await
+        .unwrap();
     let dir = BrandIcon::of(&t.app).brand_dir();
     for (p, mime) in ICON_FILES {
         let res = http::get(&router, &format!("{p}?v={}", s.version)).await;
@@ -993,21 +1145,40 @@ async fn an_upload_served_in_place_of_the_defaults_at_every_address_whatever_the
         assert_eq!(res.header("cache-control"), Some("no-cache"), "{p}");
         let etag = format!("\"{}-{}\"", s.version, &p[1..]);
         assert_eq!(res.header("etag"), Some(etag.as_str()), "{p}");
-        assert_eq!(res.body.as_ref(), std::fs::read(dir.join(&p[1..])).unwrap().as_slice(), "{p}");
+        assert_eq!(
+            res.body.as_ref(),
+            std::fs::read(dir.join(&p[1..])).unwrap().as_slice(),
+            "{p}"
+        );
     }
     assert_eq!(icon_type("/favicon.ico"), Some("image/x-icon"));
     let plain = http::get(&router, "/icon-192.png").await;
     assert_eq!(plain.body[..8], SIG, "no query: the upload too");
-    assert_eq!(http::get(&router, "/other.png").await.text(), "OTHER", "other files are not its business");
+    assert_eq!(
+        http::get(&router, "/other.png").await.text(),
+        "OTHER",
+        "other files are not its business"
+    );
 }
 
 #[tokio::test]
 async fn a_matching_if_none_match_is_304_weak_in_a_list_or_star_an_old_one_200_head_has_no_body() {
     let t = test_app();
     let (router, _public) = site(&t);
-    save_brand_icon(&t.app, upload(master_png(128, [30, 160, 90, 255]))).await.unwrap();
-    let etag = http::get(&router, "/icon-32.png").await.header("etag").unwrap().to_string();
-    for inm in [etag.clone(), format!("W/{etag}"), format!("\"old\", {etag}"), "*".to_string()] {
+    save_brand_icon(&t.app, upload(master_png(128, [30, 160, 90, 255])))
+        .await
+        .unwrap();
+    let etag = http::get(&router, "/icon-32.png")
+        .await
+        .header("etag")
+        .unwrap()
+        .to_string();
+    for inm in [
+        etag.clone(),
+        format!("W/{etag}"),
+        format!("\"old\", {etag}"),
+        "*".to_string(),
+    ] {
         let res = get_with(&router, "/icon-32.png?v=x", &[("if-none-match", &inm)]).await;
         assert_eq!(res.status, 304, "{inm}");
         assert_eq!(res.header("etag"), Some(etag.as_str()));
@@ -1018,7 +1189,9 @@ async fn a_matching_if_none_match_is_304_weak_in_a_list_or_star_an_old_one_200_h
     let head = http::send(&router, http::request("HEAD", "/apple-touch-icon.png")).await;
     assert_eq!(head.status, 200);
     assert_eq!(head.header("content-type"), Some("image/png"));
-    let size = std::fs::metadata(BrandIcon::of(&t.app).brand_dir().join("apple-touch-icon.png")).unwrap().len();
+    let size = std::fs::metadata(BrandIcon::of(&t.app).brand_dir().join("apple-touch-icon.png"))
+        .unwrap()
+        .len();
     assert_eq!(head.header("content-length"), Some(size.to_string().as_str()));
     assert!(head.body.is_empty());
 }
@@ -1027,7 +1200,9 @@ async fn a_matching_if_none_match_is_304_weak_in_a_list_or_star_an_old_one_200_h
 async fn only_get_and_head_a_post_to_an_icon_address_goes_on_to_whatever_is_after_it() {
     let t = test_app();
     let (router, _public) = site(&t);
-    save_brand_icon(&t.app, upload(master_png(128, [30, 160, 90, 255]))).await.unwrap();
+    save_brand_icon(&t.app, upload(master_png(128, [30, 160, 90, 255])))
+        .await
+        .unwrap();
     let res = http::send(&router, http::request("POST", "/icon-32.png")).await;
     assert_eq!(res.status, 404);
     assert_ne!(res.header("cache-control"), Some("no-cache"));
@@ -1037,17 +1212,26 @@ async fn only_get_and_head_a_post_to_an_icon_address_goes_on_to_whatever_is_afte
 async fn the_manifest_the_version_on_every_icon_one_maskable_icon_the_one_made_for_it_192_and_512_for_any_purpose() {
     let t = test_app();
     let (router, _public) = site(&t);
-    save_brand_icon(&t.app, upload(master_png(128, [30, 160, 90, 255]))).await.unwrap();
+    save_brand_icon(&t.app, upload(master_png(128, [30, 160, 90, 255])))
+        .await
+        .unwrap();
     for p in ["/manifest.json", "/manifest.json?v=old"] {
         let res = http::get(&router, p).await;
         assert_eq!(res.status, 200, "{p}");
-        assert!(res.header("content-type").unwrap().starts_with("application/manifest+json"));
+        assert!(
+            res.header("content-type")
+                .unwrap()
+                .starts_with("application/manifest+json")
+        );
         assert_eq!(res.header("cache-control"), Some("no-cache"));
         let m = res.json();
         let v = icon_version(&t.app);
         let icons = m["icons"].as_array().unwrap();
         for icon in icons {
-            assert!(icon["src"].as_str().unwrap().ends_with(&format!("?v={v}")), "{p}: {icon}");
+            assert!(
+                icon["src"].as_str().unwrap().ends_with(&format!("?v={v}")),
+                "{p}: {icon}"
+            );
         }
         let maskable: Vec<&Value> = icons
             .iter()
@@ -1055,7 +1239,9 @@ async fn the_manifest_the_version_on_every_icon_one_maskable_icon_the_one_made_f
             .collect();
         assert_eq!(
             maskable,
-            [&json!({"src": format!("/icon-maskable-512.png?v={v}"), "sizes": "512x512", "type": "image/png", "purpose": "maskable"})],
+            [
+                &json!({"src": format!("/icon-maskable-512.png?v={v}"), "sizes": "512x512", "type": "image/png", "purpose": "maskable"})
+            ],
             "{p}"
         );
         for size in ["192x192", "512x512"] {
@@ -1083,7 +1269,9 @@ async fn the_manifest_the_version_on_every_icon_one_maskable_icon_the_one_made_f
 async fn a_manifest_follows_the_icon_after_a_reset_its_icons_carry_the_defaults_version() {
     let t = test_app();
     let (router, _public) = site(&t);
-    save_brand_icon(&t.app, upload(master_png(128, [30, 160, 90, 255]))).await.unwrap();
+    save_brand_icon(&t.app, upload(master_png(128, [30, 160, 90, 255])))
+        .await
+        .unwrap();
     reset_brand_icon(&t.app).await.unwrap();
     let m = http::get(&router, "/manifest.json").await.json();
     let v = default_version(&t);
@@ -1127,7 +1315,10 @@ async fn a_manifest_that_cannot_be_read_goes_on_to_the_static_files() {
     let res = http::get(&router, "/manifest.json").await;
     assert_eq!(res.status, 200);
     assert_eq!(res.text(), "{ broken");
-    assert_ne!(res.header("content-type"), Some("application/manifest+json; charset=utf-8"));
+    assert_ne!(
+        res.header("content-type"),
+        Some("application/manifest+json; charset=utf-8")
+    );
 }
 
 #[test]
@@ -1159,7 +1350,10 @@ async fn the_manifest_body_and_etag_are_the_ones_node_made() {
         "o": {},
     });
     let node_body = "{\n  \"name\": \"Tarsee — test\",\n  \"icons\": [\n    {\n      \"src\": \"/icon-maskable-512.png?v=v%201\",\n      \"sizes\": \"512x512\",\n      \"type\": \"image/png\",\n      \"purpose\": \"maskable\"\n    },\n    {\n      \"src\": \"/icon-192.png?v=v%201\",\n      \"sizes\": \"192x192\",\n      \"purpose\": \"any\"\n    },\n    {\n      \"src\": \"https://x.example/a.png\",\n      \"purpose\": 5\n    }\n  ],\n  \"shortcuts\": [\n    {\n      \"name\": \"x\",\n      \"icons\": [\n        {\n          \"src\": \"/icon-32.png?v=v%201\"\n        }\n      ]\n    }\n  ],\n  \"n\": [\n    1,\n    2.5,\n    {}\n  ],\n  \"e\": [],\n  \"o\": {}\n}";
-    assert_eq!(serde_json::to_string_pretty(&versioned_manifest(&base, "v 1")).unwrap(), node_body);
+    assert_eq!(
+        serde_json::to_string_pretty(&versioned_manifest(&base, "v 1")).unwrap(),
+        node_body
+    );
 
     // Through the middleware, with the icon's version set to the one above.
     std::fs::write(public.path().join("manifest.json"), base.to_string()).unwrap();
@@ -1171,7 +1365,10 @@ async fn the_manifest_body_and_etag_are_the_ones_node_made() {
     });
     let router = Router::new()
         .fallback(|| async { StatusCode::NOT_FOUND })
-        .layer(from_fn_with_state(manifest_handler(&t.app, public.path()), manifest_middleware));
+        .layer(from_fn_with_state(
+            manifest_handler(&t.app, public.path()),
+            manifest_middleware,
+        ));
     let res = http::get(&router, "/manifest.json").await;
     assert_eq!(res.text(), node_body);
     assert_eq!(res.header("etag"), Some("\"m036893de0ae0220d\""));
