@@ -609,6 +609,15 @@ struct HangingUpstream {
     gone: Mutex<Option<oneshot::Sender<()>>>,
 }
 
+impl HangingUpstream {
+    fn new(first: &'static str, gone: oneshot::Sender<()>) -> Arc<Self> {
+        Arc::new(HangingUpstream {
+            first,
+            gone: Mutex::new(Some(gone)),
+        })
+    }
+}
+
 struct FireOnDrop(Option<oneshot::Sender<()>>);
 
 impl Drop for FireOnDrop {
@@ -633,10 +642,83 @@ impl Fetch for HangingUpstream {
             .boxed();
         Ok(FetchResponse::from_stream(
             200,
-            vec![("content-type".into(), "text/event-stream".into())],
+            vec![(
+                "content-type".into(),
+                if self.first.starts_with('{') {
+                    "application/json"
+                } else {
+                    "text/event-stream"
+                }
+                .into(),
+            )],
             body,
         ))
     }
+}
+
+/// The owner's server that never answers at all. `asked` fires when the request reaches it, `gone` when the bridge
+/// gives up on it.
+struct Unanswering {
+    asked: Arc<tokio::sync::Notify>,
+    gone: Mutex<Option<oneshot::Sender<()>>>,
+}
+
+#[async_trait]
+impl Fetch for Unanswering {
+    async fn fetch(&self, _request: FetchRequest) -> Result<FetchResponse, FetchError> {
+        let _guard = FireOnDrop(self.gone.lock().take());
+        self.asked.notify_one();
+        futures::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn releasing_a_turn_while_its_request_waits_for_the_owners_server_cuts_it_with_no_answer() {
+    let asked = Arc::new(tokio::sync::Notify::new());
+    let (gone_tx, gone_rx) = oneshot::channel();
+    let bridge = bridge_with(Arc::new(Unanswering {
+        asked: asked.clone(),
+        gone: Mutex::new(Some(gone_tx)),
+    }))
+    .await;
+    let t = bridge.open(OWNER, None).unwrap();
+    let request = FetchRequest::post(format!("{}/responses", t.url))
+        .bearer(&t.token)
+        .body("{}");
+    let pending = tokio::spawn(async move { codex().fetch(request).await });
+    asked.notified().await;
+    t.release();
+    let answer = tokio::time::timeout(Duration::from_secs(5), pending)
+        .await
+        .expect("cut, not left waiting")
+        .unwrap();
+    assert!(answer.is_err(), "no answer at all: {answer:?}");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), gone_rx).await.is_ok(),
+        "the owner's request stopped"
+    );
+    bridge.close().await;
+}
+
+#[tokio::test]
+async fn an_answer_passed_through_as_it_came_is_cut_too_when_its_turn_is_released() {
+    let (gone_tx, gone_rx) = oneshot::channel();
+    let bridge = bridge_with(HangingUpstream::new("{\"partial\": ", gone_tx)).await;
+    let t = bridge.open(OWNER, None).unwrap();
+    let res = post(&t, &json!({"model": "m", "input": []})).await;
+    assert_eq!(res.header("content-type"), Some("application/json"));
+    let mut body = res.into_stream();
+    assert_eq!(body.next().await.unwrap().unwrap(), Bytes::from("{\"partial\": "));
+    t.release();
+    let rest = tokio::time::timeout(Duration::from_secs(5), body.next())
+        .await
+        .expect("the stream ends");
+    assert!(matches!(rest, Some(Err(_))), "cut, not ended cleanly: {rest:?}");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), gone_rx).await.is_ok(),
+        "the owner's request stopped"
+    );
+    bridge.close().await;
 }
 
 #[tokio::test]
@@ -1263,6 +1345,11 @@ fn json_stringify_numbers_and_strings() {
         js_stringify(&v),
         "[1,2.5,0,1e+21,1e-7,9007199254740992,-9007199254740992,\"\u{2028}\\u0000\"]"
     );
+    // String(number): a whole double without ".0", a long one rounded as a double, an exponent as JavaScript writes it.
+    let numbers: Value = serde_json::from_str("[2.0, -0.5, 1e21, 12345678901234567890, 1e-7]").unwrap();
+    let texts: Vec<String> = numbers.as_array().unwrap().iter().map(js_string).collect();
+    assert_eq!(texts, ["2", "-0.5", "1e+21", "12345678901234567000", "1e-7"]);
+    assert_eq!(js_string(&numbers), "2,-0.5,1e+21,12345678901234567000,1e-7");
     assert_eq!(tpl(None), "undefined");
     assert_eq!(tpl(Some(&json!([1, null, "a"]))), "1,,a");
     assert_eq!(str_or_empty(Some(&Value::Null)), "");

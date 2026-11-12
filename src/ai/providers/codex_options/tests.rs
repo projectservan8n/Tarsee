@@ -1053,6 +1053,17 @@ fn cap_texts() -> Vec<String> {
         ),
         format!("no newline in the tail {}\nlast line", "w".repeat(3000)),
         "line\n".repeat(2000),
+        // The tail's first line end exactly half way into it (at 1000 bytes the tail is the last 250): kept whole.
+        format!("{}{}\n{}", "a".repeat(2000), "b".repeat(125), "c".repeat(124)),
+        // The head's last line end exactly half way into it (at 1000 or 1001 bytes, whichever leaves an even head).
+        {
+            let head = [1000, 1001]
+                .iter()
+                .map(|max| max - TRIMMED_MIDDLE.len() - 250)
+                .find(|h| h % 2 == 0)
+                .unwrap();
+            format!("{}\n{}{}", "a".repeat(head / 2), "a".repeat(5000), "c".repeat(250))
+        },
     ]
 }
 

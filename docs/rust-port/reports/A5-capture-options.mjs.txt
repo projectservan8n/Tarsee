@@ -153,7 +153,16 @@ const texts = [
   "Additional quick memories at the very start\n- [a] " + "a".repeat(200) + "\n- [b] b\nafter",
   "no newline in the tail " + "w".repeat(3000) + "\nlast line",
   "line\n".repeat(2000),
+  // The tail's first line end exactly half way into it (at 1000 bytes the tail is the last 250): kept whole.
+  "a".repeat(2000) + "b".repeat(125) + "\n" + "c".repeat(124),
+  // The head's last line end exactly half way into it (at 1000 or 1001 bytes, whichever leaves an even head).
+  headAtHalf(),
 ];
+function headAtHalf() {
+  const middle = Buffer.byteLength("\n[… trimmed to fit; the workspace files are on disk]\n");
+  const head = [1000, 1001].map((max) => max - middle - 250).find((h) => h % 2 === 0);
+  return "a".repeat(head / 2) + "\n" + "a".repeat(5000) + "c".repeat(250);
+}
 for (const [n, text] of texts.entries()) {
   for (const max of [1000, 1001, 200, 208, 209, 300, 24 * 1024, 4096, 600, 50, 0]) caps.push([n, max, digest(co.capInstructions(text, max))]);
 }
