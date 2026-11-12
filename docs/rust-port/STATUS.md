@@ -12,19 +12,20 @@ agent checked it against the Node code and its findings are fixed or parked belo
 |---|---|---|---|---|---|
 | F0 | merged | - | 9956468..fe6015b | 96 | Foundation, by the lead |
 | I0 | reviewed | - | 7957ca6, fixes 38a6adb | 1562 | Interfaces and fakes; `INTERFACES.md`. Review: 1 important, 4 minor, all addressed |
-| A1 | merged | - | 92f9739 | 1562 | 161 of 181 cases; 12 wait for later packages, 8 test Node-only mechanisms. Review running |
+| A1 | merged, fixes running | - | 92f9739 | 1562 | 161 of 181 cases; 12 wait for later packages, 8 test Node-only mechanisms. Review: 1 important, 5 minor |
 | A3 | running | s2 | | | |
 | A5 | running | s10 | | | |
-| A2 | merged, fixes running | - | 74e0e4f | 728 | 106 of 109 cases. Review: 3 important, 8 minor; 2 tests fail on Linux |
+| A2 | reviewed | - | 74e0e4f, fixes 82edd82 | 1723 | 107 of 109 cases (2 wait for G2, G3). Review: 3 important, 8 minor; all 11 confirmed fixed by a second reviewer; passes on Linux |
 | B1 | merged, fixes running | - | 1649cf7 | 1020 | 36 of 36 cases. Review: nothing critical or important in the package; 2 minor |
-| B2 | merged | - | 7094777 | 875 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases; the rest wait for R4, W1, S3, S4 |
+| B2 | merged, fixes running | - | 7094777 | 875 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases. Review: 2 critical, 1 important, 6 minor |
 | C1 | merged, fixes running | - | 9dd5372 | 213 | 32 of 32 cases. Review: 1 critical, 4 important, 22 minor |
 | D1 | merged | - | 48bb9ff | 1180 | 59 of 68 cases; 4 wait for S3, 5 are browser tests (W1) |
-| V2 | running | s9 | | | |
+| V2 | merged | - | 7205d05 | 1723 | 69 of 71 cases (2 belong to the server wiring, Z1). Review running |
+| S4 | running | s3 | | | |
 | T1 | running | s4 | | | |
 | W1a | merged | - | fcfc2ba | 1328 | 116 of 141 cases of the browser files run in a real browser (`cargo test --test ui`); 25 wait for A1, A4, R2 |
 | E1 | reviewed | - | 55fa65f, fixes 96f4ac4 | 1573 | 128 of 128 cases. Review: faithful, 2 minor, addressed; two Node bugs fixed |
-| V1 | merged, fixes running | - | dbb96bb | 591 | 42 of 42 cases. Review: 2 critical, 3 important, 7 minor |
+| V1 | reviewed | - | dbb96bb, fixes 64fb45d | 1742 | 42 of 42 cases. Review: 2 critical, 3 important, 7 minor; all 12 confirmed fixed by a second reviewer |
 
 ## Rulings
 
@@ -68,6 +69,11 @@ Decisions the lead made on the owner's behalf, in order. Each says what it costs
     listed under "Node bugs fixed in the Rust version" below — the owner's standing rule is to fix issues fully,
     and a rewrite that knowingly ships a way to delete the workspace would be wrong — if wrong: each fix is one
     small, named change that can be reverted.
+
+13. Ruling: Edge's read-aloud voice speaks the protocol of `node-edge-tts` 1.2.12, not the 1.2.10 the Node version
+    pins — Microsoft's service now answers 403 to the old one (checked live: the Node version's Edge voice is
+    broken today), and the Rust engine got audio back with the new one — if wrong: none; the old protocol no
+    longer works for anyone.
 
 ## Pre-flight scan
 
@@ -117,6 +123,13 @@ Each became a rule in `DESIGN.md` and, where possible, a fix in the foundation:
 - Arithmetic on a number read from a file or the network must be checked. (V1: an overflow in the archive reader.)
 - `(?i)` in a Rust pattern folds a few characters JavaScript's `/i` does not.
 - `serde_json` parsed long decimals one unit off until `float_roundtrip` was switched on.
+- Windows rewrites a file name with a trailing dot or space, and names like `nul`, unless the path is handed over in
+  its literal form, which Node always did. (B2: `delete "..."` removed the whole workspace; V1: archive entries
+  merged.) `util::node_path::to_namespaced`.
+- A Node promise runs whether or not anyone waits for it; a Rust future stops when it is dropped. (A1: a shared
+  refresh stalled when its caller went away.)
+- Tests that start real programs with time limits can miss them when the machine is busy. They are rerun alone
+  before a merge is refused, and are to be made robust in the cleanup.
 
 ## Linux
 

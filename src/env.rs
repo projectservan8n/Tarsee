@@ -38,8 +38,21 @@ impl Env {
     }
 
     /// The real process environment, read once. Variables that are not valid Unicode are left out.
+    ///
+    /// When the system knows the user's home folder but the environment does not say it (a service started with a
+    /// bare environment), the home variable is filled in here, so that nothing later has to ask the real process
+    /// (`os.homedir()` did the same lookup in Node).
     pub fn from_process() -> Self {
-        Self::from_pairs(std::env::vars_os().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))))
+        let env = Self::from_pairs(
+            std::env::vars_os().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))),
+        );
+        let home_name = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        if env.trimmed(home_name).is_none()
+            && let Some(home) = std::env::home_dir().and_then(|dir| dir.into_os_string().into_string().ok())
+        {
+            env.set(home_name, home);
+        }
+        env
     }
 
     pub fn from_pairs<K: Into<String>, V: Into<String>>(pairs: impl IntoIterator<Item = (K, V)>) -> Self {
