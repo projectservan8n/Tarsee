@@ -26,7 +26,7 @@ use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::ai::provider_registry::{ModelPrice, PeakWindow, js_trim};
+use crate::ai::provider_registry::{ModelPrice, PeakWindow};
 use crate::util::js;
 
 /// The families in the order Claude Code shows them.
@@ -81,7 +81,7 @@ fn truthy_text(value: Option<&Value>) -> Option<String> {
     }
     Some(match value {
         Value::String(text) => text.clone(),
-        Value::Number(n) => js_number_to_string(n.as_f64().unwrap_or(0.0)),
+        Value::Number(n) => js::number_to_string(n.as_f64().unwrap_or(0.0)),
         Value::Bool(b) => b.to_string(),
         Value::Array(items) => items
             .iter()
@@ -191,7 +191,7 @@ pub struct PickerEntry {
 }
 
 /// The picker's list: `{ main, more, effortNote, defaultEffort, source, fetchedAt }`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Picker {
     pub main: Vec<PickerEntry>,
@@ -199,7 +199,22 @@ pub struct Picker {
     pub effort_note: String,
     pub default_effort: String,
     pub source: Option<String>,
-    pub fetched_at: Option<i64>,
+    /// When the catalog was fetched, in milliseconds since 1970, as it was given. It may have a fraction: for an
+    /// account catalog with no date of its own the JS passed the file's `mtimeMs`.
+    #[serde(serialize_with = "serialize_js_number")]
+    pub fetched_at: Option<f64>,
+}
+
+/// A number as JavaScript's JSON writes it: a whole one with no decimal point ("1731500000123", where `serde_json`
+/// would write an `f64` as "1731500000123.0").
+fn serialize_js_number<S: serde::Serializer>(value: &Option<f64>, serializer: S) -> Result<S::Ok, S::Error> {
+    /// The largest whole number below which every whole number is a double (2^53).
+    const EXACT_WHOLE: f64 = 9_007_199_254_740_992.0;
+    match value {
+        Some(n) if n.fract() == 0.0 && n.abs() <= EXACT_WHOLE => serializer.serialize_i64(*n as i64),
+        Some(n) => serializer.serialize_f64(*n),
+        None => serializer.serialize_none(),
+    }
 }
 
 /// An entry while the list is being put together: with its version and the catalog's notice, which the finished
@@ -385,7 +400,8 @@ pub struct PickerOptions<'a> {
     /// the newest when a new version comes out (Claude Code does the same).
     pub aliases: &'a [&'a str],
     pub source: Option<&'a str>,
-    pub fetched_at: Option<i64>,
+    /// When the catalog was fetched, in milliseconds since 1970 (a file's `mtimeMs` has a fraction).
+    pub fetched_at: Option<f64>,
     pub default_effort: &'a str,
 }
 
@@ -556,12 +572,9 @@ pub fn literal_end(text: &str, start: usize) -> Option<usize> {
     None
 }
 
-/// JavaScript's `\s`.
+/// JavaScript's `\s`, for one UTF-16 unit (every character it matches is one unit).
 fn is_js_space(unit: u16) -> bool {
-    matches!(
-        unit,
-        0x09..=0x0D | 0x20 | 0xA0 | 0x1680 | 0x2000..=0x200A | 0x2028 | 0x2029 | 0x202F | 0x205F | 0x3000 | 0xFEFF
-    )
+    char::from_u32(u32::from(unit)).is_some_and(js::is_whitespace)
 }
 
 fn is_ascii_digit(unit: u16) -> bool {
@@ -851,9 +864,9 @@ pub fn context_label(tokens: Option<u64>) -> Option<String> {
     let n = tokens.filter(|n| *n > 0)? as f64;
     if n >= 1_000_000.0 {
         let millions: f64 = js_to_fixed(n / 1_000_000.0, 1).parse().unwrap_or(0.0);
-        return Some(format!("{}M", js_number_to_string(millions)));
+        return Some(format!("{}M", js::number_to_string(millions)));
     }
-    Some(format!("{}K", js_number_to_string((n / 1_000.0 + 0.5).floor())))
+    Some(format!("{}K", js::number_to_string((n / 1_000.0 + 0.5).floor())))
 }
 
 fn usd(n: f64) -> String {
@@ -968,7 +981,7 @@ pub fn name_from_slug(id: &str) -> String {
 /// no space around it.
 fn norm_word(s: &str) -> String {
     let lower = s.to_lowercase();
-    js_trim(lower.strip_suffix("[1m]").unwrap_or(&lower)).to_string()
+    js::trim(lower.strip_suffix("[1m]").unwrap_or(&lower)).to_string()
 }
 
 fn tokens_of(s: &str) -> Vec<String> {
@@ -1106,11 +1119,12 @@ fn increment(digits: &mut Vec<u8>) -> bool {
     true
 }
 
-/// `x.toFixed(digits)` for a finite number below 1e21: a tie goes up, where Rust's own formatting rounds it to
-/// even (JavaScript writes 1.25 as "1.3", `format!("{:.1}")` as "1.2").
+/// `x.toFixed(digits)`: a tie goes up, where Rust's own formatting rounds it to even (JavaScript writes 1.25 as
+/// "1.3", `format!("{:.1}")` as "1.2"). From 1e21 up JavaScript gives up on fixed notation and writes the number as
+/// `String(x)` does ("1e+21").
 pub(crate) fn js_to_fixed(x: f64, digits: usize) -> String {
-    if !x.is_finite() {
-        return js_number_to_string(x);
+    if !x.is_finite() || x.abs() >= 1e21 {
+        return js::number_to_string(x);
     }
     let negative = x < 0.0;
     let x = x.abs();
@@ -1173,40 +1187,12 @@ pub(crate) fn js_to_precision(x: f64, digits: usize) -> f64 {
     text.parse().unwrap_or(x)
 }
 
-/// `String(x)` for a number, as JavaScript writes it: the shortest digits that read back the same, "1e-7" below a
-/// millionth and "1e+21" from there up.
+/// `String(x)` for a number: `util::js::number_to_string` under the name this file gave it before the foundation's
+/// was exact. Nothing in this package calls it any more. It stays for one reason: package A3's branch, cut while
+/// this was the exact one, imports it from here. Remove it once A3 calls the foundation's.
+#[allow(dead_code)]
 pub(crate) fn js_number_to_string(x: f64) -> String {
-    if x.is_nan() {
-        return "NaN".to_string();
-    }
-    if x.is_infinite() {
-        return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
-    }
-    if x == 0.0 {
-        return "0".to_string();
-    }
-    let text = format!("{:e}", x.abs());
-    let (mantissa, exponent) = text.split_once('e').unwrap_or((&text, "0"));
-    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
-    let k = digits.len() as i32;
-    // The value is 0.digits x 10^n.
-    let n = exponent.parse::<i32>().unwrap_or(0) + 1;
-    let body = if k <= n && n <= 21 {
-        format!("{digits}{}", "0".repeat((n - k) as usize))
-    } else if 0 < n && n <= 21 {
-        format!("{}.{}", &digits[..n as usize], &digits[n as usize..])
-    } else if -6 < n && n <= 0 {
-        format!("0.{}{digits}", "0".repeat(n.unsigned_abs() as usize))
-    } else {
-        let sign = if n - 1 < 0 { '-' } else { '+' };
-        let power = (n - 1).abs();
-        if k == 1 {
-            format!("{digits}e{sign}{power}")
-        } else {
-            format!("{}.{}e{sign}{power}", &digits[..1], &digits[1..])
-        }
-    };
-    if x < 0.0 { format!("-{body}") } else { body }
+    js::number_to_string(x)
 }
 
 #[cfg(test)]

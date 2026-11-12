@@ -948,4 +948,167 @@ mod tests {
         assert_eq!(has_marker("ßsecret"), "hasSSsecret");
         assert_eq!(has_marker(""), "has");
     }
+
+    // --- An ENCRYPTION_KEY with a byte order mark or a next-line character at one end ---
+
+    /// JavaScript's `trim()` removes U+FEFF and keeps U+0085; Rust's does the opposite. The configuration trims the
+    /// key (`process.env.ENCRYPTION_KEY?.trim()`), so trimmed the Rust way such a key would derive another vault
+    /// key and nothing the Node version stored could be read. A byte order mark is the likely one: a key read from
+    /// a file some Windows tools wrote starts with it.
+    #[test]
+    fn a_key_with_a_byte_order_mark_or_a_next_line_character_is_the_key_node_made_of_it() {
+        // ENCRYPTION_KEY as it is set; what Node's configuration made of it; the vault key Node derived from that
+        // (crypto.pbkdf2Sync); and what the Node vault encrypted under it.
+        let cases = [
+            (
+                "\u{FEFF}bom-key-not-a-secret",
+                "bom-key-not-a-secret",
+                "0185b2624d0eeaeb8e2f33e4e75815c5fc95087c4d868ed4ab4ec9ec0872472e",
+                [
+                    (
+                        "plain ascii value",
+                        "enc:v1:2lNQPRRtyUjp9/njBF4LEg==:hR6U69M+dmv3ZpTpADJNow==:0WPU1+ro94icRaigI+KJh88=",
+                    ),
+                    (
+                        "pässwörd ✓ 🐒",
+                        "enc:v1:R9U++abAL2NV7zAObaMTMw==:NY1lN8s43Aqyks5d2w48jw==:e23fy0fJ+KXgmyNpERTeah7Xow==",
+                    ),
+                    ("", "enc:v1:gLfMNV1yIEOWc0HGJml4xg==:rNOb8v0ufPqBk0dK/0wDgw==:"),
+                ],
+            ),
+            (
+                "nel-key-not-a-secret\u{85}",
+                "nel-key-not-a-secret\u{85}",
+                "c6dcd7a4fa8a1d9864c38894bcaafd6948ac0f86ae73f40c5e0a0a597ee71d31",
+                [
+                    (
+                        "plain ascii value",
+                        "enc:v1:H5/9FHmhB9mKCfn1SjbCOA==:LFz/I1c4AiUUYYQZ26vxBw==:exs0cY8zvm5GiOUvfd3SWaw=",
+                    ),
+                    (
+                        "pässwörd ✓ 🐒",
+                        "enc:v1:AHsDOTzsbulb5f4WwMFCAA==:pAh6G9tE2wRC/igRIPIlLA==:k4JlDnauqX8J0I52eclxmzn5fw==",
+                    ),
+                    ("", "enc:v1:qt1ZDgozxCWSvGuvGhAEpg==:O+MOuV+Cj3V+2qBj2/QKnQ==:"),
+                ],
+            ),
+        ];
+        for (set, used, derived, encrypted) in cases {
+            let t = test_app_with_env([("ENCRYPTION_KEY", set)]);
+            assert_eq!(t.config().encryption_key.as_deref(), Some(used), "{set:?}");
+            // The same vault key as Node's: what either version writes under this ENCRYPTION_KEY, the other reads.
+            assert_eq!(hex::encode(get_key(&t).unwrap()), derived, "{set:?}");
+            for (plaintext, ciphertext) in encrypted {
+                assert_eq!(decrypt(&t, ciphertext).unwrap(), plaintext, "{set:?}: {ciphertext}");
+                assert_eq!(decrypt(&t, &encrypt(&t, plaintext)).unwrap(), plaintext);
+            }
+            let field = json!({ "botToken": encrypted[0].1, "host": "h" });
+            assert_eq!(
+                decrypt_secret_fields(&t, &field).unwrap(),
+                json!({ "botToken": "plain ascii value", "host": "h" })
+            );
+        }
+        // The two characters matter: the key without the next-line character, or with the mark kept, is another key.
+        let without_nel = test_app_with_env([("ENCRYPTION_KEY", "nel-key-not-a-secret")]);
+        assert_eq!(decrypt(&without_nel, cases[1].3[0].1), Err(VaultError::Unauthentic));
+        assert_ne!(
+            hex::encode(derive_key("\u{FEFF}bom-key-not-a-secret")),
+            cases[0].2,
+            "a mark that is not trimmed away derives another key"
+        );
+    }
+
+    // --- Every alternative of the two patterns ---
+
+    /// One field name for each word of the secret-field pattern that no other word of it matches, so the test
+    /// fails if any single word is taken out of the pattern.
+    #[test]
+    fn each_word_of_the_secret_field_pattern_is_needed_for_a_field_of_its_own() {
+        const WORDS: [&str; 7] = [
+            "token",
+            "password",
+            "secret",
+            "apikey",
+            "api_key",
+            "credential",
+            "passphrase",
+        ];
+        let t = app();
+        for (word, field) in [
+            ("token", "accessToken"),
+            ("password", "smtpPassword"),
+            ("secret", "clientSecret"),
+            ("apikey", "apikey"),
+            ("api_key", "api_key"),
+            ("credential", "credentials"),
+            ("passphrase", "Passphrase"),
+        ] {
+            let lower = field.to_lowercase();
+            let matching: Vec<&str> = WORDS.iter().copied().filter(|other| lower.contains(other)).collect();
+            assert_eq!(matching, [word], "{field} must be matched by {word} alone");
+
+            let value = json!({ field: "value-to-hide", "host": "example.test" });
+            let stored = encrypt_secret_fields(&t, &value);
+            assert!(
+                stored[field].as_str().is_some_and(is_encrypted),
+                "{field} is stored encrypted: {stored}"
+            );
+            assert_eq!(stored["host"], "example.test");
+            assert_eq!(decrypt_secret_fields(&t, &stored).unwrap(), value);
+
+            let shown = redact_secret_fields(&value);
+            assert_eq!(shown.get(field), None, "{field} is not shown: {shown}");
+            assert_eq!(shown[has_marker(field).as_str()], true);
+        }
+        // Names that only come close hold no secret.
+        let plain = json!({ "tokn": "a", "pass": "b", "secre": "c", "api key": "d", "credentia": "e", "phrase": "f" });
+        assert_eq!(encrypt_secret_fields(&t, &plain), plain);
+        assert_eq!(redact_secret_fields(&plain), plain);
+    }
+
+    /// One settings key for each pattern of the secret-key list, with the patterns that match it. Seven of the nine
+    /// have a key only they match. `\.apiKey$` and `\.secret$` never stand alone: whatever they match, the two
+    /// case-insensitive patterns match too (that is how the Node list is). Either way the test fails if any single
+    /// pattern is taken out.
+    #[test]
+    fn each_pattern_of_the_secret_key_list_is_needed_for_a_key_of_its_own() {
+        // The pattern's place in the list, a key, and every place in the list that matches the key.
+        let cases: [(usize, &str, &[usize]); 9] = [
+            (0, "ai.anthropic.apiKey", &[0, 7]),
+            (1, "channel.discord.token", &[1]),
+            (2, "channel.slack.appToken", &[2]),
+            (3, "webhook.secret", &[3, 8]),
+            (4, "channel.email.password", &[4]),
+            (5, "voice.elevenlabs.key", &[5]),
+            (6, "encryption.salt", &[6]),
+            (7, "MY_API-KEY_NAME", &[7]),
+            (8, "SECRETARY", &[8]),
+        ];
+        assert_eq!(SECRET_KEY_PATTERNS.len(), cases.len());
+        for (place, key, expected) in cases {
+            let matching: Vec<usize> = SECRET_KEY_PATTERNS
+                .iter()
+                .enumerate()
+                .filter(|(_, pattern)| pattern.is_match(key))
+                .map(|(index, _)| index)
+                .collect();
+            assert_eq!(matching, expected, "{key}");
+            assert!(expected.contains(&place));
+            assert!(is_secret_key(key), "{key}");
+            assert!(is_encrypted(&encrypt_if_secret(&app(), key, "value")), "{key}");
+        }
+        // Keys that only come close are not secrets.
+        for key in [
+            "channel.discord.tokens",
+            "channel.slack.apptoken",
+            "x.passwords",
+            "x.keys",
+            "xencryption.salt",
+            "encryption",
+            "api.key.name",
+            "secre.t",
+        ] {
+            assert!(!is_secret_key(key), "{key}");
+        }
+    }
 }

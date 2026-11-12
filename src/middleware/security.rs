@@ -20,9 +20,10 @@ use rand::Rng;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use super::auth::{Auth, Clock, env_number_or, js_number, node_header};
+use super::auth::{Auth, Clock, env_number_or, js_number, node_header, safe_compare};
 use crate::app::App;
 use crate::error::ApiError;
+use crate::util::js::number_to_string;
 
 // --- CSRF: HMAC-signed tokens (stateless, survives restarts) ---
 
@@ -37,12 +38,6 @@ pub struct Csrf {
     max_age_ms: f64,
     clock: Arc<Clock>,
 }
-
-/// `crypto.timingSafeEqual` was given two buffers of different lengths and threw. The Node code did not catch
-/// that, so a token whose signature has the wrong length is answered with a 500, not a 403.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("Input buffers must have the same byte length")]
-pub struct TimingSafeEqualLength;
 
 impl Csrf {
     /// The app's CSRF signing, made on first use.
@@ -76,7 +71,7 @@ impl Csrf {
 
     /// `signCsrfToken(timestamp)`: `<timestamp>.<hex HMAC-SHA256 of the timestamp's text>`.
     fn sign(&self, timestamp: f64) -> String {
-        let timestamp = js_number_to_string(timestamp);
+        let timestamp = number_to_string(timestamp);
         // HMAC takes a key of any length, so this never fails.
         let mut hmac = <Hmac<Sha256> as KeyInit>::new_from_slice(&self.secret).expect("HMAC takes a key of any length");
         hmac.update(timestamp.as_bytes());
@@ -88,68 +83,27 @@ impl Csrf {
         self.sign(self.clock.now_ms() as f64)
     }
 
-    /// `verifyCsrfToken(token)`.
-    pub fn verify(&self, token: &str) -> Result<bool, TimingSafeEqualLength> {
+    /// `verifyCsrfToken(token)`: whether this server signed the token and it has not run out.
+    ///
+    /// A Node bug fixed here. The Node code compared the token with the one it expected through
+    /// `crypto.timingSafeEqual`, which throws when the two differ in length, and nothing caught that: a token whose
+    /// signature has the wrong length (a cut or stale one, or the header sent twice) was answered with a 500. A
+    /// token of another length is simply not the token, so it is refused like every other bad token.
+    pub fn verify(&self, token: &str) -> bool {
         let Some(dot) = token.find('.') else {
-            return Ok(false);
+            return false;
         };
         let timestamp = js_number(&token[..dot]);
         if timestamp.is_nan() {
-            return Ok(false);
+            return false;
         }
         // Check expiry
         if self.clock.now_ms() as f64 - timestamp > self.max_age_ms {
-            return Ok(false);
+            return false;
         }
         // Verify HMAC
-        let expected = self.sign(timestamp);
-        if token.len() != expected.len() {
-            return Err(TimingSafeEqualLength);
-        }
-        let mut difference = 0u8;
-        for (a, b) in token.bytes().zip(expected.bytes()) {
-            difference |= a ^ b;
-        }
-        Ok(std::hint::black_box(difference) == 0)
+        safe_compare(token, &self.sign(timestamp))
     }
-}
-
-/// `String(number)`, exactly: the shortest digits that read back as the same number, written without an exponent
-/// from 1e-6 up to 1e21 and as `1.5e+25` or `1e-7` outside it.
-pub(crate) fn js_number_to_string(number: f64) -> String {
-    if number.is_nan() {
-        return "NaN".to_string();
-    }
-    if number == 0.0 {
-        return "0".to_string();
-    }
-    if number.is_infinite() {
-        return if number > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
-    }
-    let sign = if number < 0.0 { "-" } else { "" };
-    // Rust's exponent form has the shortest digits too: "1.794495254663e12".
-    let scientific = format!("{:e}", number.abs());
-    let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
-    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
-    let count = digits.len() as i32;
-    // The position of the decimal point, counted from the first digit.
-    let point = exponent.parse::<i32>().unwrap_or(0) + 1;
-    let body = if count <= point && point <= 21 {
-        format!("{digits}{}", "0".repeat((point - count) as usize))
-    } else if 0 < point && point <= 21 {
-        format!("{}.{}", &digits[..point as usize], &digits[point as usize..])
-    } else if -6 < point && point <= 0 {
-        format!("0.{}{digits}", "0".repeat(-point as usize))
-    } else {
-        let power = point - 1;
-        let power_sign = if power < 0 { '-' } else { '+' };
-        if count == 1 {
-            format!("{digits}e{power_sign}{}", power.abs())
-        } else {
-            format!("{}.{}e{power_sign}{}", &digits[..1], &digits[1..], power.abs())
-        }
-    };
-    format!("{sign}{body}")
 }
 
 // --- Cookies, as Express wrote them ---
@@ -220,7 +174,7 @@ pub fn cookie(name: &str, value: &str, options: CookieOptions, now_ms: i64) -> R
     if !max_age.is_finite() {
         return Err(CookieError("option maxAge is invalid"));
     }
-    line.push_str(&format!("; Max-Age={}", js_number_to_string(max_age)));
+    line.push_str(&format!("; Max-Age={}", number_to_string(max_age)));
     line.push_str("; Path=/");
     let expires = utc_string(expires).ok_or(CookieError("option expires is invalid"))?;
     line.push_str(&format!("; Expires={expires}"));
@@ -361,23 +315,22 @@ pub async fn csrf_protect(State(app): State<App>, request: Request, next: Next) 
     };
 
     // Validate HMAC signature and expiry (stateless: no server-side storage needed)
-    match Csrf::of(&app).verify(&header_token) {
-        Ok(true) => next.run(request).await,
-        Ok(false) => ApiError::new(403, "CSRF token invalid or expired").into_response(),
-        Err(err) => uncaught_error(&app, "RangeError", &err.to_string()),
+    if !Csrf::of(&app).verify(&header_token) {
+        return ApiError::new(403, "CSRF token invalid or expired").into_response();
     }
+
+    next.run(request).await
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::middleware::auth::{create_session, session_auth};
+    use crate::testkit::captured_logs::CapturedLogs;
+    use crate::testkit::{TestApp, http, test_app, test_app_with_env};
     use axum::Router;
     use axum::middleware::{from_fn, from_fn_with_state};
     use axum::routing::{get, post};
-    use serde_json::Value;
-
-    use super::*;
-    use crate::middleware::auth::{create_session, session_auth};
-    use crate::testkit::{TestApp, http, test_app, test_app_with_env};
 
     /// The key the Node fixture below was signed with.
     const FIXTURE_KEY: &str = "tarsee-port-fixture-key-not-a-secret";
@@ -423,7 +376,7 @@ mod tests {
     fn a_token_the_node_version_signed_still_verifies() {
         let (t, _clock) = fixture_app();
         let csrf = Csrf::of(&t);
-        assert_eq!(csrf.verify(NODE_TOKEN), Ok(true));
+        assert!(csrf.verify(NODE_TOKEN));
         assert_eq!(
             csrf.sign(NODE_TOKEN_AT as f64),
             NODE_TOKEN,
@@ -437,13 +390,13 @@ mod tests {
         // Node hashed process.env.ENCRYPTION_KEY untrimmed: spaces around the key make another secret.
         let padded = test_app_with_env([("ENCRYPTION_KEY", format!(" {FIXTURE_KEY} "))]);
         padded.app.set(Clock::manual(NODE_TOKEN_AT));
-        assert_eq!(Csrf::of(&padded).verify(NODE_TOKEN), Ok(false));
+        assert!(!Csrf::of(&padded).verify(NODE_TOKEN));
 
         // Without a key the secret is random: a token is good for the app that issued it and no other.
         let (a, b) = (test_app(), test_app());
         let token = Csrf::of(&a).issue();
-        assert_eq!(Csrf::of(&a).verify(&token), Ok(true));
-        assert_eq!(Csrf::of(&b).verify(&token), Ok(false));
+        assert!(Csrf::of(&a).verify(&token));
+        assert!(!Csrf::of(&b).verify(&token));
     }
 
     #[test]
@@ -453,9 +406,9 @@ mod tests {
         let token = csrf.issue();
         assert_eq!(token.len(), "1794495963789.".len() + 64);
         clock.advance(86_400_000);
-        assert_eq!(csrf.verify(&token), Ok(true));
+        assert!(csrf.verify(&token));
         clock.advance(1);
-        assert_eq!(csrf.verify(&token), Ok(false));
+        assert!(!csrf.verify(&token));
 
         let week = test_app_with_env([("TARSEE_CSRF_MAX_AGE_HOURS", "168")]);
         assert_eq!(Csrf::of(&week).max_age_ms(), 604_800_000.0);
@@ -464,51 +417,44 @@ mod tests {
     }
 
     #[test]
-    fn tokens_are_judged_as_the_node_version_judged_them() {
+    fn a_token_is_good_only_as_it_was_issued() {
         let (t, _clock) = fixture_app();
         let csrf = Csrf::of(&t);
         let zeros = "0".repeat(64);
         let flipped = format!("{}{}", &NODE_TOKEN[..NODE_TOKEN.len() - 1], "5");
-        // What csrfProtect answered in Node: Ok(false) is its 403, Err its 500.
-        assert_eq!(
-            csrf.verify(&flipped),
-            Ok(false),
-            "a wrong signature of the right length"
-        );
-        assert_eq!(
-            csrf.verify("1794495903789.deadbeef"),
-            Err(TimingSafeEqualLength),
-            "a short signature"
-        );
-        assert_eq!(csrf.verify("abcdef"), Ok(false), "no dot");
-        assert_eq!(csrf.verify("abc.def"), Ok(false), "not a number");
-        assert_eq!(csrf.verify(&format!("1000.{zeros}")), Ok(false), "long expired");
-        assert_eq!(csrf.verify(&format!(".{zeros}")), Ok(false), "an empty timestamp is 0");
-        assert_eq!(
-            csrf.verify(&format!("1e25.{zeros}")),
-            Err(TimingSafeEqualLength),
-            "1e25 signs as 1e+25"
-        );
-        assert_eq!(csrf.verify(&format!("1e25.{zeros}0")), Ok(false));
-        assert_eq!(csrf.verify(&format!("Infinity.{zeros}")), Ok(false));
-        assert_eq!(
-            csrf.verify(&NODE_TOKEN.replace('.', " .")),
-            Err(TimingSafeEqualLength),
-            "a padded timestamp reads as the number, but the token is a byte longer"
-        );
-        assert_eq!(
-            csrf.verify(&format!("{NODE_TOKEN}, {NODE_TOKEN}")),
-            Err(TimingSafeEqualLength),
-            "the header sent twice"
-        );
+        // What the Node version refused with its 403.
+        assert!(!csrf.verify(&flipped), "a wrong signature of the right length");
+        assert!(!csrf.verify("abcdef"), "no dot");
+        assert!(!csrf.verify("abc.def"), "not a number");
+        assert!(!csrf.verify(&format!("1000.{zeros}")), "long expired");
+        assert!(!csrf.verify(&format!(".{zeros}")), "an empty timestamp is 0");
+        assert!(!csrf.verify(&format!("1e25.{zeros}0")));
+        assert!(!csrf.verify(&format!("Infinity.{zeros}")));
+        // What the Node version answered with a 500, because the token it expected had another length: these are
+        // refused the same way now.
+        for wrong_length in [
+            "1794495903789.deadbeef".to_string(),
+            "1794495903789.".to_string(),
+            format!("{NODE_TOKEN}00"),
+            NODE_TOKEN[..NODE_TOKEN.len() - 1].to_string(),
+            format!("1e25.{zeros}"),
+            NODE_TOKEN.replace('.', " ."),
+            format!("{NODE_TOKEN}, {NODE_TOKEN}"),
+        ] {
+            assert!(!csrf.verify(&wrong_length), "{wrong_length}");
+        }
+        // The same moment written another way (it reads as the same number) is not the token that was issued.
+        assert!(!csrf.verify(&NODE_TOKEN.replace("1794495903789.", "1794495903789e0.")));
+        assert!(!csrf.verify(&NODE_TOKEN.replace("1794495903789.", "+1794495903789.")));
         // A timestamp from the future is not expired; only its signature decides.
         let future = csrf.sign((NODE_TOKEN_AT + 10 * 86_400_000) as f64);
-        assert_eq!(csrf.verify(&future), Ok(true));
+        assert!(csrf.verify(&future));
     }
 
     #[test]
-    fn numbers_print_exactly_as_javascript_prints_them() {
-        // String(number) in Node.
+    fn the_numbers_in_a_token_and_a_cookie_print_as_javascript_prints_them() {
+        // String(number) in Node, for `util::js::number_to_string`, which writes the timestamp a token is signed
+        // over and a cookie's Max-Age.
         for (number, expected) in [
             (1e21, "1e+21"),
             (1e25, "1e+25"),
@@ -531,7 +477,7 @@ mod tests {
             (f64::NEG_INFINITY, "-Infinity"),
             (f64::NAN, "NaN"),
         ] {
-            assert_eq!(js_number_to_string(number), expected);
+            assert_eq!(number_to_string(number), expected);
         }
     }
 
@@ -786,17 +732,26 @@ mod tests {
         assert_eq!(wrong_token.status, 403);
     }
 
+    /// A Node bug fixed in this version. The Node version answered each of these with a 500 and an `[error]` line
+    /// (`crypto.timingSafeEqual` threw on two lengths, uncaught). They are bad tokens: 403, like any other.
     #[tokio::test]
-    async fn a_signature_of_the_wrong_length_is_the_500_the_node_version_gave() {
+    async fn a_signature_of_the_wrong_length_is_refused_like_any_other_bad_token() {
         let (t, _clock) = fixture_app();
         let router = router(&t);
-        // Node: 500 {"error":"Internal server error","detail":"Input buffers must have the same byte length"}
-        let short = post_with(&router, Some("1794495903789.deadbeef")).await;
-        assert_eq!(short.status, 500);
-        assert_eq!(
-            short.text(),
-            r#"{"error":"Internal server error","detail":"Input buffers must have the same byte length"}"#
-        );
+        let logs = CapturedLogs::start();
+        let refused = (403, r#"{"error":"CSRF token invalid or expired"}"#.to_string());
+        let zeros = "0".repeat(64);
+        for token in [
+            "1794495903789.deadbeef".to_string(),
+            "1794495903789.".to_string(),
+            format!("{NODE_TOKEN}00"),
+            NODE_TOKEN[..NODE_TOKEN.len() - 1].to_string(),
+            format!("1e25.{zeros}"),
+            NODE_TOKEN.replace('.', " ."),
+        ] {
+            let response = post_with(&router, Some(&token)).await;
+            assert_eq!((response.status, response.text()), refused, "{token}");
+        }
         // The header sent twice reaches the check as "token, token".
         let twice = http::send(
             &router,
@@ -805,15 +760,14 @@ mod tests {
                 .header("x-csrf-token", NODE_TOKEN),
         )
         .await;
-        assert_eq!(twice.status, 500);
+        assert_eq!((twice.status, twice.text()), refused);
+        assert_eq!(logs.errors(), Vec::<String>::new(), "a bad token is not a server error");
 
-        // In production the detail is left out.
+        // The token itself still passes, and so in production.
+        assert_eq!(post_with(&router, Some(NODE_TOKEN)).await.status, 200);
         let production = test_app_with_env([("NODE_ENV", "production")]);
         let response = post_with(&self::router(&production), Some("1794495903789.deadbeef")).await;
-        assert_eq!(
-            (response.status, response.json()),
-            (500, json!({ "error": "Internal server error" }))
-        );
+        assert_eq!((response.status, response.text()), refused);
     }
 
     #[tokio::test]
@@ -827,6 +781,13 @@ mod tests {
             json!({ "error": "Internal server error", "detail": "option maxAge is invalid" })
         );
         assert_eq!(page.set_cookies(), Vec::<String>::new());
-        let _: Value = page.json();
+
+        // In production the detail is left out.
+        let production = test_app_with_env([("TARSEE_CSRF_MAX_AGE_HOURS", "Infinity"), ("NODE_ENV", "production")]);
+        let page = http::get(&router(&production), "/page").await;
+        assert_eq!(
+            (page.status, page.json()),
+            (500, json!({ "error": "Internal server error" }))
+        );
     }
 }

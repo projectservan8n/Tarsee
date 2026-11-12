@@ -45,7 +45,7 @@ use sha2::{Digest, Sha256};
 
 use crate::app::App;
 use crate::config::env::create_private_dir;
-use crate::util::js::{now_iso, number_to_string, truthy, utf16_truncate};
+use crate::util::js::{is_whitespace as js_space, now_iso, number_to_string, trim as js_trim, truthy, utf16_truncate};
 
 pub const MASTER_MIN: u32 = 64;
 pub const MASTER_MAX: u32 = 2048;
@@ -868,15 +868,6 @@ pub struct ImageKind {
     pub mime: &'static str,
 }
 
-/// `\s` in a JavaScript regex.
-fn js_space(c: char) -> bool {
-    matches!(
-        c,
-        '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
-    )
-}
-
 /// A file's real type by its first bytes (a PNG, JPEG or WebP), or an SVG by a light look (text with an <svg
 /// element).
 pub fn sniff_image_type(buf: &[u8]) -> Option<ImageKind> {
@@ -1377,7 +1368,7 @@ fn etag_matches(header: Option<&str>, etag: &str) -> bool {
     };
     let bare = etag.strip_prefix("W/").unwrap_or(etag);
     header.split(',').any(|t| {
-        let v = t.trim();
+        let v = js_trim(t);
         v == "*" || v.strip_prefix("W/").unwrap_or(v) == bare
     })
 }

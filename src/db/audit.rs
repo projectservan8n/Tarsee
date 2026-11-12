@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use rusqlite::params;
+use rusqlite::{Connection, params};
 
 use super::{Db, Row};
 use crate::app::App;
@@ -77,9 +77,21 @@ impl AuditLog {
         app.set(AuditLog::new(app.db().clone()))
     }
 
+    /// Runs `f` with the connection, or fails as `better-sqlite3` did once the database is closed. (`Db::with`
+    /// itself panics on a closed database; the Node code threw an error its callers caught.)
+    fn with_open<R>(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<R>) -> rusqlite::Result<R> {
+        if !self.db.is_open() {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_MISUSE),
+                Some("The database connection is not open".to_string()),
+            ));
+        }
+        self.db.with(f)
+    }
+
     /// Log a credential or sensitive action.
     pub fn log(&self, entry: AuditEntry) {
-        let written = self.db.with(|conn| {
+        let written = self.with_open(|conn| {
             super::run(
                 conn,
                 "
@@ -104,7 +116,7 @@ impl AuditLog {
     /// Query audit logs, newest first: at most `limit` rows (100 when `None`, never more than 1000) after skipping
     /// `offset`.
     pub fn query(&self, limit: Option<i64>, offset: Option<i64>) -> rusqlite::Result<Vec<Row>> {
-        self.db.with(|conn| {
+        self.with_open(|conn| {
             super::all(
                 conn,
                 "
@@ -119,15 +131,14 @@ impl AuditLog {
 
     /// Get total count of audit entries.
     pub fn count(&self) -> rusqlite::Result<i64> {
-        self.db
-            .with(|conn| conn.query_row("SELECT COUNT(*) as count FROM audit_log", [], |row| row.get(0)))
+        self.with_open(|conn| conn.query_row("SELECT COUNT(*) as count FROM audit_log", [], |row| row.get(0)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::test_app;
+    use crate::testkit::{CapturedLogs, test_app};
     use serde_json::{Value, json};
 
     #[test]
@@ -229,7 +240,34 @@ mod tests {
         let t = test_app();
         let audit = AuditLog::new(t.db().clone());
         t.db().with(|c| c.execute_batch("DROP TABLE audit_log")).unwrap();
+        let logs = CapturedLogs::start();
         audit.log(AuditEntry::new("auth.login"));
+        assert_eq!(logs.errors(), ["[audit] failed to write log: no such table: audit_log"]);
         assert!(audit.count().is_err());
+    }
+
+    #[test]
+    fn a_closed_database_is_an_error_that_is_logged_not_a_panic() {
+        let t = test_app();
+        let audit = AuditLog::init(&t);
+        audit.log(AuditEntry::new("before"));
+        t.db().close();
+
+        // What Node logged for `new AuditLog(db); db.close(); log(...)`, and then went on.
+        let logs = CapturedLogs::start();
+        audit.log(AuditEntry::new("auth.login").actor("user"));
+        assert_eq!(
+            logs.errors(),
+            ["[audit] failed to write log: The database connection is not open"]
+        );
+        // Reading fails with the error better-sqlite3 threw, for the caller to answer with.
+        assert_eq!(
+            audit.query(None, None).unwrap_err().to_string(),
+            "The database connection is not open"
+        );
+        assert_eq!(
+            audit.count().unwrap_err().to_string(),
+            "The database connection is not open"
+        );
     }
 }

@@ -19,6 +19,7 @@ mod run_cmd;
 mod stt_install;
 mod stt_local;
 mod stt_routes;
+mod terminal;
 mod tts_phonon;
 mod voice;
 mod voice_fixtures;

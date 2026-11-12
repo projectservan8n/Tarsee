@@ -38,7 +38,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde::Serialize;
 
-use super::provider_registry::{Engine, Provider, get_provider, js_trim, normalize_provider_id};
+use super::provider_registry::{Engine, Provider, get_provider, normalize_provider_id};
 use crate::util::js;
 
 /// What kind of failure it is.
@@ -364,7 +364,7 @@ pub fn auth_message(provider_id: &str) -> String {
 /// b11768 for llama.cpp, the first build whose tool calls Tarsee can rely on. `local_url` is the address the owner
 /// set (…/v1).
 pub fn local_no_responses_message(local_url: Option<&str>) -> String {
-    let place = js_trim(local_url.unwrap_or("")).trim_end_matches('/');
+    let place = js::trim(local_url.unwrap_or("")).trim_end_matches('/');
     let (at, address) = if place.is_empty() {
         (String::new(), "its /responses address".to_string())
     } else {
@@ -402,7 +402,7 @@ pub fn friendly(provider_id: &str, kind: ErrorKind, detail: Option<&str>, model:
     let id = id_of(provider_id);
     let p = get_provider(&id);
     let label = label_of(p, &id);
-    let words = js_trim(detail.unwrap_or(""));
+    let words = js::trim(detail.unwrap_or(""));
     let model = model.filter(|m| !m.is_empty());
     match kind {
         ErrorKind::Expired | ErrorKind::Auth => auth_message(&id),
@@ -440,7 +440,7 @@ pub fn friendly(provider_id: &str, kind: ErrorKind, detail: Option<&str>, model:
         ErrorKind::Moderated => {
             let reason = FLAGGED_FOR_RE
                 .captures(words)
-                .map(|why| js::utf16_truncate(js_trim(&why[1].replace(['\\', '"'], "")), 80))
+                .map(|why| js::utf16_truncate(js::trim(&why[1].replace(['\\', '"'], "")), 80))
                 .unwrap_or_default();
             let flagged = if reason.is_empty() {
                 String::new()

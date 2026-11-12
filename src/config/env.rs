@@ -167,17 +167,16 @@ fn parse_int_prefix(text: &str) -> Option<u16> {
     digits.parse().ok()
 }
 
-/// The user's home folder (`os.homedir()`): the environment's own variable first, so a test can point it somewhere.
+/// The user's home folder (`os.homedir()`), from the environment given: `USERPROFILE` on Windows, `HOME` elsewhere.
+/// It never asks the real process: [`Env::from_process`] fills the variable in at startup when the system has a
+/// home folder but did not put it in the environment. With no home at all it is the current folder.
 pub fn home_dir(env: &Env) -> PathBuf {
     let from_env = if cfg!(windows) {
         env.trimmed("USERPROFILE")
     } else {
         env.trimmed("HOME")
     };
-    from_env
-        .map(PathBuf::from)
-        .or_else(std::env::home_dir)
-        .unwrap_or_else(|| PathBuf::from("."))
+    from_env.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// `TARSEE_STATE_DIR`, else Railway's volume at /data when it is there, else `~/.tarsee`.
@@ -224,7 +223,7 @@ fn resolve_api_token(env: &Env, state_dir: &Path) -> String {
     }
     let token_path = state_dir.join("api.token");
     if let Ok(existing) = fs::read_to_string(&token_path) {
-        let existing = existing.trim();
+        let existing = crate::util::js::trim(&existing);
         if !existing.is_empty() {
             return existing.to_string();
         }
@@ -514,6 +513,11 @@ mod tests {
         assert_eq!(config.workspace_dir, dir.path().join("ws"));
         assert_eq!(config.claude_workspace_dir, dir.path().join("ws"));
         assert_eq!(config.skills_dir(), dir.path().join("ws").join("skills"));
+    }
+
+    #[test]
+    fn with_no_home_in_the_environment_the_real_one_is_never_asked() {
+        assert_eq!(home_dir(&Env::new()), PathBuf::from("."));
     }
 
     #[test]

@@ -1153,14 +1153,19 @@ fn the_clock_is_the_systems_unless_a_test_stores_one() {
 }
 
 #[test]
-fn text_is_trimmed_as_javascript_trims_it() {
-    assert_eq!(
-        js_trim(" \t\n\u{B}\u{C}\r\u{A0}\u{FEFF}x y\u{2028}\u{2029}\u{3000} "),
-        "x y"
-    );
-    // U+0085 is whitespace to Rust's trim, not to JavaScript's.
-    assert_eq!(js_trim("\u{85}x\u{85}"), "\u{85}x\u{85}");
-    assert_eq!(js_trim(""), "");
+fn the_whitespace_class_is_javascripts_whitespace() {
+    // `JS_WHITESPACE` (for patterns) and `util::js::is_whitespace` (for trimming) must be one set of characters.
+    let class = Regex::new(&format!("^{JS_WHITESPACE}$")).unwrap();
+    for c in ('\0'..='\u{FFFF}').chain(['\u{10000}', '\u{1F412}', '\u{10FFFF}']) {
+        let mut buffer = [0u8; 4];
+        assert_eq!(
+            class.is_match(c.encode_utf8(&mut buffer)),
+            js::is_whitespace(c),
+            "U+{:04X}",
+            c as u32
+        );
+    }
+    assert!(js::is_whitespace('\u{FEFF}') && !js::is_whitespace('\u{85}'));
 }
 
 #[test]
@@ -1210,4 +1215,90 @@ fn a_header_sent_more_than_once_reads_as_node_read_it() {
         node_header(&raw, &HeaderName::from_static("x-raw")).as_deref(),
         Some("p\u{C3}\u{A4}s")
     );
+}
+
+// --- A PIN or an API token with a byte order mark or a next-line character at one end ---
+//
+// JavaScript's `trim()` removes U+FEFF and keeps U+0085; Rust's does the opposite. The configuration trims
+// SETUP_PASSWORD and TARSEE_API_TOKEN (`process.env.NAME?.trim()`), so trimmed the Rust way a PIN that signs in
+// under the Node version would be refused here (and each refusal counts toward the lockout), and the API token
+// every client holds would stop working.
+
+/// SETUP_PASSWORD and TARSEE_API_TOKEN as they are set, then what `validatePassword` and `validateApiToken` of the
+/// Node version answered for each candidate under them.
+#[test]
+fn a_pin_and_an_api_token_set_with_a_mark_or_a_next_line_character_are_the_ones_node_checked() {
+    let token = "api-token-not-a-secret";
+    let passwords = [
+        "1234",
+        "1234\u{FEFF}",
+        "\u{FEFF}1234",
+        "\u{85}1234",
+        "1234\u{85}",
+        " 1234",
+    ];
+    let tokens = [
+        token.to_string(),
+        format!("\u{FEFF}{token}"),
+        format!("{token}\u{FEFF}"),
+        format!("{token}\u{85}"),
+        format!("\u{85}{token}"),
+    ];
+    for (pin, api_token, node_passwords, node_tokens) in [
+        (
+            // A byte order mark: trimmed away, so the PIN is 1234 and the token the bare one.
+            "1234\u{FEFF}",
+            format!("\u{FEFF}{token}"),
+            [true, false, false, false, false, false],
+            [true, false, false, false, false],
+        ),
+        (
+            // A next-line character: kept, so it is part of the PIN and of the token.
+            "\u{85}1234",
+            format!("{token}\u{85}"),
+            [false, false, false, true, false, false],
+            [false, false, false, true, false],
+        ),
+    ] {
+        let t = test_app_with_env([("SETUP_PASSWORD", pin), ("TARSEE_API_TOKEN", api_token.as_str())]);
+        for (candidate, expected) in passwords.iter().zip(node_passwords) {
+            assert_eq!(
+                validate_password(&t, candidate),
+                expected,
+                "PIN {pin:?}, tried {candidate:?}"
+            );
+        }
+        for (candidate, expected) in tokens.iter().zip(node_tokens) {
+            assert_eq!(
+                validate_api_token(&t, candidate),
+                expected,
+                "token {api_token:?}, tried {candidate:?}"
+            );
+        }
+    }
+}
+
+/// The same through the Authorization header, with the bytes a client would put on the wire. What the Node server
+/// answered to each (`GET /api/auth/status`): signed in by the token, or not.
+#[test]
+fn the_api_token_in_a_header_is_matched_as_node_matched_it_when_it_has_such_a_character() {
+    let bearer = |t: &TestApp, value: &[u8]| {
+        let mut map = HeaderMap::new();
+        map.insert(AUTHORIZATION, HeaderValue::from_bytes(value).unwrap());
+        authenticate(t, &map).is_bearer()
+    };
+    // TARSEE_API_TOKEN = U+FEFF + "api-token-not-a-secret": the mark is trimmed away.
+    let bom = test_app_with_env([("TARSEE_API_TOKEN", "\u{FEFF}api-token-not-a-secret")]);
+    assert_eq!(bom.config().api_token, "api-token-not-a-secret");
+    assert!(bearer(&bom, b"Bearer api-token-not-a-secret"));
+    assert!(!bearer(&bom, b"Bearer api-token-not-a-secret\x85"));
+    assert!(!bearer(&bom, b"Bearer \xEF\xBB\xBFapi-token-not-a-secret"));
+
+    // TARSEE_API_TOKEN = "api-token-not-a-secret" + U+0085: the character stays, and a header carries it as the
+    // one byte 0x85 (Node reads header bytes as Latin-1), not as its two UTF-8 bytes.
+    let nel = test_app_with_env([("TARSEE_API_TOKEN", "api-token-not-a-secret\u{85}")]);
+    assert_eq!(nel.config().api_token, "api-token-not-a-secret\u{85}");
+    assert!(!bearer(&nel, b"Bearer api-token-not-a-secret"));
+    assert!(bearer(&nel, b"Bearer api-token-not-a-secret\x85"));
+    assert!(!bearer(&nel, b"Bearer api-token-not-a-secret\xC2\x85"));
 }
