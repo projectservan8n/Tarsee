@@ -335,6 +335,56 @@ fn fresh_store() -> Arc<dyn Settings> {
     Arc::new(MemorySettings::new())
 }
 
+/// The cache as the store was given it: text, written as JavaScript writes JSON.
+fn cached_text(store: &dyn Settings) -> String {
+    match store.get(CATALOG_CACHE_KEY) {
+        Some(Value::String(text)) => text,
+        other => panic!("the cache is not text: {other:?}"),
+    }
+}
+
+/// The cache as a setting read back: the real store hands a setting back parsed; the one in memory hands back the
+/// text it was given.
+fn cached_value(store: &dyn Settings) -> Value {
+    serde_json::from_str(&cached_text(store)).expect("the cache is JSON")
+}
+
+/// A store that says when the list is saved in it, so a test can wait for that and for nothing else.
+#[derive(Default)]
+struct TellingStore {
+    inner: MemorySettings,
+    saved: tokio::sync::Notify,
+}
+
+impl TellingStore {
+    /// Waits for the list to be saved (once for each save). Fails, instead of waiting for ever, when it never is:
+    /// the clock of these tests is paused, so the ten minutes pass at once.
+    async fn next_save(&self, or_else: &str) {
+        tokio::time::timeout(Duration::from_secs(600), self.saved.notified())
+            .await
+            .expect(or_else);
+    }
+}
+
+impl Settings for TellingStore {
+    fn get(&self, key: &str) -> Option<Value> {
+        self.inner.get(key)
+    }
+    fn set(&self, key: &str, value: Value) -> anyhow::Result<()> {
+        self.inner.set(key, value)?;
+        if key == CATALOG_CACHE_KEY {
+            self.saved.notify_one();
+        }
+        Ok(())
+    }
+    fn delete(&self, key: &str) -> bool {
+        self.inner.delete(key)
+    }
+    fn get_by_prefix(&self, prefix: &str) -> Vec<(String, Value)> {
+        self.inner.get_by_prefix(prefix)
+    }
+}
+
 /// Ask the stand-in address, with the clock reading `at_ms`.
 fn at(at_ms: i64) -> CatalogOptions {
     CatalogOptions {
@@ -385,7 +435,7 @@ async fn caches_the_list_in_cache_openrouter_models_and_feeds_the_registry() {
     let s = setup();
     let store = fresh_store();
     s.catalog.refresh_open_router_catalog(store.clone(), at(now())).await;
-    let cached = store.get(CATALOG_CACHE_KEY).unwrap();
+    let cached = cached_value(store.as_ref());
     assert_eq!(cached["fetchedAt"], js::iso_from_ms(now()));
     assert_eq!(cached["models"].as_array().unwrap().len(), 36);
     assert_eq!(s.registry.catalog_models("openrouter").len(), 36);
@@ -482,6 +532,15 @@ impl GatedFetch {
     }
 }
 
+/// Waits for the next request to arrive at the gate. Fails, instead of waiting for ever, when none comes (on the
+/// paused clock of these tests the ten minutes pass at once).
+async fn next_request(arrivals: &mut tokio::sync::mpsc::UnboundedReceiver<()>) {
+    tokio::time::timeout(Duration::from_secs(600), arrivals.recv())
+        .await
+        .expect("the list was not asked for")
+        .expect("the client is gone");
+}
+
 #[async_trait]
 impl Fetch for GatedFetch {
     async fn fetch(&self, request: FetchRequest) -> Result<FetchResponse, FetchError> {
@@ -492,7 +551,7 @@ impl Fetch for GatedFetch {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn asks_once_when_two_callers_want_the_list_at_the_same_time() {
     let s = setup();
     let (gated, _arrivals) = GatedFetch::before(&s.t);
@@ -524,6 +583,251 @@ async fn asks_once_when_two_callers_want_the_list_at_the_same_time() {
     gated.let_one_through();
     s.catalog.refresh_open_router_catalog(store, forced).await;
     assert_eq!(gated.started.load(Ordering::SeqCst), 2);
+}
+
+// A promise runs whether or not anyone waits for it; a future does not. The cases below are what Node did when
+// nobody was left waiting, which a future that callers poll would not do.
+
+#[tokio::test(start_paused = true)]
+async fn a_refresh_finishes_whoever_is_waiting_and_the_next_caller_gets_the_list() {
+    let s = setup();
+    let (gated, mut arrivals) = GatedFetch::before(&s.t);
+    let store = Arc::new(TellingStore::default());
+    let settings: Arc<dyn Settings> = store.clone();
+    // A caller asks, and goes away while OpenRouter has not answered yet (a browser leaving Settings > AI: the
+    // server drops the handler that was waiting).
+    {
+        let caller = s.catalog.refresh_open_router_catalog(settings.clone(), at(now()));
+        tokio::pin!(caller);
+        tokio::select! {
+            biased;
+            _ = &mut caller => panic!("the list came before the request was let through"),
+            () = next_request(&mut arrivals) => {}
+        }
+    }
+    // Nobody is waiting now. OpenRouter answers.
+    gated.let_one_through();
+    store.next_save("the refresh stopped when its caller left").await;
+    // The list was saved and put to use all the same.
+    assert_eq!(s.catalog.open_router_models().len(), 36);
+    assert_eq!(s.registry.catalog_models("openrouter").len(), 36);
+    assert_eq!(cached_value(store.as_ref())["fetchedAt"], "2026-11-09T12:00:00.000Z");
+    // The next caller gets the list, and no second request was needed for it.
+    let next = s.catalog.refresh_open_router_catalog(settings, at(now() + 1000)).await;
+    assert_eq!((next.source, next.models.len()), (CatalogSource::Cache, 36));
+    assert_eq!(gated.started.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_request_whose_caller_went_away_ends_by_itself_and_the_next_refresh_asks_again() {
+    let s = setup();
+    let store = fresh_store();
+    let forced = |at_ms: i64| CatalogOptions {
+        force: true,
+        timeout: Some(Duration::from_millis(300)),
+        ..at(at_ms)
+    };
+    // OpenRouter does not answer. The request has 300 ms; its only caller gives up after 50.
+    s.t.fetch.respond(URL, Answer::Hang);
+    let gone = tokio::time::timeout(
+        Duration::from_millis(50),
+        s.catalog.refresh_open_router_catalog(store.clone(), forced(now())),
+    )
+    .await;
+    assert!(gone.is_err(), "the caller left before any answer");
+    // A second later OpenRouter answers again, and the list is asked for.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    s.t.fetch.respond(URL, Answer::bytes(200, "application/json", FIXTURE));
+    let out = s.catalog.refresh_open_router_catalog(store, forced(now() + 1050)).await;
+    // A request of its own, with the list: not what was left of the one nobody was waiting for (whose time limit
+    // had long passed, so it would have said "it took too long to answer" without asking).
+    assert_eq!(
+        (out.source, out.models.len(), out.error),
+        (CatalogSource::Network, 36, None)
+    );
+    assert_eq!(out.fetched_at, Some(js::iso_from_ms(now() + 1050)));
+    assert_eq!(s.t.fetch.calls().len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn stopping_the_timer_while_its_refresh_is_on_its_way_lets_that_refresh_finish() {
+    let s = setup();
+    let (gated, mut arrivals) = GatedFetch::before(&s.t);
+    let store = Arc::new(TellingStore::default());
+    let opts = CatalogOptions {
+        interval: Some(Duration::from_secs(60)),
+        ..at(now())
+    };
+    let handle = init_open_router_catalog(&s.t, store.clone(), opts);
+    // Boot's own refresh.
+    next_request(&mut arrivals).await;
+    gated.let_one_through();
+    assert_eq!(handle.ready().await.source, CatalogSource::Network);
+    store.next_save("boot's list was not saved").await;
+    // An interval later the timer asks again, and is stopped before OpenRouter has answered.
+    next_request(&mut arrivals).await;
+    handle.stop();
+    gated.let_one_through();
+    store.next_save("the refresh stopped with the timer").await;
+    assert_eq!(s.t.fetch.calls().len(), 2);
+    // The timer itself is over: nothing more is asked, however long it is left.
+    tokio::time::sleep(Duration::from_secs(600)).await;
+    assert_eq!(gated.started.load(Ordering::SeqCst), 2);
+    // And nothing was left half done for the next caller: a forced refresh makes a request of its own.
+    gated.let_one_through();
+    let forced = CatalogOptions {
+        force: true,
+        ..at(now())
+    };
+    let out = s.catalog.refresh_open_router_catalog(store, forced).await;
+    assert_eq!((out.source, out.models.len()), (CatalogSource::Network, 36));
+    assert_eq!(gated.started.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_timer_does_not_wait_for_its_refresh_so_a_slow_answer_moves_no_tick() {
+    let s = setup();
+    let (gated, mut arrivals) = GatedFetch::before(&s.t);
+    let store = Arc::new(TellingStore::default());
+    let opts = CatalogOptions {
+        interval: Some(Duration::from_secs(60)),
+        ..at(now())
+    };
+    let handle = init_open_router_catalog(&s.t, store.clone(), opts);
+    // Boot's own refresh, which nobody here waits for (`ready` is not asked for): it finishes all the same.
+    next_request(&mut arrivals).await;
+    gated.let_one_through();
+    store.next_save("boot's list was not saved").await;
+    assert_eq!(s.catalog.open_router_models().len(), 36);
+    // The request of the first tick (60 s after boot) is not answered until 210 s. The ticks at 120 s and 180 s
+    // find it still on its way and join it, as the calls of the JS interval did: nothing more is asked.
+    next_request(&mut arrivals).await;
+    tokio::time::sleep(Duration::from_secs(150)).await;
+    assert_eq!(gated.started.load(Ordering::SeqCst), 2);
+    gated.let_one_through();
+    store.next_save("the timer's list was not saved").await;
+    // Nothing is asked to make up for the ticks that passed meanwhile ...
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert_eq!(gated.started.load(Ordering::SeqCst), 2);
+    // ... and the next tick comes when it was due, at 240 s.
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    assert_eq!(gated.started.load(Ordering::SeqCst), 3);
+    handle.stop();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_fresh_cached_list_is_asked_for_again_only_a_whole_interval_after_boot() {
+    let s = setup();
+    let rows = rows();
+    let store: Arc<dyn Settings> = Arc::new(MemorySettings::from_pairs([(
+        CATALOG_CACHE_KEY,
+        json!({"fetchedAt": js::iso_from_ms(now() - HOUR), "models": &rows[..5]}),
+    )]));
+    let opts = CatalogOptions {
+        interval: Some(Duration::from_secs(60)),
+        ..at(now())
+    };
+    let handle = init_open_router_catalog(&s.t, store, opts);
+    // Boot is content with the cached list ...
+    assert_eq!(handle.ready().await.source, CatalogSource::Cache);
+    tokio::time::sleep(Duration::from_secs(59)).await;
+    assert_eq!(s.t.fetch.calls().len(), 0);
+    assert_eq!(s.catalog.open_router_models().len(), 5);
+    // ... the timer is not: its refresh is forced.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(s.t.fetch.calls().len(), 1);
+    assert_eq!(s.catalog.open_router_models().len(), 36);
+    handle.stop();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refresh_that_breaks_half_way_keeps_the_last_list_and_the_next_one_starts_afresh() {
+    /// A store that breaks (a panic, not an error) the first time the list is saved in it.
+    #[derive(Default)]
+    struct BreaksOnce {
+        inner: MemorySettings,
+        broke: std::sync::atomic::AtomicBool,
+    }
+    impl Settings for BreaksOnce {
+        fn get(&self, key: &str) -> Option<Value> {
+            self.inner.get(key)
+        }
+        fn set(&self, key: &str, value: Value) -> anyhow::Result<()> {
+            assert!(self.broke.swap(true, Ordering::SeqCst), "the store broke");
+            self.inner.set(key, value)
+        }
+        fn delete(&self, key: &str) -> bool {
+            self.inner.delete(key)
+        }
+        fn get_by_prefix(&self, prefix: &str) -> Vec<(String, Value)> {
+            self.inner.get_by_prefix(prefix)
+        }
+    }
+    let s = setup();
+    let rows = rows();
+    s.catalog.set_models_for_tests(rows[..5].to_vec());
+    let store: Arc<dyn Settings> = Arc::new(BreaksOnce::default());
+    let out = s.catalog.refresh_open_router_catalog(store.clone(), at(now())).await;
+    // The caller still gets an answer: the list in hand, and what went wrong.
+    assert_eq!((out.source, out.models.len()), (CatalogSource::Stale, 5));
+    let error = out.error.unwrap();
+    assert!(
+        error.starts_with("Tarsee couldn't read OpenRouter's model list (") && error.contains("the store broke"),
+        "{error}"
+    );
+    assert_eq!(s.catalog.open_router_models().len(), 5);
+    // The fetch that broke was forgotten with it: the next refresh asks again, and this time the list is saved.
+    let out = s.catalog.refresh_open_router_catalog(store.clone(), at(now())).await;
+    assert_eq!(
+        (out.source, out.models.len(), out.error),
+        (CatalogSource::Network, 36, None)
+    );
+    assert_eq!(s.t.fetch.calls().len(), 2);
+    assert_eq!(cached_value(store.as_ref())["models"].as_array().unwrap().len(), 36);
+}
+
+#[tokio::test]
+async fn the_cached_list_is_the_text_the_node_version_wrote_byte_for_byte() {
+    use sha2::Digest;
+    let s = setup();
+    let store = fresh_store();
+    s.catalog.refresh_open_router_catalog(store.clone(), at(now())).await;
+    let text = cached_text(store.as_ref());
+    // What `JSON.stringify({ fetchedAt, models })` gave in Node for the same list at the same moment: 13,042 bytes
+    // with this SHA-256.
+    assert_eq!(text.len(), 13_042);
+    assert_eq!(
+        hex::encode(sha2::Sha256::digest(text.as_bytes())),
+        "5ff99cbe0c7d4dd65da1ecf37b051b496ac144e352a42ee632f5565128adc52a"
+    );
+    // A whole price has no decimal point there (serde_json's own text for the same value would be "0.0", "2.0").
+    assert!(text.starts_with(r#"{"fetchedAt":"2026-11-09T12:00:00.000Z","models":[{"id":""#));
+    assert!(text.contains(r#""price":{"in":0,"out":0,"cacheRead":0,"cacheWrite":0}"#));
+    assert!(text.contains(r#""price":{"in":2,"out":10,"cacheRead":0.1,"cacheWrite":2.5}"#));
+    // And it reads back as the same 36 rows.
+    let cached = s.catalog.load_open_router_catalog(store.as_ref()).unwrap();
+    assert_eq!(cached.models.as_slice(), rows().as_slice());
+}
+
+#[tokio::test]
+async fn a_price_of_a_millionth_is_cached_as_javascript_writes_it() {
+    // The smallest price the rounding leaves, 0.000001: JavaScript writes it in full, serde_json as "1e-6".
+    let mut tiny = raw("z-ai/glm-5.3");
+    tiny["id"] = json!("tiny/price");
+    tiny["pricing"] = json!({
+        "prompt": "0.000000000001", "completion": "0.0000000000025", "input_cache_read": "0.000000000000123",
+    });
+    let s = setup();
+    s.t.fetch.respond(URL, Answer::json(200, json!({"data": [tiny]})));
+    let store = fresh_store();
+    s.catalog.refresh_open_router_catalog(store.clone(), at(now())).await;
+    let text = cached_text(store.as_ref());
+    assert!(
+        text.contains(r#""price":{"in":0.000001,"out":0.000003,"cacheRead":0,"cacheWrite":0.000001}"#),
+        "{text}"
+    );
+    let cached = s.catalog.load_open_router_catalog(store.as_ref()).unwrap();
+    assert_eq!(cached.models[0].price, Some(price(0.000001, 0.000003, 0.0, 0.000001)));
 }
 
 #[tokio::test]
@@ -919,13 +1223,13 @@ fn with_no_list_loaded_the_sections_are_drawn_from_the_cached_one() {
     assert_eq!(section(&sections, "recommended").models[0].label, "Second Copy");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_request_that_takes_too_long_or_is_stopped_says_so_and_never_fails() {
     let s = setup();
     // The stand-in never answers: what ends the wait is the request's own time limit.
     s.t.fetch.respond(URL, Answer::Hang);
     let slow = CatalogOptions {
-        timeout: Some(Duration::from_millis(10)),
+        timeout: Some(Duration::from_secs(3)),
         ..at(now())
     };
     let out = s.catalog.refresh_open_router_catalog(fresh_store(), slow).await;
@@ -1005,43 +1309,33 @@ async fn a_store_that_cant_save_the_list_does_not_stop_it_being_used() {
     assert_eq!(s.registry.catalog_models("openrouter").len(), 36);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_list_is_asked_for_again_every_interval_until_it_is_stopped() {
     let s = setup();
-    let (gated, mut arrivals) = GatedFetch::before(&s.t);
-    let interval = Duration::from_millis(150);
     let opts = CatalogOptions {
-        interval: Some(interval),
+        interval: Some(Duration::from_secs(60)),
         ..at(now())
     };
-    // Each wait below is for the request itself to arrive, however long the machine takes to get there.
-    let mut next_request = async || {
-        tokio::time::timeout(Duration::from_secs(30), arrivals.recv())
-            .await
-            .expect("the list was not asked for again")
-            .expect("the client is gone");
-        gated.let_one_through();
-    };
-    let started = std::time::Instant::now();
     let mut handle = init_open_router_catalog(&s.t, fresh_store(), opts);
-    next_request().await;
     assert_eq!(handle.ready().await.source, CatalogSource::Network);
-    // Once for each interval after that, even though the cached list is still fresh.
-    next_request().await;
-    assert!(
-        started.elapsed() >= interval,
-        "the first repeat comes a whole interval after boot, not at once"
-    );
-    next_request().await;
-    assert_eq!(gated.started.load(Ordering::SeqCst), 3);
+    assert_eq!(s.t.fetch.calls().len(), 1);
+    // Nothing more until a whole interval has passed since boot; then once for each one, even though the cached
+    // list is still fresh.
+    tokio::time::sleep(Duration::from_secs(59)).await;
+    assert_eq!(s.t.fetch.calls().len(), 1);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(s.t.fetch.calls().len(), 2);
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(s.t.fetch.calls().len(), 3);
     handle.stop();
     // The task that asked is over: nothing is left to ask again.
     let ended = (&mut handle.timer).await;
     assert!(ended.is_err_and(|err| err.is_cancelled()));
-    assert_eq!(gated.started.load(Ordering::SeqCst), 3);
+    tokio::time::sleep(Duration::from_secs(600)).await;
+    assert_eq!(s.t.fetch.calls().len(), 3);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_refreshing_ends_by_itself_once_the_app_is_gone() {
     let s = setup();
     let opts = CatalogOptions {

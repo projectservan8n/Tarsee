@@ -5,9 +5,8 @@
 
 use serde_json::Value;
 
-use crate::ai::provider_registry::{ProviderKind, get_provider, js_trim, strip_one_quote_each_side};
+use crate::ai::provider_registry::{ProviderKind, get_provider, strip_one_quote_each_side};
 use crate::env::Env;
-use crate::lib::model_picker::js_number_to_string;
 use crate::util::js;
 
 /// The settings store, as the code that only reads and writes settings sees it.
@@ -52,7 +51,7 @@ pub trait Settings: Send + Sync {
 pub fn is_empty_setting(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::Null) => true,
-        Some(Value::String(text)) => js_trim(text).is_empty(),
+        Some(Value::String(text)) => js::trim(text).is_empty(),
         Some(_) => false,
     }
 }
@@ -66,7 +65,7 @@ pub fn is_ai_key_slot(key: &str) -> bool {
 
 /// A key as stored or as Railway hands it over: whitespace and one pair of wrapping quotes removed. "" is no key.
 pub fn clean_key(value: &str) -> Option<String> {
-    let key = js_trim(strip_one_quote_each_side(js_trim(value)));
+    let key = js::trim(strip_one_quote_each_side(js::trim(value)));
     (!key.is_empty()).then(|| key.to_string())
 }
 
@@ -148,7 +147,7 @@ fn stored_text(value: &Value) -> Option<String> {
     Some(match value {
         Value::Null => return None,
         Value::String(text) => text.clone(),
-        Value::Number(n) => js_number_to_string(n.as_f64().unwrap_or(0.0)),
+        Value::Number(n) => js::number_to_string(n.as_f64().unwrap_or(0.0)),
         Value::Bool(b) => b.to_string(),
         Value::Array(items) => items
             .iter()

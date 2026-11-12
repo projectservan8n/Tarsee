@@ -15,7 +15,8 @@
 
 use serde::Serialize;
 
-use super::provider_registry::{js_trim, normalize_provider_id};
+use super::provider_registry::normalize_provider_id;
+use crate::util::js;
 
 /// A ref taken apart: `{ provider, model }`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -36,7 +37,7 @@ impl ModelRef {
 /// "provider:model" as `{ provider, model }`. provider is the public id, or `None` for a bare model; model is
 /// `None` when a ref names only a provider ("openrouter:" means that provider's default).
 pub fn parse_model_ref(text: &str) -> ModelRef {
-    let s = js_trim(text);
+    let s = js::trim(text);
     if s.is_empty() {
         return ModelRef {
             provider: None,
@@ -47,7 +48,7 @@ pub fn parse_model_ref(text: &str) -> ModelRef {
         && !before.is_empty()
         && let Some(provider) = normalize_provider_id(before)
     {
-        let model = js_trim(after);
+        let model = js::trim(after);
         return ModelRef {
             provider: Some(provider),
             model: (!model.is_empty()).then(|| model.to_string()),
@@ -65,7 +66,7 @@ pub fn parse_model_ref(text: &str) -> ModelRef {
 /// back as a provider's ("deepseek:7b", a Local AI model's name, would mean DeepSeek's API): name its provider
 /// instead.
 pub fn format_model_ref(provider: Option<&str>, model: Option<&str>) -> anyhow::Result<String> {
-    let m = js_trim(model.unwrap_or(""));
+    let m = js::trim(model.unwrap_or(""));
     let Some(provider) = provider.filter(|p| !p.is_empty()) else {
         if let Some(reads_as) = parse_model_ref(m).provider {
             anyhow::bail!("\"{m}\" would read back as a {reads_as} model: name its provider");

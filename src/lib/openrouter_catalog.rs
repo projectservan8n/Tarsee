@@ -41,12 +41,12 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::ai::provider_registry::{
-    Engine, ModelPrice, PROVIDERS, ProviderRegistry, engine_for, is_js_space, js_to_number, js_trim, positive_int,
-    verified_models,
+    Engine, ModelPrice, PROVIDERS, ProviderRegistry, engine_for, js_to_number, positive_int, verified_models,
 };
 use crate::app::{App, WeakApp};
 use crate::db::settings::Settings;
-use crate::lib::model_picker::{EFFORT_IDS, js_number_to_string, js_to_precision};
+use crate::lib::model_picker::{EFFORT_IDS, js_to_precision};
+use crate::lib::workspace_files::jstext::js_json_stringify;
 use crate::net::fetch::{FetchError, FetchRequest};
 use crate::util::js;
 
@@ -139,7 +139,7 @@ fn has_text(list: &[Value], text: &str) -> bool {
 }
 
 fn trimmed_text(value: Option<&Value>) -> Option<String> {
-    let text = js_trim(value?.as_str()?);
+    let text = js::trim(value?.as_str()?);
     (!text.is_empty()).then(|| text.to_string())
 }
 
@@ -260,7 +260,7 @@ fn js_string(v: &Value) -> String {
     match v {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
-        Value::Number(n) => js_number_to_string(n.as_f64().unwrap_or(f64::NAN)),
+        Value::Number(n) => js::number_to_string(n.as_f64().unwrap_or(f64::NAN)),
         Value::String(text) => text.clone(),
         // A list is its items joined with commas, a null among them being nothing.
         Value::Array(items) => items
@@ -402,6 +402,8 @@ struct Current {
     fetched_at: Option<String>,
 }
 
+/// The result of the fetch in progress, for everyone who waits for it. The fetch itself runs in a task of its own
+/// ([`OpenRouterCatalog::refresh_open_router_catalog`]); this only hands its one result to each waiter.
 type Inflight = Shared<BoxFuture<'static, RefreshResult>>;
 
 /// The current OpenRouter list and the fetch in progress. One per `App` ([`OpenRouterCatalog::of`]).
@@ -411,6 +413,15 @@ pub struct OpenRouterCatalog {
     current: Mutex<Current>,
     /// The fetch in progress, so callers at the same moment share it.
     inflight: Mutex<Option<Inflight>>,
+}
+
+/// Forgets the fetch in progress when it ends, however it ends (the JS `finally { _inflight = null }`).
+struct ForgetWhenDone<'a>(&'a Mutex<Option<Inflight>>);
+
+impl Drop for ForgetWhenDone<'_> {
+    fn drop(&mut self) {
+        *self.0.lock() = None;
+    }
 }
 
 /// Why the list couldn't be had.
@@ -437,11 +448,26 @@ impl OpenRouterCatalog {
     /// OpenRouter can't be reached the last list stays in use and `error` says why.
     ///
     /// Returns `{ source: "cache"|"network"|"stale"|"none", models, fetchedAt, error }`.
+    ///
+    /// Asking OpenRouter runs in a task of its own, so it finishes, saves the list and feeds the registry whoever is
+    /// still waiting: a caller that goes away (a browser leaving Settings > AI) leaves the request to end by itself,
+    /// and the next caller starts a new one. Must be called inside the tokio runtime.
     pub async fn refresh_open_router_catalog(
         self: &Arc<Self>,
         store: Arc<dyn Settings>,
         opts: CatalogOptions,
     ) -> RefreshResult {
+        self.begin_refresh(store, opts).await
+    }
+
+    /// What the JS `refreshOpenRouterCatalog` did before it returned its promise: the cached list put to use if it
+    /// is fresh, else the fetch in progress joined or a new one started. The future it gives back is only the
+    /// waiting; dropping it stops nothing.
+    fn begin_refresh(
+        self: &Arc<Self>,
+        store: Arc<dyn Settings>,
+        opts: CatalogOptions,
+    ) -> BoxFuture<'static, RefreshResult> {
         let t = opts.now_ms();
         let cached = read_cache(store.as_ref());
         if !opts.force
@@ -449,25 +475,42 @@ impl OpenRouterCatalog {
             && is_fresh(&cached.fetched_at, t)
         {
             self.apply(cached.models.clone(), Some(cached.fetched_at.clone()));
-            return RefreshResult {
+            return std::future::ready(RefreshResult {
                 source: CatalogSource::Cache,
                 models: cached.models.clone(),
                 fetched_at: Some(cached.fetched_at.clone()),
                 error: None,
-            };
+            })
+            .boxed();
         }
         let fetch = {
             let mut inflight = self.inflight.lock();
             match inflight.as_ref() {
                 Some(fetch) => fetch.clone(),
                 None => {
-                    let fetch = self.clone().fetch_fresh(store, opts, t, cached).boxed().shared();
+                    // In the JS this was a promise, which runs to its end on its own. A future that callers poll
+                    // would stop where it is when the last of them is dropped, and the next caller would be handed
+                    // what was left of it (a request whose time limit had long passed). So the work is a task, and
+                    // callers wait on its handle.
+                    let task = tokio::spawn(self.clone().fetch_fresh(store, opts, t, cached.clone()));
+                    let catalog = self.clone();
+                    let fetch: Inflight = async move {
+                        match task.await {
+                            Ok(result) => result,
+                            // The task was cut short (something in it panicked, or the runtime is shutting down).
+                            // As with anything the JS caught: the last list stays in use, with what went wrong.
+                            Err(err) => catalog
+                                .keep_last(cached, format!("Tarsee couldn't read OpenRouter's model list ({err}).")),
+                        }
+                    }
+                    .boxed()
+                    .shared();
                     *inflight = Some(fetch.clone());
                     fetch
                 }
             }
         };
-        fetch.await
+        fetch.boxed()
     }
 
     async fn fetch_fresh(
@@ -477,11 +520,13 @@ impl OpenRouterCatalog {
         t: i64,
         cached: Option<CachedCatalog>,
     ) -> RefreshResult {
+        // Declared first, so it runs last: the list is saved and in use before a next caller can start a new fetch.
+        let _forget = ForgetWhenDone(&self.inflight);
         let fresh = match self.get_json(&opts).await {
             Ok(body) => parse_open_router_models(&body, t).map_err(|err| Failure::Catalog(err.0)),
             Err(failure) => Err(failure),
         };
-        let result = match fresh {
+        match fresh {
             Ok(models) => {
                 let models = Arc::new(models);
                 let fetched_at = js::iso_from_ms(t);
@@ -499,34 +544,38 @@ impl OpenRouterCatalog {
                     Failure::Catalog(message) => message,
                     Failure::Other(why) => format!("Tarsee couldn't read OpenRouter's model list ({why})."),
                 };
-                let last = cached.map(|c| (c.models, Some(c.fetched_at))).or_else(|| {
-                    let current = self.current.lock();
-                    current
-                        .models
-                        .clone()
-                        .map(|models| (models, current.fetched_at.clone()))
-                });
-                match last {
-                    Some((models, fetched_at)) => {
-                        self.apply(models.clone(), fetched_at.clone());
-                        RefreshResult {
-                            source: CatalogSource::Stale,
-                            models,
-                            fetched_at,
-                            error: Some(error),
-                        }
-                    }
-                    None => RefreshResult {
-                        source: CatalogSource::None,
-                        models: Arc::new(Vec::new()),
-                        fetched_at: None,
-                        error: Some(error),
-                    },
+                self.keep_last(cached, error)
+            }
+        }
+    }
+
+    /// What a refresh answers when it brought no list: the last one (the store's cached one, or failing that the
+    /// one in hand) stays in use, and `error` says why.
+    fn keep_last(&self, cached: Option<CachedCatalog>, error: String) -> RefreshResult {
+        let last = cached.map(|c| (c.models, Some(c.fetched_at))).or_else(|| {
+            let current = self.current.lock();
+            current
+                .models
+                .clone()
+                .map(|models| (models, current.fetched_at.clone()))
+        });
+        match last {
+            Some((models, fetched_at)) => {
+                self.apply(models.clone(), fetched_at.clone());
+                RefreshResult {
+                    source: CatalogSource::Stale,
+                    models,
+                    fetched_at,
+                    error: Some(error),
                 }
             }
-        };
-        *self.inflight.lock() = None;
-        result
+            None => RefreshResult {
+                source: CatalogSource::None,
+                models: Arc::new(Vec::new()),
+                fetched_at: None,
+                error: Some(error),
+            },
+        }
     }
 
     /// The cached list, put to use without asking OpenRouter (boot). `None` when nothing is cached.
@@ -549,7 +598,7 @@ impl OpenRouterCatalog {
 
     /// One listed model's row, or `None`.
     pub fn catalog_model(&self, model_id: &str) -> Option<CatalogModel> {
-        let id = strip_context_suffix(js_trim(model_id));
+        let id = strip_context_suffix(js::trim(model_id));
         self.open_router_models().iter().find(|m| m.id == id).cloned()
     }
 
@@ -773,7 +822,8 @@ impl CatalogHandle {
         self.ready.clone().await
     }
 
-    /// Ends the 6-hourly refresh.
+    /// Ends the 6-hourly refresh. A refresh that is on its way at that moment finishes by itself, as it did in the
+    /// JS after `clearInterval`: it runs in its own task, not in the timer's.
     pub fn stop(&self) {
         self.timer.abort();
     }
@@ -786,9 +836,9 @@ pub fn init_open_router_catalog(app: &App, store: Arc<dyn Settings>, opts: Catal
     catalog.load_open_router_catalog(store.as_ref());
 
     let first = {
-        let (catalog, store, opts) = (catalog.clone(), store.clone(), opts.clone());
+        let started = catalog.begin_refresh(store.clone(), opts.clone());
         async move {
-            let r = catalog.refresh_open_router_catalog(store, opts).await;
+            let r = started.await;
             if let Some(error) = &r.error {
                 let using = match (&r.fetched_at, r.models.is_empty()) {
                     (Some(fetched_at), false) => format!(" Using the list from {fetched_at}."),
@@ -803,7 +853,7 @@ pub fn init_open_router_catalog(app: &App, store: Arc<dyn Settings>, opts: Catal
         }
     };
     let ready: Inflight = first.boxed().shared();
-    // The first refresh runs whether or not anyone waits for `ready`.
+    // What the first refresh found is logged whether or not anyone waits for `ready`.
     tokio::spawn(ready.clone().map(|_| ()));
 
     let period = opts.interval.unwrap_or(Duration::from_millis(CATALOG_TTL_MS as u64));
@@ -819,7 +869,10 @@ pub fn init_open_router_catalog(app: &App, store: Arc<dyn Settings>, opts: Catal
                 force: true,
                 ..opts.clone()
             };
-            catalog.refresh_open_router_catalog(store.clone(), forced).await;
+            // Started and left to itself, as the JS interval did (it never awaited the refresh): a slow answer
+            // does not move the next tick, a tick that finds a request still on its way joins it instead of
+            // asking again, and stopping the timer stops nothing that is on its way.
+            drop(catalog.begin_refresh(store.clone(), forced));
         }
     });
     CatalogHandle { ready, timer }
@@ -842,7 +895,7 @@ fn read_cache(store: &dyn Settings) -> Option<CachedCatalog> {
         .filter(|m| {
             m.get("id")
                 .and_then(Value::as_str)
-                .is_some_and(|id| !js_trim(id).is_empty())
+                .is_some_and(|id| !js::trim(id).is_empty())
                 && m.get("engines").is_some_and(Value::is_array)
         })
         // A row whose fields are not what a row holds is skipped (the JS kept whatever was there).
@@ -855,8 +908,11 @@ fn read_cache(store: &dyn Settings) -> Option<CachedCatalog> {
 }
 
 fn write_cache(store: &dyn Settings, fetched_at: &str, models: &[CatalogModel]) {
-    let value = json!({ "fetchedAt": fetched_at, "models": models });
-    if let Err(err) = store.set(CATALOG_CACHE_KEY, value) {
+    // Handed to the store as the text JavaScript's JSON.stringify writes (a price of 2 is "2", one of a millionth
+    // "0.000001"; serde_json would write "2.0" and "1e-6"), so the cache is the same text whichever version wrote
+    // it. The store keeps a string as it is and hands the setting back parsed, as it did the JS object.
+    let text = js_json_stringify(&json!({ "fetchedAt": fetched_at, "models": models }));
+    if let Err(err) = store.set(CATALOG_CACHE_KEY, Value::String(text)) {
         log::warn!("[models] couldn't cache OpenRouter's model list: {err}");
     }
 }
@@ -971,7 +1027,7 @@ impl PickerRow {
 /// Rows whose id or name holds every word of the query (any case). An empty query keeps them all.
 pub fn search_models<'a>(models: &'a [CatalogModel], query: &str) -> Vec<&'a CatalogModel> {
     let query = query.to_lowercase();
-    let words: Vec<&str> = query.split(is_js_space).filter(|w| !w.is_empty()).collect();
+    let words: Vec<&str> = query.split(js::is_whitespace).filter(|w| !w.is_empty()).collect();
     models
         .iter()
         .filter(|m| {
@@ -998,7 +1054,7 @@ fn usd(n: f64) -> String {
     if !n.is_finite() {
         return "?".to_string();
     }
-    format!("${}", js_number_to_string(js_to_precision(n, 3)))
+    format!("${}", js::number_to_string(js_to_precision(n, 3)))
 }
 
 /// By name, then by id, as JavaScript orders strings (by UTF-16 unit).
@@ -1031,7 +1087,7 @@ fn maker_of(id: &str) -> String {
 /// The day at the start of a date ("2026-11-13T00:00:00Z" as "2026-11-13") and the moment that day begins in UTC,
 /// in milliseconds since 1970; `None` when the text does not start with a date.
 fn date_only(v: Option<&Value>) -> Option<(String, i64)> {
-    let text = js_trim(v?.as_str()?);
+    let text = js::trim(v?.as_str()?);
     let day = text.get(..10)?;
     let bytes = day.as_bytes();
     let digits = |range: std::ops::Range<usize>| bytes[range].iter().all(u8::is_ascii_digit);
