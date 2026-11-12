@@ -528,6 +528,31 @@ async fn what_the_tool_is_handed_has_only_the_keys_its_shape_names_in_the_shapes
 }
 
 #[tokio::test]
+async fn a_whole_number_reaches_the_tool_as_one_however_it_was_written() {
+    // JavaScript has one kind of number: the Node tools got 3 for "3.0" and wrote 3 back.
+    let t = test_app();
+    let tools = FakeTools::install(&t.app);
+    let mcp = server(&t.app);
+    let search: Value = serde_json::from_str(r#"{"query": "q", "num_results": 3.0}"#).unwrap();
+    mcp.call_tool(&t.app, "tarsee_web_search", Some(&search)).await;
+    let task: Value = serde_json::from_str(
+        r#"{"schedule": "0 8 * * *", "action": {"tool": "x", "args": {"n": 2e0, "list": [1.5, 4.0, -0.0, 1e21], "deep": {"k": 7.0}}}}"#,
+    )
+    .unwrap();
+    mcp.call_tool(&t.app, "tarsee_schedule_task", Some(&task)).await;
+    let read: Value = serde_json::from_str(r#"{"path": "a.pdf", "max_chars": 2500.5}"#).unwrap();
+    mcp.call_tool(&t.app, "tarsee_pdf_read", Some(&read)).await;
+    let calls = tools.calls();
+    assert_eq!(calls[0].args.to_string(), r#"{"query":"q","max_results":3}"#);
+    assert_eq!(calls[0].args["max_results"].as_u64(), Some(3));
+    assert_eq!(
+        calls[1].args.to_string(),
+        r#"{"schedule":"0 8 * * *","action":{"tool":"x","args":{"n":2,"list":[1.5,4,0,1e+21],"deep":{"k":7}}}}"#
+    );
+    assert_eq!(calls[2].args.to_string(), r#"{"path":"a.pdf","max_chars":2500.5}"#);
+}
+
+#[tokio::test]
 async fn arguments_that_dont_fit_never_reach_the_tool_and_the_model_is_told_what_is_wrong() {
     let t = test_app();
     let tools = FakeTools::install(&t.app);

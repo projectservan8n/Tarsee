@@ -1509,6 +1509,52 @@ async fn a_grant_says_what_to_hand_each_engines_program() {
     assert_eq!(reply.status, 200);
 }
 
+/// How the grant fits what `providers/codex_options.rs` builds for Codex: the endpoint's address in the config,
+/// the token in the program's environment under the name the config says to read it from, and nowhere else.
+#[tokio::test]
+async fn the_options_codex_is_started_with_carry_the_grant_as_codex_reads_it() {
+    use crate::ai::providers::codex_options::{CodexContext, CodexTarget, McpGrant as CodexGrant, build_codex_options};
+    let up = up().await;
+    let grant = up.grant("conv-codex-options").await;
+    let handed = CodexGrant::from(&grant);
+    assert_eq!(
+        (handed.url.as_str(), handed.token.as_str()),
+        (grant.url.as_str(), grant.token.as_str())
+    );
+    let built = build_codex_options(
+        &CodexTarget {
+            provider_id: "openai".into(),
+            model: Some("gpt-6.1-sol".into()),
+            effort: None,
+        },
+        &CodexContext {
+            env: Env::from_pairs([("PATH", "/usr/bin")]),
+            key: Some(format!("sk-{}", "test-canary-own-openai-key")),
+            state_dir: Some(up.t.path().to_path_buf()),
+            workspace: Some(up.t.config().workspace_dir.clone()),
+            mcp: Some(handed),
+            developer_instructions: Some("You are Tarsee.".into()),
+            ..CodexContext::default()
+        },
+    )
+    .map_err(|err| err.to_string())
+    .unwrap();
+    let server = &built.config["mcp_servers"]["tarsee"];
+    assert_eq!(server["url"], grant.url);
+    assert_eq!(server["bearer_token_env_var"], MCP_TOKEN_ENV);
+    assert_eq!(built.env.get(MCP_TOKEN_ENV), Some(&grant.token));
+    assert!(
+        !built.config.to_string().contains(&grant.token),
+        "the token is in Codex's config"
+    );
+    // And with exactly that, a request gets in.
+    let header = format!("Bearer {}", built.env[MCP_TOKEN_ENV]);
+    let port = up.port();
+    assert_eq!(server["url"], format!("http://127.0.0.1:{port}/mcp"));
+    assert_eq!(send(port, post(INIT).header("authorization", header)).await.status, 200);
+    assert_eq!(McpGrant::from(&grant), grant.mcp_grant());
+}
+
 // --- Two things at once, and a caller that goes away ---------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1601,6 +1647,48 @@ async fn a_call_runs_to_its_end_when_the_caller_hangs_up_or_the_grant_ends_meanw
         .await
         .expect("the tool was stopped half-way when its caller left");
     assert!(gated.done.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn a_request_dropped_half_way_leaves_the_endpoint_as_it_was() {
+    let up = up().await;
+    up.tools.respond("calculator", "2");
+    let grant = up.grant("conv-half").await;
+    let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "tarsee_calculator", "arguments": {"expression": "1 + 1"}
+    }})
+    .to_string();
+    let whole = post(&call).token(&grant.token).bytes(up.port(), false);
+    // Cut at every kind of place: in the request line, in the headers, at the blank line, in the body.
+    let head_end = whole.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+    for cut in [5, 40, head_end - 2, head_end, head_end + 1, whole.len() - 1] {
+        let mut caller = TcpStream::connect(("127.0.0.1", up.port())).await.unwrap();
+        caller.write_all(&whole[..cut]).await.unwrap();
+        drop(caller);
+    }
+    // Nothing ran for a request that never arrived whole, the grant is still the turn's, and the next request is
+    // served as ever.
+    let reply = send(up.port(), post(&call).token(&grant.token)).await;
+    assert_eq!(reply.text(), "2");
+    assert_eq!(up.tools.calls().len(), 1);
+    assert_eq!(grant_count(&up.t.app), 1);
+    // A body that says it is longer than what comes, then nothing more: the same.
+    let mut caller = TcpStream::connect(("127.0.0.1", up.port())).await.unwrap();
+    let mut short = post(&call).token(&grant.token);
+    short
+        .headers
+        .push(("content-length".into(), (call.len() + 50).to_string()));
+    let mut bytes = short.bytes(up.port(), false);
+    let own_length = format!("content-length: {}\r\n", call.len());
+    let at = bytes
+        .windows(own_length.len())
+        .rposition(|w| w == own_length.as_bytes())
+        .unwrap();
+    bytes.drain(at..at + own_length.len());
+    caller.write_all(&bytes).await.unwrap();
+    drop(caller);
+    assert_eq!(send(up.port(), post(&call).token(&grant.token)).await.text(), "2");
+    assert_eq!(up.tools.calls().len(), 2);
 }
 
 #[tokio::test]

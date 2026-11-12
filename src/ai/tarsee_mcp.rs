@@ -198,11 +198,31 @@ impl TarseeMcp {
 /// don't fit the tool's shape.
 fn checked_arguments(tool_name: &str, shape: &Schema, arguments: Option<&Value>) -> Result<Value, String> {
     match shape.parse(arguments) {
-        Ok(args) => Ok(args.unwrap_or_else(|| json!({}))),
+        Ok(args) => {
+            let mut args = args.unwrap_or_else(|| json!({}));
+            whole_numbers(&mut args);
+            Ok(args)
+        }
         Err(issues) => Err(format!(
             "MCP error -32602: Input validation error: Invalid arguments for tool {tool_name}: {}",
             z::issues_text(&issues)
         )),
+    }
+}
+
+/// A whole number reads as one, however it was written: `3.0` and `3e0` are `3`. JavaScript has one kind of number,
+/// so the Node tools never saw the difference; here a tool that asks for a whole number (`as_u64`) would otherwise
+/// find none in `3.0`, and one that stores its arguments would write `3.0` where Node wrote `3`.
+fn whole_numbers(value: &mut Value) {
+    match value {
+        Value::Number(number) if number.is_f64() => {
+            if let Some(whole) = z::safe_integer(number) {
+                *value = Value::from(whole);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(whole_numbers),
+        Value::Object(members) => members.values_mut().for_each(whole_numbers),
+        _ => {}
     }
 }
 

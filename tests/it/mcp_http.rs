@@ -330,10 +330,35 @@ async fn claude_codes_own_mcp_client_connects_with_the_token_from_its_environmen
     assert!(!wrong.contains("Connected"), "{wrong}");
 
     // 2. A session started as the engine starts one, with --mcp-config: before anything is asked of a model, the
-    //    program says which MCP servers it reached and which tools it has.
+    //    program says which MCP servers it reached and which tools it has. The config is handed over as text (it
+    //    holds no secret) and, a second time, as a file: both are read the same.
     let config_file = home.join("mcp.json");
     std::fs::write(&config_file, config.to_string()).unwrap();
-    let mut command = program(&bin, &home);
+    for config_arg in [config.to_string(), config_file.to_string_lossy().into_owned()] {
+        let init = session_init(&bin, &home, &config_dir, token, &config_arg).await;
+        let servers = init["mcp_servers"].as_array().unwrap();
+        assert_eq!(servers.len(), 1, "{init}");
+        assert_eq!(
+            (&servers[0]["name"], &servers[0]["status"]),
+            (&json!("tarsee"), &json!("connected")),
+            "{init}"
+        );
+        let mut shown: Vec<String> = init["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool.as_str()?.strip_prefix("mcp__tarsee__").map(String::from))
+            .collect();
+        shown.sort();
+        assert_eq!(shown, tools.names);
+    }
+    assert!(tools.fake.calls().is_empty(), "no tool was asked for");
+}
+
+/// Starts a Claude Code session the way an engine does and gives its first message (`system`/`init`): what it
+/// started with.
+async fn session_init(bin: &Path, home: &Path, config_dir: &Path, token: &str, config: &str) -> Value {
+    let mut command = program(bin, home);
     command
         .args([
             "-p",
@@ -345,8 +370,8 @@ async fn claude_codes_own_mcp_client_connects_with_the_token_from_its_environmen
             "--strict-mcp-config",
             "--mcp-config",
         ])
-        .arg(&config_file)
-        .env("CLAUDE_CONFIG_DIR", &config_dir)
+        .arg(config)
+        .env("CLAUDE_CONFIG_DIR", config_dir)
         .env("ANTHROPIC_BASE_URL", CLOSED)
         .env("DISABLE_AUTOUPDATER", "1")
         .env("DISABLE_TELEMETRY", "1")
@@ -374,20 +399,5 @@ async fn claude_codes_own_mcp_client_connects_with_the_token_from_its_environmen
     .await
     .expect("claude did not say what it started with");
     let _ = child.kill().await;
-    let servers = init["mcp_servers"].as_array().unwrap();
-    assert_eq!(servers.len(), 1, "{init}");
-    assert_eq!(
-        (&servers[0]["name"], &servers[0]["status"]),
-        (&json!("tarsee"), &json!("connected")),
-        "{init}"
-    );
-    let mut shown: Vec<String> = init["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|tool| tool.as_str()?.strip_prefix("mcp__tarsee__").map(String::from))
-        .collect();
-    shown.sort();
-    assert_eq!(shown, tools.names);
-    assert!(tools.fake.calls().is_empty(), "no tool was asked for");
+    init
 }
