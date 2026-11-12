@@ -354,7 +354,7 @@ fn own_names(code: &str) -> Vec<Own> {
     let n = code.len();
     let close_of: HashMap<usize, usize> = pairs.iter().copied().collect();
     let mut found = Vec::new();
-    let mut add = |found: &mut Vec<Own>, name: &str, at: usize| {
+    let add = |found: &mut Vec<Own>, name: &str, at: usize| {
         let (from, to) = scope_at(&pairs, at, n);
         found.push(Own {
             name: name.to_string(),

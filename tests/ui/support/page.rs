@@ -11,10 +11,12 @@
 //!
 //! Every page watches for errors: `console.error` (and failed `console.assert`), uncaught exceptions and unhandled
 //! promise rejections, and the browser's own error lines (a script or picture that failed to load). Each step a test
-//! takes first checks that none came since the last, and so does dropping the page: a test that expects errors takes
-//! them with [`Page::take_errors`] (and can then assert on them).
+//! takes first checks that none came since the last, and so does dropping the page. A test that expects errors either
+//! takes them with [`Page::take_errors`] before its next step, or says so up front with [`Page::allow_errors`]; either
+//! way it can then assert on what it took.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -22,7 +24,9 @@ use chromiumoxide::cdp::browser_protocol::browser::{
     BrowserContextId, PermissionDescriptor, PermissionSetting, SetPermissionParams,
 };
 use chromiumoxide::cdp::browser_protocol::dom::SetFileInputFilesParams;
-use chromiumoxide::cdp::browser_protocol::emulation::{SetLocaleOverrideParams, SetTimezoneOverrideParams};
+use chromiumoxide::cdp::browser_protocol::emulation::{
+    SetFocusEmulationEnabledParams, SetLocaleOverrideParams, SetTimezoneOverrideParams,
+};
 use chromiumoxide::cdp::browser_protocol::input::{DispatchKeyEventParams, DispatchKeyEventType, InsertTextParams};
 use chromiumoxide::cdp::browser_protocol::log::{EventEntryAdded, LogEntryLevel};
 use chromiumoxide::cdp::browser_protocol::network::CookieParam;
@@ -44,6 +48,10 @@ pub const WAIT_LIMIT: Duration = Duration::from_secs(10);
 /// How often a wait looks again.
 const POLL_EVERY: Duration = Duration::from_millis(20);
 
+/// How long one step in the browser (a command, a navigation, opening a tab) may take before the test fails: nothing
+/// the harness asks of the browser can hang a test.
+const STEP_LIMIT: Duration = Duration::from_secs(30);
+
 /// One test's tab.
 pub struct Page {
     cdp: chromiumoxide::Page,
@@ -51,6 +59,8 @@ pub struct Page {
     shared: &'static Shared,
     /// (Taken when the page is dropped, to go back to the pool with its tab.)
     events: Mutex<Option<Events>>,
+    /// The test expects errors: they do not fail it ([`Page::allow_errors`]).
+    errors_allowed: AtomicBool,
 }
 
 /// Where a page's tab lives.
@@ -85,6 +95,12 @@ impl Page {
     /// the site's root), the way `index.html` loads them, in a tab of the pool (see the module's notes). Returns once
     /// the page has loaded (its scripts have run).
     pub async fn with_scripts(scripts: &[&str]) -> Page {
+        Page::with_scripts_and_body(scripts, "").await
+    }
+
+    /// [`Page::with_scripts`], with `body` (HTML) as the page's body, for scripts that work on elements of the page.
+    /// The scripts are in the head, so they run before the body is there, as on `index.html`.
+    pub async fn with_scripts_and_body(scripts: &[&str], body: &str) -> Page {
         let shared = browser::shared().await;
         let pool = pool(shared).await;
         let idle = pool.idle.lock().unwrap_or_else(|e| e.into_inner()).pop();
@@ -97,8 +113,9 @@ impl Page {
             home: Some(Home::Pool(pool)),
             shared,
             events: Mutex::new(Some(tab.events)),
+            errors_allowed: AtomicBool::new(false),
         };
-        page.goto(&Site::shared().scripts_page(scripts, "")).await;
+        page.goto(&Site::shared().scripts_page(scripts, body)).await;
         page
     }
 
@@ -115,11 +132,14 @@ impl Page {
     /// either with [`Page::set_timezone`] or through [`Page::cdp`].
     pub async fn blank() -> Page {
         let shared = browser::shared().await;
-        let context = shared
-            .browser
-            .create_browser_context(CreateBrowserContextParams::default())
-            .await
-            .unwrap_or_else(|e| panic!("the browser could not make a context for the test: {e}"));
+        let context = step(
+            "making a browser context",
+            shared
+                .browser
+                .create_browser_context(CreateBrowserContextParams::default()),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("the browser could not make a context for the test: {e}"));
         let tab = match new_tab(shared, &context).await {
             Ok(tab) => tab,
             Err(e) => {
@@ -132,6 +152,7 @@ impl Page {
             home: Some(Home::Own(context)),
             shared,
             events: Mutex::new(Some(tab.events)),
+            errors_allowed: AtomicBool::new(false),
         }
     }
 
@@ -144,11 +165,16 @@ impl Page {
     /// Goes to `url` in this tab and waits until it has loaded.
     pub async fn goto(&self, url: &str) {
         self.check_errors();
-        if let Err(e) = self.cdp.goto(url).await {
+        if let Err(e) = step(&format!("opening {url}"), self.cdp.goto(url)).await {
             panic!("could not open {url}: {e}");
         }
-        self.wait_for("document.readyState === 'complete'", &format!("{url} to load"))
-            .await;
+        // (What the page reports while it loads is for the next step to look at, or the test to take.)
+        self.poll_until(
+            "document.readyState === 'complete'",
+            WAIT_LIMIT,
+            &format!("{url} to load"),
+        )
+        .await;
     }
 
     /// The page's address now.
@@ -162,7 +188,7 @@ impl Page {
 
     /// The page's clock reads in `zone` (an IANA name such as `Asia/Manila`).
     pub async fn set_timezone(&self, zone: &str) {
-        set_timezone(&self.cdp, zone)
+        step("setting the timezone", set_timezone(&self.cdp, zone))
             .await
             .unwrap_or_else(|e| panic!("could not set the timezone to {zone}: {e}"));
     }
@@ -215,6 +241,10 @@ impl Page {
     /// [`Page::wait_for`] with a time limit of its own.
     pub async fn wait_for_within(&self, predicate: &str, limit: Duration, what: &str) -> Value {
         self.check_errors();
+        self.poll_until(predicate, limit, what).await
+    }
+
+    async fn poll_until(&self, predicate: &str, limit: Duration, what: &str) -> Value {
         let deadline = Instant::now() + limit;
         loop {
             // (Asked anew each time, so a wait goes on across a navigation.)
@@ -276,12 +306,10 @@ impl Page {
     /// scrolled into view first), once there is one.
     pub async fn click(&self, selector: &str) {
         self.wait_for_element(selector).await;
-        let element = self
-            .cdp
-            .find_element(selector)
+        let element = step(&format!("finding {selector}"), self.cdp.find_element(selector))
             .await
             .unwrap_or_else(|e| panic!("could not find {selector} to click it: {e}"));
-        if let Err(e) = element.click().await {
+        if let Err(e) = step(&format!("clicking {selector}"), element.click()).await {
             panic!("could not click {selector}: {e}");
         }
     }
@@ -342,9 +370,7 @@ impl Page {
     /// Chooses `files` in the file input matching `selector`, as a person picking them in the file dialog does.
     pub async fn set_files(&self, selector: &str, files: &[&Path]) {
         self.wait_for_element(selector).await;
-        let element = self
-            .cdp
-            .find_element(selector)
+        let element = step(&format!("finding {selector}"), self.cdp.find_element(selector))
             .await
             .unwrap_or_else(|e| panic!("could not find {selector}: {e}"));
         let paths = files
@@ -367,9 +393,7 @@ impl Page {
     /// The value of the cookie `name` that the page's address would be sent, if there is one.
     pub async fn cookie(&self, name: &str) -> Option<String> {
         self.check_errors();
-        let cookies = self
-            .cdp
-            .get_cookies()
+        let cookies = step("reading the cookies", self.cdp.get_cookies())
             .await
             .unwrap_or_else(|e| panic!("could not read the cookies: {e}"));
         cookies.into_iter().find(|c| c.name == name).map(|c| c.value)
@@ -381,7 +405,7 @@ impl Page {
         let mut cookie = CookieParam::new(name, value);
         cookie.url = Some(self.url().await);
         cookie.http_only = Some(http_only);
-        if let Err(e) = self.cdp.set_cookie(cookie).await {
+        if let Err(e) = step("setting a cookie", self.cdp.set_cookie(cookie)).await {
             panic!("could not set the cookie {name}: {e}");
         }
     }
@@ -400,7 +424,7 @@ impl Page {
                 Some(Home::Pool(pool)) => Some(pool.context.clone()),
                 None => None,
             };
-            if let Err(e) = self.shared.browser.execute(params).await {
+            if let Err(e) = step("allowing a permission", self.shared.browser.execute(params)).await {
                 panic!("could not allow {name} for {origin}: {e}");
             }
         }
@@ -423,14 +447,19 @@ impl Page {
 
     /// Fails the test if the page reported an error the test did not take.
     pub fn check_errors(&self) {
+        if self.errors_allowed.load(Ordering::Relaxed) {
+            return;
+        }
         let errors = self.take_errors();
         if !errors.is_empty() {
-            panic!(
-                "the page reported {} error(s) (a test that expects them takes them with take_errors()):\n  - {}",
-                errors.len(),
-                errors.join("\n  - ")
-            );
+            panic!("{}", unexpected(&errors));
         }
+    }
+
+    /// Says the test expects the page to report errors: from now on they do not fail it, and wait for the test to
+    /// take them ([`Page::take_errors`]).
+    pub fn allow_errors(&self) {
+        self.errors_allowed.store(true, Ordering::Relaxed);
     }
 
     /// Closes the tab, once every error the page reported before now has been looked at (dropping the page does
@@ -451,10 +480,9 @@ impl Page {
             .user_gesture(true)
             .build()
             .map_err(|e| format!("bad evaluation: {e}"))?;
-        let answer = self
-            .cdp
-            .execute(params)
+        let answer = tokio::time::timeout(STEP_LIMIT, self.cdp.execute(params))
             .await
+            .map_err(|_| format!("the browser did not answer within {}s", STEP_LIMIT.as_secs()))?
             .map_err(|e| format!("the browser did not run it: {e}"))?;
         if let Some(details) = &answer.result.exception_details {
             return Err(exception_text(details));
@@ -463,7 +491,7 @@ impl Page {
     }
 
     async fn command<C: chromiumoxide::types::Command>(&self, command: C, what: &str) {
-        if let Err(e) = self.cdp.execute(command).await {
+        if let Err(e) = step(what, self.cdp.execute(command)).await {
             panic!("could not {what}: {e}");
         }
     }
@@ -472,7 +500,11 @@ impl Page {
 impl Drop for Page {
     fn drop(&mut self) {
         let failing = std::thread::panicking();
-        let errors = if failing { Vec::new() } else { self.take_errors() };
+        let errors = if failing || self.errors_allowed.load(Ordering::Relaxed) {
+            Vec::new()
+        } else {
+            self.take_errors()
+        };
         let events = self.events.get_mut().unwrap_or_else(|e| e.into_inner()).take();
         match (self.home.take(), events) {
             (Some(Home::Own(context)), _) => dispose(self.shared, context),
@@ -487,19 +519,25 @@ impl Drop for Page {
             (Some(Home::Pool(_)), _) => {
                 let cdp = self.cdp.clone();
                 runtime().spawn(async move {
-                    let _ = cdp.close().await;
+                    let _ = tokio::time::timeout(STEP_LIMIT, cdp.close()).await;
                 });
             }
             (None, _) => {}
         }
         if !errors.is_empty() {
-            panic!(
-                "the page reported {} error(s) (a test that expects them takes them with take_errors()):\n  - {}",
-                errors.len(),
-                errors.join("\n  - ")
-            );
+            panic!("{}", unexpected(&errors));
         }
     }
+}
+
+/// The failure for errors a test did not expect.
+fn unexpected(errors: &[String]) -> String {
+    format!(
+        "the page reported {} error(s) (a test that expects them takes them with take_errors(), or calls \
+         allow_errors() first):\n  - {}",
+        errors.len(),
+        errors.join("\n  - ")
+    )
 }
 
 /// The pool of tabs for [`Page::with_scripts`], made on first use.
@@ -507,11 +545,15 @@ async fn pool(shared: &'static Shared) -> &'static Pool {
     static POOL: LazyLock<OnceCell<Result<Pool, String>>> = LazyLock::new(OnceCell::new);
     let made = POOL
         .get_or_init(|| async {
-            let context = shared
-                .browser
-                .create_browser_context(CreateBrowserContextParams::default())
-                .await
-                .map_err(|e| format!("the browser could not make a context for the tests' tabs: {e}"))?;
+            let context = tokio::time::timeout(
+                STEP_LIMIT,
+                shared
+                    .browser
+                    .create_browser_context(CreateBrowserContextParams::default()),
+            )
+            .await
+            .map_err(|_| "the browser did not make a context for the tests' tabs in time".to_string())?
+            .map_err(|e| format!("the browser could not make a context for the tests' tabs: {e}"))?;
             Ok(Pool {
                 context,
                 idle: Mutex::new(Vec::new()),
@@ -527,8 +569,17 @@ async fn pool(shared: &'static Shared) -> &'static Pool {
 /// A new tab in `context`, showing `about:blank`, reporting what it logs and throws, its clock in UTC and its language
 /// American English.
 async fn new_tab(shared: &'static Shared, context: &BrowserContextId) -> Result<Tab, String> {
+    tokio::time::timeout(STEP_LIMIT, open_tab(shared, context))
+        .await
+        .map_err(|_| format!("the browser did not open a tab within {}s", STEP_LIMIT.as_secs()))?
+}
+
+async fn open_tab(shared: &'static Shared, context: &BrowserContextId) -> Result<Tab, String> {
     let mut target = CreateTargetParams::new("about:blank");
     target.browser_context_id = Some(context.clone());
+    // A window of its own: a tab behind another in its window is hidden, and the browser holds the clicks and keys
+    // meant for it until it comes to the front.
+    target.new_window = Some(true);
     let cdp = shared
         .browser
         .new_page(target)
@@ -542,6 +593,10 @@ async fn new_tab(shared: &'static Shared, context: &BrowserContextId) -> Result<
     let (Ok(console), Ok(exceptions), Ok(log)) = listened else {
         return Err("the browser could not report the tab's errors".to_string());
     };
+    // Every tab acts as the one in front, with the focus, as a person's would: tests run side by side.
+    cdp.execute(SetFocusEmulationEnabledParams::new(true))
+        .await
+        .map_err(|e| format!("could not give the tab the focus: {e}"))?;
     set_timezone(&cdp, "UTC")
         .await
         .map_err(|e| format!("could not set the tab's timezone: {e}"))?;
@@ -579,7 +634,7 @@ async fn recycle(pool: &'static Pool, mut tab: Tab) {
         tab.events.errors.clear();
         pool.idle.lock().unwrap_or_else(|e| e.into_inner()).push(tab);
     } else {
-        let _ = tab.cdp.close().await;
+        let _ = tokio::time::timeout(STEP_LIMIT, tab.cdp.close()).await;
     }
 }
 
@@ -623,8 +678,16 @@ impl Events {
 /// Closes a test's browser context (and its tab) on the shared runtime: a test's own runtime may be ending.
 fn dispose(shared: &'static Shared, context: BrowserContextId) {
     runtime().spawn(async move {
-        let _ = shared.browser.dispose_browser_context(context).await;
+        let _ = tokio::time::timeout(STEP_LIMIT, shared.browser.dispose_browser_context(context)).await;
     });
+}
+
+/// `future`, or a failure that says what did not finish when it takes longer than [`STEP_LIMIT`].
+async fn step<T>(what: &str, future: impl std::future::Future<Output = T>) -> T {
+    match tokio::time::timeout(STEP_LIMIT, future).await {
+        Ok(done) => done,
+        Err(_) => panic!("the browser did not finish within {}s: {what}", STEP_LIMIT.as_secs()),
+    }
 }
 
 /// `args` (a JSON array) as JavaScript that spreads into a call: the JSON is handed over as a string and parsed in

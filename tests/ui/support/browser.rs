@@ -301,23 +301,30 @@ const PLAYWRIGHT_PROGRAMS: [(&str, &[&str]); 2] = [
 ];
 
 fn playwright_candidates() -> Vec<PathBuf> {
+    playwright_dirs()
+        .iter()
+        .flat_map(|dir| playwright_programs_in(dir))
+        .collect()
+}
+
+/// Where the program would be in a Playwright download folder: the full Chromium first, newest revision first, then
+/// the headless shell.
+pub fn playwright_programs_in(dir: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
-    for dir in playwright_dirs() {
-        for (prefix, programs) in PLAYWRIGHT_PROGRAMS {
-            let mut revisions: Vec<(u64, PathBuf)> = fs::read_dir(&dir)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .filter_map(|entry| {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    let revision = name.strip_prefix(prefix)?.parse::<u64>().ok()?;
-                    Some((revision, entry.path()))
-                })
-                .collect();
-            revisions.sort_by(|a, b| b.0.cmp(&a.0));
-            for (_, folder) in revisions {
-                found.extend(programs.iter().map(|p| folder.join(p)));
-            }
+    for (prefix, programs) in PLAYWRIGHT_PROGRAMS {
+        let mut revisions: Vec<(u64, PathBuf)> = fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let revision = name.strip_prefix(prefix)?.parse::<u64>().ok()?;
+                Some((revision, entry.path()))
+            })
+            .collect();
+        revisions.sort_by(|a, b| b.0.cmp(&a.0));
+        for (_, folder) in revisions {
+            found.extend(programs.iter().map(|p| folder.join(p)));
         }
     }
     found

@@ -21,3 +21,5 @@ mod site;
 pub use page::{Page, WAIT_LIMIT, js_string, truthy};
 #[allow(unused_imports)]
 pub use site::Site;
+
+pub use browser::playwright_programs_in;
