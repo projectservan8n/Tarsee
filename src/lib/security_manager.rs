@@ -5,6 +5,7 @@
 //! `SecurityManager`. Here the one manager of an `App` holds them: [`get_security_manager`].
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::net::Ipv6Addr;
 use std::sync::{Arc, LazyLock};
 
 use parking_lot::Mutex;
@@ -41,6 +42,26 @@ static PRIVATE_IP_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     )
     .expect("the private address pattern")
 });
+
+/// Whether a URL's host is one a tool must never be pointed at: [`PRIVATE_IP_REGEX`], and the same IPv4 ranges
+/// written inside an IPv6 address.
+///
+/// A Node bug fixed here. The Node code tested the pattern against the hostname alone, and the hostname of
+/// `http://[::ffff:127.0.0.1]/` is `[::ffff:7f00:1]`, which the pattern does not know. So the IPv4-mapped form of
+/// every loopback, private and link-local address went through (169.254.169.254, the cloud metadata service, among
+/// them), and so did `[::]`, which reaches this machine as 0.0.0.0 does. An IPv6 address that carries an IPv4 one
+/// (`::ffff:a.b.c.d`, and the older `::a.b.c.d`, of which `::` is 0.0.0.0) is judged by that IPv4 address.
+fn is_private_host(hostname: &str) -> bool {
+    if PRIVATE_IP_REGEX.is_match(hostname) {
+        return true;
+    }
+    hostname
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .and_then(|address| address.parse::<Ipv6Addr>().ok())
+        .and_then(|address| address.to_ipv4())
+        .is_some_and(|carried| PRIVATE_IP_REGEX.is_match(&carried.to_string()))
+}
 
 /// Default permissions
 const DEFAULT_PERMISSIONS: [(&str, &str); 4] = [
@@ -272,7 +293,7 @@ impl SecurityManager {
             && let Some(url) = truthy_field(input, "url")
             // An invalid URL is let through, to fail naturally.
             && let Some(hostname) = url_hostname(&js_string(url))
-            && PRIVATE_IP_REGEX.is_match(&hostname)
+            && is_private_host(&hostname)
         {
             return ToolVerdict::denied(format!("SSRF protection: blocked request to private IP {hostname}"));
         }
@@ -280,7 +301,7 @@ impl SecurityManager {
         if tool_name == "browser"
             && let Some(url) = truthy_field(input, "url")
             && let Some(hostname) = url_hostname(&js_string(url))
-            && PRIVATE_IP_REGEX.is_match(&hostname)
+            && is_private_host(&hostname)
         {
             return ToolVerdict::denied("Browser navigation to private IP blocked".to_string());
         }
@@ -607,7 +628,6 @@ mod tests {
             ("http://user:pw@127.0.0.1/", Some("127.0.0.1"), true),
             ("http://127.0.0.1.nip.io/", Some("127.0.0.1.nip.io"), true),
             ("HTTP://EXAMPLE.COM", Some("example.com"), false),
-            ("http://[::ffff:127.0.0.1]/", Some("[::ffff:7f00:1]"), false),
             ("http://0/", Some("0.0.0.0"), true),
             ("http://0x0.0/", Some("0.0.0.0"), true),
             ("ftp://10.1.2.3/", Some("10.1.2.3"), true),
@@ -651,6 +671,72 @@ mod tests {
             sm.check_tool_permission("read_file", &json!({ "url": "http://127.0.0.1/" }), None),
             ToolVerdict::allowed()
         );
+    }
+
+    /// A Node bug fixed in this version: the Node manager let every one of the refused addresses below through
+    /// (`allowed: true` for `web_fetch` and for `browser`), because the hostname of `http://[::ffff:127.0.0.1]/` is
+    /// `[::ffff:7f00:1]` and its pattern knows IPv4 addresses only in dotted form.
+    #[test]
+    fn a_private_address_written_inside_an_ipv6_one_is_refused_like_the_address_itself() {
+        let t = test_app();
+        let sm = manager(&t);
+        // The URL, its hostname as Node's `new URL(url).hostname` gave it, and whether it is refused now.
+        for (url, hostname, blocked) in [
+            // IPv4-mapped (::ffff:a.b.c.d): loopback, however it is spelled.
+            ("http://[::ffff:127.0.0.1]/", "[::ffff:7f00:1]", true),
+            ("http://[::ffff:7f00:1]/", "[::ffff:7f00:1]", true),
+            ("http://[0:0:0:0:0:FFFF:7F00:0001]:8080/x", "[::ffff:7f00:1]", true),
+            ("foo://[::ffff:127.0.0.1]/", "[::ffff:7f00:1]", true),
+            // Each private range, link-local (the cloud metadata service) and 0.0.0.0.
+            ("http://[::ffff:10.0.0.5]/", "[::ffff:a00:5]", true),
+            ("http://[::ffff:172.16.0.1]/", "[::ffff:ac10:1]", true),
+            ("http://[::ffff:172.31.255.255]/", "[::ffff:ac1f:ffff]", true),
+            ("http://[::ffff:192.168.1.1]/", "[::ffff:c0a8:101]", true),
+            (
+                "http://[::ffff:169.254.169.254]/latest/meta-data/",
+                "[::ffff:a9fe:a9fe]",
+                true,
+            ),
+            ("http://[::ffff:0.0.0.0]/", "[::ffff:0:0]", true),
+            // The older IPv4-compatible form (::a.b.c.d), of which `::` is 0.0.0.0.
+            ("http://[::127.0.0.1]/", "[::7f00:1]", true),
+            ("http://[::10.1.2.3]/", "[::a01:203]", true),
+            ("http://[::]/", "[::]", true),
+            ("http://[::]:3000/", "[::]", true),
+            // A public address stays allowed in either form, and so do the addresses just outside each range.
+            ("http://[::ffff:8.8.8.8]/", "[::ffff:808:808]", false),
+            ("http://[::ffff:172.32.0.1]/", "[::ffff:ac20:1]", false),
+            ("http://[::ffff:172.15.0.1]/", "[::ffff:ac0f:1]", false),
+            ("http://[::ffff:192.169.1.1]/", "[::ffff:c0a9:101]", false),
+            ("http://[::8.8.8.8]/", "[::808:808]", false),
+            // Not an IPv4 address inside an IPv6 one: judged as before.
+            ("http://[2001:db8::7f00:1]/", "[2001:db8::7f00:1]", false),
+            ("http://[64:ff9b::7f00:1]/", "[64:ff9b::7f00:1]", false),
+        ] {
+            assert_eq!(url_hostname(url).as_deref(), Some(hostname), "{url}");
+            assert_eq!(is_private_host(hostname), blocked, "{hostname}");
+            let (fetch, browser) = if blocked {
+                (
+                    ToolVerdict::denied(format!("SSRF protection: blocked request to private IP {hostname}")),
+                    ToolVerdict::denied("Browser navigation to private IP blocked".to_string()),
+                )
+            } else {
+                (ToolVerdict::allowed(), ToolVerdict::allowed())
+            };
+            assert_eq!(
+                sm.check_tool_permission("web_fetch", &json!({ "url": url }), None),
+                fetch,
+                "{url}"
+            );
+            assert_eq!(
+                sm.check_tool_permission("browser", &json!({ "url": url }), None),
+                browser,
+                "{url}"
+            );
+        }
+        // Only a bracketed address is read as one: a name that merely looks like it is a name.
+        assert!(!is_private_host("::ffff:7f00:1.example.com"));
+        assert!(!is_private_host("[not an address]"));
     }
 
     #[test]

@@ -16,9 +16,17 @@
 //! on every boot — so the file manager could read every credential the deployment owns and write code that would
 //! execute on the next restart. Nothing in the UI ever needed to browse outside the workspace.
 //!
-//! The JSON bodies are read as `express.json` read them (application/json only; anything else is an empty body),
-//! with the server's 50 MB limit; the query as Express 5's simple parser read it (a repeated `path` is a list, so
-//! it is not a path).
+//! The JSON bodies are read as `express.json` read them (application/json only; anything else is an empty body; a
+//! byte order mark is dropped), with the server's 50 MB limit; the query as Express 5's simple parser read it (a
+//! repeated `path` is a list, so it is not a path).
+//!
+//! Every file call takes the checked path in its literal form (`to_namespaced`), as Node's `fs` did: on Windows a
+//! name such as `data.db.`, `...` or `nul` then means exactly what it says, not the file or device Windows would
+//! otherwise turn it into.
+//!
+//! Two Node bugs are fixed here (see the package report): `delete` compared the root as text, so a workspace
+//! written another way could be deleted whole; `rename` checked its target with a text prefix, so a file or the
+//! whole workspace could be moved to a sibling or the parent folder. Roots are now compared as paths.
 
 use std::path::{Path, PathBuf};
 
@@ -34,10 +42,11 @@ use crate::app::App;
 use crate::config::constants::limits;
 use crate::error::ApiError;
 use crate::lib::safe_path::{
-    SafePathError, fs_error_message, fs_error_message_two, join_path, normalize_path, relative_path, safe_path,
-    sanitize_filename,
+    SafePathError, fs_error_message, fs_error_message_two, is_inside, is_sensitive_path, node_dirname, node_join,
+    nul_in_path, relative_path, safe_path, same_path, sanitize_filename,
 };
 use crate::util::js::{number_to_string, truthy};
+use crate::util::node_path::to_namespaced;
 
 pub fn router() -> Router<App> {
     Router::new()
@@ -56,16 +65,9 @@ fn ok(body: Value) -> Answer {
     Ok(axum::Json(body).into_response())
 }
 
-/// `ALLOWED_ROOTS`: `[config.WORKSPACE_DIR]`, as the text Node had. `delete` and `rename` compare paths with it as
-/// text, so it must be what Node had: `TARSEE_WORKSPACE_DIR` as it was set, or else `path.join(STATE_DIR,
-/// "workspace")`, which Node normalized (the Rust configuration joins without normalizing, so on Windows a state
-/// folder written with `/` would otherwise never equal a resolved path).
+/// `ALLOWED_ROOTS`: `[config.WORKSPACE_DIR]`, the configuration's (normalised) workspace folder.
 fn allowed_roots(app: &App) -> Vec<PathBuf> {
-    let root = match app.env().trimmed("TARSEE_WORKSPACE_DIR") {
-        Some(raw) => PathBuf::from(raw),
-        None => normalize_path(&app.config().state_dir.join("workspace")),
-    };
-    vec![root]
+    vec![app.config().workspace_dir.clone()]
 }
 
 /// `safePath(value, ALLOWED_ROOTS)` for a value from the query or the body: anything but text is an invalid path.
@@ -98,29 +100,144 @@ fn query_path(req: &Request) -> Value {
 
 /// `req.body || {}` after `express.json`: a JSON body when the request says it is JSON, else an empty one.
 async fn json_body(req: Request) -> Result<Value, ApiError> {
-    let is_json = req
+    let content_type = req
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(';').next())
-        .is_some_and(|t| t.trim().eq_ignore_ascii_case("application/json"));
+        .unwrap_or("")
+        .to_string();
+    // The header's own white space (RFC 9110's OWS: spaces and tabs), as the `content-type` package read it.
+    let ows = |s: &str| s.trim_matches([' ', '\t']).to_string();
+    let mut parts = content_type.split(';');
+    let is_json = parts
+        .next()
+        .is_some_and(|t| ows(t).eq_ignore_ascii_case("application/json"));
+    let charset = parts.find_map(|p| {
+        let (k, v) = p.split_once('=')?;
+        ows(k)
+            .eq_ignore_ascii_case("charset")
+            .then(|| ows(v).trim_matches('"').to_lowercase())
+    });
+    if !is_json {
+        // Not for express.json: the body stays unread and `req.body` is empty.
+        return Ok(json!({}));
+    }
+    // body-parser checks the charset before it reads anything (RFC 7159: JSON is UTF-8, 16 or 32).
+    let charset = charset.unwrap_or_else(|| "utf-8".into());
+    if !charset.starts_with("utf-") || !matches!(charset.as_str(), "utf-8" | "utf-16" | "utf-16le" | "utf-16be") {
+        return Err(ApiError::new(
+            415,
+            format!("unsupported charset \"{}\"", charset.to_uppercase()),
+        ));
+    }
     let bytes: Bytes = axum::body::to_bytes(req.into_body(), limits::JSON_BODY_MAX_BYTES)
         .await
         .map_err(|_| ApiError::new(413, "request entity too large"))?;
-    if !is_json || bytes.is_empty() {
+    let decoded = decode_body(&bytes, &charset);
+    // iconv-lite drops a byte order mark.
+    let text = decoded.strip_prefix('\u{FEFF}').unwrap_or(&decoded);
+    if text.is_empty() {
+        // special-case empty json body, as it's a common client-side mistake
         return Ok(json!({}));
     }
     // Strict, as body-parser was: only an object or an array.
-    let first = bytes.iter().find(|b| !b" \t\n\r".contains(b));
-    if !matches!(first, Some(b'{') | Some(b'[')) {
-        let shown = String::from_utf8_lossy(&bytes);
+    let first = text.chars().find(|c| !matches!(c, ' ' | '\t' | '\n' | '\r'));
+    if !matches!(first, Some('{') | Some('[')) {
+        let shown: String = text.chars().take(10).collect();
+        let more = if text.chars().count() > 10 { "..." } else { "" };
         return Err(ApiError::bad_request(format!(
-            "Unexpected token '{}', \"{}\" is not valid JSON",
-            shown.trim_start().chars().next().unwrap_or(' '),
-            shown.chars().take(10).collect::<String>()
+            "Unexpected token '{}', \"{shown}\"{more} is not valid JSON",
+            first.unwrap_or(' ')
         )));
     }
-    serde_json::from_slice(&bytes).map_err(|err| ApiError::bad_request(err.to_string()))
+    serde_json::from_str(&mend_lone_surrogates(text)).map_err(|err| ApiError::bad_request(err.to_string()))
+}
+
+/// The body as text in its charset; bytes that do not decode become U+FFFD, as iconv-lite made them.
+fn decode_body(bytes: &[u8], charset: &str) -> String {
+    let utf16 = |big_endian: bool, bytes: &[u8]| {
+        let units: Vec<u16> = bytes
+            .chunks(2)
+            .map(|c| match (c, big_endian) {
+                ([a, b], false) => u16::from_le_bytes([*a, *b]),
+                ([a, b], true) => u16::from_be_bytes([*a, *b]),
+                _ => 0xFFFD,
+            })
+            .collect();
+        String::from_utf16_lossy(&units)
+    };
+    match charset {
+        "utf-16be" => utf16(true, bytes),
+        "utf-16le" => utf16(false, bytes),
+        // "utf-16": the byte order mark says which; little-endian without one.
+        "utf-16" => match bytes {
+            [0xFE, 0xFF, rest @ ..] => utf16(true, rest),
+            [0xFF, 0xFE, rest @ ..] => utf16(false, rest),
+            _ => utf16(false, bytes),
+        },
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
+
+/// JSON text in which every `\uD800`-`\uDFFF` escape that is not half of a pair is written `�`. `JSON.parse`
+/// accepted such a lone surrogate (and writing it out as UTF-8 gave U+FFFD); serde refuses it.
+fn mend_lone_surrogates(json: &str) -> std::borrow::Cow<'_, str> {
+    if !json.contains("\\u") {
+        return std::borrow::Cow::Borrowed(json);
+    }
+    let bytes = json.as_bytes();
+    let hex_at = |at: usize| -> Option<u16> {
+        let digits = bytes.get(at..at + 4)?;
+        u16::from_str_radix(std::str::from_utf8(digits).ok()?, 16).ok()
+    };
+    let escape_at = |at: usize| -> Option<u16> {
+        (bytes.get(at) == Some(&b'\\') && bytes.get(at + 1) == Some(&b'u'))
+            .then(|| hex_at(at + 2))
+            .flatten()
+    };
+    let mut out = String::with_capacity(json.len());
+    let mut in_string = false;
+    let mut i = 0;
+    let mut copied = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if !in_string {
+            if b == b'"' {
+                in_string = true;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'"' => {
+                in_string = false;
+                i += 1;
+            }
+            b'\\' => match escape_at(i) {
+                Some(0xD800..=0xDBFF) => {
+                    let paired = escape_at(i + 6).is_some_and(|low| (0xDC00..=0xDFFF).contains(&low));
+                    if paired {
+                        i += 12;
+                    } else {
+                        out.push_str(&json[copied..i]);
+                        out.push_str("\\uFFFD");
+                        i += 6;
+                        copied = i;
+                    }
+                }
+                Some(0xDC00..=0xDFFF) => {
+                    out.push_str(&json[copied..i]);
+                    out.push_str("\\uFFFD");
+                    i += 6;
+                    copied = i;
+                }
+                _ => i += 2,
+            },
+            _ => i += 1,
+        }
+    }
+    out.push_str(&json[copied.min(json.len())..]);
+    std::borrow::Cow::Owned(out)
 }
 
 /// A body field (`const { path } = req.body`): missing when the body is not an object.
@@ -137,18 +254,51 @@ fn is_not_found(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::NotFound
 }
 
+/// Node's refusal of a path with a NUL in it, which came before the file call (a 500, as any error that is not
+/// ENOENT).
+fn refuse_nul(argument: &str, path: &Path) -> Result<(), ApiError> {
+    match nul_in_path(argument, path) {
+        Some(message) => Err(fs_failed(message)),
+        None => Ok(()),
+    }
+}
+
+/// `fs.mkdirSync(path, { recursive: true })`: nothing to do for a folder that is there; EEXIST when a file is,
+/// ENOTDIR when a file stands where a folder on the way should be (what Node's own mkdirp answered; std's would
+/// give other codes).
+async fn make_dirs(path: &Path) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    match tokio::fs::metadata(to_namespaced(path)).await {
+        Ok(meta) if meta.is_dir() => return Ok(()),
+        Ok(_) => return Err(Error::from(ErrorKind::AlreadyExists)),
+        Err(err) if err.kind() != ErrorKind::NotFound => return Err(err),
+        Err(_) => {}
+    }
+    for ancestor in path.ancestors().skip(1) {
+        match tokio::fs::metadata(to_namespaced(ancestor)).await {
+            Ok(meta) if meta.is_dir() => break,
+            Ok(_) => return Err(Error::from(ErrorKind::NotADirectory)),
+            Err(err) if err.kind() == ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    tokio::fs::create_dir_all(to_namespaced(path)).await
+}
+
 /// GET /api/files/ls?path=... — list directory contents.
 async fn ls(State(app): State<App>, req: Request) -> Answer {
     let asked = query_path(&req);
     let req_path = if truthy(&asked) { asked } else { json!(".") };
     let resolved = resolve(&app, &req_path)?;
+    refuse_nul("path", &resolved)?;
 
     let listing = tokio::task::spawn_blocking(move || -> Result<Result<Vec<Value>, ApiError>, std::io::Error> {
-        let stat = std::fs::metadata(&resolved).map_err(|e| with_message(e, "stat", &resolved))?;
+        let literal = to_namespaced(&resolved);
+        let stat = std::fs::metadata(&literal).map_err(|e| with_message(e, "stat", &resolved))?;
         if !stat.is_dir() {
             return Ok(Err(ApiError::bad_request("Not a directory")));
         }
-        let mut entries: Vec<std::fs::DirEntry> = std::fs::read_dir(&resolved)
+        let mut entries: Vec<std::fs::DirEntry> = std::fs::read_dir(&literal)
             .map_err(|e| with_message(e, "scandir", &resolved))?
             .collect::<Result<_, _>>()
             .map_err(|e| with_message(e, "scandir", &resolved))?;
@@ -161,7 +311,8 @@ async fn ls(State(app): State<App>, req: Request) -> Answer {
             let kind = entry.file_type().map_err(|e| with_message(e, "scandir", &resolved))?;
             let size = if kind.is_file() {
                 let full = resolved.join(entry.file_name());
-                let meta = std::fs::metadata(&full).map_err(|e| with_message(e, "stat", &full))?;
+                let meta =
+                    std::fs::metadata(literal.join(entry.file_name())).map_err(|e| with_message(e, "stat", &full))?;
                 json!(meta.len())
             } else {
                 Value::Null
@@ -198,8 +349,10 @@ async fn read(State(app): State<App>, req: Request) -> Answer {
         return Err(ApiError::bad_request("Path required"));
     }
     let resolved = resolve(&app, &req_path)?;
+    refuse_nul("path", &resolved)?;
+    let literal = to_namespaced(&resolved);
 
-    let stat = match tokio::fs::metadata(&resolved).await {
+    let stat = match tokio::fs::metadata(&literal).await {
         Ok(stat) => stat,
         Err(err) if is_not_found(&err) => return Err(ApiError::not_found("File not found")),
         Err(err) => return Err(fs_failed(fs_error_message(&err, "stat", &resolved))),
@@ -218,7 +371,7 @@ async fn read(State(app): State<App>, req: Request) -> Answer {
             ),
         ));
     }
-    let content = match tokio::fs::read(&resolved).await {
+    let content = match tokio::fs::read(&literal).await {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(err) if is_not_found(&err) => return Err(ApiError::not_found("File not found")),
         Err(err) => return Err(fs_failed(fs_error_message(&err, "open", &resolved))),
@@ -254,15 +407,24 @@ async fn write(State(app): State<App>, req: Request) -> Answer {
     let resolved = resolve(&app, req_path)?;
 
     // Ensure parent directory exists
-    if let Some(parent) = resolved.parent()
-        && let Err(err) = tokio::fs::create_dir_all(parent).await
-    {
-        return Err(fs_failed(fs_error_message(&err, "mkdir", parent)));
+    let parent = PathBuf::from(node_dirname(&resolved.to_string_lossy()));
+    refuse_nul("path", &parent)?;
+    if let Err(err) = make_dirs(&parent).await {
+        return Err(fs_failed(fs_error_message(&err, "mkdir", &parent)));
     }
     let Value::String(text) = content else {
         return Err(fs_failed(not_text(content)));
     };
-    if let Err(err) = tokio::fs::write(&resolved, text.as_bytes()).await {
+    refuse_nul("path", &resolved)?;
+    let literal = to_namespaced(&resolved);
+    if let Err(err) = tokio::fs::write(&literal, text.as_bytes()).await {
+        // Writing to a folder: Windows says "access denied"; libuv said EISDIR, as Linux does.
+        let on_folder = tokio::fs::metadata(&literal).await.is_ok_and(|m| m.is_dir());
+        let err = if on_folder {
+            std::io::Error::from(std::io::ErrorKind::IsADirectory)
+        } else {
+            err
+        };
         return Err(fs_failed(fs_error_message(&err, "open", &resolved)));
     }
     ok(json!({ "ok": true, "path": req_path }))
@@ -276,7 +438,8 @@ async fn mkdir(State(app): State<App>, req: Request) -> Answer {
         return Err(ApiError::bad_request("Path required"));
     }
     let resolved = resolve(&app, req_path)?;
-    if let Err(err) = tokio::fs::create_dir_all(&resolved).await {
+    refuse_nul("path", &resolved)?;
+    if let Err(err) = make_dirs(&resolved).await {
         return Err(fs_failed(fs_error_message(&err, "mkdir", &resolved)));
     }
     ok(json!({ "ok": true, "path": req_path }))
@@ -291,23 +454,23 @@ async fn delete(State(app): State<App>, req: Request) -> Answer {
     }
     let resolved = resolve(&app, req_path)?;
 
-    // Prevent deleting root directories (compared as text, as `ALLOWED_ROOTS.includes(resolved)` did)
-    if allowed_roots(&app)
-        .iter()
-        .any(|root| root.as_os_str() == resolved.as_os_str())
-    {
+    // Prevent deleting root directories. Compared as paths (Node compared text, so a workspace written another way,
+    // with a trailing separator or `..`, could be deleted whole).
+    if allowed_roots(&app).iter().any(|root| same_path(root, &resolved)) {
         return Err(ApiError::bad_request("Cannot delete root directory"));
     }
+    refuse_nul("path", &resolved)?;
+    let literal = to_namespaced(&resolved);
 
-    let stat = match tokio::fs::metadata(&resolved).await {
+    let stat = match tokio::fs::metadata(&literal).await {
         Ok(stat) => stat,
         Err(err) if is_not_found(&err) => return Err(ApiError::not_found("Path not found")),
         Err(err) => return Err(fs_failed(fs_error_message(&err, "stat", &resolved))),
     };
     let removed = if stat.is_dir() {
-        tokio::fs::remove_dir_all(&resolved).await.map_err(|e| (e, "rm"))
+        tokio::fs::remove_dir_all(&literal).await.map_err(|e| (e, "rm"))
     } else {
-        tokio::fs::remove_file(&resolved).await.map_err(|e| (e, "unlink"))
+        tokio::fs::remove_file(&literal).await.map_err(|e| (e, "unlink"))
     };
     match removed {
         Ok(()) => ok(json!({ "ok": true })),
@@ -342,21 +505,38 @@ async fn rename(State(app): State<App>, req: Request) -> Answer {
     }
     let resolved = resolve(&app, req_path)?;
 
+    // `path.join(path.dirname(resolved), sanitized)`: the name may still hold `/` and `..`.
     let sanitized = sanitize_filename(&js_string(new_name));
-    let dir = resolved.parent().unwrap_or(&resolved);
-    let new_path = join_path(dir, &sanitized);
+    let dir = node_dirname(&resolved.to_string_lossy());
+    let new_path = PathBuf::from(node_join(&[&dir, &sanitized]));
 
-    // Validate new path is still within allowed roots (a prefix of the text, as the JS checked)
+    // Validate new path is still within allowed roots: strictly inside one, compared as paths (Node checked a text
+    // prefix without a separator, so `ws-old` passed for `ws`, and the workspace itself could be moved out).
     let roots = allowed_roots(&app);
-    let new_text = new_path.to_string_lossy();
-    if !roots
-        .iter()
-        .any(|root| new_text.starts_with(root.to_string_lossy().as_ref()))
-    {
+    if !roots.iter().any(|root| is_inside(root, &new_path)) {
         return Err(ApiError::bad_request("New name resolves outside allowed directory"));
     }
+    // Not in the Node version: a protected name (a credential, a database, an NTFS stream) is never a target either.
+    if is_sensitive_path(&new_path) {
+        return Err(ApiError::bad_request(SafePathError::NotAccessible.to_string()));
+    }
 
-    if let Err(err) = tokio::fs::rename(&resolved, &new_path).await {
+    refuse_nul("oldPath", &resolved)?;
+    refuse_nul("newPath", &new_path)?;
+    let (from, to) = (to_namespaced(&resolved), to_namespaced(&new_path));
+    // libuv renamed with MoveFileExW, which refuses to replace a folder (EPERM); std's rename replaces an empty one.
+    if cfg!(windows) && tokio::fs::metadata(&to).await.is_ok_and(|m| m.is_dir()) {
+        // ERROR_ACCESS_DENIED, which libuv called EPERM
+        let denied = std::io::Error::from_raw_os_error(5);
+        return Err(fs_failed(fs_error_message_two(&denied, "rename", &resolved, &new_path)));
+    }
+    if let Err(err) = tokio::fs::rename(&from, &to).await {
+        // Folder onto a folder that is not empty: MoveFileExW said "access denied" (EPERM) here too.
+        let err = if err.raw_os_error() == Some(145) && cfg!(windows) {
+            std::io::Error::from_raw_os_error(5)
+        } else {
+            err
+        };
         return Err(fs_failed(fs_error_message_two(&err, "rename", &resolved, &new_path)));
     }
     ok(json!({ "ok": true, "newPath": relative_path(&roots[0], &new_path) }))
@@ -369,8 +549,10 @@ async fn download(State(app): State<App>, req: Request) -> Answer {
         return Err(ApiError::bad_request("Path required"));
     }
     let resolved = resolve(&app, &req_path)?;
+    refuse_nul("path", &resolved)?;
+    let literal = to_namespaced(&resolved);
 
-    let stat = match tokio::fs::metadata(&resolved).await {
+    let stat = match tokio::fs::metadata(&literal).await {
         Ok(stat) => stat,
         Err(err) if is_not_found(&err) => return Err(ApiError::not_found("File not found")),
         Err(err) => return Err(fs_failed(fs_error_message(&err, "stat", &resolved))),
@@ -378,7 +560,7 @@ async fn download(State(app): State<App>, req: Request) -> Answer {
     if !stat.is_file() {
         return Err(ApiError::bad_request("Not a file"));
     }
-    let file = match tokio::fs::File::open(&resolved).await {
+    let file = match tokio::fs::File::open(&literal).await {
         Ok(file) => file,
         Err(err) if is_not_found(&err) => return Err(ApiError::not_found("File not found")),
         Err(err) => return Err(fs_failed(fs_error_message(&err, "open", &resolved))),
@@ -770,21 +952,298 @@ mod tests {
         );
     }
 
+    /// Fixed in the Rust version: Node compared the root as text, so with `TARSEE_WORKSPACE_DIR` ending in a
+    /// separator, written with `/`, or holding `..`, `{"path": "."}` deleted the whole workspace. Now the roots come
+    /// from the configuration and are compared as paths, whatever the spelling.
     #[tokio::test]
-    async fn a_workspace_set_by_its_own_variable_is_the_root_as_it_was_written() {
+    async fn the_workspace_is_never_deleted_however_its_variable_is_written() {
         let outer = crate::testkit::tmp_dir();
-        // (Written normalized: the check compares text, so a root written another way would not match; see the
-        // report on this package.)
-        let own = normalize_path(&outer.path().join("own-ws"));
-        std::fs::create_dir_all(&own).unwrap();
-        let t = crate::testkit::test_app_with_env([("TARSEE_WORKSPACE_DIR", own.to_string_lossy().into_owned())]);
-        let router = router().with_state(t.app.clone());
-        std::fs::write(own.join("x.txt"), "x").unwrap();
-        let res = http::get(&router, "/read?path=x.txt").await;
-        assert_eq!(res.json()["content"], "x");
-        let root = http::post_json(&router, "/delete", &json!({ "path": own.to_string_lossy() })).await;
-        assert_eq!(root.json(), json!({"error": "Cannot delete root directory"}));
-        assert_eq!(allowed_roots(&t.app), vec![own]);
+        let own = crate::util::node_path::normalize(&outer.path().join("own-ws"));
+        let text = own.to_string_lossy().into_owned();
+        let spellings = [
+            text.clone(),
+            format!("{text}{}", std::path::MAIN_SEPARATOR),
+            text.replace('\\', "/"),
+            format!(
+                "{text}{}..{}own-ws",
+                std::path::MAIN_SEPARATOR,
+                std::path::MAIN_SEPARATOR
+            ),
+            format!("  {text}  "),
+        ];
+        for spelling in spellings {
+            std::fs::create_dir_all(own.join("sub")).unwrap();
+            std::fs::write(own.join("x.txt"), "x").unwrap();
+            let t = crate::testkit::test_app_with_env([("TARSEE_WORKSPACE_DIR", spelling.clone())]);
+            let router = router().with_state(t.app.clone());
+            assert_eq!(
+                http::get(&router, "/read?path=x.txt").await.json()["content"],
+                "x",
+                "{spelling}"
+            );
+            for path in [
+                json!("."),
+                json!("./."),
+                json!("sub/.."),
+                json!(text),
+                json!(format!("{text}{}", std::path::MAIN_SEPARATOR)),
+                json!(text.replace('\\', "/")),
+                json!(format!("{text}{}.", std::path::MAIN_SEPARATOR)),
+            ] {
+                let res = http::post_json(&router, "/delete", &json!({ "path": path })).await;
+                assert_eq!(
+                    (res.status, res.json()),
+                    (400, json!({"error": "Cannot delete root directory"})),
+                    "{spelling} / {path}"
+                );
+            }
+            // Nor moved out of itself.
+            let res = http::post_json(&router, "/rename", &json!({ "path": ".", "newName": "own-ws-old" })).await;
+            assert_eq!(
+                res.json(),
+                json!({"error": "New name resolves outside allowed directory"}),
+                "{spelling}"
+            );
+            assert!(own.join("x.txt").exists(), "{spelling}");
+            assert!(same_path(&allowed_roots(&t.app)[0], &own), "{spelling}");
+        }
+    }
+
+    /// Windows turns `...`, `. ` and `.. ` into the folder itself, `a.txt.` into `a.txt` and `nul` into a device,
+    /// unless a path is handed over literally. Node's `fs` always did that, so each name meant itself: these are
+    /// Node's answers, and the files around stay as they were.
+    #[tokio::test]
+    async fn names_windows_would_rewrite_are_taken_literally() {
+        let (t, router) = site();
+        std::fs::create_dir_all(ws(&t).join("sub")).unwrap();
+        std::fs::write(ws(&t).join("sub/kept.txt"), "kept").unwrap();
+        std::fs::write(ws(&t).join("a.txt"), "original").unwrap();
+        std::fs::write(ws(&t).join("data.db"), "secret").unwrap();
+        let post = |path: &'static str, body: Value| {
+            let router = router.clone();
+            async move { http::post_json(&router, path, &body).await }
+        };
+        for name in ["...", ". ", ".. ", "sub/...", "a.txt.", "a.txt ", "nul", "con", "a. "] {
+            let res = post("/delete", json!({ "path": name })).await;
+            assert_eq!(
+                (res.status, res.json()),
+                (404, json!({"error": "Path not found"})),
+                "delete {name:?}"
+            );
+        }
+        assert_eq!(std::fs::read_to_string(ws(&t).join("sub/kept.txt")).unwrap(), "kept");
+        assert_eq!(std::fs::read_to_string(ws(&t).join("a.txt")).unwrap(), "original");
+        for name in ["data.db.", "DATA.DB ", "a.txt.", "nul", "con"] {
+            let read = http::get(&router, &format!("/read?path={}", q(name))).await;
+            assert_eq!(
+                (read.status, read.json()),
+                (404, json!({"error": "File not found"})),
+                "read {name:?}"
+            );
+            let down = http::get(&router, &format!("/download?path={}", q(name))).await;
+            assert_eq!(down.status, 404, "download {name:?}");
+        }
+        assert_eq!(http::get(&router, "/ls?path=nul").await.status, 404);
+        // A write to `a.txt.` makes a file of that name; `a.txt` is untouched. `nul` and `...` are files too.
+        for name in ["a.txt.", "nul", "...", "a. "] {
+            let res = post("/write", json!({ "path": name, "content": "new" })).await;
+            assert_eq!(res.status, 200, "write {name:?}: {}", res.text());
+            let read = http::get(&router, &format!("/read?path={}", q(name))).await;
+            assert_eq!(read.json()["content"], "new", "{name:?}");
+        }
+        assert_eq!(std::fs::read_to_string(ws(&t).join("a.txt")).unwrap(), "original");
+        let res = post("/mkdir", json!({ "path": "dots..." })).await;
+        assert_eq!(res.status, 200);
+        let res = post("/rename", json!({ "path": "a.txt.", "newName": "...." })).await;
+        assert_eq!(res.status, 200, "{}", res.text());
+        // Deleting `a.txt.` removes that file, not `a.txt`.
+        assert_eq!(
+            post("/delete", json!({ "path": "nul" })).await.json(),
+            json!({"ok": true})
+        );
+        assert_eq!(std::fs::read_to_string(ws(&t).join("a.txt")).unwrap(), "original");
+        assert!(ws(&t).join("sub").is_dir() && ws(&t).is_dir());
+    }
+
+    /// Fixed in the Rust version: `rename` checked its target with a text prefix without a separator, so a file
+    /// (or the whole workspace) could be moved into a sibling such as `ws-old` or into the parent folder.
+    #[tokio::test]
+    async fn a_rename_target_must_be_inside_the_workspace() {
+        let (t, router) = site();
+        let parent = ws(&t).parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(ws(&t).join("sub")).unwrap();
+        std::fs::write(ws(&t).join("sub/b.txt"), "b").unwrap();
+        let post = |body: Value| {
+            let router = router.clone();
+            async move { http::post_json(&router, "/rename", &body).await }
+        };
+        for body in [
+            json!({ "path": ".", "newName": "workspace-old" }),
+            json!({ "path": "sub/b.txt", "newName": "../../workspace-oldfile.txt" }),
+            json!({ "path": "sub/b.txt", "newName": "../../x.txt" }),
+            json!({ "path": "sub", "newName": "../.." }),
+        ] {
+            let res = post(body.clone()).await;
+            assert_eq!(
+                (res.status, res.json()),
+                (400, json!({"error": "New name resolves outside allowed directory"})),
+                "{body}"
+            );
+        }
+        assert!(ws(&t).join("sub/b.txt").exists());
+        assert!(!parent.join("workspace-old").exists() && !parent.join("x.txt").exists());
+        // Moving within the workspace with `/` in the name still works, as it did.
+        let res = post(json!({ "path": "sub/b.txt", "newName": "../moved.txt" })).await;
+        assert_eq!(res.json(), json!({ "ok": true, "newPath": "moved.txt" }));
+        // A protected name is not a target either (not in the Node version).
+        std::fs::write(ws(&t).join("c.txt"), "c").unwrap();
+        let res = post(json!({ "path": "c.txt", "newName": "vault.json" })).await;
+        assert_eq!(
+            (res.status, res.json()),
+            (400, json!({"error": "Path is not accessible"}))
+        );
+    }
+
+    /// Fixed in the Rust version (Windows): a `:` after the drive names an NTFS stream, which got around the `.db`
+    /// protection (`data.db::$DATA` is the database).
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_stream_name_is_refused() {
+        let (t, router) = site();
+        std::fs::write(ws(&t).join("data.db"), "secret").unwrap();
+        std::fs::write(ws(&t).join("a.txt"), "a").unwrap();
+        for name in ["data.db::$DATA", "a.txt::$DATA", "a.txt:hidden"] {
+            let res = http::get(&router, &format!("/read?path={}", q(name))).await;
+            assert_eq!(
+                (res.status, res.json()),
+                (400, json!({"error": "Path is not accessible"})),
+                "{name}"
+            );
+        }
+        let res = http::post_json(&router, "/write", &json!({ "path": "a.txt:hidden", "content": "x" })).await;
+        assert_eq!(res.status, 400);
+        let res = http::post_json(&router, "/rename", &json!({ "path": "a.txt", "newName": "b:s" })).await;
+        assert_eq!(
+            (res.status, res.json()),
+            (400, json!({"error": "Path is not accessible"}))
+        );
+    }
+
+    #[tokio::test]
+    async fn json_bodies_are_read_as_express_json_read_them() {
+        let (t, router) = site();
+        let send = |body: Vec<u8>, content_type: &'static str| {
+            let router = router.clone();
+            async move {
+                http::send(
+                    &router,
+                    request("POST", "/write")
+                        .header("content-type", content_type)
+                        .body(body),
+                )
+                .await
+            }
+        };
+        // A byte order mark is dropped.
+        let mut bom = vec![0xEF, 0xBB, 0xBF];
+        bom.extend_from_slice(br#"{"path":"bom.txt","content":"b"}"#);
+        assert_eq!(send(bom, "application/json").await.status, 200);
+        assert_eq!(std::fs::read_to_string(ws(&t).join("bom.txt")).unwrap(), "b");
+        // A lone surrogate is accepted, and written out as U+FFFD (what UTF-8 made of it in Node). (`|` stands for
+        // a backslash in these texts.)
+        let json_text = |s: &str| s.replace('|', "\\");
+        let lone = json_text(r#"{"path":"lone.txt","content":"a|ud800b|udc00c|ud83d|ude00"}"#).into_bytes();
+        assert_eq!(send(lone, "application/json; charset=utf-8").await.status, 200);
+        assert_eq!(
+            std::fs::read_to_string(ws(&t).join("lone.txt")).unwrap(),
+            "a\u{FFFD}b\u{FFFD}c\u{1F600}"
+        );
+        // An escaped backslash before a `u` is not an escape.
+        let not_escape = br#"{"path":"bs.txt","content":"\\ud800"}"#.to_vec();
+        assert_eq!(send(not_escape, "application/json").await.status, 200);
+        assert_eq!(std::fs::read_to_string(ws(&t).join("bs.txt")).unwrap(), "\\ud800");
+        // UTF-16 is read too; another charset is refused before the body is read.
+        let utf16: Vec<u8> = r#"{"path":"w.txt","content":"é"}"#.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+        assert_eq!(send(utf16, "application/json; charset=utf-16le").await.status, 200);
+        assert_eq!(std::fs::read_to_string(ws(&t).join("w.txt")).unwrap(), "é");
+        let latin = send(b"{}".to_vec(), "application/json; charset=latin1").await;
+        assert_eq!(
+            (latin.status, latin.json()),
+            (415, json!({"error": "unsupported charset \"LATIN1\""}))
+        );
+        // Only a byte order mark: an empty body.
+        let only_bom = send(vec![0xEF, 0xBB, 0xBF], "application/json").await;
+        assert_eq!(
+            (only_bom.status, only_bom.json()),
+            (400, json!({"error": "Path required"}))
+        );
+        let mended = |s: &str| mend_lone_surrogates(&json_text(s)).into_owned();
+        assert_eq!(mended(r#"["|ud800", "x"]"#), json_text(r#"["|uFFFD", "x"]"#));
+        assert_eq!(mended(r#"{"a":"|uDC00"}"#), json_text(r#"{"a":"|uFFFD"}"#));
+        assert_eq!(mended(r#"["|ud83d|ude00"]"#), json_text(r#"["|ud83d|ude00"]"#));
+        assert_eq!(mended(r#"["||ud800"]"#), json_text(r#"["||ud800"]"#));
+    }
+
+    #[tokio::test]
+    async fn file_errors_are_nodes() {
+        let (t, router) = site();
+        std::fs::create_dir_all(ws(&t).join("dir/inner")).unwrap();
+        std::fs::write(ws(&t).join("dir/inner/f"), "f").unwrap();
+        std::fs::write(ws(&t).join("file"), "f").unwrap();
+        let post = |path: &'static str, body: Value| {
+            let router = router.clone();
+            async move { http::post_json(&router, path, &body).await }
+        };
+        let w = |p: &str| ws(&t).join(p).display().to_string();
+        // Writing to a folder: EISDIR (Windows itself says "access denied").
+        let res = post("/write", json!({ "path": "dir", "content": "x" })).await;
+        assert_eq!(
+            (res.status, res.json()),
+            (
+                500,
+                json!({"error": format!("EISDIR: illegal operation on a directory, open '{}'", w("dir"))})
+            )
+        );
+        // A folder where a file is: EEXIST; a file on the way: ENOTDIR (what Node's own mkdirp said).
+        let res = post("/mkdir", json!({ "path": "file" })).await;
+        assert_eq!(
+            res.json(),
+            json!({"error": format!("EEXIST: file already exists, mkdir '{}'", w("file"))})
+        );
+        let res = post("/mkdir", json!({ "path": "file/sub" })).await;
+        let sub = ws(&t).join("file").join("sub");
+        assert_eq!(
+            res.json(),
+            json!({"error": format!("ENOTDIR: not a directory, mkdir '{}'", sub.display())})
+        );
+        let res = post("/write", json!({ "path": "file/x.txt", "content": "x" })).await;
+        assert_eq!(
+            res.json(),
+            json!({"error": format!("EEXIST: file already exists, mkdir '{}'", w("file"))})
+        );
+        // A NUL in the path, refused before any file call.
+        let res = http::get(&router, "/read?path=a%00b").await;
+        let nul = ws(&t).join("a\0b");
+        assert_eq!(res.status, 500);
+        assert_eq!(
+            res.json(),
+            json!({"error": crate::lib::safe_path::nul_in_path("path", &nul).unwrap()})
+        );
+        let res = post("/rename", json!({ "path": "file", "newName": "x\u{0}y" })).await;
+        // (sanitizeFilename turns the NUL into "_" first, so the rename goes through, as in Node.)
+        assert_eq!(res.json(), json!({"ok": true, "newPath": "x_y"}));
+        // A folder onto a folder: libuv's MoveFileExW refused (EPERM); std's rename would replace an empty one.
+        std::fs::create_dir_all(ws(&t).join("empty")).unwrap();
+        let res = post("/rename", json!({ "path": "dir", "newName": "empty" })).await;
+        if cfg!(windows) {
+            assert_eq!(
+                res.json(),
+                json!({"error": format!("EPERM: operation not permitted, rename '{}' -> '{}'", w("dir"), w("empty"))})
+            );
+            assert!(ws(&t).join("dir/inner/f").exists());
+        } else {
+            assert_eq!(res.json(), json!({"ok": true, "newPath": "empty"}));
+        }
     }
 
     #[tokio::test]

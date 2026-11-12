@@ -220,6 +220,12 @@ text identical, including the `[tag]` prefix: people grep their logs for it.
      it expected a relative path. Never `remove_dir_all`, write or copy to a path built from such a piece without
      that check, and test it with an absolute name and with `..`. Node's `path.join` also normalises its result
      (`a/../b`, doubled and trailing separators); Rust's does not, so compare paths as paths, not as text.
+   - **File names on Windows.** Node hands every path to Windows in the literal form (`\\\\?\\C:\\...`), so a name
+     means what it says. Rust's `std::fs` does not, and Windows then drops trailing dots and spaces from the last
+     name and turns `nul`, `con`, `com1` into devices: `data.db.` opens `data.db`, and `...` is the folder
+     itself. A check on the name as written then passes for a different file than the one opened (a reviewed
+     package let `delete "..."` remove the whole workspace). Every file operation on a path holding a name from
+     outside goes through `util::node_path::to_namespaced(&path)`, for the check and the operation alike.
    - `text.trim()` is `util::js::trim(text)`, not `str::trim`: JavaScript trims U+FEFF (a byte order mark) and
      not U+0085; Rust does the opposite. The same two characters differ in `\s`.
    - On Windows an environment variable's name matches whatever its case (`Path`). `Env` does that for `get`,
@@ -229,6 +235,13 @@ text identical, including the `[tag]` prefix: people grep their logs for it.
      `util::js::now_iso()`. `Date.now()` is `util::js::now_ms()`.
    - `setTimeout`/`setInterval` are tokio tasks; keep the handle so the matching `stopX` can end it. Use
      `tokio::time`, so tests can pause and advance time (`#[tokio::test(start_paused = true)]`).
+   - **A promise runs whether or not anyone waits for it; a future does not.** In Node, `const p = refresh()` starts
+     the work and it finishes even if every caller goes away. A Rust future does nothing until it is awaited and
+     stops where it is the moment it is dropped (a client disconnects, a `select!` takes the other branch, a
+     timeout fires). Work that must finish whoever is waiting (a refresh several callers share, a turn, a save,
+     anything Node started without `await`) runs in a task of its own (`tokio::spawn`), and callers wait on its
+     handle or a channel. A shared future (`futures::future::Shared`) is not enough: it only advances while some
+     caller polls it. Test it: start the work, drop the caller, and check the work still completes.
    - `AbortSignal` is `tokio_util::sync::CancellationToken`. `EventEmitter` is `tokio::sync::broadcast`. An async
      generator is a `Stream` (often simplest as a `tokio::sync::mpsc` receiver).
    - `child_process.spawn` is `tokio::process::Command`. Build its environment explicitly from the `Env`; never let
@@ -237,6 +250,13 @@ text identical, including the `[tag]` prefix: people grep their logs for it.
    Express router had (relative to where `server.js` mounted it), and handlers take `State(app): State<App>`.
    Middleware (`requireAuth`, `csrfProtect`) is applied where `server.js` applied it, in `server.rs`; a route file
    applies only what the Node route file applied itself.
+    **A handler stops when the client leaves.** Express ran a handler to its end even after the browser closed the
+    connection. axum drops the handler's future at its next `.await`. Whatever must happen regardless (removing a
+    temporary file, taking a request off a pending list, answering a worker, finishing a turn, saving) is done in a
+    task of its own (`tokio::spawn`) or by a guard that cleans up when dropped, never by code after an `.await` in
+    the handler. Test each such handler by dropping its future half way.
+    What Express did to every response is done once, in `server.rs` (package Z1), not in each route: the
+    `; charset=utf-8` on JSON, the weak `ETag` and the 304 answer, a trailing slash treated as none.
 10. **Async.** The server runs on tokio. Never block the runtime: file and process work that can take long goes
     through `tokio::fs`, `tokio::process` or `spawn_blocking`. Short synchronous database calls are fine.
 11. **Platforms.** The server runs on Linux in Docker and on Windows and macOS for local use, as the Node version

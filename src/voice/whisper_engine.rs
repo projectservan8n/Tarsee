@@ -14,7 +14,7 @@ use anyhow::{Context, anyhow};
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
 
-use super::tts_interface::{exec_file, os_tmpdir, program_command};
+use super::tts_interface::{exec_file, is_plain_name, os_tmpdir, program_command, terminate};
 use crate::app::App;
 use crate::config::Config;
 use crate::net::fetch::FetchRequest;
@@ -63,6 +63,9 @@ pub struct Transcript {
 /// ggml-base.en.bin).
 pub async fn transcribe(app: &App, audio: &[u8], model: Option<&str>) -> anyhow::Result<Transcript> {
     let model = model.filter(|m| !m.is_empty()).unwrap_or(DEFAULT_MODEL);
+    if !is_plain_name(model) {
+        return Err(anyhow!("Invalid model name: {model}"));
+    }
     let model_path = models_dir(app.config()).join(model);
 
     // Download the model if it is not there
@@ -74,7 +77,9 @@ pub async fn transcribe(app: &App, audio: &[u8], model: Option<&str>) -> anyhow:
     let tmp = os_tmpdir(app.env());
     let tmp_in = tmp.join(format!("whisper-in-{}.audio", now_ms()));
     let tmp_wav = tmp.join(format!("whisper-{}.wav", now_ms()));
-    std::fs::write(&tmp_in, audio).with_context(|| format!("could not write {}", tmp_in.display()))?;
+    tokio::fs::write(&tmp_in, audio)
+        .await
+        .with_context(|| format!("could not write {}", tmp_in.display()))?;
 
     // Convert to 16 kHz mono WAV with ffmpeg
     let converted = exec_file(
@@ -164,7 +169,7 @@ async fn run_whisper(
     let status = match tokio::time::timeout(Duration::from_secs(60), child.wait()).await {
         Ok(status) => status?,
         Err(_) => {
-            let _ = child.start_kill();
+            terminate(&mut child);
             child.wait().await?
         }
     };
@@ -201,6 +206,10 @@ async fn find_whisper_binary(app: &App) -> anyhow::Result<String> {
 
 /// Downloads a whisper.cpp GGML model (e.g. "ggml-base.en.bin") from Hugging Face.
 pub async fn download_model(app: &App, model_name: &str) -> anyhow::Result<()> {
+    // Node joined the name unchecked ("../x" wrote outside the folder); only a plain file name is taken here.
+    if !is_plain_name(model_name) {
+        return Err(anyhow!("Invalid model name: {model_name}"));
+    }
     let dir = models_dir(app.config());
     std::fs::create_dir_all(&dir)?;
 
@@ -217,7 +226,7 @@ pub async fn download_model(app: &App, model_name: &str) -> anyhow::Result<()> {
         return Err(anyhow!("Model download failed ({}): {url}", res.status));
     }
     let bytes = res.bytes().await?;
-    std::fs::write(&dest, &bytes)?;
+    tokio::fs::write(&dest, &bytes).await?;
     log::info!("[whisper] model saved: {}", dest.display());
     Ok(())
 }
@@ -228,6 +237,19 @@ mod tests {
     use crate::testkit::{Answer, test_app_with_env};
 
     // The Node code had no tests. These need no program; tests/it/voice.rs starts the stand-ins.
+
+    #[tokio::test]
+    async fn a_model_name_that_is_not_a_plain_name_is_refused_before_anything_is_written() {
+        let t = test_app_with_env([("PATH", "")]);
+        let outside = t.path().join("outside.bin");
+        for name in ["../outside.bin", &outside.to_string_lossy()] {
+            let err = download_model(&t, name).await.unwrap_err();
+            assert_eq!(err.to_string(), format!("Invalid model name: {name}"));
+            assert!(transcribe(&t, b"x", Some(name)).await.is_err());
+        }
+        assert!(!outside.exists());
+        assert!(t.fetch.calls().is_empty(), "nothing was fetched");
+    }
 
     #[tokio::test]
     async fn a_model_is_downloaded_from_hugging_face_into_the_models_folder() {

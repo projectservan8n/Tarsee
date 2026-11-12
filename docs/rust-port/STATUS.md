@@ -1,4 +1,4 @@
-# Tarsee in Rust: status ledger
+| E1 | reviewed | - | 55fa65f, fixes 96f4ac4 | 1573 | 128 of 128 cases. Review: faithful, 2 minor; fixes and two Node bug fixes confirmed by a second reviewer || I0 | reviewed | - | 7957ca6, fixes 38a6adb | 1562 | Interfaces and fakes; `INTERFACES.md`. Review: 1 important, 4 minor, all confirmed fixed by a second reviewer || B1 | reviewed | - | 1649cf7, fixes 9aa27aa | 1757 | 36 of 36 cases. Review: nothing critical or important in the package; 2 minor and two Node bugs fixed, confirmed by a second reviewer |# Tarsee in Rust: status ledger
 
 The lead keeps this file. It is the record that survives a lost context: trust it and `git log` over memory.
 Plan: `docs/rust-port/PLAN.md`. Spec: `docs/rust-port/DESIGN.md`.
@@ -11,18 +11,21 @@ agent checked it against the Node code and its findings are fixed or parked belo
 | Package | State | Slot | Commits | Tests after merge | Notes |
 |---|---|---|---|---|---|
 | F0 | merged | - | 9956468..fe6015b | 96 | Foundation, by the lead |
-| I0 | merged | - | 7957ca6 | 591 | Interfaces and fakes; `INTERFACES.md`. Every event shape checked against 152 events captured from the Node code |
-| A1 | running | s2 | | | |
-| A2 | merged | - | 74e0e4f | 728 | 106 of 109 cases; 3 wait for B1, G2, G3. `engine_env::ProviderEntry` to be built from A1 |
-| B1 | merged | - | 1649cf7 | 1020 | 36 of 36 cases. Stored secrets, sessions and CSRF tokens checked both ways against the Node code |
-| B2 | merged | - | 7094777 | 875 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases; the rest wait for R4, W1, S3, S4 |
-| C1 | merged | - | 9dd5372 | 213 | 32 of 32 cases |
+| I0 | reviewed | - | 7957ca6, fixes 38a6adb | 1562 | Interfaces and fakes; `INTERFACES.md`. Review: 1 important, 4 minor, all addressed |
+| A1 | merged, fixes running | - | 92f9739 | 1562 | 161 of 181 cases; 12 wait for later packages, 8 test Node-only mechanisms. Review: 1 important, 5 minor |
+| A3 | running | s2 | | | |
+| A5 | running | s10 | | | |
+| A2 | reviewed | - | 74e0e4f, fixes 82edd82 | 1723 | 107 of 109 cases (2 wait for G2, G3). Review: 3 important, 8 minor; all 11 confirmed fixed by a second reviewer; passes on Linux |
+| B1 | merged, fixed | - | 1649cf7, fixes 9aa27aa | 1757 | 36 of 36 cases. Review: nothing critical or important in the package; 2 minor, fixed; two Node bugs fixed. Second review running |
+| B2 | merged, fixes running | - | 7094777 | 875 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases. Review: 2 critical, 1 important, 6 minor |
+| C1 | merged, fixes running | - | 9dd5372 | 213 | 32 of 32 cases. Review: 1 critical, 4 important, 22 minor |
 | D1 | merged | - | 48bb9ff | 1180 | 59 of 68 cases; 4 wait for S3, 5 are browser tests (W1) |
-| V2 | running | s9 | | | |
-| T1 | running | s4 | | | |
-| W1a | running | s10 | | | The browser test harness and the unit tests of the browser files |
-| E1 | merged | - | 55fa65f | 395 | 128 of 128 cases |
-| V1 | merged | - | dbb96bb | 591 | 42 of 42 cases |
+| V2 | merged, fixes running | - | 7205d05 | 1723 | 69 of 71 cases. Review: 5 important, 13 minor |
+| S4 | running | s3 | | | |
+| T1 | merged | - | 40e4ee7 | 1886 | 102 of 107 cases (5 wait for S3, S4). Review running |
+| W1a | merged | - | fcfc2ba | 1328 | 116 of 141 cases of the browser files run in a real browser (`cargo test --test ui`); 25 wait for A1, A4, R2 |
+| E1 | reviewed | - | 55fa65f, fixes 96f4ac4 | 1573 | 128 of 128 cases. Review: faithful, 2 minor, addressed; two Node bugs fixed |
+| V1 | reviewed | - | dbb96bb, fixes 64fb45d | 1742 | 42 of 42 cases. Review: 2 critical, 3 important, 7 minor; all 12 confirmed fixed by a second reviewer |
 
 ## Rulings
 
@@ -67,6 +70,11 @@ Decisions the lead made on the owner's behalf, in order. Each says what it costs
     and a rewrite that knowingly ships a way to delete the workspace would be wrong — if wrong: each fix is one
     small, named change that can be reverted.
 
+13. Ruling: Edge's read-aloud voice speaks the protocol of `node-edge-tts` 1.2.12, not the 1.2.10 the Node version
+    pins — Microsoft's service now answers 403 to the old one (checked live: the Node version's Edge voice is
+    broken today), and the Rust engine got audio back with the new one — if wrong: none; the old protocol no
+    longer works for anyone.
+
 ## Pre-flight scan
 
 - Packages share no source files: every Rust file is owned by exactly one package (the stub in each file names it).
@@ -87,13 +95,14 @@ Decisions the lead made on the owner's behalf, in order. Each says what it costs
 
 ## Node bugs fixed in the Rust version
 
-To be fixed in each package's fix round (none is fixed yet):
+Fixed (in the list below, marked "done") or being fixed in each package's fix round:
 
 - B2 `routes/files`: `POST /api/files/delete` can delete the whole workspace when `TARSEE_WORKSPACE_DIR` is not
   written in its normal form (a trailing slash, `..`), because the root check compares text; `rename` has a prefix
   check without a path separator.
 - C1 `lib/skills-engine`: a skill name in install, uninstall and setup can reach outside the skills folders.
-- E1 `lib/discord-format`: the hard cut can make a 2001-unit piece when the line has emoji, which Discord refuses.
+- done: E1 `lib/discord-format`: a piece of a split message can no longer be over the limit when the line has emoji;
+  code fences in text with CRLF line endings are recognised (also in the Slack stream).
 - B1 `middleware/security`: a CSRF token with a signature of the wrong length answers 500 instead of 403.
 
 ## Node oddities ported as they are
@@ -101,6 +110,28 @@ To be fixed in each package's fix round (none is fixed yet):
 Listed in each package report. The ones that touch security, for the owner to decide (the unmerged PR #11 covers
 some): `http://[::ffff:127.0.0.1]/` passes the private-address check; `checkUrlSafety` lets loopback and private
 names through; a `write_file` call with a non-text file name skips the tool policy.
+
+## What the reviews found that applies everywhere
+
+Each became a rule in `DESIGN.md` and, where possible, a fix in the foundation:
+
+- Rust's `Path::join` replaces the base when the piece is absolute; Node's `path.join` stays under it. (C1: a skill
+  name could delete a folder outside the skills area.)
+- JavaScript's `trim` and `\s` differ from Rust's on U+0085 and U+FEFF. (V1: a damaged archive header accepted; the
+  foundation: an `ENCRYPTION_KEY` with a byte order mark derived a different key.)
+- On Windows an environment variable's name matches in any case. (V1: programs never found on the `Path`.)
+- Arithmetic on a number read from a file or the network must be checked. (V1: an overflow in the archive reader.)
+- `(?i)` in a Rust pattern folds a few characters JavaScript's `/i` does not.
+- `serde_json` parsed long decimals one unit off until `float_roundtrip` was switched on.
+- Windows rewrites a file name with a trailing dot or space, and names like `nul`, unless the path is handed over in
+  its literal form, which Node always did. (B2: `delete "..."` removed the whole workspace; V1: archive entries
+  merged.) `util::node_path::to_namespaced`.
+- A Node promise runs whether or not anyone waits for it; a Rust future stops when it is dropped. (A1: a shared
+  refresh stalled when its caller went away.)
+- An axum handler is dropped when the client disconnects; an Express handler ran to its end. (V2: a speech
+  request whose client left stayed pending and broke every later one; recordings were left in the temp folder.)
+- Tests that start real programs with time limits can miss them when the machine is busy. They are rerun alone
+  before a merge is refused, and are to be made robust in the cleanup.
 
 ## Linux
 
@@ -122,6 +153,10 @@ round. Clippy on the newer compiler there reports 3 warnings (a large error type
   and A2 wrote for themselves move to `util::js`.
 - Z1: `SessionStore::init(&app)?` and `AuditLog::init(&app)` at boot; serve with
   `into_make_service_with_connect_info::<SocketAddr>()` so `middleware::auth::client_ip` sees the socket address.
+- Z1: what Express did to every response, done once for the whole server: `application/json; charset=utf-8`, the
+  weak `ETag` with the 304 answer on a fresh GET, a trailing slash treated as none, and paths matched in any case
+  where that can be done without changing the case of a parameter. `/terminal` is wired after the sign-in check.
+  The settings store is stored in the App also as `Arc<dyn Settings>` (the voice routes read it that way).
 - R1: run a turn in a spawned task (a closed socket never cancels a turn) inside `scope_queued_turn`.
 - Cleanup: `Config::load` normalises the paths it joins, as Node's `path.join` did; one `express.json()` rule for
   request bodies; JSON responses say `application/json; charset=utf-8` as Express did.

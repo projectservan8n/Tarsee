@@ -210,7 +210,8 @@ impl Downloader for GuardedFetch {
             hop.follow_redirects = false;
             let res = self.fetch.fetch(hop).await.map_err(InstallError::from_fetch)?;
             let location = if (300..400).contains(&res.status) {
-                res.header("location").map(str::to_string)
+                // An empty Location is no redirect (it was falsy in the JavaScript): the 3xx answer is the answer.
+                res.header("location").filter(|l| !l.is_empty()).map(str::to_string)
             } else {
                 None
             };
@@ -286,6 +287,36 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut name: OsString = path.as_os_str().to_owned();
     name.push(suffix);
     PathBuf::from(name)
+}
+
+/// `fs.rmSync(path, { recursive: true, force: true })`: removes a file, or a folder with everything in it. Nothing
+/// there is not an error; anything else that stops the removal is (a file another program holds open, on Windows).
+pub fn remove_all(path: &Path) -> std::io::Result<()> {
+    let result = match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path),
+        Ok(_) => std::fs::remove_file(path),
+        Err(err) => Err(err),
+    };
+    match result {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+/// [`remove_all`] off the async runtime: for a big folder (a whole Python), which takes a while.
+pub async fn remove_all_async(path: &Path) -> std::io::Result<()> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || remove_all(&path))
+        .await
+        .map_err(std::io::Error::other)?
+}
+
+/// `fs.rmSync(file, { force: true })` for a single file: nothing there is not an error.
+pub fn remove_file_force(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
 }
 
 /// Writes `data` to a temporary name beside `file`, then renames it into place: a reader never sees half of it.
@@ -394,14 +425,45 @@ async fn matches(dest: &Path, spec: &DownloadFile<'_>) -> std::io::Result<bool> 
         && spec.git_sha1.as_ref().is_none_or(|want| *want == h.git_sha1))
 }
 
-/// `Number(text)` for a header: surrounding whitespace ignored, empty is 0, anything else not a number is NaN.
+/// `Number(header)`: no header (`null`) is 0.
 fn js_number(text: Option<&str>) -> f64 {
-    let Some(text) = text else { return 0.0 };
-    let text = text.trim();
+    text.map(js_number_text).unwrap_or(0.0)
+}
+
+static DECIMAL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^[+-]?(?:Infinity|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)$")
+        .expect("the number pattern")
+});
+
+/// `Number(text)` for text from outside (a header, a JSON string): JavaScript's whitespace around it ignored, empty
+/// is 0, a decimal number (or `Infinity`), or a whole number written `0x`, `0o` or `0b`; anything else is NaN.
+/// Rust's own parser would also take "inf" and "nan", and not "0x10".
+pub fn js_number_text(text: &str) -> f64 {
+    let text = crate::util::js::trim(text);
     if text.is_empty() {
         return 0.0;
     }
-    text.parse::<f64>().unwrap_or(f64::NAN)
+    for (prefix, radix) in [("0x", 16), ("0X", 16), ("0o", 8), ("0O", 8), ("0b", 2), ("0B", 2)] {
+        if let Some(digits) = text.strip_prefix(prefix) {
+            if digits.is_empty() {
+                return f64::NAN;
+            }
+            let mut n = 0.0;
+            for c in digits.chars() {
+                let Some(d) = c.to_digit(radix) else { return f64::NAN };
+                n = n * f64::from(radix) + f64::from(d);
+            }
+            return n;
+        }
+    }
+    if !DECIMAL.is_match(text) {
+        return f64::NAN;
+    }
+    match text.trim_start_matches(['+', '-']) {
+        "Infinity" if text.starts_with('-') => f64::NEG_INFINITY,
+        "Infinity" => f64::INFINITY,
+        _ => text.parse::<f64>().unwrap_or(f64::NAN),
+    }
 }
 
 /// Streams `url` to `dest`, then renames it into place. Checked first: the exact size when `size` is given (else
@@ -420,7 +482,7 @@ pub async fn download_file<D: Downloader + ?Sized>(
             spec.report(std::fs::metadata(&spec.dest)?.len() as i64);
             return Ok(Downloaded::Kept);
         }
-        let _ = std::fs::remove_file(&spec.dest);
+        remove_file_force(&spec.dest)?;
     }
     if let Some(parent) = spec.dest.parent() {
         std::fs::create_dir_all(parent)?;
@@ -440,7 +502,10 @@ pub async fn download_file<D: Downloader + ?Sized>(
             Err(err) => {
                 last_err = describe_fetch_error(&err, &spec.url);
                 spec.report(-(counted as i64));
-                let _ = tokio::fs::remove_file(&tmp).await;
+                match tokio::fs::remove_file(&tmp).await {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                    _ => {}
+                }
                 // A refused host or a missing file won't change on a retry.
                 if err.has_code("HOST_REFUSED") || err.http_status == Some(404) {
                     break;
@@ -659,7 +724,7 @@ pub fn acquire_lock(app: &App, root: &Path, what: Option<&str>) -> Result<Instal
                         "LOCKED",
                     ));
                 }
-                let _ = std::fs::remove_file(&file);
+                remove_file_force(&file)?;
             }
             Err(err) => return Err(err.into()),
         }
@@ -1254,6 +1319,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn numbers_read_as_javascript_s_number_reads_them() {
+        for (text, want) in [
+            ("", 0.0),
+            ("  42 ", 42.0),
+            ("\u{feff}7", 7.0),
+            ("1e3", 1000.0),
+            (".5", 0.5),
+            ("5.", 5.0),
+            ("+3", 3.0),
+            ("-2", -2.0),
+            ("0x1F", 31.0),
+            ("0b101", 5.0),
+            ("0o17", 15.0),
+            ("Infinity", f64::INFINITY),
+            ("-Infinity", f64::NEG_INFINITY),
+        ] {
+            assert_eq!(js_number_text(text), want, "{text:?}");
+        }
+        for text in [
+            "inf", "nan", "infinity", "1_000", "12px", "0x", "-0x10", "\u{85}1", "1 2",
+        ] {
+            assert!(js_number_text(text).is_nan(), "{text:?}");
+        }
+        assert_eq!(js_number(None), 0.0, "Number(null)");
+    }
+
+    #[tokio::test]
     async fn sha256_file_is_the_files_sha256() {
         let dir = tmp_dir();
         let file = dir.path().join("f");
@@ -1261,6 +1353,45 @@ mod tests {
         assert_eq!(sha256_file(&file).await.unwrap(), sha(b"hello\n"));
         assert_eq!(host_of("https://huggingface.co:8443/x"), "huggingface.co:8443");
         assert_eq!(host_of("nope"), "an unknown host");
+    }
+
+    // Fix round 1.
+
+    #[tokio::test]
+    async fn a_redirect_with_an_empty_location_is_the_answer_itself() {
+        let dir = tmp_dir();
+        let host = FakeDownloadHost::new([("https://huggingface.co/x", Route::redirect(""))]);
+        let get = guarded_fetch(HF, host.clone());
+        let res = get.get(FetchRequest::get("https://huggingface.co/x")).await.unwrap();
+        assert_eq!(res.status, 302);
+        let err = download_file(
+            &get,
+            DownloadFile::new("https://huggingface.co/x", dir.path().join("x")).retry_delay_ms(1),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.message, "huggingface.co answered HTTP 302 for x");
+        assert_eq!(
+            host.hits("https://huggingface.co/x"),
+            4,
+            "one request a try, three tries, never followed"
+        );
+    }
+
+    #[test]
+    fn remove_all_takes_files_and_folders_and_nothing_is_no_error() {
+        let dir = tmp_dir();
+        let tree = dir.path().join("tree");
+        std::fs::create_dir_all(tree.join("a").join("b")).unwrap();
+        std::fs::write(tree.join("a").join("b").join("f"), "x").unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, "x").unwrap();
+        remove_all(&tree).unwrap();
+        remove_all(&file).unwrap();
+        remove_all(&dir.path().join("never")).unwrap();
+        remove_file_force(&dir.path().join("never")).unwrap();
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        assert!(remove_file_force(dir.path()).is_err(), "a folder is not a file");
     }
 
     #[test]

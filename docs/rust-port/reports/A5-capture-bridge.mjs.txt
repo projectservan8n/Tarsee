@@ -1,0 +1,208 @@
+// Captures what the Node Local AI bridge's pure functions (src/ai/local-bridge.js) answer for a set of inputs, as
+// JSON, for the Rust tests of src/ai/local_bridge.rs (src/ai/local_bridge/node-cases.json).
+// node A5-capture-bridge.mjs <main checkout> <out file>
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const [root, outFile] = process.argv.slice(2);
+const lb = await import(pathToFileURL(path.join(root, "src/ai/local-bridge.js")).href);
+
+const fn = (name, extra = {}) => ({ type: "function", name, description: `${name} does a thing`, strict: false, parameters: { type: "object", properties: {} }, ...extra });
+const NS = { type: "namespace", name: "mcp__tarsee", description: "Tarsee's tools", tools: [fn("tarsee_calculator"), fn("tarsee_datetime")] };
+const long = "x".repeat(80);
+
+const names = (n) => ({
+  byFlat: [...n.byFlat.entries()].map(([flat, orig]) => [flat, orig]),
+  byPair: [...n.byPair.entries()],
+});
+
+// --- flatName ---
+const flatName = [];
+for (const [ns, name] of [
+  ["mcp__tarsee", "tarsee_calculator"], ["mcp__tarsee__", "tarsee_calculator"], ["mcp__my.server", "do it"], ["", "x"], ["a__", "b"],
+  ["a", "b"], ["mcp__tarsee", `${long}_a`], ["mcp__tarsee", `${long}_b`], ["mcp__tärsee", "🐒tool"], ["ns", ""], ["", ""],
+  ["__", "x"], ["x".repeat(70), "y"], ["mcp__tarsee", "x".repeat(59)], ["mcp__tarsee", "x".repeat(51)], ["mcp__tarsee", "x".repeat(52)],
+]) {
+  const taken = new Set();
+  const seq = [];
+  for (let i = 0; i < 6; i++) { const f = lb.flatName(ns, name, taken); seq.push(f); taken.add(f); }
+  flatName.push({ namespace: ns, name, plain: lb.flatName(ns, name), seq });
+}
+
+// --- flattenTools ---
+const toolSets = [
+  [fn("exec_command"), NS, { type: "custom", name: "apply_patch", format: { type: "grammar" } }, { type: "web_search" }],
+  [fn("mcp__tarsee__tarsee_calculator"), NS],
+  [{ type: "namespace", name: "a__", tools: [fn("b")] }, { type: "namespace", name: "a", tools: [fn("b")] }],
+  [{ type: "namespace", tools: [fn("x")] }],
+  [{ type: "namespace", name: 5, tools: [fn("x")] }],
+  [{ type: "namespace", name: null, tools: [fn("x")] }],
+  [{ type: "namespace", name: "ns", tools: [{ type: "custom", name: "c" }, { name: 5 }, null, 7, "s", { type: "", name: "blank" }, { name: "untyped" }, fn("ok"), fn("ok"), { type: "function" }] }],
+  [{ type: "namespace", name: "ns", tools: "nope" }, { type: "namespace", name: "ns2" }, { type: "function" }, { type: "function", name: 3 }],
+  null, {}, "x", 5, [],
+  [null, 5, "function", { type: "namespace", name: "n", tools: [{ name: "t", description: "no type" }] }],
+  [{ type: "namespace", name: "x".repeat(70), tools: [fn("a"), fn("b")] }, fn(`${"x".repeat(70)}__a`)],
+  [fn("dup"), fn("dup"), { type: "namespace", name: "d", tools: [fn("up")] }, fn("d__up")],
+  [{ type: "namespace", name: "mcp__tärsee", tools: [fn("🐒")] }],
+];
+const flattenTools = toolSets.map((tools) => {
+  const r = lb.flattenTools(tools);
+  return { input: tools, tools: r.tools, names: names(r.names) };
+});
+
+// --- rewriteRequest ---
+const msg = (role, text, extra = {}) => ({ type: "message", role, content: [{ type: "input_text", text }], ...extra });
+const bodies = [
+  null, [], "x", 5, true, {},
+  { model: "spark-4b", stream: true, tool_choice: "auto", tools: [fn("exec_command"), NS, { type: "custom", name: "apply_patch", format: { type: "grammar" } }, { type: "web_search" }], input: [msg("user", "hi")] },
+  { tools: [NS], input: [
+    msg("user", "work it out"),
+    { type: "function_call", call_id: "c1", namespace: "mcp__tarsee", name: "tarsee_calculator", arguments: "{\"expression\":\"6*7\"}" },
+    { type: "function_call_output", call_id: "c1", output: "6*7 = 42" },
+    { type: "tool_search_call", call_id: "s1", arguments: { query: "x" } },
+    { type: "tool_search_output", call_id: "s1", tools: [] },
+    { type: "custom_tool_call", call_id: "p1", name: "apply_patch", input: "*** Begin Patch" },
+    { type: "custom_tool_call_output", call_id: "p1", output: "done" },
+    { type: "function_call_output", call_id: "lost", output: "no call for this one" },
+    { type: "additional_tools", tools: [] },
+    { type: "message", role: "assistant", content: [{ type: "output_text", text: "42" }] },
+  ] },
+  { tools: [], input: [{ type: "function_call", call_id: "c", namespace: "mcp__tarsee", name: "tarsee_remember", arguments: "{}" }, { type: "function_call_output", call_id: "c", output: "ok" }] },
+  { input: [msg("user", "q"), { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "thinking" }], encrypted_content: "gAAAA" }, { type: "reasoning", id: "rs_2", summary: [], content: [{ type: "reasoning_text", text: "kept" }] }] },
+  { instructions: "Base instructions.", input: [
+    msg("developer", "Permissions."),
+    { type: "message", role: "developer", content: [{ type: "input_text", text: "You are Tarsee." }, { type: "input_text", text: "Tools: calculator." }] },
+    msg("user", "hello"), msg("developer", "The model changed."), { role: "system", content: "A late system note." },
+  ] },
+  { input: [msg("developer", "only")] },
+  { instructions: "Inst.", input: [msg("developer", "only")] },
+  { instructions: "   ", input: [msg("developer", "one"), msg("user", "u")] },
+  { instructions: "Inst.", input: [msg("user", "no lead")] },
+  { instructions: 5, input: [msg("developer", "a"), msg("system", "b")] },
+  { input: [{ role: "developer", content: "plain words" }, { role: "system", content: [{ type: "input_image", image_url: "data:x" }, { type: "input_text", text: "with a picture" }, null, "part", 0] }, msg("user", "u")] },
+  { input: [{ type: "message", role: "assistant", content: [{ type: "refusal", refusal: "I can't." }] }] },
+  { input: [{ type: "message", role: "assistant", content: [{ type: "refusal", text: "fallback" }, { type: "refusal" }, { type: "output_text", text: "fine" }, null] }] },
+  { input: [null, 5, "x", [], { type: 7, call_id: "n" }, { type: "function_call", call_id: "n", name: "f" }, { call_id: "n2" }, { type: "function_call_output", call_id: "n2" }] },
+  { input: [{ type: "function_call", name: "f", arguments: "{}" }, { type: "function_call_output", output: "no id, paired by none" }, { type: "function_call_output", call_id: "x", output: "orphan" }] },
+  { input: [{ type: "function_call", call_id: 5, name: "f" }, { type: "function_call_output", call_id: 5, output: "numeric" }, { type: "function_call_output", call_id: "5", output: "text five" }] },
+  { input: [{ type: "function_call", call_id: "z", namespace: "mcp__tarsee", arguments: "{}" }, { type: "function_call_output", call_id: "z", output: "" }] },
+  { tools: [NS], tool_choice: { type: "function", namespace: "mcp__tarsee", name: "tarsee_calculator" }, input: [] },
+  { tools: [NS], tool_choice: { namespace: "mcp__tarsee", name: "tarsee_datetime", extra: 1 } },
+  { tools: [NS], tool_choice: { namespace: "", name: "x" } },
+  { tools: [NS], tool_choice: { namespace: "ns", name: 5 } },
+  { tools: [NS], tool_choice: ["x"] },
+  { tools: [NS], tool_choice: { namespace: "other", name: "thing" } },
+  { tools: "not a list", input: "not a list either", instructions: "kept" },
+  { input: [{ type: "message", content: "typed, no role" }, { role: "", content: "empty role" }, { type: "", role: "developer", content: "untyped developer" }, { type: "", role: "developer", content: "second" }] },
+  { instructions: "Inst.", input: [{ role: "developer", content: [{ type: "input_text", text: "  " }, { type: "input_text", text: "" }, { text: "no type" }, { text: 5 }] }] },
+  { model: "m", input: [], metadata: { a: 1.5, b: 1e21, c: 12345678901234567890, d: -0, e: 1.0, f: " \u0007\u001f/" } },
+];
+const rewriteRequest = bodies.map((input) => {
+  const r = lb.rewriteRequest(input);
+  return { input, body: r.body === undefined ? null : r.body, names: names(r.names) };
+});
+
+// --- restoreEvent ---
+const call = (name, extra = {}) => ({ type: "function_call", id: "fc_1", call_id: "call_1", name, arguments: "{}", status: "completed", ...extra });
+const toolsFor = [
+  [NS, fn("exec_command")],
+  [],
+  [{ type: "namespace", tools: [fn("anon")] }],
+];
+const events = [
+  { type: "response.output_item.added", output_index: 0, item: call("mcp__tarsee__tarsee_datetime") },
+  { type: "response.output_item.done", output_index: 0, item: call("mcp__tarsee__tarsee_calculator", { namespace: "stale" }) },
+  { type: "response.output_item.done", item: call("exec_command") },
+  { type: "response.output_item.done", item: { type: "message", content: [] } },
+  { type: "response.function_call_arguments.done", item_id: "fc_1", name: "mcp__tarsee__tarsee_datetime", arguments: "{}" },
+  { type: "response.custom_tool_call", name: "mcp__tarsee__tarsee_datetime" },
+  { type: "response.function_call_arguments.done", name: "unknown_flat" },
+  { type: "response.completed", response: { id: "r", output: [call("mcp__tarsee__tarsee_calculator"), { type: "message", content: [] }] } },
+  { type: "response.completed", response: { id: "r", output: [{ type: "message", content: [] }] } },
+  { id: "r", object: "response", output: [call("mcp__tarsee__tarsee_calculator")] },
+  { type: "response.output_text.delta", delta: "hi" },
+  { type: "response.completed", response: { response: { output: [call("mcp__tarsee__tarsee_datetime")] } } },
+  { item: call("anon"), output: [call("anon")], name: "anon", type: "function_call_done" },
+  [call("mcp__tarsee__tarsee_calculator")],
+  { item: 0, output: "x", response: "y", name: 5 },
+  { type: 7, name: "mcp__tarsee__tarsee_datetime" },
+];
+const restoreEvent = [];
+for (const [t, tools] of toolsFor.entries()) {
+  const { names: n } = lb.flattenTools(tools);
+  for (const ev of events) {
+    const r = lb.restoreEvent(ev, n);
+    restoreEvent.push({ tools: t, event: ev, same: r === ev, out: r });
+  }
+}
+
+// --- the SSE rewriter ---
+const frame = (e, named = true) => `${named ? `event: ${e.type}\n` : ""}data: ${JSON.stringify(e)}\n\n`;
+const created = "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_9\"}}\n\n";
+const itemDone = `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: call("mcp__tarsee__tarsee_calculator") })}\r\n\r\n`;
+const streams = [
+  [created.slice(0, 20), created.slice(20) + itemDone.slice(0, 31), itemDone.slice(31, 70), itemDone.slice(70)],
+  ["event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_5\"}}\n\n", "data: {\"error\":{\"code\":500,\"message\":\"the model crashed\",\"type\":\"server_error\"}}\n\n"],
+  ["data: {\"error\":{\"code\":400,\"message\":\"request (40000 tokens) exceeds the available context size (32768 tokens), try increasing it\",\"type\":\"exceed_context_size_error\"}}\n\n"],
+  ["data: [DONE]\n\n"],
+  ["data: {\"error\":\"plain words\"}\n\n"],
+  ["data: {\"error\":{\"code\":503}}\n\n"],
+  ["data: {\"error\":{\"message\":null,\"code\":\"x\"}}\n\n"],
+  ["data: {\"error\":5}\n\n", "data: {\"error\":true,\"other\":1}\n\n"],
+  ["data: {\"error\":{\"type\":null,\"code\":42,\"message\":\"maximum context length is 8192\"}}\n\n"],
+  ["data: {\"error\":[1,2]}\n\n"],
+  ["event: error\ndata: {\"error\":{\"message\":\"named, so kept\"}}\n\n", "data: {\"type\":\"x\",\"error\":{\"message\":\"typed, so kept\"}}\n\n"],
+  ["data: {\"response\":{\"id\":7}}\n\n", "data: {\"error\":{\"message\":\"numeric id\"}}\n\n"],
+  ["data: {\"response\":{\"id\":\"\"}}\n\ndata: {\"response\":{\"id\":\"second\"}}\n\ndata: {\"error\":\"after\"}\n\n"],
+  [": keep-alive\n\n", "   \n\n", "\n\n\n\n", "event: ping\n\n", "id: 3\nretry: 100\ndata: {\"type\":\"x\"}\n\n"],
+  [frame({ type: "response.output_item.added", output_index: 0, item: call("mcp__tarsee__tarsee_datetime") }, false)],
+  [frame({ type: "response.output_item.added", output_index: 0, item: call("mcp__tarsee__tarsee_datetime") })],
+  ["event:   spaced  \ndata:{\"type\":\"response.output_item.done\",\"item\":" + JSON.stringify(call("mcp__tarsee__tarsee_calculator")) + "}\n\n"],
+  ["event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\n", "data: \"item\":" + JSON.stringify(call("mcp__tarsee__tarsee_calculator")) + "}\n\n"],
+  ["event: \ndata: {\"type\":\"response.output_item.done\",\"item\":" + JSON.stringify(call("mcp__tarsee__tarsee_calculator")) + "}\n\n"],
+  ["data: {\"type\":\"response.output_text.delta\",\"delta\":\"a\"}\r\n\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"b\"}\n\r\n"],
+  ["data: {\"type\":\"x\"}\n\ndata: {\"error\":\"left at the end\"}"],
+  ["data: not json\n\n", "data: \"just a string\"\n\n", "data: 42\n\n", "data: null\n\n", "data: []\n\n"],
+  ["data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"temperature\":1.0,\"top_p\":1.0,\"output\":[" + JSON.stringify(call("mcp__tarsee__tarsee_calculator")) + "]}}\n\n"],
+  ["data: {\"type\":\"x\"}\r", "\n", "\r", "\ndata: {\"type\":\"y\"}\n", "\n"],
+  ["event: a\r\nevent: b\r\ndata: {\"type\":\"response.function_call_arguments.done\",\"name\":\"mcp__tarsee__tarsee_datetime\"}\r\n\r\n"],
+  ["data: {\"type\":\"x\",\"text\":\"Grüße 🐒\"}\n\ndata: {\"error\":{\"message\":\"Grüße 🐒 fail\"}}\n\n"],
+];
+const sse = [];
+for (const [t, tools] of toolsFor.entries()) {
+  const { names: n } = lb.flattenTools(tools);
+  for (const pushes of streams) {
+    const rw = lb.createSseRewriter(n);
+    const outs = pushes.map((p) => rw.push(p));
+    outs.push(rw.end());
+    sse.push({ tools: t, pushes, outs });
+  }
+}
+
+// --- redactBridgeUrls ---
+const id = "abcdefghijklmnopqrstuv";
+const redact = [
+  `error sending request for url (http://127.0.0.1:5555/t/${id}/v1/responses)`,
+  "http://localhost:9931/v1/responses",
+  `http://127.0.0.1:1/t/${id}`, `x 127.0.0.1:1/t/${id}-`, `127.0.0.1:1/t/${id}--x`, `127.0.0.1:1/t/${"a".repeat(130)}`,
+  `127.0.0.1:1/t/${"a".repeat(128)}/x`, `127.0.0.1:1/t/${"a".repeat(127)}-a/x`, `127.0.0.1:1/t/${"a".repeat(15)}`,
+  `127.0.0.1:1/t/${id}é`, `127.0.0.1:1/t/${id}.`, `127.0.0.1:2/t/${id}/v1 and 127.0.0.1:3/t/${id}x/v1`,
+  `1127.0.0.1:44/t/${id}`, `127.0.0.1:/t/${id}`, `127.0.0.1:127.0.0.1:5/t/${id}`, `127.0.0.1:5/t/abc127.0.0.1:6/t/${id}`,
+  `127.0.0.1:1/t/${"-".repeat(20)}a`, `127.0.0.1:1/t/${"-".repeat(20)}`, `127.0.0.1:1/t/${"-".repeat(16)}/`, "", "nothing here",
+];
+const redactOut = redact.map((text) => [text, lb.redactBridgeUrls(text)]);
+
+// --- request bodies as the server re-writes them: JSON.stringify(rewriteRequest(JSON.parse(text)).body) ---
+const texts = [
+  "{\"model\":\"m\",\"temperature\":1.0,\"top_p\":0.95,\"seed\":12345678901234567890,\"tiny\":1e-7,\"neg\":-0.0,\"exp\":2E+3,\"huge\":1e300}",
+  "{\"s\":\"\\u2028 \\u0007 \\u001F \\/ \\\\ \\\" é 🐒\",\"arr\":[1.50,{\"a\":null}],\"dup\":1,\"dup\":2}",
+  "  [1, 2.0, \"x\"]  ", "\"just text\"", "null",
+  "{\"input\":[{\"type\":\"message\",\"role\":\"developer\",\"content\":\"a\"},{\"type\":\"message\",\"role\":\"developer\",\"content\":\"b\"}],\"n\":100.000}",
+  "{\"tools\":[{\"type\":\"namespace\",\"name\":\"mcp__tarsee\",\"tools\":[{\"type\":\"function\",\"name\":\"t\",\"parameters\":{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"number\",\"default\":0.5e1}}}}]}]}",
+];
+const restringify = texts.map((text) => [text, JSON.stringify(lb.rewriteRequest(JSON.parse(text)).body)]);
+
+const all = { toolSets: toolsFor, flatName, flattenTools, rewriteRequest, restoreEvent, sse, redact: redactOut, restringify };
+// One case a line, so a change shows as a change to that case.
+fs.writeFileSync(outFile, `{\n${Object.entries(all).map(([k, v]) => `${JSON.stringify(k)}: [\n${v.map((x) => JSON.stringify(x)).join(",\n")}\n]`).join(",\n")}\n}\n`);

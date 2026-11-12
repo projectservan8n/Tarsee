@@ -30,9 +30,8 @@ use serde_json::{Map, Value, json};
 use tokio::sync::Mutex as Queue;
 use tokio::task::AbortHandle;
 
-use crate::lib::discord_format::js_text::trim;
 use crate::lib::slack_format::{SLACK_MAX_MARKDOWN, close_fence, open_fence};
-use crate::util::js::{now_ms, utf16_len};
+use crate::util::js::{now_ms, trim, utf16_len};
 
 /// An error from a Slack Web API call. `code` is Slack's own error code when Slack answered `{ ok: false, error }`
 /// ("ratelimited", "feature_disabled"...), else `None` (the connection failed, the answer was not JSON...).
@@ -67,10 +66,19 @@ impl SlackApiError {
     }
 }
 
-/// Slack's error code on an error a Slack call returned ("ratelimited", "feature_disabled"...), or `None`: for a
-/// [`SlackApiError`] (or one wrapped as the error's own source), its [`code`](SlackApiError::code).
+/// Slack's error code on an error a Slack call returned ("ratelimited", "feature_disabled"...), or `None`: the
+/// [`code`](SlackApiError::code) of the first [`SlackApiError`] in the error's chain (the error itself, then each
+/// `source()`), so context added around it (`anyhow`'s `.context(...)`, an error type that keeps it as its source)
+/// does not hide the code. Pass an `anyhow::Error` as `err.as_ref()`.
 pub fn slack_error_code<'a>(err: &'a (dyn std::error::Error + 'static)) -> Option<&'a str> {
-    err.downcast_ref::<SlackApiError>().and_then(SlackApiError::code)
+    let mut current = Some(err);
+    while let Some(e) = current {
+        if let Some(slack) = e.downcast_ref::<SlackApiError>() {
+            return slack.code();
+        }
+        current = e.source();
+    }
+    None
 }
 
 /// The Slack Web API calls a reply stream makes, each with its arguments and answer as JSON (Slack's field names).

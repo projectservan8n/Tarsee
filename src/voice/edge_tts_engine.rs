@@ -1,22 +1,24 @@
 //! Port of `src/voice/edge-tts-engine.js`: Microsoft's free text-to-speech service. No API key needed. No rate
 //! limits. Good quality.
 //!
-//! The Node version used the npm library `node-edge-tts` (1.2.10), which speaks Edge's read-aloud WebSocket
-//! protocol. That protocol is written out here, as the library spoke it:
+//! The Node version used the npm library `node-edge-tts`, which speaks Edge's read-aloud WebSocket protocol. That
+//! protocol is written out here. Tarsee's Node code pinned 1.2.10; by November 2026 the service answered that
+//! version's address with HTTP 403 (checked by hand), and the library's 1.2.12 moved to a new address and a new
+//! clock token. This port speaks 1.2.12's protocol, the one the service answers:
 //!
-//!   1. Connect to `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1` with the query
-//!      `TrustedClientToken=<token>&Sec-MS-GEC=<clock token>&Sec-MS-GEC-Version=1-<Chromium version>`, the Edge
-//!      extension's Origin and a desktop Edge User-Agent ([`generate_sec_ms_gec_token`] says how the clock token is
-//!      made).
+//!   1. Connect to `wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1` with the query
+//!      `Ocp-Apim-Subscription-Key=<token>&Sec-MS-GEC=<clock token>&Sec-MS-GEC-Version=2-<Chromium version>`, the
+//!      Edge extension's Origin and a desktop Edge User-Agent ([`generate_sec_ms_gec_token_v2`] says how the clock
+//!      token is made).
 //!   2. Send the `speech.config` text message (the audio format), then the `ssml` message (the text, escaped, in a
 //!      `<speak>` with the voice).
-//!   3. Every binary message carries audio after its `Path:audio\r\n` header; a text message with `Path:turn.end`
-//!      ends the turn. Anything else (`turn.start`, `audio.metadata`) is ignored.
+//!   3. Every binary message is a header (its length in the first two bytes, big-endian) and then audio; a text
+//!      message with `Path:turn.end` ends the turn. Anything else (`turn.start`, `audio.metadata`) is ignored. The
+//!      connection closing before the turn ends is an error at once.
 //!
-//! The library gave a turn 10 seconds once connected; the engine gives each attempt 30 seconds in all and tries
-//! three times.
+//! The library gave a request 10 seconds, the connection included; the engine gives each attempt 30 seconds in all
+//! and tries three times.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -39,14 +41,14 @@ const TTS_TIMEOUT: Duration = Duration::from_secs(30);
 /// The voice used when none is set.
 pub const DEFAULT_EDGE_VOICE: &str = "en-US-AndrewMultilingualNeural";
 
-/// Where Edge's read-aloud service listens.
-pub const EDGE_TTS_ENDPOINT: &str = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1";
+/// Where Edge's read-aloud service listens (node-edge-tts 1.2.12).
+pub const EDGE_TTS_ENDPOINT: &str = "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1";
 
 /// The Edge (Chromium) version the requests claim to come from.
 pub const CHROMIUM_FULL_VERSION: &str = "143.0.3650.75";
 /// The read-aloud extension's own token.
 pub const TRUSTED_CLIENT_TOKEN: &str = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
-const WINDOWS_FILE_TIME_EPOCH: u64 = 11_644_473_600;
+const WINDOWS_FILE_TIME_EPOCH: i128 = 11_644_473_600;
 const ORIGIN: &str = "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold";
 
 /// The library's settings Tarsee never changed: the language tag of the `<speak>`, the audio format and the
@@ -54,17 +56,107 @@ const ORIGIN: &str = "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold";
 const LANG: &str = "zh-CN";
 const OUTPUT_FORMAT: &str = "audio-24khz-48kbitrate-mono-mp3";
 const PROSODY: &str = "default";
-/// The library's own limit on one turn, counted from the moment the connection is open.
+/// The library's own limit on one request, the connection included.
 const TURN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The `Sec-MS-GEC` token for the moment `now_ms`: the time in Windows file-time ticks (100 ns since 1601), rounded
-/// down to the 5 minutes, followed by the trusted client token, hashed with sha256, in upper-case hex.
-pub fn generate_sec_ms_gec_token(now_ms: i64) -> String {
-    let seconds = (now_ms as f64 / 1000.0 + WINDOWS_FILE_TIME_EPOCH as f64).floor() as u128;
-    let ticks = seconds * 10_000_000;
-    let rounded = ticks - (ticks % 3_000_000_000);
-    let digest = Sha256::digest(format!("{rounded}{TRUSTED_CLIENT_TOKEN}").as_bytes());
-    hex::encode_upper(digest)
+/// What the second token is salted with (the library keeps it in base64).
+const TOKEN_PREFIX: &[u8] = b"Copyright (C) Microsoft Corporation. All rights reserved.";
+
+/// The multipliers and offsets of the second token's 64-bit checksum.
+const COEFFICIENTS: [(u32, u32); 14] = [
+    (0xE82E91B1, 0xB32700D0),
+    (0x44DE24C6, 0x88DFF51D),
+    (0x3BEB65BC, 0x29514038),
+    (0xC89C5933, 0xB328CBDF),
+    (0x8D1EC211, 0xD405B4D5),
+    (0x314EF5D5, 0x26E55F3C),
+    (0xE92491B1, 0x607801C6),
+    (0xF0A5B9D5, 0x82B2C1FB),
+    (0x06064CF3, 0xFA51A3DA),
+    (0xDA79FA60, 0x207CC464),
+    (0xBED20560, 0x3C3C74F3),
+    (0x89F9C9F8, 0xD2D14B61),
+    (0x35FA38C6, 0xBB04A2C1),
+    (0xCB49E3C6, 0xC5626167),
+];
+
+/// `Math.imul`, as bits.
+fn mul(a: u32, b: u32) -> u32 {
+    a.wrapping_mul(b)
+}
+
+fn rol16(x: u32) -> u32 {
+    x.rotate_left(16)
+}
+
+fn le32(bytes: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+}
+
+/// The library's `cs64Digest`: a 64-bit checksum of `data`, keyed by its sha256. The JavaScript worked in 32-bit
+/// integers (`Math.imul`, `>>> 0`); every sum here wraps the same way.
+fn cs64_digest(data: &[u8], sha: &[u8]) -> [u8; 8] {
+    let key_a = le32(sha, 0) | 1;
+    let key_b = le32(sha, 4) | 1;
+    let factors = [mul(key_a, 0x82893933), mul(key_b, 0x82893933)];
+    let mut terms: Vec<u32> = COEFFICIENTS
+        .iter()
+        .enumerate()
+        .map(|(i, (coefficient, _))| mul(*coefficient, factors[i % 2]))
+        .collect();
+    let mut offsets: Vec<u32> = COEFFICIENTS.iter().map(|(_, offset)| *offset).collect();
+    let mut padded = vec![0u8; (data.len() + 1).div_ceil(8) * 8];
+    padded[1..=data.len()].copy_from_slice(data);
+    for i in 0..padded.len() / 4 {
+        let word = le32(&padded, i * 4);
+        let even = i % 2 == 0;
+        let mut term = mul(word, if even { key_a } else { key_b });
+        let mut offset = mul(rol16(word), if even { 0xEF0569FB } else { 0xC31713DB });
+        if i == 0 {
+            term = term.wrapping_add(mul(0xF2F90B1A, factors[0]));
+            offset = offset.wrapping_add(0x0B1A0000);
+        }
+        terms.push(term);
+        offsets.push(offset);
+    }
+    let (mut swap_acc, mut swap_last, mut state, mut acc) = (0u32, 0u32, 0u32, 0u32);
+    for i in (0..terms.len()).step_by(2) {
+        let (x, y) = (terms[i], terms[i + 1]);
+        let q = mul(rol16(offsets[i].wrapping_add(x)), 0x76F50F34);
+        swap_acc = swap_acc.wrapping_add(mul(rol16(q), 0xC3EFEA97).wrapping_add(q));
+        let q = mul(rol16(offsets[i + 1].wrapping_add(y)), 0x1881CE3C);
+        swap_last = mul(rol16(q), 0x35BD1EC9).wrapping_add(q);
+        swap_acc = swap_acc.wrapping_add(swap_last);
+        state = mul(state, key_a).wrapping_add(x);
+        for k in [0xCF98B111, 0x87085B9F, 0x12CEB96D, 0x257E1D83] {
+            state = mul(rol16(state), k);
+        }
+        acc = acc.wrapping_add(state);
+        let mut t = mul(state, key_b).wrapping_add(y);
+        t = mul(rol16(t), 0xA27416F5);
+        t = mul(rol16(t), 0xD38396FF);
+        state = mul(rol16(mul(rol16(t), 0x7C932B89)), 0xBFA49F69);
+        acc = acc.wrapping_add(state);
+    }
+    let mut out = [0u8; 8];
+    out[..4].copy_from_slice(&(swap_last ^ state).to_le_bytes());
+    out[4..].copy_from_slice(&(swap_acc ^ acc).to_le_bytes());
+    out
+}
+
+/// The `Sec-MS-GEC` token (version 2) for the moment `unix_seconds`: the time in Windows file-time seconds rounded
+/// down to the 5 minutes, as ticks (100 ns), followed by the trusted client token; its sha256 (salted with
+/// [`TOKEN_PREFIX`]) and a 64-bit checksum of it, both in upper-case hex: `<checksum>-<sha256>`.
+pub fn generate_sec_ms_gec_token_v2(unix_seconds: f64) -> String {
+    let epoch_seconds = unix_seconds.floor() as i128 + WINDOWS_FILE_TIME_EPOCH;
+    let rounded = epoch_seconds - epoch_seconds % 300;
+    let data = format!("{}{TRUSTED_CLIENT_TOKEN}", rounded * 10_000_000);
+    let sha = Sha256::new()
+        .chain_update(TOKEN_PREFIX)
+        .chain_update(data.as_bytes())
+        .finalize();
+    let checksum = cs64_digest(data.as_bytes(), &sha);
+    format!("{}-{}", hex::encode_upper(checksum), hex::encode_upper(sha))
 }
 
 /// The User-Agent of a desktop Edge of that version.
@@ -75,11 +167,11 @@ fn user_agent() -> String {
     )
 }
 
-/// The address with its query, for this moment.
+/// The address with its query, for the moment `now_ms` (milliseconds since 1970).
 pub fn connect_url(endpoint: &str, now_ms: i64) -> String {
     format!(
-        "{endpoint}?TrustedClientToken={TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC={}&Sec-MS-GEC-Version=1-{CHROMIUM_FULL_VERSION}",
-        generate_sec_ms_gec_token(now_ms)
+        "{endpoint}?Ocp-Apim-Subscription-Key={TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC={}&Sec-MS-GEC-Version=2-{CHROMIUM_FULL_VERSION}",
+        generate_sec_ms_gec_token_v2(now_ms as f64 / 1000.0)
     )
 }
 
@@ -98,52 +190,45 @@ fn escape_xml(unsafe_text: &str) -> String {
     out
 }
 
-/// The first message: the audio format, and which events to send back.
+/// The first message: the audio format, and which events to send back (`JSON.stringify` of the settings).
 pub fn speech_config_message() -> String {
-    format!(
-        "Content-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n
-          {{
-            \"context\": {{
-              \"synthesis\": {{
-                \"audio\": {{
-                  \"metadataoptions\": {{
-                    \"sentenceBoundaryEnabled\": \"false\",
-                    \"wordBoundaryEnabled\": \"true\"
-                  }},
-                  \"outputFormat\": \"{OUTPUT_FORMAT}\"
-                }}
-              }}
-            }}
-          }}
-        "
-    )
+    let settings = serde_json::json!({
+        "context": {
+            "synthesis": {
+                "audio": {
+                    "metadataoptions": { "sentenceBoundaryEnabled": "false", "wordBoundaryEnabled": "true" },
+                    "outputFormat": OUTPUT_FORMAT,
+                }
+            }
+        }
+    });
+    format!("Content-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{settings}")
 }
 
 /// The second message: the text to speak, with its voice.
 pub fn ssml_message(request_id: &str, voice: &str, text: &str) -> String {
     format!(
-        "X-RequestId:{request_id}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n
-      <speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" xmlns:mstts=\"https://www.w3.org/2001/mstts\" xml:lang=\"{LANG}\">
-        <voice name=\"{voice}\">
-          <prosody rate=\"{PROSODY}\" pitch=\"{PROSODY}\" volume=\"{PROSODY}\">
-            {}
-          </prosody>
-        </voice>
-      </speak>",
+        "X-RequestId:{request_id}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n<speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" xmlns:mstts=\"https://www.w3.org/2001/mstts\" xml:lang=\"{LANG}\">
+          <voice name=\"{voice}\">
+            <prosody rate=\"{PROSODY}\" pitch=\"{PROSODY}\" volume=\"{PROSODY}\">
+              {}
+            </prosody>
+          </voice>
+        </speak>",
         escape_xml(text)
     )
 }
 
-/// The audio in a binary message: everything after its `Path:audio\r\n` header. Like the library, a message
-/// without that header gives everything after its first 11 bytes (where the search's -1 lands).
-pub fn audio_of(data: &[u8]) -> &[u8] {
-    const SEPARATOR: &[u8] = b"Path:audio\r\n";
-    let index = data
-        .windows(SEPARATOR.len())
-        .position(|w| w == SEPARATOR)
-        .map(|i| i + SEPARATOR.len())
-        .unwrap_or(SEPARATOR.len() - 1);
-    &data[index.min(data.len())..]
+/// The audio in a binary message: what follows its header, whose length is in the first two bytes.
+pub fn audio_payload(data: &[u8]) -> Result<&[u8], TtsError> {
+    if data.len() < 2 {
+        return Err(TtsError::new("Invalid audio frame header"));
+    }
+    let offset = usize::from(u16::from_be_bytes([data[0], data[1]])) + 2;
+    if offset > data.len() {
+        return Err(TtsError::new("Invalid audio frame header length"));
+    }
+    Ok(&data[offset..])
 }
 
 fn random_hex(bytes: usize) -> String {
@@ -151,18 +236,6 @@ fn random_hex(bytes: usize) -> String {
     let mut buf = vec![0u8; bytes];
     rand::rng().fill_bytes(&mut buf);
     hex::encode(buf)
-}
-
-/// TLS for `wss://`, with the webpki roots, built here so it does not depend on a process-wide crypto provider.
-fn tls_connector() -> Result<tokio_tungstenite::Connector, TtsError> {
-    let mut roots = rustls::RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
-        .with_safe_default_protocol_versions()
-        .map_err(|err| TtsError::new(err.to_string()))?
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    Ok(tokio_tungstenite::Connector::Rustls(Arc::new(config)))
 }
 
 /// The connection error in the words the Node library (`ws`) used where they differ.
@@ -226,8 +299,10 @@ impl EdgeTtsEngine {
         self
     }
 
-    /// One turn: connect, send the config and the text, collect the audio until `turn.end`.
+    /// One turn: connect, send the config and the text, collect the audio until `turn.end`. The library's limit
+    /// (`turn_timeout`) covers the connection and then what is left of it the turn.
     async fn tts_once(&self, text: &str, voice: &str) -> Result<Vec<u8>, TtsError> {
+        let started = tokio::time::Instant::now();
         let url = connect_url(&self.endpoint, (self.clock)());
         let mut request = url.as_str().into_client_request().map_err(connect_error)?;
         let headers = request.headers_mut();
@@ -243,42 +318,55 @@ impl EdgeTtsEngine {
                 headers.insert(name, value);
             }
         }
-        let connector = if self.endpoint.starts_with("wss:") {
-            Some(tls_connector()?)
-        } else {
-            None
+        // `wss://` goes through rustls with the webpki roots and the process's TLS backend (`net::install_crypto_provider`,
+        // which `main` calls). No `permessage-deflate` is offered, though `ws` offered it: tungstenite cannot take
+        // compressed frames, and the service answers without it (checked by hand against the real one).
+        let connect = tokio_tungstenite::connect_async_tls_with_config(request, None, false, None);
+        let (mut ws, _) = match tokio::time::timeout(self.turn_timeout, connect).await {
+            Err(_) => return Err(TtsError::new("Timed out while connecting to Edge TTS")),
+            Ok(connected) => connected.map_err(connect_error)?,
         };
-        let (mut ws, _) = tokio_tungstenite::connect_async_tls_with_config(request, None, false, connector)
-            .await
-            .map_err(connect_error)?;
-        ws.send(Message::Text(speech_config_message().into()))
-            .await
-            .map_err(|err| TtsError::new(err.to_string()))?;
 
         let turn = async {
             let mut audio = Vec::new();
+            let sent = |err: tungstenite::Error| TtsError::new(err.to_string());
+            ws.send(Message::Text(speech_config_message().into()))
+                .await
+                .map_err(sent)?;
             ws.send(Message::Text(ssml_message(&random_hex(16), voice, text).into()))
                 .await
-                .map_err(|err| TtsError::new(err.to_string()))?;
+                .map_err(sent)?;
             loop {
                 match ws.next().await {
-                    Some(Ok(Message::Binary(data))) => audio.extend_from_slice(audio_of(&data)),
+                    Some(Ok(Message::Binary(data))) => audio.extend_from_slice(audio_payload(&data)?),
                     Some(Ok(Message::Text(message))) => {
                         if message.as_str().contains("Path:turn.end") {
                             return Ok::<Vec<u8>, TtsError>(audio);
                         }
                         // Path:audio.metadata (word boundaries for subtitles), Path:turn.start: not used.
                     }
+                    Some(Ok(Message::Close(frame))) => {
+                        // `ws` reports 1005 for a close without a status.
+                        let code = frame.map(|f| u16::from(f.code)).unwrap_or(1005);
+                        return Err(TtsError::new(format!("WebSocket closed before turn.end (code {code})")));
+                    }
                     Some(Ok(_)) => {}
-                    // The library heard nothing more once the connection dropped, and gave up when its time ran
-                    // out ("Timed out"), not before.
-                    Some(Err(_)) | None => futures::future::pending::<()>().await,
+                    // Gone without a close frame: `ws` closes with 1006, and says nothing else.
+                    Some(Err(tungstenite::Error::Protocol(
+                        tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
+                    )))
+                    | Some(Err(tungstenite::Error::ConnectionClosed))
+                    | None => {
+                        return Err(TtsError::new("WebSocket closed before turn.end (code 1006)"));
+                    }
+                    Some(Err(err)) => return Err(TtsError::new(err.to_string())),
                 }
             }
         };
-        let audio = tokio::time::timeout(self.turn_timeout, turn)
+        let left = self.turn_timeout.saturating_sub(started.elapsed());
+        let audio = tokio::time::timeout(left, turn)
             .await
-            .map_err(|_| TtsError::new("Timed out"))??;
+            .map_err(|_| TtsError::new("Timed out waiting for Edge TTS"))??;
         let _ = ws.close(None).await;
         Ok(audio)
     }
@@ -394,21 +482,22 @@ impl TtsEngine for EdgeTtsEngine {
 #[cfg(test)]
 mod tests {
     //! The Node code had no tests of its own here (the library did the talking). These play Edge's side of the
-    //! protocol on a local socket and check every message against what the library sent.
+    //! protocol on a local socket and check every message against what node-edge-tts 1.2.12 sends.
 
     use super::*;
     use parking_lot::Mutex;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 
-    /// What the library sent for "Tom & Jerry <3 'q' \"dq\"" with the default voice (captured from node-edge-tts
-    /// 1.2.10), the request id aside.
-    const NODE_CONFIG: &str = "Content-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n\n          {\n            \"context\": {\n              \"synthesis\": {\n                \"audio\": {\n                  \"metadataoptions\": {\n                    \"sentenceBoundaryEnabled\": \"false\",\n                    \"wordBoundaryEnabled\": \"true\"\n                  },\n                  \"outputFormat\": \"audio-24khz-48kbitrate-mono-mp3\"\n                }\n              }\n            }\n          }\n        ";
-    const NODE_SSML_AFTER_ID: &str = "\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n\n      <speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" xmlns:mstts=\"https://www.w3.org/2001/mstts\" xml:lang=\"zh-CN\">\n        <voice name=\"en-US-AndrewMultilingualNeural\">\n          <prosody rate=\"default\" pitch=\"default\" volume=\"default\">\n            Tom &amp; Jerry &lt;3 &apos;q&apos; &quot;dq&quot;\n          </prosody>\n        </voice>\n      </speak>";
+    /// What the library sends for "Tom & Jerry <3 'q' \"dq\"" with the default voice, the request id aside
+    /// (node-edge-tts 1.2.12, `streamAudio`: the settings through `JSON.stringify`, the SSML template as written).
+    const NODE_CONFIG: &str = "Content-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{\"context\":{\"synthesis\":{\"audio\":{\"metadataoptions\":{\"sentenceBoundaryEnabled\":\"false\",\"wordBoundaryEnabled\":\"true\"},\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}";
+    const NODE_SSML_AFTER_ID: &str = "\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n<speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" xmlns:mstts=\"https://www.w3.org/2001/mstts\" xml:lang=\"zh-CN\">\n          <voice name=\"en-US-AndrewMultilingualNeural\">\n            <prosody rate=\"default\" pitch=\"default\" volume=\"default\">\n              Tom &amp; Jerry &lt;3 &apos;q&apos; &quot;dq&quot;\n            </prosody>\n          </voice>\n        </speak>";
 
-    /// A moment and the token the library made for it.
+    /// A moment and the token the library made for it (`generateSecMsGecToken_V2(1794472200.123)`).
     const FIXED_MS: i64 = 1_794_472_200_123;
-    const FIXED_TOKEN: &str = "1B6CC2D91DA280C6C523CE390EF556D30046CD122FC27C838E2009090934BA56";
+    const FIXED_TOKEN: &str = "07073521B65B7503-3E9681857C93B70C671C514C3CE3AFC1C5EE48CB6D825AC3987768454BB94491";
 
     fn fixed_clock() -> i64 {
         FIXED_MS
@@ -418,8 +507,10 @@ mod tests {
     enum Frame {
         Text(String),
         Binary(Vec<u8>),
-        /// Close the connection.
+        /// Close the connection with a close frame (no status).
         Close,
+        /// Drop the connection without a close frame.
+        Drop,
     }
 
     #[derive(Clone)]
@@ -430,6 +521,8 @@ mod tests {
         Silent,
         /// Turn the handshake away with this status.
         Refuse(u16),
+        /// Take the connection and never answer the handshake.
+        NoHandshake,
     }
 
     #[derive(Debug, Clone, Default)]
@@ -472,7 +565,7 @@ mod tests {
     async fn fake_edge(plan: impl Fn(usize) -> Plan + Send + Sync + 'static) -> FakeEdge {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!(
-            "ws://{}/consumer/speech/synthesize/readaloud/edge/v1",
+            "ws://{}/tts/cognitiveservices/websocket/v1",
             listener.local_addr().unwrap()
         );
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -486,6 +579,12 @@ mod tests {
                 let plan = plan(n);
                 let seen = seen2.clone();
                 tokio::spawn(async move {
+                    if let Plan::NoHandshake = plan {
+                        // Hold the socket, say nothing.
+                        tokio::time::sleep(Duration::from_secs(60)).await;
+                        drop(tcp);
+                        return;
+                    }
                     let record = Arc::new(Mutex::new(Seen::default()));
                     let r = record.clone();
                     let refuse = if let Plan::Refuse(status) = plan {
@@ -532,6 +631,7 @@ mod tests {
                                         let _ = ws.close(None).await;
                                         return;
                                     }
+                                    Frame::Drop => return,
                                 };
                                 if sent.is_err() {
                                     return;
@@ -540,7 +640,7 @@ mod tests {
                             while let Some(Ok(_)) = ws.next().await {}
                         }
                         Plan::Silent => while let Some(Ok(_)) = ws.next().await {},
-                        Plan::Refuse(_) => {}
+                        Plan::Refuse(_) | Plan::NoHandshake => {}
                     }
                 });
             }
@@ -564,7 +664,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_turn_sends_what_the_library_sent_and_gives_the_audio_of_every_binary_message() {
+    async fn a_turn_sends_what_the_library_sends_and_gives_the_audio_of_every_binary_message() {
         let first = vec![1u8; 150];
         let second = vec![2u8; 80];
         let fake = fake_edge({
@@ -574,6 +674,7 @@ mod tests {
                     Frame::Text("X-RequestId:abc\r\nPath:turn.start\r\n\r\n{}".into()),
                     Frame::Binary(audio_frame(&first)),
                     Frame::Text("X-RequestId:abc\r\nPath:audio.metadata\r\n\r\n{\"Metadata\":[]}".into()),
+                    Frame::Binary(audio_frame(&[])),
                     Frame::Binary(audio_frame(&second)),
                     turn_end(),
                 ])
@@ -588,7 +689,7 @@ mod tests {
         assert_eq!(
             seen.uri,
             format!(
-                "/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&Sec-MS-GEC={FIXED_TOKEN}&Sec-MS-GEC-Version=1-143.0.3650.75"
+                "/tts/cognitiveservices/websocket/v1?Ocp-Apim-Subscription-Key=6A5AA1D4EAFF4E9FB37E23D68491D6F4&Sec-MS-GEC={FIXED_TOKEN}&Sec-MS-GEC-Version=2-143.0.3650.75"
             )
         );
         assert_eq!(
@@ -605,6 +706,11 @@ mod tests {
         assert_eq!(seen.header("cache-control"), Some("no-cache"));
         assert_eq!(seen.header("accept-encoding"), Some("gzip, deflate, br, zstd"));
         assert_eq!(seen.header("accept-language"), Some("en-US,en;q=0.9"));
+        assert_eq!(
+            seen.header("sec-websocket-extensions"),
+            None,
+            "no permessage-deflate: tungstenite cannot read compressed frames"
+        );
         assert_eq!(seen.messages[0], NODE_CONFIG);
         let ssml = &seen.messages[1];
         let id = ssml
@@ -645,7 +751,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_connection_that_drops_before_the_turn_ends_is_tried_again() {
+    async fn a_connection_that_closes_before_the_turn_ends_fails_at_once_and_is_tried_again() {
         let fake = fake_edge(|n| {
             if n == 1 {
                 Plan::Reply(vec![Frame::Binary(audio_frame(&[1u8; 200])), Frame::Close])
@@ -654,14 +760,46 @@ mod tests {
             }
         })
         .await;
-        let edge = engine(&fake).with_timeouts(Duration::from_secs(10), Duration::from_millis(200));
-        let out = speak(&edge, "hello").await.unwrap();
+        let started = std::time::Instant::now();
+        let out = speak(&engine(&fake), "hello").await.unwrap();
         assert_eq!(
             out.audio.to_vec(),
             vec![3u8; 120],
             "nothing of the dropped attempt is kept"
         );
         assert_eq!(fake.connections.load(Ordering::SeqCst), 2);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "no waiting out the 10 seconds"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_close_or_a_drop_before_the_turn_ends_says_how_it_closed() {
+        let closes = fake_edge(|_| Plan::Reply(vec![Frame::Binary(audio_frame(&[1u8; 200])), Frame::Close])).await;
+        assert_eq!(
+            speak(&engine(&closes), "hello").await.unwrap_err().message,
+            "WebSocket closed before turn.end (code 1005)"
+        );
+        let drops = fake_edge(|_| Plan::Reply(vec![Frame::Binary(audio_frame(&[1u8; 200])), Frame::Drop])).await;
+        assert_eq!(
+            speak(&engine(&drops), "hello").await.unwrap_err().message,
+            "WebSocket closed before turn.end (code 1006)"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_damaged_audio_frame_ends_the_turn() {
+        let short = fake_edge(|_| Plan::Reply(vec![Frame::Binary(vec![0]), turn_end()])).await;
+        assert_eq!(
+            speak(&engine(&short), "hello").await.unwrap_err().message,
+            "Invalid audio frame header"
+        );
+        let long = fake_edge(|_| Plan::Reply(vec![Frame::Binary(vec![0, 9, 1, 2]), turn_end()])).await;
+        assert_eq!(
+            speak(&engine(&long), "hello").await.unwrap_err().message,
+            "Invalid audio frame header length"
+        );
     }
 
     #[tokio::test]
@@ -673,7 +811,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_silent_service_runs_out_the_turn_or_the_attempt() {
+    async fn a_silent_service_runs_out_the_request_or_the_attempt() {
         let fake = fake_edge(|_| Plan::Silent).await;
         let err = speak(
             &engine(&fake).with_timeouts(Duration::from_secs(10), Duration::from_millis(100)),
@@ -681,7 +819,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(err.message, "Timed out", "the library's own limit on a turn");
+        assert_eq!(err.message, "Timed out waiting for Edge TTS", "the library's own limit");
         let err = speak(
             &engine(&fake).with_timeouts(Duration::from_millis(100), Duration::from_secs(10)),
             "hello",
@@ -690,6 +828,15 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.message, "TTS timed out (attempt 3/3)");
         assert_eq!(fake.connections.load(Ordering::SeqCst), 6);
+
+        let mute = fake_edge(|_| Plan::NoHandshake).await;
+        let err = speak(
+            &engine(&mute).with_timeouts(Duration::from_secs(10), Duration::from_millis(100)),
+            "hello",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.message, "Timed out while connecting to Edge TTS");
     }
 
     #[tokio::test]
@@ -730,54 +877,52 @@ mod tests {
             .unwrap();
         let ssml = fake.seen.lock()[0].messages[1].clone();
         // The paragraph break goes with the first collapse of spaces, before the markdown step, as in Node.
-        assert!(ssml.contains("\n            Hi see docs ok\n"), "{ssml}");
+        assert!(ssml.contains("\n              Hi see docs ok\n"), "{ssml}");
     }
 
     #[test]
     fn the_clock_token_matches_the_library() {
-        // Values from node-edge-tts's generateSecMsGecToken with Date.now() fixed.
-        assert_eq!(generate_sec_ms_gec_token(FIXED_MS), FIXED_TOKEN);
+        // Values from node-edge-tts 1.2.12's generateSecMsGecToken_V2 for these moments (in seconds).
+        let token = |ms: i64| generate_sec_ms_gec_token_v2(ms as f64 / 1000.0);
+        assert_eq!(token(FIXED_MS), FIXED_TOKEN);
+        assert_eq!(token(1_794_472_499_999), FIXED_TOKEN, "the same 5 minutes");
         assert_eq!(
-            generate_sec_ms_gec_token(1_794_472_499_999),
-            FIXED_TOKEN,
-            "the same 5 minutes"
+            token(1_794_472_500_000),
+            "42CD87A913DD203F-25325919676A732A78141D2AE5AFCB6EDD531AE091B9CFB7815DFC4D6FFCBFDD"
         );
         assert_eq!(
-            generate_sec_ms_gec_token(1_794_472_500_000),
-            "B993B0BBDED099EEA94EF35C7C49476556477024AA6263EA3DD370CE2C1B32EB"
+            token(1_700_000_000_000),
+            "2CD23A2CA0B2595A-F3C846C370E05F9CC83ACC5F995C5F5D87A4D0F14CE8936A0F902E64099E38A2"
         );
         assert_eq!(
-            generate_sec_ms_gec_token(1_700_000_000_000),
-            "42301B335578FEFDAE2637DED1ABD614505D432559EC08032B82048483726AFF"
-        );
-        assert_eq!(
-            generate_sec_ms_gec_token(0),
-            "7ECB79D14E3AA576D2D79E6D487A1388156D91E614B1BE11C64226A29BC8DD8C"
+            token(0),
+            "52BC7A17B50DFEC9-28C4394775C8751CD2F6859C030C06DB1489ACAB3B3A7651831FC26895177ED6"
         );
         assert_eq!(
             connect_url(EDGE_TTS_ENDPOINT, FIXED_MS),
             format!(
-                "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&Sec-MS-GEC={FIXED_TOKEN}&Sec-MS-GEC-Version=1-143.0.3650.75"
+                "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1?Ocp-Apim-Subscription-Key=6A5AA1D4EAFF4E9FB37E23D68491D6F4&Sec-MS-GEC={FIXED_TOKEN}&Sec-MS-GEC-Version=2-143.0.3650.75"
             )
         );
+        // The salt is the library's base64 text, decoded.
+        use base64::Engine;
+        let salt = base64::engine::general_purpose::STANDARD
+            .decode("Q29weXJpZ2h0IChDKSBNaWNyb3NvZnQgQ29ycG9yYXRpb24uIEFsbCByaWdodHMgcmVzZXJ2ZWQu")
+            .unwrap();
+        assert_eq!(salt, TOKEN_PREFIX);
     }
 
     #[test]
-    fn the_audio_is_what_follows_its_header_and_the_library_s_quirk_is_kept() {
-        assert_eq!(audio_of(&audio_frame(b"MP3DATA")), b"MP3DATA");
-        assert_eq!(audio_of(b"Path:audio\r\n"), b"");
-        // No header at all: the search's -1 plus the separator's length.
-        assert_eq!(audio_of(b"0123456789ABCDEF"), b"BCDEF");
-        assert_eq!(audio_of(b"short"), b"");
+    fn the_audio_is_what_follows_its_header() {
+        assert_eq!(audio_payload(&audio_frame(b"MP3DATA")).unwrap(), b"MP3DATA");
+        assert_eq!(audio_payload(&[0, 0]).unwrap(), b"");
+        assert_eq!(audio_payload(&[0, 1, 7]).unwrap(), b"");
+        assert!(audio_payload(&[]).is_err());
+        assert!(audio_payload(&[0, 2, 7]).is_err());
         assert_eq!(
             escape_xml("<a href=\"x\">'&'</a>"),
             "&lt;a href=&quot;x&quot;&gt;&apos;&amp;&apos;&lt;/a&gt;"
         );
-    }
-
-    #[test]
-    fn a_tls_configuration_can_be_made_without_a_process_wide_provider() {
-        assert!(tls_connector().is_ok());
     }
 
     #[tokio::test]

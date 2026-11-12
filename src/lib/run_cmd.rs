@@ -5,6 +5,7 @@
 
 use std::ffi::OsStr;
 use std::io;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,14 +37,24 @@ pub struct CmdResult {
     pub output: String,
 }
 
+/// A start that failed the way Node's `spawn` throws rather than reports (anything but ENOENT, EACCES, EAGAIN,
+/// EMFILE and ENFILE): the JS promise rejected with this error. Its text is the JS `err.message` ("spawn EPERM").
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("spawn {code}")]
+pub struct SpawnError {
+    /// Node's code for the failure ("EPERM"), or the system's words when Node has no name for it.
+    pub code: String,
+}
+
 struct Collected {
     text: String,
     bytes: usize,
     truncated: bool,
 }
 
-/// Runs a command with bounded output collection and timeout.
-pub async fn run_cmd<S: AsRef<OsStr>>(cmd: &str, args: &[S], opts: &RunCmdOpts) -> CmdResult {
+/// Runs a command with bounded output collection and timeout. A program that isn't there (or can't be run) is code
+/// 127 with Node's words for it; any other failure to start is the error (the JS promise rejected).
+pub async fn run_cmd<S: AsRef<OsStr>>(cmd: &str, args: &[S], opts: &RunCmdOpts) -> Result<CmdResult, SpawnError> {
     let timeout_ms = opts.timeout_ms.unwrap_or(120_000);
     let max_bytes = opts.max_output_bytes.unwrap_or(limits::CMD_OUTPUT_MAX_BYTES);
 
@@ -58,10 +69,16 @@ pub async fn run_cmd<S: AsRef<OsStr>>(cmd: &str, args: &[S], opts: &RunCmdOpts) 
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(err) => {
-            return CmdResult {
+            let code = spawn_error_code(Path::new(cmd), &err);
+            if !reported_as_event(code) {
+                return Err(SpawnError {
+                    code: code.map_or_else(|| err.to_string(), str::to_string),
+                });
+            }
+            return Ok(CmdResult {
                 code: 127,
-                output: format!("\n[spawn error] {}\n", spawn_error_text(cmd, &err)),
-            };
+                output: format!("\n[spawn error] {}\n", spawn_error_text(cmd, code, &err)),
+            });
         }
     };
 
@@ -93,7 +110,7 @@ pub async fn run_cmd<S: AsRef<OsStr>>(cmd: &str, args: &[S], opts: &RunCmdOpts) 
         status = closed => Some(status),
         _ = &mut timer => None,
     };
-    match status {
+    Ok(match status {
         Some(status) => CmdResult {
             code: status.ok().and_then(|s| s.code()).unwrap_or(0),
             output: out.lock().text.clone(),
@@ -114,7 +131,7 @@ pub async fn run_cmd<S: AsRef<OsStr>>(cmd: &str, args: &[S], opts: &RunCmdOpts) 
                 output: format!("{}\n[timeout after {seconds}s]\n", out.lock().text),
             }
         }
-    }
+    })
 }
 
 async fn collect<R: AsyncRead + Unpin>(mut stream: R, out: Arc<Mutex<Collected>>, max_bytes: usize) {
@@ -150,12 +167,27 @@ fn terminate(child: &mut tokio::process::Child) {
     let _ = child.start_kill();
 }
 
-/// `String(err)` for a failed start: "Error: spawn sh ENOENT".
-fn spawn_error_text(cmd: &str, err: &io::Error) -> String {
-    match node_error_code(err) {
+/// `String(err)` for a failed start Node reports as an event: "Error: spawn sh ENOENT".
+fn spawn_error_text(cmd: &str, code: Option<&str>, err: &io::Error) -> String {
+    match code {
         Some(code) => format!("Error: spawn {cmd} {code}"),
         None => format!("Error: spawn {cmd} {err}"),
     }
+}
+
+/// Whether Node reports a failed start later, as the child's "error" event (what `run_cmd` turns into code 127),
+/// rather than throwing from `spawn` itself: only for these five codes.
+fn reported_as_event(code: Option<&str>) -> bool {
+    matches!(code, Some("ENOENT" | "EACCES" | "EAGAIN" | "EMFILE" | "ENFILE"))
+}
+
+/// Node's code for a failed start of `program`. On Windows libuv looks only for a file, so a folder is ENOENT there
+/// (Windows itself says access denied).
+pub(crate) fn spawn_error_code(program: &Path, err: &io::Error) -> Option<&'static str> {
+    if cfg!(windows) && err.kind() == io::ErrorKind::PermissionDenied && program.is_dir() {
+        return Some("ENOENT");
+    }
+    node_error_code(err)
 }
 
 /// Node's name for an operating-system error ("ENOENT", "EACCES", ...), which its messages and `err.code` carry.
@@ -180,6 +212,8 @@ pub(crate) fn node_error_code(err: &io::Error) -> Option<&'static str> {
             libc::EINVAL => "EINVAL",
             libc::EAGAIN => "EAGAIN",
             libc::ENOEXEC => "ENOEXEC",
+            libc::ENFILE => "ENFILE",
+            libc::E2BIG => "E2BIG",
             _ => return None,
         };
         return Some(code);
@@ -221,6 +255,8 @@ pub(crate) fn node_error_message(err: &io::Error, syscall: &str, path: &std::pat
         "EINVAL" => "invalid argument",
         "EAGAIN" => "resource temporarily unavailable",
         "ENOEXEC" => "exec format error",
+        "ENFILE" => "file table overflow",
+        "E2BIG" => "argument list too long",
         _ => "unknown error",
     };
     format!("{code}: {description}, {syscall} '{}'", path.display())
@@ -229,36 +265,73 @@ pub(crate) fn node_error_message(err: &io::Error, syscall: &str, path: &std::pat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::tmp_dir;
 
     #[test]
     fn os_errors_get_nodes_names_and_messages() {
         let missing = io::Error::from(io::ErrorKind::NotFound);
         assert_eq!(node_error_code(&missing), Some("ENOENT"));
-        assert_eq!(spawn_error_text("sh", &missing), "Error: spawn sh ENOENT");
         assert_eq!(
-            node_error_message(&missing, "scandir", std::path::Path::new("x")),
+            spawn_error_text("sh", node_error_code(&missing), &missing),
+            "Error: spawn sh ENOENT"
+        );
+        assert_eq!(
+            node_error_message(&missing, "scandir", Path::new("x")),
             "ENOENT: no such file or directory, scandir 'x'"
         );
         #[cfg(unix)]
         {
             let denied = io::Error::from_raw_os_error(libc::EACCES);
             assert_eq!(
-                node_error_message(&denied, "scandir", std::path::Path::new("/s")),
+                node_error_message(&denied, "scandir", Path::new("/s")),
                 "EACCES: permission denied, scandir '/s'"
             );
+            let too_big = io::Error::from_raw_os_error(libc::E2BIG);
+            assert_eq!(node_error_code(&too_big), Some("E2BIG"));
         }
         let other = io::Error::other("strange");
         assert_eq!(node_error_code(&other), None);
-        assert_eq!(spawn_error_text("sh", &other), "Error: spawn sh strange");
+        assert_eq!(spawn_error_text("sh", None, &other), "Error: spawn sh strange");
+    }
+
+    #[test]
+    fn node_reports_five_start_failures_as_an_event_and_throws_the_rest() {
+        for code in ["ENOENT", "EACCES", "EAGAIN", "EMFILE", "ENFILE"] {
+            assert!(reported_as_event(Some(code)), "{code}");
+        }
+        for code in [Some("EPERM"), Some("E2BIG"), Some("ENOEXEC"), None] {
+            assert!(!reported_as_event(code), "{code:?}");
+        }
+        let denied = io::Error::from(io::ErrorKind::PermissionDenied);
+        let tmp = tmp_dir();
+        let expected = if cfg!(windows) { "ENOENT" } else { "EPERM" };
+        assert_eq!(
+            spawn_error_code(tmp.path(), &denied),
+            Some(expected),
+            "a folder, on Windows, is not found"
+        );
     }
 
     #[tokio::test]
-    async fn a_program_that_cant_start_is_code_127_with_nodes_words() {
-        let r = run_cmd("tarsee-no-such-program-anywhere", &["x"], &RunCmdOpts::default()).await;
+    async fn a_program_that_isnt_there_is_code_127_with_nodes_words() {
+        let r = run_cmd("tarsee-no-such-program-anywhere", &["x"], &RunCmdOpts::default())
+            .await
+            .unwrap();
         assert_eq!(r.code, 127);
         assert_eq!(
             r.output,
             "\n[spawn error] Error: spawn tarsee-no-such-program-anywhere ENOENT\n"
         );
+    }
+
+    #[tokio::test]
+    async fn a_folder_is_not_a_program() {
+        // Windows: libuv finds no file there (ENOENT, an event). Elsewhere: exec refuses it (EACCES, an event).
+        let tmp = tmp_dir();
+        let folder = tmp.path().to_string_lossy().into_owned();
+        let r = run_cmd(&folder, &["x"], &RunCmdOpts::default()).await.unwrap();
+        assert_eq!(r.code, 127);
+        let code = if cfg!(windows) { "ENOENT" } else { "EACCES" };
+        assert_eq!(r.output, format!("\n[spawn error] Error: spawn {folder} {code}\n"));
     }
 }

@@ -439,6 +439,12 @@ pub fn install_channel_manager(app: &App, manager: Arc<dyn ChannelApi>) {
 /// The app's channel manager, or `None` when there is none (yet): the Node code tolerated that everywhere
 /// (`channelManager?.getStatus() || {}`, "channel manager unavailable", "Channel manager not initialized"), and so
 /// do its callers here.
+///
+/// Who calls this: a tool (which always had the app's manager), the routes and boot code that read
+/// `req.app.get("channelManager")`, and a caller that hands the manager on where the Node caller did. Three Node
+/// functions behave differently with and without one, and only some of their callers passed it: `processCommand`
+/// (`CommandContext::channel_manager`), `buildSystemPromptParts` and `runDiagnostics`. Those take the manager as an
+/// argument and must not call this themselves (`docs/rust-port/INTERFACES.md`, "Rules for all of them").
 pub fn channel_manager(app: &App) -> Option<Arc<dyn ChannelApi>> {
     app.get::<InstalledChannelManager>()
         .map(|installed| installed.0.clone())

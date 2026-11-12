@@ -34,8 +34,8 @@ use regex::Regex;
 
 use crate::app::App;
 use crate::lib::key_vault::{get_key, list_keys};
-use crate::middleware::auth::{Clock, js_trim};
-use crate::util::js::utf16_len;
+use crate::middleware::auth::Clock;
+use crate::util::js::{trim, utf16_len};
 
 /// Names that never go into the agent's environment, by how they start.
 pub static AGENT_ENV_KEEP_OUT: LazyLock<Regex> = LazyLock::new(|| {
@@ -125,12 +125,14 @@ pub fn agent_vault_env(app: &App, options: AgentVaultEnvOptions<'_>) -> Arc<BTre
     } = options;
     // Only the default call shares the cache: names, the vault and the environment are all the live ones.
     let cachable = names.is_none() && get.is_none() && env.is_none();
-    let own_env;
-    let env = match env {
-        Some(env) => env,
-        None => {
-            own_env = app.env().snapshot();
-            &own_env
+    // A variable of the environment the vault's names are compared against. The caller's own is a plain map (the
+    // JS callers passed a copy of `process.env`, an ordinary object). The app's is asked through `Env`, where on
+    // Windows a name matches whatever its case, as in `process.env` itself: a key named COMSPEC stays out when the
+    // system has ComSpec.
+    let env_value = |name: &str| -> Option<String> {
+        match env {
+            Some(env) => env.get(name).cloned(),
+            None => app.env().get(name),
         }
     };
     let now = now.unwrap_or_else(|| Clock::of(app).now_ms());
@@ -145,7 +147,8 @@ pub fn agent_vault_env(app: &App, options: AgentVaultEnvOptions<'_>) -> Arc<BTre
 
     let mut out = BTreeMap::new();
     let mut skipped: Vec<String> = Vec::new();
-    let setting = env.get("TARSEE_AGENT_ENV_KEYS").map_or("", |text| js_trim(text));
+    let setting = env_value("TARSEE_AGENT_ENV_KEYS").unwrap_or_default();
+    let setting = trim(&setting);
     if !blocked && setting.to_lowercase() != "off" {
         let wanted: Vec<String> = match names {
             Some(names) => names,
@@ -156,11 +159,11 @@ pub fn agent_vault_env(app: &App, options: AgentVaultEnvOptions<'_>) -> Arc<BTre
             },
         };
         for raw in wanted {
-            let name = js_trim(&raw);
+            let name = trim(&raw);
             if !ENV_NAME.is_match(name)
                 || AGENT_ENV_KEEP_OUT.is_match(name)
                 || KEEP_OUT_NAMES.contains(&name)
-                || env.get(name).is_some_and(|value| !value.is_empty())
+                || env_value(name).is_some_and(|value| !value.is_empty())
             {
                 continue;
             }
@@ -172,7 +175,7 @@ pub fn agent_vault_env(app: &App, options: AgentVaultEnvOptions<'_>) -> Arc<BTre
             let value = read
                 .ok()
                 .flatten()
-                .map(|value| js_trim(&value).to_string())
+                .map(|value| trim(&value).to_string())
                 .filter(|value| !value.is_empty());
             let Some(value) = value else { continue };
             // Linux refuses a single environment string past about 128 KB, and then the agent could not start at
@@ -565,5 +568,68 @@ mod tests {
         )
         .unwrap();
         assert_eq!(*default_call(&t), map(&[("GOOD_KEY", "good-value")]));
+    }
+
+    /// An app whose environment matches names whatever their case (Windows) or only in their own case (elsewhere),
+    /// on whichever system the test runs.
+    fn app_with_names(ignore_case: bool, pairs: &[(&str, &str)]) -> (App, tempfile::TempDir) {
+        let dir = crate::testkit::tmp_dir();
+        let env = crate::env::Env::new().with_case_insensitive_names(ignore_case);
+        env.set("TARSEE_STATE_DIR", dir.path().to_string_lossy().to_string());
+        for (name, value) in pairs {
+            env.set(*name, *value);
+        }
+        let config = crate::config::Config::load(&env);
+        let db = crate::db::Db::open(&config.db_path).unwrap();
+        let app = App::with_fetch(config, env, db, crate::testkit::FakeFetch::new());
+        (app, dir)
+    }
+
+    #[test]
+    fn on_windows_a_name_the_system_set_in_another_case_still_wins() {
+        let set_by_the_host = [("Test_Shared_Key", "set-by-the-host")];
+        // Windows: `process.env.TEST_SHARED_KEY` finds Test_Shared_Key, so the vault's key stays out.
+        let (windows, _windows_dir) = app_with_names(true, &set_by_the_host);
+        set_key(&windows, "TEST_SCRIPT_KEY", &canary("script"), None).unwrap();
+        set_key(&windows, "TEST_SHARED_KEY", &canary("shared"), None).unwrap();
+        assert_eq!(
+            *agent_vault_env(&windows, AgentVaultEnvOptions::default()),
+            map(&[("TEST_SCRIPT_KEY", &canary("script"))])
+        );
+        // A caller's own environment is a plain map there too: only the name as written counts.
+        let own_env = map(&[("Test_Shared_Key", "set-by-the-host")]);
+        let own = agent_vault_env(
+            &windows,
+            AgentVaultEnvOptions {
+                env: Some(&own_env),
+                ..Default::default()
+            },
+        );
+        assert_eq!(*own, both());
+
+        // Elsewhere the two names are two variables, and the key goes in.
+        let (elsewhere, _elsewhere_dir) = app_with_names(false, &set_by_the_host);
+        set_key(&elsewhere, "TEST_SCRIPT_KEY", &canary("script"), None).unwrap();
+        set_key(&elsewhere, "TEST_SHARED_KEY", &canary("shared"), None).unwrap();
+        assert_eq!(*agent_vault_env(&elsewhere, AgentVaultEnvOptions::default()), both());
+
+        // The setting is found the same way: "off" under a name in another case switches it off on Windows only.
+        let off = [("Tarsee_Agent_Env_Keys", "off")];
+        let (windows_off, _windows_off_dir) = app_with_names(true, &off);
+        set_key(&windows_off, "TEST_SCRIPT_KEY", &canary("script"), None).unwrap();
+        assert_eq!(
+            *agent_vault_env(&windows_off, AgentVaultEnvOptions::default()),
+            map(&[])
+        );
+        let (elsewhere_off, _elsewhere_off_dir) = app_with_names(false, &off);
+        set_key(&elsewhere_off, "TEST_SCRIPT_KEY", &canary("script"), None).unwrap();
+        assert_eq!(
+            *agent_vault_env(&elsewhere_off, AgentVaultEnvOptions::default()),
+            map(&[("TEST_SCRIPT_KEY", &canary("script"))])
+        );
+        for app in [windows, elsewhere, windows_off, elsewhere_off] {
+            // Closed before its folder is removed (Windows cannot delete an open file).
+            app.db().close();
+        }
     }
 }

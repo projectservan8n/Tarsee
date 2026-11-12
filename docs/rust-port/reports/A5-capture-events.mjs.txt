@@ -1,0 +1,217 @@
+// Captures what the Node Codex event mapping (src/ai/providers/codex-events.js) yields, as JSON, for the Rust tests
+// of src/ai/providers/codex_events.rs (src/ai/providers/codex_events/node-cases.json): every captured fixture under
+// test/fixtures/codex/ replayed whole with several turn options, made-up event sequences for the edge cases, and the
+// exported helpers on many inputs.
+// node A5-capture-events.mjs <main checkout> <out file>
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const [root, outFile] = process.argv.slice(2);
+const cx = await import(pathToFileURL(path.join(root, "src/ai/providers/codex-events.js")).href);
+const FIXTURES = path.join(root, "test", "fixtures", "codex");
+const lines = (name) => fs.readFileSync(path.join(FIXTURES, `${name}.jsonl`), "utf8").trim().split(/\r?\n/).map((l) => JSON.parse(l));
+
+const plain = (v) => JSON.parse(JSON.stringify(v ?? null));
+const stateOf = (s) => ({ threadId: s.threadId, totals: s.totals, done: s.done, toolCount: s.toolCount, label: s.label, providerId: s.providerId });
+
+/** A run: the events in order (an "x-sdk-threw" line is the error finish() sees), then finish(). */
+function run(opts, events, finish = {}) {
+  const state = cx.createCodexEventState(opts);
+  const out = [];
+  let thrown = null;
+  for (const ev of events) {
+    if (ev && ev.type === "x-sdk-threw") { thrown = new Error(ev.message); continue; }
+    out.push(...cx.mapCodexEvent(ev, state));
+  }
+  const fin = { ...finish };
+  if (thrown && !("error" in fin)) fin.error = thrown;
+  const end = cx.finishCodexEvents(state, fin);
+  return { out: plain(out), end: plain(end), state: plain(stateOf(state)) };
+}
+
+const replays = [];
+const fixtureNames = fs.readdirSync(FIXTURES).filter((f) => f.endsWith(".jsonl")).map((f) => f.replace(/\.jsonl$/, "")).sort();
+const optionSets = [
+  { providerId: "openrouter", model: "openai/gpt-6.1-sol" },
+  { providerId: "chatgpt", model: null },
+  { providerId: "openai", model: "gpt-6.1-sol" },
+  { providerId: "deepseek", model: "deepseek-flash" },
+  { providerId: "local", model: "llama3.1:8b", localUrl: "http://127.0.0.1:9/v1" },
+  { providerId: "openrouter", model: "openai/gpt-6.1-sol", baseline: { input_tokens: 1000, cached_input_tokens: 100, cache_write_input_tokens: 0, output_tokens: 10, reasoning_output_tokens: 0 } },
+  { providerId: "openrouter", model: "x", baselineKnown: false },
+  { providerId: "openrouter", model: "x", baseline: { input_tokens: 999999 } },
+];
+for (const name of fixtureNames) {
+  for (const opts of optionSets) {
+    replays.push({ fixture: name, opts, finish: {}, ...run(opts, lines(name)) });
+  }
+  // The same turn stopped, or over its limit, before the end it reached.
+  replays.push({ fixture: name, opts: optionSets[0], finish: { aborted: true }, ...run(optionSets[0], lines(name), { aborted: true }) });
+  replays.push({ fixture: name, opts: optionSets[0], finish: { maxTurns: 3 }, ...run(optionSets[0], lines(name), { maxTurns: 3 }) });
+}
+
+// --- Made-up sequences for what the fixtures don't cover ---
+const items = (done) => [{ text: "Read the file", completed: done }, { text: "Answer", completed: false }];
+const cmd = (id, extra = {}) => ({ id, type: "command_execution", command: "/bin/bash -lc 'ls'", aggregated_output: "", exit_code: null, status: "in_progress", ...extra });
+const sequences = [
+  ["todo and web search", [
+    { type: "item.started", item: { id: "t1", type: "todo_list", items: items(false) } },
+    { type: "item.updated", item: { id: "t1", type: "todo_list", items: items(false) } },
+    { type: "item.updated", item: { id: "t1", type: "todo_list", items: items(true) } },
+    { type: "item.completed", item: { id: "t1", type: "todo_list", items: items(true) } },
+    { type: "item.started", item: { id: "w1", type: "web_search", query: "tarsier facts" } },
+    { type: "item.completed", item: { id: "w1", type: "web_search", query: "tarsier facts" } },
+  ]],
+  ["two messages and reasoning", [
+    { type: "item.started", item: { id: "r1", type: "reasoning", text: "" } },
+    { type: "item.started", item: { id: "r1", type: "reasoning", text: "" } },
+    { type: "item.completed", item: { id: "r1", type: "reasoning", text: "Plan the answer." } },
+    { type: "item.completed", item: { id: "r2", type: "reasoning", text: "  " } },
+    { type: "item.completed", item: { id: "m1", type: "agent_message", text: "First." } },
+    { type: "item.completed", item: { id: "m2", type: "agent_message", text: "" } },
+    { type: "item.completed", item: { id: "m3", type: "agent_message", text: "  Second.  " } },
+    { type: "item.completed", item: { id: "m4", type: "agent_message", text: "   " } },
+  ]],
+  ["a secret in a command", [
+    { type: "item.completed", item: { id: "c9", type: "command_execution", command: "/bin/bash -lc 'echo sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'", aggregated_output: "sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n", exit_code: 0, status: "completed" } },
+  ]],
+  ["an error with no turn.failed", [
+    { type: "thread.started", thread_id: "th-1" }, { type: "turn.started" },
+    { type: "error", message: "stream disconnected before completion: connection reset" },
+  ]],
+  ["a command left open", [{ type: "item.started", item: cmd("c1", { command: "sleep 30" }) }]],
+  ["exit codes and outputs", [
+    { type: "item.completed", item: cmd("a", { exit_code: 2, status: "completed" }) },
+    { type: "item.completed", item: cmd("b", { exit_code: "0", status: "completed" }) },
+    { type: "item.completed", item: cmd("c", { exit_code: 0.0, status: "failed", aggregated_output: "boom" }) },
+    { type: "item.completed", item: cmd("d", { exit_code: null, status: "completed", aggregated_output: 42 }) },
+    { type: "item.completed", item: cmd("e", { exit_code: -1, aggregated_output: "x".repeat(2500) + "🐒" }) },
+    { type: "item.completed", item: cmd("f", { command: "pwsh -NoProfile -Command \"dir\"", exit_code: 0 }) },
+    { type: "item.completed", item: cmd("g", { command: 5, exit_code: 0 }) },
+    { type: "item.completed", item: { type: "command_execution", command: "no id", exit_code: 0, aggregated_output: "x" } },
+  ]],
+  ["MCP results of every kind", [
+    { type: "item.started", item: { id: "m1", type: "mcp_tool_call", server: "tarsee", tool: "tarsee_x", arguments: { a: 1 }, status: "in_progress" } },
+    { type: "item.completed", item: { id: "m1", type: "mcp_tool_call", server: "tarsee", tool: "tarsee_x", arguments: { a: 1 }, result: { content: [{ type: "text", text: "one" }, { type: "image", data: "x" }, { type: "audio" }, { type: 7 }, {}, null, { type: "text" }, { type: "text", text: 5 }] }, status: "completed" } },
+    { type: "item.completed", item: { id: "m2", type: "mcp_tool_call", server: "other", tool: "t", result: { content: [], structured_content: { b: [1, 2.5, "x"], c: null } }, status: "completed" } },
+    { type: "item.completed", item: { id: "m3", type: "mcp_tool_call", server: "s", tool: "t", arguments: null, error: { message: "it failed" }, status: "failed" } },
+    { type: "item.completed", item: { id: "m4", type: "mcp_tool_call", tool: "t", result: { structured_content: null }, error: { message: "" }, status: "completed" } },
+    { type: "item.completed", item: { id: "m5", type: "mcp_tool_call", server: "s", tool: "t", arguments: "raw", result: null, error: "string error", status: "completed" } },
+  ]],
+  ["patches", [
+    { type: "item.started", item: { id: "p1", type: "file_change", changes: [{ path: "/w/a.txt", kind: "add" }, { path: "/w/b.txt", kind: "update" }], status: "in_progress" } },
+    { type: "item.completed", item: { id: "p1", type: "file_change", changes: [{ path: "/w/a.txt", kind: "add" }, { path: "/w/b.txt", kind: "update" }, { path: "/w/c.txt", kind: "delete" }], status: "completed" } },
+    { type: "item.completed", item: { id: "p2", type: "file_change", changes: [{ path: "/w/d.txt", kind: "delete" }, { kind: "add" }, { path: 7 }, "x"], status: "failed" } },
+    { type: "item.started", item: { id: "p3", type: "file_change", changes: [] } },
+    { type: "item.completed", item: { id: "p3", type: "file_change", changes: "nope", status: "completed" } },
+  ]],
+  ["retries then a failure", [
+    { type: "error", message: "Reconnecting... 1/5 (unexpected status 503 Service Unavailable: busy)" },
+    { type: "error", message: "Reconnecting... 2/5 (unexpected status 429)" },
+    { type: "error", message: "Reconnecting... 3/5" },
+    { type: "error", message: "Reconnecting...4 / 5 (stream disconnected before completion)" },
+    { type: "error", message: "Reconnecting... 5/5 (something " + "very ".repeat(40) + "odd)" },
+    { type: "error", message: "Reconnecting... 007/0099999999999999999999 (status 404 Not Found,)" },
+    { type: "turn.failed", error: {} },
+  ]],
+  ["noise and status items", [
+    { type: "item.completed", item: { id: "e1", type: "error", message: "Model metadata for `x` not found. Defaulting" } },
+    { type: "item.completed", item: { id: "e2", type: "error", message: "  " } },
+    { type: "item.completed", item: { id: "e3", type: "error", message: "A note with a key sk-test-AAAAAAAAAAAAAAAAAAAA and " + "words ".repeat(60) } },
+    { type: "item.completed", item: { id: "e4", type: "error", message: "model metadata FOR y NOT FOUND" } },
+  ]],
+  ["odd events", [
+    null, 5, "x", [], { type: "thread.started" }, { type: "thread.started", thread_id: 12 }, { type: "item.started" },
+    { type: "item.started", item: null }, { type: "item.started", item: { type: "command_execution" } },
+    { type: "item.updated", item: { id: "c", type: "command_execution" } }, { type: "item.completed", item: "text" },
+    { type: "item.completed", item: { id: "z", type: "unknown_kind" } }, { type: "turn.started" }, { type: "mystery" },
+    { type: "item.completed", item: { id: 3, type: "web_search", query: null } },
+    { type: "item.started", item: { id: { o: 1 }, type: "command_execution", command: "ls" } },
+    { type: "item.completed", item: { id: { o: 1 }, type: "command_execution", command: "ls", exit_code: 0 } },
+    { type: "item.updated", item: { type: "todo_list", items: [{ text: "no id" }, null, "s", { text: 5, completed: 1 }] } },
+    { type: "item.updated", item: { type: "todo_list", items: [{ text: "no id" }, null, "s", { text: 5, completed: 1 }] } },
+    { type: "item.completed", item: { type: "reasoning", text: 42 } },
+  ]],
+  ["a completed turn closes what is open", [
+    { type: "item.started", item: cmd("c1") }, { type: "item.started", item: { id: "w", type: "web_search", query: "q" } },
+    { type: "turn.completed", usage: { input_tokens: "1200", cached_input_tokens: 200.5, cache_write_input_tokens: -3, output_tokens: true, reasoning_output_tokens: [7] } },
+    { type: "item.completed", item: { id: "late", type: "agent_message", text: "ignored" } },
+  ]],
+  ["usage of an odd shape", [{ type: "turn.completed", usage: "nope" }]],
+  ["usage with cache writes", [{ type: "turn.completed", usage: { input_tokens: 100, cached_input_tokens: 70, cache_write_input_tokens: 50, output_tokens: 3 } }]],
+  ["a failure with its own words", [{ type: "turn.failed", error: { message: "unexpected status 402 Payment Required: x" } }]],
+  ["the last error is the failure", [{ type: "error", message: "Quota exceeded. Check your plan and billing details." }, { type: "turn.failed" }]],
+  ["nothing at all", []],
+];
+const finishes = [{}, { aborted: true }, { maxTurns: 7 }, { error: new Error("Codex Exec exited with code 1: Error: thread/resume: thread/resume failed: no rollout found for thread id 01a1 (code -32600)") },
+  { error: new Error("Unable to locate Codex CLI binaries. Ensure @openai/codex is installed with optional dependencies.") },
+  { error: new Error("Codex Exec exited with code 2: WARNING: proceeding, even though we could not create PATH aliases: x\nReading prompt from stdin...\n2026-11-09T01:02:03.456Z ERROR codex_core::x: Error: bad config value\r\n  \n2026-11-09T01:02:03Z WARN y: second") },
+  { error: new Error("") }, { error: "a thrown string" }, { error: new Error("spawn /opt/codex/bin/codex ENOENT") }, { aborted: true, maxTurns: 2 }];
+// The events a sequence maps to don't depend on how the turn is finished: each finish's own end is kept beside them.
+const synthetic = [];
+for (const [name, events] of sequences) {
+  for (const opts of [{ providerId: "openai", model: "gpt-6.1-sol" }, { providerId: "local", model: "m", localUrl: "http://127.0.0.1:9931/v1" }]) {
+    const ends = finishes.map((finish) => {
+      const r = run(opts, events, finish);
+      return { finish: finishText(finish), end: r.end, state: r.state };
+    });
+    synthetic.push({ name, opts, events, out: run(opts, events, {}).out, ends });
+  }
+}
+function finishText(f) {
+  const out = { ...f };
+  if (f.error instanceof Error) out.error = { message: f.error.message };
+  else if (typeof f.error === "string") out.error = { string: f.error };
+  return out;
+}
+
+// --- Helpers ---
+const commands = [
+  "/bin/bash -lc 'ls -la'", "/bin/bash -lc \"node -e \\\"x\\\"\"", "bash -c 'a && b'", "/usr/bin/zsh -lc 'pwd'",
+  "\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"Get-Date\"", "pwsh -NoProfile -Command \"dir\"",
+  "git status", "", "   ", "sh -c x", "dash -lc 'it'\\''s'", "/bin/sh -l -c x", "bash -lc", "bash -lc ''", "bash -lc '", "\"/bin/bash\" -lc \"a \\$HOME \\` \\\\ \\x\"",
+  "PowerShell.EXE -Command dir", "POWERSHELL -NoLogo -NonInteractive -Command 'x'", "pwsh -Command -Command y", "pwsh -CommandX z -Command w",
+  "pwsh -command", "pwsh  -c dir", "C:\\tools\\pwsh.exe -Command \"a\"", "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"b\"",
+  "bash\t-lc\t'tabs'", "bash -lc 'multi\nline'", "/bin/bash -lc 'x' ", " /bin/bash -lc 'padded' ", "zsh -lc '🐒'", "powerſhell -Command x",
+  "bash -lc \"\"", "bash -lc '\"'", "/x y/bash -lc z", "bash.exe -c y",
+];
+const unwrap = commands.map((c) => [c, cx.unwrapShellCommand(c)]);
+
+const failures = [];
+const messages = [
+  "unexpected status 402 Payment Required: x", "unexpected status 404 Not Found: The model `nope` does not exist", "exceeded retry limit, last status: 503 Service Unavailable",
+  "You've hit your usage limit. subscription_sharing_usage_limit_exceeded", "subscription_sharing_usage_unavailable", "unexpected status 429 Too Many Requests: slow down. Try again in 20s.",
+  "Rate limit reached. try again at 12:00 UTC\nmore", "unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***, url: http://127.0.0.1:54805/v1/responses",
+  "Connection failed: error sending request", "stream disconnected before completion: connection reset", "something odd at http://127.0.0.1:50000/t/abcdefghijklmnopqrstuv/v1/responses",
+  "unexpected status 404 Not Found: 404 page not found, url: http://127.0.0.1:11434/v1/responses", "unexpected status 404 Not Found: {\"detail\":\"Not Found\"}, url: http://127.0.0.1:11434/v1/responses",
+  "unexpected status 404 Not Found: model \"llama3.1:8b\" not found, try pulling it first, url: http://127.0.0.1:11434/v1/responses",
+  "unexpected status 400 Bad Request: {\"error\":{\"code\":400,\"message\":\"request (40123 tokens) exceeds the available context size (32768 tokens), try increasing it\",\"type\":\"exceed_context_size_error\"}}, url: http://127.0.0.1:50000/t/abcdefghijklmnopqrstuv/v1/responses",
+  "unexpected status 502 Bad Gateway: {\"error\":{\"message\":\"Can't reach your Local AI at http://127.0.0.1:9931/v1 (connection refused).\"}}, url: http://127.0.0.1:50000/t/abcdefghijklmnopqrstuv/v1/responses",
+  "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.",
+  "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+  "Codex Exec exited with code 1: Error: thread/resume: thread/resume failed: no rollout found for thread id 01a1 (code -32600)",
+  "Codex Exec exited with signal SIGKILL: \n\n", "Unable to locate Codex CLI binaries.", "codex.exe: ENOENT", "Quota exceeded. Check your plan and billing details.",
+  "", "   ", "the session was not found", "dns error: failed to lookup address information",
+  `unexpected status 403 Forbidden: ${JSON.stringify({ error: { code: 403, message: "openai/gpt-5.5 requires moderation on OpenAI. Your input was flagged for \"violence\". No credits were charged.", metadata: { reasons: ["violence"], flagged_input: "words", provider_name: "OpenAI", model_slug: "openai/gpt-5.5" } } })}, url: https://openrouter.ai/api/v1/responses`,
+  "Key limit exceeded (total limit) status 403",
+];
+for (const provider of ["openai", "chatgpt", "openrouter", "deepseek", "local", "anthropic", "nope", ""]) {
+  for (const message of messages) {
+    for (const ctx of [{}, { model: "llama3.1:8b", localUrl: "http://127.0.0.1:11434/v1" }, { localUrl: "http://x/$&/$$/v1", status: 500, code: "server_error" }]) {
+      failures.push({ provider, message, ctx, out: cx.classifyCodexFailure(provider, message, ctx) });
+    }
+  }
+}
+
+const usage = [
+  [{ input_tokens: 10, cached_input_tokens: 4, cache_write_input_tokens: 1, output_tokens: 5, reasoning_output_tokens: 2 }, null],
+  [{ input_tokens: 10, cached_input_tokens: 4, cache_write_input_tokens: 1, output_tokens: 5, reasoning_output_tokens: 2 }, { input_tokens: 3, cached_input_tokens: 1, output_tokens: 2 }],
+  [{ input_tokens: 10, cached_input_tokens: 4, cache_write_input_tokens: 1, output_tokens: 5, reasoning_output_tokens: 2 }, { input_tokens: 99 }],
+  [{ input_tokens: "7", output_tokens: null }, {}], [{}, null], [null, null], [{ input_tokens: -4, output_tokens: 1.5 }, { output_tokens: 0.5 }],
+  [{ input_tokens: "0x10", cached_input_tokens: " 3 ", output_tokens: "1e3", reasoning_output_tokens: "abc" }, { input_tokens: false }],
+].map(([now, base]) => ({ now, base, out: cx.usageDelta(now, base) }));
+
+const all = { replays, synthetic, unwrap, failures, usage };
+// One case a line, so a change shows as a change to that case.
+fs.writeFileSync(outFile, `{\n${Object.entries(all).map(([k, v]) => `${JSON.stringify(k)}: [\n${v.map((x) => JSON.stringify(x)).join(",\n")}\n]`).join(",\n")}\n}\n`);

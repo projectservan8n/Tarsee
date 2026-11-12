@@ -115,7 +115,7 @@ pub fn get_recommended_model() -> &'static str {
 /// A partial match ("opus-4-6") gives the SHORTEST id containing it, so "fable-5" is claude-fable-5 and not
 /// claude-fable-5-1: someone pinning a version wants the version they typed.
 pub fn resolve_model_alias(alias: &str) -> Option<&'static str> {
-    let a = alias.trim().to_lowercase();
+    let a = crate::util::js::trim(alias).to_lowercase();
     if a.is_empty() {
         return None;
     }
@@ -145,7 +145,7 @@ pub fn is_known_model(id: &str) -> bool {
 /// The tier a model id belongs to. Falls back to reading the id, so a brand-new `claude-fable-6` still gets a Fable
 /// badge the day it ships.
 pub fn tier_of(model_id: &str) -> Option<&'static str> {
-    let id = model_id.trim().to_lowercase();
+    let id = crate::util::js::trim(model_id).to_lowercase();
     if id.is_empty() {
         return None;
     }
@@ -218,6 +218,15 @@ mod tests {
         assert_eq!(resolve_model_alias("fable-5"), Some("claude-fable-5"));
         assert_eq!(resolve_model_alias("opus-4-6"), Some("claude-opus-4-6"));
         assert_eq!(resolve_model_alias("haiku-4"), Some("claude-haiku-4-5"));
+    }
+
+    #[test]
+    fn names_are_trimmed_the_way_javascript_trims() {
+        // U+FEFF is whitespace to JavaScript and is trimmed; U+0085 is not, so the name no longer matches exactly
+        // and falls through to the partial match, as in the Node code.
+        assert_eq!(resolve_model_alias("\u{FEFF}opus\u{FEFF}"), Some("opus"));
+        assert_eq!(resolve_model_alias("opus\u{0085}"), None);
+        assert_eq!(tier_of("\u{FEFF}claude-opus-5 "), Some("opus"));
     }
 
     #[test]

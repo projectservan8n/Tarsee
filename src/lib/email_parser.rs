@@ -11,8 +11,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::lib::discord_format::js_text::{self, re, trim};
-use crate::util::js::utf16_len;
+use crate::lib::discord_format::js_text::re;
+use crate::util::js::{is_whitespace, trim, utf16_len};
 
 /// The mention keyword when none is configured.
 pub const DEFAULT_MENTION_KEYWORD: &str = "tarsee";
@@ -232,7 +232,7 @@ pub fn is_reply_all(check: ReplyAllCheck<'_>) -> bool {
             return false;
         };
         // \s+ : at least one, and all of them (what follows starts with a letter)
-        let spaces = text[i..].iter().take_while(|&&c| js_text::is_ws(c)).count();
+        let spaces = text[i..].iter().take_while(|&&c| is_whitespace(c)).count();
         if spaces == 0 {
             return false;
         }
@@ -241,7 +241,7 @@ pub fn is_reply_all(check: ReplyAllCheck<'_>) -> bool {
             return false;
         };
         // [\s-]? : "all" cannot start with either, so take it when it is there
-        if text.get(i).is_some_and(|&c| js_text::is_ws(c) || c == '-') {
+        if text.get(i).is_some_and(|&c| is_whitespace(c) || c == '-') {
             i += 1;
         }
         ascii_word_at(&text, i, "all").is_some_and(|end| word_boundary(&text, end))

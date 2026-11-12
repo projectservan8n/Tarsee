@@ -31,6 +31,11 @@ fn err(s: &str) {
     let _ = e.flush();
 }
 
+/// JavaScript's whitespace (`\s`, `trim()`): U+FEFF is, U+0085 is not.
+fn js_space(c: char) -> bool {
+    c == '\u{FEFF}' || (c != '\u{0085}' && c.is_whitespace())
+}
+
 fn sleep(ms: u64) {
     std::thread::sleep(std::time::Duration::from_millis(ms));
 }
@@ -144,7 +149,7 @@ pub fn main() -> i32 {
                 let squashed: String = key.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
                 format!("C:\\Python\\{squashed}\\python.exe")
             } else {
-                let squashed: String = key.chars().filter(|c| !c.is_whitespace()).collect();
+                let squashed: String = key.chars().filter(|c| !js_space(*c)).collect();
                 format!("/usr/bin/{squashed}")
             };
             me.insert("executable".into(), json!(exe));
@@ -381,7 +386,7 @@ fn worker(scenario: &Value, log: &Option<String>, packages: &dyn Fn() -> Map<Str
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
-        if line.trim().is_empty() {
+        if line.chars().all(js_space) {
             continue;
         }
         let Ok(req) = serde_json::from_str::<Value>(&line) else {

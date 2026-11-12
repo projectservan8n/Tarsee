@@ -13,9 +13,9 @@
 //!
 //! The JS functions defaulted their argument to `process.env`; here the caller passes the [`Env`] (`app.env()`).
 //!
-//! This file also holds the few JavaScript string and number rules the A2 files need (`String.prototype.trim`, `\s`,
-//! `Number(text)`, `Math.round`, `Math.min`), so a value read from the environment or a file is judged exactly as the
-//! Node version judged it.
+//! This file also holds the few JavaScript rules the A2 files need that `util::js` doesn't have (`\s` and `.` as regex
+//! classes, `Number(text)`, `Math.round`, `Math.min`), so a value read from the environment or a file is judged
+//! exactly as the Node version judged it.
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -23,7 +23,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::env::Env;
-use crate::util::js::number_to_string;
+use crate::util::js::{number_to_string, trim as js_trim};
 
 /// A set of environment variables to add to a program's environment.
 pub type EnvMap = BTreeMap<String, String>;
@@ -141,32 +141,13 @@ fn env_number(env: &Env, name: &str) -> f64 {
 
 // --- JavaScript's rules for strings and numbers ------------------------------------------------------------------
 
-/// JavaScript's whitespace (`\s`, and what `String.prototype.trim` removes): unlike Rust's, it includes the
-/// byte-order mark U+FEFF and leaves out U+0085.
-pub(crate) fn is_js_space(c: char) -> bool {
-    matches!(
-        c,
-        '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
-    )
-}
-
-/// The same set as a regex character class body, for patterns ported from JS that use `\s`.
+/// JavaScript's whitespace (`util::js::is_whitespace`) as a regex character class body, for patterns ported from JS
+/// that use `\s`.
 pub(crate) const JS_SPACE_CLASS: &str =
     r"\t\n\x0B\x0C\r \x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}";
 
 /// What JavaScript's `.` matches without the `s` flag: anything but a line terminator.
 pub(crate) const JS_DOT_CLASS: &str = r"[^\n\r\x{2028}\x{2029}]";
-
-/// `text.trim()`.
-pub(crate) fn js_trim(text: &str) -> &str {
-    text.trim_matches(is_js_space)
-}
-
-/// `text.trimStart()`.
-pub(crate) fn js_trim_start(text: &str) -> &str {
-    text.trim_start_matches(is_js_space)
-}
 
 static DECIMAL_LITERAL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$").expect("a decimal pattern"));
@@ -390,7 +371,20 @@ mod tests {
     }
 
     #[test]
-    fn javascript_number_trim_and_round_rules() {
+    fn huge_limits_are_written_with_an_exponent_as_javascript_writes_them() {
+        // Node: String(Math.ceil(4e21 / 4)) is "1e+21", String(Math.round(2e21)) is "2e+21".
+        assert_eq!(
+            mcp_output_env(&env(&[("TARSEE_TOOL_RESULT_MAX_CHARS", "4e21")])),
+            map(&[("MAX_MCP_OUTPUT_TOKENS", "1e+21")])
+        );
+        assert_eq!(
+            bash_output_env(&env(&[("TARSEE_BASH_OUTPUT_MAX_CHARS", "2e21")])),
+            map(&[("BASH_MAX_OUTPUT_LENGTH", "2e+21")])
+        );
+    }
+
+    #[test]
+    fn javascript_number_and_round_rules() {
         assert_eq!(js_number(""), 0.0);
         assert_eq!(js_number("  12  "), 12.0);
         assert_eq!(js_number("0x10"), 16.0);
@@ -402,8 +396,6 @@ mod tests {
         for nan in ["0x", "-0x10", "1e", "e5", ".", "inf", "nan", "infinity", "1,000", "--1"] {
             assert!(js_number(nan).is_nan(), "{nan}");
         }
-        assert_eq!(js_trim("\u{FEFF}\u{A0} x \u{3000}"), "x");
-        assert_eq!(js_trim("\u{85}x"), "\u{85}x", "NEL is not JavaScript whitespace");
         assert_eq!(js_round(2.5), 3.0);
         assert_eq!(js_round(-2.5), -2.0);
         assert_eq!(js_round(0.49999999999999994), 0.0);

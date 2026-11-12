@@ -16,9 +16,33 @@ function and never names the implementing module, so it compiles and runs before
 
 ## Rules for all of them
 
-- **What Node passed around now comes from the `App`.** `db`, `settingsStore`, `channelManager`, `auditLog` and the
-  channels' `chatStream` option are not in any context or option struct. `toolCtx.channelManager` is
-  `channels::api::channel_manager(app)`.
+- **What every Node caller passed now comes from the `App`.** `db`, `settingsStore`, `convStore`, `auditLog` and the
+  channels' `chatStream` option are not in any context or option struct.
+- **The channel manager is the app's for a tool, and the caller's everywhere else.** A tool always had a manager
+  (`lib/tools.js` `executeTool` fell back to the app's when its context had none), so `ToolContext` has none and a
+  tool calls `channels::api::channel_manager(app)`. Three other Node functions answer differently depending on
+  whether their caller handed them a manager, and their callers differ. In Rust each takes
+  `Option<Arc<dyn ChannelApi>>`: **pass `channel_manager(app)` exactly where the Node caller passed
+  `channelManager`, and `None` where it passed none.**
+
+  | Function | Node callers that pass the manager | Node callers that do not | What the manager adds |
+  |---|---|---|---|
+  | `process_command`, in `CommandContext::channel_manager` (K1) | `routes/chat.js` `POST /send` (R1) | `channels/telegram.js`, `discord.js`, `slack.js` (both places), `whatsapp.js`, `email.js` (H1 H2 H3); `channels/websocket.js` (Z1) | `/status`: the "Channels" line. `/doctor`: the channels check |
+  | `build_system_prompt_parts` (S1), which hands it to `get_credential_inventory` (S1) | `routes/chat.js`, `routes/external-api.js` (R1); `channels/websocket.js` (Z1) | the five channels (H1 H2 H3); `lib/cron.js`, `lib/heartbeat.js`, `lib/boot-runner.js`, `lib/subagents.js` (S5); `routes/acp.js` (R1) | the system prompt's credential inventory gets a "Channels" section |
+  | `run_diagnostics` (A4) | `routes/health.js` (A4); the debug console's `doctor` (`routes/debug.js` R3, `channels/websocket.js` Z1); `/doctor` typed in the web chat (K1 passes on its context's) | `/doctor` typed in a chat channel or over the WebSocket (K1 passes on `None`) | the "channels" check |
+
+  `run_diagnostics` has a second argument of this kind, the settings store: `routes/health.js` and `/doctor` pass
+  it, the debug console's `doctor` does not (its context is `{ db, channelManager }`), and its AI check then answers
+  `Settings store not available`. A4 keeps that parameter too (`Option<&dyn Settings>`), and R3 passes `None`.
+
+  These are all there are in the contexts of these interfaces (a tool's, a command's, a turn's options) and in the
+  functions those contexts are handed on to. They come from a list of what each call site passes, for every exported
+  Node function that takes `db`, `settingsStore`, `channelManager`, `convStore` or `auditLog`
+  (`reports/I0-audit-args.cjs.txt`), and from running the Node code both ways for each difference
+  (`reports/I0-probe-per-caller.mjs.txt`). In those contexts, everywhere else, every caller passes the handle or the
+  callee falls back to the app's. A function outside these interfaces keeps its own optional parameters as they are
+  (`engineFor`, `contextTokensFor` and `getSttStatus` are each called without a settings store somewhere): port the
+  arguments each call site passes, not more.
 - **Each implementing module exposes `pub fn install(app: &App)`** that stores its implementation, and `server.rs`
   (Z1) calls them at boot. Its own tests call it too.
 
@@ -58,7 +82,7 @@ event it does not know whole (`TurnEvent::Other`).
 | `Thinking(ThinkingEvent)` | `{type:"thinking", status:"start"\|"stop"}` | |
 | `ToolUse(ToolUseEvent)` | `{type:"tool_use", id, name, input}` | `input` is JSON |
 | `ToolResult(ToolResultEvent)` | `{type:"tool_result", id, ok, result}` | `result` is text |
-| `Usage(UsageEvent)` | `{type:"usage", usage:{input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, context_input_tokens?}, costUsd?, costExact?}` | `costExact` written only when true |
+| `Usage(UsageEvent)` | `{type:"usage", usage:{input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, context_input_tokens?}, costUsd?, costExact?}` | `costExact` written only when true. Each count is an `Option`: the engines always send all four, a scripted usage may leave some out, and one left out stays out |
 | `Step(StepEvent)` | `{type:"step", kind, ...}` | engines yield them; the turn layer publishes `step.payload()` to the live bus and never passes one on |
 | `Error(ErrorEvent)` | `{type:"error", message, subtype?, recoverable?, code?, status?, state?}` | `code` can be absent, `null` or a word: `Option<Option<String>>`, read it with `.code()` |
 | `Done(DoneEvent)` | `{type:"done", stopReason, overBudget?, ceilingUsd?, spentUsd?}` | exactly one, last; `.reason()` is `event.stopReason \|\| ...` |
@@ -84,7 +108,7 @@ while let Some(event) = stream.next().await {
         TurnEvent::Text(text) => reply.push_str(&text.content),
         TurnEvent::ToolUse(tool) => show_tool(&tool.id, &tool.name, &tool.input).await,
         TurnEvent::ToolResult(result) => mark_done(&result.id, result.ok).await,
-        TurnEvent::Usage(usage) => usage.usage.merge_into(&mut tokens),   // usage = { ...usage, ...event.usage }
+        TurnEvent::Usage(event) => usage.merge(&event.usage),             // usage = { ...usage, ...event.usage }
         TurnEvent::Error(error) => surfaced = Some(error.message),
         TurnEvent::Done(done) => { stop_reason = done.reason().map(str::to_string); break; }
         _ => {}                                           // callers ignore types they don't know
@@ -106,6 +130,14 @@ TurnEvent::Error(ErrorEvent::new(message).with_code(None));       // code: null
 TurnEvent::done("end_turn");
 TurnEvent::from_value(json!({"type": "usage", "usage": {...}}));  // never fails
 ```
+
+Gathering a turn's usage: start with `let mut usage = Usage::default();` (the Node `{}`, and it serialises as
+`{}`), `merge` each usage event into it, then read `usage.input() + usage.cache_read() + usage.cache_creation()`
+(`|| 0` each) and `usage.output_tokens` (`?? null`).
+
+A `route` scripted with fields left out reads as a route, and writes the missing ones back as `""` (`provider`,
+`label`, `providerLabel`), `null` (`engine`, `model`, `effort`, `vendor`) or `false` (`streaming`, `backup`). The
+turn layer's own routes always have all nine.
 
 An async generator is a `TurnStream` (`BoxStream<'static, anyhow::Result<TurnEvent>>`). `stream_of([...])` makes
 one from a list; `turn_channel(n)` gives `(sender, stream)` for work that runs in its own task (stop when `send`
@@ -258,12 +290,14 @@ The manager's failure texts are the Node ones (`err.to_string()` is `err.message
 
 `process_command(app, message, &CommandContext) -> anyhow::Result<CommandResult>`, `get_command_list(app)`,
 `extract_playbook_prompt(&result)` are the three things the channels imported from `lib/commands.js`.
-`CommandContext { conversation_id, platform, owner }`; `CommandResult { handled, response }`;
+`CommandContext { conversation_id, platform, owner, channel_manager }`; `CommandResult { handled, response }`;
 `CommandInfo { name, description, usage, category }`. `extract_playbook_prompt` is implemented here (it only reads
 the result); `lib/commands.rs` re-exports it.
 
 ```rust
-// K1, in lib/commands.rs:
+// K1, in lib/commands.rs. `ctx.channelManager` is `ctx.channel_manager`, never `channel_manager(app)`:
+//   if let Some(manager) = &ctx.channel_manager { lines.push(channels_line(&manager.get_status())); }   // /status
+//   run_diagnostics(app, Some(settings), ctx.channel_manager.clone())                                   // /doctor
 #[async_trait]
 impl CommandHandler for Commands {
     async fn process_command(&self, app: &App, message: &str, ctx: &CommandContext) -> anyhow::Result<CommandResult> { ... }
@@ -271,8 +305,12 @@ impl CommandHandler for Commands {
 }
 pub fn install(app: &App) { lib::command_api::install_command_handler(app, Arc::new(Commands)); }
 
-// A channel:
-let result = process_command(&app, &text, &CommandContext { conversation_id, platform: Some("telegram".into()), owner }).await?;
+// A channel (and the WebSocket): no channel manager in the context, as in Node.
+let ctx = CommandContext { conversation_id, platform: Some("telegram".into()), owner, ..Default::default() };
+// The web chat's POST /send, the one caller that hands it over (`channelManager: req.app.get("channelManager")`):
+let ctx = CommandContext { conversation_id, platform, channel_manager: channel_manager(&app), ..Default::default() };
+
+let result = process_command(&app, &text, &ctx).await?;
 if result.handled {
     match extract_playbook_prompt(&result).filter(|p| !p.is_empty()) {      // `if (playbook)`
         Some(playbook) => ai_prompt_override = Some(playbook),
@@ -286,6 +324,7 @@ commands.respond("help", "Here is what I can do.");
 commands.respond("checkpoint", "__PLAYBOOK__\nSave a checkpoint now.");
 commands.respond_with("cron", |call| Ok(CommandResult::handled(if call.ctx.owner { "No scheduled tasks yet." } else { "Only the owner can use /cron" })));
 assert_eq!(commands.calls()[0].ctx.platform.as_deref(), Some("telegram"));   // unscripted commands are { handled: false }
+assert!(commands.calls()[0].ctx.channel_manager.is_none());                  // a channel hands over no manager
 ```
 
 ## Porting the Node tests with these
@@ -301,6 +340,8 @@ assert_eq!(commands.calls()[0].ctx.platform.as_deref(), Some("telegram"));   // 
 | `channels: new Map([["email", { bot: { sendNew } }]])` | `channels.set_channel("email", Arc::new(FakeChannel::new().without_files().with_send_new(sent)))` |
 | `executeTool(name, args, { db, settingsStore, background })` | `execute_tool(&app, name, args, &ToolContext { background, ..Default::default() })` |
 | `processCommand(text, { settingsStore, db, platform: "web" })` | `process_command(&app, text, &CommandContext { platform: Some("web".into()), ..Default::default() })` |
+| `processCommand(text, { ..., channelManager })` | `CommandContext { channel_manager: channel_manager(&app), .. }` (or `Some(fake)` in a test) |
+| `buildSystemPromptParts({ ..., channelManager })`, `runDiagnostics({ ..., channelManager })` | pass `channel_manager(&app)`; where the Node call had no `channelManager`, pass `None` |
 
 A Node test that scripted an *engine* to test something above the turn layer (`test/background-callers.test.js`,
 `test/scheduled-tasks.test.js`: cron, the heartbeat, BOOT.md) needs the real turn layer between the two. Until G3 is
