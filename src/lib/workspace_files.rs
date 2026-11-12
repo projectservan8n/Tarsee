@@ -628,7 +628,7 @@ pub mod jstext {
     use std::path::Path;
     use std::sync::LazyLock;
 
-    use serde_json::Value;
+    use serde_json::{Map, Value};
 
     use crate::env::Env;
     use crate::util::js::number_to_string;
@@ -677,6 +677,42 @@ pub mod jstext {
                 .collect::<Vec<_>>()
                 .join(","),
             Some(Value::Object(_)) => "[object Object]".into(),
+        }
+    }
+
+    /// Whether a property name is an array index, which JavaScript objects keep first, in number order.
+    pub fn is_array_index(key: &str) -> bool {
+        !key.is_empty()
+            && key.chars().all(|c| c.is_ascii_digit())
+            && (key == "0" || !key.starts_with('0'))
+            && key.parse::<u64>().is_ok_and(|n| n < u64::from(u32::MAX))
+    }
+
+    /// An object's keys in JavaScript's property order: array indexes ascending, then the rest as inserted.
+    pub fn js_key_order(object: &Map<String, Value>) -> Vec<&String> {
+        let mut indexes: Vec<&String> = object.keys().filter(|k| is_array_index(k)).collect();
+        indexes.sort_by_key(|k| k.parse::<u64>().unwrap_or(0));
+        indexes.extend(object.keys().filter(|k| !is_array_index(k)));
+        indexes
+    }
+
+    /// `JSON.stringify(value)`: numbers as JavaScript prints them, object keys in JavaScript's order.
+    pub fn js_json_stringify(value: &Value) -> String {
+        match value {
+            Value::Number(n) => {
+                let f = n.as_f64().unwrap_or(0.0);
+                if f.is_finite() { number_to_string(f) } else { "null".into() }
+            }
+            Value::Array(items) => format!("[{}]", items.iter().map(js_json_stringify).collect::<Vec<_>>().join(",")),
+            Value::Object(object) => format!(
+                "{{{}}}",
+                js_key_order(object)
+                    .into_iter()
+                    .map(|k| format!("{}:{}", Value::String(k.clone()), js_json_stringify(&object[k])))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+            other => other.to_string(),
         }
     }
 

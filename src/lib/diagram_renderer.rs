@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
-use crate::lib::workspace_files::jstext::js_string;
+use crate::lib::workspace_files::jstext::{js_json_stringify, js_string};
 use crate::util::js::{number_to_string, truthy};
 
 struct KindStyle {
@@ -380,46 +380,10 @@ fn render_legend(legend: Option<&Value>) -> Result<String, String> {
     Ok(format!("<div class=\"legend\">{pills}</div>"))
 }
 
-/// Whether a property name is an array index, which JavaScript objects keep first, in number order.
-fn is_array_index(key: &str) -> bool {
-    !key.is_empty()
-        && key.chars().all(|c| c.is_ascii_digit())
-        && (key == "0" || !key.starts_with('0'))
-        && key.parse::<u64>().is_ok_and(|n| n < u64::from(u32::MAX))
-}
-
-/// An object's keys in JavaScript's property order: array indexes ascending, then the rest as inserted.
-fn js_key_order(object: &Map<String, Value>) -> Vec<&String> {
-    let mut indexes: Vec<&String> = object.keys().filter(|k| is_array_index(k)).collect();
-    indexes.sort_by_key(|k| k.parse::<u64>().unwrap_or(0));
-    indexes.extend(object.keys().filter(|k| !is_array_index(k)));
-    indexes
-}
-
-/// `JSON.stringify(value)`: numbers as JavaScript prints them, object keys in JavaScript's order.
-fn js_json(value: &Value) -> String {
-    match value {
-        Value::Number(n) => {
-            let f = n.as_f64().unwrap_or(0.0);
-            if f.is_finite() { number_to_string(f) } else { "null".into() }
-        }
-        Value::Array(items) => format!("[{}]", items.iter().map(js_json).collect::<Vec<_>>().join(",")),
-        Value::Object(object) => format!(
-            "{{{}}}",
-            js_key_order(object)
-                .into_iter()
-                .map(|k| format!("{}:{}", Value::String(k.clone()), js_json(&object[k])))
-                .collect::<Vec<_>>()
-                .join(",")
-        ),
-        other => other.to_string(),
-    }
-}
-
 /// Safe to embed inside a <script> tag: `</`, line separators and paragraph separators escaped, so user-influenced
 /// strings can't break out of the script context.
 fn script_safe(value: &Value) -> String {
-    js_json(value)
+    js_json_stringify(value)
         .replace('<', "\\u003c")
         .replace('\u{2028}', "\\u2028")
         .replace('\u{2029}', "\\u2029")
