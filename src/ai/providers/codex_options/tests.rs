@@ -102,7 +102,11 @@ fn target(id: &str, model: Option<&str>, effort: Option<&str>) -> CodexTarget {
     }
 }
 
-fn build_with(id: &str, model: Option<&str>, change: impl FnOnce(&mut CodexContext)) -> Result<CodexOptions, EngineEnvError> {
+fn build_with(
+    id: &str,
+    model: Option<&str>,
+    change: impl FnOnce(&mut CodexContext),
+) -> Result<CodexOptions, EngineEnvError> {
     let mut ctx = base_ctx(id, STATE, WS);
     change(&mut ctx);
     build_codex_options(&target(id, model, None), &ctx)
@@ -146,10 +150,17 @@ fn code_of(err: EngineEnvError) -> Option<&'static str> {
 fn openai_the_key_only_as_the_api_key_codex_api_key_in_the_child_openais_host_named_explicitly_api_login_only() {
     let o = build_with("openai", Some("gpt-6.1-sol"), |_| {}).unwrap();
     assert_eq!(o.api_key.as_deref(), key("openai"));
-    assert_eq!(o.env["CODEX_HOME"], node_join(Path::new(STATE), &[".codex-home-keys"]).to_string_lossy());
+    assert_eq!(
+        o.env["CODEX_HOME"],
+        node_join(Path::new(STATE), &[".codex-home-keys"]).to_string_lossy()
+    );
     assert_eq!(o.home, node_join(Path::new(STATE), &[".codex-home-keys"]));
     assert_eq!(o.env["TARSEE_MCP_TOKEN"], MCP_TOKEN);
-    assert_eq!(o.env.get("CODEX_API_KEY"), None, "the engine adds CODEX_API_KEY itself, from the API key");
+    assert_eq!(
+        o.env.get("CODEX_API_KEY"),
+        None,
+        "the engine adds CODEX_API_KEY itself, from the API key"
+    );
     assert_eq!(o.config["forced_login_method"], "api");
     assert_eq!(o.config["openai_base_url"], "https://api.openai.com/v1");
     assert!(o.config.get("model_provider").is_none());
@@ -214,31 +225,65 @@ fn local_the_turns_bridge_address_the_bridges_token_as_its_key_never_the_owners_
     let o = build_with("local", Some("llama3.1:8b"), |c| c.context_tokens = Some(32_000.0)).unwrap();
     let p = &o.config["model_providers"]["tarsee_local"];
     assert_eq!(o.config["model_provider"], "tarsee_local");
-    assert_eq!(p["base_url"], BRIDGE_URL, "Codex talks to the bridge, which passes the requests on to the owner's server");
+    assert_eq!(
+        p["base_url"], BRIDGE_URL,
+        "Codex talks to the bridge, which passes the requests on to the owner's server"
+    );
     assert_eq!(p["env_key"], "TARSEE_PROVIDER_KEY");
     assert_eq!(o.env["TARSEE_PROVIDER_KEY"], BRIDGE_TOKEN);
     // The owner's key and address appear nowhere in what the Codex process gets: its environment, its config, argv.
-    let everything: Vec<String> = env_strings(&o.env).into_iter().chain(all_strings(&o.config)).chain(args(&o)).collect();
-    assert!(!everything.iter().any(|s| s.contains(key("local").unwrap())), "the owner's Local AI key never reaches the Codex process");
-    assert!(!everything.iter().any(|s| s.contains("ollama.railway.internal")), "nor the owner's address");
-    assert!(!args(&o).iter().any(|s| s.contains(BRIDGE_TOKEN)), "the bridge's token is in the environment only, never on the command line");
+    let everything: Vec<String> = env_strings(&o.env)
+        .into_iter()
+        .chain(all_strings(&o.config))
+        .chain(args(&o))
+        .collect();
+    assert!(
+        !everything.iter().any(|s| s.contains(key("local").unwrap())),
+        "the owner's Local AI key never reaches the Codex process"
+    );
+    assert!(
+        !everything.iter().any(|s| s.contains("ollama.railway.internal")),
+        "nor the owner's address"
+    );
+    assert!(
+        !args(&o).iter().any(|s| s.contains(BRIDGE_TOKEN)),
+        "the bridge's token is in the environment only, never on the command line"
+    );
     assert_eq!(o.config["model_context_window"], 32_000);
     // A server that sends its headers and then nothing (a wedged GPU, a model too big for its memory): Codex waits 5
     // minutes per try, so one retry, not five, gives up in about 10 minutes and lets the backup model answer.
     assert_eq!(p["stream_max_retries"], 1);
-    assert!(p.get("stream_idle_timeout_ms").is_none(), "Codex's own 5 minutes: a slow local model still answers");
+    assert!(
+        p.get("stream_idle_timeout_ms").is_none(),
+        "Codex's own 5 minutes: a slow local model still answers"
+    );
     for (id, model) in [("openrouter", "openai/x"), ("deepseek", "deepseek-flash")] {
         let o = build_with(id, Some(model), |_| {}).unwrap();
-        assert!(o.config["model_providers"][format!("tarsee_{id}")].get("stream_max_retries").is_none(), "{id}");
+        assert!(
+            o.config["model_providers"][format!("tarsee_{id}")]
+                .get("stream_max_retries")
+                .is_none(),
+            "{id}"
+        );
     }
     // A server with no key: Codex still carries the bridge's token, which the bridge checks and never passes on.
     let keyless = build_with("local", Some("llama3.1:8b"), |c| c.key = None).unwrap();
-    assert_eq!(keyless.config["model_providers"]["tarsee_local"]["env_key"], "TARSEE_PROVIDER_KEY");
+    assert_eq!(
+        keyless.config["model_providers"]["tarsee_local"]["env_key"],
+        "TARSEE_PROVIDER_KEY"
+    );
     assert_eq!(keyless.env["TARSEE_PROVIDER_KEY"], BRIDGE_TOKEN);
     // No bridge is a caller's mistake, never a quiet fall back to the owner's server with the owner's key.
-    assert!(build_with("local", Some("llama3.1:8b"), |c| c.local_bridge = None).unwrap_err().is_type_error());
+    assert!(
+        build_with("local", Some("llama3.1:8b"), |c| c.local_bridge = None)
+            .unwrap_err()
+            .is_type_error()
+    );
     let no_token = build_with("local", Some("llama3.1:8b"), |c| {
-        c.local_bridge = Some(BridgeAddress { url: BRIDGE_URL.into(), token: String::new() })
+        c.local_bridge = Some(BridgeAddress {
+            url: BRIDGE_URL.into(),
+            token: String::new(),
+        })
     });
     assert!(no_token.unwrap_err().is_type_error());
 }
@@ -246,15 +291,38 @@ fn local_the_turns_bridge_address_the_bridges_token_as_its_key_never_the_owners_
 #[test]
 fn refuses_before_anything_starts_a_missing_key_local_ai_without_an_address_a_provider_codex_doesnt_run() {
     for id in ["openai", "openrouter", "deepseek"] {
-        assert_eq!(code_of(build_with(id, None, |c| c.key = Some(String::new())).unwrap_err()), Some("needs-key"), "{id}");
+        assert_eq!(
+            code_of(build_with(id, None, |c| c.key = Some(String::new())).unwrap_err()),
+            Some("needs-key"),
+            "{id}"
+        );
     }
-    assert_eq!(code_of(build_with("local", None, |c| c.local_url = Some(String::new())).unwrap_err()), Some("needs-setup"));
-    assert_eq!(code_of(build_with("anthropic", None, |_| {}).unwrap_err()), Some("wrong-engine"));
-    assert_eq!(code_of(build_with("claude", None, |_| {}).unwrap_err()), Some("wrong-engine"));
+    assert_eq!(
+        code_of(build_with("local", None, |c| c.local_url = Some(String::new())).unwrap_err()),
+        Some("needs-setup")
+    );
+    assert_eq!(
+        code_of(build_with("anthropic", None, |_| {}).unwrap_err()),
+        Some("wrong-engine")
+    );
+    assert_eq!(
+        code_of(build_with("claude", None, |_| {}).unwrap_err()),
+        Some("wrong-engine")
+    );
     let nope = build_with("nope", None, |_| {}).unwrap_err();
-    assert!(nope.is_type_error() && nope.to_string().to_lowercase().contains("provider"), "{nope}");
-    assert_eq!(code_of(build_with("openai", None, |c| c.mcp = None).unwrap_err()), Some("needs-mcp-token"));
-    assert!(build_with("openai", None, |c| c.workspace = Some(PathBuf::new())).unwrap_err().is_type_error());
+    assert!(
+        nope.is_type_error() && nope.to_string().to_lowercase().contains("provider"),
+        "{nope}"
+    );
+    assert_eq!(
+        code_of(build_with("openai", None, |c| c.mcp = None).unwrap_err()),
+        Some("needs-mcp-token")
+    );
+    assert!(
+        build_with("openai", None, |c| c.workspace = Some(PathBuf::new()))
+            .unwrap_err()
+            .is_type_error()
+    );
 }
 
 // --- build_codex_options: what every Codex turn gets -------------------------------------------------------------
@@ -264,14 +332,20 @@ const ALL: [&str; 5] = ["chatgpt", "openai", "openrouter", "deepseek", "local"];
 #[test]
 fn full_access_no_approvals_the_workspace_no_git_check_no_web_search_the_skills_folder() {
     for id in ALL {
-        let t = build_with(id, Some("m"), |c| c.skills_dir = Some("/app/skills".into())).unwrap().thread_options;
+        let t = build_with(id, Some("m"), |c| c.skills_dir = Some("/app/skills".into()))
+            .unwrap()
+            .thread_options;
         assert_eq!(t.sandbox_mode, "danger-full-access", "{id}");
         assert_eq!(t.approval_policy, "never", "{id}");
         assert_eq!(t.working_directory, Path::new(WS), "{id}");
         assert!(t.skip_git_repo_check, "{id}");
         assert_eq!(t.web_search_mode, "disabled", "{id}");
         assert!(t.network_access_enabled, "{id}");
-        assert_eq!(t.additional_directories, Some(vec![PathBuf::from("/app/skills")]), "{id}");
+        assert_eq!(
+            t.additional_directories,
+            Some(vec![PathBuf::from("/app/skills")]),
+            "{id}"
+        );
     }
 }
 
@@ -296,13 +370,22 @@ fn the_shell_inherits_everything_vault_keys_reach_scripts_except_the_engines_own
     excluded.sort();
     assert_eq!(
         excluded,
-        ["CODEX_ACCESS_TOKEN", "CODEX_API_KEY", "TARSEE_CHATGPT_ACCESS_TOKEN", "TARSEE_MCP_TOKEN", "TARSEE_PROVIDER_KEY"]
+        [
+            "CODEX_ACCESS_TOKEN",
+            "CODEX_API_KEY",
+            "TARSEE_CHATGPT_ACCESS_TOKEN",
+            "TARSEE_MCP_TOKEN",
+            "TARSEE_PROVIDER_KEY"
+        ]
     );
     for id in ALL {
         let p = build(id).config["shell_environment_policy"].clone();
         assert_eq!(p["inherit"], "all", "{id}");
         assert_eq!(p["ignore_default_excludes"], true, "{id}");
-        let filters: Map<String, Value> = CODEX_SHELL_EXCLUDED.iter().map(|n| (n.to_string(), json!("exclude"))).collect();
+        let filters: Map<String, Value> = CODEX_SHELL_EXCLUDED
+            .iter()
+            .map(|n| (n.to_string(), json!("exclude")))
+            .collect();
         assert_eq!(p["filters"], Value::Object(filters), "{id}");
     }
 }
@@ -332,9 +415,15 @@ fn the_fixed_settings_instructions_no_agents_md_no_history_file_sign_in_kept_in_
 }
 
 #[test]
-fn thinking_summaries_only_when_asked_and_the_compact_limit_is_the_smaller_of_the_window_setting_and_85_percent_of_the_context() {
+fn thinking_summaries_only_when_asked_and_the_compact_limit_is_the_smaller_of_the_window_setting_and_85_percent_of_the_context()
+ {
     assert_eq!(build("openai").config["model_reasoning_summary"], "none");
-    assert_eq!(build_with("openai", None, |c| c.thinking_summaries = true).unwrap().config["model_reasoning_summary"], "concise");
+    assert_eq!(
+        build_with("openai", None, |c| c.thinking_summaries = true)
+            .unwrap()
+            .config["model_reasoning_summary"],
+        "concise"
+    );
     let limit = |id: &str, context: f64, window: f64| {
         build_with(id, None, |c| {
             c.context_tokens = Some(context);
@@ -371,7 +460,11 @@ fn the_environment_no_canary_from_the_servers_environment_the_vaults_keys_the_tu
 
 #[test]
 fn no_secret_in_the_config_or_on_the_command_line_for_any_provider() {
-    let mut secrets: Vec<String> = ["openai", "openrouter", "deepseek", "local"].iter().filter_map(|id| key(id)).map(str::to_string).collect();
+    let mut secrets: Vec<String> = ["openai", "openrouter", "deepseek", "local"]
+        .iter()
+        .filter_map(|id| key(id))
+        .map(str::to_string)
+        .collect();
     secrets.push(MCP_TOKEN.into());
     secrets.extend(CANARIES.iter().map(|(_, v)| v.to_string()));
     for id in ALL {
@@ -381,7 +474,11 @@ fn no_secret_in_the_config_or_on_the_command_line_for_any_provider() {
         let thread = serde_json::to_value(&o.thread_options).unwrap();
         let argv = format!("{}\n{}", args(&o).join("\n"), all_strings(&thread).join("\n"));
         for s in &secrets {
-            assert!(!argv.contains(s.as_str()), "{id}: {}… on the command line", &s[..s.len().min(24)]);
+            assert!(
+                !argv.contains(s.as_str()),
+                "{id}: {}… on the command line",
+                &s[..s.len().min(24)]
+            );
         }
         assert!(!all_strings(&o.config).iter().any(|v| secrets.contains(v)), "{id}");
     }
@@ -396,36 +493,69 @@ fn config_args_flattens_the_config_the_way_the_sdk_does_dotted_keys_toml_values(
 // --- models and effort -------------------------------------------------------------------------------------------
 
 #[test]
-fn chatgpt_names_only_a_model_the_accounts_live_list_has_its_default_included_none_when_the_list_is_missing_or_lacks_it() {
+fn chatgpt_names_only_a_model_the_accounts_live_list_has_its_default_included_none_when_the_list_is_missing_or_lacks_it()
+ {
     let list = vec![
         json!({"id": "gpt-6-luna", "default": true, "efforts": ["low", "medium"]}),
         json!({"id": "gpt-6-luna-mini", "efforts": ["low"]}),
     ];
-    assert_eq!(codex_model_for("chatgpt", Some("gpt-6-luna-mini"), Some(&list)).as_deref(), Some("gpt-6-luna-mini"));
+    assert_eq!(
+        codex_model_for("chatgpt", Some("gpt-6-luna-mini"), Some(&list)).as_deref(),
+        Some("gpt-6-luna-mini")
+    );
     // The account's default is named too: left out, a `model` in the home's config.toml (the Terminal's /model writes
     // one there, and the guard allows it) would run instead of the one Tarsee shows and records.
-    assert_eq!(codex_model_for("chatgpt", Some("gpt-6-luna"), Some(&list)).as_deref(), Some("gpt-6-luna"));
+    assert_eq!(
+        codex_model_for("chatgpt", Some("gpt-6-luna"), Some(&list)).as_deref(),
+        Some("gpt-6-luna")
+    );
     assert_eq!(codex_model_for("chatgpt", Some("default"), Some(&list)), None);
-    assert_eq!(codex_model_for("chatgpt", Some("gpt-6.1-sol"), Some(&list)), None, "not on this account's list");
-    assert_eq!(codex_model_for("chatgpt", Some("gpt-6-luna-mini"), Some(&[])), None, "no live list: Codex's own default");
-    assert_eq!(codex_model_for("chatgpt", Some("gpt-6-luna-mini"), None), None, "no list at all: Codex's own default");
+    assert_eq!(
+        codex_model_for("chatgpt", Some("gpt-6.1-sol"), Some(&list)),
+        None,
+        "not on this account's list"
+    );
+    assert_eq!(
+        codex_model_for("chatgpt", Some("gpt-6-luna-mini"), Some(&[])),
+        None,
+        "no live list: Codex's own default"
+    );
+    assert_eq!(
+        codex_model_for("chatgpt", Some("gpt-6-luna-mini"), None),
+        None,
+        "no list at all: Codex's own default"
+    );
     assert_eq!(codex_model_for("chatgpt", Some(""), Some(&list)), None);
     let chatgpt = |model: &str, effort: Option<&str>| {
         let mut ctx = base_ctx("chatgpt", STATE, WS);
         ctx.account_models = Some(list.clone());
-        build_codex_options(&target("chatgpt", Some(model), effort), &ctx).unwrap().thread_options
+        build_codex_options(&target("chatgpt", Some(model), effort), &ctx)
+            .unwrap()
+            .thread_options
     };
-    assert_eq!(chatgpt("gpt-6-luna-mini", None).model.as_deref(), Some("gpt-6-luna-mini"));
+    assert_eq!(
+        chatgpt("gpt-6-luna-mini", None).model.as_deref(),
+        Some("gpt-6-luna-mini")
+    );
     assert_eq!(chatgpt("gpt-6-luna", None).model.as_deref(), Some("gpt-6-luna"));
     // ...and the default's own efforts apply: a level it doesn't take is not sent.
     assert_eq!(chatgpt("gpt-6-luna", Some("high")).model_reasoning_effort, None);
-    assert_eq!(chatgpt("gpt-6-luna", Some("medium")).model_reasoning_effort.as_deref(), Some("medium"));
+    assert_eq!(
+        chatgpt("gpt-6-luna", Some("medium")).model_reasoning_effort.as_deref(),
+        Some("medium")
+    );
 }
 
 #[test]
 fn every_other_provider_passes_its_model_through_and_none_at_all_means_codexs_default() {
-    assert_eq!(codex_model_for("openai", Some("gpt-6.1-sol"), None).as_deref(), Some("gpt-6.1-sol"));
-    assert_eq!(codex_model_for("local", Some("llama3.1:8b"), None).as_deref(), Some("llama3.1:8b"));
+    assert_eq!(
+        codex_model_for("openai", Some("gpt-6.1-sol"), None).as_deref(),
+        Some("gpt-6.1-sol")
+    );
+    assert_eq!(
+        codex_model_for("local", Some("llama3.1:8b"), None).as_deref(),
+        Some("llama3.1:8b")
+    );
     assert_eq!(codex_model_for("openai", Some("default"), None), None);
     assert_eq!(codex_model_for("openai", None, None), None);
 }
@@ -438,16 +568,26 @@ fn effort_tarsees_levels_go_through_anything_else_is_dropped_and_a_models_own_li
     assert_eq!(codex_effort(Some("turbo"), None), None);
     assert_eq!(codex_effort(None, None), None);
     assert_eq!(codex_effort(Some("max"), Some(&json!(["low", "medium"]))), None);
-    assert_eq!(codex_effort(Some("low"), Some(&json!(["low", "medium"]))).as_deref(), Some("low"));
+    assert_eq!(
+        codex_effort(Some("low"), Some(&json!(["low", "medium"]))).as_deref(),
+        Some("low")
+    );
     let list = vec![json!({"id": "gpt-6-luna-mini", "efforts": ["low"]})];
     let effort = |e: &str| {
         let mut ctx = base_ctx("chatgpt", STATE, WS);
         ctx.account_models = Some(list.clone());
-        build_codex_options(&target("chatgpt", Some("gpt-6-luna-mini"), Some(e)), &ctx).unwrap().thread_options.model_reasoning_effort
+        build_codex_options(&target("chatgpt", Some("gpt-6-luna-mini"), Some(e)), &ctx)
+            .unwrap()
+            .thread_options
+            .model_reasoning_effort
     };
     assert_eq!(effort("high"), None);
     assert_eq!(effort("low").as_deref(), Some("low"));
-    let openai = build_codex_options(&target("openai", Some("gpt-6.1-sol"), Some("xhigh")), &base_ctx("openai", STATE, WS)).unwrap();
+    let openai = build_codex_options(
+        &target("openai", Some("gpt-6.1-sol"), Some("xhigh")),
+        &base_ctx("openai", STATE, WS),
+    )
+    .unwrap();
     assert_eq!(openai.thread_options.model_reasoning_effort.as_deref(), Some("xhigh"));
 }
 
@@ -467,15 +607,25 @@ fn has_half_character(text: &str) -> bool {
 }
 
 #[test]
-fn an_oversized_prompt_loses_its_saved_memories_first_then_its_middle_never_the_preamble_or_the_end_never_a_surrogate_half() {
+fn an_oversized_prompt_loses_its_saved_memories_first_then_its_middle_never_the_preamble_or_the_end_never_a_surrogate_half()
+ {
     // The instructions as a Codex turn builds them (codex.rs): the preamble, the workspace CLAUDE.md, then the stable
     // part (workspace files, the database's quick memories, skills, the conversation's prompt, the channel hint).
     let preamble = build_preamble(Some("codex"), "/data/tarsee/workspace", "UTC");
-    let claude_md = format!("## Workspace instructions (CLAUDE.md)\n\n{}", "Keep the workspace tidy and log what you do.\n".repeat(150));
-    let files = format!("<!-- SOUL.md -->\n{}", "I am calm and precise, and I say so when I don't know.\n".repeat(150));
+    let claude_md = format!(
+        "## Workspace instructions (CLAUDE.md)\n\n{}",
+        "Keep the workspace tidy and log what you do.\n".repeat(150)
+    );
+    let files = format!(
+        "<!-- SOUL.md -->\n{}",
+        "I am calm and precise, and I say so when I don't know.\n".repeat(150)
+    );
     let memories = format!(
         "\n\nAdditional quick memories (shortened; search memory for the full note):\n{}",
-        (0..300).map(|i| format!("- [fact] remembered fact number {i} about the owner's projects")).collect::<Vec<_>>().join("\n")
+        (0..300)
+            .map(|i| format!("- [fact] remembered fact number {i} about the owner's projects"))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
     let skills = "\n\n## Skills\n- pdf: make PDF files\n- browser: browse the web";
     let conversation_prompt = "\n\nThis conversation's own prompt: answer in French.";
@@ -488,20 +638,36 @@ fn an_oversized_prompt_loses_its_saved_memories_first_then_its_middle_never_the_
     let fit = cap_instructions(&text, limit);
     assert!(fit.len() <= limit, "{} bytes", fit.len());
     assert!(fit.starts_with(&preamble), "the whole preamble survives");
-    assert!(fit.contains("## Memory\nUse remember for durable facts."), "and its memory-tool instructions");
+    assert!(
+        fit.contains("## Memory\nUse remember for durable facts."),
+        "and its memory-tool instructions"
+    );
     assert!(fit.contains("Additional quick memories"), "the memories' heading stays");
     assert!(
         fit.contains("remembered fact number 0 ") && !fit.contains("remembered fact number 299 "),
         "the saved memories are trimmed first"
     );
     assert!(
-        fit.contains("## Skills") && fit.contains(js::trim(conversation_prompt)) && fit.ends_with(js::trim(channel_hint)),
+        fit.contains("## Skills")
+            && fit.contains(js::trim(conversation_prompt))
+            && fit.ends_with(js::trim(channel_hint)),
         "the end survives"
     );
-    assert!(fit.contains(&claude_md[..200]), "the workspace instructions too, when trimming the memories is enough");
+    assert!(
+        fit.contains(&claude_md[..200]),
+        "the workspace instructions too, when trimming the memories is enough"
+    );
 
     // Not enough even without the memories: the middle goes (the workspace files), and both ends stay.
-    let huge = [preamble.as_str(), &claude_md, &format!("{}{memories}{skills}{conversation_prompt}{channel_hint}", files.repeat(6))].join("\n\n");
+    let huge = [
+        preamble.as_str(),
+        &claude_md,
+        &format!(
+            "{}{memories}{skills}{conversation_prompt}{channel_hint}",
+            files.repeat(6)
+        ),
+    ]
+    .join("\n\n");
     let cut = cap_instructions(&huge, limit);
     assert!(cut.len() <= limit, "{} bytes", cut.len());
     assert!(cut.starts_with(&preamble), "the preamble survives");
@@ -510,7 +676,10 @@ fn an_oversized_prompt_loses_its_saved_memories_first_then_its_middle_never_the_
         "the conversation's prompt and the channel hint survive"
     );
     assert!(cut.contains("trimmed to fit"));
-    assert!(!has_half_character(&cap_instructions(&format!("{}end", "😀".repeat(5000)), 1001)), "never half a character");
+    assert!(
+        !has_half_character(&cap_instructions(&format!("{}end", "😀".repeat(5000)), 1001)),
+        "never half a character"
+    );
 
     let plain = cap_instructions(&format!("{}😀", "x".repeat(10_000)), 1000);
     assert!(plain.len() <= 1000);
@@ -542,12 +711,29 @@ fn build_applies_the_platforms_limit() {
 #[test]
 fn chatgpts_hosts_move_only_in_tests_only_to_loopback() {
     let hosts = |pairs: &[(&str, &str)]| codex_chatgpt_test_hosts(&Env::from_pairs(pairs.iter().copied()));
-    assert_eq!(hosts(&[("TARSEE_TEST_BASE_URL_CHATGPT", "http://127.0.0.1:9")]), None, "not without NODE_ENV=test");
-    assert_eq!(hosts(&[("NODE_ENV", "test"), ("TARSEE_TEST_BASE_URL_CHATGPT", "http://canary.invalid")]), None);
-    let got = hosts(&[("NODE_ENV", "test"), ("TARSEE_TEST_BASE_URL_CHATGPT", "http://127.0.0.1:9/")]).unwrap();
+    assert_eq!(
+        hosts(&[("TARSEE_TEST_BASE_URL_CHATGPT", "http://127.0.0.1:9")]),
+        None,
+        "not without NODE_ENV=test"
+    );
+    assert_eq!(
+        hosts(&[
+            ("NODE_ENV", "test"),
+            ("TARSEE_TEST_BASE_URL_CHATGPT", "http://canary.invalid")
+        ]),
+        None
+    );
+    let got = hosts(&[
+        ("NODE_ENV", "test"),
+        ("TARSEE_TEST_BASE_URL_CHATGPT", "http://127.0.0.1:9/"),
+    ])
+    .unwrap();
     assert_eq!(
         (got.chatgpt_base_url.as_str(), got.openai_base_url.as_str()),
-        ("http://127.0.0.1:9/backend-api/", "http://127.0.0.1:9/backend-api/codex")
+        (
+            "http://127.0.0.1:9/backend-api/",
+            "http://127.0.0.1:9/backend-api/codex"
+        )
     );
     let o = build_with("chatgpt", None, |c| {
         let env = server();
@@ -573,7 +759,10 @@ fn the_guard_reads_a_trusted_folder_however_codex_spells_it_and_still_refuses_a_
     assert!(guard("[projects.\"/data/a \\\"quoted\\\" name\"]\ntrust_level = \"trusted\"\n").ok);
     assert!(guard("[projects.\"/data/workspace\"]\ntrust_level = \"trusted\"\n").ok);
     // An escape in the root name could spell any name: refused, unread.
-    for text in ["\"openai_base_u\\u0072l\" = \"http://x.invalid\"\n", "[\"mcp_serv\\u0065rs\".leak]\ncommand = \"node\"\n"] {
+    for text in [
+        "\"openai_base_u\\u0072l\" = \"http://x.invalid\"\n",
+        "[\"mcp_serv\\u0065rs\".leak]\ncommand = \"node\"\n",
+    ] {
         let r = guard(text);
         assert!(!r.ok, "{text}");
         assert!(r.files[0].unreadable, "{text}");
@@ -589,13 +778,34 @@ fn the_guard_reads_a_trusted_folder_however_codex_spells_it_and_still_refuses_a_
 }
 
 #[test]
-fn the_allowlist_has_what_codex_writes_itself_the_windows_sandbox_choice_features_personality_and_nothing_that_moves_traffic() {
-    for k in ["windows", "features", "personality", "tui", "projects", "notice", "model", "model_reasoning_effort"] {
+fn the_allowlist_has_what_codex_writes_itself_the_windows_sandbox_choice_features_personality_and_nothing_that_moves_traffic()
+ {
+    for k in [
+        "windows",
+        "features",
+        "personality",
+        "tui",
+        "projects",
+        "notice",
+        "model",
+        "model_reasoning_effort",
+    ] {
         assert!(CODEX_CONFIG_ALLOWED.contains(&k), "{k}");
     }
     for k in [
-        "openai_base_url", "chatgpt_base_url", "model_provider", "model_providers", "profile", "profiles", "mcp_servers",
-        "notify", "plugins", "network", "shell_environment_policy", "otel", "analytics",
+        "openai_base_url",
+        "chatgpt_base_url",
+        "model_provider",
+        "model_providers",
+        "profile",
+        "profiles",
+        "mcp_servers",
+        "notify",
+        "plugins",
+        "network",
+        "shell_environment_policy",
+        "otel",
+        "analytics",
     ] {
         assert!(!CODEX_CONFIG_ALLOWED.contains(&k), "{k}");
     }
@@ -613,7 +823,11 @@ fn sha256(text: &str) -> Value {
 
 /// A long text as the capture wrote it: its digest.
 fn short(text: &str) -> Value {
-    if utf16_len(text) > 1000 { sha256(text) } else { json!(text) }
+    if utf16_len(text) > 1000 {
+        sha256(text)
+    } else {
+        json!(text)
+    }
 }
 
 /// The base context the capture built (`base(id)`), with the case's changes.
@@ -625,8 +839,22 @@ fn node_ctx(provider: &str, change: &Value) -> CodexContext {
     let text = |v: &Value| v.as_str().map(str::to_string);
     for (name, v) in change.as_object().unwrap() {
         match name.as_str() {
-            "env" => ctx.env = Env::from_pairs(v.as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))),
-            "vaultEnv" => ctx.vault_env = v.as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string())).collect(),
+            "env" => {
+                ctx.env = Env::from_pairs(
+                    v.as_object()
+                        .unwrap()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string())),
+                )
+            }
+            "vaultEnv" => {
+                ctx.vault_env = v
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))
+                    .collect()
+            }
             "key" => ctx.key = text(v),
             "stateDir" => ctx.state_dir = text(v).map(PathBuf::from),
             "home" => ctx.home = text(v).map(PathBuf::from),
@@ -672,7 +900,9 @@ fn node_ctx(provider: &str, change: &Value) -> CodexContext {
 
 fn error_json(err: &EngineEnvError) -> Value {
     match err {
-        EngineEnvError::Credential(c) => json!({"name": "CredentialError", "code": c.code.as_str(), "message": c.message}),
+        EngineEnvError::Credential(c) => {
+            json!({"name": "CredentialError", "code": c.code.as_str(), "message": c.message})
+        }
         EngineEnvError::Type(t) => json!({"name": "TypeError", "code": null, "message": t.0}),
     }
 }
@@ -698,14 +928,25 @@ fn node_build_codex_options_for_every_provider_with_and_without_each_optional_in
         let o = built.unwrap_or_else(|err| panic!("{what}: {err}"));
         // The home: the state folder's (or the one named), as Node's path.join made it on this system.
         let id = normalize_provider_id(provider).unwrap();
-        let home = ctx
-            .home
-            .clone()
-            .unwrap_or_else(|| home_for(id, CODEX, &HomeOpts { state_dir: ctx.state_dir.clone(), home_dir: None }).unwrap());
+        let home = ctx.home.clone().unwrap_or_else(|| {
+            home_for(
+                id,
+                CODEX,
+                &HomeOpts {
+                    state_dir: ctx.state_dir.clone(),
+                    home_dir: None,
+                },
+            )
+            .unwrap()
+        });
         assert_eq!(o.home, home, "{what}");
         assert_eq!(o.env["CODEX_HOME"], home.to_string_lossy(), "{what}");
         #[cfg(windows)]
-        assert_eq!(json!(o.home.to_string_lossy()), case["home"], "{what}: as the Node capture (made on Windows) has it");
+        assert_eq!(
+            json!(o.home.to_string_lossy()),
+            case["home"],
+            "{what}: as the Node capture (made on Windows) has it"
+        );
         let mut got = serde_json::to_value(&o).unwrap();
         let fields = got.as_object_mut().unwrap();
         fields.shift_remove("home");
@@ -721,7 +962,10 @@ fn node_build_codex_options_for_every_provider_with_and_without_each_optional_in
         );
         assert_eq!(got, *want, "{what}");
         if let Some(want_args) = case.get("args") {
-            let got_args: Vec<Value> = args(&o).iter().map(|a| if utf16_len(a) > 1000 { sha256(a) } else { json!(a) }).collect();
+            let got_args: Vec<Value> = args(&o)
+                .iter()
+                .map(|a| if utf16_len(a) > 1000 { sha256(a) } else { json!(a) })
+                .collect();
             assert_eq!(Value::Array(got_args), *want_args, "{what}");
         }
     }
@@ -741,7 +985,11 @@ fn node_codex_model_for() {
     let cases = node_cases();
     for case in cases["models"].as_array().unwrap() {
         let list = case[2].as_array().map(Vec::as_slice);
-        assert_eq!(json!(codex_model_for(case[0].as_str().unwrap(), case[1].as_str(), list)), case[3], "{case}");
+        assert_eq!(
+            json!(codex_model_for(case[0].as_str().unwrap(), case[1].as_str(), list)),
+            case[3],
+            "{case}"
+        );
     }
 }
 
@@ -759,24 +1007,50 @@ fn node_config_args() {
 
 /// The texts the capture cut, made again the same way.
 fn cap_texts() -> Vec<String> {
-    let preamble = format!("# Preamble\n\n## Memory\nUse remember for durable facts.\n{}", "Tool notes line.\n".repeat(40));
-    let claude_md = format!("## Workspace instructions (CLAUDE.md)\n\n{}", "Keep the workspace tidy and log what you do.\n".repeat(150));
-    let files = format!("<!-- SOUL.md -->\n{}", "I am calm and precise, and I say so when I don't know.\n".repeat(150));
+    let preamble = format!(
+        "# Preamble\n\n## Memory\nUse remember for durable facts.\n{}",
+        "Tool notes line.\n".repeat(40)
+    );
+    let claude_md = format!(
+        "## Workspace instructions (CLAUDE.md)\n\n{}",
+        "Keep the workspace tidy and log what you do.\n".repeat(150)
+    );
+    let files = format!(
+        "<!-- SOUL.md -->\n{}",
+        "I am calm and precise, and I say so when I don't know.\n".repeat(150)
+    );
     let memories = format!(
         "\n\nAdditional quick memories (shortened; search memory for the full note):\n{}",
-        (0..300).map(|i| format!("- [fact] remembered fact number {i} about the owner's projects")).collect::<Vec<_>>().join("\n")
+        (0..300)
+            .map(|i| format!("- [fact] remembered fact number {i} about the owner's projects"))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
     let rest = "\n\n## Skills\n- pdf: make PDF files\n\nThis conversation's own prompt: answer in French.\n\nYou are talking on Telegram. Send a file with send_file, as an attachment.";
     vec![
         [preamble.as_str(), &claude_md, &format!("{files}{memories}{rest}")].join("\n\n"),
-        [preamble.as_str(), &claude_md, &format!("{}{memories}{rest}", files.repeat(6))].join("\n\n"),
+        [
+            preamble.as_str(),
+            &claude_md,
+            &format!("{}{memories}{rest}", files.repeat(6)),
+        ]
+        .join("\n\n"),
         format!("{}end", "😀".repeat(5000)),
         format!("{}😀", "x".repeat(10_000)),
         "short".to_string(),
         format!("{}\n{}", "é".repeat(3000), "日本".repeat(2000)),
-        format!("start\r\nAdditional quick memories x\n- [a] one\n- [b] two\n\n\n\nend {}", "z".repeat(500)),
-        format!("start\u{2028}Additional quick memories x\n- [a] one\n- [b] two\nend {}", "z".repeat(500)),
-        format!("Additional quick memories at the very start\n- [a] {}\n- [b] b\nafter", "a".repeat(200)),
+        format!(
+            "start\r\nAdditional quick memories x\n- [a] one\n- [b] two\n\n\n\nend {}",
+            "z".repeat(500)
+        ),
+        format!(
+            "start\u{2028}Additional quick memories x\n- [a] one\n- [b] two\nend {}",
+            "z".repeat(500)
+        ),
+        format!(
+            "Additional quick memories at the very start\n- [a] {}\n- [b] b\nafter",
+            "a".repeat(200)
+        ),
         format!("no newline in the tail {}\nlast line", "w".repeat(3000)),
         "line\n".repeat(2000),
     ]
@@ -789,7 +1063,12 @@ fn node_cap_instructions_on_every_size_around_its_edges() {
     for case in cases["caps"].as_array().unwrap() {
         let text = &texts[case[0].as_u64().unwrap() as usize];
         let max = case[1].as_u64().unwrap() as usize;
-        assert_eq!(sha256(&cap_instructions(text, max)), case[2], "text {} at {max}", case[0]);
+        assert_eq!(
+            sha256(&cap_instructions(text, max)),
+            case[2],
+            "text {} at {max}",
+            case[0]
+        );
     }
 }
 
@@ -801,10 +1080,16 @@ fn the_registry_entry_gives_engine_env_what_it_reads() {
     assert_eq!(entry.id, "openrouter");
     assert_eq!(entry.label.as_deref(), Some(PROVIDERS.openrouter.label));
     assert_eq!(entry.env_key.as_deref(), Some("OPENROUTER_API_KEY"));
-    assert_eq!(entry.base_url.get("codex").map(String::as_str), Some("https://openrouter.ai/api/v1"));
+    assert_eq!(
+        entry.base_url.get("codex").map(String::as_str),
+        Some("https://openrouter.ai/api/v1")
+    );
     assert!(entry.engines.as_ref().unwrap().contains(&"codex".to_string()));
     assert_eq!(entry.wrong_slot.len(), PROVIDERS.openrouter.wrong_slot.len());
-    assert_eq!(engine_entry(&PROVIDERS.claude).default_model.as_deref(), PROVIDERS.claude.default_model);
+    assert_eq!(
+        engine_entry(&PROVIDERS.claude).default_model.as_deref(),
+        PROVIDERS.claude.default_model
+    );
 }
 
 #[test]
@@ -820,7 +1105,17 @@ fn compact_off_gives_a_compact_limit_of_zero_as_the_node_code_did() {
 #[test]
 fn debug_output_never_shows_a_key_or_a_token() {
     let o = build("openrouter");
-    let shown = format!("{o:?} {:?} {:?}", McpGrant { url: MCP_URL.into(), token: MCP_TOKEN.into() }, BridgeAddress { url: BRIDGE_URL.into(), token: BRIDGE_TOKEN.into() });
+    let shown = format!(
+        "{o:?} {:?} {:?}",
+        McpGrant {
+            url: MCP_URL.into(),
+            token: MCP_TOKEN.into()
+        },
+        BridgeAddress {
+            url: BRIDGE_URL.into(),
+            token: BRIDGE_TOKEN.into()
+        }
+    );
     for secret in [key("openrouter").unwrap(), MCP_TOKEN, BRIDGE_TOKEN] {
         assert!(!shown.contains(secret), "{secret}");
     }

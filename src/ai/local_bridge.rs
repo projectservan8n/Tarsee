@@ -401,7 +401,8 @@ fn is_known(ty: Option<&str>) -> bool {
 }
 
 fn is_lead_role(role: Option<&Value>) -> bool {
-    role.and_then(Value::as_str).is_some_and(|role| LEAD_ROLES.contains(&role))
+    role.and_then(Value::as_str)
+        .is_some_and(|role| LEAD_ROLES.contains(&role))
 }
 
 /// A message's words: its text parts joined (a string content as it is).
@@ -508,7 +509,7 @@ fn rewrite_input(input: &[Value], names: &ToolNames, body: &mut Map<String, Valu
     let dropped: HashSet<String> = input
         .iter()
         .filter(|item| !is_known(item_type(item)))
-        .filter_map(|item| call_id(item))
+        .filter_map(&call_id)
         .filter_map(|id| same_value(Some(&id)))
         .collect();
     let mut kept: Vec<Value> = Vec::new();
@@ -670,7 +671,11 @@ pub fn restore_event(event: &Value, names: &ToolNames) -> Option<Value> {
         set("response", Some(restored));
     }
     if let Some(Value::String(name)) = fields.get("name") {
-        let ty = fields.get("type").filter(|ty| truthy(ty)).map(js_string).unwrap_or_default();
+        let ty = fields
+            .get("type")
+            .filter(|ty| truthy(ty))
+            .map(js_string)
+            .unwrap_or_default();
         if FUNCTION_CALL_RE.is_match(&ty)
             && let Some(orig) = names.by_flat.get(name)
         {
@@ -758,10 +763,7 @@ impl SseRewriter {
 
     fn take(&mut self, last: bool) -> String {
         let mut out = String::new();
-        loop {
-            let Some(found) = FRAME_END_RE.find_at(&self.buf, self.searched) else {
-                break;
-            };
+        while let Some(found) = FRAME_END_RE.find_at(&self.buf, self.searched) {
             let (start, end) = (found.start(), found.end());
             let raw = self.buf[..start].to_string();
             out.push_str(&self.frame(&raw));
@@ -805,15 +807,15 @@ impl SseRewriter {
             return format!("{raw}\n\n");
         };
         if self.response_id.is_none()
-            && let Some(id) = payload.get("response").and_then(|r| r.get("id")).filter(|id| truthy(id))
+            && let Some(id) = payload
+                .get("response")
+                .and_then(|r| r.get("id"))
+                .filter(|id| truthy(id))
         {
             self.response_id = Some(id.clone());
         }
         let event = event.filter(|name| !name.is_empty());
-        if event.is_none()
-            && !payload.get("type").is_some_and(truthy)
-            && payload.get("error").is_some_and(truthy)
-        {
+        if event.is_none() && !payload.get("type").is_some_and(truthy) && payload.get("error").is_some_and(truthy) {
             let failed = failed_event(&payload, self.response_id.as_ref());
             return format!("event: response.failed\ndata: {}\n\n", js_stringify(&failed));
         }
@@ -977,11 +979,28 @@ fn reach_why(err: &FetchError) -> &'static str {
     let has = |words: &[&str]| words.iter().any(|w| cause.contains(w));
     if has(&["refused", "(os error 111)", "(os error 61)", "(os error 10061)"]) {
         "connection refused"
-    } else if has(&["dns error", "failed to lookup", "no such host", "name or service not known"]) {
+    } else if has(&[
+        "dns error",
+        "failed to lookup",
+        "no such host",
+        "name or service not known",
+    ]) {
         "the name isn't known"
-    } else if has(&["reset", "forcibly closed", "(os error 104)", "(os error 54)", "(os error 10054)"]) {
+    } else if has(&[
+        "reset",
+        "forcibly closed",
+        "(os error 104)",
+        "(os error 54)",
+        "(os error 10054)",
+    ]) {
         "the connection was reset"
-    } else if has(&["timed out", "did not properly respond", "(os error 110)", "(os error 60)", "(os error 10060)"]) {
+    } else if has(&[
+        "timed out",
+        "did not properly respond",
+        "(os error 110)",
+        "(os error 60)",
+        "(os error 10060)",
+    ]) {
         "it took too long to answer"
     } else {
         "network error"
@@ -1125,9 +1144,9 @@ impl LocalBridge {
     /// address that isn't a plain http(s) URL and a key with a line break (a caller's mistake: `TypeError`).
     pub fn open(&self, upstream: &str, key: Option<&str>) -> Result<BridgeTurn, TypeError> {
         let address = js::trim(upstream);
-        let plain = url::Url::parse(address)
-            .ok()
-            .is_some_and(|u| matches!(u.scheme(), "http" | "https") && u.username().is_empty() && u.password().is_none());
+        let plain = url::Url::parse(address).ok().is_some_and(|u| {
+            matches!(u.scheme(), "http" | "https") && u.username().is_empty() && u.password().is_none()
+        });
         if !plain {
             return Err(TypeError(
                 "local-bridge: the Local AI address must be a plain http(s) URL".into(),
@@ -1305,7 +1324,9 @@ impl Listener for BridgeListener {
                 Err(err) => {
                     let passing = matches!(
                         err.kind(),
-                        io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionAborted | io::ErrorKind::ConnectionReset
+                        io::ErrorKind::ConnectionRefused
+                            | io::ErrorKind::ConnectionAborted
+                            | io::ErrorKind::ConnectionReset
                     );
                     if !passing {
                         // Out of file handles and the like: wait a moment rather than spin.
@@ -1337,7 +1358,10 @@ impl CuttableStream {
 
     fn check(&mut self, cx: &mut Context<'_>) -> io::Result<()> {
         if self.cut.is_cancelled() || self.cut_wait.as_mut().poll(cx).is_ready() {
-            return Err(io::Error::new(io::ErrorKind::ConnectionAborted, "the bridge closed the connection"));
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "the bridge closed the connection",
+            ));
         }
         Ok(())
     }
@@ -1404,8 +1428,7 @@ static TURN_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
 static BEARER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(r"^(?i-u:Bearer)[{JS_SPACE_CLASS}]+([^{JS_SPACE_CLASS}]+)$")).expect("the bearer pattern")
 });
-static EVENT_STREAM_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("(?i-u:event-stream)").expect("a fixed pattern"));
+static EVENT_STREAM_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new("(?i-u:event-stream)").expect("a fixed pattern"));
 
 /// The rest of the request after `/t/<id>`, without its leading `/v1` (`/v1/responses` is `/responses`).
 fn rest_of(path: Option<&str>) -> String {
@@ -1414,7 +1437,11 @@ fn rest_of(path: Option<&str>) -> String {
         Some(after) if after.is_empty() || after.starts_with('/') => after,
         _ => path,
     };
-    if rest.is_empty() { "/".to_string() } else { rest.to_string() }
+    if rest.is_empty() {
+        "/".to_string()
+    } else {
+        rest.to_string()
+    }
 }
 
 /// Reads and discards a request's body, so the connection can take the next request (`req.resume()`).
@@ -1455,12 +1482,15 @@ async fn handle(State(shared): State<Arc<Shared>>, ConnectInfo(conn): ConnectInf
     let (parts, body) = req.into_parts();
     let raw_target = parts.uri.to_string();
     let base = url::Url::parse("http://bridge/").ok();
-    let Some(url) = base.and_then(|base| base.join(if raw_target.is_empty() { "/" } else { &raw_target }).ok())
-    else {
+    let Some(url) = base.and_then(|base| base.join(if raw_target.is_empty() { "/" } else { &raw_target }).ok()) else {
         drain(body);
         return refuse();
     };
-    let search = url.query().filter(|q| !q.is_empty()).map(|q| format!("?{q}")).unwrap_or_default();
+    let search = url
+        .query()
+        .filter(|q| !q.is_empty())
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
     let found = TURN_PATH_RE.captures(url.path());
     let authorization = parts
         .headers
@@ -1490,18 +1520,17 @@ async fn handle(State(shared): State<Arc<Shared>>, ConnectInfo(conn): ConnectInf
         turn.upstream,
         if rest == "/" { "" } else { rest.as_str() }
     );
-    let live = turn.live.child_token();
-    let mut body = tokio::select! {
-        read = read_body(body) => match read {
-            Ok(body) => body,
-            Err(BodyError::TooBig) => {
-                return json_response(413, &json!({"error": {"message": "The request is too big for the Local AI bridge."}}));
-            }
-            Err(BodyError::Unreadable) => {
-                return json_response(400, &json!({"error": {"message": "The request couldn't be read."}}));
-            }
-        },
-        _ = live.cancelled() => return destroyed(&conn),
+    let mut body = match read_body(body).await {
+        Ok(body) => body,
+        Err(BodyError::TooBig) => {
+            return json_response(
+                413,
+                &json!({"error": {"message": "The request is too big for the Local AI bridge."}}),
+            );
+        }
+        Err(BodyError::Unreadable) => {
+            return json_response(400, &json!({"error": {"message": "The request couldn't be read."}}));
+        }
     };
 
     let mut names = ToolNames::default();
@@ -1525,6 +1554,14 @@ async fn handle(State(shared): State<Arc<Shared>>, ConnectInfo(conn): ConnectInf
             request = request.body(body);
         }
     }
+    // The request joins the turn's live ones only now, after its body: one whose turn closed while its body was
+    // still coming in goes on to the owner's server all the same, as the Node bridge's did (it added its abort to the
+    // turn's set after closeTurn had emptied it).
+    let live = if turn.live.is_cancelled() {
+        CancellationToken::new()
+    } else {
+        turn.live.child_token()
+    };
     // Codex hanging up drops this future, and with it the request to the owner's server.
     let fetched = tokio::select! {
         fetched = shared.fetch.fetch(request) => fetched,
@@ -1556,7 +1593,11 @@ async fn reply(up: FetchResponse, names: ToolNames, live: CancellationToken, con
             .status(status)
             .header(
                 "content-type",
-                if content_type.is_empty() { "application/octet-stream" } else { content_type.as_str() },
+                if content_type.is_empty() {
+                    "application/octet-stream"
+                } else {
+                    content_type.as_str()
+                },
             )
             .header("cache-control", "no-cache");
         if let Some(retry_after) = &retry_after {
@@ -1570,7 +1611,12 @@ async fn reply(up: FetchResponse, names: ToolNames, live: CancellationToken, con
         return respond(Body::from_stream(pass_through(up.into_stream(), live, conn.clone())));
     }
     if event_stream {
-        return respond(Body::from_stream(rewrite_stream(up.into_stream(), names, live, conn.clone())));
+        return respond(Body::from_stream(rewrite_stream(
+            up.into_stream(),
+            names,
+            live,
+            conn.clone(),
+        )));
     }
     let whole = tokio::select! {
         whole = up.bytes() => whole,

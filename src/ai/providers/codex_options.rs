@@ -127,7 +127,11 @@ fn last_bytes(s: &str, max_bytes: usize) -> &str {
 fn fit_lines(block: &str, max_bytes: usize) -> String {
     let mut out = String::new();
     for line in block.split('\n') {
-        let next = if out.is_empty() { line.to_string() } else { format!("{out}\n{line}") };
+        let next = if out.is_empty() {
+            line.to_string()
+        } else {
+            format!("{out}\n{line}")
+        };
         if next.len() > max_bytes {
             break;
         }
@@ -247,7 +251,11 @@ pub fn config_args(config: &Value) -> Result<Vec<String>, TypeError> {
                 return Ok(());
             }
             for (key, item) in entries {
-                let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+                let path = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
                 flatten(item, &path, out)?;
             }
             return Ok(());
@@ -351,7 +359,9 @@ pub struct McpGrant {
 
 impl std::fmt::Debug for McpGrant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("McpGrant").field("url", &self.url).finish_non_exhaustive()
+        f.debug_struct("McpGrant")
+            .field("url", &self.url)
+            .finish_non_exhaustive()
     }
 }
 
@@ -364,7 +374,9 @@ pub struct BridgeAddress {
 
 impl std::fmt::Debug for BridgeAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BridgeAddress").field("url", &self.url).finish_non_exhaustive()
+        f.debug_struct("BridgeAddress")
+            .field("url", &self.url)
+            .finish_non_exhaustive()
     }
 }
 
@@ -679,7 +691,11 @@ pub fn build_codex_options(target: &CodexTarget, ctx: &CodexContext) -> Result<C
             .find(|row| row.get("id").and_then(Value::as_str) == Some(model.as_str())),
         _ => None,
     };
-    let allowed = if id == "chatgpt" { model_row.and_then(|row| row.get("efforts")) } else { None };
+    let allowed = if id == "chatgpt" {
+        model_row.and_then(|row| row.get("efforts"))
+    } else {
+        None
+    };
     let effort = codex_effort(target.effort.as_deref(), allowed);
 
     let thread_options = ThreadOptions {

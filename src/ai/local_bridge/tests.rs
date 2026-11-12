@@ -48,9 +48,19 @@ fn original(namespace: &str, name: &str) -> OriginalName {
 
 #[test]
 fn joins_the_namespace_and_the_name_with_double_underscore_none_added_when_the_namespace_already_ends_in_it() {
-    assert_eq!(flat_name("mcp__tarsee", "tarsee_calculator", None), "mcp__tarsee__tarsee_calculator");
-    assert_eq!(flat_name("mcp__tarsee__", "tarsee_calculator", None), "mcp__tarsee__tarsee_calculator");
-    assert_eq!(flat_name("mcp__my.server", "do it", None), "mcp__my_server__do_it", "only [A-Za-z0-9_-]");
+    assert_eq!(
+        flat_name("mcp__tarsee", "tarsee_calculator", None),
+        "mcp__tarsee__tarsee_calculator"
+    );
+    assert_eq!(
+        flat_name("mcp__tarsee__", "tarsee_calculator", None),
+        "mcp__tarsee__tarsee_calculator"
+    );
+    assert_eq!(
+        flat_name("mcp__my.server", "do it", None),
+        "mcp__my_server__do_it",
+        "only [A-Za-z0-9_-]"
+    );
 }
 
 #[test]
@@ -61,7 +71,11 @@ fn a_name_past_64_characters_is_cut_and_given_a_short_hash_the_same_every_time_a
     assert_eq!(a.len(), MAX_TOOL_NAME);
     assert_eq!(b.len(), MAX_TOOL_NAME);
     assert_ne!(a, b);
-    assert_eq!(flat_name("mcp__tarsee", &format!("{long}_a"), None), a, "fixed: nothing is kept between requests");
+    assert_eq!(
+        flat_name("mcp__tarsee", &format!("{long}_a"), None),
+        a,
+        "fixed: nothing is kept between requests"
+    );
     assert!(Regex::new("^mcp__tarsee__x+_[0-9a-f]{8}$").unwrap().is_match(&a), "{a}");
 }
 
@@ -69,8 +83,15 @@ fn a_name_past_64_characters_is_cut_and_given_a_short_hash_the_same_every_time_a
 fn a_flat_name_that_clashes_with_a_plain_function_tool_or_another_flat_name_gets_the_hashed_form() {
     let FlatTools { tools, names } = flatten_tools(Some(&json!([func("mcp__tarsee__tarsee_calculator"), tarsee_ns()])));
     let flat: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(flat.iter().collect::<HashSet<_>>().len(), flat.len(), "no two tools share a name");
-    assert_eq!(flat[0], "mcp__tarsee__tarsee_calculator", "the plain tool keeps its own name");
+    assert_eq!(
+        flat.iter().collect::<HashSet<_>>().len(),
+        flat.len(),
+        "no two tools share a name"
+    );
+    assert_eq!(
+        flat[0], "mcp__tarsee__tarsee_calculator",
+        "the plain tool keeps its own name"
+    );
     let moved = &names.by_pair["mcp__tarsee\u{0}tarsee_calculator"];
     assert_ne!(moved, "mcp__tarsee__tarsee_calculator");
     assert_eq!(names.by_flat[moved], original("mcp__tarsee", "tarsee_calculator"));
@@ -94,7 +115,11 @@ fn namespace_tools_become_function_tools_other_tool_kinds_go_plain_functions_sta
     });
     let before = body.to_string();
     let RewrittenRequest { body: out, names } = rewrite_request(&body);
-    assert_eq!(body.to_string(), before, "the request Codex sent is not changed in place");
+    assert_eq!(
+        body.to_string(),
+        before,
+        "the request Codex sent is not changed in place"
+    );
     let kinds: Vec<(&str, &str)> = out["tools"]
         .as_array()
         .unwrap()
@@ -103,11 +128,22 @@ fn namespace_tools_become_function_tools_other_tool_kinds_go_plain_functions_sta
         .collect();
     assert_eq!(
         kinds,
-        [("function", "exec_command"), ("function", "mcp__tarsee__tarsee_calculator"), ("function", "mcp__tarsee__tarsee_datetime")]
+        [
+            ("function", "exec_command"),
+            ("function", "mcp__tarsee__tarsee_calculator"),
+            ("function", "mcp__tarsee__tarsee_datetime")
+        ]
     );
-    assert_eq!(out["tools"][1]["parameters"], tarsee_ns()["tools"][0]["parameters"], "each tool keeps its own description and parameters");
+    assert_eq!(
+        out["tools"][1]["parameters"],
+        tarsee_ns()["tools"][0]["parameters"],
+        "each tool keeps its own description and parameters"
+    );
     assert_eq!(out["tools"][1]["description"], "tarsee_calculator does a thing");
-    assert_eq!(names.by_flat["mcp__tarsee__tarsee_datetime"], original("mcp__tarsee", "tarsee_datetime"));
+    assert_eq!(
+        names.by_flat["mcp__tarsee__tarsee_datetime"],
+        original("mcp__tarsee", "tarsee_datetime")
+    );
     assert_eq!(out["model"], "spark-4b");
     assert_eq!(out["stream"], true);
     assert_eq!(out["tool_choice"], "auto");
@@ -130,7 +166,12 @@ fn earlier_calls_in_the_history_get_their_flat_names_unknown_items_go_with_their
             {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "42"}]},
         ],
     }));
-    let types: Vec<&str> = body["input"].as_array().unwrap().iter().map(|i| i["type"].as_str().unwrap()).collect();
+    let types: Vec<&str> = body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["type"].as_str().unwrap())
+        .collect();
     assert_eq!(types, ["message", "function_call", "function_call_output", "message"]);
     assert_eq!(body["input"][1]["name"], "mcp__tarsee__tarsee_calculator");
     assert!(body["input"][1].get("namespace").is_none());
@@ -176,8 +217,16 @@ fn the_developer_messages_at_the_start_become_one_with_the_instructions_a_later_
             {"role": "system", "content": "A late system note."},
         ],
     }));
-    assert!(body.get("instructions").is_none(), "folded into the one message at the start");
-    let roles: Vec<&str> = body["input"].as_array().unwrap().iter().map(|i| i["role"].as_str().unwrap()).collect();
+    assert!(
+        body.get("instructions").is_none(),
+        "folded into the one message at the start"
+    );
+    let roles: Vec<&str> = body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["role"].as_str().unwrap())
+        .collect();
     assert_eq!(roles, ["developer", "user", "user", "user"]);
     assert_eq!(body["input"][0]["content"].as_array().unwrap().len(), 1);
     assert_eq!(
@@ -188,7 +237,10 @@ fn the_developer_messages_at_the_start_become_one_with_the_instructions_a_later_
     assert_eq!(body["input"][3]["content"], "A late system note.");
     // One developer message and no instructions: as it was.
     let one = rewrite_request(&json!({"input": [{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "only"}]}]})).body;
-    assert_eq!(one["input"], json!([{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "only"}]}]));
+    assert_eq!(
+        one["input"],
+        json!([{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "only"}]}])
+    );
 }
 
 #[test]
@@ -196,7 +248,10 @@ fn an_assistants_refusal_part_becomes_output_text() {
     let RewrittenRequest { body, .. } = rewrite_request(&json!({"input": [
         {"type": "message", "role": "assistant", "content": [{"type": "refusal", "refusal": "I can't."}]},
     ]}));
-    assert_eq!(body["input"][0]["content"], json!([{"type": "output_text", "text": "I can't.", "annotations": []}]));
+    assert_eq!(
+        body["input"][0]["content"],
+        json!([{"type": "output_text", "text": "I can't.", "annotations": []}])
+    );
 }
 
 // --- replies: every call gets its {namespace, name} back ---------------------------------------------------------
@@ -214,10 +269,21 @@ fn output_item_added_and_done_function_call_arguments_done_response_completed_an
     let names = reply_names();
     let mut want = call("tarsee_calculator");
     want["namespace"] = json!("mcp__tarsee");
-    assert_eq!(restore_item(&call("mcp__tarsee__tarsee_calculator"), &names), Some(want));
-    assert_eq!(restore_item(&call("exec_command"), &names), None, "a plain tool's call is left alone");
+    assert_eq!(
+        restore_item(&call("mcp__tarsee__tarsee_calculator"), &names),
+        Some(want)
+    );
+    assert_eq!(
+        restore_item(&call("exec_command"), &names),
+        None,
+        "a plain tool's call is left alone"
+    );
     for ty in ["response.output_item.added", "response.output_item.done"] {
-        let e = restore_event(&json!({"type": ty, "output_index": 0, "item": call("mcp__tarsee__tarsee_datetime")}), &names).unwrap();
+        let e = restore_event(
+            &json!({"type": ty, "output_index": 0, "item": call("mcp__tarsee__tarsee_datetime")}),
+            &names,
+        )
+        .unwrap();
         assert_eq!(e["item"]["name"], "tarsee_datetime");
         assert_eq!(e["item"]["namespace"], "mcp__tarsee");
     }
@@ -234,10 +300,18 @@ fn output_item_added_and_done_function_call_arguments_done_response_completed_an
     .unwrap();
     assert_eq!(done["response"]["output"][0]["namespace"], "mcp__tarsee");
     assert_eq!(done["response"]["output"][0]["name"], "tarsee_calculator");
-    let whole = restore_event(&json!({"id": "r", "object": "response", "output": [call("mcp__tarsee__tarsee_calculator")]}), &names).unwrap();
+    let whole = restore_event(
+        &json!({"id": "r", "object": "response", "output": [call("mcp__tarsee__tarsee_calculator")]}),
+        &names,
+    )
+    .unwrap();
     assert_eq!(whole["output"][0]["name"], "tarsee_calculator");
     let text = json!({"type": "response.output_text.delta", "delta": "hi"});
-    assert_eq!(restore_event(&text, &names), None, "anything else is the very same object");
+    assert_eq!(
+        restore_event(&text, &names),
+        None,
+        "anything else is the very same object"
+    );
 }
 
 #[test]
@@ -268,7 +342,8 @@ fn an_sse_event_split_across_network_chunks_is_rewritten_once_it_is_whole_untouc
 fn a_bare_mid_stream_error_frame_llama_servers_becomes_response_failed_with_the_servers_words() {
     let mut sse = create_sse_rewriter(reply_names());
     sse.push("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_5\"}}\n\n");
-    let out = sse.push("data: {\"error\":{\"code\":500,\"message\":\"the model crashed\",\"type\":\"server_error\"}}\n\n");
+    let out =
+        sse.push("data: {\"error\":{\"code\":500,\"message\":\"the model crashed\",\"type\":\"server_error\"}}\n\n");
     assert!(out.starts_with("event: response.failed\ndata: "), "{out}");
     let e: Value = serde_json::from_str(&out.split('\n').nth(1).unwrap()[6..]).unwrap();
     assert_eq!(e["type"], "response.failed");
@@ -294,7 +369,9 @@ const OWNER_KEY: &str = "sk-test-canary-owner-local-key";
 const OWNER: &str = "http://owner.test:11434/v1";
 
 async fn bridge_with(fetch: Arc<dyn Fetch>) -> LocalBridge {
-    start_local_bridge(BridgeOptions::new(fetch)).await.expect("the bridge starts")
+    start_local_bridge(BridgeOptions::new(fetch))
+        .await
+        .expect("the bridge starts")
 }
 
 /// The Codex side: the real HTTP client, talking to the bridge on loopback.
@@ -313,7 +390,11 @@ async fn get_with(url: &str, token: Option<&str>) -> FetchResponse {
 
 async fn post(turn: &BridgeTurn, body: &Value) -> FetchResponse {
     codex()
-        .fetch(FetchRequest::post(format!("{}/responses", turn.url)).bearer(&turn.token).json(body))
+        .fetch(
+            FetchRequest::post(format!("{}/responses", turn.url))
+                .bearer(&turn.token)
+                .json(body),
+        )
         .await
         .expect("the bridge answers")
 }
@@ -326,23 +407,44 @@ async fn needs_the_turn_named_in_the_path_and_its_token_as_the_bearer_header_a_r
     let t = bridge.open(OWNER, Some(OWNER_KEY)).unwrap();
     let other = bridge.open(OWNER, None).unwrap();
     assert!(
-        Regex::new(r"^http://127\.0\.0\.1:[0-9]+/t/[A-Za-z0-9_-]{16,}/v1$").unwrap().is_match(&t.url),
+        Regex::new(r"^http://127\.0\.0\.1:[0-9]+/t/[A-Za-z0-9_-]{16,}/v1$")
+            .unwrap()
+            .is_match(&t.url),
         "{}",
         t.url
     );
-    assert!(!t.url.contains(&t.token), "the token is never in the address (Codex's command line carries the address)");
+    assert!(
+        !t.url.contains(&t.token),
+        "the token is never in the address (Codex's command line carries the address)"
+    );
     assert!(Regex::new("^[A-Za-z0-9_-]{40,}$").unwrap().is_match(&t.token));
     let models = format!("{}/models", t.url);
     assert_eq!(get_with(&models, None).await.status, 401, "no header");
-    assert_eq!(get_with(&models, Some(&other.token)).await.status, 401, "another turn's token");
-    assert_eq!(get_with(&format!("{}/models", other.url), Some(&t.token)).await.status, 401, "this token on another turn's address");
-    assert_eq!(get_with(&models, Some(OWNER_KEY)).await.status, 401, "the owner's key itself is no way in");
+    assert_eq!(
+        get_with(&models, Some(&other.token)).await.status,
+        401,
+        "another turn's token"
+    );
+    assert_eq!(
+        get_with(&format!("{}/models", other.url), Some(&t.token)).await.status,
+        401,
+        "this token on another turn's address"
+    );
+    assert_eq!(
+        get_with(&models, Some(OWNER_KEY)).await.status,
+        401,
+        "the owner's key itself is no way in"
+    );
     let made_up = format!("{}/models", t.url.replace(&t.id, &"x".repeat(22)));
     assert_eq!(get_with(&made_up, Some(&t.token)).await.status, 401, "a made-up turn");
     assert!(fake.calls().is_empty(), "nothing refused reached the owner's server");
     let ok = get_with(&models, Some(&t.token)).await;
     assert_eq!(ok.status, 200);
-    assert_eq!(fake.calls()[0].url, format!("{OWNER}/models"), "any other path is passed on as it is");
+    assert_eq!(
+        fake.calls()[0].url,
+        format!("{OWNER}/models"),
+        "any other path is passed on as it is"
+    );
     t.release();
     t.release();
     assert_eq!(get_with(&models, Some(&t.token)).await.status, 401, "released");
@@ -373,10 +475,15 @@ fn frames_of(text: &str) -> Vec<Value> {
 }
 
 #[tokio::test]
-async fn the_owners_key_goes_to_the_owners_server_the_turns_token_never_does_tools_go_flat_calls_come_back_namespaced_streamed() {
+async fn the_owners_key_goes_to_the_owners_server_the_turns_token_never_does_tools_go_flat_calls_come_back_namespaced_streamed()
+ {
     let fake = FakeFetch::new();
     // In small pieces, so frames arrive split across chunks.
-    let pieces: Vec<String> = streamed_frames().as_bytes().chunks(37).map(|c| String::from_utf8(c.to_vec()).unwrap()).collect();
+    let pieces: Vec<String> = streamed_frames()
+        .as_bytes()
+        .chunks(37)
+        .map(|c| String::from_utf8(c.to_vec()).unwrap())
+        .collect();
     fake.respond(OWNER, Answer::sse(pieces));
     let bridge = bridge_with(fake.clone()).await;
     let t = bridge.open(OWNER, Some(OWNER_KEY)).unwrap();
@@ -388,16 +495,53 @@ async fn the_owners_key_goes_to_the_owners_server_the_turns_token_never_does_too
     t.release();
     let seen = &fake.calls()[0];
     assert_eq!(seen.url, format!("{OWNER}/responses"));
-    assert_eq!(seen.header("authorization").map(str::to_string), Some(format!("Bearer {OWNER_KEY}")));
-    assert!(!format!("{seen:?}").contains(&t.token), "the turn's token stays between Codex and the bridge");
+    assert_eq!(
+        seen.header("authorization").map(str::to_string),
+        Some(format!("Bearer {OWNER_KEY}"))
+    );
+    assert!(
+        !format!("{seen:?}").contains(&t.token),
+        "the turn's token stays between Codex and the bridge"
+    );
     let sent = seen.json();
-    let tool_names: Vec<&str> = sent["tools"].as_array().unwrap().iter().map(|x| x["name"].as_str().unwrap()).collect();
-    assert_eq!(tool_names, ["exec_command", "mcp__tarsee__tarsee_calculator", "mcp__tarsee__tarsee_datetime"]);
-    assert!(sent["tools"].as_array().unwrap().iter().all(|x| x["type"] == "function"), "no namespace tool reaches the server");
+    let tool_names: Vec<&str> = sent["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        tool_names,
+        [
+            "exec_command",
+            "mcp__tarsee__tarsee_calculator",
+            "mcp__tarsee__tarsee_datetime"
+        ]
+    );
+    assert!(
+        sent["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|x| x["type"] == "function"),
+        "no namespace tool reaches the server"
+    );
     let events = frames_of(&text);
     let types: Vec<&str> = events.iter().map(|e| e["type"].as_str().unwrap()).collect();
-    assert_eq!(types, ["response.created", "response.output_item.added", "response.output_item.done", "response.completed"]);
-    for e in [&events[1]["item"], &events[2]["item"], &events[3]["response"]["output"][0]] {
+    assert_eq!(
+        types,
+        [
+            "response.created",
+            "response.output_item.added",
+            "response.output_item.done",
+            "response.completed"
+        ]
+    );
+    for e in [
+        &events[1]["item"],
+        &events[2]["item"],
+        &events[3]["response"]["output"][0],
+    ] {
         assert_eq!(e["name"], "tarsee_calculator");
         assert_eq!(e["namespace"], "mcp__tarsee");
     }
@@ -417,8 +561,15 @@ async fn a_server_with_no_key_gets_no_authorization_at_all_a_reply_that_isnt_str
     let body = res.json().await.unwrap();
     t.release();
     assert_eq!(fake.calls()[0].header("authorization"), None);
-    assert_eq!(fake.calls()[0].url, format!("{OWNER}/responses"), "one trailing slash on the address changes nothing");
-    assert_eq!((&body["output"][0]["namespace"], &body["output"][0]["name"]), (&json!("mcp__tarsee"), &json!("tarsee_datetime")));
+    assert_eq!(
+        fake.calls()[0].url,
+        format!("{OWNER}/responses"),
+        "one trailing slash on the address changes nothing"
+    );
+    assert_eq!(
+        (&body["output"][0]["namespace"], &body["output"][0]["name"]),
+        (&json!("mcp__tarsee"), &json!("tarsee_datetime"))
+    );
     bridge.close().await;
 }
 
@@ -436,10 +587,16 @@ async fn an_http_error_comes_back_unchanged_a_bare_error_frame_mid_stream_become
         OWNER,
         Answer::sse(["event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_3\"}}\n\ndata: {\"error\":{\"code\":500,\"message\":\"Failed to parse the tool call\",\"type\":\"server_error\"}}\n\n"]),
     );
-    let mid = post(&t, &json!({"model": "m", "stream": true, "input": []})).await.text().await.unwrap();
+    let mid = post(&t, &json!({"model": "m", "stream": true, "input": []}))
+        .await
+        .text()
+        .await
+        .unwrap();
     t.release();
     assert!(
-        Regex::new(r#"event: response\.failed\ndata: \{"type":"response\.failed".*Failed to parse the tool call"#).unwrap().is_match(&mid),
+        Regex::new(r#"event: response\.failed\ndata: \{"type":"response\.failed".*Failed to parse the tool call"#)
+            .unwrap()
+            .is_match(&mid),
         "{mid}"
     );
     bridge.close().await;
@@ -474,7 +631,11 @@ impl Fetch for HangingUpstream {
                 chunk
             })
             .boxed();
-        Ok(FetchResponse::from_stream(200, vec![("content-type".into(), "text/event-stream".into())], body))
+        Ok(FetchResponse::from_stream(
+            200,
+            vec![("content-type".into(), "text/event-stream".into())],
+            body,
+        ))
     }
 }
 
@@ -487,14 +648,21 @@ async fn when_codex_hangs_up_the_request_to_the_owners_server_is_stopped() {
     });
     let bridge = bridge_with(upstream).await;
     let t = bridge.open(OWNER, Some(OWNER_KEY)).unwrap();
-    let res = post(&t, &json!({"model": "m", "stream": true, "tools": [tarsee_ns()], "input": []})).await;
+    let res = post(
+        &t,
+        &json!({"model": "m", "stream": true, "tools": [tarsee_ns()], "input": []}),
+    )
+    .await;
     let mut body = res.into_stream();
     let first = body.next().await.unwrap().unwrap();
     assert!(String::from_utf8_lossy(&first).contains("response.created"));
     drop(body);
     let stopped = tokio::time::timeout(Duration::from_secs(5), gone_rx).await;
     t.release();
-    assert!(matches!(stopped, Ok(Ok(()))), "the owner's server saw the request end before its answer did");
+    assert!(
+        matches!(stopped, Ok(Ok(()))),
+        "the owner's server saw the request end before its answer did"
+    );
     bridge.close().await;
 }
 
@@ -523,10 +691,22 @@ async fn an_owners_server_that_isnt_there_is_a_502_that_names_the_owners_address
 async fn refuses_an_address_that_isnt_plain_http_s_and_a_key_with_a_line_break() {
     let bridge = bridge_with(FakeFetch::new()).await;
     let refusal = |upstream: &str, key: Option<&str>| bridge.open(upstream, key).map(|_| ()).unwrap_err().0;
-    assert_eq!(refusal("ftp://x/v1", None), "local-bridge: the Local AI address must be a plain http(s) URL");
-    assert_eq!(refusal("http://user:pw@x/v1", None), "local-bridge: the Local AI address must be a plain http(s) URL");
-    assert_eq!(refusal("not a url", None), "local-bridge: the Local AI address must be a plain http(s) URL");
-    assert_eq!(refusal(OWNER, Some("a\nb")), "local-bridge: the key has a line break in it");
+    assert_eq!(
+        refusal("ftp://x/v1", None),
+        "local-bridge: the Local AI address must be a plain http(s) URL"
+    );
+    assert_eq!(
+        refusal("http://user:pw@x/v1", None),
+        "local-bridge: the Local AI address must be a plain http(s) URL"
+    );
+    assert_eq!(
+        refusal("not a url", None),
+        "local-bridge: the Local AI address must be a plain http(s) URL"
+    );
+    assert_eq!(
+        refusal(OWNER, Some("a\nb")),
+        "local-bridge: the key has a line break in it"
+    );
     assert_eq!(bridge.turns(), 0);
     bridge.close().await;
 }
@@ -547,7 +727,13 @@ async fn a_turns_token_works_no_longer_than_its_time() {
     let t = b.open(OWNER, None).unwrap();
     let models = format!("{}/models", t.url);
     assert_eq!(get_with(&models, Some(&t.token)).await.status, 200);
-    now.fetch_add(60_001, Ordering::SeqCst);
+    now.fetch_add(60_000, Ordering::SeqCst);
+    assert_eq!(
+        get_with(&models, Some(&t.token)).await.status,
+        200,
+        "still its time to the very millisecond"
+    );
+    now.fetch_add(1, Ordering::SeqCst);
     assert_eq!(get_with(&models, Some(&t.token)).await.status, 401);
     assert_eq!(b.turns(), 0, "an expired turn is closed when it is looked up");
     b.close().await;
@@ -559,10 +745,15 @@ async fn a_turns_token_works_no_longer_than_its_time() {
 fn blanks_a_bridge_addresss_turn_out_of_words_that_may_be_shown_or_logged() {
     let id = "abcdefghijklmnopqrstuv";
     assert_eq!(
-        redact_bridge_urls(&format!("error sending request for url (http://127.0.0.1:5555/t/{id}/v1/responses)")),
+        redact_bridge_urls(&format!(
+            "error sending request for url (http://127.0.0.1:5555/t/{id}/v1/responses)"
+        )),
         "error sending request for url (http://127.0.0.1:5555/t/…/v1/responses)"
     );
-    assert_eq!(redact_bridge_urls("http://localhost:9931/v1/responses"), "http://localhost:9931/v1/responses");
+    assert_eq!(
+        redact_bridge_urls("http://localhost:9931/v1/responses"),
+        "http://localhost:9931/v1/responses"
+    );
 }
 
 // --- The Node code's answers -------------------------------------------------------------------------------------
@@ -612,7 +803,11 @@ fn node_flatten_tools() {
     for case in cases["flattenTools"].as_array().unwrap() {
         let input = &case["input"];
         let got = flatten_tools(if input.is_null() { None } else { Some(input) });
-        assert_eq!(js_stringify(&Value::Array(got.tools)), js_stringify(&case["tools"]), "{input}");
+        assert_eq!(
+            js_stringify(&Value::Array(got.tools)),
+            js_stringify(&case["tools"]),
+            "{input}"
+        );
         assert_eq!(got.names, expected_names(&case["names"]), "{input}");
     }
 }
@@ -622,7 +817,12 @@ fn node_rewrite_request() {
     let cases = node_cases();
     for case in cases["rewriteRequest"].as_array().unwrap() {
         let got = rewrite_request(&case["input"]);
-        assert_eq!(js_stringify(&got.body), js_stringify(&case["body"]), "{}", case["input"]);
+        assert_eq!(
+            js_stringify(&got.body),
+            js_stringify(&case["body"]),
+            "{}",
+            case["input"]
+        );
         assert_eq!(got.names, expected_names(&case["names"]), "{}", case["input"]);
     }
 }
@@ -637,7 +837,11 @@ fn node_restore_event() {
         if case["same"] == true {
             assert_eq!(got, None, "{case}");
         } else {
-            assert_eq!(js_stringify(&got.expect("changed")), js_stringify(&case["out"]), "{case}");
+            assert_eq!(
+                js_stringify(&got.expect("changed")),
+                js_stringify(&case["out"]),
+                "{case}"
+            );
         }
     }
 }
@@ -648,9 +852,19 @@ fn node_sse_rewriter_frame_by_frame() {
     let tool_sets = cases["toolSets"].as_array().unwrap().clone();
     for case in cases["sse"].as_array().unwrap() {
         let mut sse = create_sse_rewriter(names_of(tool_sets[case["tools"].as_u64().unwrap() as usize].clone()));
-        let mut got: Vec<String> = case["pushes"].as_array().unwrap().iter().map(|p| sse.push(p.as_str().unwrap())).collect();
+        let mut got: Vec<String> = case["pushes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| sse.push(p.as_str().unwrap()))
+            .collect();
         got.push(sse.end());
-        let want: Vec<&str> = case["outs"].as_array().unwrap().iter().map(|o| o.as_str().unwrap()).collect();
+        let want: Vec<&str> = case["outs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o.as_str().unwrap())
+            .collect();
         assert_eq!(got, want, "{}", case["pushes"]);
     }
 }
@@ -659,7 +873,11 @@ fn node_sse_rewriter_frame_by_frame() {
 fn node_redact_bridge_urls() {
     let cases = node_cases();
     for case in cases["redact"].as_array().unwrap() {
-        assert_eq!(redact_bridge_urls(case[0].as_str().unwrap()), case[1].as_str().unwrap(), "{case}");
+        assert_eq!(
+            redact_bridge_urls(case[0].as_str().unwrap()),
+            case[1].as_str().unwrap(),
+            "{case}"
+        );
     }
 }
 
@@ -668,7 +886,11 @@ fn node_request_bodies_are_written_back_as_json_stringify_writes_them() {
     let cases = node_cases();
     for case in cases["restringify"].as_array().unwrap() {
         let parsed: Value = serde_json::from_str(case[0].as_str().unwrap()).unwrap();
-        assert_eq!(js_stringify(&rewrite_request(&parsed).body), case[1].as_str().unwrap(), "{case}");
+        assert_eq!(
+            js_stringify(&rewrite_request(&parsed).body),
+            case[1].as_str().unwrap(),
+            "{case}"
+        );
     }
 }
 
@@ -680,7 +902,8 @@ fn text_cut_in_the_middle_of_a_character_waits_for_its_end() {
     let bytes = text.as_bytes();
     for cut in 0..=bytes.len() {
         let mut decoder = Utf8Decoder::default();
-        let joined = decoder.decode(&bytes[..cut], true) + &decoder.decode(&bytes[cut..], true) + &decoder.decode(&[], false);
+        let joined =
+            decoder.decode(&bytes[..cut], true) + &decoder.decode(&bytes[cut..], true) + &decoder.decode(&[], false);
         assert_eq!(joined, text, "cut at {cut}");
     }
     // Bytes that are not UTF-8 are U+FFFD, as TextDecoder makes them; an unfinished character at the very end too.
@@ -688,7 +911,10 @@ fn text_cut_in_the_middle_of_a_character_waits_for_its_end() {
     assert_eq!(decoder.decode(b"a\xff\xc3", true), "a\u{FFFD}");
     assert_eq!(decoder.decode(b"", false), "\u{FFFD}");
     let mut decoder = Utf8Decoder::default();
-    assert_eq!(decoder.decode(b"\xf0\x80b\xed\xa0\x80", false), "\u{FFFD}\u{FFFD}b\u{FFFD}\u{FFFD}\u{FFFD}");
+    assert_eq!(
+        decoder.decode(b"\xf0\x80b\xed\xa0\x80", false),
+        "\u{FFFD}\u{FFFD}b\u{FFFD}\u{FFFD}\u{FFFD}"
+    );
 }
 
 #[test]
@@ -725,7 +951,11 @@ async fn through_the_server_a_stream_cut_mid_line_and_mid_character_comes_out_wh
         streamed_frames()
     );
     // Every byte its own piece: each frame, each line and each character arrives cut.
-    let chunks: Vec<Bytes> = frames.as_bytes().iter().map(|b| Bytes::copy_from_slice(&[*b])).collect();
+    let chunks: Vec<Bytes> = frames
+        .as_bytes()
+        .iter()
+        .map(|b| Bytes::copy_from_slice(&[*b]))
+        .collect();
     let fake = FakeFetch::new();
     fake.respond(
         OWNER,
@@ -737,7 +967,14 @@ async fn through_the_server_a_stream_cut_mid_line_and_mid_character_comes_out_wh
     );
     let bridge = bridge_with(fake).await;
     let t = bridge.open(OWNER, None).unwrap();
-    let text = post(&t, &json!({"model": "m", "stream": true, "tools": [tarsee_ns()], "input": []})).await.text().await.unwrap();
+    let text = post(
+        &t,
+        &json!({"model": "m", "stream": true, "tools": [tarsee_ns()], "input": []}),
+    )
+    .await
+    .text()
+    .await
+    .unwrap();
     let events = frames_of(&text);
     assert_eq!(events[0]["delta"], "Grüße 🐒");
     assert_eq!(events[4]["response"]["output"][0]["namespace"], "mcp__tarsee");
@@ -751,7 +988,11 @@ async fn a_stream_with_nothing_to_map_back_still_turns_a_bare_error_frame_into_r
     fake.respond(OWNER, Answer::sse(["data: {\"error\":\"out of memory\"}\n\n"]));
     let bridge = bridge_with(fake).await;
     let t = bridge.open(OWNER, None).unwrap();
-    let text = post(&t, &json!({"model": "m", "stream": true, "input": []})).await.text().await.unwrap();
+    let text = post(&t, &json!({"model": "m", "stream": true, "input": []}))
+        .await
+        .text()
+        .await
+        .unwrap();
     assert_eq!(
         text,
         "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_local_bridge\",\"object\":\"response\",\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"out of memory\"},\"output\":[]}}\n\n"
@@ -785,7 +1026,11 @@ async fn the_request_passed_on_its_headers_its_path_and_query_and_its_body_rewri
     assert_eq!(res.status, 200);
     assert_eq!(res.header("retry-after"), Some("7"));
     assert_eq!(res.header("cache-control"), Some("no-cache"));
-    assert_eq!(res.text().await.unwrap(), "{\"ok\":1}", "re-written as JSON.stringify writes it");
+    assert_eq!(
+        res.text().await.unwrap(),
+        "{\"ok\":1}",
+        "re-written as JSON.stringify writes it"
+    );
     let seen = &fake.calls()[0];
     assert_eq!(seen.url, format!("{OWNER}/responses?api-version=2&x=%20y"));
     assert_eq!(seen.method, "POST");
@@ -793,8 +1038,15 @@ async fn the_request_passed_on_its_headers_its_path_and_query_and_its_body_rewri
         seen.body,
         r#"{"model":"m","temperature":1,"seed":12345678901234567000,"tools":[{"type":"function","name":"mcp__tarsee__t"}],"input":[]}"#
     );
-    assert_eq!(seen.header("content-length"), Some(seen.body.len().to_string().as_str()));
-    assert_eq!(seen.header("authorization").map(str::to_string), Some(format!("Bearer {OWNER_KEY}")), "the owner's key, trimmed");
+    assert_eq!(
+        seen.header("content-length"),
+        Some(seen.body.len().to_string().as_str())
+    );
+    assert_eq!(
+        seen.header("authorization").map(str::to_string),
+        Some(format!("Bearer {OWNER_KEY}")),
+        "the owner's key, trimmed"
+    );
     assert_eq!(seen.header("accept-encoding"), Some("identity"));
     assert_eq!(seen.header("x-custom"), Some("a, b"));
     assert_eq!(seen.header("cookie"), Some("a=1; b=2"));
@@ -812,7 +1064,9 @@ async fn a_body_that_is_not_json_or_is_encoded_goes_through_untouched_and_a_get_
     let t = bridge.open(OWNER, None).unwrap();
     let client = codex();
     let send = |body: &'static str, encoding: Option<&'static str>| {
-        let mut request = FetchRequest::post(format!("{}/responses", t.url)).bearer(&t.token).body(body);
+        let mut request = FetchRequest::post(format!("{}/responses", t.url))
+            .bearer(&t.token)
+            .body(body);
         if let Some(encoding) = encoding {
             request = request.header("content-encoding", encoding);
         }
@@ -826,7 +1080,14 @@ async fn a_body_that_is_not_json_or_is_encoded_goes_through_untouched_and_a_get_
     assert_eq!(calls[0].body, "{not json");
     assert_eq!(calls[1].body, "{\"a\": 1.0}", "an encoded body is not read");
     assert_eq!(calls[2].body, "{\"a\":1}", "identity is no encoding");
-    assert_eq!((calls[3].method.as_str(), calls[3].body.as_str(), calls[3].header("content-length")), ("GET", "", None));
+    assert_eq!(
+        (
+            calls[3].method.as_str(),
+            calls[3].body.as_str(),
+            calls[3].header("content-length")
+        ),
+        ("GET", "", None)
+    );
     bridge.close().await;
 }
 
@@ -840,13 +1101,19 @@ async fn paths_the_turn_does_not_serve_and_tokens_that_are_not_bearer_are_refuse
     for (url, auth) in [
         (format!("{base}/"), format!("Bearer {}", t.token)),
         (format!("{base}/t/{}", "x".repeat(15)), format!("Bearer {}", t.token)),
-        (format!("{base}/t/{}/v1/../../models", t.id), format!("Bearer {}", t.token)),
+        (
+            format!("{base}/t/{}/v1/../../models", t.id),
+            format!("Bearer {}", t.token),
+        ),
         (format!("{base}/x/t/{}/v1/models", t.id), format!("Bearer {}", t.token)),
         (format!("{}/models", t.url), format!("Basic {}", t.token)),
         (format!("{}/models", t.url), format!("Bearer {} extra", t.token)),
         (format!("{}/models", t.url), "Bearer".to_string()),
     ] {
-        let res = codex().fetch(FetchRequest::get(&url).header("authorization", &auth)).await.unwrap();
+        let res = codex()
+            .fetch(FetchRequest::get(&url).header("authorization", &auth))
+            .await
+            .unwrap();
         assert_eq!(res.status, 401, "{url} {auth}");
         assert_eq!(res.header("content-type"), Some("application/json"));
         assert_eq!(
@@ -855,12 +1122,25 @@ async fn paths_the_turn_does_not_serve_and_tokens_that_are_not_bearer_are_refuse
         );
     }
     // Any case of "Bearer", and the turn's address without /v1: still the turn's.
-    let res = codex().fetch(FetchRequest::get(format!("{base}/t/{}/models", t.id)).header("authorization", format!("bEaReR   {}", t.token))).await.unwrap();
+    let res = codex()
+        .fetch(
+            FetchRequest::get(format!("{base}/t/{}/models", t.id))
+                .header("authorization", format!("bEaReR   {}", t.token)),
+        )
+        .await
+        .unwrap();
     assert_eq!(res.status, 200);
     assert_eq!(fake.calls()[0].url, format!("{OWNER}/models"));
-    let res = codex().fetch(FetchRequest::get(format!("{base}/t/{}/v1", t.id)).bearer(&t.token)).await.unwrap();
+    let res = codex()
+        .fetch(FetchRequest::get(format!("{base}/t/{}/v1", t.id)).bearer(&t.token))
+        .await
+        .unwrap();
     assert_eq!(res.status, 200);
-    assert_eq!(fake.calls()[1].url, OWNER, "the turn's own root is the server's address");
+    assert_eq!(
+        fake.calls()[1].url,
+        OWNER,
+        "the turn's own root is the server's address"
+    );
     bridge.close().await;
 }
 
@@ -877,9 +1157,14 @@ async fn releasing_a_turn_mid_answer_cuts_its_stream_and_closing_the_bridge_cuts
     let mut body = res.into_stream();
     assert!(body.next().await.unwrap().is_ok());
     t.release();
-    let rest = tokio::time::timeout(Duration::from_secs(5), body.next()).await.expect("the stream ends");
+    let rest = tokio::time::timeout(Duration::from_secs(5), body.next())
+        .await
+        .expect("the stream ends");
     assert!(matches!(rest, Some(Err(_))), "cut, not ended cleanly: {rest:?}");
-    assert!(tokio::time::timeout(Duration::from_secs(5), gone_rx).await.is_ok(), "the owner's request stopped");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), gone_rx).await.is_ok(),
+        "the owner's request stopped"
+    );
 
     // A request still waiting for the owner's server when the bridge closes: no answer at all.
     let waiting = Arc::new(tokio::sync::Notify::new());
@@ -893,11 +1178,18 @@ async fn releasing_a_turn_mid_answer_cuts_its_stream_and_closing_the_bridge_cuts
     }
     let bridge = bridge_with(Arc::new(Never(waiting.clone()))).await;
     let t = bridge.open(OWNER, None).unwrap();
-    let request = FetchRequest::post(format!("{}/responses", t.url)).bearer(&t.token).body("{}");
+    let request = FetchRequest::post(format!("{}/responses", t.url))
+        .bearer(&t.token)
+        .body("{}");
     let pending = tokio::spawn(async move { codex().fetch(request).await });
     waiting.notified().await;
-    tokio::time::timeout(Duration::from_secs(5), bridge.close()).await.expect("close returns");
-    let answer = tokio::time::timeout(Duration::from_secs(5), pending).await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(5), bridge.close())
+        .await
+        .expect("close returns");
+    let answer = tokio::time::timeout(Duration::from_secs(5), pending)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(answer.is_err(), "the connection was cut without an answer: {answer:?}");
 }
 
@@ -908,11 +1200,18 @@ async fn a_body_bigger_than_64_mib_is_refused_after_it_is_read() {
     let t = bridge.open(OWNER, None).unwrap();
     let big = vec![b'x'; MAX_BODY_BYTES + 1];
     let res = codex()
-        .fetch(FetchRequest::post(format!("{}/responses", t.url)).bearer(&t.token).body(big))
+        .fetch(
+            FetchRequest::post(format!("{}/responses", t.url))
+                .bearer(&t.token)
+                .body(big),
+        )
         .await
         .unwrap();
     assert_eq!(res.status, 413);
-    assert_eq!(res.text().await.unwrap(), "{\"error\":{\"message\":\"The request is too big for the Local AI bridge.\"}}");
+    assert_eq!(
+        res.text().await.unwrap(),
+        "{\"error\":{\"message\":\"The request is too big for the Local AI bridge.\"}}"
+    );
     assert!(fake.calls().is_empty());
     bridge.close().await;
 }
@@ -925,8 +1224,16 @@ async fn the_apps_bridge_starts_once_and_reaches_the_owner_through_the_apps_http
     let second = local_bridge(&t.app).await.unwrap();
     assert!(Arc::ptr_eq(&first, &second));
     let turn = first.open(OWNER, Some(OWNER_KEY)).unwrap();
-    assert_eq!(get_with(&format!("{}/models", turn.url), Some(&turn.token)).await.status, 200);
-    assert_eq!(t.fetch.calls()[0].header("authorization").map(str::to_string), Some(format!("Bearer {OWNER_KEY}")));
+    assert_eq!(
+        get_with(&format!("{}/models", turn.url), Some(&turn.token))
+            .await
+            .status,
+        200
+    );
+    assert_eq!(
+        t.fetch.calls()[0].header("authorization").map(str::to_string),
+        Some(format!("Bearer {OWNER_KEY}"))
+    );
     drop(turn);
     assert_eq!(first.turns(), 0, "dropping a turn releases it");
 }
@@ -949,8 +1256,13 @@ fn why_the_owners_server_could_not_be_reached_in_short_words() {
 
 #[test]
 fn json_stringify_numbers_and_strings() {
-    let v: Value = serde_json::from_str("[1.0, 2.5, -0.0, 1e21, 1e-7, 9007199254740993, -9007199254740993, \"\\u2028\\u0000\"]").unwrap();
-    assert_eq!(js_stringify(&v), "[1,2.5,0,1e+21,1e-7,9007199254740992,-9007199254740992,\"\u{2028}\\u0000\"]");
+    let v: Value =
+        serde_json::from_str("[1.0, 2.5, -0.0, 1e21, 1e-7, 9007199254740993, -9007199254740993, \"\\u2028\\u0000\"]")
+            .unwrap();
+    assert_eq!(
+        js_stringify(&v),
+        "[1,2.5,0,1e+21,1e-7,9007199254740992,-9007199254740992,\"\u{2028}\\u0000\"]"
+    );
     assert_eq!(tpl(None), "undefined");
     assert_eq!(tpl(Some(&json!([1, null, "a"]))), "1,,a");
     assert_eq!(str_or_empty(Some(&Value::Null)), "");

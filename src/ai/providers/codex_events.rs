@@ -46,9 +46,7 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 
 use crate::ai::context_limits::{JS_DOT_CLASS, JS_SPACE_CLASS, js_number};
-use crate::ai::engine_errors::{
-    EngineFailure, ErrorKind, classify_engine_error, friendly, local_no_responses_message,
-};
+use crate::ai::engine_errors::{EngineFailure, ErrorKind, classify_engine_error, friendly, local_no_responses_message};
 use crate::ai::local_bridge::{js_string, js_stringify, redact_bridge_urls, str_or_empty, tpl};
 use crate::ai::provider_registry::{Engine, get_provider, normalize_provider_id};
 use crate::ai::turn_types::TurnEvent;
@@ -114,8 +112,7 @@ static CODEX_EXITED_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static PATH_ALIASES_RE: LazyLock<Regex> =
     LazyLock::new(|| pattern("^WARNING: proceeding, even though we could not create PATH aliases"));
-static READING_STDIN_RE: LazyLock<Regex> =
-    LazyLock::new(|| pattern("^Reading (prompt|additional input) from stdin"));
+static READING_STDIN_RE: LazyLock<Regex> = LazyLock::new(|| pattern("^Reading (prompt|additional input) from stdin"));
 static LOG_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
     let s = format!("[{JS_SPACE_CLASS}]");
     pattern(&format!(
@@ -451,7 +448,9 @@ fn mcp_result_text(item: &Value) -> String {
             .map(|c| {
                 let ty = c.get("type");
                 if ty.and_then(Value::as_str) == Some("text") {
-                    c.get("text").map(|text| if text.is_null() { String::new() } else { js_string(text) }).unwrap_or_default()
+                    c.get("text")
+                        .map(|text| if text.is_null() { String::new() } else { js_string(text) })
+                        .unwrap_or_default()
                 } else if ty.and_then(Value::as_str) == Some("image") {
                     "[image]".to_string()
                 } else if let Some(ty) = ty.filter(|ty| truthy(ty)) {
@@ -642,7 +641,10 @@ pub fn classify_codex_failure(provider_id: &str, raw_message: &str, ctx: Failure
     }
     let mut kind = c.kind;
     let mut words = c.message.clone();
-    if matches!(kind, ErrorKind::Unknown | ErrorKind::Unavailable) && UNREACHABLE_RE.is_match(&message) && c.status.is_none() {
+    if matches!(kind, ErrorKind::Unknown | ErrorKind::Unavailable)
+        && UNREACHABLE_RE.is_match(&message)
+        && c.status.is_none()
+    {
         kind = ErrorKind::Unavailable;
     }
     if kind == ErrorKind::Unavailable && id == "local" {
@@ -766,7 +768,12 @@ impl CodexEventState {
         let key = js_stringify(&Value::Array(
             items
                 .iter()
-                .map(|t| json!([t.get("text").cloned().unwrap_or(Value::Null), t.get("completed").is_some_and(truthy)]))
+                .map(|t| {
+                    json!([
+                        t.get("text").cloned().unwrap_or(Value::Null),
+                        t.get("completed").is_some_and(truthy)
+                    ])
+                })
                 .collect(),
         ));
         let list = self.id_of(item.get("id")).key;
@@ -794,7 +801,10 @@ impl CodexEventState {
         let why = js::trim(reason.unwrap_or(""));
         let label = &self.label;
         let what = if let Some(status) = RETRY_STATUS_RE.captures(why) {
-            let named = status.get(2).map(|m| format!(" {}", js::trim(m.as_str()))).unwrap_or_default();
+            let named = status
+                .get(2)
+                .map(|m| format!(" {}", js::trim(m.as_str())))
+                .unwrap_or_default();
             format!("{label} answered {}{named}", &status[1])
         } else if UNREACHABLE_RE.is_match(why) {
             format!("Couldn't reach {label}")
@@ -827,12 +837,16 @@ impl CodexEventState {
         if matches!(c.kind, ErrorKind::Auth | ErrorKind::Expired) {
             return vec![
                 event(json!({"type": "text", "content": c.message})),
-                event(json!({"type": "error", "message": c.message, "code": kind, "subtype": "auth-expired", "recoverable": false})),
+                event(
+                    json!({"type": "error", "message": c.message, "code": kind, "subtype": "auth-expired", "recoverable": false}),
+                ),
                 event(json!({"type": "done", "stopReason": "auth-expired"})),
             ];
         }
         vec![
-            event(json!({"type": "error", "message": c.message, "code": kind, "subtype": kind, "recoverable": c.recoverable})),
+            event(
+                json!({"type": "error", "message": c.message, "code": kind, "subtype": kind, "recoverable": c.recoverable}),
+            ),
             event(json!({"type": "done", "stopReason": "error"})),
         ]
     }
@@ -858,7 +872,11 @@ impl CodexEventState {
             }
             Some("mcp_tool_call") => {
                 let name = format!("mcp__{}__{}", tpl(item.get("server")), tpl(item.get("tool")));
-                let input = item.get("arguments").filter(|a| !a.is_null()).cloned().unwrap_or_else(|| json!({}));
+                let input = item
+                    .get("arguments")
+                    .filter(|a| !a.is_null())
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
                 self.start_tool(id, &name, input, true)
             }
             Some("file_change") => {
@@ -950,7 +968,10 @@ impl CodexEventState {
                 let text = str_or_empty(item.get("text"));
                 let text = js::trim(&text);
                 if !text.is_empty() {
-                    out.push(step("thinking", redact_secrets(&utf16_truncate(text, THINKING_MAX_CHARS))));
+                    out.push(step(
+                        "thinking",
+                        redact_secrets(&utf16_truncate(text, THINKING_MAX_CHARS)),
+                    ));
                 }
                 out.push(event(json!({"type": "thinking", "status": "stop"})));
                 out
@@ -960,7 +981,11 @@ impl CodexEventState {
                 if text.is_empty() {
                     return Vec::new();
                 }
-                let content = if self.text_count > 0 { format!("\n\n{text}") } else { text.clone() };
+                let content = if self.text_count > 0 {
+                    format!("\n\n{text}")
+                } else {
+                    text.clone()
+                };
                 self.text_count += 1;
                 let mut out = vec![event(json!({"type": "text", "content": content}))];
                 let trimmed = js::trim(&text);
@@ -1095,7 +1120,11 @@ pub fn finish_codex_events(state: &mut CodexEventState, opts: FinishOptions) -> 
             && !state.last_error.is_empty()
             && !RESUME_FAILED_RE.is_match(&thrown)
             && !MISSING_BINARY_RE.is_match(&thrown);
-        let raw = if use_last_error { state.last_error.clone() } else { words };
+        let raw = if use_last_error {
+            state.last_error.clone()
+        } else {
+            words
+        };
         out.extend(state.failure_events(&raw));
         return out;
     }
