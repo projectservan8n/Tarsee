@@ -17,6 +17,11 @@
 //! The Node version used `node-pty`; this one uses `portable-pty`, whose calls block. The shell's output is read on
 //! a thread of its own, keystrokes are written on another, and a third waits for the shell to end; channels carry
 //! everything to and from the socket's task.
+//!
+//! In Node the socket's `close` event always came and ended the shell. Here the socket's task can stop anywhere (the
+//! connection reset, a send failing, the task dropped, a panic), so a started shell is held by a [`Session`] whose
+//! drop does what the `close` event did: the shell and what it started are ended, the terminal stops being counted,
+//! and the audit lines are written.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
@@ -28,13 +33,14 @@ use std::time::Duration;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, HeaderName};
 use axum::response::Response;
+use futures::SinkExt;
 use parking_lot::{Condvar, Mutex};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 
-use crate::app::App;
+use crate::app::{App, WeakApp};
 use crate::db::audit::{AuditEntry, AuditLog};
 use crate::middleware::auth::{js_number, node_header};
 use crate::util::js::{now_ms, truthy};
@@ -63,6 +69,12 @@ const CLOSE_GRACE: Duration = Duration::from_secs(5);
 const HANGUP_GRACE: Duration = Duration::from_secs(3);
 /// How long the browser has to answer our close (the `ws` package's `closeTimeout`).
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The cursor position request the Windows console sends before it draws, and the answer that puts it top left.
+const CURSOR_QUERY: &[u8] = b"\x1b[6n";
+const CURSOR_TOP_LEFT: &[u8] = b"\x1b[1;1R";
+/// What `node-pty`'s console sent first instead: clear the screen, cursor top left.
+const CLEAR_SCREEN: &str = "\x1b[2J\x1b[H";
 
 /// The shell the terminal runs: PowerShell on Windows, bash elsewhere.
 pub fn shell() -> &'static str {
@@ -97,6 +109,24 @@ pub fn shell_env(app: &App) -> BTreeMap<String, String> {
         put("PWD", working_folder(app).to_string_lossy().into_owned());
     }
     env
+}
+
+/// The program to start for [`shell`]. On Windows it is found as `node-pty`'s `CreateProcessW` found it: the first
+/// folder of `PATH` (whatever the case of its name) that holds it. portable-pty would look it up itself, trying each
+/// `PATHEXT` entry in each folder, and an empty entry there (a trailing `;`) makes it panic; given the full path it
+/// looks no further. Not found, the bare name is given and the start fails with portable-pty's words.
+fn shell_program(env: &BTreeMap<String, String>) -> PathBuf {
+    if cfg!(windows)
+        && let Some((_, path)) = env.iter().find(|(name, _)| name.eq_ignore_ascii_case("PATH"))
+    {
+        for dir in std::env::split_paths(path) {
+            let candidate = dir.join(shell());
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    PathBuf::from(shell())
 }
 
 /// The client's address for the audit log: `req.headers["x-forwarded-for"] || req.socket.remoteAddress` (the whole
@@ -175,37 +205,117 @@ impl ShellExit {
     }
 }
 
-/// Set once the shell has ended, for a kill waiting to see whether it has to insist.
+/// How the shell ended, once it has: for a kill waiting to see whether it has to insist, and for a session that
+/// stopped before the shell did and still owes the exit's log and audit lines.
 #[derive(Default)]
 struct Ended {
-    done: Mutex<bool>,
+    status: Mutex<Option<ShellExit>>,
     changed: Condvar,
 }
 
 impl Ended {
-    fn set(&self) {
-        *self.done.lock() = true;
+    fn set(&self, status: ShellExit) {
+        *self.status.lock() = Some(status);
         self.changed.notify_all();
     }
 
-    /// Whether it ended within `wait`.
+    /// The exit, if it comes within `wait`.
     #[cfg(unix)]
-    fn wait(&self, wait: Duration) -> bool {
-        let mut done = self.done.lock();
-        if !*done {
-            self.changed.wait_for(&mut done, wait);
+    fn wait_for(&self, wait: Duration) -> Option<ShellExit> {
+        let mut status = self.status.lock();
+        if status.is_none() {
+            self.changed.wait_for(&mut status, wait);
         }
-        *done
+        *status
+    }
+
+    /// The exit, however long it takes.
+    fn wait(&self) -> ShellExit {
+        let mut status = self.status.lock();
+        loop {
+            if let Some(exit) = *status {
+                return exit;
+            }
+            self.changed.wait(&mut status);
+        }
+    }
+}
+
+/// A Windows job object holding the shell and everything it starts: ending the job ends exactly those processes,
+/// whatever their ids, and closing its last handle does the same (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`), so they
+/// end with the server too.
+#[cfg(windows)]
+struct Job(windows_sys::Win32::Foundation::HANDLE);
+
+// SAFETY: a job handle may be used and closed from any thread.
+#[cfg(windows)]
+unsafe impl Send for Job {}
+#[cfg(windows)]
+unsafe impl Sync for Job {}
+
+#[cfg(windows)]
+impl Job {
+    /// A new job that ends its processes when closed, with `process` in it.
+    fn holding(process: std::os::windows::io::RawHandle) -> Result<Job, String> {
+        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        };
+        // SAFETY: plain Win32 calls; the limit structure is zeroed, then one flag set, and passed with its size. The
+        // job's handle is owned by the returned value (closed on drop, also on the error paths below).
+        unsafe {
+            let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if handle.is_null() {
+                return Err(format!("CreateJobObjectW failed, error {}", GetLastError()));
+            }
+            let job = Job(handle);
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            ) == 0
+            {
+                return Err(format!("SetInformationJobObject failed, error {}", GetLastError()));
+            }
+            if AssignProcessToJobObject(job.0, process.cast()) == 0 {
+                return Err(format!("AssignProcessToJobObject failed, error {}", GetLastError()));
+            }
+            Ok(job)
+        }
+    }
+
+    /// Ends every process in the job (exit code 1, as `process.kill` gave on Windows).
+    fn terminate(&self) {
+        // SAFETY: a call on the handle this value owns.
+        unsafe {
+            windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1);
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Job {
+    fn drop(&mut self) {
+        // SAFETY: the handle is owned by this value and closed once.
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
     }
 }
 
 /// A running shell: what it takes to resize its terminal and to end it.
 pub struct Shell {
+    #[cfg_attr(not(unix), allow(dead_code))]
     pid: Option<u32>,
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
-    /// Read by a Unix kill that waits to see whether it has to insist.
-    #[cfg_attr(not(unix), allow(dead_code))]
+    /// Windows: the job the shell and everything it starts are in; `None` when the shell could not be put in one.
+    #[cfg(windows)]
+    job: Mutex<Option<Job>>,
     ended: Arc<Ended>,
 }
 
@@ -241,9 +351,9 @@ impl Shell {
     }
 
     /// Ends the shell and what it started. Unix: SIGHUP, as `node-pty` sent (bash passes it on to its jobs), and if
-    /// the shell is still there after a grace period, SIGKILL to it and its process group. Windows: the shell and
-    /// every process under it are terminated (`node-pty` ended every process attached to the console). Then the
-    /// terminal is closed.
+    /// the shell is still there after a grace period, SIGKILL to it and its process group. Windows: the shell's job
+    /// is ended, which ends the shell and every process it started and nothing else (`node-pty` ended the processes
+    /// attached to the console); without a job, the shell alone through its handle. Then the terminal is closed.
     fn kill(self: &Arc<Self>) {
         #[cfg(unix)]
         match self.pid.and_then(|p| i32::try_from(p).ok()) {
@@ -253,25 +363,25 @@ impl Shell {
                     libc::kill(pid, libc::SIGHUP);
                 }
                 let ended = self.ended.clone();
-                let _ = std::thread::Builder::new().name("terminal-kill".into()).spawn(move || {
-                    if !ended.wait(HANGUP_GRACE) {
-                        // SAFETY: as above.
-                        unsafe {
-                            if libc::kill(-pid, libc::SIGKILL) != 0 {
-                                libc::kill(pid, libc::SIGKILL);
+                let _ = std::thread::Builder::new()
+                    .name("terminal-kill".into())
+                    .spawn(move || {
+                        if ended.wait_for(HANGUP_GRACE).is_none() {
+                            // SAFETY: as above.
+                            unsafe {
+                                if libc::kill(-pid, libc::SIGKILL) != 0 {
+                                    libc::kill(pid, libc::SIGKILL);
+                                }
                             }
                         }
-                    }
-                });
+                    });
             }
             None => self.kill_child(),
         }
         #[cfg(windows)]
-        {
-            if let Some(pid) = self.pid {
-                kill_process_tree(pid);
-            }
-            self.kill_child();
+        match self.job.lock().take() {
+            Some(job) => job.terminate(),
+            None => self.kill_child(),
         }
         #[cfg(not(any(unix, windows)))]
         self.kill_child();
@@ -279,97 +389,8 @@ impl Shell {
     }
 }
 
-/// When a process was created, as the system's own 64-bit time stamp; `None` when it cannot be asked (the process
-/// is gone, or it is one this program may not look at).
-#[cfg(windows)]
-fn process_created_at(pid: u32) -> Option<u64> {
-    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
-    use windows_sys::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
-
-    let zero = FILETIME {
-        dwLowDateTime: 0,
-        dwHighDateTime: 0,
-    };
-    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
-    // SAFETY: a handle opened, used and closed here; the four out-parameters are plain structs on this stack.
-    let ok = unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            return None;
-        }
-        let ok = GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) != 0;
-        CloseHandle(handle);
-        ok
-    };
-    ok.then(|| (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
-}
-
-/// Whether `child`, which the system lists with `parent`'s id as its parent, really is its child: it must have been
-/// created after it. Windows reuses the id of a process that has ended, and a process keeps the id of a parent
-/// long gone; without this check, a shell that happens to get such an id would "own" a stranger (the desktop's own
-/// processes are among those whose parent has ended). A process whose creation time cannot be read is never taken.
-#[cfg(windows)]
-fn is_really_child(child_created: Option<u64>, parent_created: Option<u64>) -> bool {
-    matches!((child_created, parent_created), (Some(child), Some(parent)) if child >= parent)
-}
-
-/// Terminates every process under `root` (children first) and then `root`, from a snapshot of the system's
-/// processes and their parents. Only real descendants are taken: see [`is_really_child`].
-#[cfg(windows)]
-fn kill_process_tree(root: u32) {
-    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
-    };
-    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
-
-    let mut parents: Vec<(u32, u32)> = Vec::new();
-    // SAFETY: a process snapshot read with the documented calls, on an entry whose size field is set; the handle is
-    // closed here.
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snapshot != INVALID_HANDLE_VALUE {
-            let mut entry = PROCESSENTRY32W {
-                dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
-                ..Default::default()
-            };
-            let mut more = Process32FirstW(snapshot, &mut entry) != 0;
-            while more {
-                parents.push((entry.th32ProcessID, entry.th32ParentProcessID));
-                more = Process32NextW(snapshot, &mut entry) != 0;
-            }
-            CloseHandle(snapshot);
-        }
-    }
-    let mut tree = vec![(root, process_created_at(root))];
-    let mut i = 0;
-    while i < tree.len() {
-        let (parent, parent_created) = tree[i];
-        for &(pid, ppid) in &parents {
-            if ppid == parent && pid != 0 && !tree.iter().any(|(known, _)| *known == pid) {
-                let created = process_created_at(pid);
-                if is_really_child(created, parent_created) {
-                    tree.push((pid, created));
-                }
-            }
-        }
-        i += 1;
-    }
-    for (pid, _) in tree.into_iter().rev() {
-        // SAFETY: a handle opened, used and closed here; a process already gone makes OpenProcess fail.
-        unsafe {
-            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-            if !handle.is_null() {
-                TerminateProcess(handle, 1);
-                CloseHandle(handle);
-            }
-        }
-    }
-}
-
-/// What the threads around the shell send to the socket's task.
-struct Spawned {
-    shell: Arc<Shell>,
+/// The ends of the shell's pipes the socket's task uses.
+struct Pipes {
     /// The shell's output, as it is read; closed when the terminal has no more.
     output: mpsc::Receiver<Vec<u8>>,
     /// Keystrokes for the shell, written in order on the writer's thread.
@@ -377,24 +398,61 @@ struct Spawned {
     exit: oneshot::Receiver<ShellExit>,
 }
 
-/// Starts the shell in a pseudo-terminal of 80 by 30, in the working folder, with [`shell_env`]. Blocking.
-fn spawn_shell(app: &App) -> anyhow::Result<Spawned> {
+/// The panic's message, for a panic inside the pseudo-terminal library.
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "the pseudo-terminal library failed".to_string())
+}
+
+/// Starts the shell in a pseudo-terminal of 80 by 30, in the working folder, with [`shell_env`]. Blocking. A panic
+/// inside portable-pty is caught and answered as a shell that could not start.
+fn spawn_shell(app: &App) -> Result<(Arc<Shell>, Pipes), String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| start_shell(app))) {
+        Ok(started) => started.map_err(|err| format!("{err:#}")),
+        Err(payload) => Err(panic_text(&*payload)),
+    }
+}
+
+fn start_shell(app: &App) -> anyhow::Result<(Arc<Shell>, Pipes)> {
     let pair = native_pty_system().openpty(PtySize {
         rows: ROWS,
         cols: COLS,
         pixel_width: 0,
         pixel_height: 0,
     })?;
-    let mut command = CommandBuilder::new(shell());
+    let env = shell_env(app);
+    let mut command = CommandBuilder::new(shell_program(&env));
     // The environment is exactly the one built here; portable-pty would otherwise start from the real one.
     command.env_clear();
-    for (name, value) in shell_env(app) {
+    for (name, value) in env {
         command.env(name, value);
     }
     command.cwd(working_folder(app));
     let mut child = pair.slave.spawn_command(command)?;
     // The slave side now belongs to the shell; the output ends when the shell and what it started have let go of it.
     drop(pair.slave);
+
+    // Windows: the shell goes in a job at once, before it can start anything.
+    #[cfg(windows)]
+    let job = match child.as_raw_handle().map(Job::holding) {
+        Some(Ok(job)) => Some(job),
+        Some(Err(err)) => {
+            log::warn!(
+                "[terminal] Could not put the shell in a job object ({err}): closing the terminal will end the shell alone"
+            );
+            None
+        }
+        None => {
+            log::warn!(
+                "[terminal] Could not put the shell in a job object (no process handle): closing the terminal will end the shell alone"
+            );
+            None
+        }
+    };
+
     let mut reader = pair.master.try_clone_reader()?;
     let mut writer = pair.master.take_writer()?;
     let ended = Arc::new(Ended::default());
@@ -402,6 +460,8 @@ fn spawn_shell(app: &App) -> anyhow::Result<Spawned> {
         pid: child.process_id(),
         killer: Mutex::new(child.clone_killer()),
         master: Mutex::new(Some(pair.master)),
+        #[cfg(windows)]
+        job: Mutex::new(job),
         ended: ended.clone(),
     });
 
@@ -441,16 +501,11 @@ fn spawn_shell(app: &App) -> anyhow::Result<Spawned> {
         .name("terminal-wait".into())
         .spawn(move || {
             let status = wait_for(&mut *child);
-            ended.set();
+            ended.set(status);
             let _ = exit_tx.send(status);
         })?;
 
-    Ok(Spawned {
-        shell,
-        output,
-        input,
-        exit,
-    })
+    Ok((shell, Pipes { output, input, exit }))
 }
 
 /// Waits for the shell to end. Unix: the exit code, or 0 and the signal that ended it, as `node-pty` gave them.
@@ -475,6 +530,110 @@ fn wait_for(child: &mut (dyn portable_pty::Child + Send + Sync)) -> ShellExit {
     ShellExit {
         exit_code: code,
         signal: if cfg!(unix) { Some(0) } else { None },
+    }
+}
+
+// ---------------------------------------------------------------- the session
+
+fn audit(app: &App, entry: AuditEntry) {
+    if let Some(audit_log) = app.get::<AuditLog>() {
+        audit_log.log(entry);
+    }
+}
+
+/// The shell's end, as Node's `onExit` reported it: the log line, the terminal no longer counted, the audit line.
+fn report_exit(app: &App, terminal_id: &str, terminals: &Terminals, status: ShellExit) {
+    log::info!(
+        "[terminal] Terminal {terminal_id} exited: code={}, signal={}",
+        status.exit_code,
+        status.signal_text()
+    );
+    terminals.remove(terminal_id);
+    let mut detail = json!({ "terminalId": terminal_id, "exitCode": status.exit_code });
+    if let Some(signal) = status.signal {
+        detail["signal"] = json!(signal);
+    }
+    audit(
+        app,
+        AuditEntry::new("terminal.exit")
+            .actor("session-user")
+            .detail(detail.to_string()),
+    );
+}
+
+/// A started shell, from the moment it is counted until its session is over. Whatever ends the socket's task (the
+/// socket closing, a reset, a send failing, the task dropped, a panic), dropping this does what Node's `close` and
+/// `exit` handlers did and the task did not get to: the socket's close is logged and audited, the shell and what it
+/// started are ended, and the shell's exit is logged and audited when it comes.
+struct Session {
+    app: App,
+    terminal_id: String,
+    terminals: Arc<Terminals>,
+    shell: Arc<Shell>,
+    /// The socket's close has been handled (`ws.on("close")`).
+    socket_done: bool,
+    /// The shell's exit has been reported (`ptyProcess.onExit`).
+    exit_done: bool,
+}
+
+impl Session {
+    /// Counts the shell as an open terminal (`terminals.set`) and takes charge of it.
+    fn start(app: &App, terminal_id: &str, shell: Arc<Shell>) -> Session {
+        let terminals = Terminals::of(app);
+        terminals.insert(terminal_id, shell.clone());
+        Session {
+            app: app.clone(),
+            terminal_id: terminal_id.to_string(),
+            terminals,
+            shell,
+            socket_done: false,
+            exit_done: false,
+        }
+    }
+
+    /// The socket has closed (Handle WebSocket close): the shell is ended if it is still counted.
+    fn socket_closed(&mut self) {
+        if self.socket_done {
+            return;
+        }
+        self.socket_done = true;
+        log::info!("[terminal] WebSocket closed for {}", self.terminal_id);
+        // Kill PTY process
+        if let Some(shell) = self.terminals.remove(&self.terminal_id) {
+            shell.kill();
+        }
+        audit(
+            &self.app,
+            AuditEntry::new("terminal.disconnect")
+                .actor("session-user")
+                .detail(json!({ "terminalId": self.terminal_id }).to_string()),
+        );
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.socket_closed();
+        if !self.exit_done {
+            // The exit comes once the shell has gone, which the kill above makes sure of; it is reported then, as
+            // Node's `onExit` reported it after the socket had closed.
+            let app: WeakApp = self.app.downgrade();
+            let terminal_id = self.terminal_id.clone();
+            let terminals = self.terminals.clone();
+            let ended = self.shell.ended.clone();
+            let waiting = std::thread::Builder::new()
+                .name("terminal-exit".into())
+                .spawn(move || {
+                    let status = ended.wait();
+                    if let Some(app) = app.upgrade() {
+                        report_exit(&app, &terminal_id, &terminals, status);
+                    }
+                });
+            if waiting.is_err() {
+                log::error!("[terminal] Terminal {} exit will not be reported", self.terminal_id);
+            }
+        }
+        self.shell.close_terminal();
     }
 }
 
@@ -529,6 +688,44 @@ impl Utf8Decoder {
     }
 }
 
+/// The Windows console portable-pty makes (`PSEUDOCONSOLE_INHERIT_CURSOR`, which it gives no way to leave out)
+/// starts by asking where the cursor is, and draws from there. `node-pty`'s console did not ask: it cleared the
+/// screen and started top left. So the question is answered here, top left, before anything reaches the browser,
+/// and the browser gets the clear screen instead of the question.
+struct CursorQuery {
+    /// The first output, held until it is clear whether it starts with the question; `None` once decided.
+    held: Option<Vec<u8>>,
+}
+
+impl CursorQuery {
+    fn new() -> Self {
+        CursorQuery {
+            held: cfg!(windows).then(Vec::new),
+        }
+    }
+
+    /// What of `chunk` goes on to the browser, and whether the question was found (and is to be answered).
+    fn filter(&mut self, chunk: Vec<u8>) -> (Vec<u8>, bool) {
+        let Some(mut held) = self.held.take() else {
+            return (chunk, false);
+        };
+        held.extend_from_slice(&chunk);
+        if let Some(rest) = held.strip_prefix(CURSOR_QUERY) {
+            return (rest.to_vec(), true);
+        }
+        if CURSOR_QUERY.starts_with(&held) {
+            self.held = Some(held);
+            return (Vec::new(), false);
+        }
+        (held, false)
+    }
+
+    /// What is still held when the output ends.
+    fn finish(&mut self) -> Vec<u8> {
+        self.held.take().unwrap_or_default()
+    }
+}
+
 // ---------------------------------------------------------------- the socket
 
 /// Answers the upgrade with the terminal: the socket takes messages up to [`MAX_PAYLOAD`], as the Node server's did.
@@ -538,12 +735,6 @@ pub fn terminal_upgrade(app: App, upgrade: WebSocketUpgrade, client_ip: Option<S
         .max_message_size(MAX_PAYLOAD)
         .max_frame_size(MAX_PAYLOAD)
         .on_upgrade(move |socket| handle_terminal_connection(app, socket, client_ip))
-}
-
-fn audit(app: &App, entry: AuditEntry) {
-    if let Some(audit_log) = app.get::<AuditLog>() {
-        audit_log.log(entry);
-    }
 }
 
 async fn send_json(socket: &mut WebSocket, value: Value) -> bool {
@@ -559,8 +750,38 @@ async fn close(socket: &mut WebSocket, code: u16, reason: &'static str) {
         .await;
 }
 
+/// The next message, or never when the socket is gone.
+async fn next_message(socket: &mut Option<WebSocket>) -> Option<Result<Message, axum::Error>> {
+    match socket {
+        Some(socket) => socket.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Whether a failed read is one `ws` reported with an `error` event. A connection that drops or is reset was not
+/// (`ws` only closed); a broken frame, a message too large or text that is not UTF-8 was.
+fn is_reported_error(err: &axum::Error) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(err);
+    while let Some(cause) = source {
+        if cause.is::<std::io::Error>() {
+            return false;
+        }
+        source = cause.source();
+    }
+    let text = err.to_string();
+    ![
+        "Connection reset without closing handshake",
+        "Connection closed normally",
+        "Trying to work with closed connection",
+        "IO error",
+    ]
+    .iter()
+    .any(|quiet| text.contains(quiet))
+}
+
 /// Runs one terminal on an upgraded socket until both the shell and the socket are done.
-pub async fn handle_terminal_connection(app: App, mut socket: WebSocket, client_ip: Option<String>) {
+pub async fn handle_terminal_connection(app: App, socket: WebSocket, client_ip: Option<String>) {
+    let mut socket = Some(socket);
     // Auth is already handled at upgrade level
     let terminal_id = generate_terminal_id();
     log::info!("[terminal] New terminal session: {terminal_id}");
@@ -574,29 +795,47 @@ pub async fn handle_terminal_connection(app: App, mut socket: WebSocket, client_
 
     let shell_name = shell();
     let cwd = working_folder(&app);
-    let spawning = app.clone();
-    let spawned = match tokio::task::spawn_blocking(move || spawn_shell(&spawning)).await {
-        Ok(Ok(spawned)) => spawned,
-        Ok(Err(err)) => return spawn_failed(&mut socket, &format!("{err:#}")).await,
-        Err(err) => return spawn_failed(&mut socket, &err.to_string()).await,
+    // The session is made where the shell is started: if this task is dropped while it starts, the session is
+    // dropped with the result, and the shell ended.
+    let starting = (app.clone(), terminal_id.clone());
+    let started = tokio::task::spawn_blocking(move || {
+        let (app, terminal_id) = starting;
+        spawn_shell(&app).map(|(shell, pipes)| (Session::start(&app, &terminal_id, shell), pipes))
+    })
+    .await;
+    let (mut session, pipes) = match started {
+        Ok(Ok(started)) => started,
+        Ok(Err(err)) => {
+            if let Some(socket) = socket.as_mut() {
+                spawn_failed(socket, &err).await;
+            }
+            return;
+        }
+        Err(err) => {
+            if let Some(socket) = socket.as_mut() {
+                spawn_failed(socket, &err.to_string()).await;
+            }
+            return;
+        }
     };
-    let Spawned {
-        shell,
+    let Pipes {
         mut output,
         input,
         mut exit,
-    } = spawned;
-    let terminals = Terminals::of(&app);
-    terminals.insert(&terminal_id, shell.clone());
+    } = pipes;
+    let shell = session.shell.clone();
 
     // Send initial terminal ID
-    let mut socket_open = send_json(
-        &mut socket,
-        json!({ "type": "connected", "terminalId": terminal_id, "shell": shell_name, "cwd": cwd.to_string_lossy() }),
-    )
-    .await;
+    let connected = json!({ "type": "connected", "terminalId": terminal_id, "shell": shell_name, "cwd": cwd.to_string_lossy() });
+    if let Some(open) = socket.as_mut()
+        && !send_json(open, connected).await
+    {
+        socket = None;
+        session.socket_closed();
+    }
 
     let mut decoder = Utf8Decoder::default();
+    let mut cursor_query = CursorQuery::new();
     let mut output_done = false;
     let mut exited: Option<ShellExit> = None;
     // After the shell has ended: when to stop waiting for its last output (Windows: when to close the console).
@@ -613,14 +852,14 @@ pub async fn handle_terminal_connection(app: App, mut socket: WebSocket, client_
                 status.exit_code,
                 status.signal_text()
             );
-            terminals.remove(&terminal_id);
-            if socket_open {
+            session.terminals.remove(&terminal_id);
+            if let Some(open) = socket.as_mut() {
                 let mut message = json!({ "type": "exit", "exitCode": status.exit_code });
                 if let Some(signal) = status.signal {
                     message["signal"] = json!(signal);
                 }
-                send_json(&mut socket, message).await;
-                close(&mut socket, 1000, "Terminal process exited").await;
+                send_json(open, message).await;
+                close(open, 1000, "Terminal process exited").await;
             }
             let mut detail = json!({ "terminalId": terminal_id, "exitCode": status.exit_code });
             if let Some(signal) = status.signal {
@@ -632,29 +871,45 @@ pub async fn handle_terminal_connection(app: App, mut socket: WebSocket, client_
                     .actor("session-user")
                     .detail(detail.to_string()),
             );
+            session.exit_done = true;
             break;
         }
         tokio::select! {
-            message = socket.recv(), if socket_open => match message {
+            message = next_message(&mut socket), if socket.is_some() => match message {
                 Some(Ok(Message::Text(text))) => {
-                    handle_message(&mut socket, text.as_bytes(), &shell, &input).await;
+                    if let Some(open) = socket.as_mut() {
+                        handle_message(open, text.as_bytes(), &shell, &input).await;
+                    }
                 }
                 Some(Ok(Message::Binary(bytes))) => {
-                    handle_message(&mut socket, &bytes, &shell, &input).await;
+                    if let Some(open) = socket.as_mut() {
+                        handle_message(open, &bytes, &shell, &input).await;
+                    }
                 }
                 Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
-                Some(Ok(Message::Close(_))) | None => {
-                    socket_open = false;
-                    socket_closed(&app, &terminal_id, &terminals);
+                Some(Ok(Message::Close(_))) => {
+                    // `ws` answered a close at once and ended the connection; the answer is queued, flushing sends it.
+                    if let Some(mut open) = socket.take() {
+                        let _ = open.flush().await;
+                    }
+                    session.socket_closed();
+                }
+                None => {
+                    socket = None;
+                    session.socket_closed();
                 }
                 Some(Err(err)) => {
-                    log::error!("[terminal] WebSocket error for {terminal_id}: {err}");
-                    // `ws` closed with 1009 on a message over its limit.
-                    if err.to_string().contains("Space limit exceeded") {
-                        close(&mut socket, 1009, "").await;
+                    if is_reported_error(&err) {
+                        log::error!("[terminal] WebSocket error for {terminal_id}: {err}");
+                        // `ws` closed with 1009 on a message over its limit.
+                        if err.to_string().contains("Space limit exceeded")
+                            && let Some(open) = socket.as_mut()
+                        {
+                            close(open, 1009, "").await;
+                        }
                     }
-                    socket_open = false;
-                    socket_closed(&app, &terminal_id, &terminals);
+                    socket = None;
+                    session.socket_closed();
                 }
             },
             chunk = output.recv(), if !output_done => {
@@ -663,15 +918,26 @@ pub async fn handle_terminal_connection(app: App, mut socket: WebSocket, client_
                         if cfg!(windows) && exited.is_some() && !console_closed {
                             drain_until = Some(Instant::now() + OUTPUT_AFTER_EXIT);
                         }
-                        decoder.decode(&bytes)
+                        let (bytes, asked) = cursor_query.filter(bytes);
+                        if asked {
+                            let _ = input.send(CURSOR_TOP_LEFT.to_vec());
+                            format!("{CLEAR_SCREEN}{}", decoder.decode(&bytes))
+                        } else {
+                            decoder.decode(&bytes)
+                        }
                     }
                     None => {
                         output_done = true;
-                        decoder.finish()
+                        let held = cursor_query.finish();
+                        format!("{}{}", decoder.decode(&held), decoder.finish())
                     }
                 };
-                if socket_open && !text.is_empty() {
-                    send_json(&mut socket, json!({ "type": "data", "data": text })).await;
+                if !text.is_empty()
+                    && let Some(open) = socket.as_mut()
+                    && !send_json(open, json!({ "type": "data", "data": text })).await
+                {
+                    socket = None;
+                    session.socket_closed();
                 }
             },
             status = &mut exit, if exited.is_none() => {
@@ -691,36 +957,21 @@ pub async fn handle_terminal_connection(app: App, mut socket: WebSocket, client_
         }
     }
     drop(input);
-    shell.close_terminal();
 
     // After our close, the browser answers with its own; then the socket is done.
-    if socket_open {
+    if let Some(mut open) = socket.take() {
         let _ = tokio::time::timeout(CLOSE_TIMEOUT, async {
             loop {
-                match socket.recv().await {
+                match open.recv().await {
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                     Some(Ok(_)) => {}
                 }
             }
         })
         .await;
-        socket_closed(&app, &terminal_id, &terminals);
+        drop(open);
+        session.socket_closed();
     }
-}
-
-/// The socket has closed: the shell is ended if it is still running (Handle WebSocket close).
-fn socket_closed(app: &App, terminal_id: &str, terminals: &Terminals) {
-    log::info!("[terminal] WebSocket closed for {terminal_id}");
-    // Kill PTY process
-    if let Some(shell) = terminals.remove(terminal_id) {
-        shell.kill();
-    }
-    audit(
-        app,
-        AuditEntry::new("terminal.disconnect")
-            .actor("session-user")
-            .detail(json!({ "terminalId": terminal_id }).to_string()),
-    );
 }
 
 async fn spawn_failed(socket: &mut WebSocket, err: &str) {
@@ -843,25 +1094,8 @@ fn pty_size(cols: &Value, rows: &Value) -> Result<(u16, u16), String> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(windows)]
-    #[test]
-    fn a_process_is_a_child_only_if_it_was_created_after_its_parent() {
-        use super::{is_really_child, process_created_at};
-        // A stranger that only carries a reused parent id is older than the "parent".
-        assert!(!is_really_child(Some(100), Some(200)));
-        assert!(is_really_child(Some(200), Some(100)));
-        assert!(is_really_child(Some(100), Some(100)));
-        // What cannot be checked is never taken.
-        assert!(!is_really_child(None, Some(100)));
-        assert!(!is_really_child(Some(100), None));
-        assert!(!is_really_child(None, None));
-        // This process has a creation time; a process id that is not in use has none.
-        assert!(process_created_at(std::process::id()).is_some());
-        assert!(process_created_at(u32::MAX - 3).is_none());
-    }
-
     use super::*;
-    use crate::testkit::{test_app, test_app_with_env};
+    use crate::testkit::{test_app, test_app_with_env, tmp_dir};
 
     #[test]
     fn the_shell_is_powershell_on_windows_and_bash_elsewhere() {
@@ -908,6 +1142,35 @@ mod tests {
     }
 
     #[test]
+    fn the_shell_program_is_found_in_path_on_windows_and_left_to_the_system_elsewhere() {
+        let dir = tmp_dir();
+        let empty = dir.path().join("empty");
+        let holding = dir.path().join("with shell");
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::create_dir_all(&holding).unwrap();
+        std::fs::write(holding.join(shell()), b"").unwrap();
+        let path = std::env::join_paths([&empty, &holding]).unwrap().into_string().unwrap();
+        let env = BTreeMap::from([("Path".to_string(), path), ("PATHEXT".to_string(), ".COM;.EXE;".to_string())]);
+        if cfg!(windows) {
+            assert_eq!(shell_program(&env), holding.join(shell()));
+        } else {
+            assert_eq!(shell_program(&env), PathBuf::from(shell()));
+        }
+        // Nowhere to be found: the bare name.
+        let none = BTreeMap::from([("PATH".to_string(), empty.to_string_lossy().into_owned())]);
+        assert_eq!(shell_program(&none), PathBuf::from(shell()));
+        assert_eq!(shell_program(&BTreeMap::new()), PathBuf::from(shell()));
+    }
+
+    #[test]
+    fn a_panic_inside_the_library_becomes_its_message() {
+        let caught = std::panic::catch_unwind(|| panic!("start byte index 1 is out of bounds of ``")).unwrap_err();
+        assert_eq!(panic_text(&*caught), "start byte index 1 is out of bounds of ``");
+        let caught = std::panic::catch_unwind(|| std::panic::panic_any(5)).unwrap_err();
+        assert_eq!(panic_text(&*caught), "the pseudo-terminal library failed");
+    }
+
+    #[test]
     fn the_client_address_is_the_forwarded_header_as_sent_else_the_connection() {
         let mut headers = HeaderMap::new();
         let remote: SocketAddr = "127.0.0.1:5000".parse().unwrap();
@@ -947,6 +1210,24 @@ mod tests {
         assert_eq!(d.finish(), "");
         // A sequence broken off in the middle is replaced and the next byte read afresh.
         assert_eq!(Utf8Decoder::default().decode(&[0xE2, 0x82, b'x']), "\u{FFFD}x");
+    }
+
+    #[test]
+    fn the_consoles_first_question_is_taken_out_on_windows_even_in_pieces() {
+        let mut q = CursorQuery::new();
+        if cfg!(windows) {
+            assert_eq!(q.filter(b"\x1b[".to_vec()), (Vec::new(), false));
+            assert_eq!(q.filter(b"6n\x1b[?9001h".to_vec()), (b"\x1b[?9001h".to_vec(), true));
+            // Only the first output is looked at.
+            assert_eq!(q.filter(b"\x1b[6n".to_vec()), (b"\x1b[6n".to_vec(), false));
+            let mut other = CursorQuery::new();
+            assert_eq!(other.filter(b"\x1bX".to_vec()), (b"\x1bX".to_vec(), false));
+            let mut cut = CursorQuery::new();
+            assert_eq!(cut.filter(b"\x1b".to_vec()), (Vec::new(), false));
+            assert_eq!(cut.finish(), b"\x1b".to_vec());
+        } else {
+            assert_eq!(q.filter(b"\x1b[6n".to_vec()), (b"\x1b[6n".to_vec(), false));
+        }
     }
 
     #[test]

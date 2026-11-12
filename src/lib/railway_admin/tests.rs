@@ -3,6 +3,7 @@
 // reached: the app's HTTP client is a stand-in that answers like Railway's GraphQL API, and the vault is a stand-in
 // or a temporary one.
 
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -1875,4 +1876,47 @@ async fn tarsees_own_service_in_another_environment_is_not_tarsee() {
     .await;
     assert!(ran.out.starts_with("Asked Railway to redeploy tarsee"), "{}", ran.out);
     assert!(!ran.out.contains("restarts Tarsee"), "{}", ran.out);
+}
+
+#[test]
+fn latin_letters_sort_as_local_compare_sorts_them() {
+    // Node's order for these (`localeCompare`, ICU's root collation): letters it counts as two (æ, œ, ß, ĳ, ǆ), every
+    // kind of accent, letters with a place of their own (ŋ, ħ, ǥ, ƒ, þ, ı), case.
+    let node = [
+        "aether", "Æther", "ăla", "alpha", "Alpha", "ALPHA", "ångström", "Ångström", "api_key", "API-KEY", "apikey",
+        "capelo", "ĉapelo", "çava", "co_op", "co-op", "coop", "de", "đe", "Ðe", "dzungla", "ǆungla", "emile", "Émile",
+        "ėmile", "flag", "ƒlag", "gamma", "ǥamma", "hotel", "ħotel", "Ħotel", "ii", "ijs", "ĳs", "Ĳs", "ıi", "lodz",
+        "łódź", "Łódź", "noma", "ñoma", "ŋoma", "oeuvre", "œuvre", "Œuvre", "ost", "öst", "Øst", "ōst", "safr", "šafr",
+        "şafr", "ẞtrasse", "strasse", "STRASSE", "straße", "web 2", "web2", "x", "X", "ẍ", "yes", "ŷes", "Ŷes", "ÿes",
+        "zena", "žena", "zeta", "ǯ", "þorn", "Þorn", "Ωmega", "日本",
+    ];
+    let mut names: Vec<&str> = node.iter().rev().copied().collect();
+    names.sort_by(|a, b| locale_compare(a, b));
+    assert_eq!(names, node);
+    // Accents in their canonical order, letters ICU counts as two (with their own accents after the first), letters
+    // that are a compatibility form of two (ẚ, ŉ), modifier letters (after capitals at the case level).
+    let node = [
+        "a", "Ạ", "Ặ", "ab", "ae", "æ", "ǽ", "Ǣ", "aʾ", "ẚ", "dž", "ǆ", "ǅ", "Ǆ", "ɣ", "Ɣ", "ˠ", "h", "H", "ʰ", "n", "o", "ø",
+        "Ø", "ǿ", "Ơ", "ờ", "ộ", "ʒ", "Ʒ", "ǯ", "Ǯ", "ʼn", "ŉ",
+    ];
+    let mut names: Vec<&str> = node.iter().rev().copied().collect();
+    names.sort_by(|a, b| locale_compare(a, b));
+    assert_eq!(names, node);
+}
+
+#[tokio::test]
+async fn a_text_cut_through_an_emoji_shows_what_node_wrote_out() {
+    // JavaScript's `slice` kept half of the emoji, a lone surrogate, which every UTF-8 reader shows as U+FFFD.
+    // Node: "a🐒\ud83d...🐒🐒".
+    assert_eq!(mask_value("a🐒🐒🐒🐒🐒🐒"), "a🐒\u{FFFD}...🐒🐒");
+    let t = test_app();
+    let value = format!("{}🐒{}", "x".repeat(199), "y".repeat(50));
+    let ran = run(&t, merged(&base(), json!({"value": value}))).await;
+    assert!(
+        ran.out.contains(&format!("value: \"{}\u{FFFD}...\" (plain value)", "x".repeat(199))),
+        "{}",
+        ran.out
+    );
+    // The value itself reached Railway whole.
+    assert_eq!(ran.writes()[0].variables["variables"]["FEATURE_FLAG"], json!(value));
 }
