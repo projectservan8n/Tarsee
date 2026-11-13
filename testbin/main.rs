@@ -9,6 +9,7 @@
 
 mod browser_guard;
 mod echo;
+mod fake_codex;
 mod fake_phonon;
 mod fake_python;
 mod pdftotext;
@@ -26,6 +27,7 @@ fn main() {
         });
     let code = match role.as_deref() {
         Some("echo") => echo::main(),
+        Some("codex" | "fake-codex") => fake_codex::main(),
         Some("fake-phonon") => fake_phonon::main(),
         Some("fake-python") => fake_python::main(),
         Some("piper") => speech::piper(),

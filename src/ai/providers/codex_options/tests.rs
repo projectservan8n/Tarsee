@@ -1108,24 +1108,6 @@ fn node_cap_instructions_on_every_size_around_its_edges() {
 // --- More than the Node tests checked ----------------------------------------------------------------------------
 
 #[test]
-fn the_registry_entry_gives_engine_env_what_it_reads() {
-    let entry = engine_entry(&PROVIDERS.openrouter);
-    assert_eq!(entry.id, "openrouter");
-    assert_eq!(entry.label.as_deref(), Some(PROVIDERS.openrouter.label));
-    assert_eq!(entry.env_key.as_deref(), Some("OPENROUTER_API_KEY"));
-    assert_eq!(
-        entry.base_url.get("codex").map(String::as_str),
-        Some("https://openrouter.ai/api/v1")
-    );
-    assert!(entry.engines.as_ref().unwrap().contains(&"codex".to_string()));
-    assert_eq!(entry.wrong_slot.len(), PROVIDERS.openrouter.wrong_slot.len());
-    assert_eq!(
-        engine_entry(&PROVIDERS.claude).default_model.as_deref(),
-        PROVIDERS.claude.default_model
-    );
-}
-
-#[test]
 fn compact_off_leaves_the_compact_limit_to_codex_a_node_bug_fixed() {
     // Node wrote Math.min(null, ...), which is 0: with TARSEE_COMPACT_WINDOW=off Codex was told to compact at 0
     // tokens, on every turn. "off" means the engine's own choice: the key is left out, in every spelling.

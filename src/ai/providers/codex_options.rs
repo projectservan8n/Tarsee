@@ -42,11 +42,11 @@ use serde_json::{Map, Value, json};
 use crate::ai::context_limits::{EnvMap, compact_window_tokens, js_min, js_round};
 use crate::ai::engine::McpGrant;
 use crate::ai::engine_env::{
-    CODEX, CODEX_SHELL_EXCLUDED, CodexEnvOpts, CredentialCode, CredentialError, EngineEnvError, EntryModel,
-    ProviderEntry, Tiers, TypeError, WrongSlot, codex_chatgpt_test_hosts, codex_env_for, host_for,
+    CODEX, CODEX_SHELL_EXCLUDED, CodexEnvOpts, CredentialCode, CredentialError, EngineEnvError, TypeError,
+    codex_chatgpt_test_hosts, codex_env_for, host_for,
 };
 use crate::ai::local_bridge::js_string;
-use crate::ai::provider_registry::{PROVIDERS, Provider, normalize_provider_id};
+use crate::ai::provider_registry::{PROVIDERS, Provider, engine_entry, normalize_provider_id};
 use crate::env::Env;
 use crate::util::js::{self, utf16_len};
 
@@ -310,45 +310,6 @@ fn js_num(n: f64) -> Value {
         return Value::from(n as i64);
     }
     serde_json::Number::from_f64(n).map_or(Value::Null, Value::Number)
-}
-
-/// What engine_env reads of a provider, from its registry entry.
-pub fn engine_entry(p: &Provider) -> ProviderEntry {
-    let tier = |name: &str| p.tier(name).map(str::to_string);
-    ProviderEntry {
-        id: p.id.to_string(),
-        label: Some(p.label.to_string()),
-        engines: Some(p.engines.iter().map(|e| e.as_str().to_string()).collect()),
-        env_key: p.env_key.map(str::to_string),
-        base_url: p
-            .base_urls
-            .iter()
-            .map(|(engine, url)| (engine.as_str().to_string(), url.to_string()))
-            .collect(),
-        wrong_slot: p
-            .wrong_slot
-            .iter()
-            .map(|slot| WrongSlot {
-                re: slot.re.clone(),
-                message: slot.message.to_string(),
-            })
-            .collect(),
-        models: p
-            .models
-            .iter()
-            .map(|m| EntryModel {
-                id: m.id.clone(),
-                context: m.context.map(|c| c as f64),
-            })
-            .collect(),
-        tiers: Tiers {
-            fable: tier("fable"),
-            opus: tier("opus"),
-            sonnet: tier("sonnet"),
-            haiku: tier("haiku"),
-        },
-        default_model: p.default_model.map(str::to_string),
-    }
 }
 
 /// A Local AI turn's address on the bridge and its per-turn token (`ai::local_bridge::BridgeTurn`).

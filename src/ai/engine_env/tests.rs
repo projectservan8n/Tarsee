@@ -6,8 +6,8 @@
 //! off loopback, a missing key refuses the turn, the per-provider homes, the settings-file guards for both engines,
 //! and that the module agrees with the provider registry.
 //!
-//! The JS matrix ran on the registry's real entries. Until the registry (package A1) is merged, [`registry`] below is
-//! a copy of its entries' values as `provider-registry.js` has them; the lead swaps it for A1's entries at merge.
+//! The JS matrix ran on the registry's real entries, and so does this one: [`registry`] below is the provider
+//! registry's own table, through `provider_registry::engine_entry`.
 //! Every key and token here is an obvious fake, built from parts.
 
 use std::collections::BTreeMap;
@@ -16,9 +16,10 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 
 use super::*;
+use crate::ai::provider_registry::{PROVIDER_IDS, engine_entry, get_provider};
 use crate::testkit::tmp_dir;
 
-// --- The registry's entries (a copy of provider-registry.js's values) --------------------------------------------
+// --- The registry's entries ------------------------------------------------------------------------------------
 
 struct Fixture {
     entry: ProviderEntry,
@@ -33,75 +34,8 @@ fn slot(pattern: &str, message: &str) -> WrongSlot {
     }
 }
 
-fn claude_token() -> WrongSlot {
-    slot(
-        "(?i-u)^sk-ant-oat",
-        "This is a Claude sign-in token, not an API key. Create an API key in the Anthropic Console instead.",
-    )
-}
-fn anthropic_key() -> WrongSlot {
-    slot(
-        "(?i-u)^sk-ant-",
-        "This is an Anthropic key. Paste it in the Anthropic API key card.",
-    )
-}
-fn openrouter_key() -> WrongSlot {
-    slot(
-        "(?i-u)^sk-or-",
-        "This is an OpenRouter key. Paste it in the OpenRouter card.",
-    )
-}
-fn openai_key() -> WrongSlot {
-    slot(
-        "(?i-u:^sk-(proj|svcacct|admin)-|^sk-[a-z0-9]{20}t3blbkfj[a-z0-9]{20}$)",
-        "This is an OpenAI key. Paste it in the OpenAI API key card.",
-    )
-}
-fn deepseek_key() -> WrongSlot {
-    slot(
-        "^sk-[0-9a-f]{32}$",
-        "This looks like a DeepSeek key. Paste it in the DeepSeek card.",
-    )
-}
-
-fn tiers(fable: &str, opus: &str, sonnet: &str, haiku: &str) -> Tiers {
-    Tiers {
-        fable: Some(fable.into()),
-        opus: Some(opus.into()),
-        sonnet: Some(sonnet.into()),
-        haiku: Some(haiku.into()),
-    }
-}
-
-fn models(rows: &[(&str, f64)]) -> Vec<EntryModel> {
-    rows.iter()
-        .map(|(id, context)| EntryModel {
-            id: id.to_string(),
-            context: Some(*context),
-        })
-        .collect()
-}
-
 fn hosts(rows: &[(&str, &str)]) -> BTreeMap<String, String> {
     rows.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
-}
-
-fn claude_models() -> Vec<EntryModel> {
-    models(&[
-        ("opus", 1e6),
-        ("sonnet", 1e6),
-        ("haiku", 2e5),
-        ("fable", 1e6),
-        ("claude-fable-5-1", 1e6),
-        ("claude-fable-5", 1e6),
-        ("claude-opus-5", 1e6),
-        ("claude-opus-4-8", 1e6),
-        ("claude-opus-4-7", 1e6),
-        ("claude-opus-4-6", 1e6),
-        ("claude-sonnet-5", 1e6),
-        ("claude-sonnet-4-6", 1e6),
-        ("claude-haiku-4-5", 2e5),
-    ])
 }
 
 const PRO: &str = "deepseek-v4-pro";
@@ -110,154 +44,21 @@ const OR_OPUS: &str = "~anthropic/claude-opus-latest";
 const OR_SONNET: &str = "~anthropic/claude-sonnet-latest";
 const OR_HAIKU: &str = "~anthropic/claude-haiku-latest";
 
-/// PROVIDER_IDS, in the registry's order.
-const PROVIDER_IDS: [&str; 7] = [
-    "claude",
-    "anthropic",
-    "chatgpt",
-    "openai",
-    "openrouter",
-    "deepseek",
-    "local",
-];
-
+/// The registry's own entries (`provider_registry.rs` `PROVIDERS`), as engine_env reads them. While the registry was
+/// being ported a copy of the Node values stood here; these are the real ones, through the one conversion.
 fn registry() -> BTreeMap<&'static str, Fixture> {
-    let engines = |list: &[&str]| Some(list.iter().map(|e| e.to_string()).collect());
-    let mut r = BTreeMap::new();
-    r.insert(
-        "claude",
-        Fixture {
-            kind: "subscription",
-            storage_id: "claude-code",
-            entry: ProviderEntry {
-                id: "claude".into(),
-                label: Some("Claude plan".into()),
-                engines: engines(&[CLAUDE_CODE]),
-                models: claude_models(),
-                tiers: tiers("fable", "opus", "sonnet", "haiku"),
-                default_model: Some("sonnet".into()),
-                ..ProviderEntry::default()
-            },
-        },
-    );
-    r.insert(
-        "anthropic",
-        Fixture {
-            kind: "key",
-            storage_id: "anthropic",
-            entry: ProviderEntry {
-                id: "anthropic".into(),
-                label: Some("Anthropic API key".into()),
-                engines: engines(&[CLAUDE_CODE]),
-                env_key: Some("ANTHROPIC_API_KEY".into()),
-                base_url: hosts(&[(CLAUDE_CODE, "https://api.anthropic.com")]),
-                wrong_slot: vec![claude_token(), openrouter_key(), openai_key()],
-                models: claude_models(),
-                tiers: tiers("fable", "opus", "sonnet", "haiku"),
-                default_model: Some("sonnet".into()),
-            },
-        },
-    );
-    r.insert(
-        "chatgpt",
-        Fixture {
-            kind: "subscription",
-            storage_id: "chatgpt",
-            entry: ProviderEntry {
-                id: "chatgpt".into(),
-                label: Some("ChatGPT plan".into()),
-                engines: engines(&[CODEX]),
-                ..ProviderEntry::default()
-            },
-        },
-    );
-    r.insert(
-        "openai",
-        Fixture {
-            kind: "key",
-            storage_id: "openai",
-            entry: ProviderEntry {
-                id: "openai".into(),
-                label: Some("OpenAI API key".into()),
-                engines: engines(&[CODEX]),
-                env_key: Some("OPENAI_API_KEY".into()),
-                base_url: hosts(&[(CODEX, "https://api.openai.com/v1")]),
-                wrong_slot: vec![claude_token(), anthropic_key(), openrouter_key(), deepseek_key()],
-                models: models(&[
-                    ("gpt-6-astra", 1_050_000.0),
-                    ("gpt-6.1-sol", 1_050_000.0),
-                    ("gpt-6-luna", 1_050_000.0),
-                    ("gpt-5.5", 1_050_000.0),
-                ]),
-                tiers: tiers("gpt-6-astra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"),
-                default_model: Some("gpt-6.1-sol".into()),
-            },
-        },
-    );
-    r.insert(
-        "openrouter",
-        Fixture {
-            kind: "key",
-            storage_id: "openrouter",
-            entry: ProviderEntry {
-                id: "openrouter".into(),
-                label: Some("OpenRouter".into()),
-                engines: engines(&[CLAUDE_CODE, CODEX]),
-                env_key: Some("OPENROUTER_API_KEY".into()),
-                base_url: hosts(&[
-                    (CLAUDE_CODE, "https://openrouter.ai/api"),
-                    (CODEX, "https://openrouter.ai/api/v1"),
-                ]),
-                wrong_slot: vec![claude_token(), anthropic_key(), openai_key()],
-                models: Vec::new(),
-                tiers: tiers(OR_OPUS, OR_OPUS, OR_SONNET, OR_HAIKU),
-                default_model: Some(OR_SONNET.into()),
-            },
-        },
-    );
-    r.insert(
-        "deepseek",
-        Fixture {
-            kind: "key",
-            storage_id: "deepseek",
-            entry: ProviderEntry {
-                id: "deepseek".into(),
-                label: Some("DeepSeek".into()),
-                engines: engines(&[CLAUDE_CODE, CODEX]),
-                env_key: Some("DEEPSEEK_API_KEY".into()),
-                base_url: hosts(&[
-                    (CLAUDE_CODE, "https://api.deepseek.com/anthropic"),
-                    (CODEX, "https://api.deepseek.com"),
-                ]),
-                wrong_slot: vec![claude_token(), anthropic_key(), openrouter_key(), openai_key()],
-                models: models(&[(FLASH, 1e6), (PRO, 1e6)]),
-                tiers: tiers(PRO, PRO, FLASH, FLASH),
-                default_model: Some(FLASH.into()),
-            },
-        },
-    );
-    r.insert(
-        "local",
-        Fixture {
-            kind: "local",
-            storage_id: "local",
-            entry: ProviderEntry {
-                id: "local".into(),
-                label: Some("Local AI".into()),
-                engines: engines(&[CODEX]),
-                env_key: Some("TARSEE_LOCAL_AI_KEY".into()),
-                wrong_slot: vec![
-                    claude_token(),
-                    anthropic_key(),
-                    openrouter_key(),
-                    openai_key(),
-                    deepseek_key(),
-                ],
-                ..ProviderEntry::default()
-            },
-        },
-    );
-    r
+    PROVIDER_IDS
+        .iter()
+        .map(|id| {
+            let provider = get_provider(id).expect("an id of the registry");
+            let fixture = Fixture {
+                entry: engine_entry(provider),
+                kind: provider.kind.as_str(),
+                storage_id: provider.storage_id,
+            };
+            (provider.id, fixture)
+        })
+        .collect()
 }
 
 /// `PROVIDERS[id]`.

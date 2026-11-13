@@ -44,6 +44,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use crate::ai::engine_env;
 use crate::app::App;
 use crate::config::constants::{
     CLAUDE_MODELS, MODEL_TIERS, background_defaults, claude_model_by_id, get_recommended_model, resolve_model_alias,
@@ -558,6 +559,46 @@ impl Provider {
     /// The model a tier word means here (`tiers[tier]`).
     pub fn tier(&self, tier: &str) -> Option<&'static str> {
         tier_in(self.tiers, tier)
+    }
+}
+
+/// What `engine_env` reads of a provider, from its registry entry. The JS handed `PROVIDERS[id]` itself to
+/// `engine-env.js`; this is the one conversion between the two tables, for every caller.
+pub fn engine_entry(p: &Provider) -> engine_env::ProviderEntry {
+    let tier = |name: &str| p.tier(name).map(str::to_string);
+    engine_env::ProviderEntry {
+        id: p.id.to_string(),
+        label: Some(p.label.to_string()),
+        engines: Some(p.engines.iter().map(|e| e.as_str().to_string()).collect()),
+        env_key: p.env_key.map(str::to_string),
+        base_url: p
+            .base_urls
+            .iter()
+            .map(|(engine, url)| (engine.as_str().to_string(), url.to_string()))
+            .collect(),
+        wrong_slot: p
+            .wrong_slot
+            .iter()
+            .map(|slot| engine_env::WrongSlot {
+                re: slot.re.clone(),
+                message: slot.message.to_string(),
+            })
+            .collect(),
+        models: p
+            .models
+            .iter()
+            .map(|m| engine_env::EntryModel {
+                id: m.id.clone(),
+                context: m.context.map(|c| c as f64),
+            })
+            .collect(),
+        tiers: engine_env::Tiers {
+            fable: tier("fable"),
+            opus: tier("opus"),
+            sonnet: tier("sonnet"),
+            haiku: tier("haiku"),
+        },
+        default_model: p.default_model.map(str::to_string),
     }
 }
 

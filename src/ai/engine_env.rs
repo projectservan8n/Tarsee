@@ -26,7 +26,7 @@
 //! Like the JS, which worked on a copy of `process.env`, every builder works on `env.snapshot()` of the [`Env`] it is
 //! given, never on the real process environment.
 
-mod js_json;
+pub(crate) mod js_json;
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
