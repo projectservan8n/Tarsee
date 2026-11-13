@@ -87,7 +87,7 @@ pub fn load_hooks(app: &App) -> HookLoadReport {
 }
 
 fn read_manifest(path: &Path) -> Result<HookManifest, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let text = std::fs::read_to_string(crate::util::node_path::to_namespaced(path)).map_err(|e| e.to_string())?;
     let manifest: HookManifest = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     if manifest.command.trim().is_empty() {
         return Err("the manifest names no command".into());
@@ -150,7 +150,9 @@ impl ProgramHook {
             .spawn()
             .map_err(|err| anyhow::anyhow!("could not start {}: {err}", self.manifest.command))?;
 
-        let input = serde_json::to_vec(&json!({ "event": self.event, "data": data }))?;
+        // One line: the JSON and a line end, so a script can read it with `read -r line`.
+        let mut input = serde_json::to_vec(&json!({ "event": self.event, "data": data }))?;
+        input.push(b'\n');
         let stdin = child.stdin.take();
         let write = async move {
             if let Some(mut stdin) = stdin {

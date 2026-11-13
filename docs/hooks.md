@@ -46,7 +46,7 @@ Put a file named `<name>.hook.json` in `workspace/hooks/`:
 On each of its events Tarsee starts the program:
 
 - in the workspace folder, with Tarsee's environment (so the keys you set for Tarsee are there);
-- with the event as one line of JSON on stdin: `{"event": "message:received", "data": {...}}`;
+- with the event as one line of JSON on stdin, ending in a line end: `{"event": "message:received", "data": {...}}`;
 - for at most 5 seconds, after which it is stopped.
 
 Whatever it prints on stdout, if it is JSON, is the hook's result. A program that exits with an error code is logged

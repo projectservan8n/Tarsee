@@ -5,6 +5,9 @@
 //! `node src/server.js`. Everything else is as it was.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use crate::env::Env;
 
@@ -14,24 +17,79 @@ pub const SERVICE_NAME: &str = "tarsee";
 /// and touches real files; the tests use a recording one.
 pub trait ServiceSystem {
     /// Runs a command through the shell; fails, with `Command failed: <command>` and its stderr, on a non-zero exit.
-    fn run(&mut self, command: &str) -> anyhow::Result<String>;
+    /// `show_stderr`: also pass what the command wrote on stderr to this program's stderr, as `execSync` did when
+    /// it was given no `stdio` (systemd's "Created symlink ..." reached the terminal that way).
+    fn run(&mut self, command: &str, show_stderr: bool) -> anyhow::Result<String>;
     fn write(&mut self, path: &Path, content: &str) -> std::io::Result<()>;
     fn remove(&mut self, path: &Path) -> std::io::Result<()>;
     fn exists(&self, path: &Path) -> bool;
 }
 
-/// The machine itself.
-pub struct RealSystem;
+/// The machine itself. Commands get the app's environment (`execSync` passed `process.env` on).
+pub struct RealSystem {
+    env: Env,
+    /// Where a shown stderr goes: this program's stderr, or (tests) a buffer.
+    stderr_sink: Option<Arc<Mutex<Vec<u8>>>>,
+}
+
+impl RealSystem {
+    pub fn new(env: &Env) -> Self {
+        RealSystem {
+            env: env.clone(),
+            stderr_sink: None,
+        }
+    }
+
+    /// A system whose shown stderr is collected in `sink` instead of written out (tests).
+    pub fn with_stderr_sink(env: &Env, sink: Arc<Mutex<Vec<u8>>>) -> Self {
+        RealSystem {
+            env: env.clone(),
+            stderr_sink: Some(sink),
+        }
+    }
+
+    /// The shell, started the way `execSync` started it: `cmd.exe /d /s /c "<command>"` on Windows, with the command
+    /// passed as it is (Node's `windowsVerbatimArguments`; Rust's own quoting would escape the quotes inside it),
+    /// and `/bin/sh -c <command>` elsewhere.
+    fn shell(&self, command: &str) -> std::process::Command {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let comspec = self
+                .env
+                .get("ComSpec")
+                .filter(|c| !c.is_empty())
+                .unwrap_or_else(|| "cmd.exe".into());
+            let mut shell = std::process::Command::new(comspec);
+            shell.args(["/d", "/s", "/c"]).raw_arg(format!("\"{command}\""));
+            shell
+        }
+        #[cfg(not(windows))]
+        {
+            let mut shell = std::process::Command::new("/bin/sh");
+            shell.args(["-c", command]);
+            shell
+        }
+    }
+}
 
 impl ServiceSystem for RealSystem {
-    fn run(&mut self, command: &str) -> anyhow::Result<String> {
-        let output = if cfg!(windows) {
-            std::process::Command::new("cmd")
-                .args(["/d", "/s", "/c", command])
-                .output()?
-        } else {
-            std::process::Command::new("/bin/sh").args(["-c", command]).output()?
-        };
+    fn run(&mut self, command: &str, show_stderr: bool) -> anyhow::Result<String> {
+        let output = self
+            .shell(command)
+            .env_clear()
+            .envs(self.env.snapshot())
+            .stdin(std::process::Stdio::null())
+            .output()?;
+        if show_stderr && !output.stderr.is_empty() {
+            match &self.stderr_sink {
+                Some(sink) => sink.lock().extend_from_slice(&output.stderr),
+                None => {
+                    use std::io::Write;
+                    let _ = std::io::stderr().write_all(&output.stderr);
+                }
+            }
+        }
         if !output.status.success() {
             anyhow::bail!("Command failed: {command}\n{}", String::from_utf8_lossy(&output.stderr));
         }
@@ -67,17 +125,17 @@ fn this_program() -> anyhow::Result<PathBuf> {
 
 /// Installs the service for this machine.
 pub fn install(env: &Env) -> anyhow::Result<()> {
-    install_with(&mut RealSystem, current_platform(), &this_program()?, env)
+    install_with(&mut RealSystem::new(env), current_platform(), &this_program()?, env)
 }
 
 /// Removes the service.
 pub fn uninstall(env: &Env) -> anyhow::Result<()> {
-    uninstall_with(&mut RealSystem, current_platform(), env)
+    uninstall_with(&mut RealSystem::new(env), current_platform(), env)
 }
 
 /// Whether the service is installed.
 pub fn is_installed(env: &Env) -> bool {
-    is_installed_with(&mut RealSystem, current_platform(), env)
+    is_installed_with(&mut RealSystem::new(env), current_platform(), env)
 }
 
 pub fn install_with(system: &mut dyn ServiceSystem, platform: &str, program: &Path, env: &Env) -> anyhow::Result<()> {
@@ -101,9 +159,13 @@ pub fn uninstall_with(system: &mut dyn ServiceSystem, platform: &str, env: &Env)
 
 pub fn is_installed_with(system: &mut dyn ServiceSystem, platform: &str, env: &Env) -> bool {
     match platform {
-        "linux" => system.run(&format!("systemctl is-enabled {SERVICE_NAME}")).is_ok(),
+        "linux" => system
+            .run(&format!("systemctl is-enabled {SERVICE_NAME}"), false)
+            .is_ok(),
         "darwin" => system.exists(Path::new(&plist_path(env))),
-        "win32" => system.run(&format!("schtasks /Query /TN {SERVICE_NAME}")).is_ok(),
+        "win32" => system
+            .run(&format!("schtasks /Query /TN {SERVICE_NAME}"), false)
+            .is_ok(),
         _ => false,
     }
 }
@@ -135,18 +197,18 @@ fn unit_path() -> String {
 fn install_systemd(system: &mut dyn ServiceSystem, program: &str) -> anyhow::Result<()> {
     let unit_path = unit_path();
     system.write(Path::new(&unit_path), &systemd_unit(program))?;
-    system.run("systemctl daemon-reload")?;
-    system.run(&format!("systemctl enable {SERVICE_NAME}"))?;
+    system.run("systemctl daemon-reload", true)?;
+    system.run(&format!("systemctl enable {SERVICE_NAME}"), true)?;
     log::info!("Installed systemd service: {unit_path}");
     log::info!("Start with: sudo systemctl start {SERVICE_NAME}");
     Ok(())
 }
 
 fn uninstall_systemd(system: &mut dyn ServiceSystem) -> anyhow::Result<()> {
-    system.run(&format!("systemctl stop {SERVICE_NAME}"))?;
-    system.run(&format!("systemctl disable {SERVICE_NAME}"))?;
+    system.run(&format!("systemctl stop {SERVICE_NAME}"), false)?;
+    system.run(&format!("systemctl disable {SERVICE_NAME}"), false)?;
     system.remove(Path::new(&unit_path()))?;
-    system.run("systemctl daemon-reload")?;
+    system.run("systemctl daemon-reload", true)?;
     log::info!("Systemd service removed.");
     Ok(())
 }
@@ -175,14 +237,14 @@ fn plist_path(env: &Env) -> String {
 fn install_launchd(system: &mut dyn ServiceSystem, program: &str, env: &Env) -> anyhow::Result<()> {
     let plist_path = plist_path(env);
     system.write(Path::new(&plist_path), &launchd_plist(program))?;
-    system.run(&format!("launchctl load {plist_path}"))?;
+    system.run(&format!("launchctl load {plist_path}"), true)?;
     log::info!("Installed launchd agent: {plist_path}");
     Ok(())
 }
 
 fn uninstall_launchd(system: &mut dyn ServiceSystem, env: &Env) -> anyhow::Result<()> {
     let plist_path = plist_path(env);
-    system.run(&format!("launchctl unload {plist_path}"))?;
+    system.run(&format!("launchctl unload {plist_path}"), false)?;
     system.remove(Path::new(&plist_path))?;
     log::info!("Launchd agent removed.");
     Ok(())
@@ -194,14 +256,14 @@ pub fn windows_task_command(program: &str) -> String {
 }
 
 fn install_windows(system: &mut dyn ServiceSystem, program: &str) -> anyhow::Result<()> {
-    system.run(&windows_task_command(program))?;
+    system.run(&windows_task_command(program), false)?;
     log::info!("Installed Windows scheduled task: {SERVICE_NAME}");
     log::info!("Start with: schtasks /Run /TN {SERVICE_NAME}");
     Ok(())
 }
 
 fn uninstall_windows(system: &mut dyn ServiceSystem) -> anyhow::Result<()> {
-    system.run(&format!("schtasks /Delete /TN {SERVICE_NAME} /F"))?;
+    system.run(&format!("schtasks /Delete /TN {SERVICE_NAME} /F"), false)?;
     log::info!("Windows scheduled task removed.");
     Ok(())
 }
@@ -215,6 +277,8 @@ mod tests {
     #[derive(Default)]
     struct Recorder {
         ran: Vec<String>,
+        /// The commands whose stderr was to be shown.
+        shown: Vec<String>,
         written: Vec<(String, String)>,
         removed: Vec<String>,
         files: BTreeSet<String>,
@@ -222,8 +286,11 @@ mod tests {
     }
 
     impl ServiceSystem for Recorder {
-        fn run(&mut self, command: &str) -> anyhow::Result<String> {
+        fn run(&mut self, command: &str, show_stderr: bool) -> anyhow::Result<String> {
             self.ran.push(command.to_string());
+            if show_stderr {
+                self.shown.push(command.to_string());
+            }
             if self.fail.is_some_and(|f| command.contains(f)) {
                 anyhow::bail!("Command failed: {command}\n");
             }
@@ -257,6 +324,8 @@ mod tests {
             )]
         );
         assert_eq!(system.ran, ["systemctl daemon-reload", "systemctl enable tarsee"]);
+        // execSync without stdio showed these commands' stderr (systemd's "Created symlink ...").
+        assert_eq!(system.shown, system.ran);
         assert_eq!(
             logs.infos(),
             [
@@ -275,6 +344,11 @@ mod tests {
             ]
         );
         assert_eq!(system.removed, ["/etc/systemd/system/tarsee.service"]);
+        assert_eq!(
+            system.shown,
+            ["systemctl daemon-reload"],
+            "stop and disable ran with stdio: pipe"
+        );
         assert!(is_installed_with(&mut Recorder::default(), "linux", &Env::new()));
         let mut failing = Recorder {
             fail: Some("is-enabled"),
@@ -299,6 +373,7 @@ mod tests {
                 .starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist")
         );
         assert_eq!(system.ran, [format!("launchctl load {plist}")]);
+        assert_eq!(system.shown, system.ran);
         let mut system = Recorder::default();
         uninstall_with(&mut system, "darwin", &env).unwrap();
         assert_eq!(system.ran, [format!("launchctl unload {plist}")]);
@@ -320,6 +395,7 @@ mod tests {
         let mut system = Recorder::default();
         uninstall_with(&mut system, "win32", &Env::new()).unwrap();
         assert_eq!(system.ran, ["schtasks /Delete /TN tarsee /F"]);
+        assert!(system.shown.is_empty());
         assert!(is_installed_with(&mut Recorder::default(), "win32", &Env::new()));
     }
 
@@ -357,9 +433,14 @@ mod tests {
 
     #[test]
     fn the_real_system_runs_commands_through_the_shell() {
-        let mut real = RealSystem;
-        assert!(real.run("exit 0").is_ok());
-        let err = real.run("exit 3").unwrap_err().to_string();
-        assert!(err.starts_with("Command failed: exit 3\n"), "{err}");
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let mut real = RealSystem::with_stderr_sink(&Env::new(), sink.clone());
+        assert!(real.run("exit 0", true).is_ok());
+        let err = real.run("echo oops 1>&2 && exit 3", false).unwrap_err().to_string();
+        assert!(err.starts_with("Command failed: echo oops 1>&2 && exit 3\n"), "{err}");
+        assert!(err.contains("oops"), "{err}");
+        assert!(sink.lock().is_empty(), "not shown when stdio was piped");
+        real.run("echo shown 1>&2", true).unwrap();
+        assert!(String::from_utf8_lossy(&sink.lock()).contains("shown"));
     }
 }

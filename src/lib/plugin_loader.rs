@@ -20,7 +20,7 @@ pub fn load_plugins(app: &App) -> Vec<String> {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !dir.join(&name).join("index.js").exists() {
+        if !crate::util::node_path::to_namespaced(&dir.join(&name).join("index.js")).exists() {
             continue;
         }
         log::warn!("[plugins] {name} is a JavaScript plugin, which this version of Tarsee cannot run");

@@ -12,6 +12,7 @@ mod echo;
 mod fake_phonon;
 mod fake_python;
 mod pdftotext;
+mod sleeper;
 mod speech;
 mod thread_dbs_sweep;
 
@@ -33,6 +34,7 @@ fn main() {
         Some("thread-dbs-sweep") => thread_dbs_sweep::main(),
         Some("pdftotext") => pdftotext::main(),
         Some("browser-guard") => browser_guard::main(),
+        Some("sleeper") => sleeper::main(),
         other => {
             eprintln!("tarsee-testbin: no such role: {}", other.unwrap_or("(none)"));
             64

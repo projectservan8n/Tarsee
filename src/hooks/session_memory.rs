@@ -5,22 +5,24 @@ use serde_json::Value;
 use crate::app::{App, WeakApp};
 use crate::lib::hooks::{HookOptions, HookRegistry};
 use crate::lib::workspace_files::append_daily_log;
-use crate::lib::workspace_files::jstext::{js_string, js_trim};
+use crate::lib::workspace_files::jstext::{js_string, js_to_number};
 use crate::util::js::truthy;
 
 pub const NAME: &str = "session-memory";
 pub const EVENTS: &[&str] = &["session:end"];
 
-/// `data.messageCount > 5`, as JavaScript compares: a number, or text that reads as one.
+/// `data.messageCount > 5`, as JavaScript compares: the value made a number (text read as `Number` reads it, so
+/// "0x10" is 16 and "inf" is NaN; an array or object through its text; true is 1, null 0).
 fn more_than_five(count: Option<&Value>) -> bool {
-    match count {
-        Some(Value::Number(n)) => n.as_f64().is_some_and(|n| n > 5.0),
-        Some(Value::String(s)) => js_trim(s).parse::<f64>().is_ok_and(|n| n > 5.0),
-        Some(Value::Array(_)) | Some(Value::Object(_)) => js_trim(&js_string(count))
-            .parse::<f64>()
-            .is_ok_and(|n| n > 5.0),
-        _ => false,
-    }
+    let n = match count {
+        Some(Value::Number(n)) => n.as_f64().unwrap_or(f64::NAN),
+        Some(Value::Bool(b)) => f64::from(u8::from(*b)),
+        Some(Value::Null) => 0.0,
+        None => f64::NAN,
+        Some(Value::String(s)) => js_to_number(s),
+        other => js_to_number(&js_string(other)),
+    };
+    n > 5.0
 }
 
 /// Writes `[session] Ended conversation "<title>" (<n> messages)` to the daily log for a conversation of more than
@@ -94,5 +96,27 @@ mod tests {
         handler(&t, &json!({"messageCount": true}));
         handler(&t, &json!({"title": "x"}));
         assert_eq!(todays_log(&t).matches("[session]").count(), 2);
+    }
+
+    #[test]
+    fn a_count_given_as_text_compares_as_javascript_compares_it() {
+        // `value > 5` in JavaScript, checked against Node.
+        for (count, more) in [
+            (json!("0x10"), true),
+            (json!("inf"), false),
+            (json!("infinity"), false),
+            (json!("Infinity"), true),
+            (json!(" 12 "), true),
+            (json!("5"), false),
+            (json!(""), false),
+            (json!([6]), true),
+            (json!({"a": 9}), false),
+            (json!(true), false),
+            (json!(null), false),
+            (json!(5.5), true),
+        ] {
+            assert_eq!(more_than_five(Some(&count)), more, "{count}");
+        }
+        assert!(!more_than_five(None));
     }
 }

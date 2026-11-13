@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
-use crate::lib::workspace_files::jstext::{js_json_stringify, js_string};
+use crate::lib::workspace_files::jstext::{js_json_stringify, js_string, js_to_number};
 use crate::util::js::{number_to_string, truthy};
 
 struct KindStyle {
@@ -30,12 +30,13 @@ const PROCESSING: KindStyle = KindStyle {
 };
 
 /// What `KIND_STYLES[kind]` found for an inherited name ("toString", "constructor", ...): a function or an object,
-/// truthy, with none of the fields.
+/// truthy, with none of the fields. Its colours print as "undefined" in the style attribute; its label is
+/// `esc(undefined)`, which is "".
 const INHERITED: KindStyle = KindStyle {
     bg: "undefined",
     border: "undefined",
     fg: "undefined",
-    label: "undefined",
+    label: "",
 };
 
 /// `KIND_STYLES[kind] || KIND_STYLES.processing`, the kind used as a property name.
@@ -130,7 +131,7 @@ impl JsVal {
         match self {
             JsVal::Num(n) => *n,
             JsVal::Bool(b) => f64::from(u8::from(*b)),
-            JsVal::Str(s) => string_to_number(s),
+            JsVal::Str(s) => js_to_number(s),
         }
     }
 
@@ -150,41 +151,6 @@ impl std::fmt::Display for JsVal {
             JsVal::Str(s) => f.write_str(s),
         }
     }
-}
-
-/// `Number(text)`: blank is 0, otherwise the whole trimmed text must be a number.
-fn string_to_number(s: &str) -> f64 {
-    let t = crate::lib::workspace_files::jstext::js_trim(s);
-    if t.is_empty() {
-        return 0.0;
-    }
-    let radix = |prefix: &str, radix: u32| {
-        t.strip_prefix(prefix)
-            .or_else(|| t.strip_prefix(&prefix.to_uppercase()))
-            .map(|digits| {
-                if digits.is_empty() {
-                    f64::NAN
-                } else {
-                    u64::from_str_radix(digits, radix).map_or(f64::NAN, |v| v as f64)
-                }
-            })
-    };
-    if let Some(v) = radix("0x", 16).or_else(|| radix("0o", 8)).or_else(|| radix("0b", 2)) {
-        return v;
-    }
-    match t {
-        "Infinity" | "+Infinity" => return f64::INFINITY,
-        "-Infinity" => return f64::NEG_INFINITY,
-        _ => {}
-    }
-    let valid = t
-        .chars()
-        .all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
-        && t.chars().any(|c| c.is_ascii_digit());
-    if !valid {
-        return f64::NAN;
-    }
-    t.parse::<f64>().unwrap_or(f64::NAN)
 }
 
 /// `Math.max(a, b)`: NaN when either is NaN.
@@ -623,9 +589,9 @@ mod tests {
             JsVal::Str("100130".into())
         );
         assert_eq!(JsVal::Bool(true).add(&JsVal::Num(1.0)), JsVal::Num(2.0));
-        assert_eq!(string_to_number(" 12.5 "), 12.5);
-        assert!(string_to_number("12px").is_nan());
-        assert_eq!(string_to_number("0x10"), 16.0);
-        assert_eq!(string_to_number(""), 0.0);
+        assert_eq!(js_to_number(" 12.5 "), 12.5);
+        assert!(js_to_number("12px").is_nan());
+        assert_eq!(js_to_number("0x10"), 16.0);
+        assert_eq!(js_to_number(""), 0.0);
     }
 }

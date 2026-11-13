@@ -5,8 +5,8 @@ use std::sync::LazyLock;
 
 use crate::app::App;
 use crate::db::memory::MemoryStore;
-use crate::lib::workspace_files::jstext::{JS_SPACE_CLASS, js_trim};
-use crate::util::js::{utf16_len, utf16_truncate};
+use crate::lib::workspace_files::jstext::JS_SPACE_CLASS;
+use crate::util::js::{trim, utf16_len, utf16_truncate};
 
 /// `/\[REMEMBER:\s*(.+?)\]/gi`, with JavaScript's `\s` and `.` (which stops at a line end).
 static REMEMBER: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -26,7 +26,7 @@ pub fn extract_and_save_memories(app: &App, text: &str, conversation_id: Option<
     }
     let facts: Vec<String> = REMEMBER
         .captures_iter(text)
-        .map(|caps| js_trim(&caps[1]).to_string())
+        .map(|caps| trim(&caps[1]).to_string())
         .collect();
     if facts.is_empty() {
         return text.to_string();
@@ -44,7 +44,7 @@ pub fn extract_and_save_memories(app: &App, text: &str, conversation_id: Option<
     // Strip the markers so the user doesn't see them.
     let stripped = REMEMBER.replace_all(text, "");
     let collapsed = BLANK_LINES.replace_all(&stripped, "\n\n");
-    js_trim(&collapsed).to_string()
+    trim(&collapsed).to_string()
 }
 
 #[cfg(test)]
