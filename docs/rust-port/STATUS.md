@@ -17,15 +17,15 @@ agent checked it against the Node code and its findings are fixed or parked belo
 | I0 | reviewed | - | 7957ca6, fixes 38a6adb | 1562 | Interfaces and fakes; `INTERFACES.md`. Review: 1 important, 4 minor, all addressed |
 | A1 | reviewed | - | 92f9739, fixes d5772a9 | 2016 | 161 of 181 cases. Review: 1 important, 5 minor; all confirmed fixed by a second reviewer |
 | A3 | running | s2 | | | |
-| A5 | merged, fixed | - | 2d96d1c, fixes 0a15a7a | 2137 | 66 of 66 cases. Review: 1 important, 4 minor; all fixed, one Node bug fixed. Second review running |
+| A5 | reviewed | - | 2d96d1c, fixes 0a15a7a | 2137 | 66 of 66 cases. Review: 1 important, 4 minor; all 5 confirmed fixed by a second reviewer (80,340 commands, 5,247 option builds compared with Node). Two minor leftovers deferred |
 | A2 | reviewed | - | 74e0e4f, fixes 82edd82 | 1723 | 107 of 109 cases (2 wait for G2, G3). Review: 3 important, 8 minor; all 11 confirmed fixed by a second reviewer; passes on Linux |
 | B1 | merged, fixed | - | 1649cf7, fixes 9aa27aa | 1757 | 36 of 36 cases. Review: nothing critical or important in the package; 2 minor, fixed; two Node bugs fixed. Second review running |
 | B2 | reviewed | - | 7094777, fixes a1ce610 | 2016 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases. Review: 2 critical, 1 important, 6 minor, all fixed with five Node bugs; confirmed by a second reviewer, who attacked the files route with 87 hostile paths |
-| C1 | merged, fixed | - | 9dd5372, fixes 2f14fc4 | 2201 | 32 of 32 cases. Review: 1 critical, 4 important, 22 minor; 25 fixed, 2 answered, four Node bugs fixed. Second review running |
-| D1 | merged, fixed | - | 48bb9ff, fixes 8a3ff04 | 2201 | 59 of 68 cases, plus 5 browser cases now in `tests/ui`. Review: 1 important, 11 minor; all addressed (the lock race: 0 wrong in 200,000 stress rounds). Second review running |
-| V2 | merged, fixed | - | 7205d05, fixes 344c47a | 2031 | 71 of 71 cases. Review: 5 important, 13 minor; 15 fixed, 3 belong to the server-wide wiring (Z1). Second review running |
+| C1 | merged, second fix round running | - | 9dd5372, fixes 2f14fc4 | 2201 | 32 of 32 cases. Second review: 25 of 27 confirmed fixed, 2 left on purpose; one hole traced to the foundation (fixed there) and one new breakage (a linked skill folder cannot be removed on Windows) |
+| D1 | merged, second fix round running | - | 48bb9ff, fixes 8a3ff04 | 2201 | 59 of 68 cases. Second review: all 12 confirmed fixed (the lock race: 0 wrong in 220,000 rounds); two low findings in the fix itself |
+| V2 | merged, second fix round running | - | 7205d05, fixes 344c47a | 2031 | 71 of 71 cases. Second review: 16 of 18 confirmed fixed (2 belong to Z1); two new minor findings (lines asked at once lose their order on several threads) |
 | S4 | merged | - | 40c3723 | 2118 | 41 of 42 cases (1 waits for S3). The real `codex` and `claude` programs each connected to the Rust endpoint and listed all 27 tools. Review running |
-| T1 | merged, fixed | - | 40e4ee7, fixes bac416f | 2131 | 102 of 107 cases (5 wait for S3). Review: 2 critical, 1 important, 4 minor; all fixed (the shell runs in a job object). Second review running |
+| T1 | reviewed | - | 40e4ee7, fixes bac416f | 2131 | 102 of 107 cases (5 wait for S3). Review: 2 critical, 1 important, 4 minor; all 7 confirmed fixed by a second reviewer, who ended sessions nine ways with unrelated processes running beside them; passes on Linux. Three minor leftovers deferred |
 | W1a | merged | - | fcfc2ba | 1328 | 116 of 141 cases of the browser files run in a real browser (`cargo test --test ui`); 25 wait for A1, A4, R2 |
 | E1 | reviewed | - | 55fa65f, fixes 96f4ac4 | 1573 | 128 of 128 cases. Review: faithful, 2 minor, addressed; two Node bugs fixed |
 | V1 | reviewed | - | dbb96bb, fixes 64fb45d | 1742 | 42 of 42 cases. Review: 2 critical, 3 important, 7 minor; all 12 confirmed fixed by a second reviewer |
@@ -211,3 +211,10 @@ For the final cleanup; none blocks a package.
 - The conversion from a registry provider to the engine environment's entry lives in `codex_options.rs`; it belongs
   beside the registry.
 - Clippy on the newest compiler reports a few warnings the pinned one does not.
+- T1 web terminal: when the shell cannot be put in a job object, every close logs an error line that Node never
+  logged; with PowerShell in no PATH folder and an empty PATHEXT entry the browser sees the pseudo-terminal
+  library's own message where Node said "File not found"; Railway's project list sorts signs and emoji after
+  letters where Node sorts them first.
+- A5 Local AI bridge: blanks after a header's value are not counted towards the 16 KiB header limit (Node answered
+  431); one request in 3,100 against a server that ends the connection at once got no answer for 75 s.
+- A stray folder `E:\localhost` on the machine the port was done on (8 default workspace files from a reviewer's
