@@ -73,7 +73,14 @@ fn system_env() -> Vec<(String, String)> {
 /// A variable of this test process's own environment that the app's environment does not have: the shell must not
 /// see it (portable-pty starts from the real environment unless told not to).
 fn real_only_variable() -> (String, String) {
-    for name in ["CARGO_PKG_NAME", "CARGO_MANIFEST_DIR", "CARGO", "USERNAME", "USER", "LOGNAME"] {
+    for name in [
+        "CARGO_PKG_NAME",
+        "CARGO_MANIFEST_DIR",
+        "CARGO",
+        "USERNAME",
+        "USER",
+        "LOGNAME",
+    ] {
         if let Ok(value) = std::env::var(name)
             && !value.is_empty()
             && !system_env().iter().any(|(n, _)| n.eq_ignore_ascii_case(name))
@@ -503,10 +510,7 @@ async fn a_shell_runs_commands_resizes_and_is_gone_with_what_it_started_when_the
     }
     until_closed_count(&server.t.app).await;
     assert_eq!(get_active_terminal_count(&server.t.app), 0);
-    assert!(
-        running(stranger.id()),
-        "a process the shell did not start was ended"
-    );
+    assert!(running(stranger.id()), "a process the shell did not start was ended");
     let _ = stranger.kill();
     let _ = stranger.wait();
 
@@ -723,7 +727,7 @@ async fn a_close_the_browser_starts_is_answered_and_ends_the_shell() {
     let answer = answer.unwrap();
     assert_eq!((u16::from(answer.code), answer.reason.as_str()), (1000, "bye"));
     assert!(
-        matches!(tokio::time::timeout(WAIT, term.ws.next()).await.unwrap(), None),
+        tokio::time::timeout(WAIT, term.ws.next()).await.unwrap().is_none(),
         "the connection ends cleanly after the close"
     );
     assert!(gone(pid).await);

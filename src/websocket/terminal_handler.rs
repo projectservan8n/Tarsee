@@ -363,18 +363,16 @@ impl Shell {
                     libc::kill(pid, libc::SIGHUP);
                 }
                 let ended = self.ended.clone();
-                let _ = std::thread::Builder::new()
-                    .name("terminal-kill".into())
-                    .spawn(move || {
-                        if ended.wait_for(HANGUP_GRACE).is_none() {
-                            // SAFETY: as above.
-                            unsafe {
-                                if libc::kill(-pid, libc::SIGKILL) != 0 {
-                                    libc::kill(pid, libc::SIGKILL);
-                                }
+                let _ = std::thread::Builder::new().name("terminal-kill".into()).spawn(move || {
+                    if ended.wait_for(HANGUP_GRACE).is_none() {
+                        // SAFETY: as above.
+                        unsafe {
+                            if libc::kill(-pid, libc::SIGKILL) != 0 {
+                                libc::kill(pid, libc::SIGKILL);
                             }
                         }
-                    });
+                    }
+                });
             }
             None => self.kill_child(),
         }
@@ -621,14 +619,12 @@ impl Drop for Session {
             let terminal_id = self.terminal_id.clone();
             let terminals = self.terminals.clone();
             let ended = self.shell.ended.clone();
-            let waiting = std::thread::Builder::new()
-                .name("terminal-exit".into())
-                .spawn(move || {
-                    let status = ended.wait();
-                    if let Some(app) = app.upgrade() {
-                        report_exit(&app, &terminal_id, &terminals, status);
-                    }
-                });
+            let waiting = std::thread::Builder::new().name("terminal-exit".into()).spawn(move || {
+                let status = ended.wait();
+                if let Some(app) = app.upgrade() {
+                    report_exit(&app, &terminal_id, &terminals, status);
+                }
+            });
             if waiting.is_err() {
                 log::error!("[terminal] Terminal {} exit will not be reported", self.terminal_id);
             }
@@ -826,7 +822,8 @@ pub async fn handle_terminal_connection(app: App, socket: WebSocket, client_ip: 
     let shell = session.shell.clone();
 
     // Send initial terminal ID
-    let connected = json!({ "type": "connected", "terminalId": terminal_id, "shell": shell_name, "cwd": cwd.to_string_lossy() });
+    let connected =
+        json!({ "type": "connected", "terminalId": terminal_id, "shell": shell_name, "cwd": cwd.to_string_lossy() });
     if let Some(open) = socket.as_mut()
         && !send_json(open, connected).await
     {
@@ -1150,7 +1147,10 @@ mod tests {
         std::fs::create_dir_all(&holding).unwrap();
         std::fs::write(holding.join(shell()), b"").unwrap();
         let path = std::env::join_paths([&empty, &holding]).unwrap().into_string().unwrap();
-        let env = BTreeMap::from([("Path".to_string(), path), ("PATHEXT".to_string(), ".COM;.EXE;".to_string())]);
+        let env = BTreeMap::from([
+            ("Path".to_string(), path),
+            ("PATHEXT".to_string(), ".COM;.EXE;".to_string()),
+        ]);
         if cfg!(windows) {
             assert_eq!(shell_program(&env), holding.join(shell()));
         } else {

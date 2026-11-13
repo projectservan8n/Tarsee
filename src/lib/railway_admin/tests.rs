@@ -1883,12 +1883,80 @@ fn latin_letters_sort_as_local_compare_sorts_them() {
     // Node's order for these (`localeCompare`, ICU's root collation): letters it counts as two (æ, œ, ß, ĳ, ǆ), every
     // kind of accent, letters with a place of their own (ŋ, ħ, ǥ, ƒ, þ, ı), case.
     let node = [
-        "aether", "Æther", "ăla", "alpha", "Alpha", "ALPHA", "ångström", "Ångström", "api_key", "API-KEY", "apikey",
-        "capelo", "ĉapelo", "çava", "co_op", "co-op", "coop", "de", "đe", "Ðe", "dzungla", "ǆungla", "emile", "Émile",
-        "ėmile", "flag", "ƒlag", "gamma", "ǥamma", "hotel", "ħotel", "Ħotel", "ii", "ijs", "ĳs", "Ĳs", "ıi", "lodz",
-        "łódź", "Łódź", "noma", "ñoma", "ŋoma", "oeuvre", "œuvre", "Œuvre", "ost", "öst", "Øst", "ōst", "safr", "šafr",
-        "şafr", "ẞtrasse", "strasse", "STRASSE", "straße", "web 2", "web2", "x", "X", "ẍ", "yes", "ŷes", "Ŷes", "ÿes",
-        "zena", "žena", "zeta", "ǯ", "þorn", "Þorn", "Ωmega", "日本",
+        "aether",
+        "Æther",
+        "ăla",
+        "alpha",
+        "Alpha",
+        "ALPHA",
+        "ångström",
+        "Ångström",
+        "api_key",
+        "API-KEY",
+        "apikey",
+        "capelo",
+        "ĉapelo",
+        "çava",
+        "co_op",
+        "co-op",
+        "coop",
+        "de",
+        "đe",
+        "Ðe",
+        "dzungla",
+        "ǆungla",
+        "emile",
+        "Émile",
+        "ėmile",
+        "flag",
+        "ƒlag",
+        "gamma",
+        "ǥamma",
+        "hotel",
+        "ħotel",
+        "Ħotel",
+        "ii",
+        "ijs",
+        "ĳs",
+        "Ĳs",
+        "ıi",
+        "lodz",
+        "łódź",
+        "Łódź",
+        "noma",
+        "ñoma",
+        "ŋoma",
+        "oeuvre",
+        "œuvre",
+        "Œuvre",
+        "ost",
+        "öst",
+        "Øst",
+        "ōst",
+        "safr",
+        "šafr",
+        "şafr",
+        "ẞtrasse",
+        "strasse",
+        "STRASSE",
+        "straße",
+        "web 2",
+        "web2",
+        "x",
+        "X",
+        "ẍ",
+        "yes",
+        "ŷes",
+        "Ŷes",
+        "ÿes",
+        "zena",
+        "žena",
+        "zeta",
+        "ǯ",
+        "þorn",
+        "Þorn",
+        "Ωmega",
+        "日本",
     ];
     let mut names: Vec<&str> = node.iter().rev().copied().collect();
     names.sort_by(|a, b| locale_compare(a, b));
@@ -1896,8 +1964,8 @@ fn latin_letters_sort_as_local_compare_sorts_them() {
     // Accents in their canonical order, letters ICU counts as two (with their own accents after the first), letters
     // that are a compatibility form of two (ẚ, ŉ), modifier letters (after capitals at the case level).
     let node = [
-        "a", "Ạ", "Ặ", "ab", "ae", "æ", "ǽ", "Ǣ", "aʾ", "ẚ", "dž", "ǆ", "ǅ", "Ǆ", "ɣ", "Ɣ", "ˠ", "h", "H", "ʰ", "n", "o", "ø",
-        "Ø", "ǿ", "Ơ", "ờ", "ộ", "ʒ", "Ʒ", "ǯ", "Ǯ", "ʼn", "ŉ",
+        "a", "Ạ", "Ặ", "ab", "ae", "æ", "ǽ", "Ǣ", "aʾ", "ẚ", "dž", "ǆ", "ǅ", "Ǆ", "ɣ", "Ɣ", "ˠ", "h", "H", "ʰ", "n",
+        "o", "ø", "Ø", "ǿ", "Ơ", "ờ", "ộ", "ʒ", "Ʒ", "ǯ", "Ǯ", "ʼn", "ŉ",
     ];
     let mut names: Vec<&str> = node.iter().rev().copied().collect();
     names.sort_by(|a, b| locale_compare(a, b));
@@ -1913,7 +1981,8 @@ async fn a_text_cut_through_an_emoji_shows_what_node_wrote_out() {
     let value = format!("{}🐒{}", "x".repeat(199), "y".repeat(50));
     let ran = run(&t, merged(&base(), json!({"value": value}))).await;
     assert!(
-        ran.out.contains(&format!("value: \"{}\u{FFFD}...\" (plain value)", "x".repeat(199))),
+        ran.out
+            .contains(&format!("value: \"{}\u{FFFD}...\" (plain value)", "x".repeat(199))),
         "{}",
         ran.out
     );
