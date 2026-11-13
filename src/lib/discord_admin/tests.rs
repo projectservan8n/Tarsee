@@ -2078,3 +2078,15 @@ async fn voice_channels_come_after_text_channels_whatever_their_position() {
         .join("\n")
     );
 }
+
+#[test]
+fn a_slice_through_an_emoji_keeps_its_half_as_node_wrote_it_out() {
+    assert_eq!(js_slice_shown("ab🐒cd", 0, 3), "ab\u{FFFD}");
+    assert_eq!(js_slice_shown("ab🐒cd", 3, 6), "\u{FFFD}cd");
+    assert_eq!(js_slice_shown("ab🐒cd", 0, 4), "ab🐒");
+    assert_eq!(js_slice_shown("ab🐒cd", 2, 3), "\u{FFFD}");
+    assert_eq!(js_slice_shown("ab", 0, 200), "ab");
+    assert_eq!(js_slice_shown("ab", 5, 9), "");
+    assert_eq!(js_tail_shown("ab🐒cd", 3), "\u{FFFD}cd");
+    assert_eq!(js_tail_shown("ab🐒cd", 4), "🐒cd");
+}

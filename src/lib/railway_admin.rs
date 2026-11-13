@@ -29,21 +29,20 @@
 //! Every call returns a plain-English string (never fails) and logs one line: the action, the project, the
 //! environment, the service, never a value or a token.
 
-use std::cmp::Ordering;
 use std::sync::LazyLock;
 use std::time::Duration;
 
 use regex::Regex;
 use serde_json::{Value, json};
 
-use super::discord_admin::{js_string, js_string_or_empty, js_template, one_line};
+use super::discord_admin::{js_slice_shown, js_string, js_string_or_empty, js_tail_shown, js_template, one_line};
 use crate::app::App;
 use crate::env::Env;
 use crate::lib::key_vault;
 use crate::middleware::auth::JS_WHITESPACE;
 use crate::net::fetch::{Fetch, FetchError, FetchRequest};
 use crate::util::js::trim as js_trim;
-use crate::util::js::{truthy, utf16_len, utf16_slice, utf16_tail, utf16_truncate};
+use crate::util::js::{truthy, utf16_len};
 
 pub const ACTIONS: [&str; 4] = ["list_projects", "list_variables", "set_variable", "redeploy"];
 const WRITES: [&str; 2] = ["set_variable", "redeploy"];
@@ -131,7 +130,7 @@ pub fn mask_value(value: &str) -> String {
     if utf16_len(value) < 12 {
         return "****".to_string();
     }
-    format!("{}...{}", utf16_slice(value, 0, 4), utf16_tail(value, 4))
+    format!("{}...{}", js_slice_shown(value, 0, 4), js_tail_shown(value, 4))
 }
 
 /// Where Tarsee itself runs on Railway: the ids Railway gives every service, `None` off Railway (or when one is not
@@ -362,7 +361,7 @@ pub async fn railway_admin(app: &App, args: &Value, deps: RailwayDeps<'_>) -> St
                 text.push_str(" Nothing was changed.");
             }
             let text = note.scrub(&text);
-            let outcome = format!("failed: {}", utf16_truncate(&one_line(&text), 200));
+            let outcome = format!("failed: {}", js_slice_shown(&one_line(&text), 0, 200));
             (outcome, format!("railway {action} error: {text}").replace("  ", " "))
         }
     };
@@ -416,7 +415,7 @@ async fn run(
     }
     if writes {
         let go = one_line(&js_string_or_empty(args.get("approved_by")));
-        note.extra.push(format!("go=\"{}\"", utf16_truncate(&go, 120)));
+        note.extra.push(format!("go=\"{}\"", js_slice_shown(&go, 0, 120)));
     }
     let token = token_of(vault, env)?;
     note.secrets.push(token.clone());
@@ -1014,7 +1013,7 @@ async fn set_variable(ctx: &Ctx<'_>, note: &mut Note) -> Step<String> {
         }
         note.extra.push("value=plain".to_string());
         let quoted = if utf16_len(&value) > 200 {
-            format!("{}...", utf16_truncate(&value, 200))
+            format!("{}...", js_slice_shown(&value, 0, 200))
         } else {
             value.clone()
         };
@@ -1160,81 +1159,8 @@ async fn redeploy(ctx: &Ctx<'_>, note: &mut Note) -> Step<String> {
 
 // ---------------------------------------------------------------- String.prototype.localeCompare
 
-/// The printable ASCII characters (and the whitespace controls) in the order ICU's root collation puts them, which
-/// is what `localeCompare` used: whitespace, punctuation, symbols, digits, then letters with each small letter
-/// before its capital. Letters share a weight with their other case; the case decides only between names that are
-/// otherwise equal.
-const ICU_ASCII_ORDER: &str =
-    "\t\n\x0B\x0C\r _-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$0123456789aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ";
-
-/// Latin-1 letters with an accent: their letter, and the accent's place after the plain letter as ICU orders
-/// accents (acute, grave, circumflex, ring, diaeresis, tilde, cedilla).
-const ACCENTED: &[(char, char, u8)] = &[
-    ('á', 'a', 1),
-    ('à', 'a', 2),
-    ('â', 'a', 3),
-    ('å', 'a', 4),
-    ('ä', 'a', 5),
-    ('ã', 'a', 6),
-    ('ç', 'c', 7),
-    ('é', 'e', 1),
-    ('è', 'e', 2),
-    ('ê', 'e', 3),
-    ('ë', 'e', 5),
-    ('í', 'i', 1),
-    ('ì', 'i', 2),
-    ('î', 'i', 3),
-    ('ï', 'i', 5),
-    ('ñ', 'n', 6),
-    ('ó', 'o', 1),
-    ('ò', 'o', 2),
-    ('ô', 'o', 3),
-    ('ö', 'o', 5),
-    ('õ', 'o', 6),
-    ('ú', 'u', 1),
-    ('ù', 'u', 2),
-    ('û', 'u', 3),
-    ('ü', 'u', 5),
-    ('ý', 'y', 1),
-    ('ÿ', 'y', 5),
-];
-
-/// The (primary, secondary, tertiary) weights of one character, or `None` for a control character ICU ignores.
-fn collation_weights(c: char) -> Option<(u32, u8, u8)> {
-    if c.is_ascii() {
-        let index = ICU_ASCII_ORDER.find(c)? as u32;
-        if c.is_ascii_alphabetic() {
-            let lower = ICU_ASCII_ORDER.find(c.to_ascii_lowercase())? as u32;
-            return Some((lower, 0, c.is_ascii_uppercase() as u8));
-        }
-        return Some((index, 0, 0));
-    }
-    let lower = c.to_lowercase().next().unwrap_or(c);
-    if let Some((_, base, accent)) = ACCENTED.iter().find(|(a, _, _)| *a == lower) {
-        let (primary, _, _) = collation_weights(*base)?;
-        return Some((primary, *accent, (lower != c) as u8));
-    }
-    if c.is_control() {
-        return None;
-    }
-    // Everything else after the ASCII letters, by its small letter's code point.
-    Some((1000 + lower as u32, 0, (lower != c) as u8))
-}
-
-/// `a.localeCompare(b)` for the names Railway gives projects and variables: exact for ASCII and the accented Latin-1
-/// letters, and a stable approximation (by code point) for anything else.
-fn locale_compare(a: &str, b: &str) -> Ordering {
-    let weights = |s: &str| s.chars().filter_map(collation_weights).collect::<Vec<_>>();
-    let (wa, wb) = (weights(a), weights(b));
-    let level = |pick: fn(&(u32, u8, u8)) -> u32| {
-        let la: Vec<u32> = wa.iter().map(pick).collect();
-        let lb: Vec<u32> = wb.iter().map(pick).collect();
-        la.cmp(&lb)
-    };
-    level(|w| w.0)
-        .then_with(|| level(|w| w.1 as u32))
-        .then_with(|| level(|w| w.2 as u32))
-}
+mod collation;
+use collation::locale_compare;
 
 #[cfg(test)]
 mod tests;
