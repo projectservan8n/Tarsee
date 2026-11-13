@@ -32,8 +32,8 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use crate::lib::message_tools::{TIMELINE_PREFIX, slim_message};
-use crate::lib::tool_steps::{fold_blank_lines, js_string, js_trim, parse_json_lossy};
-use crate::util::js::{ms_from_iso, truthy, utf16_len, utf16_tail};
+use crate::lib::tool_steps::{fold_blank_lines, js_string, parse_json_lossy};
+use crate::util::js::{ms_from_iso, trim, truthy, utf16_len, utf16_tail};
 
 /// The default size of the handoff in characters (the ai.handoffChars setting overrides it).
 pub const HANDOFF_DEFAULT_CHARS: i64 = 10_000;
@@ -245,7 +245,7 @@ static BLOCK_TAG: LazyLock<Regex> = LazyLock::new(|| {
 /// stored JSON.)
 fn clean(s: &str) -> String {
     let safe = BLOCK_TAG.replace_all(s, "[recent-conversation]");
-    js_trim(&fold_blank_lines(&safe)).to_string()
+    trim(&fold_blank_lines(&safe)).to_string()
 }
 
 static ALL_DIGITS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9]+$").expect("the digits pattern"));
@@ -263,7 +263,7 @@ fn to_ms(v: &Value) -> Option<i64> {
         Value::String(s) if s.is_empty() => None,
         other => {
             let text = js_string(other);
-            let s = js_trim(&text);
+            let s = trim(&text);
             if ALL_DIGITS.is_match(s) {
                 return s.parse::<f64>().ok().map(|f| f as i64);
             }

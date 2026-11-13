@@ -32,9 +32,24 @@
 //!   everything the turn awaits, but not by a task the turn spawns: wrap that task in [`scope_queued_turn`].
 //! - The module's own lock guards a few map operations and is never held while anything else is called: not the
 //!   database, not the live timeline, not a callback.
+//! - **A Stop and the slot can come at the same moment**, on two threads (in the JS one always came first). What
+//!   a queued turn is (waiting, removed, begun, ended) is kept under one small lock and changed in one step, so
+//!   the two always land in an order the JS had: the Stop first (the line ends "removed" and the turn never runs)
+//!   or the slot first (the Stop is refused and the turn runs).
+//!   A turn that was removed comes back (`Turn::QueueRemoved`) only once the Stop that removed it has finished:
+//!   its line has ended on the timeline and `on_removed` has returned, as both had in the JS. So `on_removed` must
+//!   not block: the slot is not passed on until it returns.
+//! - **`on_queued` and `on_removed` are advisory**, as in the JS, which caught what they threw: one that panics is
+//!   logged and the turn goes on.
 //!
 //! As in the JS, a turn that starts another turn *of its own conversation* queues it behind itself. Awaiting that
 //! inner turn from inside the outer one would wait for ever (in both versions); nothing does.
+//!
+//! One thing the JS did is not copied. Its queue forgot a finished turn one tick of the event loop after the
+//! caller's own code went on, so a turn started in the very same tick as the previous one's end (`await turn(a);
+//! turn(b)` with nothing awaited in between) was still told "queued, 1 ahead" and got a "Queued" line, though it
+//! waited for nothing. No caller does that, and there is no tick to count here: the slot is free the moment the
+//! turn's future completes, and the next turn is simply not queued.
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -42,7 +57,7 @@ use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 use crate::app::{App, WeakApp};
 use crate::lib::live_bus::{new_turn_id, publish};
@@ -116,6 +131,8 @@ pub struct QueuedTurn {
     locks: Weak<ConversationLocks>,
     flags: Mutex<Flags>,
     on_removed: Mutex<Option<OnRemoved>>,
+    /// True once a Stop that took the turn out has finished (its line ended on the timeline, its caller told).
+    stop_done: watch::Sender<bool>,
 }
 
 impl QueuedTurn {
@@ -129,6 +146,11 @@ impl QueuedTurn {
             }
             flags.ended = true;
         }
+        self.say_ended(stop_reason, extra);
+    }
+
+    /// The line's turn_end goes on the timeline. Only for the one caller that has just set `ended`.
+    fn say_ended(&self, stop_reason: &str, extra: Map<String, Value>) {
         let Some(locks) = self.locks.upgrade() else {
             return;
         };
@@ -154,13 +176,25 @@ impl QueuedTurn {
             if flags.removed || flags.slot || flags.ended {
                 return false;
             }
+            // Removed and ended in one step, as in the JS, where nothing could come in between. If the slot came
+            // between the two, the turn would find itself removed with its line still open, and its line would be
+            // ended as "It could not start" before this Stop got to say "removed".
             flags.removed = true;
+            flags.ended = true;
         }
-        self.end("removed", Map::new());
-        // (advisory only)
+        // The turn itself may get its slot while this is still at work, on another thread. It waits for this to
+        // finish (see `with_conversation_turn`), however it finishes.
+        struct Done<'a>(&'a watch::Sender<bool>);
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                self.0.send_replace(true);
+            }
+        }
+        let _done = Done(&self.stop_done);
+        self.say_ended("removed", Map::new());
         let on_removed = self.on_removed.lock().take();
         if let Some(on_removed) = on_removed {
-            on_removed();
+            advisory("on_removed", on_removed);
         }
         true
     }
@@ -249,6 +283,14 @@ impl Drop for QueuedLine {
     }
 }
 
+/// Calls a caller's callback that is advisory only: the JS wrapped these in `try { } catch { }`, so one that
+/// fails must not stop the turn (or leave its place in the queue half taken).
+fn advisory(what: &str, callback: impl FnOnce()) {
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)).is_err() {
+        log::warn!("[conv-lock] {what} panicked; the turn goes on");
+    }
+}
+
 fn could_not_start() -> Map<String, Value> {
     let mut extra = Map::new();
     extra.insert("error".into(), json!("It could not start"));
@@ -309,6 +351,7 @@ impl ConversationLocks {
             locks: Arc::downgrade(self),
             flags: Mutex::new(Flags::default()),
             on_removed: Mutex::new(live.on_removed),
+            stop_done: watch::Sender::new(false),
         });
         self.state.lock().waiting.insert(queued.turn_id.clone(), queued.clone());
         if let Some(app) = self.app.upgrade() {
@@ -360,7 +403,8 @@ impl ConversationLocks {
         let mut line = None;
         if wake.is_some() {
             if let Some(on_queued) = opts.on_queued {
-                on_queued(ahead);
+                // depth includes this turn, so subtract it to get the number ahead.
+                advisory("on_queued", move || on_queued(ahead));
             }
             if let Some(live) = opts.live {
                 line = Some(QueuedLine(self.queue_live(live, conv_id)));
@@ -407,6 +451,12 @@ impl ConversationLocks {
                 locks.state.lock().waiting.remove(&queued.turn_id);
             }
             if removed {
+                // The Stop that took this turn out may still be at work on another thread. In the JS it had long
+                // finished when the slot came: the line had ended, `on_removed` had been called, and only then
+                // did the turn come back removed. Waiting for it here keeps that order for the caller and for the
+                // timeline (the line ends before the next turn begins). The Stop waits for nothing of this turn's.
+                let mut stop_done = queued.stop_done.subscribe();
+                let _ = stop_done.wait_for(|done| *done).await;
                 return Ok(Turn::QueueRemoved);
             }
             // Inside f the provider claims the queued turn id; if nothing does (the turn failed first, a command

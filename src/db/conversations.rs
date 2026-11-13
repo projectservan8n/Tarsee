@@ -6,13 +6,24 @@
 //! the same field names, and `null` where the column is null.
 //!
 //! **Errors.** The JS let a failed statement throw. Here the methods that write return `rusqlite::Result` (a
-//! message for a conversation that was just deleted is refused by the database, and the caller must hear of it);
-//! the methods that only read answer with nothing (`None`, an empty list, 0) and log the failure, since a read
-//! can only fail when the database itself is broken.
+//! message for a conversation that was just deleted is refused by the database, and the caller must hear of it).
+//!
+//! Each read comes twice:
+//! - `try_get`, `try_list`, `try_get_messages`, `try_get_recent_messages`, `try_message_count` and
+//!   `try_get_session_handle` return `rusqlite::Result`: the JS call, with its throw as the error.
+//! - `get`, `list`, `get_messages`, ... answer with nothing (`None`, an empty list, 0) and log the failure. They
+//!   are for callers that only show what they find.
+//!
+//! **A caller that acts on "it is not there" must use the `try_` form.** The channels' get-or-create is the case
+//! to remember: `if !store.get(id) { create a conversation; point the chat at it }`. With `get`, a database that
+//! fails for one read would make that code start a new conversation and point the chat at it for good, cutting the
+//! chat off from its history, where the JS failed that one message. `try_get(id)?` keeps the JS behaviour. The
+//! same goes for a missing conversation answered with "that conversation no longer exists", and for a history that
+//! is handed to the AI as if the chat were empty.
 
 use std::sync::Arc;
 
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -20,8 +31,8 @@ use crate::app::{App, WeakApp};
 use crate::db::Db;
 use crate::lib::live_bus::{LiveBus, TimelineMessage};
 use crate::lib::message_tools::timeline_text;
-use crate::lib::tool_steps::{collapse_whitespace, js_round, js_trim, js_trim_start};
-use crate::util::js::{now_iso, now_ms, utf16_len, utf16_truncate};
+use crate::lib::tool_steps::{collapse_whitespace, js_round};
+use crate::util::js::{now_iso, now_ms, trim, trim_start, utf16_len, utf16_truncate};
 
 /// A conversation, as `SELECT * FROM conversations` gives it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -223,7 +234,7 @@ fn strip_speaker(text: &str) -> &str {
         return text;
     };
     match rest.find(']') {
-        Some(end) if end > 0 && rest[end + 1..].starts_with(':') => js_trim_start(&rest[end + 2..]),
+        Some(end) if end > 0 && rest[end + 1..].starts_with(':') => trim_start(&rest[end + 2..]),
         _ => text,
     }
 }
@@ -255,9 +266,9 @@ impl ConversationStore {
         self.app.as_ref()?.upgrade()?.get::<LiveBus>()
     }
 
-    /// Runs a read, answering with the type's "nothing" when the database fails.
-    fn read<R: Default>(&self, what: &str, f: impl FnOnce(&Connection) -> rusqlite::Result<R>) -> R {
-        match self.db.with(f) {
+    /// What a read found, or the type's "nothing" (and a log line) when the database failed.
+    fn or_nothing<R: Default>(what: &str, read: rusqlite::Result<R>) -> R {
+        match read {
             Ok(found) => found,
             Err(err) => {
                 log::warn!("[conv] {what} failed: {err}");
@@ -282,8 +293,14 @@ impl ConversationStore {
     }
 
     /// List conversations with pagination, the most recently active first. The JS defaults: limit 50, offset 0.
+    /// Nothing when the database fails: see [`try_list`](Self::try_list).
     pub fn list(&self, limit: i64, offset: i64) -> Vec<ConversationSummary> {
-        self.read("list", |conn| {
+        Self::or_nothing("list", self.try_list(limit, offset))
+    }
+
+    /// [`list`](Self::list), with a database failure as the error (the JS throw).
+    pub fn try_list(&self, limit: i64, offset: i64) -> rusqlite::Result<Vec<ConversationSummary>> {
+        self.db.with(|conn| {
             let mut stmt = conn.prepare_cached(
                 "SELECT id, title, provider, model, created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ? OFFSET ?",
             )?;
@@ -301,9 +318,16 @@ impl ConversationStore {
         })
     }
 
-    /// Get a single conversation by ID.
+    /// Get a single conversation by ID. `None` also when the database fails: a caller that would create, rebind
+    /// or refuse something on `None` uses [`try_get`](Self::try_get) (see the module notes).
     pub fn get(&self, id: &str) -> Option<Conversation> {
-        self.read("get", |conn| {
+        Self::or_nothing("get", self.try_get(id))
+    }
+
+    /// [`get`](Self::get), with a database failure as the error (the JS throw): `Ok(None)` is "there is no such
+    /// conversation", and nothing else is.
+    pub fn try_get(&self, id: &str) -> rusqlite::Result<Option<Conversation>> {
+        self.db.with(|conn| {
             conn.prepare_cached(&format!(
                 "SELECT {CONVERSATION_COLUMNS} FROM conversations WHERE id = ?"
             ))?
@@ -392,9 +416,15 @@ impl ConversationStore {
         }
     }
 
-    /// Get all messages in a conversation, oldest first.
+    /// Get all messages in a conversation, oldest first. Nothing when the database fails: see
+    /// [`try_get_messages`](Self::try_get_messages).
     pub fn get_messages(&self, conversation_id: &str) -> Vec<Message> {
-        self.read("getMessages", |conn| {
+        Self::or_nothing("getMessages", self.try_get_messages(conversation_id))
+    }
+
+    /// [`get_messages`](Self::get_messages), with a database failure as the error (the JS throw).
+    pub fn try_get_messages(&self, conversation_id: &str) -> rusqlite::Result<Vec<Message>> {
+        self.db.with(|conn| {
             let mut stmt = conn.prepare_cached(
                 "SELECT id, role, content, provider, model, tokens_in, tokens_out, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC",
             )?;
@@ -414,9 +444,19 @@ impl ConversationStore {
         })
     }
 
-    /// Get the N most recent messages (returned in chronological order). The JS default: 20.
+    /// Get the N most recent messages (returned in chronological order). The JS default: 20. Nothing when the
+    /// database fails: a caller that hands the history to the AI uses
+    /// [`try_get_recent_messages`](Self::try_get_recent_messages).
     pub fn get_recent_messages(&self, conversation_id: &str, limit: i64) -> Vec<RecentMessage> {
-        let mut rows: Vec<RecentMessage> = self.read("getRecentMessages", |conn| {
+        Self::or_nothing(
+            "getRecentMessages",
+            self.try_get_recent_messages(conversation_id, limit),
+        )
+    }
+
+    /// [`get_recent_messages`](Self::get_recent_messages), with a database failure as the error (the JS throw).
+    pub fn try_get_recent_messages(&self, conversation_id: &str, limit: i64) -> rusqlite::Result<Vec<RecentMessage>> {
+        let mut rows: Vec<RecentMessage> = self.db.with(|conn| {
             let mut stmt = conn.prepare_cached(
                 "SELECT id, role, content, provider, model, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?",
             )?;
@@ -430,10 +470,10 @@ impl ConversationStore {
                     created_at: row.get(5)?,
                 })
             })?;
-            rows.collect()
-        });
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        })?;
         rows.reverse(); // chronological order
-        rows
+        Ok(rows)
     }
 
     /// Session recap — if the conversation has been idle for >= `stale_minutes` (the JS default: 30), return a
@@ -558,9 +598,15 @@ impl ConversationStore {
         Ok(gone)
     }
 
-    /// Get message count for a conversation.
+    /// Get message count for a conversation. 0 when the database fails: see
+    /// [`try_message_count`](Self::try_message_count).
     pub fn message_count(&self, conversation_id: &str) -> i64 {
-        self.read("messageCount", |conn| {
+        Self::or_nothing("messageCount", self.try_message_count(conversation_id))
+    }
+
+    /// [`message_count`](Self::message_count), with a database failure as the error (the JS throw).
+    pub fn try_message_count(&self, conversation_id: &str) -> rusqlite::Result<i64> {
+        self.db.with(|conn| {
             conn.prepare_cached("SELECT COUNT(*) as count FROM messages WHERE conversation_id = ?")?
                 .query_row([conversation_id], |row| row.get(0))
         })
@@ -591,7 +637,7 @@ impl ConversationStore {
     /// Full-text search across all messages. Returns matching messages with conversation title and highlighted
     /// snippet, the best match first. The JS default limit: 30.
     pub fn search(&self, query: &str, limit: i64) -> Vec<SearchResult> {
-        let trimmed = js_trim(query);
+        let trimmed = trim(query);
         if trimmed.is_empty() {
             return Vec::new();
         }
@@ -636,10 +682,21 @@ impl ConversationStore {
     }
 
     /// The session handle a conversation's next turn resumes (see `set_session_handle`), or `None`. Returns `None`
-    /// if the session is stale (idle > 2 hours) to force a fresh start, on every AI.
+    /// if the session is stale (idle > 2 hours) to force a fresh start, on every AI. `None` also when the database
+    /// fails (the turn then starts a fresh session and is handed the recent conversation): see
+    /// [`try_get_session_handle`](Self::try_get_session_handle).
     pub fn get_session_handle(&self, conversation_id: &str) -> Option<String> {
-        let conv = self.get(conversation_id)?;
-        let handle = conv.claude_session_id.filter(|handle| !handle.is_empty())?;
+        Self::or_nothing("getSessionHandle", self.try_get_session_handle(conversation_id))
+    }
+
+    /// [`get_session_handle`](Self::get_session_handle), with a database failure as the error (the JS throw).
+    pub fn try_get_session_handle(&self, conversation_id: &str) -> rusqlite::Result<Option<String>> {
+        let Some(conv) = self.try_get(conversation_id)? else {
+            return Ok(None);
+        };
+        let Some(handle) = conv.claude_session_id.filter(|handle| !handle.is_empty()) else {
+            return Ok(None);
+        };
 
         // (A time that cannot be read is not counted as idle; no time at all is.)
         let idle_ms = if conv.updated_at.is_empty() {
@@ -649,13 +706,11 @@ impl ConversationStore {
         };
         if idle_ms.is_some_and(|idle| idle > IDLE_TIMEOUT_MS) {
             log::info!("[session] Session for conv {conversation_id} expired (idle > 2h), starting fresh");
-            if let Err(err) = self.write_session_handle(conversation_id, None) {
-                log::warn!("[conv] forgetting the expired session of {conversation_id} failed: {err}");
-            }
-            return None;
+            self.write_session_handle(conversation_id, None)?;
+            return Ok(None);
         }
 
-        Some(handle)
+        Ok(Some(handle))
     }
 }
 
@@ -669,6 +724,8 @@ mod tests {
     //! Port of the `ConversationStore` cases of `test/db.test.js`, the "live bus: messages" cases of
     //! `test/live-bus.test.js`, and the cases of `test/conversation-settings-cleanup.test.js` that need only this
     //! store (its daily-sweep case needs lib/retention.rs, package S1).
+    use rusqlite::Connection;
+
     use super::*;
     use crate::testkit::{TestApp, test_app};
 
@@ -1304,6 +1361,86 @@ mod tests {
             1,
             "quotes are taken out"
         );
+    }
+
+    // ── Fix round 1 ──────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// A database that fails every read of a conversation (its table lacks a column the read names) and still
+    /// takes the write the channels' get-or-create would make next.
+    fn failing_reads() -> ConversationStore {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT 'New conversation', provider TEXT, model TEXT, system_prompt TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+             INSERT INTO conversations (id, title) VALUES ('kept', 'The chat with all the history');",
+        )
+        .unwrap();
+        ConversationStore::for_db(Db::from_connection(conn))
+    }
+
+    /// Review finding M2. `get` says `None` for a conversation that is there when the database fails; `try_get`
+    /// says so. A caller that would start a new conversation on `None` (the channels' get-or-create) uses the
+    /// second, and the chat keeps its history.
+    #[test]
+    fn a_read_that_fails_is_told_apart_from_a_conversation_that_is_not_there() {
+        let store = failing_reads();
+        let logs = crate::testkit::CapturedLogs::start();
+        assert_eq!(store.get("kept"), None, "what the plain read says");
+        assert_eq!(logs.warnings().len(), 1);
+        assert!(
+            logs.warnings()[0].starts_with("[conv] get failed: "),
+            "{:?}",
+            logs.warnings()
+        );
+        let failed = store.try_get("kept").unwrap_err();
+        assert!(failed.to_string().contains("claude_session_id"), "{failed}");
+        assert!(store.try_get_session_handle("kept").is_err());
+        assert_eq!(store.get_session_handle("kept"), None);
+
+        // The channels' get-or-create, written with `try_get`: the failure stops it, and nothing is created.
+        let get_or_create = |store: &ConversationStore, bound: &str| -> rusqlite::Result<String> {
+            match store.try_get(bound)? {
+                Some(conv) => Ok(conv.id),
+                None => {
+                    store
+                        .db
+                        .with(|conn| conn.execute("INSERT INTO conversations (id) VALUES ('new')", []))?;
+                    Ok("new".to_string())
+                }
+            }
+        };
+        assert!(get_or_create(&store, "kept").is_err());
+        assert_eq!(
+            store.try_list(LIST_LIMIT, 0).unwrap().len(),
+            1,
+            "no second conversation was made"
+        );
+    }
+
+    #[test]
+    fn the_try_reads_answer_as_the_plain_ones_when_the_database_is_well() {
+        let (_t, store) = store();
+        let conv = store.create(NewConversation::titled("Both ways")).unwrap();
+        say(&store, &conv.id, "user", "one");
+        say(&store, &conv.id, "assistant", "two");
+        store.set_session_handle(&conv.id, Some("sess")).unwrap();
+        assert_eq!(store.try_get(&conv.id).unwrap(), store.get(&conv.id));
+        assert_eq!(store.try_get("no-such-chat").unwrap(), None);
+        assert_eq!(store.try_list(LIST_LIMIT, 0).unwrap(), store.list(LIST_LIMIT, 0));
+        assert_eq!(store.try_get_messages(&conv.id).unwrap(), store.get_messages(&conv.id));
+        assert_eq!(
+            store.try_get_recent_messages(&conv.id, 1).unwrap(),
+            store.get_recent_messages(&conv.id, 1)
+        );
+        assert_eq!(store.try_get_recent_messages(&conv.id, 1).unwrap()[0].content, "two");
+        assert_eq!(store.try_message_count(&conv.id).unwrap(), 2);
+        assert_eq!(store.try_get_session_handle(&conv.id).unwrap().as_deref(), Some("sess"));
+        assert_eq!(store.try_get_session_handle("no-such-chat").unwrap(), None);
+        // A database with no messages table: each try read is an error, each plain read is nothing.
+        let bare = failing_reads();
+        assert!(bare.try_get_messages("kept").is_err() && bare.get_messages("kept").is_empty());
+        assert!(bare.try_get_recent_messages("kept", 5).is_err() && bare.get_recent_messages("kept", 5).is_empty());
+        assert!(bare.try_message_count("kept").is_err());
+        assert_eq!(bare.message_count("kept"), 0);
     }
 
     #[test]

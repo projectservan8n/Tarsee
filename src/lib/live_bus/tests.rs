@@ -444,7 +444,20 @@ fn events_older_than_the_retention_time_are_pruned() {
     assert!(bus.events_since("old", 0, 500).is_empty());
     assert_eq!(bus.events_since("new", 0, 500).len(), 1);
     // Unset, blank or not a number: 14 days.
-    for (value, kept) in [("", 1), ("abc", 1), ("0", 1), ("0.5", 0)] {
+    // (Read as JavaScript's `Number()` reads it: hex counts, `Infinity` keeps everything, `inf` is no number.)
+    for (value, kept) in [
+        ("", 1),
+        ("abc", 1),
+        ("0", 1),
+        ("0.5", 0),
+        ("\u{feff}0.5", 0),
+        ("\u{85}0.5", 1),
+        ("0x2", 1),
+        ("0b0", 1),
+        ("Infinity", 1),
+        ("-Infinity", 0),
+        ("inf", 1),
+    ] {
         let t = test_app_with_retention(value);
         seed(&t, "c", None, "step", json!({}), now_ms() - 86_400_000);
         let bus = LiveBus::init(&t.app);
@@ -571,4 +584,140 @@ fn a_payload_the_node_version_stored_with_half_an_emoji_still_reads() {
     let events = bus.events_since("c", 0, 500);
     assert_eq!(events[0].payload, json!({ "kind": "text", "text": "cut …" }));
     assert_eq!(events[1].payload, json!({}));
+}
+
+// ── Fix round 1 ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+/// Review finding M1. In Node a listener that threw was caught by `publish`: it logged
+/// `[live-bus] publish <type> failed: <message>`, returned null, the event (already written) went to no listener
+/// after that one, and the caller went on. A listener that panics here is that listener.
+#[test]
+fn a_listener_that_panics_is_caught_and_logged_and_the_timeline_goes_on() {
+    let (_t, bus) = started();
+    let first = Arc::new(Mutex::new(Vec::<String>::new()));
+    let last = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = first.clone();
+    bus.on_event(move |e| sink.lock().push(e.r#type.clone()));
+    bus.on_event(|e| {
+        if e.r#type == "turn_queued" || e.r#type == "message" {
+            panic!("bug on {}", e.r#type);
+        }
+    });
+    let sink = last.clone();
+    bus.on_event(move |e| sink.lock().push(e.r#type.clone()));
+
+    let logs = crate::testkit::CapturedLogs::start();
+    assert!(bus.publish("pl", "turn_start", json!({}), Some("t1")).is_some());
+    assert_eq!(
+        bus.publish("pl", "turn_queued", json!({ "source": "web" }), Some("t2")),
+        None
+    );
+    let message = TimelineMessage {
+        id: "m1",
+        role: "user",
+        content: "hi",
+    };
+    assert_eq!(bus.publish_message("pl", message, &Map::new()), None);
+    assert!(bus.publish("pl", "turn_end", json!({}), Some("t1")).is_some());
+    assert_eq!(
+        logs.warnings(),
+        [
+            "[live-bus] publish turn_queued failed: bug on turn_queued",
+            "[live-bus] publishMessage failed: bug on message",
+        ]
+    );
+    // Both events are on the timeline all the same, and counted.
+    assert_eq!(
+        types(&bus.events_since("pl", 0, 500)),
+        ["turn_start", "turn_queued", "message", "turn_end"]
+    );
+    assert_eq!(bus.queued_turn_list(Some("pl")).len(), 1);
+    // The listener before the one that failed heard everything; the one after it missed those two, as in Node.
+    assert_eq!(*first.lock(), ["turn_start", "turn_queued", "message", "turn_end"]);
+    assert_eq!(*last.lock(), ["turn_start", "turn_end"]);
+}
+
+#[test]
+fn a_listener_that_panics_on_an_event_another_listener_published_is_logged_where_it_is_delivered() {
+    let (_t, bus) = started();
+    let again = Arc::downgrade(&bus);
+    let answered = Arc::new(Mutex::new(Vec::<Option<i64>>::new()));
+    let sink = answered.clone();
+    bus.on_event(move |e| {
+        if e.r#type == "turn_start" {
+            // Published from inside a delivery: it is delivered after the event in hand, by the same thread.
+            let step = again
+                .upgrade()
+                .unwrap()
+                .publish("c", "step", json!({ "kind": "text" }), None);
+            sink.lock().push(step.map(|evt| evt.seq));
+        }
+    });
+    bus.on_event(|e| {
+        if e.r#type == "step" {
+            panic!("bug on a step");
+        }
+    });
+    let logs = crate::testkit::CapturedLogs::start();
+    let start = bus.publish("c", "turn_start", json!({}), Some("t")).unwrap();
+    // The step's own publish had returned (with the event) before the step was delivered.
+    assert_eq!(*answered.lock(), [Some(start.seq + 1)]);
+    assert_eq!(logs.warnings(), ["[live-bus] publish step failed: bug on a step"]);
+    assert_eq!(bus.active_turn_for("c").unwrap().steps, 1);
+}
+
+/// Review finding M4, on the timeline: JavaScript has one kind of number, so what a publisher gives as 50.0 is 50
+/// in the row, in the event handed to listeners and in the event read back.
+#[test]
+fn a_whole_number_given_as_a_float_is_a_whole_number_on_the_timeline() {
+    let (t, bus) = started();
+    let heard = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = heard.clone();
+    bus.on_event(move |e| sink.lock().push(serde_json::to_string(e).unwrap()));
+    let evt = bus
+        .publish(
+            "c",
+            "step",
+            json!({ "kind": "usage", "outTps": 50.0, "nowTps": 33.3, "deep": [{ "a": { "b": { "c": { "d": { "e": 2.0 } } } } }], "big": 1e21 }),
+            Some("t"),
+        )
+        .unwrap();
+    let text = r#"{"kind":"usage","outTps":50,"nowTps":33.3,"deep":[{"a":{"b":{"c":{"d":{"e":2}}}}}],"big":1e+21}"#;
+    let stored: String = t
+        .db()
+        .with(|c| {
+            c.query_row(
+                "SELECT payload FROM conversation_events WHERE seq = ?",
+                [evt.seq],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(stored, text, "the row is what Node's JSON.stringify wrote");
+    assert_eq!(evt.payload["outTps"], json!(50));
+    assert!(evt.payload["outTps"].is_i64() && evt.payload["deep"][0]["a"]["b"]["c"]["d"]["e"].is_i64());
+    assert!(
+        heard.lock()[0].contains(r#""outTps":50,"nowTps":33.3,"#),
+        "{}",
+        heard.lock()[0]
+    );
+    assert_eq!(
+        bus.events_since("c", 0, 10),
+        [evt],
+        "what is read back is what was published"
+    );
+    // A message's extra fields too.
+    let mut extra = Map::new();
+    extra.insert("clientMsgId".into(), json!("tab-1"));
+    extra.insert("n".into(), json!(3.0));
+    let message = TimelineMessage {
+        id: "m1",
+        role: "user",
+        content: "hi",
+    };
+    let said = bus.publish_message("c", message, &extra).unwrap();
+    assert_eq!(
+        said.payload.to_string(),
+        r#"{"id":"m1","role":"user","content":"hi","truncated":false,"clientMsgId":"tab-1","n":3}"#
+    );
 }

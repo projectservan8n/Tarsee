@@ -985,3 +985,477 @@ fn only_a_file_inside_the_uploads_folder_may_be_looked_at() {
     fs::write(lookalike.join("b.txt"), "b").unwrap();
     assert_eq!(viewable_path(&text(&lookalike.join("b.txt")), &c.uploads), None);
 }
+
+// ── Fix round 1 ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+/// The names in a folder, sorted.
+fn names_in(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(to_namespaced(dir))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// "Joining paths" and "File names on Windows": whatever a person calls a file, its copy is one plain name inside
+/// the uploads folder, and on every system it is the name that was asked for. (Each line was read off Node.)
+#[test]
+fn an_upload_called_anything_at_all_is_kept_under_one_plain_name_in_the_folder() {
+    let c = chat();
+    let called = [
+        ("C:\\Windows\\win.ini", "win.ini"),
+        ("/etc/passwd", "passwd"),
+        ("\\\\server\\share\\x.txt", "x.txt"),
+        ("..", "file"),
+        ("a.", "a."),
+        ("b ", "b"),
+        ("...", "file"),
+        ("nul", "nul"),
+        ("nul.txt", "nul.txt"),
+        ("con", "con"),
+        ("a:b.txt", "a_b.txt"),
+        ("", "file"),
+        ("ok.txt", "ok.txt"),
+    ];
+    let files: Vec<UploadedFile> = called
+        .iter()
+        .map(|(name, _)| UploadedFile {
+            name: (*name).to_string(),
+            buffer: b"x".to_vec(),
+        })
+        .collect();
+    let kept = keep_uploaded_files(&files, &c.uploads, 1_793_000_000_000).unwrap();
+    let mut on_disk = Vec::new();
+    for (i, ((_, name), kept)) in called.iter().zip(&kept).enumerate() {
+        let file = format!("chat-1793000000000-{i}-{name}");
+        assert_eq!(kept.name, *name);
+        assert_eq!(kept.path, c.uploads.join(&file));
+        assert_eq!(kept.size, 1);
+        on_disk.push(file);
+    }
+    on_disk.sort();
+    // Exactly these names are in the folder, and nothing was written anywhere else: `a.` is a file called `a.`
+    // (Windows left to itself would call it `a`), and `nul` is a file, not the null device.
+    assert_eq!(names_in(&c.uploads), on_disk);
+    assert_eq!(
+        names_in(&c.t.config().workspace_dir)
+            .iter()
+            .filter(|n| *n == "uploads")
+            .count(),
+        1
+    );
+    assert!(!c.t.path().join("win.ini").exists() && !c.outside.join("passwd").exists());
+    // Each is the file the page is then given, under the name it was kept by.
+    for kept in &kept {
+        let seen = viewable_path(&kept.path.to_string_lossy(), &c.uploads);
+        assert_eq!(seen.as_deref(), Some(kept.path.as_path()), "{}", kept.name);
+        assert_eq!(fs::read(to_namespaced(&kept.path)).unwrap(), b"x");
+    }
+}
+
+/// The second guard of "Joining paths": `safe_file_name` gives one plain name, and should a name ever reach the join
+/// that is not one, the copy is still a file in the folder and nowhere else.
+#[test]
+fn a_kept_copys_path_is_in_the_folder_whatever_name_reaches_the_join() {
+    let dir = Path::new("uploads");
+    let in_dir = |file: &str| dir.join(file);
+    assert_eq!(kept_path(dir, "chat-5-0-", "notes.txt"), in_dir("chat-5-0-notes.txt"));
+    // (With the time in front of it, ".." is only two dots in a name.)
+    assert_eq!(kept_path(dir, "sent-5-", ".."), in_dir("sent-5-.."));
+    for not_plain in [
+        "",
+        "/etc/passwd",
+        "C:\\Windows\\win.ini",
+        "C:win.ini",
+        "\\\\server\\share\\x",
+        "a/b",
+        "a\\b",
+        "..\\..\\x",
+        "../x",
+        "a\0b",
+    ] {
+        assert_eq!(
+            kept_path(dir, "chat-5-0-", not_plain),
+            in_dir("chat-5-0-file"),
+            "{not_plain:?}"
+        );
+    }
+}
+
+/// The path of a file the agent sends comes from the model. One that only reads as a file because of what Windows
+/// does to names is no file, as in Node (ENOENT), on every system.
+#[test]
+fn a_sent_file_must_be_there_under_the_very_name_given() {
+    let c = chat();
+    c.write("secret.txt", "secret");
+    for not_there in [
+        "nul",
+        "...",
+        "secret.txt.",
+        "secret.txt ",
+        "missing",
+        "con",
+        "secret.txt\\..\\nul",
+    ] {
+        let path = c.outside.join(not_there);
+        assert!(
+            keep_sent_file(&path, &c.uploads, 1_793_000_000_500).is_err(),
+            "{not_there:?} was kept"
+        );
+        assert_eq!(c.sent("conv", &path, "", "telegram"), None, "{not_there:?}");
+    }
+    assert!(
+        !c.uploads.exists() || names_in(&c.uploads).is_empty(),
+        "nothing was copied"
+    );
+
+    // A file whose own name ends in a dot is that file, and its copy has that name.
+    let dotted = c.outside.join("report.");
+    fs::write(to_namespaced(&dotted), "r").unwrap();
+    let kept = keep_sent_file(&dotted, &c.uploads, 1_793_000_000_900).unwrap();
+    assert_eq!((kept.name.as_str(), kept.size), ("report.", 1));
+    assert_eq!(kept.path, c.uploads.join("sent-1793000000900-report."));
+    assert_eq!(names_in(&c.uploads), ["sent-1793000000900-report."]);
+    assert_eq!(fs::read_to_string(to_namespaced(&kept.path)).unwrap(), "r");
+    // A way round to a real file is the real file.
+    let round = c.outside.join("x").join("..").join(".").join("secret.txt");
+    let kept = keep_sent_file(&round, &c.uploads, 1_793_000_001_000).unwrap();
+    assert_eq!(kept.path, c.uploads.join("sent-1793000001000-secret.txt"));
+}
+
+#[test]
+fn tidying_removes_the_copy_it_names_and_not_what_windows_would_make_of_the_name() {
+    let c = chat();
+    fs::create_dir_all(&c.uploads).unwrap();
+    let now = 1_793_000_000_000;
+    let old = now - 31 * 86_400_000;
+    let dotted = c.uploads.join(format!("sent-{old}-old."));
+    let plain = c.uploads.join(format!("sent-{}-old", now - 86_400_000));
+    let fresh_dotted = c.uploads.join(format!("chat-{}-0-new.", now - 1000));
+    for f in [&dotted, &plain, &fresh_dotted] {
+        fs::write(to_namespaced(f), "x").unwrap();
+    }
+    tidy_kept_files(&c.uploads, now);
+    assert_eq!(
+        names_in(&c.uploads),
+        [
+            format!("chat-{}-0-new.", now - 1000),
+            format!("sent-{}-old", now - 86_400_000)
+        ]
+    );
+}
+
+/// Review finding M10, and the spellings the Node version refused or kept as written (each line was read off Node
+/// on Windows; elsewhere the same names are simply other files, or none).
+#[test]
+fn a_file_is_looked_up_under_the_name_as_written_and_no_other_spelling_of_it() {
+    let c = chat();
+    fs::create_dir_all(c.uploads.join("sub")).unwrap();
+    let inside = c.uploads.join("sub").join("chat-1-0-a.txt");
+    fs::write(&inside, "a").unwrap();
+    let text = |p: &Path| p.to_string_lossy().into_owned();
+    let view = |p: &str| viewable_path(p, &c.uploads);
+    let written = text(&inside);
+    assert_eq!(view(&written), Some(inside.clone()));
+    // Names that only Windows reads as this file, or as something else altogether.
+    assert_eq!(view(&format!("{written}.")), None, "a trailing dot");
+    assert_eq!(view(&format!("{written} ")), None, "a trailing space");
+    assert_eq!(view(&text(&c.uploads.join("nul"))), None);
+    assert_eq!(view(&text(&c.uploads.join("..."))), None);
+    assert_eq!(view(&text(&c.uploads.join("sub").join("..."))), None);
+    assert_eq!(view(&text(&c.uploads.join("con"))), None);
+    // A file that really has such a name is that file.
+    let dotted = c.uploads.join("chat-1-1-a.");
+    fs::write(to_namespaced(&dotted), "dotted").unwrap();
+    assert_eq!(view(&text(&dotted)), Some(dotted.clone()));
+    assert_eq!(
+        view(&text(&c.uploads.join("chat-1-1-a"))),
+        None,
+        "and not the name without the dot"
+    );
+
+    #[cfg(windows)]
+    {
+        // Another case of a name inside the folder: the path as written (Node gave it back so).
+        let upper = written.replace("\\sub\\", "\\SUB\\");
+        assert_eq!(view(&upper), Some(PathBuf::from(&upper)));
+        let upper_file = written.replace("chat-1-0-a.txt", "CHAT-1-0-A.TXT");
+        assert_eq!(view(&upper_file), Some(PathBuf::from(&upper_file)));
+        // Forward slashes are the same path.
+        assert_eq!(view(&written.replace('\\', "/")), Some(inside.clone()));
+        // Another spelling of the folder itself is not the folder: Node compared the two as text.
+        assert_eq!(view(&format!("\\\\?\\{written}")), None, "a \\\\?\\ in front");
+        assert_eq!(view(&format!("\\\\.\\{written}")), None, "a \\\\.\\ in front");
+        let lower_drive = format!("{}{}", written[..1].to_lowercase(), &written[1..]);
+        assert_ne!(
+            lower_drive, written,
+            "the test folder is on a drive with a capital letter"
+        );
+        assert_eq!(view(&lower_drive), None, "the drive's letter in the other case");
+        let other_case_folder = written.replace("\\uploads\\", "\\UPLOADS\\");
+        assert_eq!(view(&other_case_folder), None, "the uploads folder in another case");
+        // The file's other stream is the path as written (and goes out as a download: no known kind).
+        let stream = format!("{written}::$DATA");
+        assert_eq!(view(&stream), Some(PathBuf::from(&stream)));
+        assert_eq!(view_kind(&stream).r#type, "application/octet-stream");
+    }
+}
+
+/// A link is followed, as `fs.realpathSync` followed it: one that leads out of the folder is refused, one that
+/// stays inside gives the real file. On Windows the link is a junction, which needs no special right to make.
+#[test]
+fn a_link_in_the_folder_is_followed_to_where_it_leads() {
+    let c = chat();
+    fs::create_dir_all(c.uploads.join("sub")).unwrap();
+    let inside = c.uploads.join("sub").join("chat-1-0-a.txt");
+    fs::write(&inside, "a").unwrap();
+    c.write("secret.txt", "secret");
+    let link = |from: &Path, to: &Path| {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(to, from).unwrap();
+        #[cfg(windows)]
+        {
+            let made = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(from)
+                .arg(to)
+                .output()
+                .unwrap();
+            assert!(made.status.success(), "a junction could not be made: {made:?}");
+        }
+    };
+    link(&c.uploads.join("out"), &c.outside);
+    link(&c.uploads.join("in"), &c.uploads.join("sub"));
+    let text = |p: &Path| p.to_string_lossy().into_owned();
+    assert!(c.uploads.join("out").join("secret.txt").exists(), "the link works");
+    assert_eq!(
+        viewable_path(&text(&c.uploads.join("out").join("secret.txt")), &c.uploads),
+        None
+    );
+    assert_eq!(
+        viewable_path(&text(&c.uploads.join("in").join("chat-1-0-a.txt")), &c.uploads),
+        Some(inside.clone())
+    );
+    assert_eq!(real_path(&c.uploads.join("in")).unwrap(), c.uploads.join("sub"));
+    assert_eq!(real_path(&c.uploads.join("out")).unwrap(), c.outside);
+    // Past a link, ".." is the folder the link is in (taken out as text before anything is followed).
+    assert_eq!(
+        real_path(&c.uploads.join("out").join("..").join("sub")).unwrap(),
+        c.uploads.join("sub")
+    );
+    // A file the agent sends through a link into the folder is already in it; through one out of it, it is copied.
+    let through = keep_sent_file(&c.uploads.join("in").join("chat-1-0-a.txt"), &c.uploads, 5).unwrap();
+    assert_eq!((through.name.as_str(), through.path), ("a.txt", inside));
+    let copied = keep_sent_file(&c.uploads.join("out").join("secret.txt"), &c.uploads, 1_793_000_000_000).unwrap();
+    assert_eq!(copied.path, c.uploads.join("sent-1793000000000-secret.txt"));
+}
+
+/// Review finding M9: Express's `send` refused a path with ".." in it whatever came before; the JS callback made
+/// that a 404. The route checks first (`viewable_path`); this is the second guard.
+#[tokio::test]
+async fn sending_refuses_a_path_with_dot_dot_in_it_whatever_the_route_checked() {
+    let c = chat();
+    fs::create_dir_all(&c.uploads).unwrap();
+    let secret = c.write("secret.txt", "secret");
+    let inside = c.uploads.join("chat-1-0-a.txt");
+    fs::write(&inside, "a").unwrap();
+    let send = |file: PathBuf| async move {
+        let res = send_viewable(&Method::GET, &HeaderMap::new(), &file, &SendOptions::default()).await;
+        let status = res.status().as_u16();
+        let kind = res
+            .headers()
+            .get("content-type")
+            .map(|v| v.to_str().unwrap().to_string());
+        let body = http_body_util::BodyExt::collect(res.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        (status, kind, String::from_utf8_lossy(&body).into_owned())
+    };
+    let text_kind = Some("text/plain; charset=utf-8".to_string());
+    assert_eq!(
+        send(secret.clone()).await,
+        (200, text_kind.clone(), "secret".to_string())
+    );
+    for up in [
+        c.uploads.join("..").join("..").join("deliverables").join("secret.txt"),
+        c.uploads.join("sub").join("..").join("chat-1-0-a.txt"),
+        PathBuf::from(format!("{}/../uploads/chat-1-0-a.txt", c.uploads.display())),
+        PathBuf::from(".."),
+    ] {
+        assert_eq!(send(up.clone()).await.0, 404, "{}", up.display());
+    }
+    assert_eq!(
+        send(c.uploads.join("..")).await,
+        (404, Some("application/octet-stream".to_string()), String::new())
+    );
+    // Dots that are part of a name are a name.
+    let dotty = c.uploads.join("chat-1-0-a..b.txt");
+    fs::write(&dotty, "dots").unwrap();
+    assert_eq!(send(dotty).await, (200, text_kind.clone(), "dots".to_string()));
+    // And the file opened is the file named: no other file answers for a trailing dot, nor a device for `nul`.
+    assert_eq!(send(PathBuf::from(format!("{}.", inside.display()))).await.0, 404);
+    assert_eq!(send(c.uploads.join("nul")).await.0, 404);
+    assert!(
+        has_up_segment("a\\..\\b") && has_up_segment("../b") && has_up_segment("a/..") && !has_up_segment("a/..b/c.")
+    );
+}
+
+/// Review finding M7: the pattern replaces UTF-16 units, so an emoji is two "_" (each line was read off Node).
+#[test]
+fn a_download_name_has_one_underscore_for_each_utf16_unit_it_may_not_hold() {
+    assert_eq!(disposition_name("/w/uploads/chat-1-0-a🐒.txt"), "a__.txt");
+    assert_eq!(disposition_name("🐒-1-x"), "__-1-x");
+    assert_eq!(disposition_name("/w/uploads/sent-1-ñ é.pdf"), "_ _.pdf");
+    // A kept name folds a run of them into one.
+    assert_eq!(safe_file_name("a🐒🐒b.txt"), "a_b.txt");
+    assert_eq!(safe_file_name("🐒"), "_");
+}
+
+// ── The same work from async code: off the runtime's threads, and to its end whoever waits ───────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_async_twins_do_the_same_work() {
+    let c = chat();
+    let conv = c.conv("telegram:1");
+    let said = c.say(&conv, "user", "here");
+    // An upload.
+    let files = vec![
+        UploadedFile {
+            name: "../a b.png".into(),
+            buffer: b"png".to_vec(),
+        },
+        UploadedFile {
+            name: "nul".into(),
+            buffer: Vec::new(),
+        },
+    ];
+    let kept = keep_uploaded_files_async(files.clone(), &c.uploads, 1_793_000_000_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        kept.iter().map(|k| (k.name.as_str(), k.size)).collect::<Vec<_>>(),
+        [("a b.png", 3), ("nul", 0)]
+    );
+    assert_eq!(kept[0].path, c.uploads.join("chat-1793000000000-0-a b.png"));
+    assert_eq!(fs::read(&kept[0].path).unwrap(), b"png");
+    // A file the agent sent: the copy, the row, the event.
+    let report = c.write("report.txt", "r");
+    let noted = note_sent_file_async(
+        &c.t.app,
+        SentFile {
+            abs_path: &report,
+            caption: "Here",
+            conversation_id: Some(&conv),
+            via: "telegram",
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(noted.file.name, "report.txt");
+    assert_eq!(c.files_events(&conv).last(), noted.event.as_ref());
+    assert_eq!(chat_files_for(&c.t.app, &conv).len(), 1);
+    let none = SentFile {
+        abs_path: &c.outside.join("missing"),
+        caption: "",
+        conversation_id: Some(&conv),
+        via: "",
+    };
+    assert_eq!(note_sent_file_async(&c.t.app, none).await, None);
+    let copy = keep_sent_file_async(&report, &c.uploads, 1_793_000_000_777)
+        .await
+        .unwrap();
+    assert_eq!(copy.path, c.uploads.join("sent-1793000000777-report.txt"));
+    assert!(
+        keep_sent_file_async(&c.outside.join("nul"), &c.uploads, 1)
+            .await
+            .is_err()
+    );
+    // Pictures handed to the agent as bytes.
+    let png = json!({ "type": "image", "source": { "media_type": "image/png", "data": "cG5nLWJ5dGVz" } });
+    let rows = note_media_blocks_async(
+        &c.t.app,
+        &conv,
+        std::slice::from_ref(&png),
+        MediaBlockOptions {
+            via: "telegram",
+            now: Some(1_793_000_000_001),
+            ..MediaBlockOptions::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.name.as_str(), r.message_id.as_deref(), r.via.as_str()))
+            .collect::<Vec<_>>(),
+        [("image.png", Some(said.as_str()), "telegram")]
+    );
+    assert_eq!(
+        PathBuf::from(&rows[0].path),
+        c.uploads.join("chat-1793000000001-0-image.png")
+    );
+    assert!(
+        note_media_blocks_async(&c.t.app, &conv, &[png], MediaBlockOptions::default())
+            .await
+            .is_empty()
+    );
+    // Tidying.
+    let old = c.uploads.join("sent-1000000000000-old.txt");
+    fs::write(&old, "x").unwrap();
+    tidy_kept_files_async(&c.uploads, now_ms()).await;
+    assert!(!old.exists());
+}
+
+/// "A promise runs whether or not anyone waits for it": a caller that goes away (its request was dropped) half way
+/// does not leave a file half kept. Node's call was synchronous: once begun it finished.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_file_is_kept_to_the_end_even_when_the_caller_stops_waiting() {
+    let c = chat();
+    let conv = c.conv("telegram:2");
+    let report = c.write("big.bin", &"x".repeat(200_000));
+    {
+        let keeping = note_sent_file_async(
+            &c.t.app,
+            SentFile {
+                abs_path: &report,
+                caption: "",
+                conversation_id: Some(&conv),
+                via: "telegram",
+            },
+        );
+        tokio::pin!(keeping);
+        // Begun, and then nobody waits for it.
+        let _ = futures::poll!(keeping.as_mut());
+    }
+    let wait = async {
+        while c.files_events(&conv).is_empty() {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(20), wait)
+        .await
+        .expect("the file was kept and told to the timeline");
+    let rows = chat_files_for(&c.t.app, &conv);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(fs::metadata(&rows[0].path).unwrap().len(), 200_000);
+
+    let files = vec![UploadedFile {
+        name: "upload.bin".into(),
+        buffer: vec![7u8; 300_000],
+    }];
+    {
+        let keeping = keep_uploaded_files_async(files, &c.uploads, 1_793_000_000_000);
+        tokio::pin!(keeping);
+        let _ = futures::poll!(keeping.as_mut());
+    }
+    let kept = c.uploads.join("chat-1793000000000-0-upload.bin");
+    let wait = async {
+        while fs::metadata(&kept).map(|m| m.len()).unwrap_or(0) != 300_000 {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(20), wait)
+        .await
+        .expect("the upload was written whole");
+}

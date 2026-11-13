@@ -771,3 +771,466 @@ async fn resetting_drops_all_state_and_turns_under_way_still_finish() {
     g.open();
     assert_eq!(before.await, Ok(Turn::Ran("before")));
 }
+
+// ── Fix round 1 ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+/// How a Stop that raced the slot came out.
+#[derive(Debug, PartialEq)]
+enum Raced {
+    /// The Stop came first: the turn never ran, its line ended as removed, its caller was told once.
+    InTime,
+    /// The slot came first: the Stop was refused and the turn ran.
+    TooLate,
+    /// Neither of the two endings Node has.
+    Wrong(String),
+}
+
+/// Spins until `flag` is up. (Two threads that must set off within a few billionths of a second of each other
+/// cannot be woken by anything slower.)
+fn spin_until(flag: &AtomicBool) {
+    while !flag.load(Ordering::Acquire) {
+        std::hint::spin_loop();
+    }
+}
+
+/// The thread that makes the Stops: one for the whole test, spinning between rounds, so that a round costs no
+/// thread start and no wake-up.
+struct Stopper {
+    /// (turn id, conversation, spins to hold back) of the Stop to make next.
+    job: Mutex<Option<(String, String, u32)>>,
+    /// Up once the thread has the job and is spinning on `go`.
+    at_the_line: AtomicBool,
+    go: AtomicBool,
+    /// 0: not made yet. 1: the Stop took the turn out. 2: it was refused.
+    answer: std::sync::atomic::AtomicU8,
+    done: AtomicBool,
+}
+
+impl Stopper {
+    fn start(app: &App) -> (Arc<Stopper>, std::thread::JoinHandle<()>) {
+        let stopper = Arc::new(Stopper {
+            job: Mutex::new(None),
+            at_the_line: AtomicBool::new(false),
+            go: AtomicBool::new(false),
+            answer: std::sync::atomic::AtomicU8::new(0),
+            done: AtomicBool::new(false),
+        });
+        let (this, app) = (stopper.clone(), app.clone());
+        let thread = std::thread::spawn(move || {
+            while !this.done.load(Ordering::Acquire) {
+                let Some((line, conv, hold_back)) = this.job.lock().take() else {
+                    std::hint::spin_loop();
+                    continue;
+                };
+                this.at_the_line.store(true, Ordering::Release);
+                spin_until(&this.go);
+                for _ in 0..hold_back {
+                    std::hint::spin_loop();
+                }
+                let removed = remove_queued_turn(&app, &line, Some(&conv));
+                this.answer.store(if removed { 1 } else { 2 }, Ordering::Release);
+            }
+        });
+        (stopper, thread)
+    }
+}
+
+/// One round of a Stop racing the slot. The turn ahead and the thread that makes the Stop both spin on one flag,
+/// so both set off at the same moment: the turn ahead ends (which hands the slot to the queued turn), and the Stop
+/// is made `hold_back` spins later.
+async fn stop_races_the_slot(
+    t: &TestApp,
+    bus: &Arc<LiveBus>,
+    stopper: &Arc<Stopper>,
+    conv: &str,
+    hold_back: u32,
+) -> Raced {
+    stopper.go.store(false, Ordering::Release);
+    stopper.at_the_line.store(false, Ordering::Release);
+    stopper.answer.store(0, Ordering::Release);
+    let ahead_at_the_line = Arc::new(AtomicBool::new(false));
+    let queued_waiting = Arc::new(AtomicBool::new(false));
+
+    let ahead = tokio::spawn(with_conversation_turn(&t.app, Some(conv), plain(), {
+        let (stopper, at_the_line) = (stopper.clone(), ahead_at_the_line.clone());
+        move || async move {
+            at_the_line.store(true, Ordering::Release);
+            spin_until(&stopper.go);
+            Ok::<_, Never>(())
+        }
+    }));
+    let ran = Arc::new(AtomicBool::new(false));
+    let told = Arc::new(AtomicUsize::new(0));
+    let opts = TurnOptions {
+        live: Some(LiveQueue {
+            source: Some("web".into()),
+            prompt: "stop me".into(),
+            on_removed: Some(Box::new({
+                let told = told.clone();
+                move || {
+                    told.fetch_add(1, Ordering::SeqCst);
+                }
+            })),
+            ..LiveQueue::default()
+        }),
+        ..TurnOptions::default()
+    };
+    let turn = with_conversation_turn(&t.app, Some(conv), opts, {
+        let ran = ran.clone();
+        move || async move {
+            ran.store(true, Ordering::SeqCst);
+            Ok::<_, Never>(())
+        }
+    });
+    let line = bus.queued_turn_list(Some(conv))[0].turn_id.clone().unwrap();
+    let queued = tokio::spawn({
+        let (waiting, told, bus) = (queued_waiting.clone(), told.clone(), bus.clone());
+        let (conv, line) = (conv.to_string(), line.clone());
+        async move {
+            // (Up once this task is being polled: the turn is then waiting for its slot.)
+            waiting.store(true, Ordering::Release);
+            let result = turn.await;
+            // What its caller finds at the moment the turn comes back: whether it was told, and its line.
+            (result, told.load(Ordering::SeqCst), of(&bus, &conv, &line))
+        }
+    });
+    *stopper.job.lock() = Some((line.clone(), conv.to_string(), hold_back));
+    while !(ahead_at_the_line.load(Ordering::Acquire)
+        && queued_waiting.load(Ordering::Acquire)
+        && stopper.at_the_line.load(Ordering::Acquire))
+    {
+        tokio::task::yield_now().await;
+    }
+    stopper.go.store(true, Ordering::Release);
+
+    let (result, told_when_back, line_when_back) = queued.await.unwrap();
+    assert_eq!(ahead.await.unwrap(), Ok(Turn::Ran(())));
+    let removed = loop {
+        match stopper.answer.load(Ordering::Acquire) {
+            0 => tokio::task::yield_now().await,
+            answer => break answer == 1,
+        }
+    };
+    let seen = (
+        removed,
+        result,
+        ran.load(Ordering::SeqCst),
+        (told_when_back, told.load(Ordering::SeqCst)),
+        line_when_back,
+        of(bus, conv, &line),
+        queue_depth(&t.app, conv),
+    );
+    // Node: stopped in time, it never runs; its line has ended as removed and its caller has been told by the
+    // time it comes back removed...
+    let removed_line = vec![evt("turn_queued", None), evt("turn_end", Some("removed"))];
+    let in_time = (
+        true,
+        Ok(Turn::QueueRemoved),
+        false,
+        (1, 1),
+        removed_line.clone(),
+        removed_line,
+        0,
+    );
+    // ...or its slot had come, so it is the running turn (nothing claimed its line here, so the lock ends it).
+    let ended_line = vec![evt("turn_queued", None), evt("turn_end", Some("ended"))];
+    let too_late = (
+        false,
+        Ok(Turn::Ran(())),
+        true,
+        (0, 0),
+        ended_line.clone(),
+        ended_line,
+        0,
+    );
+    if seen == in_time {
+        Raced::InTime
+    } else if seen == too_late {
+        Raced::TooLate
+    } else {
+        Raced::Wrong(format!("{conv}, the Stop held back {hold_back} spins: {seen:?}"))
+    }
+}
+
+/// Review finding I1. A person stops a queued message at the moment the reply ahead of it finishes. In Node the
+/// two cannot overlap: either the Stop came first (the line ends "removed") or the slot did (the turn runs). Here
+/// they are two threads, and whichever order they land in must end as one of those two, never as "It could not
+/// start".
+///
+/// Before the fix, 8 to 22 of 40,000 such rounds ended a removed line as failed (six runs out of six failed).
+/// Each round also checks the order the caller sees, which Node's one thread gave for free: by the time a removed
+/// turn comes back, its line has ended and `on_removed` has been called.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn a_stop_at_the_moment_the_turn_ahead_ends_is_either_in_time_or_too_late_never_a_failure() {
+    const ROUNDS: u32 = 20_000;
+    // (The timeline is kept in memory here: tens of thousands of rounds, each writing its events.)
+    let t = test_app();
+    let bus = t.app.set(LiveBus::new(crate::db::Db::open_in_memory().unwrap(), 14.0));
+    let (stopper, thread) = Stopper::start(&t.app);
+    let (mut in_time, mut too_late, mut wrong) = (0, 0, Vec::new());
+    // The Stop is aimed at the moment the slot is handed over, on whatever machine this runs: a round where it
+    // came in time holds the next one back a little longer, a round where it came too late lets the next one go
+    // sooner. So nearly every round lands within a few billionths of a second of the handover, on either side.
+    let mut hold_back = 0u32;
+    for round in 0..ROUNDS {
+        match stop_races_the_slot(&t, &bus, &stopper, &format!("race-{round}"), hold_back).await {
+            Raced::InTime => {
+                in_time += 1;
+                hold_back += 2;
+            }
+            Raced::TooLate => {
+                too_late += 1;
+                hold_back = hold_back.saturating_sub(2);
+            }
+            Raced::Wrong(what) => wrong.push(what),
+        }
+    }
+    stopper.done.store(true, Ordering::Release);
+    thread.join().unwrap();
+    assert!(
+        wrong.is_empty(),
+        "{} of {ROUNDS} ended as Node never ends one:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+    assert!(ConversationLocks::of(&t.app).state.lock().waiting.is_empty());
+    assert!(bus.queued_turn_list(None).is_empty(), "no line left queued");
+    assert!(
+        in_time > ROUNDS / 10 && too_late > ROUNDS / 10,
+        "the Stops did not land on both sides of the handover: {in_time} in time, {too_late} too late"
+    );
+}
+
+/// The other half of I1: the Stop has decided (the turn is removed) but is still at work on its own thread,
+/// telling the timeline and then the caller, when the slot comes. In Node the Stop had long finished by then, so
+/// what the caller saw was: the line ends, `on_removed`, and then the turn comes back removed. The turn waits for
+/// the Stop, so that is still the order, and the turn behind it does not begin before the line has ended.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_removed_turn_comes_back_only_once_the_stop_that_removed_it_is_done() {
+    let (t, bus) = with_bus();
+    let order = Arc::new(Mutex::new(Vec::<&str>::new()));
+    // A listener that holds the Stop's own thread inside its `turn_end`, until the test lets it go.
+    let telling = Arc::new(AtomicBool::new(false));
+    let let_go = Arc::new(AtomicBool::new(false));
+    bus.on_event({
+        let (order, telling, let_go) = (order.clone(), telling.clone(), let_go.clone());
+        move |e| {
+            if e.r#type == "turn_end" && e.payload["stopReason"] == "removed" {
+                order.lock().push("the line ended");
+                telling.store(true, Ordering::Release);
+                spin_until(&let_go);
+            }
+        }
+    });
+    let gate = Gate::default();
+    let ahead = tokio::spawn(with_conversation_turn(&t.app, Some("s-1"), plain(), {
+        let gate = gate.clone();
+        move || async move {
+            gate.passed().await;
+            Ok::<_, Never>(())
+        }
+    }));
+    let opts = TurnOptions {
+        live: Some(LiveQueue {
+            source: Some("web".into()),
+            prompt: "x".into(),
+            on_removed: Some(Box::new({
+                let order = order.clone();
+                move || order.lock().push("its caller was told")
+            })),
+            ..LiveQueue::default()
+        }),
+        ..TurnOptions::default()
+    };
+    let turn = with_conversation_turn(&t.app, Some("s-1"), opts, || async { Ok::<_, Never>("it ran") });
+    let queued = tokio::spawn({
+        let order = order.clone();
+        async move {
+            let result = turn.await;
+            order.lock().push("it came back");
+            result
+        }
+    });
+    let behind = tokio::spawn(with_conversation_turn(&t.app, Some("s-1"), plain(), {
+        let order = order.clone();
+        move || async move {
+            order.lock().push("the next turn began");
+            Ok::<_, Never>(())
+        }
+    }));
+    let line = bus.queued_turn_list(Some("s-1"))[0].turn_id.clone().unwrap();
+    let stop = std::thread::spawn({
+        let (app, line) = (t.app.clone(), line.clone());
+        move || remove_queued_turn(&app, &line, Some("s-1"))
+    });
+    while !telling.load(Ordering::Acquire) {
+        tokio::task::yield_now().await;
+    }
+    // The Stop is half way: decided, not yet done. Now the turn ahead ends and the slot comes.
+    gate.open();
+    assert_eq!(ahead.await.unwrap(), Ok(Turn::Ran(())));
+    // (Every chance to come back early, or for the turn behind it to slip past.)
+    for _ in 0..500 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!queued.is_finished(), "it came back while its Stop was still at work");
+    assert!(
+        !behind.is_finished(),
+        "the turn behind it began before its line had ended"
+    );
+    assert_eq!(*order.lock(), ["the line ended"]);
+
+    let_go.store(true, Ordering::Release);
+    assert!(stop.join().unwrap());
+    assert_eq!(queued.await.unwrap(), Ok(Turn::QueueRemoved));
+    assert_eq!(behind.await.unwrap(), Ok(Turn::Ran(())));
+    let order = order.lock().clone();
+    let at = |what: &str| order.iter().position(|step| *step == what).unwrap();
+    assert_eq!(order.len(), 4, "{order:?}");
+    assert!(at("the line ended") < at("its caller was told"), "{order:?}");
+    assert!(at("its caller was told") < at("it came back"), "{order:?}");
+    assert!(at("its caller was told") < at("the next turn began"), "{order:?}");
+    assert_eq!(
+        of(&bus, "s-1", &line),
+        [evt("turn_queued", None), evt("turn_end", Some("removed"))]
+    );
+    assert_eq!(queue_depth(&t.app, "s-1"), 0);
+}
+
+/// A Stop that breaks half way (a caller's `on_removed` with a bug in it) still lets the removed turn come back,
+/// and the conversation go on.
+#[tokio::test]
+async fn a_stop_whose_on_removed_panics_still_lets_the_conversation_go_on() {
+    let (t, bus) = with_bus();
+    let g = Gate::default();
+    let gate = g.clone();
+    let a = with_conversation_turn(&t.app, Some("s-2"), plain(), move || async move {
+        gate.passed().await;
+        Ok::<_, Never>("a")
+    });
+    let opts = TurnOptions {
+        live: Some(LiveQueue {
+            source: Some("web".into()),
+            prompt: "x".into(),
+            on_removed: Some(Box::new(|| panic!("on_removed broke"))),
+            ..LiveQueue::default()
+        }),
+        ..TurnOptions::default()
+    };
+    let b = with_conversation_turn(&t.app, Some("s-2"), opts, || async { Ok::<_, Never>("b") });
+    let c = with_conversation_turn(&t.app, Some("s-2"), plain(), || async { Ok::<_, Never>("c") });
+    let line = bus.queued_turn_list(Some("s-2"))[0].turn_id.clone().unwrap();
+    assert!(remove_queued_turn(&t.app, &line, Some("s-2")));
+    g.open();
+    assert_eq!(
+        tokio::join!(a, b, c),
+        (Ok(Turn::Ran("a")), Ok(Turn::QueueRemoved), Ok(Turn::Ran("c")))
+    );
+    assert_eq!(queue_depth(&t.app, "s-2"), 0);
+}
+
+/// Review finding M1. Node caught what a timeline listener threw (`[live-bus] publish turn_queued failed: ...`) and
+/// the turn went on. A listener that panics here must not come out of `with_conversation_turn`, leave a line
+/// queued for ever, or keep the turn from running.
+#[tokio::test]
+async fn a_timeline_listener_that_panics_while_a_turn_queues_does_not_stop_the_turn() {
+    let (t, bus) = with_bus();
+    bus.on_event(|e| {
+        if e.r#type == "turn_queued" || e.r#type == "turn_end" {
+            panic!("bug on {}", e.r#type);
+        }
+    });
+    let g = Gate::default();
+    let gate = g.clone();
+    let a = with_conversation_turn(&t.app, Some("pl"), plain(), move || async move {
+        gate.passed().await;
+        Ok::<_, Never>("a")
+    });
+    let b = with_conversation_turn(&t.app, Some("pl"), live("web", "second"), || async {
+        Ok::<_, Never>("b")
+    });
+    let line = bus.events_since("pl", 0, 10)[0].turn_id.clone().unwrap();
+    g.open();
+    assert_eq!(tokio::join!(a, b), (Ok(Turn::Ran("a")), Ok(Turn::Ran("b"))));
+    assert_eq!(
+        of(&bus, "pl", &line),
+        [evt("turn_queued", None), evt("turn_end", Some("ended"))],
+        "both events are on the timeline, whatever the listener did with them"
+    );
+    assert!(bus.queued_turn_list(Some("pl")).is_empty(), "no line left queued");
+    assert!(ConversationLocks::of(&t.app).state.lock().waiting.is_empty());
+    assert_eq!(queue_depth(&t.app, "pl"), 0);
+}
+
+/// M1, the lock's own callbacks: the JS wrapped `onQueued` and `onRemoved` in `try { } catch { }` ("advisory only").
+#[tokio::test]
+async fn an_on_queued_or_on_removed_that_panics_is_advisory_only() {
+    let (t, bus) = with_bus();
+    let g = Gate::default();
+    let gate = g.clone();
+    let a = with_conversation_turn(&t.app, Some("cb"), plain(), move || async move {
+        gate.passed().await;
+        Ok::<_, Never>("a")
+    });
+    let broken = || TurnOptions {
+        on_queued: Some(Box::new(|ahead| panic!("on_queued broke with {ahead} ahead"))),
+        live: Some(LiveQueue {
+            source: Some("web".into()),
+            prompt: "x".into(),
+            on_removed: Some(Box::new(|| panic!("on_removed broke"))),
+            ..LiveQueue::default()
+        }),
+    };
+    // One that runs, one that is stopped.
+    let b = with_conversation_turn(&t.app, Some("cb"), broken(), || async { Ok::<_, Never>("b") });
+    let c = with_conversation_turn(&t.app, Some("cb"), broken(), || async { Ok::<_, Never>("c") });
+    let lines: Vec<String> = bus
+        .queued_turn_list(Some("cb"))
+        .into_iter()
+        .filter_map(|q| q.turn_id)
+        .collect();
+    assert_eq!(lines.len(), 2, "both took their place in the queue");
+    assert!(
+        remove_queued_turn(&t.app, &lines[1], Some("cb")),
+        "the Stop is made all the same"
+    );
+    assert_eq!(
+        of(&bus, "cb", &lines[1]),
+        [evt("turn_queued", None), evt("turn_end", Some("removed"))]
+    );
+    g.open();
+    assert_eq!(
+        tokio::join!(a, b, c),
+        (Ok(Turn::Ran("a")), Ok(Turn::Ran("b")), Ok(Turn::QueueRemoved))
+    );
+    assert_eq!(queue_depth(&t.app, "cb"), 0);
+}
+
+/// Review finding M3, as it stands (see the module notes): a turn begun right after the one before it finished
+/// waits for nothing, and is not told it queued.
+#[tokio::test]
+async fn a_turn_begun_right_after_the_one_before_it_finished_is_not_queued() {
+    let (t, bus) = with_bus();
+    let queued_at = Arc::new(Mutex::new(Vec::<usize>::new()));
+    let opts = || {
+        let queued_at = queued_at.clone();
+        TurnOptions {
+            on_queued: Some(Box::new(move |ahead| queued_at.lock().push(ahead))),
+            live: Some(LiveQueue {
+                source: Some("web".into()),
+                prompt: "x".into(),
+                ..LiveQueue::default()
+            }),
+        }
+    };
+    let a = with_conversation_turn(&t.app, Some("m3"), opts(), || async { Ok::<_, Never>("a") }).await;
+    // With nothing awaited in between: the very next thing the caller does.
+    let b = with_conversation_turn(&t.app, Some("m3"), opts(), || async { Ok::<_, Never>("b") });
+    assert_eq!(queue_depth(&t.app, "m3"), 1, "only itself");
+    assert_eq!((a, b.await), (Ok(Turn::Ran("a")), Ok(Turn::Ran("b"))));
+    assert!(queued_at.lock().is_empty(), "neither was told it queued");
+    assert!(
+        bus.events_since("m3", 0, 10).is_empty(),
+        "and neither has a Queued line"
+    );
+}
