@@ -217,4 +217,3 @@ For the final cleanup; none blocks a package.
   letters where Node sorts them first.
 - A5 Local AI bridge: blanks after a header's value are not counted towards the 16 KiB header limit (Node answered
   431); one request in 3,100 against a server that ends the connection at once got no answer for 75 s.
-- A stray folder `E:\localhost` on the machine the port was done on (8 default workspace files from a reviewer's
