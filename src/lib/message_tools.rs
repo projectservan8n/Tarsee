@@ -21,10 +21,10 @@ use serde_json::{Map, Value, json};
 
 use crate::lib::redact::redact_secrets;
 use crate::lib::tool_steps::{
-    collapse_whitespace, display_tool_name, fold_blank_lines, js_json, js_string, js_trim, js_trim_start,
-    parse_json_lossy, summarize_tool_input,
+    collapse_whitespace, display_tool_name, fold_blank_lines, js_json, js_string, parse_json_lossy,
+    summarize_tool_input, whole_numbers,
 };
-use crate::util::js::{truthy, utf16_len, utf16_truncate};
+use crate::util::js::{trim, trim_start, truthy, utf16_len, utf16_truncate};
 
 pub const IO_CAP: usize = 4000;
 pub const MAX_TOOLS: usize = 300;
@@ -117,7 +117,7 @@ fn is_failed_status(status: &str) -> bool {
 
 /// `/^\s*(error|failed)\b/i`: the response starts with the word.
 fn starts_with_failure(text: &str) -> bool {
-    let text = js_trim_start(text);
+    let text = trim_start(text);
     ["error", "failed"].iter().any(|word| {
         text.get(..word.len())
             .is_some_and(|head| head.eq_ignore_ascii_case(word))
@@ -145,7 +145,7 @@ pub fn message_tools(content: &str) -> Vec<MessageTool> {
             .take(MAX_TOOLS)
             .map(|it| {
                 let mut input = match it.get("input") {
-                    Some(Value::String(text)) if js_trim_start(text).starts_with(['{', '[']) => {
+                    Some(Value::String(text)) if trim_start(text).starts_with(['{', '[']) => {
                         parse_json_lossy(text).unwrap_or(Value::Null)
                     }
                     _ => Value::Null,
@@ -195,7 +195,7 @@ pub fn message_tools(content: &str) -> Vec<MessageTool> {
         } else if let (Some(response), Some(last)) = (found.get(2), out.last_mut())
             && !answered
         {
-            last.output = redact_secrets(&cap(js_trim(response.as_str()), IO_CAP));
+            last.output = redact_secrets(&cap(trim(response.as_str()), IO_CAP));
             last.ok = !starts_with_failure(response.as_str());
             answered = true;
         }
@@ -215,6 +215,13 @@ pub fn message_tools(content: &str) -> Vec<MessageTool> {
 /// `m` is the message as a JSON object (a row of the store, or just `{ "content": ... }`). A message with no tools
 /// comes back as it was.
 pub fn slim_message(m: &Value) -> Value {
+    // (Whatever writes the answer out, the message's numbers are JavaScript's: a count of 12.0 is 12.)
+    let mut slim = slim_message_as_is(m);
+    whole_numbers(&mut slim);
+    slim
+}
+
+fn slim_message_as_is(m: &Value) -> Value {
     let content = text_or(m.get("content"), "");
     let Some(message) = m.as_object() else {
         return m.clone();
@@ -293,7 +300,7 @@ pub fn slim_message(m: &Value) -> Value {
     }
     let clean = strip_tool_markup(&content);
     let mut out = message.clone();
-    out.insert("content".into(), json!(js_trim(&clean)));
+    out.insert("content".into(), json!(trim(&clean)));
     out.insert("tools".into(), Value::Array(tools));
     Value::Object(out)
 }
@@ -470,6 +477,31 @@ mod tests {
         let no_items = json!({ "content": "{\"__timeline\":true}" });
         assert_eq!(slim_message(&no_items), no_items);
         assert_eq!(slim_message(&Value::Null), Value::Null);
+    }
+
+    /// Review finding M4: the fields a message is handed on with, and the timeline it is rewritten into, have
+    /// their numbers as JavaScript writes them.
+    #[test]
+    fn a_slim_message_has_its_numbers_as_javascript_writes_them() {
+        let channel = json!({ "id": "m1", "tokens_in": 12.0, "score": 0.5, "content": "a<tool_call>{\"name\":\"Read\"}</tool_call>b" });
+        assert_eq!(
+            serde_json::to_string(&slim_message(&channel)).unwrap(),
+            r#"{"id":"m1","tokens_in":12,"score":0.5,"content":"ab","tools":[{"name":"Read","summary":""}]}"#
+        );
+        let timeline =
+            json!({ "__timeline": true, "items": [{ "type": "text", "text": "x", "at": 3.0 }], "text": "t" })
+                .to_string();
+        let slim = slim_message(&json!({ "tokens_out": 7.0, "content": timeline }));
+        assert_eq!(
+            serde_json::to_string(&slim).unwrap(),
+            r#"{"tokens_out":7,"content":"{\"__timeline\":true,\"items\":[{\"type\":\"text\",\"text\":\"x\",\"at\":3}],\"text\":\"t\"}"}"#
+        );
+        // A message with nothing to slim is handed on with the same numbers.
+        let plain = json!({ "id": "m3", "tokens_in": 4.0, "content": "hi" });
+        assert_eq!(
+            serde_json::to_string(&slim_message(&plain)).unwrap(),
+            r#"{"id":"m3","tokens_in":4,"content":"hi"}"#
+        );
     }
 
     #[test]

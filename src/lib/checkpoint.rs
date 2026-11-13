@@ -110,7 +110,7 @@ pub fn list_recent_checkpoints(config: &Config, limit: usize) -> Vec<CheckpointE
         }
         let full = dir.join(&name);
         // One that cannot be read spoils the list, as in the JS.
-        let Ok(meta) = fs::metadata(&full) else {
+        let Ok(meta) = fs::metadata(crate::util::node_path::to_namespaced(&full)) else {
             return Vec::new();
         };
         let mtime = meta

@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use crate::config::Config;
+use crate::env::Env;
 use crate::lib::workspace_files::jstext::js_parse_int;
 
 /// `<state>/tarsee.pid`.
@@ -29,19 +30,22 @@ pub fn read_pid(config: &Config) -> Option<i64> {
     js_parse_int(text.trim())
 }
 
-/// Whether a process with this id is running (`process.kill(pid, 0)`).
-pub fn is_running(pid: Option<i64>) -> bool {
+/// Whether a process with this id is running (`process.kill(pid, 0)`). The check starts a program (the shell's
+/// `kill -0`, or `tasklist` on Windows), with the environment `env` holds.
+pub fn is_running(env: &Env, pid: Option<i64>) -> bool {
     let Some(pid) = pid.filter(|p| *p > 0) else {
         return false;
     };
-    process_exists(pid)
+    process_exists(env, pid)
 }
 
 /// `kill -0`, through the shell's own `kill` (a slim container may have no `kill` program).
 #[cfg(unix)]
-fn process_exists(pid: i64) -> bool {
+fn process_exists(env: &Env, pid: i64) -> bool {
     std::process::Command::new("/bin/sh")
         .args(["-c", &format!("kill -0 {pid}")])
+        .env_clear()
+        .envs(env.snapshot())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -50,8 +54,10 @@ fn process_exists(pid: i64) -> bool {
 }
 
 #[cfg(windows)]
-fn process_exists(pid: i64) -> bool {
+fn process_exists(env: &Env, pid: i64) -> bool {
     let out = std::process::Command::new("tasklist")
+        .env_clear()
+        .envs(env.snapshot())
         .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -90,10 +96,13 @@ mod tests {
 
     #[test]
     fn this_process_is_running_and_nonsense_ids_are_not() {
-        assert!(is_running(Some(i64::from(std::process::id()))));
-        assert!(!is_running(None));
-        assert!(!is_running(Some(0)));
-        assert!(!is_running(Some(-3)));
-        assert!(!is_running(Some(2_147_000_000)));
+        // The environment the check's program gets: `tasklist` cannot start without SystemRoot, which every real
+        // Windows environment has.
+        let env = &Env::from_pairs([("SystemRoot", r"C:\Windows")]);
+        assert!(is_running(env, Some(i64::from(std::process::id()))));
+        assert!(!is_running(env, None));
+        assert!(!is_running(env, Some(0)));
+        assert!(!is_running(env, Some(-3)));
+        assert!(!is_running(env, Some(2_147_000_000)));
     }
 }

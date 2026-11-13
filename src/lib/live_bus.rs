@@ -38,8 +38,8 @@ use tokio::sync::mpsc;
 use crate::app::App;
 use crate::db::Db;
 use crate::lib::message_tools::strip_tool_markup;
-use crate::lib::tool_steps::{js_number, js_string, js_trim, parse_json_lossy};
-use crate::util::js::{now_ms, truthy, utf16_len, utf16_truncate};
+use crate::lib::tool_steps::{js_json, js_number, js_string, parse_json_lossy, whole_numbers};
+use crate::util::js::{now_ms, trim, truthy, utf16_len, utf16_truncate};
 
 /// cap any single string in a step payload
 const MAX_STRING: usize = 8_000;
@@ -301,8 +301,9 @@ impl LiveBus {
         let retention_days = app
             .env()
             .get("TARSEE_EVENT_RETENTION_DAYS")
+            // `Number(process.env.TARSEE_EVENT_RETENTION_DAYS) || 14`
             .map(|days| js_number(&Value::String(days)))
-            .filter(|days| days.is_finite() && *days != 0.0)
+            .filter(|days| !days.is_nan() && *days != 0.0)
             .unwrap_or(RETENTION_DAYS);
         let bus = app.set(LiveBus::new(app.db().clone(), retention_days));
         bus.start();
@@ -409,17 +410,20 @@ impl LiveBus {
         Some(self.db.with(f))
     }
 
-    /// Writes one event and queues it for the listeners. `track`: it counts for the turns in progress.
+    /// Writes one event and queues it for the listeners. `track`: it counts for the turns in progress. The error
+    /// is what the JS `catch` caught: the write failed, or a listener did while this event was handed to it.
     fn append(
         &self,
         conversation_id: &str,
         turn_id: Option<&str>,
         event_type: &str,
-        payload: Value,
+        mut payload: Value,
         track: bool,
     ) -> anyhow::Result<LiveEvent> {
         let created_at = now_ms();
-        let text = payload.to_string();
+        // JavaScript has one kind of number: what a publisher gives as 50.0 is 50, in the row and in the event.
+        whole_numbers(&mut payload);
+        let text = js_json(&payload, false);
         // The insert, the bookkeeping and the place in the queue happen under the database's own lock, so two
         // publishers can never hand their events to the listeners out of sequence order.
         let written = self.read(|conn| -> rusqlite::Result<LiveEvent> {
@@ -445,36 +449,55 @@ impl LiveBus {
             anyhow::bail!("The database connection is not open");
         };
         let evt = written?;
-        self.deliver();
+        if let Some(why) = self.deliver(evt.seq) {
+            anyhow::bail!("{why}");
+        }
         Ok(evt)
     }
 
     /// Hands every queued event to the listeners, oldest first. One thread does this at a time; an event queued
     /// meanwhile (by another thread, or by a listener) is delivered by that thread before it returns.
-    fn deliver(&self) {
+    ///
+    /// A listener that panics is a listener that threw in the JS: the event goes to no listener after it (the JS
+    /// `emit` stopped there), the publisher is not harmed, and the events behind it are delivered as usual.
+    /// Returns what the listener said when that happened to the event `own_seq` (this caller's own), for the
+    /// caller to log as the JS `publish` logged what it caught; for another publisher's event it is logged here.
+    fn deliver(&self, own_seq: i64) -> Option<String> {
+        let mut own_failure = None;
         loop {
             {
                 let Some(_delivering) = self.delivering.try_lock() else {
-                    return;
+                    return own_failure;
                 };
                 loop {
                     let next = self.outbox.lock().pop_front();
                     let Some(evt) = next else { break };
                     let listeners: Vec<Listener> = self.listeners.list.lock().iter().map(|(_, l)| l.clone()).collect();
                     for listener in listeners {
-                        listener(&evt);
+                        let heard = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| listener(&evt)));
+                        let Err(panic) = heard else { continue };
+                        let why = panic_text(panic.as_ref());
+                        if evt.seq == own_seq {
+                            own_failure = Some(why);
+                        } else if evt.r#type == "message" {
+                            log::warn!("[live-bus] publishMessage failed: {why}");
+                        } else {
+                            log::warn!("[live-bus] publish {} failed: {why}", evt.r#type);
+                        }
+                        break;
                     }
                 }
             }
             // An event queued between the last look and letting go would otherwise wait for the next publish.
             if self.outbox.lock().is_empty() {
-                return;
+                return own_failure;
             }
         }
     }
 
-    /// Append an event to the timeline and push it to subscribers. Never fails: the live view is best-effort and
-    /// must not break a turn. `None` when there is no conversation id or type, or the write failed.
+    /// Append an event to the timeline and push it to subscribers. Never fails and never panics: the live view is
+    /// best-effort and must not break a turn. `None` when there is no conversation id or type, when the write
+    /// failed, and (as in the JS, where the event is written all the same) when a listener failed on this event.
     pub fn publish(
         &self,
         conversation_id: &str,
@@ -504,7 +527,7 @@ impl LiveBus {
         extra: &Map<String, Value>,
     ) -> Option<LiveEvent> {
         let tidy = tidy_message_text(message.content);
-        let mut content = js_trim(&tidy).to_string();
+        let mut content = trim(&tidy).to_string();
         let truncated = utf16_len(&content) > MAX_MESSAGE_CHARS;
         if truncated {
             content = utf16_truncate(&content, MAX_MESSAGE_CHARS);
@@ -741,6 +764,17 @@ impl LiveBus {
 impl Drop for LiveBus {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+/// What a panic said (the JS `err.message`).
+fn panic_text(panic: &(dyn std::any::Any + Send)) -> String {
+    if let Some(text) = panic.downcast_ref::<&str>() {
+        (*text).to_string()
+    } else if let Some(text) = panic.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "a listener panicked".to_string()
     }
 }
 

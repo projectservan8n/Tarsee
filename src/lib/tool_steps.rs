@@ -18,14 +18,16 @@
 //! The messages are the JSON the engine wrote, so they are read as `serde_json::Value`.
 
 use std::collections::HashSet;
+use std::io;
 use std::sync::LazyLock;
 
 use regex::Regex;
 use serde::{Serialize, Serializer};
 use serde_json::Value;
+use serde_json::ser::{CompactFormatter, Formatter, PrettyFormatter};
 
 use crate::lib::redact::redact_secrets;
-use crate::util::js::{now_ms, number_to_string, truthy, utf16_len, utf16_tail, utf16_truncate};
+use crate::util::js::{is_whitespace, now_ms, number_to_string, trim, truthy, utf16_len, utf16_tail, utf16_truncate};
 
 const PREVIEW_CHARS: usize = 600;
 const INPUT_CHARS: usize = 2000;
@@ -169,7 +171,7 @@ pub fn summarize_tool_input(name: &str, input: &Value) -> String {
         "TodoWrite" => "updating the task list".to_string(),
         _ => first_text_value(input),
     };
-    let mut s = js_trim(&collapse_whitespace(&s)).to_string();
+    let mut s = trim(&collapse_whitespace(&s)).to_string();
     // Paths: show the tail, which is the informative part.
     if s.starts_with('/') && utf16_len(&s) > 80 {
         s = format!("…{}", utf16_tail(&s, 78));
@@ -183,14 +185,14 @@ pub fn summarize_tool_input(name: &str, input: &Value) -> String {
 
 /// `Object.values(input).find((v) => typeof v === "string" && v.trim())`: the first argument that is words.
 fn first_text_value(input: &Value) -> String {
-    let is_words = |v: &&Value| v.as_str().is_some_and(|s| !js_trim(s).is_empty());
+    let is_words = |v: &&Value| v.as_str().is_some_and(|s| !trim(s).is_empty());
     match input {
         Value::Object(map) => map.values().find(is_words).map(str_of).unwrap_or_default(),
         Value::Array(items) => items.iter().find(is_words).map(str_of).unwrap_or_default(),
         // (A string's values are its characters.)
         Value::String(s) => s
             .chars()
-            .find(|c| !is_js_whitespace(*c))
+            .find(|c| !is_whitespace(*c))
             .map(String::from)
             .unwrap_or_default(),
         _ => String::new(),
@@ -233,7 +235,7 @@ pub fn result_preview(content: &Value) -> String {
         Value::Array(blocks) => blocks_text(blocks),
         other => str_of(other),
     };
-    cap(redact_secrets(js_trim(&text.replace('\r', ""))), PREVIEW_CHARS)
+    cap(redact_secrets(trim(&text.replace('\r', ""))), PREVIEW_CHARS)
 }
 
 /// The key a tool id is remembered under: the id itself when it is a string.
@@ -275,7 +277,7 @@ pub fn steps_from_sdk_message(message: &Value, seen: &mut HashSet<String>) -> Ve
                         });
                     }
                     (Some("text"), _) => {
-                        let text = b.get("text").and_then(Value::as_str).map(js_trim).unwrap_or_default();
+                        let text = b.get("text").and_then(Value::as_str).map(trim).unwrap_or_default();
                         if !text.is_empty() {
                             steps.push(Step::Text { text: text.to_string() });
                         }
@@ -589,7 +591,7 @@ impl StreamWatcher {
                     return Vec::new();
                 };
                 let (_, sofar) = self.thinking.remove(at);
-                let text = js_trim(&sofar);
+                let text = trim(&sofar);
                 // (No text: the model thought without a summary, which is all a turn that did not ask for one gets.)
                 if text.is_empty() {
                     Vec::new()
@@ -653,44 +655,16 @@ fn retry_text(m: &Value) -> String {
     format!("Claude's API answered {}{why}. {when}", js_string(status))
 }
 
-// ── JavaScript behaviour this package needs that `util::js` does not have yet ───────────────────────────────────
-// (Proposed for `util::js` in the package report; they live here because this is the first module of the package
-// that needs them.)
-
-/// What JavaScript calls whitespace (`\s`, and what `trim()` removes). Unlike Rust's it has U+FEFF and not U+0085.
-pub(crate) fn is_js_whitespace(c: char) -> bool {
-    matches!(
-        c,
-        '\u{9}'..='\u{d}'
-            | ' '
-            | '\u{a0}'
-            | '\u{1680}'
-            | '\u{2000}'..='\u{200a}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{202f}'
-            | '\u{205f}'
-            | '\u{3000}'
-            | '\u{feff}'
-    )
-}
-
-/// `text.trim()`.
-pub(crate) fn js_trim(text: &str) -> &str {
-    text.trim_matches(is_js_whitespace)
-}
-
-/// `text.trimStart()`.
-pub(crate) fn js_trim_start(text: &str) -> &str {
-    text.trim_start_matches(is_js_whitespace)
-}
+// ── JavaScript behaviour this package needs that `util::js` does not have ───────────────────────────────────────
+// (`util::js` has `trim`, `trim_start`, `is_whitespace` and `number_to_string`, and this package uses those. What
+// is left here is used by this package only; its report says which of it belongs in `util::js`.)
 
 /// `text.replace(/\s+/g, " ")`.
 pub(crate) fn collapse_whitespace(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut in_space = false;
     for c in text.chars() {
-        if is_js_whitespace(c) {
+        if is_whitespace(c) {
             if !in_space {
                 out.push(' ');
             }
@@ -753,21 +727,75 @@ pub(crate) fn js_number(value: &Value) -> f64 {
         Value::Null => 0.0,
         Value::Bool(b) => f64::from(u8::from(*b)),
         Value::Number(n) => n.as_f64().unwrap_or(f64::NAN),
-        Value::String(s) => {
-            let s = js_trim(s);
-            if s.is_empty() {
-                0.0
-            } else if s
-                .bytes()
-                .all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'-' | b'+' | b'e' | b'E'))
-            {
-                s.parse().unwrap_or(f64::NAN)
-            } else {
-                f64::NAN
-            }
-        }
-        _ => f64::NAN,
+        Value::String(s) => js_number_from_str(s),
+        // (An array or an object is its text first: `Number([5])` is 5, `Number({})` is NaN.)
+        other => js_number_from_str(&js_string(other)),
     }
+}
+
+/// `Number(text)`: JavaScript's whitespace around it does not count, nothing at all is 0, and besides the decimal
+/// forms (`12`, `1.5`, `.5`, `1e3`) it reads `0x1F`, `0o17`, `0b101` and `Infinity`. Anything else is NaN: `12px`,
+/// `1,000`, and the spellings only Rust's own parser takes (`inf`, `nan`).
+pub(crate) fn js_number_from_str(text: &str) -> f64 {
+    let s = trim(text);
+    if s.is_empty() {
+        return 0.0;
+    }
+    for (prefix, radix) in [("0x", 16), ("0X", 16), ("0o", 8), ("0O", 8), ("0b", 2), ("0B", 2)] {
+        if let Some(digits) = s.strip_prefix(prefix) {
+            if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+                return f64::NAN;
+            }
+            // (Summed as a float, so a number of any length reads, as in JavaScript.)
+            return digits.chars().fold(0.0, |sum, c| {
+                sum * f64::from(radix) + f64::from(c.to_digit(radix).unwrap_or(0))
+            });
+        }
+    }
+    let (sign, unsigned) = match s.as_bytes()[0] {
+        b'-' => (-1.0, &s[1..]),
+        b'+' => (1.0, &s[1..]),
+        _ => (1.0, s),
+    };
+    if unsigned == "Infinity" {
+        return sign * f64::INFINITY;
+    }
+    if !is_decimal_literal(unsigned) {
+        return f64::NAN;
+    }
+    unsigned.parse::<f64>().map_or(f64::NAN, |n| sign * n)
+}
+
+/// Digits, with an optional fraction and an optional exponent: `12`, `1.`, `.5`, `1.5e-3`.
+fn is_decimal_literal(text: &str) -> bool {
+    fn digits(bytes: &[u8], at: &mut usize) -> usize {
+        let start = *at;
+        while bytes.get(*at).is_some_and(u8::is_ascii_digit) {
+            *at += 1;
+        }
+        *at - start
+    }
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    let whole = digits(bytes, &mut at);
+    let mut fraction = 0;
+    if bytes.get(at) == Some(&b'.') {
+        at += 1;
+        fraction = digits(bytes, &mut at);
+    }
+    if whole == 0 && fraction == 0 {
+        return false;
+    }
+    if matches!(bytes.get(at), Some(b'e' | b'E')) {
+        at += 1;
+        if matches!(bytes.get(at), Some(b'+' | b'-')) {
+            at += 1;
+        }
+        if digits(bytes, &mut at) == 0 {
+            return false;
+        }
+    }
+    at == bytes.len()
 }
 
 /// `Number(value) || 0`, as a whole count.
@@ -781,27 +809,117 @@ pub(crate) fn js_round(n: f64) -> f64 {
     (n + 0.5).floor()
 }
 
-/// `JSON.stringify(value)` (or with `pretty`, `JSON.stringify(value, null, 2)`). A number with no fraction is
-/// written without one (JavaScript has one kind of number: 1.0 is 1).
-pub(crate) fn js_json(value: &Value, pretty: bool) -> String {
-    let value = whole_numbers(value);
-    let text = if pretty {
-        serde_json::to_string_pretty(&value)
-    } else {
-        serde_json::to_string(&value)
-    };
-    text.unwrap_or_default()
+/// The largest whole number JavaScript holds exactly (`Number.MAX_SAFE_INTEGER`).
+const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+/// Writes JSON's numbers as JavaScript writes them, and everything else as the formatter inside does. JavaScript
+/// has one kind of number: `1.0` is written `1`, `1e21` is `1e+21`, a whole number too large to hold exactly is
+/// written as the nearest one it can hold.
+struct JsNumbers<F>(F);
+
+impl<F: Formatter> Formatter for JsNumbers<F> {
+    fn write_i64<W: ?Sized + io::Write>(&mut self, writer: &mut W, value: i64) -> io::Result<()> {
+        if value.unsigned_abs() <= MAX_SAFE_INTEGER {
+            self.0.write_i64(writer, value)
+        } else {
+            writer.write_all(number_to_string(value as f64).as_bytes())
+        }
+    }
+
+    fn write_u64<W: ?Sized + io::Write>(&mut self, writer: &mut W, value: u64) -> io::Result<()> {
+        if value <= MAX_SAFE_INTEGER {
+            self.0.write_u64(writer, value)
+        } else {
+            writer.write_all(number_to_string(value as f64).as_bytes())
+        }
+    }
+
+    fn write_f32<W: ?Sized + io::Write>(&mut self, writer: &mut W, value: f32) -> io::Result<()> {
+        writer.write_all(number_to_string(f64::from(value)).as_bytes())
+    }
+
+    fn write_f64<W: ?Sized + io::Write>(&mut self, writer: &mut W, value: f64) -> io::Result<()> {
+        writer.write_all(number_to_string(value).as_bytes())
+    }
+
+    // (The layout is the inner formatter's: compact, or indented by two.)
+    fn begin_array<W: ?Sized + io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        self.0.begin_array(writer)
+    }
+
+    fn end_array<W: ?Sized + io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        self.0.end_array(writer)
+    }
+
+    fn begin_array_value<W: ?Sized + io::Write>(&mut self, writer: &mut W, first: bool) -> io::Result<()> {
+        self.0.begin_array_value(writer, first)
+    }
+
+    fn end_array_value<W: ?Sized + io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        self.0.end_array_value(writer)
+    }
+
+    fn begin_object<W: ?Sized + io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        self.0.begin_object(writer)
+    }
+
+    fn end_object<W: ?Sized + io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        self.0.end_object(writer)
+    }
+
+    fn begin_object_key<W: ?Sized + io::Write>(&mut self, writer: &mut W, first: bool) -> io::Result<()> {
+        self.0.begin_object_key(writer, first)
+    }
+
+    fn end_object_key<W: ?Sized + io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        self.0.end_object_key(writer)
+    }
+
+    fn begin_object_value<W: ?Sized + io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        self.0.begin_object_value(writer)
+    }
+
+    fn end_object_value<W: ?Sized + io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        self.0.end_object_value(writer)
+    }
 }
 
-fn whole_numbers(value: &Value) -> Value {
+/// `JSON.stringify(value)` (or with `pretty`, `JSON.stringify(value, null, 2)`) of anything that serialises: the
+/// same text as `serde_json` writes, except that numbers are written as JavaScript writes them (see
+/// [`JsNumbers`]). Use it wherever this package makes JSON text that the Node version made with `JSON.stringify`.
+pub(crate) fn to_js_json<T: Serialize + ?Sized>(value: &T, pretty: bool) -> serde_json::Result<String> {
+    let mut out = Vec::with_capacity(128);
+    if pretty {
+        let mut serializer = serde_json::Serializer::with_formatter(&mut out, JsNumbers(PrettyFormatter::new()));
+        value.serialize(&mut serializer)?;
+    } else {
+        let mut serializer = serde_json::Serializer::with_formatter(&mut out, JsNumbers(CompactFormatter));
+        value.serialize(&mut serializer)?;
+    }
+    // (serde_json writes only valid UTF-8.)
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// [`to_js_json`] of a JSON value, which cannot fail.
+pub(crate) fn js_json(value: &Value, pretty: bool) -> String {
+    to_js_json(value, pretty).unwrap_or_default()
+}
+
+/// Makes every number with no fraction a whole number, all the way down: what a value was in the JS, which has one
+/// kind of number (50.0 is 50). For a JSON value this package hands on to be written by whoever takes it.
+pub(crate) fn whole_numbers(value: &mut Value) {
     match value {
-        Value::Number(n) if n.is_f64() => match n.as_f64() {
-            Some(f) if f == f.trunc() && f.abs() < 9_007_199_254_740_992.0 => Value::from(f as i64),
-            _ => value.clone(),
-        },
-        Value::Array(items) => Value::Array(items.iter().map(whole_numbers).collect()),
-        Value::Object(map) => Value::Object(map.iter().map(|(k, v)| (k.clone(), whole_numbers(v))).collect()),
-        other => other.clone(),
+        Value::Number(n) if n.is_f64() => {
+            if let Some(f) = n.as_f64()
+                && f == f.trunc()
+                && f.abs() < 9_007_199_254_740_992.0
+            {
+                *value = Value::from(f as i64);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(whole_numbers),
+        Value::Object(map) => map.values_mut().for_each(whole_numbers),
+        _ => {}
     }
 }
 
@@ -1207,14 +1325,12 @@ mod tests {
 
     #[test]
     fn javascripts_whitespace_strings_and_numbers() {
-        assert_eq!(js_trim("\u{feff} a b \u{2028}"), "a b");
-        assert_eq!(
-            js_trim("\u{85}a\u{85}"),
-            "\u{85}a\u{85}",
-            "U+0085 is not whitespace in JavaScript"
-        );
-        assert_eq!(js_trim_start("  /help "), "/help ");
         assert_eq!(collapse_whitespace("a \n\t b\u{a0}c"), "a b c");
+        assert_eq!(
+            collapse_whitespace("a\u{feff}\u{feff}b\u{85}c"),
+            "a b\u{85}c",
+            "U+FEFF is whitespace in JavaScript and U+0085 is not"
+        );
         assert_eq!(fold_blank_lines("a\n\n\n\nb\n\nc\n\n\n"), "a\n\nb\n\nc\n\n");
         assert_eq!(js_string(&json!(3)), "3");
         assert_eq!(js_string(&json!(2.5)), "2.5");
@@ -1229,6 +1345,94 @@ mod tests {
             js_json(&json!({ "a": 1.0, "b": [2.5, 3.0] }), false),
             r#"{"a":1,"b":[2.5,3]}"#
         );
+    }
+
+    /// Review findings M4 and M5: every number as `JSON.stringify` writes it (each line was read off Node).
+    #[test]
+    fn json_text_has_its_numbers_as_javascript_writes_them() {
+        let written = |value: Value| js_json(&value, false);
+        assert_eq!(written(json!(1.0)), "1");
+        assert_eq!(written(json!(-0.0)), "0");
+        assert_eq!(written(json!(1.5)), "1.5");
+        assert_eq!(written(json!(100000000000000000000.0)), "100000000000000000000");
+        assert_eq!(written(json!(123456789012345680000.0)), "123456789012345680000");
+        assert_eq!(written(json!(1e21)), "1e+21");
+        assert_eq!(written(json!(0.000001)), "0.000001");
+        assert_eq!(written(json!(1e-7)), "1e-7");
+        assert_eq!(written(json!(1.5e-9)), "1.5e-9");
+        assert_eq!(written(json!(9_007_199_254_740_991_u64)), "9007199254740991");
+        assert_eq!(written(json!(9_007_199_254_740_993_u64)), "9007199254740992");
+        assert_eq!(written(json!(u64::MAX)), "18446744073709552000");
+        assert_eq!(written(json!(i64::MIN)), "-9223372036854776000");
+        assert_eq!(written(json!(-42)), "-42");
+        // The same numbers as the engine's own JSON text gives them.
+        let parsed: Value =
+            serde_json::from_str(r#"{"big":100000000000000000000,"small":0.000001,"whole":2.0}"#).unwrap();
+        assert_eq!(
+            written(parsed.clone()),
+            r#"{"big":100000000000000000000,"small":0.000001,"whole":2}"#
+        );
+        assert_eq!(
+            tool_input_preview("Read", &parsed),
+            "{\n  \"big\": 100000000000000000000,\n  \"small\": 0.000001,\n  \"whole\": 2\n}"
+        );
+        // Indented by two, and everything that is not a number as before.
+        assert_eq!(
+            js_json(
+                &json!({ "a": 1.0, "b": [2.5, 3.0], "c": {}, "d": [], "e": "é \"q\" \n 🐒", "f": null }),
+                true
+            ),
+            "{\n  \"a\": 1,\n  \"b\": [\n    2.5,\n    3\n  ],\n  \"c\": {},\n  \"d\": [],\n  \"e\": \"é \\\"q\\\" \\n 🐒\",\n  \"f\": null\n}"
+        );
+        // Anything that serialises, not only a JSON value.
+        #[derive(Serialize)]
+        struct Reading {
+            at: f64,
+            ratio: f32,
+            n: u8,
+        }
+        let reading = Reading {
+            at: 3.0,
+            ratio: 0.5,
+            n: 7,
+        };
+        assert_eq!(to_js_json(&reading, false).unwrap(), r#"{"at":3,"ratio":0.5,"n":7}"#);
+        assert_eq!(to_js_json(&f64::NAN, false).unwrap(), "null");
+    }
+
+    /// Review finding M6 and the report's difference 15: `Number(text)` (each line was read off Node).
+    #[test]
+    fn text_is_read_as_a_number_the_way_javascript_reads_it() {
+        let n = js_number_from_str;
+        assert_eq!(n("  12  "), 12.0);
+        assert_eq!(
+            n("\u{feff}5000"),
+            5000.0,
+            "a byte order mark is whitespace to JavaScript"
+        );
+        assert!(n("\u{85}5000").is_nan(), "and U+0085 is not");
+        assert_eq!(n(""), 0.0);
+        assert_eq!(n(" \t\n"), 0.0);
+        assert_eq!(
+            (n("1."), n(".5"), n("1e3"), n("1e+3"), n("5e-1"), n("-2.5"), n("+7")),
+            (1.0, 0.5, 1000.0, 1000.0, 0.5, -2.5, 7.0)
+        );
+        assert_eq!((n("0x10"), n("0X1f"), n("0o17"), n("0b101")), (16.0, 31.0, 15.0, 5.0));
+        assert_eq!(
+            (n("Infinity"), n("+Infinity"), n("-Infinity")),
+            (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY)
+        );
+        for not_a_number in [
+            "12px", "1,000", "1_000", "1e", "+", "-", ".", "e3", "0x", "-0x10", "0b102", "infinity", "inf", "nan",
+            "NaN", "1 2", "--1",
+        ] {
+            assert!(n(not_a_number).is_nan(), "{not_a_number:?}");
+        }
+        assert_eq!(js_number(&json!([5])), 5.0);
+        assert_eq!(js_number(&json!([])), 0.0);
+        assert!(js_number(&json!([1, 2])).is_nan());
+        assert!(js_number(&json!({})).is_nan());
+        assert_eq!((js_number(&json!(true)), js_number(&json!(null))), (1.0, 0.0));
     }
 
     #[test]

@@ -10,6 +10,7 @@ mod ai_settings_ui;
 mod brand_icon;
 mod channel_guides_core;
 mod chat_core;
+mod chat_files;
 mod dialogs;
 mod harness;
 mod model_picker_core;

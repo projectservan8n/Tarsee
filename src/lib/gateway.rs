@@ -15,6 +15,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::app::App;
+use crate::lib::tool_steps::js_json;
 use crate::util::js::{iso_from_ms, now_ms};
 
 const MAX_EVENTS_PER_CONV: usize = 200;
@@ -217,7 +218,7 @@ impl GatewayManager {
         if let Some(entry) = entry {
             message.insert("eventId".into(), json!(entry.id));
         }
-        let payload = Value::Object(message).to_string();
+        let payload = js_json(&Value::Object(message), false);
         for ws in self.open_sockets() {
             let _ = ws.send(&payload);
         }
@@ -240,7 +241,7 @@ impl GatewayManager {
         let mut message = Map::new();
         message.insert("type".into(), json!("presence"));
         message.extend(event);
-        let payload = Value::Object(message).to_string();
+        let payload = js_json(&Value::Object(message), false);
         for ws in self.open_sockets() {
             let _ = ws.send(&payload);
         }
@@ -458,6 +459,30 @@ mod tests {
         assert_eq!(gw.append_event("", "x", json!(1)), None);
         // Ids go on across conversations.
         assert_eq!(gw.append_event("c2", "x", json!(1)).unwrap().id, 3);
+    }
+
+    /// Review finding M4: what goes to the sockets is written as `JSON.stringify` wrote it.
+    #[test]
+    fn a_broadcast_has_its_numbers_as_javascript_writes_them() {
+        let (gw, _) = clocked();
+        let socket = Arc::new(FakeSocket::default());
+        gw.add_connection("a", socket.clone(), None);
+        gw.broadcast(
+            Some("c1"),
+            "usage",
+            json!({ "seconds": 12.0, "speed": 33.3, "big": 1e21 }),
+        );
+        let mut seen = Map::new();
+        seen.insert("userId".into(), json!("owner"));
+        seen.insert("idleMinutes".into(), json!(5.0));
+        gw.broadcast_presence(seen);
+        assert_eq!(
+            *socket.sent.lock(),
+            [
+                r#"{"type":"sync","convId":"c1","event":"usage","data":{"seconds":12,"speed":33.3,"big":1e+21},"eventId":1}"#,
+                r#"{"type":"presence","userId":"owner","idleMinutes":5}"#,
+            ]
+        );
     }
 
     #[test]

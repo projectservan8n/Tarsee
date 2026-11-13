@@ -35,6 +35,7 @@ use crate::app::App;
 use crate::db::Db;
 use crate::lib::tool_steps::js_string;
 use crate::util::js::{ms_from_iso, now_ms, truthy, utf16_truncate};
+use crate::util::node_path::to_namespaced;
 
 /// The agent's file goes on the next reply only when that reply came within this long of it.
 const ON_REPLY_WITHIN_MS: i64 = 2 * 3_600_000;
@@ -165,7 +166,8 @@ pub fn file_view(r: &ChatFileRow) -> FileView {
         message_id: or_none(r.message_id.clone()),
         after_message_id: or_none(r.after_message_id.clone()),
         turn_id: or_none(r.turn_id.clone()),
-        gone: !Path::new(&r.path).exists(),
+        // (Asked of the path as it is written: `a.txt.` is not `a.txt`, and `nul` is not there.)
+        gone: !to_namespaced(Path::new(&r.path)).exists(),
     }
 }
 
@@ -224,6 +226,8 @@ impl ChatFiles {
                 .optional()?
                 .flatten()
                 .filter(|id| !id.is_empty());
+            // (One time for the whole call, as the JS default `at = Date.now()` was: the files of one upload.)
+            let at = opts.at.filter(|at| *at != 0).unwrap_or_else(now_ms);
             let mut rows = Vec::new();
             for f in files {
                 if f.path.as_os_str().is_empty() {
@@ -242,7 +246,7 @@ impl ChatFiles {
                     path: f.path.to_string_lossy().into_owned(),
                     caption: or_none(Some(utf16_truncate(&opts.caption, 500))),
                     via: or_none(Some(utf16_truncate(&opts.via, 40))),
-                    created_at: opts.at.filter(|at| *at != 0).unwrap_or_else(now_ms),
+                    created_at: at,
                 };
                 conn.prepare_cached(INSERT)?.execute(named_params! {
                     ":conversationId": row.conversation_id,
@@ -973,5 +977,49 @@ mod tests {
             .unwrap();
         let file = kept(&t, "sent-1-a.txt");
         assert!(record_chat_files(&t.app, &conv, &[file], &RecordOptions::default()).is_empty());
+    }
+
+    // ── Fix round 1 ──────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// Review finding M8: with no time given, the files of one call share one time (the JS default
+    /// `at = Date.now()` was read once), however long the call takes.
+    #[test]
+    fn the_files_of_one_call_are_kept_at_one_time() {
+        let (t, store) = started();
+        let conv = store.create(NewConversation::default()).unwrap().id;
+        let file = kept(&t, "chat-1-0-a.txt");
+        let many = vec![file; 600];
+        let before = now_ms();
+        let rows = record_chat_files(&t.app, &conv, &many, &RecordOptions::default());
+        let after = now_ms();
+        assert_eq!(rows.len(), 600);
+        assert!(rows.iter().all(|row| row.at == rows[0].at), "one time for them all");
+        assert!((before..=after).contains(&rows[0].at));
+        // (The call took long enough for a clock read at each row to have shown.)
+        assert!(after > before, "600 rows were written within one millisecond");
+    }
+
+    /// "File names on Windows": whether a kept copy is still there is asked of the path as it is written. Left to
+    /// itself, Windows answers for `a.txt` when asked about `a.txt.`, and says the null device is there.
+    #[test]
+    fn a_copy_is_gone_unless_a_file_of_that_very_name_is_there() {
+        let (t, _store) = started();
+        let there = kept(&t, "sent-1-a.txt");
+        let row = |path: std::path::PathBuf| ChatFileRow {
+            path: path.to_string_lossy().into_owned(),
+            ..ChatFileRow::default()
+        };
+        let uploads = there.path.parent().unwrap().to_path_buf();
+        assert!(!file_view(&row(there.path.clone())).gone);
+        assert!(file_view(&row(uploads.join("sent-1-a.txt."))).gone, "a trailing dot");
+        assert!(file_view(&row(uploads.join("sent-1-a.txt "))).gone, "a trailing space");
+        assert!(file_view(&row(uploads.join("nul"))).gone);
+        assert!(file_view(&row(uploads.join("..."))).gone);
+        assert!(file_view(&row(uploads.join("missing.txt"))).gone);
+        // A copy whose own name ends in a dot is there.
+        let dotted = uploads.join("sent-2-b.");
+        std::fs::write(to_namespaced(&dotted), "b").unwrap();
+        assert!(!file_view(&row(dotted)).gone);
+        assert!(file_view(&row(uploads.join("sent-2-b"))).gone);
     }
 }

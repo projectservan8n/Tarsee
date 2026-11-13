@@ -16,6 +16,7 @@ use crate::app::App;
 use crate::env::Env;
 use crate::voice::python_runtime::{node_arch, node_platform};
 use crate::voice::stt_install::{ResolvedModel, get_stt_status, resolve_stt_model};
+use crate::voice::tts_interface::find_program;
 use crate::voice::whisper_models::ModelSource;
 
 /// How a check came out.
@@ -42,23 +43,9 @@ fn check(name: &str, status: CheckStatus, detail: impl Into<String>) -> Check {
     }
 }
 
-/// The `PATH` of an environment: on Windows the variable is usually spelled `Path`, and names are not case-sensitive
-/// there.
-fn path_var(env: &Env) -> Option<String> {
-    if cfg!(windows) {
-        env.snapshot()
-            .into_iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("PATH"))
-            .map(|(_, v)| v)
-    } else {
-        env.get("PATH")
-    }
-}
-
-/// A program on the environment's `PATH`.
+/// A program on the environment's `PATH` (`tts_interface::find_program`: on Windows, whatever the variable's case).
 fn which(env: &Env, name: &str) -> Option<PathBuf> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    which::which_in(name, path_var(env), cwd).ok()
+    find_program(env, name)
 }
 
 /// Whether `program -version` runs and succeeds (`execSync("ffmpeg -version")`).
@@ -508,15 +495,5 @@ mod tests {
             ),
         ]);
         assert_eq!(find_browser(&env), Some(newest));
-    }
-
-    #[test]
-    fn the_path_is_found_whatever_its_name_is_spelled_on_windows() {
-        let env = Env::from_pairs([("Path", "/x")]);
-        if cfg!(windows) {
-            assert_eq!(path_var(&env).as_deref(), Some("/x"));
-        } else {
-            assert_eq!(path_var(&env), None);
-        }
     }
 }

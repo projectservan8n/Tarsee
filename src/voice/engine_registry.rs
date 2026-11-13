@@ -11,22 +11,20 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::FutureExt;
-use futures::future::{BoxFuture, Shared};
+use futures::future::BoxFuture;
 use parking_lot::{Mutex, RwLock};
 use regex::Regex;
 use serde_json::Value;
 
 use super::edge_tts_engine::EdgeTtsEngine;
 use super::elevenlabs_engine::ElevenLabsTtsEngine;
-use super::phonon_engine::{PhononOptions, PhononTtsEngine, js_number, js_string_or_empty};
+use super::phonon_engine::{PhononOptions, PhononTtsEngine, SharedTask, js_number, js_string_or_empty, spawn_shared};
 use super::piper_engine::PiperTtsEngine;
-use super::speech_text::js_trim;
 use super::tts_interface::{AudioStream, ClonedVoice, SynthOptions, Synthesized, TtsEngine, TtsError, VoiceInfo};
 use super::tts_stub::StubTtsEngine;
 use crate::app::App;
-use crate::db::settings::Settings;
-use crate::env::Env;
-use crate::util::js::number_to_string;
+use crate::db::settings::{Settings, get_api_key};
+use crate::util::js::{number_to_string, trim};
 
 /// The engine in use, and how many inits have started (only the newest may choose).
 pub struct TtsRegistry {
@@ -61,7 +59,7 @@ pub const DEFAULT_ENGINE: &str = "phonon";
 /// which is free and local; Settings > Voice already showed Phonon for them.
 pub fn engine_preference(settings: Option<&dyn Settings>) -> String {
     if let Some(Value::String(v)) = settings.and_then(|s| s.get("voice.engine")) {
-        let v = js_trim(&v);
+        let v = trim(&v);
         if !v.is_empty() {
             return v.to_string();
         }
@@ -232,40 +230,6 @@ pub async fn init_tts_engine(app: &App, settings: Option<Arc<dyn Settings>>, opt
     choose(Arc::new(StubTtsEngine::new()));
 }
 
-/// A provider's API key, as the settings store's `getApiKey(id)` gives it for a provider the AI registry does not
-/// list (ElevenLabs) or lists under its own id (OpenAI): the saved `ai.<id>.apiKey`, else the environment's
-/// `<ID>_API_KEY`, with whitespace and one pair of wrapping quotes removed.
-pub(crate) fn api_key(settings: Option<&dyn Settings>, env: &Env, id: &str) -> Option<String> {
-    let clean = |value: &str| {
-        let t = js_trim(value);
-        let t = t.strip_prefix(['"', '\'']).unwrap_or(t);
-        let t = t.strip_suffix(['"', '\'']).unwrap_or(t);
-        let t = js_trim(t);
-        (!t.is_empty()).then(|| t.to_string())
-    };
-    let saved = settings
-        .and_then(|s| s.get(&format!("ai.{id}.apiKey")))
-        .and_then(|v| match v {
-            Value::Null => None,
-            Value::String(s) => clean(&s),
-            other => clean(&super::phonon_engine::js_template(Some(&other))),
-        });
-    if saved.is_some() {
-        return saved;
-    }
-    let name: String = format!("{}_API_KEY", id.to_uppercase())
-        .chars()
-        .map(|c| {
-            if c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    env.get(&name).and_then(|v| clean(&v))
-}
-
 /// The engines Tarsee has: `name` built from the settings, or `None` when it has no such engine or is not set up.
 fn builtin_engine(
     app: &App,
@@ -275,7 +239,9 @@ fn builtin_engine(
 ) -> Option<Arc<dyn TtsEngine>> {
     match name {
         "elevenlabs" => {
-            let key = api_key(settings, app.env(), "elevenlabs")
+            // `settingsStore?.getApiKey?.("elevenlabs")`: no store, no key from it (not even the environment's).
+            let key = settings
+                .and_then(|s| get_api_key(s, app.env(), "elevenlabs"))
                 .or_else(|| setting_text(settings, "voice.elevenlabs.apiKey"))?;
             Some(Arc::new(ElevenLabsTtsEngine::new(
                 app.fetch(),
@@ -372,10 +338,11 @@ fn try_engine(
     .boxed()
 }
 
+/// The spare engine being built, shared by every sentence that waits for it.
+type SpareBuild = SharedTask<Option<Arc<dyn TtsEngine>>>;
+
 /// Builds the spare engine when it is first needed: `None` when it cannot start.
 pub type FallbackMaker = Arc<dyn Fn() -> BoxFuture<'static, Option<Arc<dyn TtsEngine>>> + Send + Sync>;
-
-type SharedFallback = Shared<BoxFuture<'static, Option<Arc<dyn TtsEngine>>>>;
 
 /// An engine with a spare: a sentence the primary fails is spoken by the fallback (built on first need). After
 /// [`FAILS_TO_TRIP`](FallbackTtsEngine::FAILS_TO_TRIP) failures in a row the primary is skipped for
@@ -384,11 +351,18 @@ type SharedFallback = Shared<BoxFuture<'static, Option<Arc<dyn TtsEngine>>>>;
 ///
 /// The fallback gets the request's voice id only when it is one of its own voices: a Phonon voice such as "toby" means
 /// nothing to Edge TTS.
+///
+/// Each sentence runs to its end in a task of its own, as the JS promise did, so a caller that goes away still leaves
+/// the failure count and the spare as they would have been.
 pub struct FallbackTtsEngine {
+    inner: Arc<FallbackInner>,
+}
+
+struct FallbackInner {
     primary: Arc<dyn TtsEngine>,
     make_fallback: FallbackMaker,
     fallback_name: String,
-    fallback: Mutex<Option<SharedFallback>>,
+    fallback: Mutex<Option<SpareBuild>>,
     fails: Mutex<u32>,
     /// Measured on tokio's clock, so a test can let the pause pass.
     skip_until: Mutex<Option<tokio::time::Instant>>,
@@ -400,25 +374,30 @@ impl FallbackTtsEngine {
 
     pub fn new(primary: Arc<dyn TtsEngine>, make_fallback: FallbackMaker, fallback_name: &str) -> Self {
         FallbackTtsEngine {
-            primary,
-            make_fallback,
-            fallback_name: fallback_name.to_string(),
-            fallback: Mutex::new(None),
-            fails: Mutex::new(0),
-            skip_until: Mutex::new(None),
+            inner: Arc::new(FallbackInner {
+                primary,
+                make_fallback,
+                fallback_name: fallback_name.to_string(),
+                fallback: Mutex::new(None),
+                fails: Mutex::new(0),
+                skip_until: Mutex::new(None),
+            }),
         }
     }
 
     /// The engine behind the spare.
     pub fn primary(&self) -> &Arc<dyn TtsEngine> {
-        &self.primary
+        &self.inner.primary
     }
+}
 
+impl FallbackInner {
     async fn get_fallback(&self) -> Option<Arc<dyn TtsEngine>> {
+        // Built in a task of its own (the JS promise): it finishes even when the sentence that asked for it is gone.
         let building = self
             .fallback
             .lock()
-            .get_or_insert_with(|| (self.make_fallback)().shared())
+            .get_or_insert_with(|| spawn_shared((self.make_fallback)(), None))
             .clone();
         let fb = building.await;
         if fb.is_none() {
@@ -436,17 +415,6 @@ impl FallbackTtsEngine {
     ) -> Result<Synthesized, TtsError> {
         let voice = fallback_voice_for(&self.fallback_name, voice_id);
         fb.synthesize(text, voice.as_deref(), &SynthOptions::default()).await
-    }
-}
-
-#[async_trait]
-impl TtsEngine for FallbackTtsEngine {
-    fn name(&self) -> &str {
-        self.primary.name()
-    }
-
-    fn default_voice(&self) -> Option<String> {
-        self.primary.default_voice()
     }
 
     async fn synthesize(
@@ -473,20 +441,20 @@ impl TtsEngine for FallbackTtsEngine {
                     let tripped = {
                         let mut fails = self.fails.lock();
                         *fails += 1;
-                        let tripped = *fails >= Self::FAILS_TO_TRIP;
+                        let tripped = *fails >= FallbackTtsEngine::FAILS_TO_TRIP;
                         if tripped {
                             *fails = 0;
                         }
                         tripped
                     };
                     if tripped {
-                        *self.skip_until.lock() = Some(tokio::time::Instant::now() + Self::TRIP);
+                        *self.skip_until.lock() = Some(tokio::time::Instant::now() + FallbackTtsEngine::TRIP);
                         log::warn!(
                             "[voice] {} failed {} times in a row, using {} for {} min",
                             self.primary.name(),
-                            Self::FAILS_TO_TRIP,
+                            FallbackTtsEngine::FAILS_TO_TRIP,
                             self.fallback_name,
-                            Self::TRIP.as_secs() / 60
+                            FallbackTtsEngine::TRIP.as_secs() / 60
                         );
                     }
                     log::warn!(
@@ -507,17 +475,41 @@ impl TtsEngine for FallbackTtsEngine {
             Some(fb) => self.fallback_synth(&fb, text, voice_id).await,
         }
     }
+}
+
+#[async_trait]
+impl TtsEngine for FallbackTtsEngine {
+    fn name(&self) -> &str {
+        self.inner.primary.name()
+    }
+
+    fn default_voice(&self) -> Option<String> {
+        self.inner.primary.default_voice()
+    }
+
+    async fn synthesize(
+        &self,
+        text: &str,
+        voice_id: Option<&str>,
+        opts: &SynthOptions,
+    ) -> Result<Synthesized, TtsError> {
+        let inner = self.inner.clone();
+        let (text, voice_id, opts) = (text.to_string(), voice_id.map(str::to_string), opts.clone());
+        tokio::spawn(async move { inner.synthesize(&text, voice_id.as_deref(), &opts).await })
+            .await
+            .unwrap_or_else(|err| Err(TtsError::new(format!("the voice stopped ({err})"))))
+    }
 
     async fn is_available(&self) -> bool {
-        self.primary.is_available().await
+        self.inner.primary.is_available().await
     }
 
     async fn list_voices(&self) -> Result<Vec<VoiceInfo>, TtsError> {
-        self.primary.list_voices().await
+        self.inner.primary.list_voices().await
     }
 
     async fn clone_voice(&self, audio_sample: &[u8], name: &str) -> Result<ClonedVoice, TtsError> {
-        self.primary.clone_voice(audio_sample, name).await
+        self.inner.primary.clone_voice(audio_sample, name).await
     }
 
     fn can_stream(&self) -> bool {
@@ -529,15 +521,15 @@ impl TtsEngine for FallbackTtsEngine {
     }
 
     fn set_speed(&self, speed: f64) {
-        self.primary.set_speed(speed);
+        self.inner.primary.set_speed(speed);
     }
 
     async fn warm(&self) -> Result<(), TtsError> {
-        self.primary.warm().await
+        self.inner.primary.warm().await
     }
 
     fn stop(&self) {
-        self.primary.stop();
+        self.inner.primary.stop();
     }
 }
 

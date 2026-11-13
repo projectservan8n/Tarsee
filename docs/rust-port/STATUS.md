@@ -12,17 +12,17 @@ agent checked it against the Node code and its findings are fixed or parked belo
 |---|---|---|---|---|---|
 | F0 | merged | - | 9956468..fe6015b | 96 | Foundation, by the lead |
 | I0 | reviewed | - | 7957ca6, fixes 38a6adb | 1562 | Interfaces and fakes; `INTERFACES.md`. Review: 1 important, 4 minor, all addressed |
-| A1 | merged, fixes running | - | 92f9739 | 1562 | 161 of 181 cases; 12 wait for later packages, 8 test Node-only mechanisms. Review: 1 important, 5 minor |
+| A1 | reviewed | - | 92f9739, fixes d5772a9 | 2016 | 161 of 181 cases. Review: 1 important, 5 minor; all confirmed fixed by a second reviewer |
 | A3 | running | s2 | | | |
-| A5 | running | s10 | | | |
+| A5 | merged, fixed | - | 2d96d1c, fixes 0a15a7a | 2137 | 66 of 66 cases. Review: 1 important, 4 minor; all fixed, one Node bug fixed. Second review running |
 | A2 | reviewed | - | 74e0e4f, fixes 82edd82 | 1723 | 107 of 109 cases (2 wait for G2, G3). Review: 3 important, 8 minor; all 11 confirmed fixed by a second reviewer; passes on Linux |
 | B1 | merged, fixed | - | 1649cf7, fixes 9aa27aa | 1757 | 36 of 36 cases. Review: nothing critical or important in the package; 2 minor, fixed; two Node bugs fixed. Second review running |
-| B2 | merged, fixes running | - | 7094777 | 875 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases. Review: 2 critical, 1 important, 6 minor |
-| C1 | merged, fixes running | - | 9dd5372 | 213 | 32 of 32 cases. Review: 1 critical, 4 important, 22 minor |
-| D1 | merged | - | 48bb9ff | 1180 | 59 of 68 cases; 4 wait for S3, 5 are browser tests (W1) |
-| V2 | merged, fixes running | - | 7205d05 | 1723 | 69 of 71 cases. Review: 5 important, 13 minor |
-| S4 | running | s3 | | | |
-| T1 | merged | - | 40e4ee7 | 1886 | 102 of 107 cases (5 wait for S3, S4). Review running |
+| B2 | reviewed | - | 7094777, fixes a1ce610 | 2016 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases. Review: 2 critical, 1 important, 6 minor, all fixed with five Node bugs; confirmed by a second reviewer, who attacked the files route with 87 hostile paths |
+| C1 | merged, fixed | - | 9dd5372, fixes 2f14fc4 | 2201 | 32 of 32 cases. Review: 1 critical, 4 important, 22 minor; 25 fixed, 2 answered, four Node bugs fixed. Second review running |
+| D1 | merged, fixed | - | 48bb9ff, fixes 8a3ff04 | 2201 | 59 of 68 cases, plus 5 browser cases now in `tests/ui`. Review: 1 important, 11 minor; all addressed (the lock race: 0 wrong in 200,000 stress rounds). Second review running |
+| V2 | merged, fixed | - | 7205d05, fixes 344c47a | 2031 | 71 of 71 cases. Review: 5 important, 13 minor; 15 fixed, 3 belong to the server-wide wiring (Z1). Second review running |
+| S4 | merged | - | 40c3723 | 2118 | 41 of 42 cases (1 waits for S3). The real `codex` and `claude` programs each connected to the Rust endpoint and listed all 27 tools. Review running |
+| T1 | merged, fixed | - | 40e4ee7, fixes bac416f | 2131 | 102 of 107 cases (5 wait for S3). Review: 2 critical, 1 important, 4 minor; all fixed (the shell runs in a job object). Second review running |
 | W1a | merged | - | fcfc2ba | 1328 | 116 of 141 cases of the browser files run in a real browser (`cargo test --test ui`); 25 wait for A1, A4, R2 |
 | E1 | reviewed | - | 55fa65f, fixes 96f4ac4 | 1573 | 128 of 128 cases. Review: faithful, 2 minor, addressed; two Node bugs fixed |
 | V1 | reviewed | - | dbb96bb, fixes 64fb45d | 1742 | 42 of 42 cases. Review: 2 critical, 3 important, 7 minor; all 12 confirmed fixed by a second reviewer |
@@ -97,13 +97,18 @@ Decisions the lead made on the owner's behalf, in order. Each says what it costs
 
 Fixed (in the list below, marked "done") or being fixed in each package's fix round:
 
-- B2 `routes/files`: `POST /api/files/delete` can delete the whole workspace when `TARSEE_WORKSPACE_DIR` is not
-  written in its normal form (a trailing slash, `..`), because the root check compares text; `rename` has a prefix
-  check without a path separator.
-- C1 `lib/skills-engine`: a skill name in install, uninstall and setup can reach outside the skills folders.
+- done: B2 `routes/files`: the workspace root can no longer be deleted, however the workspace folder is written; a
+  rename must stay inside the workspace and never lands on a protected name; NTFS stream names (`name.db::$DATA`)
+  are refused; a private address written as IPv6 is judged by its IPv4 form.
+- done: B1 `middleware/security`: a CSRF token with a signature of the wrong length answers 403, not 500; a private
+  address inside an IPv6 one is refused by the security manager.
+- done: C1 `lib/skills-engine`, `lib/canvas`: a skill name must be one plain name, so install, uninstall, setup,
+  update and delete cannot reach outside the skills folders; a canvas path cannot reach a sibling folder; a skill
+  update that keeps the content no longer adds a blank line each time.
+- done: A5 `ai/providers/codex-options`: switching the compact window off (`TARSEE_COMPACT_WINDOW=off`) no longer
+  gives Codex a limit of 0, which made it compact on every turn.
 - done: E1 `lib/discord-format`: a piece of a split message can no longer be over the limit when the line has emoji;
   code fences in text with CRLF line endings are recognised (also in the Slack stream).
-- B1 `middleware/security`: a CSRF token with a signature of the wrong length answers 500 instead of 403.
 
 ## Node oddities ported as they are
 
@@ -130,6 +135,9 @@ Each became a rule in `DESIGN.md` and, where possible, a fix in the foundation:
   refresh stalled when its caller went away.)
 - An axum handler is dropped when the client disconnects; an Express handler ran to its end. (V2: a speech
   request whose client left stayed pending and broke every later one; recordings were left in the temp folder.)
+- Windows reuses the id of a process that has ended, and a process keeps the id of a parent long gone, so the
+  children of a process cannot be found by parent id alone. (T1: ending a web terminal could have ended unrelated
+  programs; patched at once with a creation-time check, and being replaced by a job object.)
 - Tests that start real programs with time limits can miss them when the machine is busy. They are rerun alone
   before a merge is refused, and are to be made robust in the cleanup.
 
@@ -138,6 +146,12 @@ Each became a rule in `DESIGN.md` and, where possible, a fix in the foundation:
 The branch is built and tested on Linux inside WSL after merges. First run (five packages): everything compiles;
 678 unit tests pass; 2 of 51 integration tests fail (both in A2: output past the size cap), to be fixed in A2's fix
 round. Clippy on the newer compiler there reports 3 warnings (a large error type) to clear in the cleanup.
+
+## Engine protocols
+
+Two specifications are being written and independently checked from captures of the real SDKs: how the Node
+version starts and talks to the `claude` and `codex` programs (`docs/rust-port/engines/`, with fixtures under
+`tests/fixtures/claude-cli/` and `tests/fixtures/codex-cli/`). Packages G1 and G2 are built from them.
 
 ## Follow-ups owed by later packages
 
@@ -163,4 +177,15 @@ round. Clippy on the newer compiler there reports 3 warnings (a large error type
 
 ## Deferred minor findings
 
-None recorded.
+For the final cleanup; none blocks a package.
+
+- B2 `lib/url_safety`: only the `::ffff:a.b.c.d` spelling of IPv4 inside IPv6 is judged by its IPv4 form; the
+  compatible, NAT64 and 6to4 spellings still pass (Node let every IPv6 literal through, so this is not worse).
+- B2 `routes/files` rename on Windows: a folder renamed onto an existing file replaces the file and answers 200;
+  Node's rename refused. It stays inside the workspace.
+- V1/V2/A2 tests that start real programs with time limits: make each wait on the event itself.
+- The JavaScript-behaviour helpers still private to packages (`js_to_fixed`, `js_to_precision`, `js_json_stringify`,
+  `js_string`, `js_stringify`, `Clock`, `node_header`) move to `util::js`.
+- The conversion from a registry provider to the engine environment's entry lives in `codex_options.rs`; it belongs
+  beside the registry.
+- Clippy on the newest compiler reports a few warnings the pinned one does not.

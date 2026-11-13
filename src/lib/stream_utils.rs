@@ -21,6 +21,8 @@ use axum::response::Response;
 use bytes::Bytes;
 use rand::Rng;
 use serde::Serialize;
+
+use crate::lib::tool_steps::to_js_json;
 use tokio::sync::mpsc;
 
 enum Frame {
@@ -82,7 +84,7 @@ pub fn send_sse<T: Serialize + ?Sized>(res: &SseStream, event: &str, data: &T) {
     if res.writable_ended() || res.destroyed() {
         return;
     }
-    if let Ok(json) = serde_json::to_string(data) {
+    if let Ok(json) = to_js_json(data, false) {
         res.write(format!("event: {event}\ndata: {json}\n\n"));
     }
 }
@@ -184,6 +186,39 @@ mod tests {
              event: text\ndata: {\"content\":\"line one\\nline two — ünï 🐒 \\\"quoted\\\"\"}\n\n\
              event: heartbeat\ndata: {\"ts\":1794472200000,\"queued\":true}\n\n\
              event: done\ndata: {\"conversationId\":\"c1\",\"usage\":{},\"stopReason\":null}\n\n"
+        );
+    }
+
+    /// Review finding M4: `JSON.stringify` writes a whole number without a decimal point, whatever it was made from.
+    #[tokio::test]
+    async fn a_frame_has_its_numbers_as_javascript_writes_them() {
+        #[derive(Serialize)]
+        struct Usage {
+            seconds: f64,
+            speed: f32,
+            tokens: u64,
+        }
+        let (sse, response) = init_sse();
+        send_sse(
+            &sse,
+            "n",
+            &json!({ "a": 1.0, "b": 2.5, "c": [3.0, 1e21, 0.000001], "d": -0.0 }),
+        );
+        send_sse(
+            &sse,
+            "usage",
+            &Usage {
+                seconds: 12.0,
+                speed: 1.5,
+                tokens: 40_504,
+            },
+        );
+        sse.end();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            String::from_utf8(body.to_vec()).unwrap(),
+            "event: n\ndata: {\"a\":1,\"b\":2.5,\"c\":[3,1e+21,0.000001],\"d\":0}\n\n\
+             event: usage\ndata: {\"seconds\":12,\"speed\":1.5,\"tokens\":40504}\n\n"
         );
     }
 

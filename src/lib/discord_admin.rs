@@ -661,6 +661,33 @@ pub fn key_name_from(raw: &str) -> String {
 
 // ---------------------------------------------------------------- JavaScript's reading of values
 
+/// `text.slice(start, end)` (UTF-16 units) as it reads once written out: a cut through a character outside the basic
+/// plane left JavaScript holding half of it, a lone surrogate, which a log or any UTF-8 reader shows as U+FFFD.
+pub(crate) fn js_slice_shown(text: &str, start: usize, end: usize) -> String {
+    let mut out = String::new();
+    let mut unit = 0usize;
+    for ch in text.chars() {
+        let width = ch.len_utf16();
+        let (from, to) = (unit, unit + width);
+        unit = to;
+        if to <= start || from >= end {
+            continue;
+        }
+        if from >= start && to <= end {
+            out.push(ch);
+        } else {
+            out.push('\u{FFFD}');
+        }
+    }
+    out
+}
+
+/// `text.slice(-count)`, as [`js_slice_shown`] gives it.
+pub(crate) fn js_tail_shown(text: &str, count: usize) -> String {
+    let len = utf16_len(text);
+    js_slice_shown(text, len.saturating_sub(count), len)
+}
+
 /// `String(value)` for a JSON value.
 pub(crate) fn js_string(value: &Value) -> String {
     match value {
@@ -799,7 +826,7 @@ pub async fn discord_admin(app: &App, args: &Value, deps: DiscordAdminDeps<'_>) 
                 Failure::Admin(message) => message,
                 Failure::Discord(err) => discord_error_text(&err, &action, &note),
             };
-            let outcome = format!("failed: {}", utf16_truncate(&one_line(&text), 200));
+            let outcome = format!("failed: {}", js_slice_shown(&one_line(&text), 0, 200));
             let shown = if action.is_empty() { "" } else { action.as_str() };
             (
                 outcome,

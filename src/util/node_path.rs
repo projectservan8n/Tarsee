@@ -10,24 +10,45 @@ use std::path::{Component, Path, PathBuf};
 /// It works on the text only (it does not look at the disk or follow links), as Node's does. A `..` that would go
 /// above the root is dropped; one that goes above the start of a relative path is kept. An empty path is `.`.
 pub fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
+    // The parts are kept apart and put together as text at the end. Building the result with `PathBuf::push` would
+    // be wrong on Windows: a folder named like a drive in the middle of a path (`a\C:\b`) would replace everything
+    // before it, because `push` treats any piece that starts with a drive as a new path.
+    let mut prefix: Option<&std::ffi::OsStr> = None;
+    let mut rooted = false;
+    let mut names: Vec<&std::ffi::OsStr> = Vec::new();
     for component in path.components() {
         match component {
+            Component::Prefix(found) => prefix = Some(found.as_os_str()),
+            Component::RootDir => rooted = true,
             Component::CurDir => {}
-            Component::ParentDir => match out.components().next_back() {
-                Some(Component::Normal(_)) => {
-                    out.pop();
+            Component::ParentDir => match names.last() {
+                Some(last) if *last != ".." => {
+                    names.pop();
                 }
-                Some(Component::RootDir | Component::Prefix(_)) => {}
-                _ => out.push(".."),
+                // Above the root there is nothing: the step is dropped. Above the start of a relative path it is kept.
+                _ if rooted => {}
+                _ => names.push(std::ffi::OsStr::new("..")),
             },
-            other => out.push(other.as_os_str()),
+            Component::Normal(name) => names.push(name),
         }
     }
-    if out.as_os_str().is_empty() {
+    let mut out = std::ffi::OsString::new();
+    if let Some(prefix) = prefix {
+        out.push(prefix);
+    }
+    if rooted {
+        out.push(std::path::MAIN_SEPARATOR_STR);
+    }
+    for (i, name) in names.iter().enumerate() {
+        if i > 0 {
+            out.push(std::path::MAIN_SEPARATOR_STR);
+        }
+        out.push(name);
+    }
+    if out.is_empty() {
         out.push(".");
     }
-    out
+    PathBuf::from(out)
 }
 
 /// `path.join(base, piece)` for a piece the program itself wrote (never for one that came from outside: see
@@ -153,6 +174,21 @@ mod tests {
             "kept"
         );
         std::fs::remove_file(to_namespaced(&dir.path().join("nul"))).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_named_like_a_drive_in_the_middle_of_a_path_stays_a_folder() {
+        assert_eq!(n("a\\C:\\b"), "a/C:/b");
+        assert_eq!(n("C:\\data\\D:\\x\\..\\y"), "C:/data/D:/y");
+        assert_eq!(normalize(Path::new("C:\\ws\\E:")), PathBuf::from("C:\\ws\\E:"));
+    }
+
+    #[test]
+    fn a_relative_path_can_climb_and_a_rooted_one_cannot() {
+        assert_eq!(n("../../a"), "../../a");
+        assert_eq!(n("a/../../../b"), "../../b");
+        assert_eq!(n("/a/../../../b"), "/b");
     }
 
     #[test]

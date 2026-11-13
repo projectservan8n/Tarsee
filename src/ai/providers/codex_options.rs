@@ -40,6 +40,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::ai::context_limits::{EnvMap, compact_window_tokens, js_min, js_round};
+use crate::ai::engine::McpGrant;
 use crate::ai::engine_env::{
     CODEX, CODEX_SHELL_EXCLUDED, CodexEnvOpts, CredentialCode, CredentialError, EngineEnvError, EntryModel,
     ProviderEntry, Tiers, TypeError, WrongSlot, codex_chatgpt_test_hosts, codex_env_for, host_for,
@@ -350,21 +351,6 @@ pub fn engine_entry(p: &Provider) -> ProviderEntry {
     }
 }
 
-/// The turn's grant for Tarsee's tools: the MCP endpoint and its per-turn token.
-#[derive(Clone, Default)]
-pub struct McpGrant {
-    pub url: String,
-    pub token: String,
-}
-
-impl std::fmt::Debug for McpGrant {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("McpGrant")
-            .field("url", &self.url)
-            .finish_non_exhaustive()
-    }
-}
-
 /// A Local AI turn's address on the bridge and its per-turn token (`ai::local_bridge::BridgeTurn`).
 #[derive(Clone, Default)]
 pub struct BridgeAddress {
@@ -616,9 +602,10 @@ pub fn build_codex_options(target: &CodexTarget, ctx: &CodexContext) -> Result<C
         },
         "features": features,
     }));
-    if let Some(context) = context {
-        // `Math.min(compact, ...)` with no compact window ("off") is Math.min(null, ...): 0.
-        let limit = js_min(compact.unwrap_or(0.0), (context * 0.85).floor());
+    // With no compact window (TARSEE_COMPACT_WINDOW=off: the engine's own choice) the key is left out, so Codex keeps
+    // its own limit. Node bug fixed: the JS wrote `Math.min(null, ...)`, which is 0, a limit that compacts every turn.
+    if let (Some(context), Some(compact)) = (context, compact) {
+        let limit = js_min(compact, (context * 0.85).floor());
         settings.insert("model_auto_compact_token_limit".into(), js_num(limit));
     }
 

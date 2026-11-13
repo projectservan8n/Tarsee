@@ -31,7 +31,9 @@ pub enum FetchError {
     /// No answer within the request's timeout.
     #[error("the request timed out")]
     Timeout,
-    /// The host could not be reached: DNS, refused connection, TLS (the JS `TypeError: fetch failed`).
+    /// The host could not be reached: DNS, refused connection, TLS (the JS `TypeError: fetch failed`). The text
+    /// says why in Node's words (`connect ECONNREFUSED 127.0.0.1:9931`, `getaddrinfo ENOTFOUND example.invalid`), as
+    /// `err.cause.message` did; [`FetchError::code`] gives the code alone.
     #[error("fetch failed: {0}")]
     Connect(String),
     /// The body could not be read or was not what was asked for (bad JSON, bad UTF-8, a cut connection).
@@ -42,9 +44,36 @@ pub enum FetchError {
     Other(String),
 }
 
+/// The system error codes Node put in `err.cause.code` for a request that failed, which callers tell apart.
+const NODE_CODES: &[&str] = &[
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "ECONNABORTED",
+    "ENOTFOUND",
+    "EAI_AGAIN",
+    "ETIMEDOUT",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+    "EPIPE",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "UND_ERR_SOCKET",
+];
+
 impl FetchError {
     pub fn is_timeout(&self) -> bool {
         matches!(self, FetchError::Timeout)
+    }
+
+    /// Node's code for why the request failed (`err.cause?.code`): `ECONNREFUSED` when nothing listens at the
+    /// address, `ENOTFOUND` when the name is not known, `ECONNRESET` when the other side cut the connection, and so
+    /// on; `ETIMEDOUT` for a timeout. `None` when the failure has no such code.
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            FetchError::Timeout => Some("ETIMEDOUT"),
+            FetchError::Connect(text) | FetchError::Body(text) | FetchError::Other(text) => {
+                NODE_CODES.iter().copied().find(|code| text.contains(code))
+            }
+        }
     }
 }
 
@@ -261,15 +290,69 @@ fn error_from(err: reqwest::Error) -> FetchError {
     if err.is_timeout() {
         FetchError::Timeout
     } else if err.is_connect() || err.is_request() {
-        // The cause says more than reqwest's own wrapper line ("error sending request").
-        let cause = std::error::Error::source(&err)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| err.to_string());
-        FetchError::Connect(cause)
+        FetchError::Connect(connect_failure_text(&err))
     } else if err.is_body() || err.is_decode() {
         FetchError::Body(err.to_string())
     } else {
         FetchError::Other(err.to_string())
+    }
+}
+
+/// Why a request could not be sent, in Node's words. reqwest's own line says only "error sending request"; the
+/// reason is further down its chain of causes: an `io::Error` from the connection, or the resolver saying the name
+/// is not known.
+fn connect_failure_text(err: &reqwest::Error) -> String {
+    use std::error::Error;
+    use std::io::ErrorKind;
+
+    let address = err
+        .url()
+        .map(|url| match (url.host_str(), url.port_or_known_default()) {
+            (Some(host), Some(port)) => format!("{host}:{port}"),
+            (Some(host), None) => host.to_string(),
+            _ => String::new(),
+        });
+    let host = err.url().and_then(|url| url.host_str()).unwrap_or_default().to_string();
+    let address = address.unwrap_or_default();
+
+    let mut deepest = err.to_string();
+    let mut texts = Vec::new();
+    let mut io_kind = None;
+    let mut cause = err.source();
+    while let Some(inner) = cause {
+        deepest = inner.to_string();
+        texts.push(deepest.to_lowercase());
+        if let Some(io) = inner.downcast_ref::<std::io::Error>() {
+            io_kind = Some(io.kind());
+        }
+        cause = inner.source();
+    }
+    let said = |needle: &str| texts.iter().any(|text| text.contains(needle));
+
+    // The resolver's failure comes first: it also ends in an io::Error, of no particular kind.
+    if said("dns error")
+        || said("failed to lookup address")
+        || said("no such host")
+        || said("name or service not known")
+    {
+        return format!("getaddrinfo ENOTFOUND {host}");
+    }
+    let code = match io_kind {
+        Some(ErrorKind::ConnectionRefused) => Some("ECONNREFUSED"),
+        Some(ErrorKind::ConnectionReset) => Some("ECONNRESET"),
+        Some(ErrorKind::ConnectionAborted) => Some("ECONNABORTED"),
+        Some(ErrorKind::TimedOut) => Some("ETIMEDOUT"),
+        Some(ErrorKind::HostUnreachable) => Some("EHOSTUNREACH"),
+        Some(ErrorKind::NetworkUnreachable) => Some("ENETUNREACH"),
+        Some(ErrorKind::BrokenPipe) => Some("EPIPE"),
+        _ => None,
+    };
+    match code {
+        Some("ECONNRESET") => "read ECONNRESET".to_string(),
+        Some("EPIPE") => "write EPIPE".to_string(),
+        Some(code) => format!("connect {code} {address}"),
+        // No code Node would have given (a certificate that is refused, a malformed address): the cause as it is.
+        None => deepest,
     }
 }
 
@@ -425,12 +508,65 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unreachable_host_is_a_connect_error() {
-        // Port 1 on loopback: nothing listens there.
+    async fn an_address_nothing_listens_at_is_refused_in_nodes_words() {
+        // A port that was just free: bind one, note it, and let it go.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
         let err = ReqwestFetch::new()
-            .fetch(FetchRequest::get("http://127.0.0.1:1/").timeout(Duration::from_secs(5)))
+            .fetch(FetchRequest::get(format!("http://127.0.0.1:{port}/")).timeout(Duration::from_secs(20)))
             .await
             .unwrap_err();
-        assert!(matches!(err, FetchError::Connect(_) | FetchError::Timeout), "{err:?}");
+        assert_eq!(err.code(), Some("ECONNREFUSED"), "{err:?}");
+        assert_eq!(
+            err.to_string(),
+            format!("fetch failed: connect ECONNREFUSED 127.0.0.1:{port}")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_name_that_is_not_known_is_enotfound_in_nodes_words() {
+        // The .invalid top-level name never resolves (RFC 2606), with or without a network.
+        let err = ReqwestFetch::new()
+            .fetch(FetchRequest::get("http://tarsee-test.invalid/").timeout(Duration::from_secs(20)))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some("ENOTFOUND"), "{err:?}");
+        assert_eq!(
+            err.to_string(),
+            "fetch failed: getaddrinfo ENOTFOUND tarsee-test.invalid"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_connection_the_other_side_cuts_is_a_failure_with_its_cause() {
+        // A server that accepts and closes at once, before any answer.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                drop(socket);
+            }
+        });
+        let err = ReqwestFetch::new()
+            .fetch(FetchRequest::get(format!("http://127.0.0.1:{port}/")).timeout(Duration::from_secs(20)))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FetchError::Connect(_)), "{err:?}");
+    }
+
+    #[test]
+    fn the_code_is_read_from_nodes_words_and_a_timeout_has_its_own() {
+        assert_eq!(
+            FetchError::Connect("getaddrinfo ENOTFOUND down.test".into()).code(),
+            Some("ENOTFOUND")
+        );
+        assert_eq!(
+            FetchError::Connect("connect ECONNREFUSED 127.0.0.1:1".into()).code(),
+            Some("ECONNREFUSED")
+        );
+        assert_eq!(FetchError::Connect("read ECONNRESET".into()).code(), Some("ECONNRESET"));
+        assert_eq!(FetchError::Connect("certificate has expired".into()).code(), None);
+        assert_eq!(FetchError::Timeout.code(), Some("ETIMEDOUT"));
     }
 }
