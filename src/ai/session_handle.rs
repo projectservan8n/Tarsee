@@ -120,7 +120,7 @@ struct Place {
 }
 
 /// JavaScript's `||` on text: the value unless it is missing or empty.
-fn truthy<'a>(text: Option<&'a str>) -> Option<&'a str> {
+fn truthy(text: Option<&str>) -> Option<&str> {
     text.filter(|t| !t.is_empty())
 }
 

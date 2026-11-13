@@ -2204,3 +2204,21 @@ fn numbers_in_settings_are_read_as_javascript_reads_them() {
     assert_eq!(context_from_label("2 m"), 2_000_000);
     assert_eq!(context_from_label("lots"), 1_000_000);
 }
+
+#[test]
+fn the_registry_entry_gives_engine_env_what_it_reads() {
+    let entry = engine_entry(&PROVIDERS.openrouter);
+    assert_eq!(entry.id, "openrouter");
+    assert_eq!(entry.label.as_deref(), Some(PROVIDERS.openrouter.label));
+    assert_eq!(entry.env_key.as_deref(), Some("OPENROUTER_API_KEY"));
+    assert_eq!(
+        entry.base_url.get("codex").map(String::as_str),
+        Some("https://openrouter.ai/api/v1")
+    );
+    assert!(entry.engines.as_ref().unwrap().contains(&"codex".to_string()));
+    assert_eq!(entry.wrong_slot.len(), PROVIDERS.openrouter.wrong_slot.len());
+    assert_eq!(
+        engine_entry(&PROVIDERS.claude).default_model.as_deref(),
+        PROVIDERS.claude.default_model
+    );
+}

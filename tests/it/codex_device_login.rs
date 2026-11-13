@@ -529,13 +529,10 @@ async fn codex_exiting_cleanly_without_a_sign_in_isnt_taken_as_one() {
 
 #[tokio::test]
 async fn a_sign_in_link_to_any_other_site_is_refused_and_codex_is_stopped() {
+    // (The JS test gave the start 1.5 s. The refusal comes as soon as the link and the code are read, so the limit
+    // only says how long a busy machine may take to start the stand-in: it is left at its own 30 s.)
     let s = scenario(&[("FAKE_CODEX_LOGIN", "other-host")]);
-    let (code, message) = s
-        .start_error(DeviceLoginOpts {
-            start_timeout: Duration::from_millis(5000),
-            ..s.start_opts()
-        })
-        .await;
+    let (code, message) = s.start_error(s.start_opts()).await;
     assert_eq!(code, LoginCode::UnexpectedOutput);
     assert!(!message.contains("example.test"), "the other link is never passed on");
     assert!(gone_soon(s.pid()).await);
@@ -902,12 +899,13 @@ async fn real_codex_nothing_signed_in() {
 
 #[tokio::test]
 async fn a_codex_that_shows_nothing_in_time_is_stopped_and_what_it_said_decides_the_message() {
-    // (Long enough for the stand-in to have started and said its piece on a busy machine; the three run together.)
-    async fn outcome(mode: &str) -> (LoginCode, String, Scenario) {
+    // (The three run together. The one whose words decide the message gets long enough for the stand-in to have
+    // started and said its piece on a busy machine; the other two end the same whatever arrived.)
+    async fn outcome(mode: &str, limit_ms: u64) -> (LoginCode, String, Scenario) {
         let s = scenario(&[("FAKE_CODEX_LOGIN", mode)]);
         let (code, message) = s
             .start_error(DeviceLoginOpts {
-                start_timeout: Duration::from_millis(3000),
+                start_timeout: Duration::from_millis(limit_ms),
                 ..s.start_opts()
             })
             .await;
@@ -915,7 +913,11 @@ async fn a_codex_that_shows_nothing_in_time_is_stopped_and_what_it_said_decides_
         assert_eq!(s.state(), Some(LoginState::Failed), "{mode}");
         (code, message, s)
     }
-    let (silent, warning, error) = tokio::join!(outcome("silent"), outcome("warning-only"), outcome("stderr-error"));
+    let (silent, warning, error) = tokio::join!(
+        outcome("silent", 3000),
+        outcome("warning-only", 3000),
+        outcome("stderr-error", 12_000)
+    );
     // Nothing at all, or only a warning: no code.
     for (code, message, _) in [&silent, &warning] {
         assert_eq!(*code, LoginCode::NoCode);

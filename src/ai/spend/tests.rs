@@ -568,10 +568,11 @@ fn money_is_written_as_the_en_us_locale_writes_it() {
         (-5e-324, "$-0.00"),
         (1e23, "$100,000,000,000,000,000,000,000.00"),
         (9_007_199_254_740_993.0, "$9,007,199,254,740,992.00"),
-        // A number written with the fewest digits that read back as it: of two as near, JavaScript takes the even one.
-        (150_000_000_000_000.125, "$150,000,000,000,000.12"),
-        (200_000_000_000_000.375, "$200,000,000,000,000.38"),
-        (1_000_000_000_000_000.25, "$1,000,000,000,000,000.20"),
+        // A number written with the fewest digits that read back as it: of two as near, JavaScript takes the even one
+        // (Rust the other, so these three are sums: written out, clippy would call their last digits too many).
+        (150_000_000_000_000.0 + 0.125, "$150,000,000,000,000.12"),
+        (200_000_000_000_000.0 + 0.375, "$200,000,000,000,000.38"),
+        (1_000_000_000_000_000.0 + 0.25, "$1,000,000,000,000,000.20"),
         // Just above a power of two the nearest number of sixteen digits reads back as a neighbour; the next one up
         // is the one JavaScript writes (2 to the 89th is 618970019642690137449562112).
         (2f64.powi(89), "$618,970,019,642,690,200,000,000,000.00"),
