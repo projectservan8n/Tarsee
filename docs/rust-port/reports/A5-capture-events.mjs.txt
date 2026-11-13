@@ -175,6 +175,16 @@ const commands = [
   "pwsh -command", "pwsh  -c dir", "C:\\tools\\pwsh.exe -Command \"a\"", "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"b\"",
   "bash\t-lc\t'tabs'", "bash -lc 'multi\nline'", "/bin/bash -lc 'x' ", " /bin/bash -lc 'padded' ", "zsh -lc '🐒'", "powerſhell -Command x",
   "bash -lc \"\"", "bash -lc '\"'", "/x y/bash -lc z", "bash.exe -c y",
+  // PowerShell's wrapper in every shape its pattern takes (the Rust reads it without a backtracking pattern).
+  "pwsh.exe\" -Command x", "\"pwsh\" -Command x", "a/b\\c/powershell.EXE -Command x", "a/pwsh/b/pwsh -Command x",
+  "x\"y/pwsh -Command z", "pwsh -Command", "pwsh -Command  ", "pwsh -Command \t", "pwsh -Command\u00a0x", "pwsh\u00a0-Command x",
+  "pwsh -A -B_c -Command x", "pwsh -A: -Command x", "pwsh - -Command x", "pwsh -CommandLine -Command x", "pwsh -command -Command x",
+  "pwsh -Command -A -Command x", "pwshx -Command y", "pwsh.exex -Command y", "pwsh.exe\"\" -Command y", "/pwsh -Command y",
+  "\"/pwsh\" -Command 'y'", "\"\" -Command y", "\"pwsh -Command \"y\"\"", "PoWeRsHeLl.ExE -NoP -Command & {Get-Date}",
+  "C:\\a b\\pwsh.exe -Command x", "x/pwsh -A/pwsh -Command y", "pwsh -Command\n\nx\n", "pwsh -Command \"a\" ", "pwsh -Command x\r\ny",
+  "pwsh -NoProfile -Command -Command", "pwsh -é -Command x", "pwsh -A\u2028-Command x", "\\\\server\\share\\pwsh.exe -Command x",
+  "pwsh.exe -Command 'it'\\''s'", "pwsh   -NoProfile\t-Command   \"x\"",
+  "x/pwsh -Command a/pwsh -Command b", "x\\pwsh -Command a\\pwsh -NoP -Command \"b\"",
 ];
 const unwrap = commands.map((c) => [c, cx.unwrapShellCommand(c)]);
 

@@ -104,12 +104,21 @@ pub struct TargetCaps {
     pub streaming: bool,
 }
 
-/// Tarsee's tools for a Codex turn: the loopback MCP endpoint and this turn's token (`ai/mcp-http.js`
-/// `grantTurn`'s `{ url, token }`).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Tarsee's tools for a turn: the loopback MCP endpoint and this turn's token (`ai/mcp-http.js` `grantTurn`'s
+/// `{ url, token }`). The one grant type: the turn layer hands it to an engine here, and the Codex engine passes it
+/// on in `providers::codex_options::CodexContext::mcp`. `Debug` leaves the token out: it opens Tarsee's tools.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpGrant {
     pub url: String,
     pub token: String,
+}
+
+impl std::fmt::Debug for McpGrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpGrant")
+            .field("url", &self.url)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The Node `sessionId` option of an engine, which meant three things.

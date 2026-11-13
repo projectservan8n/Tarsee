@@ -955,7 +955,19 @@ fn node_build_codex_options_for_every_provider_with_and_without_each_optional_in
         fields["env"].as_object_mut().unwrap().shift_remove("CODEX_HOME");
         let instructions = fields["config"]["developer_instructions"].as_str().unwrap().to_string();
         fields["config"]["developer_instructions"] = short(&instructions);
-        let want = &case["out"];
+        let mut want = case["out"].clone();
+        // The one Node bug fixed here: with TARSEE_COMPACT_WINDOW=off Node wrote a compact limit of 0
+        // (Math.min(null, n)); the Rust version leaves the key out.
+        let compact_off = case["name"] == "compact off";
+        if compact_off {
+            let config = want["config"].as_object_mut().unwrap();
+            assert_eq!(
+                config.shift_remove("model_auto_compact_token_limit"),
+                Some(json!(0)),
+                "{what}"
+            );
+        }
+        let want = &want;
         // The config in order, key by key (its order is the order of Codex's --config arguments).
         assert_eq!(
             crate::ai::local_bridge::js_stringify(&got["config"]),
@@ -964,6 +976,14 @@ fn node_build_codex_options_for_every_provider_with_and_without_each_optional_in
         );
         assert_eq!(got, *want, "{what}");
         if let Some(want_args) = case.get("args") {
+            let mut want_args = want_args.clone();
+            if compact_off {
+                want_args
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|a| a != "model_auto_compact_token_limit=0");
+            }
+            let want_args = &want_args;
             let got_args: Vec<Value> = args(&o)
                 .iter()
                 .map(|a| if utf16_len(a) > 1000 { sha256(a) } else { json!(a) })
@@ -1106,13 +1126,37 @@ fn the_registry_entry_gives_engine_env_what_it_reads() {
 }
 
 #[test]
-fn compact_off_gives_a_compact_limit_of_zero_as_the_node_code_did() {
-    // Math.min(null, ...) is 0 in JavaScript: with TARSEE_COMPACT_WINDOW=off the limit Codex gets is 0.
-    let o = build_with("openai", None, |c| {
+fn compact_off_leaves_the_compact_limit_to_codex_a_node_bug_fixed() {
+    // Node wrote Math.min(null, ...), which is 0: with TARSEE_COMPACT_WINDOW=off Codex was told to compact at 0
+    // tokens, on every turn. "off" means the engine's own choice: the key is left out, in every spelling.
+    for off in ["off", " OFF ", "Off"] {
+        for id in ["openai", "local", "chatgpt"] {
+            let o = build_with(id, None, |c| {
+                c.env.set("TARSEE_COMPACT_WINDOW", off);
+                c.context_tokens = Some(32_000.0);
+            })
+            .unwrap();
+            assert!(o.config.get("model_auto_compact_token_limit").is_none(), "{id} {off:?}");
+            assert!(
+                !args(&o).iter().any(|a| a.starts_with("model_auto_compact_token_limit")),
+                "{id}"
+            );
+        }
+    }
+    // A window named in the call still sets it, whatever the environment says.
+    let named = build_with("openai", None, |c| {
         c.env.set("TARSEE_COMPACT_WINDOW", "off");
+        c.context_tokens = Some(400_000.0);
+        c.compact_window = Some(150_000.0);
     })
     .unwrap();
-    assert_eq!(o.config["model_auto_compact_token_limit"], 0);
+    assert_eq!(named.config["model_auto_compact_token_limit"], 150_000);
+    // And with the window set or left to its default, as before.
+    assert!(
+        build("openai").config["model_auto_compact_token_limit"]
+            .as_u64()
+            .is_some()
+    );
 }
 
 #[test]

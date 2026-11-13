@@ -41,7 +41,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
-use fancy_regex::Regex as FancyRegex;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
@@ -126,16 +125,101 @@ static POSIX_WRAP_RE: LazyLock<Regex> = LazyLock::new(|| {
         r#"^"?(?:[^"{JS_SPACE_CLASS}]*[\\/])?(?:bash|sh|zsh|dash)(?:\.exe)?"?{s}+-l?c{s}+((?s:.)+)$"#
     ))
 });
-/// PowerShell's wrapper, in any case (JavaScript's `i` flag, ASCII letters only): its options up to `-Command`, then
-/// the command. An option spelled `-Command` is the command's, never one to skip.
-static POWERSHELL_WRAP_RE: LazyLock<FancyRegex> = LazyLock::new(|| {
-    let s = format!("[{JS_SPACE_CLASS}]");
-    let command = "[Cc][Oo][Mm][Mm][Aa][Nn][Dd]";
-    FancyRegex::new(&format!(
-        r#"^"?(?:[^"]*[\\/])?(?:[Pp][Oo][Ww][Ee][Rr][Ss][Hh][Ee][Ll][Ll]|[Pp][Ww][Ss][Hh])(?:\.[Ee][Xx][Ee])?"?(?:{s}+-(?!{command}(?![A-Za-z0-9_]))[A-Za-z0-9_]+)*{s}+-{command}{s}+((?s:.)+)$"#
-    ))
-    .expect("the PowerShell wrapper pattern")
-});
+
+/// The command inside PowerShell's wrapper, as the JS pattern
+/// `/^"?(?:[^"]*[\\/])?(?:powershell|pwsh)(?:\.exe)?"?(?:\s+-(?!Command\b)\w+)*\s+-Command\s+([\s\S]+)$/i` finds it
+/// (the program's name in any case, ASCII letters only; its options up to `-Command`, then the command; an option
+/// spelled `-Command` is the command's, never one to skip). Written out by hand rather than as a backtracking pattern,
+/// which gives up on a command of a million characters: the ways that pattern can match are tried in the order it
+/// tries them, and each part of the text is read a bounded number of times.
+fn powershell_command(s: &str) -> Option<&str> {
+    let start = usize::from(s.starts_with('"'));
+    // `(?:[^"]*[\\/])?`: the program's folder, ending at a separator before any quote; the last separator first, then
+    // no folder at all. Reading the name and the options after one of them stops at the next separator, so all of
+    // them together read the text about once.
+    let run_end = s[start..].find('"').map_or(s.len(), |at| start + at);
+    let separators = s[start..run_end]
+        .match_indices(['\\', '/'])
+        .map(|(at, _)| start + at + 1);
+    let mut folders: Vec<usize> = separators.collect();
+    folders.reverse();
+    folders.push(start);
+    folders
+        .into_iter()
+        .find_map(|after_folder| after_program(s, after_folder))
+}
+
+/// `(?:powershell|pwsh)(?:\.exe)?"?` at `at`, then the options and the command.
+fn after_program(s: &str, at: usize) -> Option<&str> {
+    let rest = &s[at..];
+    let name = ["powershell", "pwsh"]
+        .into_iter()
+        .find(|name| starts_with_ascii_ci(rest, name))?;
+    let after_name = at + name.len();
+    let mut ends = Vec::with_capacity(4);
+    for after_exe in [after_name + 4, after_name] {
+        if after_exe == after_name || starts_with_ascii_ci(&s[after_name..], ".exe") {
+            if s[after_exe..].starts_with('"') {
+                ends.push(after_exe + 1);
+            }
+            ends.push(after_exe);
+        }
+    }
+    ends.into_iter().find_map(|end| options_then_command(s, end))
+}
+
+fn starts_with_ascii_ci(text: &str, word: &str) -> bool {
+    text.len() >= word.len() && text.as_bytes()[..word.len()].eq_ignore_ascii_case(word.as_bytes())
+}
+
+/// The length in bytes of the run of JavaScript whitespace at `at`.
+fn space_run(s: &str, at: usize) -> usize {
+    s[at..]
+        .chars()
+        .take_while(|c| js::is_whitespace(*c))
+        .map(char::len_utf8)
+        .sum()
+}
+
+/// `(?:\s+-(?!Command\b)\w+)*\s+-Command\s+([\s\S]+)$` at `at`. An option's word must be followed by whitespace
+/// (the next option, or the command's), so it is always the whole run of word characters, and the only word that is
+/// not an option is "command" itself: no other way of matching exists to try.
+fn options_then_command(s: &str, mut at: usize) -> Option<&str> {
+    let bytes = s.as_bytes();
+    loop {
+        let spaces = space_run(s, at);
+        if spaces == 0 {
+            return None;
+        }
+        let dash = at + spaces;
+        if bytes.get(dash) != Some(&b'-') {
+            return None;
+        }
+        let word_start = dash + 1;
+        let word_len = bytes[word_start..]
+            .iter()
+            .take_while(|b| b.is_ascii_alphanumeric() || **b == b'_')
+            .count();
+        if word_len == 0 {
+            return None;
+        }
+        let after_word = word_start + word_len;
+        let spaces_after = space_run(s, after_word);
+        if spaces_after == 0 {
+            return None;
+        }
+        if s[word_start..after_word].eq_ignore_ascii_case("command") {
+            // `\s+([\s\S]+)$`: all the whitespace, leaving at least one character for the command.
+            let rest = &s[after_word..];
+            if spaces_after < rest.len() {
+                return Some(&rest[spaces_after..]);
+            }
+            let (last, _) = rest.char_indices().last()?;
+            return (last > 0).then(|| &rest[last..]);
+        }
+        at = after_word;
+    }
+}
 
 // --- Numbers -----------------------------------------------------------------------------------------------------
 
@@ -236,8 +320,11 @@ pub fn usage_delta(now: &CodexUsage, baseline: Option<&CodexUsage>) -> CodexUsag
 /// Codex's usage as Tarsee's (Anthropic's shape): its input_tokens includes the cached and cache-written parts.
 /// (input, cache_read, cache_creation, output).
 fn tarsee_usage(d: &CodexUsage) -> [f64; 4] {
+    // `Math.max(0, x)`: NaN when x is (an "Infinity" less an "Infinity"), which JSON writes as null. Rust's `max` would
+    // give 0.
+    let uncached = d.input_tokens - d.cached_input_tokens - d.cache_write_input_tokens;
     [
-        (d.input_tokens - d.cached_input_tokens - d.cache_write_input_tokens).max(0.0),
+        if uncached.is_nan() { uncached } else { uncached.max(0.0) },
         d.cached_input_tokens,
         d.cache_write_input_tokens,
         d.output_tokens,
@@ -418,10 +505,8 @@ pub fn unwrap_shell_command(command: &str) -> String {
     if let Some(found) = POSIX_WRAP_RE.captures(s) {
         return unquote(&found[1]);
     }
-    if let Ok(Some(found)) = POWERSHELL_WRAP_RE.captures(s)
-        && let Some(inner) = found.get(1)
-    {
-        return unquote(inner.as_str());
+    if let Some(inner) = powershell_command(s) {
+        return unquote(inner);
     }
     s.to_string()
 }
