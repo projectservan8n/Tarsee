@@ -75,6 +75,26 @@ Decisions the lead made on the owner's behalf, in order. Each says what it costs
     broken today), and the Rust engine got audio back with the new one — if wrong: none; the old protocol no
     longer works for anyone.
 
+14. Ruling: the Claude engine gives the `claude` program its MCP token in a configuration file that is deleted as
+    soon as the program has started, not in an environment variable or on the command line — the engine research
+    showed a token in the environment can be read by a shell the agent starts, and one on the command line by
+    anyone who can list processes; the Node version had no token at all for Claude — if wrong: one function in
+    the Claude engine.
+15. Ruling: the Rust engine does not set the two environment markers the Node SDK set
+    (`CLAUDE_CODE_ENTRYPOINT=sdk-ts`, `CLAUDE_AGENT_SDK_VERSION`) — they tell Anthropic's service the caller is the
+    TypeScript SDK at a version, which it is not; a turn works without them — if wrong: two lines.
+16. Ruling: a turn is stopped by asking the `claude` program to interrupt first, then by the SDK's own sequence
+    (close its input, then end it after the same waits) — the research measured the interrupt at under a second
+    and showed that closing the input alone does not stop a model call in progress — if wrong: none; the SDK's
+    sequence still follows.
+17. Ruling: on Windows every program Tarsee starts is tied to the server so that it ends when the server ends —
+    Node's runtime did this for every child process; a Rust program does not unless it asks — if wrong: a
+    program meant to outlive the server would need to be started apart, and there is none today.
+18. Ruling: three defects the engine research found in the Node Claude engine are fixed in the Rust one: a resumed
+    turn's cost counted the whole session again (the monthly cap then tripped early); a stopped turn could not
+    promise that nothing was sent; the "Claude Code isn't installed" message could never appear — each is plainly
+    wrong output — if wrong: each is one branch.
+
 ## Pre-flight scan
 
 - Packages share no source files: every Rust file is owned by exactly one package (the stub in each file names it).

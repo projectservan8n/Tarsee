@@ -593,6 +593,32 @@ cases must be ported with them, and the packages that must be merged first.
   - `test/owner-session.test.js` (549) (also reads the browser files)
   - `test/server-boot.test.js` (197)
 
+### U1: Starting and stopping programs, in one place
+
+- **Needs:** A2, B2, C1, T1, V1, V2, W1a (all merged)
+- **Why:** every package that starts a program wrote its own way of stopping it, and reviews found two of them
+  dangerous or wrong (a walk of parent process ids on Windows, where ids are reused; `taskkill /T`, which walks the
+  same way). The engine research (`docs/rust-port/engines/`) also showed what the Node runtime did for free and Rust
+  does not: on Windows, every program Node started died with the server.
+- **New file:** `src/util/process.rs`, with its tests (unit tests, and `tests/it/process.rs` with the stand-in
+  program).
+- **Call sites to move onto it** (find them all: `grep -rnE "taskkill|TerminateProcess|JobObject|start_kill|\.kill\(|libc::kill|process_group|killpg|SIGTERM|SIGKILL" src testbin tests`):
+  `src/ai/codex_cli.rs` (`kill_tree`), `src/lib/run_cmd.rs`, `src/websocket/terminal_handler.rs` (its job object),
+  `src/voice/tts_interface.rs` (`terminate`) and the voice workers and engines that use it, `src/voice/install_common.rs`
+  (`process_exists`), `src/lib/hook_loader.rs` (a program hook's time limit), `src/lib/pdf_text.rs` (`pdftotext`),
+  `src/ai/codex_device_login.rs` and `src/ai/codex_models.rs` if merged, `testbin/browser_guard.rs`.
+- **Tests to port:** none from Node (Node's runtime did this); the package writes its own.
+
+### U2: The JavaScript-behaviour helpers, in one place
+
+- **Needs:** every merged package; run when no fix round is open on the files it touches
+- **Why:** packages wrote private copies of the same helpers while the foundation lacked them (seven `js_string`,
+  three `js_number`, three `js_round`, four `encode_uri_component`, `js_to_fixed`, `js_to_precision`,
+  `js_json_stringify`, `js_stringify`, `node_header`, `Clock`, a `JSON.parse` that reads what JavaScript reads).
+  One copy each, in `src/util/js.rs` (and `src/util/` modules beside it), tested against Node's own answers; every
+  private copy deleted and its callers pointed at the shared one, with no change in any output.
+- **Tests to port:** none; each helper keeps the tests its copies had, merged.
+
 ### W1: Browser UI: its own tests, and end-to-end tests against the Rust server
 
 - **Needs:** Z1
