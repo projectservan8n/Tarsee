@@ -14,15 +14,15 @@ agent checked it against the Node code and its findings are fixed or parked belo
 | I0 | reviewed | - | 7957ca6, fixes 38a6adb | 1562 | Interfaces and fakes; `INTERFACES.md`. Review: 1 important, 4 minor, all addressed |
 | A1 | reviewed | - | 92f9739, fixes d5772a9 | 2016 | 161 of 181 cases. Review: 1 important, 5 minor; all confirmed fixed by a second reviewer |
 | A3 | running | s2 | | | |
-| A5 | merged | - | 2d96d1c | 2016 | 66 of 66 cases. Review running |
+| A5 | merged, fixed | - | 2d96d1c, fixes 0a15a7a | 2137 | 66 of 66 cases. Review: 1 important, 4 minor; all fixed, one Node bug fixed. Second review running |
 | A2 | reviewed | - | 74e0e4f, fixes 82edd82 | 1723 | 107 of 109 cases (2 wait for G2, G3). Review: 3 important, 8 minor; all 11 confirmed fixed by a second reviewer; passes on Linux |
 | B1 | merged, fixed | - | 1649cf7, fixes 9aa27aa | 1757 | 36 of 36 cases. Review: nothing critical or important in the package; 2 minor, fixed; two Node bugs fixed. Second review running |
 | B2 | reviewed | - | 7094777, fixes a1ce610 | 2016 | 62 of 69 own cases, plus 27 of the 32 `pdf-read` cases. Review: 2 critical, 1 important, 6 minor, all fixed with five Node bugs; confirmed by a second reviewer, who attacked the files route with 87 hostile paths |
-| C1 | merged, fixes running | - | 9dd5372 | 213 | 32 of 32 cases. Review: 1 critical, 4 important, 22 minor |
-| D1 | merged, fixes running | - | 48bb9ff | 1180 | 59 of 68 cases; 4 wait for S3, 5 are browser tests. Review: 1 important, 11 minor; no double lock holder, lost event or deadlock found under stress |
-| V2 | merged, fixed | - | 7205d05, fixes merged | 2031 | 71 of 71 cases. Review: 5 important, 13 minor; 15 fixed, 3 belong to the server-wide wiring (Z1) |
-| S4 | running | s3 | | | |
-| T1 | merged, fixes running | - | 40e4ee7 | 1886 | 102 of 107 cases (5 wait for S3, S4). Review: 2 critical, 1 important, 4 minor; the dangerous one patched at once (5e6fc99) |
+| C1 | merged, fixed | - | 9dd5372, fixes 2f14fc4 | 2201 | 32 of 32 cases. Review: 1 critical, 4 important, 22 minor; 25 fixed, 2 answered, four Node bugs fixed. Second review running |
+| D1 | merged, fixed | - | 48bb9ff, fixes 8a3ff04 | 2201 | 59 of 68 cases, plus 5 browser cases now in `tests/ui`. Review: 1 important, 11 minor; all addressed (the lock race: 0 wrong in 200,000 stress rounds). Second review running |
+| V2 | merged, fixed | - | 7205d05, fixes 344c47a | 2031 | 71 of 71 cases. Review: 5 important, 13 minor; 15 fixed, 3 belong to the server-wide wiring (Z1). Second review running |
+| S4 | merged | - | 40c3723 | 2118 | 41 of 42 cases (1 waits for S3). The real `codex` and `claude` programs each connected to the Rust endpoint and listed all 27 tools. Review running |
+| T1 | merged, fixed | - | 40e4ee7, fixes bac416f | 2131 | 102 of 107 cases (5 wait for S3). Review: 2 critical, 1 important, 4 minor; all fixed (the shell runs in a job object). Second review running |
 | W1a | merged | - | fcfc2ba | 1328 | 116 of 141 cases of the browser files run in a real browser (`cargo test --test ui`); 25 wait for A1, A4, R2 |
 | E1 | reviewed | - | 55fa65f, fixes 96f4ac4 | 1573 | 128 of 128 cases. Review: faithful, 2 minor, addressed; two Node bugs fixed |
 | V1 | reviewed | - | dbb96bb, fixes 64fb45d | 1742 | 42 of 42 cases. Review: 2 critical, 3 important, 7 minor; all 12 confirmed fixed by a second reviewer |
@@ -97,12 +97,16 @@ Decisions the lead made on the owner's behalf, in order. Each says what it costs
 
 Fixed (in the list below, marked "done") or being fixed in each package's fix round:
 
-- C1 `lib/skills-engine`: a skill name in install, uninstall and setup can reach outside the skills folders.
 - done: B2 `routes/files`: the workspace root can no longer be deleted, however the workspace folder is written; a
   rename must stay inside the workspace and never lands on a protected name; NTFS stream names (`name.db::$DATA`)
   are refused; a private address written as IPv6 is judged by its IPv4 form.
 - done: B1 `middleware/security`: a CSRF token with a signature of the wrong length answers 403, not 500; a private
   address inside an IPv6 one is refused by the security manager.
+- done: C1 `lib/skills-engine`, `lib/canvas`: a skill name must be one plain name, so install, uninstall, setup,
+  update and delete cannot reach outside the skills folders; a canvas path cannot reach a sibling folder; a skill
+  update that keeps the content no longer adds a blank line each time.
+- done: A5 `ai/providers/codex-options`: switching the compact window off (`TARSEE_COMPACT_WINDOW=off`) no longer
+  gives Codex a limit of 0, which made it compact on every turn.
 - done: E1 `lib/discord-format`: a piece of a split message can no longer be over the limit when the line has emoji;
   code fences in text with CRLF line endings are recognised (also in the Slack stream).
 
