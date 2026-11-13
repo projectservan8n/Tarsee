@@ -15,10 +15,26 @@
 //!
 //! The JS functions took their folder and clock as optional arguments (`{ dir = uploadsDir(), now = Date.now() }`);
 //! here they are plain arguments: pass `uploads_dir(app.config())` and `now_ms()` for the defaults.
+//!
+//! **Names from outside.** A file's name comes from whoever sent it, and the path of a file the agent sends comes
+//! from the model. Two rules keep both where they belong:
+//! - A kept copy's name is made by [`safe_file_name`] and always has `chat-<time>-<n>-` or `sent-<time>-` in front
+//!   of it, so it is one plain name inside the uploads folder whatever was sent: never a path, never `..`, never a
+//!   Windows device (`nul`).
+//! - Every file call here hands Windows the path in the form it takes literally (`util::node_path::to_namespaced`),
+//!   as Node did. So a name means what it says: `a.` is a file called `a.` (not `a`), `...` is not the folder
+//!   itself, `nul` is not the null device, and the file that is checked is the file that is opened.
+//!
+//! **Blocking.** The JS used the synchronous file calls, and so do the functions that carry the JS names. Called
+//! from async code they hold a thread of the runtime for as long as the disk takes, which for an upload of any
+//! size, a copy of a file of any size, or an uploads folder of any length is not bounded. Async code calls the
+//! `_async` twin instead (`keep_uploaded_files_async`, `keep_sent_file_async`, `tidy_kept_files_async`,
+//! `note_sent_file_async`, `note_media_blocks_async`): the same work on the blocking pool, which also finishes
+//! whether or not the caller is still there, as the JS call did.
 
 use std::fs;
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 use std::sync::LazyLock;
 
 use axum::body::Body;
@@ -42,8 +58,8 @@ use crate::lib::chat_files::{
     Direction, FileView, KeptFile, RecordOptions, latest_user_message_id, message_has_files, record_chat_files,
 };
 use crate::lib::live_bus::{LiveEvent, active_turn_for, publish};
-use crate::lib::tool_steps::js_trim;
-use crate::util::js::{ms_from_iso, now_ms, utf16_tail, utf16_truncate};
+use crate::util::js::{ms_from_iso, now_ms, trim, trim_start, utf16_tail, utf16_truncate};
+use crate::util::node_path::{self, to_namespaced};
 
 const KEEP_DAYS: i64 = 30;
 
@@ -72,8 +88,16 @@ pub fn safe_file_name(name: &str) -> String {
             in_run = true;
         }
     }
-    let base = js_trim(clean.trim_start_matches('.'));
+    let base = trim(clean.trim_start_matches('.'));
     utf16_tail(if base.is_empty() { "file" } else { base }, 120)
+}
+
+/// Where a kept copy goes: `<dir>/<front><name>`, with `front` the `chat-<time>-<n>-` or `sent-<time>-` every kept
+/// copy has. `name` comes from [`safe_file_name`], so it is one plain name; should it ever not be (a separator, a
+/// drive's colon), it is "file" rather than a path that leaves `dir`.
+fn kept_path(dir: &Path, front: &str, name: &str) -> PathBuf {
+    let plain = !name.is_empty() && !name.contains(['/', '\\', ':', '\0']);
+    node_path::join(dir, format!("{front}{}", if plain { name } else { "file" }))
 }
 
 static KEPT_STAMP: LazyLock<Regex> =
@@ -83,7 +107,9 @@ static KEPT_STAMP: LazyLock<Regex> =
 /// agent sent can be a hard link to a file written long before, so its own date says nothing.
 pub fn tidy_kept_files(dir: &Path, now: i64) {
     // (cleaning up is best-effort: it stops at the first thing that fails)
-    let Ok(entries) = fs::read_dir(dir) else {
+    // The folder is read by its literal path, so each entry's path is literal too: `sent-<time>-a.` is removed, not
+    // the `sent-<time>-a` Windows would otherwise make of it.
+    let Ok(entries) = fs::read_dir(to_namespaced(dir)) else {
         return;
     };
     for entry in entries {
@@ -120,15 +146,15 @@ pub fn keep_uploaded_files(files: &[UploadedFile], dir: &Path, now: i64) -> io::
     if files.is_empty() {
         return Ok(Vec::new());
     }
-    fs::create_dir_all(dir)?;
+    fs::create_dir_all(to_namespaced(dir))?;
     tidy_kept_files(dir, now);
     files
         .iter()
         .enumerate()
         .map(|(i, f)| {
             let name = safe_file_name(&f.name);
-            let path = dir.join(format!("chat-{now}-{i}-{name}"));
-            fs::write(&path, &f.buffer)?;
+            let path = kept_path(dir, &format!("chat-{now}-{i}-"), &name);
+            fs::write(to_namespaced(&path), &f.buffer)?;
             Ok(KeptFile {
                 name,
                 size: f.buffer.len() as u64,
@@ -138,34 +164,90 @@ pub fn keep_uploaded_files(files: &[UploadedFile], dir: &Path, now: i64) -> io::
         .collect()
 }
 
-/// `fs.realpathSync(p)`: the path with every link followed. On Windows the answer is an ordinary path
-/// (`C:\...`), not the `\\?\C:\...` form `canonicalize` gives: the path is stored, shown and compared as text.
-pub(crate) fn real_path(p: &Path) -> io::Result<PathBuf> {
-    let real = fs::canonicalize(p)?;
+/// A link's target as Node's `readlink` gives it: without the `\\?\` (or `\??\`) Windows may put in front.
+fn plain_target(target: PathBuf) -> PathBuf {
     #[cfg(windows)]
     {
-        let text = real.to_string_lossy();
-        if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
-            return Ok(PathBuf::from(format!(r"\\{unc}")));
+        let text = target.to_string_lossy();
+        for front in [r"\\?\UNC\", r"\??\UNC\"] {
+            if let Some(rest) = text.strip_prefix(front) {
+                return PathBuf::from(format!(r"\\{rest}"));
+            }
         }
-        if let Some(plain) = text.strip_prefix(r"\\?\") {
-            return Ok(PathBuf::from(plain.to_string()));
+        for front in [r"\\?\", r"\??\"] {
+            if let Some(rest) = text.strip_prefix(front) {
+                return PathBuf::from(rest.to_string());
+            }
         }
     }
-    Ok(real)
+    target
 }
 
-/// `real.startsWith(root + path.sep)`: inside the folder, and not the folder itself.
+/// `fs.realpathSync(p)`, as Node's own (written in JavaScript) works it out: the path made absolute and tidied as
+/// text, then walked name by name, each link replaced by what it points at. Every name must be there.
+///
+/// A name that is not a link stays **as it was written**. That is the difference from `fs::canonicalize`, which
+/// asks the system for the one true spelling: on Windows that also answers for a name in another case, a short
+/// name (`CHAT-1~1.TXT`), a trailing dot or space, a `\\?\` in front. Node refused some of those and kept the
+/// others as written, and so does this: each name is looked up literally (`to_namespaced`), and the answer is
+/// stored, shown and compared as text.
+pub(crate) fn real_path(p: &Path) -> io::Result<PathBuf> {
+    let mut path = resolve(p)?;
+    // (Node follows links for as long as there are any, and a ring of them ends in the system's own error at the
+    // `metadata` below. The count is only so that nothing here can go round for ever.)
+    for _ in 0..256 {
+        let mut current = PathBuf::new();
+        let mut parts = path.components();
+        let mut after_link = None;
+        while let Some(part) = parts.next() {
+            let Component::Normal(name) = part else {
+                // (The root: a drive, a share, "/".)
+                current.push(part.as_os_str());
+                continue;
+            };
+            let base = current.join(name);
+            let literal = to_namespaced(&base);
+            if !fs::symlink_metadata(&literal)?.file_type().is_symlink() {
+                current = base;
+                continue;
+            }
+            // What it points at has to be there.
+            fs::metadata(&literal)?;
+            let target = plain_target(fs::read_link(&literal)?);
+            // `path.resolve(previous, linkTarget)` (a target that is absolute stands alone), then what was left.
+            let mut next = current.join(target);
+            for rest in parts.by_ref() {
+                next.push(rest.as_os_str());
+            }
+            after_link = Some(node_path::normalize(&next));
+            break;
+        }
+        match after_link {
+            Some(next) => path = next,
+            None => {
+                // (A path that is only a root: Node checks that it is there.)
+                fs::symlink_metadata(to_namespaced(&current))?;
+                return Ok(current);
+            }
+        }
+    }
+    Err(io::Error::other("too many links"))
+}
+
+/// `real.startsWith(root + path.sep)`: inside the folder, and not the folder itself. Compared as text, as the JS
+/// compared them: another spelling of the folder (another case, a `\\?\` in front) is not the folder.
 fn is_inside(real: &Path, root: &Path) -> bool {
-    real != root && real.starts_with(root)
+    let (real, root) = (real.to_string_lossy(), root.to_string_lossy());
+    real.strip_prefix(root.as_ref())
+        .is_some_and(|rest| rest.starts_with(MAIN_SEPARATOR))
 }
 
 /// Keep something the agent sent so the page can show it. A file already in the uploads folder `dir` is used as
 /// it is.
 pub fn keep_sent_file(abs_path: &Path, dir: &Path, now: i64) -> io::Result<KeptFile> {
-    fs::create_dir_all(dir)?;
+    fs::create_dir_all(to_namespaced(dir))?;
     let real = real_path(abs_path)?;
-    let size = fs::metadata(&real)?.len();
+    let size = fs::metadata(to_namespaced(&real))?.len();
     if is_inside(&real, &real_path(dir)?) {
         return Ok(KeptFile {
             name: shown_name(&real.to_string_lossy()),
@@ -175,15 +257,15 @@ pub fn keep_sent_file(abs_path: &Path, dir: &Path, now: i64) -> io::Result<KeptF
     }
     tidy_kept_files(dir, now);
     let name = safe_file_name(&basename(&real.to_string_lossy()));
-    let mut file = dir.join(format!("sent-{now}-{name}"));
+    let mut file = kept_path(dir, &format!("sent-{now}-"), &name);
     let mut n = 1;
     // two in the same millisecond
-    while file.exists() {
-        file = dir.join(format!("sent-{}-{name}", now + n));
+    while to_namespaced(&file).exists() {
+        file = kept_path(dir, &format!("sent-{}-", now + n), &name);
         n += 1;
     }
-    if fs::hard_link(&real, &file).is_err() {
-        fs::copy(&real, &file)?;
+    if fs::hard_link(to_namespaced(&real), to_namespaced(&file)).is_err() {
+        fs::copy(to_namespaced(&real), to_namespaced(&file))?;
     }
     Ok(KeptFile { name, size, path: file })
 }
@@ -444,7 +526,7 @@ pub fn note_media_blocks(
     let default_dir = uploads_dir(app.config());
     let dir = opts.dir.unwrap_or(&default_dir);
     let now = opts.now.unwrap_or_else(now_ms);
-    if fs::create_dir_all(dir).is_err() {
+    if fs::create_dir_all(to_namespaced(dir)).is_err() {
         return Vec::new();
     }
     tidy_kept_files(dir, now);
@@ -461,9 +543,9 @@ pub fn note_media_blocks(
             .and_then(Value::as_str)
             .unwrap_or_default();
         let name = format!("image{number}{}", picture_ext(media_type));
-        let path = dir.join(format!("chat-{now}-{i}-{name}"));
+        let path = kept_path(dir, &format!("chat-{now}-{i}-"), &name);
         let buffer = decode_base64_lenient(data);
-        if fs::write(&path, &buffer).is_err() {
+        if fs::write(to_namespaced(&path), &buffer).is_err() {
             return Vec::new();
         }
         files.push(KeptFile {
@@ -483,35 +565,104 @@ pub fn note_media_blocks(
     )
 }
 
-/// `path.resolve(p)`: the path made absolute against the working folder, its "." and ".." taken out as text
-/// (before any link is followed).
+/// Runs blocking file work on tokio's blocking pool and waits for it. The work goes on to its end even if the
+/// caller stops waiting (its request was dropped), as the JS call it stands for did.
+async fn off_the_runtime<R: Send + 'static>(work: impl FnOnce() -> R + Send + 'static) -> Result<R, io::Error> {
+    tokio::task::spawn_blocking(work).await.map_err(io::Error::other)
+}
+
+/// [`tidy_kept_files`] for async code: the uploads folder can be of any length.
+pub async fn tidy_kept_files_async(dir: &Path, now: i64) {
+    let dir = dir.to_path_buf();
+    let _ = off_the_runtime(move || tidy_kept_files(&dir, now)).await;
+}
+
+/// [`keep_uploaded_files`] for async code: an upload can be of any size.
+pub async fn keep_uploaded_files_async(files: Vec<UploadedFile>, dir: &Path, now: i64) -> io::Result<Vec<KeptFile>> {
+    let dir = dir.to_path_buf();
+    off_the_runtime(move || keep_uploaded_files(&files, &dir, now)).await?
+}
+
+/// [`keep_sent_file`] for async code: where a hard link cannot be made, the file (of any size) is copied.
+pub async fn keep_sent_file_async(abs_path: &Path, dir: &Path, now: i64) -> io::Result<KeptFile> {
+    let (abs_path, dir) = (abs_path.to_path_buf(), dir.to_path_buf());
+    off_the_runtime(move || keep_sent_file(&abs_path, &dir, now)).await?
+}
+
+/// [`note_sent_file`] for async code (a tool's `send_file`): the copy, the row and the "files" event, off the
+/// runtime's threads. `None` when it could not be kept.
+pub async fn note_sent_file_async(app: &App, sent: SentFile<'_>) -> Option<NotedSentFile> {
+    let app = app.clone();
+    let abs_path = sent.abs_path.to_path_buf();
+    let (caption, via) = (sent.caption.to_string(), sent.via.to_string());
+    let conversation_id = sent.conversation_id.map(String::from);
+    let noted = off_the_runtime(move || {
+        note_sent_file(
+            &app,
+            SentFile {
+                abs_path: &abs_path,
+                caption: &caption,
+                conversation_id: conversation_id.as_deref(),
+                via: &via,
+            },
+        )
+    });
+    match noted.await {
+        Ok(noted) => noted,
+        Err(err) => {
+            log::warn!("[chat-files] a file the agent sent could not be kept for the dashboard: {err}");
+            None
+        }
+    }
+}
+
+/// [`note_media_blocks`] for async code (a turn handing the agent pictures): the pictures are decoded and written
+/// off the runtime's threads. Returns the kept rows.
+pub async fn note_media_blocks_async(
+    app: &App,
+    conversation_id: &str,
+    blocks: &[Value],
+    opts: MediaBlockOptions<'_>,
+) -> Vec<FileView> {
+    let app = app.clone();
+    let conversation_id = conversation_id.to_string();
+    let blocks = blocks.to_vec();
+    let (message_id, via) = (opts.message_id.map(String::from), opts.via.to_string());
+    let (dir, now) = (opts.dir.map(Path::to_path_buf), opts.now);
+    let kept = off_the_runtime(move || {
+        let opts = MediaBlockOptions {
+            message_id: message_id.as_deref(),
+            via: &via,
+            dir: dir.as_deref(),
+            now,
+        };
+        note_media_blocks(&app, &conversation_id, &blocks, opts)
+    });
+    kept.await.unwrap_or_default()
+}
+
+/// `path.resolve(p)`: the path made absolute against the working folder and tidied as text (its ".", ".." and
+/// doubled separators taken out), before any link is followed.
 fn resolve(p: &Path) -> io::Result<PathBuf> {
     let absolute = if p.is_absolute() {
         p.to_path_buf()
     } else {
         std::env::current_dir()?.join(p)
     };
-    let mut out = PathBuf::new();
-    for part in absolute.components() {
-        match part {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    Ok(out)
+    Ok(node_path::normalize(&absolute))
 }
 
 /// The real path of a file the page may look at, or `None`: it must exist and sit inside the uploads folder `dir`.
+///
+/// `p` comes from the page. It is looked up exactly as written (see [`real_path`]): a spelling Windows would
+/// quietly read as another file (a trailing dot or space, `nul`, `...`) is no file here, as it was none in Node.
 pub fn viewable_path(p: &str, dir: &Path) -> Option<PathBuf> {
     if p.is_empty() || p.contains('\0') {
         return None;
     }
     let root = real_path(dir).ok()?;
-    let real = real_path(&resolve(Path::new(p)).ok()?).ok()?;
-    if !is_inside(&real, &root) || !fs::metadata(&real).ok()?.is_file() {
+    let real = real_path(Path::new(p)).ok()?;
+    if !is_inside(&real, &root) || !fs::metadata(to_namespaced(&real)).ok()?.is_file() {
         return None;
     }
     Some(real)
@@ -636,10 +787,16 @@ pub fn view_kind(file: &str) -> ViewKind {
 /// A file's name for its Content-Disposition: what the bots and the chat put in front taken off, nothing that could
 /// break the header.
 pub fn disposition_name(file: &str) -> String {
-    let name: String = shown_name(file)
-        .chars()
-        .map(|c| if is_name_char(c) { c } else { '_' })
-        .collect();
+    let mut name = String::new();
+    for c in shown_name(file).chars() {
+        if is_name_char(c) {
+            name.push(c);
+        } else {
+            // One "_" for each UTF-16 unit, as the JS pattern (which has no `u` flag) replaced them: two for an
+            // emoji.
+            name.extend(std::iter::repeat_n('_', c.len_utf16()));
+        }
+    }
     if name.is_empty() { "file".to_string() } else { name }
 }
 
@@ -702,7 +859,15 @@ pub async fn send_viewable(method: &Method, request: &HeaderMap, file: &Path, op
     }
 
     let not_found = |headers: HeaderMap| respond(StatusCode::NOT_FOUND, headers, Body::empty());
-    let stat = match tokio::fs::metadata(file).await {
+    // `send` refused a path with a ".." in it (403) or a NUL (400) before it looked at the disk, whatever the
+    // route had checked; the JS callback made either a 404. The route's own check (`viewable_path`) stays the first
+    // guard: this is the second.
+    if has_up_segment(&shown) || shown.contains('\0') {
+        return not_found(headers);
+    }
+    // (The file is opened by its literal path, so it is the file `viewable_path` checked.)
+    let literal = to_namespaced(file);
+    let stat = match tokio::fs::metadata(&literal).await {
         Ok(stat) if stat.is_file() => stat,
         _ => return not_found(headers),
     };
@@ -789,7 +954,7 @@ pub async fn send_viewable(method: &Method, request: &HeaderMap, file: &Path, op
     if method == Method::HEAD {
         return respond(status, headers, Body::empty());
     }
-    let mut source = match tokio::fs::File::open(file).await {
+    let mut source = match tokio::fs::File::open(&literal).await {
         Ok(source) => source,
         Err(_) => {
             headers.remove(CONTENT_LENGTH);
@@ -803,6 +968,11 @@ pub async fn send_viewable(method: &Method, request: &HeaderMap, file: &Path, op
     respond(status, headers, Body::from_stream(ReaderStream::new(source.take(len))))
 }
 
+/// `send`'s `/(?:^|[\\/])\.\.(?:[\\/]|$)/`: a ".." between separators (either slash), or at an end.
+fn has_up_segment(path: &str) -> bool {
+    path.split(['/', '\\']).any(|part| part == "..")
+}
+
 fn respond(status: StatusCode, headers: HeaderMap, body: Body) -> Response {
     let mut response = Response::new(body);
     *response.status_mut() = status;
@@ -812,7 +982,7 @@ fn respond(status: StatusCode, headers: HeaderMap, body: Body) -> Response {
 
 /// `Date.parse(text)` for an HTTP date ("Tue, 27 Oct 2026 01:56:34 GMT").
 fn parse_http_date(text: &str) -> Option<i64> {
-    DateTime::parse_from_rfc2822(text.trim())
+    DateTime::parse_from_rfc2822(trim(text))
         .map(|date| date.timestamp_millis())
         .ok()
         .or_else(|| ms_from_iso(text))
@@ -859,7 +1029,7 @@ fn is_fresh(
         return false;
     }
     // Always return stale when Cache-Control: no-cache to support end-to-end reload requests
-    if cache_control.is_some_and(|value| token_list(value).any(|token| token.trim() == "no-cache")) {
+    if cache_control.is_some_and(|value| token_list(value).any(|token| trim(token) == "no-cache")) {
         return false;
     }
     // if-none-match takes precedent over if-modified-since
@@ -902,7 +1072,7 @@ enum Ranges {
 
 /// `parseInt(text, 10)`.
 fn parse_int(text: &str) -> Option<i64> {
-    let text = text.trim_start();
+    let text = trim_start(text);
     let (sign, digits) = match text.strip_prefix('-') {
         Some(rest) => (-1, rest),
         None => (1, text.strip_prefix('+').unwrap_or(text)),

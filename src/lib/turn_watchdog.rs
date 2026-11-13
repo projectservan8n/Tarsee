@@ -37,13 +37,21 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::env::Env;
+use crate::lib::tool_steps::js_number_from_str;
 
-/// How long a turn may go without an event (the same variable as the chat channels'), in milliseconds.
+/// How long a turn may go without an event (the same variable as the chat channels'), in milliseconds:
+/// `Number(env.TARSEE_CHANNEL_IDLE_ABORT_MS) || 20 * 60_000`, read as JavaScript reads a number (so `0x2710` and
+/// `Infinity` count, and a byte order mark in front does not get in the way).
 pub fn idle_limit_ms(env: &Env) -> i64 {
-    env.get("TARSEE_CHANNEL_IDLE_ABORT_MS")
-        .and_then(|value| value.trim().parse::<f64>().ok())
-        .filter(|ms| ms.is_finite() && *ms != 0.0)
-        .map_or(20 * 60_000, |ms| ms as i64)
+    let asked = env
+        .get("TARSEE_CHANNEL_IDLE_ABORT_MS")
+        .map_or(f64::NAN, |value| js_number_from_str(&value));
+    if asked.is_nan() || asked == 0.0 {
+        20 * 60_000
+    } else {
+        // (`Infinity` is as long as a number can say: never.)
+        asked as i64
+    }
 }
 
 /// The options of [`watch_turn`].
@@ -217,6 +225,19 @@ mod tests {
         assert_eq!(idle_limit_ms(&env(Some("1e3"))), 1000);
         for unset in ["", "0", "soon", "  "] {
             assert_eq!(idle_limit_ms(&env(Some(unset))), 1_200_000, "{unset:?}");
+        }
+        // Review finding M6: read as JavaScript's `Number()` reads it (each line was read off Node).
+        assert_eq!(
+            idle_limit_ms(&env(Some("\u{feff}5000"))),
+            5000,
+            "a byte order mark is whitespace"
+        );
+        assert_eq!(idle_limit_ms(&env(Some("\u{85}5000"))), 1_200_000, "U+0085 is not");
+        assert_eq!(idle_limit_ms(&env(Some("0x2710"))), 10_000);
+        assert_eq!(idle_limit_ms(&env(Some("Infinity"))), i64::MAX);
+        assert_eq!(idle_limit_ms(&env(Some("-5"))), -5);
+        for not_a_number in ["inf", "infinity", "nan", "5000ms", "5,000"] {
+            assert_eq!(idle_limit_ms(&env(Some(not_a_number))), 1_200_000, "{not_a_number:?}");
         }
     }
 
