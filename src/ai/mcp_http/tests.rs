@@ -1546,10 +1546,10 @@ async fn a_grant_says_what_to_hand_each_engines_program() {
 /// the token in the program's environment under the name the config says to read it from, and nowhere else.
 #[tokio::test]
 async fn the_options_codex_is_started_with_carry_the_grant_as_codex_reads_it() {
-    use crate::ai::providers::codex_options::{CodexContext, CodexTarget, McpGrant as CodexGrant, build_codex_options};
+    use crate::ai::providers::codex_options::{CodexContext, CodexTarget, build_codex_options};
     let up = up().await;
     let grant = up.grant("conv-codex-options").await;
-    let handed = CodexGrant::from(&grant);
+    let handed = McpGrant::from(&grant);
     assert_eq!(
         (handed.url.as_str(), handed.token.as_str()),
         (grant.url.as_str(), grant.token.as_str())

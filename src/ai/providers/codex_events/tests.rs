@@ -587,6 +587,36 @@ fn unwrap_shell_command_takes_off_the_shells_codex_wraps_a_command_in_and_leaves
 }
 
 #[test]
+fn a_powershell_wrapper_around_two_million_characters_is_taken_off_too() {
+    // What the Node function gave for each (in a few milliseconds): the wrapper off, however long the text.
+    let big = "a".repeat(2_000_000);
+    assert_eq!(
+        unwrap_shell_command(&format!("pwsh -Command Get-Content x/y; {big}")),
+        format!("Get-Content x/y; {big}")
+    );
+    let path = "p".repeat(2_000_000);
+    assert_eq!(
+        unwrap_shell_command(&format!("C:/{path}/pwsh.exe -NoProfile -Command \"dir\"")),
+        "dir"
+    );
+    assert_eq!(
+        unwrap_shell_command(&format!("pwsh{} -Command x", " -A".repeat(500_000))),
+        "x"
+    );
+    assert_eq!(
+        unwrap_shell_command(&format!("{}pwsh -Command x", "/".repeat(100_000))),
+        "x"
+    );
+    // And long texts that are no wrapper at all stay as they are.
+    for text in [
+        format!("{}x", "/pwsh -A".repeat(200_000)),
+        format!("pwsh{} -B:", " -A".repeat(500_000)),
+    ] {
+        assert_eq!(unwrap_shell_command(&text), text);
+    }
+}
+
+#[test]
 fn usage_delta_subtracts_a_baseline_never_below_zero_and_a_missing_baseline_is_none() {
     let now = usage(10.0, 4.0, 1.0, 5.0, 2.0);
     assert_eq!(usage_delta(&now, None), now);
@@ -934,6 +964,38 @@ fn node_usage_delta() {
 }
 
 // --- More than the Node tests checked ----------------------------------------------------------------------------
+
+#[test]
+fn usage_counts_written_as_infinity_give_null_as_javascripts_numbers_did() {
+    // What the Node mapping yielded for each: Infinity - Infinity is NaN, and NaN and Infinity are written as null.
+    for (usage, input, cache_read, total) in [
+        (
+            json!({"input_tokens": "Infinity", "cached_input_tokens": "Infinity"}),
+            Value::Null,
+            Value::Null,
+            Value::Null,
+        ),
+        (json!({"input_tokens": "Infinity"}), Value::Null, json!(0), Value::Null),
+        (
+            json!({"input_tokens": 5, "cached_input_tokens": "-Infinity"}),
+            json!(5),
+            json!(0),
+            json!(5),
+        ),
+    ] {
+        let mut state = create_codex_event_state(opts("openai", None));
+        let out = map_codex_event(&json!({"type": "turn.completed", "usage": usage}), &mut state);
+        assert_eq!(
+            as_json(&out),
+            json!([
+                {"type": "usage", "usage": {"input_tokens": input, "cache_read_input_tokens": cache_read, "cache_creation_input_tokens": 0, "output_tokens": 0}},
+                {"type": "step", "kind": "usage", "input": input, "cacheRead": cache_read, "cacheWrite": 0, "output": 0, "total": total, "calls": null, "outTps": null, "nowTps": null},
+                {"type": "done", "stopReason": "end_turn"},
+            ]),
+            "{usage}"
+        );
+    }
+}
 
 #[test]
 fn usage_events_give_this_turns_share_with_its_step() {

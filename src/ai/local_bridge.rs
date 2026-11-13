@@ -63,7 +63,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::connect_info::{ConnectInfo, Connected};
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode, Version};
 use axum::response::Response;
 use axum::serve::{IncomingStream, Listener};
 use base64::Engine as _;
@@ -830,10 +830,12 @@ impl SseRewriter {
 }
 
 /// UTF-8 bytes arriving in pieces, as text (`new TextDecoder().decode(chunk, { stream: true })`): a character cut
-/// between two pieces waits for its end, and bytes that are not UTF-8 become U+FFFD.
+/// between two pieces waits for its end, bytes that are not UTF-8 become U+FFFD, and a byte order mark at the very
+/// start of the stream is taken off (the decoder's "BOM seen" flag: only the stream's first character is looked at).
 #[derive(Debug, Default)]
 struct Utf8Decoder {
     pending: Vec<u8>,
+    started: bool,
 }
 
 impl Utf8Decoder {
@@ -868,6 +870,12 @@ impl Utf8Decoder {
                         }
                     }
                 }
+            }
+        }
+        if !self.started && !out.is_empty() {
+            self.started = true;
+            if let Some(rest) = out.strip_prefix('\u{FEFF}') {
+                out = rest.to_string();
             }
         }
         out
@@ -970,40 +978,17 @@ fn upstream_headers(headers: &HeaderMap, key: Option<&str>) -> Vec<(String, Stri
     out
 }
 
-/// Why a request to the owner's server failed, in short words (a connection refused, a timeout...).
+/// Why a request to the owner's server failed, in short words (a connection refused, a timeout...), read from Node's
+/// error code for it (`err.cause.code`): a code with no words of its own is shown as it is (`EHOSTUNREACH`), and a
+/// failure with no code is "network error".
 fn reach_why(err: &FetchError) -> &'static str {
-    let cause = match err {
-        FetchError::Timeout => return "it took too long to answer",
-        FetchError::Connect(cause) | FetchError::Body(cause) | FetchError::Other(cause) => cause.to_lowercase(),
-    };
-    let has = |words: &[&str]| words.iter().any(|w| cause.contains(w));
-    if has(&["refused", "(os error 111)", "(os error 61)", "(os error 10061)"]) {
-        "connection refused"
-    } else if has(&[
-        "dns error",
-        "failed to lookup",
-        "no such host",
-        "name or service not known",
-    ]) {
-        "the name isn't known"
-    } else if has(&[
-        "reset",
-        "forcibly closed",
-        "(os error 104)",
-        "(os error 54)",
-        "(os error 10054)",
-    ]) {
-        "the connection was reset"
-    } else if has(&[
-        "timed out",
-        "did not properly respond",
-        "(os error 110)",
-        "(os error 60)",
-        "(os error 10060)",
-    ]) {
-        "it took too long to answer"
-    } else {
-        "network error"
+    match err.code() {
+        Some("ECONNREFUSED") => "connection refused",
+        Some("ENOTFOUND" | "EAI_AGAIN") => "the name isn't known",
+        Some("ECONNRESET") => "the connection was reset",
+        Some("ETIMEDOUT" | "UND_ERR_CONNECT_TIMEOUT") => "it took too long to answer",
+        Some(code) => code,
+        None => "network error",
     }
 }
 
@@ -1422,6 +1407,27 @@ fn destroyed(conn: &Conn) -> Response {
     Response::new(Body::empty())
 }
 
+/// Node's limit on a request's headers (`--max-http-header-size`, 16 KiB), counted as its parser counts them: the
+/// request target and every header's name and value, without the separators. At the limit the request is refused.
+const MAX_HEADER_BYTES: usize = 16 * 1024;
+
+fn header_bytes(target: &str, headers: &HeaderMap) -> usize {
+    headers.iter().fold(target.len(), |sum, (name, value)| {
+        sum.saturating_add(name.as_str().len() + value.len())
+    })
+}
+
+/// The answer Node's server gave a request it refused itself: the status and `Connection: close`, no body.
+fn refused_by_server(status: StatusCode) -> Response {
+    let mut res = Response::new(Body::empty());
+    *res.status_mut() = status;
+    res.headers_mut().insert(
+        axum::http::header::CONNECTION,
+        axum::http::HeaderValue::from_static("close"),
+    );
+    res
+}
+
 static TURN_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(r"^/t/([A-Za-z0-9_-]{{16,128}})(/{JS_DOT_CLASS}*)?$")).expect("the turn path pattern")
 });
@@ -1481,6 +1487,14 @@ async fn read_body(body: Body) -> Result<Bytes, BodyError> {
 async fn handle(State(shared): State<Arc<Shared>>, ConnectInfo(conn): ConnectInfo<Conn>, req: Request) -> Response {
     let (parts, body) = req.into_parts();
     let raw_target = parts.uri.to_string();
+    // What Node's HTTP server refused before any handler saw the request (`http.createServer`'s defaults): headers
+    // of 16 KiB or more (431), then an HTTP/1.1 request with no Host header (400). Both close the connection.
+    if header_bytes(&raw_target, &parts.headers) >= MAX_HEADER_BYTES {
+        return refused_by_server(StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE);
+    }
+    if parts.version == Version::HTTP_11 && !parts.headers.contains_key("host") {
+        return refused_by_server(StatusCode::BAD_REQUEST);
+    }
     let base = url::Url::parse("http://bridge/").ok();
     let Some(url) = base.and_then(|base| base.join(if raw_target.is_empty() { "/" } else { &raw_target }).ok()) else {
         drain(body);

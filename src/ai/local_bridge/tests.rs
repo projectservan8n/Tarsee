@@ -748,25 +748,47 @@ async fn when_codex_hangs_up_the_request_to_the_owners_server_is_stopped() {
     bridge.close().await;
 }
 
-#[tokio::test]
-async fn an_owners_server_that_isnt_there_is_a_502_that_names_the_owners_address_never_the_bridges_token() {
-    let fake = FakeFetch::new();
-    fake.respond(
-        "http://127.0.0.1:9/v1",
-        Answer::connect_error("tcp connect error: Connection refused (os error 111)"),
-    );
-    let bridge = bridge_with(fake).await;
-    let t = bridge.open("http://127.0.0.1:9/v1", Some(OWNER_KEY)).unwrap();
+/// A 502 from a bridge that reaches the owner's server with the real HTTP client: what Codex gets for each way the
+/// owner's server can't be reached.
+async fn unreachable_owner_says(upstream: &str) -> String {
+    crate::net::install_crypto_provider();
+    let bridge = bridge_with(Arc::new(ReqwestFetch::new())).await;
+    let t = bridge.open(upstream, Some(OWNER_KEY)).unwrap();
     let res = post(&t, &json!({"model": "m", "input": []})).await;
     t.release();
     assert_eq!(res.status, 502);
+    assert_eq!(res.header("content-type"), Some("application/json"));
     let words = res.text().await.unwrap();
-    assert_eq!(
-        words,
-        "{\"error\":{\"message\":\"Can't reach your Local AI at http://127.0.0.1:9/v1 (connection refused).\",\"type\":\"server_error\",\"code\":\"local_ai_unreachable\"}}"
+    assert!(
+        !words.contains(&t.token) && !words.contains(OWNER_KEY) && !words.contains(&t.id),
+        "{words}"
     );
-    assert!(!words.contains(&t.token) && !words.contains(OWNER_KEY) && !words.contains(&t.id));
     bridge.close().await;
+    words
+}
+
+#[tokio::test]
+async fn an_owners_server_that_isnt_there_is_a_502_that_names_the_owners_address_never_the_bridges_token() {
+    // A port that was just free: bind one, note it, and let it go (the real client, as local_bridge(&app) uses).
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let upstream = format!("http://127.0.0.1:{port}/v1");
+    assert_eq!(
+        unreachable_owner_says(&upstream).await,
+        format!(
+            "{{\"error\":{{\"message\":\"Can't reach your Local AI at {upstream} (connection refused).\",\"type\":\"server_error\",\"code\":\"local_ai_unreachable\"}}}}"
+        )
+    );
+}
+
+#[tokio::test]
+async fn an_owners_server_whose_name_is_not_known_is_a_502_that_says_so() {
+    // The .invalid top-level name never resolves (RFC 2606), with or without a network.
+    assert_eq!(
+        unreachable_owner_says("http://tarsee-test.invalid/v1").await,
+        "{\"error\":{\"message\":\"Can't reach your Local AI at http://tarsee-test.invalid/v1 (the name isn't known).\",\"type\":\"server_error\",\"code\":\"local_ai_unreachable\"}}"
+    );
 }
 
 #[tokio::test]
@@ -1082,6 +1104,149 @@ async fn a_stream_with_nothing_to_map_back_still_turns_a_bare_error_frame_into_r
     bridge.close().await;
 }
 
+/// A request written on a socket by hand, and everything the bridge answers until it closes the connection.
+async fn raw_request(port: u16, request: &[u8]) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    socket.write_all(request).await.unwrap();
+    let mut answer = Vec::new();
+    tokio::time::timeout(Duration::from_secs(10), socket.read_to_end(&mut answer))
+        .await
+        .expect("the bridge closes the connection")
+        .ok();
+    String::from_utf8_lossy(&answer).into_owned()
+}
+
+#[tokio::test]
+async fn what_nodes_http_server_refused_itself_headers_of_16_kib_and_an_http_1_1_request_with_no_host() {
+    let fake = FakeFetch::new();
+    fake.respond(OWNER, Answer::json(200, json!({"data": []})));
+    let bridge = bridge_with(fake.clone()).await;
+    let t = bridge.open(OWNER, None).unwrap();
+    let target = format!(
+        "{}/models",
+        t.url.trim_start_matches(&format!("http://127.0.0.1:{}", bridge.port()))
+    );
+    // Node counts the target and every header's name and value: refused from 16,384 bytes on.
+    let counted = |pad: usize| {
+        target.len()
+            + "host".len()
+            + 1
+            + "authorization".len()
+            + "Bearer ".len()
+            + t.token.len()
+            + "connection".len()
+            + "close".len()
+            + "x-pad".len()
+            + pad
+    };
+    let pad = 16_384 - counted(0);
+    let with_pad = |pad: usize| {
+        format!(
+            "GET {target} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {}\r\nConnection: close\r\nX-Pad: {}\r\n\r\n",
+            t.token,
+            "p".repeat(pad)
+        )
+    };
+    assert_eq!(counted(pad - 1), 16_383);
+    let under = raw_request(bridge.port(), with_pad(pad - 1).as_bytes()).await;
+    assert!(under.starts_with("HTTP/1.1 200 "), "{under}");
+    let at = raw_request(bridge.port(), with_pad(pad).as_bytes()).await;
+    assert!(
+        at.starts_with("HTTP/1.1 431 Request Header Fields Too Large\r\n"),
+        "{at}"
+    );
+    assert!(at.to_lowercase().contains("connection: close"), "{at}");
+    let big = raw_request(bridge.port(), with_pad(20_000).as_bytes()).await;
+    assert!(big.starts_with("HTTP/1.1 431 "), "{big}");
+    // HTTP/1.1 needs a Host header; HTTP/1.0 does not.
+    let no_host = format!("GET {target} HTTP/1.1\r\nAuthorization: Bearer {}\r\n\r\n", t.token);
+    let refused = raw_request(bridge.port(), no_host.as_bytes()).await;
+    assert!(refused.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{refused}");
+    assert!(refused.to_lowercase().contains("connection: close"), "{refused}");
+    let old = format!("GET {target} HTTP/1.0\r\nAuthorization: Bearer {}\r\n\r\n", t.token);
+    let served = raw_request(bridge.port(), old.as_bytes()).await;
+    assert!(
+        served.starts_with("HTTP/1.0 200 ") || served.starts_with("HTTP/1.1 200 "),
+        "{served}"
+    );
+    assert_eq!(
+        fake.calls().len(),
+        2,
+        "only the two requests Node served reached the owner's server"
+    );
+    bridge.close().await;
+}
+
+#[test]
+fn a_byte_order_mark_at_the_very_start_of_a_stream_is_taken_off_as_text_decoder_does() {
+    const BOM: &[u8] = b"\xEF\xBB\xBF";
+    // At the start, even arriving a byte at a time.
+    let mut decoder = Utf8Decoder::default();
+    let mut text = String::new();
+    for byte in [&BOM[..1], &BOM[1..2], &BOM[2..], b"a".as_slice(), BOM] {
+        text += &decoder.decode(byte, true);
+    }
+    text += &decoder.decode(&[], false);
+    assert_eq!(text, "a\u{FEFF}", "only the first one, at the very start");
+    // Two at the start: the second one stays.
+    let mut decoder = Utf8Decoder::default();
+    assert_eq!(decoder.decode(b"\xEF\xBB\xBF\xEF\xBB\xBFa", false), "\u{FEFF}a");
+    // A first character that is not one (here a bad byte): any later one stays.
+    let mut decoder = Utf8Decoder::default();
+    assert_eq!(decoder.decode(b"\xFF\xEF\xBB\xBFa", false), "\u{FFFD}\u{FEFF}a");
+}
+
+#[tokio::test]
+async fn behind_a_byte_order_mark_a_bare_error_frame_still_fails_and_a_first_frame_keeps_its_event_line() {
+    let bom_first = |rest: &str| {
+        let mut bytes = b"\xEF\xBB\xBF".to_vec();
+        bytes.extend_from_slice(rest.as_bytes());
+        // A byte at a time, the mark cut in three.
+        let chunks: Vec<Bytes> = bytes.iter().map(|b| Bytes::copy_from_slice(&[*b])).collect();
+        Answer::Response {
+            status: 200,
+            headers: vec![("content-type".into(), "text/event-stream".into())],
+            chunks,
+        }
+    };
+    let fake = FakeFetch::new();
+    let bridge = bridge_with(fake.clone()).await;
+    let t = bridge.open(OWNER, None).unwrap();
+    // What the Node bridge answered for the same streams.
+    fake.respond(OWNER, bom_first("data: {\"error\":\"out of memory\"}\n\n"));
+    let failed = post(&t, &json!({"model": "m", "stream": true, "input": []}))
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert_eq!(
+        failed,
+        "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_local_bridge\",\"object\":\"response\",\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"out of memory\"},\"output\":[]}}\n\n"
+    );
+    let call = json!({"type": "response.output_item.done", "output_index": 0, "item": {"type": "function_call", "call_id": "c", "name": "mcp__tarsee__tarsee_calculator", "arguments": "{}"}});
+    fake.respond(
+        OWNER,
+        bom_first(&format!(
+            "event: response.output_item.done\ndata: {}\n\n",
+            js_stringify(&call)
+        )),
+    );
+    let mapped = post(
+        &t,
+        &json!({"model": "m", "stream": true, "tools": [tarsee_ns()], "input": []}),
+    )
+    .await
+    .text()
+    .await
+    .unwrap();
+    assert_eq!(
+        mapped,
+        "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"c\",\"name\":\"tarsee_calculator\",\"arguments\":\"{}\",\"namespace\":\"mcp__tarsee\"}}\n\n"
+    );
+    bridge.close().await;
+}
+
 #[tokio::test]
 async fn the_request_passed_on_its_headers_its_path_and_query_and_its_body_rewritten_as_json_stringify_writes_it() {
     let fake = FakeFetch::new();
@@ -1322,15 +1487,43 @@ async fn the_apps_bridge_starts_once_and_reaches_the_owner_through_the_apps_http
 
 #[test]
 fn why_the_owners_server_could_not_be_reached_in_short_words() {
+    // What the HTTP client reports, in Node's words (src/net/fetch.rs), and the bridge's words for each code
+    // (reachWhy): a code with no words of its own is shown as it is.
     for (err, want) in [
         (FetchError::Timeout, "it took too long to answer"),
-        (FetchError::Connect("tcp connect error: Connection refused (os error 111)".into()), "connection refused"),
-        (FetchError::Connect("tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)".into()), "connection refused"),
-        (FetchError::Connect("dns error: failed to lookup address information: Name or service not known".into()), "the name isn't known"),
-        (FetchError::Connect("connection reset by peer".into()), "the connection was reset"),
-        (FetchError::Connect("An existing connection was forcibly closed by the remote host. (os error 10054)".into()), "the connection was reset"),
-        (FetchError::Connect("connection timed out".into()), "it took too long to answer"),
-        (FetchError::Connect("no route to host".into()), "network error"),
+        (
+            FetchError::Connect("connect ECONNREFUSED 127.0.0.1:9931".into()),
+            "connection refused",
+        ),
+        (
+            FetchError::Connect("getaddrinfo ENOTFOUND ollama.invalid".into()),
+            "the name isn't known",
+        ),
+        (
+            FetchError::Connect("getaddrinfo EAI_AGAIN ollama.lan".into()),
+            "the name isn't known",
+        ),
+        (
+            FetchError::Connect("read ECONNRESET".into()),
+            "the connection was reset",
+        ),
+        (
+            FetchError::Connect("connect ETIMEDOUT 10.0.0.9:11434".into()),
+            "it took too long to answer",
+        ),
+        (
+            FetchError::Connect("connect EHOSTUNREACH 10.0.0.9:11434".into()),
+            "EHOSTUNREACH",
+        ),
+        (
+            FetchError::Connect("connect ENETUNREACH 10.0.0.9:11434".into()),
+            "ENETUNREACH",
+        ),
+        (
+            FetchError::Connect("invalid peer certificate: UnknownIssuer".into()),
+            "network error",
+        ),
+        (FetchError::Body("connection cut".into()), "network error"),
     ] {
         assert_eq!(reach_why(&err), want, "{err:?}");
     }

@@ -250,21 +250,12 @@ pub fn claude_mcp_config(url: &str) -> Value {
     })
 }
 
+/// The grant as the engines take it: `EngineOptions::mcp_grant`, and for the Codex engine
+/// `codex_options::CodexContext::mcp`, which writes the url into Codex's `mcp_servers.tarsee` with
+/// `bearer_token_env_var = "TARSEE_MCP_TOKEN"` and puts the token in Codex's environment under that name.
 impl From<&Grant> for McpGrant {
     fn from(grant: &Grant) -> Self {
         grant.mcp_grant()
-    }
-}
-
-/// What `providers/codex_options.rs` takes as the turn's grant (`CodexContext::mcp`): it writes the url into Codex's
-/// `mcp_servers.tarsee` with `bearer_token_env_var = "TARSEE_MCP_TOKEN"`, and puts the token in Codex's environment
-/// under that name.
-impl From<&Grant> for crate::ai::providers::codex_options::McpGrant {
-    fn from(grant: &Grant) -> Self {
-        crate::ai::providers::codex_options::McpGrant {
-            url: grant.url.clone(),
-            token: grant.token.clone(),
-        }
     }
 }
 
