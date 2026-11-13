@@ -1,0 +1,65 @@
+// The loopback HTTP MCP server claim, with my own logging server and my own stand-in API.
+import fs from "node:fs";
+import path from "node:path";
+import { startFakeApi, startMcp } from "./fakes.mjs";
+import { drive, initialize, userText, kinds } from "./drive.mjs";
+import { SCRATCH } from "./realenv.mjs";
+
+const TOKEN = "<TOKEN>";
+const only = process.argv.slice(2);
+const want = (n) => !only.length || only.some((o) => n.startsWith(o));
+
+function argsWith(mcp, { strict = true } = {}) {
+  return [
+    "--output-format", "stream-json", "--verbose", "--input-format", "stream-json",
+    "--max-turns=50", "--model=claude-sonnet-4-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*", "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    ...mcp,
+    "--setting-sources=project", ...(strict ? ["--strict-mcp-config"] : []),
+    "--permission-mode=bypassPermissions", "--allow-dangerously-skip-permissions", "--include-partial-messages",
+  ];
+}
+const cfg = (url, auth, extra = {}) => JSON.stringify({ mcpServers: { tarsee: { type: "http", url, headers: { Authorization: auth }, ...extra } } });
+
+async function one(name, { mcpOpts = {}, mcpArgs, env = {}, script, apiEnv = true, summary = true }) {
+  if (!want(name)) return;
+  const mcp = await startMcp({ token: TOKEN, ...mcpOpts });
+  const api = await startFakeApi(script ?? [{ tool: { id: "toolu_verify_1", name: "mcp__tarsee__echo", input: { text: "ping" } } }, { text: "all done" }]);
+  const rec = await drive(name, { args: argsWith(mcpArgs(mcp)), env: { ANTHROPIC_BASE_URL: api.url, CLAUDE_CODE_ENTRYPOINT: "sdk-ts", ...env }, initial: [initialize(), userText("use the echo tool")] });
+  const init = rec.stdout.find((s) => s.json.subtype === "init")?.json;
+  console.log(`\n=== ${name}`);
+  console.log("stdout:", kinds(rec));
+  console.log("init.mcp_servers:", JSON.stringify(init?.mcp_servers), "tools:", JSON.stringify(init?.tools));
+  console.log("exit:", JSON.stringify(rec.exit), "stderr:", JSON.stringify(rec.stderr.slice(0, 300)));
+  console.log("control_requests on stdout:", rec.stdout.filter((s) => s.json.type === "control_request").length);
+  for (const [i, r] of mcp.requests.entries()) {
+    const h = { ...r.headers }; delete h.host;
+    if (h.authorization) h.authorization = h.authorization.replace(TOKEN, "<TOKEN>");
+    console.log(`  mcp #${i + 1} ${r.method} ${r.url} -> ${r.answer?.status}\n     headers ${JSON.stringify(h)}\n     body ${JSON.stringify(r.body)}`);
+  }
+  const user = rec.stdout.filter((s) => s.json.type === "user").map((s) => s.json);
+  for (const u of user) console.log("  user msg:", JSON.stringify({ message: u.message, tool_use_result: u.tool_use_result }).slice(0, 700));
+  const streams = api.requests.filter((r) => r.body?.stream);
+  console.log("  api calls:", streams.length, "tools offered in each:", streams.map((r) => r.body.tools.map((t) => t.name).join(",")).join(" | "));
+  const mt = streams[0]?.body.tools.find((t) => t.name.startsWith("mcp__"));
+  if (mt) console.log("  an MCP tool as offered:", JSON.stringify(mt));
+  if (streams[1]) console.log("  tool_result sent to the API:", JSON.stringify(streams[1].body.messages.at(-1)).slice(0, 500));
+  fs.writeFileSync(path.join(SCRATCH, "real", "out", `${name}.mcp.json`), JSON.stringify({ mcp: mcp.requests, api: api.requests }, null, 1));
+  await mcp.close(); await api.close();
+  return rec;
+}
+
+await one("m1-token-inline", { mcpArgs: (m) => ["--mcp-config", cfg(m.url, `Bearer ${TOKEN}`, { alwaysLoad: true })] });
+await one("m2-token-from-env", { mcpArgs: (m) => ["--mcp-config", cfg(m.url, "Bearer ${TARSEE_MCP_TOKEN}", { alwaysLoad: true })], env: { TARSEE_MCP_TOKEN: TOKEN } });
+await one("m3-one-argument-no-alwaysload", { mcpArgs: (m) => [`--mcp-config=${cfg(m.url, `Bearer ${TOKEN}`)}`] });
+await one("m4-wrong-token", { mcpArgs: (m) => ["--mcp-config", cfg(m.url, "Bearer wrong", { alwaysLoad: true })], script: [{ text: "no tools here" }] });
+await one("m5-discover-400-session-id-older-protocol", { mcpOpts: { discover: "400", sessionId: "sess-verify-1", protocol: "2025-06-18" }, mcpArgs: (m) => ["--mcp-config", cfg(m.url, `Bearer ${TOKEN}`, { alwaysLoad: true })] });
+await one("m6-tool-iserror", { mcpOpts: { failCall: "isError" }, mcpArgs: (m) => ["--mcp-config", cfg(m.url, `Bearer ${TOKEN}`, { alwaysLoad: true })] });
+await one("m7-tool-rpc-error", { mcpOpts: { failCall: "rpc" }, mcpArgs: (m) => ["--mcp-config", cfg(m.url, `Bearer ${TOKEN}`, { alwaysLoad: true })] });
+if (want("m8-nothing-listening")) {
+  const api = await startFakeApi([{ text: "no tools here" }]);
+  const rec = await drive("m8-nothing-listening", { args: argsWith(["--mcp-config", cfg("http://127.0.0.1:9/mcp", `Bearer ${TOKEN}`, { alwaysLoad: true })]), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("hi")] });
+  const init = rec.stdout.find((s) => s.json.subtype === "init")?.json;
+  console.log("\n=== m8-nothing-listening\nstdout:", kinds(rec), "\ninit.mcp_servers:", JSON.stringify(init?.mcp_servers), "tools:", JSON.stringify(init?.tools), "exit:", JSON.stringify(rec.exit), "stderr:", JSON.stringify(rec.stderr.slice(0, 300)));
+  await api.close();
+}

@@ -1,0 +1,66 @@
+#!/usr/bin/env node
+/**
+ * try-cmd-shim.mjs (Windows): does an argument list survive a .cmd launcher, which is what `npm install -g
+ * @openai/codex` puts on the PATH as `codex`? The launcher here is the usual three-line shim in front of the stub
+ * (stub/codex-stub.rs), started the way Tarsee's own spawnCodex() starts a .cmd or .bat: cmd.exe /d /s /c "<line>".
+ *
+ * The answer decides what the Rust engine may start for a TURN: the three short arguments of the sign-in and the
+ * model list pass; a turn's arguments (quotes inside quotes, %, &, |, <, >, and up to 24 KiB in one argument) do not.
+ *
+ *   node try-cmd-shim.mjs
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const PROJECT = process.env.CAPTURE_PROJECT || "/path/to/the/node/checkout";
+const SCRATCH = process.env.CAPTURE_SCRATCH || "/path/to/a/scratch/folder";
+const SHIM = path.join(SCRATCH, "shim");
+const { spawnCodex } = await import(pathToFileURL(path.join(PROJECT, "src/ai/codex-cli.js")).href);
+
+fs.mkdirSync(SHIM, { recursive: true });
+fs.copyFileSync(path.join(SCRATCH, "stub", "codex-stub.exe"), path.join(SHIM, "codex-stub.exe"));
+const SHIM_TEXT = '@echo off\r\n"%~dp0codex-stub.exe" %*\r\nexit /b %ERRORLEVEL%\r\n';
+fs.writeFileSync(path.join(SHIM, "codex.cmd"), SHIM_TEXT);
+
+const run = (args) => new Promise((resolve) => {
+  fs.rmSync(path.join(SHIM, "plan"), { recursive: true, force: true });
+  fs.mkdirSync(path.join(SHIM, "plan"));
+  const rec = path.join(SHIM, "record.json");
+  fs.rmSync(rec, { force: true });
+  fs.writeFileSync(path.join(SHIM, "plan", "record.txt"), rec);
+  const child = spawnCodex(path.join(SHIM, "codex.cmd"), args, { env: { SystemRoot: process.env.SystemRoot || process.env.SYSTEMROOT, PATH: "C:\\WINDOWS\\system32" }, cwd: SHIM });
+  let stderr = "";
+  child.stderr.on("data", (b) => { stderr += b; });
+  child.stdin.end("prompt");
+  child.once("close", (code) => {
+    let argv = null;
+    try { argv = JSON.parse(fs.readFileSync(rec, "utf8")).argv; } catch { /* the stub never ran */ }
+    resolve({ exitCode: code, stderr, argv });
+  });
+});
+
+const long = (n) => `developer_instructions="${"x".repeat(n)}"`;
+const cases = {
+  "the sign-in's and the model list's arguments (CODEX_BASE_ARGS)": ["-c", 'cli_auth_credentials_store="file"', "-c", "check_for_update_on_startup=false", "-c", "project_root_markers=[]", "login", "status"],
+  "a short turn: a string with an escaped newline and escaped quotes in it": ["exec", "--experimental-json", "--config", 'developer_instructions="You are Tarsee.\\n\\nSecond \\"line\\"."', "--config", 'approval_policy="never"'],
+  "a string with percent, caret, ampersand, pipe, angle brackets": ["exec", "--config", 'developer_instructions="100% sure ^ a & b | c < d > e ! %PATH% done"'],
+  "8,000 characters in one argument": ["exec", "--config", long(8000)],
+  "24,000 characters in one argument (the size Tarsee allows the instructions on Windows)": ["exec", "--config", long(24000)],
+};
+const shorten = (a) => (a.length > 120 ? `${a.slice(0, 60)} … (${a.length} characters)` : a);
+const results = {};
+for (const [name, args] of Object.entries(cases)) {
+  const r = await run(args);
+  const same = JSON.stringify(r.argv) === JSON.stringify(args);
+  results[name] = { given: args.map(shorten), arrivedUnchanged: same, exitCode: r.exitCode, stderr: r.stderr, whatArrived: same ? undefined : (r.argv ? r.argv.map(shorten) : "the program was never started") };
+  console.log(`${same ? "unchanged" : "CHANGED  "} ${name} (exit ${r.exitCode})`);
+}
+const fixture = {
+  name: "other-07-windows-cmd-launcher",
+  what: "Windows: argument lists passed through a .cmd launcher (the kind npm puts on the PATH as `codex`), started as Tarsee's spawnCodex() starts one (cmd.exe /d /s /c). The short arguments of the sign-in and the model list arrive unchanged; a turn's do not.",
+  made_with: { launcher: SHIM_TEXT, startedBy: "src/ai/codex-cli.js spawnCodex()", platform: process.platform },
+  results,
+};
+fs.writeFileSync(path.join(SCRATCH, "fixtures-other", "other-07-windows-cmd-launcher.json"), `${JSON.stringify(fixture, null, 2)}\n`);
+process.exit(0);

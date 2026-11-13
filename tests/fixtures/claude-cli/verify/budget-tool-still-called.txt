@@ -1,0 +1,4 @@
+503:control_response  607:system/init  613:system/status  648:stream_event/message_start  648:stream_event/content_block_start  649:stream_event/content_block_delta  652:assistant  659:stream_event/content_block_stop  665:stream_event/message_delta  666:stream_event/message_stop  686:result/error_max_budget_usd
+mcp requests: 524:POST server/discover  536:POST initialize  542:POST notifications/initialized  548:GET   551:POST tools/list  668:POST tools/call
+api requests: 645:POST /v1/messages?beta=true
+{"subtype":"error_max_budget_usd","errors":["Reached maximum budget ($0.0001)"],"num_turns":1,"total_cost_usd":0.00016800000000000002,"permission_denials":[]} exit {"t":729,"code":1,"signal":null}

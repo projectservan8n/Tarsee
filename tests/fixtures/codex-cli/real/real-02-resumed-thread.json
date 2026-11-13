@@ -1,0 +1,306 @@
+{
+  "name": "real-02-resumed-thread",
+  "what": "The next turn on the same thread (`resume <thread id>`): thread.started carries the same id, and turn.completed's usage is the thread's running total (both turns'), not this turn's.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program), started with the argument list, environment and stdin the SDK produced",
+    "platform": "win32"
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "argv": [
+      "--config",
+      "sandbox_workspace_write.network_access=true",
+      "--config",
+      "web_search=\"disabled\"",
+      "--config",
+      "approval_policy=\"never\"",
+      "resume",
+      "<THREAD_ID>"
+    ],
+    "argvNote": "the last 8 arguments; the rest is the same as the new thread's",
+    "stdin": "And again."
+  },
+  "result": {
+    "exitCode": 0,
+    "signal": null,
+    "stdoutLines": [
+      "{\"type\":\"thread.started\",\"thread_id\":\"<THREAD_ID>\"}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+      "{\"type\":\"turn.started\"}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"reasoning\",\"text\":\"Thinking briefly.\"}}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"Hello from the fake model.\"}}",
+      "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":2400,\"cached_input_tokens\":400,\"cache_write_input_tokens\":0,\"output_tokens\":60,\"reasoning_output_tokens\":24}}"
+    ],
+    "stderr": "Reading prompt from stdin...\n"
+  },
+  "requestsToTheMcpServer": [
+    {
+      "n": 1,
+      "at_ms": 1903,
+      "method": "POST",
+      "path": "/mcp",
+      "httpVersion": "1.1",
+      "headers": [
+        [
+          "user-agent",
+          "codex-mcp-client/0.167.0"
+        ],
+        [
+          "accept",
+          "text/event-stream, application/json"
+        ],
+        [
+          "content-type",
+          "application/json"
+        ],
+        [
+          "authorization",
+          "Bearer <MCP_TOKEN>"
+        ],
+        [
+          "host",
+          "127.0.0.1:<MCP_PORT>"
+        ],
+        [
+          "content-length",
+          "217"
+        ]
+      ],
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+          "protocolVersion": "2025-06-18",
+          "capabilities": {
+            "elicitation": {
+              "form": {},
+              "url": {}
+            }
+          },
+          "clientInfo": {
+            "name": "codex-mcp-client",
+            "title": "Codex",
+            "version": "0.167.0"
+          }
+        }
+      },
+      "answer": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {
+              "tools": {
+                "listChanged": true
+              }
+            },
+            "serverInfo": {
+              "name": "tarsee",
+              "version": "1.0.0"
+            }
+          },
+          "jsonrpc": "2.0",
+          "id": 0
+        }
+      }
+    },
+    {
+      "n": 2,
+      "at_ms": 1904,
+      "method": "POST",
+      "path": "/mcp",
+      "httpVersion": "1.1",
+      "headers": [
+        [
+          "user-agent",
+          "codex-mcp-client/0.167.0"
+        ],
+        [
+          "mcp-protocol-version",
+          "2025-06-18"
+        ],
+        [
+          "accept",
+          "text/event-stream, application/json"
+        ],
+        [
+          "content-type",
+          "application/json"
+        ],
+        [
+          "authorization",
+          "Bearer <MCP_TOKEN>"
+        ],
+        [
+          "host",
+          "127.0.0.1:<MCP_PORT>"
+        ],
+        [
+          "content-length",
+          "54"
+        ]
+      ],
+      "body": {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+      },
+      "answer": {
+        "status": 202,
+        "headers": {},
+        "body": null
+      }
+    },
+    {
+      "n": 3,
+      "at_ms": 1905,
+      "method": "POST",
+      "path": "/mcp",
+      "httpVersion": "1.1",
+      "headers": [
+        [
+          "user-agent",
+          "codex-mcp-client/0.167.0"
+        ],
+        [
+          "mcp-protocol-version",
+          "2025-06-18"
+        ],
+        [
+          "accept",
+          "text/event-stream, application/json"
+        ],
+        [
+          "content-type",
+          "application/json"
+        ],
+        [
+          "authorization",
+          "Bearer <MCP_TOKEN>"
+        ],
+        [
+          "host",
+          "127.0.0.1:<MCP_PORT>"
+        ],
+        [
+          "content-length",
+          "85"
+        ]
+      ],
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {
+          "_meta": {
+            "progressToken": 0
+          }
+        }
+      },
+      "answer": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "result": {
+            "tools": [
+              {
+                "name": "tarsee_datetime",
+                "description": "The current date and time.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "timezone": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                }
+              },
+              {
+                "name": "tarsee_remember",
+                "description": "Remember a fact.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "content"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                }
+              }
+            ]
+          },
+          "jsonrpc": "2.0",
+          "id": 1
+        }
+      }
+    }
+  ],
+  "requestsToTheModel": [
+    {
+      "method": "POST",
+      "path": "/v1/responses",
+      "authorization": "Bearer <PROVIDER_KEY>",
+      "model": "test-model",
+      "toolNames": [
+        "exec_command",
+        "write_stdin",
+        "list_mcp_resources",
+        "list_mcp_resource_templates",
+        "read_mcp_resource",
+        "request_user_input",
+        "view_image",
+        "mcp__tarsee"
+      ],
+      "inputTypes": [
+        "message:developer:input_text",
+        "message:developer:input_text+input_text+input_text",
+        "message:user:input_text",
+        "message:user:input_text",
+        "reasoning",
+        "message:assistant:output_text",
+        "message:user:input_text"
+      ]
+    }
+  ],
+  "codexHomeAfterTheTurn": [
+    ".sandbox/",
+    ".sandbox/sandbox.2026-11-13.log (524 bytes)",
+    ".sandbox_migration (3 bytes)",
+    "goals_1.sqlite (32768 bytes)",
+    "installation_id (36 bytes)",
+    "logs_2.sqlite (49152 bytes)",
+    "memories_1.sqlite (45056 bytes)",
+    "queue_1.sqlite (4096 bytes)",
+    "queue_1.sqlite-shm (32768 bytes)",
+    "queue_1.sqlite-wal (82432 bytes)",
+    "sessions/",
+    "sessions/2026/",
+    "sessions/2026/11/",
+    "sessions/2026/11/13/",
+    "sessions/2026/11/13/rollout-2026-11-13T08-16-53-<THREAD_ID>.jsonl (56623 bytes)",
+    "skills/",
+    "skills/.system/ (Codex's own bundled skills: 49 files, not listed)",
+    "state_5.sqlite (4096 bytes)",
+    "state_5.sqlite-shm (32768 bytes)",
+    "state_5.sqlite-wal (2768672 bytes)",
+    "thread_history_1.sqlite (4096 bytes)",
+    "thread_history_1.sqlite-shm (32768 bytes)",
+    "thread_history_1.sqlite-wal (564472 bytes)",
+    "thread-writer-locks/",
+    "thread-writer-locks/.coordination.lock (0 bytes)",
+    "tmp/",
+    "tmp/arg0-windows/"
+  ]
+}

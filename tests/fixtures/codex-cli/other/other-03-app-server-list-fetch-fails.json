@@ -1,0 +1,434 @@
+{
+  "name": "other-03-app-server-list-fetch-fails",
+  "what": "The same with a backend that refuses the list (401): model/list still answers, with the bundled catalog, and the only sign is the `failed to refresh available models` line on stderr and no models_cache.json. This is the case codex-models.js reports as not-live.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program)",
+    "platform": "win32"
+  },
+  "argv": [
+    "-c",
+    "cli_auth_credentials_store=\"file\"",
+    "-c",
+    "check_for_update_on_startup=false",
+    "-c",
+    "project_root_markers=[]",
+    "-c",
+    "chatgpt_base_url=\"https://127.0.0.1:<PORT>/backend-api/\"",
+    "-c",
+    "openai_base_url=\"https://127.0.0.1:<PORT>/backend-api/codex\"",
+    "app-server"
+  ],
+  "envNames": [
+    "APPDATA",
+    "CODEX_HOME",
+    "ComSpec",
+    "HOME",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "LOCALAPPDATA",
+    "NO_PROXY",
+    "PATH",
+    "RUST_LOG",
+    "SSL_CERT_FILE",
+    "SystemDrive",
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "USERPROFILE"
+  ],
+  "envValues": {
+    "CODEX_HOME": "<CODEX_HOME>",
+    "RUST_LOG": "error"
+  },
+  "cwd": "<CODEX_HOME>",
+  "transcript": [
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 7,
+      "message": {
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "clientInfo": {
+            "name": "tarsee",
+            "title": "Tarsee",
+            "version": "0.2.0"
+          }
+        }
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 327,
+      "message": {
+        "id": 1,
+        "result": {
+          "userAgent": "tarsee/0.167.0 (Windows 10.0.26300; x86_64) unknown (tarsee; 0.2.0)",
+          "codexHome": "<CODEX_HOME>",
+          "platformFamily": "windows",
+          "platformOs": "windows"
+        }
+      }
+    },
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 327,
+      "message": {
+        "method": "initialized"
+      }
+    },
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 327,
+      "message": {
+        "id": 2,
+        "method": "account/read",
+        "params": {
+          "refreshToken": false
+        }
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 327,
+      "message": {
+        "method": "remoteControl/status/changed",
+        "params": {
+          "status": "disabled",
+          "serverName": "<MACHINE_NAME>",
+          "installationId": "<INSTALLATION_ID>",
+          "environmentId": null
+        },
+        "emittedAtMs": 1794527276925
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 329,
+      "message": {
+        "method": "account/updated",
+        "params": {
+          "authMode": "chatgpt",
+          "planType": "free"
+        },
+        "emittedAtMs": 1794527276928
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 330,
+      "message": {
+        "id": 2,
+        "result": {
+          "account": {
+            "type": "chatgpt",
+            "email": "person@example.test",
+            "planType": "free",
+            "workspaceName": null
+          },
+          "requiresOpenaiAuth": true,
+          "workspaceRouting": {
+            "chatgptAccountId": "acct-capture",
+            "backendOrigin": "https://127.0.0.1:<PORT>",
+            "accountRoutingOverride": "NO_CONSTRAINT"
+          }
+        }
+      }
+    },
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 330,
+      "message": {
+        "id": 3,
+        "method": "model/list",
+        "params": {
+          "limit": 100,
+          "includeHidden": false
+        }
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 337,
+      "message": {
+        "id": 3,
+        "result": {
+          "data": [
+            {
+              "id": "gpt-6.1-sol",
+              "model": "gpt-6.1-sol",
+              "upgrade": null,
+              "upgradeInfo": null,
+              "availabilityNux": {
+                "message": "Maximize usage with GPT-6.1 Sol. Try it on complex work for near-Astra performance at a lower cost."
+              },
+              "displayName": "GPT-6.1-Sol",
+              "description": "Latest workhorse model for coding and everyday work.",
+              "modelSpecialty": null,
+              "hidden": false,
+              "supportedReasoningEfforts": [
+                {
+                  "reasoningEffort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "reasoningEffort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "reasoningEffort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "max",
+                  "description": "Maximum reasoning depth for the hardest problems"
+                },
+                {
+                  "reasoningEffort": "ultra",
+                  "description": "Maximum reasoning with automatic task delegation"
+                }
+              ],
+              "defaultReasoningEffort": "low",
+              "inputModalities": [
+                "text",
+                "image"
+              ],
+              "supportsPersonality": false,
+              "multiAgentVersion": "v2",
+              "additionalSpeedTiers": [
+                "fast"
+              ],
+              "serviceTiers": [
+                {
+                  "id": "priority",
+                  "name": "Fast",
+                  "description": "2x speed, increased usage"
+                }
+              ],
+              "defaultServiceTier": null,
+              "availableAccessPrograms": null,
+              "isDefault": true
+            },
+            {
+              "id": "gpt-6-astra",
+              "model": "gpt-6-astra",
+              "upgrade": null,
+              "upgradeInfo": null,
+              "availabilityNux": null,
+              "displayName": "GPT-6-Astra",
+              "description": "Frontier intelligence for the most demanding work.",
+              "modelSpecialty": null,
+              "hidden": false,
+              "supportedReasoningEfforts": [
+                {
+                  "reasoningEffort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "reasoningEffort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "reasoningEffort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "max",
+                  "description": "Maximum reasoning depth for the hardest problems"
+                },
+                {
+                  "reasoningEffort": "ultra",
+                  "description": "Maximum reasoning with automatic task delegation"
+                }
+              ],
+              "defaultReasoningEffort": "low",
+              "inputModalities": [
+                "text",
+                "image"
+              ],
+              "supportsPersonality": false,
+              "multiAgentVersion": "v2",
+              "additionalSpeedTiers": [
+                "fast"
+              ],
+              "serviceTiers": [
+                {
+                  "id": "priority",
+                  "name": "Fast",
+                  "description": "2x speed, increased usage"
+                }
+              ],
+              "defaultServiceTier": null,
+              "availableAccessPrograms": null,
+              "isDefault": false
+            },
+            {
+              "(capture note)": "7 more models, same shape",
+              "ids": [
+                "gpt-6-sol",
+                "gpt-6-luna",
+                "gpt-5.6-sol",
+                "gpt-6.1-terra",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5"
+              ]
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    }
+  ],
+  "stderr": "\u001b[2m2026-11-12T23:47:56.910160Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[2mcodex_models_manager::manager\u001b[0m\u001b[2m:\u001b[0m failed to refresh available models: unexpected status 401 Unauthorized: {\"detail\":\"Your authentication token is not from a valid issuer.\"}, url: https://127.0.0.1:<PORT>/backend-api/codex/models?client_version=0.167.0\n\u001b[2m2026-11-12T23:47:56.935157Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[2mcodex_models_manager::manager\u001b[0m\u001b[2m:\u001b[0m failed to refresh available models: unexpected status 401 Unauthorized: {\"detail\":\"Your authentication token is not from a valid issuer.\"}, url: https://127.0.0.1:<PORT>/backend-api/codex/models?client_version=0.167.0\n",
+  "stdinClosedAt_ms": 337,
+  "endedByItselfWithin3s": true,
+  "exit": {
+    "code": 0,
+    "signal": null,
+    "at_ms": 408
+  },
+  "requestsToTheBackend": [
+    {
+      "n": 1,
+      "method": "GET",
+      "path": "/backend-api/wham/accounts/check",
+      "answer": {
+        "status": 200,
+        "body": {
+          "accounts": [
+            {
+              "id": "acct-capture",
+              "name": null,
+              "structure": "personal",
+              "plan_type": "free",
+              "is_deactivated": false,
+              "is_fedramp_compliant_workspace": false,
+              "can_access_with_session": true,
+              "sso_connection_name": null,
+              "workspace_backend_origin": "https://127.0.0.1:<PORT>",
+              "account_routing_override": "NO_CONSTRAINT",
+              "profile_picture_url": null
+            }
+          ],
+          "account_ordering": [
+            "acct-capture"
+          ],
+          "default_account_id": "acct-capture"
+        }
+      }
+    },
+    {
+      "n": 2,
+      "method": "GET",
+      "path": "/backend-api/ps/plugins/suggested/codex?scope=GLOBAL",
+      "answer": {
+        "status": 404,
+        "body": {
+          "error": "not found (capture server)"
+        }
+      }
+    },
+    {
+      "n": 3,
+      "method": "GET",
+      "path": "/backend-api/codex/models?client_version=0.167.0",
+      "answer": {
+        "status": 401,
+        "body": {
+          "detail": "Your authentication token is not from a valid issuer."
+        }
+      }
+    },
+    {
+      "n": 4,
+      "method": "GET",
+      "path": "/backend-api/plugins/featured?platform=codex",
+      "answer": {
+        "status": 404,
+        "body": {
+          "error": "not found (capture server)"
+        }
+      }
+    },
+    {
+      "n": 5,
+      "method": "GET",
+      "path": "/backend-api/ps/plugins/installed?limit=200",
+      "answer": {
+        "status": 404,
+        "body": {
+          "error": "not found (capture server)"
+        }
+      }
+    },
+    {
+      "n": 6,
+      "method": "GET",
+      "path": "/backend-api/ps/plugins/list?scope=GLOBAL&limit=200",
+      "answer": {
+        "status": 404,
+        "body": {
+          "error": "not found (capture server)"
+        }
+      }
+    },
+    {
+      "n": 7,
+      "method": "GET",
+      "path": "/backend-api/ps/plugins/installed?limit=200&includeDownloadUrls=true",
+      "answer": {
+        "status": 404,
+        "body": {
+          "error": "not found (capture server)"
+        }
+      }
+    },
+    {
+      "n": 8,
+      "method": "GET",
+      "path": "/backend-api/ps/plugins/installed?limit=200",
+      "answer": {
+        "status": 404,
+        "body": {
+          "error": "not found (capture server)"
+        }
+      }
+    },
+    {
+      "n": 9,
+      "method": "GET",
+      "path": "/backend-api/codex/models?client_version=0.167.0",
+      "answer": {
+        "status": 401,
+        "body": {
+          "detail": "Your authentication token is not from a valid issuer."
+        }
+      }
+    }
+  ],
+  "modelsCacheJsonExists": false,
+  "homeAfter": [
+    ".sandbox/",
+    ".sandbox/sandbox.2026-11-12.log (131 bytes)",
+    "auth.json (721 bytes)",
+    "goals_1.sqlite (32768 bytes)",
+    "installation_id (36 bytes)",
+    "logs_2.sqlite (49152 bytes)",
+    "memories_1.sqlite (45056 bytes)",
+    "queue_1.sqlite (40960 bytes)",
+    "skills/",
+    "skills/.system/ (Codex's own bundled skills, not listed)",
+    "state_5.sqlite (282624 bytes)",
+    "tmp/",
+    "tmp/arg0-windows/"
+  ]
+}

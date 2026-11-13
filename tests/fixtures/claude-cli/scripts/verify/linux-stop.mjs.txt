@@ -1,0 +1,26 @@
+// The Linux side of a stop: the real SDK 0.3.319 under Linux Node, a stand-in program, the abort Tarsee's run() makes.
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const here = path.dirname(new URL(import.meta.url).pathname);
+const sdk = await import(pathToFileURL(process.env.SDK_MJS).href);
+const STUB = path.join(here, "linux-stub");
+for (const scenario of (process.env.ONLY ? [process.env.ONLY] : ["ignore-term", "exit-on-term", "exit-on-stdin-close"])) {
+  const out = path.join("/tmp", `vstub-${scenario}.jsonl`); fs.rmSync(out, { force: true });
+  const ac = new AbortController();
+  const t0 = Date.now(); const rel = () => Date.now() - t0;
+  const notes = []; let abortAt = null; let goneAt = null; let pid = null;
+  const stream = sdk.query({ prompt: "hi", options: { abortController: ac, pathToClaudeCodeExecutable: STUB, cwd: "/tmp", env: { PATH: process.env.PATH, HOME: "/tmp/vhome", VSTUB_OUT: out, VSTUB_SCENARIO: scenario, MADE_UP: "1" }, stderr: () => {},
+    onProcessSpawned: (p) => { pid = p; const iv = setInterval(() => { try { process.kill(p, 0); } catch { goneAt = rel(); clearInterval(iv); } }, 10); iv.unref(); } } });
+  setTimeout(() => { abortAt = rel(); ac.abort(); }, 500);
+  let thrown = null; let n = 0;
+  try { for await (const m of stream) { n++; if (ac.signal.aborted) break; } } catch (e) { thrown = e.message; }
+  const loopEnded = rel();
+  await new Promise((r) => setTimeout(r, scenario === "ignore-term" ? 5800 : 300));
+  const stub = fs.readFileSync(out, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const base = stub[0].at; const abs = t0 + abortAt;
+  console.log(`--- ${scenario}: abort at ${abortAt} ms; loop ended ${loopEnded - abortAt} ms after the abort; process gone ${goneAt == null ? "not seen" : goneAt - abortAt + " ms after the abort"}; thrown: ${thrown}; messages seen: ${n}`);
+  console.log("    stub, in ms after the abort: " + stub.filter((r) => r.ev !== "start" && r.ev !== "stdin").map((r) => `${r.ev} ${r.at - abs}`).join(", "));
+  if (scenario === "ignore-term") console.log("    env names the program received: " + stub[0].envNames.join(" "));
+}
+process.exit(0);

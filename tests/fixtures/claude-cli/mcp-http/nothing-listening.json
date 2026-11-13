@@ -1,0 +1,64 @@
+{
+  "name": "nothing-listening",
+  "description": "Nothing listens at the address: the same.",
+  "how": "The real claude 2.1.319 pointed at a small local HTTP server that logs every request and answers initialize, tools/list and tools/call; a loopback stand-in for the Messages API scripted a call to mcp__tarsee__tarsee_datetime.",
+  "mcp_arguments": [
+    "--mcp-config",
+    "{\"mcpServers\":{\"tarsee\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:<PORT>/mcp\",\"headers\":{\"Authorization\":\"Bearer <TOKEN>\"},\"alwaysLoad\":true}}}"
+  ],
+  "exit_code": 0,
+  "system_init": {
+    "mcp_servers": [
+      {
+        "name": "tarsee",
+        "status": "failed",
+        "source": "dynamic"
+      }
+    ],
+    "tools": [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Read",
+      "Write"
+    ]
+  },
+  "stdout_message_counts": {
+    "control_response": 1,
+    "system/session_state_changed": 2,
+    "system/init": 1,
+    "system/status": 1,
+    "stream_event": 8,
+    "assistant": 1,
+    "result/success": 1
+  },
+  "tools_offered_to_the_model_in_each_api_request": [
+    [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Read",
+      "Write"
+    ]
+  ],
+  "requests_the_server_received": [],
+  "tool_messages_on_stdout": [
+    {
+      "type": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "No tarsee tool was offered."
+        }
+      ]
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "result": "No tarsee tool was offered."
+    }
+  ]
+}

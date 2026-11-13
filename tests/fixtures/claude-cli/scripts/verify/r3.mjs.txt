@@ -1,0 +1,142 @@
+// Sessions, stops and failures of the real program, each against my own stand-in API.
+import fs from "node:fs";
+import path from "node:path";
+import { startFakeApi, startMcp } from "./fakes.mjs";
+import { drive, initialize, userText, kinds } from "./drive.mjs";
+import { SCRATCH, HOME } from "./realenv.mjs";
+
+const only = process.argv.slice(2);
+const want = (n) => !only.length || only.some((o) => n.startsWith(o));
+const args = (extra = [], { maxTurns = 50, afterModel = [] } = {}) => [
+  "--output-format", "stream-json", "--verbose", "--input-format", "stream-json",
+  ...(maxTurns ? [`--max-turns=${maxTurns}`] : []), ...extra.filter((a) => a.startsWith("--max-budget")), "--model=claude-sonnet-4-5", ...afterModel,
+  "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*", "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+  ...extra.filter((a) => !a.startsWith("--max-budget")),
+  "--setting-sources=project", "--strict-mcp-config",
+  "--permission-mode=bypassPermissions", "--allow-dangerously-skip-permissions", "--include-partial-messages",
+];
+const brief = (rec) => {
+  const result = rec.stdout.filter((s) => s.json.type === "result").map((s) => s.json);
+  console.log("stdout:", kinds(rec));
+  for (const r of result) console.log("result:", JSON.stringify({ subtype: r.subtype, is_error: r.is_error, result: r.result, errors: r.errors, num_turns: r.num_turns, session_id: r.session_id, terminal_reason: r.terminal_reason, api_error_status: r.api_error_status, total_cost_usd: r.total_cost_usd, usage: r.usage && { in: r.usage.input_tokens, out: r.usage.output_tokens }, modelUsage: r.modelUsage && Object.fromEntries(Object.entries(r.modelUsage).map(([k, v]) => [k, { in: v.inputTokens, out: v.outputTokens, cost: v.costUSD }])), since_last: r.model_usage_since_last_result && Object.fromEntries(Object.entries(r.model_usage_since_last_result).map(([k, v]) => [k, { in: v.inputTokens, out: v.outputTokens, cost: v.costUSD }])) }));
+  console.log("stderr:", JSON.stringify(rec.stderr.slice(0, 600)), "| exit:", JSON.stringify(rec.exit), "| stdin:", rec.stdin_written.map((s) => s.t + ":" + (s.closed ? "CLOSED" : s.json.type + (s.json.request ? "/" + s.json.request.subtype : ""))).join(" "), "| notes:", JSON.stringify(rec.notes));
+};
+
+let sid = null;
+if (want("s1")) {
+  const api = await startFakeApi([{ text: "first answer" }]);
+  console.log("\n=== s1a turn 1");
+  const a = await drive("s1a-turn1", { args: args(), env: { ANTHROPIC_BASE_URL: api.url, CLAUDE_CODE_SDK_READS_SESSION_STATE: "1" }, initial: [initialize(["FIRST TURN PROMPT"]), userText("one")] });
+  brief(a);
+  sid = a.stdout.find((s) => s.json.type === "result")?.json.session_id;
+  console.log("\n=== s1b turn 2, --resume, a different system prompt, systemPromptSnapshot false");
+  const b = await drive("s1b-turn2-resume", { args: args([], { afterModel: [`--resume=${sid}`] }), env: { ANTHROPIC_BASE_URL: api.url, CLAUDE_CODE_SDK_READS_SESSION_STATE: "1" }, initial: [initialize(["SECOND TURN PROMPT"]), userText("two")] });
+  brief(b);
+  console.log("init session:", b.stdout.find((s) => s.json.subtype === "init")?.json.session_id, "same as turn 1:", b.stdout.find((s) => s.json.subtype === "init")?.json.session_id === sid);
+  console.log("isReplay user messages on stdout:", b.stdout.filter((s) => s.json.type === "user").length);
+  console.log("\n=== s1c turn 3, --resume, a third prompt, NO systemPromptSnapshot key");
+  const c = await drive("s1c-turn3-resume-no-snapshot-key", { args: args([], { afterModel: [`--resume=${sid}`] }), env: { ANTHROPIC_BASE_URL: api.url }, initial: [{ request_id: "init1", type: "control_request", request: { subtype: "initialize", systemPrompt: ["THIRD TURN PROMPT"] } }, userText("three")] });
+  brief(c);
+  const sys = api.requests.filter((r) => r.body?.stream).map((r) => r.body.system.map((b) => b.text.slice(0, 60) + (b.cache_control ? " [cache_control " + JSON.stringify(b.cache_control) + "]" : "")));
+  console.log("system sent on each call:", JSON.stringify(sys, null, 1));
+  console.log("messages count per call:", api.requests.filter((r) => r.body?.stream).map((r) => r.body.messages.length).join(","));
+  const tr = path.join(HOME, ".claude", "projects");
+  const files = fs.readdirSync(tr).flatMap((d) => fs.readdirSync(path.join(tr, d)).filter((f) => f.startsWith(sid)).map((f) => path.join(d, f)));
+  console.log("transcript files for the session:", files);
+  const rows = fs.readFileSync(path.join(tr, files.find((f) => f.endsWith(".jsonl"))), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  console.log("transcript row types:", rows.map((r) => r.type).join(","));
+  fs.copyFileSync(path.join(tr, files.find((f) => f.endsWith(".jsonl"))), path.join(SCRATCH, "real", "out", "s1-transcript.jsonl"));
+  await api.close();
+}
+if (want("s2")) {
+  console.log("\n=== s2 --resume with a well-formed id that has no transcript");
+  brief(await drive("s2-resume-unknown", { args: args([], { afterModel: ["--resume=11111111-2222-4333-8444-555555555555"] }), initial: [initialize(), userText("hi")], closeOnResult: true, maxMs: 20000 }));
+  console.log("\n=== s3 --resume with a value that is not a UUID");
+  brief(await drive("s3-resume-not-uuid", { args: args([], { afterModel: ["--resume=not-a-uuid"] }), initial: [initialize(), userText("hi")], maxMs: 20000 }));
+}
+if (want("s4")) {
+  console.log("\n=== s4 unknown flag");
+  brief(await drive("s4-unknown-flag", { args: [...args(), "--no-such-flag"], initial: [initialize(), userText("hi")], maxMs: 20000 }));
+}
+if (want("s5")) {
+  console.log("\n=== s5 interrupt while the reply streams (a slow stream: 10 chunks, 400 ms apart)");
+  const api = await startFakeApi([{ text: "0123456789abcdefghij", chunks: 10, delayMs: 400 }, { text: "second answer" }]);
+  let sent = false; let second = false;
+  const rec = await drive("s5-interrupt", {
+    args: args(), env: { ANTHROPIC_BASE_URL: api.url, CLAUDE_CODE_SDK_READS_SESSION_STATE: "1" }, initial: [initialize(), userText("talk slowly")], closeOnResult: false, maxMs: 30000,
+    onMessage: (m, ctl) => {
+      if (!sent && m.type === "stream_event" && m.event.type === "content_block_delta") { sent = true; ctl.write({ request_id: "int1", type: "control_request", request: { subtype: "interrupt" } }); }
+      if (m.type === "result" && !second) { second = true; setTimeout(() => ctl.write(userText("and again")), 200); }
+      else if (m.type === "result") setTimeout(() => ctl.close(), 100);
+    },
+  });
+  brief(rec);
+  console.log("after the interrupt:", rec.stdout.filter((s) => s.t >= rec.stdin_written.find((w) => w.json?.request?.subtype === "interrupt").t).slice(0, 9).map((s) => `${s.t}:${JSON.stringify(s.json).slice(0, 330)}`).join("\n   "));
+  await api.close();
+}
+if (want("s6")) {
+  console.log("\n=== s6 stdin closed while the reply streams, and the stream goes on to its end (8 chunks, 400 ms apart)");
+  const api = await startFakeApi([{ text: "0123456789abcdef", chunks: 8, delayMs: 400 }]);
+  let closed = false;
+  const rec = await drive("s6-stdin-closed-mid-stream-stream-completes", {
+    args: args(), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("talk slowly")], closeOnResult: false, maxMs: 30000,
+    onMessage: (m, ctl) => { if (!closed && m.type === "stream_event" && m.event.type === "content_block_delta") { closed = true; ctl.close(); } },
+  });
+  brief(rec);
+  await api.close();
+}
+if (want("s7")) {
+  console.log("\n=== s7 stdin closed while a model call hangs (the API sends message_start and then nothing)");
+  const api = await startFakeApi([{ hang: true }]);
+  let closed = false;
+  const rec = await drive("s7-stdin-closed-api-hangs", {
+    args: args(), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("hang")], closeOnResult: false, maxMs: 12000,
+    onMessage: (m, ctl) => { if (!closed && m.type === "stream_event" && m.event.type === "message_start") { closed = true; ctl.close(); } },
+  });
+  brief(rec);
+  await api.close();
+}
+if (want("s8")) {
+  console.log("\n=== s8 stdin closed at once, nothing written");
+  brief(await drive("s8-empty-stdin", { args: args(), closeStdinAtStart: true, maxMs: 20000 }));
+}
+if (want("s9")) {
+  for (const [name, step] of [["401", { status: 401, error: { type: "authentication_error", message: "invalid x-api-key" } }], ["429", { status: 429, error: { type: "rate_limit_error", message: "slow down please" } }], ["529", { status: 529, error: { type: "overloaded_error", message: "Overloaded" } }], ["400", { status: 400, error: { type: "invalid_request_error", message: "bad thing in the request" } }]]) {
+    console.log(`\n=== s9 API answers ${name}`);
+    const api = await startFakeApi([step]);
+    const rec = await drive(`s9-api-${name}`, { args: args(), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("hi")], maxMs: 30000 });
+    brief(rec);
+    const a = rec.stdout.find((s) => s.json.type === "assistant")?.json;
+    console.log("assistant:", JSON.stringify(a && { error: a.error, model: a.message?.model, content: a.message?.content, is_api_error_message: a.is_api_error_message, api_error: a.api_error }));
+    await api.close();
+  }
+}
+if (want("s10")) {
+  console.log("\n=== s10 the three-element system prompt");
+  const api = await startFakeApi([{ text: "ok" }]);
+  const rec = await drive("s10-system-three-parts", { args: args(), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(["STABLE PART", "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__", "VOLATILE PART"]), userText("hi")] });
+  brief(rec);
+  console.log("system:", JSON.stringify(api.requests.find((r) => r.body?.stream)?.body.system));
+  console.log("anthropic-beta:", api.requests.find((r) => r.body?.stream)?.headers["anthropic-beta"]);
+  await api.close();
+}
+if (want("s11")) {
+  console.log("\n=== s11 --max-turns=1 with a model that keeps calling a tool");
+  const mcp = await startMcp({});
+  const api = await startFakeApi([{ tool: { id: "toolu_a", name: "mcp__tarsee__echo", input: { text: "1" } } }, { tool: { id: "toolu_b", name: "mcp__tarsee__echo", input: { text: "2" } } }, { tool: { id: "toolu_c", name: "mcp__tarsee__echo", input: { text: "3" } } }]);
+  const rec = await drive("s11-max-turns", { args: args(["--mcp-config", JSON.stringify({ mcpServers: { tarsee: { type: "http", url: mcp.url } } })], { maxTurns: 1 }), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("loop")], maxMs: 30000 });
+  brief(rec);
+  console.log("tool calls that reached the MCP server:", mcp.requests.filter((r) => r.body?.method === "tools/call").length, "api calls:", api.requests.filter((r) => r.body?.stream).length);
+  await mcp.close(); await api.close();
+}
+if (want("s12")) {
+  for (const form of ["1e-7", "0.0000001"]) {
+    console.log(`\n=== s12 --max-budget-usd=${form}`);
+    const mcp = await startMcp({});
+    const api = await startFakeApi([{ tool: { id: "toolu_a", name: "mcp__tarsee__echo", input: { text: "1" } } }, { text: "done" }]);
+    const rec = await drive(`s12-budget-${form}`, { args: args([`--max-budget-usd=${form}`, "--mcp-config", JSON.stringify({ mcpServers: { tarsee: { type: "http", url: mcp.url } } })]), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("spend")], maxMs: 30000 });
+    brief(rec);
+    console.log("tool calls that reached the MCP server:", mcp.requests.filter((r) => r.body?.method === "tools/call").length);
+    await mcp.close(); await api.close();
+  }
+}

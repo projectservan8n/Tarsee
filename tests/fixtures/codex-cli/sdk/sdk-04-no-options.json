@@ -1,0 +1,99 @@
+{
+  "name": "sdk-04-no-options",
+  "what": "Nothing but the program's path: no env option (so the child gets a copy of the caller's whole process environment), no config, no thread options. The shortest command line the SDK produces.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "win32"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "thread": {
+      "method": "startThread"
+    },
+    "runStreamed(input, turnOptions)": {
+      "input": "",
+      "inputLength": {
+        "characters": 0,
+        "utf8Bytes": 0
+      },
+      "turnOptions": {}
+    },
+    "callerProcessEnvNames": [
+      "COMSPEC",
+      "FROM_PROCESS_ENV",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "TMP",
+      "TMPDIR"
+    ]
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "argv": [
+      "exec",
+      "--experimental-json"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "COMSPEC",
+      "FROM_PROCESS_ENV",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "TMP",
+      "TMPDIR"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "FROM_PROCESS_ENV": "the caller's own environment",
+      "PATH": "C:\\WINDOWS\\system32;C:\\WINDOWS"
+    },
+    "stdin": {
+      "text": "",
+      "sameAsTheInput": true,
+      "bytes": 0,
+      "chunks": [],
+      "eof_at_ms": 0
+    }
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000bb\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":0,\"output_tokens\":2,\"reasoning_output_tokens\":0}}\n",
+    "stderr": "",
+    "exitCode": 0,
+    "sleepMsBeforeExit": 0
+  },
+  "sdkYielded": [
+    {
+      "type": "thread.started",
+      "thread_id": "01a1c000-0000-7000-8000-0000000000bb"
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_0",
+        "type": "agent_message",
+        "text": "ok"
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 10,
+        "cached_input_tokens": 0,
+        "output_tokens": 2,
+        "reasoning_output_tokens": 0,
+        "cache_write_input_tokens": 0
+      }
+    }
+  ],
+  "sdkThrew": null
+}

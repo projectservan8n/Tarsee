@@ -1,0 +1,79 @@
+#!/usr/bin/env node
+/**
+ * inspect-home.mjs: what is in a Codex home after real turns, read from the home capture-real.mjs's first scenario
+ * left (runs-real/real-01): the rollout's line types and its token_count lines, and the parts of the six sqlite
+ * databases Tarsee's retention relies on (lib/codex-thread-dbs.js): the `threads` table's columns and every table that
+ * has a thread column. Read-only.
+ *
+ *   node inspect-home.mjs        (after capture-real.mjs real-01)
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { createRequire } from "node:module";
+
+const PROJECT = process.env.CAPTURE_PROJECT || "/path/to/the/node/checkout";
+const SCRATCH = process.env.CAPTURE_SCRATCH || "/path/to/a/scratch/folder";
+const Database = createRequire(path.join(PROJECT, "package.json"))("better-sqlite3");
+const home = path.join(SCRATCH, "runs-real", "real-01", "state", ".codex-home-keys");
+
+// --- the rollout ----------------------------------------------------------------------------------------------------
+const rollouts = [];
+const walk = (dir, depth) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory() && depth > 0) walk(p, depth - 1); else if (/^rollout-.*\.jsonl$/.test(e.name)) rollouts.push(p); } };
+walk(path.join(home, "sessions"), 3);
+const file = rollouts[0];
+const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+const threadId = lines.find((l) => l.type === "session_meta").payload.id;
+const kinds = {};
+for (const l of lines) { const k = l.type + (l.payload?.type ? `:${l.payload.type}` : ""); kinds[k] = (kinds[k] || 0) + 1; }
+const meta = lines.find((l) => l.type === "session_meta");
+const rollout = {
+  fileRelativeToTheHome: path.relative(home, file).split(path.sep).join("/"),
+  note: "the folder and the time in the name are the machine's local time; session_meta.timestamp is UTC",
+  lines: lines.length,
+  topLevelKeysOfEveryLine: Object.keys(lines[0]),
+  lineTypesAndCounts: kinds,
+  sessionMeta: { timestamp: meta.timestamp, payloadKeys: Object.keys(meta.payload), id: meta.payload.id, originator: meta.payload.originator, cli_version: meta.payload.cli_version, source: meta.payload.source, thread_source: meta.payload.thread_source, model_provider: meta.payload.model_provider },
+  tokenCountLines: lines.filter((l) => l.type === "event_msg" && l.payload.type === "token_count"),
+};
+
+// --- the databases --------------------------------------------------------------------------------------------------
+const THREAD_COLUMNS = ["thread_id", "parent_thread_id", "child_thread_id"];
+const databases = {};
+for (const name of ["state_5.sqlite", "thread_history_1.sqlite", "goals_1.sqlite", "queue_1.sqlite", "memories_1.sqlite", "logs_2.sqlite"]) {
+  const f = path.join(home, name);
+  if (!fs.existsSync(f)) { databases[name] = "not there"; continue; }
+  const db = new Database(f, { readonly: true, fileMustExist: true });
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map((r) => r.name);
+  const entry = { tables, tablesWithAThreadColumn: {} };
+  for (const t of tables) {
+    const cols = db.prepare("SELECT name, type FROM pragma_table_info(?)").all(t);
+    const hit = cols.filter((c) => THREAD_COLUMNS.includes(c.name)).map((c) => c.name);
+    if (hit.length) entry.tablesWithAThreadColumn[t] = hit;
+    if (t === "threads") {
+      entry.threadsColumns = cols.map((c) => `${c.name} ${c.type}`);
+      entry.aThreadsRow = db.prepare("SELECT id, rollout_path, updated_at, updated_at_ms FROM threads LIMIT 1").get();
+    }
+  }
+  db.close();
+  databases[name] = entry;
+}
+
+const fixture = {
+  name: "real-13-codex-home-after-turns",
+  what: "A Codex home after a real turn and a resumed one (the home real-01 and real-02 left): the rollout's line types and its token_count lines (what Tarsee reads usage from), and in the six sqlite databases the `threads` table's columns and every table with a thread column (what Tarsee's retention deletes from).",
+  made_with: { program: "codex 0.167.0 (the real pinned program)", platform: process.platform },
+  rollout,
+  databases,
+};
+let text = JSON.stringify(fixture, null, 2);
+// Every spelling the home's path takes inside the JSON text: with either slash, and JSON-escaped once or twice.
+const forms = (value) => {
+  const out = new Set([value, value.split("\\").join("/"), value.split("/").join("\\")]);
+  for (let i = 0; i < 2; i++) for (const f of [...out]) out.add(JSON.stringify(f).slice(1, -1));
+  return [...out].sort((a, b) => b.length - a.length);
+};
+for (const [v, label] of [[home, "<CODEX_HOME>"], [SCRATCH, "<SCRATCH>"]]) for (const f of forms(v)) text = text.split(f).join(label);
+text = text.split(threadId).join("<THREAD_ID>");
+fs.writeFileSync(path.join(SCRATCH, "fixtures-real", "real-13-codex-home-after-turns.json"), `${text}\n`);
+console.log(`real-13-codex-home-after-turns: ${lines.length} rollout lines, ${Object.keys(databases).length} databases`);
+process.exit(0);

@@ -1,0 +1,725 @@
+{
+  "name": "other-05-device-login",
+  "what": "`codex login --device-auth` against a local stand-in for the sign-in server (through the program's hidden --experimental_issuer option, which Tarsee does not pass): what it prints on which stream and when, the requests it makes, how it ends, and the auth.json it writes. Six runs: signed in after two polls; device-code sign-in switched off (404); the code request refused (500); refused while waiting (400); never approved and cancelled by killTree(); approved but the token exchange fails.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program)",
+    "platform": "win32"
+  },
+  "signedInAfterTwoPolls": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "login",
+      "--device-auth",
+      "--experimental_issuer",
+      "http://127.0.0.1:<PORT>"
+    ],
+    "argvNote": "--experimental_issuer and its value are the capture's addition; Tarsee passes the first eight arguments only",
+    "envNames": [
+      "APPDATA",
+      "CODEX_HOME",
+      "ComSpec",
+      "HOME",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "LOCALAPPDATA",
+      "NO_PROXY",
+      "PATH",
+      "SystemDrive",
+      "SystemRoot",
+      "TEMP",
+      "TMP",
+      "USERPROFILE"
+    ],
+    "cwd": "<CODEX_HOME>",
+    "stdinClosedAtOnce": true,
+    "output": [
+      {
+        "stream": "stdout",
+        "at_ms": 5302,
+        "text": "\nWelcome to Codex [v\u001b[90m0.167.0\u001b[0m]\n\u001b[90mOpenAI's command-line coding agent\u001b[0m\n\nFollow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   \u001b[94mhttp://127.0.0.1:<PORT>/codex/device\u001b[0m\n\n2. Enter this one-time code \u001b[90m(expires in 15 minutes)\u001b[0m\n   \u001b[94mCAPT-12345\u001b[0m\n\n\u001b[90mContinue only if you started this login in Codex. If a website or another person gave you this code, cancel.\u001b[0m\n\n"
+      },
+      {
+        "stream": "stderr",
+        "at_ms": 11522,
+        "text": "Successfully logged in\n"
+      }
+    ],
+    "stdout": "\nWelcome to Codex [v\u001b[90m0.167.0\u001b[0m]\n\u001b[90mOpenAI's command-line coding agent\u001b[0m\n\nFollow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   \u001b[94mhttp://127.0.0.1:<PORT>/codex/device\u001b[0m\n\n2. Enter this one-time code \u001b[90m(expires in 15 minutes)\u001b[0m\n   \u001b[94mCAPT-12345\u001b[0m\n\n\u001b[90mContinue only if you started this login in Codex. If a website or another person gave you this code, cancel.\u001b[0m\n\n",
+    "stderr": "Successfully logged in\n",
+    "exit": {
+      "code": 0,
+      "signal": null,
+      "at_ms": 11548
+    },
+    "stoppedByTheCapture": null,
+    "authJsonAppearedAt_ms": 11519,
+    "authJson": {
+      "auth_mode": "chatgpt",
+      "OPENAI_API_KEY": null,
+      "tokens": {
+        "id_token": "<ID_TOKEN>",
+        "access_token": "<ACCESS_TOKEN>",
+        "refresh_token": "<REFRESH_TOKEN>",
+        "oauth_provenance": {
+          "issuer": "http://127.0.0.1:<PORT>",
+          "client_id": "<CODEX_CLIENT_ID>"
+        },
+        "login_owner_id": "<LOGIN_OWNER_ID>",
+        "account_id": "acct-capture"
+      },
+      "last_refresh": "2026-11-13T00:13:55.044613500Z"
+    },
+    "requestsToTheSignInServer": [
+      {
+        "n": 1,
+        "at_ms": 3851,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/usercode",
+        "contentType": "application/json",
+        "body": {
+          "client_id": "<CODEX_CLIENT_ID>"
+        },
+        "answer": {
+          "status": 200,
+          "body": {
+            "device_auth_id": "deviceauth-capture-0001",
+            "user_code": "CAPT-12345",
+            "interval": "1"
+          }
+        }
+      },
+      {
+        "n": 2,
+        "at_ms": 5321,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/token",
+        "contentType": "application/json",
+        "body": {
+          "device_auth_id": "deviceauth-capture-0001",
+          "user_code": "CAPT-12345"
+        },
+        "answer": {
+          "status": 403,
+          "body": {
+            "error": "authorization_pending"
+          }
+        }
+      },
+      {
+        "n": 3,
+        "at_ms": 6514,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/token",
+        "contentType": "application/json",
+        "body": {
+          "device_auth_id": "deviceauth-capture-0001",
+          "user_code": "CAPT-12345"
+        },
+        "answer": {
+          "status": 403,
+          "body": {
+            "error": "authorization_pending"
+          }
+        }
+      },
+      {
+        "n": 4,
+        "at_ms": 7517,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/token",
+        "contentType": "application/json",
+        "body": {
+          "device_auth_id": "deviceauth-capture-0001",
+          "user_code": "CAPT-12345"
+        },
+        "answer": {
+          "status": 200,
+          "body": {
+            "authorization_code": "authcode-capture-0001",
+            "code_challenge": "challenge-capture",
+            "code_verifier": "verifier-capture"
+          }
+        }
+      },
+      {
+        "n": 5,
+        "at_ms": 8536,
+        "method": "POST",
+        "path": "/oauth/token",
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "grant_type=authorization_code&client_id=<CODEX_CLIENT_ID>&code=authcode-capture-0001&redirect_uri=http%3A%2F%2F127.0.0.1%3A<PORT>%2Fdeviceauth%2Fcallback&code_verifier=verifier-capture",
+        "answer": {
+          "status": 200,
+          "body": {
+            "id_token": "<ID_TOKEN>",
+            "access_token": "<ACCESS_TOKEN>",
+            "refresh_token": "<REFRESH_TOKEN>"
+          }
+        }
+      }
+    ],
+    "homeAfter": [
+      "auth.json (890 bytes)",
+      "auth.json.lock (0 bytes)",
+      "auth.lock (0 bytes)",
+      "log/",
+      "log/codex-login.log (392 bytes)",
+      "tmp/",
+      "tmp/arg0-windows/",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/.lock (0 bytes)",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/apply_patch.bat (178 bytes)",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/applypatch.bat (178 bytes)"
+    ]
+  },
+  "deviceCodeSignInSwitchedOff": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "login",
+      "--device-auth",
+      "--experimental_issuer",
+      "http://127.0.0.1:<PORT>"
+    ],
+    "argvNote": "--experimental_issuer and its value are the capture's addition; Tarsee passes the first eight arguments only",
+    "envNames": [
+      "APPDATA",
+      "CODEX_HOME",
+      "ComSpec",
+      "HOME",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "LOCALAPPDATA",
+      "NO_PROXY",
+      "PATH",
+      "SystemDrive",
+      "SystemRoot",
+      "TEMP",
+      "TMP",
+      "USERPROFILE"
+    ],
+    "cwd": "<CODEX_HOME>",
+    "stdinClosedAtOnce": true,
+    "output": [
+      {
+        "stream": "stderr",
+        "at_ms": 202,
+        "text": "Error logging in: device code login is not enabled for this Codex server. Use the browser login or verify the server URL.\n"
+      }
+    ],
+    "stdout": "",
+    "stderr": "Error logging in: device code login is not enabled for this Codex server. Use the browser login or verify the server URL.\n",
+    "exit": {
+      "code": 1,
+      "signal": null,
+      "at_ms": 223
+    },
+    "stoppedByTheCapture": null,
+    "authJsonAppearedAt_ms": null,
+    "authJson": null,
+    "requestsToTheSignInServer": [
+      {
+        "n": 1,
+        "at_ms": 205,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/usercode",
+        "contentType": "application/json",
+        "body": {
+          "client_id": "<CODEX_CLIENT_ID>"
+        },
+        "answer": {
+          "status": 404,
+          "body": {
+            "error": "not found"
+          }
+        }
+      }
+    ],
+    "homeAfter": [
+      "auth.json.lock (0 bytes)",
+      "auth.lock (0 bytes)",
+      "log/",
+      "log/codex-login.log (84 bytes)",
+      "tmp/",
+      "tmp/arg0-windows/",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/.lock (0 bytes)",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/apply_patch.bat (178 bytes)",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/applypatch.bat (178 bytes)"
+    ]
+  },
+  "signInServerRefusesTheCodeRequest": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "login",
+      "--device-auth",
+      "--experimental_issuer",
+      "http://127.0.0.1:<PORT>"
+    ],
+    "argvNote": "--experimental_issuer and its value are the capture's addition; Tarsee passes the first eight arguments only",
+    "envNames": [
+      "APPDATA",
+      "CODEX_HOME",
+      "ComSpec",
+      "HOME",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "LOCALAPPDATA",
+      "NO_PROXY",
+      "PATH",
+      "SystemDrive",
+      "SystemRoot",
+      "TEMP",
+      "TMP",
+      "USERPROFILE"
+    ],
+    "cwd": "<CODEX_HOME>",
+    "stdinClosedAtOnce": true,
+    "output": [
+      {
+        "stream": "stderr",
+        "at_ms": 60,
+        "text": "Error logging in: device code request failed with status 500 Internal Server Error\n"
+      }
+    ],
+    "stdout": "",
+    "stderr": "Error logging in: device code request failed with status 500 Internal Server Error\n",
+    "exit": {
+      "code": 1,
+      "signal": null,
+      "at_ms": 75
+    },
+    "stoppedByTheCapture": null,
+    "authJsonAppearedAt_ms": null,
+    "authJson": null,
+    "requestsToTheSignInServer": [
+      {
+        "n": 1,
+        "at_ms": 60,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/usercode",
+        "contentType": "application/json",
+        "body": {
+          "client_id": "<CODEX_CLIENT_ID>"
+        },
+        "answer": {
+          "status": 500,
+          "body": {
+            "error": "boom"
+          }
+        }
+      }
+    ],
+    "homeAfter": [
+      "auth.json.lock (0 bytes)",
+      "auth.lock (0 bytes)",
+      "log/",
+      "log/codex-login.log (84 bytes)",
+      "tmp/",
+      "tmp/arg0-windows/",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/.lock (0 bytes)",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/apply_patch.bat (178 bytes)",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/applypatch.bat (178 bytes)"
+    ]
+  },
+  "refusedWhileWaiting": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "login",
+      "--device-auth",
+      "--experimental_issuer",
+      "http://127.0.0.1:<PORT>"
+    ],
+    "argvNote": "--experimental_issuer and its value are the capture's addition; Tarsee passes the first eight arguments only",
+    "envNames": [
+      "APPDATA",
+      "CODEX_HOME",
+      "ComSpec",
+      "HOME",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "LOCALAPPDATA",
+      "NO_PROXY",
+      "PATH",
+      "SystemDrive",
+      "SystemRoot",
+      "TEMP",
+      "TMP",
+      "USERPROFILE"
+    ],
+    "cwd": "<CODEX_HOME>",
+    "stdinClosedAtOnce": true,
+    "output": [
+      {
+        "stream": "stdout",
+        "at_ms": 53,
+        "text": "\nWelcome to Codex [v\u001b[90m0.167.0\u001b[0m]\n\u001b[90mOpenAI's command-line coding agent\u001b[0m\n\nFollow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   \u001b[94mhttp://127.0.0.1:<PORT>/codex/device\u001b[0m\n\n2. Enter this one-time code \u001b[90m(expires in 15 minutes)\u001b[0m\n   \u001b[94mCAPT-12345\u001b[0m\n\n\u001b[90mContinue only if you started this login in Codex. If a website or another person gave you this code, cancel.\u001b[0m\n\n"
+      },
+      {
+        "stream": "stderr",
+        "at_ms": 1059,
+        "text": "Error logging in: device auth failed with status 400 Bad Request\n"
+      }
+    ],
+    "stdout": "\nWelcome to Codex [v\u001b[90m0.167.0\u001b[0m]\n\u001b[90mOpenAI's command-line coding agent\u001b[0m\n\nFollow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   \u001b[94mhttp://127.0.0.1:<PORT>/codex/device\u001b[0m\n\n2. Enter this one-time code \u001b[90m(expires in 15 minutes)\u001b[0m\n   \u001b[94mCAPT-12345\u001b[0m\n\n\u001b[90mContinue only if you started this login in Codex. If a website or another person gave you this code, cancel.\u001b[0m\n\n",
+    "stderr": "Error logging in: device auth failed with status 400 Bad Request\n",
+    "exit": {
+      "code": 1,
+      "signal": null,
+      "at_ms": 1099
+    },
+    "stoppedByTheCapture": null,
+    "authJsonAppearedAt_ms": null,
+    "authJson": null,
+    "requestsToTheSignInServer": [
+      {
+        "n": 1,
+        "at_ms": 53,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/usercode",
+        "contentType": "application/json",
+        "body": {
+          "client_id": "<CODEX_CLIENT_ID>"
+        },
+        "answer": {
+          "status": 200,
+          "body": {
+            "device_auth_id": "deviceauth-capture-0001",
+            "user_code": "CAPT-12345",
+            "interval": "1"
+          }
+        }
+      },
+      {
+        "n": 2,
+        "at_ms": 55,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/token",
+        "contentType": "application/json",
+        "body": {
+          "device_auth_id": "deviceauth-capture-0001",
+          "user_code": "CAPT-12345"
+        },
+        "answer": {
+          "status": 403,
+          "body": {}
+        }
+      },
+      {
+        "n": 3,
+        "at_ms": 1059,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/token",
+        "contentType": "application/json",
+        "body": {
+          "device_auth_id": "deviceauth-capture-0001",
+          "user_code": "CAPT-12345"
+        },
+        "answer": {
+          "status": 400,
+          "body": {
+            "error": "expired"
+          }
+        }
+      }
+    ],
+    "homeAfter": [
+      "auth.json.lock (0 bytes)",
+      "auth.lock (0 bytes)",
+      "log/",
+      "log/codex-login.log (84 bytes)",
+      "tmp/",
+      "tmp/arg0-windows/",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/.lock (0 bytes)",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/apply_patch.bat (178 bytes)",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/applypatch.bat (178 bytes)"
+    ]
+  },
+  "neverApprovedThenCancelled": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "login",
+      "--device-auth",
+      "--experimental_issuer",
+      "http://127.0.0.1:<PORT>"
+    ],
+    "argvNote": "--experimental_issuer and its value are the capture's addition; Tarsee passes the first eight arguments only",
+    "envNames": [
+      "APPDATA",
+      "CODEX_HOME",
+      "ComSpec",
+      "HOME",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "LOCALAPPDATA",
+      "NO_PROXY",
+      "PATH",
+      "SystemDrive",
+      "SystemRoot",
+      "TEMP",
+      "TMP",
+      "USERPROFILE"
+    ],
+    "cwd": "<CODEX_HOME>",
+    "stdinClosedAtOnce": true,
+    "output": [
+      {
+        "stream": "stdout",
+        "at_ms": 139,
+        "text": "\nWelcome to Codex [v\u001b[90m0.167.0\u001b[0m]\n\u001b[90mOpenAI's command-line coding agent\u001b[0m\n\nFollow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   \u001b[94mhttp://127.0.0.1:<PORT>/codex/device\u001b[0m\n\n2. Enter this one-time code \u001b[90m(expires in 15 minutes)\u001b[0m\n   \u001b[94mCAPT-12345\u001b[0m\n\n\u001b[90mContinue only if you started this login in Codex. If a website or another person gave you this code, cancel.\u001b[0m\n\n"
+      }
+    ],
+    "stdout": "\nWelcome to Codex [v\u001b[90m0.167.0\u001b[0m]\n\u001b[90mOpenAI's command-line coding agent\u001b[0m\n\nFollow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   \u001b[94mhttp://127.0.0.1:<PORT>/codex/device\u001b[0m\n\n2. Enter this one-time code \u001b[90m(expires in 15 minutes)\u001b[0m\n   \u001b[94mCAPT-12345\u001b[0m\n\n\u001b[90mContinue only if you started this login in Codex. If a website or another person gave you this code, cancel.\u001b[0m\n\n",
+    "stderr": "",
+    "exit": {
+      "code": 1,
+      "signal": null,
+      "at_ms": 3861
+    },
+    "stoppedByTheCapture": {
+      "killTreeAt_ms": 3524,
+      "killTreeDone_ms": 3861
+    },
+    "authJsonAppearedAt_ms": null,
+    "authJson": null,
+    "requestsToTheSignInServer": [
+      {
+        "n": 1,
+        "at_ms": 138,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/usercode",
+        "contentType": "application/json",
+        "body": {
+          "client_id": "<CODEX_CLIENT_ID>"
+        },
+        "answer": {
+          "status": 200,
+          "body": {
+            "device_auth_id": "deviceauth-capture-0001",
+            "user_code": "CAPT-12345",
+            "interval": "1"
+          }
+        }
+      },
+      {
+        "n": 2,
+        "at_ms": 142,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/token",
+        "contentType": "application/json",
+        "body": {
+          "device_auth_id": "deviceauth-capture-0001",
+          "user_code": "CAPT-12345"
+        },
+        "answer": {
+          "status": 403,
+          "body": {}
+        }
+      },
+      {
+        "n": 3,
+        "at_ms": 1148,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/token",
+        "contentType": "application/json",
+        "body": {
+          "device_auth_id": "deviceauth-capture-0001",
+          "user_code": "CAPT-12345"
+        },
+        "answer": {
+          "status": 403,
+          "body": {}
+        }
+      },
+      {
+        "n": 4,
+        "at_ms": 2170,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/token",
+        "contentType": "application/json",
+        "body": {
+          "device_auth_id": "deviceauth-capture-0001",
+          "user_code": "CAPT-12345"
+        },
+        "answer": {
+          "status": 403,
+          "body": {}
+        }
+      },
+      {
+        "n": 5,
+        "at_ms": 3191,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/token",
+        "contentType": "application/json",
+        "body": {
+          "device_auth_id": "deviceauth-capture-0001",
+          "user_code": "CAPT-12345"
+        },
+        "answer": {
+          "status": 403,
+          "body": {}
+        }
+      }
+    ],
+    "homeAfter": [
+      "auth.json.lock (0 bytes)",
+      "auth.lock (0 bytes)",
+      "log/",
+      "log/codex-login.log (84 bytes)",
+      "tmp/",
+      "tmp/arg0-windows/",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/.lock (0 bytes)",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/apply_patch.bat (178 bytes)",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/applypatch.bat (178 bytes)"
+    ]
+  },
+  "tokenExchangeFails": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "login",
+      "--device-auth",
+      "--experimental_issuer",
+      "http://127.0.0.1:<PORT>"
+    ],
+    "argvNote": "--experimental_issuer and its value are the capture's addition; Tarsee passes the first eight arguments only",
+    "envNames": [
+      "APPDATA",
+      "CODEX_HOME",
+      "ComSpec",
+      "HOME",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "LOCALAPPDATA",
+      "NO_PROXY",
+      "PATH",
+      "SystemDrive",
+      "SystemRoot",
+      "TEMP",
+      "TMP",
+      "USERPROFILE"
+    ],
+    "cwd": "<CODEX_HOME>",
+    "stdinClosedAtOnce": true,
+    "output": [
+      {
+        "stream": "stdout",
+        "at_ms": 92,
+        "text": "\nWelcome to Codex [v\u001b[90m0.167.0\u001b[0m]\n\u001b[90mOpenAI's command-line coding agent\u001b[0m\n\nFollow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   \u001b[94mhttp://127.0.0.1:<PORT>/codex/device\u001b[0m\n\n2. Enter this one-time code \u001b[90m(expires in 15 minutes)\u001b[0m\n   \u001b[94mCAPT-12345\u001b[0m\n\n\u001b[90mContinue only if you started this login in Codex. If a website or another person gave you this code, cancel.\u001b[0m\n\n"
+      },
+      {
+        "stream": "stderr",
+        "at_ms": 115,
+        "text": "Error logging in: device code exchange failed: token endpoint returned status 400 Bad Request: capture refuses the exchange\n"
+      }
+    ],
+    "stdout": "\nWelcome to Codex [v\u001b[90m0.167.0\u001b[0m]\n\u001b[90mOpenAI's command-line coding agent\u001b[0m\n\nFollow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   \u001b[94mhttp://127.0.0.1:<PORT>/codex/device\u001b[0m\n\n2. Enter this one-time code \u001b[90m(expires in 15 minutes)\u001b[0m\n   \u001b[94mCAPT-12345\u001b[0m\n\n\u001b[90mContinue only if you started this login in Codex. If a website or another person gave you this code, cancel.\u001b[0m\n\n",
+    "stderr": "Error logging in: device code exchange failed: token endpoint returned status 400 Bad Request: capture refuses the exchange\n",
+    "exit": {
+      "code": 1,
+      "signal": null,
+      "at_ms": 135
+    },
+    "stoppedByTheCapture": null,
+    "authJsonAppearedAt_ms": null,
+    "authJson": null,
+    "requestsToTheSignInServer": [
+      {
+        "n": 1,
+        "at_ms": 93,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/usercode",
+        "contentType": "application/json",
+        "body": {
+          "client_id": "<CODEX_CLIENT_ID>"
+        },
+        "answer": {
+          "status": 200,
+          "body": {
+            "device_auth_id": "deviceauth-capture-0001",
+            "user_code": "CAPT-12345",
+            "interval": "1"
+          }
+        }
+      },
+      {
+        "n": 2,
+        "at_ms": 95,
+        "method": "POST",
+        "path": "/api/accounts/deviceauth/token",
+        "contentType": "application/json",
+        "body": {
+          "device_auth_id": "deviceauth-capture-0001",
+          "user_code": "CAPT-12345"
+        },
+        "answer": {
+          "status": 200,
+          "body": {
+            "authorization_code": "authcode-capture-0001",
+            "code_challenge": "challenge-capture",
+            "code_verifier": "verifier-capture"
+          }
+        }
+      },
+      {
+        "n": 3,
+        "at_ms": 96,
+        "method": "POST",
+        "path": "/oauth/token",
+        "contentType": "application/x-www-form-urlencoded",
+        "body": "grant_type=authorization_code&client_id=<CODEX_CLIENT_ID>&code=authcode-capture-0001&redirect_uri=http%3A%2F%2F127.0.0.1%3A<PORT>%2Fdeviceauth%2Fcallback&code_verifier=verifier-capture",
+        "answer": {
+          "status": 400,
+          "body": {
+            "error": "invalid_grant",
+            "error_description": "capture refuses the exchange"
+          }
+        }
+      }
+    ],
+    "homeAfter": [
+      "auth.json.lock (0 bytes)",
+      "auth.lock (0 bytes)",
+      "log/",
+      "log/codex-login.log (433 bytes)",
+      "tmp/",
+      "tmp/arg0-windows/",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/.lock (0 bytes)",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/apply_patch.bat (178 bytes)",
+      "tmp/arg0-windows/codex-arg0<RANDOM>/applypatch.bat (178 bytes)"
+    ]
+  }
+}

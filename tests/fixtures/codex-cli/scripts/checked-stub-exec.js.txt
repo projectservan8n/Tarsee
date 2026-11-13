@@ -1,0 +1,102 @@
+// A stand-in for the `codex` program, written for the independent check of codex-cli-protocol.md.
+// It is run as `node exec --experimental-json ...`: the SDK is given node itself as the program, node takes the
+// first argument (`exec`) as the script to run in the working folder, and everything after it arrives untouched.
+// What it does comes from plan.json next to it; what it saw goes to record.json next to it.
+"use strict";
+const fs = require("fs");
+const path = require("path");
+const { spawn } = require("child_process");
+
+const here = __dirname;
+const t0 = Date.now();
+let plan = {};
+try { plan = JSON.parse(fs.readFileSync(path.join(here, "plan.json"), "utf8")); } catch { /* no plan: defaults */ }
+
+const record = {
+  pid: process.pid,
+  ppid: process.ppid,
+  argv0: process.argv[0],
+  script: process.argv[1],
+  // node resolved argv[1] from the first argument; the SDK's first argument is the script's own name
+  args: [path.basename(process.argv[1]), ...process.argv.slice(2)],
+  cwd: process.cwd(),
+  env: { ...process.env },
+  stdin: { chunks: [], bytes: 0, eofAtMs: null, base64: null, error: null },
+  signals: [],
+};
+try {
+  // Linux: the process group and session this process is in.
+  const st = fs.readFileSync("/proc/self/stat", "utf8");
+  const f = st.slice(st.lastIndexOf(")") + 2).split(" ");
+  record.procStat = { ppid: Number(f[1]), pgrp: Number(f[2]), session: Number(f[3]) };
+} catch { /* not Linux */ }
+const save = () => { try { fs.writeFileSync(path.join(here, "record.json"), JSON.stringify(record, null, 1)); } catch { /* best effort */ } };
+save();
+
+// A heartbeat, so the caller can tell when this process stopped running.
+const beat = () => { try { fs.writeFileSync(path.join(here, "alive.txt"), String(Date.now() - t0)); } catch { /* best effort */ } };
+beat();
+const beatTimer = setInterval(beat, 20);
+
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+  try {
+    process.on(sig, () => {
+      record.signals.push({ sig, atMs: Date.now() - t0 });
+      save();
+      if (!plan.ignoreSignals) process.exit(plan.exitCodeOnSignal ?? 143);
+    });
+  } catch { /* not on this system */ }
+}
+
+let grandchild = null;
+if (plan.spawnChild) {
+  // Something the program itself started: does it outlive the program?
+  grandchild = spawn(process.execPath, ["-e", `const fs=require('fs');const t=Date.now();setInterval(()=>fs.writeFileSync(${JSON.stringify(path.join(here, "grandchild-alive.txt"))},String(Date.now()-t)),20);setTimeout(()=>{},${plan.spawnChildMs ?? 15000}).ref();setTimeout(()=>process.exit(0),${plan.spawnChildMs ?? 15000});`], { stdio: "ignore" });
+  record.grandchildPid = grandchild.pid;
+  save();
+}
+
+function play() {
+  const pieces = Array.isArray(plan.stdout) ? plan.stdout : (plan.stdout != null ? [{ text: plan.stdout }] : []);
+  let i = 0;
+  const next = () => {
+    if (i >= pieces.length) return finish();
+    const p = pieces[i++];
+    const buf = p.base64 != null ? Buffer.from(p.base64, "base64") : Buffer.from(String(p.text ?? ""), "utf8");
+    const write = () => process.stdout.write(buf, () => next());
+    if (p.delayMs) setTimeout(write, p.delayMs); else write();
+  };
+  if (plan.stderr) process.stderr.write(plan.stderr_base64 ? Buffer.from(plan.stderr, "base64") : String(plan.stderr), () => next());
+  else next();
+}
+
+function finish() {
+  const end = () => { clearInterval(beatTimer); record.exitedAtMs = Date.now() - t0; save(); process.exit(plan.exitCode ?? 0); };
+  if (plan.sleepMsBeforeExit) setTimeout(end, plan.sleepMsBeforeExit); else end();
+}
+
+if (plan.exitWithoutReadingStdin) {
+  // The program dies before it reads its prompt (a refused argument, say).
+  if (plan.stderr) process.stderr.write(String(plan.stderr));
+  clearInterval(beatTimer);
+  record.exitedAtMs = Date.now() - t0;
+  save();
+  process.exit(plan.exitCode ?? 2);
+} else if (plan.playBeforeStdinEnds) {
+  play();
+  process.stdin.on("data", (b) => { record.stdin.chunks.push({ atMs: Date.now() - t0, bytes: b.length }); record.stdin.bytes += b.length; });
+  process.stdin.on("end", () => { record.stdin.eofAtMs = Date.now() - t0; save(); });
+} else {
+  const bufs = [];
+  process.stdin.on("data", (b) => { bufs.push(b); record.stdin.chunks.push({ atMs: Date.now() - t0, bytes: b.length }); record.stdin.bytes += b.length; });
+  process.stdin.on("error", (e) => { record.stdin.error = String(e && e.message); save(); });
+  process.stdin.on("end", () => {
+    record.stdin.eofAtMs = Date.now() - t0;
+    const all = Buffer.concat(bufs);
+    record.stdin.base64 = all.length <= 4096 ? all.toString("base64") : null;
+    record.stdin.sha256 = require("crypto").createHash("sha256").update(all).digest("hex");
+    record.stdin.text = all.length <= 4096 ? all.toString("utf8") : `${all.subarray(0, 200).toString("utf8")}... (${all.length} bytes)`;
+    save();
+    play();
+  });
+}

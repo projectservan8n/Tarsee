@@ -1,0 +1,147 @@
+{
+  "name": "wrong-token-401",
+  "description": "The server answers 401: system/init reports the server as failed and the turn runs without its tools.",
+  "how": "The real claude 2.1.319 pointed at a small local HTTP server that logs every request and answers initialize, tools/list and tools/call; a loopback stand-in for the Messages API scripted a call to mcp__tarsee__tarsee_datetime.",
+  "mcp_arguments": [
+    "--mcp-config",
+    "{\"mcpServers\":{\"tarsee\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:<PORT>/mcp\",\"headers\":{\"Authorization\":\"Bearer <TOKEN>\"},\"alwaysLoad\":true}}}"
+  ],
+  "exit_code": 0,
+  "system_init": {
+    "mcp_servers": [
+      {
+        "name": "tarsee",
+        "status": "failed",
+        "source": "dynamic"
+      }
+    ],
+    "tools": [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Read",
+      "Write"
+    ]
+  },
+  "stdout_message_counts": {
+    "control_response": 1,
+    "system/session_state_changed": 2,
+    "system/init": 1,
+    "system/status": 1,
+    "stream_event": 8,
+    "assistant": 1,
+    "result/success": 1
+  },
+  "tools_offered_to_the_model_in_each_api_request": [
+    [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Read",
+      "Write"
+    ]
+  ],
+  "requests_the_server_received": [
+    {
+      "method": "POST",
+      "path": "/mcp",
+      "answered_with_status": 401,
+      "headers": {
+        "accept": "application/json, text/event-stream",
+        "accept-encoding": "identity",
+        "authorization": "Bearer <TOKEN>",
+        "content-type": "application/json",
+        "user-agent": "claude-code/2.1.319 (sdk-ts)",
+        "mcp-method": "server/discover",
+        "mcp-protocol-version": "2026-07-28",
+        "connection": "keep-alive",
+        "host": "127.0.0.1:<PORT>",
+        "content-length": "458"
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": "server-discover-probe-1",
+        "method": "server/discover",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "claude-code",
+              "title": "Claude Code",
+              "version": "2.1.319",
+              "description": "Anthropic's agentic coding tool",
+              "websiteUrl": "https://claude.com/claude-code"
+            },
+            "io.modelcontextprotocol/clientCapabilities": {
+              "roots": {
+                "listChanged": true
+              },
+              "elicitation": {
+                "form": {},
+                "url": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/mcp",
+      "answered_with_status": 401,
+      "headers": {
+        "accept": "application/json, text/event-stream",
+        "accept-encoding": "identity",
+        "authorization": "Bearer <TOKEN>",
+        "content-type": "application/json",
+        "user-agent": "claude-code/2.1.319 (sdk-ts)",
+        "connection": "keep-alive",
+        "host": "127.0.0.1:<PORT>",
+        "content-length": "341"
+      },
+      "body": {
+        "method": "initialize",
+        "params": {
+          "protocolVersion": "2025-11-25",
+          "capabilities": {
+            "roots": {
+              "listChanged": true
+            },
+            "elicitation": {
+              "form": {},
+              "url": {}
+            }
+          },
+          "clientInfo": {
+            "name": "claude-code",
+            "title": "Claude Code",
+            "version": "2.1.319",
+            "description": "Anthropic's agentic coding tool",
+            "websiteUrl": "https://claude.com/claude-code"
+          }
+        },
+        "jsonrpc": "2.0",
+        "id": 0
+      }
+    }
+  ],
+  "tool_messages_on_stdout": [
+    {
+      "type": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "No tarsee tool was offered."
+        }
+      ]
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "result": "No tarsee tool was offered."
+    }
+  ]
+}

@@ -1,0 +1,111 @@
+{
+  "name": "sdk-06-pinned-binary-package-layout",
+  "what": "No codexPathOverride: the SDK resolves @openai/codex, then its platform package, and starts vendor/<triple>/bin/codex(.exe) (the layout 0.167.0 ships, marked by codex-package.json), with vendor/<triple>/codex-path put first on the child's PATH. Run against a byte-for-byte copy of the SDK's file inside a made-up node_modules whose binary is the stub. The env option here carries both `Path` and `PATH`.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "win32"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {
+        "FROM_ENV_OPTION": "the env option",
+        "PATH": "C:\\one;C:\\two",
+        "Path": "C:\\three;C:\\four",
+        "SystemRoot": "C:\\WINDOWS"
+      }
+    },
+    "thread": {
+      "method": "startThread"
+    },
+    "runStreamed(input, turnOptions)": {
+      "input": "hello",
+      "inputLength": {
+        "characters": 5,
+        "utf8Bytes": 5
+      },
+      "turnOptions": {}
+    },
+    "callerProcessEnvNames": [
+      "COMSPEC",
+      "FROM_PROCESS_ENV",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "TMP",
+      "TMPDIR"
+    ]
+  },
+  "child": {
+    "program": "<NODE_MODULES>\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe",
+    "argv": [
+      "exec",
+      "--experimental-json"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "FROM_ENV_OPTION",
+      "Path",
+      "SYSTEMDRIVE",
+      "SystemRoot",
+      "TEMP"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "FROM_ENV_OPTION": "the env option",
+      "Path": "<NODE_MODULES>\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\codex-path;C:\\three;C:\\four"
+    },
+    "envNamesNotInEnvOption": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "SYSTEMDRIVE",
+      "TEMP"
+    ],
+    "stdin": {
+      "text": "hello",
+      "sameAsTheInput": true,
+      "bytes": 5,
+      "chunks": [
+        {
+          "at_ms": 0,
+          "bytes": 5
+        }
+      ],
+      "eof_at_ms": 2
+    }
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000bb\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":0,\"output_tokens\":2,\"reasoning_output_tokens\":0}}\n",
+    "stderr": "",
+    "exitCode": 0,
+    "sleepMsBeforeExit": 0
+  },
+  "sdkYielded": [
+    {
+      "type": "thread.started",
+      "thread_id": "01a1c000-0000-7000-8000-0000000000bb"
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_0",
+        "type": "agent_message",
+        "text": "ok"
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 10,
+        "cached_input_tokens": 0,
+        "output_tokens": 2,
+        "reasoning_output_tokens": 0,
+        "cache_write_input_tokens": 0
+      }
+    }
+  ],
+  "sdkThrew": null
+}

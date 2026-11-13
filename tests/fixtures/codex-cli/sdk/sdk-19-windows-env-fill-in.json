@@ -1,0 +1,144 @@
+{
+  "name": "sdk-19-windows-env-fill-in",
+  "what": "Windows only, and Node's doing, not the SDK's: when `env` is given, Node still copies a fixed set of system names from the caller's own environment into the child if `env` lacks them. The caller here has a full made-up Windows environment (callerProcessEnvNames) and passes env = {FROM_ENV_OPTION}: child.envNamesNotInEnvOption lists what arrived anyway.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "win32"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {
+        "FROM_ENV_OPTION": "the env option"
+      },
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "thread": {
+      "method": "startThread"
+    },
+    "runStreamed(input, turnOptions)": {
+      "input": "hello",
+      "inputLength": {
+        "characters": 5,
+        "utf8Bytes": 5
+      },
+      "turnOptions": {}
+    },
+    "callerProcessEnvNames": [
+      "ALLUSERSPROFILE",
+      "APPDATA",
+      "COMMONPROGRAMFILES",
+      "COMPUTERNAME",
+      "COMSPEC",
+      "FROM_PROCESS_ENV",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "LOCALAPPDATA",
+      "LOGONSERVER",
+      "NUMBER_OF_PROCESSORS",
+      "OS",
+      "PATH",
+      "PATHEXT",
+      "PROCESSOR_ARCHITECTURE",
+      "PROGRAMDATA",
+      "PROGRAMFILES",
+      "PUBLIC",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "TMP",
+      "TMPDIR",
+      "USERDOMAIN",
+      "USERNAME",
+      "USERPROFILE",
+      "WINDIR"
+    ]
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "argv": [
+      "exec",
+      "--experimental-json"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "FROM_ENV_OPTION",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "LOGONSERVER",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "USERDOMAIN",
+      "USERNAME",
+      "USERPROFILE",
+      "WINDIR"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "FROM_ENV_OPTION": "the env option",
+      "PATH": "C:\\WINDOWS\\system32;C:\\WINDOWS"
+    },
+    "envNamesNotInEnvOption": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "LOGONSERVER",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "USERDOMAIN",
+      "USERNAME",
+      "USERPROFILE",
+      "WINDIR"
+    ],
+    "stdin": {
+      "text": "hello",
+      "sameAsTheInput": true,
+      "bytes": 5,
+      "chunks": [
+        {
+          "at_ms": 0,
+          "bytes": 5
+        }
+      ],
+      "eof_at_ms": 0
+    }
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000bb\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":0,\"output_tokens\":2,\"reasoning_output_tokens\":0}}\n",
+    "stderr": "",
+    "exitCode": 0,
+    "sleepMsBeforeExit": 0
+  },
+  "sdkYielded": [
+    {
+      "type": "thread.started",
+      "thread_id": "01a1c000-0000-7000-8000-0000000000bb"
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_0",
+        "type": "agent_message",
+        "text": "ok"
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 10,
+        "cached_input_tokens": 0,
+        "output_tokens": 2,
+        "reasoning_output_tokens": 0,
+        "cache_write_input_tokens": 0
+      }
+    }
+  ],
+  "sdkThrew": null
+}

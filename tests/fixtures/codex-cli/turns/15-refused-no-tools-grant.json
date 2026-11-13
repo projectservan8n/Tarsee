@@ -1,0 +1,78 @@
+{
+  "name": "15-refused-no-tools-grant",
+  "what": "\"Without the MCP server\" does not exist as a turn: with no grant for Tarsee's tools the engine refuses before anything starts.",
+  "made_with": {
+    "engine": "src/ai/providers/codex.js run() -> providers/codex-options.js buildCodexOptions()",
+    "sdk": "@openai/codex-sdk 0.167.0 (the real one), codexPathOverride = the stub",
+    "platform": "win32"
+  },
+  "turn": {
+    "target": {
+      "provider": "openai",
+      "model": "gpt-5.5"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Please say hello."
+      }
+    ],
+    "systemParts": {
+      "stable": "You are Tarsee (capture run).",
+      "volatile": "Today is a capture day."
+    },
+    "sessionHandle": null,
+    "pictures": [],
+    "thinkingSummaries": false,
+    "settings": {},
+    "mcpGrant": null,
+    "serverEnvNames": [
+      "ANTHROPIC_API_KEY",
+      "CODEX_ACCESS_TOKEN",
+      "CODEX_API_KEY",
+      "CODEX_HOME",
+      "ComSpec",
+      "DEEPSEEK_API_KEY",
+      "ENCRYPTION_KEY",
+      "MY_APP_SETTING",
+      "NODE_ENV",
+      "OPENAI_API_KEY",
+      "OPENAI_BASE_URL",
+      "OPENROUTER_API_KEY",
+      "PATH",
+      "SETUP_PASSWORD",
+      "SystemDrive",
+      "SystemRoot",
+      "TARSEE_API_TOKEN",
+      "TARSEE_CHATGPT_ACCESS_TOKEN",
+      "TARSEE_LOCAL_AI_KEY",
+      "TARSEE_MCP_TOKEN",
+      "TARSEE_PROVIDER_KEY",
+      "TEMP",
+      "TMP"
+    ],
+    "vaultEnvNames": [
+      "SCRIPT_KEY"
+    ]
+  },
+  "sdk": null,
+  "child": null,
+  "stubStdout": null,
+  "tarseeEvents": [
+    {
+      "type": "text",
+      "content": "Tarsee's tools couldn't be opened for this turn: the endpoint could not start (capture)"
+    },
+    {
+      "type": "error",
+      "message": "Tarsee's tools couldn't be opened for this turn: the endpoint could not start (capture)",
+      "code": "needs-mcp-token",
+      "subtype": "needs-mcp-token",
+      "recoverable": false
+    },
+    {
+      "type": "done",
+      "stopReason": "error"
+    }
+  ]
+}

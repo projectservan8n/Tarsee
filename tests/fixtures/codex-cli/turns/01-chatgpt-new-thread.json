@@ -1,0 +1,357 @@
+{
+  "name": "01-chatgpt-new-thread",
+  "what": "ChatGPT plan, new thread. The account's model list is not known, so no --model; no effort. forced_login_method \"chatgpt\"; no key anywhere.",
+  "made_with": {
+    "engine": "src/ai/providers/codex.js run() -> providers/codex-options.js buildCodexOptions()",
+    "sdk": "@openai/codex-sdk 0.167.0 (the real one), codexPathOverride = the stub",
+    "platform": "win32"
+  },
+  "turn": {
+    "target": {
+      "provider": "chatgpt",
+      "model": "gpt-6.1-sol"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Please say hello."
+      }
+    ],
+    "systemParts": {
+      "stable": "You are Tarsee (capture run).",
+      "volatile": "Today is a capture day."
+    },
+    "sessionHandle": null,
+    "pictures": [],
+    "thinkingSummaries": false,
+    "accountModels": [],
+    "settings": {},
+    "mcpGrant": {
+      "url": "http://127.0.0.1:45123/mcp",
+      "token": "<MCP_TOKEN>"
+    },
+    "serverEnvNames": [
+      "ANTHROPIC_API_KEY",
+      "CODEX_ACCESS_TOKEN",
+      "CODEX_API_KEY",
+      "CODEX_HOME",
+      "ComSpec",
+      "DEEPSEEK_API_KEY",
+      "ENCRYPTION_KEY",
+      "MY_APP_SETTING",
+      "NODE_ENV",
+      "OPENAI_API_KEY",
+      "OPENAI_BASE_URL",
+      "OPENROUTER_API_KEY",
+      "PATH",
+      "SETUP_PASSWORD",
+      "SystemDrive",
+      "SystemRoot",
+      "TARSEE_API_TOKEN",
+      "TARSEE_CHATGPT_ACCESS_TOKEN",
+      "TARSEE_LOCAL_AI_KEY",
+      "TARSEE_MCP_TOKEN",
+      "TARSEE_PROVIDER_KEY",
+      "TEMP",
+      "TMP"
+    ],
+    "vaultEnvNames": [
+      "SCRIPT_KEY"
+    ]
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {
+        "PATH": "C:WINDOWSsystem32;C:WINDOWS",
+        "SystemRoot": "C:WINDOWS",
+        "SystemDrive": "C:",
+        "ComSpec": "C:WINDOWSsystem32cmd.exe",
+        "TEMP": "<TMP>",
+        "TMP": "<TMP>",
+        "NODE_ENV": "production",
+        "MY_APP_SETTING": "kept",
+        "SCRIPT_KEY": "<VAULT_VALUE>",
+        "CODEX_HOME": "<STATE_DIR>\\.codex-home",
+        "TARSEE_MCP_TOKEN": "<MCP_TOKEN>",
+        "TARSEE_CODEX_TURN": "<TURN_MARK>"
+      },
+      "config": {
+        "developer_instructions": "PREAMBLE (the real one is src/ai/preamble.js; shortened for the capture).\n\n## Workspace instructions (CLAUDE.md)\n\nWorkspace rule: answer briefly.\n\nYou are Tarsee (capture run).",
+        "project_doc_max_bytes": 0,
+        "project_root_markers": [],
+        "history": {
+          "persistence": "none"
+        },
+        "cli_auth_credentials_store": "file",
+        "check_for_update_on_startup": false,
+        "model_reasoning_summary": "none",
+        "tool_output_token_limit": 3000,
+        "shell_environment_policy": {
+          "inherit": "all",
+          "ignore_default_excludes": true,
+          "filters": {
+            "CODEX_API_KEY": "exclude",
+            "CODEX_ACCESS_TOKEN": "exclude",
+            "TARSEE_MCP_TOKEN": "exclude",
+            "TARSEE_PROVIDER_KEY": "exclude",
+            "TARSEE_CHATGPT_ACCESS_TOKEN": "exclude"
+          }
+        },
+        "mcp_servers": {
+          "tarsee": {
+            "url": "http://127.0.0.1:45123/mcp",
+            "bearer_token_env_var": "TARSEE_MCP_TOKEN",
+            "default_tools_approval_mode": "approve",
+            "required": true,
+            "startup_timeout_sec": 20,
+            "tool_timeout_sec": 300
+          }
+        },
+        "features": {
+          "apps": false,
+          "plugins": false,
+          "remote_plugin": false,
+          "plugin_discovery_prefetch": false,
+          "multi_agent": false,
+          "goals": false,
+          "computer_use": false,
+          "browser_use": false,
+          "browser_use_external": false,
+          "in_app_browser": false,
+          "image_generation": false,
+          "tool_suggest": false,
+          "skill_mcp_dependency_install": false,
+          "memories": false,
+          "hooks": false,
+          "unbounded_connection_retries": false
+        },
+        "model_auto_compact_token_limit": 170000,
+        "forced_login_method": "chatgpt"
+      },
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "thread": {
+      "method": "startThread",
+      "threadOptions": {
+        "sandboxMode": "danger-full-access",
+        "approvalPolicy": "never",
+        "workingDirectory": "<WORKSPACE>",
+        "skipGitRepoCheck": true,
+        "networkAccessEnabled": true,
+        "webSearchMode": "disabled",
+        "additionalDirectories": [
+          "<TARSEE_SKILLS_DIR>"
+        ]
+      }
+    },
+    "runStreamed(input, turnOptions)": {
+      "input": "<turn-context>\nToday is a capture day.\n</turn-context>\n\nPlease say hello.",
+      "turnOptions": {
+        "signal": "<AbortSignal>"
+      }
+    }
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "argv": [
+      "exec",
+      "--experimental-json",
+      "--config",
+      "developer_instructions=\"PREAMBLE (the real one is src/ai/preamble.js; shortened for the capture).\\n\\n## Workspace instructions (CLAUDE.md)\\n\\nWorkspace rule: answer briefly.\\n\\nYou are Tarsee (capture run).\"",
+      "--config",
+      "project_doc_max_bytes=0",
+      "--config",
+      "project_root_markers=[]",
+      "--config",
+      "history.persistence=\"none\"",
+      "--config",
+      "cli_auth_credentials_store=\"file\"",
+      "--config",
+      "check_for_update_on_startup=false",
+      "--config",
+      "model_reasoning_summary=\"none\"",
+      "--config",
+      "tool_output_token_limit=3000",
+      "--config",
+      "shell_environment_policy.inherit=\"all\"",
+      "--config",
+      "shell_environment_policy.ignore_default_excludes=true",
+      "--config",
+      "shell_environment_policy.filters.CODEX_API_KEY=\"exclude\"",
+      "--config",
+      "shell_environment_policy.filters.CODEX_ACCESS_TOKEN=\"exclude\"",
+      "--config",
+      "shell_environment_policy.filters.TARSEE_MCP_TOKEN=\"exclude\"",
+      "--config",
+      "shell_environment_policy.filters.TARSEE_PROVIDER_KEY=\"exclude\"",
+      "--config",
+      "shell_environment_policy.filters.TARSEE_CHATGPT_ACCESS_TOKEN=\"exclude\"",
+      "--config",
+      "mcp_servers.tarsee.url=\"http://127.0.0.1:45123/mcp\"",
+      "--config",
+      "mcp_servers.tarsee.bearer_token_env_var=\"TARSEE_MCP_TOKEN\"",
+      "--config",
+      "mcp_servers.tarsee.default_tools_approval_mode=\"approve\"",
+      "--config",
+      "mcp_servers.tarsee.required=true",
+      "--config",
+      "mcp_servers.tarsee.startup_timeout_sec=20",
+      "--config",
+      "mcp_servers.tarsee.tool_timeout_sec=300",
+      "--config",
+      "features.apps=false",
+      "--config",
+      "features.plugins=false",
+      "--config",
+      "features.remote_plugin=false",
+      "--config",
+      "features.plugin_discovery_prefetch=false",
+      "--config",
+      "features.multi_agent=false",
+      "--config",
+      "features.goals=false",
+      "--config",
+      "features.computer_use=false",
+      "--config",
+      "features.browser_use=false",
+      "--config",
+      "features.browser_use_external=false",
+      "--config",
+      "features.in_app_browser=false",
+      "--config",
+      "features.image_generation=false",
+      "--config",
+      "features.tool_suggest=false",
+      "--config",
+      "features.skill_mcp_dependency_install=false",
+      "--config",
+      "features.memories=false",
+      "--config",
+      "features.hooks=false",
+      "--config",
+      "features.unbounded_connection_retries=false",
+      "--config",
+      "model_auto_compact_token_limit=170000",
+      "--config",
+      "forced_login_method=\"chatgpt\"",
+      "--sandbox",
+      "danger-full-access",
+      "--cd",
+      "<WORKSPACE>",
+      "--add-dir",
+      "<TARSEE_SKILLS_DIR>",
+      "--skip-git-repo-check",
+      "--config",
+      "sandbox_workspace_write.network_access=true",
+      "--config",
+      "web_search=\"disabled\"",
+      "--config",
+      "approval_policy=\"never\""
+    ],
+    "cwd": "<SERVER_CWD>",
+    "envNames": [
+      "CODEX_HOME",
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "ComSpec",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "LOGONSERVER",
+      "MY_APP_SETTING",
+      "NODE_ENV",
+      "PATH",
+      "SCRIPT_KEY",
+      "SystemDrive",
+      "SystemRoot",
+      "TARSEE_CODEX_TURN",
+      "TARSEE_MCP_TOKEN",
+      "TEMP",
+      "TMP",
+      "USERDOMAIN",
+      "USERNAME",
+      "USERPROFILE",
+      "WINDIR"
+    ],
+    "envValues": {
+      "CODEX_HOME": "<STATE_DIR>\\.codex-home",
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "TARSEE_MCP_TOKEN": "<MCP_TOKEN>",
+      "TARSEE_CODEX_TURN": "<TURN_MARK>",
+      "SCRIPT_KEY": "<VAULT_VALUE>",
+      "MY_APP_SETTING": "kept",
+      "NODE_ENV": "production"
+    },
+    "serverEnvNamesNotPassed": [
+      "ANTHROPIC_API_KEY",
+      "CODEX_ACCESS_TOKEN",
+      "CODEX_API_KEY",
+      "DEEPSEEK_API_KEY",
+      "ENCRYPTION_KEY",
+      "OPENAI_API_KEY",
+      "OPENAI_BASE_URL",
+      "OPENROUTER_API_KEY",
+      "SETUP_PASSWORD",
+      "TARSEE_API_TOKEN",
+      "TARSEE_CHATGPT_ACCESS_TOKEN",
+      "TARSEE_LOCAL_AI_KEY",
+      "TARSEE_PROVIDER_KEY"
+    ],
+    "serverEnvValuesReplaced": [
+      "CODEX_HOME",
+      "TARSEE_MCP_TOKEN"
+    ],
+    "stdin": {
+      "text": "<turn-context>\nToday is a capture day.\n</turn-context>\n\nPlease say hello.",
+      "bytes": 73,
+      "chunks": [
+        {
+          "at_ms": 1,
+          "bytes": 73
+        }
+      ],
+      "eof_at_ms": 3
+    },
+    "pictureFiles": []
+  },
+  "stubStdout": [
+    "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000aa\"}",
+    "{\"type\":\"turn.started\"}",
+    "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"Hello from the stub.\"}}",
+    "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+  ],
+  "tarseeEvents": [
+    {
+      "type": "text",
+      "content": "Hello from the stub."
+    },
+    {
+      "type": "step",
+      "kind": "text",
+      "text": "Hello from the stub."
+    },
+    {
+      "type": "step",
+      "kind": "usage",
+      "input": 1000,
+      "cacheRead": 200,
+      "cacheWrite": 0,
+      "output": 30,
+      "total": 1230,
+      "calls": null,
+      "outTps": null,
+      "nowTps": null
+    },
+    {
+      "type": "usage",
+      "usage": {
+        "input_tokens": 1000,
+        "cache_read_input_tokens": 200,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 30
+      }
+    },
+    {
+      "type": "done",
+      "stopReason": "end_turn"
+    }
+  ]
+}

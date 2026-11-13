@@ -1,0 +1,795 @@
+{
+  "name": "other-02-app-server-signed-in",
+  "what": "`codex app-server` in a home holding a made-up ChatGPT sign-in (auth.json with unsigned tokens) whose backend is a local server: account/read names the account, model/list fetches the account's list from <chatgpt_base_url>/codex/models and caches it in models_cache.json. Two extra --config overrides (chatgpt_base_url, openai_base_url) and SSL_CERT_FILE, none of which Tarsee passes, keep the made-up token on this machine.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program)",
+    "platform": "win32"
+  },
+  "argv": [
+    "-c",
+    "cli_auth_credentials_store=\"file\"",
+    "-c",
+    "check_for_update_on_startup=false",
+    "-c",
+    "project_root_markers=[]",
+    "-c",
+    "chatgpt_base_url=\"https://127.0.0.1:<PORT>/backend-api/\"",
+    "-c",
+    "openai_base_url=\"https://127.0.0.1:<PORT>/backend-api/codex\"",
+    "app-server"
+  ],
+  "envNames": [
+    "APPDATA",
+    "CODEX_HOME",
+    "ComSpec",
+    "HOME",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "LOCALAPPDATA",
+    "NO_PROXY",
+    "PATH",
+    "RUST_LOG",
+    "SSL_CERT_FILE",
+    "SystemDrive",
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "USERPROFILE"
+  ],
+  "envValues": {
+    "CODEX_HOME": "<CODEX_HOME>",
+    "RUST_LOG": "error"
+  },
+  "cwd": "<CODEX_HOME>",
+  "transcript": [
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 8,
+      "message": {
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "clientInfo": {
+            "name": "tarsee",
+            "title": "Tarsee",
+            "version": "0.2.0"
+          }
+        }
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 450,
+      "message": {
+        "id": 1,
+        "result": {
+          "userAgent": "tarsee/0.167.0 (Windows 10.0.26300; x86_64) unknown (tarsee; 0.2.0)",
+          "codexHome": "<CODEX_HOME>",
+          "platformFamily": "windows",
+          "platformOs": "windows"
+        }
+      }
+    },
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 450,
+      "message": {
+        "method": "initialized"
+      }
+    },
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 450,
+      "message": {
+        "id": 2,
+        "method": "account/read",
+        "params": {
+          "refreshToken": false
+        }
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 452,
+      "message": {
+        "method": "remoteControl/status/changed",
+        "params": {
+          "status": "disabled",
+          "serverName": "<MACHINE_NAME>",
+          "installationId": "<INSTALLATION_ID>",
+          "environmentId": null
+        },
+        "emittedAtMs": 1794527888157
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 529,
+      "message": {
+        "method": "account/updated",
+        "params": {
+          "authMode": "chatgpt",
+          "planType": "free"
+        },
+        "emittedAtMs": 1794527888237
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 530,
+      "message": {
+        "id": 2,
+        "result": {
+          "account": {
+            "type": "chatgpt",
+            "email": "person@example.test",
+            "planType": "free",
+            "workspaceName": null
+          },
+          "requiresOpenaiAuth": true,
+          "workspaceRouting": {
+            "chatgptAccountId": "acct-capture",
+            "backendOrigin": "https://127.0.0.1:<PORT>",
+            "accountRoutingOverride": "NO_CONSTRAINT"
+          }
+        }
+      }
+    },
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 530,
+      "message": {
+        "id": 3,
+        "method": "model/list",
+        "params": {
+          "limit": 1,
+          "includeHidden": false
+        }
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 552,
+      "message": {
+        "id": 3,
+        "result": {
+          "data": [
+            {
+              "id": "capture-model-2",
+              "model": "capture-model-2",
+              "upgrade": null,
+              "upgradeInfo": null,
+              "availabilityNux": {
+                "message": "Maximize usage with GPT-6.1 Sol. Try it on complex work for near-Astra performance at a lower cost."
+              },
+              "displayName": "Capture Model 2",
+              "description": "Latest workhorse model for coding and everyday work.",
+              "modelSpecialty": null,
+              "hidden": false,
+              "supportedReasoningEfforts": [
+                {
+                  "reasoningEffort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "reasoningEffort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "reasoningEffort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "max",
+                  "description": "Maximum reasoning depth for the hardest problems"
+                },
+                {
+                  "reasoningEffort": "ultra",
+                  "description": "Maximum reasoning with automatic task delegation"
+                }
+              ],
+              "defaultReasoningEffort": "low",
+              "inputModalities": [
+                "text",
+                "image"
+              ],
+              "supportsPersonality": false,
+              "multiAgentVersion": "v2",
+              "additionalSpeedTiers": [
+                "fast"
+              ],
+              "serviceTiers": [
+                {
+                  "id": "priority",
+                  "name": "Fast",
+                  "description": "2x speed, increased usage"
+                }
+              ],
+              "defaultServiceTier": null,
+              "availableAccessPrograms": null,
+              "isDefault": true
+            }
+          ],
+          "nextCursor": "1"
+        }
+      }
+    },
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 552,
+      "message": {
+        "id": 4,
+        "method": "model/list",
+        "params": {
+          "limit": 1,
+          "includeHidden": false,
+          "cursor": "1"
+        }
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 564,
+      "message": {
+        "id": 4,
+        "result": {
+          "data": [
+            {
+              "id": "capture-model-1",
+              "model": "capture-model-1",
+              "upgrade": null,
+              "upgradeInfo": null,
+              "availabilityNux": null,
+              "displayName": "Capture Model 1",
+              "description": "Frontier intelligence for the most demanding work.",
+              "modelSpecialty": null,
+              "hidden": false,
+              "supportedReasoningEfforts": [
+                {
+                  "reasoningEffort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "reasoningEffort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "reasoningEffort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "max",
+                  "description": "Maximum reasoning depth for the hardest problems"
+                },
+                {
+                  "reasoningEffort": "ultra",
+                  "description": "Maximum reasoning with automatic task delegation"
+                }
+              ],
+              "defaultReasoningEffort": "low",
+              "inputModalities": [
+                "text",
+                "image"
+              ],
+              "supportsPersonality": false,
+              "multiAgentVersion": "v2",
+              "additionalSpeedTiers": [
+                "fast"
+              ],
+              "serviceTiers": [
+                {
+                  "id": "priority",
+                  "name": "Fast",
+                  "description": "2x speed, increased usage"
+                }
+              ],
+              "defaultServiceTier": null,
+              "availableAccessPrograms": null,
+              "isDefault": false
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "dir": "tarsee -> codex",
+      "at_ms": 564,
+      "message": {
+        "id": 5,
+        "method": "model/list",
+        "params": {
+          "limit": 100,
+          "includeHidden": false
+        }
+      }
+    },
+    {
+      "dir": "codex -> tarsee",
+      "at_ms": 566,
+      "message": {
+        "id": 5,
+        "result": {
+          "data": [
+            {
+              "id": "capture-model-2",
+              "model": "capture-model-2",
+              "upgrade": null,
+              "upgradeInfo": null,
+              "availabilityNux": {
+                "message": "Maximize usage with GPT-6.1 Sol. Try it on complex work for near-Astra performance at a lower cost."
+              },
+              "displayName": "Capture Model 2",
+              "description": "Latest workhorse model for coding and everyday work.",
+              "modelSpecialty": null,
+              "hidden": false,
+              "supportedReasoningEfforts": [
+                {
+                  "reasoningEffort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "reasoningEffort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "reasoningEffort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "max",
+                  "description": "Maximum reasoning depth for the hardest problems"
+                },
+                {
+                  "reasoningEffort": "ultra",
+                  "description": "Maximum reasoning with automatic task delegation"
+                }
+              ],
+              "defaultReasoningEffort": "low",
+              "inputModalities": [
+                "text",
+                "image"
+              ],
+              "supportsPersonality": false,
+              "multiAgentVersion": "v2",
+              "additionalSpeedTiers": [
+                "fast"
+              ],
+              "serviceTiers": [
+                {
+                  "id": "priority",
+                  "name": "Fast",
+                  "description": "2x speed, increased usage"
+                }
+              ],
+              "defaultServiceTier": null,
+              "availableAccessPrograms": null,
+              "isDefault": true
+            },
+            {
+              "id": "capture-model-1",
+              "model": "capture-model-1",
+              "upgrade": null,
+              "upgradeInfo": null,
+              "availabilityNux": null,
+              "displayName": "Capture Model 1",
+              "description": "Frontier intelligence for the most demanding work.",
+              "modelSpecialty": null,
+              "hidden": false,
+              "supportedReasoningEfforts": [
+                {
+                  "reasoningEffort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "reasoningEffort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "reasoningEffort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "max",
+                  "description": "Maximum reasoning depth for the hardest problems"
+                },
+                {
+                  "reasoningEffort": "ultra",
+                  "description": "Maximum reasoning with automatic task delegation"
+                }
+              ],
+              "defaultReasoningEffort": "low",
+              "inputModalities": [
+                "text",
+                "image"
+              ],
+              "supportsPersonality": false,
+              "multiAgentVersion": "v2",
+              "additionalSpeedTiers": [
+                "fast"
+              ],
+              "serviceTiers": [
+                {
+                  "id": "priority",
+                  "name": "Fast",
+                  "description": "2x speed, increased usage"
+                }
+              ],
+              "defaultServiceTier": null,
+              "availableAccessPrograms": null,
+              "isDefault": false
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    }
+  ],
+  "stderr": "",
+  "stdinClosedAt_ms": 566,
+  "endedByItselfWithin3s": true,
+  "exit": {
+    "code": 0,
+    "signal": null,
+    "at_ms": 639
+  },
+  "requestsToTheBackend": [
+    {
+      "n": 1,
+      "at_ms": 551,
+      "method": "GET",
+      "path": "/backend-api/ps/plugins/suggested/codex?scope=GLOBAL",
+      "headers": {
+        "originator": "codex_cli_rs",
+        "user-agent": "codex_cli_rs/0.167.0 (Windows 10.0.26300; x86_64) unknown",
+        "authorization": "Bearer <ACCESS_TOKEN>",
+        "chatgpt-account-id": "acct-capture",
+        "oai-product-sku": "codex",
+        "accept": "*/*",
+        "host": "127.0.0.1:<PORT>"
+      },
+      "body": null,
+      "answer": {
+        "status": 404,
+        "body": {
+          "error": "not found (capture server)"
+        }
+      }
+    },
+    {
+      "n": 2,
+      "at_ms": 554,
+      "method": "GET",
+      "path": "/backend-api/ps/plugins/list?scope=GLOBAL&limit=200",
+      "headers": {
+        "originator": "codex_cli_rs",
+        "user-agent": "codex_cli_rs/0.167.0 (Windows 10.0.26300; x86_64) unknown",
+        "authorization": "Bearer <ACCESS_TOKEN>",
+        "chatgpt-account-id": "acct-capture",
+        "oai-product-sku": "codex",
+        "accept": "*/*",
+        "host": "127.0.0.1:<PORT>"
+      },
+      "body": null,
+      "answer": {
+        "status": 404,
+        "body": {
+          "error": "not found (capture server)"
+        }
+      }
+    },
+    {
+      "n": 3,
+      "at_ms": 556,
+      "method": "GET",
+      "path": "/backend-api/ps/plugins/installed?limit=200",
+      "headers": {
+        "originator": "codex_cli_rs",
+        "user-agent": "codex_cli_rs/0.167.0 (Windows 10.0.26300; x86_64) unknown",
+        "authorization": "Bearer <ACCESS_TOKEN>",
+        "chatgpt-account-id": "acct-capture",
+        "oai-product-sku": "codex",
+        "accept": "*/*",
+        "host": "127.0.0.1:<PORT>"
+      },
+      "body": null,
+      "answer": {
+        "status": 404,
+        "body": {
+          "error": "not found (capture server)"
+        }
+      }
+    },
+    {
+      "n": 4,
+      "at_ms": 556,
+      "method": "GET",
+      "path": "/backend-api/wham/accounts/check",
+      "headers": {
+        "user-agent": "codex_cli_rs/0.167.0 (Windows 10.0.26300; x86_64) unknown",
+        "authorization": "Bearer <ACCESS_TOKEN>",
+        "chatgpt-account-id": "acct-capture",
+        "accept": "*/*",
+        "host": "127.0.0.1:<PORT>"
+      },
+      "body": null,
+      "answer": {
+        "status": 200,
+        "body": {
+          "accounts": [
+            {
+              "id": "acct-capture",
+              "name": null,
+              "structure": "personal",
+              "plan_type": "free",
+              "is_deactivated": false,
+              "is_fedramp_compliant_workspace": false,
+              "can_access_with_session": true,
+              "sso_connection_name": null,
+              "workspace_backend_origin": "https://127.0.0.1:<PORT>",
+              "account_routing_override": "NO_CONSTRAINT",
+              "profile_picture_url": null
+            }
+          ],
+          "account_ordering": [
+            "acct-capture"
+          ],
+          "default_account_id": "acct-capture"
+        }
+      }
+    },
+    {
+      "n": 5,
+      "at_ms": 557,
+      "method": "GET",
+      "path": "/backend-api/ps/plugins/installed?limit=200&includeDownloadUrls=true",
+      "headers": {
+        "originator": "codex_cli_rs",
+        "user-agent": "codex_cli_rs/0.167.0 (Windows 10.0.26300; x86_64) unknown",
+        "authorization": "Bearer <ACCESS_TOKEN>",
+        "chatgpt-account-id": "acct-capture",
+        "oai-product-sku": "codex",
+        "accept": "*/*",
+        "host": "127.0.0.1:<PORT>"
+      },
+      "body": null,
+      "answer": {
+        "status": 404,
+        "body": {
+          "error": "not found (capture server)"
+        }
+      }
+    },
+    {
+      "n": 6,
+      "at_ms": 558,
+      "method": "GET",
+      "path": "/backend-api/codex/models?client_version=0.167.0",
+      "headers": {
+        "version": "0.167.0",
+        "authorization": "Bearer <ACCESS_TOKEN>",
+        "chatgpt-account-id": "acct-capture",
+        "originator": "codex_cli_rs",
+        "user-agent": "codex_cli_rs/0.167.0 (Windows 10.0.26300; x86_64) unknown",
+        "accept": "*/*",
+        "host": "127.0.0.1:<PORT>"
+      },
+      "body": null,
+      "answer": {
+        "status": 200,
+        "body": {
+          "models": [
+            {
+              "slug": "capture-model-1",
+              "display_name": "Capture Model 1",
+              "(capture note)": "40 fields in all, as `codex debug models` prints them"
+            },
+            {
+              "slug": "capture-model-2",
+              "display_name": "Capture Model 2",
+              "(capture note)": "40 fields in all, as `codex debug models` prints them"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "n": 7,
+      "at_ms": 560,
+      "method": "GET",
+      "path": "/backend-api/plugins/featured?platform=codex",
+      "headers": {
+        "originator": "codex_cli_rs",
+        "user-agent": "codex_cli_rs/0.167.0 (Windows 10.0.26300; x86_64) unknown",
+        "authorization": "Bearer <ACCESS_TOKEN>",
+        "chatgpt-account-id": "acct-capture",
+        "accept": "*/*",
+        "host": "127.0.0.1:<PORT>"
+      },
+      "body": null,
+      "answer": {
+        "status": 404,
+        "body": {
+          "error": "not found (capture server)"
+        }
+      }
+    },
+    {
+      "n": 8,
+      "at_ms": 561,
+      "method": "GET",
+      "path": "/backend-api/ps/plugins/installed?limit=200",
+      "headers": {
+        "originator": "tarsee",
+        "user-agent": "tarsee/0.167.0 (Windows 10.0.26300; x86_64) unknown (tarsee; 0.2.0)",
+        "authorization": "Bearer <ACCESS_TOKEN>",
+        "chatgpt-account-id": "acct-capture",
+        "oai-product-sku": "codex",
+        "accept": "*/*",
+        "host": "127.0.0.1:<PORT>"
+      },
+      "body": null,
+      "answer": {
+        "status": 404,
+        "body": {
+          "error": "not found (capture server)"
+        }
+      }
+    },
+    {
+      "n": 9,
+      "at_ms": 588,
+      "method": "GET",
+      "path": "/backend-api/codex/models?client_version=0.167.0",
+      "headers": {
+        "version": "0.167.0",
+        "authorization": "Bearer <ACCESS_TOKEN>",
+        "chatgpt-account-id": "acct-capture",
+        "originator": "tarsee",
+        "user-agent": "tarsee/0.167.0 (Windows 10.0.26300; x86_64) unknown (tarsee; 0.2.0)",
+        "accept": "*/*",
+        "host": "127.0.0.1:<PORT>"
+      },
+      "body": null,
+      "answer": {
+        "status": 200,
+        "body": {
+          "models": [
+            {
+              "slug": "capture-model-1",
+              "display_name": "Capture Model 1",
+              "(capture note)": "40 fields in all, as `codex debug models` prints them"
+            },
+            {
+              "slug": "capture-model-2",
+              "display_name": "Capture Model 2",
+              "(capture note)": "40 fields in all, as `codex debug models` prints them"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "modelsCacheJson": {
+    "fetched_at": "2026-11-12T23:58:08.255983Z",
+    "etag": "W/\"capture\"",
+    "client_version": "0.167.0",
+    "identity": "f5219375493cfa1669d230359877f6edd929b75bdd7557e89aff8583b4b6c102",
+    "models": [
+      {
+        "slug": "capture-model-1",
+        "display_name": "Capture Model 1",
+        "(capture note)": "39 fields in all"
+      },
+      {
+        "slug": "capture-model-2",
+        "display_name": "Capture Model 2",
+        "(capture note)": "39 fields in all"
+      }
+    ]
+  },
+  "homeAfter": [
+    ".sandbox/",
+    ".sandbox/sandbox.2026-11-12.log (131 bytes)",
+    "auth.json (721 bytes)",
+    "goals_1.sqlite (4096 bytes)",
+    "goals_1.sqlite-shm (32768 bytes)",
+    "goals_1.sqlite-wal (74192 bytes)",
+    "installation_id (36 bytes)",
+    "logs_2.sqlite (49152 bytes)",
+    "logs_2.sqlite-shm (32768 bytes)",
+    "logs_2.sqlite-wal (115392 bytes)",
+    "memories_1.sqlite (4096 bytes)",
+    "memories_1.sqlite-shm (32768 bytes)",
+    "memories_1.sqlite-wal (86552 bytes)",
+    "models_cache.json (130669 bytes)",
+    "queue_1.sqlite (40960 bytes)",
+    "queue_1.sqlite-shm (32768 bytes)",
+    "queue_1.sqlite-wal (82432 bytes)",
+    "skills/",
+    "skills/.system/ (Codex's own bundled skills, not listed)",
+    "state_5.sqlite (4096 bytes)",
+    "state_5.sqlite-shm (32768 bytes)",
+    "state_5.sqlite-wal (2142432 bytes)",
+    "tmp/",
+    "tmp/arg0-windows/"
+  ],
+  "debugModelsCommand": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "debug",
+      "models"
+    ],
+    "exit": {
+      "code": 0,
+      "signal": null,
+      "at_ms": 75
+    },
+    "topLevelKeys": [
+      "models"
+    ],
+    "firstModelKeys": [
+      "slug",
+      "display_name",
+      "description",
+      "default_reasoning_level",
+      "supported_reasoning_levels",
+      "shell_type",
+      "visibility",
+      "supported_in_api",
+      "priority",
+      "additional_speed_tiers",
+      "service_tiers",
+      "availability_nux",
+      "upgrade",
+      "model_messages",
+      "include_skills_usage_instructions",
+      "include_plugin_usage_instructions",
+      "include_apps_usage_instructions",
+      "default_reasoning_summary",
+      "support_verbosity",
+      "default_verbosity",
+      "apply_patch_tool_type",
+      "web_search_tool_type",
+      "truncation_policy",
+      "supports_image_detail_original",
+      "context_window",
+      "max_context_window",
+      "comp_hash",
+      "effective_context_window_percent",
+      "experimental_supported_tools",
+      "input_modalities",
+      "supports_search_tool",
+      "supports_experimental_context",
+      "use_responses_lite",
+      "supports_reasoning_effort_updates",
+      "node_repl_auto_review_required",
+      "node_repl_disabled",
+      "tool_mode",
+      "multi_agent_version",
+      "multi_agent_reasoning_effort",
+      "base_instructions"
+    ]
+  }
+}

@@ -1,0 +1,384 @@
+{
+  "name": "fail-sign-in-token-rejected-401",
+  "description": "A (fake) CLAUDE_CODE_OAUTH_TOKEN that the API turns down with 401 'OAuth token has expired'.",
+  "how": "The real claude 2.1.319 started directly (no SDK) with stdin, stdout and stderr as pipes, in an empty home, with a fake credential, against a loopback stand-in for the Messages API. t is milliseconds from the start of the process.",
+  "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-4-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=project",
+    "--strict-mcp-config",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--include-partial-messages"
+  ],
+  "exit": {
+    "code": 1,
+    "signal": null,
+    "at_ms": 1506
+  },
+  "stderr": "",
+  "stdin_written": [
+    {
+      "t": 7,
+      "json": {
+        "request_id": "init1",
+        "type": "control_request",
+        "request": {
+          "subtype": "initialize",
+          "systemPrompt": [
+            "You are a test."
+          ],
+          "systemPromptSnapshot": false
+        }
+      }
+    },
+    {
+      "t": 8,
+      "json": {
+        "type": "user",
+        "session_id": "",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "say hi"
+            }
+          ]
+        },
+        "parent_tool_use_id": null
+      }
+    },
+    {
+      "t": 1343,
+      "event": "stdin-end"
+    }
+  ],
+  "stdout": [
+    {
+      "t": 622,
+      "json": {
+        "type": "control_response",
+        "response": {
+          "subtype": "success",
+          "request_id": "init1",
+          "response": {
+            "commands": "<45 commands; cut from this fixture>",
+            "agents": "<5 agents; cut from this fixture>",
+            "output_style": "default",
+            "available_output_styles": [
+              "default",
+              "Proactive",
+              "Concise",
+              "Explanatory",
+              "Learning"
+            ],
+            "user_output_styles_dir": "<HOME>\\.claude\\output-styles",
+            "models": "<6 models; cut from this fixture>",
+            "account": {
+              "tokenSource": "CLAUDE_CODE_OAUTH_TOKEN",
+              "apiProvider": "firstParty"
+            },
+            "pid": 52996,
+            "claude_code_version": "2.1.319",
+            "current_permission_mode": "bypassPermissions",
+            "hook_on_failure_supported": true,
+            "feedback_mode": {
+              "kind": "disabled"
+            },
+            "analytics_disabled": true,
+            "remote_control_auto_enable": false,
+            "remote_control_auto_connect_default": false,
+            "remote_control_available": false,
+            "remote_control_auto_on_by_default": false,
+            "ide_rc_auto_enable_gate": false,
+            "fast_mode_state": "off",
+            "fast_mode_disabled_reason": "sdk_opt_in_required",
+            "session_state": "idle",
+            "capabilities": [
+              "ui_surface_v1",
+              "mcp_call_result_not_for_model_v1",
+              "mcp_call_check_permissions_v1"
+            ]
+          },
+          "pending_permission_requests": [],
+          "pending_user_dialog_requests": []
+        }
+      }
+    },
+    {
+      "t": 626,
+      "json": {
+        "type": "system",
+        "subtype": "session_state_changed",
+        "state": "running",
+        "sdk_host_only": true,
+        "uuid": "3a391b1d-cff0-4d56-b7dd-c3cff1e1f30f",
+        "session_id": "e05f0581-91ff-47b0-bf00-994f6d22d030"
+      }
+    },
+    {
+      "t": 701,
+      "json": {
+        "type": "system",
+        "subtype": "init",
+        "cwd": "<WORKSPACE>",
+        "session_id": "e05f0581-91ff-47b0-bf00-994f6d22d030",
+        "tools": [
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "Write"
+        ],
+        "mcp_servers": [],
+        "model": "claude-sonnet-4-5",
+        "permissionMode": "bypassPermissions",
+        "slash_commands": "<45 slash commands; cut from this fixture>",
+        "terminal_slash_commands": "<4 terminal slash commands; cut from this fixture>",
+        "apiKeySource": "none",
+        "claude_code_version": "2.1.319",
+        "output_style": "default",
+        "agents": [
+          "claude",
+          "Explore",
+          "general-purpose",
+          "Plan",
+          "statusline-setup"
+        ],
+        "skills": "<17 skills; cut from this fixture>",
+        "plugins": [
+          {
+            "name": "cc-plugin-agents-md",
+            "path": "builtin",
+            "source": "cc-plugin-agents-md@builtin"
+          },
+          {
+            "name": "cc-plugin-privacy",
+            "path": "builtin",
+            "source": "cc-plugin-privacy@builtin"
+          },
+          {
+            "name": "cc-plugin-plugin-authoring",
+            "path": "builtin",
+            "source": "cc-plugin-plugin-authoring@builtin"
+          }
+        ],
+        "capabilities": [
+          "interrupt_receipt_v1",
+          "interrupt_cancel_queued_v1",
+          "interrupt_send_now_v1",
+          "interrupt_requeue_taken_v1",
+          "msg_lifecycle_v1",
+          "request_marker_lists_v1",
+          "ask_user_question_unanswered_v1",
+          "lifecycle_wakeup_source_v1",
+          "sdk_mcp_tools_list_changed",
+          "sdk_mcp_manifests",
+          "mcp_read_resource_v1",
+          "mcp_tool_ui_meta_v1",
+          "ui_surface_v1",
+          "mcp_call_result_not_for_model_v1",
+          "mcp_call_check_permissions_v1"
+        ],
+        "analytics_disabled": true,
+        "product_feedback_disabled": true,
+        "uuid": "de6cbd6d-64db-4c65-8cd5-b7d17f04329c",
+        "memory_paths": {
+          "auto": "<HOME>\\.claude\\projects\\<WORKSPACE_AS_FOLDER_NAME>\\memory\\"
+        },
+        "original_cwd": "<WORKSPACE>",
+        "additional_directories": [],
+        "messaging_socket_path": "\\\\.\\pipe\\LOCAL\\cc-msg-86baa84c34a2b96cb6cce7eea34f7161",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "per_turn_effort_active": false,
+        "ultrathink_available": false,
+        "ultrathink_typed_raises": false,
+        "view_mode": "default",
+        "powershell_path": "<POWERSHELL_EXE>"
+      }
+    },
+    {
+      "t": 709,
+      "json": {
+        "type": "system",
+        "subtype": "status",
+        "status": "requesting",
+        "session_id": "e05f0581-91ff-47b0-bf00-994f6d22d030",
+        "uuid": "4184f1c1-28fc-47e5-afdc-1add69acfa78"
+      }
+    },
+    {
+      "t": 775,
+      "json": {
+        "type": "system",
+        "subtype": "api_retry",
+        "attempt": 0,
+        "max_retries": 0,
+        "retry_delay_ms": 255,
+        "error_status": 401,
+        "error": "authentication_failed",
+        "session_id": "e05f0581-91ff-47b0-bf00-994f6d22d030",
+        "uuid": "b1026966-67a6-434e-b505-f39f0b33ff01"
+      }
+    },
+    {
+      "t": 1042,
+      "json": {
+        "type": "system",
+        "subtype": "api_retry",
+        "attempt": 0,
+        "max_retries": 0,
+        "retry_delay_ms": 280,
+        "error_status": 401,
+        "error": "authentication_failed",
+        "session_id": "e05f0581-91ff-47b0-bf00-994f6d22d030",
+        "uuid": "9a675fff-0d29-467e-9564-c247979e111e"
+      }
+    },
+    {
+      "t": 1333,
+      "json": {
+        "type": "assistant",
+        "message": {
+          "diagnostics": null,
+          "id": "33f7dbf2-dac0-406a-a970-7132a6301a17",
+          "container": null,
+          "model": "<synthetic>",
+          "role": "assistant",
+          "stop_details": null,
+          "stop_reason": "stop_sequence",
+          "stop_sequence": "",
+          "type": "message",
+          "usage": {
+            "output_tokens_details": null,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": null,
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 0,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": null,
+            "iterations": null,
+            "speed": null,
+            "fallback_credit": null
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "Failed to authenticate. API Error: 401 OAuth token has expired. Please obtain a new token or refresh your existing token."
+            }
+          ],
+          "context_management": null
+        },
+        "parent_tool_use_id": null,
+        "session_id": "e05f0581-91ff-47b0-bf00-994f6d22d030",
+        "uuid": "8907cdfb-0767-47d9-a9d6-8921ffde24cc",
+        "timestamp": "2026-11-12T23:46:26.247Z",
+        "error": "authentication_failed",
+        "request_id": "req_fake_err_2",
+        "is_api_error_message": true,
+        "api_error_status": 401
+      }
+    },
+    {
+      "t": 1343,
+      "json": {
+        "duration_api_ms": 0,
+        "stop_reason": "stop_sequence",
+        "session_id": "e05f0581-91ff-47b0-bf00-994f6d22d030",
+        "total_cost_usd": 0,
+        "usage": {
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 0,
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard",
+          "fallback_credit": null
+        },
+        "modelUsage": {},
+        "permission_denials": [],
+        "terminal_reason": "api_error",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "safety_stops": 0,
+        "is_error": true,
+        "num_turns": 1,
+        "subtype": "success",
+        "api_error_status": 401,
+        "result": "Failed to authenticate. API Error: 401 OAuth token has expired. Please obtain a new token or refresh your existing token.",
+        "type": "result",
+        "duration_ms": 709,
+        "uuid": "4d5a768a-615e-4076-bfed-4c51230dfd3c",
+        "queued_turn_count": 0,
+        "result_index": 0,
+        "model_usage_since_last_result": {}
+      }
+    },
+    {
+      "t": 1346,
+      "json": {
+        "type": "system",
+        "subtype": "session_state_changed",
+        "state": "idle",
+        "sdk_host_only": true,
+        "uuid": "0a876928-8a92-4821-b696-82fbeff07b79",
+        "session_id": "e05f0581-91ff-47b0-bf00-994f6d22d030"
+      }
+    }
+  ]
+}

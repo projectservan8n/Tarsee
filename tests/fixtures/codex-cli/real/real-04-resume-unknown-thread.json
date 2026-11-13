@@ -1,0 +1,27 @@
+{
+  "name": "real-04-resume-unknown-thread",
+  "what": "`resume <id>` with a thread id that has no rollout in this Codex home.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program), started with the argument list, environment and stdin the SDK produced",
+    "platform": "win32"
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "argv": [
+      "--config",
+      "approval_policy=\"never\"",
+      "resume",
+      "01a1c000-0000-7000-8000-00000000dead"
+    ],
+    "stdin": "Anyone there?"
+  },
+  "result": {
+    "exitCode": 1,
+    "signal": null,
+    "stdoutLines": [],
+    "stderr": "Reading prompt from stdin...\nError: thread/resume: thread/resume failed: no rollout found for thread id 01a1c000-0000-7000-8000-00000000dead (code -32600)\n"
+  },
+  "whatTheSdkThrows": "Codex Exec exited with code 1: Reading prompt from stdin...\nError: thread/resume: thread/resume failed: no rollout found for thread id 01a1c000-0000-7000-8000-00000000dead (code -32600)\n",
+  "requestsToTheMcpServer": 0,
+  "requestsToTheModel": 0
+}

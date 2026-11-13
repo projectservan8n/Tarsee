@@ -1,0 +1,24 @@
+//! bare-env: start a program with exactly the environment given on the command line (NAME=value arguments before
+//! `--`) and nothing inherited, the way Rust's `Command::env_clear()` does; stdin, stdout and stderr are passed
+//! through, and the program's exit code is this program's. Node cannot do this on Windows (it fills a few system
+//! names in from its own environment), so this is how the captures see what the real codex does with none of them.
+//!
+//!   bare-env [NAME=value ...] -- program [args ...]
+use std::process::{Command, Stdio};
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let split = args.iter().position(|a| a == "--").expect("usage: bare-env [NAME=value ...] -- program [args]");
+    let mut cmd = Command::new(&args[split + 1]);
+    cmd.args(&args[split + 2..]).env_clear().stdin(Stdio::inherit()).stdout(Stdio::inherit()).stderr(Stdio::inherit());
+    for pair in &args[..split] {
+        let (k, v) = pair.split_once('=').expect("NAME=value");
+        cmd.env(k, v);
+    }
+    match cmd.status() {
+        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+        Err(e) => {
+            eprintln!("bare-env: could not start: {e}");
+            std::process::exit(127);
+        }
+    }
+}

@@ -1,0 +1,124 @@
+{
+  "name": "sdk-20-long-unicode-prompt",
+  "what": "A prompt of 300,000 characters with non-ASCII in it: written to stdin as UTF-8 in one write() and then closed; the program reads it in pieces (the pipe's), and its end is the end of stdin. Nothing is added: no newline, no length, no framing.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "win32"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {},
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "thread": {
+      "method": "startThread"
+    },
+    "runStreamed(input, turnOptions)": {
+      "input": "héllo ☃ 😀\n0123456789012345678901234567890123456789012345678 … (300046 characters in all) … 56789\nlast line with no newline after it",
+      "inputLength": {
+        "characters": 300046,
+        "utf8Bytes": 300051
+      },
+      "turnOptions": {}
+    },
+    "callerProcessEnvNames": [
+      "COMSPEC",
+      "FROM_PROCESS_ENV",
+      "NUMBER_OF_PROCESSORS",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "TMP",
+      "TMPDIR"
+    ]
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "argv": [
+      "exec",
+      "--experimental-json"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "PATH": "C:\\WINDOWS\\system32;C:\\WINDOWS"
+    },
+    "envNamesNotInEnvOption": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "stdin": {
+      "text": "héllo ☃ 😀\n0123456789012345678901234567890123456789012345678 … (300046 characters in all) … 56789\nlast line with no newline after it",
+      "sameAsTheInput": true,
+      "bytes": 300051,
+      "chunks": [
+        {
+          "at_ms": 0,
+          "bytes": 65536
+        },
+        {
+          "at_ms": 0,
+          "bytes": 65536
+        },
+        {
+          "at_ms": 0,
+          "bytes": 65536
+        },
+        {
+          "at_ms": 0,
+          "bytes": 65536
+        },
+        {
+          "at_ms": 0,
+          "bytes": 37907
+        }
+      ],
+      "eof_at_ms": 0
+    }
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000bb\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":0,\"output_tokens\":2,\"reasoning_output_tokens\":0}}\n",
+    "stderr": "",
+    "exitCode": 0,
+    "sleepMsBeforeExit": 0
+  },
+  "sdkYielded": [
+    {
+      "type": "thread.started",
+      "thread_id": "01a1c000-0000-7000-8000-0000000000bb"
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_0",
+        "type": "agent_message",
+        "text": "ok"
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 10,
+        "cached_input_tokens": 0,
+        "output_tokens": 2,
+        "reasoning_output_tokens": 0,
+        "cache_write_input_tokens": 0
+      }
+    }
+  ],
+  "sdkThrew": null
+}

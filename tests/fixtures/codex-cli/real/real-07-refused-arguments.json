@@ -1,0 +1,117 @@
+{
+  "name": "real-07-refused-arguments",
+  "what": "The program started with one argument changed to something it cannot take: which it refuses (and how), and which it lets through.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program), started with the argument list, environment and stdin the SDK produced",
+    "platform": "win32"
+  },
+  "an approval policy that does not exist": {
+    "changedArguments": [
+      "approval_policy=\"sometimes\""
+    ],
+    "exitCode": 1,
+    "stdoutLines": [],
+    "stderr": "Error loading config.toml: unknown variant `sometimes`, expected one of `untrusted`, `on-failure`, `on-request`, `granular`, `never`\nin `approval_policy`\n\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 1: Error loading config.toml: unknown variant `sometimes`, expected one of `untrusted`, `on-failure`, `on-request`, `granular`, `never`\nin `approval_policy`\n\n",
+    "requestsToTheModel": 0
+  },
+  "a --config with no equals sign": {
+    "changedArguments": [
+      "justakey"
+    ],
+    "exitCode": 1,
+    "stdoutLines": [],
+    "stderr": "Error parsing -c overrides: Invalid override (missing '='): justakey\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 1: Error parsing -c overrides: Invalid override (missing '='): justakey\n",
+    "requestsToTheModel": 0
+  },
+  "a --config whose value has the wrong type": {
+    "changedArguments": [
+      "model_context_window=\"big\""
+    ],
+    "exitCode": 1,
+    "stdoutLines": [],
+    "stderr": "Error loading config.toml: invalid type: string \"big\", expected i64\nin `model_context_window`\n\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 1: Error loading config.toml: invalid type: string \"big\", expected i64\nin `model_context_window`\n\n",
+    "requestsToTheModel": 0
+  },
+  "a --config key Codex does not know": {
+    "changedArguments": [
+      "no_such_setting_at_all=1"
+    ],
+    "exitCode": 0,
+    "stdoutLines": [
+      "{\"type\":\"thread.started\",\"thread_id\":\"<THREAD_ID>\"}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\\n  session-flags: `no_such_setting_at_all` is ignored.\"}}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"error\",\"message\":\"Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\\n  session-flags: `no_such_setting_at_all` is ignored.\"}}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+      "{\"type\":\"turn.started\"}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_3\",\"type\":\"reasoning\",\"text\":\"Thinking briefly.\"}}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_4\",\"type\":\"agent_message\",\"text\":\"Hello from the fake model.\"}}",
+      "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+    ],
+    "stderr": "Reading prompt from stdin...\n",
+    "whatTheSdkThrows": null,
+    "requestsToTheModel": 1
+  },
+  "a sandbox mode that does not exist": {
+    "changedArguments": [
+      "wide-open"
+    ],
+    "exitCode": 2,
+    "stdoutLines": [],
+    "stderr": "error: invalid value 'wide-open' for '--sandbox <SANDBOX_MODE>'\n  [possible values: read-only, workspace-write, danger-full-access]\n\nFor more information, try '--help'.\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 2: error: invalid value 'wide-open' for '--sandbox <SANDBOX_MODE>'\n  [possible values: read-only, workspace-write, danger-full-access]\n\nFor more information, try '--help'.\n",
+    "requestsToTheModel": 0
+  },
+  "an option that does not exist": {
+    "changedArguments": [
+      "--bogus"
+    ],
+    "exitCode": 2,
+    "stdoutLines": [],
+    "stderr": "error: unexpected argument '--bogus' found\n\n  tip: to pass '--bogus' as a value, use '-- --bogus'\n\nUsage: codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]\n\nFor more information, try '--help'.\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 2: error: unexpected argument '--bogus' found\n\n  tip: to pass '--bogus' as a value, use '-- --bogus'\n\nUsage: codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]\n\nFor more information, try '--help'.\n",
+    "requestsToTheModel": 0
+  },
+  "a login method that does not exist": {
+    "changedArguments": [
+      "forced_login_method=\"carrier-pigeon\""
+    ],
+    "exitCode": 1,
+    "stdoutLines": [],
+    "stderr": "Error loading config.toml: unknown variant `carrier-pigeon`, expected `chatgpt` or `api`\nin `forced_login_method`\n\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 1: Error loading config.toml: unknown variant `carrier-pigeon`, expected `chatgpt` or `api`\nin `forced_login_method`\n\n",
+    "requestsToTheModel": 0
+  },
+  "a model provider that is not defined": {
+    "changedArguments": [
+      "model_provider=\"nobody\""
+    ],
+    "exitCode": 1,
+    "stdoutLines": [],
+    "stderr": "Error: Model provider `nobody` not found\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 1: Error: Model provider `nobody` not found\n",
+    "requestsToTheModel": 0
+  },
+  "a working folder that is not there": {
+    "changedArguments": [
+      "<RUN_DIR>\\no-such-folder"
+    ],
+    "exitCode": 1,
+    "stdoutLines": [],
+    "stderr": "Error: The system cannot find the file specified. (os error 2)\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 1: Error: The system cannot find the file specified. (os error 2)\n",
+    "requestsToTheModel": 0
+  },
+  "a string holding a raw DEL character (U+007F)": {
+    "changedArguments": [
+      "model_reasoning_summary=\"non\u007fe\""
+    ],
+    "exitCode": 1,
+    "stdoutLines": [],
+    "stderr": "Error loading config.toml: unknown variant `non\u007fe`, expected one of `auto`, `concise`, `detailed`, `none`\nin `model_reasoning_summary`\n\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 1: Error loading config.toml: unknown variant `non\u007fe`, expected one of `auto`, `concise`, `detailed`, `none`\nin `model_reasoning_summary`\n\n",
+    "requestsToTheModel": 0
+  }
+}

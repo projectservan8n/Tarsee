@@ -1,0 +1,62 @@
+{
+  "name": "fail-unknown-flag",
+  "description": "An unknown command-line flag: nothing on stdout, 'error: unknown option ...' on stderr; exit code 1.",
+  "how": "The real claude 2.1.319 started directly (no SDK) with stdin, stdout and stderr as pipes, in an empty home, with a fake credential, against a loopback stand-in for the Messages API. t is milliseconds from the start of the process.",
+  "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=claude-sonnet-4-5",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=project",
+    "--strict-mcp-config",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--include-partial-messages",
+    "--no-such-flag"
+  ],
+  "exit": {
+    "code": 1,
+    "signal": null,
+    "at_ms": 334
+  },
+  "stderr": "error: unknown option '--no-such-flag'\n",
+  "stdin_written": [
+    {
+      "t": 8,
+      "json": {
+        "request_id": "init5",
+        "type": "control_request",
+        "request": {
+          "subtype": "initialize",
+          "systemPrompt": [
+            "You are a test."
+          ],
+          "systemPromptSnapshot": false
+        }
+      }
+    },
+    {
+      "t": 8,
+      "json": {
+        "type": "user",
+        "session_id": "",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "say hi"
+            }
+          ]
+        },
+        "parent_tool_use_id": null
+      }
+    }
+  ],
+  "stdout": []
+}

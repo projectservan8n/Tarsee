@@ -1,0 +1,99 @@
+{
+  "name": "sdk-17-bad-line-ends-the-program",
+  "what": "After a stdout line that is not JSON the SDK does not leave the program running: the stub would have slept 20 s, and its heartbeat stops right after the bad line.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "win32"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {},
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "thread": {
+      "method": "startThread"
+    },
+    "runStreamed(input, turnOptions)": {
+      "input": "hello",
+      "inputLength": {
+        "characters": 5,
+        "utf8Bytes": 5
+      },
+      "turnOptions": {}
+    },
+    "callerProcessEnvNames": [
+      "COMSPEC",
+      "FROM_PROCESS_ENV",
+      "NUMBER_OF_PROCESSORS",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "TMP",
+      "TMPDIR"
+    ]
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "argv": [
+      "exec",
+      "--experimental-json"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "PATH": "C:\\WINDOWS\\system32;C:\\WINDOWS"
+    },
+    "envNamesNotInEnvOption": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "stdin": {
+      "text": "hello",
+      "sameAsTheInput": true,
+      "bytes": 5,
+      "chunks": [
+        {
+          "at_ms": 12,
+          "bytes": 5
+        }
+      ],
+      "eof_at_ms": 15
+    }
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000bb\"}\nthis is not json\n",
+    "stderr": "",
+    "exitCode": 0,
+    "sleepMsBeforeExit": 20000
+  },
+  "sdkYielded": [
+    {
+      "type": "thread.started",
+      "thread_id": "01a1c000-0000-7000-8000-0000000000bb"
+    }
+  ],
+  "sdkThrew": {
+    "name": "Error",
+    "message": "Failed to parse item: this is not json",
+    "code": null,
+    "cause": {
+      "name": "SyntaxError",
+      "message": "Unexpected token 'h', \"this is not json\" is not valid JSON"
+    }
+  },
+  "programAfterTheError": {
+    "note": "the stub would have run for sleepMsBeforeExit more; its heartbeat (ms since it started, every 20 ms) stopped at",
+    "stubLastAliveMs": 21
+  }
+}

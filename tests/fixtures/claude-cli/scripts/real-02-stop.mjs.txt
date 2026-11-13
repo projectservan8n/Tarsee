@@ -1,0 +1,81 @@
+// Real CLI, driven directly: what stops a turn, and what the program writes when it is stopped.
+//   A  stdin closed in the middle of a streamed answer
+//   B  an interrupt control request in the middle of a streamed answer, then stdin closed after its result
+//   C  the process killed in the middle of a streamed answer
+//   D  stdin closed right after the user message, before the reply (does the turn still finish?)
+//   E  interrupt, then a second user message on the same process (does it keep going?)
+import { drive, gatewayEnv, baseArgs, initRequest, userText, startFakeAnthropic, SCRATCH, brief } from "./real-drive.mjs";
+import fs from "node:fs";
+
+fs.mkdirSync(`${SCRATCH}/real`, { recursive: true });
+const which = process.argv[2] || "ABCDE";
+const show = (label, r) => {
+  console.log(`\n===== ${label}: exit code ${r.exitCode}, signal ${r.signal}, at ${r.exitAt} ms; stderr: ${JSON.stringify(r.stderr.slice(0, 600))}`);
+  for (const s of r.sent) console.log(`  > ${s.t} ${s.event || brief(s.line) || JSON.stringify(s.line).slice(0, 160)}`);
+  for (const o of r.stdout) console.log(`  < ${o.t} ${o.msg ? brief(o.msg) : `RAW ${o.raw.slice(0, 300)}`}`);
+};
+const hang = () => ({ hang: true, text: "This answer will never finish because" });
+const sessionState = { CLAUDE_CODE_SDK_READS_SESSION_STATE: "1" };
+
+async function withFake(script, fn) {
+  const fake = await startFakeAnthropic({ script });
+  try { return await fn(fake); } finally { await fake.close(); }
+}
+const stdin0 = () => [initRequest({ systemPrompt: ["You are a test."], systemPromptSnapshot: false }), userText("say hi")];
+const isTextDelta = (m) => m.type === "stream_event" && m.event?.type === "content_block_delta";
+
+if (which.includes("A")) await withFake(hang, async (fake) => {
+  let done = false;
+  const r = await drive({
+    name: "02A-stdin-closed-mid-stream", args: baseArgs(), env: gatewayEnv(`${SCRATCH}/homes/stopA`, fake.url, sessionState), cwd: `${SCRATCH}/ws/stopA`,
+    stdin: stdin0(), timeoutMs: 30_000,
+    onMessage(m, api) { if (!done && isTextDelta(m)) { done = true; api.endInput(); } },
+  });
+  show("A stdin closed mid-stream", r);
+});
+
+if (which.includes("B")) await withFake(hang, async (fake) => {
+  let done = false;
+  const r = await drive({
+    name: "02B-interrupt-mid-stream", args: baseArgs(), env: gatewayEnv(`${SCRATCH}/homes/stopB`, fake.url, sessionState), cwd: `${SCRATCH}/ws/stopB`,
+    stdin: stdin0(), timeoutMs: 30_000,
+    onMessage(m, api) { if (!done && isTextDelta(m)) { done = true; api.send({ request_id: "int1", type: "control_request", request: { subtype: "interrupt" } }); } },
+  });
+  show("B interrupt mid-stream (stdin closed after the result)", r);
+});
+
+if (which.includes("C")) await withFake(hang, async (fake) => {
+  let done = false;
+  const r = await drive({
+    name: "02C-killed-mid-stream", args: baseArgs(), env: gatewayEnv(`${SCRATCH}/homes/stopC`, fake.url, sessionState), cwd: `${SCRATCH}/ws/stopC`,
+    stdin: stdin0(), timeoutMs: 30_000,
+    onMessage(m, api) { if (!done && isTextDelta(m)) { done = true; api.kill("SIGKILL"); } },
+  });
+  show("C killed mid-stream", r);
+});
+
+if (which.includes("D")) await withFake(() => ({ text: "Hello from the fake." }), async (fake) => {
+  const env = gatewayEnv(`${SCRATCH}/homes/stopD`, fake.url, sessionState);
+  const { spawn } = await import("node:child_process");
+  // write both lines and close stdin at once, before anything is read back
+  const r = await drive({
+    name: "02D-stdin-closed-before-reply", args: baseArgs(), env, cwd: `${SCRATCH}/ws/stopD`,
+    stdin: stdin0(), timeoutMs: 30_000, endInputAfterResult: false,
+    onMessage(m, api) { if (m.type === "control_response") api.endInput(); },
+  });
+  show("D stdin closed right after initialize was answered, before the reply", r);
+});
+
+if (which.includes("E")) await withFake((req, all) => (all.filter((q) => /\/v1\/messages$/.test(q.path)).length === 1 ? hang() : { text: "Second answer." }), async (fake) => {
+  let done = false, second = false;
+  const r = await drive({
+    name: "02E-interrupt-then-second-message", args: baseArgs(), env: gatewayEnv(`${SCRATCH}/homes/stopE`, fake.url, sessionState), cwd: `${SCRATCH}/ws/stopE`,
+    stdin: stdin0(), timeoutMs: 40_000, endInputAfterResult: false,
+    onMessage(m, api) {
+      if (!done && isTextDelta(m)) { done = true; api.send({ request_id: "int1", type: "control_request", request: { subtype: "interrupt" } }); }
+      if (m.type === "result" && !second) { second = true; api.send(userText("and again")); }
+      else if (m.type === "result") api.endInput();
+    },
+  });
+  show("E interrupt, then a second user message", r);
+});

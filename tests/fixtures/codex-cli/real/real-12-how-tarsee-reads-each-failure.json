@@ -1,0 +1,303 @@
+{
+  "name": "real-12-how-tarsee-reads-each-failure",
+  "what": "Each failure the captures recorded, and what the Node version's classifier (providers/codex-events.js classifyCodexFailure) makes of its words: the kind, whether the turn layer retries with a fresh thread (recoverable), and the words shown.",
+  "cases": [
+    {
+      "what": "resume of a thread id that has no rollout",
+      "provider": "openrouter",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 1: Reading prompt from stdin...\nError: thread/resume: thread/resume failed: no rollout found for thread id 01a1c000-0000-7000-8000-00000000dead (code -32600)\n",
+      "tarsee": {
+        "kind": "session",
+        "recoverable": true,
+        "message": "**The earlier conversation couldn't be picked up again**, so I'm starting a fresh one."
+      }
+    },
+    {
+      "what": "custom provider, env_key variable not set",
+      "provider": "openrouter",
+      "source": "turn.failed message",
+      "words": "Missing environment variable: `TARSEE_PROVIDER_KEY`.",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenRouter ran into a problem:** Missing environment variable: `TARSEE_PROVIDER_KEY`."
+      }
+    },
+    {
+      "what": "unknown model (404), on openrouter",
+      "provider": "openrouter",
+      "source": "turn.failed message",
+      "words": "The model `no-such-model` does not exist or you do not have access to it.",
+      "tarsee": {
+        "kind": "model",
+        "recoverable": false,
+        "message": "**OpenRouter can't run the model no-such-model**: it doesn't exist there, or this account can't use it. Pick another model in the chat's model menu or in Settings > AI."
+      }
+    },
+    {
+      "what": "unknown model (400), on openrouter",
+      "provider": "openrouter",
+      "source": "turn.failed message",
+      "words": "The requested model 'no-such-model' does not exist.",
+      "tarsee": {
+        "kind": "model",
+        "recoverable": false,
+        "message": "**OpenRouter can't run the model no-such-model**: it doesn't exist there, or this account can't use it. Pick another model in the chat's model menu or in Settings > AI."
+      }
+    },
+    {
+      "what": "refused key (401), on openrouter",
+      "provider": "openrouter",
+      "source": "turn.failed message",
+      "words": "unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***, url: http://127.0.0.1:<MODEL_PORT>/v1/responses",
+      "tarsee": {
+        "kind": "auth",
+        "recoverable": false,
+        "message": "**Your OpenRouter key was rejected.** Update it in Settings > AI or the Railway variable OPENROUTER_API_KEY."
+      }
+    },
+    {
+      "what": "refused key (401), on chatgpt",
+      "provider": "chatgpt",
+      "source": "turn.failed message",
+      "words": "unexpected status 401 Unauthorized: Incorrect API key provided: sk-test***, url: http://127.0.0.1:<MODEL_PORT>/v1/responses",
+      "tarsee": {
+        "kind": "expired",
+        "recoverable": false,
+        "message": "**The ChatGPT sign-in has expired**, so I can't reach the model right now. Retrying won't fix it.\n\nSign in again in Settings > AI (it shows a link and a one-time code), or run `codex login --device-auth` in the Terminal. Then send your message again."
+      }
+    },
+    {
+      "what": "refused argument: an approval policy that does not exist",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 1: Error loading config.toml: unknown variant `sometimes`, expected one of `untrusted`, `on-failure`, `on-request`, `granular`, `never`\nin `approval_policy`\n\n",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenAI ran into a problem:** Error loading config.toml: unknown variant `sometimes`, expected one of `untrusted`, `on-failure`, `on-request`, `granular`, `never`\nin `approval_policy`"
+      }
+    },
+    {
+      "what": "refused argument: a --config with no equals sign",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 1: Error parsing -c overrides: Invalid override (missing '='): justakey\n",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenAI ran into a problem:** Error parsing -c overrides: Invalid override (missing '='): justakey"
+      }
+    },
+    {
+      "what": "refused argument: a --config whose value has the wrong type",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 1: Error loading config.toml: invalid type: string \"big\", expected i64\nin `model_context_window`\n\n",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenAI ran into a problem:** Error loading config.toml: invalid type: string \"big\", expected i64\nin `model_context_window`"
+      }
+    },
+    {
+      "what": "refused argument: a sandbox mode that does not exist",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 2: error: invalid value 'wide-open' for '--sandbox <SANDBOX_MODE>'\n  [possible values: read-only, workspace-write, danger-full-access]\n\nFor more information, try '--help'.\n",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenAI ran into a problem:** error: invalid value 'wide-open' for '--sandbox <SANDBOX_MODE>'\n[possible values: read-only, workspace-write, danger-full-access]\nFor more information, try '--help'."
+      }
+    },
+    {
+      "what": "refused argument: an option that does not exist",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 2: error: unexpected argument '--bogus' found\n\n  tip: to pass '--bogus' as a value, use '-- --bogus'\n\nUsage: codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]\n\nFor more information, try '--help'.\n",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenAI ran into a problem:** error: unexpected argument '--bogus' found\ntip: to pass '--bogus' as a value, use '-- --bogus'\nUsage: codex exec [OPTIONS] [PROMPT]\ncodex exec [OPTIONS] <COMMAND> [ARGS]\nFor more information, try '--help'."
+      }
+    },
+    {
+      "what": "refused argument: a login method that does not exist",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 1: Error loading config.toml: unknown variant `carrier-pigeon`, expected `chatgpt` or `api`\nin `forced_login_method`\n\n",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenAI ran into a problem:** Error loading config.toml: unknown variant `carrier-pigeon`, expected `chatgpt` or `api`\nin `forced_login_method`"
+      }
+    },
+    {
+      "what": "refused argument: a model provider that is not defined",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 1: Error: Model provider `nobody` not found\n",
+      "tarsee": {
+        "kind": "model",
+        "recoverable": false,
+        "message": "**OpenAI can't run the model the-model**: it doesn't exist there, or this account can't use it. Pick another model in the chat's model menu or in Settings > AI."
+      }
+    },
+    {
+      "what": "refused argument: a working folder that is not there",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 1: Error: The system cannot find the file specified. (os error 2)\n",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenAI ran into a problem:** Error: The system cannot find the file specified. (os error 2)"
+      }
+    },
+    {
+      "what": "refused argument: a string holding a raw DEL character (U+007F)",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 1: Error loading config.toml: unknown variant `none`, expected one of `auto`, `concise`, `detailed`, `none`\nin `model_reasoning_summary`\n\n",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenAI ran into a problem:** Error loading config.toml: unknown variant `none`, expected one of `auto`, `concise`, `detailed`, `none`\nin `model_reasoning_summary`"
+      }
+    },
+    {
+      "what": "Tarsee's MCP server: nothing listens at its address",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 1: Reading prompt from stdin...\n2026-11-13T00:17:09.037218Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:9/mcp)\")))\n2026-11-13T00:17:10.320452Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:9/mcp)\")))\n2026-11-13T00:17:12.347777Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(HttpRequest(HttpRequest(\"http/request failed: error sending request for url (http://127.0.0.1:9/mcp)\")))\n2026-11-13T00:17:12.348258Z ERROR codex_core::session: Failed to create session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Client error: HTTP request failed: http/request failed: error sending request for url (http://127.0.0.1:9/mcp), when send initialize request (code -32603)\n",
+      "tarsee": {
+        "kind": "unavailable",
+        "recoverable": false,
+        "message": "**OpenAI isn't answering right now** (the service is down or overloaded). This usually clears up on its own: try again in a few minutes, or switch to another AI in Settings > AI."
+      }
+    },
+    {
+      "what": "Tarsee's MCP server refuses the token (401)",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 1: Reading prompt from stdin...\n2026-11-13T00:17:21.203959Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: \"Bearer realm=\\\"tarsee\\\"\" })\n2026-11-13T00:17:21.205740Z ERROR codex_core::session: Failed to create session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request (code -32603)\n",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenAI ran into a problem:** worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: \"Bearer realm=\\\"tarsee\\\"\" })\nFailed to create session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request: Send message error Transport [codex_rmcp_client::tool_list_changes::ToolListChanges<codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>>] error: Auth required, when send initialize request (code -32603)"
+      }
+    },
+    {
+      "what": "TARSEE_MCP_TOKEN not set",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 1: Reading prompt from stdin...\n2026-11-13T00:17:22.601630Z ERROR codex_core::session: Failed to create session: required MCP servers failed to initialize: tarsee: Environment variable TARSEE_MCP_TOKEN for MCP server 'tarsee' is not set\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: Environment variable TARSEE_MCP_TOKEN for MCP server 'tarsee' is not set (code -32603)\n",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenAI ran into a problem:** Failed to create session: required MCP servers failed to initialize: tarsee: Environment variable TARSEE_MCP_TOKEN for MCP server 'tarsee' is not set\nError: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: Environment variable TARSEE_MCP_TOKEN for MCP server 'tarsee' is not set (code -32603)"
+      }
+    },
+    {
+      "what": "nothing on stdin",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 1: Reading prompt from stdin...\nNo prompt provided via stdin.\n",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenAI ran into a problem:** No prompt provided via stdin."
+      }
+    },
+    {
+      "what": "the program killed from outside (Windows: exit code 1, no stderr)",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with code 1: ",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenAI ran into a problem** it didn't explain. Try again, or check the server logs."
+      }
+    },
+    {
+      "what": "the program killed from outside (Linux: SIGKILL)",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Codex Exec exited with signal SIGKILL: ",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenAI ran into a problem** it didn't explain. Try again, or check the server logs."
+      }
+    },
+    {
+      "what": "a stdout line that is not JSON",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Failed to parse item: this is not json",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**OpenAI ran into a problem:** Failed to parse item: this is not json"
+      }
+    },
+    {
+      "what": "the program is not where the path says (Windows; the path is made up here)",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "spawn C:\\tarsee\\bin\\codex.exe ENOENT",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**Codex isn't installed where Tarsee can run it** (the @openai/codex package or its program for this system is missing). Reinstall Tarsee's dependencies, then try again."
+      }
+    },
+    {
+      "what": "the SDK cannot find its own binary",
+      "provider": "openai",
+      "source": "what the SDK threw",
+      "words": "Unable to locate Codex CLI binaries. Ensure @openai/codex is installed with optional dependencies.",
+      "tarsee": {
+        "kind": "unknown",
+        "recoverable": false,
+        "message": "**Codex isn't installed where Tarsee can run it** (the @openai/codex package or its program for this system is missing). Reinstall Tarsee's dependencies, then try again."
+      }
+    },
+    {
+      "what": "out of credit (response.failed insufficient_quota), words from test/fixtures/codex/quota.jsonl",
+      "provider": "openrouter",
+      "source": "turn.failed message",
+      "words": "Quota exceeded. Check your plan and billing details.",
+      "tarsee": {
+        "kind": "billing",
+        "recoverable": false,
+        "message": "**OpenRouter is out of credit.** Your OpenRouter key has hit its spending limit. Raise it at openrouter.ai/settings/keys. (https://openrouter.ai/settings/keys)"
+      }
+    },
+    {
+      "what": "busy (429 after retries), words from test/fixtures/codex/rate-limit.jsonl",
+      "provider": "openrouter",
+      "source": "turn.failed message",
+      "words": "exceeded retry limit, last status: 429 Too Many Requests",
+      "tarsee": {
+        "kind": "rate",
+        "recoverable": false,
+        "message": "**OpenRouter is busy right now** (too many requests). Wait a minute and send your message again."
+      }
+    },
+    {
+      "what": "server not reachable, words from test/fixtures/codex/unreachable.jsonl",
+      "provider": "local",
+      "source": "turn.failed message",
+      "words": "Connection failed: error sending request",
+      "tarsee": {
+        "kind": "unavailable",
+        "recoverable": false,
+        "message": "**Can't reach your Local AI at its address.** Check that the server is running and that the address in Settings > AI is right. If you just started llama-server with -hf, it may still be downloading the model."
+      }
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+// Real CLI, driven directly: initialize, one user message, a streamed text reply from the fake, result, stdin closed.
+import { drive, gatewayEnv, baseArgs, initRequest, userText, startFakeAnthropic, SCRATCH, brief } from "./real-drive.mjs";
+import fs from "node:fs";
+
+fs.mkdirSync(`${SCRATCH}/real`, { recursive: true });
+const fake = await startFakeAnthropic({ script: () => ({ text: "Hello from the fake." }) });
+try {
+  const home = `${SCRATCH}/homes/basic`;
+  const cwd = `${SCRATCH}/ws/basic`;
+  const r = await drive({
+    name: "01-basic",
+    args: baseArgs(),
+    env: gatewayEnv(home, fake.url),
+    cwd,
+    stdin: [
+      initRequest({ systemPrompt: ["You are a test."], systemPromptSnapshot: false }),
+      userText("say hi"),
+    ],
+  });
+  console.log("exit", r.exitCode, r.signal, "at", r.exitAt, "ms; stderr:", JSON.stringify(r.stderr.slice(0, 500)));
+  for (const o of r.stdout) console.log(o.t, o.msg ? brief(o.msg) : `RAW ${o.raw.slice(0, 200)}`);
+  console.log("API requests:", fake.requests.map((q) => `${q.method} ${q.path}`).join(" | "));
+  fs.writeFileSync(`${SCRATCH}/real/01-basic.api.json`, JSON.stringify(fake.requests, null, 2));
+} finally {
+  await fake.close();
+}

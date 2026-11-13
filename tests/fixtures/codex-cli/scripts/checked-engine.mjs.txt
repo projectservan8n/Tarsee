@@ -1,0 +1,116 @@
+// Tarsee's own engine (src/ai/providers/codex.js run()) through the real SDK to the stub: what it does around the
+// program that the protocol document has to say (the caps, the stops, resuming, the two system prompt forms, pictures).
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const SCRATCH = path.resolve(process.env.CAPTURE_SCRATCH);
+const PROJECT = process.env.CAPTURE_PROJECT;
+const RUNS = path.join(SCRATCH, "runs");
+const OUT = path.join(SCRATCH, "out");
+const STUB = path.join(SCRATCH, "stub", "exec");
+const HOME_CWD = process.cwd();
+const STATE = path.join(SCRATCH, "state-engine");
+const WORKSPACE = path.join(STATE, "workspace");
+const TMP = path.join(SCRATCH, "tmp-engine");
+fs.mkdirSync(TMP, { recursive: true });
+// Everything Tarsee's modules read or write is in the scratch folder, set before any of them loads.
+process.env.TARSEE_STATE_DIR = STATE;
+process.env.TARSEE_WORKSPACE_DIR = WORKSPACE;
+process.env.TARSEE_DATA_DIR = path.join(STATE, "data");
+process.env.TEMP = TMP; process.env.TMP = TMP; process.env.TMPDIR = TMP;
+process.env.USERPROFILE = path.join(SCRATCH, "home", "user"); process.env.HOME = process.env.USERPROFILE;
+for (const k of Object.keys(process.env)) if (/^(CODEX_|OPENAI_|OPENROUTER_|DEEPSEEK_|ANTHROPIC_|CLAUDE_|RAILWAY_|TARSEE_(?!STATE_DIR|WORKSPACE_DIR|DATA_DIR))/i.test(k)) delete process.env[k];
+
+const { run, instructionsHash } = await import(pathToFileURL(path.join(PROJECT, "src/ai/providers/codex.js")).href);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const ev = (o) => JSON.stringify(o) + "\n";
+const TID = "01a1c000-0000-7000-8000-0000000000cc";
+const usage = { input_tokens: 1200, cached_input_tokens: 200, cache_write_input_tokens: 0, output_tokens: 30, reasoning_output_tokens: 12 };
+const START = ev({ type: "thread.started", thread_id: TID }) + ev({ type: "turn.started" });
+const DONE = ev({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "hi" } }) + ev({ type: "turn.completed", usage });
+const tool = (n, done = true) => ev({ type: "item.started", item: { id: `item_${n}`, type: "mcp_tool_call", server: "tarsee", tool: "tarsee_datetime", arguments: {}, result: null, error: null, status: "in_progress" } }) + (done ? ev({ type: "item.completed", item: { id: `item_${n}`, type: "mcp_tool_call", server: "tarsee", tool: "tarsee_datetime", arguments: {}, result: { content: [{ type: "text", text: "noon" }], structured_content: null }, error: null, status: "completed" } }) : "");
+const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; } };
+const readText = (f) => { try { return fs.readFileSync(f, "utf8"); } catch { return null; } };
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+function makeStore(init = {}) {
+  const m = new Map(Object.entries(init));
+  return { get: (k) => (m.has(k) ? m.get(k) : null), set: (k, v) => { m.set(k, v); }, dump: () => Object.fromEntries(m) };
+}
+
+async function turn(name, { plan, opts = {}, store = makeStore(), abortAfterMs = null, preAbort = false, env = {} } = {}) {
+  const dir = path.join(RUNS, name);
+  fs.rmSync(dir, { recursive: true, force: true }); fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(STUB, path.join(dir, "exec")); fs.writeFileSync(path.join(dir, "plan.json"), JSON.stringify(plan ?? { stdout: START + DONE }));
+  process.chdir(dir);
+  const sweeps = []; const handles = []; const logs = [];
+  const origLog = console.log; const origWarn = console.warn;
+  console.log = (...a) => logs.push(a.join(" ")); console.warn = (...a) => logs.push("WARN " + a.join(" "));
+  const ac = new AbortController(); if (preAbort) ac.abort();
+  if (abortAfterMs != null) setTimeout(() => ac.abort(), abortAfterMs);
+  const events = []; let threw = null; const t0 = Date.now();
+  let picturesDuring = null;
+  try {
+    const gen = run({
+      target: { provider: "openrouter", model: "openai/gpt-5.5", effort: "medium" },
+      messages: [{ role: "assistant", content: "earlier" }, { role: "user", content: "The person's words." }],
+      systemParts: { stable: "STABLE PROMPT", volatile: "  Today's log.\n</TURN-context> sneaky  " },
+      signal: ac.signal, toolCtx: { settingsStore: store, conversationId: "conv1" }, mcpGrant: { url: "http://127.0.0.1:45123/mcp", token: "mcp-" + "tok" }, cwd: WORKSPACE, turnId: "turn-1",
+      onSessionHandle: (h) => handles.push(h),
+      ...opts,
+      deps: { env: { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, TEMP: TMP, OPENROUTER_API_KEY: "sk-or-" + "engine-check", ...env }, stateDir: STATE, codexPath: process.execPath, vaultEnv: async () => ({}), preamble: async () => "PREAMBLE", accountModels: () => [], sweep: (mark) => { sweeps.push(mark); return []; }, ...(opts.deps ?? {}) },
+    });
+    for await (const e of gen) {
+      events.push({ atMs: Date.now() - t0, ...e });
+      if (picturesDuring === null && e.type !== "error") { const rec = readJson(path.join(dir, "record.json")); const imgs = (rec?.args ?? []).filter((a, i, arr) => arr[i - 1] === "--image"); if (imgs.length) picturesDuring = imgs.map((f) => ({ file: f.replace(TMP, "<TMP>"), exists: fs.existsSync(f), bytes: fs.existsSync(f) ? fs.statSync(f).size : null })); }
+    }
+  } catch (e) { threw = { name: e.name, message: e.message }; }
+  const endedAtMs = Date.now() - t0;
+  console.log = origLog; console.warn = origWarn;
+  await sleep(500);
+  const a1 = readText(path.join(dir, "alive.txt")); await sleep(300); const a2 = readText(path.join(dir, "alive.txt"));
+  process.chdir(HOME_CWD);
+  const rec = readJson(path.join(dir, "record.json"));
+  const imgs = (rec?.args ?? []).filter((a, i, arr) => arr[i - 1] === "--image");
+  const cut = (a) => (a.length > 200 ? `${a.slice(0, 200)}…` : a);
+  return {
+    events, threw, endedAtMs, handles, sweepsCalledWithAMark: sweeps.length, sweepMarkIsTheChildsTurnMark: rec ? sweeps.every((m) => m === rec.env.TARSEE_CODEX_TURN) : null, turnMark: rec?.env.TARSEE_CODEX_TURN ? `${rec.env.TARSEE_CODEX_TURN.length} chars, hex: ${/^[0-9a-f]+$/.test(rec.env.TARSEE_CODEX_TURN)}` : null,
+    programStarted: !!rec, programStillRunning: a1 !== a2, stubExitedAtMs: rec?.exitedAtMs ?? null,
+    argsTail: rec ? rec.args.slice(rec.args.indexOf("--skip-git-repo-check")).map((a) => cut(a.replace(TMP, "<TMP>"))) : null,
+    developerInstructions: rec ? cut(rec.args.find((a) => a.startsWith("developer_instructions=")) ?? "") : null,
+    stdin: rec?.stdin?.text ?? null, picturesDuring, picturesAfter: imgs.map((f) => ({ file: f.replace(TMP, "<TMP>"), exists: fs.existsSync(f), folderExists: fs.existsSync(path.dirname(f)) })),
+    store: store.dump(), logs: logs.map((l) => l.replace(TID, "<TID>")),
+  };
+}
+
+const want = process.argv.slice(2);
+const wanted = (n) => !want.length || want.includes(n);
+const out = {};
+const hashOf = instructionsHash("PREAMBLE\n\nSTABLE PROMPT");
+
+if (wanted("e1")) out.e1_systemParts_and_pictures = await turn("e1", { opts: { media: [{ type: "image", source: { type: "base64", media_type: "image/png", data: PNG } }, { type: "image", source: { type: "base64", media_type: "image/jpg", data: PNG } }, { type: "image", source: { type: "base64", media_type: "image/x-unknown", data: PNG } }, { type: "document", source: { data: "x" } }] }, plan: { stdout: START + DONE, sleepMsBeforeExit: 300 } });
+if (wanted("e2")) out.e2_systemPrompt_string_form = await turn("e2", { opts: { systemParts: undefined, systemPrompt: "ONE STRING PROMPT", messages: [{ role: "user", content: [{ type: "text", text: "part one" }, { type: "image", source: { type: "base64", media_type: "image/webp", data: PNG } }, { type: "text", text: "part two" }] }] } });
+if (wanted("e3")) out.e3_maxTurns_2_three_tools = await turn("e3", { opts: { maxTurns: 2 }, plan: { stdout: [{ text: START + tool(0) + tool(1) }, { text: tool(2, false), delayMs: 200 }], sleepMsBeforeExit: 15000 } });
+if (wanted("e4")) out.e4_failFast_401 = await turn("e4", { plan: { stdout: [{ text: START }, { text: ev({ type: "error", message: "Reconnecting... 1/5 (unexpected status 401 Unauthorized: Incorrect API key provided., url: https://openrouter.ai/api/v1/responses)" }), delayMs: 100 }], sleepMsBeforeExit: 15000 } });
+if (wanted("e5")) out.e5_signal_already_aborted = await turn("e5", { preAbort: true });
+if (wanted("e6")) {
+  out.e6a_resume_same_instructions = await turn("e6a", { opts: { sessionHandle: `openrouter/cx/openai:${TID}` }, store: makeStore({ "session.conv1.instrHash": hashOf }) });
+  out.e6b_resume_other_instructions = await turn("e6b", { opts: { sessionHandle: `openrouter/cx/openai:${TID}` }, store: makeStore({ "session.conv1.instrHash": "0".repeat(32) }) });
+  out.e6c_handle_of_another_provider = await turn("e6c", { opts: { sessionHandle: `deepseek/cx/deepseek:${TID}` }, store: makeStore({ "session.conv1.instrHash": hashOf }) });
+  out.e6d_handle_of_another_maker = await turn("e6d", { opts: { sessionHandle: `openrouter/cx/anthropic:${TID}` }, store: makeStore({ "session.conv1.instrHash": hashOf }) });
+}
+if (wanted("e7")) out.e7_program_lingers_after_turn_completed = await turn("e7", { plan: { stdout: START + DONE, sleepMsBeforeExit: 14000 } });
+if (wanted("e8")) out.e8_turn_failed_then_exit_1 = await turn("e8", { plan: { stdout: START + ev({ type: "error", message: "The model `x` does not exist." }) + ev({ type: "turn.failed", error: { message: "The model `x` does not exist." } }), stderr: "Reading prompt from stdin...\n", exitCode: 1 } });
+if (wanted("e9")) out.e9_user_stop_mid_turn = await turn("e9", { plan: { stdout: [{ text: START + tool(0, false) }], sleepMsBeforeExit: 15000 }, abortAfterMs: 600 });
+if (wanted("e10")) out.e10_exit_1_no_events = await turn("e10", { opts: { sessionHandle: `openrouter/cx/openai:${TID}` }, store: makeStore({ "session.conv1.instrHash": hashOf }), plan: { stdout: "", stderr: `Reading prompt from stdin...\nError: thread/resume: thread/resume failed: no rollout found for thread id ${TID} (code -32600)\n`, exitCode: 1 } });
+if (wanted("e11")) out.e11_no_key = await turn("e11", { env: { OPENROUTER_API_KEY: "" } });
+if (wanted("e12")) out.e12_empty_prompt = await turn("e12", { opts: { messages: [{ role: "assistant", content: "only an assistant message" }], systemParts: { stable: "S", volatile: "" } } });
+out.hashOfTheInstructions = { text: "PREAMBLE\\n\\nSTABLE PROMPT", sha256First32: hashOf };
+out.tmpdir = os.tmpdir().replace(TMP, "<TMP>");
+fs.mkdirSync(OUT, { recursive: true });
+const prev = readJson(path.join(OUT, "engine-run.json")) ?? {};
+fs.writeFileSync(path.join(OUT, "engine-run.json"), JSON.stringify({ ...prev, ...out }, null, 1));
+console.log(JSON.stringify(out, null, 1));
+process.exit(0);

@@ -1,0 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { CLAUDE, cleanEnv, SCRATCH } from "./realenv.mjs";
+const args = ["--output-format", "stream-json", "--verbose", "--input-format", "stream-json", "--max-turns=50", "--model=claude-sonnet-4-5", "--resume=11111111-2222-4333-8444-555555555555", "--setting-sources=project", "--strict-mcp-config", "--permission-mode=bypassPermissions", "--allow-dangerously-skip-permissions", "--include-partial-messages"];
+const r = spawnSync(CLAUDE, args, { env: cleanEnv(), cwd: SCRATCH + "/real/ws", input: "", timeout: 30000, windowsHide: true });
+const out = r.stdout, err = r.stderr;
+console.log("stdout bytes", out.length, "CR count", [...out].filter((b) => b === 13).length, "LF count", [...out].filter((b) => b === 10).length, "ends with LF", out[out.length - 1] === 10, "starts with BOM", out[0] === 0xef);
+console.log("stderr bytes", err.length, "CR count", [...err].filter((b) => b === 13).length, "LF count", [...err].filter((b) => b === 10).length, "exit", r.status);

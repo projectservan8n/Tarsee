@@ -1,0 +1,195 @@
+// Copies the verification captures into tests/fixtures/claude-cli/verify/, cut down to what the specification
+// cites and with this machine's paths, names, ports and made-up keys replaced by placeholders. Refuses to write a
+// file that still names the machine.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const SCRATCH = process.env.VERIFY_SCRATCH;
+const NODE_PROJECT = process.env.TARSEE_NODE_PROJECT;
+const DEST = process.argv[2];
+if (!SCRATCH || !NODE_PROJECT || !DEST) throw new Error("usage: VERIFY_SCRATCH=… TARSEE_NODE_PROJECT=… node build-verify-fixtures.mjs <tests/fixtures/claude-cli>");
+const OUT = path.join(DEST, "verify");
+fs.mkdirSync(OUT, { recursive: true });
+
+const win = (p) => p.split("/").join("\\");
+const variants = (p) => { const w = win(p); return [w.split("\\").join("\\\\\\\\"), w.split("\\").join("\\\\"), w, p.split("\\").join("/")]; };
+const home = os.homedir();
+const swaps = [
+  ...variants(NODE_PROJECT).map((v) => [v, "<TARSEE_ROOT>"]),
+  ...variants(SCRATCH).map((v) => [v, "<SCRATCH>"]),
+  [win(SCRATCH).replace(/[^a-zA-Z0-9]/g, "-"), "<SCRATCH_AS_FOLDER_NAME>"],
+  ...variants("/mnt/" + SCRATCH[0].toLowerCase() + SCRATCH.slice(2)).map((v) => [v, "<SCRATCH>"]),
+  ...variants(home).map((v) => [v, "<USER_HOME>"]),
+  [os.userInfo().username, "<USER>"],
+  [os.hostname(), "<HOST>"],
+];
+function clean(text) {
+  let s = text;
+  for (const [from, to] of swaps) s = s.split(from).join(to);
+  s = s.replace(/127\.0\.0\.1:(?!45678\b|9\b)\d{4,5}/g, "127.0.0.1:<PORT>");
+  s = s.replace(/<TOKEN>|<TOKEN>/g, "<TOKEN>");
+  s = s.replace(/<ANTHROPIC_KEY>[A-Za-z0-9_-]*/g, "<ANTHROPIC_KEY>").replace(/<OPENROUTER_KEY>[A-Za-z0-9_-]*/g, "<OPENROUTER_KEY>");
+  s = s.replace(/<DEEPSEEK_KEY>/g, "<DEEPSEEK_KEY>").replace(/<PLAN_OAUTH_TOKEN>/g, "<PLAN_OAUTH_TOKEN>");
+  s = s.replace(/sdk-[0-9a-f]{8}-[0-9a-f-]{27}\.txt/g, "sdk-<uuid>.txt");
+  return s;
+}
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// what must not be left in a fixture: this machine's user and host names, and the last two folders of the scratch path
+const LEAK = new RegExp([esc(os.userInfo().username), esc(os.hostname()), ...SCRATCH.split(/[\\/]/).filter(Boolean).slice(-2).map(esc), "Users\\\\", "/home/"].join("|"), "i");
+const NL = String.fromCharCode(10);
+// indented down to the fields of each capture; what is below that stays on one line
+function pretty(v, depth = 0) {
+  if (v === null || typeof v !== "object" || depth >= 4) return JSON.stringify(v);
+  const pad = " ".repeat(depth + 1);
+  if (Array.isArray(v)) return v.length ? "[" + NL + v.map((x) => pad + pretty(x, depth + 1)).join("," + NL) + NL + " ".repeat(depth) + "]" : "[]";
+  const keys = Object.keys(v).filter((k) => v[k] !== undefined);
+  return keys.length ? "{" + NL + keys.map((k) => pad + JSON.stringify(k) + ": " + pretty(v[k], depth + 1)).join("," + NL) + NL + " ".repeat(depth) + "}" : "{}";
+}
+function put(name, value) {
+  const text = clean(typeof value === "string" ? value : pretty(value));
+  const hit = text.match(LEAK);
+  if (hit) throw new Error(`${name} still names this machine: …${text.slice(Math.max(0, hit.index - 60), hit.index + 60)}…`);
+  fs.writeFileSync(path.join(OUT, name), text.endsWith("\n") ? text : text + "\n");
+  console.log("wrote", name, text.length);
+}
+const read = (f) => JSON.parse(fs.readFileSync(path.join(SCRATCH, f), "utf8"));
+
+// ---- sdk.json: Tarsee's run() -> the real SDK -> the stub --------------------------------------------------------
+const WHAT = {
+  "a-plan-plain": "The Claude plan, a new session, a plain system prompt, no MCP server.",
+  "b-plan-resume-parts-effort-thinking": "Resume, stable and volatile system parts, effort high, thinking summaries.",
+  "c-plan-media-image-no-mcp": "A picture and words in the last message, no MCP server: the prompt is a generator, stdin is closed right after the user message (the stub, like the real program, still finishes the turn).",
+  "d-plan-media-pdf-adapted-real-mcp": "The turn layer's adapted media (a PDF) with Tarsee's real in-process MCP server: stdin stays open to the result.",
+  "e-plan-real-mcp-tool-call": "Tarsee's real in-process MCP server and one tool call over the control channel (tarsee_datetime really ran).",
+  "f-anthropic-budget-maxturns": "The Anthropic key, maxBudgetUsd 0.5, maxTurns 8.",
+  "g-deepseek-default": "DeepSeek's default model, effort medium (not one it takes: left out), maxBudgetUsd 1 (no flag: the SDK does not keep DeepSeek's ceiling).",
+  "h-deepseek-pro-max-resume": "DeepSeek Pro, effort max, resuming.",
+  "i-openrouter-title-referer": "OpenRouter with a title and a referer from Settings.",
+  "j-http-mcp-through-sdk": "Not the Node behaviour: an HTTP MCP server config handed to the SDK, for the --mcp-config arguments.",
+  "k-stop-hang": "Stop at about 600 ms with a program that never exits and writes nothing more: stdin closed, the process ended by the SDK 7 s later, done{aborted} only then.",
+  "l-stop-hang-then-more": "Stop with a program that never exits and keeps writing: the loop breaks on the next message, done{aborted} 2 s later, the process ended 7 s after the stop.",
+  "m-stop-exits-on-stdin-close": "Stop with a program that exits when stdin closes.",
+  "n-signal-aborted-before-start": "The caller's signal is already aborted when run() is called: the SDK still starts the program, writes nothing, closes stdin; run() emits done{aborted}.",
+  "o-exit1-at-once": "The program exits with code 1 and a line on stderr (with a key-shaped string in it) before reading anything.",
+  "p-exit0-at-once": "The program exits with code 0 without a word.",
+  "q-exit0-after-init-answer": "The program answers initialize and exits with code 0.",
+  "r-exit0-mid-answer": "The program exits with code 0 in the middle of an answer.",
+  "s-program-not-found": "No program at the path.",
+  "t-error-result-then-exit1": "A result with subtype error_during_execution and two errors, then exit code 1.",
+  "u-api-error-result": "An API failure written as a reply: assistant with error server_error, result success with is_error true, exit code 1.",
+  "v-budget-forms": "maxBudgetUsd 0.0000001 and maxTurns 0: --max-budget-usd=1e-7 and no --max-turns at all.",
+  "w-unknown-control-requests": "Nine control requests from the program, one of each kind: what the SDK answers with Tarsee's options.",
+  "x-non-json-lines": "A line that is not JSON, blank lines, a keep_alive line ended with CR LF, and a text holding U+2028 and U+2029: the first three are skipped, the text arrives whole.",
+  "y-bad-key-source": "system/init reports an apiKeySource the provider does not allow (R6): the error and done at once, run() itself returns 2 s later, the process is ended 7 s later.",
+  "z-empty-prompt-stable-only": "No words and no media (the word hello); systemParts with nothing volatile (one string); sessionId null beats a stored handle.",
+  "za-exit3-no-stderr": "The program exits with code 3 and nothing on stderr.",
+  "zb-no-init-answer": "The program never answers initialize: the turn runs all the same.",
+  "zc-working-folder-missing": "The working folder does not exist: the SDK blames the binary.",
+  "zd-crlf-lines": "A whole turn whose every stdout line ends with CR LF: read as usual.",
+};
+const WINDOWS_FILL = new Set(["HOMEDRIVE", "HOMEPATH", "LOGONSERVER", "USERDOMAIN", "USERNAME"]);
+const SYSTEM_NAMES = new Set(["PATH", "PATHEXT", "SystemRoot", "SystemDrive", "COMSPEC", "TEMP", "TMP", "windir", "HOME", "USERPROFILE", "VSTUB_OUT", "VSTUB_SCENARIO"]);
+const shorten = (raw) => { if (typeof raw !== "string") return raw; const s = clean(raw); return s.length > 160 ? `${s.slice(0, 60)} … ${s.slice(-70)} [${raw.length} characters]` : s; };
+function stdinLine(j) {
+  const o = JSON.parse(JSON.stringify(j));
+  const r = o.request;
+  if (r?.systemPrompt) r.systemPrompt = r.systemPrompt.map(shorten);
+  const m = r?.sdkMcpServerManifests?.tarsee?.toolsListResult;
+  if (m) m.tools = { count: m.tools.length, names: m.tools.map((t) => t.name), keys_of_each: Object.keys(m.tools[0]), first: { ...m.tools[0], description: shorten(m.tools[0].description) } };
+  for (const b of o.message?.content ?? []) if (b.source?.data) b.source.data = shorten(b.source.data);
+  return o;
+}
+const sdk = {};
+for (const f of fs.readdirSync(path.join(SCRATCH, "out")).filter((x) => /^[a-z]{1,2}-.*\.json$/.test(x)).sort()) {
+  const j = read(`out/${f}`);
+  const q = j.query_calls.find((c) => c.options);
+  const given = q?.options.env ?? {}; const got = j.env_received ?? null;
+  const opts = q ? { ...q.options } : null;
+  if (opts) { delete opts.env; opts.systemPrompt = opts.systemPrompt && { ...opts.systemPrompt, prompt: Array.isArray(opts.systemPrompt.prompt) ? opts.systemPrompt.prompt.map(shorten) : shorten(opts.systemPrompt.prompt) }; delete opts.pathToClaudeCodeExecutable; }
+  sdk[j.name] = {
+    what: WHAT[j.name] ?? "",
+    stub_scenario: j.scenario,
+    sdk_query: q ? { prompt: q.promptKind === "string" ? q.prompt : "<an async generator of one user message>", options: opts } : null,
+    argv: j.argv,
+    env: got ? {
+      given_to_sdk: Object.fromEntries(Object.keys(given).filter((k) => !SYSTEM_NAMES.has(k)).sort().map((k) => [k, given[k]])),
+      added_by_sdk: Object.fromEntries(Object.keys(got).filter((k) => !(k in given) && !WINDOWS_FILL.has(k)).sort().map((k) => [k, got[k]])),
+      removed_by_sdk: Object.keys(given).filter((k) => !(k in got)).sort(),
+      changed_by_sdk: Object.keys(given).filter((k) => k in got && given[k] !== got[k]),
+      filled_in_by_windows_process_start: Object.keys(got).filter((k) => WINDOWS_FILL.has(k)).sort(),
+    } : null,
+    stdin: j.stdin.map((s) => ({ t: s.t, bytes: s.bytes, json: stdinLine(s.json) })),
+    stub_timeline: j.stub_timeline,
+    abort_at_ms: j.abortAt,
+    harness_notes: j.query_calls.filter((c) => c.ev).map((c) => ({ t: c.t, event: c.ev })),
+    sdk_messages_seen_by_tarsee: j.sdk_messages_seen.map((m) => `${m.t}:${m.type}${m.subtype ? "/" + m.subtype : ""}`),
+    sdk_error_thrown: j.sdk_error,
+    tarsee_events: j.tarsee_events.map((e) => (e.type === "step" ? { t: e.t, type: "step", kind: e.kind } : e)),
+    tarsee_logs: j.tarsee_logs.map((l) => ({ ...l, text: shorten(l.text) })),
+    run_returned_at_ms: j.endedAt,
+  };
+}
+put("sdk.json", { how: "Tarsee's own run() -> the real SDK 0.3.319 -> a stub in place of claude (scripts/verify/cap.mjs, stub.mjs, tramp.rs). `t` on stdin lines and in stub_timeline is milliseconds since the stub started; every other `t` is milliseconds since run() was called.", captures: sdk });
+
+// ---- real.json: the real program, started directly ---------------------------------------------------------------
+const kind = (m) => `${m.type}${m.subtype ? "/" + m.subtype : ""}${m.event ? "/" + m.event.type : ""}${m.subtype === "session_state_changed" ? "=" + m.state : ""}`;
+const pick = (m) => {
+  if (m.type === "result") {
+    const four = (u) => u && { input_tokens: u.input_tokens, output_tokens: u.output_tokens, cache_read_input_tokens: u.cache_read_input_tokens, cache_creation_input_tokens: u.cache_creation_input_tokens };
+    const byModel = (o) => o && Object.fromEntries(Object.entries(o).map(([k, v]) => [k, { inputTokens: v.inputTokens, outputTokens: v.outputTokens, cacheReadInputTokens: v.cacheReadInputTokens, cacheCreationInputTokens: v.cacheCreationInputTokens, costUSD: v.costUSD }]));
+    return { type: "result", subtype: m.subtype, is_error: m.is_error, result: m.result, errors: m.errors, num_turns: m.num_turns, session_id: m.session_id, stop_reason: m.stop_reason, terminal_reason: m.terminal_reason, api_error_status: m.api_error_status, api_error: m.api_error, total_cost_usd: m.total_cost_usd, usage: four(m.usage), modelUsage: byModel(m.modelUsage), model_usage_since_last_result: byModel(m.model_usage_since_last_result), permission_denials: m.permission_denials, keys: Object.keys(m) };
+  }
+  if (m.type === "assistant") { const { message, ...rest } = m; return { ...rest, message: { id: message.id, model: message.model, content: message.content, stop_reason: message.stop_reason } }; }
+  if (m.type === "user") return { type: "user", message: m.message, tool_use_result: m.tool_use_result };
+  if (m.type === "system" && m.subtype === "init") return { type: "system", subtype: "init", session_id: m.session_id, tools: m.tools, mcp_servers: m.mcp_servers, model: m.model, permissionMode: m.permissionMode, apiKeySource: m.apiKeySource, claude_code_version: m.claude_code_version, keys: Object.keys(m) };
+  if (m.type === "system" && m.subtype === "api_retry") return m;
+  if (m.type === "control_response" && m.response?.response && Object.keys(m.response.response).length > 6) return { type: "control_response", response: { subtype: m.response.subtype, request_id: m.response.request_id, response: { keys: Object.keys(m.response.response) }, pending_permission_requests: m.response.pending_permission_requests, pending_user_dialog_requests: m.response.pending_user_dialog_requests } };
+  if (m.type === "control_response" || m.type === "control_request") return m;
+  return null;
+};
+const real = {};
+const realDir = path.join(SCRATCH, "real", "out");
+for (const f of fs.readdirSync(realDir).filter((x) => x.endsWith(".json") && !x.endsWith(".mcp.json")).sort()) {
+  const j = JSON.parse(fs.readFileSync(path.join(realDir, f), "utf8"));
+  real[j.name] = {
+    argv: j.argv,
+    working_folder: j.cwd,
+    stdin_written: j.stdin_written.map((s) => (s.closed ? { t: s.t, closed: true } : { t: s.t, json: stdinLine(s.json) })),
+    stdout_kinds: j.stdout.map((s) => `${s.t}:${kind(s.json)}`),
+    stdout_selected: j.stdout.map((s) => ({ t: s.t, json: pick(s.json) })).filter((s) => s.json),
+    lines_that_were_not_json: j.non_json_stdout.length,
+    stderr: j.stderr,
+    exit: j.exit,
+    driver_notes: j.notes,
+  };
+  const mcpFile = path.join(realDir, f.replace(/\.json$/, ".mcp.json"));
+  if (fs.existsSync(mcpFile)) {
+    const m = JSON.parse(fs.readFileSync(mcpFile, "utf8"));
+    real[j.name].mcp_requests = m.mcp.map((r) => { const h = { ...r.headers }; delete h.host; return { method: r.method, path: r.url, headers: h, body: r.body, answered: r.answer?.status, answer_headers: r.answer?.headers }; });
+    real[j.name].tools_offered_to_the_model_in_each_api_request = m.api.filter((r) => r.body?.stream).map((r) => r.body.tools.map((t) => t.name));
+  }
+}
+put("real.json", { how: "The real claude 2.1.319 started directly (no SDK) by scripts/verify/drive.mjs, in an empty home and config folder, with a made-up bearer token, against a loopback stand-in for the Messages API (scripts/verify/fakes.mjs). `t` is milliseconds since the process was started. stdout_kinds lists every stdout line; stdout_selected holds the messages the specification cites (init and the answer to initialize cut to their keys).", runs: real });
+
+// ---- plain text outputs -----------------------------------------------------------------------------------------
+for (const [src, dst] of [["real/out/help.txt", "help-2.1.319.txt"], ["notes/rust-probe-windows.txt", "rust-probe-windows.txt"], ["notes/linux-stop.txt", "linux-stop.txt"], ["notes/direct-sdk.txt", "direct-sdk.txt"], ["notes/failure-words-by-environment.txt", "failure-words-by-environment.txt"], ["notes/system-prompt-record.txt", "system-prompt-record.txt"], ["notes/anthropic-key-approval.txt", "anthropic-key-approval.txt"], ["notes/transcript-folder-names.txt", "transcript-folder-names.txt"], ["notes/budget-tool-still-called.txt", "budget-tool-still-called.txt"], ["notes/stops-and-interrupts.txt", "stops-and-interrupts.txt"], ["notes/system-blocks.txt", "system-blocks.txt"], ["notes/resumed-session.txt", "resumed-session.txt"], ["notes/raw-line-ends.txt", "raw-line-ends.txt"], ["notes/classified-kinds.txt", "classified-kinds.txt"], ["notes/models-credentials-retry-thinking.txt", "models-credentials-retry-thinking.txt"], ["notes/picture-prompt-flag-unknown-request.txt", "picture-prompt-flag-unknown-request.txt"], ["notes/thinking-cost-token-agent-shell.txt", "thinking-cost-token-agent-shell.txt"]]) {
+  const p = path.join(SCRATCH, src);
+  if (fs.existsSync(p)) put(dst, fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n"));
+  else console.log("missing", src);
+}
+
+// ---- the scripts, as .txt ---------------------------------------------------------------------------------------
+const SOUT = path.join(DEST, "scripts", "verify");
+fs.mkdirSync(SOUT, { recursive: true });
+for (const f of ["cap.mjs", "direct.mjs", "direct2.mjs", "fakes.mjs", "drive.mjs", "realenv.mjs", "help.mjs", "r1.mjs", "r2.mjs", "r3.mjs", "r4.mjs", "r5.mjs", "r6.mjs", "r7.mjs", "r8.mjs", "r9.mjs", "r10.mjs", "r11.mjs", "rawcheck.mjs", "classify.mjs", "compare.mjs", "build-verify-fixtures.mjs", "stub/stub.mjs", "stub/tramp.rs", "stub/probe.rs", "stub/shim.cmd", "linux/linux-stub", "linux/linux-stop.mjs"]) {
+  let s = fs.readFileSync(path.join(SCRATCH, f), "utf8").replace(/\r\n/g, "\n");
+  s = s.split(`"${SCRATCH}"`).join("process.env.VERIFY_SCRATCH").split(`"${NODE_PROJECT}"`).join("process.env.TARSEE_NODE_PROJECT");
+  s = s.replace(new RegExp(`"${NODE_PROJECT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([^"]*)"`, "g"), "`${process.env.TARSEE_NODE_PROJECT}/$1`");
+  s = s.replace(new RegExp(`"${SCRATCH.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([^"]*)"`, "g"), "`${process.env.VERIFY_SCRATCH}/$1`");
+  const text = clean(s);
+  const hit = text.match(LEAK);
+  if (hit && !/build-verify-fixtures/.test(f)) throw new Error(`${f} still names this machine: …${text.slice(Math.max(0, hit.index - 60), hit.index + 60)}…`);
+  fs.writeFileSync(path.join(SOUT, path.basename(f) + ".txt"), text);
+}
+console.log("scripts copied to", SOUT);

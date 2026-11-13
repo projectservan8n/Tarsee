@@ -1,0 +1,26 @@
+{
+  "description": "What CLAUDE_CODE_ENTRYPOINT and CLAUDE_AGENT_SDK_VERSION (both added to the environment by the SDK) change in the program's requests to the Messages API.",
+  "cases": [
+    {
+      "environment": "CLAUDE_CODE_ENTRYPOINT not set",
+      "exit_code": 0,
+      "user_agent_header": "claude-cli/2.1.319 (external, sdk-cli)",
+      "x_app_header": "cli",
+      "first_system_block": "x-anthropic-billing-header: cc_version=2.1.319.812; cc_entrypoint=sdk-cli;"
+    },
+    {
+      "environment": "CLAUDE_CODE_ENTRYPOINT=sdk-ts",
+      "exit_code": 0,
+      "user_agent_header": "claude-cli/2.1.319 (external, sdk-ts)",
+      "x_app_header": "cli",
+      "first_system_block": "x-anthropic-billing-header: cc_version=2.1.319.812; cc_entrypoint=sdk-ts;"
+    },
+    {
+      "environment": "CLAUDE_CODE_ENTRYPOINT=sdk-ts and CLAUDE_AGENT_SDK_VERSION=0.3.319",
+      "exit_code": 0,
+      "user_agent_header": "claude-cli/2.1.319 (external, sdk-ts, agent-sdk/0.3.319)",
+      "x_app_header": "cli",
+      "first_system_block": "x-anthropic-billing-header: cc_version=2.1.319.812; cc_entrypoint=sdk-ts;"
+    }
+  ]
+}

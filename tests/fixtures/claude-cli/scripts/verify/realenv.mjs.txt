@@ -1,0 +1,21 @@
+// A from-nothing environment for the real `claude`: an empty home and config folder inside the scratch folder,
+// a made-up token and a loopback API host, so no sign-in on this machine can be read or used.
+import path from "node:path";
+export const SCRATCH = process.env.VERIFY_SCRATCH;
+export const CLAUDE = `${process.env.TARSEE_NODE_PROJECT}/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe`;
+export const HOME = path.join(SCRATCH, "real", "home");
+export function cleanEnv(extra = {}) {
+  const env = {};
+  for (const k of ["PATH", "PATHEXT", "SystemRoot", "SystemDrive", "COMSPEC", "TEMP", "TMP", "windir", "NUMBER_OF_PROCESSORS", "OS", "PROCESSOR_ARCHITECTURE", "ProgramFiles", "ProgramData"]) if (process.env[k]) env[k] = process.env[k];
+  return {
+    ...env,
+    HOME, USERPROFILE: HOME,
+    TEMP: path.join(SCRATCH, "real", "tmp"), TMP: path.join(SCRATCH, "real", "tmp"),
+    APPDATA: path.join(SCRATCH, "real", "appdata"), LOCALAPPDATA: path.join(SCRATCH, "real", "localappdata"),
+    CLAUDE_CONFIG_DIR: path.join(HOME, ".claude"),
+    ANTHROPIC_BASE_URL: "http://127.0.0.1:9", ANTHROPIC_AUTH_TOKEN: "made-up-token-for-a-loopback-fake",
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_AUTOUPDATER: "1", DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1",
+    CLAUDE_CODE_MAX_RETRIES: "0",
+    ...extra,
+  };
+}

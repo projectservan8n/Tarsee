@@ -1,0 +1,71 @@
+{
+  "name": "sdk-21-signal-already-aborted",
+  "what": "The caller's AbortSignal has already fired when runStreamed() is called: what the SDK throws, and that the stub left no record. That is NOT evidence that the program is never started: see `corrected`.",
+  "corrected": {
+    "by": "the independent check (checked/checked-04-sdk-stop.json `signalAlreadyAborted`)",
+    "earlierReading": "`child` is null below, which was read as 'the program is never started'",
+    "whatIsSo": "Node starts the process (it is given a process id) and ends it on the next turn of its loop, before the stub can write its record; seen on Windows and on Linux by watching ChildProcess.prototype.spawn. The error thrown is the one recorded below.",
+    "forTheRustEngine": "look at the stop before starting the program, and do not start it"
+  },
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "win32"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {},
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "thread": {
+      "method": "startThread"
+    },
+    "runStreamed(input, turnOptions)": {
+      "input": "hello",
+      "inputLength": {
+        "characters": 5,
+        "utf8Bytes": 5
+      },
+      "turnOptions": {
+        "signal": "<AbortSignal>"
+      }
+    },
+    "callerProcessEnvNames": [
+      "COMSPEC",
+      "FROM_PROCESS_ENV",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "TMP",
+      "TMPDIR"
+    ]
+  },
+  "child": null,
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000bb\"}\n{\"type\":\"turn.started\"}\n",
+    "stderr": "",
+    "exitCode": 0,
+    "sleepMsBeforeExit": 5000
+  },
+  "sdkYielded": [],
+  "sdkThrew": {
+    "name": "AbortError",
+    "message": "The operation was aborted",
+    "code": "ABORT_ERR",
+    "cause": {
+      "name": "AbortError",
+      "message": "This operation was aborted"
+    }
+  },
+  "programAfterTheError": {
+    "note": "the stub would have run for sleepMsBeforeExit more; its heartbeat (ms since it started, every 20 ms) stopped at",
+    "stubLastAliveMs": null
+  },
+  "abort": {
+    "note": "abortedAtMs and iterationEndedAtMs are since runStreamed() was called; the stub's two values are on its own clock (ms since it started), written every 20 ms",
+    "abortedAtMs": null,
+    "iterationEndedAtMs": 5,
+    "stubAliveWhenAbortFiredMs": null,
+    "stubLastAliveMs": null
+  }
+}

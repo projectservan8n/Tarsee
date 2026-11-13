@@ -1,0 +1,87 @@
+{
+  "name": "sdk-12-exit-nonzero-no-output",
+  "what": "Exit code 2 with nothing on stdout (a refused argument): nothing is yielded, the SDK throws with the exit code and stderr.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "win32"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {},
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "thread": {
+      "method": "startThread"
+    },
+    "runStreamed(input, turnOptions)": {
+      "input": "hello",
+      "inputLength": {
+        "characters": 5,
+        "utf8Bytes": 5
+      },
+      "turnOptions": {}
+    },
+    "callerProcessEnvNames": [
+      "COMSPEC",
+      "FROM_PROCESS_ENV",
+      "NUMBER_OF_PROCESSORS",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "TMP",
+      "TMPDIR"
+    ]
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "argv": [
+      "exec",
+      "--experimental-json"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "PATH": "C:\\WINDOWS\\system32;C:\\WINDOWS"
+    },
+    "envNamesNotInEnvOption": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "stdin": {
+      "text": "hello",
+      "sameAsTheInput": true,
+      "bytes": 5,
+      "chunks": [
+        {
+          "at_ms": 0,
+          "bytes": 5
+        }
+      ],
+      "eof_at_ms": 0
+    }
+  },
+  "stub": {
+    "stdout": "",
+    "stderr": "error: unexpected argument '--bogus' found\n\nUsage: codex exec [OPTIONS] [PROMPT]\n",
+    "exitCode": 2,
+    "sleepMsBeforeExit": 0
+  },
+  "sdkYielded": [],
+  "sdkThrew": {
+    "name": "Error",
+    "message": "Codex Exec exited with code 2: error: unexpected argument '--bogus' found\n\nUsage: codex exec [OPTIONS] [PROMPT]\n",
+    "code": null,
+    "cause": null
+  }
+}

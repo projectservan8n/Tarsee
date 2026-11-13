@@ -1,0 +1,111 @@
+{
+  "name": "other-08-mcp-list-and-get",
+  "what": "`codex mcp list` and `codex mcp get tarsee` given the six --config pairs a turn gets: how the program reads them (a streamable-HTTP server with a bearer token from TARSEE_MCP_TOKEN), and that neither command sends the server anything.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program)",
+    "platform": "win32"
+  },
+  "listJson": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "-c",
+      "mcp_servers.tarsee.url=\"http://127.0.0.1:<PORT>/mcp\"",
+      "-c",
+      "mcp_servers.tarsee.bearer_token_env_var=\"TARSEE_MCP_TOKEN\"",
+      "-c",
+      "mcp_servers.tarsee.default_tools_approval_mode=\"approve\"",
+      "-c",
+      "mcp_servers.tarsee.required=true",
+      "-c",
+      "mcp_servers.tarsee.startup_timeout_sec=20",
+      "-c",
+      "mcp_servers.tarsee.tool_timeout_sec=300",
+      "mcp",
+      "list",
+      "--json"
+    ],
+    "cwd": "<CODEX_HOME>",
+    "stdout": "[\n  {\n    \"name\": \"tarsee\",\n    \"enabled\": true,\n    \"disabled_reason\": null,\n    \"transport\": {\n      \"type\": \"streamable_http\",\n      \"url\": \"http://127.0.0.1:<PORT>/mcp\",\n      \"bearer_token_env_var\": \"TARSEE_MCP_TOKEN\",\n      \"http_headers\": null,\n      \"env_http_headers\": null,\n      \"http_headers_helper\": null\n    },\n    \"startup_timeout_sec\": 20.0,\n    \"tool_timeout_sec\": 300.0,\n    \"auth_status\": \"bearer_token\"\n  }\n]\n",
+    "stderr": "",
+    "exit": {
+      "code": 0,
+      "signal": null,
+      "at_ms": 122
+    },
+    "timedOut": false
+  },
+  "getJson": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "-c",
+      "mcp_servers.tarsee.url=\"http://127.0.0.1:<PORT>/mcp\"",
+      "-c",
+      "mcp_servers.tarsee.bearer_token_env_var=\"TARSEE_MCP_TOKEN\"",
+      "-c",
+      "mcp_servers.tarsee.default_tools_approval_mode=\"approve\"",
+      "-c",
+      "mcp_servers.tarsee.required=true",
+      "-c",
+      "mcp_servers.tarsee.startup_timeout_sec=20",
+      "-c",
+      "mcp_servers.tarsee.tool_timeout_sec=300",
+      "mcp",
+      "get",
+      "tarsee",
+      "--json"
+    ],
+    "cwd": "<CODEX_HOME>",
+    "stdout": "{\n  \"name\": \"tarsee\",\n  \"enabled\": true,\n  \"disabled_reason\": null,\n  \"transport\": {\n    \"type\": \"streamable_http\",\n    \"url\": \"http://127.0.0.1:<PORT>/mcp\",\n    \"bearer_token_env_var\": \"TARSEE_MCP_TOKEN\",\n    \"http_headers\": null,\n    \"env_http_headers\": null,\n    \"http_headers_helper\": null\n  },\n  \"enabled_tools\": null,\n  \"disabled_tools\": null,\n  \"startup_timeout_sec\": 20.0,\n  \"tool_timeout_sec\": 300.0\n}\n",
+    "stderr": "",
+    "exit": {
+      "code": 0,
+      "signal": null,
+      "at_ms": 76
+    },
+    "timedOut": false
+  },
+  "listText": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "-c",
+      "mcp_servers.tarsee.url=\"http://127.0.0.1:<PORT>/mcp\"",
+      "-c",
+      "mcp_servers.tarsee.bearer_token_env_var=\"TARSEE_MCP_TOKEN\"",
+      "-c",
+      "mcp_servers.tarsee.default_tools_approval_mode=\"approve\"",
+      "-c",
+      "mcp_servers.tarsee.required=true",
+      "-c",
+      "mcp_servers.tarsee.startup_timeout_sec=20",
+      "-c",
+      "mcp_servers.tarsee.tool_timeout_sec=300",
+      "mcp",
+      "list"
+    ],
+    "cwd": "<CODEX_HOME>",
+    "stdout": "Name    Url                         Bearer Token Env Var  Status   Auth        \ntarsee  http://127.0.0.1:<PORT>/mcp  TARSEE_MCP_TOKEN      enabled  Bearer token\n",
+    "stderr": "",
+    "exit": {
+      "code": 0,
+      "signal": null,
+      "at_ms": 74
+    },
+    "timedOut": false
+  },
+  "requestsTheServerReceived": 0
+}

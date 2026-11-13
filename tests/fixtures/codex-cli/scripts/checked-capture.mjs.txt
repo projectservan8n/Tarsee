@@ -1,0 +1,411 @@
+// Independent re-capture for docs/rust-port/engines/codex-cli-protocol.md.
+// Calls the real @openai/codex-sdk (from the Node checkout's node_modules, read only) with node itself as the
+// "codex" program: node runs the script named `exec` in the working folder (the stub), which records what it got.
+// Usage: node capture.mjs [name-part ...]
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { pathToFileURL } from "node:url";
+import childProcess from "node:child_process";
+
+const SCRATCH = path.resolve(process.env.CAPTURE_SCRATCH);
+const PROJECT = process.env.CAPTURE_PROJECT;
+const RUNS = path.join(SCRATCH, "runs");
+const OUT = path.join(SCRATCH, "out");
+const STUB = path.join(SCRATCH, "stub", "exec");
+const NODE = process.execPath;
+const HOME_CWD = process.cwd();
+
+// Nothing of the machine's own Tarsee or Codex is read or written: every folder Tarsee's modules look at is here.
+process.env.TARSEE_STATE_DIR = path.join(SCRATCH, "state");
+process.env.TARSEE_WORKSPACE_DIR = path.join(SCRATCH, "state", "workspace");
+process.env.TARSEE_DATA_DIR = path.join(SCRATCH, "state", "data");
+for (const k of Object.keys(process.env)) {
+  if (/^(CODEX_|OPENAI_|OPENROUTER_|DEEPSEEK_|ANTHROPIC_|TARSEE_(?!STATE_DIR|WORKSPACE_DIR|DATA_DIR))/i.test(k)) delete process.env[k];
+}
+
+const sdkUrl = pathToFileURL(path.join(PROJECT, "node_modules/@openai/codex-sdk/dist/index.js")).href;
+const { Codex } = await import(sdkUrl);
+const tarsee = (rel) => import(pathToFileURL(path.join(PROJECT, rel)).href);
+
+const want = process.argv.slice(2);
+const wanted = (name) => !want.length || want.includes(name);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const TID = "01a1c000-0000-7000-8000-0000000000cc";
+const ev = (o) => JSON.stringify(o) + "\n";
+const BASIC = ev({ type: "thread.started", thread_id: TID }) + ev({ type: "turn.started" })
+  + ev({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "hi" } })
+  + ev({ type: "turn.completed", usage: { input_tokens: 10, cached_input_tokens: 2, cache_write_input_tokens: 0, output_tokens: 3, reasoning_output_tokens: 1 } });
+
+// Watch every process Node starts, so "was a process started at all" has an answer of its own.
+const spawned = [];
+const origSpawn = childProcess.ChildProcess.prototype.spawn;
+childProcess.ChildProcess.prototype.spawn = function (options) {
+  const r = origSpawn.call(this, options);
+  spawned.push({ file: options.file, pid: this.pid, argc: options.args?.length, windowsHide: options.windowsHide ?? null, detached: options.detached ?? null, cwd: options.cwd ?? null, stdio: Array.isArray(options.stdio) ? options.stdio.map((s) => s?.type ?? s) : options.stdio, envPairsCount: options.envPairs?.length ?? null, killSignal: options.killSignal ?? null });
+  return r;
+};
+
+const uncaught = [];
+process.on("uncaughtException", (e) => { uncaught.push({ name: e?.name, message: e?.message, code: e?.code, syscall: e?.syscall }); });
+process.on("unhandledRejection", (e) => { uncaught.push({ unhandledRejection: true, name: e?.name, message: e?.message, code: e?.code }); });
+
+function prepare(name, plan) {
+  const dir = path.join(RUNS, name);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(STUB, path.join(dir, "exec"));
+  fs.writeFileSync(path.join(dir, "plan.json"), JSON.stringify(plan ?? { stdout: BASIC }));
+  return dir;
+}
+const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; } };
+const readText = (f) => { try { return fs.readFileSync(f, "utf8"); } catch { return null; } };
+const errOf = (e) => (e ? { name: e.name, message: e.message, code: e.code ?? null, cause: e.cause ? { name: e.cause.name, message: e.cause.message } : null } : null);
+
+/** One call of the SDK, the way providers/codex.js makes it. */
+async function sdkRun(name, { plan, codex = {}, thread = {}, resume = null, input = "hello", turn = {}, abort = null, stopReadingAfter = null, noOverride = false } = {}) {
+  const dir = prepare(name, plan);
+  process.chdir(dir);
+  const before = spawned.length;
+  const uncaughtBefore = uncaught.length;
+  const ac = abort ? new AbortController() : null;
+  if (abort === "pre") ac.abort();
+  const yielded = [];
+  let threw = null;
+  const t0 = Date.now();
+  const timing = {};
+  try {
+    const client = new Codex({ ...codex, ...(noOverride ? {} : { codexPathOverride: NODE }) });
+    const th = resume ? client.resumeThread(resume, thread) : client.startThread(thread);
+    const { events } = await th.runStreamed(input, { ...turn, ...(ac ? { signal: ac.signal } : {}) });
+    for await (const e of events) {
+      yielded.push({ atMs: Date.now() - t0, event: e });
+      if (abort && abort !== "pre" && yielded.length === abort.afterEvents) {
+        setTimeout(() => { timing.abortAtMs = Date.now() - t0; timing.stubAliveAtAbort = readText(path.join(dir, "alive.txt")); ac.abort(); }, abort.delayMs ?? 0);
+      }
+      if (stopReadingAfter && yielded.length === stopReadingAfter) { timing.stoppedReadingAtMs = Date.now() - t0; break; }
+    }
+    timing.threadIdAfter = th.id;
+  } catch (e) { threw = e; }
+  timing.endedAtMs = Date.now() - t0;
+  await sleep(abort || stopReadingAfter ? 700 : 250);
+  const aliveA = readText(path.join(dir, "alive.txt"));
+  const gA = readText(path.join(dir, "grandchild-alive.txt"));
+  await sleep(abort || stopReadingAfter ? 400 : 0);
+  const aliveB = readText(path.join(dir, "alive.txt"));
+  const gB = readText(path.join(dir, "grandchild-alive.txt"));
+  process.chdir(HOME_CWD);
+  const rec = readJson(path.join(dir, "record.json"));
+  if (rec?.grandchildPid) { try { process.kill(rec.grandchildPid); } catch { /* gone */ } }
+  return {
+    name, dir, plan: plan ?? { stdout: BASIC },
+    record: rec,
+    yielded, threw: errOf(threw), timing,
+    stub: { lastAliveMs: aliveB, stillBeating: aliveA !== aliveB, exitedAtMs: rec?.exitedAtMs ?? null },
+    grandchild: rec?.grandchildPid ? { pid: rec.grandchildPid, stillBeating: gA !== gB, lastAliveMs: gB } : null,
+    spawnedByNode: spawned.slice(before),
+    uncaught: uncaught.slice(uncaughtBefore),
+  };
+}
+
+function summarize(r, { envOption = undefined } = {}) {
+  const rec = r.record;
+  return {
+    name: r.name,
+    args: rec?.args ?? null,
+    cwdIsCallerCwd: rec ? path.resolve(rec.cwd) === path.resolve(r.dir) : null,
+    envNames: rec ? Object.keys(rec.env).sort() : null,
+    env: rec?.env ?? null,
+    stdin: rec ? { bytes: rec.stdin.bytes, text: rec.stdin.text, sha256: rec.stdin.sha256, chunks: rec.stdin.chunks, eofAtMs: rec.stdin.eofAtMs } : null,
+    signals: rec?.signals ?? null,
+    yielded: r.yielded,
+    threw: r.threw,
+    timing: r.timing,
+    stub: r.stub,
+    grandchild: r.grandchild,
+    spawnedByNode: r.spawnedByNode,
+    uncaught: r.uncaught,
+    plan: r.plan,
+    envOption,
+  };
+}
+const write = (name, obj) => { fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(path.join(OUT, `${name}.json`), JSON.stringify(obj, null, 1)); console.log(`wrote ${name}`); };
+
+// ---------------------------------------------------------------------------------------------------------------------
+// T: Tarsee's own options (buildCodexOptions), given to the SDK exactly as providers/codex.js run() gives them.
+// ---------------------------------------------------------------------------------------------------------------------
+const { buildCodexOptions, instructionsLimit, capInstructions } = await tarsee("src/ai/providers/codex-options.js");
+
+const SERVER_ENV = {
+  PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, TEMP: process.env.TEMP, COMSPEC: process.env.COMSPEC,
+  FROM_SERVER: "kept",
+  OPENAI_API_KEY: "sk-" + "server-openai", OPENROUTER_API_KEY: "sk-or-" + "server", DEEPSEEK_API_KEY: "sk-ds-" + "server", TARSEE_LOCAL_AI_KEY: "local-" + "server",
+  CODEX_HOME: "X:/should/not/pass", CODEX_API_KEY: "should-not-pass", codex_lowercase: "should-not-pass", OPENAI_BASE_URL: "http://evil.test", Openai_Base_Url2: "kept-not-a-credential-name",
+  ANTHROPIC_API_KEY: "should-not-pass", CLAUDE_CONFIG_DIR: "should-not-pass", CLAUDE_CODE_OAUTH_TOKEN: "should-not-pass",
+  ENCRYPTION_KEY: "should-not-pass", SETUP_PASSWORD: "should-not-pass", TARSEE_API_TOKEN: "should-not-pass",
+  TARSEE_PROVIDER_KEY: "should-not-pass", TARSEE_MCP_TOKEN: "should-not-pass", TARSEE_CHATGPT_ACCESS_TOKEN: "should-not-pass",
+  TARSEE_OTHER: "kept", CODEX_INTERNAL_ORIGINATOR_OVERRIDE: "should-not-pass",
+};
+const STATE = path.join(SCRATCH, "state");
+const WORKSPACE = path.join(SCRATCH, "state", "workspace");
+const SKILLS = path.join(PROJECT, "src", "skills");
+fs.mkdirSync(WORKSPACE, { recursive: true });
+
+async function tarseeTurn(name, target, ctx, { resume = null, input = "hello", plan, signal = null } = {}) {
+  let o;
+  try { o = buildCodexOptions(target, { env: SERVER_ENV, stateDir: STATE, workspace: WORKSPACE, mcp: { url: "http://127.0.0.1:45123/mcp", token: "mcp-" + "token-value" }, turnMark: "0123456789abcdef01234567", ...ctx }); }
+  catch (e) { return { name, refused: { name: e.name, code: e.code, message: e.message } }; }
+  // providers/codex.js line: new Codex({ env: o.env, config: o.config, ...(o.apiKey ? { apiKey: o.apiKey } : {}), ...(codexPath ? { codexPathOverride: codexPath } : {}) })
+  const r = await sdkRun(name, { plan, codex: { env: o.env, config: o.config, ...(o.apiKey ? { apiKey: o.apiKey } : {}) }, thread: o.threadOptions, resume, input });
+  const s = summarize(r);
+  s.tarsee = { target, home: o.home, apiKey: o.apiKey ?? null, config: o.config, threadOptions: o.threadOptions, envOptionNames: Object.keys(o.env).sort() };
+  s.envNamesChildHasThatOptionLacks = s.envNames ? s.envNames.filter((n) => !(n in o.env)) : null;
+  s.envNamesOptionHasThatChildLacks = s.envNames ? Object.keys(o.env).filter((n) => !s.envNames.includes(n)) : null;
+  s.envValueDiffs = s.env ? Object.keys(o.env).filter((n) => s.env[n] !== o.env[n]).map((n) => ({ n, option: o.env[n], child: s.env[n] })) : null;
+  return s;
+}
+
+const INSTR = "PREAMBLE says \"use tools\" and C:\\path\\to\\x.\nLine two\twith a tab, café ☃ 😀, and a control \u0007 char.\n\n## Workspace instructions (CLAUDE.md)\n\nBe brief.\n\nYou are Tarsee (check run).";
+
+if (wanted("t1")) write("t1-openrouter-new", await tarseeTurn("t1-openrouter-new",
+  { providerId: "openrouter", model: "openai/gpt-5.5", effort: "HIGH" },
+  { key: "  \"sk-or-" + "quoted-key\"  ", vaultEnv: { MY_VAULT_KEY: "vault-value", CODEX_FROM_VAULT: "should-not-pass", OPENAI_API_KEY: "vault-openai-kept" }, developerInstructions: INSTR, appTitle: "My \"Tarsee\"\r\nApp", referer: " https://example.test/tarsee ", contextTokens: 400000, thinkingSummaries: true, skillsDir: SKILLS },
+  { input: "<turn-context>\nToday is a day.\n</turn-context>\n\nWhat is 2+2?" }));
+
+if (wanted("t2")) write("t2-openai-resume-pictures", await tarseeTurn("t2-openai-resume-pictures",
+  { providerId: "openai", model: "gpt-5.5", effort: "low" },
+  { key: "'sk-" + "openai-single-quoted'", developerInstructions: INSTR, contextTokens: 272000, skillsDir: SKILLS },
+  { resume: TID, input: [{ type: "text", text: "first words" }, { type: "local_image", path: "C:\\Temp Dir\\tarsee-codex\\tarsee-images-AbC123\\image-1.png" }, { type: "text", text: "second words" }, { type: "local_image", path: "C:\\Temp Dir\\tarsee-codex\\tarsee-images-AbC123\\image-2.jpg" }] }));
+
+if (wanted("t3")) write("t3-chatgpt-effort-not-offered", await tarseeTurn("t3-chatgpt-effort-not-offered",
+  { providerId: "chatgpt", model: "gpt-x-test", effort: "high" },
+  { developerInstructions: "", accountModels: [{ id: "gpt-x-test", efforts: ["low", "medium"] }] }));
+
+if (wanted("t3b")) write("t3b-chatgpt-list-unknown", await tarseeTurn("t3b-chatgpt-list-unknown",
+  { providerId: "chatgpt", model: "gpt-x-test", effort: "high" },
+  { developerInstructions: "x", accountModels: [] }));
+
+if (wanted("t4")) write("t4-local-bridge", await tarseeTurn("t4-local-bridge",
+  { providerId: "local", model: "qwen3:8b", effort: "medium" },
+  { localUrl: "http://192.168.1.5:11434/v1", localBridge: { url: "http://127.0.0.1:5555/t/turnabc/v1", token: "bridge-" + "token" }, key: "owner-key-never-used", developerInstructions: "x" }));
+
+if (wanted("t5")) {
+  const saved = SERVER_ENV.TARSEE_COMPACT_WINDOW;
+  SERVER_ENV.TARSEE_COMPACT_WINDOW = "off";
+  write("t5-deepseek-default-model-compact-off", await tarseeTurn("t5-deepseek-default-model-compact-off",
+    { providerId: "deepseek", model: "default", effort: "extreme" },
+    { key: "sk-ds-" + "test", developerInstructions: "x", contextTokens: 128000 }));
+  if (saved === undefined) delete SERVER_ENV.TARSEE_COMPACT_WINDOW; else SERVER_ENV.TARSEE_COMPACT_WINDOW = saved;
+}
+
+if (wanted("t6")) {
+  // The instructions cap, and whether what passes the cap can be started at all.
+  const plain = "A".repeat(40 * 1024);
+  const a = await tarseeTurn("t6a-cap-plain-win32", { providerId: "openai", model: "m" }, { key: "sk-" + "k", developerInstructions: plain });
+  const quotes = "\"".repeat(40 * 1024);
+  const b = await tarseeTurn("t6b-cap-all-quotes-win32", { providerId: "openai", model: "m" }, { key: "sk-" + "k", developerInstructions: quotes });
+  const newlines = "line\n".repeat(8 * 1024);
+  const c = await tarseeTurn("t6c-cap-many-newlines-win32", { providerId: "openai", model: "m" }, { key: "sk-" + "k", developerInstructions: newlines });
+  const slim = (s) => ({
+    refused: s.refused ?? null, threw: s.threw, spawnedByNode: s.spawnedByNode, uncaught: s.uncaught,
+    instructionsBytesAfterCap: s.tarsee ? Buffer.byteLength(s.tarsee.config.developer_instructions) : null,
+    developerInstructionsArgChars: s.args ? s.args.find((x) => x.startsWith("developer_instructions="))?.length : null,
+    totalArgChars: s.args ? s.args.reduce((n, x) => n + x.length + 1, 0) : null,
+    argCount: s.args?.length ?? null,
+    yieldedCount: s.yielded?.length ?? null,
+  });
+  write("t6-instruction-caps", {
+    instructionsLimit: { win32: instructionsLimit("win32"), linux: instructionsLimit("linux"), darwin: instructionsLimit("darwin") },
+    capOf40KiBPlain: { win32: Buffer.byteLength(capInstructions(plain, instructionsLimit("win32"))), linux: Buffer.byteLength(capInstructions(plain, instructionsLimit("linux"))) },
+    plain: slim(a), allQuotes: slim(b), manyNewlines: slim(c),
+  });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// A: the SDK directly
+// ---------------------------------------------------------------------------------------------------------------------
+if (wanted("a1")) {
+  const config = {
+    "10": "integer-like key written first by JS", "2": "second",
+    s_plain: "hello", s_quotes: "say \"hi\" to C:\\Users\\me", s_nl: "one\ntwo\ttab\rcr\bbs\fff", s_unicode: "café ☃ 😀", s_control: "bell\u0007esc\u001bdel\u007fnel\u0085ls\u2028ps\u2029", s_empty: "",
+    s_lone_surrogate: "x\ud83dy",
+    n_int: 42, n_neg: -7, n_float: 0.85, n_big: 1e21, n_small: 1e-7, n_negzero: -0, n_bigint_like: 9007199254740993,
+    b_true: true, b_false: false,
+    a_empty: [], a_str: ["a", "b c", "d\"e"], a_mixed: [1, "two", [3, 4], true], a_tables: [{ name: "first", n: 1 }, { "key with space": "v", nested: { deep: true }, skipped: undefined }],
+    t_empty: {}, t_nested: { a: { b: { c: 1 } }, "dotted.key": "raw", "spaced key": "raw", und: undefined, deep_empty: {} },
+  };
+  const r = await sdkRun("a1-every-option", {
+    codex: { env: { ONLY: "this", CODEX_API_KEY: "from-env" }, config, configOverrides: ["raw_one=1", "raw.two=\"x y\""], baseUrl: "http://127.0.0.1:1/v1", apiKey: "from-apiKey" },
+    thread: { model: "the-model", threadSource: "user", sandboxMode: "workspace-write", workingDirectory: "C:\\work dir\\ws", additionalDirectories: ["C:\\a b", "D:\\c"], skipGitRepoCheck: true, modelReasoningEffort: "xhigh", networkAccessEnabled: false, webSearchMode: "cached", webSearchEnabled: true, approvalPolicy: "on-request" },
+    turn: { outputSchema: { type: "object", properties: { a: { type: "string" } } }, cyberAccessProgram: "prog" },
+    input: [{ type: "text", text: "first part" }, { type: "local_image", path: "C:\\p q\\one.png" }, { type: "text", text: "second part" }, { type: "local_image", path: "two.jpg" }],
+  });
+  write("a1-every-option", summarize(r));
+}
+if (wanted("a2")) {
+  const r = await sdkRun("a2-resumed-other-forms", {
+    codex: { env: { ONLY: "this", CODEX_INTERNAL_ORIGINATOR_OVERRIDE: "mine" }, config: {} },
+    thread: { threadSource: "user", sandboxMode: "read-only", skipGitRepoCheck: false, networkAccessEnabled: true, webSearchEnabled: false, additionalDirectories: [] },
+    resume: TID, input: [{ type: "local_image", path: "only.png" }],
+  });
+  const r2 = await sdkRun("a2b-websearch-true-originator-empty", { codex: { env: { CODEX_INTERNAL_ORIGINATOR_OVERRIDE: "" } }, thread: { webSearchEnabled: true }, input: "" });
+  write("a2-resumed-other-forms", { resumed: summarize(r), webSearchTrue: summarize(r2) });
+}
+if (wanted("a3")) {
+  process.env.FROM_PROCESS_ENV = "inherited";
+  const r = await sdkRun("a3-no-options", {});
+  const s = summarize(r);
+  s.processEnvNames = Object.keys(process.env).sort();
+  s.childLacks = s.processEnvNames.filter((n) => !s.envNames.includes(n));
+  s.childHasExtra = s.envNames.filter((n) => !s.processEnvNames.includes(n));
+  delete s.env;
+  write("a3-no-options", s);
+}
+if (wanted("a5")) {
+  const r = await sdkRun("a5-empty-env", { codex: { env: {} } });
+  const s = summarize(r);
+  const r2 = await sdkRun("a5b-env-lowercase-names", { codex: { env: { path: "C:\\only-lower", systemroot: process.env.SYSTEMROOT, Temp: "C:\\t" } } });
+  const s2 = summarize(r2);
+  write("a5-empty-env", { empty: { envNames: s.envNames, env: s.env }, lowercase: { envNames: s2.envNames, env: s2.env } });
+}
+if (wanted("a6")) {
+  const cases = {
+    crlf_loneCR_noFinalNewline: ev({ type: "a" }).replace("\n", "\r\n") + JSON.stringify({ type: "b" }) + "\r" + JSON.stringify({ type: "c" }) + "\n" + JSON.stringify({ type: "d" }),
+    u2028_inside_a_string: ev({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "before\u2028after\u2029end" } }) + ev({ type: "z" }),
+    nel_inside_a_string: ev({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "before\u0085after" } }),
+    blank_line: ev({ type: "a" }) + "\n" + ev({ type: "b" }),
+    whitespace_line: ev({ type: "a" }) + "   \n" + ev({ type: "b" }),
+    not_json: ev({ type: "a" }) + "warning: something\n" + ev({ type: "b" }),
+    json_but_not_object: ev({ type: "a" }) + "42\n\"str\"\nnull\n" + ev({ type: "b" }),
+    bom_first: "\ufeff" + ev({ type: "a" }),
+    turn_completed_no_usage: ev({ type: "turn.completed" }),
+    long_line_300k: ev({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "x".repeat(300000) } }) + ev({ type: "b" }),
+  };
+  const out = {};
+  for (const [k, stdout] of Object.entries(cases)) {
+    const r = await sdkRun(`a6-${k}`, { plan: { stdout }, codex: { env: {} } });
+    out[k] = { stdout: stdout.length > 500 ? `${stdout.slice(0, 120)}... (${stdout.length} chars)` : stdout, yielded: r.yielded.map((y) => (JSON.stringify(y.event).length > 300 ? { type: y.event.type, textLength: y.event.item?.text?.length } : y.event)), threw: r.threw, stubLastAliveMs: r.stub.lastAliveMs, stubExitedAtMs: r.stub.exitedAtMs, uncaught: r.uncaught };
+  }
+  // a split multi-byte character across two writes
+  const snow = Buffer.from(ev({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "☃😀" } }), "utf8");
+  const cut = snow.indexOf(Buffer.from("☃")) + 1;
+  const r = await sdkRun("a6-split-utf8", { plan: { stdout: [{ base64: snow.subarray(0, cut).toString("base64") }, { base64: snow.subarray(cut).toString("base64"), delayMs: 150 }] }, codex: { env: {} } });
+  out.split_utf8_across_writes = { yielded: r.yielded.map((y) => y.event), threw: r.threw };
+  write("a6-stdout-reading", out);
+}
+if (wanted("a7")) {
+  const out = {};
+  const cases = {
+    nonzero_after_events: { stdout: ev({ type: "thread.started", thread_id: TID }) + ev({ type: "turn.failed", error: { message: "boom" } }), stderr: "Reading prompt from stdin...\n", exitCode: 1 },
+    nonzero_no_output_stderr: { stdout: "", stderr: "Reading prompt from stdin...\nError: thread/resume: thread/resume failed: no rollout found for thread id x (code -32600)\n", exitCode: 1 },
+    zero_with_stderr: { stdout: BASIC, stderr: "Reading prompt from stdin...\nsome warning\n", exitCode: 0 },
+    zero_no_output: { stdout: "", exitCode: 0 },
+    code_2: { stdout: "", stderr: "error: unexpected argument '--bogus' found\n", exitCode: 2 },
+    code_255: { stdout: "", stderr: "", exitCode: 255 },
+    stderr_200k: { stdout: "", stderr: "E".repeat(200000) + "\n", exitCode: 3 },
+    stderr_not_utf8: { stdout: "", stderr: Buffer.from([0x62, 0x61, 0x64, 0xff, 0xfe, 0x0a]).toString("base64"), stderr_base64: true, exitCode: 4 },
+  };
+  for (const [k, plan] of Object.entries(cases)) {
+    const r = await sdkRun(`a7-${k}`, { plan, codex: { env: {} } });
+    out[k] = { plan: { ...plan, stderr: plan.stderr?.length > 300 ? `${plan.stderr.length} chars` : plan.stderr }, yielded: r.yielded.map((y) => y.event), threw: r.threw && { ...r.threw, message: r.threw.message.length > 400 ? `${r.threw.message.slice(0, 80)}... (${r.threw.message.length} chars)` : r.threw.message }, uncaught: r.uncaught };
+  }
+  write("a7-exit-codes", out);
+}
+if (wanted("a8")) {
+  const plan = { stdout: [{ text: ev({ type: "thread.started", thread_id: TID }) + ev({ type: "turn.started" }) }, { text: ev({ type: "item.started", item: { id: "item_0", type: "command_execution", command: "sleep", aggregated_output: "", exit_code: null, status: "in_progress" } }), delayMs: 100 }, { text: ev({ type: "late" }), delayMs: 3000 }], sleepMsBeforeExit: 20000, spawnChild: true };
+  const r = await sdkRun("a8-abort-mid-turn", { plan, codex: { env: { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT } }, abort: { afterEvents: 3, delayMs: 300 } });
+  write("a8-abort-mid-turn", summarize(r));
+}
+if (wanted("a9")) {
+  const r = await sdkRun("a9-signal-already-aborted", { plan: { stdout: BASIC, sleepMsBeforeExit: 5000 }, codex: { env: { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT } }, abort: "pre" });
+  const s = summarize(r);
+  s.recordFileExists = fs.existsSync(path.join(r.dir, "record.json"));
+  write("a9-signal-already-aborted", s);
+}
+if (wanted("a10")) {
+  const plan = { stdout: [{ text: ev({ type: "thread.started", thread_id: TID }) }, { text: ev({ type: "turn.started" }), delayMs: 200 }], sleepMsBeforeExit: 20000, spawnChild: true };
+  const r = await sdkRun("a10-caller-stops-reading", { plan, codex: { env: { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT } }, stopReadingAfter: 1 });
+  write("a10-caller-stops-reading", summarize(r));
+}
+if (wanted("a11")) {
+  const out = {};
+  for (const [k, n] of Object.entries({ small_5_bytes: 5, big_2MB: 2 * 1024 * 1024 })) {
+    const r = await sdkRun(`a11-exits-before-reading-${k}`, { plan: { exitWithoutReadingStdin: true, stderr: "error: unexpected argument '--bogus' found\n", exitCode: 2 }, codex: { env: {} }, input: "p".repeat(n) });
+    await sleep(300);
+    out[k] = { yielded: r.yielded, threw: r.threw, uncaughtInTheCallersProcess: uncaught.slice(-3), stubExitedAtMs: r.stub.exitedAtMs };
+  }
+  write("a11-program-exits-before-reading-stdin", out);
+}
+if (wanted("a12")) {
+  const dir = prepare("a12-missing", {});
+  process.chdir(dir);
+  let threw = null; const yielded = [];
+  const u0 = uncaught.length;
+  try {
+    const client = new Codex({ env: {}, codexPathOverride: path.join(dir, "no-such-codex.exe") });
+    const { events } = await client.startThread().runStreamed("hello");
+    for await (const e of events) yielded.push(e);
+  } catch (e) { threw = e; }
+  await sleep(200);
+  process.chdir(HOME_CWD);
+  write("a12-program-missing", { yielded, threw: errOf(threw), threwErrno: threw?.errno, threwSyscall: threw?.syscall, threwPath: threw?.path ? "<the path given>" : null, uncaught: uncaught.slice(u0) });
+}
+if (wanted("a13")) {
+  const prompt = "Line one\r\nLine two\n\u0000nul? no: " + "é☃😀".repeat(20000) + "\n\ntrailing spaces   \n\n";
+  const r = await sdkRun("a13-long-unicode-prompt", { codex: { env: {} }, input: prompt.replace("\u0000", "") });
+  const want2 = Buffer.from(prompt.replace("\u0000", ""), "utf8");
+  write("a13-long-unicode-prompt", { promptChars: prompt.length - 1, promptUtf8Bytes: want2.length, promptSha256: crypto.createHash("sha256").update(want2).digest("hex"), stdinBytes: r.record?.stdin.bytes, stdinSha256: r.record?.stdin.sha256, same: r.record?.stdin.sha256 === crypto.createHash("sha256").update(want2).digest("hex"), chunks: r.record?.stdin.chunks?.length, threw: r.threw });
+}
+if (wanted("a14")) {
+  const a = await sdkRun("a14-empty-string", { codex: { env: {} }, input: "" });
+  const b = await sdkRun("a14b-only-pictures", { codex: { env: {} }, input: [{ type: "local_image", path: "x.png" }] });
+  const c = await sdkRun("a14c-empty-text-items", { codex: { env: {} }, input: [{ type: "text", text: "" }, { type: "text", text: "" }, { type: "local_image", path: "x.png" }] });
+  const d = await sdkRun("a14d-lone-surrogate", { codex: { env: {} }, input: "a\ud83db" });
+  write("a14-empty-and-odd-prompts", Object.fromEntries([["emptyString", a], ["onlyPictures", b], ["twoEmptyTexts", c], ["loneSurrogate", d]].map(([k, r]) => [k, { args: r.record?.args, stdinBytes: r.record?.stdin.bytes, stdinBase64: r.record?.stdin.base64, eofAtMs: r.record?.stdin.eofAtMs, threw: r.threw }])));
+}
+if (wanted("a15")) {
+  // Lines already written when the abort fires, and the program printing more after it (it cannot: it is dead on Windows).
+  const many = Array.from({ length: 200 }, (_, i) => ev({ type: "n", i })).join("");
+  const plan = { stdout: [{ text: ev({ type: "thread.started", thread_id: TID }) }, { text: many, delayMs: 200 }], sleepMsBeforeExit: 20000 };
+  const r = await sdkRun("a15-abort-during-burst", { plan, codex: { env: { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT } }, abort: { afterEvents: 2, delayMs: 0 } });
+  write("a15-abort-during-burst", { yieldedCount: r.yielded.length, lastYielded: r.yielded.at(-1), threw: r.threw, timing: r.timing, stub: r.stub });
+}
+if (wanted("a16")) {
+  // Two turns on one Thread object: the second one resumes by itself.
+  const dir = prepare("a16-two-turns-one-thread", { stdout: BASIC });
+  process.chdir(dir);
+  const client = new Codex({ env: {}, codexPathOverride: NODE });
+  const th = client.startThread({ model: "m", threadSource: "user" });
+  const idBefore = th.id;
+  for await (const _ of (await th.runStreamed("one")).events) { /* drain */ }
+  const first = readJson(path.join(dir, "record.json"));
+  for await (const _ of (await th.runStreamed("two")).events) { /* drain */ }
+  const second = readJson(path.join(dir, "record.json"));
+  process.chdir(HOME_CWD);
+  write("a16-two-turns-one-thread", { idBefore, idAfter: th.id, firstArgs: first.args, secondArgs: second.args, differentPids: first.pid !== second.pid });
+}
+if (wanted("a17")) {
+  // What the SDK refuses before it starts anything.
+  const out = {};
+  const tryIt = async (k, codex, thread = {}, turn = {}) => {
+    const before = spawned.length;
+    const r = await sdkRun(`a17-${k}`, { codex: { env: {}, ...codex }, thread, turn });
+    out[k] = { threw: r.threw, started: spawned.length > before, args: r.record?.args ?? null };
+  };
+  await tryIt("null_value", { config: { a: { b: null } } });
+  await tryIt("nan", { config: { n: NaN } });
+  await tryIt("infinity", { config: { n: Infinity } });
+  await tryIt("empty_key", { config: { "": 1 } });
+  await tryIt("empty_key_in_inline_table", { config: { a: [{ "": 1 }] } });
+  await tryIt("function_value", { config: { f: () => 1 } });
+  await tryIt("bigint_value", { config: { f: 10n } });
+  await tryIt("config_is_array", { config: [1] });
+  await tryIt("config_is_string", { config: "x=1" });
+  await tryIt("output_schema_not_object", {}, {}, { outputSchema: [1] });
+  await tryIt("empty_config_object", { config: {} });
+  await tryIt("date_value", { config: { d: new Date(0) } });
+  write("a17-refused-by-the-sdk", out);
+}
+
+console.log("done; uncaught so far:", JSON.stringify(uncaught));
+process.exit(0);

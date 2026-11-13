@@ -1,0 +1,20 @@
+// Verification stub launcher: a native executable (the SDK starts anything that does not end in .js/.mjs/.ts as a
+// native binary). It runs `node stub.mjs <the arguments it was given>` with the same stdin, stdout, stderr and
+// environment, and exits with the script's code. The node path is read from node-path.txt beside this executable.
+use std::env;
+use std::fs;
+use std::process::{Command, exit};
+
+fn main() {
+    let exe = env::current_exe().expect("current_exe");
+    let dir = exe.parent().expect("parent").to_path_buf();
+    let node = fs::read_to_string(dir.join("node-path.txt")).expect("node-path.txt");
+    let node = node.trim();
+    let args: Vec<std::ffi::OsString> = env::args_os().skip(1).collect();
+    let status = Command::new(node)
+        .arg(dir.join("stub.mjs"))
+        .args(&args)
+        .status()
+        .expect("start node");
+    exit(status.code().unwrap_or(1));
+}

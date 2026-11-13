@@ -1,0 +1,701 @@
+{
+  "name": "sdk-media-image",
+  "providerId": "deepseek",
+  "note": "Every line that crossed the real claude.exe's stdin (to-program) and stdout (from-program) while Tarsee's engine ran one turn through the Agent SDK 0.3.319. t is milliseconds from the start of the turn.",
+  "command": "<TARSEE_ROOT>\\node_modules\\@anthropic-ai\\claude-agent-sdk-win32-x64\\claude.exe",
+  "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=deepseek-flash[1m]",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=project",
+    "--strict-mcp-config",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+  ],
+  "cwd": "<WORKSPACE>",
+  "abort_at_ms": null,
+  "process_calls": [
+    {
+      "t": 11,
+      "event": "stdin.end()"
+    },
+    {
+      "t": 850,
+      "event": "stdin.end()"
+    },
+    {
+      "t": 902,
+      "event": "exit",
+      "code": 0,
+      "signal": null
+    }
+  ],
+  "stderr": "[claude-code:unrecognized_model] {\"model\":\"deepseek-flash[1m]\",\"query_source\":\"sdk\"}\n",
+  "wire": [
+    {
+      "t": 10,
+      "dir": "to-program",
+      "json": {
+        "request_id": "bvsj89dzv4j",
+        "type": "control_request",
+        "request": {
+          "subtype": "initialize",
+          "systemPrompt": [
+            "You ARE Tarsee — a headless AI agent running 24/7 on a server.\n\n## MCP Tools (call as mcp__tarsee__tarsee_<name>)\n- **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/Slack/web\n- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp/Slack or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files\n- **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs\n- **remember**(content) — append to MEMORY.md\n- **daily_log**(content) — append to today's log\n- **read_file**(filename) / **write_file**(filename, content) — workspace files\n- **search_memories**(query) — keyword search through memory files\n- **search_memories_deep**(query) — dumps ALL memories for semantic reasoning (use when keyword search finds nothing)\n- **create_canvas**(title, html, css?, js?) — create live interactive HTML/CSS/JS canvas (renders as iframe in chat)\n- **web_fetch**(url) / **web_search**(query) — web access\n- **get_key**(name) / **set_key**(name, value) — encrypted vault\n- **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head\n- **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: UTC\n- **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving\n- **discord_admin**(action, ...) — list, make and edit Discord channels and make webhooks with Tarsee's own bot (never the bot token from Bash); changes need approved_by, a webhook URL goes to the vault, nothing deletes\n- **railway**(action, project?, environment?, service?, ...) — list Railway projects and variable names, set a variable (secrets via from_key, a vault key name) or redeploy, with the vault's RAILWAY_API_TOKEN; writes need approved_by. Use it instead of Railway calls from Bash\n\n## Memory\nUse remember for durable facts. Use daily_log for session notes. Only append, never overwrite.\nBefore saying \"I don't know\" or \"I can't remember\":\n1. Try search_memories first (fast, keyword-based)\n2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)\n\n## CLI Tools Installed\n- **railway** — Railway CLI for logs and deploys (to set a variable or redeploy, use the railway tool above: never a secret in a command)\n- **gog** — Google Workspace (Gmail, Calendar, Drive, Contacts, Sheets)\n- **himalaya** — Zoho/IMAP email\n- **gh** — GitHub CLI\n- **claude** — Claude Code CLI\n- **whisper-cli** — local speech-to-text\n- Use Bash to run any of these directly.\n\n## Skill Discovery\nYou have skills installed in the skills/ directory. Before saying \"I can't do that\":\n1. Check if a skill exists: list files in <WORKSPACE>/skills/ or read a skill's SKILL.md\n2. If a matching skill exists, read its SKILL.md and follow the instructions\n3. If no skill exists, ask the user if they want you to create one\n\n## Workspace: <WORKSPACE>\n\nYou are a test."
+          ],
+          "systemPromptSnapshot": false
+        }
+      }
+    },
+    {
+      "t": 10,
+      "dir": "to-program",
+      "json": {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "image",
+              "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+              }
+            },
+            {
+              "type": "text",
+              "text": "what is this?"
+            }
+          ]
+        },
+        "parent_tool_use_id": null
+      }
+    },
+    {
+      "t": 11,
+      "dir": "to-program",
+      "event": "stdin closed"
+    },
+    {
+      "t": 686,
+      "dir": "from-program",
+      "json": {
+        "type": "control_response",
+        "response": {
+          "subtype": "success",
+          "request_id": "bvsj89dzv4j",
+          "response": {
+            "commands": "<44 commands; cut from this fixture>",
+            "agents": "<5 agents; cut from this fixture>",
+            "output_style": "default",
+            "available_output_styles": [
+              "default",
+              "Proactive",
+              "Concise",
+              "Explanatory",
+              "Learning"
+            ],
+            "user_output_styles_dir": "<STATE_DIR>\\.claude-home-deepseek\\output-styles",
+            "models": "<6 models; cut from this fixture>",
+            "account": {
+              "tokenSource": "ANTHROPIC_AUTH_TOKEN",
+              "apiProvider": "firstParty"
+            },
+            "pid": 62772,
+            "claude_code_version": "2.1.319",
+            "current_permission_mode": "bypassPermissions",
+            "hook_on_failure_supported": true,
+            "feedback_mode": {
+              "kind": "disabled"
+            },
+            "analytics_disabled": true,
+            "remote_control_auto_enable": false,
+            "remote_control_auto_connect_default": false,
+            "remote_control_available": false,
+            "remote_control_auto_on_by_default": false,
+            "ide_rc_auto_enable_gate": false,
+            "fast_mode_state": "off",
+            "fast_mode_disabled_reason": "sdk_opt_in_required",
+            "session_state": "idle",
+            "capabilities": [
+              "ui_surface_v1",
+              "mcp_call_result_not_for_model_v1",
+              "mcp_call_check_permissions_v1"
+            ]
+          },
+          "pending_permission_requests": [],
+          "pending_user_dialog_requests": []
+        }
+      }
+    },
+    {
+      "t": 689,
+      "dir": "from-program",
+      "json": {
+        "type": "system",
+        "subtype": "session_state_changed",
+        "state": "running",
+        "sdk_host_only": true,
+        "uuid": "5c914a66-1b02-4d16-9531-cbc4f5984fd8",
+        "session_id": "43e9c2ad-5e4a-4848-8572-d4512950b31e"
+      }
+    },
+    {
+      "t": 784,
+      "dir": "from-program",
+      "json": {
+        "type": "system",
+        "subtype": "init",
+        "cwd": "<WORKSPACE>",
+        "session_id": "43e9c2ad-5e4a-4848-8572-d4512950b31e",
+        "tools": [
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "Write"
+        ],
+        "mcp_servers": [],
+        "model": "deepseek-flash[1m]",
+        "permissionMode": "bypassPermissions",
+        "slash_commands": "<44 slash commands; cut from this fixture>",
+        "terminal_slash_commands": "<4 terminal slash commands; cut from this fixture>",
+        "apiKeySource": "none",
+        "claude_code_version": "2.1.319",
+        "output_style": "default",
+        "agents": [
+          "claude",
+          "Explore",
+          "general-purpose",
+          "Plan",
+          "statusline-setup"
+        ],
+        "skills": "<16 skills; cut from this fixture>",
+        "plugins": [
+          {
+            "name": "cc-plugin-agents-md",
+            "path": "builtin",
+            "source": "cc-plugin-agents-md@builtin"
+          },
+          {
+            "name": "cc-plugin-privacy",
+            "path": "builtin",
+            "source": "cc-plugin-privacy@builtin"
+          },
+          {
+            "name": "cc-plugin-plugin-authoring",
+            "path": "builtin",
+            "source": "cc-plugin-plugin-authoring@builtin"
+          }
+        ],
+        "capabilities": [
+          "interrupt_receipt_v1",
+          "interrupt_cancel_queued_v1",
+          "interrupt_send_now_v1",
+          "interrupt_requeue_taken_v1",
+          "msg_lifecycle_v1",
+          "request_marker_lists_v1",
+          "ask_user_question_unanswered_v1",
+          "lifecycle_wakeup_source_v1",
+          "sdk_mcp_tools_list_changed",
+          "sdk_mcp_manifests",
+          "mcp_read_resource_v1",
+          "mcp_tool_ui_meta_v1",
+          "ui_surface_v1",
+          "mcp_call_result_not_for_model_v1",
+          "mcp_call_check_permissions_v1"
+        ],
+        "analytics_disabled": true,
+        "product_feedback_disabled": true,
+        "uuid": "5b403cef-6070-48d3-970b-75a29f66a284",
+        "memory_paths": {
+          "auto": "<STATE_DIR>\\.claude-home-deepseek\\projects\\<WORKSPACE_AS_FOLDER_NAME>\\memory\\"
+        },
+        "original_cwd": "<WORKSPACE>",
+        "additional_directories": [
+          "<TARSEE_ROOT>\\src\\skills"
+        ],
+        "messaging_socket_path": "\\\\.\\pipe\\LOCAL\\cc-msg-5f553828fd54c055b423d466140a281c",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "per_turn_effort_active": false,
+        "ultrathink_available": false,
+        "ultrathink_typed_raises": false,
+        "view_mode": "default",
+        "powershell_path": "<POWERSHELL_EXE>"
+      }
+    },
+    {
+      "t": 792,
+      "dir": "from-program",
+      "json": {
+        "type": "system",
+        "subtype": "status",
+        "status": "requesting",
+        "session_id": "43e9c2ad-5e4a-4848-8572-d4512950b31e",
+        "uuid": "e3509eda-2ac1-4479-a48a-796b50f7759a"
+      }
+    },
+    {
+      "t": 828,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fake_6",
+            "type": "message",
+            "role": "assistant",
+            "model": "deepseek-flash",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 12,
+              "output_tokens": 1,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0
+            }
+          }
+        },
+        "session_id": "43e9c2ad-5e4a-4848-8572-d4512950b31e",
+        "parent_tool_use_id": null,
+        "uuid": "e9b49ed3-3ed4-4c73-ab56-e2345de2fbd2",
+        "ttft_ms": 11,
+        "api_message_id": "msg_fake_6"
+      }
+    },
+    {
+      "t": 829,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        "session_id": "43e9c2ad-5e4a-4848-8572-d4512950b31e",
+        "parent_tool_use_id": null,
+        "uuid": "b42150f6-fc7a-416b-8475-fff27314b1a3",
+        "api_message_id": "msg_fake_6"
+      }
+    },
+    {
+      "t": 829,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "A picture."
+          }
+        },
+        "session_id": "43e9c2ad-5e4a-4848-8572-d4512950b31e",
+        "parent_tool_use_id": null,
+        "uuid": "9509a847-d6fd-4071-9166-ef5f71d40a8a",
+        "api_message_id": "msg_fake_6"
+      }
+    },
+    {
+      "t": 831,
+      "dir": "from-program",
+      "json": {
+        "type": "assistant",
+        "message": {
+          "id": "msg_fake_6",
+          "type": "message",
+          "role": "assistant",
+          "model": "deepseek-flash",
+          "content": [
+            {
+              "type": "text",
+              "text": "A picture."
+            }
+          ],
+          "stop_reason": null,
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 12,
+            "output_tokens": 1,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "context_management": null
+        },
+        "parent_tool_use_id": null,
+        "session_id": "43e9c2ad-5e4a-4848-8572-d4512950b31e",
+        "uuid": "e0623b25-b831-4332-af7b-43739e850bfd",
+        "timestamp": "2026-11-12T23:57:52.646Z",
+        "request_id": "req_fake_6"
+      }
+    },
+    {
+      "t": 831,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        "session_id": "43e9c2ad-5e4a-4848-8572-d4512950b31e",
+        "parent_tool_use_id": null,
+        "uuid": "0dfdf213-5ce5-4233-88b6-2bce5b399fd0",
+        "api_message_id": "msg_fake_6"
+      }
+    },
+    {
+      "t": 833,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          },
+          "usage": {
+            "output_tokens": 6
+          }
+        },
+        "session_id": "43e9c2ad-5e4a-4848-8572-d4512950b31e",
+        "parent_tool_use_id": null,
+        "uuid": "a833e408-ccd1-416f-966e-9155ce09626a",
+        "api_message_id": "msg_fake_6"
+      }
+    },
+    {
+      "t": 834,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        },
+        "session_id": "43e9c2ad-5e4a-4848-8572-d4512950b31e",
+        "parent_tool_use_id": null,
+        "uuid": "82a57787-41c5-4359-a533-57062ddb0642",
+        "api_message_id": "msg_fake_6"
+      }
+    },
+    {
+      "t": 849,
+      "dir": "from-program",
+      "json": {
+        "duration_api_ms": 20,
+        "stop_reason": "end_turn",
+        "session_id": "43e9c2ad-5e4a-4848-8572-d4512950b31e",
+        "total_cost_usd": 0.00021,
+        "usage": {
+          "input_tokens": 12,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 6,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard",
+          "fallback_credit": null
+        },
+        "modelUsage": {
+          "deepseek-flash[1m]": {
+            "inputTokens": 12,
+            "outputTokens": 6,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0,
+            "webSearchRequests": 0,
+            "costUSD": 0.00021,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 32000,
+            "thinkingTokens": 0,
+            "cacheCreationEphemeral5mInputTokens": 0,
+            "cacheCreationEphemeral1hInputTokens": 0,
+            "canonicalModel": "deepseek-flash[1m]",
+            "provider": "firstParty",
+            "costBasis": "unknown"
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "safety_stops": 0,
+        "is_error": false,
+        "num_turns": 1,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "A picture.",
+        "ttft_ms": 134,
+        "type": "result",
+        "duration_ms": 144,
+        "uuid": "5fd55c34-569f-4a6b-8f0e-4dd512513074",
+        "ttft_stream_ms": 133,
+        "time_to_request_ms": 125,
+        "first_content_frame_ms": 134,
+        "queued_turn_count": 0,
+        "result_index": 0,
+        "model_usage_since_last_result": {
+          "deepseek-flash[1m]": {
+            "inputTokens": 12,
+            "outputTokens": 6,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0,
+            "webSearchRequests": 0,
+            "costUSD": 0.00021,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 32000,
+            "thinkingTokens": 0,
+            "cacheCreationEphemeral5mInputTokens": 0,
+            "cacheCreationEphemeral1hInputTokens": 0,
+            "canonicalModel": "deepseek-flash[1m]",
+            "provider": "firstParty",
+            "costBasis": "unknown"
+          }
+        }
+      }
+    },
+    {
+      "t": 850,
+      "dir": "to-program",
+      "event": "stdin closed"
+    },
+    {
+      "t": 852,
+      "dir": "from-program",
+      "json": {
+        "type": "system",
+        "subtype": "session_state_changed",
+        "state": "idle",
+        "sdk_host_only": true,
+        "uuid": "e81ddfb8-effb-4038-81f6-9eced4394859",
+        "session_id": "43e9c2ad-5e4a-4848-8572-d4512950b31e"
+      }
+    },
+    {
+      "t": 902,
+      "dir": "from-program",
+      "event": "exit code 0 signal null"
+    }
+  ],
+  "messages_the_sdk_handed_to_its_caller": [
+    {
+      "t": 785,
+      "type": "system",
+      "subtype": "init"
+    },
+    {
+      "t": 792,
+      "type": "system",
+      "subtype": "status"
+    },
+    {
+      "t": 828,
+      "type": "stream_event",
+      "event": "message_start"
+    },
+    {
+      "t": 829,
+      "type": "stream_event",
+      "event": "content_block_start"
+    },
+    {
+      "t": 829,
+      "type": "stream_event",
+      "event": "content_block_delta"
+    },
+    {
+      "t": 831,
+      "type": "assistant"
+    },
+    {
+      "t": 831,
+      "type": "stream_event",
+      "event": "content_block_stop"
+    },
+    {
+      "t": 833,
+      "type": "stream_event",
+      "event": "message_delta"
+    },
+    {
+      "t": 834,
+      "type": "stream_event",
+      "event": "message_stop"
+    },
+    {
+      "t": 849,
+      "type": "result",
+      "subtype": "success"
+    }
+  ],
+  "tarsee_events": [
+    {
+      "t": 828,
+      "type": "step",
+      "kind": "usage",
+      "calls": 1,
+      "input": 12,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "output": 1,
+      "total": 13,
+      "outTps": null,
+      "nowTps": null
+    },
+    {
+      "t": 829,
+      "type": "text",
+      "content": "A picture."
+    },
+    {
+      "t": 831,
+      "type": "step",
+      "kind": "text",
+      "text": "A picture."
+    },
+    {
+      "t": 833,
+      "type": "step",
+      "kind": "usage",
+      "calls": 1,
+      "input": 12,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "output": 6,
+      "total": 18,
+      "outTps": null,
+      "nowTps": null
+    },
+    {
+      "t": 850,
+      "type": "usage",
+      "usage": {
+        "input_tokens": 12,
+        "output_tokens": 6,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "context_input_tokens": 12
+      },
+      "costUsd": 0.000005
+    },
+    {
+      "t": 850,
+      "type": "done",
+      "stopReason": "end_turn"
+    }
+  ],
+  "tarsee_logs": [
+    "log: [claude-code] Starting deepseek turn in <WORKSPACE>, model: deepseek-flash[1m], session: new, media: 1",
+    "log: [claude-code] deepseek: apiKeySource=none"
+  ],
+  "api_requests": [
+    {
+      "method": "POST",
+      "path": "/v1/messages",
+      "model": "deepseek-flash",
+      "tools": [
+        "Bash",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Read",
+        "Write"
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        },
+        {
+          "type": "text",
+          "text": "You ARE Tarsee — a headless AI agent running 24/7 on a server.\n\n## MCP Tools (call as mcp__tarsee__tarsee_<name>)\n- **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/Slack/web\n- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp/Slack or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files\n- **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs\n- **remember**(content) — append to MEMORY.md\n- **daily_log**(content) — append to today's log\n- **read_file**(filename) / **write_file**(filename, content) — workspace files\n- **search_memories**(query) — keyword search through memory files\n- **search_memories_deep**(query) — dumps ALL memories for semantic reasoning (use when keyword search finds nothing)\n- **create_canvas**(title, html, css?, js?) — create live interactive HTML/CSS/JS canvas (renders as iframe in chat)\n- **web_fetch**(url) / **web_search**(query) — web access\n- **get_key**(name) / **set_key**(name, value) — encrypted vault\n- **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head\n- **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: UTC\n- **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving\n- **discord_admin**(action, ...) — list, make and edit Discord channels and make webhooks with Tarsee's own bot (never the bot token from Bash); changes need approved_by, a webhook URL goes to the vault, nothing deletes\n- **railway**(action, project?, environment?, service?, ...) — list Railway projects and variable names, set a variable (secrets via from_key, a vault key name) or redeploy, with the vault's RAILWAY_API_TOKEN; writes need approved_by. Use it instead of Railway calls from Bash\n\n## Memory\nUse remember for durable facts. Use daily_log for session notes. Only append, never overwrite.\nBefore saying \"I don't know\" or \"I can't remember\":\n1. Try search_memories first (fast, keyword-based)\n2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)\n\n## CLI Tools Installed\n- **railway** — Railway CLI for logs and deploys (to set a variable or redeploy, use the railway tool above: never a secret in a command)\n- **gog** — Google Workspace (Gmail, Calendar, Drive, Contacts, Sheets)\n- **himalaya** — Zoho/IMAP email\n- **gh** — GitHub CLI\n- **claude** — Claude Code CLI\n- **whisper-cli** — local speech-to-text\n- Use Bash to run any of these directly.\n\n## Skill Discovery\nYou have skills installed in the skills/ directory. Before saying \"I can't do that\":\n1. Check if a skill exists: list files in <WORKSPACE>/skills/ or read a skill's SKILL.md\n2. If a matching skill exists, read its SKILL.md and follow the instructions\n3. If no skill exists, ask the user if they want you to create one\n\n## Workspace: <WORKSPACE>\n\nYou are a test.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "last_user": [
+        {
+          "type": "text",
+          "text": "<system-reminder>\nAttribution for git commits and pull requests you create from here on (this replaces Claude Code's own earlier attribution guidance, such as a previous copy of this reminder; the user's own instructions about these lines, such as a CLAUDE.md or memory rule, take precedence over this reminder, but do not add attribution lines this reminder leaves out):\n- End git commit messages with:\nCo-Authored-By: Claude Code <noreply@anthropic.com>\n- End pull request descriptions with:\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n</system-reminder>"
+        },
+        {
+          "type": "image",
+          "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+          }
+        },
+        {
+          "type": "text",
+          "text": "what is this?\n"
+        },
+        {
+          "type": "text",
+          "text": "[Image: source: <TEMP>\\claude\\3402e6ce0f9a3597\\43e9c2ad-5e4a-4848-8572-d4512950b31e\\images\\1.png]",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ]
+    }
+  ]
+}

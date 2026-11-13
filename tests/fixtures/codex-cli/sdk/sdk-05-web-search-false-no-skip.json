@@ -1,0 +1,117 @@
+{
+  "name": "sdk-05-web-search-false-no-skip",
+  "what": "webSearchEnabled false with no webSearchMode gives web_search=\"disabled\"; skipGitRepoCheck false and networkAccessEnabled undefined give nothing; an empty additionalDirectories gives nothing; an empty env option ({}) counts as given.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "win32"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {},
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "thread": {
+      "method": "startThread",
+      "threadOptions": {
+        "webSearchEnabled": false,
+        "skipGitRepoCheck": false,
+        "additionalDirectories": [],
+        "sandboxMode": "danger-full-access"
+      }
+    },
+    "runStreamed(input, turnOptions)": {
+      "input": [
+        {
+          "type": "text",
+          "text": "only text"
+        }
+      ],
+      "turnOptions": {}
+    },
+    "callerProcessEnvNames": [
+      "COMSPEC",
+      "FROM_PROCESS_ENV",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "TMP",
+      "TMPDIR"
+    ]
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "argv": [
+      "exec",
+      "--experimental-json",
+      "--sandbox",
+      "danger-full-access",
+      "--config",
+      "web_search=\"disabled\""
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "PATH": "C:\\WINDOWS\\system32;C:\\WINDOWS"
+    },
+    "envNamesNotInEnvOption": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "stdin": {
+      "text": "only text",
+      "bytes": 9,
+      "chunks": [
+        {
+          "at_ms": 0,
+          "bytes": 9
+        }
+      ],
+      "eof_at_ms": 55
+    }
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000bb\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":0,\"output_tokens\":2,\"reasoning_output_tokens\":0}}\n",
+    "stderr": "",
+    "exitCode": 0,
+    "sleepMsBeforeExit": 0
+  },
+  "sdkYielded": [
+    {
+      "type": "thread.started",
+      "thread_id": "01a1c000-0000-7000-8000-0000000000bb"
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_0",
+        "type": "agent_message",
+        "text": "ok"
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 10,
+        "cached_input_tokens": 0,
+        "output_tokens": 2,
+        "reasoning_output_tokens": 0,
+        "cache_write_input_tokens": 0
+      }
+    }
+  ],
+  "sdkThrew": null
+}

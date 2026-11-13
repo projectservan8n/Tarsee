@@ -1,0 +1,560 @@
+{
+  "name": "sdk-abort-mid-stream-with-mcp",
+  "providerId": "deepseek",
+  "note": "Every line that crossed the real claude.exe's stdin (to-program) and stdout (from-program) while Tarsee's engine ran one turn through the Agent SDK 0.3.319. t is milliseconds from the start of the turn.",
+  "command": "<TARSEE_ROOT>\\node_modules\\@anthropic-ai\\claude-agent-sdk-win32-x64\\claude.exe",
+  "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=deepseek-flash[1m]",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=project",
+    "--strict-mcp-config",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+  ],
+  "cwd": "<WORKSPACE>",
+  "abort_at_ms": 824,
+  "process_calls": [
+    {
+      "t": 824,
+      "event": "stdin.end()"
+    },
+    {
+      "t": 7832,
+      "event": "kill()",
+      "signal": "SIGKILL"
+    },
+    {
+      "t": 7833,
+      "event": "kill()",
+      "signal": "(default SIGTERM)"
+    },
+    {
+      "t": 7833,
+      "event": "spawn signal aborted"
+    },
+    {
+      "t": 7833,
+      "event": "kill()",
+      "signal": "SIGKILL"
+    },
+    {
+      "t": 7868,
+      "event": "exit",
+      "code": null,
+      "signal": "SIGKILL"
+    }
+  ],
+  "stderr": "[claude-code:unrecognized_model] {\"model\":\"deepseek-flash[1m]\",\"query_source\":\"sdk\"}\n",
+  "wire": [
+    {
+      "t": 25,
+      "dir": "to-program",
+      "json": {
+        "request_id": "2s4dgeen6k7",
+        "type": "control_request",
+        "request": {
+          "subtype": "initialize",
+          "sdkMcpServers": [
+            "tarsee"
+          ],
+          "sdkMcpServerManifests": {
+            "tarsee": {
+              "initializeResult": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {
+                  "tools": {
+                    "listChanged": true
+                  }
+                },
+                "serverInfo": {
+                  "name": "tarsee",
+                  "version": "1.0.0"
+                }
+              },
+              "toolsListResult": {
+                "tools": "<27 tools, each {name, description, inputSchema}; the whole list is in sdk/08-plan-with-mcp-tool-call.json>"
+              }
+            }
+          },
+          "systemPrompt": [
+            "You ARE Tarsee — a headless AI agent running 24/7 on a server.\n\n## MCP Tools (call as mcp__tarsee__tarsee_<name>)\n- **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/Slack/web\n- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp/Slack or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files\n- **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs\n- **remember**(content) — append to MEMORY.md\n- **daily_log**(content) — append to today's log\n- **read_file**(filename) / **write_file**(filename, content) — workspace files\n- **search_memories**(query) — keyword search through memory files\n- **search_memories_deep**(query) — dumps ALL memories for semantic reasoning (use when keyword search finds nothing)\n- **create_canvas**(title, html, css?, js?) — create live interactive HTML/CSS/JS canvas (renders as iframe in chat)\n- **web_fetch**(url) / **web_search**(query) — web access\n- **get_key**(name) / **set_key**(name, value) — encrypted vault\n- **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head\n- **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: UTC\n- **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving\n- **discord_admin**(action, ...) — list, make and edit Discord channels and make webhooks with Tarsee's own bot (never the bot token from Bash); changes need approved_by, a webhook URL goes to the vault, nothing deletes\n- **railway**(action, project?, environment?, service?, ...) — list Railway projects and variable names, set a variable (secrets via from_key, a vault key name) or redeploy, with the vault's RAILWAY_API_TOKEN; writes need approved_by. Use it instead of Railway calls from Bash\n\n## Memory\nUse remember for durable facts. Use daily_log for session notes. Only append, never overwrite.\nBefore saying \"I don't know\" or \"I can't remember\":\n1. Try search_memories first (fast, keyword-based)\n2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)\n\n## CLI Tools Installed\n- **railway** — Railway CLI for logs and deploys (to set a variable or redeploy, use the railway tool above: never a secret in a command)\n- **gog** — Google Workspace (Gmail, Calendar, Drive, Contacts, Sheets)\n- **himalaya** — Zoho/IMAP email\n- **gh** — GitHub CLI\n- **claude** — Claude Code CLI\n- **whisper-cli** — local speech-to-text\n- Use Bash to run any of these directly.\n\n## Skill Discovery\nYou have skills installed in the skills/ directory. Before saying \"I can't do that\":\n1. Check if a skill exists: list files in <WORKSPACE>/skills/ or read a skill's SKILL.md\n2. If a matching skill exists, read its SKILL.md and follow the instructions\n3. If no skill exists, ask the user if they want you to create one\n\n## Workspace: <WORKSPACE>\n\nYou are a test."
+          ],
+          "systemPromptSnapshot": false
+        }
+      }
+    },
+    {
+      "t": 25,
+      "dir": "to-program",
+      "json": {
+        "type": "user",
+        "session_id": "",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "what time is it?"
+            }
+          ]
+        },
+        "parent_tool_use_id": null
+      }
+    },
+    {
+      "t": 607,
+      "dir": "from-program",
+      "json": {
+        "type": "control_response",
+        "response": {
+          "subtype": "success",
+          "request_id": "2s4dgeen6k7",
+          "response": {
+            "commands": "<44 commands; cut from this fixture>",
+            "agents": "<5 agents; cut from this fixture>",
+            "output_style": "default",
+            "available_output_styles": [
+              "default",
+              "Proactive",
+              "Concise",
+              "Explanatory",
+              "Learning"
+            ],
+            "user_output_styles_dir": "<STATE_DIR>\\.claude-home-deepseek\\output-styles",
+            "models": "<6 models; cut from this fixture>",
+            "account": {
+              "tokenSource": "ANTHROPIC_AUTH_TOKEN",
+              "apiProvider": "firstParty"
+            },
+            "pid": 58332,
+            "claude_code_version": "2.1.319",
+            "current_permission_mode": "bypassPermissions",
+            "hook_on_failure_supported": true,
+            "sdk_mcp_manifests_parked": {
+              "tarsee": "parked"
+            },
+            "feedback_mode": {
+              "kind": "disabled"
+            },
+            "analytics_disabled": true,
+            "remote_control_auto_enable": false,
+            "remote_control_auto_connect_default": false,
+            "remote_control_available": false,
+            "remote_control_auto_on_by_default": false,
+            "ide_rc_auto_enable_gate": false,
+            "fast_mode_state": "off",
+            "fast_mode_disabled_reason": "sdk_opt_in_required",
+            "session_state": "idle",
+            "capabilities": [
+              "ui_surface_v1",
+              "mcp_call_result_not_for_model_v1",
+              "mcp_call_check_permissions_v1"
+            ]
+          },
+          "pending_permission_requests": [],
+          "pending_user_dialog_requests": []
+        }
+      }
+    },
+    {
+      "t": 629,
+      "dir": "from-program",
+      "json": {
+        "type": "system",
+        "subtype": "session_state_changed",
+        "state": "running",
+        "sdk_host_only": true,
+        "uuid": "08420957-8bac-461e-899b-c1c7ba15a34f",
+        "session_id": "b88d0ef0-9307-4516-ad97-eb8c29ed0005"
+      }
+    },
+    {
+      "t": 758,
+      "dir": "from-program",
+      "json": {
+        "type": "system",
+        "subtype": "init",
+        "cwd": "<WORKSPACE>",
+        "session_id": "b88d0ef0-9307-4516-ad97-eb8c29ed0005",
+        "tools": [
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "Write",
+          "mcp__tarsee__tarsee_browser",
+          "mcp__tarsee__tarsee_calculator",
+          "mcp__tarsee__tarsee_configure_email_channel",
+          "mcp__tarsee__tarsee_create_canvas",
+          "mcp__tarsee__tarsee_create_diagram",
+          "mcp__tarsee__tarsee_daily_log",
+          "mcp__tarsee__tarsee_datetime",
+          "mcp__tarsee__tarsee_delete_key",
+          "mcp__tarsee__tarsee_discord_admin",
+          "mcp__tarsee__tarsee_get_key",
+          "mcp__tarsee__tarsee_list_files",
+          "mcp__tarsee__tarsee_list_keys",
+          "mcp__tarsee__tarsee_pdf_read",
+          "mcp__tarsee__tarsee_push_notification",
+          "mcp__tarsee__tarsee_railway",
+          "mcp__tarsee__tarsee_read_file",
+          "mcp__tarsee__tarsee_remember",
+          "mcp__tarsee__tarsee_schedule_task",
+          "mcp__tarsee__tarsee_search_memories",
+          "mcp__tarsee__tarsee_search_memories_deep",
+          "mcp__tarsee__tarsee_send_email_thread",
+          "mcp__tarsee__tarsee_send_file",
+          "mcp__tarsee__tarsee_send_message",
+          "mcp__tarsee__tarsee_set_key",
+          "mcp__tarsee__tarsee_web_fetch",
+          "mcp__tarsee__tarsee_web_search",
+          "mcp__tarsee__tarsee_write_file"
+        ],
+        "mcp_servers": [
+          {
+            "name": "tarsee",
+            "status": "connected",
+            "source": "sdk"
+          }
+        ],
+        "model": "deepseek-flash[1m]",
+        "permissionMode": "bypassPermissions",
+        "slash_commands": "<44 slash commands; cut from this fixture>",
+        "terminal_slash_commands": "<4 terminal slash commands; cut from this fixture>",
+        "apiKeySource": "none",
+        "claude_code_version": "2.1.319",
+        "output_style": "default",
+        "agents": [
+          "claude",
+          "Explore",
+          "general-purpose",
+          "Plan",
+          "statusline-setup"
+        ],
+        "skills": "<16 skills; cut from this fixture>",
+        "plugins": [
+          {
+            "name": "cc-plugin-agents-md",
+            "path": "builtin",
+            "source": "cc-plugin-agents-md@builtin"
+          },
+          {
+            "name": "cc-plugin-privacy",
+            "path": "builtin",
+            "source": "cc-plugin-privacy@builtin"
+          },
+          {
+            "name": "cc-plugin-plugin-authoring",
+            "path": "builtin",
+            "source": "cc-plugin-plugin-authoring@builtin"
+          }
+        ],
+        "capabilities": [
+          "interrupt_receipt_v1",
+          "interrupt_cancel_queued_v1",
+          "interrupt_send_now_v1",
+          "interrupt_requeue_taken_v1",
+          "msg_lifecycle_v1",
+          "request_marker_lists_v1",
+          "ask_user_question_unanswered_v1",
+          "lifecycle_wakeup_source_v1",
+          "sdk_mcp_tools_list_changed",
+          "sdk_mcp_manifests",
+          "mcp_read_resource_v1",
+          "mcp_tool_ui_meta_v1",
+          "ui_surface_v1",
+          "mcp_call_result_not_for_model_v1",
+          "mcp_call_check_permissions_v1"
+        ],
+        "analytics_disabled": true,
+        "product_feedback_disabled": true,
+        "uuid": "4b813dda-c741-4bfb-83bf-32eb36d964c1",
+        "memory_paths": {
+          "auto": "<STATE_DIR>\\.claude-home-deepseek\\projects\\<WORKSPACE_AS_FOLDER_NAME>\\memory\\"
+        },
+        "original_cwd": "<WORKSPACE>",
+        "additional_directories": [
+          "<TARSEE_ROOT>\\src\\skills"
+        ],
+        "messaging_socket_path": "\\\\.\\pipe\\LOCAL\\cc-msg-495da7500f85097a49ca7fe4ce6a8796",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "per_turn_effort_active": false,
+        "ultrathink_available": false,
+        "ultrathink_typed_raises": false,
+        "view_mode": "default",
+        "powershell_path": "<POWERSHELL_EXE>"
+      }
+    },
+    {
+      "t": 765,
+      "dir": "from-program",
+      "json": {
+        "type": "system",
+        "subtype": "status",
+        "status": "requesting",
+        "session_id": "b88d0ef0-9307-4516-ad97-eb8c29ed0005",
+        "uuid": "0ffb9600-0997-46f4-b46f-6d673012dcb8"
+      }
+    },
+    {
+      "t": 823,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fake_5",
+            "type": "message",
+            "role": "assistant",
+            "model": "deepseek-flash",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 12,
+              "output_tokens": 1,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0
+            }
+          }
+        },
+        "session_id": "b88d0ef0-9307-4516-ad97-eb8c29ed0005",
+        "parent_tool_use_id": null,
+        "uuid": "50ea9605-0eb1-4f15-8061-b877dff81588",
+        "ttft_ms": 23,
+        "api_message_id": "msg_fake_5"
+      }
+    },
+    {
+      "t": 823,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        "session_id": "b88d0ef0-9307-4516-ad97-eb8c29ed0005",
+        "parent_tool_use_id": null,
+        "uuid": "20d7bb4b-4406-4fd6-86df-83a7ddc0382b",
+        "api_message_id": "msg_fake_5"
+      }
+    },
+    {
+      "t": 824,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "This answer "
+          }
+        },
+        "session_id": "b88d0ef0-9307-4516-ad97-eb8c29ed0005",
+        "parent_tool_use_id": null,
+        "uuid": "94de129e-8a5b-4683-93cc-299aac63f9ab",
+        "api_message_id": "msg_fake_5"
+      }
+    },
+    {
+      "t": 824,
+      "dir": "to-program",
+      "event": "stdin closed"
+    },
+    {
+      "t": 824,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "will never "
+          }
+        },
+        "session_id": "b88d0ef0-9307-4516-ad97-eb8c29ed0005",
+        "parent_tool_use_id": null,
+        "uuid": "3a3018bf-47fa-4f28-9515-35507ed64c40",
+        "api_message_id": "msg_fake_5"
+      }
+    },
+    {
+      "t": 824,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "finish because"
+          }
+        },
+        "session_id": "b88d0ef0-9307-4516-ad97-eb8c29ed0005",
+        "parent_tool_use_id": null,
+        "uuid": "cc1b6100-cba3-421c-9133-94ed56311cdb",
+        "api_message_id": "msg_fake_5"
+      }
+    },
+    {
+      "t": 7868,
+      "dir": "from-program",
+      "event": "exit code null signal SIGKILL"
+    }
+  ],
+  "messages_the_sdk_handed_to_its_caller": [
+    {
+      "t": 758,
+      "type": "system",
+      "subtype": "init"
+    },
+    {
+      "t": 765,
+      "type": "system",
+      "subtype": "status"
+    },
+    {
+      "t": 823,
+      "type": "stream_event",
+      "event": "message_start"
+    },
+    {
+      "t": 823,
+      "type": "stream_event",
+      "event": "content_block_start"
+    },
+    {
+      "t": 824,
+      "type": "stream_event",
+      "event": "content_block_delta"
+    },
+    {
+      "t": 824,
+      "type": "stream_event",
+      "event": "content_block_delta"
+    }
+  ],
+  "tarsee_events": [
+    {
+      "t": 823,
+      "type": "step",
+      "kind": "usage",
+      "calls": 1,
+      "input": 12,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "output": 1,
+      "total": 13,
+      "outTps": null,
+      "nowTps": null
+    },
+    {
+      "t": 824,
+      "type": "text",
+      "content": "This answer "
+    },
+    {
+      "t": 2829,
+      "type": "done",
+      "stopReason": "aborted"
+    }
+  ],
+  "tarsee_logs": [
+    "log: [claude-code] Starting deepseek turn in <WORKSPACE>, model: deepseek-flash[1m], session: new, media: 0",
+    "log: [claude-code] deepseek: apiKeySource=none",
+    "log: [claude-code] Turn stopped."
+  ],
+  "api_requests": [
+    {
+      "method": "POST",
+      "path": "/v1/messages",
+      "model": "deepseek-flash",
+      "tools": [
+        "Bash",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Read",
+        "Write",
+        "mcp__tarsee__tarsee_browser",
+        "mcp__tarsee__tarsee_calculator",
+        "mcp__tarsee__tarsee_configure_email_channel",
+        "mcp__tarsee__tarsee_create_canvas",
+        "mcp__tarsee__tarsee_create_diagram",
+        "mcp__tarsee__tarsee_daily_log",
+        "mcp__tarsee__tarsee_datetime",
+        "mcp__tarsee__tarsee_delete_key",
+        "mcp__tarsee__tarsee_discord_admin",
+        "mcp__tarsee__tarsee_get_key",
+        "mcp__tarsee__tarsee_list_files",
+        "mcp__tarsee__tarsee_list_keys",
+        "mcp__tarsee__tarsee_pdf_read",
+        "mcp__tarsee__tarsee_push_notification",
+        "mcp__tarsee__tarsee_railway",
+        "mcp__tarsee__tarsee_read_file",
+        "mcp__tarsee__tarsee_remember",
+        "mcp__tarsee__tarsee_schedule_task",
+        "mcp__tarsee__tarsee_search_memories",
+        "mcp__tarsee__tarsee_search_memories_deep",
+        "mcp__tarsee__tarsee_send_email_thread",
+        "mcp__tarsee__tarsee_send_file",
+        "mcp__tarsee__tarsee_send_message",
+        "mcp__tarsee__tarsee_set_key",
+        "mcp__tarsee__tarsee_web_fetch",
+        "mcp__tarsee__tarsee_web_search",
+        "mcp__tarsee__tarsee_write_file"
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        },
+        {
+          "type": "text",
+          "text": "You ARE Tarsee — a headless AI agent running 24/7 on a server.\n\n## MCP Tools (call as mcp__tarsee__tarsee_<name>)\n- **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/Slack/web\n- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp/Slack or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files\n- **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs\n- **remember**(content) — append to MEMORY.md\n- **daily_log**(content) — append to today's log\n- **read_file**(filename) / **write_file**(filename, content) — workspace files\n- **search_memories**(query) — keyword search through memory files\n- **search_memories_deep**(query) — dumps ALL memories for semantic reasoning (use when keyword search finds nothing)\n- **create_canvas**(title, html, css?, js?) — create live interactive HTML/CSS/JS canvas (renders as iframe in chat)\n- **web_fetch**(url) / **web_search**(query) — web access\n- **get_key**(name) / **set_key**(name, value) — encrypted vault\n- **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head\n- **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: UTC\n- **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving\n- **discord_admin**(action, ...) — list, make and edit Discord channels and make webhooks with Tarsee's own bot (never the bot token from Bash); changes need approved_by, a webhook URL goes to the vault, nothing deletes\n- **railway**(action, project?, environment?, service?, ...) — list Railway projects and variable names, set a variable (secrets via from_key, a vault key name) or redeploy, with the vault's RAILWAY_API_TOKEN; writes need approved_by. Use it instead of Railway calls from Bash\n\n## Memory\nUse remember for durable facts. Use daily_log for session notes. Only append, never overwrite.\nBefore saying \"I don't know\" or \"I can't remember\":\n1. Try search_memories first (fast, keyword-based)\n2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)\n\n## CLI Tools Installed\n- **railway** — Railway CLI for logs and deploys (to set a variable or redeploy, use the railway tool above: never a secret in a command)\n- **gog** — Google Workspace (Gmail, Calendar, Drive, Contacts, Sheets)\n- **himalaya** — Zoho/IMAP email\n- **gh** — GitHub CLI\n- **claude** — Claude Code CLI\n- **whisper-cli** — local speech-to-text\n- Use Bash to run any of these directly.\n\n## Skill Discovery\nYou have skills installed in the skills/ directory. Before saying \"I can't do that\":\n1. Check if a skill exists: list files in <WORKSPACE>/skills/ or read a skill's SKILL.md\n2. If a matching skill exists, read its SKILL.md and follow the instructions\n3. If no skill exists, ask the user if they want you to create one\n\n## Workspace: <WORKSPACE>\n\nYou are a test.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "last_user": [
+        {
+          "type": "text",
+          "text": "<system-reminder>\nAttribution for git commits and pull requests you create from here on (this replaces Claude Code's own earlier attribution guidance, such as a previous copy of this reminder; the user's own instructions about these lines, such as a CLAUDE.md or memory rule, take precedence over this reminder, but do not add attribution lines this reminder leaves out):\n- End git commit messages with:\nCo-Authored-By: Claude Code <noreply@anthropic.com>\n- End pull request descriptions with:\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n</system-reminder>\n"
+        },
+        {
+          "type": "text",
+          "text": "what time is it?",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ]
+    }
+  ]
+}

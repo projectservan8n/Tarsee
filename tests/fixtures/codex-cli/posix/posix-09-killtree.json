@@ -1,0 +1,49 @@
+{
+  "name": "posix-09-killtree",
+  "what": "Tarsee's killTree() (src/ai/codex-cli.js) on a program started by spawnCodex() (its own process group): SIGTERM to the whole group, then SIGKILL to the group 2 s later if it is still running. The program's own child goes with it either way.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "linux (WSL)",
+    "node": "v22.22.2"
+  },
+  "theProgramObeysSigterm": {
+    "processGroup": {
+      "isItsOwnGroupLeader": true,
+      "sameGroupAsTheCaller": false
+    },
+    "killTreeCalledAt_ms": 1511,
+    "killTreeResolvedAt_ms": 1519,
+    "exit": {
+      "code": 143,
+      "signal": null,
+      "at_ms": 1518
+    },
+    "signalsTheStubReceived": [
+      {
+        "stubClock_ms": 1471,
+        "signal": "SIGTERM"
+      }
+    ],
+    "theStubsOwnChildStillRunning": false
+  },
+  "theProgramIgnoresSigterm": {
+    "processGroup": {
+      "isItsOwnGroupLeader": true,
+      "sameGroupAsTheCaller": false
+    },
+    "killTreeCalledAt_ms": 1508,
+    "killTreeResolvedAt_ms": 3514,
+    "exit": {
+      "code": null,
+      "signal": "SIGKILL",
+      "at_ms": 3514
+    },
+    "signalsTheStubReceived": [
+      {
+        "stubClock_ms": 1468,
+        "signal": "SIGTERM"
+      }
+    ],
+    "theStubsOwnChildStillRunning": false
+  }
+}

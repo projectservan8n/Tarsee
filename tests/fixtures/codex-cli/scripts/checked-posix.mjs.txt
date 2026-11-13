@@ -1,0 +1,85 @@
+// The Linux side of the independent check (run under WSL): what the SDK does to the program on abort, on a bad
+// line and when the caller stops reading; the environment; an over-long argument; a prompt nobody reads.
+// Usage (in WSL): node posix.mjs
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { execFileSync } from "node:child_process";
+import childProcess from "node:child_process";
+
+const SCRATCH = process.env.CAPTURE_SCRATCH; // the scratch folder as WSL sees it
+const PROJECT = process.env.CAPTURE_PROJECT; // the Node checkout as WSL sees it
+const RUNS = "/tmp/verify-codex-runs"; // signals and 20 ms heartbeats want a Linux filesystem
+const OUT = path.join(SCRATCH, "out");
+const STUB = path.join(SCRATCH, "stub", "exec");
+const NODE = process.execPath;
+process.env.TARSEE_STATE_DIR = path.join(RUNS, "state");
+const { Codex } = await import(pathToFileURL(path.join(PROJECT, "node_modules/@openai/codex-sdk/dist/index.js")).href);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const ev = (o) => JSON.stringify(o) + "\n";
+const TID = "01a1c000-0000-7000-8000-0000000000cc";
+const BASIC = ev({ type: "thread.started", thread_id: TID }) + ev({ type: "turn.started" }) + ev({ type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } });
+const spawned = [];
+const origSpawn = childProcess.ChildProcess.prototype.spawn;
+childProcess.ChildProcess.prototype.spawn = function (options) { const r = origSpawn.call(this, options); spawned.push({ pid: this.pid, detached: options.detached ?? null }); return r; };
+const uncaught = [];
+process.on("uncaughtException", (e) => { uncaught.push({ name: e?.name, message: e?.message, code: e?.code, syscall: e?.syscall }); });
+const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; } };
+const errOf = (e) => (e ? { name: e.name, message: e.message.length > 300 ? `${e.message.slice(0, 120)}… (${e.message.length} chars)` : e.message, code: e.code ?? null } : null);
+const myStat = () => { const st = fs.readFileSync("/proc/self/stat", "utf8"); const f = st.slice(st.lastIndexOf(")") + 2).split(" "); return { pid: process.pid, pgrp: Number(f[2]), session: Number(f[3]) }; };
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+async function run(name, { plan, codex = {}, thread = {}, input = "hello", abort = null, stopReadingAfter = null, killFromOutside = null, settleMs = 600 } = {}) {
+  const dir = path.join(RUNS, name);
+  fs.rmSync(dir, { recursive: true, force: true }); fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(STUB, path.join(dir, "exec")); fs.writeFileSync(path.join(dir, "plan.json"), JSON.stringify(plan ?? { stdout: BASIC }));
+  process.chdir(dir);
+  const before = spawned.length; const u0 = uncaught.length;
+  const ac = abort ? new AbortController() : null; if (abort === "pre") ac.abort();
+  const yielded = []; let threw = null; const t0 = Date.now(); const timing = {};
+  try {
+    const { events } = await new Codex({ ...codex, codexPathOverride: NODE }).startThread(thread).runStreamed(input, ac ? { signal: ac.signal } : {});
+    for await (const e of events) {
+      yielded.push(e.type);
+      if (abort && abort !== "pre" && yielded.length === abort.afterEvents) setTimeout(() => { timing.abortAtMs = Date.now() - t0; ac.abort(); }, abort.delayMs ?? 0);
+      if (killFromOutside && yielded.length === killFromOutside.afterEvents) setTimeout(() => { const rec = readJson(path.join(dir, "record.json")); timing.killedAtMs = Date.now() - t0; process.kill(rec.pid, killFromOutside.signal); }, 200);
+      if (stopReadingAfter && yielded.length === stopReadingAfter) { timing.stoppedReadingAtMs = Date.now() - t0; break; }
+    }
+  } catch (e) { threw = e; }
+  timing.endedAtMs = Date.now() - t0;
+  await sleep(settleMs);
+  process.chdir("/tmp");
+  const rec = readJson(path.join(dir, "record.json"));
+  const g = rec?.grandchildPid ? { pid: rec.grandchildPid, stillRunningAfterwards: alive(rec.grandchildPid) } : null;
+  if (g?.stillRunningAfterwards) { try { process.kill(rec.grandchildPid, "SIGKILL"); } catch { /* gone */ } }
+  return { name, args: rec?.args ?? null, envNames: rec ? Object.keys(rec.env).sort() : null, env: rec?.env, stdinBytes: rec?.stdin?.bytes ?? null, signalsTheStubReceived: rec?.signals ?? null, stubProcStat: rec?.procStat ?? null, callerProcStat: myStat(), stubStillRunning: rec ? alive(rec.pid) : null, stubExitedAtMs: rec?.exitedAtMs ?? null, grandchild: g, yielded, threw: errOf(threw), timing, spawnedByNode: spawned.slice(before), recordExists: !!rec, uncaught: uncaught.slice(u0) };
+}
+
+const out = {};
+const hang = (extra = {}) => ({ stdout: ev({ type: "thread.started", thread_id: TID }) + ev({ type: "turn.started" }), sleepMsBeforeExit: 15000, ...extra });
+const E = { env: { PATH: process.env.PATH } };
+
+{ const r = await run("p1-env-option", { codex: { env: { ONLY: "this", PATH: process.env.PATH } } }); out.envOption = { childEnvNames: r.envNames, threw: r.threw }; }
+{ const r = await run("p2-no-env-option", {}); const mine = Object.keys(process.env).sort(); out.noEnvOption = { childLacks: mine.filter((n) => !r.envNames.includes(n)), childHasExtra: r.envNames.filter((n) => !mine.includes(n)), processGroup: { stub: r.stubProcStat, caller: r.callerProcStat }, detached: r.spawnedByNode[0]?.detached }; }
+{ const r = await run("p3-abort", { plan: hang({ spawnChild: true }), codex: E, abort: { afterEvents: 2, delayMs: 300 } }); out.abort = { signalsTheStubReceived: r.signalsTheStubReceived, yielded: r.yielded, threw: r.threw, timing: r.timing, stubStillRunning: r.stubStillRunning, theStubsOwnChild: r.grandchild, sameProcessGroupAsCaller: r.stubProcStat?.pgrp === r.callerProcStat.pgrp }; }
+{ const r = await run("p4-abort-ignored", { plan: { stdout: ev({ type: "thread.started", thread_id: TID }) + ev({ type: "turn.started" }), sleepMsBeforeExit: 4000, ignoreSignals: true }, codex: E, abort: { afterEvents: 2, delayMs: 300 }, settleMs: 300 }); out.abortIgnored = { signalsTheStubReceived: r.signalsTheStubReceived, threw: r.threw, timing: r.timing, stubExitedAtMs: r.stubExitedAtMs }; }
+{ const r = await run("p5-pre-aborted", { plan: hang(), codex: E, abort: "pre", settleMs: 1200 }); out.signalAlreadyAborted = { aProcessWasStarted: r.spawnedByNode.length > 0 && r.spawnedByNode[0].pid > 0, theStubGotAsFarAsWritingItsRecord: r.recordExists, signalsTheStubReceived: r.signalsTheStubReceived, threw: r.threw, timing: r.timing, stubStillRunning: r.stubStillRunning }; }
+{ const r = await run("p6-caller-stops-reading", { plan: hang(), codex: E, stopReadingAfter: 1 }); out.callerStopsReading = { signalsTheStubReceived: r.signalsTheStubReceived, threw: r.threw, timing: r.timing, stubStillRunning: r.stubStillRunning }; }
+{ const r = await run("p7-killed-from-outside", { plan: hang(), codex: E, killFromOutside: { afterEvents: 2, signal: "SIGKILL" } }); out.killedFromOutside_SIGKILL = { yielded: r.yielded, threw: r.threw }; }
+{ const r = await run("p7b-killed-from-outside-term", { plan: hang({ exitCodeOnSignal: 143 }), codex: E, killFromOutside: { afterEvents: 2, signal: "SIGTERM" } }); out.killedFromOutside_SIGTERM_stubExits143 = { yielded: r.yielded, threw: r.threw, signalsTheStubReceived: r.signalsTheStubReceived }; }
+{ const r = await run("p8-bad-line", { plan: { stdout: ev({ type: "a" }) + "not json\n" + ev({ type: "b" }), sleepMsBeforeExit: 15000 }, codex: E }); out.badLine = { yielded: r.yielded, threw: r.threw, signalsTheStubReceived: r.signalsTheStubReceived, stubStillRunning: r.stubStillRunning }; }
+{ const r = await run("p9-exits-before-reading", { plan: { exitWithoutReadingStdin: true, stderr: "error: unexpected argument\n", exitCode: 2 }, codex: E, input: "p".repeat(2 * 1024 * 1024) }); await sleep(300); out.programExitsBeforeReadingA2MBPrompt = { threw: r.threw, uncaughtInTheCallersProcess: uncaught.slice(-2) }; }
+{
+  // an argument past Linux's per-argument limit (MAX_ARG_STRLEN, 131072 bytes with its NUL)
+  const { buildCodexOptions, instructionsLimit } = await import(pathToFileURL(path.join(PROJECT, "src/ai/providers/codex-options.js")).href);
+  const tryIt = async (k, text) => {
+    const o = buildCodexOptions({ providerId: "openai", model: "m" }, { env: { PATH: process.env.PATH }, key: "sk-" + "k", stateDir: path.join(RUNS, "state"), workspace: "/tmp", mcp: { url: "http://127.0.0.1:1/mcp", token: "t" }, developerInstructions: text, platform: "linux" });
+    const r = await run(`p10-${k}`, { codex: { env: o.env, config: o.config, apiKey: o.apiKey }, thread: o.threadOptions });
+    return { capBytes: instructionsLimit("linux"), instructionsBytesAfterCap: Buffer.byteLength(o.config.developer_instructions), argumentBytes: Buffer.byteLength(`developer_instructions=${JSON.stringify(o.config.developer_instructions)}`), started: r.spawnedByNode.length > 0 && r.recordExists, threw: r.threw, argArrivedBytes: r.args ? Buffer.byteLength(r.args.find((a) => a.startsWith("developer_instructions="))) : null };
+  };
+  out.instructionsAtTheLinuxCap = { plainAscii: await tryIt("plain", "A".repeat(200000)), everyThirdCharacterAQuote: await tryIt("third-quotes", "ab\"".repeat(70000)), allQuotes: await tryIt("quotes", "\"".repeat(200000)), manyNewlines: await tryIt("newlines", "line\n".repeat(40000)) };
+}
+out.platform = { node: process.version, kernel: execFileSync("uname", ["-sr"]).toString().trim() };
+fs.writeFileSync(path.join(OUT, "posix-checks.json"), JSON.stringify(out, null, 1));
+console.log(JSON.stringify(out, null, 1));
+process.exit(0);

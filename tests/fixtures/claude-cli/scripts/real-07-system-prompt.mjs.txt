@@ -1,0 +1,49 @@
+// Real CLI, driven directly: how the system prompt of the initialize request reaches the Messages API.
+//   1  the three-part form with the dynamic boundary marker
+//   2  systemPromptSnapshot: without it, a resumed session keeps the first turn's prompt; with false it is fresh
+//   3  no initialize request at all: does the program still take a user message?
+import { drive, gatewayEnv, baseArgs, initRequest, userText, startFakeAnthropic, SCRATCH } from "./real-drive.mjs";
+import fs from "node:fs";
+
+fs.mkdirSync(`${SCRATCH}/real`, { recursive: true });
+const SS = { CLAUDE_CODE_SDK_READS_SESSION_STATE: "1" };
+const sys = (fake) => JSON.stringify(fake.messages().at(-1)?.body?.system);
+const fake = await startFakeAnthropic({ script: () => ({ text: "ok" }) });
+const summary = [];
+const sysOf = (fake) => fake.messages().at(-1)?.body?.system;
+try {
+  // 1
+  let r = await drive({ name: "07-system-prompt-boundary", args: baseArgs(), env: gatewayEnv(`${SCRATCH}/homes/sys1`, fake.url, SS), cwd: `${SCRATCH}/ws/sys1`,
+    stdin: [initRequest({ systemPrompt: ["STABLE PART", "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__", "VOLATILE PART"], systemPromptSnapshot: false }), userText("hi")] });
+  console.log("1 boundary form: exit", r.exitCode, "system sent:", sys(fake));
+  summary.push({ case: "initialize.systemPrompt = [stable, the boundary marker, volatile], systemPromptSnapshot false", initialize_systemPrompt: ["STABLE PART", "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__", "VOLATILE PART"], exit_code: r.exitCode, system_sent_to_the_api: sysOf(fake) });
+
+  // 2a: recorded on the first turn (no systemPromptSnapshot), a different prompt on resume
+  for (const [label, snap] of [["no systemPromptSnapshot field", undefined], ["systemPromptSnapshot: false", false]]) {
+    const home = `${SCRATCH}/homes/sys2-${snap === false ? "off" : "default"}`;
+    const cwd = `${SCRATCH}/ws/sys2-${snap === false ? "off" : "default"}`;
+    fs.rmSync(home, { recursive: true, force: true });
+    const extra = snap === undefined ? {} : { systemPromptSnapshot: snap };
+    r = await drive({ args: baseArgs(), env: gatewayEnv(home, fake.url, SS), cwd, stdin: [initRequest({ systemPrompt: ["FIRST TURN PROMPT"], ...extra }), userText("hi")] });
+    const sid = r.stdout.map((o) => o.msg).find((m) => m?.type === "result")?.session_id;
+    const first = sys(fake);
+    const firstObj = sysOf(fake);
+    r = await drive({ args: baseArgs({ extra: [`--resume=${sid}`] }), env: gatewayEnv(home, fake.url, SS), cwd, stdin: [initRequest({ systemPrompt: ["SECOND TURN PROMPT"], ...extra }), userText("again")] });
+    console.log(`2 ${label}: first turn system: ${first}`);
+    console.log(`  resumed turn (exit ${r.exitCode}) system: ${sys(fake)}`);
+    summary.push({ case: `two turns of one session (the second with --resume), ${label}`, first_turn: { initialize_systemPrompt: ["FIRST TURN PROMPT"], system_sent_to_the_api: firstObj }, resumed_turn: { initialize_systemPrompt: ["SECOND TURN PROMPT"], exit_code: r.exitCode, system_sent_to_the_api: sysOf(fake) } });
+  }
+
+  // 3: no initialize request
+  fake.requests.length = 0;
+  r = await drive({ name: "07-no-initialize", args: baseArgs(), env: gatewayEnv(`${SCRATCH}/homes/sys3`, fake.url, SS), cwd: `${SCRATCH}/ws/sys3`, stdin: [userText("hi")] });
+  summary.push({ case: "no initialize request at all, only the user message", exit_code: r.exitCode, stdout_message_types: r.stdout.map((o) => (o.msg ? o.msg.type + (o.msg.subtype ? `/${o.msg.subtype}` : "") : "RAW")).filter((x) => !x.startsWith("stream_event")), system_sent_to_the_api_first_two_blocks: sysOf(fake)?.slice(0, 2), system_block_3_starts: String(sysOf(fake)?.[2]?.text || "").slice(0, 80) });
+  console.log("3 no initialize request: exit", r.exitCode, "messages:", r.stdout.map((o) => (o.msg ? o.msg.type + (o.msg.subtype ? `/${o.msg.subtype}` : "") : "RAW")).filter((x) => !x.startsWith("stream_event")).join(" "), "system sent:", sys(fake)?.slice(0, 300));
+
+  // 4: --system-prompt on the command line instead (no initialize)
+  fake.requests.length = 0;
+  r = await drive({ name: "07-system-prompt-flag", args: baseArgs({ extra: ["--system-prompt", "FLAG PROMPT", "--system-prompt-snapshot", "off"] }), env: gatewayEnv(`${SCRATCH}/homes/sys4`, fake.url, SS), cwd: `${SCRATCH}/ws/sys4`, stdin: [userText("hi")] });
+  summary.push({ case: "--system-prompt 'FLAG PROMPT' --system-prompt-snapshot off on the command line, no initialize request", exit_code: r.exitCode, stderr: r.stderr, system_sent_to_the_api: sysOf(fake) });
+  console.log("4 --system-prompt flag, no initialize: exit", r.exitCode, "stderr", JSON.stringify(r.stderr.slice(0, 200)), "system sent:", sys(fake)?.slice(0, 400));
+  fs.writeFileSync(`${SCRATCH}/real/07-system-prompt-summary.json`, JSON.stringify(summary, null, 2));
+} finally { await fake.close(); }

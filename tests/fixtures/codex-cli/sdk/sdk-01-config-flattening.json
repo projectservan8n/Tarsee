@@ -1,0 +1,235 @@
+{
+  "name": "sdk-01-config-flattening",
+  "what": "How `config` becomes --config arguments: every kind of value the SDK accepts. A table is flattened into dotted keys, one argument per leaf; anything inside an array is written as one TOML value (tables there become inline tables).",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "win32"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {
+        "FROM_ENV_OPTION": "the env option"
+      },
+      "config": {
+        "string_plain": "hello",
+        "string_quotes_backslash": "say \"hi\" to C:\\Users\\me",
+        "string_newline_tab": "line one\nline two\ttabbed",
+        "string_unicode": "café ☃ 😀",
+        "string_control": "bell\u0007 esc\u001b del",
+        "string_empty": "",
+        "integer": 42,
+        "negative": -7,
+        "float": 0.85,
+        "exponent_large": 1e+21,
+        "exponent_small": 1e-7,
+        "bool_true": true,
+        "bool_false": false,
+        "array_empty": [],
+        "array_strings": [
+          "a",
+          "b c",
+          "d\"e"
+        ],
+        "array_numbers": [
+          1,
+          2.5,
+          -3
+        ],
+        "array_mixed_nested": [
+          1,
+          "two",
+          [
+            3,
+            4
+          ],
+          true
+        ],
+        "array_of_tables": [
+          {
+            "name": "first",
+            "n": 1
+          },
+          {
+            "key with space": "v",
+            "nested": {
+              "deep": true
+            }
+          }
+        ],
+        "table_empty": {},
+        "table": {
+          "leaf": "v",
+          "inner": {
+            "leaf2": 2,
+            "list": [
+              "x"
+            ],
+            "empty": {}
+          }
+        },
+        "key with space": "top-level key is not quoted",
+        "dotted.key": "a dot in a key reads as a deeper path",
+        "table_awkward_keys": {
+          "X-Header-Name": "bare",
+          "has space": 1,
+          "has.dot": 2,
+          "quote\"d": 3
+        }
+      },
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "thread": {
+      "method": "startThread"
+    },
+    "runStreamed(input, turnOptions)": {
+      "input": "hello",
+      "inputLength": {
+        "characters": 5,
+        "utf8Bytes": 5
+      },
+      "turnOptions": {}
+    },
+    "callerProcessEnvNames": [
+      "COMSPEC",
+      "FROM_PROCESS_ENV",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "TMP",
+      "TMPDIR"
+    ]
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "argv": [
+      "exec",
+      "--experimental-json",
+      "--config",
+      "string_plain=\"hello\"",
+      "--config",
+      "string_quotes_backslash=\"say \\\"hi\\\" to C:\\\\Users\\\\me\"",
+      "--config",
+      "string_newline_tab=\"line one\\nline two\\ttabbed\"",
+      "--config",
+      "string_unicode=\"café ☃ 😀\"",
+      "--config",
+      "string_control=\"bell\\u0007 esc\\u001b del\"",
+      "--config",
+      "string_empty=\"\"",
+      "--config",
+      "integer=42",
+      "--config",
+      "negative=-7",
+      "--config",
+      "float=0.85",
+      "--config",
+      "exponent_large=1e+21",
+      "--config",
+      "exponent_small=1e-7",
+      "--config",
+      "bool_true=true",
+      "--config",
+      "bool_false=false",
+      "--config",
+      "array_empty=[]",
+      "--config",
+      "array_strings=[\"a\", \"b c\", \"d\\\"e\"]",
+      "--config",
+      "array_numbers=[1, 2.5, -3]",
+      "--config",
+      "array_mixed_nested=[1, \"two\", [3, 4], true]",
+      "--config",
+      "array_of_tables=[{name = \"first\", n = 1}, {\"key with space\" = \"v\", nested = {deep = true}}]",
+      "--config",
+      "table_empty={}",
+      "--config",
+      "table.leaf=\"v\"",
+      "--config",
+      "table.inner.leaf2=2",
+      "--config",
+      "table.inner.list=[\"x\"]",
+      "--config",
+      "table.inner.empty={}",
+      "--config",
+      "key with space=\"top-level key is not quoted\"",
+      "--config",
+      "dotted.key=\"a dot in a key reads as a deeper path\"",
+      "--config",
+      "table_awkward_keys.X-Header-Name=\"bare\"",
+      "--config",
+      "table_awkward_keys.has space=1",
+      "--config",
+      "table_awkward_keys.has.dot=2",
+      "--config",
+      "table_awkward_keys.quote\"d=3"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "FROM_ENV_OPTION",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "FROM_ENV_OPTION": "the env option",
+      "PATH": "C:\\WINDOWS\\system32;C:\\WINDOWS"
+    },
+    "envNamesNotInEnvOption": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "stdin": {
+      "text": "hello",
+      "sameAsTheInput": true,
+      "bytes": 5,
+      "chunks": [
+        {
+          "at_ms": 0,
+          "bytes": 5
+        }
+      ],
+      "eof_at_ms": 1
+    }
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000bb\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":0,\"output_tokens\":2,\"reasoning_output_tokens\":0}}\n",
+    "stderr": "",
+    "exitCode": 0,
+    "sleepMsBeforeExit": 0
+  },
+  "sdkYielded": [
+    {
+      "type": "thread.started",
+      "thread_id": "01a1c000-0000-7000-8000-0000000000bb"
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_0",
+        "type": "agent_message",
+        "text": "ok"
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 10,
+        "cached_input_tokens": 0,
+        "output_tokens": 2,
+        "reasoning_output_tokens": 0,
+        "cache_write_input_tokens": 0
+      }
+    }
+  ],
+  "sdkThrew": null
+}

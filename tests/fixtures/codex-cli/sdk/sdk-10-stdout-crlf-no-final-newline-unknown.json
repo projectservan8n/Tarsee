@@ -1,0 +1,114 @@
+{
+  "name": "sdk-10-stdout-crlf-no-final-newline-unknown",
+  "what": "CRLF line ends, a last line with no line end, an event type the SDK does not know and extra fields: all pass through as parsed. turn.completed without cache_write_input_tokens gets it as 0; one that has it keeps its value.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "win32"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {},
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "thread": {
+      "method": "startThread"
+    },
+    "runStreamed(input, turnOptions)": {
+      "input": "hello",
+      "inputLength": {
+        "characters": 5,
+        "utf8Bytes": 5
+      },
+      "turnOptions": {}
+    },
+    "callerProcessEnvNames": [
+      "COMSPEC",
+      "FROM_PROCESS_ENV",
+      "NUMBER_OF_PROCESSORS",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "TMP",
+      "TMPDIR"
+    ]
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "argv": [
+      "exec",
+      "--experimental-json"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "PATH": "C:\\WINDOWS\\system32;C:\\WINDOWS"
+    },
+    "envNamesNotInEnvOption": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP"
+    ],
+    "stdin": {
+      "text": "hello",
+      "sameAsTheInput": true,
+      "bytes": 5,
+      "chunks": [
+        {
+          "at_ms": 0,
+          "bytes": 5
+        }
+      ],
+      "eof_at_ms": 1
+    }
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000bb\",\"extra_field\":1}\r\n{\"type\":\"some.future.event\",\"payload\":{\"x\":1}}\r\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":5,\"cached_input_tokens\":1,\"output_tokens\":2,\"reasoning_output_tokens\":0}}\r\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":5,\"cached_input_tokens\":1,\"cache_write_input_tokens\":3,\"output_tokens\":2,\"reasoning_output_tokens\":0}}",
+    "stderr": "",
+    "exitCode": 0,
+    "sleepMsBeforeExit": 0
+  },
+  "sdkYielded": [
+    {
+      "type": "thread.started",
+      "thread_id": "01a1c000-0000-7000-8000-0000000000bb",
+      "extra_field": 1
+    },
+    {
+      "type": "some.future.event",
+      "payload": {
+        "x": 1
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 5,
+        "cached_input_tokens": 1,
+        "output_tokens": 2,
+        "reasoning_output_tokens": 0,
+        "cache_write_input_tokens": 0
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 5,
+        "cached_input_tokens": 1,
+        "cache_write_input_tokens": 3,
+        "output_tokens": 2,
+        "reasoning_output_tokens": 0
+      }
+    }
+  ],
+  "sdkThrew": null
+}

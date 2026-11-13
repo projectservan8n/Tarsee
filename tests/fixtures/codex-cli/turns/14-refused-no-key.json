@@ -1,0 +1,80 @@
+{
+  "name": "14-refused-no-key",
+  "what": "A turn that cannot start (no OpenAI key in Settings and no OPENAI_API_KEY in the server's environment): the program is never started. What the engine yields instead.",
+  "made_with": {
+    "engine": "src/ai/providers/codex.js run() -> providers/codex-options.js buildCodexOptions()",
+    "sdk": "@openai/codex-sdk 0.167.0 (the real one), codexPathOverride = the stub",
+    "platform": "win32"
+  },
+  "turn": {
+    "target": {
+      "provider": "openai",
+      "model": "gpt-5.5"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Please say hello."
+      }
+    ],
+    "systemParts": {
+      "stable": "You are Tarsee (capture run).",
+      "volatile": "Today is a capture day."
+    },
+    "sessionHandle": null,
+    "pictures": [],
+    "thinkingSummaries": false,
+    "settings": {},
+    "mcpGrant": {
+      "url": "http://127.0.0.1:45123/mcp",
+      "token": "<MCP_TOKEN>"
+    },
+    "serverEnvNames": [
+      "ANTHROPIC_API_KEY",
+      "CODEX_ACCESS_TOKEN",
+      "CODEX_API_KEY",
+      "CODEX_HOME",
+      "ComSpec",
+      "DEEPSEEK_API_KEY",
+      "ENCRYPTION_KEY",
+      "MY_APP_SETTING",
+      "NODE_ENV",
+      "OPENAI_BASE_URL",
+      "OPENROUTER_API_KEY",
+      "PATH",
+      "SETUP_PASSWORD",
+      "SystemDrive",
+      "SystemRoot",
+      "TARSEE_API_TOKEN",
+      "TARSEE_CHATGPT_ACCESS_TOKEN",
+      "TARSEE_LOCAL_AI_KEY",
+      "TARSEE_MCP_TOKEN",
+      "TARSEE_PROVIDER_KEY",
+      "TEMP",
+      "TMP"
+    ],
+    "vaultEnvNames": [
+      "SCRIPT_KEY"
+    ]
+  },
+  "sdk": null,
+  "child": null,
+  "stubStdout": null,
+  "tarseeEvents": [
+    {
+      "type": "text",
+      "content": "OpenAI API key needs its API key (Settings > AI, or the OPENAI_API_KEY variable)."
+    },
+    {
+      "type": "error",
+      "message": "OpenAI API key needs its API key (Settings > AI, or the OPENAI_API_KEY variable).",
+      "code": "needs-key",
+      "subtype": "needs-key",
+      "recoverable": false
+    },
+    {
+      "type": "done",
+      "stopReason": "error"
+    }
+  ]
+}

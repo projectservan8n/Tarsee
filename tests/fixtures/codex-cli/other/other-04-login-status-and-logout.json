@@ -1,0 +1,238 @@
+{
+  "name": "other-04-login-status-and-logout",
+  "what": "`codex login status` and `codex logout` (each after the three CODEX_BASE_ARGS): with no sign-in, with a made-up ChatGPT sign-in, with a made-up API key in auth.json.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program)",
+    "platform": "win32"
+  },
+  "statusNotSignedIn": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "login",
+      "status"
+    ],
+    "envNames": [
+      "APPDATA",
+      "CODEX_HOME",
+      "ComSpec",
+      "HOME",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "LOCALAPPDATA",
+      "NO_PROXY",
+      "PATH",
+      "SystemDrive",
+      "SystemRoot",
+      "TEMP",
+      "TMP",
+      "USERPROFILE"
+    ],
+    "cwd": "<CODEX_HOME>",
+    "stdout": "",
+    "stderr": "Not logged in\n",
+    "order": [
+      {
+        "stream": "stderr",
+        "at_ms": 87,
+        "text": "Not logged in\n"
+      }
+    ],
+    "exit": {
+      "code": 1,
+      "signal": null,
+      "at_ms": 120
+    },
+    "timedOut": false
+  },
+  "logoutNotSignedIn": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "logout"
+    ],
+    "envNames": [
+      "APPDATA",
+      "CODEX_HOME",
+      "ComSpec",
+      "HOME",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "LOCALAPPDATA",
+      "NO_PROXY",
+      "PATH",
+      "SystemDrive",
+      "SystemRoot",
+      "TEMP",
+      "TMP",
+      "USERPROFILE"
+    ],
+    "cwd": "<CODEX_HOME>",
+    "stdout": "",
+    "stderr": "Not logged in\n",
+    "order": [
+      {
+        "stream": "stderr",
+        "at_ms": 524,
+        "text": "Not logged in\n"
+      }
+    ],
+    "exit": {
+      "code": 0,
+      "signal": null,
+      "at_ms": 572
+    },
+    "timedOut": false
+  },
+  "homeAfterNotSignedIn": [
+    "auth.json.lock (0 bytes)",
+    "auth.lock (0 bytes)",
+    "tmp/",
+    "tmp/arg0-windows/",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/.lock (0 bytes)",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/apply_patch.bat (178 bytes)",
+    "tmp/arg0-windows/codex-arg0<RANDOM>/applypatch.bat (178 bytes)"
+  ],
+  "statusChatgptSignIn": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "login",
+      "status"
+    ],
+    "envNames": [
+      "APPDATA",
+      "CODEX_HOME",
+      "ComSpec",
+      "HOME",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "LOCALAPPDATA",
+      "NO_PROXY",
+      "PATH",
+      "SystemDrive",
+      "SystemRoot",
+      "TEMP",
+      "TMP",
+      "USERPROFILE"
+    ],
+    "cwd": "<CODEX_HOME>",
+    "stdout": "",
+    "stderr": "Logged in using ChatGPT\n",
+    "order": [
+      {
+        "stream": "stderr",
+        "at_ms": 156,
+        "text": "Logged in using ChatGPT\n"
+      }
+    ],
+    "exit": {
+      "code": 0,
+      "signal": null,
+      "at_ms": 208
+    },
+    "timedOut": false
+  },
+  "statusApiKey": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "login",
+      "status"
+    ],
+    "envNames": [
+      "APPDATA",
+      "CODEX_HOME",
+      "ComSpec",
+      "HOME",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "LOCALAPPDATA",
+      "NO_PROXY",
+      "PATH",
+      "SystemDrive",
+      "SystemRoot",
+      "TEMP",
+      "TMP",
+      "USERPROFILE"
+    ],
+    "cwd": "<CODEX_HOME>",
+    "stdout": "",
+    "stderr": "API key configured - sk-test-***tatus\nAuthentication is checked when you send a request.\n",
+    "order": [
+      {
+        "stream": "stderr",
+        "at_ms": 145,
+        "text": "API key configured - sk-test-***tatus\nAuthentication is checked when you send a request.\n"
+      }
+    ],
+    "exit": {
+      "code": 0,
+      "signal": null,
+      "at_ms": 161
+    },
+    "timedOut": false
+  },
+  "logoutChatgptSignIn": {
+    "argv": [
+      "-c",
+      "cli_auth_credentials_store=\"file\"",
+      "-c",
+      "check_for_update_on_startup=false",
+      "-c",
+      "project_root_markers=[]",
+      "logout"
+    ],
+    "envNames": [
+      "APPDATA",
+      "CODEX_HOME",
+      "ComSpec",
+      "HOME",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "LOCALAPPDATA",
+      "NO_PROXY",
+      "PATH",
+      "SystemDrive",
+      "SystemRoot",
+      "TEMP",
+      "TMP",
+      "USERPROFILE"
+    ],
+    "cwd": "<CODEX_HOME>",
+    "stdout": "",
+    "stderr": "Successfully logged out\n",
+    "order": [
+      {
+        "stream": "stderr",
+        "at_ms": 1147,
+        "text": "Successfully logged out\n"
+      }
+    ],
+    "exit": {
+      "code": 0,
+      "signal": null,
+      "at_ms": 1155
+    },
+    "timedOut": false
+  },
+  "authJsonAfterLogout": false,
+  "requestsToTheIssuerOnLogout": []
+}

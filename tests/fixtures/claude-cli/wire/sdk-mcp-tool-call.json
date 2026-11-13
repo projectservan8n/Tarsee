@@ -1,0 +1,2328 @@
+{
+  "name": "sdk-mcp-tool-call",
+  "providerId": "deepseek",
+  "note": "Every line that crossed the real claude.exe's stdin (to-program) and stdout (from-program) while Tarsee's engine ran one turn through the Agent SDK 0.3.319. t is milliseconds from the start of the turn.",
+  "command": "<TARSEE_ROOT>\\node_modules\\@anthropic-ai\\claude-agent-sdk-win32-x64\\claude.exe",
+  "argv": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--max-turns=50",
+    "--model=deepseek-flash[1m]",
+    "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+    "--setting-sources=project",
+    "--strict-mcp-config",
+    "--permission-mode=bypassPermissions",
+    "--allow-dangerously-skip-permissions",
+    "--include-partial-messages",
+    "--add-dir=<TARSEE_ROOT>\\src\\skills"
+  ],
+  "cwd": "<WORKSPACE>",
+  "abort_at_ms": null,
+  "process_calls": [
+    {
+      "t": 1024,
+      "event": "stdin.end()"
+    },
+    {
+      "t": 1082,
+      "event": "exit",
+      "code": 0,
+      "signal": null
+    }
+  ],
+  "stderr": "[claude-code:unrecognized_model] {\"model\":\"deepseek-flash[1m]\",\"query_source\":\"sdk\"}\n",
+  "wire": [
+    {
+      "t": 87,
+      "dir": "to-program",
+      "json": {
+        "request_id": "x1ksdas782c",
+        "type": "control_request",
+        "request": {
+          "subtype": "initialize",
+          "sdkMcpServers": [
+            "tarsee"
+          ],
+          "sdkMcpServerManifests": {
+            "tarsee": {
+              "initializeResult": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {
+                  "tools": {
+                    "listChanged": true
+                  }
+                },
+                "serverInfo": {
+                  "name": "tarsee",
+                  "version": "1.0.0"
+                }
+              },
+              "toolsListResult": {
+                "tools": [
+                  {
+                    "name": "tarsee_send_message",
+                    "description": "Send a message to a channel (Telegram, Discord, WhatsApp, Slack, email, or web chat). Use this to proactively notify the user. For email, channel_id MUST be the target address; for threaded email replies with In-Reply-To headers, use tarsee_send_email_thread instead.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "channel": {
+                          "type": "string",
+                          "enum": [
+                            "telegram",
+                            "discord",
+                            "whatsapp",
+                            "slack",
+                            "email",
+                            "web"
+                          ],
+                          "description": "Channel to send to"
+                        },
+                        "message": {
+                          "type": "string",
+                          "description": "Message text"
+                        },
+                        "channel_id": {
+                          "description": "Specific chat/channel ID (auto-resolved if omitted — required for email)",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "channel",
+                        "message"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_send_file",
+                    "description": "Send a file as a real attachment (PDF, HTML report, image, audio, video, zip, spreadsheet, anything) to a Telegram, Discord, WhatsApp or Slack chat, or to one of the dashboard's own chats (web: a card there that opens in the viewer). Use it whenever someone asks for a file or you made one for them: never answer with a folder path or a download link instead, and never say a channel can't take attachments. With no channel_id it goes to the chat you are talking in (on Slack, the same thread; else that channel's most recent chat). The file must already exist; a relative path is read from the workspace. Size caps: Telegram 50 MB, Discord 25 MB, WhatsApp 16 MB, Slack 100 MB, web 50 MB. For email, use tarsee_send_email_thread with attachments.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "channel": {
+                          "type": "string",
+                          "enum": [
+                            "telegram",
+                            "discord",
+                            "whatsapp",
+                            "slack",
+                            "web"
+                          ],
+                          "description": "Channel to send to: the one you are talking in, unless asked otherwise (web: one of the dashboard's own chats; channel_id is its conversation id, the one you are in by default)"
+                        },
+                        "file_path": {
+                          "type": "string",
+                          "description": "Absolute path, or a path relative to the workspace"
+                        },
+                        "caption": {
+                          "description": "Optional words sent with the file (Telegram shows up to 1024 characters)",
+                          "type": "string"
+                        },
+                        "channel_id": {
+                          "description": "Specific chat/channel ID; leave it out to send to the chat you are in",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "channel",
+                        "file_path"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_configure_email_channel",
+                    "description": "Configure the email channel when the user tells you their IMAP/SMTP credentials in chat. Partial-update — only the fields you pass get written; existing values stay. Passwords are stored encrypted. Call this instead of asking the user to open Settings. Infer common provider hosts (Gmail: imap.gmail.com:993 / smtp.gmail.com:465; iCloud: imap.mail.me.com:993 / smtp.mail.me.com:587; Zoho: imap.zoho.com:993 / smtp.zoho.com:465; FastMail: imap.fastmail.com:993 / smtp.fastmail.com:465) from the user's email domain when they don't specify. Outlook.com, Hotmail and Microsoft 365 mailboxes cannot connect this way: Microsoft refuses app passwords for IMAP and requires its own sign-in, so tell the user to use a mailbox from another provider instead of saving one.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "tarseeEmailAddress": {
+                          "description": "The mailbox Tarsee answers at, e.g. 'tarsee@yourcompany.com'",
+                          "type": "string"
+                        },
+                        "imap": {
+                          "type": "object",
+                          "properties": {
+                            "host": {
+                              "type": "string"
+                            },
+                            "port": {
+                              "description": "Default 993",
+                              "type": "number"
+                            },
+                            "user": {
+                              "description": "Usually the same as the mailbox address",
+                              "type": "string"
+                            },
+                            "password": {
+                              "description": "App password — stored encrypted",
+                              "type": "string"
+                            },
+                            "secure": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
+                        "smtp": {
+                          "type": "object",
+                          "properties": {
+                            "host": {
+                              "type": "string"
+                            },
+                            "port": {
+                              "description": "Default 465 (implicit TLS) or 587 (STARTTLS)",
+                              "type": "number"
+                            },
+                            "user": {
+                              "type": "string"
+                            },
+                            "password": {
+                              "description": "App password — stored encrypted",
+                              "type": "string"
+                            },
+                            "secure": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
+                        "allowlistFromAddresses": {
+                          "description": "Only reply to emails from these addresses. Empty = accept from anyone (dev mode — warn the user).",
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "mentionKeyword": {
+                          "description": "Without leading @. Default 'tarsee'. Tarsee only replies when the body contains this mention.",
+                          "type": "string"
+                        },
+                        "replyAllMarker": {
+                          "description": "Subject marker that opts into reply-all. Default '[reply-all]'.",
+                          "type": "string"
+                        },
+                        "fromName": {
+                          "description": "Display name on outbound mail. Default 'Tarsee'.",
+                          "type": "string"
+                        },
+                        "enabled": {
+                          "description": "Toggle the channel on/off. Leave undefined to preserve current state.",
+                          "type": "boolean"
+                        }
+                      }
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_send_email_thread",
+                    "description": "Start a new email thread or reply to an existing one with proper threading headers (In-Reply-To + References). Use this for proactive outbound email — you don't need to wait for the recipient to email first. Body is plain text; no markdown formatting survives email well. For replies, pass inReplyTo with the Message-ID from the inbound email. Attach files with attachments (paths on disk).",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "to": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          ],
+                          "description": "Primary recipient(s). Single address string or array."
+                        },
+                        "cc": {
+                          "description": "Optional CC recipients",
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          ]
+                        },
+                        "subject": {
+                          "type": "string",
+                          "description": "Subject line (Tarsee adds 'Re: ' automatically when inReplyTo is set)"
+                        },
+                        "body": {
+                          "type": "string",
+                          "description": "Plain text body"
+                        },
+                        "inReplyTo": {
+                          "description": "Message-ID of the email you're replying to (include angle brackets). Omit for new threads.",
+                          "type": "string"
+                        },
+                        "attachments": {
+                          "description": "Files to attach as real attachments: absolute paths, or paths relative to the workspace. Never paste a file's contents or a folder path into the body instead.",
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "to",
+                        "subject",
+                        "body"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_schedule_task",
+                    "description": "Schedule a task using cron syntax. Supports one-time and recurring. For simple notifications, use action (direct, instant). For complex tasks, use prompt (AI session).\n\nOnly schedule a task when the owner asks for one, or has said yes when you offered: every run of a prompt task is a paid turn on the AI. A task you schedule starts paused, and won't run until the owner switches it on, in Settings > Automation > Scheduled tasks or by sending /cron on <id>. Say so when you save one, with its id. You can't schedule tasks while running a scheduled task, the heartbeat or BOOT.md.\n\nEXAMPLES:\n- One-time reminder: schedule='30 12 7 4 *', once=true, action={tool:'send_message', args:{channel:'telegram', message:'Meeting now!'}}\n- Daily recurring: schedule='0 8 * * *', action={tool:'send_message', args:{channel:'telegram', message:'Good morning!'}}\n- Complex: schedule='0 8 * * 1', prompt='Check calendar and summarize the week'\n\nALWAYS prefer action over prompt for send_message tasks. Set once=true for one-time reminders (auto-deletes after firing). A prompt task runs at most once every 15 minutes (5-part schedules, no seconds). Cron expressions are interpreted in UTC — call tarsee_datetime to confirm the current local time before scheduling.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "schedule": {
+                          "type": "string",
+                          "description": "Cron expression. Format: 'min hour day month weekday'. Interpreted in UTC."
+                        },
+                        "name": {
+                          "description": "Human-friendly name",
+                          "type": "string"
+                        },
+                        "once": {
+                          "description": "If true, job auto-deletes after firing once. Use for one-time reminders.",
+                          "type": "boolean"
+                        },
+                        "prompt": {
+                          "description": "AI prompt for complex tasks (each run is a full, paid AI session)",
+                          "type": "string"
+                        },
+                        "action": {
+                          "description": "Direct tool action — instant, no AI needed. Use for simple notifications.",
+                          "type": "object",
+                          "properties": {
+                            "tool": {
+                              "type": "string",
+                              "description": "Tool to execute directly (e.g. 'send_message')"
+                            },
+                            "args": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {},
+                              "description": "Tool arguments (e.g. {channel:'telegram', message:'Hello!'})"
+                            }
+                          },
+                          "required": [
+                            "tool",
+                            "args"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "schedule"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_remember",
+                    "description": "Save an important fact or note to long-term memory. This persists across conversations and restarts.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "content": {
+                          "type": "string",
+                          "description": "The fact or note to remember"
+                        },
+                        "category": {
+                          "description": "Optional category label, e.g. 'preference', 'fact', 'project'",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "content"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_daily_log",
+                    "description": "Append an entry to today's daily memory log (memory/YYYY-MM-DD.md).",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "content": {
+                          "type": "string",
+                          "description": "Log entry to append"
+                        }
+                      },
+                      "required": [
+                        "content"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_read_file",
+                    "description": "Read a Tarsee workspace file (SOUL.md, IDENTITY.md, MEMORY.md, USER.md, etc.) or a daily memory log.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "filename": {
+                          "type": "string",
+                          "description": "Filename to read, e.g. 'MEMORY.md' or 'memory/2026-04-05.md'"
+                        }
+                      },
+                      "required": [
+                        "filename"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_write_file",
+                    "description": "Write or overwrite a Tarsee workspace file. Use for updating personality, identity, memory, or user notes. HEARTBEAT.md (the heartbeat's checks) and BOOT.md (what runs when Tarsee restarts) can be written too, but what you write there doesn't run until the owner OKs it in Settings > Automation (Let it run; for BOOT.md, Run at each restart): tell the owner so, and never say it is set up or running before then. The same goes for a change made with your own file or shell tools.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "filename": {
+                          "type": "string",
+                          "description": "Workspace filename"
+                        },
+                        "content": {
+                          "type": "string",
+                          "description": "Full content to write"
+                        }
+                      },
+                      "required": [
+                        "filename",
+                        "content"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_search_memories",
+                    "description": "Search through all memory files for a keyword or phrase.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "query": {
+                          "type": "string",
+                          "description": "Search term"
+                        }
+                      },
+                      "required": [
+                        "query"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_search_memories_deep",
+                    "description": "Deep semantic search — reads ALL memories, MEMORY.md, and last 30 daily logs so you can reason about what's relevant. Use when keyword search returns nothing or the query is vague/conceptual.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "query": {
+                          "type": "string",
+                          "description": "What you're looking for — natural language description"
+                        }
+                      },
+                      "required": [
+                        "query"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_create_canvas",
+                    "description": "Create an interactive HTML/CSS/JS canvas — renders as a live iframe in chat. Use for dashboards, charts, visualizations, mini-apps, calculators, or any interactive UI the user requests.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "title": {
+                          "type": "string",
+                          "description": "Canvas title/ID (used in URL, lowercase, hyphens ok)"
+                        },
+                        "html": {
+                          "type": "string",
+                          "description": "HTML content (the body, no need for full document)"
+                        },
+                        "css": {
+                          "description": "CSS styles",
+                          "type": "string"
+                        },
+                        "js": {
+                          "description": "JavaScript code",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "title",
+                        "html"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_create_diagram",
+                    "description": "Render a clickable flowchart/diagram in chat. Use for multi-step processes, workflows, architecture, decision trees. Each clickable node triggers a follow-up question when the user clicks it.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "title": {
+                          "type": "string",
+                          "description": "Diagram title"
+                        },
+                        "nodes": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "sublabel": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "trigger",
+                                  "processing",
+                                  "decision",
+                                  "output",
+                                  "note"
+                                ]
+                              },
+                              "question": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "label",
+                              "kind"
+                            ]
+                          },
+                          "description": "Diagram nodes"
+                        },
+                        "edges": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "from": {
+                                "type": "string"
+                              },
+                              "to": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "from",
+                              "to"
+                            ]
+                          },
+                          "description": "Directional connections"
+                        },
+                        "legend": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "trigger",
+                                  "processing",
+                                  "decision",
+                                  "output",
+                                  "note"
+                                ]
+                              },
+                              "label": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "title",
+                        "nodes",
+                        "edges"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_datetime",
+                    "description": "Get current date/time/day or convert timezones. ALWAYS use this for dates and days of the week — never guess.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "timezone": {
+                          "description": "IANA timezone, e.g. 'Europe/Berlin', 'America/New_York'. Default: UTC",
+                          "type": "string"
+                        },
+                        "date": {
+                          "description": "Date to check, e.g. '2026-04-17' or 'next friday'",
+                          "type": "string"
+                        },
+                        "format": {
+                          "description": "Output format",
+                          "type": "string",
+                          "enum": [
+                            "full",
+                            "date",
+                            "time",
+                            "day",
+                            "iso"
+                          ]
+                        }
+                      }
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_calculator",
+                    "description": "Evaluate a math expression with precision. Use for ANY math — arithmetic, percentages, conversions, financial calculations. Never do math in your head.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "expression": {
+                          "type": "string",
+                          "description": "Math expression, e.g. '(149 * 12) * 0.85' or 'Math.sqrt(144)'"
+                        }
+                      },
+                      "required": [
+                        "expression"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_discord_admin",
+                    "description": "Admin jobs in a Discord server the bot is in, done by Tarsee's own logged-in bot: list_channels, create_channel (text, voice or category; public, private for listed people and roles, or with another channel's access), edit_channel (name, topic, category, who can see or do what), create_webhook, list_webhooks. Use it whenever someone asks for a new channel, a private channel, a webhook or a permission change. It replaces any Discord REST call from Bash: never pull DISCORD_BOT_TOKEN from the vault for this, and never put a bot token or a webhook URL in a command.\n\nGET THE GO FIRST for anything that changes a server, following the approval rules in your instructions (AGENTS.md). A new webhook counts as a credential (its URL lets anyone post), so create_webhook needs the owner's go. Put who said go, in their words, in approved_by (it is logged and shows in the server's audit log). If nobody has said go for this exact change, ask instead. list_channels and list_webhooks need no go.\n\nTHE SERVER: guild_id, or channel_id of any channel in it (the one you are answering in works), or nothing when the bot is in one server only.\n\nWEBHOOK URLS ARE SECRETS: create_webhook saves the URL in the vault under save_as_key (e.g. ALERTS_WATCHDOG_WEBHOOK; say what it is for in purpose) and returns only the webhook id, the key name and a masked URL. Scripts and services read it from the vault by that key name. reveal: true puts the full URL in the result: only when the owner asks to see it themselves, never for anything that goes into a chat.\n\nNOTHING HERE DELETES: deleting a channel or a webhook is for the owner to do by hand; say so if asked. If Discord refuses for a missing permission, the error says which one and where: tell the person, do not try another way around it.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "action": {
+                          "type": "string",
+                          "enum": [
+                            "list_channels",
+                            "create_channel",
+                            "edit_channel",
+                            "create_webhook",
+                            "list_webhooks"
+                          ],
+                          "description": "What to do"
+                        },
+                        "guild_id": {
+                          "description": "The server's id. Optional: channel_id of any channel in it works too, and with one server neither is needed",
+                          "type": "string"
+                        },
+                        "channel_id": {
+                          "description": "edit_channel, create_webhook, list_webhooks: the channel to act on. list_channels, create_channel: any channel in the server (e.g. the one you are answering in), only to find the server",
+                          "type": "string"
+                        },
+                        "approved_by": {
+                          "description": "Required for create_channel, edit_channel and create_webhook: who said go and for what, e.g. \"the owner in #general: make #alerts and a webhook for the watchdog\"",
+                          "type": "string"
+                        },
+                        "name": {
+                          "description": "create_channel: the new channel's name. edit_channel: its new name. create_webhook: the webhook's name, shown on its posts",
+                          "type": "string"
+                        },
+                        "type": {
+                          "description": "create_channel: the kind of channel (default text)",
+                          "type": "string",
+                          "enum": [
+                            "text",
+                            "voice",
+                            "category"
+                          ]
+                        },
+                        "parent_id": {
+                          "description": "create_channel: the category to put it in. edit_channel: the category to move it to, or \"none\" to take it out of its category",
+                          "type": "string"
+                        },
+                        "topic": {
+                          "description": "Text channels: the topic line (an empty string clears it in edit_channel)",
+                          "type": "string"
+                        },
+                        "near_channel_id": {
+                          "description": "create_channel: put the new channel next to this one (it goes in the same category unless parent_id says otherwise)",
+                          "type": "string"
+                        },
+                        "place": {
+                          "description": "create_channel with near_channel_id: before or after it (default after)",
+                          "type": "string",
+                          "enum": [
+                            "before",
+                            "after"
+                          ]
+                        },
+                        "private": {
+                          "description": "create_channel, edit_channel: true hides it from @everyone and lets in only the bot, allow_user_ids and allow_role_ids (and server admins). edit_channel false: @everyone's view goes back to the default",
+                          "type": "boolean"
+                        },
+                        "allow_user_ids": {
+                          "description": "With private: true, the Discord user ids who may see and use it",
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "allow_role_ids": {
+                          "description": "With private: true, the role ids whose members may see and use it",
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "copy_permissions_from": {
+                          "description": "create_channel: give the new channel the same access as this channel (instead of private). Without either, a channel in a category gets the category's access, and one outside any category is public",
+                          "type": "string"
+                        },
+                        "sync_with_category": {
+                          "description": "edit_channel: replace its access with its category's (the new one when parent_id is given)",
+                          "type": "boolean"
+                        },
+                        "permissions": {
+                          "description": "edit_channel: who may see or do what in the channel",
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "target": {
+                                "type": "string",
+                                "description": "A user id, a role id, or \"everyone\""
+                              },
+                              "target_type": {
+                                "description": "Only if the id could be either",
+                                "type": "string",
+                                "enum": [
+                                  "user",
+                                  "role"
+                                ]
+                              },
+                              "allow": {
+                                "description": "Permissions to allow, e.g. ViewChannel, SendMessages, ReadMessageHistory, Connect, Speak (or view, send, history)",
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "deny": {
+                                "description": "Permissions to deny",
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "reset": {
+                                "description": "Permissions to set back to the default (neither allowed nor denied here)",
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "clear": {
+                                "description": "true removes this target's whole overwrite on the channel",
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "target"
+                            ]
+                          }
+                        },
+                        "save_as_key": {
+                          "description": "create_webhook: the vault key name for the URL, capitals and underscores, e.g. ALERTS_WATCHDOG_WEBHOOK (default DISCORD_WEBHOOK_<CHANNEL>). An existing key is never replaced unless overwrite_key is true",
+                          "type": "string"
+                        },
+                        "purpose": {
+                          "description": "create_webhook: what the webhook is for, saved with the vault key, e.g. \"uptime watchdog alerts\"",
+                          "type": "string"
+                        },
+                        "overwrite_key": {
+                          "description": "create_webhook: replace a vault key of that name that is already there",
+                          "type": "boolean"
+                        },
+                        "use_bot_avatar": {
+                          "description": "create_webhook: give the webhook the bot's own picture",
+                          "type": "boolean"
+                        },
+                        "reveal": {
+                          "description": "create_webhook: also return the full URL. Only when the owner asks to see it themselves; never for anything that goes into a chat",
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "action"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_railway",
+                    "description": "Railway jobs done by Tarsee itself with a Railway token it reads from the vault (RAILWAY_API_TOKEN): list_projects (projects; with project, its environments and services), list_variables (variable NAMES on a service, never values), set_variable (set one variable on a service, then Railway redeploys it as it does on any variable change), redeploy (redeploy a service's latest deployment). Use it whenever someone asks to set a Railway variable or redeploy. It replaces any Railway call from Bash: never put a Railway token or a secret value in a command (no `railway variables --set` with a secret, no GraphQL with a token).\n\nSECRETS GO THROUGH from_key: for anything secret (a token, a password, a webhook URL, a database URL) pass from_key, the vault key name that holds it (e.g. from_key: \"ALERTS_WEBHOOK\"). Tarsee reads the value itself; it never shows up in the result, the logs or your context, only a masked form. value is for plain, non-secret text only (a port, a flag, a public URL); a value that looks like a secret or is a vault key's value is refused.\n\nGET THE GO FIRST for set_variable and redeploy: from the owner, or from whoever your instructions (AGENTS.md, USER.md) say may give it. Putting a secret into a service (from_key) counts as handing out a credential, so it needs the owner's go. Put who said go, in their words, in approved_by (it is logged). If nobody has said go for this exact change, ask instead. list_projects and list_variables need no go.\n\nTARSEE'S OWN SERVICE: when Tarsee runs on Railway, leaving out project works on the project Tarsee runs in, in its environment, on its own service. Redeploying it, or setting a variable on it with a deploy, restarts Tarsee and ends the turn doing it: say so before you do it, and finish anything else first.\n\nNAMES OR IDS: project, environment (default: the one Tarsee runs in, else production) and service each take a name (any case) or an id. A name that matches nothing, or more than one, is refused with the choices listed.\n\nNOTHING HERE DELETES: deleting a variable, a service or a project is for the owner to do by hand in Railway; say so if asked. If Railway refuses, the error says why in plain words: tell the person, do not try another way around it.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "action": {
+                          "type": "string",
+                          "enum": [
+                            "list_projects",
+                            "list_variables",
+                            "set_variable",
+                            "redeploy"
+                          ],
+                          "description": "What to do"
+                        },
+                        "project": {
+                          "description": "The project's name (any case) or id. Leave it out for the project Tarsee runs in (on Railway); list_projects without it lists them all",
+                          "type": "string"
+                        },
+                        "environment": {
+                          "description": "The environment's name or id (default: the one Tarsee runs in, else production)",
+                          "type": "string"
+                        },
+                        "service": {
+                          "description": "list_variables, set_variable, redeploy: the service's name or id (default in Tarsee's own project: Tarsee's own service)",
+                          "type": "string"
+                        },
+                        "name": {
+                          "description": "set_variable: the variable's name, e.g. ALERTS_WEBHOOK_URL",
+                          "type": "string"
+                        },
+                        "from_key": {
+                          "description": "set_variable: the vault key whose value to set, for anything secret. The value is read by Tarsee and never shown",
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "set_variable: a plain, NON-SECRET value. Anything secret goes in the vault and through from_key instead. Pass from_key or value, not both",
+                          "type": "string"
+                        },
+                        "deploy": {
+                          "description": "set_variable: true (default) lets Railway redeploy the service as it normally does on a variable change; false sets it without a deploy (it takes effect on the next one)",
+                          "type": "boolean"
+                        },
+                        "approved_by": {
+                          "description": "Required for set_variable and redeploy: who said go and for what, e.g. \"the owner in chat: put the alerts webhook on the worker service\"",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "action"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_browser",
+                    "description": "Control a stealth web browser with captcha solving. Navigate pages, fill forms, click buttons, take screenshots, and auto-solve reCAPTCHA/hCaptcha/Turnstile. Browser persists across calls.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "action": {
+                          "type": "string",
+                          "enum": [
+                            "navigate",
+                            "screenshot",
+                            "click",
+                            "type",
+                            "evaluate",
+                            "get_text",
+                            "wait_for",
+                            "scroll",
+                            "select",
+                            "solve_captcha",
+                            "close"
+                          ],
+                          "description": "Browser action"
+                        },
+                        "url": {
+                          "description": "URL to navigate to",
+                          "type": "string"
+                        },
+                        "selector": {
+                          "description": "CSS selector for target element",
+                          "type": "string"
+                        },
+                        "text": {
+                          "description": "Text to type",
+                          "type": "string"
+                        },
+                        "script": {
+                          "description": "JavaScript to evaluate in page",
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Value for select dropdown",
+                          "type": "string"
+                        },
+                        "timeout": {
+                          "description": "Timeout in ms (default 30000)",
+                          "type": "number"
+                        },
+                        "direction": {
+                          "description": "Scroll direction",
+                          "type": "string",
+                          "enum": [
+                            "down",
+                            "up",
+                            "bottom",
+                            "top"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "action"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_web_fetch",
+                    "description": "Fetch a URL and return its content (HTML converted to text, or raw for APIs).",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string",
+                          "description": "URL to fetch"
+                        },
+                        "raw": {
+                          "description": "Return raw response (for APIs)",
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "url"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_web_search",
+                    "description": "Search the web and return results.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "query": {
+                          "type": "string",
+                          "description": "Search query"
+                        },
+                        "num_results": {
+                          "description": "Number of results, 1-10 (default 5)",
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "query"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_pdf_read",
+                    "description": "Read the text of a PDF: a file in the workspace (files people send in are saved in its uploads folder) or a web address. Long PDFs come a few pages at a time; the answer says which pages to ask for next. Use it whenever you need what a PDF says and can't open the file yourself. Scanned pages (pictures of text) have no text to read.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "description": "The PDF: a path in the workspace (absolute, or relative to it, e.g. 'uploads/report.pdf') or an http(s) address"
+                        },
+                        "pages": {
+                          "description": "Which pages: '3', '2-5', or '6-' for page 6 to the end. Default: from page 1, as many as fit",
+                          "type": "string"
+                        },
+                        "max_chars": {
+                          "description": "The most characters to return (default 10000, up to 50000)",
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "path"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_get_key",
+                    "description": "Get a value from the encrypted key vault. The session system prompt already includes an inventory of what's available — use this tool to fetch the actual value when you need to USE a key, not to check whether one exists.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "Key name (matches an entry from the inventory)"
+                        }
+                      },
+                      "required": [
+                        "key"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_set_key",
+                    "description": "Store a value in the encrypted key vault. Use when the user gives you a new credential (API key, token, password) to remember across sessions.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "Key name (uppercase with underscores, e.g. STRIPE_SECRET)"
+                        },
+                        "value": {
+                          "type": "string",
+                          "description": "Secret value — stored encrypted at rest"
+                        },
+                        "description": {
+                          "description": "What this key is for (surfaced in the next session's inventory)",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "value"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_list_keys",
+                    "description": "Re-query the vault live for the current list of keys. The session system prompt already snapshots this at start, so only call this if you just set/deleted a key or suspect the inventory is stale. Returns names + descriptions only — values require tarsee_get_key.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_delete_key",
+                    "description": "Remove a key from the encrypted vault. Use when the user explicitly asks to forget or rotate a credential.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "Key name to delete"
+                        }
+                      },
+                      "required": [
+                        "key"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_list_files",
+                    "description": "List all Tarsee workspace files and their sizes.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  },
+                  {
+                    "name": "tarsee_push_notification",
+                    "description": "Send a Web Push notification to all the user's registered devices (iPhone/iPad PWA, laptop browsers). Use this for time-sensitive pings — cron completions, webhook alerts, proactive reminders — when the user may not have the app open. Non-urgent follow-ups should use tarsee_send_message instead.",
+                    "inputSchema": {
+                      "$schema": "http://json-schema.org/draft-07/schema#",
+                      "type": "object",
+                      "properties": {
+                        "title": {
+                          "type": "string",
+                          "description": "Short headline — appears as the notification title. Keep under 50 chars."
+                        },
+                        "body": {
+                          "type": "string",
+                          "description": "One- or two-sentence body. Keep under 200 chars; platforms truncate."
+                        },
+                        "url": {
+                          "description": "Deep-link URL on tap. Defaults to the app root. Use e.g. '/?conv=xxx' to jump to a specific conversation.",
+                          "type": "string"
+                        },
+                        "tag": {
+                          "description": "Grouping tag — pushes with the same tag replace each other in the tray instead of stacking.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "title",
+                        "body"
+                      ]
+                    },
+                    "execution": {
+                      "taskSupport": "forbidden"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "systemPrompt": [
+            "You ARE Tarsee — a headless AI agent running 24/7 on a server.\n\n## MCP Tools (call as mcp__tarsee__tarsee_<name>)\n- **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/Slack/web\n- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp/Slack or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files\n- **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs\n- **remember**(content) — append to MEMORY.md\n- **daily_log**(content) — append to today's log\n- **read_file**(filename) / **write_file**(filename, content) — workspace files\n- **search_memories**(query) — keyword search through memory files\n- **search_memories_deep**(query) — dumps ALL memories for semantic reasoning (use when keyword search finds nothing)\n- **create_canvas**(title, html, css?, js?) — create live interactive HTML/CSS/JS canvas (renders as iframe in chat)\n- **web_fetch**(url) / **web_search**(query) — web access\n- **get_key**(name) / **set_key**(name, value) — encrypted vault\n- **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head\n- **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: UTC\n- **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving\n- **discord_admin**(action, ...) — list, make and edit Discord channels and make webhooks with Tarsee's own bot (never the bot token from Bash); changes need approved_by, a webhook URL goes to the vault, nothing deletes\n- **railway**(action, project?, environment?, service?, ...) — list Railway projects and variable names, set a variable (secrets via from_key, a vault key name) or redeploy, with the vault's RAILWAY_API_TOKEN; writes need approved_by. Use it instead of Railway calls from Bash\n\n## Memory\nUse remember for durable facts. Use daily_log for session notes. Only append, never overwrite.\nBefore saying \"I don't know\" or \"I can't remember\":\n1. Try search_memories first (fast, keyword-based)\n2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)\n\n## CLI Tools Installed\n- **railway** — Railway CLI for logs and deploys (to set a variable or redeploy, use the railway tool above: never a secret in a command)\n- **gog** — Google Workspace (Gmail, Calendar, Drive, Contacts, Sheets)\n- **himalaya** — Zoho/IMAP email\n- **gh** — GitHub CLI\n- **claude** — Claude Code CLI\n- **whisper-cli** — local speech-to-text\n- Use Bash to run any of these directly.\n\n## Skill Discovery\nYou have skills installed in the skills/ directory. Before saying \"I can't do that\":\n1. Check if a skill exists: list files in <WORKSPACE>/skills/ or read a skill's SKILL.md\n2. If a matching skill exists, read its SKILL.md and follow the instructions\n3. If no skill exists, ask the user if they want you to create one\n\n## Workspace: <WORKSPACE>\n\nYou are a test."
+          ],
+          "systemPromptSnapshot": false
+        }
+      }
+    },
+    {
+      "t": 88,
+      "dir": "to-program",
+      "json": {
+        "type": "user",
+        "session_id": "",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "what time is it?"
+            }
+          ]
+        },
+        "parent_tool_use_id": null
+      }
+    },
+    {
+      "t": 753,
+      "dir": "from-program",
+      "json": {
+        "type": "control_response",
+        "response": {
+          "subtype": "success",
+          "request_id": "x1ksdas782c",
+          "response": {
+            "commands": "<44 commands; cut from this fixture>",
+            "agents": "<5 agents; cut from this fixture>",
+            "output_style": "default",
+            "available_output_styles": [
+              "default",
+              "Proactive",
+              "Concise",
+              "Explanatory",
+              "Learning"
+            ],
+            "user_output_styles_dir": "<STATE_DIR>\\.claude-home-deepseek\\output-styles",
+            "models": "<6 models; cut from this fixture>",
+            "account": {
+              "tokenSource": "ANTHROPIC_AUTH_TOKEN",
+              "apiProvider": "firstParty"
+            },
+            "pid": 68576,
+            "claude_code_version": "2.1.319",
+            "current_permission_mode": "bypassPermissions",
+            "hook_on_failure_supported": true,
+            "sdk_mcp_manifests_parked": {
+              "tarsee": "parked"
+            },
+            "feedback_mode": {
+              "kind": "disabled"
+            },
+            "analytics_disabled": true,
+            "remote_control_auto_enable": false,
+            "remote_control_auto_connect_default": false,
+            "remote_control_available": false,
+            "remote_control_auto_on_by_default": false,
+            "ide_rc_auto_enable_gate": false,
+            "fast_mode_state": "off",
+            "fast_mode_disabled_reason": "sdk_opt_in_required",
+            "session_state": "idle",
+            "capabilities": [
+              "ui_surface_v1",
+              "mcp_call_result_not_for_model_v1",
+              "mcp_call_check_permissions_v1"
+            ]
+          },
+          "pending_permission_requests": [],
+          "pending_user_dialog_requests": []
+        }
+      }
+    },
+    {
+      "t": 776,
+      "dir": "from-program",
+      "json": {
+        "type": "system",
+        "subtype": "session_state_changed",
+        "state": "running",
+        "sdk_host_only": true,
+        "uuid": "23b4954c-8237-4ec0-a10f-0f8a82478446",
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55"
+      }
+    },
+    {
+      "t": 894,
+      "dir": "from-program",
+      "json": {
+        "type": "system",
+        "subtype": "init",
+        "cwd": "<WORKSPACE>",
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "tools": [
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "Write",
+          "mcp__tarsee__tarsee_browser",
+          "mcp__tarsee__tarsee_calculator",
+          "mcp__tarsee__tarsee_configure_email_channel",
+          "mcp__tarsee__tarsee_create_canvas",
+          "mcp__tarsee__tarsee_create_diagram",
+          "mcp__tarsee__tarsee_daily_log",
+          "mcp__tarsee__tarsee_datetime",
+          "mcp__tarsee__tarsee_delete_key",
+          "mcp__tarsee__tarsee_discord_admin",
+          "mcp__tarsee__tarsee_get_key",
+          "mcp__tarsee__tarsee_list_files",
+          "mcp__tarsee__tarsee_list_keys",
+          "mcp__tarsee__tarsee_pdf_read",
+          "mcp__tarsee__tarsee_push_notification",
+          "mcp__tarsee__tarsee_railway",
+          "mcp__tarsee__tarsee_read_file",
+          "mcp__tarsee__tarsee_remember",
+          "mcp__tarsee__tarsee_schedule_task",
+          "mcp__tarsee__tarsee_search_memories",
+          "mcp__tarsee__tarsee_search_memories_deep",
+          "mcp__tarsee__tarsee_send_email_thread",
+          "mcp__tarsee__tarsee_send_file",
+          "mcp__tarsee__tarsee_send_message",
+          "mcp__tarsee__tarsee_set_key",
+          "mcp__tarsee__tarsee_web_fetch",
+          "mcp__tarsee__tarsee_web_search",
+          "mcp__tarsee__tarsee_write_file"
+        ],
+        "mcp_servers": [
+          {
+            "name": "tarsee",
+            "status": "connected",
+            "source": "sdk"
+          }
+        ],
+        "model": "deepseek-flash[1m]",
+        "permissionMode": "bypassPermissions",
+        "slash_commands": "<44 slash commands; cut from this fixture>",
+        "terminal_slash_commands": "<4 terminal slash commands; cut from this fixture>",
+        "apiKeySource": "none",
+        "claude_code_version": "2.1.319",
+        "output_style": "default",
+        "agents": [
+          "claude",
+          "Explore",
+          "general-purpose",
+          "Plan",
+          "statusline-setup"
+        ],
+        "skills": "<16 skills; cut from this fixture>",
+        "plugins": [
+          {
+            "name": "cc-plugin-agents-md",
+            "path": "builtin",
+            "source": "cc-plugin-agents-md@builtin"
+          },
+          {
+            "name": "cc-plugin-privacy",
+            "path": "builtin",
+            "source": "cc-plugin-privacy@builtin"
+          },
+          {
+            "name": "cc-plugin-plugin-authoring",
+            "path": "builtin",
+            "source": "cc-plugin-plugin-authoring@builtin"
+          }
+        ],
+        "capabilities": [
+          "interrupt_receipt_v1",
+          "interrupt_cancel_queued_v1",
+          "interrupt_send_now_v1",
+          "interrupt_requeue_taken_v1",
+          "msg_lifecycle_v1",
+          "request_marker_lists_v1",
+          "ask_user_question_unanswered_v1",
+          "lifecycle_wakeup_source_v1",
+          "sdk_mcp_tools_list_changed",
+          "sdk_mcp_manifests",
+          "mcp_read_resource_v1",
+          "mcp_tool_ui_meta_v1",
+          "ui_surface_v1",
+          "mcp_call_result_not_for_model_v1",
+          "mcp_call_check_permissions_v1"
+        ],
+        "analytics_disabled": true,
+        "product_feedback_disabled": true,
+        "uuid": "d0b56db0-c94c-4d5d-b908-44352322dfeb",
+        "memory_paths": {
+          "auto": "<STATE_DIR>\\.claude-home-deepseek\\projects\\<WORKSPACE_AS_FOLDER_NAME>\\memory\\"
+        },
+        "original_cwd": "<WORKSPACE>",
+        "additional_directories": [
+          "<TARSEE_ROOT>\\src\\skills"
+        ],
+        "messaging_socket_path": "\\\\.\\pipe\\LOCAL\\cc-msg-44d6d685419d26e6ad420172c8e6397b",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "per_turn_effort_active": false,
+        "ultrathink_available": false,
+        "ultrathink_typed_raises": false,
+        "view_mode": "default",
+        "powershell_path": "<POWERSHELL_EXE>"
+      }
+    },
+    {
+      "t": 900,
+      "dir": "from-program",
+      "json": {
+        "type": "system",
+        "subtype": "status",
+        "status": "requesting",
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "uuid": "aa585f13-e079-4f2d-901d-bb7098995ad6"
+      }
+    },
+    {
+      "t": 949,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fake_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "deepseek-flash",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 12,
+              "output_tokens": 1,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0
+            }
+          }
+        },
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "parent_tool_use_id": null,
+        "uuid": "36cce32f-a0fd-4dcc-a18b-507fea920bb6",
+        "ttft_ms": 21,
+        "api_message_id": "msg_fake_1"
+      }
+    },
+    {
+      "t": 949,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "tool_use",
+            "id": "toolu_datetime_1",
+            "name": "mcp__tarsee__tarsee_datetime",
+            "input": {}
+          }
+        },
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "parent_tool_use_id": null,
+        "uuid": "1c869d91-fc55-4a32-a2b8-9890ff986eba",
+        "api_message_id": "msg_fake_1"
+      }
+    },
+    {
+      "t": 950,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "{\"timezone\":\"UTC\",\"format\":\"iso\"}"
+          }
+        },
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "parent_tool_use_id": null,
+        "uuid": "28c7f69e-4c28-436c-8fc6-f06128b527c9",
+        "api_message_id": "msg_fake_1"
+      }
+    },
+    {
+      "t": 952,
+      "dir": "from-program",
+      "json": {
+        "type": "assistant",
+        "message": {
+          "id": "msg_fake_1",
+          "type": "message",
+          "role": "assistant",
+          "model": "deepseek-flash",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_datetime_1",
+              "name": "mcp__tarsee__tarsee_datetime",
+              "input": {
+                "timezone": "UTC",
+                "format": "iso"
+              }
+            }
+          ],
+          "stop_reason": null,
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 12,
+            "output_tokens": 1,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "context_management": null
+        },
+        "parent_tool_use_id": null,
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "uuid": "ac872879-52cd-46cc-8021-b06948b2726a",
+        "timestamp": "2026-11-12T23:57:25.045Z",
+        "request_id": "req_fake_1",
+        "tool_use_meta": [
+          {
+            "id": "toolu_datetime_1",
+            "display_name": "Tarsee Datetime",
+            "server_display_name": "tarsee",
+            "tool_name": "tarsee_datetime"
+          }
+        ]
+      }
+    },
+    {
+      "t": 960,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "parent_tool_use_id": null,
+        "uuid": "5fe790ab-eaa1-40b0-a299-d0f37f02c90f",
+        "api_message_id": "msg_fake_1"
+      }
+    },
+    {
+      "t": 965,
+      "dir": "from-program",
+      "json": {
+        "type": "control_request",
+        "request_id": "5f5c15b4-cc63-408c-ab95-da157b2261a3",
+        "request": {
+          "subtype": "mcp_message",
+          "server_name": "tarsee",
+          "message": {
+            "method": "tools/call",
+            "params": {
+              "name": "tarsee_datetime",
+              "arguments": {
+                "timezone": "UTC",
+                "format": "iso"
+              },
+              "_meta": {
+                "claudecode/toolUseId": "toolu_datetime_1",
+                "progressToken": 2
+              }
+            },
+            "jsonrpc": "2.0",
+            "id": 2
+          }
+        }
+      }
+    },
+    {
+      "t": 974,
+      "dir": "to-program",
+      "json": {
+        "type": "control_response",
+        "response": {
+          "subtype": "success",
+          "request_id": "5f5c15b4-cc63-408c-ab95-da157b2261a3",
+          "response": {
+            "mcp_response": {
+              "result": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "2026-11-12T23:57:25.067Z"
+                  }
+                ]
+              },
+              "jsonrpc": "2.0",
+              "id": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "t": 974,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "tool_use",
+            "stop_sequence": null
+          },
+          "usage": {
+            "output_tokens": 6
+          }
+        },
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "parent_tool_use_id": null,
+        "uuid": "a3099b28-c02d-4e8f-a31b-5acb22496df8",
+        "api_message_id": "msg_fake_1"
+      }
+    },
+    {
+      "t": 974,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        },
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "parent_tool_use_id": null,
+        "uuid": "9c9dfc7f-1a23-47a5-9b59-f4a54dd860ac",
+        "api_message_id": "msg_fake_1"
+      }
+    },
+    {
+      "t": 985,
+      "dir": "from-program",
+      "json": {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "toolu_datetime_1",
+              "type": "tool_result",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "2026-11-12T23:57:25.067Z"
+                }
+              ]
+            }
+          ]
+        },
+        "parent_tool_use_id": null,
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "uuid": "3217cc4b-c1cc-47eb-8d3d-189f4feeb18e",
+        "timestamp": "2026-11-12T23:57:25.077Z",
+        "tool_use_result": [
+          {
+            "type": "text",
+            "text": "2026-11-12T23:57:25.067Z"
+          }
+        ],
+        "tool_result_meta": [
+          {
+            "id": "toolu_datetime_1",
+            "permission_decision": {
+              "decision": "accept",
+              "source": "config",
+              "reason_type": "mode"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "t": 988,
+      "dir": "from-program",
+      "json": {
+        "type": "system",
+        "subtype": "status",
+        "status": "requesting",
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "uuid": "4981fc14-6774-4b78-bfc9-43be2998cb86"
+      }
+    },
+    {
+      "t": 1007,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "id": "msg_fake_2",
+            "type": "message",
+            "role": "assistant",
+            "model": "deepseek-flash",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 12,
+              "output_tokens": 1,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0
+            }
+          }
+        },
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "parent_tool_use_id": null,
+        "uuid": "53968f9f-5ca8-464c-9ff1-b2cb9d956186",
+        "ttft_ms": 10,
+        "api_message_id": "msg_fake_2"
+      }
+    },
+    {
+      "t": 1008,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "parent_tool_use_id": null,
+        "uuid": "cbddde05-01e3-47a9-a53e-a50aff3337ae",
+        "api_message_id": "msg_fake_2"
+      }
+    },
+    {
+      "t": 1008,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "The time "
+          }
+        },
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "parent_tool_use_id": null,
+        "uuid": "05d9c621-6afa-43ce-bac7-733e28cb510c",
+        "api_message_id": "msg_fake_2"
+      }
+    },
+    {
+      "t": 1008,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "is noted."
+          }
+        },
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "parent_tool_use_id": null,
+        "uuid": "4608e732-8316-4260-9d8d-a0ef067b8e70",
+        "api_message_id": "msg_fake_2"
+      }
+    },
+    {
+      "t": 1010,
+      "dir": "from-program",
+      "json": {
+        "type": "assistant",
+        "message": {
+          "id": "msg_fake_2",
+          "type": "message",
+          "role": "assistant",
+          "model": "deepseek-flash",
+          "content": [
+            {
+              "type": "text",
+              "text": "The time is noted."
+            }
+          ],
+          "stop_reason": null,
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 12,
+            "output_tokens": 1,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "context_management": null
+        },
+        "parent_tool_use_id": null,
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "uuid": "9fe844eb-becd-4afd-843b-1188039516f6",
+        "timestamp": "2026-11-12T23:57:25.103Z",
+        "request_id": "req_fake_2"
+      }
+    },
+    {
+      "t": 1011,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "parent_tool_use_id": null,
+        "uuid": "54c35ce8-f065-4813-8161-45746956468c",
+        "api_message_id": "msg_fake_2"
+      }
+    },
+    {
+      "t": 1012,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          },
+          "usage": {
+            "output_tokens": 6
+          }
+        },
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "parent_tool_use_id": null,
+        "uuid": "f186bf1f-5192-47b5-9e6e-c7d7b2a17a99",
+        "api_message_id": "msg_fake_2"
+      }
+    },
+    {
+      "t": 1013,
+      "dir": "from-program",
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        },
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "parent_tool_use_id": null,
+        "uuid": "d4f26e6f-644d-4e2d-bd54-9c19e6cba904",
+        "api_message_id": "msg_fake_2"
+      }
+    },
+    {
+      "t": 1022,
+      "dir": "from-program",
+      "json": {
+        "duration_api_ms": 64,
+        "stop_reason": "end_turn",
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55",
+        "total_cost_usd": 0.00042,
+        "usage": {
+          "input_tokens": 24,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 12,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard",
+          "fallback_credit": null
+        },
+        "modelUsage": {
+          "deepseek-flash[1m]": {
+            "inputTokens": 24,
+            "outputTokens": 12,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0,
+            "webSearchRequests": 0,
+            "costUSD": 0.00042,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 32000,
+            "thinkingTokens": 0,
+            "cacheCreationEphemeral5mInputTokens": 0,
+            "cacheCreationEphemeral1hInputTokens": 0,
+            "canonicalModel": "deepseek-flash[1m]",
+            "provider": "firstParty",
+            "costBasis": "unknown"
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "safety_stops": 0,
+        "is_error": false,
+        "num_turns": 2,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "The time is noted.",
+        "ttft_ms": 156,
+        "type": "result",
+        "duration_ms": 222,
+        "uuid": "605154d5-0708-4885-ac89-a3cf963410f7",
+        "ttft_stream_ms": 154,
+        "time_to_request_ms": 137,
+        "first_content_frame_ms": 154,
+        "queued_turn_count": 0,
+        "result_index": 0,
+        "model_usage_since_last_result": {
+          "deepseek-flash[1m]": {
+            "inputTokens": 24,
+            "outputTokens": 12,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0,
+            "webSearchRequests": 0,
+            "costUSD": 0.00042,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 32000,
+            "thinkingTokens": 0,
+            "cacheCreationEphemeral5mInputTokens": 0,
+            "cacheCreationEphemeral1hInputTokens": 0,
+            "canonicalModel": "deepseek-flash[1m]",
+            "provider": "firstParty",
+            "costBasis": "unknown"
+          }
+        }
+      }
+    },
+    {
+      "t": 1024,
+      "dir": "to-program",
+      "event": "stdin closed"
+    },
+    {
+      "t": 1027,
+      "dir": "from-program",
+      "json": {
+        "type": "system",
+        "subtype": "session_state_changed",
+        "state": "idle",
+        "sdk_host_only": true,
+        "uuid": "97848cc7-a4d0-4908-9841-f643c7928885",
+        "session_id": "53f8aa9e-2f68-49a8-87c2-5676de0d8c55"
+      }
+    },
+    {
+      "t": 1082,
+      "dir": "from-program",
+      "event": "exit code 0 signal null"
+    }
+  ],
+  "messages_the_sdk_handed_to_its_caller": [
+    {
+      "t": 895,
+      "type": "system",
+      "subtype": "init"
+    },
+    {
+      "t": 900,
+      "type": "system",
+      "subtype": "status"
+    },
+    {
+      "t": 949,
+      "type": "stream_event",
+      "event": "message_start"
+    },
+    {
+      "t": 950,
+      "type": "stream_event",
+      "event": "content_block_start"
+    },
+    {
+      "t": 950,
+      "type": "stream_event",
+      "event": "content_block_delta"
+    },
+    {
+      "t": 952,
+      "type": "assistant"
+    },
+    {
+      "t": 960,
+      "type": "stream_event",
+      "event": "content_block_stop"
+    },
+    {
+      "t": 975,
+      "type": "stream_event",
+      "event": "message_delta"
+    },
+    {
+      "t": 975,
+      "type": "stream_event",
+      "event": "message_stop"
+    },
+    {
+      "t": 985,
+      "type": "user"
+    },
+    {
+      "t": 988,
+      "type": "system",
+      "subtype": "status"
+    },
+    {
+      "t": 1007,
+      "type": "stream_event",
+      "event": "message_start"
+    },
+    {
+      "t": 1008,
+      "type": "stream_event",
+      "event": "content_block_start"
+    },
+    {
+      "t": 1008,
+      "type": "stream_event",
+      "event": "content_block_delta"
+    },
+    {
+      "t": 1008,
+      "type": "stream_event",
+      "event": "content_block_delta"
+    },
+    {
+      "t": 1010,
+      "type": "assistant"
+    },
+    {
+      "t": 1011,
+      "type": "stream_event",
+      "event": "content_block_stop"
+    },
+    {
+      "t": 1012,
+      "type": "stream_event",
+      "event": "message_delta"
+    },
+    {
+      "t": 1013,
+      "type": "stream_event",
+      "event": "message_stop"
+    },
+    {
+      "t": 1022,
+      "type": "result",
+      "subtype": "success"
+    }
+  ],
+  "tarsee_events": [
+    {
+      "t": 949,
+      "type": "step",
+      "kind": "usage",
+      "calls": 1,
+      "input": 12,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "output": 1,
+      "total": 13,
+      "outTps": null,
+      "nowTps": null
+    },
+    {
+      "t": 954,
+      "type": "step",
+      "kind": "tool_start",
+      "id": "toolu_datetime_1",
+      "name": "tarsee_datetime",
+      "rawName": "mcp__tarsee__tarsee_datetime",
+      "summary": "UTC",
+      "input": "{\n  \"timezone\": \"UTC\",\n  \"format\": \"iso\"\n}"
+    },
+    {
+      "t": 954,
+      "type": "tool_use",
+      "id": "toolu_datetime_1",
+      "name": "mcp__tarsee__tarsee_datetime",
+      "input": {
+        "timezone": "UTC",
+        "format": "iso"
+      }
+    },
+    {
+      "t": 975,
+      "type": "step",
+      "kind": "usage",
+      "calls": 1,
+      "input": 12,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "output": 6,
+      "total": 18,
+      "outTps": null,
+      "nowTps": null
+    },
+    {
+      "t": 985,
+      "type": "step",
+      "kind": "tool_end",
+      "id": "toolu_datetime_1",
+      "ok": true,
+      "preview": "2026-11-12T23:57:25.067Z"
+    },
+    {
+      "t": 985,
+      "type": "tool_result",
+      "id": "toolu_datetime_1",
+      "ok": true,
+      "result": "2026-11-12T23:57:25.067Z"
+    },
+    {
+      "t": 1008,
+      "type": "step",
+      "kind": "usage",
+      "calls": 2,
+      "input": 24,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "output": 7,
+      "total": 31,
+      "outTps": null,
+      "nowTps": null
+    },
+    {
+      "t": 1008,
+      "type": "text",
+      "content": "The time "
+    },
+    {
+      "t": 1008,
+      "type": "text",
+      "content": "is noted."
+    },
+    {
+      "t": 1010,
+      "type": "step",
+      "kind": "text",
+      "text": "The time is noted."
+    },
+    {
+      "t": 1013,
+      "type": "step",
+      "kind": "usage",
+      "calls": 2,
+      "input": 24,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "output": 12,
+      "total": 36,
+      "outTps": null,
+      "nowTps": null
+    },
+    {
+      "t": 1023,
+      "type": "usage",
+      "usage": {
+        "input_tokens": 24,
+        "output_tokens": 12,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "context_input_tokens": 12
+      },
+      "costUsd": 0.000011
+    },
+    {
+      "t": 1023,
+      "type": "done",
+      "stopReason": "end_turn"
+    }
+  ],
+  "tarsee_logs": [
+    "log: [claude-code] Starting deepseek turn in <WORKSPACE>, model: deepseek-flash[1m], session: new, media: 0",
+    "log: [claude-code] deepseek: apiKeySource=none"
+  ],
+  "api_requests": [
+    {
+      "method": "POST",
+      "path": "/v1/messages",
+      "model": "deepseek-flash",
+      "tools": [
+        "Bash",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Read",
+        "Write",
+        "mcp__tarsee__tarsee_browser",
+        "mcp__tarsee__tarsee_calculator",
+        "mcp__tarsee__tarsee_configure_email_channel",
+        "mcp__tarsee__tarsee_create_canvas",
+        "mcp__tarsee__tarsee_create_diagram",
+        "mcp__tarsee__tarsee_daily_log",
+        "mcp__tarsee__tarsee_datetime",
+        "mcp__tarsee__tarsee_delete_key",
+        "mcp__tarsee__tarsee_discord_admin",
+        "mcp__tarsee__tarsee_get_key",
+        "mcp__tarsee__tarsee_list_files",
+        "mcp__tarsee__tarsee_list_keys",
+        "mcp__tarsee__tarsee_pdf_read",
+        "mcp__tarsee__tarsee_push_notification",
+        "mcp__tarsee__tarsee_railway",
+        "mcp__tarsee__tarsee_read_file",
+        "mcp__tarsee__tarsee_remember",
+        "mcp__tarsee__tarsee_schedule_task",
+        "mcp__tarsee__tarsee_search_memories",
+        "mcp__tarsee__tarsee_search_memories_deep",
+        "mcp__tarsee__tarsee_send_email_thread",
+        "mcp__tarsee__tarsee_send_file",
+        "mcp__tarsee__tarsee_send_message",
+        "mcp__tarsee__tarsee_set_key",
+        "mcp__tarsee__tarsee_web_fetch",
+        "mcp__tarsee__tarsee_web_search",
+        "mcp__tarsee__tarsee_write_file"
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        },
+        {
+          "type": "text",
+          "text": "You ARE Tarsee — a headless AI agent running 24/7 on a server.\n\n## MCP Tools (call as mcp__tarsee__tarsee_<name>)\n- **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/Slack/web\n- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp/Slack or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files\n- **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs\n- **remember**(content) — append to MEMORY.md\n- **daily_log**(content) — append to today's log\n- **read_file**(filename) / **write_file**(filename, content) — workspace files\n- **search_memories**(query) — keyword search through memory files\n- **search_memories_deep**(query) — dumps ALL memories for semantic reasoning (use when keyword search finds nothing)\n- **create_canvas**(title, html, css?, js?) — create live interactive HTML/CSS/JS canvas (renders as iframe in chat)\n- **web_fetch**(url) / **web_search**(query) — web access\n- **get_key**(name) / **set_key**(name, value) — encrypted vault\n- **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head\n- **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: UTC\n- **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving\n- **discord_admin**(action, ...) — list, make and edit Discord channels and make webhooks with Tarsee's own bot (never the bot token from Bash); changes need approved_by, a webhook URL goes to the vault, nothing deletes\n- **railway**(action, project?, environment?, service?, ...) — list Railway projects and variable names, set a variable (secrets via from_key, a vault key name) or redeploy, with the vault's RAILWAY_API_TOKEN; writes need approved_by. Use it instead of Railway calls from Bash\n\n## Memory\nUse remember for durable facts. Use daily_log for session notes. Only append, never overwrite.\nBefore saying \"I don't know\" or \"I can't remember\":\n1. Try search_memories first (fast, keyword-based)\n2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)\n\n## CLI Tools Installed\n- **railway** — Railway CLI for logs and deploys (to set a variable or redeploy, use the railway tool above: never a secret in a command)\n- **gog** — Google Workspace (Gmail, Calendar, Drive, Contacts, Sheets)\n- **himalaya** — Zoho/IMAP email\n- **gh** — GitHub CLI\n- **claude** — Claude Code CLI\n- **whisper-cli** — local speech-to-text\n- Use Bash to run any of these directly.\n\n## Skill Discovery\nYou have skills installed in the skills/ directory. Before saying \"I can't do that\":\n1. Check if a skill exists: list files in <WORKSPACE>/skills/ or read a skill's SKILL.md\n2. If a matching skill exists, read its SKILL.md and follow the instructions\n3. If no skill exists, ask the user if they want you to create one\n\n## Workspace: <WORKSPACE>\n\nYou are a test.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "last_user": [
+        {
+          "type": "text",
+          "text": "<system-reminder>\nAttribution for git commits and pull requests you create from here on (this replaces Claude Code's own earlier attribution guidance, such as a previous copy of this reminder; the user's own instructions about these lines, such as a CLAUDE.md or memory rule, take precedence over this reminder, but do not add attribution lines this reminder leaves out):\n- End git commit messages with:\nCo-Authored-By: Claude Code <noreply@anthropic.com>\n- End pull request descriptions with:\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n</system-reminder>\n"
+        },
+        {
+          "type": "text",
+          "text": "what time is it?",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v1/messages",
+      "model": "deepseek-flash",
+      "tools": [
+        "Bash",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Read",
+        "Write",
+        "mcp__tarsee__tarsee_browser",
+        "mcp__tarsee__tarsee_calculator",
+        "mcp__tarsee__tarsee_configure_email_channel",
+        "mcp__tarsee__tarsee_create_canvas",
+        "mcp__tarsee__tarsee_create_diagram",
+        "mcp__tarsee__tarsee_daily_log",
+        "mcp__tarsee__tarsee_datetime",
+        "mcp__tarsee__tarsee_delete_key",
+        "mcp__tarsee__tarsee_discord_admin",
+        "mcp__tarsee__tarsee_get_key",
+        "mcp__tarsee__tarsee_list_files",
+        "mcp__tarsee__tarsee_list_keys",
+        "mcp__tarsee__tarsee_pdf_read",
+        "mcp__tarsee__tarsee_push_notification",
+        "mcp__tarsee__tarsee_railway",
+        "mcp__tarsee__tarsee_read_file",
+        "mcp__tarsee__tarsee_remember",
+        "mcp__tarsee__tarsee_schedule_task",
+        "mcp__tarsee__tarsee_search_memories",
+        "mcp__tarsee__tarsee_search_memories_deep",
+        "mcp__tarsee__tarsee_send_email_thread",
+        "mcp__tarsee__tarsee_send_file",
+        "mcp__tarsee__tarsee_send_message",
+        "mcp__tarsee__tarsee_set_key",
+        "mcp__tarsee__tarsee_web_fetch",
+        "mcp__tarsee__tarsee_web_search",
+        "mcp__tarsee__tarsee_write_file"
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        },
+        {
+          "type": "text",
+          "text": "You ARE Tarsee — a headless AI agent running 24/7 on a server.\n\n## MCP Tools (call as mcp__tarsee__tarsee_<name>)\n- **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/Slack/web\n- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp/Slack or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files\n- **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs\n- **remember**(content) — append to MEMORY.md\n- **daily_log**(content) — append to today's log\n- **read_file**(filename) / **write_file**(filename, content) — workspace files\n- **search_memories**(query) — keyword search through memory files\n- **search_memories_deep**(query) — dumps ALL memories for semantic reasoning (use when keyword search finds nothing)\n- **create_canvas**(title, html, css?, js?) — create live interactive HTML/CSS/JS canvas (renders as iframe in chat)\n- **web_fetch**(url) / **web_search**(query) — web access\n- **get_key**(name) / **set_key**(name, value) — encrypted vault\n- **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head\n- **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: UTC\n- **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving\n- **discord_admin**(action, ...) — list, make and edit Discord channels and make webhooks with Tarsee's own bot (never the bot token from Bash); changes need approved_by, a webhook URL goes to the vault, nothing deletes\n- **railway**(action, project?, environment?, service?, ...) — list Railway projects and variable names, set a variable (secrets via from_key, a vault key name) or redeploy, with the vault's RAILWAY_API_TOKEN; writes need approved_by. Use it instead of Railway calls from Bash\n\n## Memory\nUse remember for durable facts. Use daily_log for session notes. Only append, never overwrite.\nBefore saying \"I don't know\" or \"I can't remember\":\n1. Try search_memories first (fast, keyword-based)\n2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)\n\n## CLI Tools Installed\n- **railway** — Railway CLI for logs and deploys (to set a variable or redeploy, use the railway tool above: never a secret in a command)\n- **gog** — Google Workspace (Gmail, Calendar, Drive, Contacts, Sheets)\n- **himalaya** — Zoho/IMAP email\n- **gh** — GitHub CLI\n- **claude** — Claude Code CLI\n- **whisper-cli** — local speech-to-text\n- Use Bash to run any of these directly.\n\n## Skill Discovery\nYou have skills installed in the skills/ directory. Before saying \"I can't do that\":\n1. Check if a skill exists: list files in <WORKSPACE>/skills/ or read a skill's SKILL.md\n2. If a matching skill exists, read its SKILL.md and follow the instructions\n3. If no skill exists, ask the user if they want you to create one\n\n## Workspace: <WORKSPACE>\n\nYou are a test.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "last_user": [
+        {
+          "tool_use_id": "toolu_datetime_1",
+          "type": "tool_result",
+          "content": [
+            {
+              "type": "text",
+              "text": "2026-11-12T23:57:25.067Z"
+            }
+          ],
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ]
+    }
+  ]
+}

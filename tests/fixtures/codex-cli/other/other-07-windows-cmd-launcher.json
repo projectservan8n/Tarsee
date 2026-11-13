@@ -1,0 +1,75 @@
+{
+  "name": "other-07-windows-cmd-launcher",
+  "what": "Windows: argument lists passed through a .cmd launcher (the kind npm puts on the PATH as `codex`), started as Tarsee's spawnCodex() starts one (cmd.exe /d /s /c). The short arguments of the sign-in and the model list arrive unchanged; a turn's do not.",
+  "made_with": {
+    "launcher": "@echo off\r\n\"%~dp0codex-stub.exe\" %*\r\nexit /b %ERRORLEVEL%\r\n",
+    "startedBy": "src/ai/codex-cli.js spawnCodex()",
+    "platform": "win32"
+  },
+  "results": {
+    "the sign-in's and the model list's arguments (CODEX_BASE_ARGS)": {
+      "given": [
+        "-c",
+        "cli_auth_credentials_store=\"file\"",
+        "-c",
+        "check_for_update_on_startup=false",
+        "-c",
+        "project_root_markers=[]",
+        "login",
+        "status"
+      ],
+      "arrivedUnchanged": true,
+      "exitCode": 0,
+      "stderr": ""
+    },
+    "a short turn: a string with an escaped newline and escaped quotes in it": {
+      "given": [
+        "exec",
+        "--experimental-json",
+        "--config",
+        "developer_instructions=\"You are Tarsee.\\n\\nSecond \\\"line\\\".\"",
+        "--config",
+        "approval_policy=\"never\""
+      ],
+      "arrivedUnchanged": true,
+      "exitCode": 0,
+      "stderr": ""
+    },
+    "a string with percent, caret, ampersand, pipe, angle brackets": {
+      "given": [
+        "exec",
+        "--config",
+        "developer_instructions=\"100% sure ^ a & b | c < d > e ! %PATH% done\""
+      ],
+      "arrivedUnchanged": false,
+      "exitCode": 255,
+      "stderr": "'b' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n",
+      "whatArrived": [
+        "exec",
+        "--config",
+        "developer_instructions=\"100% sure  a"
+      ]
+    },
+    "8,000 characters in one argument": {
+      "given": [
+        "exec",
+        "--config",
+        "developer_instructions=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx … (8025 characters)"
+      ],
+      "arrivedUnchanged": true,
+      "exitCode": 0,
+      "stderr": ""
+    },
+    "24,000 characters in one argument (the size Tarsee allows the instructions on Windows)": {
+      "given": [
+        "exec",
+        "--config",
+        "developer_instructions=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx … (24025 characters)"
+      ],
+      "arrivedUnchanged": false,
+      "exitCode": 1,
+      "stderr": "The command line is too long.\r\n",
+      "whatArrived": "the program was never started"
+    }
+  }
+}

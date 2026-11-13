@@ -1,0 +1,40 @@
+
+=== s1a turn 1
+stdout: 564:control_response  569:system/session_state_changed=running  641:system/init  650:system/status  692:stream_event/message_start  692:stream_event/content_block_start  692:stream_event/content_block_delta  692:stream_event/content_block_delta  694:assistant  694:stream_event/content_block_stop  696:stream_event/message_delta  697:stream_event/message_stop  734:result/success  739:system/session_state_changed=idle
+result: {"subtype":"success","is_error":false,"result":"first answer","num_turns":1,"session_id":"0b2b5071-c728-4c31-968a-533b853551a2","terminal_reason":"completed","api_error_status":null,"total_cost_usd":0.000123,"usage":{"in":11,"out":6},"modelUsage":{"claude-sonnet-4-5":{"in":11,"out":6,"cost":0.000123}},"since_last":{"claude-sonnet-4-5":{"in":11,"out":6,"cost":0.000123}}}
+stderr: "" | exit: {"t":797,"code":0,"signal":null} | stdin: 11:control_request/initialize 11:user 734:CLOSED | notes: []
+
+=== s1b turn 2, --resume, a different system prompt, systemPromptSnapshot false
+stdout: 701:control_response  705:system/session_state_changed=running  803:system/init  808:system/status  847:stream_event/message_start  847:stream_event/content_block_start  848:stream_event/content_block_delta  848:stream_event/content_block_delta  850:assistant  850:stream_event/content_block_stop  853:stream_event/message_delta  853:stream_event/message_stop  861:result/success  864:system/session_state_changed=idle
+result: {"subtype":"success","is_error":false,"result":"first answer","num_turns":1,"session_id":"0b2b5071-c728-4c31-968a-533b853551a2","terminal_reason":"completed","api_error_status":null,"total_cost_usd":0.000246,"usage":{"in":11,"out":6},"modelUsage":{"claude-sonnet-4-5":{"in":22,"out":12,"cost":0.000246}},"since_last":{"claude-sonnet-4-5":{"in":11,"out":6,"cost":0.000123}}}
+stderr: "" | exit: {"t":936,"code":0,"signal":null} | stdin: 8:control_request/initialize 8:user 861:CLOSED | notes: []
+init session: 0b2b5071-c728-4c31-968a-533b853551a2 same as turn 1: true
+isReplay user messages on stdout: 0
+
+=== s1c turn 3, --resume, a third prompt, NO systemPromptSnapshot key
+stdout: 656:control_response  757:system/init  763:system/status  805:stream_event/message_start  805:stream_event/content_block_start  805:stream_event/content_block_delta  805:stream_event/content_block_delta  807:assistant  807:stream_event/content_block_stop  809:stream_event/message_delta  810:stream_event/message_stop  833:result/success
+result: {"subtype":"success","is_error":false,"result":"first answer","num_turns":1,"session_id":"0b2b5071-c728-4c31-968a-533b853551a2","terminal_reason":"completed","api_error_status":null,"total_cost_usd":0.000369,"usage":{"in":11,"out":6},"modelUsage":{"claude-sonnet-4-5":{"in":33,"out":18,"cost":0.000369}},"since_last":{"claude-sonnet-4-5":{"in":11,"out":6,"cost":0.000123}}}
+stderr: "" | exit: {"t":878,"code":0,"signal":null} | stdin: 3:control_request/initialize 4:user 833:CLOSED | notes: []
+system sent on each call: [
+ [
+  "x-anthropic-billing-header: cc_version=2.1.319.812; cc_entry",
+  "You are a Claude agent, built on Anthropic's Claude Agent SD [cache_control {\"type\":\"ephemeral\"}]",
+  "FIRST TURN PROMPT [cache_control {\"type\":\"ephemeral\"}]"
+ ],
+ [
+  "x-anthropic-billing-header: cc_version=2.1.319.812; cc_entry",
+  "You are a Claude agent, built on Anthropic's Claude Agent SD [cache_control {\"type\":\"ephemeral\"}]",
+  "SECOND TURN PROMPT [cache_control {\"type\":\"ephemeral\"}]"
+ ],
+ [
+  "x-anthropic-billing-header: cc_version=2.1.319.812; cc_entry",
+  "You are a Claude agent, built on Anthropic's Claude Agent SD [cache_control {\"type\":\"ephemeral\"}]",
+  "THIRD TURN PROMPT [cache_control {\"type\":\"ephemeral\"}]"
+ ]
+]
+messages count per call: 1,3,5
+transcript files for the session: [
+  '<SCRATCH_AS_FOLDER_NAME>-real-ws\\0b2b5071-c728-4c31-968a-533b853551a2.jsonl'
+]
+transcript row types: queue-operation,queue-operation,user,attachment,attachment,attachment,atis-latch,attachment,attachment,attachment,api-request-shape,api-request-blob,api-request,assistant,last-prompt,atis-latch,cost-state,queue-operation,queue-operation,user,attachment,api-request-shape,api-request-blob,api-request,assistant,last-prompt,mode,cost-state,queue-operation,queue-operation,user,attachment,attachment,api-request-shape,api-request-blob,api-request,assistant,attachment,last-prompt,mode,atis-latch,cost-state
+

@@ -1,0 +1,159 @@
+// Wire captures: Tarsee's engine and the real Agent SDK on one side, the REAL claude.exe on the other, with every
+// line that crosses the program's stdin and stdout written down in order. The program talks to a loopback fake of the
+// Messages API through engine-env's test-only base-URL seam, with a fake key; nothing leaves the machine.
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { sdk, engine, createTarseeMcp, KEYS, dirsFor, serverEnv, sanitizer, SCRATCH, NODE_PROJECT, optionsView } from "./capture-lib.mjs";
+
+const { startFakeAnthropic } = await import(pathToFileURL(`${NODE_PROJECT}/test/fixtures/fake-anthropic.js`).href);
+fs.mkdirSync(`${SCRATCH}/wire`, { recursive: true });
+const which = (process.argv[2] || "all").split(",");
+const want = (k) => which.includes("all") || which.includes(k);
+
+const hasToolResult = (body) => {
+  const last = [...(body?.messages || [])].reverse().find((m) => m.role === "user");
+  return Array.isArray(last?.content) && last.content.some((b) => b.type === "tool_result");
+};
+const toolNames = (body) => (body?.tools || []).map((x) => x.name);
+
+async function wire(name, { providerId = "deepseek", model, script, runOpts = {}, mcp = false, abortAfter = null, envExtra = {} }) {
+  const d = dirsFor(`wire-${name}`);
+  const clean = sanitizer(d);
+  const fake = await startFakeAnthropic({ script });
+  const t0 = Date.now();
+  const t = () => Date.now() - t0;
+  const log = [];
+  const proc = [];
+  let spawned = null;
+  let stderr = "";
+  try {
+    const env = serverEnv(d, { NODE_ENV: "test", [`TARSEE_TEST_BASE_URL_${providerId.toUpperCase()}`]: fake.url, CLAUDE_CODE_MAX_RETRIES: "0", ...envExtra });
+    const seenBySdkCaller = [];
+    const rawQuery = ({ prompt, options }) => sdk.query({
+      prompt,
+      options: {
+        ...options,
+        spawnClaudeCodeProcess(spec) {
+          spawned = { command: spec.command, args: spec.args, cwd: spec.cwd };
+          const child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, stdio: ["pipe", "pipe", "pipe"], signal: spec.signal, windowsHide: true });
+          const write = child.stdin.write.bind(child.stdin);
+          child.stdin.write = (chunk, ...rest) => {
+            for (const line of String(chunk).split("\n")) { if (!line.trim()) continue; let json = null; try { json = JSON.parse(line); } catch { /* text */ } log.push({ t: t(), dir: "to-program", ...(json ? { json } : { text: line }) }); }
+            return write(chunk, ...rest);
+          };
+          const end = child.stdin.end.bind(child.stdin);
+          child.stdin.end = (...a) => { proc.push({ t: t(), event: "stdin.end()" }); log.push({ t: t(), dir: "to-program", event: "stdin closed" }); return end(...a); };
+          const kill = child.kill.bind(child);
+          child.kill = (sig) => { proc.push({ t: t(), event: "kill()", signal: sig ?? "(default SIGTERM)" }); return kill(sig); };
+          let buf = "";
+          child.stdout.on("data", (c) => {
+            buf += c;
+            let i;
+            while ((i = buf.indexOf("\n")) !== -1) { const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue; let json = null; try { json = JSON.parse(line); } catch { /* text */ } log.push({ t: t(), dir: "from-program", ...(json ? { json } : { text: line }) }); }
+          });
+          child.stderr.on("data", (c) => { stderr += c; });
+          child.on("exit", (code, signal) => { proc.push({ t: t(), event: "exit", code, signal }); log.push({ t: t(), dir: "from-program", event: `exit code ${code} signal ${signal}` }); });
+          spec.signal?.addEventListener("abort", () => proc.push({ t: t(), event: "spawn signal aborted" }));
+          return child;
+        },
+      },
+    });
+    // what the SDK hands its caller, to compare with what the program wrote: the difference is what the SDK keeps
+    const query = (args) => {
+      const it = rawQuery(args);
+      return (async function* () {
+        try { for await (const m of it) { seenBySdkCaller.push({ t: t(), type: m.type, ...(m.subtype ? { subtype: m.subtype } : {}), ...(m.event?.type ? { event: m.event.type } : {}) }); yield m; } }
+        catch (e) { seenBySdkCaller.push({ t: t(), thrown: `${e?.name}: ${e?.message}` }); throw e; }
+      })();
+    };
+    const ac = new AbortController();
+    const events = [];
+    const logs = [];
+    const orig = { log: console.log, warn: console.warn, error: console.error };
+    for (const k of Object.keys(orig)) console[k] = (...a) => logs.push(`${k}: ${a.map((x) => (x instanceof Error ? `${x.name}: ${x.message}` : typeof x === "string" ? x : JSON.stringify(x))).join(" ")}`);
+    let abortAt = null;
+    try {
+      for await (const e of engine.run({
+        target: { providerId, model },
+        messages: [{ role: "user", content: "what time is it?" }],
+        systemPrompt: "You are a test.",
+        signal: ac.signal,
+        ...runOpts,
+        deps: { query, env, stateDir: d.stateDir, homeDir: d.homeDir, cwd: d.cwd, key: KEYS[providerId], mcpServer: mcp ? createTarseeMcp({}, { quiet: true }) : null, vaultEnv: {}, isTranscriptOverCap: () => false },
+      })) {
+        events.push({ t: t(), ...e });
+        if (abortAfter && !ac.signal.aborted && abortAfter(e)) { abortAt = t(); ac.abort(); }
+      }
+    } finally { Object.assign(console, orig); }
+    await new Promise((r) => setTimeout(r, abortAfter ? 9000 : 800));
+    const out = clean({
+      name, providerId,
+      note: "Every line that crossed the real claude.exe's stdin (to-program) and stdout (from-program) while Tarsee's engine ran one turn through the Agent SDK 0.3.319. t is milliseconds from the start of the turn.",
+      command: spawned?.command, argv: spawned?.args, cwd: spawned?.cwd,
+      abort_at_ms: abortAt, process_calls: proc, stderr,
+      wire: log,
+      messages_the_sdk_handed_to_its_caller: seenBySdkCaller,
+      tarsee_events: events, tarsee_logs: logs,
+      api_requests: fake.requests.map((q) => ({ method: q.method, path: q.path, model: q.body?.model, tools: toolNames(q.body), system: q.body?.system, last_user: [...(q.body?.messages || [])].reverse().find((m) => m.role === "user")?.content })),
+    });
+    const text = JSON.stringify(out, null, 2).replaceAll(fake.url, "http://127.0.0.1:<FAKE_API_PORT>");
+    fs.writeFileSync(`${SCRATCH}/wire/${name}.json`, text);
+    return JSON.parse(text);
+  } finally { await fake.close(); }
+}
+
+const briefLine = (l) => {
+  if (l.event) return `${l.t} ${l.dir === "to-program" ? ">" : "<"} [${l.event}]`;
+  const j = l.json; if (!j) return `${l.t} ${l.dir === "to-program" ? ">" : "<"} TEXT ${l.text?.slice(0, 200)}`;
+  let s = j.type + (j.subtype ? `/${j.subtype}` : "");
+  if (j.type === "control_request") s += ` ${j.request?.subtype} id=${j.request_id} ${JSON.stringify(j.request).slice(0, 700)}`;
+  else if (j.type === "control_response") s += ` ${j.response?.subtype} id=${j.response?.request_id} ${JSON.stringify(j.response?.response ?? j.response?.error).slice(0, 500)}`;
+  else if (j.type === "stream_event") s += ` ${j.event?.type} ${JSON.stringify(j.event?.delta ?? j.event?.content_block ?? "").slice(0, 120)}`;
+  else if (j.type === "system" && j.subtype === "init") s += ` mcp_servers=${JSON.stringify(j.mcp_servers)} tools=${JSON.stringify(j.tools)} apiKeySource=${j.apiKeySource}`;
+  else s += ` ${JSON.stringify(j).slice(0, 500)}`;
+  return `${l.t} ${l.dir === "to-program" ? ">" : "<"} ${s}`;
+};
+const show = (label, w) => {
+  console.log(`\n===== ${label}`);
+  console.log("  argv:", JSON.stringify(w.argv));
+  for (const l of w.wire) console.log("  " + briefLine(l));
+  console.log("  process calls:", JSON.stringify(w.process_calls));
+  console.log("  stderr:", JSON.stringify(w.stderr.slice(0, 400)));
+  console.log("  tarsee events:", w.tarsee_events.filter((e) => e.type !== "step").map((e) => `${e.type}${e.stopReason ? `:${e.stopReason}` : ""}${e.code ? `:${e.code}` : ""}`).join(" "));
+};
+
+if (want("mcp")) {
+  const w = await wire("sdk-mcp-tool-call", {
+    mcp: true,
+    script: (req) => (hasToolResult(req.body) ? { text: "The time is noted." } : toolNames(req.body).includes("mcp__tarsee__tarsee_datetime") ? { toolUse: { id: "toolu_datetime_1", name: "mcp__tarsee__tarsee_datetime", input: { timezone: "UTC", format: "iso" } } } : { text: "No tarsee tool offered." }),
+  });
+  show("the in-process tarsee MCP server: a tool call travels over the control channel", w);
+}
+
+if (want("plain")) {
+  const w = await wire("sdk-plain-turn", { script: () => ({ text: "Hello from the fake." }) });
+  show("a plain turn, no MCP server", w);
+}
+
+if (want("abort")) {
+  const w = await wire("sdk-abort-mid-stream", { script: () => ({ hang: true, text: "This answer will never finish because" }), abortAfter: (e) => e.type === "text" });
+  show("the caller's signal fires in the middle of a streamed answer", w);
+}
+
+if (want("abortmcp")) {
+  const w = await wire("sdk-abort-mid-stream-with-mcp", { mcp: true, script: () => ({ hang: true, text: "This answer will never finish because" }), abortAfter: (e) => e.type === "text" });
+  show("the same with the in-process MCP server registered", w);
+}
+
+if (want("media")) {
+  // a 1x1 PNG
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const w = await wire("sdk-media-image", {
+    script: () => ({ text: "A picture." }),
+    runOpts: { messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: png } }, { type: "text", text: "what is this?" }] }] },
+  });
+  show("a picture with the prompt", w);
+  console.log("  API last user content:", JSON.stringify(w.api_requests.at(-1)?.last_user)?.slice(0, 900));
+}

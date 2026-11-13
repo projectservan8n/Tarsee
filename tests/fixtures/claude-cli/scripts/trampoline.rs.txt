@@ -1,0 +1,20 @@
+// A native stand-in for the claude program: starts `node stub-claude.mjs <the same arguments>` from its own folder
+// with the same stdin, stdout, stderr, environment and working folder, and exits with its exit code. It exists so the
+// SDK takes its "native binary" path (a pathToClaudeCodeExecutable that does not end in .js/.mjs/.ts).
+use std::process::{Command, Stdio};
+
+fn main() {
+    let exe = std::env::current_exe().expect("current_exe");
+    let dir = exe.parent().expect("exe dir");
+    let script = dir.join("stub-claude.mjs");
+    let node = std::fs::read_to_string(dir.join("node-path.txt")).map(|s| s.trim().to_string()).unwrap_or_else(|_| "node".to_string());
+    let status = Command::new(node)
+        .arg(script)
+        .args(std::env::args_os().skip(1))
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .expect("start node");
+    std::process::exit(status.code().unwrap_or(1));
+}

@@ -1,0 +1,18 @@
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const SCRATCH = path.resolve(process.env.CAPTURE_SCRATCH);
+const PROJECT = process.env.CAPTURE_PROJECT;
+process.env.TARSEE_STATE_DIR = path.join(SCRATCH, "state-engine");
+process.env.TARSEE_WORKSPACE_DIR = path.join(SCRATCH, "state-engine", "workspace");
+process.env.TARSEE_DATA_DIR = path.join(SCRATCH, "state-engine", "data");
+const { unwrapShellCommand } = await import(pathToFileURL(path.join(PROJECT, "src/ai/providers/codex-events.js")).href);
+const s = JSON.parse(fs.readFileSync(path.join(SCRATCH, "out", "r9-stop-with-a-command-running.json"), "utf8"));
+const out = {};
+for (const k of ["commandRunningWhenTheProgramIsTerminated", "commandThatExits3"]) {
+  const item = JSON.parse(s[k].stdoutLines.find((l) => l.includes("command_execution"))).item;
+  out[k] = { command: item.command, unwrapped: unwrapShellCommand(item.command) };
+}
+fs.writeFileSync(path.join(SCRATCH, "out", "unwrap.json"), JSON.stringify(out, null, 1));
+console.log(JSON.stringify(out, null, 1));
+process.exit(0);

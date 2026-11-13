@@ -1,0 +1,103 @@
+// Real CLI, driven directly: a tool call, a resumed session, where the transcript is kept, thinking and effort flags.
+import { drive, gatewayEnv, baseArgs, initRequest, userText, startFakeAnthropic, SCRATCH, brief } from "./real-drive.mjs";
+import fs from "node:fs";
+import http from "node:http";
+import path from "node:path";
+
+fs.mkdirSync(`${SCRATCH}/real`, { recursive: true });
+const which = (process.argv[2] || "all").split(",");
+const want = (k) => which.includes("all") || which.includes(k);
+const SS = { CLAUDE_CODE_SDK_READS_SESSION_STATE: "1" };
+const hasToolResult = (body) => {
+  const last = [...(body?.messages || [])].reverse().find((m) => m.role === "user");
+  return Array.isArray(last?.content) && last.content.some((b) => b.type === "tool_result");
+};
+const lines = (r, filter = () => true) => { for (const o of r.stdout) if (o.msg ? filter(o.msg) : true) console.log(`  < ${o.t} ${o.msg ? JSON.stringify(o.msg).slice(0, 1500) : `RAW ${o.raw}`}`); };
+function tree(dir, depth = 0, out = []) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    out.push(`${"  ".repeat(depth)}${e.name}${e.isDirectory() ? "/" : `  (${fs.statSync(p).size} bytes)`}`);
+    if (e.isDirectory() && depth < 6) tree(p, depth + 1, out);
+  }
+  return out;
+}
+
+if (want("session")) {
+  const home = `${SCRATCH}/homes/session`;
+  const cwd = `${SCRATCH}/ws/session ws.dir_1`; // a space, a dot and an underscore, to see how the folder name is made
+  fs.rmSync(home, { recursive: true, force: true });
+  const fake = await startFakeAnthropic({ script: (req) => (hasToolResult(req.body) ? { text: "The tool said hi." } : { toolUse: { id: "toolu_real_1", name: "Bash", input: { command: "echo hi-from-bash", description: "say hi" } } }) });
+  try {
+    const r1 = await drive({ name: "04-session-turn1-tool", args: baseArgs(), env: gatewayEnv(home, fake.url, SS), cwd, stdin: [initRequest({ systemPrompt: ["You are a test."], systemPromptSnapshot: false }), userText("run echo")], timeoutMs: 90_000 });
+    console.log(`\n===== turn 1 (new session, a Bash call): exit ${r1.exitCode}; stderr ${JSON.stringify(r1.stderr.slice(0, 300))}`);
+    lines(r1, (m) => ["assistant", "user", "result"].includes(m.type) || (m.type === "system" && m.subtype !== "init"));
+    const sid = r1.stdout.map((o) => o.msg).find((m) => m?.type === "result")?.session_id;
+    console.log("  session id:", sid);
+    console.log("  home after turn 1:\n   ", tree(home).join("\n    "));
+
+    fake.script = () => ({ text: "Second turn answer." });
+    fake.requests.length = 0;
+    const r2 = await drive({ name: "04-session-turn2-resume", args: baseArgs({ extra: [`--resume=${sid}`] }), env: gatewayEnv(home, fake.url, SS), cwd, stdin: [initRequest({ systemPrompt: ["You are a test."], systemPromptSnapshot: false }), userText("and now?")], timeoutMs: 90_000 });
+    console.log(`\n===== turn 2 (--resume=${sid}): exit ${r2.exitCode}; stderr ${JSON.stringify(r2.stderr.slice(0, 300))}`);
+    lines(r2, (m) => ["assistant", "user", "result"].includes(m.type) || (m.type === "system" && m.subtype !== "init"));
+    const init2 = r2.stdout.map((o) => o.msg).find((m) => m?.type === "system" && m.subtype === "init");
+    console.log("  init.session_id on resume:", init2?.session_id, "same:", init2?.session_id === sid);
+    const body = fake.messages()[0]?.body;
+    console.log("  messages sent to the API on resume:", JSON.stringify(body?.messages?.map((m) => ({ role: m.role, content: Array.isArray(m.content) ? m.content.map((b) => b.type + (b.text ? `:${b.text.slice(0, 60)}` : "")) : String(m.content).slice(0, 60) }))));
+    console.log("  system sent to the API on resume:", JSON.stringify(body?.system)?.slice(0, 400));
+    console.log("  home after turn 2:\n   ", tree(home).join("\n    "));
+    // the transcript
+    const projects = path.join(home, ".claude", "projects");
+    for (const dir of fs.readdirSync(projects)) {
+      for (const f of fs.readdirSync(path.join(projects, dir))) {
+        if (!f.endsWith(".jsonl")) continue;
+        const rows = fs.readFileSync(path.join(projects, dir, f), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+        console.log(`\n  transcript ${dir}/${f}: ${rows.length} lines`);
+        for (const row of rows) console.log("   ", JSON.stringify(row).slice(0, 700));
+        fs.copyFileSync(path.join(projects, dir, f), `${SCRATCH}/real/04-transcript.jsonl`);
+      }
+    }
+  } finally { await fake.close(); }
+}
+
+if (want("thinking")) {
+  // a fake that streams a thinking block before the text, to see how it comes through
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => { raw += c; });
+    req.on("end", () => {
+      let body = null; try { body = JSON.parse(raw); } catch { /* not JSON */ }
+      requests.push({ method: req.method, path: req.url, headers: req.headers, body });
+      if (!(req.method === "POST" && /\/v1\/messages(\?|$)/.test(req.url))) { res.writeHead(404, { "content-type": "application/json" }); res.end("{}"); return; }
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const sse = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      sse("message_start", { type: "message_start", message: { id: "msg_think_1", type: "message", role: "assistant", model: body?.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 1, cache_read_input_tokens: 5, cache_creation_input_tokens: 7 } } });
+      sse("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } });
+      sse("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "The user wants a greeting. " } });
+      sse("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "I will say hi." } });
+      sse("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "c2lnbmF0dXJl" } });
+      sse("content_block_stop", { type: "content_block_stop", index: 0 });
+      sse("content_block_start", { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } });
+      sse("content_block_delta", { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Hi." } });
+      sse("content_block_stop", { type: "content_block_stop", index: 1 });
+      sse("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 15 } });
+      sse("message_stop", { type: "message_stop" });
+      res.end();
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const r = await drive({
+      name: "04-thinking", args: baseArgs({ model: "claude-sonnet-5", extra: ["--thinking=adaptive", "--thinking-display=summarized", "--effort=high"] }),
+      env: gatewayEnv(`${SCRATCH}/homes/thinking`, url, SS), cwd: `${SCRATCH}/ws/thinking`,
+      stdin: [initRequest({ systemPrompt: ["You are a test."], systemPromptSnapshot: false }), userText("say hi")], timeoutMs: 90_000,
+    });
+    console.log(`\n===== thinking (--thinking=adaptive --thinking-display=summarized --effort=high): exit ${r.exitCode}; stderr ${JSON.stringify(r.stderr.slice(0, 300))}`);
+    lines(r, (m) => m.type !== "control_response" && !(m.type === "system" && m.subtype === "init"));
+    const b = requests.find((q) => q.method === "POST" && /\/v1\/messages/.test(q.path))?.body;
+    console.log("  request body: thinking =", JSON.stringify(b?.thinking), "output_config =", JSON.stringify(b?.output_config), "model =", b?.model, "max_tokens =", b?.max_tokens);
+    fs.writeFileSync(`${SCRATCH}/real/04-thinking.api.json`, JSON.stringify(requests, null, 2));
+  } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
+}

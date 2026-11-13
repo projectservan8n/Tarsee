@@ -1,0 +1,193 @@
+{
+  "description": "What reaches the Messages API as `system` for each way of giving the system prompt. The first block is the program's billing header, the second its own identity line; the caller's prompt is the third.",
+  "cases": [
+    {
+      "case": "initialize.systemPrompt = [stable, the boundary marker, volatile], systemPromptSnapshot false",
+      "initialize_systemPrompt": [
+        "STABLE PART",
+        "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__",
+        "VOLATILE PART"
+      ],
+      "exit_code": 0,
+      "system_sent_to_the_api": [
+        {
+          "type": "text",
+          "text": "x-anthropic-billing-header: cc_version=2.1.319.812; cc_entrypoint=sdk-ts;"
+        },
+        {
+          "type": "text",
+          "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        },
+        {
+          "type": "text",
+          "text": "STABLE PART\n\nVOLATILE PART",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ]
+    },
+    {
+      "case": "two turns of one session (the second with --resume), no systemPromptSnapshot field",
+      "first_turn": {
+        "initialize_systemPrompt": [
+          "FIRST TURN PROMPT"
+        ],
+        "system_sent_to_the_api": [
+          {
+            "type": "text",
+            "text": "x-anthropic-billing-header: cc_version=2.1.319.812; cc_entrypoint=sdk-ts;"
+          },
+          {
+            "type": "text",
+            "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          },
+          {
+            "type": "text",
+            "text": "FIRST TURN PROMPT",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ]
+      },
+      "resumed_turn": {
+        "initialize_systemPrompt": [
+          "SECOND TURN PROMPT"
+        ],
+        "exit_code": 0,
+        "system_sent_to_the_api": [
+          {
+            "type": "text",
+            "text": "x-anthropic-billing-header: cc_version=2.1.319.812; cc_entrypoint=sdk-ts;"
+          },
+          {
+            "type": "text",
+            "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          },
+          {
+            "type": "text",
+            "text": "FIRST TURN PROMPT",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case": "two turns of one session (the second with --resume), systemPromptSnapshot: false",
+      "first_turn": {
+        "initialize_systemPrompt": [
+          "FIRST TURN PROMPT"
+        ],
+        "system_sent_to_the_api": [
+          {
+            "type": "text",
+            "text": "x-anthropic-billing-header: cc_version=2.1.319.812; cc_entrypoint=sdk-ts;"
+          },
+          {
+            "type": "text",
+            "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          },
+          {
+            "type": "text",
+            "text": "FIRST TURN PROMPT",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ]
+      },
+      "resumed_turn": {
+        "initialize_systemPrompt": [
+          "SECOND TURN PROMPT"
+        ],
+        "exit_code": 0,
+        "system_sent_to_the_api": [
+          {
+            "type": "text",
+            "text": "x-anthropic-billing-header: cc_version=2.1.319.812; cc_entrypoint=sdk-ts;"
+          },
+          {
+            "type": "text",
+            "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          },
+          {
+            "type": "text",
+            "text": "SECOND TURN PROMPT",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case": "no initialize request at all, only the user message",
+      "exit_code": 0,
+      "stdout_message_types": [
+        "system/session_state_changed",
+        "system/init",
+        "system/status",
+        "assistant",
+        "result/success",
+        "system/session_state_changed"
+      ],
+      "system_sent_to_the_api_first_two_blocks": [
+        {
+          "type": "text",
+          "text": "x-anthropic-billing-header: cc_version=2.1.319.812; cc_entrypoint=sdk-ts;"
+        },
+        {
+          "type": "text",
+          "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "system_block_3_starts": "\nYou are an agent working with the user toward their goals, using your own judgm"
+    },
+    {
+      "case": "--system-prompt 'FLAG PROMPT' --system-prompt-snapshot off on the command line, no initialize request",
+      "exit_code": 0,
+      "stderr": "",
+      "system_sent_to_the_api": [
+        {
+          "type": "text",
+          "text": "x-anthropic-billing-header: cc_version=2.1.319.812; cc_entrypoint=sdk-ts;"
+        },
+        {
+          "type": "text",
+          "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        },
+        {
+          "type": "text",
+          "text": "FLAG PROMPT",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ]
+    }
+  ]
+}

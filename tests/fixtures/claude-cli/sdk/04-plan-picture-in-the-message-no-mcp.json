@@ -1,0 +1,667 @@
+{
+  "name": "04-plan-picture-in-the-message-no-mcp",
+  "description": "A picture and words in the last user message (no opts.media): the prompt is an async generator of one user message. With no in-process MCP server the SDK closes stdin right after writing it.",
+  "how": "native: the SDK started the stub program itself (pathToClaudeCodeExecutable), exactly as it starts claude.exe",
+  "tarsee_run_opts": {
+    "target": {
+      "providerId": "claude",
+      "model": "sonnet"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "image",
+            "source": {
+              "type": "base64",
+              "media_type": "image/png",
+              "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+            }
+          },
+          {
+            "type": "text",
+            "text": "what is in this picture?"
+          }
+        ]
+      }
+    ],
+    "systemPrompt": "You are a test.",
+    "mcpServer": null
+  },
+  "sdk_query": {
+    "prompt": [
+      {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "image",
+              "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+              }
+            },
+            {
+              "type": "text",
+              "text": "what is in this picture?"
+            }
+          ]
+        },
+        "parent_tool_use_id": null
+      }
+    ],
+    "options": {
+      "cwd": "<WORKSPACE>",
+      "env": {
+        "names": [
+          "BASH_MAX_OUTPUT_LENGTH",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+          "CLAUDE_CODE_OAUTH_TOKEN",
+          "COMSPEC",
+          "DEBUG",
+          "HOME",
+          "MAX_MCP_OUTPUT_TOKENS",
+          "MY_SERVICE_API_KEY",
+          "NODE_OPTIONS",
+          "PATH",
+          "PATHEXT",
+          "SystemDrive",
+          "SystemRoot",
+          "TEMP",
+          "TMP",
+          "USERPROFILE",
+          "windir"
+        ],
+        "values": {
+          "BASH_MAX_OUTPUT_LENGTH": "8000",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "180000",
+          "CLAUDE_CODE_OAUTH_TOKEN": "<PLAN_OAUTH_TOKEN>",
+          "DEBUG": "canary-debug",
+          "MAX_MCP_OUTPUT_TOKENS": "3000",
+          "MY_SERVICE_API_KEY": "vault-value-for-scripts-1",
+          "NODE_OPTIONS": "--max-old-space-size=4096"
+        }
+      },
+      "model": "claude-sonnet-5",
+      "tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Glob",
+        "Grep",
+        "mcp__tarsee__*"
+      ],
+      "allowedTools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Glob",
+        "Grep",
+        "mcp__tarsee__*"
+      ],
+      "permissionMode": "bypassPermissions",
+      "allowDangerouslySkipPermissions": true,
+      "maxTurns": 50,
+      "includePartialMessages": true,
+      "settingSources": [
+        "user",
+        "project",
+        "local"
+      ],
+      "strictMcpConfig": false,
+      "additionalDirectories": [
+        "<TARSEE_ROOT>\\src\\skills"
+      ],
+      "systemPrompt": {
+        "type": "custom",
+        "prompt": "You ARE Tarsee — a headless AI agent running 24/7 on a server.\n\n## MCP Tools (call as mcp__tarsee__tarsee_<name>)\n- **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/Slack/web\n- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp/Slack or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files\n- **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs\n- **remember**(content) — append to MEMORY.md\n- **daily_log**(content) — append to today's log\n- **read_file**(filename) / **write_file**(filename, content) — workspace files\n- **search_memories**(query) — keyword search through memory files\n- **search_memories_deep**(query) — dumps ALL memories for semantic reasoning (use when keyword search finds nothing)\n- **create_canvas**(title, html, css?, js?) — create live interactive HTML/CSS/JS canvas (renders as iframe in chat)\n- **web_fetch**(url) / **web_search**(query) — web access\n- **get_key**(name) / **set_key**(name, value) — encrypted vault\n- **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head\n- **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: UTC\n- **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving\n- **discord_admin**(action, ...) — list, make and edit Discord channels and make webhooks with Tarsee's own bot (never the bot token from Bash); changes need approved_by, a webhook URL goes to the vault, nothing deletes\n- **railway**(action, project?, environment?, service?, ...) — list Railway projects and variable names, set a variable (secrets via from_key, a vault key name) or redeploy, with the vault's RAILWAY_API_TOKEN; writes need approved_by. Use it instead of Railway calls from Bash\n\n## Memory\nUse remember for durable facts. Use daily_log for session notes. Only append, never overwrite.\nBefore saying \"I don't know\" or \"I can't remember\":\n1. Try search_memories first (fast, keyword-based)\n2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)\n\n## CLI Tools Installed\n- **railway** — Railway CLI for logs and deploys (to set a variable or redeploy, use the railway tool above: never a secret in a command)\n- **gog** — Google Workspace (Gmail, Calendar, Drive, Contacts, Sheets)\n- **himalaya** — Zoho/IMAP email\n- **gh** — GitHub CLI\n- **claude** — Claude Code CLI\n- **whisper-cli** — local speech-to-text\n- Use Bash to run any of these directly.\n\n## Skill Discovery\nYou have skills installed in the skills/ directory. Before saying \"I can't do that\":\n1. Check if a skill exists: list files in <WORKSPACE>/skills/ or read a skill's SKILL.md\n2. If a matching skill exists, read its SKILL.md and follow the instructions\n3. If no skill exists, ask the user if they want you to create one\n\n## Workspace: <WORKSPACE>\n\nYou are a test.",
+        "snapshot": false
+      },
+      "abortController": "<AbortController>",
+      "fallbackModel": "claude-haiku-4-5",
+      "stderr": "<function: keeps the last 2000 characters>"
+    }
+  },
+  "spawn": {
+    "command": "<CLAUDE_EXE>",
+    "argv": [
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--input-format",
+      "stream-json",
+      "--max-turns=50",
+      "--model=claude-sonnet-5",
+      "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+      "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+      "--setting-sources=user,project,local",
+      "--permission-mode=bypassPermissions",
+      "--allow-dangerously-skip-permissions",
+      "--fallback-model=claude-haiku-4-5",
+      "--include-partial-messages",
+      "--add-dir=<TARSEE_ROOT>\\src\\skills"
+    ],
+    "cwd": "<WORKSPACE>",
+    "stdio": "stdin, stdout and stderr are pipes; windowsHide: true"
+  },
+  "env": {
+    "given_to_sdk": {
+      "names": [
+        "BASH_MAX_OUTPUT_LENGTH",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "COMSPEC",
+        "DEBUG",
+        "HOME",
+        "MAX_MCP_OUTPUT_TOKENS",
+        "MY_SERVICE_API_KEY",
+        "NODE_OPTIONS",
+        "PATH",
+        "PATHEXT",
+        "SystemDrive",
+        "SystemRoot",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "windir"
+      ],
+      "values": {
+        "BASH_MAX_OUTPUT_LENGTH": "8000",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "180000",
+        "CLAUDE_CODE_OAUTH_TOKEN": "<PLAN_OAUTH_TOKEN>",
+        "DEBUG": "canary-debug",
+        "MAX_MCP_OUTPUT_TOKENS": "3000",
+        "MY_SERVICE_API_KEY": "vault-value-for-scripts-1",
+        "NODE_OPTIONS": "--max-old-space-size=4096"
+      }
+    },
+    "received_by_program": {
+      "names": [
+        "BASH_MAX_OUTPUT_LENGTH",
+        "CLAUDE_AGENT_SDK_VERSION",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CODE_SDK_READS_SESSION_STATE",
+        "COMSPEC",
+        "HOME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "LOGONSERVER",
+        "MAX_MCP_OUTPUT_TOKENS",
+        "MY_SERVICE_API_KEY",
+        "PATH",
+        "PATHEXT",
+        "SystemDrive",
+        "SystemRoot",
+        "TEMP",
+        "TMP",
+        "USERDOMAIN",
+        "USERNAME",
+        "USERPROFILE",
+        "windir"
+      ],
+      "values": {
+        "BASH_MAX_OUTPUT_LENGTH": "8000",
+        "CLAUDE_AGENT_SDK_VERSION": "0.3.319",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "180000",
+        "CLAUDE_CODE_ENTRYPOINT": "sdk-ts",
+        "CLAUDE_CODE_OAUTH_TOKEN": "<PLAN_OAUTH_TOKEN>",
+        "CLAUDE_CODE_SDK_READS_SESSION_STATE": "1",
+        "MAX_MCP_OUTPUT_TOKENS": "3000",
+        "MY_SERVICE_API_KEY": "vault-value-for-scripts-1"
+      }
+    },
+    "sdk_changes": {
+      "added": {
+        "CLAUDE_AGENT_SDK_VERSION": "0.3.319",
+        "CLAUDE_CODE_ENTRYPOINT": "sdk-ts",
+        "CLAUDE_CODE_SDK_READS_SESSION_STATE": "1"
+      },
+      "removed": [
+        "DEBUG",
+        "NODE_OPTIONS"
+      ],
+      "changed": {},
+      "filled_in_by_windows_process_start_not_the_sdk": [
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "LOGONSERVER",
+        "USERDOMAIN",
+        "USERNAME"
+      ]
+    }
+  },
+  "stdin": [
+    {
+      "t": 4,
+      "bytes": 3569,
+      "json": {
+        "request_id": "e3s9scnwgnh",
+        "type": "control_request",
+        "request": {
+          "subtype": "initialize",
+          "systemPrompt": [
+            "You ARE Tarsee — a headless AI agent running 24/7 on a server.\n\n## MCP Tools (call as mcp__tarsee__tarsee_<name>)\n- **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/Slack/web\n- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp/Slack or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files\n- **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs\n- **remember**(content) — append to MEMORY.md\n- **daily_log**(content) — append to today's log\n- **read_file**(filename) / **write_file**(filename, content) — workspace files\n- **search_memories**(query) — keyword search through memory files\n- **search_memories_deep**(query) — dumps ALL memories for semantic reasoning (use when keyword search finds nothing)\n- **create_canvas**(title, html, css?, js?) — create live interactive HTML/CSS/JS canvas (renders as iframe in chat)\n- **web_fetch**(url) / **web_search**(query) — web access\n- **get_key**(name) / **set_key**(name, value) — encrypted vault\n- **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head\n- **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: UTC\n- **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving\n- **discord_admin**(action, ...) — list, make and edit Discord channels and make webhooks with Tarsee's own bot (never the bot token from Bash); changes need approved_by, a webhook URL goes to the vault, nothing deletes\n- **railway**(action, project?, environment?, service?, ...) — list Railway projects and variable names, set a variable (secrets via from_key, a vault key name) or redeploy, with the vault's RAILWAY_API_TOKEN; writes need approved_by. Use it instead of Railway calls from Bash\n\n## Memory\nUse remember for durable facts. Use daily_log for session notes. Only append, never overwrite.\nBefore saying \"I don't know\" or \"I can't remember\":\n1. Try search_memories first (fast, keyword-based)\n2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)\n\n## CLI Tools Installed\n- **railway** — Railway CLI for logs and deploys (to set a variable or redeploy, use the railway tool above: never a secret in a command)\n- **gog** — Google Workspace (Gmail, Calendar, Drive, Contacts, Sheets)\n- **himalaya** — Zoho/IMAP email\n- **gh** — GitHub CLI\n- **claude** — Claude Code CLI\n- **whisper-cli** — local speech-to-text\n- Use Bash to run any of these directly.\n\n## Skill Discovery\nYou have skills installed in the skills/ directory. Before saying \"I can't do that\":\n1. Check if a skill exists: list files in <WORKSPACE>/skills/ or read a skill's SKILL.md\n2. If a matching skill exists, read its SKILL.md and follow the instructions\n3. If no skill exists, ask the user if they want you to create one\n\n## Workspace: <WORKSPACE>\n\nYou are a test."
+          ],
+          "systemPromptSnapshot": false
+        }
+      }
+    },
+    {
+      "t": 5,
+      "bytes": 305,
+      "json": {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "image",
+              "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+              }
+            },
+            {
+              "type": "text",
+              "text": "what is in this picture?"
+            }
+          ]
+        },
+        "parent_tool_use_id": null
+      }
+    }
+  ],
+  "stdin_events": [
+    {
+      "t": 5,
+      "event": "user message read"
+    },
+    {
+      "t": 6,
+      "event": "stdin closed"
+    },
+    {
+      "t": 174,
+      "event": "result written"
+    },
+    {
+      "t": 175,
+      "event": "exit",
+      "code": 0
+    }
+  ],
+  "stdout_script": "turn",
+  "stdout_played": [
+    {
+      "t": 4,
+      "json": {
+        "type": "control_response",
+        "response": {
+          "subtype": "success",
+          "request_id": "e3s9scnwgnh",
+          "response": {
+            "commands": [],
+            "agents": [],
+            "output_style": "default",
+            "available_output_styles": [
+              "default"
+            ],
+            "models": [],
+            "account": {
+              "tokenSource": "none",
+              "apiProvider": "firstParty"
+            },
+            "pid": 57204,
+            "claude_code_version": "2.1.319",
+            "current_permission_mode": "bypassPermissions",
+            "hook_on_failure_supported": true,
+            "session_state": "idle",
+            "capabilities": []
+          },
+          "pending_permission_requests": [],
+          "pending_user_dialog_requests": []
+        }
+      }
+    },
+    {
+      "t": 166,
+      "json": {
+        "type": "system",
+        "subtype": "init",
+        "cwd": "<WORKSPACE>",
+        "session_id": "11111111-2222-4333-8444-555555555555",
+        "tools": [
+          "Bash",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Read",
+          "Write"
+        ],
+        "mcp_servers": [],
+        "model": "claude-sonnet-5",
+        "permissionMode": "bypassPermissions",
+        "slash_commands": [],
+        "apiKeySource": "none",
+        "claude_code_version": "2.1.319",
+        "output_style": "default",
+        "agents": [],
+        "skills": [],
+        "plugins": [],
+        "uuid": "00000000-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "t": 167,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "id": "msg_stub_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 12,
+              "output_tokens": 1,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0
+            }
+          }
+        },
+        "session_id": "11111111-2222-4333-8444-555555555555",
+        "parent_tool_use_id": null,
+        "uuid": "00000000-0000-4000-8000-000000000002",
+        "ttft_ms": 70,
+        "api_message_id": "msg_stub_1"
+      }
+    },
+    {
+      "t": 168,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        "session_id": "11111111-2222-4333-8444-555555555555",
+        "parent_tool_use_id": null,
+        "uuid": "00000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "t": 169,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "Hello from"
+          }
+        },
+        "session_id": "11111111-2222-4333-8444-555555555555",
+        "parent_tool_use_id": null,
+        "uuid": "00000000-0000-4000-8000-000000000004"
+      }
+    },
+    {
+      "t": 170,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": " the stub."
+          }
+        },
+        "session_id": "11111111-2222-4333-8444-555555555555",
+        "parent_tool_use_id": null,
+        "uuid": "00000000-0000-4000-8000-000000000005"
+      }
+    },
+    {
+      "t": 171,
+      "json": {
+        "type": "assistant",
+        "message": {
+          "id": "msg_stub_1",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "Hello from the stub."
+            }
+          ],
+          "stop_reason": null,
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 12,
+            "output_tokens": 1,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          }
+        },
+        "parent_tool_use_id": null,
+        "session_id": "11111111-2222-4333-8444-555555555555",
+        "uuid": "00000000-0000-4000-8000-000000000006"
+      }
+    },
+    {
+      "t": 172,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        "session_id": "11111111-2222-4333-8444-555555555555",
+        "parent_tool_use_id": null,
+        "uuid": "00000000-0000-4000-8000-000000000007"
+      }
+    },
+    {
+      "t": 172,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          },
+          "usage": {
+            "output_tokens": 6
+          }
+        },
+        "session_id": "11111111-2222-4333-8444-555555555555",
+        "parent_tool_use_id": null,
+        "uuid": "00000000-0000-4000-8000-000000000008"
+      }
+    },
+    {
+      "t": 173,
+      "json": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        },
+        "session_id": "11111111-2222-4333-8444-555555555555",
+        "parent_tool_use_id": null,
+        "uuid": "00000000-0000-4000-8000-000000000009"
+      }
+    },
+    {
+      "t": 174,
+      "json": {
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "duration_ms": 300,
+        "duration_api_ms": 120,
+        "num_turns": 1,
+        "result": "Hello from the stub.",
+        "stop_reason": "end_turn",
+        "session_id": "11111111-2222-4333-8444-555555555555",
+        "total_cost_usd": 0.000126,
+        "usage": {
+          "input_tokens": 12,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 6
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 12,
+            "outputTokens": 6,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0,
+            "webSearchRequests": 0,
+            "costUSD": 0.000126,
+            "contextWindow": 200000,
+            "maxOutputTokens": 32000
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "uuid": "00000000-0000-4000-8000-000000000010"
+      }
+    }
+  ],
+  "sdk_messages_seen_by_tarsee": [
+    {
+      "t": 237,
+      "type": "system",
+      "subtype": "init"
+    },
+    {
+      "t": 237,
+      "type": "stream_event",
+      "subtype": "message_start"
+    },
+    {
+      "t": 238,
+      "type": "stream_event",
+      "subtype": "content_block_start"
+    },
+    {
+      "t": 239,
+      "type": "stream_event",
+      "subtype": "content_block_delta"
+    },
+    {
+      "t": 240,
+      "type": "stream_event",
+      "subtype": "content_block_delta"
+    },
+    {
+      "t": 241,
+      "type": "assistant"
+    },
+    {
+      "t": 242,
+      "type": "stream_event",
+      "subtype": "content_block_stop"
+    },
+    {
+      "t": 242,
+      "type": "stream_event",
+      "subtype": "message_delta"
+    },
+    {
+      "t": 244,
+      "type": "stream_event",
+      "subtype": "message_stop"
+    },
+    {
+      "t": 244,
+      "type": "result",
+      "subtype": "success"
+    }
+  ],
+  "tarsee_events": [
+    {
+      "t": 237,
+      "type": "step",
+      "kind": "usage",
+      "calls": 1,
+      "input": 12,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "output": 1,
+      "total": 13,
+      "outTps": null,
+      "nowTps": null
+    },
+    {
+      "t": 239,
+      "type": "text",
+      "content": "Hello from"
+    },
+    {
+      "t": 240,
+      "type": "text",
+      "content": " the stub."
+    },
+    {
+      "t": 241,
+      "type": "step",
+      "kind": "text",
+      "text": "Hello from the stub."
+    },
+    {
+      "t": 243,
+      "type": "step",
+      "kind": "usage",
+      "calls": 1,
+      "input": 12,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "output": 6,
+      "total": 18,
+      "outTps": null,
+      "nowTps": null
+    },
+    {
+      "t": 244,
+      "type": "usage",
+      "usage": {
+        "input_tokens": 12,
+        "output_tokens": 6,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "context_input_tokens": 12
+      }
+    },
+    {
+      "t": 244,
+      "type": "done",
+      "stopReason": "end_turn"
+    }
+  ],
+  "tarsee_logs": [
+    "log: [claude-code] Starting claude turn in <WORKSPACE>, model: claude-sonnet-5, session: new, media: 1",
+    "log: [claude-code] claude: apiKeySource=none"
+  ]
+}

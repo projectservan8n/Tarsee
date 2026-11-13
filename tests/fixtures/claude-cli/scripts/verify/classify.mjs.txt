@@ -1,0 +1,27 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+process.env.TARSEE_STATE_DIR = `${process.env.VERIFY_SCRATCH}/state`;
+const { classifyEngineError } = await import(pathToFileURL(`${process.env.TARSEE_NODE_PROJECT}/src/ai/engine-errors.js`).href);
+const cases = [
+  ["no credential", "authentication_failed", "Not logged in · Please run /login"],
+  ["token refused 401", "authentication_failed", "Failed to authenticate. API Error: 401 OAuth token has expired. Please obtain a new token or refresh your existing token."],
+  ["403", "authentication_failed", "Failed to authenticate. API Error: 403 no permission"],
+  ["402", "unknown", "API Error: 402 Insufficient Balance"],
+  ["404 sdk-ts", "model_not_found", "There's an issue with the selected model (no-such-model). It may not exist or you may not have access to it."],
+  ["404 sdk-cli", "model_not_found", "There's an issue with the selected model (no-such-model). It may not exist or you may not have access to it. Run --model to pick a different model."],
+  ["429", "rate_limit", "API Error: Request rejected (429) · slow down please"],
+  ["500", "server_error", "API Error: 500 Internal server error. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (127.0.0.1:<PORT>)."],
+  ["529", "server_error", "API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (127.0.0.1:<PORT>)."],
+  ["400", "unknown", "API Error: 400 bad thing in the request"],
+  ["unreachable", "server_error", "API Error: Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED)"],
+  ["resume unknown", undefined, "No conversation found with session ID: 11111111-2222-4333-8444-555555555555"],
+  ["resume not uuid", undefined, "Error: --resume requires a valid session ID or session title when used with --print. Usage: claude -p --resume <session-id|title>. Provided value \"not-a-uuid\" is not a UUID and does not match any session title."],
+  ["interrupted", undefined, "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"],
+  ["exit 1 + stderr", undefined, "Claude Code process exited with code 1. stderr: something broke"],
+  ["exists but failed to launch", undefined, "Claude Code native binary at X exists but failed to launch. This usually means the binary does not match this system's libc"],
+];
+for (const [name, code, message] of cases) {
+  const a = classifyEngineError("claude", "claude-code", { code, message, model: "no-such-model" });
+  const b = classifyEngineError("deepseek", "claude-code", { code, message, model: "no-such-model" });
+  console.log(`${name.padEnd(28)} claude: ${a.kind}${a.recoverable ? " (recoverable)" : ""}${a.status ? " status " + a.status : ""}   deepseek: ${b.kind}${b.recoverable ? " (recoverable)" : ""}${b.status ? " status " + b.status : ""}`);
+}

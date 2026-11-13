@@ -1,0 +1,142 @@
+// Real CLI, driven directly: how each failure comes out (stdout messages, stderr, exit code).
+import { drive, cleanEnv, gatewayEnv, baseArgs, initRequest, userText, startFakeAnthropic, SCRATCH, brief, FAKE_TOKEN } from "./real-drive.mjs";
+import fs from "node:fs";
+import net from "node:net";
+import path from "node:path";
+
+fs.mkdirSync(`${SCRATCH}/real`, { recursive: true });
+const which = (process.argv[2] || "all").split(",");
+const want = (k) => which.includes("all") || which.includes(k);
+const show = (label, r, fake) => {
+  console.log(`\n===== ${label}: exit code ${r.exitCode}, signal ${r.signal}, at ${r.exitAt} ms`);
+  console.log(`  stderr: ${JSON.stringify(r.stderr.slice(0, 1500))}`);
+  for (const s of r.sent) if (s.event) console.log(`  > ${s.t} ${s.event}`);
+  for (const o of r.stdout) {
+    const m = o.msg;
+    if (m && ((m.type === "control_response" && String(m.response.request_id).startsWith("init")) )) { console.log(`  < ${o.t} control_response (initialize answered)`); continue; }
+    if (m && m.type === "system" && m.subtype === "init") { console.log(`  < ${o.t} system/init session_id=${m.session_id} apiKeySource=${m.apiKeySource} model=${m.model} mcp_servers=${JSON.stringify(m.mcp_servers)} tools=${JSON.stringify(m.tools)}`); continue; }
+    console.log(`  < ${o.t} ${m ? JSON.stringify(m).slice(0, 1400) : `RAW ${o.raw.slice(0, 600)}`}`);
+  }
+  if (fake) console.log(`  API: ${fake.requests.map((q) => `${q.method} ${q.path}`).join(" | ")}`);
+};
+async function withFake(script, fn) {
+  const fake = await startFakeAnthropic({ script });
+  try { return await fn(fake); } finally { await fake.close(); }
+}
+const stdin0 = (text = "say hi") => [initRequest({ systemPrompt: ["You are a test."], systemPromptSnapshot: false }), userText(text)];
+const SS = { CLAUDE_CODE_SDK_READS_SESSION_STATE: "1" };
+
+/** A loopback proxy that records CONNECT lines and refuses them: anything aimed at the internet stays on this machine. */
+async function startTrapProxy() {
+  const connects = [];
+  const server = net.createServer((sock) => {
+    sock.on("error", () => {});
+    sock.once("data", (d) => { connects.push(String(d).split("\r\n")[0]); sock.end("HTTP/1.1 403 Forbidden\r\n\r\n"); });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return { url: `http://127.0.0.1:${server.address().port}`, connects, close: () => new Promise((r) => server.close(() => r())) };
+}
+
+if (want("nocreds")) {
+  const trap = await startTrapProxy();
+  try {
+    const r = await drive({
+      name: "03-no-credentials", args: baseArgs(), cwd: `${SCRATCH}/ws/nocreds`, stdin: stdin0(), timeoutMs: 60_000,
+      env: cleanEnv(`${SCRATCH}/homes/nocreds`, { ...SS, HTTPS_PROXY: trap.url, HTTP_PROXY: trap.url, CLAUDE_CODE_ENTRYPOINT: "sdk-ts" }),
+    });
+    show("no credentials at all (an empty home, no key, no token)", r);
+    console.log("  proxy saw:", JSON.stringify(trap.connects));
+  } finally { await trap.close(); }
+}
+
+for (const [key, status, error] of [
+  ["401", 401, { type: "authentication_error", message: "invalid x-api-key" }],
+  ["402", 402, { type: "billing_error", message: "Insufficient Balance" }],
+  ["403", 403, { type: "permission_error", message: "Your API key does not have permission to use the specified resource." }],
+  ["404model", 404, { type: "not_found_error", message: "model: no-such-model-1" }],
+  ["429", 429, { type: "rate_limit_error", message: "This request would exceed your account's rate limit. Please try again later." }],
+  ["500", 500, { type: "api_error", message: "Internal server error" }],
+  ["529", 529, { type: "overloaded_error", message: "Overloaded" }],
+  ["400", 400, { type: "invalid_request_error", message: "messages: text content blocks must be non-empty" }],
+]) {
+  if (!want(key)) continue;
+  await withFake(() => ({ status, error }), async (fake) => {
+    const r = await drive({
+      name: `03-api-${key}`, args: baseArgs(key === "404model" ? { model: "no-such-model-1" } : {}), cwd: `${SCRATCH}/ws/api${key}`, stdin: stdin0(), timeoutMs: 60_000,
+      env: gatewayEnv(`${SCRATCH}/homes/api${key}`, fake.url, SS),
+    });
+    show(`the API answers ${status} ${error.type}`, r, fake);
+  });
+}
+
+if (want("retry")) await withFake((req, all) => (all.filter((q) => /\/v1\/messages$/.test(q.path)).length === 1 ? { status: 529, error: { type: "overloaded_error", message: "Overloaded" } } : { text: "Fine now." }), async (fake) => {
+  const r = await drive({
+    name: "03-api-retry", args: baseArgs(), cwd: `${SCRATCH}/ws/apiretry`, stdin: stdin0(), timeoutMs: 90_000,
+    env: gatewayEnv(`${SCRATCH}/homes/apiretry`, fake.url, { ...SS, CLAUDE_CODE_MAX_RETRIES: "2" }),
+  });
+  show("529 once, then an answer (CLAUDE_CODE_MAX_RETRIES=2)", r, fake);
+});
+
+if (want("unreachable")) {
+  const r = await drive({
+    name: "03-unreachable", args: baseArgs(), cwd: `${SCRATCH}/ws/unreach`, stdin: stdin0(), timeoutMs: 90_000,
+    env: gatewayEnv(`${SCRATCH}/homes/unreach`, "http://127.0.0.1:9", SS),
+  });
+  show("the API host refuses the connection", r);
+}
+
+if (want("resume")) {
+  await withFake(() => ({ text: "x" }), async (fake) => {
+    for (const [key, id] of [["not-a-uuid", "not-a-session"], ["unknown-uuid", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"]]) {
+      const r = await drive({
+        name: `03-resume-${key}`, args: baseArgs({ extra: [`--resume=${id}`] }), cwd: `${SCRATCH}/ws/resume`, stdin: stdin0(), timeoutMs: 60_000,
+        env: gatewayEnv(`${SCRATCH}/homes/resume`, fake.url, SS),
+      });
+      show(`--resume=${id}`, r, fake);
+    }
+  });
+}
+
+if (want("maxturns")) await withFake((req) => ({ toolUse: { id: `toolu_${Date.now()}`, name: "Glob", input: { pattern: "*.nothing" } } }), async (fake) => {
+  const r = await drive({
+    name: "03-max-turns", args: baseArgs().map((a) => (a === "--max-turns=50" ? "--max-turns=2" : a)), cwd: `${SCRATCH}/ws/maxturns`, stdin: stdin0("look around"), timeoutMs: 90_000,
+    env: gatewayEnv(`${SCRATCH}/homes/maxturns`, fake.url, SS),
+  });
+  show("--max-turns=2 with a model that keeps calling a tool", r, fake);
+});
+
+if (want("budget")) await withFake((req) => ({ toolUse: { id: `toolu_${Date.now()}`, name: "Glob", input: { pattern: "*.nothing" } }, usage: { input_tokens: 2_000_000, output_tokens: 1000 } }), async (fake) => {
+  const r = await drive({
+    name: "03-max-budget", args: baseArgs({ extra: ["--max-budget-usd=0.01"] }), cwd: `${SCRATCH}/ws/budget`, stdin: stdin0("look around"), timeoutMs: 90_000,
+    env: gatewayEnv(`${SCRATCH}/homes/budget`, fake.url, SS),
+  });
+  show("--max-budget-usd=0.01 with an expensive call", r, fake);
+});
+
+if (want("badflag")) {
+  const r = await drive({
+    name: "03-bad-flag", args: [...baseArgs(), "--no-such-flag"], cwd: `${SCRATCH}/ws/badflag`, stdin: stdin0(), timeoutMs: 30_000,
+    env: gatewayEnv(`${SCRATCH}/homes/badflag`, "http://127.0.0.1:9", SS),
+  });
+  show("an unknown command-line flag", r);
+}
+
+if (want("unapproved")) await withFake(() => ({ text: "x" }), async (fake) => {
+  // an ANTHROPIC_API_KEY that nobody approved in the home's config (what approveKeyInHome exists for)
+  const key = "sk-ant-" + "api03-test-not-a-key-AAAAAAAAAAAA";
+  const r = await drive({
+    name: "03-api-key-unapproved", args: baseArgs(), cwd: `${SCRATCH}/ws/unapproved`, stdin: stdin0(), timeoutMs: 60_000,
+    env: cleanEnv(`${SCRATCH}/homes/unapproved`, { ...SS, ANTHROPIC_BASE_URL: fake.url, ANTHROPIC_API_KEY: key, CLAUDE_CODE_ENTRYPOINT: "sdk-ts" }),
+  });
+  show("ANTHROPIC_API_KEY set but not approved in the home, not host-managed", r, fake);
+  const home2 = `${SCRATCH}/homes/approved`;
+  fs.mkdirSync(path.join(home2, ".claude"), { recursive: true });
+  fs.writeFileSync(path.join(home2, ".claude", ".claude.json"), JSON.stringify({ customApiKeyResponses: { approved: [key.slice(-20)], rejected: [] } }, null, 2));
+  fake.requests.length = 0;
+  const r2 = await drive({
+    name: "03-api-key-approved", args: baseArgs(), cwd: `${SCRATCH}/ws/approved`, stdin: stdin0(), timeoutMs: 60_000,
+    env: cleanEnv(home2, { ...SS, ANTHROPIC_BASE_URL: fake.url, ANTHROPIC_API_KEY: key, CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1", CLAUDE_CODE_ENTRYPOINT: "sdk-ts" }),
+  });
+  show("ANTHROPIC_API_KEY approved in <home>/.claude.json (customApiKeyResponses.approved), host-managed", r2, fake);
+  console.log("  x-api-key sent:", fake.messages().map((q) => (q.headers["x-api-key"] === key ? "the key" : String(q.headers["x-api-key"]))).join(","), "authorization:", fake.messages().map((q) => String(q.headers.authorization)).join(","));
+});

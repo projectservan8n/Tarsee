@@ -1,0 +1,142 @@
+//! codex-stub: a stand-in for the `codex` program, used to see exactly how a caller starts it.
+//!
+//! It is a real executable (the Codex SDK starts the program with no shell, and on Windows Node cannot start a
+//! `.cmd` launcher that way), with no dependencies, so `rustc codex-stub.rs` builds it.
+//!
+//! It takes no options of its own and reads nothing from its environment, so that neither its argument list nor
+//! its environment is changed by the capture. What it does comes from a folder called `plan` next to the
+//! executable:
+//!
+//!   plan/record.txt       the path of the JSON file to write (required to record anything)
+//!   plan/stdout.jsonl     lines to write to stdout once stdin has ended (optional)
+//!   plan/stderr.txt       text to write to stderr before exiting (optional)
+//!   plan/exit.txt         the exit code (optional, default 0)
+//!   plan/sleep_ms.txt     how long to wait after writing stdout, before exiting (optional)
+//!   plan/alive.txt        the path of a file to rewrite every 20 ms with the time since start (optional): what
+//!                         it last holds is when the process was ended from outside
+//!
+//! The record: {argv, cwd, pid, env: {name: value}, stdin: {chunks: [{at_ms, bytes, text}], eof_at_ms, text}}.
+//! argv is everything after the program's own name. Offsets are milliseconds since the stub started.
+
+use std::fs;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+fn json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn read_plan(dir: &Path, name: &str) -> Option<String> {
+    fs::read_to_string(dir.join(name)).ok()
+}
+
+fn main() {
+    let started = Instant::now();
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
+    let plan = exe.parent().unwrap_or_else(|| Path::new(".")).join("plan");
+
+    // A heartbeat, so the caller can tell when this process was ended from outside.
+    if let Some(alive) = read_plan(&plan, "alive.txt") {
+        let alive = alive.trim().to_string();
+        if !alive.is_empty() {
+            std::thread::spawn(move || loop {
+                let _ = fs::write(&alive, format!("{}", started.elapsed().as_millis()));
+                std::thread::sleep(Duration::from_millis(20));
+            });
+        }
+    }
+
+    // Read stdin to its end, noting when each piece arrived.
+    let mut chunks: Vec<(u128, Vec<u8>)> = Vec::new();
+    let mut all: Vec<u8> = Vec::new();
+    let mut stdin = std::io::stdin();
+    let mut buf = vec![0u8; 64 * 1024];
+    let eof_at;
+    loop {
+        match stdin.read(&mut buf) {
+            Ok(0) => {
+                eof_at = started.elapsed().as_millis();
+                break;
+            }
+            Ok(n) => {
+                chunks.push((started.elapsed().as_millis(), buf[..n].to_vec()));
+                all.extend_from_slice(&buf[..n]);
+            }
+            Err(_) => {
+                eof_at = started.elapsed().as_millis();
+                break;
+            }
+        }
+    }
+
+    if let Some(record) = read_plan(&plan, "record.txt") {
+        let record = record.trim();
+        if !record.is_empty() {
+            let argv: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
+            let cwd = std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+            let mut env: Vec<(String, String)> = std::env::vars_os()
+                .map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned()))
+                .collect();
+            env.sort();
+            let mut out = String::new();
+            out.push_str("{\n  \"argv\": [");
+            out.push_str(&argv.iter().map(|a| json_string(a)).collect::<Vec<_>>().join(", "));
+            out.push_str("],\n  \"cwd\": ");
+            out.push_str(&json_string(&cwd));
+            out.push_str(&format!(",\n  \"pid\": {},\n  \"env\": {{", std::process::id()));
+            out.push_str(
+                &env.iter().map(|(k, v)| format!("\n    {}: {}", json_string(k), json_string(v))).collect::<Vec<_>>().join(","),
+            );
+            out.push_str("\n  },\n  \"stdin\": {\n    \"chunks\": [");
+            out.push_str(
+                &chunks
+                    .iter()
+                    .map(|(at, bytes)| {
+                        format!(
+                            "{{\"at_ms\": {}, \"bytes\": {}, \"text\": {}}}",
+                            at,
+                            bytes.len(),
+                            json_string(&String::from_utf8_lossy(bytes))
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            out.push_str(&format!("],\n    \"eof_at_ms\": {},\n    \"bytes\": {},\n    \"text\": ", eof_at, all.len()));
+            out.push_str(&json_string(&String::from_utf8_lossy(&all)));
+            out.push_str("\n  }\n}\n");
+            let _ = fs::write(record, out);
+        }
+    }
+
+    if let Some(lines) = read_plan(&plan, "stdout.jsonl") {
+        let stdout = std::io::stdout();
+        let mut w = stdout.lock();
+        let _ = w.write_all(lines.as_bytes());
+        let _ = w.flush();
+    }
+    if let Some(ms) = read_plan(&plan, "sleep_ms.txt").and_then(|s| s.trim().parse::<u64>().ok()) {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+    if let Some(text) = read_plan(&plan, "stderr.txt") {
+        let _ = std::io::stderr().write_all(text.as_bytes());
+        let _ = std::io::stderr().flush();
+    }
+    let code = read_plan(&plan, "exit.txt").and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(0);
+    std::process::exit(code);
+}

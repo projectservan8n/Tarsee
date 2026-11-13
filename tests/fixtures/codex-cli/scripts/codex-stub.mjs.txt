@@ -1,0 +1,64 @@
+#!/usr/bin/node
+/**
+ * codex-stub.mjs: the POSIX stand-in for the `codex` program (the Windows one is stub/codex-stub.rs). The Codex SDK
+ * starts the program with no shell, so on Linux and macOS an executable script is enough.
+ *
+ * It reads nothing from its environment or arguments. What it does comes from a folder called `plan` next to it:
+ *   plan/record.txt     the JSON file to write: {argv, cwd, pid, pgid, sid, parentPgid, env, stdin: {chunks, eof_at_ms, text}}
+ *   plan/stdout.jsonl   lines to write to stdout once stdin has ended
+ *   plan/stderr.txt     text to write to stderr before exiting
+ *   plan/exit.txt       the exit code (default 0)
+ *   plan/sleep_ms.txt   how long to stay alive after writing stdout
+ *   plan/signals.txt    the file to append "<ms since start> <signal>" to for every SIGTERM, SIGINT and SIGHUP received
+ *   plan/ignore_signals.txt   when present, those signals are only logged, not obeyed
+ *   plan/child.txt      when present, start a child of its own (`sleep 300`, in the same process group) and write its
+ *                       pid to the file named here, so the caller can see whether it outlives this process
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const t0 = Date.now();
+const plan = path.join(path.dirname(fileURLToPath(import.meta.url)), "plan");
+const read = (name) => { try { return fs.readFileSync(path.join(plan, name), "utf8"); } catch { return null; } };
+
+const signalsFile = read("signals.txt")?.trim();
+const ignore = read("ignore_signals.txt") != null;
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+  process.on(sig, () => {
+    if (signalsFile) fs.appendFileSync(signalsFile, `${Date.now() - t0} ${sig}\n`);
+    if (!ignore) process.exit(128 + ({ SIGHUP: 1, SIGINT: 2, SIGTERM: 15 })[sig]);
+  });
+}
+
+const childFile = read("child.txt")?.trim();
+if (childFile) {
+  const child = spawn("sleep", ["300"], { stdio: "ignore" });
+  fs.writeFileSync(childFile, String(child.pid));
+}
+
+const stat = (pid) => { try { const f = fs.readFileSync(`/proc/${pid}/stat`, "utf8"); const rest = f.slice(f.lastIndexOf(")") + 2).split(" "); return { pgid: Number(rest[2]), sid: Number(rest[3]) }; } catch { return {}; } };
+
+const chunks = [];
+const all = [];
+process.stdin.on("data", (b) => { chunks.push({ at_ms: Date.now() - t0, bytes: b.length }); all.push(b); });
+await new Promise((r) => { process.stdin.on("end", r); process.stdin.on("error", r); });
+const eof = Date.now() - t0;
+
+const record = read("record.txt")?.trim();
+if (record) {
+  const me = stat(process.pid);
+  const parent = stat(process.ppid);
+  fs.writeFileSync(record, JSON.stringify({
+    argv: process.argv.slice(2), cwd: process.cwd(), pid: process.pid, ppid: process.ppid, pgid: me.pgid, sid: me.sid, parentPgid: parent.pgid, parentSid: parent.sid,
+    env: { ...process.env }, stdin: { chunks, eof_at_ms: eof, bytes: Buffer.concat(all).length, text: Buffer.concat(all).toString("utf8") },
+  }, null, 1));
+}
+const out = read("stdout.jsonl");
+if (out) await new Promise((r) => process.stdout.write(out, r));
+const sleepMs = Number(read("sleep_ms.txt"));
+if (sleepMs > 0) await new Promise((r) => setTimeout(r, sleepMs));
+const err = read("stderr.txt");
+if (err) await new Promise((r) => process.stderr.write(err, r));
+process.exit(Number(read("exit.txt")) || 0);

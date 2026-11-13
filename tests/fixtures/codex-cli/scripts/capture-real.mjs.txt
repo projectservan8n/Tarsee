@@ -1,0 +1,682 @@
+#!/usr/bin/env node
+/**
+ * capture-real.mjs: the REAL pinned codex program (@openai/codex 0.167.0), started with exactly what the SDK starts
+ * it with, against servers on this machine only: a fake Responses API (the Node project's test/fixtures/
+ * fake-responses.js) in place of a model, and a small MCP server that logs every request. No account, no real key,
+ * no network beyond 127.0.0.1.
+ *
+ * Each scenario is two steps:
+ *   1. Tarsee's options (providers/codex-options.js buildCodexOptions) go through the real SDK to the stub, which
+ *      records the argument list, environment and stdin the SDK produced;
+ *   2. the real program is started with that argument list, environment and stdin, and its raw stdout, stderr and
+ *      exit code are recorded (the SDK itself hides stderr unless the exit code is not 0).
+ *
+ *   node capture-real.mjs [scenario ...]
+ */
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const PROJECT = process.env.CAPTURE_PROJECT || "/path/to/the/node/checkout";
+const SCRATCH = process.env.CAPTURE_SCRATCH || "/path/to/a/scratch/folder";
+const OUT = process.env.CAPTURE_OUT || path.join(SCRATCH, "fixtures-real");
+const STUB_DIR = path.join(SCRATCH, "stub");
+const EXE = process.platform === "win32" ? ".exe" : "";
+const STUB = path.join(STUB_DIR, `codex-stub${EXE}`);
+const PLAN = path.join(STUB_DIR, "plan");
+const RUNS = path.join(SCRATCH, "runs-real");
+const TMP = path.join(SCRATCH, "tmp");
+const FAKE_HOME = path.join(SCRATCH, "fake-user-home");
+for (const d of [TMP, OUT, RUNS, FAKE_HOME, path.join(FAKE_HOME, "AppData", "Roaming"), path.join(FAKE_HOME, "AppData", "Local")]) fs.mkdirSync(d, { recursive: true });
+
+const REAL_SYSTEMROOT = process.env.SYSTEMROOT || process.env.SystemRoot || "C:\\WINDOWS";
+process.env.TARSEE_STATE_DIR = path.join(SCRATCH, "tarsee-state");
+process.env.TEMP = TMP;
+process.env.TMP = TMP;
+// The real program must never see this machine's own Codex or user folders.
+process.env.USERPROFILE = FAKE_HOME;
+process.env.HOME = FAKE_HOME;
+process.env.APPDATA = path.join(FAKE_HOME, "AppData", "Roaming");
+process.env.LOCALAPPDATA = path.join(FAKE_HOME, "AppData", "Local");
+for (const k of Object.keys(process.env)) if (/^(OPENAI_|CODEX_|ANTHROPIC_|CLAUDE)/i.test(k)) delete process.env[k];
+
+const from = (rel) => import(pathToFileURL(path.join(PROJECT, rel)).href);
+const { buildCodexOptions } = await from("src/ai/providers/codex-options.js");
+const { Codex } = await from("node_modules/@openai/codex-sdk/dist/index.js");
+const { resolveCodexBin } = await from("src/ai/codex-cli.js");
+const { startFakeResponses } = await from("test/fixtures/fake-responses.js");
+const REAL = resolveCodexBin({ env: {} });
+const CODEX_PATH_DIR = path.join(path.dirname(path.dirname(REAL)), "codex-path");
+
+const fake = (...parts) => parts.join("");
+const MCP_TOKEN = fake("mcp-", "test-token-", "not-a-token");
+const PROVIDER_KEY = fake("sk-", "test-not-a-key-", "provider");
+const OPENAI_KEY = fake("sk-", "test-not-a-key-", "openai");
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+
+/** The server's environment for these runs: only what a program needs to start. */
+function serverEnv(extra = {}) {
+  return {
+    PATH: [path.join(REAL_SYSTEMROOT, "system32"), REAL_SYSTEMROOT, path.join(REAL_SYSTEMROOT, "System32", "WindowsPowerShell", "v1.0")].join(path.delimiter),
+    SystemRoot: REAL_SYSTEMROOT, SystemDrive: "C:", ComSpec: path.join(REAL_SYSTEMROOT, "system32", "cmd.exe"), TEMP: TMP, TMP,
+    USERPROFILE: FAKE_HOME, HOME: FAKE_HOME, APPDATA: process.env.APPDATA, LOCALAPPDATA: process.env.LOCALAPPDATA,
+    // Nothing but this machine: anything the program might send elsewhere goes to a proxy that is not there.
+    HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9", NO_PROXY: "127.0.0.1,localhost",
+    NODE_ENV: "test",
+    ...extra,
+  };
+}
+
+// --- A logging MCP server ------------------------------------------------------------------------------------------
+
+const TOOLS = [
+  { name: "tarsee_datetime", description: "The current date and time.", inputSchema: { type: "object", properties: { timezone: { type: "string" } }, additionalProperties: false, $schema: "http://json-schema.org/draft-07/schema#" } },
+  { name: "tarsee_remember", description: "Remember a fact.", inputSchema: { type: "object", properties: { content: { type: "string" } }, required: ["content"], additionalProperties: false, $schema: "http://json-schema.org/draft-07/schema#" } },
+];
+
+/** mode: "ok" | "401" (refuse every request as Tarsee's endpoint refuses a wrong token). */
+async function startLoggingMcp({ token, mode = "ok" } = {}) {
+  const log = [];
+  const t0 = Date.now();
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const text = Buffer.concat(chunks).toString("utf8");
+    let body = null;
+    try { body = text ? JSON.parse(text) : null; } catch { body = { unparsed: text }; }
+    const headers = [];
+    for (let i = 0; i < req.rawHeaders.length; i += 2) headers.push([req.rawHeaders[i], req.rawHeaders[i + 1]]);
+    const entry = { n: log.length + 1, at_ms: Date.now() - t0, method: req.method, path: req.url, httpVersion: req.httpVersion, headers, body };
+    log.push(entry);
+    const send = (status, hdrs, obj) => {
+      const out = obj === undefined ? "" : JSON.stringify(obj);
+      entry.answer = { status, headers: hdrs, body: obj === undefined ? null : obj };
+      res.writeHead(status, hdrs);
+      res.end(out);
+    };
+    const rpcError = (status, message, hdrs = {}) => send(status, { "Content-Type": "application/json", "Cache-Control": "no-store", ...hdrs }, { jsonrpc: "2.0", error: { code: -32000, message }, id: null });
+    if (mode === "401" || req.headers.authorization !== `Bearer ${token}`) return rpcError(401, "This needs a live grant's token.", { "WWW-Authenticate": 'Bearer realm="tarsee"' });
+    if (req.method !== "POST") return rpcError(405, "Only POST is served here.", { Allow: "POST" });
+    const msgs = Array.isArray(body) ? body : [body];
+    if (msgs.every((m) => m && m.method && !("id" in m))) return send(202, {}, undefined);
+    const m = msgs[0];
+    const ok = (result) => send(200, { "Content-Type": "application/json" }, { result, jsonrpc: "2.0", id: m.id });
+    if (m.method === "initialize") return ok({ protocolVersion: m.params?.protocolVersion, capabilities: { tools: { listChanged: true } }, serverInfo: { name: "tarsee", version: "1.0.0" } });
+    if (m.method === "tools/list") return ok({ tools: TOOLS });
+    if (m.method === "tools/call") return ok({ content: [{ type: "text", text: `stub result of ${m.params?.name}` }] });
+    if (m.method === "ping") return ok({});
+    return send(200, { "Content-Type": "application/json" }, { jsonrpc: "2.0", id: m.id, error: { code: -32601, message: "Method not found" } });
+  });
+  const sockets = new Set();
+  server.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.delete(s)); });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address();
+  return { url: `http://127.0.0.1:${port}/mcp`, port, log, close() { for (const s of sockets) s.destroy(); return new Promise((r) => server.close(() => r())); } };
+}
+
+// --- The two steps --------------------------------------------------------------------------------------------------
+
+/** Step 1: what the SDK starts for these options (through the stub). Returns {argv, env, stdin}. */
+async function viaStub({ o, resumeId, input }) {
+  const recordFile = path.join(TMP, `stub-record-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
+  fs.rmSync(PLAN, { recursive: true, force: true });
+  fs.mkdirSync(PLAN, { recursive: true });
+  fs.writeFileSync(path.join(PLAN, "record.txt"), recordFile);
+  fs.writeFileSync(path.join(PLAN, "stdout.jsonl"), `${JSON.stringify({ type: "thread.started", thread_id: resumeId || "stub" })}\n`);
+  const codex = new Codex({ env: o.env, config: o.config, ...(o.apiKey ? { apiKey: o.apiKey } : {}), codexPathOverride: STUB });
+  const thread = resumeId ? codex.resumeThread(resumeId, o.threadOptions) : codex.startThread(o.threadOptions);
+  const { events } = await thread.runStreamed(input);
+  for await (const ev of events) void ev;
+  const rec = JSON.parse(fs.readFileSync(recordFile, "utf8"));
+  fs.rmSync(recordFile, { force: true });
+  return { argv: rec.argv, env: rec.env, stdin: rec.stdin.text };
+}
+
+/** Step 2: the real program with that argument list, environment and stdin. */
+function runReal({ argv, env, stdin, cwd, killAfterMs = null, timeoutMs = 120_000 }) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    // As the SDK does for its own pinned binary: the package's codex-path folder first on PATH.
+    const childEnv = { ...env };
+    const pathKey = Object.keys(childEnv).find((k) => k.toLowerCase() === "path") || "PATH";
+    childEnv[pathKey] = [CODEX_PATH_DIR, ...(childEnv[pathKey] || "").split(path.delimiter).filter(Boolean)].join(path.delimiter);
+    const child = spawn(REAL, argv, { env: childEnv, cwd: cwd || process.cwd() });
+    const out = [];
+    const err = [];
+    const stdoutAt = [];
+    child.stdout.on("data", (d) => { out.push(d); stdoutAt.push({ at_ms: Date.now() - t0, bytes: d.length }); });
+    child.stderr.on("data", (d) => err.push(d));
+    child.on("error", (e) => resolve({ spawnError: String(e) }));
+    if (stdin != null) child.stdin.write(stdin);
+    child.stdin.end();
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    const killer = killAfterMs != null ? setTimeout(() => child.kill(), killAfterMs) : null;
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      if (killer) clearTimeout(killer);
+      const stdout = Buffer.concat(out).toString("utf8");
+      resolve({ exitCode: code, signal, ms: Date.now() - t0, stdout, stdoutLines: stdout.split(/\r?\n/).filter((l) => l !== ""), stdoutEndsWithNewline: stdout.endsWith("\n"), stdoutHasCR: stdout.includes("\r"), stderr: Buffer.concat(err).toString("utf8") });
+    });
+  });
+}
+
+function forms(value) {
+  const out = new Set([value, value.split("\\").join("/")]);
+  for (let i = 0; i < 3; i++) for (const f of [...out]) out.add(JSON.stringify(f).slice(1, -1));
+  return [...out];
+}
+function scrub(text, pairs) {
+  const all = [];
+  for (const [value, label] of pairs) if (value) for (const f of forms(String(value))) all.push([f, label]);
+  all.sort((a, b) => b[0].length - a[0].length);
+  let out = text;
+  for (const [f, label] of all) out = out.split(f).join(label);
+  return out;
+}
+
+function tree(dir, depth = 6, prefix = "") {
+  const out = [];
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory() && prefix === "skills/" && e.name === ".system") { out.push(`skills/.system/ (Codex's own bundled skills: ${tree(p, 9).filter((l) => !l.endsWith("/")).length} files, not listed)`); continue; }
+    if (e.isDirectory()) { out.push(`${prefix}${e.name}/`); if (depth > 0) out.push(...tree(p, depth - 1, `${prefix}${e.name}/`)); }
+    else out.push(`${prefix}${e.name} (${fs.statSync(p).size} bytes)`);
+  }
+  return out;
+}
+
+const ctx = { fake: null, mcp: null };
+
+/** Tarsee's options for a provider, pointed at the fake servers. */
+function options(provider, { state, ws, model, extra = {}, mcpUrl, mcpToken = MCP_TOKEN, effort } = {}) {
+  const env = serverEnv({ TARSEE_TEST_BASE_URL_OPENAI: ctx.fake.url, TARSEE_TEST_BASE_URL_OPENROUTER: ctx.fake.url, TARSEE_TEST_BASE_URL_DEEPSEEK: ctx.fake.url, TARSEE_TEST_BASE_URL_CHATGPT: ctx.fake.origin });
+  return buildCodexOptions({ providerId: provider, model, effort }, {
+    env, stateDir: state, workspace: ws, mcp: { url: mcpUrl || ctx.mcp.url, token: mcpToken },
+    key: provider === "openai" ? OPENAI_KEY : provider === "chatgpt" ? null : PROVIDER_KEY,
+    localUrl: ctx.fake.url, localBridge: provider === "local" ? { url: ctx.fake.url, token: PROVIDER_KEY } : undefined,
+    developerInstructions: "You are Tarsee (capture run).", contextTokens: 128_000, accountModels: [], ...extra,
+  });
+}
+
+function dirs(name) {
+  const root = path.join(RUNS, name);
+  fs.rmSync(root, { recursive: true, force: true });
+  const state = path.join(root, "state");
+  const ws = path.join(root, "workspace");
+  fs.mkdirSync(state, { recursive: true });
+  fs.mkdirSync(ws, { recursive: true });
+  return { root, state, ws };
+}
+
+function save(name, why, d, data, extraPairs = []) {
+  const fixture = { name, what: why, made_with: { program: "codex 0.167.0 (the real pinned program), started with the argument list, environment and stdin the SDK produced", platform: process.platform }, ...data };
+  const pairs = [
+    [d?.state, "<STATE_DIR>"], [d?.ws, "<WORKSPACE>"], [d?.root, "<RUN_DIR>"], [REAL, "<CODEX_BIN>"], [CODEX_PATH_DIR, "<CODEX_PATH_DIR>"], [TMP, "<TMP>"], [FAKE_HOME, "<USER_HOME>"],
+    [path.join(PROJECT, "src", "skills"), "<TARSEE_SKILLS_DIR>"], [path.resolve(PROJECT), "<TARSEE_ROOT>"], [process.cwd(), "<SERVER_CWD>"], [os.homedir(), "<USER_HOME>"],
+    [MCP_TOKEN, "<MCP_TOKEN>"], [PROVIDER_KEY, "<PROVIDER_KEY>"], [OPENAI_KEY, "<OPENAI_KEY>"], [SCRATCH, "<SCRATCH>"],
+    ...(ctx.fake ? [[`127.0.0.1:${new URL(ctx.fake.url).port}`, "127.0.0.1:<MODEL_PORT>"]] : []),
+    ...(ctx.mcp ? [[`127.0.0.1:${ctx.mcp.port}`, "127.0.0.1:<MCP_PORT>"]] : []),
+    ...extraPairs,
+  ];
+  let text = scrub(JSON.stringify(fixture, null, 2), pairs);
+  text = text.replace(/\b(USERNAME|USERDOMAIN|LOGONSERVER|COMPUTERNAME)=[^"\\\s]+/g, "$1=<MACHINE>");
+  text = text.replace(/127\.0\.0\.1:\d{4,5}/g, "127.0.0.1:<PORT>").split("\u007f").join("\\u007f");
+  fs.writeFileSync(path.join(OUT, `${name}.json`), text + "\n");
+  return fixture;
+}
+
+const mcpLog = (mcp) => mcp.log.map((e) => ({ ...e }));
+const modelRequests = () => ctx.fake.requests.map((r) => ({ method: r.method, path: r.path, authorization: r.headers?.authorization ?? null, model: r.body?.model ?? null, toolNames: (r.body?.tools || []).map((t) => t.name || t.type), inputTypes: (r.body?.input || []).map((i) => (i.type === "message" ? `message:${i.role}:${(i.content || []).map((c) => c.type).join("+")}` : i.type)) }));
+
+async function withServers(fn, { handler, mcpMode } = {}) {
+  ctx.fake = await startFakeResponses({ handler: handler || (() => ({ reasoning: "Thinking briefly.", text: "Hello from the fake model.", usage: { input_tokens: 1200, cached_input_tokens: 200, output_tokens: 30, reasoning_output_tokens: 12 } })) });
+  ctx.mcp = await startLoggingMcp({ token: MCP_TOKEN, mode: mcpMode });
+  try { return await fn(); } finally { await ctx.fake.close(); await ctx.mcp.close(); ctx.fake = null; ctx.mcp = null; }
+}
+
+const short = (r) => `${r.exitCode ?? r.signal ?? r.spawnError} in ${r.ms} ms, ${r.stdoutLines?.length} stdout lines, ${r.stderr?.length} stderr bytes`;
+const env4 = (env) => ({ names: Object.keys(env).sort(), values: Object.fromEntries(["CODEX_HOME", "CODEX_API_KEY", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "TARSEE_MCP_TOKEN", "TARSEE_PROVIDER_KEY", "NODE_ENV"].filter((n) => n in env).map((n) => [n, env[n]])) });
+const sdkErrorText = (r) => (r.exitCode !== 0 || r.signal ? `Codex Exec exited with ${r.signal ? `signal ${r.signal}` : `code ${r.exitCode ?? 1}`}: ${r.stderr}` : null);
+
+// --- Scenarios -----------------------------------------------------------------------------------------------------
+
+const SCENARIOS = {
+  /** A normal turn, then a second one that resumes its thread, then the thread's files. */
+  "real-01-turn-and-resume": async () => {
+    const d = dirs("real-01");
+    await withServers(async () => {
+      const o = options("local", { ...d, model: "test-model" });
+      fs.mkdirSync(o.home, { recursive: true });
+      const s1 = await viaStub({ o, input: "<turn-context>\nToday is a capture day.\n</turn-context>\n\nPlease say hello." });
+      const r1 = await runReal(s1);
+      console.log(`real-01 first turn: ${short(r1)}`);
+      const threadId = JSON.parse(r1.stdoutLines[0]).thread_id;
+      const mcp1 = mcpLog(ctx.mcp);
+      const model1 = modelRequests();
+      const homeAfterFirst = tree(o.home);
+      save("real-01-new-thread", "A whole turn on a new thread with Tarsee's options for a custom provider (Local AI's block, the model being the fake Responses server): the raw stdout lines, stderr, the exit code, every request the program sent to the MCP server, and the Codex home afterwards.", d, {
+        child: { program: REAL, argv: s1.argv, env: env4(s1.env), stdin: s1.stdin },
+        result: { exitCode: r1.exitCode, signal: r1.signal, stdoutLines: r1.stdoutLines, stdoutEndsWithNewline: r1.stdoutEndsWithNewline, stdoutHasCarriageReturns: r1.stdoutHasCR, stderr: r1.stderr },
+        requestsToTheMcpServer: mcp1, requestsToTheModel: model1, codexHomeAfterTheTurn: homeAfterFirst,
+      }, [[threadId, "<THREAD_ID>"]]);
+
+      ctx.mcp.log.length = 0;
+      ctx.fake.requests.length = 0;
+      const s2 = await viaStub({ o, resumeId: threadId, input: "And again." });
+      const r2 = await runReal(s2);
+      console.log(`real-01 resumed turn: ${short(r2)}`);
+      save("real-02-resumed-thread", "The next turn on the same thread (`resume <thread id>`): thread.started carries the same id, and turn.completed's usage is the thread's running total (both turns'), not this turn's.", d, {
+        child: { program: REAL, argv: s2.argv.slice(-8), argvNote: "the last 8 arguments; the rest is the same as the new thread's", stdin: s2.stdin },
+        result: { exitCode: r2.exitCode, signal: r2.signal, stdoutLines: r2.stdoutLines, stderr: r2.stderr },
+        requestsToTheMcpServer: mcpLog(ctx.mcp), requestsToTheModel: modelRequests(), codexHomeAfterTheTurn: tree(o.home),
+      }, [[threadId, "<THREAD_ID>"]]);
+      // Keep the rollout itself for the spec (scratch only).
+      fs.writeFileSync(path.join(SCRATCH, "real-01-home-tree.txt"), tree(o.home).join("\n"));
+    });
+  },
+
+  "real-03-mcp-tool-call": async () => {
+    const d = dirs("real-03");
+    let n = 0;
+    await withServers(async () => {
+      const o = options("local", { ...d, model: "test-model" });
+      fs.mkdirSync(o.home, { recursive: true });
+      const s = await viaStub({ o, input: "What time is it?" });
+      const r = await runReal(s);
+      console.log(`real-03: ${short(r)}`);
+      save("real-03-mcp-tool-call", "A turn in which the model calls one of Tarsee's tools (mcp__tarsee / tarsee_datetime): the tools/call request the program sends, with no approval asked (default_tools_approval_mode \"approve\"), and the mcp_tool_call items on stdout.", d, {
+        child: { program: REAL, stdin: s.stdin },
+        result: { exitCode: r.exitCode, stdoutLines: r.stdoutLines, stderr: r.stderr },
+        requestsToTheMcpServer: mcpLog(ctx.mcp), requestsToTheModel: modelRequests(),
+      }, [[JSON.parse(r.stdoutLines[0] || "{}").thread_id, "<THREAD_ID>"]]);
+    }, { handler: () => (n++ === 0 ? { calls: [{ name: "tarsee_datetime", namespace: "mcp__tarsee", arguments: { timezone: "UTC" } }] } : { text: "It is stub o'clock.", usage: { input_tokens: 900, cached_input_tokens: 0, output_tokens: 9 } }) });
+  },
+
+  "real-04-resume-unknown-thread": async () => {
+    const d = dirs("real-04");
+    await withServers(async () => {
+      const o = options("local", { ...d, model: "test-model" });
+      fs.mkdirSync(o.home, { recursive: true });
+      const s = await viaStub({ o, resumeId: "01a1c000-0000-7000-8000-00000000dead", input: "Anyone there?" });
+      const r = await runReal(s);
+      console.log(`real-04: ${short(r)}`);
+      save("real-04-resume-unknown-thread", "`resume <id>` with a thread id that has no rollout in this Codex home.", d, {
+        child: { program: REAL, argv: s.argv.slice(-4), stdin: s.stdin },
+        result: { exitCode: r.exitCode, signal: r.signal, stdoutLines: r.stdoutLines, stderr: r.stderr },
+        whatTheSdkThrows: sdkErrorText(r), requestsToTheMcpServer: mcpLog(ctx.mcp).length, requestsToTheModel: modelRequests().length,
+      });
+    });
+  },
+
+  "real-05-missing-credentials": async () => {
+    const out = {};
+    await withServers(async () => {
+      // (a) a custom provider whose env_key variable is not set
+      {
+        const d = dirs("real-05a");
+        const o = options("local", { ...d, model: "test-model" });
+        fs.mkdirSync(o.home, { recursive: true });
+        const s = await viaStub({ o, input: "hello" });
+        delete s.env.TARSEE_PROVIDER_KEY;
+        const r = await runReal(s);
+        console.log(`real-05a custom provider, no TARSEE_PROVIDER_KEY: ${short(r)}`);
+        out.customProviderKeyVariableNotSet = { exitCode: r.exitCode, stdoutLines: r.stdoutLines, stderr: r.stderr, whatTheSdkThrows: sdkErrorText(r), requestsToTheModel: modelRequests() };
+        ctx.fake.requests.length = 0;
+      }
+      // (b) the built-in OpenAI provider with forced_login_method "api" and no CODEX_API_KEY
+      {
+        const d = dirs("real-05b");
+        const o = options("openai", { ...d, model: "gpt-5.5" });
+        fs.mkdirSync(o.home, { recursive: true });
+        const s = await viaStub({ o, input: "hello" });
+        delete s.env.CODEX_API_KEY;
+        const r = await runReal(s);
+        console.log(`real-05b openai, no CODEX_API_KEY: ${short(r)}`);
+        out.openaiNoApiKey = { exitCode: r.exitCode, stdoutLines: r.stdoutLines, stderr: r.stderr, whatTheSdkThrows: sdkErrorText(r), requestsToTheModel: modelRequests() };
+        ctx.fake.requests.length = 0;
+      }
+      // (c) the ChatGPT plan with no sign-in in its home (no auth.json)
+      {
+        const d = dirs("real-05c");
+        const o = options("chatgpt", { ...d });
+        fs.mkdirSync(o.home, { recursive: true });
+        const s = await viaStub({ o, input: "hello" });
+        const r = await runReal(s);
+        console.log(`real-05c chatgpt, no auth.json: ${short(r)}`);
+        out.chatgptNotSignedIn = { argvTail: s.argv.filter((a) => /forced_login_method|chatgpt_base_url|openai_base_url/.test(a)), exitCode: r.exitCode, stdoutLines: r.stdoutLines, stderr: r.stderr, whatTheSdkThrows: sdkErrorText(r), requestsToTheModel: modelRequests() };
+        ctx.fake.requests.length = 0;
+        save("real-05-missing-credentials", "Three turns with no credential: a custom provider whose env_key variable is not set, the OpenAI provider with no CODEX_API_KEY, and the ChatGPT plan with no auth.json in its home. (Tarsee refuses the first two before starting anything; this is what the program does if started anyway.)", d, out);
+      }
+    });
+  },
+
+  "real-06-provider-errors": async () => {
+    const out = {};
+    const cases = {
+      unknownModel404: () => ({ status: 404, error: { message: "The model `no-such-model` does not exist or you do not have access to it.", type: "invalid_request_error", code: "model_not_found" } }),
+      unknownModel400: () => ({ status: 400, error: { message: "The requested model 'no-such-model' does not exist.", type: "invalid_request_error", param: "model", code: "model_not_found" } }),
+      key401: () => ({ status: 401, error: { message: "Incorrect API key provided: sk-test***", type: "invalid_request_error", code: "invalid_api_key" } }),
+    };
+    let d;
+    for (const [name, handler] of Object.entries(cases)) {
+      d = dirs(`real-06-${name}`);
+      await withServers(async () => {
+        const o = options("local", { ...d, model: "no-such-model" });
+        fs.mkdirSync(o.home, { recursive: true });
+        const s = await viaStub({ o, input: "hello" });
+        const r = await runReal(s);
+        console.log(`real-06 ${name}: ${short(r)}`);
+        out[name] = { modelAnswered: handler(), exitCode: r.exitCode, ms: r.ms, stdoutLines: r.stdoutLines.map((l) => l.replace(/"thread_id":"[^"]+"/, '"thread_id":"<THREAD_ID>"')), stderr: r.stderr, whatTheSdkThrows: sdkErrorText(r), requestsToTheModel: modelRequests().length };
+        save("real-06-provider-errors", "The model's server refusing the request: an unknown model (404 and 400) and a refused key (401). Codex retries a 401 five times (`Reconnecting... n/5`) before failing; Tarsee's engine stops the turn at the first one for key providers.", d, out);
+      }, { handler });
+    }
+  },
+
+  "real-07-refused-arguments": async () => {
+    const d = dirs("real-07");
+    const out = {};
+    await withServers(async () => {
+      const o = options("local", { ...d, model: "test-model" });
+      fs.mkdirSync(o.home, { recursive: true });
+      const s = await viaStub({ o, input: "hello" });
+      const cut = s.argv.indexOf("--model");
+      const head = s.argv.slice(0, cut);
+      const tail = s.argv.slice(cut);
+      const cases = {
+        "an approval policy that does not exist": [...head, "--config", 'approval_policy="sometimes"', ...tail.filter((a, i) => !(a.startsWith("approval_policy=") || tail[i + 1]?.startsWith("approval_policy=")))],
+        "a --config with no equals sign": [...head, "--config", "justakey", ...tail],
+        "a --config whose value has the wrong type": [...head, "--config", 'model_context_window="big"', ...tail],
+        "a --config key Codex does not know": [...head, "--config", "no_such_setting_at_all=1", ...tail],
+        "a sandbox mode that does not exist": s.argv.map((a) => (a === "danger-full-access" ? "wide-open" : a)),
+        "an option that does not exist": [...s.argv, "--bogus"],
+        "a login method that does not exist": s.argv.map((a) => (a === 'forced_login_method="api"' ? 'forced_login_method="carrier-pigeon"' : a)),
+        "a model provider that is not defined": s.argv.map((a) => (a === 'model_provider="tarsee_local"' ? 'model_provider="nobody"' : a)),
+        "a working folder that is not there": s.argv.map((a) => (a === d.ws ? path.join(d.root, "no-such-folder") : a)),
+        // JSON.stringify (the SDK's string quoting) leaves U+007F as it is, which the TOML spec does not allow in a
+        // basic string. The program's parser takes it anyway: the error below is about the VALUE (n-o-n-DEL-e is not a
+        // reasoning summary), so the string was read as a string, and this later --config won over the earlier one.
+        "a string holding a raw DEL character (U+007F)": [...head, "--config", `model_reasoning_summary="non\u007fe"`, ...tail],
+      };
+      for (const [name, argv] of Object.entries(cases)) {
+        ctx.fake.requests.length = 0;
+        const r = await runReal({ ...s, argv });
+        console.log(`real-07 ${name}: ${short(r)}`);
+        out[name] = { changedArguments: argv.filter((a) => !s.argv.includes(a)), exitCode: r.exitCode, stdoutLines: r.stdoutLines.map((l) => l.replace(/"thread_id":"[^"]+"/, '"thread_id":"<THREAD_ID>"')), stderr: r.stderr, whatTheSdkThrows: sdkErrorText(r), requestsToTheModel: modelRequests().length };
+      }
+      save("real-07-refused-arguments", "The program started with one argument changed to something it cannot take: which it refuses (and how), and which it lets through.", d, out);
+    });
+  },
+
+  "real-08-mcp-server-failures": async () => {
+    const out = {};
+    let d;
+    // (a) nothing listens at the MCP address
+    d = dirs("real-08a");
+    await withServers(async () => {
+      const o = options("local", { ...d, model: "test-model", mcpUrl: "http://127.0.0.1:9/mcp" });
+      fs.mkdirSync(o.home, { recursive: true });
+      const s = await viaStub({ o, input: "hello" });
+      const r = await runReal(s);
+      console.log(`real-08a MCP unreachable: ${short(r)}`);
+      out.nothingListensAtTheAddress = { exitCode: r.exitCode, ms: r.ms, stdoutLines: r.stdoutLines.map((l) => l.replace(/"thread_id":"[^"]+"/, '"thread_id":"<THREAD_ID>"')), stderr: r.stderr, whatTheSdkThrows: sdkErrorText(r), requestsToTheModel: modelRequests().length };
+    });
+    // (b) the server refuses the token (401), as Tarsee's endpoint does for a revoked grant
+    d = dirs("real-08b");
+    await withServers(async () => {
+      const o = options("local", { ...d, model: "test-model" });
+      fs.mkdirSync(o.home, { recursive: true });
+      const s = await viaStub({ o, input: "hello" });
+      const r = await runReal(s);
+      console.log(`real-08b MCP 401: ${short(r)}`);
+      out.theServerRefusesTheToken = { exitCode: r.exitCode, ms: r.ms, stdoutLines: r.stdoutLines.map((l) => l.replace(/"thread_id":"[^"]+"/, '"thread_id":"<THREAD_ID>"')), stderr: r.stderr, whatTheSdkThrows: sdkErrorText(r), requestsToTheMcpServer: mcpLog(ctx.mcp), requestsToTheModel: modelRequests().length };
+    }, { mcpMode: "401" });
+    // (c) the token variable is not set at all
+    d = dirs("real-08c");
+    await withServers(async () => {
+      const o = options("local", { ...d, model: "test-model" });
+      fs.mkdirSync(o.home, { recursive: true });
+      const s = await viaStub({ o, input: "hello" });
+      delete s.env.TARSEE_MCP_TOKEN;
+      const r = await runReal(s);
+      console.log(`real-08c no TARSEE_MCP_TOKEN: ${short(r)}`);
+      out.theTokenVariableIsNotSet = { exitCode: r.exitCode, ms: r.ms, stdoutLines: r.stdoutLines.map((l) => l.replace(/"thread_id":"[^"]+"/, '"thread_id":"<THREAD_ID>"')), stderr: r.stderr, whatTheSdkThrows: sdkErrorText(r), requestsToTheMcpServer: mcpLog(ctx.mcp), requestsToTheModel: modelRequests().length };
+      save("real-08-mcp-server-failures", "Tarsee's MCP server is `required = true`: what the program does when it cannot be reached, when it refuses the token, and when the token's variable is not set.", d, out);
+    });
+  },
+
+  "real-09-pictures": async () => {
+    const d = dirs("real-09");
+    await withServers(async () => {
+      const o = options("local", { ...d, model: "test-model" });
+      fs.mkdirSync(o.home, { recursive: true });
+      const img = path.join(d.root, "image-1.png");
+      fs.writeFileSync(img, PNG);
+      const s1 = await viaStub({ o, input: [{ type: "text", text: "What is in this picture?" }, { type: "local_image", path: img }] });
+      const r1 = await runReal(s1);
+      console.log(`real-09 new thread with a picture: ${short(r1)}`);
+      const threadId = JSON.parse(r1.stdoutLines[0]).thread_id;
+      const m1 = modelRequests();
+      ctx.fake.requests.length = 0;
+      const s2 = await viaStub({ o, resumeId: threadId, input: [{ type: "text", text: "And this one?" }, { type: "local_image", path: img }] });
+      const r2 = await runReal(s2);
+      console.log(`real-09 resumed with a picture: ${short(r2)}`);
+      save("real-09-pictures", "A picture on a new thread (`--image <file>` last) and on a resumed one (`resume <id> --image <file>`): the program accepts both, and the picture reaches the model as an input_image part of the user message.", d, {
+        newThread: { argvTail: s1.argv.slice(-4), stdin: s1.stdin, exitCode: r1.exitCode, stdoutLines: r1.stdoutLines, stderr: r1.stderr, requestsToTheModel: m1 },
+        resumed: { argvTail: s2.argv.slice(-6), stdin: s2.stdin, exitCode: r2.exitCode, stdoutLines: r2.stdoutLines, stderr: r2.stderr, requestsToTheModel: modelRequests() },
+      }, [[threadId, "<THREAD_ID>"]]);
+    });
+  },
+};
+
+/**
+ * Stop. The model asks for a command that never ends (a PowerShell loop that rewrites a heartbeat file every 100 ms),
+ * so the real program has a child of its own running when it is stopped. Two ways of stopping it:
+ *   - the SDK's: the caller's AbortSignal (what a Codex turn's Stop does)
+ *   - Tarsee's killTree() (codex-cli.js: what the sign-in and the model list use)
+ * For each: what the caller sees, and whether the command the program started is still alive afterwards.
+ */
+SCENARIOS["real-10-stop"] = async () => {
+  const { killTree, spawnCodex } = await from("src/ai/codex-cli.js");
+  const out = {};
+  const loop = (file) => `while ($true) { [IO.File]::WriteAllText('${file}', [DateTime]::UtcNow.Ticks.ToString()); Start-Sleep -Milliseconds 100 }`;
+  const beat = (file) => { try { return fs.readFileSync(file, "utf8"); } catch { return null; } };
+  /** Whether the heartbeat is still moving over the next `ms`. */
+  const stillBeating = async (file, ms = 1500) => { const a = beat(file); await new Promise((r) => setTimeout(r, ms)); const b = beat(file); return { moved: a !== b, hadAny: a != null }; };
+  let d;
+
+  // (a) the SDK's abort
+  d = dirs("real-10a");
+  let hb = path.join(d.root, "heartbeat.txt");
+  await withServers(async () => {
+    const o = options("local", { ...d, model: "test-model" });
+    fs.mkdirSync(o.home, { recursive: true });
+    const codex = new Codex({ env: o.env, config: o.config, codexPathOverride: REAL });
+    const thread = codex.startThread(o.threadOptions);
+    const ac = new AbortController();
+    const yielded = [];
+    let thrown = null;
+    let abortAt = null;
+    const t0 = Date.now();
+    try {
+      const { events } = await thread.runStreamed("Run the loop.", { signal: ac.signal });
+      for await (const ev of events) {
+        yielded.push(ev.type === "item.started" ? `${ev.type}:${ev.item.type}` : ev.type);
+        if (ev.type === "item.started" && ev.item.type === "command_execution") {
+          // Let the command get going, make sure it beats, then stop.
+          setTimeout(async () => { out._aBeforeStop = await stillBeating(hb, 600); abortAt = Date.now() - t0; ac.abort(); }, 1500);
+        }
+      }
+    } catch (err) { thrown = { name: err.name, message: err.message, code: err.code ?? null }; }
+    const endedAt = Date.now() - t0;
+    const after = await stillBeating(hb, 2000);
+    out.sdkAbort = {
+      how: "runStreamed(input, { signal }) and signal.abort() while the program's own command is running",
+      eventsBeforeTheStop: yielded, commandWasRunningBeforeTheStop: out._aBeforeStop, abortAt_ms: abortAt, iterationEndedAt_ms: endedAt, sdkThrew: thrown,
+      commandStillRunningAfterwards: after.moved,
+    };
+    delete out._aBeforeStop;
+    console.log(`real-10 SDK abort: threw ${thrown?.name}; ended ${endedAt - abortAt} ms after the abort; command still running afterwards: ${after.moved}`);
+  }, { handler: (body, { index }) => (index === 0 ? { calls: [{ name: "exec_command", arguments: { cmd: loop(hb) } }] } : { text: "done" }) });
+
+  // (b) Tarsee's killTree()
+  d = dirs("real-10b");
+  hb = path.join(d.root, "heartbeat.txt");
+  await withServers(async () => {
+    const o = options("local", { ...d, model: "test-model" });
+    fs.mkdirSync(o.home, { recursive: true });
+    const s = await viaStub({ o, input: "Run the loop." });
+    const childEnv = { ...s.env };
+    const t0 = Date.now();
+    const child = spawnCodex(REAL, s.argv, { env: childEnv, cwd: process.cwd() });
+    child.stdin.write(s.stdin);
+    child.stdin.end();
+    let exit = null;
+    child.once("exit", (code, signal) => { exit = { code, signal, at_ms: Date.now() - t0 }; });
+    let started = false;
+    child.stdout.on("data", (b) => { if (String(b).includes('"command_execution"')) started = true; });
+    for (let i = 0; i < 200 && !started; i++) await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 1500));
+    const before = await stillBeating(hb, 600);
+    const killAt = Date.now() - t0;
+    await killTree(child);
+    const killDone = Date.now() - t0;
+    const after = await stillBeating(hb, 2000);
+    out.killTree = {
+      how: process.platform === "win32" ? "killTree(child): taskkill /pid <pid> /T /F" : "killTree(child): SIGTERM to the process group, SIGKILL after 2 s",
+      commandWasRunningBeforeTheStop: before, killTreeCalledAt_ms: killAt, killTreeResolvedAt_ms: killDone, exit,
+      commandStillRunningAfterwards: after.moved,
+    };
+    console.log(`real-10 killTree: exit ${JSON.stringify(exit)}; resolved in ${killDone - killAt} ms; command still running afterwards: ${after.moved}`);
+  }, { handler: (body, { index }) => (index === 0 ? { calls: [{ name: "exec_command", arguments: { cmd: loop(hb) } }] } : { text: "done" }) });
+
+  save("real-10-stop", "Stopping the real program while a command it started is still running: through the SDK's AbortSignal, and through Tarsee's killTree(). What the caller sees, and whether the command survives.", d, out);
+};
+
+/** Small questions about the real program that the SDK's source cannot answer. */
+SCENARIOS["real-11-smaller-questions"] = async () => {
+  const out = {};
+  let d = dirs("real-11");
+  const texts = (body, role) => (body?.input || []).filter((i) => i?.type === "message" && i.role === role).map((i) => (i.content || []).map((c) => c.text ?? `[${c.type}]`).join(" | "));
+
+  // (a) --json in place of --experimental-json, and what the model is sent for the prompt on stdin
+  await withServers(async () => {
+    const o = options("local", { ...d, model: "test-model" });
+    fs.mkdirSync(o.home, { recursive: true });
+    const s = await viaStub({ o, input: "<turn-context>\nToday is a capture day.\n</turn-context>\n\nPlease say héllo ☃." });
+    const r1 = await runReal(s);
+    const sent = ctx.fake.requests.filter((q) => q.method === "POST").at(-1)?.body;
+    out.whatTheModelReceives = {
+      stdin: s.stdin,
+      lastUserMessage: texts(sent, "user").at(-1),
+      developerMessagesStartWith: texts(sent, "developer").map((t) => t.slice(0, 60)),
+      developerInstructionsArgumentAppearsInADeveloperMessage: texts(sent, "developer").some((t) => t.includes("You are Tarsee (capture run).")),
+    };
+    // What CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codex_sdk_ts (the one variable the SDK always adds) changes on the wire.
+    const wire = (q) => ({ originator: q?.headers?.originator ?? null, "user-agent": q?.headers?.["user-agent"] ?? null });
+    const withVar = wire(ctx.fake.requests.filter((q) => q.method === "POST").at(-1));
+    const bare = { ...s.env };
+    delete bare.CODEX_INTERNAL_ORIGINATOR_OVERRIDE;
+    await runReal({ ...s, env: bare });
+    out.whatTheOriginatorVariableChanges = { note: "headers of the request to the model", withTheVariable: withVar, withoutIt: wire(ctx.fake.requests.filter((q) => q.method === "POST").at(-1)) };
+    const r2 = await runReal({ ...s, argv: s.argv.map((a) => (a === "--experimental-json" ? "--json" : a)) });
+    const shape = (r) => r.stdoutLines.map((l) => { const e = JSON.parse(l); return e.type + (e.item ? `:${e.item.type}` : ""); });
+    out.jsonInsteadOfExperimentalJson = { experimentalJson: { exitCode: r1.exitCode, events: shape(r1) }, json: { exitCode: r2.exitCode, events: shape(r2) }, sameEventShapes: JSON.stringify(shape(r1)) === JSON.stringify(shape(r2)) };
+    console.log(`real-11 --json: same shapes ${out.jsonInsteadOfExperimentalJson.sameEventShapes}; last user message ${JSON.stringify(out.whatTheModelReceives.lastUserMessage)}`);
+
+    // (b) nothing on stdin
+    const r3 = await runReal({ ...s, stdin: "" });
+    out.emptyStdin = { exitCode: r3.exitCode, stdoutLines: r3.stdoutLines, stderr: r3.stderr, whatTheSdkThrows: sdkErrorText(r3) };
+    console.log(`real-11 empty stdin: ${short(r3)}`);
+    // (c) stdin never closed: does the program wait for its end? (3 s, then stopped)
+    const r4 = await new Promise((resolve) => {
+      const child = spawn(REAL, s.argv, { env: s.env });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (b) => { stdout += b; });
+      child.stderr.on("data", (b) => { stderr += b; });
+      child.stdin.write(s.stdin);
+      setTimeout(() => { const before = { stdoutSoFar: stdout, stderrSoFar: stderr }; child.stdin.end(); child.once("close", (code) => resolve({ ...before, afterClosingStdin: { exitCode: code, stdoutLines: stdout.split("\n").filter(Boolean).length } })); }, 3000);
+    });
+    out.stdinWrittenButNotClosedFor3s = r4;
+    console.log(`real-11 stdin open: stdout before close ${JSON.stringify(r4.stdoutSoFar)}; after ${JSON.stringify(r4.afterClosingStdin)}`);
+  });
+
+  // (d) ripgrep: does the program's own shell find rg when the caller did not put codex-path on PATH?
+  for (const [key, prepend] of [["withCodexPathOnPath", true], ["withoutCodexPathOnPath", false]]) {
+    d = dirs(`real-11-${key}`);
+    let n = 0;
+    await withServers(async () => {
+      const o = options("local", { ...d, model: "test-model" });
+      fs.mkdirSync(o.home, { recursive: true });
+      const s = await viaStub({ o, input: "Which rg?" });
+      const r = await new Promise((resolve) => {
+        const env = { ...s.env };
+        const pathKey = Object.keys(env).find((k) => k.toLowerCase() === "path") || "PATH";
+        if (prepend) env[pathKey] = [CODEX_PATH_DIR, env[pathKey]].join(path.delimiter);
+        const child = spawn(REAL, s.argv, { env });
+        let stdout = "";
+        child.stdout.on("data", (b) => { stdout += b; });
+        child.stdin.write(s.stdin);
+        child.stdin.end();
+        child.once("close", (code) => resolve({ exitCode: code, stdout, path: env[pathKey] }));
+      });
+      const item = r.stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.type === "item.completed" && e.item.type === "command_execution")?.item;
+      out[`ripgrep_${key}`] = { callerPath: r.path, command: "rg --version", exit_code: item?.exit_code ?? null, status: item?.status ?? null, output: (item?.aggregated_output || "").split("\n").slice(0, 2).join("\n") };
+      console.log(`real-11 rg ${key}: exit ${item?.exit_code}, ${JSON.stringify((item?.aggregated_output || "").slice(0, 60))}`);
+    }, { handler: () => (n++ === 0 ? { calls: [{ name: "exec_command", arguments: { cmd: "rg --version" } }] } : { text: "done" }) });
+  }
+  // (e) the same turn with ONLY the names Tarsee and the SDK set: none of the system names Node fills in on Windows
+  //     (PATH, SYSTEMROOT, TEMP, USERPROFILE, ...). Started through bare/bare-env.rs, which clears the environment the
+  //     way Rust's Command::env_clear() does.
+  if (process.platform === "win32") {
+    out.turnsWithACutDownEnvironment = { note: "each turn was started through bare/bare-env.rs with exactly the names listed; the first four are what Tarsee and the SDK set, the rest are system names with this machine's own values" };
+    const fromTarsee = ["CODEX_HOME", "TARSEE_MCP_TOKEN", "TARSEE_PROVIDER_KEY", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"];
+    const system = { SYSTEMROOT: REAL_SYSTEMROOT, WINDIR: REAL_SYSTEMROOT, SYSTEMDRIVE: "C:", PATH: path.join(REAL_SYSTEMROOT, "system32"), TEMP: TMP, USERPROFILE: FAKE_HOME };
+    const tries = {
+      "only the four names": [],
+      "plus SYSTEMROOT": ["SYSTEMROOT"],
+      "plus SYSTEMROOT and PATH": ["SYSTEMROOT", "PATH"],
+      "plus SYSTEMROOT, WINDIR, SYSTEMDRIVE, PATH, TEMP, USERPROFILE": Object.keys(system),
+    };
+    for (const [label, extra] of Object.entries(tries)) {
+      d = dirs("real-11-bare");
+      await withServers(async () => {
+        const o = options("local", { ...d, model: "test-model" });
+        fs.mkdirSync(o.home, { recursive: true });
+        const s = await viaStub({ o, input: "Please say hello." });
+        const pairs = [...fromTarsee.map((n) => `${n}=${s.env[n]}`), ...extra.map((n) => `${n}=${system[n]}`)];
+        const r = await new Promise((resolve) => {
+          const child = spawn(path.join(SCRATCH, "bare", "bare-env.exe"), [...pairs, "--", REAL, ...s.argv], { env: {} });
+          let stdout = "";
+          let stderr = "";
+          child.stdout.on("data", (b) => { stdout += b; });
+          child.stderr.on("data", (b) => { stderr += b; });
+          child.stdin.write(s.stdin);
+          child.stdin.end();
+          child.once("close", (code) => resolve({ exitCode: code, stdout, stderr }));
+        });
+        const events = r.stdout.split("\n").filter(Boolean).map((l) => { try { const e = JSON.parse(l); return e.type + (e.item ? `:${e.item.type}` : ""); } catch { return l; } });
+        const lastLine = r.stderr.trim().split("\n").pop() || "";
+        out.turnsWithACutDownEnvironment[label] = {
+          environmentNames: [...fromTarsee, ...extra], exitCode: r.exitCode, events,
+          stderrLastLine: lastLine.length > 400 ? `${lastLine.slice(0, 250)} ... ${lastLine.slice(-120)}` : lastLine,
+          requestsToTheMcpServer: ctx.mcp.log.length, requestsToTheModel: modelRequests().length,
+        };
+        console.log(`real-11 environment, ${label}: exit ${r.exitCode}, events ${events.join(",")}`);
+      });
+    }
+  }
+  save("real-11-smaller-questions", "Small things only the real program can answer: what the model is sent for the prompt on stdin; what the originator variable changes; whether --json differs from --experimental-json; what an empty stdin does and whether the program waits for stdin to end; whether the program's shell finds ripgrep (rg) when the caller has not put the package's codex-path folder on PATH, as the SDK does for its pinned binary; and (Windows) which system names a turn's environment must hold for the program to work at all.", d, out);
+};
+
+const only = process.argv.slice(2);
+for (const [name, fn] of Object.entries(SCENARIOS)) {
+  if (only.length && !only.some((o) => name.includes(o))) continue;
+  try { await fn(); } catch (err) { console.log(`${name}: CAPTURE FAILED: ${err?.stack || err}`); }
+}
+process.exit(0);

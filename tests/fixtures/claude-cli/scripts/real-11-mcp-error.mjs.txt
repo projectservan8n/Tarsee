@@ -1,0 +1,41 @@
+// Real CLI, driven directly: an MCP tool that answers isError: true, and one whose call fails with a JSON-RPC error.
+import fs from "node:fs";
+import http from "node:http";
+import { drive, gatewayEnv, baseArgs, initRequest, userText, startFakeAnthropic, SCRATCH } from "./real-drive.mjs";
+
+const TOKEN = "tarsee-mcp-" + "test-token-0123456789abcdef";
+const out = [];
+for (const mode of ["isError", "rpcError"]) {
+  const server = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => { raw += c; });
+    req.on("end", () => {
+      let body = null; try { body = raw ? JSON.parse(raw) : null; } catch { /* none */ }
+      if (req.method !== "POST") { res.writeHead(405, { allow: "POST" }); res.end(); return; }
+      const send = (obj) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, ...obj })); };
+      if (body?.method === "initialize") return send({ result: { protocolVersion: body.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "tarsee", version: "1.0.0" } } });
+      if (body?.method === "tools/list") return send({ result: { tools: [{ name: "tarsee_schedule_task", description: "Schedule a task.", inputSchema: { type: "object", properties: { schedule: { type: "string" } } } }] } });
+      if (body?.method === "tools/call") return mode === "isError"
+        ? send({ result: { isError: true, content: [{ type: "text", text: "Error: Either 'prompt' or 'action' is required. Nothing was saved." }] } })
+        : send({ error: { code: -32602, message: "Invalid arguments for tool tarsee_schedule_task" } });
+      if (body && body.id === undefined) { res.writeHead(202); res.end(); return; }
+      res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32000, message: "Bad Request" } }));
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${server.address().port}/mcp`;
+  const hasResult = (b) => (b?.messages || []).some((m) => Array.isArray(m.content) && m.content.some((x) => x.type === "tool_result"));
+  const fake = await startFakeAnthropic({ script: (req) => (hasResult(req.body) ? { text: "Noted." } : { toolUse: { id: "toolu_err_1", name: "mcp__tarsee__tarsee_schedule_task", input: { schedule: "0 8 * * *" } } }) });
+  try {
+    const r = await drive({
+      args: baseArgs({ extra: ["--mcp-config", JSON.stringify({ mcpServers: { tarsee: { type: "http", url, headers: { Authorization: `Bearer ${TOKEN}` }, alwaysLoad: true } } })] }),
+      env: gatewayEnv(`${SCRATCH}/homes/mcperr`, fake.url, { CLAUDE_CODE_SDK_READS_SESSION_STATE: "1" }), cwd: `${SCRATCH}/ws/mcperr`,
+      stdin: [initRequest({ systemPrompt: ["You are a test."], systemPromptSnapshot: false }), userText("schedule it")], timeoutMs: 90_000,
+    });
+    const user = r.stdout.map((o) => o.msg).find((m) => m?.type === "user");
+    const row = { case: mode === "isError" ? "tools/call answers a result with isError: true" : "tools/call answers a JSON-RPC error", exit_code: r.exitCode, user_message_on_stdout: user ? { content: user.message.content, tool_use_result: user.tool_use_result } : null, result: r.stdout.map((o) => o.msg).find((m) => m?.type === "result")?.result };
+    out.push(row);
+    console.log(JSON.stringify(row));
+  } finally { await fake.close(); server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
+}
+fs.writeFileSync(`${SCRATCH}/real/11-mcp-error.json`, JSON.stringify(out, null, 2));

@@ -1,0 +1,163 @@
+{
+  "name": "22-program-not-found",
+  "description": "The path the SDK is told to start has no program at it: the error the SDK raises and what Tarsee's engine emits.",
+  "how": "native: the SDK started the stub program itself (pathToClaudeCodeExecutable), exactly as it starts claude.exe",
+  "tarsee_run_opts": {
+    "target": {
+      "providerId": "claude",
+      "model": "sonnet"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "say hi"
+      }
+    ],
+    "systemPrompt": "You are a test.",
+    "mcpServer": null
+  },
+  "sdk_query": {
+    "prompt": "say hi",
+    "options": {
+      "cwd": "<WORKSPACE>",
+      "env": {
+        "names": [
+          "BASH_MAX_OUTPUT_LENGTH",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+          "CLAUDE_CODE_OAUTH_TOKEN",
+          "COMSPEC",
+          "DEBUG",
+          "HOME",
+          "MAX_MCP_OUTPUT_TOKENS",
+          "MY_SERVICE_API_KEY",
+          "NODE_OPTIONS",
+          "PATH",
+          "PATHEXT",
+          "SystemDrive",
+          "SystemRoot",
+          "TEMP",
+          "TMP",
+          "USERPROFILE",
+          "windir"
+        ],
+        "values": {
+          "BASH_MAX_OUTPUT_LENGTH": "8000",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "180000",
+          "CLAUDE_CODE_OAUTH_TOKEN": "<PLAN_OAUTH_TOKEN>",
+          "DEBUG": "canary-debug",
+          "MAX_MCP_OUTPUT_TOKENS": "3000",
+          "MY_SERVICE_API_KEY": "vault-value-for-scripts-1",
+          "NODE_OPTIONS": "--max-old-space-size=4096"
+        }
+      },
+      "model": "claude-sonnet-5",
+      "tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Glob",
+        "Grep",
+        "mcp__tarsee__*"
+      ],
+      "allowedTools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Glob",
+        "Grep",
+        "mcp__tarsee__*"
+      ],
+      "permissionMode": "bypassPermissions",
+      "allowDangerouslySkipPermissions": true,
+      "maxTurns": 50,
+      "includePartialMessages": true,
+      "settingSources": [
+        "user",
+        "project",
+        "local"
+      ],
+      "strictMcpConfig": false,
+      "additionalDirectories": [
+        "<TARSEE_ROOT>\\src\\skills"
+      ],
+      "systemPrompt": {
+        "type": "custom",
+        "prompt": "You ARE Tarsee — a headless AI agent running 24/7 on a server.\n\n## MCP Tools (call as mcp__tarsee__tarsee_<name>)\n- **send_message**(channel, message, channel_id) — push to Telegram/Discord/WhatsApp/Slack/web\n- **send_file**(channel, file_path, caption?, channel_id?) — send a file as a real attachment to Telegram/Discord/WhatsApp/Slack or a dashboard chat (web); with no channel_id it goes to the chat you are in. When someone asks for a file, send it: never answer with a folder path or say the channel can't take files\n- **schedule_task**(id, schedule, prompt, channel?, once?, action?) — create cron jobs\n- **remember**(content) — append to MEMORY.md\n- **daily_log**(content) — append to today's log\n- **read_file**(filename) / **write_file**(filename, content) — workspace files\n- **search_memories**(query) — keyword search through memory files\n- **search_memories_deep**(query) — dumps ALL memories for semantic reasoning (use when keyword search finds nothing)\n- **create_canvas**(title, html, css?, js?) — create live interactive HTML/CSS/JS canvas (renders as iframe in chat)\n- **web_fetch**(url) / **web_search**(query) — web access\n- **get_key**(name) / **set_key**(name, value) — encrypted vault\n- **calculator**(expression) — precise math. ALWAYS use this for any calculation, never do math in your head\n- **datetime**(timezone?, date?, format?) — current date/time/day or timezone conversion. ALWAYS use this for dates and days of the week, never guess. Default timezone: UTC\n- **browser**(action, url?, selector?, text?, ...) — stealth Playwright browser with captcha solving\n- **discord_admin**(action, ...) — list, make and edit Discord channels and make webhooks with Tarsee's own bot (never the bot token from Bash); changes need approved_by, a webhook URL goes to the vault, nothing deletes\n- **railway**(action, project?, environment?, service?, ...) — list Railway projects and variable names, set a variable (secrets via from_key, a vault key name) or redeploy, with the vault's RAILWAY_API_TOKEN; writes need approved_by. Use it instead of Railway calls from Bash\n\n## Memory\nUse remember for durable facts. Use daily_log for session notes. Only append, never overwrite.\nBefore saying \"I don't know\" or \"I can't remember\":\n1. Try search_memories first (fast, keyword-based)\n2. If nothing found, use search_memories_deep (reads everything, lets you reason about relevance)\n\n## CLI Tools Installed\n- **railway** — Railway CLI for logs and deploys (to set a variable or redeploy, use the railway tool above: never a secret in a command)\n- **gog** — Google Workspace (Gmail, Calendar, Drive, Contacts, Sheets)\n- **himalaya** — Zoho/IMAP email\n- **gh** — GitHub CLI\n- **claude** — Claude Code CLI\n- **whisper-cli** — local speech-to-text\n- Use Bash to run any of these directly.\n\n## Skill Discovery\nYou have skills installed in the skills/ directory. Before saying \"I can't do that\":\n1. Check if a skill exists: list files in <WORKSPACE>/skills/ or read a skill's SKILL.md\n2. If a matching skill exists, read its SKILL.md and follow the instructions\n3. If no skill exists, ask the user if they want you to create one\n\n## Workspace: <WORKSPACE>\n\nYou are a test.",
+        "snapshot": false
+      },
+      "abortController": "<AbortController>",
+      "fallbackModel": "claude-haiku-4-5",
+      "stderr": "<function: keeps the last 2000 characters>"
+    }
+  },
+  "spawn": {
+    "command": "<A_PATH_WITH_NO_PROGRAM_AT_IT>",
+    "argv": null,
+    "cwd": null,
+    "stdio": "stdin, stdout and stderr are pipes; windowsHide: true"
+  },
+  "env": {
+    "given_to_sdk": {
+      "names": [
+        "BASH_MAX_OUTPUT_LENGTH",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "COMSPEC",
+        "DEBUG",
+        "HOME",
+        "MAX_MCP_OUTPUT_TOKENS",
+        "MY_SERVICE_API_KEY",
+        "NODE_OPTIONS",
+        "PATH",
+        "PATHEXT",
+        "SystemDrive",
+        "SystemRoot",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "windir"
+      ],
+      "values": {
+        "BASH_MAX_OUTPUT_LENGTH": "8000",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "180000",
+        "CLAUDE_CODE_OAUTH_TOKEN": "<PLAN_OAUTH_TOKEN>",
+        "DEBUG": "canary-debug",
+        "MAX_MCP_OUTPUT_TOKENS": "3000",
+        "MY_SERVICE_API_KEY": "vault-value-for-scripts-1",
+        "NODE_OPTIONS": "--max-old-space-size=4096"
+      }
+    },
+    "received_by_program": null,
+    "sdk_changes": null
+  },
+  "stdin": null,
+  "stdin_events": null,
+  "stdout_script": "turn",
+  "stdout_played": null,
+  "sdk_error_thrown": {
+    "t": 7,
+    "name": "ReferenceError",
+    "message": "Claude Code native binary not found at <A_PATH_WITH_NO_PROGRAM_AT_IT>. Please ensure Claude Code is installed via native installer or specify a valid path with options.pathToClaudeCodeExecutable."
+  },
+  "sdk_messages_seen_by_tarsee": [],
+  "tarsee_events": [
+    {
+      "t": 9,
+      "type": "error",
+      "message": "**Claude ran into a problem:** Claude Code native binary not found at <A_PATH_WITH_NO_PROGRAM_AT_IT>. Please ensure Claude Code is installed via native installer or specify a valid path with options.pathToClaudeCodeExecutable.",
+      "recoverable": false,
+      "code": "unknown"
+    },
+    {
+      "t": 9,
+      "type": "done",
+      "stopReason": "error"
+    }
+  ],
+  "tarsee_logs": [
+    "log: [claude-code] Starting claude turn in <WORKSPACE>, model: claude-sonnet-5, session: new, media: 0",
+    "error: [claude-code] Exception: ReferenceError: Claude Code native binary not found at <A_PATH_WITH_NO_PROGRAM_AT_IT>. Please ensure Claude Code is installed via native installer or specify a valid path with options.pathToClaudeCodeExecutable."
+  ]
+}

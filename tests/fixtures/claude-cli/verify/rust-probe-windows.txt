@@ -1,0 +1,3 @@
+1. native .exe: arguments intact = true
+2. .cmd shim: arguments intact = true
+3. killed with Child::kill(): status.code() = Some(1), success = false, wait returned after 0 ms

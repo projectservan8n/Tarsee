@@ -1,0 +1,8 @@
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import { CLAUDE, cleanEnv, SCRATCH } from "./realenv.mjs";
+for (const args of [["--version"], ["--help"]]) {
+  const r = spawnSync(CLAUDE, args, { env: cleanEnv(), cwd: SCRATCH + "/real/ws", encoding: "utf8", timeout: 60000, windowsHide: true });
+  fs.writeFileSync(`${SCRATCH}/real/out/${args[0].replace(/^--/, "")}.txt`, `exit ${r.status}\n--- stdout\n${r.stdout}\n--- stderr\n${r.stderr}`);
+  console.log(args.join(" "), "-> exit", r.status, "stdout bytes", r.stdout?.length, "stderr bytes", r.stderr?.length);
+}

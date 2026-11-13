@@ -1,0 +1,462 @@
+#!/usr/bin/env node
+/**
+ * capture-sdk.mjs: what @openai/codex-sdk 0.167.0 itself does, recorded by calling it directly (not through
+ * Tarsee's engine) with the stub in place of the program. It covers what Tarsee's own turns never exercise but an
+ * engineer replacing the SDK must still get right or deliberately leave out:
+ *
+ *   - how a `config` object becomes `--config key=value` arguments, for every kind of value
+ *   - every option the SDK has (the ones Tarsee uses and the ones it does not), and the argument each produces
+ *   - what the child's environment is when the caller passes `env` and when it does not
+ *   - which program the SDK starts when no path is given, and what it then puts on PATH (run against a copy of the
+ *     SDK's one file inside a made-up node_modules tree whose "pinned binary" is the stub)
+ *   - how stdout lines become events, and what a bad line, a blank line, stderr and the exit code do
+ *   - what an abort does
+ *
+ *   node capture-sdk.mjs [scenario ...]
+ */
+import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const PROJECT = process.env.CAPTURE_PROJECT || "/path/to/the/node/checkout";
+const SCRATCH = process.env.CAPTURE_SCRATCH || "/path/to/a/scratch/folder";
+const OUT = process.env.CAPTURE_OUT || path.join(SCRATCH, "fixtures-sdk");
+const STUB_DIR = path.join(SCRATCH, "stub");
+const EXE = process.platform === "win32" ? ".exe" : "";
+const STUB = path.join(STUB_DIR, `codex-stub${EXE}`);
+const RUNS = path.join(SCRATCH, "runs-sdk");
+const TMP = path.join(SCRATCH, "tmp");
+fs.mkdirSync(TMP, { recursive: true });
+fs.mkdirSync(OUT, { recursive: true });
+
+// This process's own environment, cut down to a known one: the SDK copies it when the caller passes no `env`.
+const KEEP = process.platform === "win32" ? ["SYSTEMROOT", "SYSTEMDRIVE", "COMSPEC"] : [];
+for (const k of Object.keys(process.env)) if (!KEEP.includes(k.toUpperCase())) delete process.env[k];
+process.env.PATH = process.platform === "win32" ? "C:\\WINDOWS\\system32;C:\\WINDOWS" : "/usr/local/bin:/usr/bin:/bin";
+process.env.TEMP = TMP;
+process.env.TMP = TMP;
+process.env.TMPDIR = TMP;
+process.env.FROM_PROCESS_ENV = "the caller's own environment";
+
+const SDK_FILE = path.join(PROJECT, "node_modules/@openai/codex-sdk/dist/index.js");
+const { Codex } = await import(pathToFileURL(SDK_FILE).href);
+
+const fake = (...parts) => parts.join("");
+const API_KEY = fake("sk-", "test-not-a-key-", "sdk");
+const THREAD = "01a1c000-0000-7000-8000-0000000000bb";
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+
+const okEvents = (threadId = THREAD) => [
+  { type: "thread.started", thread_id: threadId },
+  { type: "turn.started" },
+  { type: "item.completed", item: { id: "item_0", type: "agent_message", text: "ok" } },
+  { type: "turn.completed", usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 2, reasoning_output_tokens: 0 } },
+];
+const lines = (events) => events.map((e) => JSON.stringify(e)).join("\n") + "\n";
+
+function writePlan(planDir, { record, stdout, exit, stderr, sleepMs, alive }) {
+  fs.rmSync(planDir, { recursive: true, force: true });
+  fs.mkdirSync(planDir, { recursive: true });
+  fs.writeFileSync(path.join(planDir, "record.txt"), record);
+  if (stdout != null) fs.writeFileSync(path.join(planDir, "stdout.jsonl"), stdout);
+  if (exit != null) fs.writeFileSync(path.join(planDir, "exit.txt"), String(exit));
+  if (stderr) fs.writeFileSync(path.join(planDir, "stderr.txt"), stderr);
+  if (sleepMs) fs.writeFileSync(path.join(planDir, "sleep_ms.txt"), String(sleepMs));
+  if (alive) fs.writeFileSync(path.join(planDir, "alive.txt"), alive);
+}
+
+function forms(value) {
+  const out = new Set([value, value.split("\\").join("/")]);
+  for (let i = 0; i < 3; i++) for (const f of [...out]) out.add(JSON.stringify(f).slice(1, -1));
+  return [...out];
+}
+function scrub(text, pairs) {
+  const all = [];
+  for (const [value, label] of pairs) if (value) for (const f of forms(String(value))) all.push([f, label]);
+  all.sort((a, b) => b[0].length - a[0].length);
+  let out = text;
+  for (const [f, label] of all) out = out.split(f).join(label);
+  return out;
+}
+
+const errorShape = (err) => (err ? {
+  name: err.name, message: err.message, code: err.code ?? null,
+  cause: err.cause ? { name: err.cause.name, message: err.cause.message } : null,
+} : null);
+
+/**
+ * One run of the SDK. s: { codexOptions, method, threadId, threadOptions, input, turnOptions, plan (stdout, exit,
+ * stderr, sleepMs), abortAfterMs, sdk (a Codex class other than the real one's), stub (the program path), planDir }.
+ */
+async function runSdk(name, s) {
+  const root = path.join(RUNS, name);
+  fs.rmSync(root, { recursive: true, force: true });
+  const ws = path.join(root, "workspace");
+  const extra = path.join(root, "extra-dir");
+  fs.mkdirSync(ws, { recursive: true });
+  fs.mkdirSync(extra, { recursive: true });
+  const image = path.join(root, "picture.png");
+  fs.writeFileSync(image, PNG);
+  const recordFile = path.join(root, "stub-record.json");
+  const aliveFile = path.join(root, "alive.txt");
+  const planDir = s.planDir || path.join(STUB_DIR, "plan");
+  writePlan(planDir, { record: recordFile, stdout: lines(okEvents(s.threadId || THREAD)), alive: s.abortAfterMs != null || s.watchAlive || s.killExternallyAfterEvents ? aliveFile : null, ...(s.plan || {}) });
+
+  const subst = (v) => JSON.parse(JSON.stringify(v ?? null).split("<WS>").join(JSON.stringify(ws).slice(1, -1)).split("<EXTRA>").join(JSON.stringify(extra).slice(1, -1)).split("<IMAGE>").join(JSON.stringify(image).slice(1, -1)));
+  const codexOptions = { ...(subst(s.codexOptions) || {}), ...(s.useStub === false ? {} : { codexPathOverride: s.stub || STUB }) };
+  const threadOptions = s.threadOptions === undefined ? undefined : subst(s.threadOptions);
+  const input = subst(s.input ?? "hello");
+  const ac = s.abortAfterMs != null || s.abortBeforeStart ? new AbortController() : null;
+  if (s.abortBeforeStart) ac.abort();
+  const turnOptions = { ...(s.turnOptions || {}), ...(ac ? { signal: ac.signal } : {}) };
+
+  const CodexClass = s.sdk || Codex;
+  const codex = new CodexClass(codexOptions);
+  const thread = s.threadId ? codex.resumeThread(s.threadId, threadOptions) : codex.startThread(threadOptions);
+  const yielded = [];
+  let thrown = null;
+  let abortedAt = null;
+  const t0 = Date.now();
+  let endedAt = null;
+  let schemaSeen = null;
+  let aliveAtAbort = null;
+  try {
+    const { events } = await thread.runStreamed(input, turnOptions);
+    for await (const ev of events) {
+      yielded.push(ev);
+      // Abort a fixed time after the last scripted event has arrived (so a slow process start cannot beat it).
+      if (s.killExternallyAfterEvents && yielded.length === s.killExternallyAfterEvents) {
+        // End the program from outside (not through the SDK), the way a crash or an operator's kill would.
+        const pid = JSON.parse(fs.readFileSync(recordFile, "utf8")).pid;
+        setTimeout(() => {
+          if (process.platform === "win32") spawnSync(path.join(process.env.SYSTEMROOT || "C:\\WINDOWS", "System32", "taskkill.exe"), ["/PID", String(pid), "/F"], { stdio: "ignore" });
+          else process.kill(pid, "SIGKILL");
+        }, 200);
+      }
+      if (ac && yielded.length === s.abortAfterEvents) setTimeout(() => { abortedAt = Date.now() - t0; try { aliveAtAbort = Number(fs.readFileSync(aliveFile, "utf8")); } catch { /* none */ } ac.abort(); }, s.abortAfterMs);
+      if (schemaSeen === null && turnOptions.outputSchema !== undefined) {
+        // While the turn runs, the schema file the SDK wrote is still there.
+        try {
+          const rec = JSON.parse(fs.readFileSync(recordFile, "utf8"));
+          const file = rec.argv[rec.argv.indexOf("--output-schema") + 1];
+          schemaSeen = { path: file, content: fs.readFileSync(file, "utf8") };
+        } catch { /* the stub has not written its record yet */ }
+      }
+    }
+  } catch (err) {
+    thrown = err;
+  }
+  endedAt = Date.now() - t0;
+
+  let rec = null;
+  try { rec = JSON.parse(fs.readFileSync(recordFile, "utf8")); } catch { /* never started */ }
+  let lastAlive = null;
+  if (ac || s.watchAlive) {
+    await new Promise((r) => setTimeout(r, 300));
+    try { lastAlive = Number(fs.readFileSync(aliveFile, "utf8")); } catch { /* none */ }
+    const again = await new Promise((r) => setTimeout(() => { try { r(Number(fs.readFileSync(aliveFile, "utf8"))); } catch { r(null); } }, 300));
+    if (again !== lastAlive) lastAlive = `still running (${lastAlive} then ${again})`;
+  }
+  const trim = (t) => (s.trimStdinText && t.length > 200 ? `${t.slice(0, 60)} … (${t.length} characters in all) … ${t.slice(-40)}` : t);
+  const passedEnv = codexOptions.env || null;
+  const fixture = {
+    name,
+    what: s.why,
+    made_with: { sdk: "@openai/codex-sdk 0.167.0, called directly", platform: process.platform },
+    sdk: {
+      "new Codex(options)": codexOptions,
+      thread: s.threadId ? { method: "resumeThread", threadId: s.threadId, threadOptions } : { method: "startThread", threadOptions },
+      "runStreamed(input, turnOptions)": { input: typeof input === "string" ? trim(input) : input, inputLength: typeof input === "string" ? { characters: input.length, utf8Bytes: Buffer.byteLength(input, "utf8") } : undefined, turnOptions: Object.fromEntries(Object.entries(turnOptions).map(([k, v]) => [k, k === "signal" ? "<AbortSignal>" : v])) },
+      callerProcessEnvNames: Object.keys(process.env).sort(),
+    },
+    child: rec ? {
+      program: s.stub || STUB,
+      argv: rec.argv,
+      cwd: rec.cwd,
+      envNames: Object.keys(rec.env).sort(),
+      envValues: Object.fromEntries(["CODEX_API_KEY", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "FROM_PROCESS_ENV", "FROM_ENV_OPTION", "PATH", "Path", "path"].filter((n) => n in rec.env).map((n) => [n, rec.env[n]])),
+      envNamesNotInEnvOption: passedEnv ? Object.keys(rec.env).filter((n) => !Object.keys(passedEnv).some((p) => p.toUpperCase() === n.toUpperCase())).sort() : undefined,
+      stdin: { text: trim(rec.stdin.text), sameAsTheInput: typeof input === "string" ? rec.stdin.text === input : undefined, bytes: rec.stdin.bytes, chunks: rec.stdin.chunks.map((c) => ({ at_ms: c.at_ms, bytes: c.bytes })), eof_at_ms: rec.stdin.eof_at_ms },
+    } : null,
+    outputSchemaFile: schemaSeen ? { ...schemaSeen, existsAfterTheTurn: fs.existsSync(schemaSeen.path) } : undefined,
+    stub: { stdout: (s.plan?.stdout ?? lines(okEvents(s.threadId || THREAD))), stderr: s.plan?.stderr ?? "", exitCode: s.plan?.exit ?? 0, sleepMsBeforeExit: s.plan?.sleepMs ?? 0 },
+    sdkYielded: yielded,
+    sdkThrew: errorShape(thrown),
+    programAfterTheError: s.watchAlive ? { note: "the stub would have run for sleepMsBeforeExit more; its heartbeat (ms since it started, every 20 ms) stopped at", stubLastAliveMs: lastAlive } : undefined,
+    abort: ac ? {
+      note: "abortedAtMs and iterationEndedAtMs are since runStreamed() was called; the stub's two values are on its own clock (ms since it started), written every 20 ms",
+      abortedAtMs: abortedAt, iterationEndedAtMs: endedAt, stubAliveWhenAbortFiredMs: aliveAtAbort, stubLastAliveMs: lastAlive,
+    } : undefined,
+  };
+  const pairs = [
+    [ws, "<WORKSPACE>"], [extra, "<EXTRA_DIR>"], [image, "<IMAGE_FILE>"], [s.scrubRoot ? null : (s.stub || STUB), "<CODEX_BIN>"], [TMP, "<TMP>"], [s.scrubRoot, "<NODE_MODULES>"],
+    [path.resolve(PROJECT), "<TARSEE_ROOT>"], [process.cwd(), "<CALLER_CWD>"], [os.homedir(), "<HOME>"], [API_KEY, "<API_KEY>"], [SCRATCH, "<SCRATCH>"],
+  ];
+  let text = scrub(JSON.stringify(fixture, null, 2), pairs);
+  text = text.replace(/codex-output-schema-[A-Za-z0-9]{6}/g, "codex-output-schema-<RANDOM>");
+  fs.writeFileSync(path.join(OUT, `${name}.json`), text + "\n");
+  console.log(`${name}: ${rec ? `${rec.argv.length} arguments` : "not started"}; yielded ${yielded.length}; ${thrown ? `threw ${thrown.name}: ${String(thrown.message).split("\n")[0].slice(0, 100)}` : "no error"}`);
+  return fixture;
+}
+
+// --- A copy of the SDK's one file in a made-up node_modules tree, so "the pinned binary" is the stub ------------------
+
+function sha256(file) { return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
+
+/** layout: "package" (vendor/<triple>/bin + codex-package.json + codex-path) or "legacy" (vendor/<triple>/codex + path). */
+async function pinnedTree(layout) {
+  const TRIPLES = {
+    "win32-x64": ["x86_64-pc-windows-msvc", "codex-win32-x64"], "win32-arm64": ["aarch64-pc-windows-msvc", "codex-win32-arm64"],
+    "linux-x64": ["x86_64-unknown-linux-musl", "codex-linux-x64"], "linux-arm64": ["aarch64-unknown-linux-musl", "codex-linux-arm64"],
+    "darwin-x64": ["x86_64-apple-darwin", "codex-darwin-x64"], "darwin-arm64": ["aarch64-apple-darwin", "codex-darwin-arm64"],
+  };
+  const [triple, pkg] = TRIPLES[`${process.platform}-${process.arch}`];
+  const root = path.join(SCRATCH, `pinned-${layout}`, "node_modules");
+  fs.rmSync(path.dirname(root), { recursive: true, force: true });
+  const sdkDir = path.join(root, "@openai", "codex-sdk");
+  fs.mkdirSync(path.join(sdkDir, "dist"), { recursive: true });
+  fs.copyFileSync(SDK_FILE, path.join(sdkDir, "dist", "index.js"));
+  fs.copyFileSync(path.join(PROJECT, "node_modules/@openai/codex-sdk/package.json"), path.join(sdkDir, "package.json"));
+  if (sha256(path.join(sdkDir, "dist", "index.js")) !== sha256(SDK_FILE)) throw new Error("the SDK copy differs");
+  fs.mkdirSync(path.join(root, "@openai", "codex"), { recursive: true });
+  fs.copyFileSync(path.join(PROJECT, "node_modules/@openai/codex/package.json"), path.join(root, "@openai", "codex", "package.json"));
+  const platformDir = path.join(root, "@openai", pkg);
+  const vendor = path.join(platformDir, "vendor", triple);
+  fs.mkdirSync(vendor, { recursive: true });
+  fs.writeFileSync(path.join(platformDir, "package.json"), JSON.stringify({ name: "@openai/codex", version: "0.167.0-capture" }));
+  let binDir;
+  let pathDir;
+  if (layout === "package") {
+    binDir = path.join(vendor, "bin");
+    pathDir = path.join(vendor, "codex-path");
+    fs.writeFileSync(path.join(vendor, "codex-package.json"), JSON.stringify({ layoutVersion: 1, version: "0.167.0", target: triple, variant: "codex", entrypoint: `bin/codex${EXE}`, resourcesDir: "codex-resources", pathDir: "codex-path" }));
+  } else {
+    binDir = path.join(vendor, "codex");
+    pathDir = path.join(vendor, "path");
+  }
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(pathDir, { recursive: true });
+  const stub = path.join(binDir, `codex${EXE}`);
+  fs.copyFileSync(STUB, stub);
+  const sdk = (await import(pathToFileURL(path.join(sdkDir, "dist", "index.js")).href)).Codex;
+  return { sdk, stub, planDir: path.join(binDir, "plan"), root, pathDir };
+}
+
+// --- Scenarios -----------------------------------------------------------------------------------------------------
+
+const SCENARIOS = {
+  "sdk-01-config-flattening": async () => runSdk("sdk-01-config-flattening", {
+    why: "How `config` becomes --config arguments: every kind of value the SDK accepts. A table is flattened into dotted keys, one argument per leaf; anything inside an array is written as one TOML value (tables there become inline tables).",
+    codexOptions: {
+      env: { FROM_ENV_OPTION: "the env option" },
+      config: {
+        string_plain: "hello",
+        string_quotes_backslash: "say \"hi\" to C:\\Users\\me",
+        string_newline_tab: "line one\nline two\ttabbed",
+        string_unicode: "caf\u00e9 \u2603 \ud83d\ude00",
+        string_control: "bell\u0007 esc\u001b del\u007f",
+        string_empty: "",
+        integer: 42,
+        negative: -7,
+        float: 0.85,
+        exponent_large: 1e21,
+        exponent_small: 1e-7,
+        bool_true: true,
+        bool_false: false,
+        array_empty: [],
+        array_strings: ["a", "b c", "d\"e"],
+        array_numbers: [1, 2.5, -3],
+        array_mixed_nested: [1, "two", [3, 4], true],
+        array_of_tables: [{ name: "first", n: 1 }, { "key with space": "v", nested: { deep: true } }],
+        table_empty: {},
+        table: { leaf: "v", inner: { leaf2: 2, list: ["x"], empty: {} } },
+        skipped_undefined: undefined,
+        "key with space": "top-level key is not quoted",
+        "dotted.key": "a dot in a key reads as a deeper path",
+        table_awkward_keys: { "X-Header-Name": "bare", "has space": 1, "has.dot": 2, "quote\"d": 3 },
+      },
+    },
+  }),
+
+  "sdk-02-every-option": async () => runSdk("sdk-02-every-option", {
+    why: "Every option the SDK has at once, on a new thread, in the order the SDK emits them: config, configOverrides (raw), baseUrl, model, threadSource, sandboxMode, workingDirectory, additionalDirectories, skipGitRepoCheck, outputSchema, cyberAccessProgram, modelReasoningEffort, networkAccessEnabled, webSearchMode, approvalPolicy, images; apiKey as CODEX_API_KEY. The input is two text parts and a picture.",
+    codexOptions: {
+      env: { FROM_ENV_OPTION: "the env option", CODEX_API_KEY: "overwritten by apiKey" },
+      apiKey: API_KEY,
+      baseUrl: "http://127.0.0.1:9/v1",
+      config: { a: { b: 1 } },
+      configOverrides: ["raw.override=\"passed unchanged\"", "another=1"],
+    },
+    threadOptions: {
+      model: "some-model", threadSource: "capture", sandboxMode: "workspace-write", workingDirectory: "<WS>", additionalDirectories: ["<EXTRA>", "<WS>"],
+      skipGitRepoCheck: true, modelReasoningEffort: "minimal", networkAccessEnabled: false, webSearchMode: "cached", webSearchEnabled: true, approvalPolicy: "on-request",
+    },
+    input: [{ type: "text", text: "first part" }, { type: "local_image", path: "<IMAGE>" }, { type: "text", text: "second part" }],
+    turnOptions: { outputSchema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false }, cyberAccessProgram: "standard" },
+  }),
+
+  "sdk-03-every-option-resumed": async () => runSdk("sdk-03-every-option-resumed", {
+    why: "The same on a resumed thread: threadSource is left out, `resume <id>` comes after every option and before --image.",
+    threadId: THREAD,
+    codexOptions: { env: { FROM_ENV_OPTION: "the env option" }, apiKey: API_KEY, baseUrl: "http://127.0.0.1:9/v1", config: { a: { b: 1 } }, configOverrides: ["raw.override=\"passed unchanged\""] },
+    threadOptions: {
+      model: "some-model", threadSource: "capture", sandboxMode: "read-only", workingDirectory: "<WS>", additionalDirectories: ["<EXTRA>"],
+      skipGitRepoCheck: true, modelReasoningEffort: "max", networkAccessEnabled: true, webSearchEnabled: true, approvalPolicy: "untrusted",
+    },
+    input: [{ type: "text", text: "again" }, { type: "local_image", path: "<IMAGE>" }, { type: "local_image", path: "<IMAGE>" }],
+    turnOptions: { outputSchema: { type: "object" } },
+  }),
+
+  "sdk-04-no-options": async () => runSdk("sdk-04-no-options", {
+    why: "Nothing but the program's path: no env option (so the child gets a copy of the caller's whole process environment), no config, no thread options. The shortest command line the SDK produces.",
+    codexOptions: {},
+    input: "",
+  }),
+
+  "sdk-05-web-search-false-no-skip": async () => runSdk("sdk-05-web-search-false-no-skip", {
+    why: "webSearchEnabled false with no webSearchMode gives web_search=\"disabled\"; skipGitRepoCheck false and networkAccessEnabled undefined give nothing; an empty additionalDirectories gives nothing; an empty env option ({}) counts as given.",
+    codexOptions: { env: {} },
+    threadOptions: { webSearchEnabled: false, skipGitRepoCheck: false, additionalDirectories: [], sandboxMode: "danger-full-access" },
+    input: [{ type: "text", text: "only text" }],
+  }),
+
+  "sdk-06-pinned-binary-package-layout": async () => {
+    const t = await pinnedTree("package");
+    return runSdk("sdk-06-pinned-binary-package-layout", {
+      why: "No codexPathOverride: the SDK resolves @openai/codex, then its platform package, and starts vendor/<triple>/bin/codex(.exe) (the layout 0.167.0 ships, marked by codex-package.json), with vendor/<triple>/codex-path put first on the child's PATH. Run against a byte-for-byte copy of the SDK's file inside a made-up node_modules whose binary is the stub. The env option here carries both `Path` and `PATH`.",
+      sdk: t.sdk, stub: t.stub, planDir: t.planDir, useStub: false, scrubRoot: t.root,
+      codexOptions: { env: { FROM_ENV_OPTION: "the env option", PATH: "C:\\one;C:\\two", Path: "C:\\three;C:\\four", SystemRoot: "C:\\WINDOWS" } },
+    });
+  },
+
+  "sdk-07-pinned-binary-legacy-layout": async () => {
+    const t = await pinnedTree("legacy");
+    return runSdk("sdk-07-pinned-binary-legacy-layout", {
+      why: "The older layout the SDK still accepts: vendor/<triple>/codex/codex(.exe), with vendor/<triple>/path put first on PATH. No env option, so PATH is the caller's own with that folder in front.",
+      sdk: t.sdk, stub: t.stub, planDir: t.planDir, useStub: false, scrubRoot: t.root,
+      codexOptions: {},
+    });
+  },
+
+  "sdk-19-windows-env-fill-in": async () => {
+    // Give this process a full Windows-like environment (made-up values, so none of this machine's are recorded) and
+    // pass an `env` with one name in it: which of the caller's names turn up in the child anyway?
+    const made = {
+      HOMEDRIVE: "C:", HOMEPATH: "\\Users\\capture", LOGONSERVER: "\\\\CAPTURE", USERDOMAIN: "CAPTURE", USERNAME: "capture", USERPROFILE: "C:\\Users\\capture",
+      WINDIR: "C:\\WINDOWS", APPDATA: "C:\\Users\\capture\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\capture\\AppData\\Local", PROGRAMFILES: "C:\\Program Files",
+      PROGRAMDATA: "C:\\ProgramData", PATHEXT: ".COM;.EXE;.BAT;.CMD", COMPUTERNAME: "CAPTURE", OS: "Windows_NT", NUMBER_OF_PROCESSORS: "8", PROCESSOR_ARCHITECTURE: "AMD64",
+      PUBLIC: "C:\\Users\\Public", ALLUSERSPROFILE: "C:\\ProgramData", COMMONPROGRAMFILES: "C:\\Program Files\\Common Files",
+    };
+    const before = {};
+    for (const [k, v] of Object.entries(made)) { before[k] = process.env[k]; process.env[k] = v; }
+    try {
+      return await runSdk("sdk-19-windows-env-fill-in", {
+        why: "Windows only, and Node's doing, not the SDK's: when `env` is given, Node still copies a fixed set of system names from the caller's own environment into the child if `env` lacks them. The caller here has a full made-up Windows environment (callerProcessEnvNames) and passes env = {FROM_ENV_OPTION}: child.envNamesNotInEnvOption lists what arrived anyway.",
+        codexOptions: { env: { FROM_ENV_OPTION: "the env option" } },
+      });
+    } finally {
+      for (const [k, v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+  },
+
+  "sdk-20-long-unicode-prompt": async () => runSdk("sdk-20-long-unicode-prompt", {
+    why: "A prompt of 300,000 characters with non-ASCII in it: written to stdin as UTF-8 in one write() and then closed; the program reads it in pieces (the pipe's), and its end is the end of stdin. Nothing is added: no newline, no length, no framing.",
+    codexOptions: { env: {} },
+    input: `h\u00e9llo \u2603 \ud83d\ude00\n${"0123456789".repeat(30000)}\nlast line with no newline after it`,
+    trimStdinText: true,
+  }),
+
+  "sdk-08-stdout-not-json": async () => runSdk("sdk-08-stdout-not-json", {
+    why: "A stdout line that is not JSON: the events before it are yielded, then the SDK throws `Failed to parse item: <line>` and stops reading.",
+    codexOptions: { env: {} },
+    plan: { stdout: `${JSON.stringify({ type: "thread.started", thread_id: THREAD })}\nthis is not json\n${JSON.stringify({ type: "turn.started" })}\n` },
+  }),
+
+  "sdk-09-stdout-blank-line": async () => runSdk("sdk-09-stdout-blank-line", {
+    why: "An empty stdout line is a line like any other: it is not JSON, so the SDK throws on it.",
+    codexOptions: { env: {} },
+    plan: { stdout: `${JSON.stringify({ type: "thread.started", thread_id: THREAD })}\n\n${JSON.stringify({ type: "turn.started" })}\n` },
+  }),
+
+  "sdk-10-stdout-crlf-no-final-newline-unknown": async () => runSdk("sdk-10-stdout-crlf-no-final-newline-unknown", {
+    why: "CRLF line ends, a last line with no line end, an event type the SDK does not know and extra fields: all pass through as parsed. turn.completed without cache_write_input_tokens gets it as 0; one that has it keeps its value.",
+    codexOptions: { env: {} },
+    plan: {
+      stdout: [
+        JSON.stringify({ type: "thread.started", thread_id: THREAD, extra_field: 1 }),
+        JSON.stringify({ type: "some.future.event", payload: { x: 1 } }),
+        JSON.stringify({ type: "turn.completed", usage: { input_tokens: 5, cached_input_tokens: 1, output_tokens: 2, reasoning_output_tokens: 0 } }),
+        JSON.stringify({ type: "turn.completed", usage: { input_tokens: 5, cached_input_tokens: 1, cache_write_input_tokens: 3, output_tokens: 2, reasoning_output_tokens: 0 } }),
+      ].join("\r\n"),
+    },
+  }),
+
+  "sdk-11-exit-nonzero-after-events": async () => runSdk("sdk-11-exit-nonzero-after-events", {
+    why: "Exit code 1 with text on stderr after a failed turn (what codex does): every event is yielded first, then the SDK throws `Codex Exec exited with code 1: <all of stderr>`.",
+    codexOptions: { env: {} },
+    plan: {
+      stdout: lines([{ type: "thread.started", thread_id: THREAD }, { type: "turn.started" }, { type: "error", message: "boom" }, { type: "turn.failed", error: { message: "boom" } }]),
+      stderr: "Reading prompt from stdin...\nERROR something went wrong\n", exit: 1,
+    },
+  }),
+
+  "sdk-12-exit-nonzero-no-output": async () => runSdk("sdk-12-exit-nonzero-no-output", {
+    why: "Exit code 2 with nothing on stdout (a refused argument): nothing is yielded, the SDK throws with the exit code and stderr.",
+    codexOptions: { env: {} },
+    plan: { stdout: "", stderr: "error: unexpected argument '--bogus' found\n\nUsage: codex exec [OPTIONS] [PROMPT]\n", exit: 2 },
+  }),
+
+  "sdk-13-exit-zero-with-stderr": async () => runSdk("sdk-13-exit-zero-with-stderr", {
+    why: "Exit code 0 with text on stderr: stderr is collected and dropped, nothing is thrown.",
+    codexOptions: { env: {} },
+    plan: { stderr: "Reading prompt from stdin...\nWARNING: something harmless\n", exit: 0 },
+  }),
+
+  "sdk-14-exit-zero-no-output": async () => runSdk("sdk-14-exit-zero-no-output", {
+    why: "Exit code 0 with nothing on stdout: nothing is yielded and nothing is thrown (the caller sees an empty stream).",
+    codexOptions: { env: {} },
+    plan: { stdout: "", exit: 0 },
+  }),
+
+  "sdk-15-abort-while-running": async () => runSdk("sdk-15-abort-while-running", {
+    why: "The caller's AbortSignal fires 300 ms after the second event of a turn that is still running (the stub wrote two events and sleeps 30 s). When the stub stopped, what the SDK threw, and how long the iteration took to end.",
+    codexOptions: { env: {} },
+    abortAfterMs: 300, abortAfterEvents: 2,
+    plan: { stdout: lines([{ type: "thread.started", thread_id: THREAD }, { type: "turn.started" }]), sleepMs: 30000 },
+  }),
+
+  "sdk-17-bad-line-ends-the-program": async () => runSdk("sdk-17-bad-line-ends-the-program", {
+    why: "After a stdout line that is not JSON the SDK does not leave the program running: the stub would have slept 20 s, and its heartbeat stops right after the bad line.",
+    codexOptions: { env: {} }, watchAlive: true,
+    plan: { stdout: `${JSON.stringify({ type: "thread.started", thread_id: THREAD })}
+this is not json
+`, sleepMs: 20000 },
+  }),
+
+  "sdk-18-program-killed-from-outside": async () => runSdk("sdk-18-program-killed-from-outside", {
+    why: "The program is ended from outside mid-turn (taskkill /F on Windows, SIGKILL elsewhere), not by the SDK: what the SDK throws.",
+    codexOptions: { env: {} }, killExternallyAfterEvents: 2,
+    plan: { stdout: lines([{ type: "thread.started", thread_id: THREAD }, { type: "turn.started" }]), sleepMs: 20000 },
+  }),
+
+  "sdk-21-signal-already-aborted": async () => runSdk("sdk-21-signal-already-aborted", {
+    why: "The caller's AbortSignal has already fired when runStreamed() is called: whether the program is started at all, and what the SDK throws.",
+    codexOptions: { env: {} }, abortBeforeStart: true, watchAlive: true,
+    plan: { stdout: lines([{ type: "thread.started", thread_id: THREAD }, { type: "turn.started" }]), sleepMs: 5000 },
+  }),
+
+  "sdk-16-program-missing": async () => runSdk("sdk-16-program-missing", {
+    why: "codexPathOverride names a file that is not there: what the SDK throws.",
+    codexOptions: { env: {} }, stub: path.join(SCRATCH, "no-such-folder", `codex${EXE}`),
+  }),
+};
+
+const only = process.argv.slice(2);
+for (const [name, fn] of Object.entries(SCENARIOS)) {
+  if (only.length && !only.some((o) => name.includes(o))) continue;
+  try { await fn(); } catch (err) { console.log(`${name}: CAPTURE FAILED: ${err?.stack || err}`); }
+}
+process.exit(0);

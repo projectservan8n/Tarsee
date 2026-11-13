@@ -1,0 +1,79 @@
+// More checks of the real program: the system prompt record, tools after stdin is closed, exit codes after an interrupt.
+import { startFakeApi, startMcp } from "./fakes.mjs";
+import { drive, initialize, userText, kinds } from "./drive.mjs";
+
+const only = process.argv.slice(2);
+const want = (n) => !only.length || only.some((o) => n === o);
+const args = (extra = [], afterModel = []) => [
+  "--output-format", "stream-json", "--verbose", "--input-format", "stream-json",
+  "--max-turns=50", "--model=claude-sonnet-4-5", ...afterModel,
+  "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*", "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*",
+  ...extra,
+  "--setting-sources=project", "--strict-mcp-config",
+  "--permission-mode=bypassPermissions", "--allow-dangerously-skip-permissions", "--include-partial-messages",
+];
+const sysOf = (api) => api.requests.filter((r) => r.body?.stream).map((r) => r.body.system.at(-1).text.slice(0, 40));
+const noSnap = (text) => ({ request_id: "init1", type: "control_request", request: { subtype: "initialize", systemPrompt: [text] } });
+
+if (want("s13")) {
+  console.log("\n=== s13 the system prompt record: turn 1 and 2 WITHOUT systemPromptSnapshot, turn 3 with false, turn 4 without");
+  const api = await startFakeApi([{ text: "ok" }]);
+  const env = { ANTHROPIC_BASE_URL: api.url };
+  const a = await drive("s13a", { args: args(), env, initial: [noSnap("PROMPT A"), userText("one")] });
+  const sid = a.stdout.find((s) => s.json.type === "result").json.session_id;
+  await drive("s13b", { args: args([], [`--resume=${sid}`]), env, initial: [noSnap("PROMPT B"), userText("two")] });
+  await drive("s13c", { args: args([], [`--resume=${sid}`]), env, initial: [initialize(["PROMPT C"]), userText("three")] });
+  await drive("s13d", { args: args([], [`--resume=${sid}`]), env, initial: [noSnap("PROMPT D"), userText("four")] });
+  console.log("the last system block the API was sent on turns 1 to 4:", JSON.stringify(sysOf(api)));
+  await api.close();
+}
+if (want("s14")) {
+  console.log("\n=== s14 stdin closed as soon as the first model call starts; the model then asks for a tool");
+  const mcp = await startMcp({});
+  const api = await startFakeApi([{ tool: { id: "toolu_a", name: "mcp__tarsee__echo", input: { text: "after stdin closed" } } }, { text: "finished anyway" }]);
+  let closed = false; const t0 = Date.now();
+  const rec = await drive("s14-stdin-closed-then-tool", {
+    args: args(["--mcp-config", JSON.stringify({ mcpServers: { tarsee: { type: "http", url: mcp.url } } })]), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("use the tool")], closeOnResult: false, maxMs: 30000,
+    onMessage: (m, ctl) => { if (!closed && m.type === "system" && m.subtype === "init") { closed = true; ctl.close(); } },
+  });
+  console.log("stdout:", kinds(rec));
+  console.log("stdin:", rec.stdin_written.map((s) => s.t + ":" + (s.closed ? "CLOSED" : s.json.type)).join(" "), "| exit:", JSON.stringify(rec.exit));
+  console.log("tools/call that reached the MCP server after stdin was closed:", mcp.requests.filter((r) => r.body?.method === "tools/call").map((r) => r.t - t0), "| model calls:", api.requests.filter((r) => r.body?.stream).length);
+  await mcp.close(); await api.close();
+}
+if (want("s15")) {
+  console.log("\n=== s15 interrupt, then stdin closed right after the interrupted result");
+  const api = await startFakeApi([{ text: "0123456789abcdefghij", chunks: 10, delayMs: 400 }]);
+  let sent = false;
+  const rec = await drive("s15-interrupt-then-close", {
+    args: args(), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), userText("talk slowly")], maxMs: 30000,
+    onMessage: (m, ctl) => { if (!sent && m.type === "stream_event" && m.event.type === "content_block_delta") { sent = true; ctl.write({ request_id: "int1", type: "control_request", request: { subtype: "interrupt" } }); } },
+  });
+  console.log("stdout:", kinds(rec));
+  console.log("stdin:", rec.stdin_written.map((s) => s.t + ":" + (s.closed ? "CLOSED" : s.json.type)).join(" "), "| exit:", JSON.stringify(rec.exit), "| stderr:", JSON.stringify(rec.stderr));
+  await api.close();
+}
+if (want("s16")) {
+  console.log("\n=== s16 no initialize at all: a user message alone");
+  const api = await startFakeApi([{ text: "ok" }]);
+  const rec = await drive("s16-no-initialize", { args: args(), env: { ANTHROPIC_BASE_URL: api.url }, initial: [userText("hi")] });
+  console.log("stdout:", kinds(rec), "| exit:", JSON.stringify(rec.exit));
+  console.log("system blocks:", JSON.stringify(api.requests.find((r) => r.body?.stream)?.body.system.map((b) => b.text.slice(0, 70))));
+  await api.close();
+}
+if (want("s17")) {
+  console.log("\n=== s17 an interrupt when no turn is running (before any user message), then a user message");
+  const api = await startFakeApi([{ text: "ok" }]);
+  let asked = false;
+  const rec = await drive("s17-interrupt-idle", {
+    args: args(), env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(), { request_id: "int0", type: "control_request", request: { subtype: "interrupt" } }], maxMs: 30000,
+    onMessage: (m, ctl) => { if (!asked && m.type === "control_response" && m.response.request_id === "int0") { asked = true; ctl.note(JSON.stringify(m)); ctl.write(userText("hi")); } },
+  });
+  console.log("stdout:", kinds(rec), "| exit:", JSON.stringify(rec.exit), "| notes:", JSON.stringify(rec.notes));
+  await api.close();
+}
+if (want("s18")) {
+  console.log("\n=== s18 the result of a failed resume, with stdin left open");
+  const rec = await drive("s18-resume-unknown-stdin-open", { args: args([], ["--resume=11111111-2222-4333-8444-555555555555"]), initial: [initialize(), userText("hi")], closeOnResult: false, maxMs: 8000 });
+  console.log("stdout:", kinds(rec), "| exit:", JSON.stringify(rec.exit), "| notes:", JSON.stringify(rec.notes));
+}

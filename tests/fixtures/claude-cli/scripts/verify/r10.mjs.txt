@@ -1,0 +1,13 @@
+// What the program sends to the API as `system`, block by block, for three inputs.
+import { startFakeApi } from "./fakes.mjs";
+import { drive, initialize, userText } from "./drive.mjs";
+const args = ["--output-format", "stream-json", "--verbose", "--input-format", "stream-json", "--max-turns=50", "--model=claude-sonnet-4-5", "--allowedTools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*", "--tools=Read,Write,Edit,Bash,Glob,Grep,mcp__tarsee__*", "--setting-sources=project", "--strict-mcp-config", "--permission-mode=bypassPermissions", "--allow-dangerously-skip-permissions", "--include-partial-messages"];
+for (const [name, sys, text] of [["one element, first message 'say hi'", ["PLAIN PROMPT"], "say hi"], ["one element, first message 'one'", ["PLAIN PROMPT"], "one"], ["three elements with the boundary marker", ["STABLE PART", "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__", "VOLATILE PART"], "one"]]) {
+  const api = await startFakeApi([{ text: "ok" }]);
+  await drive(`s32-${name.replace(/[^a-z]+/g, "-")}`, { args, env: { ANTHROPIC_BASE_URL: api.url }, initial: [initialize(sys), userText(text)] });
+  const call = api.requests.find((r) => r.body?.stream);
+  console.log(`--- ${name}`);
+  for (const b of call.body.system) console.log("   " + JSON.stringify(b));
+  console.log("   anthropic-beta: " + call.headers["anthropic-beta"]);
+  await api.close();
+}

@@ -1,0 +1,80 @@
+{
+  "name": "posix-04-abort-ignored",
+  "what": "The same, with a stub that only logs the signal and lives 4 s more: the SDK sends that one SIGTERM and nothing else (no second signal, no SIGKILL, no time limit), and the caller's iteration ends only when the program's stdout closes, about 4 s later. So a program that ignores SIGTERM holds the caller.",
+  "made_with": {
+    "sdk": "@openai/codex-sdk 0.167.0, called directly",
+    "platform": "linux (WSL)",
+    "node": "v22.22.2"
+  },
+  "sdk": {
+    "new Codex(options)": {
+      "env": {
+        "PATH": "/usr/bin:/bin"
+      },
+      "codexPathOverride": "<CODEX_BIN>"
+    },
+    "callerProcessEnvNames": [
+      "FROM_PROCESS_ENV",
+      "PATH",
+      "TARSEE_STATE_DIR"
+    ]
+  },
+  "child": {
+    "argv": [
+      "exec",
+      "--experimental-json"
+    ],
+    "cwd": "<CALLER_CWD>",
+    "envNames": [
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+      "PATH"
+    ],
+    "envValues": {
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+      "PATH": "/usr/bin:/bin"
+    },
+    "processGroup": {
+      "sameGroupAsTheCaller": true,
+      "sameSessionAsTheCaller": true,
+      "isItsOwnGroupLeader": false
+    },
+    "stdin": {
+      "chunks": [
+        {
+          "at_ms": 6,
+          "bytes": 5
+        }
+      ],
+      "eof_at_ms": 7,
+      "bytes": 5,
+      "text": "hello"
+    }
+  },
+  "stub": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a1c000-0000-7000-8000-0000000000cc\"}\n{\"type\":\"turn.started\"}\n",
+    "stderr": "",
+    "exitCode": 0,
+    "staysAliveMs": 4000,
+    "ignoresSignals": true
+  },
+  "sdkYielded": [
+    "thread.started",
+    "turn.started"
+  ],
+  "sdkThrew": {
+    "name": "AbortError",
+    "message": "The operation was aborted",
+    "code": "ABORT_ERR"
+  },
+  "timing": {
+    "abortAt_ms": 350,
+    "iterationEndedAt_ms": 4058
+  },
+  "signalsTheStubReceived": [
+    {
+      "stubClock_ms": 315,
+      "signal": "SIGTERM"
+    }
+  ],
+  "stubStillRunningAfterwards": false
+}

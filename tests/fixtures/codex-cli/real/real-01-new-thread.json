@@ -1,0 +1,442 @@
+{
+  "name": "real-01-new-thread",
+  "what": "A whole turn on a new thread with Tarsee's options for a custom provider (Local AI's block, the model being the fake Responses server): the raw stdout lines, stderr, the exit code, every request the program sent to the MCP server, and the Codex home afterwards.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program), started with the argument list, environment and stdin the SDK produced",
+    "platform": "win32"
+  },
+  "child": {
+    "program": "<CODEX_BIN>",
+    "argv": [
+      "exec",
+      "--experimental-json",
+      "--config",
+      "developer_instructions=\"You are Tarsee (capture run).\"",
+      "--config",
+      "project_doc_max_bytes=0",
+      "--config",
+      "project_root_markers=[]",
+      "--config",
+      "history.persistence=\"none\"",
+      "--config",
+      "cli_auth_credentials_store=\"file\"",
+      "--config",
+      "check_for_update_on_startup=false",
+      "--config",
+      "model_reasoning_summary=\"none\"",
+      "--config",
+      "tool_output_token_limit=3000",
+      "--config",
+      "shell_environment_policy.inherit=\"all\"",
+      "--config",
+      "shell_environment_policy.ignore_default_excludes=true",
+      "--config",
+      "shell_environment_policy.filters.CODEX_API_KEY=\"exclude\"",
+      "--config",
+      "shell_environment_policy.filters.CODEX_ACCESS_TOKEN=\"exclude\"",
+      "--config",
+      "shell_environment_policy.filters.TARSEE_MCP_TOKEN=\"exclude\"",
+      "--config",
+      "shell_environment_policy.filters.TARSEE_PROVIDER_KEY=\"exclude\"",
+      "--config",
+      "shell_environment_policy.filters.TARSEE_CHATGPT_ACCESS_TOKEN=\"exclude\"",
+      "--config",
+      "mcp_servers.tarsee.url=\"http://127.0.0.1:<MCP_PORT>/mcp\"",
+      "--config",
+      "mcp_servers.tarsee.bearer_token_env_var=\"TARSEE_MCP_TOKEN\"",
+      "--config",
+      "mcp_servers.tarsee.default_tools_approval_mode=\"approve\"",
+      "--config",
+      "mcp_servers.tarsee.required=true",
+      "--config",
+      "mcp_servers.tarsee.startup_timeout_sec=20",
+      "--config",
+      "mcp_servers.tarsee.tool_timeout_sec=300",
+      "--config",
+      "features.apps=false",
+      "--config",
+      "features.plugins=false",
+      "--config",
+      "features.remote_plugin=false",
+      "--config",
+      "features.plugin_discovery_prefetch=false",
+      "--config",
+      "features.multi_agent=false",
+      "--config",
+      "features.goals=false",
+      "--config",
+      "features.computer_use=false",
+      "--config",
+      "features.browser_use=false",
+      "--config",
+      "features.browser_use_external=false",
+      "--config",
+      "features.in_app_browser=false",
+      "--config",
+      "features.image_generation=false",
+      "--config",
+      "features.tool_suggest=false",
+      "--config",
+      "features.skill_mcp_dependency_install=false",
+      "--config",
+      "features.memories=false",
+      "--config",
+      "features.hooks=false",
+      "--config",
+      "features.unbounded_connection_retries=false",
+      "--config",
+      "model_auto_compact_token_limit=108800",
+      "--config",
+      "model_provider=\"tarsee_local\"",
+      "--config",
+      "model_providers.tarsee_local.name=\"Local AI\"",
+      "--config",
+      "model_providers.tarsee_local.base_url=\"http://127.0.0.1:<MODEL_PORT>/v1\"",
+      "--config",
+      "model_providers.tarsee_local.env_key=\"TARSEE_PROVIDER_KEY\"",
+      "--config",
+      "model_providers.tarsee_local.wire_api=\"responses\"",
+      "--config",
+      "model_providers.tarsee_local.stream_max_retries=1",
+      "--config",
+      "forced_login_method=\"api\"",
+      "--config",
+      "model_context_window=128000",
+      "--model",
+      "test-model",
+      "--sandbox",
+      "danger-full-access",
+      "--cd",
+      "<WORKSPACE>",
+      "--skip-git-repo-check",
+      "--config",
+      "sandbox_workspace_write.network_access=true",
+      "--config",
+      "web_search=\"disabled\"",
+      "--config",
+      "approval_policy=\"never\""
+    ],
+    "env": {
+      "names": [
+        "APPDATA",
+        "CODEX_HOME",
+        "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+        "ComSpec",
+        "HOME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "LOCALAPPDATA",
+        "LOGONSERVER",
+        "NODE_ENV",
+        "NO_PROXY",
+        "PATH",
+        "SystemDrive",
+        "SystemRoot",
+        "TARSEE_MCP_TOKEN",
+        "TARSEE_PROVIDER_KEY",
+        "TARSEE_TEST_BASE_URL_CHATGPT",
+        "TARSEE_TEST_BASE_URL_DEEPSEEK",
+        "TARSEE_TEST_BASE_URL_OPENAI",
+        "TARSEE_TEST_BASE_URL_OPENROUTER",
+        "TEMP",
+        "TMP",
+        "USERDOMAIN",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR"
+      ],
+      "values": {
+        "CODEX_HOME": "<STATE_DIR>\\.codex-home-keys",
+        "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "codex_sdk_ts",
+        "TARSEE_MCP_TOKEN": "<MCP_TOKEN>",
+        "TARSEE_PROVIDER_KEY": "<PROVIDER_KEY>",
+        "NODE_ENV": "test"
+      }
+    },
+    "stdin": "<turn-context>\nToday is a capture day.\n</turn-context>\n\nPlease say hello."
+  },
+  "result": {
+    "exitCode": 0,
+    "signal": null,
+    "stdoutLines": [
+      "{\"type\":\"thread.started\",\"thread_id\":\"<THREAD_ID>\"}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `test-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}",
+      "{\"type\":\"turn.started\"}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"reasoning\",\"text\":\"Thinking briefly.\"}}",
+      "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"Hello from the fake model.\"}}",
+      "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1200,\"cached_input_tokens\":200,\"cache_write_input_tokens\":0,\"output_tokens\":30,\"reasoning_output_tokens\":12}}"
+    ],
+    "stdoutEndsWithNewline": true,
+    "stdoutHasCarriageReturns": false,
+    "stderr": "Reading prompt from stdin...\n"
+  },
+  "requestsToTheMcpServer": [
+    {
+      "n": 1,
+      "at_ms": 382,
+      "method": "POST",
+      "path": "/mcp",
+      "httpVersion": "1.1",
+      "headers": [
+        [
+          "user-agent",
+          "codex-mcp-client/0.167.0"
+        ],
+        [
+          "accept",
+          "text/event-stream, application/json"
+        ],
+        [
+          "content-type",
+          "application/json"
+        ],
+        [
+          "authorization",
+          "Bearer <MCP_TOKEN>"
+        ],
+        [
+          "host",
+          "127.0.0.1:<MCP_PORT>"
+        ],
+        [
+          "content-length",
+          "217"
+        ]
+      ],
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+          "protocolVersion": "2025-06-18",
+          "capabilities": {
+            "elicitation": {
+              "form": {},
+              "url": {}
+            }
+          },
+          "clientInfo": {
+            "name": "codex-mcp-client",
+            "title": "Codex",
+            "version": "0.167.0"
+          }
+        }
+      },
+      "answer": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {
+              "tools": {
+                "listChanged": true
+              }
+            },
+            "serverInfo": {
+              "name": "tarsee",
+              "version": "1.0.0"
+            }
+          },
+          "jsonrpc": "2.0",
+          "id": 0
+        }
+      }
+    },
+    {
+      "n": 2,
+      "at_ms": 386,
+      "method": "POST",
+      "path": "/mcp",
+      "httpVersion": "1.1",
+      "headers": [
+        [
+          "user-agent",
+          "codex-mcp-client/0.167.0"
+        ],
+        [
+          "mcp-protocol-version",
+          "2025-06-18"
+        ],
+        [
+          "accept",
+          "text/event-stream, application/json"
+        ],
+        [
+          "content-type",
+          "application/json"
+        ],
+        [
+          "authorization",
+          "Bearer <MCP_TOKEN>"
+        ],
+        [
+          "host",
+          "127.0.0.1:<MCP_PORT>"
+        ],
+        [
+          "content-length",
+          "54"
+        ]
+      ],
+      "body": {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+      },
+      "answer": {
+        "status": 202,
+        "headers": {},
+        "body": null
+      }
+    },
+    {
+      "n": 3,
+      "at_ms": 387,
+      "method": "POST",
+      "path": "/mcp",
+      "httpVersion": "1.1",
+      "headers": [
+        [
+          "user-agent",
+          "codex-mcp-client/0.167.0"
+        ],
+        [
+          "mcp-protocol-version",
+          "2025-06-18"
+        ],
+        [
+          "accept",
+          "text/event-stream, application/json"
+        ],
+        [
+          "content-type",
+          "application/json"
+        ],
+        [
+          "authorization",
+          "Bearer <MCP_TOKEN>"
+        ],
+        [
+          "host",
+          "127.0.0.1:<MCP_PORT>"
+        ],
+        [
+          "content-length",
+          "85"
+        ]
+      ],
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {
+          "_meta": {
+            "progressToken": 0
+          }
+        }
+      },
+      "answer": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "result": {
+            "tools": [
+              {
+                "name": "tarsee_datetime",
+                "description": "The current date and time.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "timezone": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                }
+              },
+              {
+                "name": "tarsee_remember",
+                "description": "Remember a fact.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "content"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                }
+              }
+            ]
+          },
+          "jsonrpc": "2.0",
+          "id": 1
+        }
+      }
+    }
+  ],
+  "requestsToTheModel": [
+    {
+      "method": "POST",
+      "path": "/v1/responses",
+      "authorization": "Bearer <PROVIDER_KEY>",
+      "model": "test-model",
+      "toolNames": [
+        "exec_command",
+        "write_stdin",
+        "list_mcp_resources",
+        "list_mcp_resource_templates",
+        "read_mcp_resource",
+        "request_user_input",
+        "view_image",
+        "mcp__tarsee"
+      ],
+      "inputTypes": [
+        "message:developer:input_text",
+        "message:developer:input_text+input_text+input_text",
+        "message:user:input_text",
+        "message:user:input_text"
+      ]
+    }
+  ],
+  "codexHomeAfterTheTurn": [
+    ".sandbox/",
+    ".sandbox/sandbox.2026-11-13.log (262 bytes)",
+    ".sandbox_migration (3 bytes)",
+    "goals_1.sqlite (32768 bytes)",
+    "installation_id (36 bytes)",
+    "logs_2.sqlite (49152 bytes)",
+    "memories_1.sqlite (45056 bytes)",
+    "queue_1.sqlite (4096 bytes)",
+    "queue_1.sqlite-shm (32768 bytes)",
+    "queue_1.sqlite-wal (82432 bytes)",
+    "sessions/",
+    "sessions/2026/",
+    "sessions/2026/11/",
+    "sessions/2026/11/13/",
+    "sessions/2026/11/13/rollout-2026-11-13T08-16-53-<THREAD_ID>.jsonl (50065 bytes)",
+    "skills/",
+    "skills/.system/ (Codex's own bundled skills: 49 files, not listed)",
+    "state_5.sqlite (4096 bytes)",
+    "state_5.sqlite-shm (32768 bytes)",
+    "state_5.sqlite-wal (2397872 bytes)",
+    "thread_history_1.sqlite (4096 bytes)",
+    "thread_history_1.sqlite-shm (32768 bytes)",
+    "thread_history_1.sqlite-wal (412032 bytes)",
+    "thread-writer-locks/",
+    "thread-writer-locks/.coordination.lock (0 bytes)",
+    "tmp/",
+    "tmp/arg0-windows/"
+  ]
+}

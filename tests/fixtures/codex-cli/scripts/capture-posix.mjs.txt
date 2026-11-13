@@ -1,0 +1,208 @@
+#!/usr/bin/env node
+/**
+ * capture-posix.mjs: the same questions as capture-sdk.mjs, asked on Linux (run here under WSL, Ubuntu, Node 22),
+ * where the answers differ from Windows: the child's environment when the caller passes `env`, which signal an abort
+ * sends and to whom, whether anything waits or escalates, what a kill from outside reads as, PATH's separator, and
+ * what Tarsee's own killTree() does to a process group.
+ *
+ *   node capture-posix.mjs [scenario ...]        (PROJECT and SCRATCH as /mnt/<drive>/... paths)
+ */
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT = process.env.CAPTURE_PROJECT || "/path/to/the/node/checkout";
+const SCRATCH = process.env.CAPTURE_SCRATCH || path.dirname(HERE);
+const OUT = process.env.CAPTURE_OUT || path.join(SCRATCH, "fixtures-posix");
+const STUB = path.join(HERE, "codex-stub.mjs");
+const RUNS = path.join(SCRATCH, "runs-posix");
+fs.mkdirSync(OUT, { recursive: true });
+fs.mkdirSync(RUNS, { recursive: true });
+
+// A known environment for this process (the SDK copies it when the caller passes no `env`).
+for (const k of Object.keys(process.env)) delete process.env[k];
+process.env.PATH = "/usr/local/bin:/usr/bin:/bin";
+process.env.FROM_PROCESS_ENV = "the caller's own environment";
+process.env.TARSEE_STATE_DIR = path.join(RUNS, "tarsee-state");
+
+const SDK_FILE = path.join(PROJECT, "node_modules/@openai/codex-sdk/dist/index.js");
+const { Codex } = await import(pathToFileURL(SDK_FILE).href);
+const THREAD = "01a1c000-0000-7000-8000-0000000000cc";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const lines = (events) => events.map((e) => JSON.stringify(e)).join("\n") + "\n";
+const two = lines([{ type: "thread.started", thread_id: THREAD }, { type: "turn.started" }]);
+const whole = lines([{ type: "thread.started", thread_id: THREAD }, { type: "turn.started" }, { type: "item.completed", item: { id: "item_0", type: "agent_message", text: "ok" } }, { type: "turn.completed", usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 2, reasoning_output_tokens: 0 } }]);
+
+function writePlan(planDir, root, plan) {
+  fs.rmSync(planDir, { recursive: true, force: true });
+  fs.mkdirSync(planDir, { recursive: true });
+  const files = { record: path.join(root, "stub-record.json"), signals: path.join(root, "signals.txt"), child: path.join(root, "child-pid.txt") };
+  fs.writeFileSync(path.join(planDir, "record.txt"), files.record);
+  fs.writeFileSync(path.join(planDir, "signals.txt"), files.signals);
+  fs.writeFileSync(path.join(planDir, "stdout.jsonl"), plan.stdout ?? whole);
+  if (plan.exit != null) fs.writeFileSync(path.join(planDir, "exit.txt"), String(plan.exit));
+  if (plan.stderr) fs.writeFileSync(path.join(planDir, "stderr.txt"), plan.stderr);
+  if (plan.sleepMs) fs.writeFileSync(path.join(planDir, "sleep_ms.txt"), String(plan.sleepMs));
+  if (plan.ignoreSignals) fs.writeFileSync(path.join(planDir, "ignore_signals.txt"), "1");
+  if (plan.child) fs.writeFileSync(path.join(planDir, "child.txt"), files.child);
+  return files;
+}
+const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; } };
+const readText = (f) => { try { return fs.readFileSync(f, "utf8"); } catch { return null; } };
+const errorShape = (err) => (err ? { name: err.name, message: err.message, code: err.code ?? null } : null);
+
+function save(name, why, data, pairs = []) {
+  let text = JSON.stringify({ name, what: why, made_with: { sdk: "@openai/codex-sdk 0.167.0, called directly", platform: `${process.platform} (WSL)`, node: process.version }, ...data }, null, 2);
+  const all = [...pairs, [STUB, "<CODEX_BIN>"], [RUNS, "<RUNS>"], [PROJECT, "<TARSEE_ROOT>"], [SCRATCH, "<SCRATCH>"], [process.cwd(), "<CALLER_CWD>"], [os.homedir(), "<HOME>"]].filter(([v]) => v).sort((a, b) => b[0].length - a[0].length);
+  for (const [v, label] of all) text = text.split(v).join(label);
+  fs.writeFileSync(path.join(OUT, `${name}.json`), text + "\n");
+}
+
+/** One SDK run against the stub. s: {codexOptions, plan, abortAfterEvents, abortDelayMs, killFromOutsideAfterEvents, stopReadingAfterEvents, sdk, stub, planDir} */
+async function runSdk(name, s) {
+  const root = path.join(RUNS, name);
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(root, { recursive: true });
+  const files = writePlan(s.planDir || path.join(HERE, "plan"), root, s.plan || {});
+  const CodexClass = s.sdk || Codex;
+  const codex = new CodexClass({ ...(s.codexOptions || {}), ...(s.useStub === false ? {} : { codexPathOverride: s.stub || STUB }) });
+  const thread = codex.startThread(s.threadOptions);
+  const ac = s.abortAfterEvents ? new AbortController() : null;
+  const yielded = [];
+  let thrown = null;
+  const t0 = Date.now();
+  const marks = {};
+  try {
+    const { events } = await thread.runStreamed("hello", ac ? { signal: ac.signal } : {});
+    for await (const ev of events) {
+      yielded.push(ev.type);
+      if (ac && yielded.length === s.abortAfterEvents) setTimeout(() => { marks.abortAt_ms = Date.now() - t0; ac.abort(); }, s.abortDelayMs ?? 300);
+      if (s.killFromOutsideAfterEvents && yielded.length === s.killFromOutsideAfterEvents) setTimeout(() => { marks.sigkillAt_ms = Date.now() - t0; process.kill(readJson(files.record).pid, "SIGKILL"); }, 300);
+      if (s.stopReadingAfterEvents && yielded.length === s.stopReadingAfterEvents) { marks.stoppedReadingAt_ms = Date.now() - t0; break; }
+    }
+  } catch (err) { thrown = err; }
+  marks.iterationEndedAt_ms = Date.now() - t0;
+  await sleep(400);
+  const rec = readJson(files.record);
+  const childPid = Number(readText(files.child)) || null;
+  const result = {
+    sdk: { "new Codex(options)": { ...(s.codexOptions || {}), ...(s.useStub === false ? {} : { codexPathOverride: s.stub || STUB }) }, callerProcessEnvNames: Object.keys(process.env).sort() },
+    child: rec ? {
+      argv: rec.argv, cwd: rec.cwd, envNames: Object.keys(rec.env).sort(),
+      envValues: Object.fromEntries(["CODEX_API_KEY", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "FROM_PROCESS_ENV", "FROM_ENV_OPTION", "PATH"].filter((n) => n in rec.env).map((n) => [n, rec.env[n]])),
+      processGroup: { sameGroupAsTheCaller: rec.pgid === rec.parentPgid, sameSessionAsTheCaller: rec.sid === rec.parentSid, isItsOwnGroupLeader: rec.pgid === rec.pid },
+      stdin: rec.stdin,
+    } : null,
+    stub: { stdout: s.plan?.stdout ?? whole, stderr: s.plan?.stderr ?? "", exitCode: s.plan?.exit ?? 0, staysAliveMs: s.plan?.sleepMs ?? 0, ignoresSignals: !!s.plan?.ignoreSignals },
+    sdkYielded: yielded,
+    sdkThrew: errorShape(thrown),
+    timing: marks,
+    signalsTheStubReceived: (readText(files.signals) || "").trim().split("\n").filter(Boolean).map((l) => { const [ms, sig] = l.split(" "); return { stubClock_ms: Number(ms), signal: sig }; }),
+    stubStillRunningAfterwards: rec ? alive(rec.pid) : null,
+    theStubsOwnChild: childPid ? { started: true, stillRunningAfterwards: alive(childPid) } : undefined,
+  };
+  if (childPid && alive(childPid)) { try { process.kill(childPid, "SIGKILL"); } catch { /* gone */ } }
+  if (rec && alive(rec.pid)) { try { process.kill(rec.pid, "SIGKILL"); } catch { /* gone */ } }
+  console.log(`${name}: yielded ${yielded.length}; ${thrown ? `threw ${thrown.name}: ${String(thrown.message).split("\n")[0].slice(0, 90)}` : "no error"}; signals ${JSON.stringify(result.signalsTheStubReceived.map((x) => x.signal))}; ${JSON.stringify(marks)}`);
+  return result;
+}
+
+async function pinnedTree() {
+  const triple = process.arch === "arm64" ? "aarch64-unknown-linux-musl" : "x86_64-unknown-linux-musl";
+  const pkg = process.arch === "arm64" ? "codex-linux-arm64" : "codex-linux-x64";
+  // On the Linux filesystem, not /mnt: the copy must keep its executable bit and be quick to start.
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "codex-pinned-"));
+  const root = path.join(base, "node_modules");
+  const sdkDir = path.join(root, "@openai", "codex-sdk");
+  fs.mkdirSync(path.join(sdkDir, "dist"), { recursive: true });
+  fs.copyFileSync(SDK_FILE, path.join(sdkDir, "dist", "index.js"));
+  fs.copyFileSync(path.join(PROJECT, "node_modules/@openai/codex-sdk/package.json"), path.join(sdkDir, "package.json"));
+  const sha = (f) => crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex");
+  if (sha(path.join(sdkDir, "dist", "index.js")) !== sha(SDK_FILE)) throw new Error("the SDK copy differs");
+  fs.mkdirSync(path.join(root, "@openai", "codex"), { recursive: true });
+  fs.copyFileSync(path.join(PROJECT, "node_modules/@openai/codex/package.json"), path.join(root, "@openai", "codex", "package.json"));
+  const vendor = path.join(root, "@openai", pkg, "vendor", triple);
+  fs.mkdirSync(path.join(vendor, "bin"), { recursive: true });
+  fs.mkdirSync(path.join(vendor, "codex-path"), { recursive: true });
+  fs.writeFileSync(path.join(root, "@openai", pkg, "package.json"), JSON.stringify({ name: "@openai/codex", version: "0.167.0-capture" }));
+  fs.writeFileSync(path.join(vendor, "codex-package.json"), JSON.stringify({ layoutVersion: 1, version: "0.167.0", target: triple, variant: "codex", entrypoint: "bin/codex", resourcesDir: "codex-resources", pathDir: "codex-path" }));
+  const stub = path.join(vendor, "bin", "codex");
+  fs.copyFileSync(STUB, stub);
+  fs.chmodSync(stub, 0o755);
+  const sdk = (await import(pathToFileURL(path.join(sdkDir, "dist", "index.js")).href)).Codex;
+  return { sdk, stub, planDir: path.join(vendor, "bin", "plan"), root, base };
+}
+
+const SCENARIOS = {
+  "posix-01-env-option": async () => save("posix-01-env-option", "The caller passes `env`: the child gets exactly those names plus CODEX_INTERNAL_ORIGINATOR_OVERRIDE, and nothing from the caller's own environment (unlike Windows, where Node fills in a few system names).",
+    await runSdk("posix-01", { codexOptions: { env: { FROM_ENV_OPTION: "the env option" } } })),
+
+  "posix-02-no-env-option": async () => save("posix-02-no-env-option", "No `env`: the child gets a copy of the caller's whole process environment plus CODEX_INTERNAL_ORIGINATOR_OVERRIDE. Also: the child is in the caller's process group and session (the SDK does not detach it).",
+    await runSdk("posix-02", { codexOptions: {} })),
+
+  "posix-03-abort": async () => save("posix-03-abort", "The caller's AbortSignal fires while the turn runs: the program gets one SIGTERM, at once. Here the stub obeys it. A child the stub had started (same process group) is NOT signalled and outlives it.",
+    await runSdk("posix-03", { codexOptions: { env: { PATH: "/usr/bin:/bin" } }, abortAfterEvents: 2, plan: { stdout: two, sleepMs: 30000, child: true } })),
+
+  "posix-04-abort-ignored": async () => save("posix-04-abort-ignored", "The same, with a stub that only logs the signal and lives 4 s more: the SDK sends that one SIGTERM and nothing else (no second signal, no SIGKILL, no time limit), and the caller's iteration ends only when the program's stdout closes, about 4 s later. So a program that ignores SIGTERM holds the caller.",
+    await runSdk("posix-04", { codexOptions: { env: { PATH: "/usr/bin:/bin" } }, abortAfterEvents: 2, plan: { stdout: two, sleepMs: 4000, ignoreSignals: true } })),
+
+  "posix-05-killed-from-outside": async () => save("posix-05-killed-from-outside", "The program is killed from outside with SIGKILL mid-turn: the SDK throws `Codex Exec exited with signal SIGKILL: <stderr>`.",
+    await runSdk("posix-05", { codexOptions: { env: { PATH: "/usr/bin:/bin" } }, killFromOutsideAfterEvents: 2, plan: { stdout: two, sleepMs: 30000 } })),
+
+  "posix-06-bad-line": async () => save("posix-06-bad-line", "A stdout line that is not JSON: the SDK throws, and on its way out sends the program SIGTERM (the stub, which would have lived 30 s, logs it).",
+    await runSdk("posix-06", { codexOptions: { env: { PATH: "/usr/bin:/bin" } }, plan: { stdout: `${JSON.stringify({ type: "thread.started", thread_id: THREAD })}\nnot json\n`, sleepMs: 30000 } })),
+
+  "posix-07-caller-stops-reading": async () => save("posix-07-caller-stops-reading", "The caller stops reading the events early (breaks out of the loop, as Tarsee's engine does at its turn limit): the SDK sends the program SIGTERM.",
+    await runSdk("posix-07", { codexOptions: { env: { PATH: "/usr/bin:/bin" } }, stopReadingAfterEvents: 2, plan: { stdout: two, sleepMs: 30000 } })),
+
+  "posix-08-pinned-binary": async () => {
+    const t = await pinnedTree();
+    const r = await runSdk("posix-08", { sdk: t.sdk, stub: t.stub, planDir: t.planDir, useStub: false, codexOptions: { env: { FROM_ENV_OPTION: "the env option", PATH: "/usr/bin:/bin" } } });
+    save("posix-08-pinned-binary", "No codexPathOverride on Linux: the SDK starts vendor/<triple>/bin/codex of the platform package (@openai/codex-linux-x64) and puts vendor/<triple>/codex-path first on PATH, joined with a colon. Run against a byte-for-byte copy of the SDK's file in a made-up node_modules whose binary is the stub.", { programTheSdkStarted: t.stub, ...r }, [[t.root, "<NODE_MODULES>"], [t.base, "<TMP>"]]);
+    fs.rmSync(t.base, { recursive: true, force: true });
+  },
+
+  /** Tarsee's own stop for the programs it starts without the SDK (codex-cli.js spawnCodex + killTree). */
+  "posix-09-killtree": async () => {
+    const { spawnCodex, killTree } = await import(pathToFileURL(path.join(PROJECT, "src/ai/codex-cli.js")).href);
+    const out = {};
+    for (const [key, ignoreSignals] of [["theProgramObeysSigterm", false], ["theProgramIgnoresSigterm", true]]) {
+      const root = path.join(RUNS, `posix-09-${key}`);
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.mkdirSync(root, { recursive: true });
+      const files = writePlan(path.join(HERE, "plan"), root, { stdout: two, sleepMs: 30000, ignoreSignals, child: true });
+      const t0 = Date.now();
+      const child = spawnCodex(STUB, ["app-server"], { env: { PATH: "/usr/bin:/bin" }, cwd: root });
+      child.stdin.end();
+      let exit = null;
+      child.once("exit", (code, signal) => { exit = { code, signal, at_ms: Date.now() - t0 }; });
+      await sleep(1500);
+      const rec = readJson(files.record);
+      const childPid = Number(readText(files.child)) || null;
+      const killAt = Date.now() - t0;
+      await killTree(child);
+      const resolvedAt = Date.now() - t0;
+      await sleep(300);
+      out[key] = {
+        processGroup: rec ? { isItsOwnGroupLeader: rec.pgid === rec.pid, sameGroupAsTheCaller: rec.pgid === rec.parentPgid } : null,
+        killTreeCalledAt_ms: killAt, killTreeResolvedAt_ms: resolvedAt, exit,
+        signalsTheStubReceived: (readText(files.signals) || "").trim().split("\n").filter(Boolean).map((l) => { const [ms, sig] = l.split(" "); return { stubClock_ms: Number(ms), signal: sig }; }),
+        theStubsOwnChildStillRunning: childPid ? alive(childPid) : null,
+      };
+      if (childPid && alive(childPid)) { try { process.kill(childPid, "SIGKILL"); } catch { /* gone */ } }
+      console.log(`posix-09 ${key}: exit ${JSON.stringify(exit)}; resolved after ${resolvedAt - killAt} ms; signals ${JSON.stringify(out[key].signalsTheStubReceived)}; own child alive ${out[key].theStubsOwnChildStillRunning}`);
+    }
+    save("posix-09-killtree", "Tarsee's killTree() (src/ai/codex-cli.js) on a program started by spawnCodex() (its own process group): SIGTERM to the whole group, then SIGKILL to the group 2 s later if it is still running. The program's own child goes with it either way.", out);
+  },
+};
+
+const only = process.argv.slice(2);
+for (const [name, fn] of Object.entries(SCENARIOS)) {
+  if (only.length && !only.some((o) => name.includes(o))) continue;
+  try { await fn(); } catch (err) { console.log(`${name}: CAPTURE FAILED: ${err?.stack || err}`); }
+}
+process.exit(0);

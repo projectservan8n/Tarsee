@@ -1,0 +1,166 @@
+{
+  "name": "real-11-smaller-questions",
+  "what": "Small things only the real program can answer: what the model is sent for the prompt on stdin; what the originator variable changes; whether --json differs from --experimental-json; what an empty stdin does and whether the program waits for stdin to end; whether the program's shell finds ripgrep (rg) when the caller has not put the package's codex-path folder on PATH, as the SDK does for its pinned binary; and (Windows) which system names a turn's environment must hold for the program to work at all.",
+  "made_with": {
+    "program": "codex 0.167.0 (the real pinned program), started with the argument list, environment and stdin the SDK produced",
+    "platform": "win32"
+  },
+  "whatTheModelReceives": {
+    "stdin": "<turn-context>\nToday is a capture day.\n</turn-context>\n\nPlease say héllo ☃.",
+    "lastUserMessage": "<turn-context>\nToday is a capture day.\n</turn-context>\n\nPlease say héllo ☃.",
+    "developerMessagesStartWith": [
+      "You are a coding agent running in the Codex CLI, a terminal-",
+      "You are Tarsee (capture run). | <skills_instructions>\n## Ski"
+    ],
+    "developerInstructionsArgumentAppearsInADeveloperMessage": true
+  },
+  "whatTheOriginatorVariableChanges": {
+    "note": "headers of the request to the model",
+    "withTheVariable": {
+      "originator": "codex_sdk_ts",
+      "user-agent": "codex_sdk_ts/0.167.0 (Windows 10.0.26300; x86_64) unknown (codex_exec; 0.167.0)"
+    },
+    "withoutIt": {
+      "originator": "codex_exec",
+      "user-agent": "codex_exec/0.167.0 (Windows 10.0.26300; x86_64) unknown (codex_exec; 0.167.0)"
+    }
+  },
+  "jsonInsteadOfExperimentalJson": {
+    "experimentalJson": {
+      "exitCode": 0,
+      "events": [
+        "thread.started",
+        "item.completed:error",
+        "turn.started",
+        "item.completed:reasoning",
+        "item.completed:agent_message",
+        "turn.completed"
+      ]
+    },
+    "json": {
+      "exitCode": 0,
+      "events": [
+        "thread.started",
+        "item.completed:error",
+        "turn.started",
+        "item.completed:reasoning",
+        "item.completed:agent_message",
+        "turn.completed"
+      ]
+    },
+    "sameEventShapes": true
+  },
+  "emptyStdin": {
+    "exitCode": 1,
+    "stdoutLines": [],
+    "stderr": "Reading prompt from stdin...\nNo prompt provided via stdin.\n",
+    "whatTheSdkThrows": "Codex Exec exited with code 1: Reading prompt from stdin...\nNo prompt provided via stdin.\n"
+  },
+  "stdinWrittenButNotClosedFor3s": {
+    "stdoutSoFar": "",
+    "stderrSoFar": "Reading prompt from stdin...\n",
+    "afterClosingStdin": {
+      "exitCode": 0,
+      "stdoutLines": 6
+    }
+  },
+  "ripgrep_withCodexPathOnPath": {
+    "callerPath": "<CODEX_PATH_DIR>;C:\\WINDOWS\\system32;C:\\WINDOWS;C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0",
+    "command": "rg --version",
+    "exit_code": 0,
+    "status": "completed",
+    "output": "ripgrep 15.2.0 (rev e89fff89ac)\n"
+  },
+  "ripgrep_withoutCodexPathOnPath": {
+    "callerPath": "C:\\WINDOWS\\system32;C:\\WINDOWS;C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0",
+    "command": "rg --version",
+    "exit_code": 0,
+    "status": "completed",
+    "output": "ripgrep 15.2.0 (rev e89fff89ac)\n"
+  },
+  "turnsWithACutDownEnvironment": {
+    "note": "each turn was started through bare/bare-env.rs with exactly the names listed; the first four are what Tarsee and the SDK set, the rest are system names with this machine's own values",
+    "only the four names": {
+      "environmentNames": [
+        "CODEX_HOME",
+        "TARSEE_MCP_TOKEN",
+        "TARSEE_PROVIDER_KEY",
+        "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"
+      ],
+      "exitCode": 1,
+      "events": [],
+      "stderrLastLine": "Error: thread/start: thread/start failed: error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: tarsee: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::tool_l ... p/request failed: error sending request for url (http://127.0.0.1:<PORT>/mcp), when send initialize request (code -32603)",
+      "requestsToTheMcpServer": 0,
+      "requestsToTheModel": 0
+    },
+    "plus SYSTEMROOT": {
+      "environmentNames": [
+        "CODEX_HOME",
+        "TARSEE_MCP_TOKEN",
+        "TARSEE_PROVIDER_KEY",
+        "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+        "SYSTEMROOT"
+      ],
+      "exitCode": 0,
+      "events": [
+        "thread.started",
+        "item.completed:error",
+        "turn.started",
+        "item.completed:reasoning",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "stderrLastLine": "Reading prompt from stdin...",
+      "requestsToTheMcpServer": 3,
+      "requestsToTheModel": 1
+    },
+    "plus SYSTEMROOT and PATH": {
+      "environmentNames": [
+        "CODEX_HOME",
+        "TARSEE_MCP_TOKEN",
+        "TARSEE_PROVIDER_KEY",
+        "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+        "SYSTEMROOT",
+        "PATH"
+      ],
+      "exitCode": 0,
+      "events": [
+        "thread.started",
+        "item.completed:error",
+        "turn.started",
+        "item.completed:reasoning",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "stderrLastLine": "Reading prompt from stdin...",
+      "requestsToTheMcpServer": 3,
+      "requestsToTheModel": 1
+    },
+    "plus SYSTEMROOT, WINDIR, SYSTEMDRIVE, PATH, TEMP, USERPROFILE": {
+      "environmentNames": [
+        "CODEX_HOME",
+        "TARSEE_MCP_TOKEN",
+        "TARSEE_PROVIDER_KEY",
+        "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+        "SYSTEMROOT",
+        "WINDIR",
+        "SYSTEMDRIVE",
+        "PATH",
+        "TEMP",
+        "USERPROFILE"
+      ],
+      "exitCode": 0,
+      "events": [
+        "thread.started",
+        "item.completed:error",
+        "turn.started",
+        "item.completed:reasoning",
+        "item.completed:agent_message",
+        "turn.completed"
+      ],
+      "stderrLastLine": "Reading prompt from stdin...",
+      "requestsToTheMcpServer": 3,
+      "requestsToTheModel": 1
+    }
+  }
+}
