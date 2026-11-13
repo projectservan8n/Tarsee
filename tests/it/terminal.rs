@@ -148,7 +148,10 @@ async fn stoppable_server(stop: CancellationToken) -> Server {
                 let stop = stop.clone();
                 async move {
                     upgrade.on_upgrade(move |socket| async move {
+                        // The terminal first: it has always started (and begun starting its shell) when the stop is
+                        // seen, however early that comes.
                         tokio::select! {
+                            biased;
                             _ = handle_terminal_connection(app, socket, None) => {}
                             _ = stop.cancelled() => {}
                         }
